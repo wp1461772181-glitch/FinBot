@@ -10,9 +10,9 @@
 **把分散的公开资料、已保存的数据与 AI 分析，变成一条可核验、可回放、可修订的研究链。**
 **Turn scattered public sources, saved data and AI analysis into a research trail you can verify, revisit and revise.**
 
-[🚀 试用演示 / Try the demo](https://wp1461772181-glitch.github.io/market-evidence-agent/) · [📦 源码 / Source](https://github.com/wp1461772181-glitch/market-evidence-agent) · [🧭 中文](#中文) · [🇬🇧 English](#english)
+[🚀 试用演示 / Try the demo](https://wp1461772181-glitch.github.io/FinBot/) · [📦 源码 / Source](https://github.com/wp1461772181-glitch/FinBot) · [🧭 中文](#中文) · [🇬🇧 English](#english)
 
-[![CI](https://github.com/wp1461772181-glitch/market-evidence-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/wp1461772181-glitch/market-evidence-agent/actions/workflows/ci.yml)
+[![CI](https://github.com/wp1461772181-glitch/FinBot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/wp1461772181-glitch/FinBot/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB)
 ![React](https://img.shields.io/badge/React-19-61DAFB)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688)
@@ -127,7 +127,7 @@ Agent 可提出写操作：只有所有者确认冻结目标的卡片后才执�
 
 ### 可选知识检索（RAG）
 
-可选 BGE-M3 / Milvus 路径支持 dense、BM25、hybrid、RRF 和**可选 reranking**，并提供服务端范围约束与来源引用。基础 RAG 不要求 reranker 模型文件；启用额外能力前请看[知识库与 RAG 指南](https://github.com/wp1461772181-glitch/market-evidence-agent/blob/main/docs/knowledge-rag.md)。
+可选 BGE-M3 / Milvus 路径支持 dense、BM25、hybrid、RRF 和**可选 reranking**，并提供服务端范围约束与来源引用。基础 RAG 不要求 reranker 模型文件；启用额外能力前请看[知识库与 RAG 指南](https://github.com/wp1461772181-glitch/FinBot/blob/main/docs/knowledge-rag.md)。
 
 ## 🧭 流程图
 
@@ -152,8 +152,8 @@ Agent 可提出写操作：只有所有者确认冻结目标的卡片后才执�
 需要 Python **3.12**、Node.js **22**，以及已配置并初始化 PostgreSQL 的本地环境。基础 Python API 也以数据库已就绪为前提；迁移、worker 和 RAG 是额外设置。仓库根目录没有 `docker-compose.yml`。
 
 ```bash
-git clone https://github.com/wp1461772181-glitch/market-evidence-agent.git
-cd market-evidence-agent
+git clone https://github.com/wp1461772181-glitch/FinBot.git
+cd FinBot
 
 # 仅在没有现有配置时，从模板创建 .env
 [ -f .env ] || cp .env.example .env
@@ -286,7 +286,7 @@ Individual material analyses can be synthesized into a `ResearchBrief` with sour
 
 ### Optional knowledge retrieval (RAG)
 
-The optional BGE-M3 / Milvus path supports dense, BM25, hybrid, RRF, and **optional reranking**, with server-side scope constraints and source quotes. Reranker model files are not required for basic RAG. See the [knowledge and RAG guide](https://github.com/wp1461772181-glitch/market-evidence-agent/blob/main/docs/knowledge-rag.md) before enabling additional components.
+The optional BGE-M3 / Milvus path supports dense, BM25, hybrid, RRF, and **optional reranking**, with server-side scope constraints and source quotes. Reranker model files are not required for basic RAG. See the [knowledge and RAG guide](https://github.com/wp1461772181-glitch/FinBot/blob/main/docs/knowledge-rag.md) before enabling additional components.
 
 ## 🧭 Workflow
 
@@ -311,8 +311,8 @@ The shared diagram above shows the read and write paths. Public-web research is 
 Requires Python **3.12**, Node.js **22**, and a configured, initialized local PostgreSQL environment. The basic Python API also assumes the database is ready; migrations, workers, and RAG require additional setup. There is no root `docker-compose.yml`.
 
 ```bash
-git clone https://github.com/wp1461772181-glitch/market-evidence-agent.git
-cd market-evidence-agent
+git clone https://github.com/wp1461772181-glitch/FinBot.git
+cd FinBot
 
 # Create .env from the template only when no config already exists.
 [ -f .env ] || cp .env.example .env

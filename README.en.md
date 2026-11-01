@@ -2,7 +2,7 @@
 
 [中文](README.md) | [English](README.en.md)
 
-**Demo:** [Open the research workspace](https://wp1461772181-glitch.github.io/market-evidence-agent/) · **Repository:** [wp1461772181-glitch/market-evidence-agent](https://github.com/wp1461772181-glitch/market-evidence-agent)
+**Demo:** [Open the research workspace](https://wp1461772181-glitch.github.io/FinBot/) · **Repository:** [wp1461772181-glitch/FinBot](https://github.com/wp1461772181-glitch/FinBot)
 
 FinBot is a research workspace for individual US stock researchers. It brings saved market data, SEC filings, research materials, and versioned analyses together, with bounded Agent chat over saved evidence. Researchers can find leads in materials, inspect sources, save analyses, and review forecast versions and later revisions.
 
@@ -36,7 +36,7 @@ This is an execution trace, not the model's chain of thought: it records what th
 
 ## Try it
 
-1. Open the [online demo](https://wp1461772181-glitch.github.io/market-evidence-agent/). Visitors can browse; write operations require a personal identity.
+1. Open the [online demo](https://wp1461772181-glitch.github.io/FinBot/). Visitors can browse; write operations require a personal identity.
 2. In Model settings, enter a profile display name, endpoint, model ID, and your own model key. Run the connection test and save the profile. Select it in the chat composer to use it. See the [model profile and storage guide](docs/model-profile-storage.md).
 3. Ask about an original quote in saved materials, or about supporting evidence, counter evidence, and key numbers in a saved AMD analysis. Then inspect the cited source.
 
