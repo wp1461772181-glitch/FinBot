@@ -1770,7 +1770,7 @@ html,body,#root{max-width:100%}
 
 .nav-scrim{display:none}
 
-.app-rail{position:fixed!important;z-index:6;left:0;top:0;bottom:0;width:min(276px,calc(100vw - 58px));height:100vh;height:100dvh;transform:translateX(-105%);transition:transform .2s ease;box-shadow:0 15px 40px #13271f30}
+.app-rail{position:fixed!important;z-index:6;left:0;top:0;bottom:0;width:min(288px,calc(100vw - 58px));height:100vh;height:100dvh;transform:translateX(-105%);transition:transform .2s ease;box-shadow:0 15px 40px #13271f30}
 
 .app-rail.is-open{transform:translateX(0)}
 
@@ -1820,11 +1820,11 @@ html,body,#root{max-width:100%}
 
 /* Approved chat refinements: docked desktop navigation, centered transcript, and compact turn previews. */
 
-.app-frame.is-nav-pinned{grid-template-columns:240px minmax(0,1fr)!important}
+.app-frame.is-nav-pinned{grid-template-columns:288px minmax(0,1fr)!important}
 
-.app-frame.is-nav-pinned .nav-drawer-region{position:sticky;top:0;grid-column:1;grid-row:1;height:100dvh;width:240px;z-index:auto}
+.app-frame.is-nav-pinned .nav-drawer-region{position:sticky;top:0;grid-column:1;grid-row:1;height:100dvh;width:288px;z-index:auto}
 
-.app-frame.is-nav-pinned .app-rail{position:relative!important;inset:auto;width:240px;height:100%;transform:none;visibility:visible;box-sizing:border-box;box-shadow:none;z-index:auto}
+.app-frame.is-nav-pinned .app-rail{position:relative!important;inset:auto;width:288px;height:100%;transform:none;visibility:visible;box-sizing:border-box;box-shadow:none;z-index:auto}
 
 .app-frame.is-nav-pinned .rail-nav-close{display:inline-flex}
 
@@ -1852,7 +1852,7 @@ html,body,#root{max-width:100%}
 
 .owner-auth-close{position:absolute;right:12px;top:10px;border:0;background:transparent;color:#547164;font-size:24px;cursor:pointer}
 
-@media(max-width:760px){.app-frame.is-nav-pinned{grid-template-columns:minmax(0,1fr)!important}.app-frame.is-nav-pinned .nav-drawer-region{position:fixed;top:0;left:0;width:0;height:100dvh;grid-column:auto;grid-row:auto;z-index:66}.app-frame.is-nav-pinned .app-rail{position:fixed!important;z-index:6;inset:0 auto 0 0;width:min(276px,calc(100vw - 58px));height:100dvh;transform:translateX(0);box-shadow:0 15px 40px #13271f30}.app-frame.is-nav-pinned .rail-nav-close{display:inline-flex}}
+@media(max-width:760px){.app-frame.is-nav-pinned{grid-template-columns:minmax(0,1fr)!important}.app-frame.is-nav-pinned .nav-drawer-region{position:fixed;top:0;left:0;width:0;height:100dvh;grid-column:auto;grid-row:auto;z-index:66}.app-frame.is-nav-pinned .app-rail{position:fixed!important;z-index:6;inset:0 auto 0 0;width:min(288px,calc(100vw - 58px));height:100dvh;transform:translateX(0);box-shadow:0 15px 40px #13271f30}.app-frame.is-nav-pinned .rail-nav-close{display:inline-flex}}
 
 @media(max-width:760px){.app-frame.is-nav-pinned .nav-drawer-region{position:fixed}.app-frame.is-nav-pinned .app-rail{position:fixed!important}}
 

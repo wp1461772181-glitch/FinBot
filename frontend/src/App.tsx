@@ -28,10 +28,11 @@ type SupportedSymbol = string;
 type FilingState = { kind: "idle" } | { kind: "loading" } | { kind: "ready"; data: FilingInventory } | { kind: "error"; message: string };
 type WorkspaceSection = "overview" | "forecast" | "evidence" | "materials" | "revisions" | "evaluation" | "replay" | "agent" | "bot" | "admin" | "routines" | "news" | "skills" | "memory" | "me";
 type ResearchSection = Exclude<WorkspaceSection, "agent" | "bot" | "admin" | "routines" | "news" | "skills" | "memory" | "me">;
-// The personal-agent navigation groups the older sections: 公司 holds 总览; 预测 (its own sidebar entry since
-// the bot-first sidebar buried it two clicks deep under 公司) holds 预测工作台, 修订, 到期评估 and 历史回放;
-// 资料库 holds 材料库 and 证据.  The older hashes stay the addresses, so links inside
-// the older pages (#materials, #evidence/<id>/…) and the agent's open_page keep working unchanged.
+// The personal-agent navigation groups the older sections: 公司 holds 总览; 预测 holds 预测工作台, 修订, 到期评估
+// and 历史回放; 资料库 holds 材料库 and 证据.  Those six (公司、预测、资料库、技能、记忆、设置) are one 「更多」
+// control on the rail and on the mobile tab bar.  例行任务 is not one of them: it is a bot-rail row (with 新闻源
+// under it) and its own mobile tab, so it stays primary chrome.  The older hashes stay the addresses, so links
+// inside the older pages (#materials, #evidence/<id>/…) and the agent's open_page keep working unchanged.
 type NavGroup = "chat" | "routines" | "news" | "company" | "forecast" | "library" | "skills" | "memory" | "settings";
 const FORECAST_TABS = ["forecast", "revisions", "evaluation", "replay"] as const;
 const LIBRARY_TABS = ["materials", "evidence"] as const;
@@ -400,6 +401,53 @@ function WorkspaceIntro({ eyebrow, title, description, action }: { eyebrow: stri
   </section>;
 }
 
+type NavItem = { id: WorkspaceSection; group: NavGroup; label: string; hint: string; icon: string };
+
+/** 「更多」: the six secondary destinations.  The trigger stays highlighted, and its subtitle names the open section. */
+function MoreMenu({ items, activeGroup, onPick, placement, drop = "up" }: { items: NavItem[]; activeGroup: NavGroup; onPick: (section: WorkspaceSection) => void; placement: "rail" | "sheet"; drop?: "up" | "down" }) {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const active = items.find(item => item.group === activeGroup) ?? null;
+  const menuId = placement === "rail" ? "rail-more-menu" : "more-sheet";
+  useEffect(() => { setOpen(false); }, [activeGroup]);
+  useEffect(() => {
+    if (!open) return;
+    menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    const onPointer = (event: PointerEvent) => {
+      if (placement === "sheet" || rootRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("pointerdown", onPointer);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", onPointer);
+    };
+  }, [open, placement]);
+  function pick(id: WorkspaceSection) { setOpen(false); onPick(id); }
+  const trigger = <button ref={triggerRef} type="button" className={active ? (placement === "sheet" ? "is-active" : "active") : ""} aria-current={active && !open ? "page" : undefined} aria-expanded={open} aria-haspopup="menu" aria-controls={menuId} onClick={() => setOpen(value => !value)}>
+    <span aria-hidden="true">⋯</span>{placement === "sheet" ? t("更多") : <span><strong>{t("更多")}</strong><small>{active ? active.label : t("公司、预测与其它")}</small></span>}
+  </button>;
+  const menu = <div ref={menuRef} id={menuId} className={placement === "rail" ? `nav-more-menu${drop === "down" ? " is-down" : ""}` : "more-sheet"} role="menu" aria-label={t("更多")}>
+    {items.map(item => {
+      const current = item.group === activeGroup;
+      return <button key={item.id} type="button" role="menuitem" className={current ? "active" : ""} aria-current={current ? "page" : undefined} onClick={() => pick(item.id)}><span aria-hidden="true">{item.icon}</span><span><strong>{item.label}</strong><small>{item.hint}</small></span></button>;
+    })}
+  </div>;
+  if (placement === "sheet") return <div className="mobile-more">{trigger}{open && <div className="more-sheet-backdrop" onClick={() => setOpen(false)}><div onClick={event => event.stopPropagation()}>{menu}</div></div>}</div>;
+  return <div className="nav-more" ref={rootRef}>{trigger}{open && menu}</div>;
+}
+
 function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchInput, setWatchInput, addWatchSymbol, watchError, setWatchError, onModeChange, botRail, overlay, children }: { activeSection: WorkspaceSection; navigate: (section: WorkspaceSection) => void; symbol: string; symbols: string[]; onSelectStock: (ticker: SupportedSymbol) => void; watchInput: string; setWatchInput: (value: string) => void; addWatchSymbol: () => void; watchError: string; setWatchError: (value: string) => void; onModeChange:(mode:"guest"|"personal")=>void; botRail?: (close: () => void) => ReactNode; overlay?: ReactNode; children: ReactNode }) {
   const { locale, setLocale, t } = useLocale();
   const navRef = useRef<HTMLElement>(null);
@@ -430,8 +478,7 @@ function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchI
     if (itemRect.left < navRect.left) navElement.scrollLeft -= navRect.left - itemRect.left;
     else if (itemRect.right > navRect.right) navElement.scrollLeft += itemRect.right - navRect.right;
   }, [activeSection]);
-  const nav: Array<{ id: WorkspaceSection; group: NavGroup; label: string; hint: string; icon: string }> = [
-    { id: "agent", group: "chat", label: t("对话"), hint: t("首页"), icon: "✳" },
+  const moreItems: NavItem[] = [
     { id: "overview", group: "company", label: t("公司"), hint: t("研究总览"), icon: "◌" },
     { id: "forecast", group: "forecast", label: t("预测"), hint: t("预测、修订与回放"), icon: "◔" },
     { id: "materials", group: "library", label: t("资料库"), hint: t("证据与材料"), icon: "▤" },
@@ -440,10 +487,8 @@ function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchI
     { id: "admin", group: "settings", label: t("设置"), hint: t("模型与账户"), icon: "⚙" },
   ];
   const mobileTabs: Array<{ id: WorkspaceSection; label: string; icon: React.ReactNode; active: boolean }> = [
-    { id: "agent", label: t("对话"), icon: "✳", active: activeSection === "agent" },
+    { id: "agent", label: t("对话"), icon: "✳", active: activeSection === "agent" || activeSection === "bot" },
     { id: "routines", label: t("例行任务"), icon: <RoutineIcon />, active: activeSection === "routines" },
-    { id: "overview", label: t("公司"), icon: "◌", active: navGroup(activeSection) === "company" || navGroup(activeSection) === "forecast" },
-    { id: "me", label: t("我"), icon: "☺", active: ["me", "memory", "skills", "admin", "materials", "evidence"].includes(activeSection) },
   ];
   const research = isResearchSection(activeSection);
   const [theme, setTheme] = useState<ThemeChoice>(() => storedTheme());
@@ -455,7 +500,8 @@ function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchI
       <a className="workspace-brand" href="#agent" onClick={() => navigate("agent")} aria-label={`FinBot · ${t("对话")}`}><BrandLogo /><span>FinBot<br /><em>{t("研究助理")}</em></span></a>
       {botRail?.(() => { if (isNarrow || !pinned) setMenuOpen(false); })}
       <nav ref={navRef} className={`workspace-nav${botRail ? " is-bottom" : ""}`}>
-        {nav.filter(item => !botRail || item.id !== "agent").map((item) => <button key={item.id} type="button" className={navGroup(activeSection) === item.group ? "active" : ""} aria-current={navGroup(activeSection) === item.group ? "page" : undefined} onClick={() => drawerNavigate(item.id)}><span aria-hidden="true">{item.icon}</span><span><strong>{item.label}</strong><small>{item.hint}</small></span></button>)}
+        {!botRail && <button type="button" className={navGroup(activeSection) === "chat" ? "active" : ""} aria-current={navGroup(activeSection) === "chat" ? "page" : undefined} onClick={() => drawerNavigate("agent")}><span aria-hidden="true">✳</span><span><strong>{t("对话")}</strong><small>{t("首页")}</small></span></button>}
+        <MoreMenu items={moreItems} activeGroup={navGroup(activeSection)} onPick={drawerNavigate} placement="rail" drop={botRail ? "up" : "down"} />
       </nav>
       <div className="rail-bottom">{research && <span><span className="rail-review-dot" aria-hidden="true" />{<Tx text={"判断可回到原始来源查看"} />}</span>}</div>
       </aside>
@@ -498,6 +544,7 @@ function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchI
       <footer>{<Tx text={"FinBot · 本地研究记录 · 研究判断可追溯到原始来源"} />}</footer>
       <nav className="mobile-tabbar" aria-label={t("主要导航")}>
         {mobileTabs.map(tab => <button key={tab.id} type="button" aria-current={tab.active ? "page" : undefined} onClick={() => navigate(tab.id)}><span aria-hidden="true">{tab.icon}</span>{tab.label}</button>)}
+        <MoreMenu items={moreItems} activeGroup={navGroup(activeSection)} onPick={navigate} placement="sheet" />
       </nav>
     </div>
   </div>;

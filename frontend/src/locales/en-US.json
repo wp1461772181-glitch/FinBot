@@ -1739,5 +1739,7 @@
   "次": "times",
   "间隔要填整数，至少为 1。": "The interval must be a whole number, at least 1.",
   "执行次数要填整数，至少为 1。": "The run count must be a whole number, at least 1.",
-  "登录个人聊天后才能查看和管理新闻源。": "Sign in to personal chat to view and manage news sources."
+  "登录个人聊天后才能查看和管理新闻源。": "Sign in to personal chat to view and manage news sources.",
+  "更多": "More",
+  "公司、预测与其它": "Company, forecast, and more"
 }
