@@ -285,6 +285,8 @@ def test_a_turn_from_telegram_sends_only_the_bot_id_and_reads_the_stream(owner):
     bodies = []
 
     class Response:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
