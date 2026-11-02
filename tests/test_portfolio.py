@@ -15,7 +15,7 @@ from app.agent_tool_catalog import OWNER_ONLY, definitions, schemas
 from app.agent_workflow import consent
 from app.agent_workflow.models import AgentConsent
 from app.database import Base, SessionLocal, engine
-from app.models import MarketPrice
+from app.models import MarketPrice, MarketPriceRevision
 from app.portfolio import PortfolioError, Quote, Txn, clean_entry, replay, summarize
 
 OWNER = "owner"
@@ -116,6 +116,11 @@ def owner(monkeypatch, disposable_database, tmp_path):
     with SessionLocal() as db:
         for model in (PortfolioTransaction, PortfolioPlan, AgentConsent, AgentBot, AgentConversation):
             db.query(model).delete()
+        # The test database is shared by the whole session: other modules leave market_price_revisions rows that
+        # reference these prices (FK ondelete=RESTRICT), so drop the dependent revisions before the prices.
+        owned = db.query(MarketPrice.id).filter(MarketPrice.symbol.in_(["INTC", "AAPL"]))
+        db.query(MarketPriceRevision).filter(MarketPriceRevision.market_price_id.in_(owned.scalar_subquery())
+                                             ).delete(synchronize_session=False)
         db.query(MarketPrice).filter(MarketPrice.symbol.in_(["INTC", "AAPL"])).delete(synchronize_session=False)
         db.commit()
     from app.agent_workflow import direct, tools
@@ -418,3 +423,20 @@ def test_a_question_about_the_portfolio_is_answered_with_numbers_that_pass_verif
     dropped = run(bad)  # 777 is in no portfolio row
     assert dropped["status"] == "failed" and "777" not in dropped["answer"]
     assert dropped["audit"]["stop_reason"] == "unsupported_numeric_claim"
+
+
+def test_zz_leaves_a_price_revision_behind_for_a_shared_database(owner):
+    # Stand-in for other modules: they leave market_price_revisions rows pointing at prices of the same symbols.
+    price("INTC", date(2026, 10, 2), 61)
+    with SessionLocal() as db:
+        row = db.query(MarketPrice).filter_by(symbol="INTC").one()
+        db.add(MarketPriceRevision(market_price_id=row.id, symbol="INTC", trading_date=row.trading_date,
+                                   open=61, high=61, low=61, close=61, volume=1, source="test", revision_number=1,
+                                   content_hash="0" * 64, available_at=datetime.now(UTC), observed_at=datetime.now(UTC),
+                                   is_initial_backfill=True))
+        db.commit()
+
+
+def test_zz_fixture_setup_survives_foreign_revisions(owner):
+    with SessionLocal() as db:
+        assert db.query(MarketPrice).filter_by(symbol="INTC").count() == 0
