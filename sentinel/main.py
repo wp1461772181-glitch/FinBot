@@ -14,13 +14,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from . import notify, signals
+from .filings import FilingWatcher
 from .escalation import Escalator
 from .store import Store
 
 logger = logging.getLogger("sentinel")
 
 INTERVAL = 60.0
-FAST_JOBS = {"escalation": 15.0}  # the one-minute rule needs a finer tick than the other jobs
+FAST_JOBS = {"escalation": 15.0, "filings": 30.0}  # the one-minute rule needs a finer tick than the other jobs
 FAILURES_BEFORE_ALERT = 3
 BASELINE_MAX_AGE = 20 * 3600      # rebuilt about once a day
 SPLITS_MAX_AGE = 3600             # a split announced today must not wait for tomorrow's baseline
@@ -36,6 +37,8 @@ class Sentinel:
         self.worker: object | None = None  # the Popen we started, if still running
         self.cooldown = signals.Cooldown(self.store)
         self.escalator = Escalator(self.store, notify.Channels())
+        self.filings = FilingWatcher(self.store, self.config.get, post_event=self.post_event_now,
+                                     raise_alert=self.escalator.raise_alert)
 
     # --- jobs (each is one tick) -------------------------------------------------
     def check_health(self) -> None:
@@ -148,6 +151,15 @@ class Sentinel:
     def check_escalation(self) -> None:
         self.escalator.tick(self.config.get())
 
+    # --- earnings filings (Task 9) ---------------------------------------------------------------
+    def post_event_now(self, event_type: str, payload: dict) -> None:
+        signals.post_event(signals.api_base(self.config.get()), event_type, payload)
+
+    def check_filings(self) -> None:
+        now = time.time()
+        self.filings.poll(now)
+        self.filings.fallbacks(now)
+
     def send_heartbeat(self) -> None:
         url = os.environ.get("SENTINEL_HEARTBEAT_URL", "").strip()
         if url:
@@ -169,6 +181,8 @@ class Sentinel:
                 self.store.bump(event["id"])
                 return  # API still down: keep order, try next tick
             self.store.delete(event["id"])
+            if event["type"] == "earnings_detected":
+                self.filings.mark_delivered(event["payload"]["accession"], time.time())
 
     # --- threads -----------------------------------------------------------------
     def jobs(self) -> dict[str, Callable[[], None]]:
@@ -177,6 +191,7 @@ class Sentinel:
             "forecast": self.check_forecast_jobs,
             "signals": self.check_signals,
             "escalation": self.check_escalation,
+            "filings": self.check_filings,
             "heartbeat": self.send_heartbeat,
             "events": self.resend_events,
         }

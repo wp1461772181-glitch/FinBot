@@ -35,6 +35,11 @@ class Store:
                          "tg_chat_id INTEGER, tg_message_id INTEGER, last_sent_at REAL, resends INTEGER NOT NULL DEFAULT 0,"
                          "deferred INTEGER NOT NULL DEFAULT 0, digested_at REAL,"
                          "receipt TEXT, receipt_closed INTEGER NOT NULL DEFAULT 0, escalated_at REAL)")
+            conn.execute("CREATE TABLE IF NOT EXISTS earnings_seen ("
+                         "accession TEXT PRIMARY KEY, symbol TEXT NOT NULL, cik TEXT NOT NULL, held INTEGER NOT NULL,"
+                         "filed TEXT NOT NULL, accepted_at REAL NOT NULL, primary_doc TEXT, url TEXT,"
+                         "detected_at REAL NOT NULL, seeded INTEGER NOT NULL DEFAULT 0, delivered_at REAL, fallback_at REAL)")
+            conn.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, ts REAL NOT NULL)")
             conn.execute("CREATE TABLE IF NOT EXISTS price_state (symbol TEXT PRIMARY KEY, price REAL NOT NULL, ts REAL NOT NULL)")
 
     def _conn(self) -> sqlite3.Connection:
@@ -153,3 +158,36 @@ class Store:
             return None
         self.ack_alert(row["id"], now)
         return int(row["id"])
+
+    # --- earnings filings (Task 9) ------------------------------------------------------------------
+    def add_earnings(self, row: dict) -> bool:
+        """True when this accession is new (the primary key makes a repeat, or a restart, a no-op)."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO earnings_seen (accession, symbol, cik, held, filed, accepted_at, primary_doc, url, detected_at, seeded)"
+                " VALUES (:accession, :symbol, :cik, :held, :filed, :accepted_at, :primary_doc, :url, :detected_at, :seeded)", row)
+            return cur.rowcount > 0
+
+    def earnings_rows(self, where: str = "1=1", params: tuple = ()) -> list[dict]:
+        with self._conn() as conn:
+            return [dict(r) for r in conn.execute(f"SELECT * FROM earnings_seen WHERE {where} ORDER BY accepted_at", params).fetchall()]
+
+    def update_earnings(self, accession: str, **fields) -> None:
+        sets = ", ".join(f"{name} = ?" for name in fields)
+        with self._conn() as conn:
+            conn.execute(f"UPDATE earnings_seen SET {sets} WHERE accession = ?", (*fields.values(), accession))
+
+    def last_earnings_date(self, symbol: str):
+        from datetime import date
+        with self._conn() as conn:
+            row = conn.execute("SELECT MAX(filed) FROM earnings_seen WHERE symbol = ?", (symbol,)).fetchone()
+        return date.fromisoformat(row[0]) if row and row[0] else None
+
+    def get_kv(self, key: str):
+        with self._conn() as conn:
+            row = conn.execute("SELECT value, ts FROM kv WHERE key = ?", (key,)).fetchone()
+        return None if row is None else (json.loads(row["value"]), row["ts"])
+
+    def set_kv(self, key: str, value) -> None:
+        with self._conn() as conn:
+            conn.execute("INSERT OR REPLACE INTO kv (key, value, ts) VALUES (?, ?, ?)", (key, json.dumps(value), time.time()))
