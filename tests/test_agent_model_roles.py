@@ -3,7 +3,7 @@ import pytest
 
 from app import agent_model_catalog as catalog
 from app import agent_model_roles as roles
-from app.agent_chat_models import AgentModelRole
+from app.agent_chat_models import AgentModelEntry, AgentModelRole
 from app.database import SessionLocal
 from tests.test_agent_bots import GUEST, H, KEY_A, OWNER_HASH, owner  # noqa: F401  (fixture)
 
@@ -16,7 +16,12 @@ def two_models(owner):
     for name in ("alpha", "bravo"):
         catalog.save_entry(name, display_name=name, provider="deepseek", model=f"m-{name}", api_key=KEY_A,
                            is_default=name == "alpha", create=True)
-    return owner
+    yield owner
+    # The shared test database goes on to other modules (test_agent_tasks expects an empty catalog).
+    with SessionLocal() as db:
+        db.query(AgentModelRole).delete()
+        db.query(AgentModelEntry).delete()
+        db.commit()
 
 
 def test_default_role_resolves_to_server_default(two_models):
