@@ -11,6 +11,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from . import notify, signals
 from .store import Store
@@ -19,6 +20,8 @@ logger = logging.getLogger("sentinel")
 
 INTERVAL = 60.0
 FAILURES_BEFORE_ALERT = 3
+BASELINE_MAX_AGE = 20 * 3600      # rebuilt about once a day
+SPLITS_MAX_AGE = 3600             # a split announced today must not wait for tomorrow's baseline
 
 
 class Sentinel:
@@ -29,6 +32,7 @@ class Sentinel:
         self.health_failures = 0
         self.alerted = False
         self.worker: object | None = None  # the Popen we started, if still running
+        self.cooldown = signals.Cooldown(self.store)
 
     # --- jobs (each is one tick) -------------------------------------------------
     def check_health(self) -> None:
@@ -59,6 +63,85 @@ class Sentinel:
             return
         self.worker = signals.spawn_worker()
 
+    # --- intraday moves (Task 11) ----------------------------------------------------------------
+    def baseline_for(self, symbol: str, now: datetime) -> dict:
+        """``{"baseline": {...}, "splits": [...]}``; the 20-day sigma baseline daily, the split list hourly."""
+        stamp = now.timestamp()
+        row = self.store.get_baseline(symbol)
+        data, baseline_at, splits_at = (row["data"], row["baseline_at"], row["splits_at"]) if row else ({}, 0.0, 0.0)
+        if not row or stamp - baseline_at > BASELINE_MAX_AGE:
+            chart = signals.fetch_chart(symbol, "5m", "60d", events=True)
+            data = {"baseline": signals.compute_baseline(chart["bars"], now), "splits": chart["splits"]}
+            baseline_at = splits_at = stamp
+        elif stamp - splits_at > SPLITS_MAX_AGE:
+            data["splits"] = signals.fetch_chart(symbol, "1d", "5d", prepost=False, events=True)["splits"]
+            splits_at = stamp
+        else:
+            return data
+        self.store.set_baseline(symbol, data, baseline_at, splits_at)
+        return data
+
+    def evaluate_symbol(self, symbol: str, held: bool, now: datetime, snap: dict) -> list[dict]:
+        """The alerts (text plus how to escalate them) for one symbol at this minute."""
+        base = self.baseline_for(symbol, now)
+        chart = signals.fetch_chart(symbol, "1m", "1d")
+        return self.alerts_from(symbol, held, now, snap, chart["bars"], chart["prev_close"],
+                                base.get("baseline"), base.get("splits"))
+
+    def alerts_from(self, symbol: str, held: bool, now: datetime, snap: dict, bars: list[dict], prev_close,
+                    baseline: dict | None, splits) -> list[dict]:
+        """Signals -> cooldown -> alert dicts.  Separate from the fetching so it can be run on built data."""
+        position = next((p for p in snap.get("positions") or [] if p.get("symbol") == symbol), None) if held else None
+        total = snap.get("total_assets")
+        found = signals.detect(symbol, bars, now, baseline, prev_close, held=held, splits=splits)
+        valid = [b for b in bars if signals._bar_ok(b)]
+        price = float(valid[-1]["close"]) if valid and not signals.is_stale(valid[-1]["ts"], now) else None
+        if held and price is not None:
+            plan = next((p for p in snap.get("plans") or [] if p.get("symbol") == symbol), None)
+            if plan:
+                found += signals.plan_crossings(symbol, self.store.get_price(symbol), price, plan)
+        if price is not None:
+            self.store.set_price(symbol, price)
+        alerts = []
+        for sig in found:
+            if sig.kind == "split":
+                if not held:
+                    continue
+                key, mult = "split", 0.0
+            else:
+                key, mult = sig.key, sig.sigma_mult
+            if not self.cooldown.allow(symbol, key, mult, now.timestamp()):
+                continue
+            weight = None
+            if position and total and price:
+                weight = signals.position_weight(position, price, total) * 100
+            down = sig.direction == "down" and held and sig.kind not in ("split", "plan_target")
+            alerts.append({
+                "symbol": symbol, "kind": sig.kind, "direction": sig.direction, "held": held,
+                "text": signals.format_alert(sig, position, total),
+                "escalate": down,                              # only a fall on a holding escalates (Task 12)
+                "weight_pct": weight,
+                "earnings_unacked": down and self.store.earnings_alert_unacked(symbol),
+            })
+        return alerts
+
+    def check_signals(self) -> None:
+        now = datetime.now(UTC)
+        if not signals.in_trading_session(now):
+            return
+        snap = self.config.get()
+        held = [p["symbol"] for p in snap.get("positions") or [] if p.get("symbol") and p.get("shares")]
+        queued = [s for s in snap.get("research_queue") or [] if s not in held]
+        for symbol, is_held in [(s, True) for s in held] + [(s, False) for s in queued]:
+            try:
+                for alert in self.evaluate_symbol(symbol, is_held, now, snap):
+                    self.emit_alert(snap, alert)
+            except Exception as exc:  # one symbol failing must not stop the others
+                logger.warning("signal check for %s failed: %s", symbol, type(exc).__name__)
+
+    def emit_alert(self, snap: dict, alert: dict) -> None:
+        notify.notify(snap, alert["text"])
+
     def send_heartbeat(self) -> None:
         url = os.environ.get("SENTINEL_HEARTBEAT_URL", "").strip()
         if url:
@@ -86,6 +169,7 @@ class Sentinel:
         return {
             "health": self.check_health,
             "forecast": self.check_forecast_jobs,
+            "signals": self.check_signals,
             "heartbeat": self.send_heartbeat,
             "events": self.resend_events,
         }
