@@ -719,7 +719,7 @@ export type CatalogModel = { name: string; display_name: string; provider: strin
 export type ModelCatalog = { models: CatalogModel[]; default: string | null; config_file: { present: boolean; problems: string[] } };
 const BOT_ERRORS:Record<string,string>={invalid_name:"名字无效（1 到 40 字）。",name_taken:"已有同名 bot。",invalid_title:"头衔最多 60 字。",invalid_description:"说明最多 4000 字。",
   invalid_focus:"关注范围无效。",invalid_focus_symbol:"股票代码无效，例如 AAPL 或 BRK.B。",too_many_companies:"关注公司最多 20 家。",invalid_tool_scope:"工具范围无效。",
-  unknown_tool:"工具范围里有不存在的工具。",unknown_model:"模型目录里没有这个模型。",invalid_avatar:"头像最多 16 个字符。",invalid_group:"分组名最多 40 字。",
+  unknown_tool:"工具范围里有不存在的工具。",unknown_model:"模型目录里没有这个模型。",unknown_role:"没有这个模型用途。",invalid_avatar:"头像最多 16 个字符。",invalid_group:"分组名最多 40 字。",
   default_bot_not_hidden:"默认 bot 不能隐藏。",default_bot_undeletable:"默认 bot 不能删除。",invalid_notify_cap:"每日通知上限为 0 到 50。",too_many_bots:"bot 已达上限（30 个）。",
   bot_not_found:"bot 不存在或已删除。",unknown_template:"模板无效。",unknown_skill:"这个技能不存在。",model_exists:"已有同名模型。",model_not_found:"模型不存在。",model_in_use:"有 bot 正在用这个模型，先给它们换模型。",
   model_from_file:"这个模型来自服务器配置文件，只能在服务器上改。",default_from_file:"默认模型由服务器配置文件指定。",invalid_provider:"模型服务无效。",invalid_model:"Model ID 无效。",
@@ -751,6 +751,9 @@ export async function deleteCatalogModel(name:string):Promise<void>{ await botJs
 export type CatalogProbe = { name?: string; provider: string; model?: string; base_url?: string | null; api_key?: string; key_env?: string };
 export async function testCatalogModel(value:CatalogProbe,signal?:AbortSignal):Promise<void>{ await botJson("model-catalog/test",{method:"POST",body:value,signal},"连接失败，请检查服务、Model ID 和 key。"); }
 export async function discoverCatalogModels(value:CatalogProbe,signal?:AbortSignal):Promise<{status:string;ordering:string;models:Array<{id:string;name:string}>}>{ return await botJson("model-catalog/models",{method:"POST",body:value,signal},"暂时无法获取服务商模型列表。"); }
+export type ModelRoles = { roles: Record<string, string | null> };
+export async function getModelRoles(signal?:AbortSignal):Promise<ModelRoles>{ return await botJson("model-roles",{signal},"模型目录暂时无法读取。"); }
+export async function setModelRole(role:string,model:string|null):Promise<void>{ await botJson(`model-roles/${encodeURIComponent(role)}`,{method:"PUT",body:{model}},"保存失败。"); }
 export async function setDefaultCatalogModel(name:string):Promise<CatalogModel>{ return (await botJson<{model:CatalogModel}>("model-catalog/default",{method:"PUT",body:{name}},"保存失败。")).model; }
 
 // Skills (stage E): recipes — name, one-line description, steps, allowed catalog tools, optional output template; never code.

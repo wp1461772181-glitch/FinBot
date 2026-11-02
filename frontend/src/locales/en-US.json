@@ -1836,5 +1836,8 @@
   "引用的来源里找不到这个说法": "The cited source does not state this",
   "没有给出可核对的依据": "No checkable basis was given",
   "推算值没有对应的计算结果": "The derived value has no matching calculation",
-  "未能与来源核对": "Could not be checked against a source"
+  "未能与来源核对": "Could not be checked against a source",
+  "财报判断模型": "Earnings judgment model",
+  "读财报、判断涨跌用的模型；不选就用服务器默认模型。": "The model that reads earnings releases and judges up or down; leave unset to use the server default model.",
+  "没有这个模型用途。": "Unknown model purpose."
 }

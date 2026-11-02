@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, SecretStr
 
 from . import agent_bots as bots
 from . import agent_model_catalog as catalog
+from . import agent_model_roles as roles
 from .agent_chat_store import owner_hash
 from .agent_chat_stream import _owner_only
 
@@ -241,6 +242,29 @@ async def default_model_endpoint(body: DefaultModelBody, x_chat_session: str | N
         return {"model": await asyncio.to_thread(catalog.set_default, body.name)}
     except catalog.CatalogError as exc:
         raise _catalog_error(exc)
+
+
+# --- which catalog model does which job (财报判断模型 etc.) -----------------------------------------------
+
+class ModelRoleBody(BaseModel):
+    # null: the server's default model.
+    model: str | None = Field(default=None, max_length=40)
+
+
+@router.get("/model-roles")
+async def model_roles_endpoint(x_chat_session: str | None = Header(default=None)):
+    credential = _owner_only(x_chat_session)
+    return {"roles": await asyncio.to_thread(roles.all_roles, owner_hash(credential))}
+
+
+@router.put("/model-roles/{role}")
+async def set_model_role_endpoint(role: str, body: ModelRoleBody, x_chat_session: str | None = Header(default=None)):
+    credential = _owner_only(x_chat_session)
+    try:
+        model = await asyncio.to_thread(roles.set_role, owner_hash(credential), role, body.model)
+    except roles.RoleError as exc:
+        raise HTTPException(422, str(exc))
+    return {"role": role, "model": model}
 
 
 # --- a bot's own Telegram bot (UX batch 2, P4); owner only.  The default bot's is the shared one

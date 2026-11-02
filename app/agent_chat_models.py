@@ -254,6 +254,16 @@ class AgentModelEntry(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class AgentModelRole(Base):
+    """Which catalog model does a job (agent_model_roles): ``earnings`` reads earnings releases, ``forecast`` is
+    reserved for the forecast job.  No row means the server's default model."""
+    __tablename__ = "agent_model_roles"
+    owner_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    role: Mapped[str] = mapped_column(String(16), primary_key=True)
+    model_name: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class AgentTelegramBind(Base):
     """The owner's Telegram bridge binding.  The bot token is encrypted with secret_box, never
     returned by any endpoint.  The one-time bind code lives here (hash of a random short code)

@@ -4,7 +4,7 @@
 import { PortfolioIcon } from "./PortfolioPage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { deleteBotTelegram, getBotTelegram, saveBotTelegramToken, startBotTelegramBind, unbindBotTelegram, type BotTelegramStatus } from "./api";
-import { addCatalogModel, createBot, deleteBot, deleteCatalogModel, discoverCatalogModels, getBotTemplates, getChatMode, getModelCatalog, listBots, listSkills, setDefaultCatalogModel, testCatalogModel, updateBot, updateCatalogModel,
+import { addCatalogModel, createBot, deleteBot, deleteCatalogModel, discoverCatalogModels, getBotTemplates, getChatMode, getModelCatalog, getModelRoles, listBots, listSkills, setDefaultCatalogModel, setModelRole, testCatalogModel, updateBot, updateCatalogModel,
   type Skill, type Bot, type BotFields, type BotTemplate, type BotTool, type ModelCatalog } from "./api";
 import { catalogName, entryMoved, entryProblem, probeFor, saveBody, siblingsToInert, type CatalogEntryDraft } from "./catalog-form.mjs";
 import { createModelDiscoveryScheduler } from "./model-discovery.mjs";
@@ -384,6 +384,30 @@ const blankEntry = (taken: string[]): CatalogEntryDraft => ({ name: catalogName(
 const DISCOVERY_ERRORS: Record<string, string> = { model_discovery_auth_required: "请填写此服务商的 API key 后重试。", model_discovery_access_denied: "当前 API key 无权读取模型列表。",
   model_discovery_rate_limited: "模型目录请求被限流，请稍后重试。", model_discovery_timeout: "获取模型列表超时，请稍后重试。" };
 
+
+/** 财报判断模型: the catalog model that reads earnings releases (agent_model_roles, role "earnings"); empty = the server default. */
+function EarningsModelSelect({ catalog }: { catalog: ModelCatalog }) {
+  const { t } = useLocale();
+  const [chosen, setChosen] = useState<string>(""), [busy, setBusy] = useState(false), [note, setNote] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    getModelRoles(controller.signal).then(r => { if (!controller.signal.aborted) setChosen(r.roles.earnings ?? ""); }).catch(() => {});
+    return () => controller.abort();
+  }, []);
+  const known = chosen === "" || catalog.models.some(m => m.name === chosen);
+  async function change(value: string) {
+    setBusy(true); setNote("");
+    try { await setModelRole("earnings", value || null); setChosen(value); setNote(t("已保存。")); } catch (err) { setNote(message(err, t("保存失败。"))); } finally { setBusy(false); }
+  }
+  return <label className="earnings-model-select">{t("财报判断模型")}
+    <select disabled={busy} value={known ? chosen : ""} onChange={e => void change(e.target.value)}>
+      <option value="">{t("服务器默认模型")}{catalog.default ? ` (${catalog.default})` : ""}</option>
+      {catalog.models.map(m => <option key={m.name} value={m.name}>{m.display_name || m.name}</option>)}
+    </select>
+    <small>{t("读财报、判断涨跌用的模型；不选就用服务器默认模型。")}</small>{note && <small role="status">{note}</small>}
+  </label>;
+}
+
 /** Settings: the server's model catalog, the only place models are configured (UX batch 3: the browser model
  *  profiles are gone).  ＋ 添加模型 / 编辑 open the same dialog the browser profiles had — provider, Base URL, Model ID,
  *  服务商可用模型 with 刷新, key, 测试并保存 — but the key goes to the server once and is never read back. */
@@ -502,6 +526,7 @@ export function ModelCatalogCard() {
       <button type="button" disabled={busy} className="profile-card profile-add" onClick={() => open(blankEntry(taken))}><strong>{t("＋ 添加模型")}</strong><small>{t("添加一个已兼容的服务配置")}</small></button>
     </div>}
     {catalog && !catalog.models.length && <small>{t("目录是空的：先添加一个模型，bot 才能回答。")}</small>}
+    {catalog && catalog.models.length > 0 && <EarningsModelSelect catalog={catalog} />}
     {status && <p role="status">{status}</p>}
     {entry && <div className="profile-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) close(); }}>
       <section ref={modal} className="profile-modal" role="dialog" aria-modal="true" aria-labelledby="catalog-entry-title">
