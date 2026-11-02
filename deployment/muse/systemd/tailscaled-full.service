@@ -1,0 +1,13 @@
+[Unit]
+Description=Tailscale (official build, userspace networking) for FinBot Funnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/finbot/proxy.env
+ExecStart=/home/hatch/.local/bin/tailscaled --socket=/home/hatch/.local/share/tailscale/tailscaled.sock --statedir=/home/hatch/.local/share/tailscale --tun=userspace-networking
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
