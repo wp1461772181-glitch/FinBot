@@ -231,6 +231,23 @@ def create_tables() -> None:
             from .knowledge.source_sync import start_source_sync
             start_source_sync(SessionLocal)
 
+_background_tasks: list = []
+
+
+@app.on_event("startup")
+async def start_background_loops() -> None:
+    from . import background
+    if background.enabled():
+        _background_tasks.extend(background.start())
+
+
+@app.on_event("shutdown")
+async def stop_background_loops() -> None:
+    from . import background
+    await background.stop(_background_tasks)
+    _background_tasks.clear()
+
+
 @app.on_event("shutdown")
 def stop_knowledge_runtime() -> None:
     from .knowledge.source_sync import stop_source_sync
