@@ -1,0 +1,12 @@
+[Unit]
+Description=FinBot local tunnel to the Mac retrieval service (127.0.0.1:18765, tailnet via proxy port 3130)
+After=network-online.target
+[Service]
+EnvironmentFile=/etc/finbot/proxy.env
+Environment=TUNNEL_TARGET=100.107.1.39:8765 TUNNEL_PORT=18765 TUNNEL_PROXY_PORT=3130
+ExecStart=/usr/bin/python3 /home/hatch/workspace/projects/FinBot/deployment/muse/tunnel.py
+Restart=always
+RestartSec=3
+MemoryMax=64M
+[Install]
+WantedBy=multi-user.target

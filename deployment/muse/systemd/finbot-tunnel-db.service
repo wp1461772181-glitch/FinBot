@@ -1,0 +1,12 @@
+[Unit]
+Description=FinBot local tunnel to Supabase (127.0.0.1:15432)
+After=network-online.target
+[Service]
+EnvironmentFile=/etc/finbot/proxy.env
+Environment=TUNNEL_TARGET=db.doftncswxfxbakyjlnfv.supabase.co:5432 TUNNEL_PORT=15432
+ExecStart=/usr/bin/python3 /home/hatch/workspace/projects/FinBot/deployment/muse/tunnel.py
+Restart=always
+RestartSec=3
+MemoryMax=64M
+[Install]
+WantedBy=multi-user.target

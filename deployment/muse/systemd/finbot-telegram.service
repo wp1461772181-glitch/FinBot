@@ -1,0 +1,15 @@
+[Unit]
+Description=FinBot Telegram bridge (only one process may long-poll a token: keep the Mac one stopped)
+After=finbot-tunnel-db.service finbot-api.service
+Wants=finbot-tunnel-db.service
+[Service]
+WorkingDirectory=/home/hatch/workspace/projects/FinBot
+EnvironmentFile=/home/hatch/workspace/projects/FinBot/.env
+EnvironmentFile=/etc/finbot/muse.env
+Environment=DB_POOL_SIZE=1 DB_MAX_OVERFLOW=1
+ExecStart=/home/hatch/workspace/projects/FinBot/.venv/bin/python scripts/run_telegram_bridge.py
+Restart=always
+RestartSec=10
+MemoryMax=400M
+[Install]
+WantedBy=multi-user.target
