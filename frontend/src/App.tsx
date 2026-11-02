@@ -167,8 +167,8 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
   // Bots (owner only): the sidebar lists them; #agent is the default bot's line, #bot/<id> another's.
   const botList = useBots(personal);
   // A background answer finished: refresh the list so its last line and unread count are current.
-  const unseenCount = lineStatus.unseen.length, reloadBots = useRef(botList.reload); reloadBots.current = botList.reload;
-  useEffect(() => { if (unseenCount) void reloadBots.current(); }, [unseenCount]);
+  const unseenCount = lineStatus.unseen.length, reloadBotsRef = useRef(botList.reload); reloadBotsRef.current = botList.reload;
+  useEffect(() => { if (unseenCount) void reloadBotsRef.current(); }, [unseenCount]);
   const [botId, setBotId] = useState(() => botFromHash(window.location.hash));
   const [newBotOpen, setNewBotOpen] = useState(false);
   useEffect(() => { const read = () => setBotId(botFromHash(window.location.hash)); window.addEventListener("hashchange", read); return () => window.removeEventListener("hashchange", read); }, []);
