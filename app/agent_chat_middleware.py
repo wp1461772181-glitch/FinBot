@@ -83,6 +83,9 @@ def create_agent_chat_access_middleware(public_mode: bool, access_key: str, owne
             chat_session = request.headers.get("X-Chat-Session", "")
             if not 32 <= len(chat_session) <= 256:
                 return JSONResponse(status_code=401, content={"detail": "chat_session_required"}, headers={"Cache-Control": "no-store"})
+        # Sentinel endpoints authenticate themselves (loopback peer + X-Sentinel-Token) in the handler.
+        if request.url.path.startswith("/agent-chat/internal/sentinel/"):
+            return await call_next(request)
         public_read = request.method in {"GET", "HEAD"} or request.url.path == "/health" or request.method == "OPTIONS"
         if not is_public and not owner_configured_now:
             response = await call_next(request)

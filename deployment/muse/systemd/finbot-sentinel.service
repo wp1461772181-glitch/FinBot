@@ -1,0 +1,14 @@
+[Unit]
+Description=FinBot sentinel (stdlib-only watchdog: API health, forecast worker launcher, heartbeat)
+After=network-online.target
+[Service]
+WorkingDirectory=/home/hatch/workspace/projects/FinBot
+EnvironmentFile=/home/hatch/workspace/projects/FinBot/.env
+EnvironmentFile=/etc/finbot/muse.env
+EnvironmentFile=/etc/finbot/proxy.env
+ExecStart=/home/hatch/workspace/projects/FinBot/.venv/bin/python -m sentinel.main
+Restart=always
+RestartSec=5
+MemoryMax=300M
+[Install]
+WantedBy=multi-user.target

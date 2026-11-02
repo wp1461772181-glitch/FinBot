@@ -692,7 +692,10 @@ async def get_research_queue_endpoint(x_chat_session: str | None = Header(defaul
 async def put_research_queue_endpoint(body: ResearchQueueBody, x_chat_session: str | None = Header(default=None)):
     from .agent_chat_store import put_research_queue
     credential = _owner_only(x_chat_session)
-    return {"symbols": await put_research_queue(credential, body.symbols)}
+    queue = await put_research_queue(credential, body.symbols)
+    from .sentinel_bridge import refresh_sentinel_snapshot
+    await asyncio.to_thread(refresh_sentinel_snapshot)
+    return {"symbols": queue}
 
 
 

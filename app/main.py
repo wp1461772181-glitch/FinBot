@@ -124,6 +124,8 @@ from .agent_bots_api import router as agent_bots_router
 app.include_router(agent_bots_router)
 from .agent_skills_api import router as agent_skills_router
 app.include_router(agent_skills_router)
+from .sentinel_api import router as sentinel_router
+app.include_router(sentinel_router)
 app.include_router(knowledge_router)
 app.include_router(agent_chat_identity_router)
 app.include_router(forecast_v2_router)
@@ -220,6 +222,9 @@ def create_tables() -> None:
     with SessionLocal() as session:
         seed_faq(session)
         session.commit()
+    # The sentinel keeps working from this file while the API is down.
+    from .sentinel_bridge import refresh_sentinel_snapshot
+    refresh_sentinel_snapshot()
     if os.getenv("RAG_ENABLED", "false").strip().lower() in {"1", "true", "yes"}:
         if os.getenv("RAG_REMOTE_URL", "").strip():
             # Retrieval, indexing and source sync live on the Mac service; this process stays torch-free.
