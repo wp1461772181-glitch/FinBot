@@ -63,10 +63,19 @@ def test_saved_lookup_precedes_answer_and_has_citations(stream_fixture):
     assert 'event: done' in wire and 'event: citations' in wire
     assert any(k.get('tool_calls',{}).get('audit',{}).get('tool_calls')==2 for _,k in stored)
 
-def test_invalid_citation_is_rejected_before_any_answer_delta(stream_fixture):
+def test_invalid_citation_is_flagged_not_deleted_and_stored_for_replay(stream_fixture,monkeypatch):
+    import app.agent_chat_stream as stream
     send,classification,_,_,stored,_,decisions=stream_fixture;classification['category']='D';decisions.append({'content':'made up [99]'})
     events=frames(asyncio.run(send()));final=next(d for e,d in events if e=='done')
-    assert final['reason']=='invalid_citation' and 'made up' not in ''.join(d.get('text','') for e,d in events)
+    # The sentence stays; the stream and the stored message carry it as an unverified line.
+    assert final['reason']=='invalid_citation' and 'made up' in ''.join(d.get('text','') for e,d in events)
+    flagged=next(d for e,d in events if e=='unverified_lines')['items']
+    assert flagged[0]['line'].startswith('made up') and flagged[0]['reason']=='invalid_citation'
+    protocol=next(k['tool_calls'] for _,k in stored if isinstance(k.get('tool_calls'),dict) and k['tool_calls'].get('unverified_lines'))
+    assert protocol['unverified_lines']==flagged
+    async def rows(*_a,**_k):return {'messages':[{'role':'assistant','content':'made up [99]','status':'complete','turn_id':'turn','tool_calls':protocol}],'has_more':False,'next_before':None}
+    monkeypatch.setattr(stream,'owned_message_page',rows)
+    assert asyncio.run(stream.get_messages('conversation','owner'))['messages'][0]['unverified_lines']==flagged
 
 
 def test_ask_user_card_survives_sse_and_history(stream_fixture,monkeypatch):

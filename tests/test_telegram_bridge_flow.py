@@ -114,3 +114,25 @@ def test_a_message_telegram_accepts_goes_out_once():
     client = _client([200])
     asyncio.run(bridge._send_text(client, TOKEN, OWNER_ID, "营收 2,817.24 亿美元"))
     assert len(client.bodies) == 1
+
+
+def test_unverified_lines_carry_the_unverified_suffix_in_telegram():
+    """The stream's unverified_lines are flagged in the chat text; sentences that checked out are untouched."""
+    events = [
+        ("delta", {"text": "AMD 收盘价为 100 美元 [1]。\nAMD 成交量为 999 万股 [1]。\n\n（另有 1 处表述未能与来源核对，已保留并标注“证据不足”。）"}),
+        ("unverified_lines", {"items": [{"line": "AMD 成交量为 999 万股 [1]。", "reason": "unsupported_numeric_claim", "numbers": ["999 万"]}]}),
+    ]
+    answer, _, _ = bridge.format_turn(events)
+    lines = answer.split("\n")
+    assert lines[0] == "AMD 收盘价为 100 美元。"
+    assert lines[1] == "AMD 成交量为 999 万股。（未核实）"
+    assert "[1]" not in answer and answer.count("（未核实）") == 1
+
+
+def test_a_table_row_and_a_bullet_get_the_suffix_too():
+    from app.agent_telegram import chat_text
+    flagged = [{"line": "| 成交量 | 999 万股 [1] |", "reason": "unsupported_numeric_claim", "numbers": []},
+               {"line": "- 开盘价 998 美元 [1]", "reason": "unsupported_numeric_claim", "numbers": []}]
+    text = "| 成交量 | 999 万股 [1] |\n- 开盘价 998 美元 [1]\n- 收盘价 100 美元 [1]"
+    out = chat_text(text, flagged).split("\n")
+    assert out[0].endswith("（未核实）") and out[1].endswith("（未核实）") and not out[2].endswith("（未核实）")

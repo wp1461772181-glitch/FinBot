@@ -332,19 +332,22 @@ def format_turn(events: list[tuple[str, dict]]):
     from app.agent_telegram import chat_text
     answer_parts: list[str] = []
     cards: list[dict] = []
+    unverified: list[dict] = []
     conversation_id = None
     for kind, data in events:
         if kind == "conversation":
             conversation_id = data.get("conversation_id")
         elif kind == "delta":
             answer_parts.append(str(data.get("text", "")))
+        elif kind == "unverified_lines":
+            unverified.extend(item for item in data.get("items") or [] if isinstance(item, dict))
         elif kind == "clarification":
             # The stream names the card ``request_id`` (agent_chat_stream); the consent record calls it ``id``.
             card = dict(data)
             if not card.get("id") and card.get("request_id"):
                 card["id"] = card["request_id"]
             cards.append(card)
-    return chat_text("".join(answer_parts)), cards, conversation_id
+    return chat_text("".join(answer_parts), unverified), cards, conversation_id
 
 
 def _make_keyboard(cards: list[dict], pending: dict, cid: str, credential: str, bot_id: str | None = None,

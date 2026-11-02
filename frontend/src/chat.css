@@ -70,6 +70,10 @@
 .agent-history-row:hover .agent-history-archive, .agent-history-archive:focus-visible, .agent-history-row:focus-within .agent-history-archive { opacity: 1; }
 .agent-history-archive:hover { background: var(--c-line); color: var(--c-ink); }
 .citation-unmatched { color: #8a5b48; cursor: help; border-bottom: 1px dotted currentColor; }
+.unverified-flag { display: inline-flex; align-items: baseline; gap: .4em; margin-left: .35em; padding: 0 .5em; border-radius: 999px; font-size: .78em; line-height: 1.7; color: #8a5b48; background: rgba(176, 125, 62, .14); border: 1px solid rgba(176, 125, 62, .45); vertical-align: baseline; }
+.unverified-flag-number { color: #8f2f2f; background: rgba(176, 58, 58, .16); border: 1px solid rgba(176, 58, 58, .7); font-weight: 600; }
+.unverified-ask { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+.unverified-ask:hover, .unverified-ask:focus-visible { text-decoration-thickness: 2px; }
 .markdown-body a.citation-ref {
   display: inline-flex;
   align-items: center;

@@ -13,7 +13,8 @@ def turn():
 def test_bad_passage_does_not_erase_supported_passage(bad):
     result=turn().finish('AMD 收盘价为100美元[1]。\n'+bad)
     assert '100美元' in result['answer'] and '[1]' in result['answer']
-    assert '999' not in result['answer'] and '[99]' not in result['answer'] and 'CEO' not in result['answer']
+    # The unsupported passage is kept, and reported as unverified; nothing is deleted.
+    assert bad in result['answer'] and len(result['unverified_lines'])==1 and result['unverified_lines'][0]['line'].startswith(bad.rstrip('。')[:6])
     assert result['status']=='partially_succeeded'
 
 def test_stock_source_does_not_require_a_stock_keyword_in_every_sentence():
@@ -24,11 +25,13 @@ def test_ordinary_uncited_fact_cannot_survive_a_supported_price_sentence():
     t=turn();t.observations=[{'accepted_evidence':True}]
     result=t.finish('AMD 收盘价为100美元[1]。\nAMD revenue declined materially.')
     assert result['status']=='partially_succeeded' and '100美元' in result['answer']
-    assert 'declined' not in result['answer'] and result['reason']=='missing_citation'
+    assert 'declined' in result['answer'] and result['reason']=='missing_citation'
+    assert [x['line'] for x in result['unverified_lines']]==['AMD revenue declined materially.']
 
 def test_bare_factual_number_is_checked_against_the_attached_source():
     result=turn().finish('AMD revenue was 999 [1].')
-    assert '999' not in result['answer'] and result['reason']=='unsupported_numeric_claim'
+    assert '999' in result['answer'] and result['reason']=='unsupported_numeric_claim'
+    assert result['unverified_lines'][0]['numbers']==['999']
 
 def test_source_bound_deterministic_calculation_exposes_formula_and_inputs():
     from app.agent_workflow.calculation import calculate

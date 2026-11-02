@@ -85,25 +85,26 @@ def test_a_closing_the_check_rejects_lists_the_sources_by_name():
     closings=[]
     turn=_capped(['AMD 收盘价为 999 美元 [1]。']*2,closings)
     result=asyncio.run(turn.run())
-    assert '999' not in result['answer'] and '已取得可核验来源' not in result['answer'] and '请拆成单独的一条再发' not in result['answer']
-    assert 'AMD 已保存收盘价：100 [1]' in result['answer']
+    assert '已取得可核验来源' not in result['answer'] and '请拆成单独的一条再发' not in result['answer']
+    assert '999' in result['answer'] and result['unverified_lines']
 
 def test_a_repair_that_calls_a_tool_is_asked_once_more_without_tools():
     seen=[];replies=iter([{'tool_calls':[{'id':'x','function':{'name':'calculate','arguments':'{}'}}]},{'content':'AMD 收盘价为 100 美元 [1]。'}])
     def decide(messages,tools):seen.append(messages);return next(replies)
     turn=_turn(decider=decide);turn.route='A'
     turn.citations=[{'ordinal':1,'quote':'100','source_type':'saved_price'}];turn.observations=[{'name':'query_stock_prices','accepted_evidence':True}]
-    result=asyncio.run(turn.finish_answer('AMD 收盘价为 999 美元 [1]。'))
+    result=asyncio.run(turn.finish_answer('AMD 收盘价为 100 美元。'))
     assert result['status']=='succeeded' and result['answer']=='AMD 收盘价为 100 美元 [1]。'
     assert len(seen)==2 and seen[1][-1]['content']==direct.REPAIR_RETRY_NOTE
 
-def test_the_audit_lists_the_lines_removed_from_the_answer_it_returns():
-    replies=iter([{'content':'AMD 收盘价为 100 美元 [1]。\nAMD 开盘价为 999 美元 [1]。'},{'content':'AMD 开盘价为 999 美元 [1]。\nAMD 最高价为 888 美元 [1]。\nAMD 最低价为 777 美元 [1]。'}])
-    turn=_turn(decider=lambda messages,tools:next(replies));turn.route='A'
+def test_the_audit_lists_the_lines_still_unverified_in_the_answer_it_returns():
+    draft='AMD 收盘价为 100 美元 [1]。\nAMD 开盘价为 999 美元 [1]。'
+    turn=_turn(decider=lambda messages,tools:{'content':draft});turn.route='A'
     turn.citations=[{'ordinal':1,'quote':'100','source_type':'saved_price'}];turn.observations=[{'name':'query_stock_prices','accepted_evidence':True}]
-    result=asyncio.run(turn.finish_answer('AMD 收盘价为 999 美元 [1]。\nAMD 开盘价为 998 美元 [1]。'))
-    assert result['answer'].startswith('AMD 收盘价为 100 美元 [1]')
+    result=asyncio.run(turn.finish_answer(draft))
+    assert result['answer'].startswith(draft)
     assert result['audit']['rejected_lines']==[{'line':'AMD 开盘价为 999 美元 [1]。','reason':'unsupported_numeric_claim'}]
+    assert [x['line'] for x in result['audit']['unverified_lines']]==['AMD 开盘价为 999 美元 [1]。']
 
 def test_a_position_mismatch_names_the_positions_the_users_words_point_to():
     turn=_turn('详细解释一下第二条。')

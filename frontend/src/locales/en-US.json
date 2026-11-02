@@ -1826,5 +1826,15 @@
   "手续费（可不填）": "Fee (optional)",
   "拆股比例（1 拆 2 填 2）": "Split ratio (enter 2 for 1-into-2)",
   "金额": "Amount",
-  "备注（可不填）": "Note (optional)"
+  "备注（可不填）": "Note (optional)",
+  "证据不足": "Not enough evidence",
+  "数字未核实": "Number not verified",
+  "追问依据": "Ask for the basis",
+  "数字与引用的来源对不上": "The number does not match the cited source",
+  "这句话没有标注来源": "This sentence cites no source",
+  "引用的来源编号不存在": "The cited source number does not exist",
+  "引用的来源里找不到这个说法": "The cited source does not state this",
+  "没有给出可核对的依据": "No checkable basis was given",
+  "推算值没有对应的计算结果": "The derived value has no matching calculation",
+  "未能与来源核对": "Could not be checked against a source"
 }

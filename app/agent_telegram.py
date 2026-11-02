@@ -306,10 +306,21 @@ _SOURCE_LINE = re.compile(r"^\s*(?:[-*•]\s*)?\[\d{1,3}\]")
 _RULE = re.compile(r"^\s*(?:—+|-{3,}|_{3,}|\*{3,})\s*$")
 
 
-def chat_text(text: str) -> str:
+def _line_key(line: str) -> str:
+    text = re.sub(r"\[\d+\]", "", str(line or ""))
+    text = re.sub(r"^\s*(?:[-*+•]\s+|\d+[.)、]\s*|>\s*)", "", text).replace("|", " ")
+    return re.sub(r"\s+", "", text)
+
+
+UNVERIFIED_SUFFIX = "（未核实）"
+
+
+def chat_text(text: str, unverified: list[dict] | None = None) -> str:
     """The answer as a Telegram chat message: the trailing sources block (a 「来源：」 heading, a rule, a list of
-    [n] lines) is cut and the [n] markers are dropped from the sentences; links in the body stay."""
+    [n] lines) is cut and the [n] markers are dropped from the sentences; links in the body stay.  A line the
+    source check could not support (``unverified``, the stream's unverified_lines) stays and ends with 「（未核实）」."""
     lines = str(text or "").replace("\r\n", "\n").split("\n")
+    flagged = {key for key in (_line_key(item.get("line")) for item in (unverified or []) if isinstance(item, dict)) if key}
     # Walk up from the end over the appendix.  A blank line or a rule is cut only above a heading or a [n]
     # line, so an answer that merely ends with a rule keeps it.
     cut, found = len(lines), False
@@ -322,7 +333,14 @@ def chat_text(text: str) -> str:
                 cut = index
         else:
             break
-    body = "\n".join(_INLINE_MARKERS.sub("", line).rstrip() for line in lines[:cut])
+
+    def clean(line: str) -> str:
+        out = _INLINE_MARKERS.sub("", line).rstrip()
+        if flagged and _line_key(line) in flagged and not out.endswith(UNVERIFIED_SUFFIX):
+            out = out.rstrip(" |") + UNVERIFIED_SUFFIX if out.rstrip().endswith("|") else out + UNVERIFIED_SUFFIX
+        return out
+
+    body = "\n".join(clean(line) for line in lines[:cut])
     return re.sub(r"\n{3,}", "\n\n", body).strip()
 
 

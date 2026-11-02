@@ -498,6 +498,10 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
       # A revision card lists the materials to tick; the restored history shows the same card.
       if pending.get("options"):protocol["clarification"].update(options=pending["options"],select=pending.get("select"))
      if citation_sidecar:protocol["citations"]=citation_sidecar
+     # Lines the source check could not support stay in the answer; they are stored with the message so a
+     # reload shows the same flags.
+     unverified=event.get("unverified_lines") or []
+     if unverified:protocol["unverified_lines"]=unverified
      if event.get("reason") in {"retrieval_unavailable","zero_evidence","web_page_excerpt_unavailable","missing_source_coverage","publisher_date_unavailable"} or str(event.get("reason","")).startswith(("requested_","weak_")):
       await asyncio.to_thread(_record_low_confidence,payload.message,cid,turn,owner_hash(x_chat_session),event["reason"])
      await append_message(cid,turn,"assistant",text_out,tool_calls=protocol,status="failed" if event.get("status")=="failed" else "complete")
@@ -517,6 +521,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
                           provider=chosen.provider,model=chosen.model,
                           api_key=chosen.key(),base_url=chosen.base_url)
      if restored:yield frame("citations",{"turn_id":turn,"items":restored})
+     if unverified:yield frame("unverified_lines",{"turn_id":turn,"items":unverified})
      yield frame("done",{"conversation_id":cid,"turn_id":turn,"status":event.get("status","complete"),"reason":event.get("reason"),"thinking_ms":thinking_ms})
    if not terminal:raise HTTPException(502,"workflow_incomplete")
   except asyncio.CancelledError:
@@ -629,6 +634,7 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
    if isinstance(row.get("tool_calls"),dict):
     stored_protocol=row["tool_calls"]
     if isinstance(stored_protocol.get("trace"),list):item["trace"]=stored_protocol["trace"]
+    if isinstance(stored_protocol.get("unverified_lines"),list) and stored_protocol["unverified_lines"]:item["unverified_lines"]=stored_protocol["unverified_lines"]
     # Older turns only know the audit's elapsed time; either one is what the reader counted.
     stored_audit=stored_protocol.get("audit")
     thinking=stored_protocol.get("thinking_ms")

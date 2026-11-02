@@ -204,9 +204,11 @@ def test_4_numeric_gate_enforced_on_configured_news_claims(news_env):
 
     ctx = AgentRuntimeContext("custom", "test", "dummy", resolver=resolver, intent_recognizer=recognizer, decider=decider)
     result = asyncio.run(direct.run_direct_turn("NVDA Q3 新闻里预期营收多少？", ctx, emit=_quiet))
-    assert result["status"] == "succeeded"
-    assert "35 billion" in result["answer"]
-    assert "88 billion" not in result["answer"]
+    # The gate only annotates: the repair may fix [n] markers, not swap the figure, so the fabricated
+    # 88 billion stays in the answer, reported as an unverified number.
+    assert result["status"] == "partially_succeeded"
+    assert "88 billion" in result["answer"]
+    assert result["unverified_lines"] and result["unverified_lines"][0]["numbers"]
     assert result["audit"].get("answer_repair_count", 0) >= 1
 
 
