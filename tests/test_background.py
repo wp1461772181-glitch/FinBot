@@ -30,4 +30,4 @@ def test_enabled_flag(monkeypatch):
 
 
 def test_default_intervals():
-    assert {n: i for n, i, _ in background.LOOPS} == {"routine-tasks": 300, "sec-monitor": 3600, "market-refresh": 3600}
+    assert {n: i for n, i, _ in background.LOOPS} == {"routine-tasks": 300, "sec-monitor": 3600, "market-refresh": 3600, "earnings-monitor": 60}

@@ -14,6 +14,7 @@ import os
 log = logging.getLogger(__name__)
 ROUTINE_SECONDS = 300
 HOURLY_SECONDS = 3600
+EARNINGS_SECONDS = 60      # picks up events the response-time task missed, due follow-ups, and anything left over from a restart
 
 
 def enabled() -> bool:
@@ -51,10 +52,19 @@ def run_market_refresh() -> None:
     log.info("market refresh: %s", refresh_once())
 
 
+def run_earnings_monitor() -> None:
+    from .earnings_monitor import tick
+
+    done = tick()
+    if done["first"] or done["followup"]:
+        log.info("earnings monitor: %s", done)
+
+
 LOOPS = (
     ("routine-tasks", ROUTINE_SECONDS, run_routine_tasks),
     ("sec-monitor", HOURLY_SECONDS, run_sec_monitor),
     ("market-refresh", HOURLY_SECONDS, run_market_refresh),
+    ("earnings-monitor", EARNINGS_SECONDS, run_earnings_monitor),
 )
 
 

@@ -10,7 +10,7 @@ import secrets
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
 
@@ -54,10 +54,23 @@ def _count_pending() -> int:
 
 
 @router.post("/events")
-async def post_event(body: SentinelEvent, request: Request):
+async def post_event(body: SentinelEvent, request: Request, background: BackgroundTasks):
     require_sentinel(request)
-    # Skeleton: accepted and logged; consumers (inbox, push) hook in with the signal tasks.
     logger.info("sentinel event %s: %s", body.type, body.payload)
+    if body.type == "earnings_detected":
+        # Accepting it is the answer the sentinel's 2-minute fallback timer waits for: the event is stored (the
+        # follow-up timer too) before we say yes, and the analysis runs after the response.
+        from . import earnings_monitor
+        from .sentinel_bridge import owner_hash_from_login_config
+        owner = owner_hash_from_login_config()
+        if owner is None:
+            raise HTTPException(503, "no_owner")
+        try:
+            result = await asyncio.to_thread(earnings_monitor.receive_event, body.payload, owner)
+        except ValueError:
+            raise HTTPException(422, "invalid_event") from None
+        background.add_task(earnings_monitor.tick)
+        return {"type": body.type, **result}
     return {"accepted": True, "type": body.type}
 
 

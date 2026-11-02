@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 
@@ -428,3 +428,47 @@ class PortfolioPlan(Base):
     stop_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8), nullable=True)
     target_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class EarningsEvent(Base):
+    """One earnings 8-K (Item 2.02) the sentinel found, and where its two messages stand.  The follow-up timer
+    is ``followup_due_at``; both it and the statuses live here so a restart picks up what is unsent."""
+    __tablename__ = "earnings_events"
+    __table_args__ = (UniqueConstraint("owner_hash", "accession", name="uq_earnings_event_accession"),)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False)
+    accession: Mapped[str] = mapped_column(String(32), nullable=False)
+    cik: Mapped[str] = mapped_column(String(10), nullable=False)
+    held: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    detected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="received")   # received | analysing | first_sent | failed
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    followup_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    followup_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    followup_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class EarningsHistory(Base):
+    """earnings_history: what each past release said and how the stock reacted, one row per accession.  Rows are
+    written from the release's own text and prices up to the day before it, so a row never contains anything that
+    was unknown at its release time; readers take only rows released before the event they analyse."""
+    __tablename__ = "earnings_history"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    quarter: Mapped[str] = mapped_column(String(8), nullable=False)
+    accession: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    released_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    guidance: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)     # given in this release, for the next quarter
+    actual: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    reaction: Mapped[float | None] = mapped_column(Float, nullable=True)           # R, first-day return (filled once known)
+    sigma: Mapped[float | None] = mapped_column(Float, nullable=True)              # daily σ before the release
+    verdict: Mapped[str | None] = mapped_column(String(8), nullable=True)          # up | down | flat
+    reader_version: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

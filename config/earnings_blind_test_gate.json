@@ -1,0 +1,4 @@
+{
+  "_note": "Blind-test verdict per model (docs/reports/2026-11-earnings-blind-test.md). A model counts as validated only with passed=true AND reader_version equal to earnings_reader.READER_VERSION. Missing = not validated: the follow-up is then a plain notice labelled 该模型未经盲测. min_confidence is the lowest confidence that is sent (default: high when validated, medium when not).",
+  "models": {}
+}
