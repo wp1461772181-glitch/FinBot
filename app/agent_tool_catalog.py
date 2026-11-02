@@ -221,6 +221,29 @@ class RepairNewsSourceWithReaArgs(Args):
     source_id:str=Field(min_length=2,max_length=80)
     require_confirm:bool=True
 
+class RecordTradeArgs(Args):
+    kind:Literal['opening','buy','sell','dividend','split']=Field(description='buy/sell: a trade; opening: a position the user already holds (moves no cash); dividend: cash received; split: a stock split (ratio 2 for 1 into 2).')
+    symbol:str=Field(pattern=r'^[A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?$')
+    quantity:float|int|str|None=Field(default=None,description='Shares, for opening/buy/sell.')
+    price:float|int|str|None=Field(default=None,description='Price per share, for opening/buy/sell. For opening, the average cost the user states.')
+    fee:float|int|str|None=Field(default=None,description='Commission and fees of this trade; omit for 0.')
+    amount:float|int|str|None=Field(default=None,description='Total cash received, for dividend.')
+    ratio:float|int|str|None=Field(default=None,description='For split: new shares per old share (1 into 2 is 2).')
+    occurred_on:str|None=Field(default=None,pattern=r'^\d{4}-\d{2}-\d{2}$',description='Trade date; omit for today.')
+    note:str|None=Field(default=None,max_length=200)
+class SetAvailableFundsArgs(Args):
+    amount:float|int|str=Field(description='The available funds (可用资金: money the user can add to positions) the user says they have now; the server writes the difference.')
+class SetPositionPlanArgs(Args):
+    symbol:str=Field(pattern=r'^[A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?$')
+    plan_text:str|None=Field(default=None,max_length=2000,description="The user's own plan for this holding, in their words; an empty string clears it.")
+    add_price:float|int|str|None=Field(default=None,description='Price at or below which the user plans to add; 0 clears it.')
+    stop_price:float|int|str|None=Field(default=None,description='Stop-loss price; 0 clears it.')
+    target_price:float|int|str|None=Field(default=None,description='Target (take-profit) price; 0 clears it.')
+    @model_validator(mode='after')
+    def changes_something(self):
+        if all(getattr(self,k) is None for k in ('plan_text','add_price','stop_price','target_price')):raise ValueError('nothing_to_change')
+        return self
+
 @dataclass(frozen=True)
 class ToolPolicy:
     name:str
@@ -276,6 +299,9 @@ EXTRA=(
  ('forget',ForgetArgs,'reversible','Propose forgetting one line of the user profile by its #handle, when the USER asks to forget or stop applying it. Owner confirmation required.'),
  ('use_skill',UseSkillArgs,'skill','Load the full steps and output format of one listed skill and follow them. While it is active only the tools it allows are offered (never more than this turn already has); a write it allows still needs the owner\'s confirmation card.'),
  ('save_skill',SaveSkillArgs,'reversible','Propose saving a skill to the skill library when the USER asks for one in any wording (存成技能, 把这个 skill 新增一下, 写一个……的 skill): write its steps from this turn\'s tool calls or from what the user described. Owner confirmation required; the card offers 保存并启用 or 存为草稿, and nothing is saved before the owner presses one.'),
+ ('record_trade',RecordTradeArgs,'reversible','Propose recording one entry of the owner\'s own portfolio ledger when the USER says they bought or sold shares, already hold a position, received a dividend or had a split (我买了 100 股 INTC，成本 80). Only what the user stated: never guess a price, quantity or date. Owner confirmation card; selling more than is held is refused, and the user can delete the entry on the 持仓 page.'),
+ ('set_available_funds',SetAvailableFundsArgs,'reversible','Propose setting the owner\'s available funds (可用资金: the money they can use to add or top up positions, not a company\'s free cash flow) to the amount the USER states; the difference is recorded as an adjustment. Owner confirmation card.'),
+ ('set_position_plan',SetPositionPlanArgs,'reversible','Propose saving the owner\'s own plan for one holding (free text and/or add, stop-loss and target prices) when the USER states it. Only what the user said; only the fields you pass change. Owner confirmation card.'),
  ('notify_telegram',NotifyArgs,'notify','Send the owner a short Telegram message, only when your work instruction (or the task\'s) says this is worth notifying; with nothing new, do not call it. It goes to the owner\'s own bound chat only (you cannot choose a recipient), starts with your bot name and reads as plain chat: the [n] you cite are checked, then dropped, and no sources list is added, so write any link the owner should open into the text itself; a figure without this turn\'s evidence number is refused. Not a write: no card, also in scheduled runs. Each bot has a daily limit; past it the message stays in the conversation only.'),
  ('search_configured_news',SearchConfiguredNewsArgs,'read','Search news items from enabled user-configured news sources only (RSS/JSON/HTML). Call this FIRST for recent market/macro/company news before falling back to web_research. Every returned item has a URL and still goes through citation and numeric gates.'),
  ('list_news_sources',Empty,'read','List configured public news sources, health status, defaults, watchlists, and push settings (without sensitive headers).'),
@@ -287,7 +313,7 @@ EXTRA=(
  ('repair_news_source_with_rea',RepairNewsSourceWithReaArgs,'read','Use REA inspection/alternates to repair a degraded or failing configured news source (rate-limited per source; major changes create an inline confirmation card).'),
 )
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
-OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill'}
+OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan'}
 
 # Every base registry entry is read-only; write names come from catalogue levels.
 WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'})]
@@ -300,7 +326,7 @@ def write_tool_names():return {n for n,p in definitions().items() if p.level in 
 
 def definitions():
     from .agent_tools import TOOL_REGISTRY
-    result={name:ToolPolicy(name,tool.description,tool.args_schema,'read') for name,tool in TOOL_REGISTRY.items()}
+    result={name:ToolPolicy(name,tool.description,tool.args_schema,'read',True,name not in OWNER_ONLY) for name,tool in TOOL_REGISTRY.items()}
     for name,schema,level,description in EXTRA:
         result[name]=ToolPolicy(name,description,schema,level,True,level!='costly' and name not in OWNER_ONLY,level in {'reversible','costly'})
     result['request_action']=ToolPolicy('request_action','Request owner approval for an agent-suggested operation that is NOT a user request. Arguments must match the target tool schema. No fetching or business writes before approval; at most one suggestion per turn.',RequestActionArgs,'card',True,False)

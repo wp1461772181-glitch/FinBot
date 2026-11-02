@@ -740,9 +740,35 @@ async def query_material_analysis(symbol: str, accession_number: str | None = No
     return {"ok":True,"data":data,"source":"material_analysis_versions joined to frozen evidence and current source","as_of":latest[0]['created_at'] if latest else None,
             "error_code":"no_analysis" if not latest else None}
 
+class PortfolioQueryArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str | None = Field(default=None, min_length=1, max_length=12, description="Only this holding (plus the account line); omit for the whole portfolio.")
+    @field_validator("symbol")
+    @classmethod
+    def valid(cls, value): return None if value is None else normalize_agent_symbol(value)
+
+@tool(args_schema=PortfolioQueryArgs)
+async def query_portfolio(symbol: str | None = None) -> dict:
+    """Read the owner's own portfolio (持仓): available funds (可用资金), total assets, each position's shares, average cost (平均成本), diluted cost (摊薄成本), latest price with its data date, floating and today's P&L (今日盈亏), position weight (仓位占比), realized P&L and the owner's plan prices. Owner only. Every figure is in the row's excerpt, so cite its [n]; to price a hypothetical purchase read the stock's price and use calculate."""
+    from .knowledge.runtime import current_research_context
+    from . import portfolio
+    context = current_research_context()
+    owner = context.owner_hash if context else None
+    if not owner:
+        return {"ok": False, "data": [], "error_code": "owner_login_required"}
+    summary = await asyncio.to_thread(portfolio.build_summary, owner)
+    rows = portfolio.evidence_rows(summary)
+    if symbol:
+        rows = [r for r in rows if r["symbol"] in (None, symbol)]
+        if not any(r["symbol"] == symbol for r in rows):
+            rows.append({"id": f"portfolio:{symbol}", "source_type": "portfolio", "title": f"{symbol} 持仓", "symbol": symbol,
+                         "excerpt": f"目前没有持有 {symbol}。", "price_date": summary.get("price_date")})
+    return {"ok": True, "data": rows, "source": "portfolio (owner's manual ledger + saved market_prices)",
+            "as_of": summary.get("price_date")}
+
 from .agent_web_research import web_research
 
-TOOL_REGISTRY={item.name:item for item in [query_stock_prices,query_latest_forecast,query_materials,query_sec_filings,query_financials,query_research_faq,query_material_analysis,search_material_analysis,web_research]}
+TOOL_REGISTRY={item.name:item for item in [query_stock_prices,query_latest_forecast,query_materials,query_sec_filings,query_financials,query_research_faq,query_material_analysis,search_material_analysis,web_research,query_portfolio]}
 def tool_schemas(*, owner: bool = True):
     from .agent_tool_catalog import schemas
     return schemas(owner=owner)

@@ -17,6 +17,7 @@ import { registerWatchlistAdder, setWatchlistSnapshot } from "./watchlist-bridge
 import { chatSessionKey } from "./chat-session.mjs";
 import { completePersonalLogin } from "./chat-mode-switch.mjs";
 import { MemoryPage, MePage, NewsSourcesPage, RoutinesPage, SkillsPage } from "./PersonalPages";
+import { PortfolioIcon, PortfolioPage } from "./PortfolioPage";
 import { formatDelta } from "./delta.mjs";
 import { conversationFromHash } from "./memory-items.mjs";
 import { applyTheme, saveTheme, storedTheme, type ThemeChoice } from "./theme.mjs";
@@ -26,14 +27,14 @@ const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"
 const WATCHLIST_KEY = "market-evidence-agent:watchlist:v1";
 type SupportedSymbol = string;
 type FilingState = { kind: "idle" } | { kind: "loading" } | { kind: "ready"; data: FilingInventory } | { kind: "error"; message: string };
-type WorkspaceSection = "overview" | "forecast" | "evidence" | "materials" | "revisions" | "evaluation" | "replay" | "agent" | "bot" | "admin" | "routines" | "news" | "skills" | "memory" | "me";
-type ResearchSection = Exclude<WorkspaceSection, "agent" | "bot" | "admin" | "routines" | "news" | "skills" | "memory" | "me">;
+type WorkspaceSection = "overview" | "forecast" | "evidence" | "materials" | "revisions" | "evaluation" | "replay" | "agent" | "bot" | "admin" | "routines" | "portfolio" | "news" | "skills" | "memory" | "me";
+type ResearchSection = Exclude<WorkspaceSection, "agent" | "bot" | "admin" | "routines" | "portfolio" | "news" | "skills" | "memory" | "me">;
 // The personal-agent navigation groups the older sections: 公司 holds 总览; 预测 holds 预测工作台, 修订, 到期评估
 // and 历史回放; 资料库 holds 材料库 and 证据.  Those six (公司、预测、资料库、技能、记忆、设置) are one 「更多」
-// control on the rail and on the mobile tab bar.  例行任务 is not one of them: it is a bot-rail row (with 新闻源
-// under it) and its own mobile tab, so it stays primary chrome.  The older hashes stay the addresses, so links
+// control on the rail and on the mobile tab bar.  例行任务 is not one of them: it is a bot-rail row (with 持仓 and
+// 新闻源 beside it) and its own mobile tab, so it stays primary chrome.  The older hashes stay the addresses, so links
 // inside the older pages (#materials, #evidence/<id>/…) and the agent's open_page keep working unchanged.
-type NavGroup = "chat" | "routines" | "news" | "company" | "forecast" | "library" | "skills" | "memory" | "settings";
+type NavGroup = "chat" | "routines" | "portfolio" | "news" | "company" | "forecast" | "library" | "skills" | "memory" | "settings";
 const FORECAST_TABS = ["forecast", "revisions", "evaluation", "replay"] as const;
 const LIBRARY_TABS = ["materials", "evidence"] as const;
 // #briefs was the 待你确认 page; it is the 例行任务 page now.
@@ -41,7 +42,7 @@ const HASH_ALIASES: Record<string, WorkspaceSection> = { chat: "agent", company:
 function navGroup(section: WorkspaceSection): NavGroup {
   if (section === "agent" || section === "bot") return "chat";
   if (section === "admin") return "settings";
-  if (section === "routines" || section === "news" || section === "skills" || section === "memory") return section;
+  if (section === "routines" || section === "portfolio" || section === "news" || section === "skills" || section === "memory") return section;
   if (section === "me") return "memory";
   if ((LIBRARY_TABS as readonly string[]).includes(section)) return "library";
   if ((FORECAST_TABS as readonly string[]).includes(section)) return "forecast";
@@ -215,7 +216,7 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
 
   function addWatchSymbol() { const ticker = normalizeTicker(watchInput); if (!ticker) { setWatchError("请输入有效的美股代码，例如 AMD 或 BRK.B。"); return; } if (symbols.includes(ticker)) { setWatchError("该代码已在关注列表中。"); return; } if (symbols.length >= MAX_WATCHLIST) { setWatchError("关注列表最多保存 30 个代码。"); return; } setSymbols(items => [...items, ticker]); setWatchInput(""); setWatchError(""); openStock(ticker); }
   function removeWatchSymbol(ticker: string) { const remaining = symbols.filter(item => item !== ticker); setSymbols(remaining); setRequestedSymbol(current => selectionForWatchlist(current, remaining)); }
-  const botRail = personal ? (close: () => void) => <BotRailList bots={botList.bots} routinesActive={activeSection === "routines"} onRoutines={() => { close(); navigate("routines"); }} newsActive={activeSection === "news"} onNews={() => { close(); navigate("news"); }} error={botList.error} activeBotId={activeBot?.id ?? null} lineStatus={lineStatus} onOpen={bot => { close(); openBot(bot); }} onNew={() => { close(); setNewBotOpen(true); }} /> : undefined;
+  const botRail = personal ? (close: () => void) => <BotRailList bots={botList.bots} routinesActive={activeSection === "routines"} onRoutines={() => { close(); navigate("routines"); }} portfolioActive={activeSection === "portfolio"} onPortfolio={() => { close(); navigate("portfolio"); }} newsActive={activeSection === "news"} onNews={() => { close(); navigate("news"); }} error={botList.error} activeBotId={activeBot?.id ?? null} lineStatus={lineStatus} onOpen={bot => { close(); openBot(bot); }} onNew={() => { close(); setNewBotOpen(true); }} /> : undefined;
   const newBotDialog = newBotOpen && <NewBotDialog onClose={() => setNewBotOpen(false)} onCreated={bot => { setNewBotOpen(false); void botList.reload().then(() => openBot(bot)); }} />;
   const shellProps = { activeSection, navigate, symbol: requestedSymbol, symbols, onSelectStock: openStock, watchInput, setWatchInput, addWatchSymbol, watchError, setWatchError, onModeChange, botRail, overlay: newBotDialog };
   if (activeBot) return <Shell {...shellProps}><BotPage bot={activeBot} symbol={requestedSymbol} watchlist={symbols} onSelectSymbol={setRequestedSymbol} onOpenCompany={(ticker, section) => { const clean = normalizeTicker(ticker); if (clean) { if (!symbols.includes(clean) && symbols.length < MAX_WATCHLIST) setSymbols(items => [...items, clean]); openStock(clean, section === "forecast" ? "forecast" : "overview"); } }} onChanged={() => void botList.reload()} onDeleted={() => { void botList.reload(); navigate("agent"); }} onSettings={() => navigate("admin")} onModeChange={onModeChange} /></Shell>;
@@ -224,6 +225,7 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
   if (activeSection === "agent") return <Shell {...shellProps}><AgentChatPanel onSettings={() => navigate("admin")} onModeChange={onModeChange} /></Shell>;
   if (activeSection === "admin") return <Shell {...shellProps}><AgentAdminPage onBack={() => navigate("agent")} /></Shell>;
   if (activeSection === "routines") return <Shell {...shellProps}><RoutinesPage bots={botList.bots} onNavigate={navigate} onChanged={() => void botList.reload()} /></Shell>;
+  if (activeSection === "portfolio") return <Shell {...shellProps}><PortfolioPage /></Shell>;
   if (activeSection === "news") return <Shell {...shellProps}><NewsSourcesPage /></Shell>;
   if (activeSection === "skills") return <Shell {...shellProps}><SkillsPage /></Shell>;
   if (activeSection === "memory") return <Shell {...shellProps}><MemoryPage onNavigate={navigate} /></Shell>;
@@ -493,6 +495,7 @@ function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchI
   const mobileTabs: Array<{ id: WorkspaceSection; label: string; icon: React.ReactNode; active: boolean }> = [
     { id: "agent", label: t("对话"), icon: "✳", active: activeSection === "agent" || activeSection === "bot" },
     { id: "routines", label: t("例行任务"), icon: <RoutineIcon />, active: activeSection === "routines" },
+    { id: "portfolio", label: t("持仓"), icon: <PortfolioIcon />, active: activeSection === "portfolio" },
   ];
   const research = isResearchSection(activeSection);
   const [theme, setTheme] = useState<ThemeChoice>(() => storedTheme());
@@ -577,7 +580,7 @@ function isSupportedSymbol(symbol: string): symbol is SupportedSymbol { return i
 function isValidSymbol(symbol: string): boolean { return /^[A-Z]{1,5}(?:[.-][A-Z]{1,2})?$/i.test(symbol.trim()); }
 function sectionFromHash(): WorkspaceSection {
   const value = window.location.hash.replace(/^#/, "").split(/[/?]/, 1)[0];
-  if ((["overview", "forecast", "evidence", "materials", "revisions", "evaluation", "replay", "agent", "bot", "admin", "routines", "news", "skills", "memory", "me"] as const).includes(value as WorkspaceSection)) return value as WorkspaceSection;
+  if ((["overview", "forecast", "evidence", "materials", "revisions", "evaluation", "replay", "agent", "bot", "admin", "routines", "news", "skills", "memory", "me", "portfolio"] as const).includes(value as WorkspaceSection)) return value as WorkspaceSection;
   // The conversation is the home page.
   return HASH_ALIASES[value] ?? "agent";
 }

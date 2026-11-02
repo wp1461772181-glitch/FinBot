@@ -9,8 +9,9 @@ export const CARDS = [
   { id: "routines", title: "例行任务", size: "s" },
   { id: "brief", title: "简报", size: "m" },
   { id: "watchlist", title: "自选列表", size: "s" },
+  { id: "portfolio", title: "我的持仓", size: "m" },
 ];
-export const DEFAULT_LAYOUT = ["price", "forecast", "materials", "filings", "routines"].map((card) => ({ card }));
+export const DEFAULT_LAYOUT = ["price", "forecast", "materials", "filings", "routines", "portfolio"].map((card) => ({ card }));
 // The 待你确认 card was folded into 例行任务 (2026-10-28): a saved layout holding it keeps one 例行任务 card in its place.
 const RENAMED = { confirm: "routines" };
 const KNOWN = new Set(CARDS.map((c) => c.id));

@@ -43,10 +43,11 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # scope left them out answered 写记忆失败 while the background extractor stored the item anyway).
 # create_routine too: it only makes a card, and a bot that said 没有对应的工具 to 每小时找一条新闻 had none;
 # and list/update/delete_routine with it (Levi: 给了新增，怎么没给查看、编辑、删除).
+# The three portfolio writes too: they only ever make an owner-only card (query_portfolio is a data tool, scoped like the rest).
 ALWAYS_ON = frozenset({"ask_user", "use_result_set", "calculate", "read_history_citation", "select_stock",
                        "open_page", "request_action", "notify_telegram", "use_skill", "save_skill",
                        "remember", "forget", "create_routine", "list_routines", "update_routine",
-                       "delete_routine"})
+                       "delete_routine", "record_trade", "set_available_funds", "set_position_plan"})
 
 TEMPLATES = {
     "blank": {"label": "空白", "name": "", "title": "", "description": "", "tool_scope": None},

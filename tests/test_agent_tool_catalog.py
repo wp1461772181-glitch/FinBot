@@ -42,6 +42,9 @@ WRITE_ARGUMENTS={
  'create_routine':{'name':'每小时新闻','instruction':'找一条新闻','schedule_kind':'hourly'},
  'update_routine':{'routine_id':'11111111-1111-4111-8111-111111111111','enabled':False},
  'delete_routine':{'routine_id':'11111111-1111-4111-8111-111111111111'},
+ 'record_trade':{'kind':'buy','symbol':'INTC','quantity':100,'price':80},
+ 'set_available_funds':{'amount':5000},
+ 'set_position_plan':{'symbol':'INTC','stop_price':70},
 }
 
 

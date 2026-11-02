@@ -29,6 +29,9 @@ VERBS={
     'create_routine':r'每小时|每个小时|每天|每日|每周|工作日|定时|定期|例行|schedule|hourly|daily|every (?:hour|day|morning)',
     'update_routine':r'改|修改|编辑|调整|换成|暂停|停用|停掉|启用|恢复|update|edit|change|pause|resume',
     'delete_routine':r'删除|删掉|删了|去掉|撤掉|delete|remove',
+    'record_trade':r'买了|买入|买进|卖了|卖出|卖掉|建仓|清仓|加仓|减仓|补仓|持有\s*\d|有\s*\d+\s*股|分红|股息|拆股|拆分|记一笔|buy|bought|sell|sold|dividend|split',
+    'set_available_funds':r'可用资金|现金|余额|入金|出金|available funds|cash',
+    'set_position_plan':r'计划|补仓价|止损|目标价|止盈|plan|stop.?loss|target',
     'forget':r'忘掉|忘记|忘了|删掉|删除|去掉|forget|delete',
 }
 # "以后别再用万元" is a standing instruction, not a refusal: for remember these are the request itself.

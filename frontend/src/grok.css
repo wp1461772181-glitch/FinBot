@@ -218,3 +218,22 @@ body { -webkit-font-smoothing: antialiased; }
 .bot-telegram p { margin: 0; }
 .bot-telegram-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .bot-telegram-row input { flex: 1 1 12em; min-width: 0; }
+
+/* 持仓 page and 我的持仓 card.  No red/green: the sign in the text carries gain and loss (the up/down colour
+   convention differs by market and the owner has not picked one); the tone classes are hooks for that choice. */
+.pf-summary { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.pf-stat { display: grid; gap: 4px; align-content: start; }
+.pf-stat strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.pf-inline { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pf-inline input, .pf-entry input, .pf-entry select, .pf-plan input, .pf-plan textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--me-line); border-radius: 8px; background: var(--me-surface-2); color: var(--me-ink); min-width: 0; }
+.pf-inline input { width: 9em; }
+.pf-positions { display: grid; gap: 12px; }
+.pf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 16px; margin: 0; }
+.pf-grid div { display: grid; gap: 2px; min-width: 0; }
+.pf-grid dt { font-size: 12px; color: var(--me-muted); }
+.pf-grid dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.pf-prices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.pf-entry, .pf-plan { display: grid; gap: 8px; }
+.pf-entry label, .pf-plan label { display: grid; gap: 4px; font-size: 13px; }
+.pf-ledger li { gap: 8px; }
+.pf-gain, .pf-loss, .pf-flat { font-variant-numeric: tabular-nums; }

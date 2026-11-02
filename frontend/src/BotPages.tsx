@@ -1,6 +1,7 @@
 // Bots (personal agent, second edition): the sidebar list, the new-bot dialog, the bot page's right tabs and the
 // server model catalog card in settings.  A bot never holds a key: it names a catalog model, and the catalog says
 // only configured / missing.
+import { PortfolioIcon } from "./PortfolioPage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { deleteBotTelegram, getBotTelegram, saveBotTelegramToken, startBotTelegramBind, unbindBotTelegram, type BotTelegramStatus } from "./api";
 import { addCatalogModel, createBot, deleteBot, deleteCatalogModel, discoverCatalogModels, getBotTemplates, getChatMode, getModelCatalog, listBots, listSkills, setDefaultCatalogModel, testCatalogModel, updateBot, updateCatalogModel,
@@ -97,7 +98,7 @@ export function NewsIcon() {
   </svg>;
 }
 
-export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutines, newsActive, onNews, onOpen, onNew, lineStatus }: { lineStatus?: { running: string[]; unseen: string[] }; bots: Bot[]; error: string; activeBotId: string | null; routinesActive: boolean; onRoutines: () => void; newsActive: boolean; onNews: () => void; onOpen: (bot: Bot) => void; onNew: () => void }) {
+export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutines, portfolioActive, onPortfolio, newsActive, onNews, onOpen, onNew, lineStatus }: { lineStatus?: { running: string[]; unseen: string[] }; bots: Bot[]; error: string; activeBotId: string | null; routinesActive: boolean; onRoutines: () => void; portfolioActive: boolean; onPortfolio: () => void; newsActive: boolean; onNews: () => void; onOpen: (bot: Bot) => void; onNew: () => void }) {
   const { t } = useLocale();
   const { top, groups } = botSections(bots);
   const pending = bots.reduce((sum, b) => sum + (b.pending || 0), 0);
@@ -115,6 +116,9 @@ export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutin
     <button type="button" className={`bot-row bot-confirm${routinesActive ? " is-active" : ""}`} aria-current={routinesActive ? "page" : undefined} onClick={onRoutines}>
       <span className="bot-avatar" aria-hidden="true"><RoutineIcon /></span><span className="bot-row-text"><strong>{t("例行任务")}</strong></span>
       {pending > 0 && <span className="bot-pending-badge" aria-label={`${pending} ${t("条待确认")}`}>{pending}</span>}
+    </button>
+    <button type="button" className={`bot-row bot-confirm${portfolioActive ? " is-active" : ""}`} aria-current={portfolioActive ? "page" : undefined} onClick={onPortfolio}>
+      <span className="bot-avatar" aria-hidden="true"><PortfolioIcon /></span><span className="bot-row-text"><strong>{t("持仓")}</strong></span>
     </button>
     <button type="button" className={`bot-row bot-confirm${newsActive ? " is-active" : ""}`} aria-current={newsActive ? "page" : undefined} onClick={onNews}>
       <span className="bot-avatar" aria-hidden="true"><NewsIcon /></span><span className="bot-row-text"><strong>{t("新闻源")}</strong></span>

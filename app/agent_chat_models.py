@@ -1,6 +1,7 @@
 import uuid
-from datetime import datetime
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, Uuid, func
+from datetime import date, datetime
+from decimal import Decimal
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 
@@ -376,3 +377,34 @@ class NewsPushLog(Base):
     inbox_item_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     pushed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+
+
+class PortfolioTransaction(Base):
+    """One entry of the owner's manual portfolio ledger (personal finance assistant, Task 6).  ``symbol`` is empty for
+    the cash kinds; ``kind`` is opening, buy, sell, dividend, split, deposit, withdraw or cash_adjust.  Positions,
+    costs and available funds are always recomputed from these rows (app.portfolio), never stored."""
+    __tablename__ = "portfolio_transactions"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    symbol: Mapped[str] = mapped_column(String(12), nullable=False, default="")
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False, default=0)
+    price: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False, default=0)
+    fee: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False, default=0)
+    amount: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False, default=0)
+    ratio: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False, default=0)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
+    note: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class PortfolioPlan(Base):
+    """The owner's own plan for one position: free text plus the prices that decide when to add, stop out or take profit."""
+    __tablename__ = "portfolio_plans"
+    owner_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(12), primary_key=True)
+    plan_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    add_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8), nullable=True)
+    stop_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8), nullable=True)
+    target_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

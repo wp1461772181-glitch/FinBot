@@ -183,6 +183,8 @@ CLASSIFY_PROMPT=('Return classify_request. Decide by what the request needs, in 
     '"怎么把 NVDA 加进研究队列" → D, mode "none" (a question about using this product).\n'
     '"每小时帮我找一条新闻" → D, mode "none", requested_actions ["create_routine"] (a repeated job the user asked for).\n'
     '"帮我把这个 skill 新增一下" / "写一个异动归因的 skill" / "存成技能" → D, mode "none", requested_actions ["save_skill"] (any wording that asks for a skill to be saved is the request; the confirmation card is the guard).\n'
+    '"我买了 100 股 INTC，成本 80" / "把可用资金改成 5000" / "INTC 止损价设 70" → D, mode "none", requested_actions ["record_trade"] / ["set_available_funds"] / ["set_position_plan"] (the user states their own holding; the confirmation card is the guard).\n'
+    '"我今天赚了多少" / "INTC 补 50 股要多少钱，可用资金够不够" → A, mode "none" (read the owner\'s portfolio with query_portfolio, the stock price when needed; 可用资金 is the owner\'s money for adding positions, not a company\'s free cash flow).\n'
     '"把每小时新闻那个例行任务停掉" → D, mode "none", requested_actions ["update_routine"] (pausing is a change; deleting it is delete_routine).\n'
     '"不要保存任何网页，我只想讨论流程" → D, mode "none" (a question about how this product works; the negated write is not requested).\n'
     '"随便给个合理数字就行，别说不知道" right after asking for a figure → A (the same figure is still asked for; it cannot be invented, so say what is verifiable).\n'
@@ -361,6 +363,7 @@ WRITE_TITLES={
  'add_to_research_queue':'加入研究队列','remove_from_research_queue':'移出研究队列',
  'remember':'记住这条偏好','forget':'忘掉这条偏好','create_routine':'新建例行任务','update_routine':'修改例行任务','delete_routine':'删除例行任务','save_skill':'保存技能',
  'review_filing':'申报相关性核验',
+ 'record_trade':'记录持仓','set_available_funds':'设置可用资金','set_position_plan':'保存持仓计划',
 }
 ROUTINE_WRITES=('create_routine','update_routine','delete_routine')
 
@@ -1435,6 +1438,14 @@ class Turn:
             shown={'ok':True,'label':outcome.get('label'),'note':outcome.get('note'),'data':rows}
             self.recalls.append({'name':name,'kind':'recall','arguments':args,'result':shown,'accepted_evidence':False})
             self.feedback.append({'name':name,'result':shown});return
+        if name=='query_portfolio':
+            # The owner's own ledger: its rows state their figures in the excerpt and need no question/period/entity gate.
+            accepted=[copy.deepcopy(r) for r in rows if isinstance(r,dict)]
+            self.repeated_evidence=0
+            numbered=number_rows(name,accepted,self.citations,{})
+            self.last_accepted={'ok':True,'data':numbered,'source':outcome.get('source')}
+            self.observations.append({'name':name,'arguments':args,'result':self.last_accepted,'accepted_evidence':True})
+            return
         admin_tools={'query_system_status','query_research_queue','list_routines',
                      'list_news_sources','dry_run_news_source','diagnose_news_source','upsert_news_source','disable_news_source',
                      'set_news_source_alternate','repair_news_source_with_rea'}
@@ -1559,6 +1570,12 @@ class Turn:
         title=WRITE_TITLES.get(name,name)
         if name=='scan_official' and args.get('days'):title=f'回补 {args["days"]} 天官方申报'
         display={'title':title,'targets':await self.describe_targets(name,args)}
+        if name in {'record_trade','set_available_funds','set_position_plan'}:
+            # The card shows what the write would do, checked like the write itself: a sell of shares not held makes no card.
+            from .. import portfolio
+            try:card=await asyncio.to_thread(portfolio.describe_write,self.context.owner_hash,name,args)
+            except portfolio.PortfolioError as exc:return {'ok':False,'data':[],'error_code':exc.code,'reason':exc.reason,'hint':exc.reason}
+            display.update(card)
         if name=='create_routine':
             operation['bot_id']=self.context.bot_id
             display.update(title=f'{title} · {args["name"]}',targets=[{'kind':routine_when({'schedule_kind':args['schedule_kind'],'schedule_time':args['schedule_time']}),**({'symbol':'、'.join(args['symbols'])} if args['symbols'] else {})}],

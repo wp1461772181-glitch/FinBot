@@ -252,6 +252,16 @@ async def _dispatch(name,args,context,is_owner,emit):
         try:saved=await asyncio.to_thread(skills.save,context.owner_hash,fields,status=args.get('_status') or 'active')
         except skills.SkillError as exc:return error(str(exc))
         return result([{'status':'saved','id':saved['id'],'name':saved['name'],'skill_status':saved['status'],'link':'#skills/'+saved['id']}],'skill library')
+    if name in {'record_trade','set_available_funds','set_position_plan'}:
+        # Only reached through execute_reversible: the owner pressed the card, and the frozen operation matched.
+        from .. import portfolio
+        if not is_owner:return error('owner_login_required')
+        try:value=await asyncio.to_thread(portfolio.apply_tool,name,context.owner_hash,args)
+        except portfolio.PortfolioError as exc:return {'ok':False,'data':[],'error_code':exc.code,'reason':exc.reason,'hint':exc.reason}
+        # The sentinel's copy of positions and plans follows every portfolio write.
+        from ..sentinel_bridge import refresh_sentinel_snapshot
+        await asyncio.to_thread(refresh_sentinel_snapshot)
+        return result([{k:v for k,v in value.items() if k!='ok'}],'portfolio')
     if name=='create_routine':
         # Only reached through execute_reversible; the bot is the proposing turn's, frozen in the operation.
         from .. import agent_tasks as tasks

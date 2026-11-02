@@ -4,9 +4,9 @@ import { DEFAULT_LAYOUT, addCard, botSymbol, cleanLayout, loadLayout, moveCard, 
 
 const memory = () => { const m = new Map(); return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; };
 
-test("five default cards; edit, save, reload and reset per bot", () => {
+test("six default cards (with 我的持仓); edit, save, reload and reset per bot", () => {
   const s = memory();
-  assert.deepEqual(loadLayout("b1", s).map((x) => x.card), ["price", "forecast", "materials", "filings", "routines"]);
+  assert.deepEqual(loadLayout("b1", s).map((x) => x.card), ["price", "forecast", "materials", "filings", "routines", "portfolio"]);
   let layout = loadLayout("b1", s);
   layout = removeCard(layout, layout.findIndex((x) => x.card === "filings"));
   layout = addCard(layout, "brief");
@@ -14,10 +14,10 @@ test("five default cards; edit, save, reload and reset per bot", () => {
   layout = pinCardSymbol(layout, 0, "nvda");
   saveLayout("b1", layout, s);
   const again = loadLayout("b1", s);
-  assert.deepEqual(again.map((x) => x.card), ["price", "forecast", "materials", "brief", "routines"]);
+  assert.deepEqual(again.map((x) => x.card), ["price", "forecast", "materials", "routines", "brief", "portfolio"]);
   assert.equal(again[0].symbol, "NVDA");
   assert.equal(loadLayout("b2", s).length, DEFAULT_LAYOUT.length);
-  assert.equal(resetLayout("b1", s).length, 5);
+  assert.equal(resetLayout("b1", s).length, 6);
   assert.equal(loadLayout("b1", s)[3].card, "filings");
 });
 

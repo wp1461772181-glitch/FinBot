@@ -46,6 +46,9 @@ FAILURE_REASONS={
  'already_reviewed':'这份申报已经有人工核验结论，结论记录后不能修改，所以这次没有重复记录。',
  'write_service_failed':'执行时服务返回了未预期的错误，操作没有完成。',
 }
+# Portfolio refusals (app.portfolio.REASONS) read the same way: the code survives, the sentence is theirs.
+from ..portfolio import REASONS as _PORTFOLIO_REASONS
+FAILURE_REASONS.update(_PORTFOLIO_REASONS)
 
 def failure_reason(code):
     return FAILURE_REASONS.get(str(code),FAILURE_REASONS['write_service_failed'])

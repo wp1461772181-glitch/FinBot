@@ -1,10 +1,11 @@
 // The bot workspace's data cards (UX batch 2, P3).  Each card loads on its own, so one failing read never blanks
 // the others.  Facts only: prices, dates, counts and titles; no buy/sell wording anywhere.
 import { useEffect, useState } from "react";
-import { getFilingInventory, getMaterialLibrary, getResearchQueue, getV2Prices, getV2Workspace, listAgentTasks, listInbox, listTaskProposals, type Bot } from "./api";
+import { getFilingInventory, getMaterialLibrary, getPortfolio, getResearchQueue, getV2Prices, getV2Workspace, listAgentTasks, listInbox, listTaskProposals, type Bot } from "./api";
 import { formatDate, getLocalePreference, useLocale } from "./i18n";
 import { CARDS, priceSummary, type LayoutItem } from "./workspace-cards.mjs";
 import { waitingCount } from "./inbox-items.mjs";
+import { formatMoney, formatPercent, pnlTone } from "./portfolio-items.mjs";
 import { materialHref } from "./material-focus.mjs";
 
 type Load<T> = { kind: "loading" } | { kind: "ready"; value: T } | { kind: "error" };
@@ -114,6 +115,26 @@ function RoutinesCard({ bot }: { bot: Bot }) {
   </>;
 }
 
+// 我的持仓: the owner's funds, total, P&L and the biggest positions; the full table is on the 持仓 page.  Owner only
+// (a guest's read answers 403, which shows as the card's usual error line).
+function PortfolioCard() {
+  const { t } = useLocale();
+  const [state] = useLoad("portfolio", signal => getPortfolio(signal));
+  return <>
+    <Body state={state} empty={v => !v.positions.length && Number(v.available_funds) === 0 && !v.transactions.length}>{v => <>
+      <ul className="ws-list">
+        <li><span>{t("可用资金")}</span> <strong>{formatMoney(v.available_funds)}</strong></li>
+        <li><span>{t("总资产")}</span> <strong>{v.total_assets === null ? "—" : formatMoney(v.total_assets)}</strong></li>
+        <li><span>{t("浮动盈亏")}</span> <strong className={`pf-${pnlTone(v.floating_pnl)}`}>{formatMoney(v.floating_pnl, { signed: true })}</strong></li>
+        <li><span>{t("今日盈亏")}{v.today_pnl_reference_only ? ` · ${t("仅供参考")}` : ""}</span> <strong className={`pf-${pnlTone(v.today_pnl)}`}>{formatMoney(v.today_pnl, { signed: true })}</strong></li>
+      </ul>
+      <ul className="ws-list">{[...v.positions].sort((a, b) => Number(b.weight_pct ?? 0) - Number(a.weight_pct ?? 0)).slice(0, 5).map(p =>
+        <li key={p.symbol}><span>{p.symbol}</span><small className="ws-muted"> {t("仓位占比")} {formatPercent(p.weight_pct)} · <span className={`pf-${pnlTone(p.floating_pnl)}`}>{formatMoney(p.floating_pnl, { signed: true })}</span></small></li>)}</ul>
+      {v.price_date && <small className="ws-muted">{t("行情数据日期")} {v.price_date}</small>}</>}</Body>
+    <a className="text-button" href="#portfolio">{t("管理持仓")} →</a>
+  </>;
+}
+
 function BriefCard({ bot }: { bot: Bot }) {
   const [state] = useLoad(`brief:${bot.id}`, signal => listInbox("brief", signal, bot.id));
   return <Body state={state} empty={v => !v.length}>{v => <ul className="ws-list">{v.slice(0, 3).map(item =>
@@ -137,6 +158,7 @@ export function WorkspaceCard({ item, bot, symbol, wide, onOpenCompany, onPickSy
     : item.card === "filings" ? <FilingsCard symbol={sym} />
     : item.card === "routines" ? <RoutinesCard bot={bot} />
     : item.card === "brief" ? <BriefCard bot={bot} />
+    : item.card === "portfolio" ? <PortfolioCard />
     : <WatchlistCard onPick={onPickSymbol} />;
   const perStock = ["price", "forecast", "materials", "filings"].includes(item.card);
   return <section className={`ws-card size-${item.size ?? card.size}`} aria-label={t(card.title)}>
