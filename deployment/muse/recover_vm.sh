@@ -3,7 +3,7 @@
 #
 # Why: only the home directory survives a VM replacement. Everything in
 # /etc (systemd units, /etc/finbot/*.env) is wiped, so all FinBot services
-# are down until this script runs. First used manually 2026-11-02 (~45 min);
+# are down until this script runs. First done manually 2026-11-02 (~45 min);
 # this script is that procedure, sequenced. Idempotent: safe to re-run.
 #
 # Run as root from an interactive shell where HTTPS_PROXY is set (the
@@ -41,19 +41,24 @@ if ! grep -q '^SENTINEL_TOKEN=' "$MUSE_ENV"; then
     printf 'SENTINEL_TOKEN=%s\n' "$(cat "$TOKEN_FILE")" >> "$MUSE_ENV"
     echo "added SENTINEL_TOKEN"
 fi
-# RAG token must match the Mac retrieval service; install.sh writes a placeholder.
-if grep -q '^RAG_REMOTE_TOKEN=<redacted> "$MUSE_ENV" || ! grep -q '^RAG_REMOTE_TOKEN=' "$MUSE_ENV"; then
-    TOK=$("$HOME/workspace/tools/mac-ssh" '/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:RAG_REMOTE_TOKEN" ~/Library/LaunchAgents/com.market-evidence-agent.retrieval.plist' 2>/dev/null || true)
-    if [ -n "$TOK" ]; then
+# RAG token must match the Mac retrieval service (install.sh writes a
+# placeholder). Always re-sync from the Mac when reachable; idempotent.
+PH=$(grep -o 'RAG_REMOTE_TOKEN=[A-Za-z_]*' deployment/muse/install.sh | head -1 | cut -d= -f2)
+CUR=$(grep '^RAG_REMOTE_TOKEN=' "$MUSE_ENV" | head -1 | cut -d= -f2 || true)
+TOK=$("$HOME/workspace/tools/mac-ssh" '/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:RAG_REMOTE_TOKEN" ~/Library/LaunchAgents/com.market-evidence-agent.retrieval.plist' 2>/dev/null || true)
+if [ -n "$TOK" ]; then
+    if [ "$TOK" != "$CUR" ]; then
         grep -v '^RAG_REMOTE_TOKEN=' "$MUSE_ENV" > /tmp/menv.$$
         printf 'RAG_REMOTE_TOKEN=%s\n' "$TOK" >> /tmp/menv.$$
         install -m 600 /tmp/menv.$$ "$MUSE_ENV"
         rm -f /tmp/menv.$$
         echo "RAG_REMOTE_TOKEN synced from the Mac"
     else
-        echo "WARNING: RAG_REMOTE_TOKEN is a placeholder and the Mac was unreachable;" >&2
-        echo "         research answers will be degraded until it is synced." >&2
+        echo "RAG_REMOTE_TOKEN already matches the Mac"
     fi
+elif [ -z "$CUR" ] || [ "$CUR" = "$PH" ]; then
+    echo "WARNING: RAG token is unset/placeholder and the Mac was unreachable;" >&2
+    echo "         research answers will be degraded until it is synced." >&2
 fi
 
 echo "== 3/6 sentinel + tailscaled units (not covered by install.sh) =="
