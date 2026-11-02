@@ -37,3 +37,51 @@ def test_a_value_written_per_million_binds_and_its_result_may_be_restated_in_yi(
     assert unsupported_number_values('差额为 50,115 百万美元 [3]',cited)==[]
     assert unsupported_number_values('差额约 501.15 亿美元 [3]',cited)==[]
     assert unsupported_number_values('差额约 600 亿美元 [3]',cited)==[6e10]
+
+
+# --- Yahoo's single-precision prices: 92.07 is stored as 92.06999969482422 -----------------------------------
+
+PRICE=92.06999969482422
+
+def _price_row(**extra):
+    return {'id':'11111111-1111-4111-8111-111111111111','symbol':'INTC','trading_date':'2026-10-29','close':PRICE,'open':91.5,
+            'source':'yahoo','fetched_at':'2026-10-30T01:00:00+00:00',**extra}
+
+def test_rounded_price_binds():
+    source=[{'ordinal':1,'source_type':'saved_price','quote':str(PRICE)}]
+    def run(value):
+        return calculate({'expression':'a','inputs':[{'name':'a','value':value,'source_ordinal':1}]},source)
+    assert run('92.07')['value']=='92.07'
+    for wrong in ('92.1','92.08'):
+        with pytest.raises(ValueError,match='calculation_input_unbound'):run(wrong)
+
+def test_price_quote_is_rounded():
+    from app.agent_workflow.evidence import number_rows
+    citations=[]
+    number_rows('query_stock_prices',[_price_row()],citations,{'symbol':'INTC'})
+    assert citations[0]['quote']=='92.07' and '92.0699' not in citations[0]['figures']
+    assert '92.0699' not in str(citations[0]['fields'])
+    # The saved price is still exactly what the restore check reads from the table.
+    assert str(PRICE)!=citations[0]['quote']
+    sets=[]
+    number_rows('query_stock_prices',[{'source_type':'saved_price_set','set_id':'ps_1','symbol':'INTC','n':2,'row_ids':[],'parent_digest':'d',
+                                       'start_date':'2026-10-29','end_date':'2026-10-30','first_close':PRICE,'last_close':65.76000213623047}],sets,{})
+    assert sets[0]['figures']=='2026-10-29 close 92.07 2026-10-30 close 65.76'
+
+def test_rounded_price_not_flagged():
+    from app.agent_workflow.evidence import number_rows,unsupported_number_values
+    citations=[]
+    number_rows('query_stock_prices',[_price_row()],citations,{'symbol':'INTC'})
+    assert unsupported_number_values('INTC 10-29 收盘 92.07 [1]',citations)==[]
+    assert unsupported_number_values('INTC 10-29 收盘 92.5 [1]',citations)==[92.5]
+
+def test_exact_figures_unchanged():
+    from decimal import Decimal
+    from app.agent_workflow.calculation import format_price,matches_source
+    source=[{'ordinal':1,'source_type':'reported_figure','quote':'Revenue per share was 165.13 dollars.'}]
+    assert calculate({'expression':'a','inputs':[{'name':'a','value':'165.13','source_ordinal':1}]},source)['value']=='165.13'
+    for wrong in ('165.1','165.14','165'):
+        with pytest.raises(ValueError,match='calculation_input_unbound'):
+            calculate({'expression':'a','inputs':[{'name':'a','value':wrong,'source_ordinal':1}]},source)
+    assert format_price(PRICE)=='92.07' and format_price(100.0)=='100' and format_price(65.76000213623047)=='65.76'
+    assert matches_source(Decimal('92.07'),{Decimal(str(PRICE))}) and not matches_source(Decimal('92.1'),{Decimal(str(PRICE))})

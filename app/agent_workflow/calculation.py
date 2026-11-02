@@ -2,10 +2,27 @@
 import ast
 import re
 import unicodedata
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from .semantic import _FIGURE, _MAGNITUDE, PERIOD_TEXT, ACCESSION, SOURCE_ID, TASK_ID
 # Percent and unit factors only: a power of ten converts a cited value (to 亿 or billions), it adds no figure.
 CONSTANTS=frozenset({0,1,100,1000,10**4,10**6,10**8,10**9,10**12})
+
+
+def format_price(value):
+    """A stored price as the reader knows it: Yahoo's single-precision 92.06999969482422 is 92.07.  Display and
+    comparison only; the stored rows (and the hashes and forecast manifests built on them) stay untouched."""
+    text=format(Decimal(repr(round(float(value),4))).normalize(),'f')
+    return text
+
+
+def matches_source(value, numbers):
+    """The model's value is one of the source's numbers: exactly, or (with at least two decimals) the source number
+    rounded to the decimals the value is written in, so 92.07 binds to a stored 92.06999969482422 but 92.1 does not."""
+    if value in numbers:return True
+    places=-value.as_tuple().exponent
+    if places<2:return False
+    step=Decimal(1).scaleb(-places)
+    return any(n.quantize(step,rounding=ROUND_HALF_UP)==value for n in numbers if n.is_finite())
 
 
 def calculate(args, citations):
@@ -23,7 +40,7 @@ def calculate(args, citations):
         numbers={Decimal(n)*Decimal(str(_MAGNITUDE.get(unit.lower(),1))) for n,unit in found}|{Decimal(n) for n,unit in found if unit}
         try:value=Decimal(item['value'])
         except (InvalidOperation,TypeError):raise ValueError('invalid_calculation')
-        if not value.is_finite() or value not in numbers:raise ValueError('calculation_input_unbound')
+        if not value.is_finite() or not matches_source(value,numbers):raise ValueError('calculation_input_unbound')
         values[name]=value;parents.append(item['source_ordinal'])
     if not values or len(values)>8:raise ValueError('invalid_calculation')
     def evaluate(node):

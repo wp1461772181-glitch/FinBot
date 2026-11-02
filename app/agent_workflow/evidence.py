@@ -330,6 +330,9 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
             end_date=str(row.get('end_date') or meta.get('end_date') or '')
             first_close=row.get('first_close') if row.get('first_close') is not None else meta.get('first_close')
             last_close=row.get('last_close') if row.get('last_close') is not None else meta.get('last_close')
+            # Yahoo's single precision (92.06999969482422) is shown as the price it is, 92.07; the stored rows are not touched.
+            from .calculation import format_price
+            first_close,last_close=[None if v is None else float(format_price(v)) for v in (first_close,last_close)]
             fields_avail=list(row.get('fields_available') or meta.get('fields_available') or PRICE_SET_FIELDS)
             source_name=row.get('source') or meta.get('source') or 'market_prices'
             fetched_at=row.get('fetched_at') or meta.get('fetched_at')
@@ -397,7 +400,11 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
                 'symbol':row.get('symbol') or scope.get('symbol'),'analysis_id':row.get('analysis_id'),'derived':kind=='ai_analysis','truncated':bool(row.get('truncated')),
                 'fields':_citation_fields(row),'evidence_quotes':_evidence_quotes(row)})
         if kind=='saved_price':
-            citations[ordinal-1]['quote']=str(row['close'])
+            from .calculation import format_price
+            for k in ('open','high','low','close'):
+                if row.get(k) is not None:row[k]=float(format_price(row[k]))
+            citations[ordinal-1]['quote']=format_price(row['close'])
+            citations[ordinal-1]['fields']=_citation_fields(row)
             # The quote stays the close (the restore check compares it); the row's other prices are
             # kept beside it so an answer that states the open, high, low or volume can be checked.
             citations[ordinal-1]['figures']=' '.join(f'{k} {row[k]}' for k in ('trading_date','open','high','low','close','volume') if row.get(k) is not None)

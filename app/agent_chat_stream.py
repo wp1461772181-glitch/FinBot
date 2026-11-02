@@ -70,7 +70,7 @@ def _restore_citations(items,credential=None):
      identity=UUID(item.get('source_id',''))
      source=session.get(MarketPrice,identity)
      valid=bool(source and source.symbol==item.get('symbol') and source.trading_date.isoformat()==item.get('trading_date')
-       and source.source==item.get('source') and __import__('decimal').Decimal(str(source.close))==__import__('decimal').Decimal(item.get('quote',''))
+       and source.source==item.get('source') and __import__('decimal').Decimal(item.get('quote','')) in {__import__('decimal').Decimal(str(source.close)),__import__('decimal').Decimal(__import__('app.agent_workflow.calculation',fromlist=['format_price']).format_price(source.close))}
        and source.fetched_at.isoformat()==item.get('fetched_at'))
      if valid:verified.append({**item,'chunk_id':None,'document_id':None,'source_url':None})
      else:verified.append({'ordinal':ordinal,'chunk_id':None,'title':'来源已失效','section':'','source_url':None,'source_type':'unavailable','truncated':False})
