@@ -104,6 +104,8 @@ async def main(dry_run: bool = False) -> int:
         print("Telegram bridge: another bridge is already running (data/telegram-bridge.lock).", file=sys.stderr)
         return 1
 
+    global _RUNNER
+    _RUNNER = TurnRunner()
     pending_cards: dict[str, dict] = {}
     last_outbox_check = 0.0
     offset = 0
@@ -145,18 +147,154 @@ async def main(dry_run: bool = False) -> int:
                     update_id = update.get("update_id")
                     if isinstance(update_id, int):
                         offset = update_id + 1
-                    message = update.get("message")
-                    callback = update.get("callback_query")
-
-                    if isinstance(message, dict):
-                        await _handle_message(client, credential, owner, message,
-                                              bound_chat, bound_user, pending_cards, tg)
-                    elif isinstance(callback, dict):
-                        await _handle_callback(client, callback, pending_cards, owner, credential,
-                                               bound_chat, bound_user, tg)
+                    await _dispatch_update(client, update, credential, owner, bound_chat, bound_user,
+                                           pending_cards, tg)
             except Exception as exc:
                 print(f"Bridge error: {_redact(exc)}", file=sys.stderr)
                 await asyncio.sleep(10)
+
+
+async def _dispatch_update(client, update: dict, credential: str, owner: str, bound_chat, bound_user,
+                           pending_cards: dict, tg) -> None:
+    """One update of the shared bot.  Returns as soon as the turn it starts is handed to the runner."""
+    message = update.get("message")
+    callback = update.get("callback_query")
+    if isinstance(message, dict):
+        await _handle_message(client, credential, owner, message, bound_chat, bound_user, pending_cards, tg)
+    elif isinstance(callback, dict):
+        await _handle_callback(client, callback, pending_cards, owner, credential, bound_chat, bound_user, tg)
+
+
+# --- feedback while a turn runs (Task 10) -------------------------------------------------------------
+# A turn takes 20-100 s.  The user sees "typing" at once, a placeholder within 2 s that is edited as the
+# stream reports steps (no extra model call), and the full answer as a separate message (so it notifies).
+# Turns run as background tasks, one queue per bot: other bots, buttons and the outbox are never held up.
+TYPING_INTERVAL = 4.0
+PROGRESS_MIN_INTERVAL = 2.0
+CONNECT_TIMEOUT = 5.0
+BUSY_RETRY_DELAY = 3.0
+BUSY_RETRIES = 5
+ACK_TEXT = "收到，正在处理……"
+QUEUED_TEXT = "收到，排在上一条后面。"
+DONE_TEXT = "处理完成，回答见下一条。"
+BACKEND_DOWN_TEXT = "后端暂时连不上，提醒不受影响。"
+BUSY_GIVEUP_TEXT = "这个对话正在别处回答中，请稍后再发一次。"
+
+_RUNNER: "TurnRunner | None" = None
+
+
+class BackendUnavailable(Exception):
+    """The local API did not accept the connection."""
+
+
+class ConversationBusy(Exception):
+    """The API answered 409 conversation_busy: the same conversation is answering elsewhere."""
+
+
+class TurnRunner:
+    """Runs turns as background tasks: one at a time per key (a bot), different keys in parallel."""
+
+    def __init__(self) -> None:
+        self._queues: dict[str, list] = {}
+        self._tasks: set[asyncio.Task] = set()
+
+    def busy(self, key: str) -> bool:
+        return key in self._queues
+
+    async def submit(self, key: str, job, on_queued=None) -> None:
+        queue = self._queues.get(key)
+        if queue is not None:
+            queue.append(job)
+            if on_queued is not None:
+                await on_queued()
+            return
+        self._queues[key] = [job]
+        task = asyncio.create_task(self._drain(key))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _drain(self, key: str) -> None:
+        queue = self._queues[key]
+        try:
+            while queue:
+                job = queue.pop(0)
+                try:
+                    await job()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    print(f"Bridge turn error: {_redact(exc)}", file=sys.stderr)
+        finally:
+            self._queues.pop(key, None)
+
+    async def wait_idle(self) -> None:
+        while self._tasks:
+            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+
+
+async def _run_turn(client, credential: str, owner: str, chat_id: int, pending_cards: dict, tg,
+                    bot_id: str, bot_name: str, text: str, channel: dict | None = None, **press) -> None:
+    """Hand one turn to the runner (and tell the user when it has to wait); without a runner run it inline."""
+    if _RUNNER is None:
+        await _bot_turn(client, credential, owner, chat_id, pending_cards, tg, bot_id, bot_name, text,
+                        channel, **press)
+        return
+
+    async def job():
+        await _bot_turn(client, credential, owner, chat_id, pending_cards, tg, bot_id, bot_name, text,
+                        channel, feedback=True, **press)
+
+    async def queued():
+        token = channel["token"] if channel else _bot_token_for_send(owner, tg)
+        await _send_text(client, token, chat_id, QUEUED_TEXT, markdown=False)
+
+    await _RUNNER.submit(bot_id, job, queued)
+
+
+async def _keep_typing(client, bot_token: str, chat_id: int) -> None:
+    try:
+        while True:
+            await asyncio.sleep(TYPING_INTERVAL)
+            await _send_action(client, bot_token, chat_id)
+    except asyncio.CancelledError:
+        pass
+
+
+def _progress_text(kind: str, data: dict) -> str | None:
+    """A progress line from a stream step event; None for events that are not steps."""
+    if kind == "tool_start" and data.get("name"):
+        return f"{ACK_TEXT}\n正在调用：{data['name']}"
+    if kind == "status" and data.get("step"):
+        return f"{ACK_TEXT}\n进展：{data['step']}"
+    return None
+
+
+class _Progress:
+    """The placeholder message: sent at once, edited at most every PROGRESS_MIN_INTERVAL seconds."""
+
+    def __init__(self, client, bot_token: str, chat_id: int) -> None:
+        self.client, self.bot_token, self.chat_id = client, bot_token, chat_id
+        self.message_id: int | None = None
+        self.last_text = ACK_TEXT
+        self.last_edit = time.monotonic()
+
+    async def start(self) -> None:
+        self.message_id = await _send_text(self.client, self.bot_token, self.chat_id, ACK_TEXT, markdown=False)
+        self.last_edit = time.monotonic()
+
+    async def on_event(self, kind: str, data: dict) -> None:
+        text = _progress_text(kind, data)
+        if text is None or text == self.last_text or self.message_id is None:
+            return
+        now = time.monotonic()
+        if now - self.last_edit < PROGRESS_MIN_INTERVAL:
+            return
+        self.last_text, self.last_edit = text, now
+        await _edit_text(self.client, self.bot_token, self.chat_id, self.message_id, text)
+
+    async def finish(self) -> None:
+        if self.message_id is not None:
+            await _edit_text(self.client, self.bot_token, self.chat_id, self.message_id, DONE_TEXT)
 
 
 async def _get_updates(client, bot_token: str, offset: int, timeout: int) -> list | None:
@@ -240,17 +378,37 @@ async def _handle_message(client, credential: str, owner: str, message: dict,
     target = await asyncio.to_thread(tg.route, owner, text, reply_to if isinstance(reply_to, int) else None)
     if not target["text"]:
         return
-    await _bot_turn(client, credential, owner, bound_chat, pending_cards, tg, target["bot_id"], target["bot_name"],
+    await _run_turn(client, credential, owner, bound_chat, pending_cards, tg, target["bot_id"], target["bot_name"],
                     target["text"])
 
 
 async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pending_cards: dict, tg,
-                    bot_id: str, bot_name: str, text: str, channel: dict | None = None, **press):
+                    bot_id: str, bot_name: str, text: str, channel: dict | None = None, *,
+                    feedback: bool = False, **press):
     """One turn of a bot, sent back as its chat message(s); ``press`` carries a card press (its conversation,
     card id and the button's label).  ``channel`` is the bot's own Telegram bot (UX batch 2, P4): the answer goes
-    out through it, without the name in front, since that chat is the bot's alone."""
+    out through it, without the name in front, since that chat is the bot's alone.  ``feedback`` adds the
+    typing indicator and the progress placeholder (the runner turns it on)."""
     bot_token = channel["token"] if channel else _bot_token_for_send(owner, tg)
-    answer, cards, cid = await _ask_agent(client, credential, bot_id, text, **press)
+    typing = progress = None
+    if feedback:
+        await _send_action(client, bot_token, bound_chat)
+        typing = asyncio.create_task(_keep_typing(client, bot_token, bound_chat))
+        progress = _Progress(client, bot_token, bound_chat)
+        await progress.start()
+    try:
+        try:
+            answer, cards, cid = await _ask_with_retry(client, credential, bot_id, text,
+                                                       on_event=progress.on_event if progress else None, **press)
+        except BackendUnavailable:
+            await _send_text(client, bot_token, bound_chat, BACKEND_DOWN_TEXT, markdown=False)
+            return
+        except ConversationBusy:
+            await _send_text(client, bot_token, bound_chat, BUSY_GIVEUP_TEXT, markdown=False)
+            return
+    finally:
+        if typing:
+            typing.cancel()
     keyboard = _make_keyboard(cards, pending_cards, cid, credential, bot_id, bot_name) if cid else None
     if cards and not keyboard:
         answer = answer.strip() + "\n\n（这一步需要在网页里选择后确认。）"
@@ -264,6 +422,21 @@ async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pendin
             await asyncio.to_thread(tg.record_reply, owner, bot_id, chunk, sent, channel["row_id"])
         else:
             await asyncio.to_thread(tg.record_reply, owner, bot_id, chunk, sent)
+    if progress:
+        await progress.finish()
+
+
+async def _ask_with_retry(client, credential: str, bot_id: str, text: str, *, on_event=None, **press):
+    """``_ask_agent``, waiting out a 409 conversation_busy a few times.  The extra argument is only passed
+    when there is a progress callback."""
+    extra = {"on_event": on_event} if on_event else {}
+    for attempt in range(BUSY_RETRIES + 1):
+        try:
+            return await _ask_agent(client, credential, bot_id, text, **press, **extra)
+        except ConversationBusy:
+            if attempt == BUSY_RETRIES:
+                raise
+            await asyncio.sleep(BUSY_RETRY_DELAY)
 
 
 async def _handle_bind_command(client, chat: dict, sender: dict | None, owner: str, code: str, tg):
@@ -295,10 +468,13 @@ def _bot_token_for_send(owner: str, tg) -> str:
 
 
 async def _ask_agent(client, credential: str, bot_id: str, text: str, *, conversation_id: str | None = None,
-                     pending_request_id: str | None = None, display_message: str | None = None):
+                     pending_request_id: str | None = None, display_message: str | None = None, on_event=None):
     """One turn of the bot (its line, its model from the server catalog).  Returns the answer as chat text,
     any cards, and the conversation id the turn ran in.  A card press sends the button's value with the
-    card id, as the web page does."""
+    card id, as the web page does.  ``on_event(kind, data)`` is awaited for each stream event as it arrives.
+    Raises BackendUnavailable when the API cannot be reached (5 s) and ConversationBusy on a 409."""
+    import codecs
+
     import httpx
     from app.agent_telegram import sse_events
 
@@ -310,17 +486,32 @@ async def _ask_agent(client, credential: str, bot_id: str, text: str, *, convers
         if display_message:
             body["display_message"] = display_message[:120]
     raw = ""
+    pending = ""
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
     try:
         async with client.stream(
             "POST",
             f"{LOCAL_API}/agent-chat/stream",
             json=body,
             headers={"X-Chat-Session": credential, "Accept": "text/event-stream"},
-            timeout=httpx.Timeout(300),
+            timeout=httpx.Timeout(300, connect=CONNECT_TIMEOUT),
         ) as response:
+            if response.status_code == 409:
+                raise ConversationBusy()
             response.raise_for_status()
             async for chunk in response.aiter_bytes():
-                raw += chunk.decode("utf-8", errors="replace")
+                piece = decoder.decode(chunk)
+                raw += piece
+                if on_event:
+                    pending += piece
+                    while "\n\n" in pending:
+                        block, pending = pending.split("\n\n", 1)
+                        for kind, data in sse_events(block + "\n\n"):
+                            await on_event(kind, data)
+    except (ConversationBusy, BackendUnavailable):
+        raise
+    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+        raise BackendUnavailable() from exc
     except Exception as exc:
         raw += "\n\n" + "event: delta\ndata: " + json.dumps({"text": f"\n\n（Agent 回答出错：{_redact(exc)}）"}, ensure_ascii=False) + "\n\n"
     return format_turn(sse_events(raw))
@@ -432,7 +623,7 @@ async def _handle_callback(client, callback: dict, pending: dict, owner: str, cr
     # finds the card, runs consent.execute with the operations it saved and the confirmed handler, and the
     # bot reports what was saved.  Calling consent.execute from here could not: the bridge holds neither
     # the operations (the payload digest) nor the turn context the handler needs.
-    await _bot_turn(client, entry.get("credential") or credential, owner, bound_chat, pending, tg,
+    await _run_turn(client, entry.get("credential") or credential, owner, bound_chat, pending, tg,
                     entry["bot_id"], entry.get("bot_name") or "", entry["value"], channel=channel,
                     conversation_id=entry.get("conversation_id"), pending_request_id=entry["card_id"],
                     display_message=entry.get("label"))
@@ -515,6 +706,27 @@ async def _answer_callback(client, bot_token: str, callback_id: str, text: str |
         await client.post(f"{TELEGRAM_API}/bot{bot_token}/answerCallbackQuery", json=body)
     except httpx.HTTPError:
         pass
+
+
+async def _send_action(client, bot_token: str, chat_id: int, action: str = "typing") -> None:
+    """sendChatAction (the "typing…" indicator lasts 5 s, so the caller renews it).  Best effort."""
+    if not bot_token:
+        return
+    try:
+        await client.post(f"{TELEGRAM_API}/bot{bot_token}/sendChatAction", json={"chat_id": chat_id, "action": action})
+    except Exception as exc:
+        print(f"Telegram sendChatAction failed: {_redact(exc)}", file=sys.stderr)
+
+
+async def _edit_text(client, bot_token: str, chat_id: int, message_id: int, text: str) -> None:
+    """editMessageText with plain text.  Best effort: a failed progress edit must not stop the turn."""
+    if not bot_token or not isinstance(message_id, int):
+        return
+    try:
+        await client.post(f"{TELEGRAM_API}/bot{bot_token}/editMessageText",
+                          json={"chat_id": chat_id, "message_id": message_id, "text": text[:ANSWER_MAX_CHARS]})
+    except Exception as exc:
+        print(f"Telegram editMessageText failed: {_redact(exc)}", file=sys.stderr)
 
 
 async def _clear_keyboard(client, bot_token: str, chat_id: int, message_id) -> None:
@@ -648,7 +860,7 @@ async def _handle_own_message(client, credential: str, owner: str, message: dict
         return
     if command or not text:
         return
-    await _bot_turn(client, credential, owner, channel["chat_id"], pending, tg, channel["bot_id"], channel["bot_name"],
+    await _run_turn(client, credential, owner, channel["chat_id"], pending, tg, channel["bot_id"], channel["bot_name"],
                     text, channel=channel)
 
 

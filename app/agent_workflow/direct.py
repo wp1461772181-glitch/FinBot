@@ -178,6 +178,7 @@ CLASSIFY_PROMPT=('Return classify_request. Decide by what the request needs, in 
     '"对比 AAPL、MSFT、GOOGL 近三年的营收增速" → A, mode "financials", symbols ["AAPL","MSFT","GOOGL"], symbol "AAPL".\n'
     '"AAPL 最新 10-K 里关于供应链风险是怎么说的" → A, mode "rag", symbols ["AAPL"], symbol "AAPL".\n'
     '"毛利率是怎么算的" → B, mode "none" (a definition; no record of this system is needed).\n'
+    '"hello ?" / "在吗" / "你好" / "在不在" → B, mode "none" (a greeting or a check that the assistant is there: answer in one short sentence with no tools; it is not out of scope, so never route C).\n'
     '"帮我写个 Python 快排" → C, mode "none" (coding; outside this product).\n'
     '"把这份 PDF 导入资料库" → D, mode "none", requested_actions ["import"] (a write the user asked for).\n'
     '"怎么把 NVDA 加进研究队列" → D, mode "none" (a question about using this product).\n'

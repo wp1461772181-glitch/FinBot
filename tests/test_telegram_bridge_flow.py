@@ -136,3 +136,198 @@ def test_a_table_row_and_a_bullet_get_the_suffix_too():
     text = "| 成交量 | 999 万股 [1] |\n- 开盘价 998 美元 [1]\n- 收盘价 100 美元 [1]"
     out = chat_text(text, flagged).split("\n")
     assert out[0].endswith("（未核实）") and out[1].endswith("（未核实）") and not out[2].endswith("（未核实）")
+
+
+# --- Task 10: feedback while a turn runs --------------------------------------------------------------
+import pytest  # noqa: E402
+
+
+class _Wire:
+    """Records the Telegram calls of a turn: typing, sends, edits."""
+
+    def __init__(self, monkeypatch):
+        self.actions, self.sends, self.edits = [], [], []
+
+        async def send_text(client, token, chat_id, text, inline_keyboard=None, *, markdown=True):
+            self.sends.append((chat_id, text))
+            return 500 + len(self.sends)
+
+        async def send_action(client, token, chat_id, action="typing"):
+            self.actions.append((chat_id, action))
+
+        async def edit_text(client, token, chat_id, message_id, text):
+            self.edits.append((message_id, text))
+
+        monkeypatch.setattr(bridge, "_send_text", send_text)
+        monkeypatch.setattr(bridge, "_send_action", send_action)
+        monkeypatch.setattr(bridge, "_edit_text", edit_text)
+        monkeypatch.setattr(bridge, "_bot_token_for_send", lambda owner, tg: TOKEN)
+
+
+def _turn(bot_id="b-default", text="问"):
+    return bridge._bot_turn(None, "cred", "owner", OWNER_ID, {}, _Telegram(), bot_id, "助理", text, feedback=True)
+
+
+def test_typing_and_ack_before_answer(monkeypatch):
+    wire = _Wire(monkeypatch)
+    order = []
+
+    async def ask_agent(client, credential, bot_id, text, on_event=None, **kw):
+        order.append(("asked", list(wire.actions), list(wire.sends)))
+        return "答案", [], "c-1"
+
+    monkeypatch.setattr(bridge, "_ask_agent", ask_agent)
+    asyncio.run(_turn())
+    _, actions_at_ask, sends_at_ask = order[0]
+    assert actions_at_ask == [(OWNER_ID, "typing")]          # typing is up before the model is asked
+    assert sends_at_ask == [(OWNER_ID, bridge.ACK_TEXT)]      # and so is the placeholder
+    assert wire.sends[-1][1] == "【助理】\n答案"                # the answer is a separate message
+    assert wire.edits[-1][1] == bridge.DONE_TEXT
+
+
+def test_typing_is_renewed_while_the_turn_runs(monkeypatch):
+    wire = _Wire(monkeypatch)
+    monkeypatch.setattr(bridge, "TYPING_INTERVAL", 0.02)
+
+    async def ask_agent(client, credential, bot_id, text, on_event=None, **kw):
+        await asyncio.sleep(0.15)
+        return "答案", [], "c-1"
+
+    monkeypatch.setattr(bridge, "_ask_agent", ask_agent)
+    asyncio.run(_turn())
+    assert len(wire.actions) >= 4
+    count = len(wire.actions)
+    asyncio.run(asyncio.sleep(0.1))
+    assert len(wire.actions) == count                          # stopped with the turn
+
+
+def test_progress_edits_are_throttled(monkeypatch):
+    wire = _Wire(monkeypatch)
+    monkeypatch.setattr(bridge, "PROGRESS_MIN_INTERVAL", 0.1)
+
+    async def ask_agent(client, credential, bot_id, text, on_event=None, **kw):
+        for i in range(30):                                    # 30 step events in ~0.3 s
+            await on_event("tool_start", {"name": f"tool_{i}"})
+            await asyncio.sleep(0.01)
+        return "答案", [], "c-1"
+
+    monkeypatch.setattr(bridge, "_ask_agent", ask_agent)
+    asyncio.run(_turn())
+    progress_edits = [e for e in wire.edits if e[1] != bridge.DONE_TEXT]
+    assert 1 <= len(progress_edits) <= 4
+    assert all("正在调用" in text for _, text in progress_edits)
+
+
+def test_long_turn_does_not_block_other_bot_callback_or_outbox(monkeypatch):
+    wire = _Wire(monkeypatch)
+    release = asyncio.Event
+    asked = []
+
+    async def scenario():
+        gate = asyncio.Event()
+
+        async def ask_agent(client, credential, bot_id, text, on_event=None, **kw):
+            asked.append(bot_id)
+            if bot_id == "b-news":
+                await gate.wait()
+            return f"答:{bot_id}", [], "c-1"
+
+        monkeypatch.setattr(bridge, "_ask_agent", ask_agent)
+        runner = bridge.TurnRunner()
+        monkeypatch.setattr(bridge, "_RUNNER", runner)
+        telegram = _Telegram()
+        telegram.pending_messages = lambda owner, *a: [{"id": 1, "text": "提醒：INTC 急跌"}]
+        telegram.mark_sent = lambda *a: None
+        telegram.mark_failed = lambda *a: None
+        # b-news starts a long turn (a reply to message 1001 routes to it)
+        long_msg = {"chat": {"id": OWNER_ID, "type": "private"}, "from": {"id": OWNER_ID}, "text": "慢问题",
+                    "reply_to_message": {"message_id": 1001}}
+        await bridge._handle_message(None, "cred", "owner", long_msg, OWNER_ID, OWNER_ID, {}, telegram)
+        await asyncio.sleep(0.05)
+        assert "b-news" in asked and runner.busy("b-news")
+        # meanwhile: another bot answers, a stray button press is handled, the outbox is delivered
+        other = {"chat": {"id": OWNER_ID, "type": "private"}, "from": {"id": OWNER_ID}, "text": "快问题"}
+        await bridge._handle_message(None, "cred", "owner", other, OWNER_ID, OWNER_ID, {}, telegram)
+        answered = []
+
+        async def answer_cb(client, token, cb_id, text=None):
+            answered.append(cb_id)
+
+        monkeypatch.setattr(bridge, "_answer_callback", answer_cb)
+        cb = {"id": "cb1", "data": "zz:none", "from": {"id": OWNER_ID},
+              "message": {"message_id": 9, "chat": {"id": OWNER_ID, "type": "private"}}}
+        await bridge._handle_callback(None, cb, {}, "owner", "cred", OWNER_ID, OWNER_ID, telegram)
+        await bridge._deliver_outbox(None, "owner", OWNER_ID, telegram)
+        await asyncio.sleep(0.05)
+        texts = [t for _, t in wire.sends]
+        assert any(t.startswith("【助理】\n答:b-default") for t in texts)   # the other bot finished
+        assert "提醒：INTC 急跌" in texts and answered == ["cb1"]            # outbox and callback went through
+        assert not any(t.startswith("【助理】\n答:b-news") for t in texts)   # the long turn is still running
+        gate.set()
+        await runner.wait_idle()
+
+    asyncio.run(scenario())
+
+
+def test_same_bot_second_message_queued(monkeypatch):
+    wire = _Wire(monkeypatch)
+    log = []
+
+    async def scenario():
+        gate = asyncio.Event()
+
+        async def ask_agent(client, credential, bot_id, text, on_event=None, **kw):
+            log.append(("start", text))
+            if text == "第一条":
+                await gate.wait()
+            log.append(("end", text))
+            return f"答:{text}", [], "c-1"
+
+        monkeypatch.setattr(bridge, "_ask_agent", ask_agent)
+        runner = bridge.TurnRunner()
+        monkeypatch.setattr(bridge, "_RUNNER", runner)
+        telegram = _Telegram()
+        for text in ("第一条", "第二条"):
+            msg = {"chat": {"id": OWNER_ID, "type": "private"}, "from": {"id": OWNER_ID}, "text": text}
+            await bridge._handle_message(None, "cred", "owner", msg, OWNER_ID, OWNER_ID, {}, telegram)
+            await asyncio.sleep(0.02)
+        assert bridge.QUEUED_TEXT in [t for _, t in wire.sends]     # told at once
+        assert log == [("start", "第一条")]                          # but not started yet
+        gate.set()
+        await runner.wait_idle()
+        assert log == [("start", "第一条"), ("end", "第一条"), ("start", "第二条"), ("end", "第二条")]
+
+    asyncio.run(scenario())
+
+
+def test_conversation_busy_409_is_retried(monkeypatch):
+    wire = _Wire(monkeypatch)
+    monkeypatch.setattr(bridge, "BUSY_RETRY_DELAY", 0.01)
+    calls = []
+
+    async def ask_agent(client, credential, bot_id, text, on_event=None, **kw):
+        calls.append(1)
+        if len(calls) < 3:
+            raise bridge.ConversationBusy()
+        return "答案", [], "c-1"
+
+    monkeypatch.setattr(bridge, "_ask_agent", ask_agent)
+    asyncio.run(_turn())
+    assert len(calls) == 3 and wire.sends[-1][1] == "【助理】\n答案"
+
+
+def test_api_down_replies_quickly(monkeypatch):
+    wire = _Wire(monkeypatch)
+
+    class _DownClient:
+        def stream(self, *a, **kw):
+            raise httpx.ConnectError("refused")
+
+    async def go():
+        await bridge._bot_turn(_DownClient(), "cred", "owner", OWNER_ID, {}, _Telegram(), "b-default", "助理", "问",
+                               feedback=True)
+
+    started = __import__("time").monotonic()
+    asyncio.run(go())
+    assert __import__("time").monotonic() - started < 5
+    assert wire.sends[-1][1] == bridge.BACKEND_DOWN_TEXT
