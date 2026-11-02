@@ -1,7 +1,7 @@
 import { BotOrb } from "./BotOrb";
 import { dispatchAgentAction } from "./agent-client-actions.mjs";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { listSkills, type Skill, agentChatStream, restoreAgentChat, clearAgentConversation, getChatMode, setChatMode, listAgentConversations, renameAgentConversation, archiveAgentConversation, selectAgentConversation, personalChatLogin, getKnowledgeCitation, getMaterialAnalysisSettings, saveMaterialAnalysisSettings, resetMaterialAnalysisSettings, getModelCatalog, getTelegramBind, saveTelegramToken, startTelegramBind, unbindTelegram, type CatalogModel, type Bot, type TelegramBindStatus, type KnowledgeCitationDetail, type ConversationSummary, type AgentChatMessage, type AgentChatEvent, type MaterialAnalysisSettings } from "./api";
+import { listSkills, type Skill, agentChatStream, restoreAgentChat, clearAgentConversation, getChatMode, setChatMode, listAgentConversations, renameAgentConversation, archiveAgentConversation, selectAgentConversation, personalChatLogin, getKnowledgeCitation, getMaterialAnalysisSettings, saveMaterialAnalysisSettings, resetMaterialAnalysisSettings, getModelCatalog, getTelegramBind, getPushover, savePushover, clearPushover, type PushoverStatus, saveTelegramToken, startTelegramBind, unbindTelegram, type CatalogModel, type Bot, type TelegramBindStatus, type KnowledgeCitationDetail, type ConversationSummary, type AgentChatMessage, type AgentChatEvent, type MaterialAnalysisSettings } from "./api";
 import { isTaskPostHead, parseTaskPostHead } from "./task-posts.mjs";
 import { chatTurnPreviews } from "./chat-thread.mjs";
 import { QuestionRail } from "./QuestionRail";
@@ -449,7 +449,7 @@ export function AgentAdminPage({ onBack }: { onBack: () => void }) {
  // their import/export and the separate 后台任务模型 card are gone (tasks use the bot's catalog model or the default).
  return <main className="workspace agent-admin" aria-labelledby="agent-admin-title"><header className="workspace-heading"><div><p className="eyebrow">FinBot / {t("后台设置")}</p><h1 id="agent-admin-title">{t("模型连接设置")}</h1></div><div className="agent-header-actions"><button type="button" className="secondary-action" onClick={()=>setKnowledgeTab(true)}>研究知识库</button><button type="button" className="secondary-action" onClick={onBack}>{t("返回 Agent 对话")}</button></div></header>
   {getChatMode()!=="personal"&&<section className="agent-settings-card"><p>{t("登录个人聊天后才能配置模型：对话、bot 和定时任务都用服务器模型目录里的模型。")}</p></section>}
-  <ModelCatalogCard/><MaterialAnalysisDefaultCard/><ChatArchiveSettings/><TelegramBindCard/></main>;
+  <ModelCatalogCard/><MaterialAnalysisDefaultCard/><ChatArchiveSettings/><TelegramBindCard/><PushoverCard/></main>;
 }
 
 function MaterialAnalysisDefaultCard() {
@@ -584,6 +584,47 @@ function TelegramBindCard() {
     {code && <p className="bind-code">{t("绑定码")}: <code>{code}</code><br/>{t("在 Telegram 上发送")}: <code>/bind {code}</code></p>}
     <div className="chat-archive-tools"><button type="button" className="primary-action" disabled={busy} onClick={() => void start()}>{busy ? t("正在生成…") : code ? t("重新生成") : t("生成绑定码")}</button></div></>}
     {tg?.configured && tg.bound && <div className="chat-archive-tools"><button type="button" className="secondary-action" disabled={busy} onClick={() => void doUnbind()}>{t("解除绑定")}</button></div>}
+    {status && <p role="status">{status}</p>}
+  </section>;
+}
+
+function PushoverCard() {
+  const { t } = useLocale();
+  const [saved, setSaved] = useState<PushoverStatus | null>(null);
+  const [userKey, setUserKey] = useState("");
+  const [appToken, setAppToken] = useState("");
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    getPushover()
+      .then((value) => { if (!cancelled) setSaved(value); })
+      .catch((error: unknown) => { if (!cancelled) setStatus(error instanceof Error ? error.message : t("Pushover 设置暂时无法读取。")); });
+    return () => { cancelled = true; };
+  }, []);
+  if (getChatMode() !== "personal") return null;
+  async function save() {
+    setBusy(true); setStatus("");
+    try { setSaved(await savePushover(userKey.trim(), appToken.trim())); setUserKey(""); setAppToken(""); setStatus(t("Pushover 已保存。")); }
+    catch (error) { setStatus(error instanceof Error ? error.message : t("保存失败，请重试。")); }
+    finally { setBusy(false); }
+  }
+  async function clear() {
+    setBusy(true); setStatus("");
+    try { setSaved(await clearPushover()); setStatus(t("Pushover 已清除。")); }
+    catch (error) { setStatus(error instanceof Error ? error.message : t("操作失败，请重试。")); }
+    finally { setBusy(false); }
+  }
+  return <section className="agent-settings-card" aria-labelledby="pushover-title">
+    <h2 id="pushover-title">{t("紧急提醒（Pushover）")}</h2>
+    <p>{t("急跌等提醒发到 Telegram 后，1 分钟内没点「收到」，就用 Pushover 紧急级通知响铃（每分钟一次，最多 30 分钟）；在 Pushover 里确认或在 Telegram 点「收到」都会停。两个值加密保存，保存后不会再显示。")}</p>
+    <p><strong>{t("状态")}：</strong>{saved?.configured ? t("已配置") : t("尚未配置")}</p>
+    <label>{t("Pushover User Key")}<input type="password" value={userKey} maxLength={64} autoComplete="off" onChange={e => setUserKey(e.target.value)} /></label>
+    <label>{t("Pushover App Token")}<input type="password" value={appToken} maxLength={64} autoComplete="off" onChange={e => setAppToken(e.target.value)} /></label>
+    <div className="chat-archive-tools">
+      <button type="button" className="primary-action" disabled={busy || !userKey.trim() || !appToken.trim()} onClick={() => void save()}>{t("保存 Pushover")}</button>
+      {saved?.configured && <button type="button" className="secondary-action" disabled={busy} onClick={() => void clear()}>{t("清除 Pushover")}</button>}
+    </div>
     {status && <p role="status">{status}</p>}
   </section>;
 }

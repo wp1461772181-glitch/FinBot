@@ -1115,6 +1115,38 @@ async def telegram_token_endpoint(body: TelegramTokenBody, x_chat_session: str |
         raise HTTPException(422, str(exc))
 
 
+# --- Pushover credentials for the sentinel's emergency alerts (Task 12); owner only ---------------------
+
+class PushoverBody(BaseModel):
+    user_key: str = Field(min_length=8, max_length=64)
+    app_token: str = Field(min_length=8, max_length=64)
+
+
+@router.get("/pushover/status")
+async def pushover_status_endpoint(x_chat_session: str | None = Header(default=None)):
+    """Whether the keys are saved.  Never the keys."""
+    from . import agent_pushover
+    credential = _owner_only(x_chat_session)
+    return await asyncio.to_thread(agent_pushover.status, owner_hash(credential))
+
+
+@router.put("/pushover")
+async def pushover_save_endpoint(body: PushoverBody, x_chat_session: str | None = Header(default=None)):
+    from . import agent_pushover
+    credential = _owner_only(x_chat_session)
+    try:
+        return await asyncio.to_thread(agent_pushover.save, owner_hash(credential), body.user_key, body.app_token)
+    except agent_pushover.PushoverError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.delete("/pushover")
+async def pushover_clear_endpoint(x_chat_session: str | None = Header(default=None)):
+    from . import agent_pushover
+    credential = _owner_only(x_chat_session)
+    return await asyncio.to_thread(agent_pushover.clear, owner_hash(credential))
+
+
 @router.post("/telegram/bind")
 async def telegram_bind_endpoint(x_chat_session: str | None = Header(default=None)):
     """Generate a one-time code to bind a Telegram account.  Send it to the bot; the bridge confirms."""

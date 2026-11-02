@@ -52,8 +52,13 @@ def _telegram(owner_hash: str) -> dict:
     return {"bot_token": bind["bot_token"], "chat_id": bind["chat_id"]}
 
 
-def _pushover() -> dict:
-    # Pushover is registered in a later task; empty values are fine.
+def _pushover(owner_hash: str) -> dict:
+    """The pair saved on the settings page (encrypted in the database); environment variables are a fallback."""
+    from . import agent_pushover
+
+    saved = agent_pushover.load(owner_hash)
+    if saved:
+        return saved
     return {"user_key": os.environ.get("PUSHOVER_USER_KEY", ""), "app_token": os.environ.get("PUSHOVER_APP_TOKEN", "")}
 
 
@@ -77,7 +82,7 @@ def build_snapshot(owner_hash: str) -> dict:
         "total_assets": portfolio.get("total_assets"),
         "research_queue": _section("research_queue", lambda: _research_queue(owner_hash), []),
         "telegram": _section("telegram", lambda: _telegram(owner_hash), {}),
-        "pushover": _section("pushover", _pushover, {}),
+        "pushover": _section("pushover", lambda: _pushover(owner_hash), {}),
     }
 
 

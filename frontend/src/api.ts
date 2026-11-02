@@ -254,6 +254,12 @@ export async function getTelegramBind(signal?:AbortSignal):Promise<TelegramBindS
 export async function saveTelegramToken(token:string):Promise<TelegramBindStatus>{
   return await ownerJson("telegram/token",{method:"POST",body:{bot_token:token}},"保存失败。");
 }
+export type PushoverStatus = { configured:boolean; updated_at:string|null };
+export async function getPushover(signal?:AbortSignal):Promise<PushoverStatus>{ return await ownerJson("pushover/status",{signal},"Pushover 设置暂时无法读取。"); }
+export async function savePushover(userKey:string,appToken:string):Promise<PushoverStatus>{
+  return await ownerJson("pushover",{method:"PUT",body:{user_key:userKey,app_token:appToken}},"Pushover 的 key 格式不对（应为 30 位字母数字）。");
+}
+export async function clearPushover():Promise<PushoverStatus>{ return await ownerJson("pushover",{method:"DELETE"},"操作失败，请重试。"); }
 export async function startTelegramBind():Promise<{code:string;bot_username?:string|null}>{
   return await ownerJson("telegram/bind",{method:"POST"},"生成绑定码失败。");
 }

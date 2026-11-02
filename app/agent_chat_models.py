@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -262,6 +262,16 @@ class AgentModelRole(Base):
     role: Mapped[str] = mapped_column(String(16), primary_key=True)
     model_name: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class AgentPushoverConfig(Base):
+    """The owner's Pushover user key and app token (Task 12), each encrypted with secret_box and never
+    returned by any endpoint; the decrypted pair only goes into the sentinel's snapshot file (0600)."""
+    __tablename__ = "agent_pushover_config"
+    owner_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_key_cipher: Mapped[str] = mapped_column(Text, nullable=False)
+    app_token_cipher: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
 
 class AgentTelegramBind(Base):

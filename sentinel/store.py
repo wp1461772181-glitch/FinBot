@@ -29,6 +29,12 @@ class Store:
                          "baseline_at REAL NOT NULL, splits_at REAL NOT NULL)")
             conn.execute("CREATE TABLE IF NOT EXISTS signal_cooldown (symbol TEXT NOT NULL, key TEXT NOT NULL,"
                          "ts REAL NOT NULL, mult REAL NOT NULL, PRIMARY KEY (symbol, key))")
+            conn.execute("CREATE TABLE IF NOT EXISTS alerts ("
+                         "id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL,"
+                         "escalate INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL, acked_at REAL,"
+                         "tg_chat_id INTEGER, tg_message_id INTEGER, last_sent_at REAL, resends INTEGER NOT NULL DEFAULT 0,"
+                         "deferred INTEGER NOT NULL DEFAULT 0, digested_at REAL,"
+                         "receipt TEXT, receipt_closed INTEGER NOT NULL DEFAULT 0, escalated_at REAL)")
             conn.execute("CREATE TABLE IF NOT EXISTS price_state (symbol TEXT PRIMARY KEY, price REAL NOT NULL, ts REAL NOT NULL)")
 
     def _conn(self) -> sqlite3.Connection:
@@ -106,3 +112,44 @@ class Store:
         except sqlite3.OperationalError:
             return False
         return row is not None
+
+    # --- alerts and acknowledgements (Task 12) -----------------------------------------------------
+    # The Telegram bridge writes ``acked_at`` here (button press or a reply to the alert message), the
+    # sentinel's escalation reads it.  WAL (set per connection above) lets both processes use the file.
+    def add_alert(self, symbol: str, kind: str, text: str, escalate: bool, created_at: float, *, deferred: bool = False) -> int:
+        with self._conn() as conn:
+            cur = conn.execute("INSERT INTO alerts (symbol, kind, text, escalate, created_at, deferred) VALUES (?, ?, ?, ?, ?, ?)",
+                               (symbol, kind, text, int(escalate), created_at, int(deferred)))
+            return int(cur.lastrowid)
+
+    def alert(self, alert_id: int) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+        return None if row is None else dict(row)
+
+    def update_alert(self, alert_id: int, **fields) -> None:
+        if not fields:
+            return
+        sets = ", ".join(f"{name} = ?" for name in fields)
+        with self._conn() as conn:
+            conn.execute(f"UPDATE alerts SET {sets} WHERE id = ?", (*fields.values(), alert_id))
+
+    def alerts_where(self, where: str, params: tuple = ()) -> list[dict]:
+        with self._conn() as conn:
+            return [dict(r) for r in conn.execute(f"SELECT * FROM alerts WHERE {where} ORDER BY id", params).fetchall()]
+
+    def ack_alert(self, alert_id: int, now: float | None = None) -> bool:
+        """True when this call is the one that acknowledged it."""
+        with self._conn() as conn:
+            cur = conn.execute("UPDATE alerts SET acked_at = ? WHERE id = ? AND acked_at IS NULL", (now or time.time(), alert_id))
+            return cur.rowcount > 0
+
+    def ack_by_message(self, chat_id: int, message_id: int, now: float | None = None) -> int | None:
+        """A reply to the alert message counts as an acknowledgement; returns the alert id, None if no alert matches."""
+        with self._conn() as conn:
+            row = conn.execute("SELECT id FROM alerts WHERE tg_message_id = ? AND (tg_chat_id = ? OR tg_chat_id IS NULL)",
+                               (message_id, chat_id)).fetchone()
+        if row is None:
+            return None
+        self.ack_alert(row["id"], now)
+        return int(row["id"])

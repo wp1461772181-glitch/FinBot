@@ -1839,5 +1839,15 @@
   "未能与来源核对": "Could not be checked against a source",
   "财报判断模型": "Earnings judgment model",
   "读财报、判断涨跌用的模型；不选就用服务器默认模型。": "The model that reads earnings releases and judges up or down; leave unset to use the server default model.",
-  "没有这个模型用途。": "Unknown model purpose."
+  "没有这个模型用途。": "Unknown model purpose.",
+  "紧急提醒（Pushover）": "Urgent alerts (Pushover)",
+  "急跌等提醒发到 Telegram 后，1 分钟内没点「收到」，就用 Pushover 紧急级通知响铃（每分钟一次，最多 30 分钟）；在 Pushover 里确认或在 Telegram 点「收到」都会停。两个值加密保存，保存后不会再显示。": "When a fall alert on Telegram is not acknowledged within a minute, Pushover rings as an emergency (once a minute, up to 30 minutes). Acknowledging in Pushover or tapping 收到 in Telegram stops it. Both values are stored encrypted and are never shown again.",
+  "Pushover User Key": "Pushover User Key",
+  "Pushover App Token": "Pushover App Token",
+  "保存 Pushover": "Save Pushover",
+  "清除 Pushover": "Clear Pushover",
+  "Pushover 已保存。": "Pushover saved.",
+  "Pushover 已清除。": "Pushover cleared.",
+  "Pushover 设置暂时无法读取。": "Pushover settings are unavailable right now.",
+  "Pushover 的 key 格式不对（应为 30 位字母数字）。": "The Pushover key format is invalid (30 letters and digits expected)."
 }

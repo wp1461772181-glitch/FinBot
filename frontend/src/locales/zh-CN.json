@@ -1839,5 +1839,15 @@
   "未能与来源核对",
   "财报判断模型",
   "读财报、判断涨跌用的模型；不选就用服务器默认模型。",
-  "没有这个模型用途。"
+  "没有这个模型用途。",
+  "紧急提醒（Pushover）",
+  "急跌等提醒发到 Telegram 后，1 分钟内没点「收到」，就用 Pushover 紧急级通知响铃（每分钟一次，最多 30 分钟）；在 Pushover 里确认或在 Telegram 点「收到」都会停。两个值加密保存，保存后不会再显示。",
+  "Pushover User Key",
+  "Pushover App Token",
+  "保存 Pushover",
+  "清除 Pushover",
+  "Pushover 已保存。",
+  "Pushover 已清除。",
+  "Pushover 设置暂时无法读取。",
+  "Pushover 的 key 格式不对（应为 30 位字母数字）。"
 ]

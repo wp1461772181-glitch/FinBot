@@ -375,6 +375,9 @@ async def _handle_message(client, credential: str, owner: str, message: dict,
             await _send_text(client, bot_token, bound_chat, msg)
             return
     reply_to = (message.get("reply_to_message") or {}).get("message_id")
+    if await _ack_by_reply(bound_chat, reply_to):
+        await _send_text(client, _bot_token_for_send(owner, tg), bound_chat, "已确认这条提醒。", markdown=False)
+        return
     target = await asyncio.to_thread(tg.route, owner, text, reply_to if isinstance(reply_to, int) else None)
     if not target["text"]:
         return
@@ -595,6 +598,9 @@ async def _handle_callback(client, callback: dict, pending: dict, owner: str, cr
     bot_token = channel["token"] if channel else _bot_token_for_send(owner, tg)
 
     kind, _, short_id = data.partition(":")
+    if kind == "ack":
+        await _ack_alert_press(client, bot_token, cb_id, chat_id, message.get("message_id"), short_id)
+        return
     if kind not in {"ok", "no"}:
         await _answer_callback(client, bot_token, cb_id)
         return
@@ -627,6 +633,34 @@ async def _handle_callback(client, callback: dict, pending: dict, owner: str, cr
                     entry["bot_id"], entry.get("bot_name") or "", entry["value"], channel=channel,
                     conversation_id=entry.get("conversation_id"), pending_request_id=entry["card_id"],
                     display_message=entry.get("label"))
+
+
+def _sentinel_store():
+    from sentinel.store import Store
+    return Store()
+
+
+async def _ack_alert_press(client, bot_token: str, cb_id: str, chat_id: int, message_id, alert_id: str) -> None:
+    """「收到」on a sentinel alert: write the acknowledgement into data/sentinel.db (the sentinel stops escalating)."""
+    try:
+        await asyncio.to_thread(_sentinel_store().ack_alert, int(alert_id))
+    except Exception as exc:  # the file is the only channel to the sentinel; say so rather than pretend
+        print(f"Alert ack failed: {_redact(exc)}", file=sys.stderr)
+        await _answer_callback(client, bot_token, cb_id, "确认没有记上，请再点一次。")
+        return
+    await _answer_callback(client, bot_token, cb_id, "已确认")
+    await _clear_keyboard(client, bot_token, chat_id, message_id)
+
+
+async def _ack_by_reply(chat_id: int, reply_to) -> bool:
+    """A reply to an alert message counts as the acknowledgement; True when the message was an alert."""
+    if not isinstance(reply_to, int):
+        return False
+    try:
+        return await asyncio.to_thread(_sentinel_store().ack_by_message, chat_id, reply_to) is not None
+    except Exception as exc:
+        print(f"Alert ack failed: {_redact(exc)}", file=sys.stderr)
+        return False
 
 
 async def _deliver_outbox(client, owner: str, bound_chat: int, tg, channel: dict | None = None) -> None:

@@ -14,11 +14,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from . import notify, signals
+from .escalation import Escalator
 from .store import Store
 
 logger = logging.getLogger("sentinel")
 
 INTERVAL = 60.0
+FAST_JOBS = {"escalation": 15.0}  # the one-minute rule needs a finer tick than the other jobs
 FAILURES_BEFORE_ALERT = 3
 BASELINE_MAX_AGE = 20 * 3600      # rebuilt about once a day
 SPLITS_MAX_AGE = 3600             # a split announced today must not wait for tomorrow's baseline
@@ -33,6 +35,7 @@ class Sentinel:
         self.alerted = False
         self.worker: object | None = None  # the Popen we started, if still running
         self.cooldown = signals.Cooldown(self.store)
+        self.escalator = Escalator(self.store, notify.Channels())
 
     # --- jobs (each is one tick) -------------------------------------------------
     def check_health(self) -> None:
@@ -140,7 +143,10 @@ class Sentinel:
                 logger.warning("signal check for %s failed: %s", symbol, type(exc).__name__)
 
     def emit_alert(self, snap: dict, alert: dict) -> None:
-        notify.notify(snap, alert["text"])
+        self.escalator.raise_alert(snap, alert)
+
+    def check_escalation(self) -> None:
+        self.escalator.tick(self.config.get())
 
     def send_heartbeat(self) -> None:
         url = os.environ.get("SENTINEL_HEARTBEAT_URL", "").strip()
@@ -170,6 +176,7 @@ class Sentinel:
             "health": self.check_health,
             "forecast": self.check_forecast_jobs,
             "signals": self.check_signals,
+            "escalation": self.check_escalation,
             "heartbeat": self.send_heartbeat,
             "events": self.resend_events,
         }
@@ -183,7 +190,7 @@ class Sentinel:
             self.stop.wait(interval)
 
     def start(self, interval: float = INTERVAL) -> list[threading.Thread]:
-        threads = [threading.Thread(target=self.run_loop, args=(name, fn, interval), name=f"sentinel-{name}", daemon=True)
+        threads = [threading.Thread(target=self.run_loop, args=(name, fn, min(interval, FAST_JOBS.get(name, interval))), name=f"sentinel-{name}", daemon=True)
                    for name, fn in self.jobs().items()]
         for thread in threads:
             thread.start()
