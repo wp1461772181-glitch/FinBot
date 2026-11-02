@@ -6,6 +6,7 @@ import { normalizeContextUsage, type ContextUsage } from "./context-usage.mjs";
 import { activeChatCredential, applyChatIdentity, changeChatMode, currentChatMode, conversationCreatedAtForMode, conversationForMode, selectConversationForMode } from "./chat-identity.mjs";
 import type { FlowNode } from "./turn-flow.mjs";
 
+// API base URL is baked in at build time from the VITE_API_BASE_URL repository variable.
 export const configuredApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/+$/, "");
 
 function apiUrl(path: string): string {
