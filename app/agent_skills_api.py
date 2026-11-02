@@ -43,7 +43,7 @@ def _error(exc: skills.SkillError) -> HTTPException:
 async def list_skills_endpoint(x_chat_session: str | None = Header(default=None)):
     credential = _owner_only(x_chat_session)
     from .agent_tool_catalog import definitions
-    tools = [{"name": p.name, "level": p.level} for p in definitions().values() if p.name not in {"use_skill", "draft_skill"}]
+    tools = [{"name": p.name, "level": p.level} for p in definitions().values() if p.name not in {"use_skill", "save_skill"}]
     return {"skills": await asyncio.to_thread(skills.list_skills, owner_hash(credential)), "tools": tools}
 
 

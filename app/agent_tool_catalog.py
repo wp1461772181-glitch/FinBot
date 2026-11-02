@@ -166,7 +166,7 @@ class ForgetArgs(Args):
     item_id:str=Field(pattern=r'^#?[0-9a-f]{8}$',description='The #handle of a line of the user profile.')
 class UseSkillArgs(Args):
     name:str=Field(min_length=1,max_length=40,description='The name of one of the listed enabled skills.')
-class DraftSkillArgs(Args):
+class SaveSkillArgs(Args):
     name:str=Field(min_length=1,max_length=40)
     description:str=Field(min_length=1,max_length=120,description='When to use it, one line.')
     body:str=Field(min_length=1,max_length=6000,description="The steps, written from what THIS turn actually did (its tool calls), in the owner's language.")
@@ -275,7 +275,7 @@ EXTRA=(
  ('read_past_conversation',ReadPastArgs,'read','Read the text of one past conversation that recall_conversations found (its newest replies, e.g. an earlier news analysis), from any bot\'s line. Owner only. Like recall it is memory, NOT evidence: never cite or number it, and read any figure again with a research tool before stating it.'),
  ('forget',ForgetArgs,'reversible','Propose forgetting one line of the user profile by its #handle, when the USER asks to forget or stop applying it. Owner confirmation required.'),
  ('use_skill',UseSkillArgs,'skill','Load the full steps and output format of one listed skill and follow them. While it is active only the tools it allows are offered (never more than this turn already has); a write it allows still needs the owner\'s confirmation card.'),
- ('draft_skill',DraftSkillArgs,'skill','Only when the OWNER asks in this turn to save the way of working as a skill (存成技能): draft it from this turn\'s tool calls. The draft is inert and goes to the skills page; it becomes a skill only when the owner saves it there.'),
+ ('save_skill',SaveSkillArgs,'reversible','Propose saving a skill to the skill library when the USER asks for one in any wording (存成技能, 把这个 skill 新增一下, 写一个……的 skill): write its steps from this turn\'s tool calls or from what the user described. Owner confirmation required; the card offers 保存并启用 or 存为草稿, and nothing is saved before the owner presses one.'),
  ('notify_telegram',NotifyArgs,'notify','Send the owner a short Telegram message, only when your work instruction (or the task\'s) says this is worth notifying; with nothing new, do not call it. It goes to the owner\'s own bound chat only (you cannot choose a recipient), starts with your bot name and reads as plain chat: the [n] you cite are checked, then dropped, and no sources list is added, so write any link the owner should open into the text itself; a figure without this turn\'s evidence number is refused. Not a write: no card, also in scheduled runs. Each bot has a daily limit; past it the message stays in the conversation only.'),
  ('search_configured_news',SearchConfiguredNewsArgs,'read','Search news items from enabled user-configured news sources only (RSS/JSON/HTML). Call this FIRST for recent market/macro/company news before falling back to web_research. Every returned item has a URL and still goes through citation and numeric gates.'),
  ('list_news_sources',Empty,'read','List configured public news sources, health status, defaults, watchlists, and push settings (without sensitive headers).'),
@@ -287,7 +287,7 @@ EXTRA=(
  ('repair_news_source_with_rea',RepairNewsSourceWithReaArgs,'read','Use REA inspection/alternates to repair a degraded or failing configured news source (rate-limited per source; major changes create an inline confirmation card).'),
 )
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
-OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','draft_skill'}
+OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill'}
 
 # Every base registry entry is read-only; write names come from catalogue levels.
 WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'})]

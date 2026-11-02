@@ -1588,7 +1588,7 @@
   "（已不可用的技能）": "(skill no longer available)",
   "Agent 起草的草稿：核对后保存才会生效。": "Draft written by the agent: it takes effect only after you review and save it.",
   "使用技能": "Use skill",
-  "起草技能": "Draft skill",
+  "保存技能": "Save skill",
   "登录个人聊天后才能使用技能。": "Log in to personal chat to use skills.",
   "导出失败，请重试。": "Export failed. Please try again.",
   "复制失败，请重试。": "Copy failed. Please try again.",

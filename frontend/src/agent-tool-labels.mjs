@@ -55,7 +55,7 @@ export const TOOL_LABELS = {
   read_past_conversation: "读取往日对话",
   notify_telegram: "发 Telegram 通知",
   use_skill: "使用技能",
-  draft_skill: "起草技能",
+  save_skill: "保存技能",
   calculate_formula: "公式计算",
   search_configured_news: "搜索已配置新闻源",
   list_news_sources: "新闻源列表",

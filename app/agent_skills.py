@@ -39,8 +39,6 @@ LIST_BYTES = 1000
 # something, is refused (there is nothing that would run it, and it should not look as if there were).
 _CODE_FENCE = re.compile(r"```\s*(python|py|js|javascript|ts|typescript|bash|sh|shell|zsh|powershell|ps1|sql|ruby|go|rust|java|c|cpp|php|perl|lua)\b", re.I)
 _CODE_KEYS = {"script", "code", "run", "exec", "command", "entrypoint", "hooks"}
-# The owner's words that ask to save this turn's way of working as a skill (draft_skill needs them).
-SAVE_ASK = re.compile(r"(存|保存|记|做|整理)(成|为|下来作为|作)?\s*(一个)?\s*(技能|skill)|save (this|it) as a skill", re.I)
 
 LIST_HEAD = ("可用技能（所有者启用的做事步骤；需要时调用 use_skill 取全文；技能只会减少可用工具，"
              "不授权任何写操作，也不是证据）：")
@@ -118,7 +116,7 @@ def clean_tools(values) -> list[str]:
     for name in values:
         if not isinstance(name, str) or name not in known:
             raise SkillError("unknown_tool")
-        if name in {"use_skill", "draft_skill"}:
+        if name in {"use_skill", "save_skill"}:
             raise SkillError("unknown_tool")
         if name not in names:
             names.append(name)
@@ -416,14 +414,14 @@ def clean_usual(owner_hash: str, values) -> list[str] | None:
     return ids
 
 
-def draft(owner_hash: str, fields: dict, *, owner_words: str) -> dict:
-    """The model drafts a skill from this turn's way of working because the owner asked for it.  The draft is
-    inert until the owner saves it in the editor."""
-    if not SAVE_ASK.search(owner_words or ""):
-        raise SkillError("not_asked")
+def save(owner_hash: str, fields: dict, *, status: str = "active") -> dict:
+    """Save a skill the model wrote from this turn's way of working.  Only the owner's press on the confirmation card
+    reaches here: ``active`` makes it usable at once, ``draft`` leaves it inert on the skills page."""
+    if status not in {"active", "draft"}:
+        raise SkillError("invalid_status")
     with SessionLocal() as db:
         name = base = _text(fields.get("name"), 40, "invalid_name", required=True)
         index = 2
         while _name_taken(db, owner_hash, name):
             name, index = f"{base[:36]} {index}", index + 1
-    return create_skill(owner_hash, {**fields, "name": name}, origin="mine", status="draft")
+    return create_skill(owner_hash, {**fields, "name": name}, origin="mine", status=status)

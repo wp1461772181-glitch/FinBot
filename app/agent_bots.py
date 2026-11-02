@@ -44,7 +44,7 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # create_routine too: it only makes a card, and a bot that said 没有对应的工具 to 每小时找一条新闻 had none;
 # and list/update/delete_routine with it (Levi: 给了新增，怎么没给查看、编辑、删除).
 ALWAYS_ON = frozenset({"ask_user", "use_result_set", "calculate", "read_history_citation", "select_stock",
-                       "open_page", "request_action", "notify_telegram", "use_skill", "draft_skill",
+                       "open_page", "request_action", "notify_telegram", "use_skill", "save_skill",
                        "remember", "forget", "create_routine", "list_routines", "update_routine",
                        "delete_routine"})
 

@@ -16,6 +16,7 @@ from app.agent_workflow import consent, direct, tools
 from app.agent_workflow.models import AgentConsent
 from app.agent_workflow.state import AgentRuntimeContext
 from app.database import Base, SessionLocal, engine
+from app.agent_chat_models import AgentSkill
 from app.knowledge.models import KnowledgeUploadOwner
 from app.models import UploadedEvidence
 from scripts import run_telegram_bridge as bridge
@@ -27,7 +28,7 @@ OWNER_HASH = "o" * 64
 @pytest.fixture
 def owner(monkeypatch, disposable_database):
     Base.metadata.create_all(engine, tables=[AgentConsent.__table__, UploadedEvidence.__table__,
-                                             KnowledgeUploadOwner.__table__])
+                                             KnowledgeUploadOwner.__table__, AgentSkill.__table__])
     monkeypatch.setattr(consent, "owner_credential_matches", lambda credential: credential == "owner")
     monkeypatch.setattr(tools, "owner_credential_matches", lambda credential: credential == "owner")
     return "owner"
@@ -289,3 +290,37 @@ def test_agree_on_telegram_files_a_web_page_into_the_library(owner, monkeypatch)
         assert saved is not None and saved.symbol == "TSLA"
         assert db.scalar(select(KnowledgeUploadOwner).where(KnowledgeUploadOwner.upload_id == saved.id)).owner_hash == OWNER_HASH
     assert f"https://finbot.example/#materials?symbol=TSLA&focus={saved.id}" in sent[-1][1]
+
+
+@pytest.mark.parametrize("button, status, enabled", [(0, "active", True), (1, "draft", False)])
+def test_telegram_skill_card_buttons_save_through_the_same_handler(owner, monkeypatch, button, status, enabled):
+    """保存并启用 / 存为草稿 on Telegram are the web card's two buttons: the press goes to the line as the button's value."""
+    conversation = "tg-line-" + uuid.uuid4().hex[:8]
+    name = "异动归因" + uuid.uuid4().hex[:6]
+    operation = {"name": "save_skill", "arguments": {"name": name, "description": "拆解一次异动的原因。",
+                 "body": "1. query_stock_prices 读走势。\n2. 标来源。", "allowed_tools": ["query_stock_prices"]}}
+    card = consent.propose(owner, conversation, [operation], {"title": "保存技能 · " + name}, question="写一个异动归因的 skill",
+                           variants=[("保存并启用", None), ("存为草稿", "draft")])
+    sent, asked = [], []
+
+    async def send_text(client, bot_token, chat_id, text, inline_keyboard=None, *, markdown=True):
+        sent.append(text)
+        return 1
+
+    async def answer_callback(*_):
+        pass
+
+    monkeypatch.setattr(bridge, "_send_text", send_text)
+    monkeypatch.setattr(bridge, "_answer_callback", answer_callback)
+    monkeypatch.setattr(bridge, "_bot_token_for_send", lambda owner_hash, tg: "123:x")
+    monkeypatch.setattr(bridge, "_ask_agent", _server_line(conversation, card, asked))
+    pending = {}
+    keyboard = bridge._make_keyboard([card], pending, conversation, owner, "b-1", "助理")
+    assert [b["text"] for b in keyboard[0]] == ["保存并启用", "存为草稿", "取消"]
+    press = {"id": "cb-1", "from": {"id": OWNER_ID}, "data": keyboard[0][button]["callback_data"],
+             "message": {"chat": {"id": OWNER_ID, "type": "private"}}}
+    asyncio.run(bridge._handle_callback(None, press, pending, OWNER_HASH, owner, OWNER_ID, OWNER_ID, _Telegram()))
+    assert len(asked) == 1
+    with SessionLocal() as db:
+        saved = db.scalar(select(AgentSkill).where(AgentSkill.name == name))
+        assert saved is not None and saved.status == status and saved.enabled is enabled

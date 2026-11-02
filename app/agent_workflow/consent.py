@@ -123,7 +123,7 @@ def failure_outcome(exc):
 
 def digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 
-def propose(credential,conversation,operations,display,*,question='',now=None,options=None):
+def propose(credential,conversation,operations,display,*,question='',now=None,options=None,variants=None):
     """Mint one card and keep the request that produced it.
 
     A press on the card sends only the button's value, so the turn that executes the write has no
@@ -141,6 +141,10 @@ def propose(credential,conversation,operations,display,*,question='',now=None,op
     card={'id':identity,'reason':'write_confirmation','display':display,'original_question':question,
         'expires_at':expires.isoformat(),
         'choices':[{'label':'同意','value':'confirm:'+token},{'label':'换个操作','value':'change:'+identity},{'label':'取消','value':'cancel:'+identity}]}
+    if variants:
+        # Several ways to approve the same frozen operation: the suffix after the token is the way, never a parameter.
+        card['choices']=[{'label':label,'value':'confirm:'+token+(':'+suffix if suffix else '')} for label,suffix in variants]+[{'label':'取消','value':'cancel:'+identity}]
+        card['variants']=[suffix for _,suffix in variants if suffix]
     if options:
         card.update(reason='choose_revision_sources',options=options,select={'min':1,'max':len(options)},
                     question='勾选要用于修订的材料（可多选），然后点「用所选材料修订」。',

@@ -72,7 +72,7 @@ async def invoke(name,args,context,*,emit=None):
     return await _dispatch(name,args,context,is_owner,emit)
 
 
-async def execute_reversible(operation,key,context,*,emit=None):
+async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
     """Require the exact durable operation currently executing under consent's lock."""
     from . import consent
     try:
@@ -83,6 +83,8 @@ async def execute_reversible(operation,key,context,*,emit=None):
         if definitions()[name].level!='reversible':raise ValueError('invalid_action_tool')
         if name=='remember':args['_source_message_id']=operation.get('source_message_id');args['_bot_id']=operation.get('bot_id')
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
+        # The press, not the frozen operation, says whether a skill starts enabled or as a draft.
+        if name=='save_skill':args['_status']=(overrides or {}).get('status') or 'active'
     except (ValueError,IndexError,KeyError,TypeError):return error('confirmation_required')
     return await _dispatch(name,args,context,True,emit)
 
@@ -242,6 +244,14 @@ async def _dispatch(name,args,context,is_owner,emit):
         if task is None:return error('routine_not_found')
         return result([{'status':'updated','name':task['name'],'schedule_kind':task['schedule_kind'],'enabled':task['enabled'],
                         'next_run_at':task.get('next_run_at')}],'bot routine')
+    if name=='save_skill':
+        # Only reached through execute_reversible: the card was pressed and the frozen operation matched.
+        from .. import agent_skills as skills
+        if not is_owner:return error('owner_login_required')
+        fields={k:v for k,v in args.items() if not k.startswith('_')}
+        try:saved=await asyncio.to_thread(skills.save,context.owner_hash,fields,status=args.get('_status') or 'active')
+        except skills.SkillError as exc:return error(str(exc))
+        return result([{'status':'saved','id':saved['id'],'name':saved['name'],'skill_status':saved['status'],'link':'#skills/'+saved['id']}],'skill library')
     if name=='create_routine':
         # Only reached through execute_reversible; the bot is the proposing turn's, frozen in the operation.
         from .. import agent_tasks as tasks

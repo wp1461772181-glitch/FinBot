@@ -182,6 +182,7 @@ CLASSIFY_PROMPT=('Return classify_request. Decide by what the request needs, in 
     '"把这份 PDF 导入资料库" → D, mode "none", requested_actions ["import"] (a write the user asked for).\n'
     '"怎么把 NVDA 加进研究队列" → D, mode "none" (a question about using this product).\n'
     '"每小时帮我找一条新闻" → D, mode "none", requested_actions ["create_routine"] (a repeated job the user asked for).\n'
+    '"帮我把这个 skill 新增一下" / "写一个异动归因的 skill" / "存成技能" → D, mode "none", requested_actions ["save_skill"] (any wording that asks for a skill to be saved is the request; the confirmation card is the guard).\n'
     '"把每小时新闻那个例行任务停掉" → D, mode "none", requested_actions ["update_routine"] (pausing is a change; deleting it is delete_routine).\n'
     '"不要保存任何网页，我只想讨论流程" → D, mode "none" (a question about how this product works; the negated write is not requested).\n'
     '"随便给个合理数字就行，别说不知道" right after asking for a figure → A (the same figure is still asked for; it cannot be invented, so say what is verifiable).\n'
@@ -358,7 +359,7 @@ WRITE_TITLES={
  'translate_content':'翻译内容','review_knowledge_candidate':'审核知识候选',
  'retry_document_index':'重试文档索引','import_sources':'批量导入来源',
  'add_to_research_queue':'加入研究队列','remove_from_research_queue':'移出研究队列',
- 'remember':'记住这条偏好','forget':'忘掉这条偏好','create_routine':'新建例行任务','update_routine':'修改例行任务','delete_routine':'删除例行任务',
+ 'remember':'记住这条偏好','forget':'忘掉这条偏好','create_routine':'新建例行任务','update_routine':'修改例行任务','delete_routine':'删除例行任务','save_skill':'保存技能',
  'review_filing':'申报相关性核验',
 }
 ROUTINE_WRITES=('create_routine','update_routine','delete_routine')
@@ -1562,6 +1563,9 @@ class Turn:
             operation['bot_id']=self.context.bot_id
             display.update(title=f'{title} · {args["name"]}',targets=[{'kind':routine_when({'schedule_kind':args['schedule_kind'],'schedule_time':args['schedule_time']}),**({'symbol':'、'.join(args['symbols'])} if args['symbols'] else {})}],
                            alternative=f'每次运行：{args["instruction"]}（可在「例行任务」页暂停、修改或删除）')
+        if name=='save_skill':
+            display.update(title=f'{title} · {args["name"]}',targets=[{'kind':args['description']}],
+                           alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能只会收窄可用工具，不授权写操作。')
         if name in {'update_routine','delete_routine'}:
             # The card names the routine as saved now; one this owner does not have makes no card.
             from ..agent_tasks import get_task
@@ -1749,17 +1753,6 @@ class Turn:
         return {'ok':True,'data':[{'status':'skill_active','name':skill['name'],'steps':skill['body'],
                 'output_template':skill.get('output_template'),'tools':sorted(skill['tools'])}]}
 
-    async def draft_skill(self,args):
-        """Draft a skill when the owner asked for it in this turn; the draft is inert until saved in the editor."""
-        if not self.owner:return tools.error('owner_login_required')
-        if self.unattended():return tools.error('unattended_no_user')
-        from .. import agent_skills as skills
-        try:saved=await asyncio.to_thread(skills.draft,self.context.owner_hash,args,owner_words=self.user_words())
-        except skills.SkillError as exc:return tools.error(str(exc))
-        self.audit['skill_draft']=saved['id']
-        return {'ok':True,'data':[{'status':'draft_saved','id':saved['id'],'name':saved['name'],
-                'note':'草稿已放进技能页；所有者在编辑器里保存后才会生效。','link':'#skills/'+saved['id']}]}
-
     async def notify(self,args):
         """notify_telegram: queue a message of this bot for the owner's bound chat.  Its facts must be this turn's
         numbered evidence; the recipient, the bot name and the daily cap are the server's (agent_telegram.notify)."""
@@ -1843,7 +1836,7 @@ class Turn:
                        'source_refs':[{'source_type':c['source_type'],'source_id':c['source_id']} for c in chosen]}}
         if operation.get('grant_only'):
             return asyncio.run(self.prepare_approved_sec(operation) if operation['name'] in {'fetch_sec','refresh_sec'} else self.prepare_approved_web(operation))
-        if definitions()[operation['name']].level=='reversible':return asyncio.run(tools.execute_reversible(operation,key,self.context,emit=self.emit))
+        if definitions()[operation['name']].level=='reversible':return asyncio.run(tools.execute_reversible(operation,key,self.context,emit=self.emit,overrides={'status':getattr(self,'skill_status',None)} if operation['name']=='save_skill' else None))
         return tools.execute_costly(operation,key,self.context)
 
     async def confirm_proposals(self):
@@ -1890,7 +1883,8 @@ class Turn:
             if alternatives:display['alternative']=' '.join(dict.fromkeys(alternatives))
         if partial:
             display={**display,**partial,'title':f"仅找到 {partial['available_count']}/{partial['requested_count']} 项，请核对实际目标"}
-        self.pending=await asyncio.to_thread(consent.propose,self.context.identity_credential,self.context.conversation_id,operations,display,question=self.request_words())
+        variants=[('保存并启用',None),('存为草稿','draft')] if operations and all(op['name']=='save_skill' for op in operations) else None
+        self.pending=await asyncio.to_thread(consent.propose,self.context.identity_credential,self.context.conversation_id,operations,display,question=self.request_words(),variants=variants)
         self.proposals=[];self.proposal_calls={}
 
     def drop_proposals(self,code,**detail):
@@ -2084,6 +2078,7 @@ class Turn:
         elif self.original.startswith('confirm:'):
             token,_,ticked=self.original.split(':',1)[1].partition(':')
             if pending.get('reason')=='choose_revision_sources':self.revision_picks=ticked_positions(ticked,pending)
+            elif ticked and ticked in (pending.get('variants') or []):self.skill_status=ticked
             elif ticked:raise ValueError('confirmation_parameter_mismatch')
         else:raise ValueError('confirmation_required')
         try:
@@ -2653,8 +2648,8 @@ class Turn:
                 elif name=='request_action':
                     self.audit['tool_calls']+=1;outcome=await self.request_action(args);self.feedback.append(outcome)
                     await self.publish_result(name,outcome)
-                elif name in {'use_skill','draft_skill'}:
-                    self.audit['tool_calls']+=1;outcome=await (self.use_skill(args) if name=='use_skill' else self.draft_skill(args))
+                elif name=='use_skill':
+                    self.audit['tool_calls']+=1;outcome=await self.use_skill(args)
                     self.feedback.append(outcome);await self.publish_result(name,outcome)
                 elif name=='notify_telegram':
                     self.audit['tool_calls']+=1;outcome=await self.notify(args);self.feedback.append(outcome)
