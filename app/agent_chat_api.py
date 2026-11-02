@@ -129,7 +129,20 @@ def _validated_base_url(value):
 
 def model_transport(base_url,**kwargs):
     base=_validated_base_url(base_url)
-    return LocalModelTransport(base) if base in local_model_endpoints() else PinnedPublicTransport(**kwargs)
+    if base in local_model_endpoints():return LocalModelTransport(base)
+    # Operator-only opt-in, read per call; never falls back to HTTPS_PROXY.
+    proxy=(os.getenv('MODEL_EGRESS_PROXY') or '').strip()
+    return ProxiedPublicTransport(proxy,**kwargs) if proxy else PinnedPublicTransport(**kwargs)
+
+class ProxiedPublicTransport(httpx.AsyncBaseTransport):
+    """Operator egress proxy mode: same URL-safety rules as PinnedPublicTransport, but the proxy resolves and connects (no IP pinning)."""
+    def __init__(self, proxy, inner=None, *, allow_internal_query=False):
+        self.inner=inner or httpx.AsyncHTTPTransport(proxy=proxy,trust_env=False); self.allow_internal_query=allow_internal_query
+    async def handle_async_request(self, request):
+        if request.url.scheme!="https" or request.url.username or request.url.password or (request.url.query and not self.allow_internal_query) or request.url.fragment:
+            raise httpx.ConnectError("unsafe_endpoint")
+        return await self.inner.handle_async_request(request)
+    async def aclose(self): await self.inner.aclose()
 
 class LocalModelTransport(httpx.AsyncBaseTransport):
     """Only exact operator endpoints, only model routes, pinned private addresses."""
