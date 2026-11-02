@@ -149,7 +149,7 @@ def test_a_figure_read_from_a_past_conversation_is_not_stated_without_a_fresh_re
     context = _context(conversation_id=str(main.conversation_id), bot_id=str(main.id), bot_is_default=True,
                        intent_recognizer=_route(), decider=lambda *_: next(steps))
     result = _turn("把研报那次说的英伟达收入告诉我", context)
-    assert "467" not in result["answer"] and not result["citations"]
+    assert result["unverified_lines"] and "467" in result["unverified_lines"][0]["line"] and not result["citations"]
 
 
 def test_another_owners_conversation_cannot_be_read(owner):

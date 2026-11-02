@@ -53,7 +53,8 @@ def test_a_turn_stopped_by_the_time_cap_never_shows_its_internal_code():
         executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]})
     turn=direct.Turn('AMD 收盘价',ctx,emit,[],{})
     result=asyncio.run(turn.run())
-    assert 'turn_budget' not in result['answer'] and '999' not in result['answer']
+    # The unsupported figure is flagged, not deleted; the internal code never reaches the reader.
+    assert 'turn_budget' not in result['answer'] and '999' in result['answer'] and result['unverified_lines']
 
 def test_a_price_refinement_may_still_read_saved_prices():
     turn=direct.Turn('最近5个交易日的走势呢？',AgentRuntimeContext('custom','test','dummy'),emit,[],{})
@@ -72,7 +73,7 @@ def test_a_capped_turn_still_repairs_its_closing_answer():
     def decide(messages,tools):
         turn.started=time.monotonic()-direct.SOFT_TURN_SECONDS-10
         return next(steps)
-    ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=decide,answerer=lambda messages:'AMD 已保存收盘价 999 美元 [1]。',
+    ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=decide,answerer=lambda messages:'AMD 已保存收盘价 100 美元。',
         executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]})
     turn=direct.Turn('AMD 收盘价',ctx,emit,[],{})
     result=asyncio.run(turn.run())

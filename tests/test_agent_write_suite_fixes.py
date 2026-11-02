@@ -25,7 +25,7 @@ def test_an_answer_about_the_research_queue_is_checked_against_the_queue_itself(
 def test_a_queue_answer_stating_a_figure_the_queue_does_not_is_still_checked():
     turn=_turn('研究队列里现在有哪些股票？');turn.route='D';turn.feedback=[QUEUE]
     result=turn.finish('研究队列当前有 3 只股票，合计市值 9,876 亿美元。')
-    assert '9,876' not in result['answer']
+    assert '9,876' in result['answer'] and result['unverified_lines'][0]['numbers'][0].startswith('9,876')
 
 def test_execution_facts_name_the_operation_and_symbol_the_card_carried():
     assert direct.execution_facts(QUEUE_ADDED,ADD_MSFT['operations'])==[{'action':'add_to_research_queue','symbol':'MSFT','ok':True}]

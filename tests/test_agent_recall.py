@@ -159,7 +159,9 @@ def test_a_figure_from_recall_still_needs_a_fresh_read(owner):
     _conversation(OWNER, [("英伟达营收", "……")], summary="用户问英伟达营收，回答说 FY2025 营收 1305 亿美元。")
     steps = iter([_call("recall_conversations", {"query": "英伟达营收"}), {"content": "英伟达 FY2025 营收 1305 亿美元。"}])
     result = _turn("上次说的英伟达营收是多少？", _context(intent_recognizer=_route, decider=lambda *_: next(steps)))
-    assert "1305" not in result["answer"]
+    # Stated from memory, so it is flagged as unverified rather than removed.
+    assert result["unverified_lines"] and "1305" in result["unverified_lines"][0]["line"]
+    assert not result.get("citations")
 
 
 def test_a_guest_cannot_recall(owner):

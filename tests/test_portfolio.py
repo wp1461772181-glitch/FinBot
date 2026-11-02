@@ -421,7 +421,8 @@ def test_a_question_about_the_portfolio_is_answered_with_numbers_that_pass_verif
     assert kept["status"] == "succeeded" and kept["answer"] == good
     assert {c["source_type"] for c in kept["citations"]} == {"portfolio"}
     dropped = run(bad)  # 777 is in no portfolio row
-    assert dropped["status"] == "failed" and "777" not in dropped["answer"]
+    assert dropped["status"] == "partially_succeeded" and "777" in dropped["answer"]
+    assert dropped["unverified_lines"] and dropped["unverified_lines"][0]["numbers"][0].startswith("777")
     assert dropped["audit"]["stop_reason"] == "unsupported_numeric_claim"
 
 
