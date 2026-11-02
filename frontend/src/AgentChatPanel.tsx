@@ -11,7 +11,8 @@ import { citationOrdinal, linkCitationMarkers } from "./chat-citations.mjs";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Tx, useLocale } from "./i18n";
-import { AgentChatLifecycle, chatContext } from "./agentChatLifecycle.js";
+import { chatContext } from "./agentChatLifecycle.js";
+import { createLineStore, lineKey, loadDraft, saveDraft } from "./chat-lines.mjs";
 import { KnowledgeAdminPage } from './KnowledgeAdminPage';
 import { ContextMeter } from "./ContextMeter";
 import { restoreConversationAfterPersistence, restoreConversationSafely } from "./chat-session.mjs";
@@ -42,7 +43,7 @@ function toolResultSummary(value:unknown):string {
   return "";
 }
 type FileHandle = { name: string; getFile: () => Promise<File>; createWritable: () => Promise<{ write: (value: string) => Promise<void>; close: () => Promise<void> }> };
-type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void> };
+type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void>; lineStatus: { running: string[]; unseen: string[] } };
 const Context = createContext<ChatSession | null>(null);
 const WRITE_CARDS = new Set(["write_confirmation", "confirm_write", "choose_write_action", "choose_revision_sources"]);
 function Icon({ children }: { children: ReactNode }) {
@@ -139,7 +140,7 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   const { t } = useLocale();
   // Models come only from the server catalog (UX batch 3): the owner's turns name a bot or the catalog default,
   // never a key.  A guest has no catalog, so a guest cannot send until they log in.
-  const verified = getChatMode() === "personal", [state, setState] = useState<State>("idle"), [status, setStatus] = useState(""), [messages, setMessages] = useState<AgentChatMessage[]>([]), [draft, setDraft] = useState(""), [conversationId, setConversationId] = useState<string | null>(null);
+  const verified = getChatMode() === "personal", [state, setState] = useState<State>("idle"), [status, setStatus] = useState(""), [messages, setMessages] = useState<AgentChatMessage[]>([]), [draft, setDraftState] = useState(() => loadDraft("local")), [conversationId, setConversationId] = useState<string | null>(null);
   const [historyHasMore,setHistoryHasMore]=useState(false),[historyBefore,setHistoryBefore]=useState<number|null>(null),[loadingEarlier,setLoadingEarlier]=useState(false);
   const conversationIdRef=useRef<string|null>(null); conversationIdRef.current=conversationId;
   // The bot whose line is open.  Its turns send only bot_id: the server takes the model and key from its catalog.
@@ -149,9 +150,19 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   const [archive,setArchive]=useState<ChatArchive|null>(null),[archiveView,setArchiveView]=useState<ArchiveConversation|null>(null),[fileName,setFileName]=useState(""),[archiveStatus,setArchiveStatus]=useState(""),[importedReadOnly,setImportedReadOnly]=useState(false);
   const connectedArchive=useRef<ChatArchive|null>(null), archiveRef=useRef<ChatArchive|null>(null), createdAt=useRef(new Date().toISOString()), epoch=useRef(0);
   const handle=useRef<FileHandle|null>(null), localId=useRef(readLocalConversationId()), writer=useRef(createSerializedWriter(async (target:FileHandle,data:string)=>{if(!target)throw new Error("未连接归档文件");await writeAtomically(target,data);}));
-  const lifecycle = useRef(new AgentChatLifecycle());
-  useEffect(() => () => lifecycle.current.invalidate(), []);
-  useEffect(() => { const controller=new AbortController(), id=lifecycle.current.begin(controller); setRestoring(true); setState("restoring"); void restoreConversationSafely(lifecycle.current,id,controller.signal,signal=>restoreAgentChat(undefined,signal),saved=>{if(!saved.conversationId)clearAgentConversation();else{localId.current=saved.conversationId;createdAt.current=saved.createdAt??new Date().toISOString();try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,localId.current)}catch{}}setConversationId(saved.conversationId);setMessages(saved.messages.filter(m=>m.role==="user"||m.role==="assistant"));setHistoryHasMore(saved.hasMore);setHistoryBefore(saved.nextBefore);setState("idle")}).catch(() => { if (lifecycle.current.isCurrent(id)) { setStatus(t("历史记录暂时无法加载；可稍后重试。"));setState("idle"); } }).finally(()=>{if(lifecycle.current.isCurrent(id))setRestoring(false)}); return () => { controller.abort(); earlierController.current?.abort(); lifecycle.current.finish(id); }; }, []);
+  // One state per chat line (a bot's line, or the legacy "local" one): switching the viewed line never aborts another line's request.
+  const lines = useRef(createLineStore<AgentChatMessage>()), lineRef = useRef("local"), [, bump] = useState(0);
+  lines.current.setActive(lineRef.current);
+  const lifecycle = { get current() { return lines.current.get(lineRef.current).lifecycle; } };
+  // Write a line's state; only the viewed line mirrors it into the React state, so a background answer cannot touch the page.
+  function apply(line:string, patch:{messages?:AgentChatMessage[];state?:State;status?:string;conversationId?:string|null;historyHasMore?:boolean;historyBefore?:number|null;restoring?:boolean;draft?:string;loaded?:boolean}) {
+    lines.current.update(line, patch);
+    if (lineRef.current === line) { if (patch.messages !== undefined) { setMessages(patch.messages); latestMessages.current = patch.messages; } if (patch.state !== undefined) setState(patch.state); if (patch.status !== undefined) setStatus(patch.status); if (patch.conversationId !== undefined) setConversationId(patch.conversationId); if (patch.historyHasMore !== undefined) setHistoryHasMore(patch.historyHasMore); if (patch.historyBefore !== undefined) setHistoryBefore(patch.historyBefore); if (patch.restoring !== undefined) setRestoring(patch.restoring); if (patch.draft !== undefined) setDraftState(patch.draft); }
+    bump(n => n + 1);
+  }
+  const setDraft = (text:string) => { setDraftState(text); lines.current.update(lineRef.current, { draft: text }); saveDraft(lineRef.current, text); };
+  useEffect(() => () => { for (const [, s] of lines.current.all()) s.lifecycle.invalidate(); }, []);
+  useEffect(() => { const line="local", lc=lines.current.get(line).lifecycle, controller=new AbortController(), id=lc.begin(controller); apply(line,{restoring:true,state:"restoring"}); void restoreConversationSafely(lc,id,controller.signal,signal=>restoreAgentChat(undefined,signal),saved=>{if(!saved.conversationId)clearAgentConversation();else{localId.current=saved.conversationId;createdAt.current=saved.createdAt??new Date().toISOString();try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,localId.current)}catch{}}apply(line,{conversationId:saved.conversationId,messages:saved.messages.filter(m=>m.role==="user"||m.role==="assistant"),historyHasMore:saved.hasMore,historyBefore:saved.nextBefore,state:"idle",loaded:true})}).catch(() => { if (lc.isCurrent(id)) apply(line,{status:t("历史记录暂时无法加载；可稍后重试。"),state:"idle"}); }).finally(()=>{if(lc.isCurrent(id))apply(line,{restoring:false})}); return () => { controller.abort(); earlierController.current?.abort(); lc.finish(id); }; }, []);
   const latestMessages=useRef(messages);latestMessages.current=messages;
   useEffect(()=>{if(!handle.current||(state!=="ready"&&state!=="error")||archiveView||importedReadOnly||messages.length===0)return;const timer=window.setTimeout(()=>void persistConversation(messages),700);return()=>window.clearTimeout(timer);},[messages,state,archiveView,importedReadOnly]);
   async function persistConversation(items:AgentChatMessage[]){const target=handle.current;if(!target||items.length===0)return;try{const now=new Date().toISOString(),conversation:ArchiveConversation={id:localId.current,created_at:createdAt.current,updated_at:now,messages:archiveMessages(items)};const merged=mergeConversation(connectedArchive.current??createArchive(),conversation);connectedArchive.current=merged;const version=epoch.current;await writer.current(target,serializeArchive(merged));if(version===epoch.current&&!importedReadOnly){archiveRef.current=merged;setArchive(merged);setArchiveStatus(`${t("上次成功保存时间")}: ${new Date().toLocaleTimeString()}`);}}catch(e){setArchiveStatus(`${t("自动保存失败")}: ${e instanceof Error?e.message:""}`);}}
@@ -161,12 +172,12 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   async function importArchive(file:File){try{if(file.size>5_000_000)throw new Error("归档文件超过 5 MB 限制");const loaded=validateArchive(await file.text());epoch.current++;setImportedReadOnly(true);setArchive(loaded);setArchiveView(loaded.conversations.at(-1)??null);setArchiveStatus(t("归档已打开，只读查看"));}catch(e){setArchiveStatus(e instanceof Error?e.message:t("归档文件无效"));}}
   function returnLive(){setArchiveView(null);if(importedReadOnly){setImportedReadOnly(false);setArchive(archiveRef.current);}setArchiveStatus(t("已返回当前对话"));}
   function selectArchive(id:string){const item=archive?.conversations.find(x=>x.id===id);if(item)setArchiveView(item);}
-  const markSendingTurnCancelled = () => setMessages(items => {
+  const cancelledMessages = (items: AgentChatMessage[]): AgentChatMessage[] => {
     const last = items.at(-1);
     if (last?.role === "assistant") return [...items.slice(0, -1), { ...last, status: "cancelled", tool_trace: last.tool_trace?.map(x => x.status === "running" ? { ...x, status: "cancelled" } : x), trace: last.trace ? cancelRunning(last.trace, "cancelled") : last.trace }];
     if (last?.role === "user") return [...items, { role: "assistant", content: "", status: "cancelled" }];
     return items;
-  });
+  };
   function translate(s: string) { return t(s); }
   async function send(e: FormEvent) {
     e.preventDefault();
@@ -194,18 +205,19 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   async function sendContent(content:string,pendingRequestId?:string,label?:string) {
     if (!(verified||botRef.current) || loadingEarlierRef.current || !content || state === "sending" || state === "testing") return;
     let context: AgentChatMessage[]; try { context = chatContext(messages, { role: "user", content }); } catch (error) { setStatus(t(error instanceof Error ? error.message : "消息过长，请缩短后重试。")); return; }
-    const next = [...messages, { role: "user" as const, content: label||content }]; setMessages(next); setDraft(""); setState("sending"); setStatus(""); const turnBot = botRef.current, tested = turnBot ? { bot_id: turnBot.id } : { catalog_model: "" }, controller = new AbortController(), id = lifecycle.current.begin(controller);
+    const line = lineRef.current, lc = lines.current.get(line).lifecycle;
+    const next = [...messages, { role: "user" as const, content: label||content }]; saveDraft(line, ""); apply(line, { messages: next, draft: "", state: "sending", status: "" }); const turnBot = botRef.current, tested = turnBot ? { bot_id: turnBot.id } : { catalog_model: "" }, controller = new AbortController(), id = lc.begin(controller);
     let localQueue = ""; let accumulated = ""; let turnId: string|undefined; let citations: NonNullable<AgentChatMessage["citations"]> = []; let clarification:AgentChatMessage["clarification"]; let terminalStatus="complete"; let reusedSources=false; const tools: NonNullable<AgentChatMessage["tool_trace"]> = []; let trace: FlowNode[] = []; let thinkingMs: number|undefined; const startedAt = Date.now();
     try {
       await agentChatStream(tested, content, turnBot ? null : conversationId, controller.signal, (event: AgentChatEvent) => {
-        if (!lifecycle.current.isCurrent(id)) return false;
-        if (event.event === "conversation" && typeof event.data.conversation_id === "string") {if(typeof event.data.turn_id==="string")turnId=event.data.turn_id;const id=event.data.conversation_id;if(id!==conversationId){const created=new Date().toISOString();localId.current=id;createdAt.current=created;selectAgentConversation(id,created)}setConversationId(id);}
+        if (!lc.isCurrent(id)) return false;
+        if (event.event === "conversation" && typeof event.data.conversation_id === "string") {if(typeof event.data.turn_id==="string")turnId=event.data.turn_id;const cid=event.data.conversation_id;if(lineRef.current===line&&cid!==conversationId){const created=new Date().toISOString();localId.current=cid;createdAt.current=created;selectAgentConversation(cid,created)}apply(line,{conversationId:cid});}
         if (event.event === "client_action") {
           const applied=dispatchAgentAction(event.data, window);
           if (applied && event.data.action === "show_queue") localQueue=`\n\n${t("研究队列")}: ${(watchlistSnapshot() ?? []).join(", ") || "—"}`;
         }
-        if (event.event === "status") { const labels: Record<string,string>={resolving_reference:"正在理解问题…",recognizing_intent:"正在识别任务…",planning_tasks:"正在规划查询…",expanding_query:"正在扩展检索词…",expansion_degraded:"检索词扩展不可用，继续原查询…",reusing_sources:"正在复用已核实来源…",writing_answer:"正在组织回答…"}; setStatus(t(labels[String(event.data.status)]??"正在选择研究工具…")); }
-        if (event.event === "tool_start") { tools.push({ call_id: String(event.data.call_id), name: String(event.data.name), arguments: event.data.arguments, status: "running" }); setStatus(t("正在查询研究数据…")); }
+        if (event.event === "status") { const labels: Record<string,string>={resolving_reference:"正在理解问题…",recognizing_intent:"正在识别任务…",planning_tasks:"正在规划查询…",expanding_query:"正在扩展检索词…",expansion_degraded:"检索词扩展不可用，继续原查询…",reusing_sources:"正在复用已核实来源…",writing_answer:"正在组织回答…"}; apply(line,{status:t(labels[String(event.data.status)]??"正在选择研究工具…")}); }
+        if (event.event === "tool_start") { tools.push({ call_id: String(event.data.call_id), name: String(event.data.name), arguments: event.data.arguments, status: "running" }); apply(line,{status:t("正在查询研究数据…")}); }
         if (event.event === "tool_result") { const item = tools.find(x => x.call_id === event.data.call_id); if (item) { item.result = event.data.result; const result = event.data.result as { ok?: boolean; data?: unknown };
           item.status = !result?.ok ? "failed" : Array.isArray(result.data) && result.data.length === 0 ? "not_found" : "complete"; } }
         if (event.event === "citations" && Array.isArray(event.data.items)) citations = event.data.items as NonNullable<AgentChatMessage["citations"]>;
@@ -214,51 +226,60 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
         if (event.event === "done") {terminalStatus=String(event.data.status??"complete");reusedSources=(event.data.audit as {reused_sources?:boolean}|undefined)?.reused_sources===true;const thinking=Number(event.data.thinking_ms);if(Number.isFinite(thinking))thinkingMs=thinking;}
         if (event.event === "delta" && typeof event.data.text === "string") accumulated += event.data.text;
         if (event.event === "error") throw new Error(String(event.data.code ?? "chat_failed"));
-        setMessages([...next, { role: "assistant", content: accumulated + localQueue, turn_id:turnId, tool_trace: [...tools], citations, clarification, trace, thinking_ms: thinkingMs, started_at: startedAt, status:terminalStatus, reused_sources:reusedSources }]);
+        apply(line,{messages:[...next, { role: "assistant", content: accumulated + localQueue, turn_id:turnId, tool_trace: [...tools], citations, clarification, trace, thinking_ms: thinkingMs, started_at: startedAt, status:terminalStatus, reused_sources:reusedSources }]});
         return true;
       },pendingRequestId,label);
-      if (!lifecycle.current.isCurrent(id)) return; setMessages([...next, { role: "assistant", content: accumulated + localQueue, turn_id:turnId, tool_trace: [...tools], citations, clarification, trace, thinking_ms: thinkingMs, started_at: startedAt, status:terminalStatus, reused_sources:reusedSources }]); setStatus(""); setState("ready");
+      if (!lc.isCurrent(id)) return; apply(line,{messages:[...next, { role: "assistant", content: accumulated + localQueue, turn_id:turnId, tool_trace: [...tools], citations, clarification, trace, thinking_ms: thinkingMs, started_at: startedAt, status:terminalStatus, reused_sources:reusedSources }],status:"",state:"ready"});
     }
-    catch (error) { if (!lifecycle.current.isCurrent(id)) return; const stopped=error instanceof DOMException && error.name==="AbortError"; const stoppedTools=tools.map(x => x.status === "running" ? { ...x, status: "cancelled" } : x); setMessages([...next, { role:"assistant",content:accumulated,status:stopped?"cancelled":"failed",tool_trace:stoppedTools,trace:cancelRunning(trace,stopped?"cancelled":"failed"),thinking_ms:thinkingMs??Date.now()-startedAt }]); setState(stopped?"ready":"error"); setStatus(stopped?translate("请求已取消；供应商可能仍会计费。"):error instanceof Error ? friendlyError(error.message, translate) : translate("发送失败，请重试")); }
-    finally { lifecycle.current.finish(id); }
+    catch (error) { if (!lc.isCurrent(id)) return; const stopped=error instanceof DOMException && error.name==="AbortError"; const stoppedTools=tools.map(x => x.status === "running" ? { ...x, status: "cancelled" } : x); apply(line,{messages:[...next, { role:"assistant",content:accumulated,status:stopped?"cancelled":"failed",tool_trace:stoppedTools,trace:cancelRunning(trace,stopped?"cancelled":"failed"),thinking_ms:thinkingMs??Date.now()-startedAt }],state:stopped?"ready":"error",status:stopped?translate("请求已取消；供应商可能仍会计费。"):error instanceof Error ? friendlyError(error.message, translate) : translate("发送失败，请重试")}); }
+    finally { lc.finish(id); }
   }
-  const cancel = () => { const wasSending = state === "sending"; lifecycle.current.invalidate(); if (wasSending) markSendingTurnCancelled(); setRestoring(false);setState(verified ? "ready" : "idle"); setStatus(translate("请求已取消；供应商可能仍会计费。")); };
+  const cancel = () => { const line = lineRef.current, wasSending = state === "sending"; lifecycle.current.invalidate(); apply(line, { ...(wasSending ? { messages: cancelledMessages(latestMessages.current) } : {}), restoring: false, state: verified ? "ready" : "idle", status: translate("请求已取消；供应商可能仍会计费。") }); };
   async function openConversation(id:string, created?:string){
     earlierController.current?.abort();loadingEarlierRef.current=false;setLoadingEarlier(false);
     const previous=latestMessages.current;let lastUser=-1;for(let i=previous.length-1;i>=0;i--)if(previous[i].role==="user"){lastUser=i;break;}const completed=state==="sending"?previous.slice(0,Math.max(0,lastUser)):previous;
-    const controller=new AbortController(), token=lifecycle.current.begin(controller);setRestoring(true);setState("restoring");setStatus("");
-    try{await restoreConversationAfterPersistence(lifecycle.current,token,controller.signal,()=>handle.current&&completed.length?persistConversation(completed):Promise.resolve(),signal=>restoreAgentChat(id,signal,true),saved=>{const restoredId=saved.conversationId??id,chosenCreatedAt=created??saved.createdAt??new Date().toISOString();selectAgentConversation(restoredId,chosenCreatedAt);setConversationId(restoredId);const display=saved.messages.filter(m=>m.role==="user"||m.role==="assistant");setMessages(display);setHistoryHasMore(saved.hasMore);setHistoryBefore(saved.nextBefore);latestMessages.current=display;localId.current=restoredId;createdAt.current=chosenCreatedAt;try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,restoredId)}catch{}setArchiveView(null);setImportedReadOnly(false);setDraft("");setState(verified?"ready":"idle")})}
-    catch(error){if(lifecycle.current.isCurrent(token)&&!(error instanceof DOMException&&error.name==="AbortError")){setStatus(t("无法恢复服务端聊天记录。"));setState(verified?"ready":"idle");}}
-    finally{if(lifecycle.current.isCurrent(token)){lifecycle.current.finish(token);setRestoring(false)}}
+    const line=lineRef.current, lc=lines.current.get(line).lifecycle, controller=new AbortController(), token=lc.begin(controller);apply(line,{restoring:true,state:"restoring",status:""});
+    try{await restoreConversationAfterPersistence(lc,token,controller.signal,()=>handle.current&&completed.length?persistConversation(completed):Promise.resolve(),signal=>restoreAgentChat(id,signal,true),saved=>{const restoredId=saved.conversationId??id,chosenCreatedAt=created??saved.createdAt??new Date().toISOString();const display=saved.messages.filter(m=>m.role==="user"||m.role==="assistant");if(lineRef.current===line){selectAgentConversation(restoredId,chosenCreatedAt);localId.current=restoredId;createdAt.current=chosenCreatedAt;try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,restoredId)}catch{}setArchiveView(null);setImportedReadOnly(false);}apply(line,{conversationId:restoredId,messages:display,historyHasMore:saved.hasMore,historyBefore:saved.nextBefore,state:verified?"ready":"idle",loaded:true})})}
+    catch(error){if(lc.isCurrent(token)&&!(error instanceof DOMException&&error.name==="AbortError")){apply(line,{status:t("无法恢复服务端聊天记录。"),state:verified?"ready":"idle"});}}
+    finally{if(lc.isCurrent(token)){lc.finish(token);apply(line,{restoring:false})}}
   }
   async function loadEarlier(){
     if(!conversationId||!historyHasMore||historyBefore===null||loadingEarlierRef.current||restoring||state==="sending"||state==="testing"||archiveView||importedReadOnly)return;
-    const target=conversationId,cursor=historyBefore;
+    const line=lineRef.current,target=conversationId,cursor=historyBefore;
     earlierController.current?.abort();
     const controller=new AbortController();earlierController.current=controller;
     loadingEarlierRef.current=true;setLoadingEarlier(true);
     try{
       const page=await restoreAgentChat(target,controller.signal,true,cursor,20);
-      if(controller.signal.aborted||conversationIdRef.current!==target)return;
+      if(controller.signal.aborted||lineRef.current!==line||conversationIdRef.current!==target)return;
       const older=page.messages.filter(m=>m.role==="user"||m.role==="assistant");
-      if(older.length)setMessages(previous=>[...older,...previous]);
-      setHistoryBefore(page.nextBefore);setHistoryHasMore(page.hasMore);
+      apply(line,{...(older.length?{messages:[...older,...lines.current.get(line).messages]}:{}),historyBefore:page.nextBefore,historyHasMore:page.hasMore});
     }catch(error){
       if(!(error instanceof DOMException&&error.name==="AbortError")&&conversationIdRef.current===target)setStatus(t("更早的聊天记录暂时无法加载。"));
     }finally{
       if(earlierController.current===controller){earlierController.current=null;loadingEarlierRef.current=false;setLoadingEarlier(false);}
     }
   }
-  const clear = () => { earlierController.current?.abort();loadingEarlierRef.current=false;setLoadingEarlier(false); const previous=latestMessages.current;let lastUser=-1;for(let i=previous.length-1;i>=0;i--)if(previous[i].role==="user"){lastUser=i;break;}const completed=state==="sending"?previous.slice(0,Math.max(0,lastUser)):previous;if(handle.current&&completed.length)void persistConversation(completed); lifecycle.current.invalidate();setRestoring(false);setArchiveView(null);if(importedReadOnly){setImportedReadOnly(false);setArchive(archiveRef.current);}clearAgentConversation(); setConversationId(null); setMessages([]); setHistoryHasMore(false); setHistoryBefore(null); latestMessages.current=[]; setDraft(""); localId.current=crypto.randomUUID();createdAt.current=new Date().toISOString();try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,localId.current);}catch{}setState(verified ? "ready" : "idle"); setStatus(""); };
+  const clearLine = (keepDraft:boolean) => { const line=lineRef.current; earlierController.current?.abort();loadingEarlierRef.current=false;setLoadingEarlier(false); const previous=latestMessages.current;let lastUser=-1;for(let i=previous.length-1;i>=0;i--)if(previous[i].role==="user"){lastUser=i;break;}const completed=state==="sending"?previous.slice(0,Math.max(0,lastUser)):previous;if(handle.current&&completed.length)void persistConversation(completed); lifecycle.current.invalidate();setArchiveView(null);if(importedReadOnly){setImportedReadOnly(false);setArchive(archiveRef.current);}clearAgentConversation(); if(!keepDraft)saveDraft(line,""); localId.current=crypto.randomUUID();createdAt.current=new Date().toISOString();try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,localId.current);}catch{}apply(line,{restoring:false,conversationId:null,messages:[],historyHasMore:false,historyBefore:null,...(keepDraft?{}:{draft:""}),state:verified ? "ready" : "idle",status:"",loaded:true}); };
+  const clear = () => clearLine(false);
   async function selectBot(next:Bot|null){
-    const switched=botRef.current?.id!==next?.id;botRef.current=next;setBot(next);
+    const prev=lineRef.current, line=lineKey(next,null), switched=prev!==line;botRef.current=next;setBot(next);
+    earlierController.current?.abort();loadingEarlierRef.current=false;setLoadingEarlier(false);
+    if(switched){
+      // Leave the old line running in the background: park its view and show the target line's own state.
+      lines.current.update(prev,{messages:latestMessages.current});
+      lineRef.current=line;lines.current.setActive(line);
+      const s=lines.current.get(line), text=s.draft||loadDraft(line);
+      setMessages(s.messages);latestMessages.current=s.messages;setState(s.state as State);setStatus(s.status);setConversationId(s.conversationId);setHistoryHasMore(s.historyHasMore);setHistoryBefore(s.historyBefore);setRestoring(s.restoring);setDraftState(text);s.draft=text;setArchiveView(null);bump(n=>n+1);
+    }
     if(!next)return;
+    { const cur=lines.current.get(line); if(cur.state==="sending"||cur.restoring)return; }
     // Each bot has one line: open it, or start empty when the bot has not spoken yet.
-    if(next.conversation_id){if(next.conversation_id!==conversationIdRef.current)await openConversation(next.conversation_id);}
-    else if(switched)clear();
+    if(next.conversation_id){if(next.conversation_id!==lines.current.get(line).conversationId)await openConversation(next.conversation_id);}
+    else if(switched)clearLine(true);
   }
   const visibleMessages=archiveView?archiveView.messages as AgentChatMessage[]:messages;
-  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,lineStatus:{running:lines.current.running(),unseen:lines.current.unseen()},archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot }}>{children}</Context.Provider>;
 }
 function readLocalConversationId(){try{const key=`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,existing=window.localStorage.getItem(key);if(existing&&/^[\w-]{1,80}$/.test(existing))return existing;const id=crypto.randomUUID();window.localStorage.setItem(key,id);return id;}catch{return crypto.randomUUID();}}
 function archiveMessages(messages:AgentChatMessage[]){return messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role as "user"|"assistant",content:m.content,...(m.status?{status:m.status as "failed"|"cancelled"}:{}),...(m.role==="assistant"&&m.citations?{citations:m.citations}:{}),...(m.role==="assistant"&&m.tool_trace?{tool_trace:m.tool_trace.map(x=>({call_id:x.call_id,name:x.name,arguments:x.arguments,result:x.result,status:x.status as "running"|"complete"|"not_found"|"failed"|"cancelled"}))}:{})}));}
@@ -267,6 +288,8 @@ function useChat() { const value = useContext(Context); if (!value) throw new Er
 export function useOpenConversation() { return useChat().openConversation; }
 /** Open a bot's line (its turns then carry only bot_id), or leave every bot's line with null. */
 export function useSelectBot() { return useChat().selectBot; }
+/** Which bots' lines are answering in the background, and which finished an answer the user has not opened yet (local state, apart from the server's bot.unread). */
+export function useLineStatus() { return useChat().lineStatus; }
 
 const SIDE_OPEN_KEY="market-evidence-agent:bot-side-open:v1";
 function PanelIcon(){return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg>}

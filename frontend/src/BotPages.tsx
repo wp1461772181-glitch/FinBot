@@ -97,7 +97,7 @@ export function NewsIcon() {
   </svg>;
 }
 
-export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutines, newsActive, onNews, onOpen, onNew }: { bots: Bot[]; error: string; activeBotId: string | null; routinesActive: boolean; onRoutines: () => void; newsActive: boolean; onNews: () => void; onOpen: (bot: Bot) => void; onNew: () => void }) {
+export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutines, newsActive, onNews, onOpen, onNew, lineStatus }: { lineStatus?: { running: string[]; unseen: string[] }; bots: Bot[]; error: string; activeBotId: string | null; routinesActive: boolean; onRoutines: () => void; newsActive: boolean; onNews: () => void; onOpen: (bot: Bot) => void; onNew: () => void }) {
   const { t } = useLocale();
   const { top, groups } = botSections(bots);
   const pending = bots.reduce((sum, b) => sum + (b.pending || 0), 0);
@@ -106,6 +106,8 @@ export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutin
   const row = (bot: Bot) => <li key={bot.id}><button type="button" className={`bot-row${bot.id === activeBotId ? " is-active" : ""}`} aria-current={bot.id === activeBotId ? "page" : undefined} onClick={() => onOpen(bot)}
     onPointerEnter={() => setHovered(bot.id)} onPointerLeave={() => setHovered(h => h === bot.id ? null : h)}>
     <BotAvatar bot={bot} track={bot.id === activeBotId || bot.id === hovered} /><span className="bot-row-text"><strong>{bot.name}{bot.is_default && bot.avatar !== "★" && <span className="bot-star" aria-label={t("默认")}> ★</span>}</strong><small>{bot.last_message || bot.title || t("还没有消息")}</small></span>
+    {lineStatus?.running.includes(`bot:${bot.id}`) && bot.id !== activeBotId && <span className="bot-pending-dot" role="img" aria-label={t("回答中")} title={t("回答中")} />}
+    {lineStatus?.unseen.includes(`bot:${bot.id}`) && bot.id !== activeBotId && <span className="bot-unread" aria-label={t("新回答")}>{t("新回答")}</span>}
     {bot.pending > 0 && <span className="bot-pending-dot" role="img" aria-label={t("有待你确认的建议")} title={t("有待你确认的建议")} />}
     {bot.unread > 0 && <span className="bot-unread" aria-label={`${bot.unread} ${t("条未读")}`}>{bot.unread > 99 ? "99+" : bot.unread}</span>}
   </button></li>;

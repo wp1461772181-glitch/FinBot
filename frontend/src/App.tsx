@@ -1,4 +1,4 @@
-import { AgentAdminPage, AgentChatPanel, AgentChatProviderRoot, useOpenConversation, useSelectBot } from "./AgentChatPanel";
+import { AgentAdminPage, AgentChatPanel, AgentChatProviderRoot, useLineStatus, useOpenConversation, useSelectBot } from "./AgentChatPanel";
 import { BotRailList, BotSide, NewBotDialog, RoutineIcon, useBots } from "./BotPages";
 import { BrandLogo } from "./BotOrb";
 import { botFromHash } from "./bot-items.mjs";
@@ -149,6 +149,7 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
   // A past-conversation link (#agent/<id>, from recall_conversations) opens that conversation.
   const openConversation = useOpenConversation(), openRef = useRef(openConversation); openRef.current = openConversation;
   const selectBot = useSelectBot(), selectBotRef = useRef(selectBot); selectBotRef.current = selectBot;
+  const lineStatus = useLineStatus();
   // A past conversation (from the memory page) opens outside any bot's line, read and continued as before.
   const [pastConversation, setPastConversation] = useState(false);
   useEffect(() => {
@@ -165,6 +166,9 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
 
   // Bots (owner only): the sidebar lists them; #agent is the default bot's line, #bot/<id> another's.
   const botList = useBots(personal);
+  // A background answer finished: refresh the list so its last line and unread count are current.
+  const unseenCount = lineStatus.unseen.length, reloadBots = useRef(botList.reload); reloadBots.current = botList.reload;
+  useEffect(() => { if (unseenCount) void reloadBots.current(); }, [unseenCount]);
   const [botId, setBotId] = useState(() => botFromHash(window.location.hash));
   const [newBotOpen, setNewBotOpen] = useState(false);
   useEffect(() => { const read = () => setBotId(botFromHash(window.location.hash)); window.addEventListener("hashchange", read); return () => window.removeEventListener("hashchange", read); }, []);
@@ -211,7 +215,7 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
 
   function addWatchSymbol() { const ticker = normalizeTicker(watchInput); if (!ticker) { setWatchError("请输入有效的美股代码，例如 AMD 或 BRK.B。"); return; } if (symbols.includes(ticker)) { setWatchError("该代码已在关注列表中。"); return; } if (symbols.length >= MAX_WATCHLIST) { setWatchError("关注列表最多保存 30 个代码。"); return; } setSymbols(items => [...items, ticker]); setWatchInput(""); setWatchError(""); openStock(ticker); }
   function removeWatchSymbol(ticker: string) { const remaining = symbols.filter(item => item !== ticker); setSymbols(remaining); setRequestedSymbol(current => selectionForWatchlist(current, remaining)); }
-  const botRail = personal ? (close: () => void) => <BotRailList bots={botList.bots} routinesActive={activeSection === "routines"} onRoutines={() => { close(); navigate("routines"); }} newsActive={activeSection === "news"} onNews={() => { close(); navigate("news"); }} error={botList.error} activeBotId={activeBot?.id ?? null} onOpen={bot => { close(); openBot(bot); }} onNew={() => { close(); setNewBotOpen(true); }} /> : undefined;
+  const botRail = personal ? (close: () => void) => <BotRailList bots={botList.bots} routinesActive={activeSection === "routines"} onRoutines={() => { close(); navigate("routines"); }} newsActive={activeSection === "news"} onNews={() => { close(); navigate("news"); }} error={botList.error} activeBotId={activeBot?.id ?? null} lineStatus={lineStatus} onOpen={bot => { close(); openBot(bot); }} onNew={() => { close(); setNewBotOpen(true); }} /> : undefined;
   const newBotDialog = newBotOpen && <NewBotDialog onClose={() => setNewBotOpen(false)} onCreated={bot => { setNewBotOpen(false); void botList.reload().then(() => openBot(bot)); }} />;
   const shellProps = { activeSection, navigate, symbol: requestedSymbol, symbols, onSelectStock: openStock, watchInput, setWatchInput, addWatchSymbol, watchError, setWatchError, onModeChange, botRail, overlay: newBotDialog };
   if (activeBot) return <Shell {...shellProps}><BotPage bot={activeBot} symbol={requestedSymbol} watchlist={symbols} onSelectSymbol={setRequestedSymbol} onOpenCompany={(ticker, section) => { const clean = normalizeTicker(ticker); if (clean) { if (!symbols.includes(clean) && symbols.length < MAX_WATCHLIST) setSymbols(items => [...items, clean]); openStock(clean, section === "forecast" ? "forecast" : "overview"); } }} onChanged={() => void botList.reload()} onDeleted={() => { void botList.reload(); navigate("agent"); }} onSettings={() => navigate("admin")} onModeChange={onModeChange} /></Shell>;
