@@ -2,11 +2,14 @@
 """Local TCP forwarder: 127.0.0.1:<port> -> HTTP CONNECT proxy -> <target>.
 
 The Muse VM blocks raw outbound TCP; only a CONNECT tunnel through the egress
-proxy (HTTPS_PROXY) reaches Supabase. Point DATABASE_URL at this listener.
-Credentials come only from the environment and are never logged.
+proxy (HTTPS_PROXY) reaches the outside. Credentials come only from the
+environment and are never logged. Two instances run side by side:
+  db : TUNNEL_TARGET=db.doftncswxfxbakyjlnfv.supabase.co:5432 TUNNEL_PORT=15432   (DATABASE_URL points here)
+  mac: TUNNEL_TARGET=100.107.1.39:8765 TUNNEL_PORT=18765 TUNNEL_PROXY_PORT=3130   (RAG_REMOTE_URL points here;
+       tailnet destinations go through the proxy's tailnet tunnel port 3130)
 
-env: HTTPS_PROXY (required), DB_TUNNEL_TARGET (default
-db.doftncswxfxbakyjlnfv.supabase.co:5432), DB_TUNNEL_PORT (default 15432).
+env: HTTPS_PROXY (required), TUNNEL_TARGET, TUNNEL_PORT (default 15432),
+TUNNEL_PROXY_PORT (default: port from HTTPS_PROXY).
 """
 from __future__ import annotations
 
@@ -18,10 +21,10 @@ import signal
 import sys
 import urllib.parse
 
-log = logging.getLogger("db_tunnel")
-TARGET = os.getenv("DB_TUNNEL_TARGET", "db.doftncswxfxbakyjlnfv.supabase.co:5432")
+log = logging.getLogger("tunnel")
+TARGET = os.getenv("TUNNEL_TARGET", "db.doftncswxfxbakyjlnfv.supabase.co:5432")
 LISTEN_HOST = "127.0.0.1"
-LISTEN_PORT = int(os.getenv("DB_TUNNEL_PORT", "15432"))
+LISTEN_PORT = int(os.getenv("TUNNEL_PORT", "15432"))
 
 
 def proxy_settings() -> tuple[str, int, str]:
@@ -34,7 +37,7 @@ def proxy_settings() -> tuple[str, int, str]:
         user = urllib.parse.unquote(parsed.username)
         password = urllib.parse.unquote(parsed.password or "")
         auth = base64.b64encode(f"{user}:{password}".encode()).decode()
-    return parsed.hostname, parsed.port or 3128, auth
+    return parsed.hostname, int(os.getenv("TUNNEL_PROXY_PORT") or parsed.port or 3128), auth
 
 
 async def open_tunnel(host: str, port: int, auth: str, target: str):

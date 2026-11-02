@@ -11,6 +11,7 @@ from ..agent_chat_models import AgentFAQ
 from .models import KnowledgeCandidate,KnowledgeChunk,KnowledgeDocument,KnowledgeUploadOwner
 from .sources import adapt_sec,adapt_uploaded
 from .runtime import current_research_context,get_runtime
+from .remote import KnowledgeOffline
 from .repository import document_integrity
 
 class KnowledgeUnavailable(RuntimeError):
@@ -188,6 +189,8 @@ async def _retrieve(query:str, *, faq:bool, symbol:str|None=None, limit:int=5, a
         if hasattr(runtime,'search_strategy'):hits=await runtime.search_strategy(strategy,search_query,filter_expr,50)
         else:
             vector=await runtime.encode(search_query);hits=await runtime.search(vector,filter_expr,50)
+    except KnowledgeOffline as exc:
+        raise KnowledgeUnavailable(exc.hint,exc.code) from exc
     except Exception as exc:
         raise KnowledgeUnavailable('knowledge retrieval backend is unavailable') from exc
     # Cosine calibration is meaningful only for dense retrieval. BM25 and RRF
@@ -201,6 +204,7 @@ async def _retrieve(query:str, *, faq:bool, symbol:str|None=None, limit:int=5, a
             # cost fifteen seconds per search, and every turn that searched waited for it.
             pairs=await runtime.rerank(query,[chunk.answer for chunk,_doc in ordered[:12]])
             ordered=[ordered[index] for index,_score in pairs[:10]]
+        except KnowledgeOffline as exc: raise KnowledgeUnavailable(exc.hint,exc.code) from exc
         except Exception as exc: raise KnowledgeUnavailable('reranker backend is unavailable','knowledge_reranker_unavailable') from exc
     # Number citations against the shared turn manifest before rendering evidence.
     # Existing chunks retain their original number when retrieved again.

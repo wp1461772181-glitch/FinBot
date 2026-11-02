@@ -131,6 +131,14 @@ def _threshold(settings):
 
 def start_runtime(settings: KnowledgeSettings|None=None):
     global _runtime
+    from .remote import remote_url,make_remote_runtime
+    if remote_url():
+        # Retrieval runs on the Mac service: no torch, models or Milvus in this process.
+        settings=settings or KnowledgeSettings.from_env(validate_model=False)
+        if not settings.enabled: return None
+        with _runtime_lock:
+            if _runtime is None or not hasattr(_runtime,'url'): _runtime=make_remote_runtime(settings)
+            return _runtime
     settings=settings or KnowledgeSettings.from_env()
     if not settings.enabled: return None
     with _runtime_lock:

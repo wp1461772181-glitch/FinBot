@@ -13,8 +13,15 @@ if [ -z "$RAG_FLAG" ] && [ -f "${PROJECT_ROOT}/.env" ]; then
     RAG_FLAG=$(sed -n 's/^RAG_ENABLED[[:space:]]*=[[:space:]]*\([^#]*\).*$/\1/p' "${PROJECT_ROOT}/.env" | tail -n 1 | tr -d "'\" ")
 fi
 RAG_FLAG=$(printf '%s' "$RAG_FLAG" | tr '[:upper:]' '[:lower:]')
+# RAG_REMOTE_URL means retrieval runs on the Mac service; this process must stay torch-free.
+REMOTE_RAG="${RAG_REMOTE_URL:-}"
+if [ -z "$REMOTE_RAG" ] && [ -f "${PROJECT_ROOT}/.env" ]; then
+    REMOTE_RAG=$(sed -n 's/^RAG_REMOTE_URL[[:space:]]*=[[:space:]]*\([^#]*\).*$/\1/p' "${PROJECT_ROOT}/.env" | tail -n 1 | tr -d "'\" ")
+fi
 if [ -n "${MARKET_EVIDENCE_API_PYTHON:-}" ]; then
     API_PYTHON="$MARKET_EVIDENCE_API_PYTHON"
+elif [ -n "$REMOTE_RAG" ]; then
+    API_PYTHON="${PROJECT_ROOT}/.venv/bin/python"
 elif [ "$RAG_FLAG" = "1" ] || [ "$RAG_FLAG" = "true" ] || [ "$RAG_FLAG" = "yes" ]; then
     API_PYTHON="${PROJECT_ROOT}/.venv-rag/bin/python"
 else

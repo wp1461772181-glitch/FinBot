@@ -221,10 +221,15 @@ def create_tables() -> None:
         seed_faq(session)
         session.commit()
     if os.getenv("RAG_ENABLED", "false").strip().lower() in {"1", "true", "yes"}:
-        from .knowledge.runtime import start_runtime_background
-        start_runtime_background()
-        from .knowledge.source_sync import start_source_sync
-        start_source_sync(SessionLocal)
+        if os.getenv("RAG_REMOTE_URL", "").strip():
+            # Retrieval, indexing and source sync live on the Mac service; this process stays torch-free.
+            from .knowledge.runtime import start_runtime
+            start_runtime()
+        else:
+            from .knowledge.runtime import start_runtime_background
+            start_runtime_background()
+            from .knowledge.source_sync import start_source_sync
+            start_source_sync(SessionLocal)
 
 @app.on_event("shutdown")
 def stop_knowledge_runtime() -> None:
