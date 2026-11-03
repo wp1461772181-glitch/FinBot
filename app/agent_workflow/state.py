@@ -41,6 +41,8 @@ class AgentRuntimeContext:
     # The research queue the client sent (None: this client sends none, so nothing asks about it).
     watchlist: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
     history_citation_catalogue: tuple[dict, ...] = ()
+    # The chosen model's window in tokens: what the in-flight request may grow to follows it.
+    context_window: int = 0
     # The owner's profile message (agent_profile.render_block): a hint, never evidence or write authority.
     profile_block: str | None = field(default=None, repr=False, compare=False)
     # A scheduled task (agent_task_runner) with nobody watching: no write is ever granted, and a write the

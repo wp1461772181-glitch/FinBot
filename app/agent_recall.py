@@ -110,6 +110,13 @@ def index_question(conversation_id: str, question: str) -> None:
         db.commit()
 
 
+def _readable(content) -> str:
+    """A summary row as searchable text: a rolling version is rendered, a legacy segment is as it is."""
+    from .agent_context import parse_rolling, render_rolling
+    rolling = parse_rolling(content)
+    return " ".join((render_rolling(rolling) if rolling is not None else str(content or "")).split())
+
+
 def index_summary(conversation_id: str, seq: int, content: str) -> None:
     """A summary segment was appended: mirror it."""
     cid = uuid.UUID(str(conversation_id))
@@ -117,7 +124,7 @@ def index_summary(conversation_id: str, seq: int, content: str) -> None:
         owner = _owner(db, cid)
         if owner is None:
             return
-        _upsert(db, cid, owner, int(seq), _title(db, cid), " ".join(str(content or "").split()))
+        _upsert(db, cid, owner, int(seq), _title(db, cid), _readable(content))
         db.commit()
 
 
@@ -155,7 +162,7 @@ def backfill() -> int:
                                            .where(AgentConversationSummary.conversation_id == cid)):
                 if (cid, seq) not in have:
                     title = title or _title(db, cid)
-                    _upsert(db, cid, owner, seq, title, " ".join(str(content or "").split()))
+                    _upsert(db, cid, owner, seq, title, _readable(content))
                     written += 1
         db.commit()
     return written
@@ -218,6 +225,67 @@ def search(owner: str, query: str, limit: int = MAX_LIMIT, *, exclude: str | Non
                 best[cid] = (key, _item(row, updated_at, bot_id, bot_name))
     ranked = sorted(best.values(), key=lambda value: value[0], reverse=True)[:limit]
     return [item for _key, item in ranked]
+
+
+MESSAGE_SNIPPET_CHARS = 320
+MESSAGE_SCAN_ROWS = 400
+MESSAGE_TERM_LIMIT = 12
+
+
+def _snippet(text: str, wanted: list[str]) -> str:
+    flat = " ".join(str(text or "").split())
+    at = min((i for i in (flat.casefold().find(t) for t in wanted) if i >= 0), default=0)
+    start = max(0, at - MESSAGE_SNIPPET_CHARS // 4)
+    piece = flat[start:start + MESSAGE_SNIPPET_CHARS]
+    return ("…" if start else "") + piece + ("…" if start + MESSAGE_SNIPPET_CHARS < len(flat) else "")
+
+
+def search_messages(owner: str, query: str, limit: int = MAX_LIMIT, *, bot_ids=None) -> list[dict]:
+    """The original messages of one bot's lines that match the query: what a rolling summary no longer
+    holds in detail.  ``bot_ids`` are the bots whose conversations are searched, archived ones included
+    (a bot has one live line, but clearing it archives the old one).  Each hit names its turn, so a
+    citation of that turn can be fetched with ``read_history_citation(turn_id, ordinal)``; like every
+    recall result it is memory, not evidence."""
+    wanted = terms(query)[:MESSAGE_TERM_LIMIT]
+    if not wanted or not bot_ids:
+        return []
+    ids = []
+    for value in bot_ids:
+        try:
+            ids.append(uuid.UUID(str(value)))
+        except ValueError:
+            pass
+    if not ids:
+        return []
+    like = [AgentMessage.content.ilike("%" + t.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%", escape="\\")
+            for t in wanted]
+    from sqlalchemy import or_
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(AgentMessage, AgentConversation.updated_at)
+            .join(AgentConversation, AgentConversation.id == AgentMessage.conversation_id)
+            .where(AgentConversation.owner_hash == owner, AgentConversation.bot_id.in_(ids),
+                   AgentMessage.role.in_(("user", "assistant")), AgentMessage.status == "complete",
+                   AgentMessage.content != "", or_(*like))
+            .order_by(AgentMessage.created_at.desc()).limit(MESSAGE_SCAN_ROWS)).all()
+    scored = []
+    for order, (message, _updated) in enumerate(rows):
+        body = message.content.casefold()
+        matched = [t for t in wanted if t in body]
+        hits = sum(min(3, body.count(t)) for t in matched)
+        scored.append(((len(matched), hits, -order), message))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    out = []
+    for _key, message in scored[:max(1, min(MAX_LIMIT, int(limit)))]:
+        manifest = message.tool_calls.get("citations", []) if isinstance(message.tool_calls, dict) else []
+        ordinals = sorted({c["ordinal"] for c in manifest if isinstance(c, dict) and isinstance(c.get("ordinal"), int)
+                           and not isinstance(c.get("ordinal"), bool)}) if message.role == "assistant" else []
+        out.append({"kind": "message", "conversation_id": str(message.conversation_id), "turn_id": str(message.turn_id),
+                    "sequence": message.sequence, "role": message.role,
+                    "date": message.created_at.date().isoformat() if message.created_at else None,
+                    "snippet": _snippet(message.content, wanted), "citation_ordinals": ordinals,
+                    "link": f"#agent/{message.conversation_id}"})
+    return out
 
 
 def recent(owner: str, limit: int = 20, *, exclude: str | None = None, bot_ids=None) -> list[dict]:

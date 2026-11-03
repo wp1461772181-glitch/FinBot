@@ -52,13 +52,17 @@ async def history(conversation_id: str, credential: str, limit_bytes=14000):
             if used+size>limit_bytes: break
             output[0:0]=[{"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,"status":m.status,"turn_id":str(m.turn_id)} for m in group]; used+=size
         return output
-async def conversation_context(conversation_id: str, credential: str, *, l1_bytes: int = layers.L1_BYTES,
-                               l2_bytes: int = layers.L2_BYTES, l3_bytes: int = layers.L3_BYTES):
+async def conversation_context(conversation_id: str, credential: str, *, window: int | None = None,
+                               l1_bytes: int | None = None, l2_bytes: int | None = None, l3_bytes: int | None = None):
     """What the next turn of this conversation carries of the turns before it, by layer (the rule is
     ``agent_context.layer_rows``; this reads the rows and the segments).  None when the conversation
     is not this credential's."""
     if not await verify_conversation(conversation_id, credential):
         return None
+    # The sizes follow the window of the model that will read them (the catalog's window; default 128k).
+    sizes = layers.layer_sizes(window) if window else (layers.L1_BYTES, layers.L2_BYTES, layers.L3_BYTES)
+    l1_bytes, l2_bytes, l3_bytes = (given if given is not None else size
+                                    for given, size in zip((l1_bytes, l2_bytes, l3_bytes), sizes))
     cid = uuid.UUID(conversation_id)
     async with Session() as s:
         rows = (await s.scalars(select(AgentMessage).where(AgentMessage.conversation_id == cid)
@@ -103,6 +107,30 @@ async def load_turn_citation(conversation_id: str, credential: str, turn_id: str
             or not isinstance(matches[0].get("quote"), str)):
         return {"ok": False, "error_code": "history_citation_invalid"}
     return {"ok": True, "citation": dict(matches[0]), "origin": {"turn_id": str(tid), "ordinal": ordinal}}
+
+
+async def citation_remembered(conversation_id: str, credential: str, turn_id: str, ordinal: int) -> bool:
+    """Whether a {turn_id, ordinal} may be fetched although the turn is no longer in the visible catalogue:
+    the newest rolling summary names it as a source, or the turn lies inside what the summary covers."""
+    try:
+        cid, tid = uuid.UUID(conversation_id), uuid.UUID(turn_id)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    if not await verify_conversation(conversation_id, credential):
+        return False
+    async with Session() as s:
+        latest = (await s.scalars(select(AgentConversationSummary).where(AgentConversationSummary.conversation_id == cid)
+                                  .order_by(AgentConversationSummary.seq.desc()).limit(1))).first()
+        if latest is None:
+            return False
+        rolling = layers.parse_rolling(latest.content)
+        for key in layers.ROLLING_SOURCED:
+            for item in (rolling or {}).get(key, []):
+                if isinstance(item, dict) and item.get("turn_id") == turn_id and item.get("ordinal") == ordinal:
+                    return True
+        last = await s.scalar(select(func.max(AgentMessage.sequence)).where(AgentMessage.conversation_id == cid,
+                                                                             AgentMessage.turn_id == tid))
+    return last is not None and last <= latest.upto_sequence
 
 
 async def append_summary(conversation_id: str, from_sequence: int, upto_sequence: int, content: str) -> bool:
@@ -162,10 +190,32 @@ async def owned_message_page(conversation_id: str, credential: str, *, before_se
         rows=(await s.scalars(select(AgentMessage)
               .where(AgentMessage.conversation_id==uuid.UUID(conversation_id))
               .order_by(AgentMessage.sequence.asc()))).all()
+    async with Session() as s:
+        versions=(await s.scalars(select(AgentConversationSummary)
+                  .where(AgentConversationSummary.conversation_id==uuid.UUID(conversation_id))
+                  .order_by(AgentConversationSummary.seq.asc()))).all()
     selected,has_more,next_before=_select_message_page(_eligible_turn_groups(rows),before_sequence,limit_turns)
     return {"messages":[{"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,
                          "status":m.status,"turn_id":str(m.turn_id)} for group in selected for m in group],
-            "has_more":has_more,"next_before":next_before}
+            "has_more":has_more,"next_before":next_before,
+            "compactions":compaction_notices(rows,versions)}
+
+
+def compaction_notices(rows,versions):
+    """The 「已压缩 N 轮」 lines of a conversation: one per rolling summary version, placed after the newest
+    turn that existed when it was made, with the summary text to open.  Legacy free-text segments make none."""
+    notices=[]
+    for version in versions:
+        rolling=layers.parse_rolling(version.content)
+        if rolling is None: continue
+        # After the last answer that existed then (an unfinished turn gets its notice once it has answered).
+        before=[m for m in rows if m.role=="assistant" and m.content and m.status=="complete"
+                and m.created_at and version.created_at and m.created_at<=version.created_at]
+        notices.append({"id":version.seq,"after_turn_id":str(before[-1].turn_id) if before else None,
+                        "turns":int(rolling.get("turns_compacted",0)),"total":int(rolling.get("total_compacted",0)),
+                        "focus":rolling.get("focus"),"summary":layers.render_rolling(rolling),
+                        "created_at":version.created_at.isoformat() if version.created_at else None})
+    return notices
 
 
 async def owned_messages(conversation_id: str,credential: str):

@@ -9,11 +9,12 @@ now share one budget:
            the turn's result set, the names are what a later referent needs);
 * layer 3  turns older still, as appended segment summaries (see ``agent_context_summary``).
 
-The budget is not a hand-picked constant: it is derived from the model's context window
-(``AGENT_MODEL_CONTEXT_WINDOW``) by subtracting the fixed overhead of a request and capping what is
-left by how many turns the product wants to keep (``derive_history_budget``).  A different window
-recomputes the whole table; ``AGENT_CONTEXT_BUDGET_KB`` may lower the result but cannot raise it
-past the window.  ``startup_self_check`` refuses a configuration where a single turn cannot run.
+The budget is not a hand-picked constant: it is half of the chosen model's context window
+(``HISTORY_SHARE``; the model catalog carries the window per model, 128k by default), turned into
+bytes with ``BYTES_PER_TOKEN`` (``budget_for_window``).  A different window recomputes the whole table;
+there is no fixed ceiling.  When the history reaches ``COMPACT_AT`` of the budget it is compressed into
+one rolling structured summary (``agent_context_summary``).  ``startup_self_check`` refuses a
+configuration where a single turn cannot run.
 
 Placement matters as much as size.  The three layers are the stable head of every request (layer 3
 is appended after the user's own message, never merged into the system prompt), so that the bytes a
@@ -32,16 +33,16 @@ import re
 from dataclasses import dataclass
 
 KB = 1024
-BUDGET_KB_DEFAULT, BUDGET_KB_MIN, BUDGET_KB_MAX = 64, 16, 128
+BUDGET_KB_MIN = 16
 
-# The history budget is what is left of the model window once one turn's fixed cost is paid, and it
-# is spent the way a conversation is read: mostly on the newest turns, a little on the compressed
-# ones, and a few summary segments.
+# The history budget is a share of the model window, and it is spent the way a conversation is read:
+# mostly on the newest turns, a little on the compressed ones, and the summary.
 BYTES_PER_TOKEN = 3            # UTF-8 bytes per token: Chinese is ~3 bytes and ~1 token a character
 DEFAULT_WINDOW_TOKENS = 128_000
-TURN_INPUT_TOKENS, TURN_OUTPUT_TOKENS = 8_000, 2_000   # X and Y: one turn is at most X + Y tokens
-HISTORY_TURNS_WANTED = 8                                # N: turns of history worth carrying
-EXTRAS_TOKENS = 4_000                                   # one turn's evidence, notes and profile on top of the measured part
+HISTORY_SHARE = 0.5            # of the window: what earlier conversation may take
+COMPACT_AT = 0.8               # history use (of the budget) at which the conversation is compressed
+COMPACT_TARGET = 0.5           # ...and the use a compression aims to come back under
+EXTRAS_TOKENS = 4_000          # one turn's evidence, notes and profile on top of the measured part
 
 
 def measure_fixed_tokens() -> int:
@@ -58,17 +59,6 @@ def measure_fixed_tokens() -> int:
 FIXED_TOKENS = measure_fixed_tokens()
 
 
-def parse_budget_kb(raw: str | None, ceiling: int | None = None) -> int:
-    """The knob, clamped.  Anything unreadable is the default; nothing exceeds ``ceiling`` (the
-    window's own limit) or the product ceiling."""
-    try:
-        value = int(str(raw).strip()) if raw is not None else BUDGET_KB_DEFAULT
-    except ValueError:
-        value = BUDGET_KB_DEFAULT
-    upper = BUDGET_KB_MAX if ceiling is None else max(BUDGET_KB_MIN, min(BUDGET_KB_MAX, ceiling))
-    return max(BUDGET_KB_MIN, min(upper, value))
-
-
 def window_tokens(raw: str | None) -> int:
     """The configured model window in tokens.  A window small enough to break a turn is refused
     rather than silently accepted (see ``startup_self_check``)."""
@@ -79,17 +69,25 @@ def window_tokens(raw: str | None) -> int:
     return max(4_000, value)
 
 
-def derive_history_budget(window: int) -> int:
-    """Bytes of earlier conversation this window can afford: what is left after the fixed overhead,
-    capped by the turns the product wants to keep.  Both sides are the chapter's arithmetic --
-    N turns of (X + Y), and the window minus everything that is not history -- and the smaller one
-    wins, so a big window does not overspend and a small one tightens by itself."""
-    room = window - FIXED_TOKENS
-    if room <= 0:
-        return BUDGET_KB_MIN * KB
-    return max(BUDGET_KB_MIN * KB,
-               min(BUDGET_KB_MAX * KB, min(room, HISTORY_TURNS_WANTED * (TURN_INPUT_TOKENS + TURN_OUTPUT_TOKENS))
-                   * BYTES_PER_TOKEN))
+def budget_for_window(window: int) -> int:
+    """Bytes of earlier conversation a model with this window may be sent: half the window, in bytes.
+    The only floor is ``BUDGET_KB_MIN``; there is no ceiling, a 1M window gets a 1M-sized budget."""
+    return max(BUDGET_KB_MIN * KB, int(window * HISTORY_SHARE) * BYTES_PER_TOKEN)
+
+
+def guard_for_window(window: int) -> int:
+    """One request at the door: the history plus the fixed part and this turn's evidence."""
+    return budget_for_window(window) * 3 // 2
+
+
+def running_bytes_for_window(window: int) -> int:
+    """A turn in flight also carries its own tool results; it may not outgrow the window itself."""
+    return max(guard_for_window(window), int(window) * BYTES_PER_TOKEN)
+
+
+def layer_sizes(window: int) -> tuple[int, int, int]:
+    """(layer 1, layer 2, layer 3) bytes for a model window."""
+    return split_budget(budget_for_window(window))
 
 
 def split_budget(budget_bytes: int) -> tuple[int, int, int]:
@@ -104,21 +102,22 @@ def split_budget(budget_bytes: int) -> tuple[int, int, int]:
     return l1, l2, budget_bytes - l1 - l2
 
 
-WINDOW_TOKENS = window_tokens(os.getenv("AGENT_MODEL_CONTEXT_WINDOW"))
-BUDGET_KB = parse_budget_kb(os.getenv("AGENT_CONTEXT_BUDGET_KB"), ceiling=derive_history_budget(WINDOW_TOKENS) // KB)
-HISTORY_BUDGET = BUDGET_KB * KB                       # bytes of earlier conversation a turn may carry
-L1_BYTES, L2_BYTES, L3_BYTES = split_budget(HISTORY_BUDGET)   # newest raw, older half-compressed, summaries
-CONTEXT_GUARD_BYTES = 2 * HISTORY_BUDGET              # one request: history + evidence + system + tools
-RUNNING_REQUEST_BYTES = 2 * CONTEXT_GUARD_BYTES       # a turn in flight also carries its own tool results
+WINDOW_TOKENS = window_tokens(os.getenv("AGENT_MODEL_CONTEXT_WINDOW"))   # the window of a model the catalog does not describe
+HISTORY_BUDGET = budget_for_window(WINDOW_TOKENS)     # bytes of earlier conversation a turn may carry
+BUDGET_KB = HISTORY_BUDGET // KB
+L1_BYTES, L2_BYTES, L3_BYTES = split_budget(HISTORY_BUDGET)   # newest raw, older half-compressed, summary
+CONTEXT_GUARD_BYTES = guard_for_window(WINDOW_TOKENS)         # one request: history + evidence + system + tools
+RUNNING_REQUEST_BYTES = running_bytes_for_window(WINDOW_TOKENS)
 
 ASSISTANT_KEEP_CHARS = 160     # layer 2: how much of an answer is kept
 USER_KEEP_CHARS = 1000         # layer 2: a pasted wall of text must not take the whole layer
 MAX_TOOL_MARKERS = 6           # layer 2: how many tool names of a turn are kept as the referent clues
-MAX_SUMMARY_SEGMENTS = 5       # layer 3: the newest segments that are sent
+MAX_SUMMARY_SEGMENTS = 5       # layer 3: the newest legacy segments that are sent (a rolling summary is one version)
 MEMORY_MARKER = "Earlier conversation (memory"
 MEMORY_NOTE = (MEMORY_MARKER + " of older turns, written by this system and not by the user; it may be "
                "incomplete or wrong, it is not evidence and not something to cite; verified sources come "
-               "only from this turn's tool results):")
+               "only from this turn's tool results. A {turn_id, ordinal} marker on a line says where it came "
+               "from: pass it to read_history_citation to fetch the saved original before relying on it):")
 CATALOGUE_MARKER = "Earlier citations (system-written locator hints"
 CATALOGUE_NOTE = (CATALOGUE_MARKER + "; not evidence and not the user's words. Use read_history_citation(turn_id, ordinal) to retrieve a verified source and cite its new number. answers_back=1 means the answer immediately before this question. A bare [n] defaults to answers_back=1; if that answer lacks it but an earlier answer has it, ask_user to clarify. Retrieve parents before any derived source):")
 
@@ -298,7 +297,9 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
     complete turns before them that no segment covers yet, the newest that fit as text; what does not
     fit is ``overflow``, the turns the next segment has to take over.  Layer 3 is the newest segments
     that fit.  A conversation that fits layer 1 has nothing in the other two."""
-    complete = complete_turns(rows)
+    upto = segments[-1]["upto_sequence"] if segments else 0
+    # A turn a summary version already covers is memory now: it is in no raw layer any more.
+    complete = [g for g in complete_turns(rows) if g[0]["sequence"] > upto]
     entries = {str(g[0].get("turn_id")): turn_catalogue_entry(g) for g in complete}
     recent: list[list[dict]] = []
     # Reserve the fixed prefix in L1 only if at least one directory entry can fit in
@@ -324,10 +325,12 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
         recent.insert(0, group); used += cost
         if entry: recent_catalogue.append({**entry, "answers_back": len(recent)})
     older = complete[:len(complete) - len(recent)]
-    upto = segments[-1]["upto_sequence"] if segments else 0
     turns = [Turn(g[0]["sequence"], g[-1]["sequence"], g[0].get("content") or "", project_turn_history(g)[-1]["content"] if len(project_turn_history(g)) > 1 else "",
                   (), str(g[0].get("turn_id") or ""), entries.get(str(g[0].get("turn_id"))))
-             for g in older if g[0]["sequence"] > upto]
+             for g in older]
+    live = [Turn(g[0]["sequence"], g[-1]["sequence"], g[0].get("content") or "",
+                 project_turn_history(g)[-1]["content"] if len(project_turn_history(g)) > 1 else "",
+                 (), str(g[0].get("turn_id") or ""), entries.get(str(g[0].get("turn_id")))) for g in complete]
     half: list[Turn] = []; used_half = 0
     selected_catalogue = [{**entries[str(g[0].get("turn_id"))], "answers_back": idx}
                           for idx, g in enumerate(reversed(recent), 1)
@@ -359,7 +362,7 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
                         for group in recent for row in group],
             "l1_turns": len(recent), "l1_bytes": used, "half_turns": half, "overflow": overflow,
             "segments": select_segments(segments, l3_bytes), "segments_total": len(segments), "summary_upto": upto,
-            "catalogue": catalogue}
+            "catalogue": catalogue, "budget": l1_bytes + l2_bytes + l3_bytes, "live_turns": live}
 
 
 def _head(text: str, keep: int) -> str:
@@ -399,6 +402,8 @@ def select_half(turns: list[Turn], budget: int) -> tuple[list[Turn], list[Turn]]
 
 def select_segments(segments: list[dict], budget: int, limit: int = MAX_SUMMARY_SEGMENTS) -> list[dict]:
     """The newest segment summaries that fit (oldest first); older ones are no longer worth the room."""
+    if segments and parse_rolling(segments[-1].get("content")) is not None:
+        return [segments[-1]]          # a rolling version already holds everything before it
     chosen: list[dict] = []
     used = 0
     for segment in reversed(segments):
@@ -418,8 +423,12 @@ def summary_message(segments: list[dict]) -> dict | None:
     of a request is what a provider caches as a prefix, and a note that grows a segment every few
     turns would invalidate everything behind it.  It is a user turn because a system turn in the
     middle of the conversation is not portable across providers, and the text says who wrote it."""
-    lines = [f"{index}. {str(segment.get('content', '')).strip()}"
-             for index, segment in enumerate(segments, 1) if str(segment.get("content", "")).strip()]
+    lines = []
+    for index, segment in enumerate(segments, 1):
+        rolling = parse_rolling(segment.get("content"))
+        text = render_rolling(rolling) if rolling is not None else str(segment.get("content", "")).strip()
+        if text:
+            lines.append(f"{index}. {text}")
     if not lines:
         return None
     return {"role": "user", "content": MEMORY_NOTE + "\n" + "\n".join(lines)}
@@ -445,22 +454,75 @@ def history_messages(half_turns: list[Turn]) -> list[dict]:
     return messages
 
 
+ROLLING_VERSION = 2
+ROLLING_LISTS = ("goals", "conclusions", "open", "preferences", "numbers")
+ROLLING_SOURCED = ("conclusions", "numbers")     # items that must carry {turn_id, ordinal}
+
+
+def parse_rolling(content) -> dict | None:
+    """The structured rolling summary stored in a summary row, or None for a legacy free-text segment."""
+    if not isinstance(content, str) or not content.startswith("{"):
+        return None
+    try:
+        value = json.loads(content)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) and value.get("v") == ROLLING_VERSION else None
+
+
+def render_rolling(summary: dict) -> str:
+    """The summary as the note's text.  Every conclusion and number shows its source marker, which
+    ``read_history_citation(turn_id, ordinal)`` takes to fetch the saved original."""
+    titles = {"goals": "目标", "conclusions": "结论与出处", "open": "未办完", "preferences": "偏好", "numbers": "关键数字"}
+    lines = []
+    for key in ROLLING_LISTS:
+        items = summary.get(key) or []
+        parts = []
+        for item in items:
+            if isinstance(item, dict):
+                parts.append(f"{item.get('text', '')} {{turn_id={item.get('turn_id')}, ordinal={item.get('ordinal')}}}")
+            else:
+                parts.append(str(item))
+        if parts:
+            lines.append(f"{titles[key]}: " + "; ".join(parts))
+    return "\n".join(lines)
+
+
+def history_usage(context: dict) -> dict:
+    """How much of the history budget the next turn would spend: the summary note, the raw turns, and
+    every turn not yet summarized at its half-compressed size (the part layer 2 may have to drop)."""
+    note = summary_message(context.get("segments", []))
+    pending = sum(half_size(t) for t in [*context.get("half_turns", []), *context.get("overflow", [])])
+    used = (json_bytes(note) if note else 0) + int(context.get("l1_bytes", 0)) + pending
+    budget = int(context.get("budget") or HISTORY_BUDGET)
+    return {"bytes": used, "budget": budget, "fraction": used / budget if budget else 0.0}
+
+
+def should_compact(context: dict) -> bool:
+    return history_usage(context)["fraction"] >= COMPACT_AT
+
+
 def usage_report(*, system_bytes: int, tools_bytes: int, summary_bytes: int, summary_segments: int,
                  half_bytes: int, half_turns: int, recent_bytes: int, recent_turns: int,
-                 hidden_turns: int) -> dict:
+                 hidden_turns: int, budget_bytes: int | None = None) -> dict:
     """The numbers of the context card.  "Remaining" is the room left in this product's history
     budget; it is not the window of whatever model the user chose (that is not known here)."""
+    budget_bytes = int(budget_bytes or HISTORY_BUDGET)
     fixed = system_bytes + tools_bytes
     history = summary_bytes + half_bytes + recent_bytes
-    capacity = fixed + HISTORY_BUDGET
-    remaining = max(0, HISTORY_BUDGET - history)
+    capacity = fixed + budget_bytes
+    remaining = max(0, budget_bytes - history)
+    used_fraction = history / budget_bytes if budget_bytes else 0.0
 
     def part(key: str, size: int, **extra) -> dict:
         return {"key": key, "bytes": size, "tokens": estimate_tokens(size), **extra}
 
     return {
-        "budget_kb": BUDGET_KB,
-        "budget_bytes": HISTORY_BUDGET,
+        "budget_kb": budget_bytes // KB,
+        "budget_bytes": budget_bytes,
+        "compact_at_percent": round(100 * COMPACT_AT),
+        "history_used_percent": round(100 * used_fraction),
+        "will_compact": used_fraction >= COMPACT_AT,
         "capacity_bytes": capacity,
         "used_bytes": fixed + history,
         "remaining_bytes": remaining,

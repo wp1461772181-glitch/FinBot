@@ -18,8 +18,12 @@ async def read_history_citation(args: dict, context) -> dict:
                        isinstance(s, dict) and not isinstance(s.get("ordinal"), bool)
                        and type(s.get("ordinal")) is int and s.get("ordinal") == ordinal
                        for s in x.get("sources", []) if isinstance(x.get("sources", []), (list, tuple)))), None)
-    if allowed is None: return _failure("history_citation_not_found")
-    from ..agent_chat_store import load_turn_citation
+    from ..agent_chat_store import citation_remembered, load_turn_citation
+    # A turn that a rolling summary has folded away is out of the catalogue, but the summary's own
+    # {turn_id, ordinal} marker (or recall's hit on its text) is a legitimate way back to the saved source.
+    if allowed is None and not await citation_remembered(context.conversation_id, context.identity_credential,
+                                                         turn_id, ordinal):
+        return _failure("history_citation_not_found")
     found = await load_turn_citation(context.conversation_id, context.identity_credential, turn_id, ordinal)
     if not found.get("ok"): return _failure(found.get("error_code", "history_citation_not_found"))
     citation = found["citation"]

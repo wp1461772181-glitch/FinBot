@@ -16,6 +16,7 @@ models:
     provider: deepseek               # deepseek | kimi | minimax | qwen | zhipu | doubao | hunyuan | baidu | siliconflow | openrouter | custom
     model: deepseek-chat
     key_env: DEEPSEEK_API_KEY
+    # context_window: 128000          # tokens; optional, default 128000.  The conversation history budget is half of it.
 
   - name: qwen-plus
     display_name: 通义千问 Plus

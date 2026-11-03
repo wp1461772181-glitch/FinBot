@@ -694,11 +694,15 @@ class Turn:
                 if attempt or getattr(exc,'detail',None) not in RETRYABLE_PROVIDER:raise
                 self.audit['provider_retries']=self.audit.get('provider_retries',0)+1
 
+    def _running_bytes(self):
+        window=getattr(self.context,'context_window',0)
+        return layers.running_bytes_for_window(window) if window else layers.RUNNING_REQUEST_BYTES
+
     async def model(self,messages,tool_schemas,*,protocol_retries=1):
         # The same knob as the door: a request that was accepted may grow by the tool results this
         # turn itself produces, and nothing more.
         size=len(json.dumps(messages,ensure_ascii=False).encode())+len(json.dumps(tool_schemas).encode())
-        if size>layers.RUNNING_REQUEST_BYTES:raise ValueError('chat_context_too_large')
+        if size>self._running_bytes():raise ValueError('chat_context_too_large')
         for attempt in range(protocol_retries+1):
             cap=getattr(self.context,'token_budget',None)
             if isinstance(cap,int) and cap>0 and self.audit['token_usage']>=cap*TASK_HARD_CAP_FACTOR:raise ValueError('task_token_cap')
@@ -1250,7 +1254,7 @@ class Turn:
         if len(starts)>6:self.protocol=self.protocol[starts[-6]:]
         # Half the running-request guard: two full-size tool results (TOOL_RESULT_BYTES) stay side by side.
         # shortcut: a turn already carrying a full history can still pass the guard; trim by measured room if that shows up.
-        while len(json.dumps(self.protocol,ensure_ascii=False).encode())>layers.RUNNING_REQUEST_BYTES//2:
+        while len(json.dumps(self.protocol,ensure_ascii=False).encode())>self._running_bytes()//2:
             starts=[i for i,m in enumerate(self.protocol) if m.get('role')=='assistant']
             if len(starts)<2:
                 # Single-batch fallback: compact oversized tool payloads so a multi-symbol batch never overflows RUNNING_REQUEST_BYTES.

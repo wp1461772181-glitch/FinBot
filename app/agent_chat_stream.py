@@ -374,7 +374,7 @@ def _catalog_turn(name,credential):
  except catalog.CatalogError as exc:raise HTTPException(409,str(exc)) from None
 class _Model:
  """The provider settings of one turn, from the browser or from the catalog.  Its repr has no key."""
- def __init__(self,provider,model,api_key,base_url):self.provider=provider;self.model=model;self.base_url=base_url;self._key=api_key
+ def __init__(self,provider,model,api_key,base_url,window=None):self.provider=provider;self.model=model;self.base_url=base_url;self._key=api_key;self.window=window or layers.WINDOW_TOKENS
  def key(self):return self._key
  def __repr__(self):return f"_Model({self.provider!r}, {self.model!r})"
 @router.post("/stream")
@@ -383,11 +383,11 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
  bot=None
  if payload.bot_id:
   bot,resolved=await asyncio.to_thread(_bot_turn,payload,x_chat_session)
-  chosen=_Model(resolved["provider"],resolved["model"],resolved["api_key"],resolved["base_url"])
+  chosen=_Model(resolved["provider"],resolved["model"],resolved["api_key"],resolved["base_url"],resolved.get("context_window"))
   payload.conversation_id=bot["conversation_id"]
  elif payload.catalog_model is not None:
   resolved=await asyncio.to_thread(_catalog_turn,payload.catalog_model,x_chat_session)
-  chosen=_Model(resolved["provider"],resolved["model"],resolved["api_key"],resolved["base_url"])
+  chosen=_Model(resolved["provider"],resolved["model"],resolved["api_key"],resolved["base_url"],resolved.get("context_window"))
  else:
   if payload.api_key is None or len(payload.api_key.get_secret_value())<8: raise HTTPException(422,"invalid_agent_chat_request")
   chosen=_Model(payload.provider,payload.model,payload.api_key.get_secret_value(),payload.base_url)
@@ -429,7 +429,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    # the user saw on the button.
    shown=payload.display_message.strip() if payload.pending_request_id and payload.display_message else ""
    await append_message(cid,turn,"user",shown or payload.message)
-   context=await conversation_context(cid,x_chat_session) or {}
+   context=await conversation_context(cid,x_chat_session,window=chosen.window) or {}
    history_rows=context.get("l1_rows",[])
    messages=[{"role":"system","content":SYSTEM}]
    # Older turns come first (layer 2), then the newest raw turns (layer 1).  The layer-3 note goes
@@ -444,7 +444,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    if memory_note:messages.append(memory_note)
    catalogue=layers.render_citation_catalogue(context.get("catalogue",[]))
    if catalogue:messages.append(catalogue)
-   if _protocol_size({"messages":messages,"tools":tool_schemas()})>layers.CONTEXT_GUARD_BYTES:raise HTTPException(413,"chat_context_too_large")
+   if _protocol_size({"messages":messages,"tools":tool_schemas()})>layers.guard_for_window(chosen.window):raise HTTPException(413,"chat_context_too_large")
    from .agent_workflow.semantic import hydrate_legacy_web_sets, legacy_web_source_choices
    legacy_result_sets=hydrate_legacy_web_sets(history_rows,owner=owner_hash(x_chat_session),conversation=cid)
    legacy_source_choices=legacy_web_source_choices(history_rows)
@@ -453,7 +453,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      api_key=chosen.key(),base_url=chosen.base_url,owner_hash=owner_hash(x_chat_session),
      conversation_id=cid,identity_credential=x_chat_session,turn_id=turn,pending_request_id=payload.pending_request_id,
      legacy_result_sets=legacy_result_sets,legacy_source_choices=legacy_source_choices,
-     history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot):
+     history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window):
     kind=event.get("event")
     if kind=="assistant_tool_request":
      await append_message(cid,turn,"assistant","",tool_calls=event["protocol"])
@@ -513,7 +513,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
       except Exception:pass
      from .agent_context_summary import schedule_summary
      schedule_summary(cid,x_chat_session,provider=chosen.provider,model=chosen.model,
-                      api_key=chosen.key(),base_url=chosen.base_url)
+                      api_key=chosen.key(),base_url=chosen.base_url,window=chosen.window)
      if _is_owner(x_chat_session) and not payload.pending_request_id:
       from .agent_profile_extract import schedule_extraction
       schedule_extraction(owner_hash(x_chat_session),payload.message,conversation_id=cid,turn_id=turn,
@@ -550,7 +550,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    release_resources()
  return _ResourceStreamingResponse(events(),media_type="text/event-stream",headers={"Cache-Control":"no-store","X-Accel-Buffering":"no"},background=BackgroundTask(release_resources),cleanup=release_resources)
 
-def _context_report(context: dict | None) -> dict:
+def _context_report(context: dict | None, window: int | None = None) -> dict:
     """The numbers of the context card: what the next turn of a conversation carries, by part.  The
     fixed part is the system prompt and the tool definitions; the rest is the history, by layer."""
     context = context or {}
@@ -577,19 +577,32 @@ def _context_report(context: dict | None) -> dict:
         recent_bytes=int(context.get("l1_bytes", 0)),
         recent_turns=int(context.get("l1_turns", 0)),
         hidden_turns=len(context.get("overflow", [])),
+        budget_bytes=int(context.get("budget") or layers.budget_for_window(window or layers.WINDOW_TOKENS)),
     )
 
+def _window_of_bot(credential:str,bot_id:str|None)->int:
+ """The window of the model a bot's line is read by (default window when there is no bot)."""
+ if not bot_id or not _is_owner(credential):return layers.WINDOW_TOKENS
+ from . import agent_bots as bots
+ from . import agent_model_catalog as catalog
+ try:
+  settings=bots.turn_settings(owner_hash(credential),bot_id)
+  return catalog.window_for(settings["model"]) if settings else layers.WINDOW_TOKENS
+ except Exception:return layers.WINDOW_TOKENS
+
 @router.get("/context")
-async def get_empty_context():
+async def get_empty_context(bot_id:str|None=Query(default=None),x_chat_session:str|None=Header(default=None)):
     """The context of a conversation that has not started: only the fixed part."""
-    return _context_report(None)
+    window=await asyncio.to_thread(_window_of_bot,x_chat_session or "",bot_id)
+    return _context_report(None,window)
 
 @router.get("/conversations/{conversation_id}/context")
-async def get_conversation_context(conversation_id:str,x_chat_session:str|None=Header(default=None)):
+async def get_conversation_context(conversation_id:str,bot_id:str|None=Query(default=None),x_chat_session:str|None=Header(default=None)):
  if not x_chat_session:raise HTTPException(404,"conversation_not_found")
- context=await conversation_context(conversation_id,x_chat_session)
+ window=await asyncio.to_thread(_window_of_bot,x_chat_session,bot_id)
+ context=await conversation_context(conversation_id,x_chat_session,window=window)
  if context is None:raise HTTPException(404,"conversation_not_found")
- return _context_report(context)
+ return _context_report(context,window)
 
 @router.get("/conversations/{conversation_id}/messages")
 async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge=1),
@@ -671,7 +684,58 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
     # An ask/clarify card is answered by the next message in the conversation.
     status="complete" if position<len(messages)-1 else "running"
    for trace in pending: trace["status"]=status;trace["card"]=True
- return {"messages":messages,"has_more":page["has_more"],"next_before":page["next_before"]}
+ return {"messages":messages,"has_more":page["has_more"],"next_before":page["next_before"],"compactions":page.get("compactions",[])}
+
+
+class CompactBody(BaseModel):
+    focus: str | None = Field(default=None, max_length=400)
+    bot_id: str | None = Field(default=None, max_length=64)
+
+
+COMPACT_REASONS = {"nothing_to_compact": "没有可压缩的旧轮次。", "no_conversation": "还没有对话可压缩。"}
+
+
+def compact_message(result: dict) -> str:
+    """The line shown (web notice, Telegram reply) for the outcome of a compression."""
+    if result.get("compacted"):
+        return f"已压缩 {result['compacted']} 轮"
+    if result.get("error"):
+        return "这次压缩没有成功（模型的摘要未通过校验），原有摘要保持不变。"
+    return COMPACT_REASONS.get(result.get("reason"), "没有可压缩的内容。")
+
+
+async def _compact_now(conversation_id:str,credential:str,resolved:dict,focus:str)->dict:
+ from . import agent_context_summary as summary
+ try:
+  result=await summary.compact_conversation(conversation_id,credential,provider=resolved["provider"],model=resolved["model"],
+      api_key=resolved["api_key"],base_url=resolved["base_url"],window=resolved.get("context_window"),
+      focus=focus or "",manual=True)
+ except asyncio.CancelledError:raise
+ except Exception as exc:
+  raise HTTPException(502,"compact_failed") from exc
+ return {**result,"message":compact_message(result)}
+
+@router.post("/conversations/{conversation_id}/compact")
+async def compact_conversation_endpoint(conversation_id:str,body:CompactBody,x_chat_session:str|None=Header(default=None)):
+ """Compress now (the 「/压缩」 command and the context card's button).  Owner only: it spends the model's quota.
+ ``bot_id`` names the bot whose line this is, so its own model and window are used."""
+ if not x_chat_session or len(x_chat_session)<32 or len(x_chat_session)>256:raise HTTPException(401,"chat_session_required")
+ if not await verify_conversation(conversation_id,x_chat_session):raise HTTPException(404,"conversation_not_found")
+ if body.bot_id:
+  class _Payload:bot_id=body.bot_id;conversation_id=None
+  settings,resolved=await asyncio.to_thread(_bot_turn,_Payload,x_chat_session)
+  if settings["conversation_id"]!=conversation_id:raise HTTPException(409,"bot_conversation_mismatch")
+ else:resolved=await asyncio.to_thread(_catalog_turn,None,x_chat_session)
+ return await _compact_now(conversation_id,x_chat_session,resolved,body.focus or "")
+
+@router.post("/bots/{bot_id}/compact")
+async def compact_bot_line_endpoint(bot_id:str,body:CompactBody,x_chat_session:str|None=Header(default=None)):
+ """The same for a bot's line, found by the bot (Telegram has no conversation id at hand)."""
+ if not x_chat_session or len(x_chat_session)<32 or len(x_chat_session)>256:raise HTTPException(401,"chat_session_required")
+ class _Payload:conversation_id=None
+ _Payload.bot_id=bot_id
+ settings,resolved=await asyncio.to_thread(_bot_turn,_Payload,x_chat_session)
+ return await _compact_now(settings["conversation_id"],x_chat_session,resolved,body.focus or "")
 
 
 class ResearchQueueBody(BaseModel):

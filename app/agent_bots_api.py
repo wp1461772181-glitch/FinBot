@@ -58,6 +58,7 @@ class ModelEntryBody(BaseModel):
     api_key: SecretStr | None = None
     key_env: str | None = Field(default=None, max_length=64)
     is_default: bool | None = None
+    context_window: int | None = Field(default=None, ge=4_000, le=10_000_000)
 
 
 class ModelProbeBody(BaseModel):
@@ -165,7 +166,7 @@ async def model_catalog_endpoint(x_chat_session: str | None = Header(default=Non
 def _save(name: str, body: ModelEntryBody, create: bool) -> dict:
     return catalog.save_entry(name, display_name=body.display_name, provider=body.provider, model=body.model,
                               base_url=body.base_url, key_env=body.key_env, is_default=body.is_default,
-                              api_key=body.api_key.get_secret_value() if body.api_key else None, create=create)
+                              context_window=body.context_window, api_key=body.api_key.get_secret_value() if body.api_key else None, create=create)
 
 
 @router.post("/model-catalog")

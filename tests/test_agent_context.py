@@ -112,31 +112,23 @@ def test_half_compressed_turn_keeps_late_marker_and_catalogue_costs_budget():
     assert l1["l1_turns"]==0 and len(l1["half_turns"])==1
 
 
-# --- the knob and what it sets ----------------------------------------------------------------------
-
-@pytest.mark.parametrize("raw, expected", [(None, 64), ("", 64), ("abc", 64), ("64", 64), ("32", 32),
-                                           ("8", 16), ("0", 16), ("500", 128), ("-5", 16), (" 96 ", 96)])
-def test_the_budget_knob_is_clamped_and_unreadable_values_are_the_default(raw, expected):
-    assert layers.parse_budget_kb(raw) == expected
-
+# --- the window and what it sets ---------------------------------------------------------------------
 
 def test_the_layers_and_guards_follow_one_budget():
-    assert layers.HISTORY_BUDGET == layers.BUDGET_KB * 1024
-    assert layers.L1_BYTES + layers.L2_BYTES + layers.L3_BYTES <= layers.HISTORY_BUDGET
-    assert layers.CONTEXT_GUARD_BYTES == 2 * layers.HISTORY_BUDGET
-    # the three layers spend exactly the budget, newest first
+    assert layers.HISTORY_BUDGET == layers.budget_for_window(layers.WINDOW_TOKENS)
+    assert layers.BUDGET_KB == layers.HISTORY_BUDGET // 1024
     assert layers.L1_BYTES + layers.L2_BYTES + layers.L3_BYTES == layers.HISTORY_BUDGET
     assert layers.L1_BYTES > layers.L2_BYTES > layers.L3_BYTES > 0
-    # the budget comes from the window, and the knob can only lower it
-    assert layers.BUDGET_KB <= layers.derive_history_budget(layers.WINDOW_TOKENS) // 1024
+    assert layers.CONTEXT_GUARD_BYTES == layers.guard_for_window(layers.WINDOW_TOKENS) > layers.HISTORY_BUDGET
+    assert layers.RUNNING_REQUEST_BYTES >= layers.CONTEXT_GUARD_BYTES
     assert layers.startup_self_check()["budget_kb"] == layers.BUDGET_KB
 
 
-def test_a_smaller_window_tightens_the_budget_by_itself(monkeypatch):
-    big, small = layers.derive_history_budget(128_000), layers.derive_history_budget(16_000)
+def test_a_smaller_window_tightens_the_budget_by_itself():
+    big, small = layers.budget_for_window(128_000), layers.budget_for_window(16_000)
     assert big > small >= layers.BUDGET_KB_MIN * 1024
-    assert layers.parse_budget_kb("64", ceiling=small // 1024) == small // 1024
-    assert layers.parse_budget_kb("64", ceiling=big // 1024) == 64
+    assert layers.budget_for_window(1_000) == layers.BUDGET_KB_MIN * 1024        # the floor
+    assert layers.guard_for_window(16_000) < layers.guard_for_window(128_000)
 
 
 # --- rendering and selection -------------------------------------------------------------------------
@@ -206,7 +198,7 @@ def test_the_usage_report_adds_up_and_says_when_it_is_compressing():
                                 recent_bytes=0, recent_turns=0, hidden_turns=0)
     assert empty["remaining_bytes"] == layers.HISTORY_BUDGET and empty["compressing"] is False
     assert empty["capacity_bytes"] == 7000 + layers.HISTORY_BUDGET and empty["used_bytes"] == 7000
-    assert 85 <= empty["remaining_percent"] <= 95
+    assert 85 <= empty["remaining_percent"] <= 99
     busy = layers.usage_report(**fixed, summary_bytes=3000, summary_segments=2, half_bytes=10_000, half_turns=7,
                                recent_bytes=20_000, recent_turns=4, hidden_turns=0)
     parts = {p["key"]: p for p in busy["parts"]}
@@ -362,7 +354,7 @@ def test_the_request_guard_is_the_budget_not_a_fixed_forty_kilobytes(stream_fixt
     monkeypatch.setattr(stream, "conversation_context", big)
     wire = asyncio.run(send("Explain prime numbers"))
     assert "chat_context_too_large" not in wire and "event: done" in wire
-    monkeypatch.setattr(layers, "CONTEXT_GUARD_BYTES", 40_000)                    # the old guard
+    monkeypatch.setattr(layers, "guard_for_window", lambda window: 40_000)       # the old guard
     refused = asyncio.run(send("Explain prime numbers"))
     assert "event: error" in refused and "chat_context_too_large" in refused and "event: done" not in refused
 

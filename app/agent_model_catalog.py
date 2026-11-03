@@ -34,6 +34,7 @@ MODEL = re.compile(r"^[A-Za-z0-9._:/-]{1,160}$")
 # Secrets of the server itself; an entry naming one would hand it to a model endpoint.
 FORBIDDEN_ENV = {"APP_API_ACCESS_KEY", "MODEL_CREDENTIAL_KEY", "TELEGRAM_BOT_API_KEY"}
 MAX_ENTRIES = 40
+WINDOW_MIN, WINDOW_MAX = 4_000, 10_000_000
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -55,6 +56,32 @@ def _endpoint(provider: str, base_url: str | None) -> str | None:
     if provider == "custom" and not value:
         raise CatalogError("invalid_endpoint")
     return value
+
+
+def clean_window(value) -> int | None:
+    """A context window in tokens, or None when none was given.  Raises CatalogError(invalid_window)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not WINDOW_MIN <= value <= WINDOW_MAX:
+        raise CatalogError("invalid_window")
+    return value
+
+
+def window_of(entry: dict) -> int:
+    from .agent_context import DEFAULT_WINDOW_TOKENS
+    return entry.get("context_window") or DEFAULT_WINDOW_TOKENS
+
+
+def window_for(name: str | None) -> int:
+    """The window of catalog entry ``name`` (None: the default entry); the default window when unknown.
+    No key is read."""
+    from .agent_context import DEFAULT_WINDOW_TOKENS
+    try:
+        listed, default = entries()
+    except Exception:
+        return DEFAULT_WINDOW_TOKENS
+    wanted = name or default
+    return next((window_of(item) for item in listed if item["name"] == wanted), DEFAULT_WINDOW_TOKENS)
 
 
 def config_path() -> Path:
@@ -104,7 +131,7 @@ def _read_file() -> tuple[list[dict], str | None, list[str]]:
                             "provider": provider, "model": model,
                             "base_url": _endpoint(provider, item.get("base_url")),
                             "key_source": "env", "key_env": key_env, "ciphertext": None, "origin": "file",
-                            "is_default": False})
+                            "is_default": False, "context_window": clean_window(item.get("context_window"))})
             seen.add(name)
         except CatalogError as exc:
             problems.append(f"{path.name} entry {position}: {exc}")
@@ -117,7 +144,7 @@ def _row_entry(row: AgentModelEntry) -> dict:
     return {"name": row.name, "display_name": row.display_name, "provider": row.provider, "model": row.model,
             "base_url": row.base_url, "key_source": row.key_source, "key_env": row.key_env,
             "ciphertext": row.ciphertext, "origin": "server", "is_default": bool(row.is_default),
-            "migrated_from": row.migrated_from}
+            "migrated_from": row.migrated_from, "context_window": row.context_window}
 
 
 def entries() -> tuple[list[dict], str | None]:
@@ -166,7 +193,8 @@ def public(entry: dict, default: str | None = None) -> dict:
             "model": entry["model"], "base_url": entry["base_url"], "origin": entry["origin"],
             "key_source": entry["key_source"], "key_env": entry.get("key_env"),
             "key_status": _key_status(entry), "is_default": entry["name"] == default,
-            "migrated": bool(entry.get("migrated_from"))}
+            "migrated": bool(entry.get("migrated_from")), "context_window": window_of(entry),
+            "context_window_set": bool(entry.get("context_window"))}
 
 
 def list_public() -> dict:
@@ -195,7 +223,7 @@ def resolve(name: str | None) -> dict:
     if key is None:
         raise CatalogError("model_key_missing")
     return {"name": entry["name"], "provider": entry["provider"], "model": entry["model"],
-            "base_url": entry["base_url"], "api_key": key}
+            "base_url": entry["base_url"], "api_key": key, "context_window": window_of(entry)}
 
 
 def probe_key(*, provider: str, base_url: str | None, api_key: str | None = None, key_env: str | None = None,
@@ -239,7 +267,7 @@ def _clean_key(api_key: str | None) -> str | None:
 
 def save_entry(name: str, *, display_name: str | None = None, provider: str | None = None, model: str | None = None,
                base_url: str | None = None, api_key: str | None = None, key_env: str | None = None,
-               is_default: bool | None = None, create: bool = False) -> dict:
+               is_default: bool | None = None, create: bool = False, context_window: int | None = None) -> dict:
     """Add (``create``) or change an owner entry.  The key comes as ``api_key`` (stored in the vault) or
     ``key_env`` (an environment variable name); a new provider or endpoint needs one of them again."""
     if not NAME.fullmatch(name or ""):
@@ -251,6 +279,7 @@ def save_entry(name: str, *, display_name: str | None = None, provider: str | No
         raise CatalogError("invalid_key_env")
     if api_key and key_env:
         raise CatalogError("one_key_source")
+    context_window = clean_window(context_window)
     with SessionLocal() as db:
         row = db.get(AgentModelEntry, name, with_for_update=True)
         if create and row is not None:
@@ -275,6 +304,8 @@ def save_entry(name: str, *, display_name: str | None = None, provider: str | No
             db.add(row)
         row.display_name = (display_name or row.display_name or name).strip()[:80] or name
         row.provider, row.model, row.base_url = provider, model, endpoint
+        if context_window is not None:
+            row.context_window = context_window
         if api_key:
             try:
                 row.ciphertext = encrypt_secret(api_key)
@@ -421,3 +452,11 @@ def startup_report() -> list[str]:
 def log_startup_report() -> None:
     for line in startup_report():
         logger.info(line)
+
+
+def ensure_window_column() -> None:
+    """Add the window column to an existing catalog table (a fresh database gets it from the model)."""
+    from sqlalchemy import text
+    from .database import engine
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE agent_model_catalog ADD COLUMN IF NOT EXISTS context_window INTEGER"))

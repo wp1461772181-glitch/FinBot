@@ -253,6 +253,8 @@ class AgentModelEntry(Base):
     ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     migrated_from: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # The model's context window in tokens; NULL means the default (128k).  The history budget follows it.
+    context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

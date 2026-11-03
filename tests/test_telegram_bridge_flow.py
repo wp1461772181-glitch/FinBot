@@ -331,3 +331,33 @@ def test_api_down_replies_quickly(monkeypatch):
     asyncio.run(go())
     assert __import__("time").monotonic() - started < 5
     assert wire.sends[-1][1] == bridge.BACKEND_DOWN_TEXT
+
+
+def test_the_compress_command_compacts_the_bots_line_and_is_not_sent_to_the_model(monkeypatch):
+    """「/压缩 重点」 (Task 15): the focus reaches the compact endpoint, the reply says what was done, and no model
+    turn runs.  Telegram does not make 「/压缩」 a bot_command entity, but 「/compact」 is one and must not be eaten."""
+    sent = _record_sends(monkeypatch)
+    asked, posted = [], []
+
+    async def ask_agent(client, credential, bot_id, text):
+        asked.append(text)
+        return "x", [], "c"
+
+    class Client:
+        async def post(self, url, json=None, headers=None, timeout=None):
+            posted.append((url, json))
+            return httpx.Response(200, json={"compacted": 7, "message": "已压缩 7 轮"})
+
+    monkeypatch.setattr(bridge, "_ask_agent", ask_agent)
+    telegram = _Telegram()
+    plain = {"chat": {"id": OWNER_ID, "type": "private"}, "from": {"id": OWNER_ID}, "text": "/压缩 重点保留 Intel 的分析"}
+    asyncio.run(bridge._handle_message(Client(), "cred", "owner", plain, OWNER_ID, OWNER_ID, {}, telegram))
+    assert asked == [] and posted[-1][0].endswith("/agent-chat/bots/b-default/compact")
+    assert posted[-1][1] == {"focus": "重点保留 Intel 的分析"}
+    assert sent[-1][2] == "【助理】\n已压缩 7 轮"
+    entity = _command(OWNER_ID, "private", OWNER_ID, "/compact")
+    asyncio.run(bridge._handle_message(Client(), "cred", "owner", entity, OWNER_ID, OWNER_ID, {}, telegram))
+    assert asked == [] and posted[-1][1] == {"focus": ""} and len(posted) == 2
+    other = _command(OWNER_ID, "private", OWNER_ID, "/help")
+    asyncio.run(bridge._handle_message(Client(), "cred", "owner", other, OWNER_ID, OWNER_ID, {}, telegram))
+    assert len(posted) == 2                                                      # other commands are still ignored

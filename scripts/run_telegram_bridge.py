@@ -346,7 +346,8 @@ async def _handle_message(client, credential: str, owner: str, message: dict,
         return
     if not _from_owner(chat, message.get("from"), bound_chat, bound_user):
         return
-    if bot_cmd:
+    from app.agent_context_summary import parse_compact_command
+    if bot_cmd and not parse_compact_command(text)[0]:
         if binding:
             await _handle_bind_command(client, chat, message.get("from"), owner, text[len(bot_cmd):].strip(), tg)
         return
@@ -381,8 +382,31 @@ async def _handle_message(client, credential: str, owner: str, message: dict,
     target = await asyncio.to_thread(tg.route, owner, text, reply_to if isinstance(reply_to, int) else None)
     if not target["text"]:
         return
+    compact, focus = parse_compact_command(target["text"])
+    if compact:
+        await _compact_command(client, credential, owner, bound_chat, tg, target["bot_id"], target["bot_name"], focus)
+        return
     await _run_turn(client, credential, owner, bound_chat, pending_cards, tg, target["bot_id"], target["bot_name"],
                     target["text"])
+
+
+async def _compact_command(client, credential: str, owner: str, chat_id: int, tg, bot_id: str, bot_name: str,
+                           focus: str, channel: dict | None = None) -> None:
+    """「/压缩 [重点]」: compress this bot's line now and say what happened (the web shows the same line)."""
+    import httpx
+    bot_token = channel["token"] if channel else _bot_token_for_send(owner, tg)
+    try:
+        response = await client.post(f"{LOCAL_API}/agent-chat/bots/{bot_id}/compact", json={"focus": focus},
+                                     headers={"X-Chat-Session": credential},
+                                     timeout=httpx.Timeout(180, connect=CONNECT_TIMEOUT))
+        if response.status_code == 200:
+            text = str(response.json().get("message") or "完成。")
+        else:
+            text = "这次压缩没有成功，稍后再试。"
+    except Exception:  # noqa: BLE001 - the chat gets a plain sentence, never a traceback
+        text = BACKEND_DOWN_TEXT
+    prefix = "" if channel else f"【{bot_name}】\n"
+    await _send_text(client, bot_token, chat_id, prefix + text, markdown=False)
 
 
 async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pending_cards: dict, tg,
@@ -891,6 +915,12 @@ async def _handle_own_message(client, credential: str, owner: str, message: dict
             await _handle_own_bind(client, chat, message.get("from"), channel, text[len(command):].strip())
         return
     if channel["chat_id"] is None or not _from_owner(chat, message.get("from"), channel["chat_id"], channel["user_id"]):
+        return
+    from app.agent_context_summary import parse_compact_command
+    compact, focus = parse_compact_command(text)
+    if compact:
+        await _compact_command(client, credential, owner, channel["chat_id"], tg, channel["bot_id"], channel["bot_name"],
+                               focus, channel=channel)
         return
     if command or not text:
         return
