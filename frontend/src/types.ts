@@ -360,7 +360,7 @@ export type V2ForecastJob = {
 };
 
 export type V2Probabilities = Record<"bearish" | "neutral" | "bullish", number>;
-export type V2ModelStatus = "research_only" | "baseline_only" | "experimental_joint" | "experimental_jev";
+export type V2ModelStatus = "research_only" | "baseline_only" | "experimental_joint" | "experimental_jev" | "experimental_llm";
 export type ResearchEvidencePointer = { analysis_id: string; section: "facts" | "supporting" | "counter" | "uncertainties"; item_id: string };
 export type ResearchMaterialKeyNumber = {
   name: string;
@@ -558,6 +558,8 @@ export type V2ModelEvaluationCohort = {
   provider: string;
   actual_model: string;
   question_version: string | null;
+  /** true: the hidden Jev control that runs next to every model forecast (never in the forecast list). */
+  control?: boolean;
   log_loss_zero_probability_floor: number | null;
   status: "pending" | "insufficient_samples" | "available";
   sample: Pick<V2EvaluationCohort["sample"], "root_denominator" | "labelled_root_count" | "scored_root_count" | "unscored_root_count">;
@@ -626,6 +628,6 @@ export type V2Workspace = {
     "id" | "version_no" | "decision_at" | "market_cutoff_at" | "model_status" | "baseline_probabilities" | "joint_probabilities" | "decision_probabilities" | "research_brief"
   > | null;
   pending_job_count: number;
-  joint_model_status: "unavailable" | "research_only" | "experimental_joint" | "experimental_jev";
+  joint_model_status: "unavailable" | "research_only" | "experimental_joint" | "experimental_jev" | "experimental_llm";
   monitor_status: "not_recorded";
 };

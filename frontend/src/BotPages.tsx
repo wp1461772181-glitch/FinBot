@@ -374,26 +374,27 @@ const DISCOVERY_ERRORS: Record<string, string> = { model_discovery_auth_required
   model_discovery_rate_limited: "模型目录请求被限流，请稍后重试。", model_discovery_timeout: "获取模型列表超时，请稍后重试。" };
 
 
-/** 财报判断模型: the catalog model that reads earnings releases (agent_model_roles, role "earnings"); empty = the server default. */
-function EarningsModelSelect({ catalog }: { catalog: ModelCatalog }) {
+/** A model role (agent_model_roles): the catalog model that does one job; empty = the server default.
+ *  earnings = 财报判断模型 (reads earnings releases); forecast = 预测模型 (gives the direction probabilities). */
+function RoleModelSelect({ catalog, role, label, hint }: { catalog: ModelCatalog; role: "earnings" | "forecast"; label: string; hint: string }) {
   const { t } = useLocale();
   const [chosen, setChosen] = useState<string>(""), [busy, setBusy] = useState(false), [note, setNote] = useState("");
   useEffect(() => {
     const controller = new AbortController();
-    getModelRoles(controller.signal).then(r => { if (!controller.signal.aborted) setChosen(r.roles.earnings ?? ""); }).catch(() => {});
+    getModelRoles(controller.signal).then(r => { if (!controller.signal.aborted) setChosen(r.roles[role] ?? ""); }).catch(() => {});
     return () => controller.abort();
-  }, []);
+  }, [role]);
   const known = chosen === "" || catalog.models.some(m => m.name === chosen);
   async function change(value: string) {
     setBusy(true); setNote("");
-    try { await setModelRole("earnings", value || null); setChosen(value); setNote(t("已保存。")); } catch (err) { setNote(message(err, t("保存失败。"))); } finally { setBusy(false); }
+    try { await setModelRole(role, value || null); setChosen(value); setNote(t("已保存。")); } catch (err) { setNote(message(err, t("保存失败。"))); } finally { setBusy(false); }
   }
-  return <label className="earnings-model-select">{t("财报判断模型")}
+  return <label className="earnings-model-select">{t(label)}
     <select disabled={busy} value={known ? chosen : ""} onChange={e => void change(e.target.value)}>
       <option value="">{t("服务器默认模型")}{catalog.default ? ` (${catalog.default})` : ""}</option>
       {catalog.models.map(m => <option key={m.name} value={m.name}>{m.display_name || m.name}</option>)}
     </select>
-    <small>{t("读财报、判断涨跌用的模型；不选就用服务器默认模型。")}</small>{note && <small role="status">{note}</small>}
+    <small>{t(hint)}</small>{note && <small role="status">{note}</small>}
   </label>;
 }
 
@@ -515,7 +516,8 @@ export function ModelCatalogCard() {
       <button type="button" disabled={busy} className="profile-card profile-add" onClick={() => open(blankEntry(taken))}><strong>{t("＋ 添加模型")}</strong><small>{t("添加一个已兼容的服务配置")}</small></button>
     </div>}
     {catalog && !catalog.models.length && <small>{t("目录是空的：先添加一个模型，bot 才能回答。")}</small>}
-    {catalog && catalog.models.length > 0 && <EarningsModelSelect catalog={catalog} />}
+    {catalog && catalog.models.length > 0 && <RoleModelSelect catalog={catalog} role="earnings" label="财报判断模型" hint="读财报、判断涨跌用的模型；不选就用服务器默认模型。" />}
+    {catalog && catalog.models.length > 0 && <RoleModelSelect catalog={catalog} role="forecast" label="预测模型" hint="给出 20 个交易日涨/平/跌概率的模型，建议选推理模型；不选就用服务器默认模型。Jev 会同时作为隐藏对照运行。" />}
     {status && <p role="status">{status}</p>}
     {entry && <div className="profile-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) close(); }}>
       <section ref={modal} className="profile-modal" role="dialog" aria-modal="true" aria-labelledby="catalog-entry-title">

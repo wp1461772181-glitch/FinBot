@@ -5,7 +5,7 @@ import { botFromHash } from "./bot-items.mjs";
 import { Tx, formatDateTime as formatLocalizedDateTime, getLocalePreference, translatePhrase, useLocale } from "./i18n";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError, markBotRead, type Bot, getFilingInventory, getJevLearningStatus, getMaterialLibrary, getV2Evaluations, getV2ForecastRoots, getV2MonitorStatus, getV2Prices, getV2Workspace, initializeMarketData, scanOfficialFilings } from "./api";
-import type { FilingInventory, JevLearningStatus, PriceHistory } from "./types";
+import type { FilingInventory, JevLearningStatus, PriceHistory, V2ModelEvaluationCohort } from "./types";
 import { V2ForecastWorkspace } from "./V2ForecastWorkspace";
 import { EvidenceCenter } from "./EvidenceCenter";
 import { MaterialLibrary } from "./MaterialLibrary";
@@ -350,17 +350,31 @@ function V2EvaluationWorkspace({ symbol }: { symbol: string }) {
     <JevLearningReadout state={learning} />
     {state.kind === "loading" && <p className="inventory-status">{<Tx text={"正在读取评估结果…"} />}</p>}
     {state.kind === "error" && <p className="inventory-status inventory-error" role="alert">{state.message}</p>}
-    {state.kind === "ready" && <div className="model-cohort-list">{state.data.model_cohorts?.length ? state.data.model_cohorts.map((cohort, index) => {
+    {state.kind === "ready" && (state.data.model_cohorts?.length ? <ModelCohortGroups cohorts={state.data.model_cohorts} /> : <div className="model-cohort-list"><div className="evaluation-empty-state"><h2>{state.data.model_cohorts ? t("还没有模型分组评估") : t("模型分组数据暂不可用")}</h2><p>{<Tx text={"这里不会用旧版离线报告或跨模型混合分组填补。预测到期并获得可用行情后，结果会进入对应模型组。"} />}</p></div></div>)}
+  </section>;
+}
+
+/** Task 14: the model forecast (LLM group) and its hidden Jev control are scored side by side but never pooled. */
+function ModelCohortGroups({ cohorts }: { cohorts: V2ModelEvaluationCohort[] }) {
+  const { t } = useLocale();
+  const groups = [
+    { key: "llm", title: "推理模型组", note: "「预测模型」给出的预测，每个独立预测算一个样本。", items: cohorts.filter((c) => !c.control && c.model_status === "experimental_llm") },
+    { key: "control", title: "Jev 对照组", note: "每次预测同时问一次 Jev，结果不进预测列表，只在这里与上一组对照。", items: cohorts.filter((c) => c.control) },
+    { key: "other", title: "其他分组", note: "更早的预测（含 Jev 直接给出的旧预测）。", items: cohorts.filter((c) => !c.control && c.model_status !== "experimental_llm") },
+  ].filter((group) => group.items.length);
+  return <div className="model-cohort-list">{groups.map((group) => <section key={group.key} className={`model-cohort-group model-cohort-group-${group.key}`}>
+    <h2 className="model-cohort-group-title">{t(group.title)}</h2><p className="fine-print">{t(group.note)}</p>
+    {group.items.map((cohort, index) => {
       const versions = cohort.roots.flatMap((root) => root.versions);
       const scored = versions.map((version) => version.latest_evaluation).filter((evaluation) => evaluation?.status === "succeeded");
       const average = (values: Array<number | null | undefined>) => { const valid = values.filter((value): value is number => typeof value === "number"); return valid.length ? (valid.reduce((sum, value) => sum + value, 0) / valid.length).toFixed(3) : "—"; };
-      return <article className="model-cohort-card" key={`${cohort.model_status}-${cohort.provider}-${cohort.actual_model}-${cohort.question_version ?? "none"}-${index}`}>
+      return <article className="model-cohort-card" key={`${cohort.model_status}-${cohort.provider}-${cohort.actual_model}-${cohort.question_version ?? "none"}-${cohort.time_mode}-${index}`}>
         <div className="section-heading"><div><p className="eyebrow">{t(cohort.time_mode === "observed" ? "真实观察" : cohort.time_mode === "historical_research" ? "历史研究" : "时间模式未分类")} · {t(modelStatusLabel(cohort.model_status))}</p><h2>{cohort.provider} / {cohort.actual_model}</h2></div><span>{t(cohort.status === "available" ? "指标可用" : cohort.status === "pending" ? "等待到期" : "样本不足")}</span></div>
         <p className="fine-print">{t("问题版本")}: {cohort.question_version ?? t("未记录")} · {t("样本按同组最高版本计数")}</p>
         <div className="overview-metrics"><article><span>{<Tx text={"独立预测样本"} />}</span><strong>{cohort.sample.root_denominator}</strong><small>{<Tx text={"同组代表记录"} />}</small></article><article><span>{<Tx text={"已标注 / 已评分"} />}</span><strong>{cohort.sample.labelled_root_count} / {cohort.sample.scored_root_count}</strong><small>{cohort.sample.unscored_root_count} {t("条尚未评分")}</small></article><article><span>{<Tx text={"平均 Brier"} />}</span><strong>{average(scored.map((value) => value?.brier_score))}</strong><small>{<Tx text={"仅已成功评分的版本"} />}</small></article><article><span>{<Tx text={"平均 Log loss"} />}</span><strong>{average(scored.map((value) => value?.log_loss))}</strong><small>{<Tx text={"仅已成功评分的版本"} />}</small></article></div>
       </article>;
-    }) : <div className="evaluation-empty-state"><h2>{state.data.model_cohorts ? t("还没有模型分组评估") : t("模型分组数据暂不可用")}</h2><p>{<Tx text={"这里不会用旧版离线报告或跨模型混合分组填补。预测到期并获得可用行情后，结果会进入对应模型组。"} />}</p></div>}</div>}
-  </section>;
+    })}
+  </section>)}</div>;
 }
 
 function JevLearningReadout({ state }: { state: { kind: "loading" } | { kind: "ready"; data: JevLearningStatus } | { kind: "error"; message: string } }) {
@@ -578,6 +592,7 @@ function formatPercent(value: number) { return `${(value * 100).toFixed(1)}%`; }
 function modelStatusLabel(status: string) {
   if (status === "research_only") return translatePhrase("研究结果（未输出概率）");
   if (status === "experimental_jev") return translatePhrase("Jev 实验模型");
+  if (status === "experimental_llm") return translatePhrase("推理模型实验预测");
   if (status === "experimental_joint") return translatePhrase("联合研究模型");
   if (status === "baseline_only") return translatePhrase("基线模型");
   return translatePhrase("模型状态未记录");

@@ -147,7 +147,7 @@ function ReplayDetail({ result }: { result: ReplayResult }) {
     {version.research_brief && <ResearchBriefView
       brief={version.research_brief}
       versionId={version.id}
-      probabilities={version.model_status === "experimental_jev" ? version.decision_probabilities ?? null : null}
+      probabilities={(version.model_status === "experimental_jev" || version.model_status === "experimental_llm") ? version.decision_probabilities ?? null : null}
       modelManifest={version.model_manifest}
       evidenceManifest={version.evidence_version_manifest}
       onOpenAnalysis={openReplayMaterial}
@@ -180,5 +180,5 @@ function actionMessage(error: unknown, fallback: string) { return translatePhras
 function jobStatusLabel(status: V2ForecastJob["status"] | "succeeded") { return translatePhrase(({ queued: "等待处理", running: "正在生成", succeeded: "回放已生成", succeeded_no_change: "已有相同回放", blocked_data: "资料不足，回放未生成", failed: "回放任务失败" } as const)[status]); }
 function evaluationLabel(status: string) { return translatePhrase(({ pending: "等待评估", succeeded: "已完成评估", blocked_price: "行情不足", failed: "评估失败" } as Record<string, string>)[status] ?? "待评估"); }
 function directionLabel(direction: string) { return translatePhrase(({ bearish: "看跌", neutral: "中性", bullish: "看涨" } as Record<string, string>)[direction] ?? direction); }
-function modelLabel(status: string) { return translatePhrase(({ research_only: "研究简报", experimental_jev: "Jev 实验模型", experimental_joint: "联合研究模型", baseline_only: "基线模型" } as Record<string, string>)[status] ?? status); }
+function modelLabel(status: string) { return translatePhrase(({ research_only: "研究简报", experimental_jev: "Jev 实验模型", experimental_llm: "推理模型实验预测", experimental_joint: "联合研究模型", baseline_only: "基线模型" } as Record<string, string>)[status] ?? status); }
 function formatDate(value: string) { const date = new Date(value); return formatLocalizedDate(date, getLocalePreference(), "UTC"); }

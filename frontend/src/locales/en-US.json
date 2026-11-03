@@ -1888,5 +1888,19 @@
   "得意": "Proud",
   "羞怯": "Shy",
   "无趣": "Bored",
-  "困倦": "Sleepy"
+  "困倦": "Sleepy",
+  "预测模型": "Forecast model",
+  "给出 20 个交易日涨/平/跌概率的模型，建议选推理模型；不选就用服务器默认模型。Jev 会同时作为隐藏对照运行。": "The model that gives the 20-trading-day up/flat/down probabilities; a reasoning model is recommended. Unset uses the server default model. Jev runs alongside as a hidden control.",
+  "推理模型": "Reasoning model",
+  "推理模型实验预测": "Reasoning-model experimental forecast",
+  "推理模型实验判断（尚未校准）": "Reasoning-model experimental judgment (not calibrated)",
+  "由「预测模型」给出的实验概率，未经校准；Jev 对照在到期评估里单独显示": "Experimental probabilities from the Forecast model, not calibrated; the Jev control is shown separately in the maturity evaluation",
+  "预测模型到期评估": "Forecast model maturity evaluation",
+  "预测模型到期评估 · 同一模型组": "Forecast model maturity evaluation · same model group",
+  "推理模型组": "Reasoning-model group",
+  "「预测模型」给出的预测，每个独立预测算一个样本。": "Forecasts from the Forecast model; each independent forecast counts as one sample.",
+  "Jev 对照组": "Jev control group",
+  "每次预测同时问一次 Jev，结果不进预测列表，只在这里与上一组对照。": "Jev is asked once alongside every forecast; its answer stays out of the forecast list and is compared with the group above only here.",
+  "其他分组": "Other groups",
+  "更早的预测（含 Jev 直接给出的旧预测）。": "Earlier forecasts (including older forecasts given directly by Jev)."
 }
