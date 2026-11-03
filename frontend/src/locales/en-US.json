@@ -1916,5 +1916,6 @@
   "现在压缩": "Compress now",
   "没有可压缩的旧轮次。": "There are no older turns to compress.",
   "没有可压缩的内容。": "There is nothing to compress.",
-  "这次压缩没有成功（模型的摘要未通过校验），原有摘要保持不变。": "Compression did not succeed (the model's summary failed the checks); the existing summary is unchanged."
+  "这次压缩没有成功（模型的摘要未通过校验），原有摘要保持不变。": "Compression did not succeed (the model's summary failed the checks); the existing summary is unchanged.",
+  "来源内容不完整，这个数字无法核实": "The source is incomplete, so this figure cannot be verified"
 }
