@@ -230,6 +230,20 @@ def _bar_ok(bar: dict) -> bool:
     return bool(bar.get("ts")) and isinstance(bar.get("close"), (int, float)) and bar["close"] > 0
 
 
+def prev_close_from_daily(bars: list[dict], now: datetime) -> float | None:
+    """Close of the last daily bar dated strictly before ``now``'s New York date, or None.
+
+    Yahoo's ``chartPreviousClose`` is relative to the last completed session, which in premarket is a
+    day too early; the daily bars give the real previous trading day's close.
+    """
+    today = _et(now).date()
+    found = None
+    for bar in sorted((b for b in bars if _bar_ok(b)), key=lambda b: b["ts"]):
+        if _et(bar["ts"]).date() < today:
+            found = float(bar["close"])
+    return found
+
+
 def _recent_split(splits, now: datetime) -> dict | None:
     today = now.date()
     for item in splits or []:

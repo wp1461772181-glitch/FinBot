@@ -77,10 +77,14 @@ class Sentinel:
         data, baseline_at, splits_at = (row["data"], row["baseline_at"], row["splits_at"]) if row else ({}, 0.0, 0.0)
         if not row or stamp - baseline_at > BASELINE_MAX_AGE:
             chart = signals.fetch_chart(symbol, "5m", "60d", events=True)
-            data = {"baseline": signals.compute_baseline(chart["bars"], now), "splits": chart["splits"]}
+            daily = signals.fetch_chart(symbol, "1d", "5d", prepost=False, events=True)
+            data = {"baseline": signals.compute_baseline(chart["bars"], now), "splits": chart["splits"],
+                    "prev_close": signals.prev_close_from_daily(daily["bars"], now)}
             baseline_at = splits_at = stamp
         elif stamp - splits_at > SPLITS_MAX_AGE:
-            data["splits"] = signals.fetch_chart(symbol, "1d", "5d", prepost=False, events=True)["splits"]
+            daily = signals.fetch_chart(symbol, "1d", "5d", prepost=False, events=True)
+            data["splits"] = daily["splits"]
+            data["prev_close"] = signals.prev_close_from_daily(daily["bars"], now)
             splits_at = stamp
         else:
             return data
@@ -91,7 +95,10 @@ class Sentinel:
         """The alerts (text plus how to escalate them) for one symbol at this minute."""
         base = self.baseline_for(symbol, now)
         chart = signals.fetch_chart(symbol, "1m", "1d")
-        return self.alerts_from(symbol, held, now, snap, chart["bars"], chart["prev_close"],
+        prev_close = base.get("prev_close")
+        if prev_close is None:
+            prev_close = chart["prev_close"]  # e.g. under two days of daily history: the meta value
+        return self.alerts_from(symbol, held, now, snap, chart["bars"], prev_close,
                                 base.get("baseline"), base.get("splits"))
 
     def alerts_from(self, symbol: str, held: bool, now: datetime, snap: dict, bars: list[dict], prev_close,

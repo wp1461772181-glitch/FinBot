@@ -184,3 +184,62 @@ def test_offline_plan_price_crossing_and_queue_symbol(tmp_path):
     quiet = s.alerts_from("AAPL", False, NOW, SNAP, _bars(NOW, [100.0] * 10 + [99, 98, 97, 96, 95.0]), 100.0,
                           {"daily_sigma": 0.0164, "bucket_sigma": {}}, [])
     assert [a["escalate"] for a in quiet] == [False]           # queue: level 2 only, never escalates
+
+
+# --- prev_close from daily bars (Yahoo's chartPreviousClose is a day stale in premarket) --------------------
+
+def _daily(*pairs):
+    """Daily bars stamped at the 09:30 ET open, like Yahoo's 1d series."""
+    return [{"ts": datetime(y, m, d, 9, 30, tzinfo=ET).astimezone(UTC), "close": c, "volume": 1}
+            for (y, m, d), c in pairs]
+
+
+FRI, MON, TUE = (2026, 10, 30), (2026, 11, 2), (2026, 11, 3)
+
+
+def _et_now(day, hour, minute):
+    return datetime(*day, hour, minute, tzinfo=ET).astimezone(UTC)
+
+
+def test_prev_close_from_daily_uses_last_completed_day():
+    bars = _daily((FRI, 344.63), (MON, 338.32), (TUE, 336.0))   # Tue bar is forming
+    for hour, minute in ((4, 5), (12, 0), (19, 0)):
+        assert signals.prev_close_from_daily(bars, _et_now(TUE, hour, minute)) == 338.32
+    # premarket: Yahoo may not have Tuesday's bar yet
+    assert signals.prev_close_from_daily(bars[:2], _et_now(TUE, 4, 5)) == 338.32
+    # next morning the Tuesday bar is complete
+    bars[2]["close"] = 330.0
+    assert signals.prev_close_from_daily(bars, _et_now((2026, 11, 4), 4, 5)) == 330.0
+
+
+def test_prev_close_from_daily_none_without_completed_day():
+    now = _et_now(TUE, 4, 5)
+    assert signals.prev_close_from_daily([], now) is None
+    assert signals.prev_close_from_daily(_daily((TUE, 336.0)), now) is None
+    assert signals.prev_close_from_daily(_daily((MON, None), (TUE, 336.0)), now) is None
+
+
+def test_derived_prev_close_beats_yahoo_meta_value(tmp_path, monkeypatch):
+    s = _sentinel(tmp_path)
+    now = _et_now(TUE, 4, 17)
+    charts = {
+        "5m": {"bars": [], "prev_close": None, "splits": []},
+        "1d": {"bars": _daily((FRI, 344.63), (MON, 338.32)), "prev_close": 344.63, "splits": []},
+        "1m": {"bars": _bars(now, [328.5] * 15), "prev_close": 344.63, "splits": []},
+    }
+    seen = {}
+    real_detect = signals.detect
+
+    def spy(symbol, bars, now_, baseline, prev_close, **kw):
+        seen["prev_close"] = prev_close
+        return real_detect(symbol, bars, now_, baseline, prev_close, **kw)
+
+    monkeypatch.setattr(signals, "fetch_chart", lambda symbol, interval, range_, **kw: charts[interval])
+    monkeypatch.setattr(signals, "detect", spy)
+    s.evaluate_symbol("AAPL", False, now, {})
+    assert seen["prev_close"] == 338.32
+    # the hourly splits refresh recomputes it; no daily history -> fall back to the meta value
+    charts["1d"]["bars"] = []
+    later = now + timedelta(hours=2)
+    s.evaluate_symbol("AAPL", False, later, {})
+    assert seen["prev_close"] == 344.63
