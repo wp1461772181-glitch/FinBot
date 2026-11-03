@@ -47,3 +47,28 @@ def verified_pair(company,symbol):
     try:
         return any(r['ticker'].casefold()==symbol.casefold() and issuer_words(r['title'])[:len(words)]==words for r in ticker_records())
     except Exception:return False
+
+# Words that say what kind of thing an issuer is, not which one: 'Eli Lilly and Company' and 'ELI LILLY & Co' are one name.
+_NAME_FILLER=frozenset({'and','the','of','co','company','companies','corp','corporation','inc','incorporated','ltd','limited','plc','sa','llc','group','holding','holdings'})
+# A rewrite writes 微软（Microsoft，NASDAQ: MSFT）: the listing venue is not a claim about which company it is.
+_EXCHANGES=frozenset({'nyse','nasdaq','amex','otc'})
+
+def name_fits_title(name,title):
+    """Looser than verified_pair, for a model's own form of a name: one side's distinctive words all appear in the other.
+    'Bank of America' does not fit BANK OF NOVA SCOTIA, whose only shared distinctive word is 'bank'."""
+    ours=[w for w in issuer_words(name) if w not in _NAME_FILLER]
+    theirs=[w for w in issuer_words(title) if w not in _NAME_FILLER]
+    if not ours or not theirs:return False
+    shorter,longer=sorted((ours,theirs),key=len)
+    return set(shorter)<=set(longer)
+
+def mapped_title(names,symbol):
+    """The SEC title when a model's mapping of a name to this ticker can stand: SEC lists the ticker and no Latin name
+    the model gave contradicts its title.  A name with no Latin words cannot be compared, so it cannot contradict."""
+    title=sec_title(symbol)
+    if not title:return None
+    for name in names:
+        name=str(name or '').strip()
+        if not re.search(r'[A-Za-z]',name) or name.casefold()==str(symbol).casefold() or name.casefold() in _EXCHANGES:continue
+        if not name_fits_title(name,title):return None
+    return title

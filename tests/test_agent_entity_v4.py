@@ -78,6 +78,9 @@ def test_symbol_anchored_grounding_still_rejects_a_symbol_sec_does_not_list(monk
     result=_run_gate(monkeypatch,{'company':'礼来制药公司','symbol':'ZZZQ','company_mention':'礼来'},'礼来 ZZZQ 的营收是多少',[{'ticker':'LLY','title':'ELI LILLY & Co'}])
     assert result['pending_request']
 
-def test_chinese_name_without_any_ticker_in_the_text_still_clarifies(monkeypatch):
+def test_chinese_name_without_any_ticker_in_the_text_proceeds_with_the_mapping_stated(monkeypatch):
+    # Changed on purpose (scope model Phase 1): nobody would call 礼来 ambiguous, so it no longer gets a card.
     result=_run_gate(monkeypatch,{'company':'礼来制药公司','symbol':'LLY','company_mention':'礼来'},'礼来的营收是多少',[{'ticker':'LLY','title':'ELI LILLY & Co'}])
-    assert result['pending_request']
+    assert not result['pending_request']
+    assert result['previous_scope']['symbol']=='LLY' and result['previous_scope']['company']=='ELI LILLY & Co'
+    assert '按 礼来 = ELI LILLY & Co（LLY）理解' in result['answer']

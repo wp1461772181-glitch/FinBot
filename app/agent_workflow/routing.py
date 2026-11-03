@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Annotated,Literal
 from pydantic import BaseModel,ConfigDict,Field,PrivateAttr,field_validator,model_validator
-from ..agent_tool_catalog import WriteTool,write_tool_names
+from ..agent_tool_catalog import CategoryName,TOOL_CATEGORIES,WriteTool,write_tool_names
 
 ROUTE_MODES=('rag','prices','financials','forecast','none')
 RouteMode=Literal['rag','prices','financials','forecast','none']
@@ -13,6 +13,7 @@ class Routing(BaseModel):
     _mode_defaulted:bool=PrivateAttr(default=False)
     category:str=Field(pattern='^[ABCD]$')
     mode:RouteMode=Field(default='none',description="Execution mode for route A (orthogonal to category): 'rag' for local/indexed knowledge docs, 'prices' for stock prices/returns/volatility/chart calculations, 'financials' for structured financial statement figures, 'forecast' for prediction/scenario analysis, or 'none' when no sub-mode applies.")
+    load_hint:list[CategoryName]=Field(default_factory=list,max_length=len(TOOL_CATEGORIES),description='Tool categories this request will probably need, so the turn starts with them. Only a hint: a wrong or empty list costs one load_tools step, never an answer, and it grants nothing.')
     query:str=Field(default='',max_length=400)
     symbol:str|None=Field(default=None,description='Legacy primary ticker; equals symbols[0] when symbols is non-empty.')
     symbols:list[Annotated[str,Field(min_length=1,max_length=12)]]=Field(default_factory=list,max_length=30,description='Every ticker relevant to the request (empty list if none). Copy all resolved tickers here; never truncate a multi-ticker request into symbol alone.')
@@ -49,6 +50,12 @@ class Routing(BaseModel):
     def registered_actions_only(cls,value):
         names=write_tool_names()
         return list(dict.fromkeys(v for v in value if isinstance(v,str) and v in names)) if isinstance(value,list) else []
+
+    @field_validator('load_hint',mode='before')
+    @classmethod
+    def known_categories_only(cls,value):
+        # A hint is never worth failing a classification: an unknown category is dropped, as an unknown write is.
+        return list(dict.fromkeys(v for v in value if isinstance(v,str) and v in TOOL_CATEGORIES)) if isinstance(value,list) else []
 
     @model_validator(mode='after')
     def sync_symbols(self):

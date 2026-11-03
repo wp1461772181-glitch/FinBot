@@ -52,9 +52,13 @@ NO_EVIDENCE_NOTICE={
  'en':'No verifiable material, so the facts in this request cannot be confirmed.',
 }
 SCOPE_NOTICE={
- 'zh':'这个请求不在 FinBot 的功能范围内。我可以协助查证市场资料、公开新闻和已保存证据。',
- 'en':'This request is outside what FinBot does. I can help verify saved market data, public news and saved evidence.',
+ 'zh':'这个请求不在 FinBot 的功能范围内。我可以协助查证市场资料、公开新闻和已保存证据，也可以查看持仓与盈亏。',
+ 'en':'This request is outside what FinBot does. I can help verify saved market data, public news and saved evidence, and review holdings and P&L.',
 }
+# What the model is told when a tool argument names something this turn has no ground for.  The real reason, so
+# it can act on it: fixing the argument's format (the advice for invalid_arguments) would not help.
+SCOPE_NOT_GROUNDED_HINT=('This symbol or identifier is not grounded in this turn. A symbol must be one the request names or one in the '
+    "owner's holdings (query_portfolio); an identifier must come from a returned result. Use one of those, or say what is missing.")
 MARKERS=('<｜｜DSML｜｜','<|tool_calls|>','<|python|>')
 # A model given no tools sometimes writes its tool call as text (DeepSeek: "<｜DSML｜ calls>…").  The
 # whole block is protocol, never part of an answer.
@@ -140,8 +144,8 @@ from ..agent_system_prompt import INSTRUCTION,disclosure_note
 CLASSIFY_PROMPT=('Return classify_request. Decide by what the request needs, in this order:\n'
     'D — the user wants this product to do something: a write (import, save, fetch, scan, index, analyse, forecast, replay, revise, withdraw, initialise, translate, review, queue change), reading or changing system state such as the research queue, task status or a workspace page, an explicit request to search the public web, or a question about how to use this product.\n'
     'A — answering needs data this product stores: prices, SEC filings, uploaded materials, saved AI analysis, saved FAQ, saved forecasts, or a specific saved source.\n'
-    'B — finance, markets or company knowledge you can explain without any data this system stores: concepts, definitions, how something works, a business model, a worked example. It may reason with general or illustrative numbers; what makes it B is that it needs none of this system\'s records.\n'
-    'C — anything else this product does not do; coding included.\n'
+    'B — finance, markets, personal finance or company knowledge you can explain without any data this system stores: concepts, definitions, how something works, a business model, a worked example. It may reason with general or illustrative numbers; what makes it B is that it needs none of this system\'s records.\n'
+    'C — only when the request is clearly unrelated to money, investing, markets, companies and this product, such as coding or a joke. An unfamiliar request is not C: when in doubt choose A with mode "none", and the tool loop finds out what can be answered.\n'
     'For route A, also choose mode (rag | prices | financials | forecast | none):\n'
     '- mode="rag": needs text passages from the knowledge base, SEC filing excerpts, uploaded materials, saved AI analysis or FAQ.\n'
     '- mode="prices": needs stock prices, K-lines/OHLC, close prices, price changes, volatility, or multi-stock price comparisons/calculations.\n'
@@ -163,7 +167,9 @@ CLASSIFY_PROMPT=('Return classify_request. Decide by what the request needs, in 
     '"每小时帮我找一条新闻" → D, mode "none", requested_actions ["create_routine"] (a repeated job the user asked for).\n'
     '"帮我把这个 skill 新增一下" / "写一个异动归因的 skill" / "存成技能" → D, mode "none", requested_actions ["save_skill"] (any wording that asks for a skill to be saved is the request; the confirmation card is the guard).\n'
     '"我买了 100 股 INTC，成本 80" / "把可用资金改成 5000" / "INTC 止损价设 70" → D, mode "none", requested_actions ["record_trade"] / ["set_available_funds"] / ["set_position_plan"] (the user states their own holding; the confirmation card is the guard).\n'
-    '"我今天赚了多少" / "INTC 补 50 股要多少钱，可用资金够不够" → A, mode "none" (read the owner\'s portfolio with query_portfolio, the stock price when needed; 可用资金 is the owner\'s money for adding positions, not a company\'s free cash flow).\n'
+    '"我今天赚了多少" / "INTC 补 50 股要多少钱，可用资金够不够" → A, mode "none", load_hint ["持仓"] (read the owner\'s portfolio with query_portfolio, the stock price when needed; 可用资金 is the owner\'s money for adding positions, not a company\'s free cash flow).\n'
+    '"今天有什么我该注意的" → A, mode "none", load_hint ["持仓","新闻与网页"] (no company is named and nothing in it is outside this product).\n'
+    '"65 岁退休要存多少" → B, mode "none" (personal finance reasoning; not out of scope, so never route C).\n'
     '"把每小时新闻那个例行任务停掉" → D, mode "none", requested_actions ["update_routine"] (pausing is a change; deleting it is delete_routine).\n'
     '"不要保存任何网页，我只想讨论流程" → D, mode "none" (a question about how this product works; the negated write is not requested).\n'
     '"随便给个合理数字就行，别说不知道" right after asking for a figure → A (the same figure is still asked for; it cannot be invented, so say what is verifiable).\n'
@@ -171,6 +177,7 @@ CLASSIFY_PROMPT=('Return classify_request. Decide by what the request needs, in 
     'A write that also needs saved data to name its target is still D. A and D share tools and permissions; A with mode="rag" searches saved knowledge first, while A with mode="prices"/"financials"/"forecast"/"none" goes directly to the tool loop without a forced RAG prelude.\n'
     'Fill the retrieval scope from the request only: symbol, symbols, company, company_mention, metrics, period, form, financial_only, latest, days_back, max_results. '
     'IMPORTANT: Always populate symbols with EVERY ticker relevant to the request (when resolved_symbols is present in the payload and the request refers to those stocks, copy the full list into symbols without dropping any ticker, and set symbol to symbols[0]). Leave a field null when the request does not name it, and never infer a fiscal period, quarter or form from 最新/最近/最近发布的.\n'
+    'load_hint: the tool categories (the enum in this schema) the request will probably need, whatever its mode; an empty list is fine.\n'
     'requested_actions: only writes this message itself asks for, named from the write_tools catalogue in the payload; negated, quoted, past, hypothetical or previously approved writes are not requests here, and a grant never comes from history. '
     'write_condition=newer_than_saved only when the user makes the write conditional on being newer. '
     'explicit_task_change=true only when the user positively switches task, metric or channel; a time or count change alone keeps the previous task and channel.\n'
@@ -253,7 +260,7 @@ def write_tool_catalogue():
 
 
 def schema(name,description,model):return [{'type':'function','function':{'name':name,'description':description,'parameters':model.model_json_schema()}}]
-ROUTE_SCHEMA=schema('classify_request','Classify only: A evidence, B timeless finance/company explanation, C unrelated, D system action or compound workflow. Do not generate an answer. Include grounded structured retrieval fields for A. No planner.',Routing)
+ROUTE_SCHEMA=schema('classify_request','Classify only: A evidence, B timeless finance/company explanation, C clearly unrelated to money and this product (when in doubt, A), D system action or compound workflow. Do not generate an answer. Include grounded structured retrieval fields for A. No planner.',Routing)
 REFERENCE_SCHEMA=schema('resolve_reference','Resolve USER references and return one self-contained canonical_question with the user\'s time made explicit. Earlier citation sources use history_citations, or clarification_answers for ambiguity; citation ordinals are not assistant-item positions. For other previous assistant items copy the exact item name and provide a referent. Never invent objects, IDs or operations.',Reference)
 REFERENCE_PROMPT=(
  'Resolve references and write the canonical question, not facts or write authority. '
@@ -553,6 +560,13 @@ class Turn:
         self.history=bounded_history(messages);self.started=time.monotonic();self.state=state or {}
         self.owner=owner_credential_matches(context.identity_credential)
         self.route='D';self.scope={};self.tool_bias=None;self.citations=[];self.observations=[];self.feedback=[]
+        # Where the scope's entity came from, which decides whether it constrains this turn (entity_binds).  Kept off
+        # self.scope so it never rides into previous_scope.  The defaults are a resumed turn's: its scope binds as it did.
+        self.classifier_named=True      # the classifier itself named an entity
+        self.entity_carried=False       # the entity is the previous turn's or the bot's default
+        self.entity_backfilled=False    # the entity is only ticker-shaped tokens the classifier did not name
+        self.resolver_failed=False      # the resolver failed or its rewrite was rejected: the words alone must be read
+        self.mapped_entity=None         # a non-Latin name the model mapped to a ticker: the answer says so
         # Past-conversation rows (recall_conversations): observation kind 'recall', kept apart from
         # self.observations so that no evidence path, citation number or claim gate ever sees them.
         self.recalls=[]
@@ -628,6 +642,7 @@ class Turn:
         if self.scope.get('form') or self.scope.get('financial_only'):wanted.append('财报与SEC')
         # days_back is filled only for a request with a news freshness window: the classifier's own news signal.
         if self.scope.get('days_back') is not None:wanted.append('新闻与网页')
+        wanted+=[c for c in self.scope.get('load_hint') or [] if c in TOOL_CATEGORIES]
         # A scheduled run exists to read and, when worth it, notify: its instruction may say so without any user words.
         if self.owner and self.unattended():wanted.append('例行与通知')
         for name in sorted({*self.granted_actions,*(self.scope.get('requested_actions') or [])}):
@@ -782,7 +797,7 @@ class Turn:
                     self.audit['resolver_retries']=1
                     payload['correction']={'error':str(exc),'instruction':'Choose a listed item_id and source, or copy a short exact source label; do not paraphrase. Citation ordinals belong in history_citations, not assistant-item referents. For a citation clarification select catalogue answers_back positions in clarification_answers and leave history_citations empty.'}
                     continue
-                self.reference_stage(False,str(exc));failure=str(exc)
+                self.reference_stage(False,str(exc));failure=str(exc);self.resolver_failed=True
                 # The tool loop reads the conversation itself, so a resolver that failed costs the hint,
                 # not the turn: a deictic follow-up goes on with the user's own words.
                 has_deictic=bool(re.search(r'(?:它|它们|他|她|这篇|份|该|上述|刚才|刚那|前一个|上一个|第[一二两三四五六七八九十\d]+[个条篇份项]|其)',self.original))
@@ -865,6 +880,7 @@ class Turn:
                     grounded_mention=True;break
             if grounded_mention and await asyncio.to_thread(verified_pair,self.scope.get('company'),self.scope.get('symbol')):
                 entities=[];self.audit['entity_mapping_verified']=True
+                self.disclose_mapping(self.scope.get('company'))
         if entities and self.scope.get('symbol') and self.scope.get('company'):
             # Two companies in one request ("AAPL 的收盘价，再搜英伟达的新闻"): the classifier put one in
             # symbol and the other in company.  Each is grounded in the user's words on its own; the
@@ -892,6 +908,21 @@ class Turn:
                     if named and not self.scope.get('company_mention') and normalized(named).casefold() in normalized(entity_trusted).casefold():
                         self.scope['company_mention']=named
                     self.scope['company']=title;entities=[];self.audit['entity_mapping_verified']=True;self.audit['entity_symbol_anchored']=symbol
+        if entities and self.scope.get('symbol'):
+            # 礼来 → LLY: the user's name with no Latin words, a ticker SEC lists, and no Latin name that contradicts
+            # its title.  This is plausible, not proved, and how the model happens to write the name must not decide
+            # the outcome, so it goes ahead with the mapping stated (disclose_mapping) for the user to correct.
+            symbol=str(self.scope['symbol'])
+            others=[str(v) for v in (self.scope.get('symbols') or []) if v and str(v).casefold()!=symbol.casefold()]
+            native=self.native_mention()
+            if native and not others:
+                from .entities import mapped_title
+                parts=re.split(r'[（(，,）):：\s]',str(self.scope.get('company_mention') or ''))
+                title=await asyncio.to_thread(mapped_title,[self.scope.get('company'),*parts],symbol)
+                if title:
+                    if not self.scope.get('company_mention'):self.scope['company_mention']=native
+                    self.scope['company']=title;entities=[];self.audit['entity_mapping_accepted']='mapped'
+                    self.disclose_mapping(title)
         if entities:
             self.reference_stage(False,'classifier_entity_unbound',skipped=self.reference_value is None)
             self.pending=self.card('请确认这次指代的公司。',[]);return
@@ -916,15 +947,31 @@ class Turn:
         future_years={y for y in requested_years(canonical)-trusted_years if int(y)>now_year}
         if future_years:
             # The rewrite added a year nobody said; the loop sees the conversation, so drop the rewrite.
-            self.reference_stage(False,'reference_period_unbound')
+            self.reference_stage(False,'reference_period_unbound');self.resolver_failed=True
             self.question=canonical=self.original
             if self.scope.get('period') and not requested_years(self.scope['period'])<=trusted_years:self.scope['period']=None
         trusted+=' '+json.dumps([{'scope':s.get('scope'),'items':[{'title':r.get('title'),'url':r.get('url'),'id':r.get('id')} for r in s['rows']]} for s in self.sets],ensure_ascii=False)
         allowed_figures=figure_values(trusted,zh=True)|figure_values(self.original,zh=True)
         if window_days(self.original):allowed_figures.add(float(window_days(self.original)))
         if (self.reference_value and self.reference_value.relationship!='new') and (set(SCOPE_ID.findall(canonical))-set(SCOPE_ID.findall(trusted)) or referenced_urls(canonical)-referenced_urls(trusted)):
-            self.reference_stage(False,'reference_scope_unbound')
+            self.reference_stage(False,'reference_scope_unbound');self.resolver_failed=True
             self.question=self.original
+
+    def native_mention(self):
+        """The company name with no Latin words that this turn's message, its rewrite or a verified referent contains."""
+        mention=self.scope.get('company_mention') or self.scope.get('company') or ''
+        words=normalized(self.original+' '+self.question+' '+' '.join(r['text'] for r in self.verified_referents)).casefold()
+        for part in re.split(r'[（(，,）):：\s]',str(mention)):
+            part=part.strip()
+            if re.search(r'[^\W\d_]',part) and not re.search(r'[A-Za-z]',part) and normalized(part).casefold() in words:return part
+        return None
+
+    def disclose_mapping(self,title):
+        """Record a name the model mapped to a ticker, so the answer can say so.  A ticker the user wrote needs no such line."""
+        native=self.native_mention();symbol=str(self.scope.get('symbol') or '')
+        if not native or not symbol or re.search(r'(?<![A-Za-z0-9.])'+re.escape(symbol.upper())+r'(?![A-Za-z0-9])',normalized(self.original)):return
+        self.mapped_entity={'mention':native,'title':title or symbol,'symbol':symbol}
+        self.audit['entity_mapped']=dict(self.mapped_entity)
 
     def extract_resolved_symbols(self) -> list[str]:
         """Extract all tickers resolved in the reference step so classify never drops multi-ticker lists."""
@@ -982,6 +1029,7 @@ class Turn:
                 messages.append({'role':'system','content':'The previous classification was invalid JSON/schema or added an unrequested fiscal period. Return complete valid classify_request arguments using only enum values; leave unspecified period/form null.'})
         if mode_defaulted:
             self.audit['classify_mode_defaulted']=True
+        self.classifier_named=any(getattr(routing,k) for k in ('symbol','symbols','company','company_mention'))
         if routing.category in {'A','D'} and resolved_symbols:
             current_syms=[str(s).strip().upper() for s in (routing.symbols or []) if s]
             if not current_syms or len(current_syms)<len(resolved_symbols) or any(s not in current_syms for s in resolved_symbols):
@@ -991,6 +1039,7 @@ class Turn:
                 routing.symbols=merged[:30]
                 routing.symbol=routing.symbols[0] if routing.symbols else routing.symbol
                 self.audit['classify_symbols_backfilled']=True
+                self.entity_backfilled=not self.classifier_named
                 self.audit['classify_symbols_resolved_count']=len(resolved_symbols)
         self.route=routing.category;self.scope=routing.model_dump();self.audit['route']=self.route;self.audit['mode']=routing.mode
         self.granted_actions=set() if self.unattended() else {name for name in routing.requested_actions if self.in_scope(name)}
@@ -1040,6 +1089,7 @@ class Turn:
                 self.scope['symbol']=routing.symbol
                 self.scope['company']=routing.company
             elif not explicit:
+                self.entity_carried=not self.classifier_named
                 self.scope['symbol']=routing.symbol or previous_symbol
                 self.scope['company']=routing.company or known_company or None
                 if not self.scope.get('symbols') and previous.get('symbols'):
@@ -1058,9 +1108,15 @@ class Turn:
         if not company or self.route not in {'A','D'}:return
         if any(self.scope.get(k) for k in ('symbol','symbols','company','company_mention')):return
         if self.followup and (self.state.get('previous_scope') or {}).get('symbol'):return
-        self.scope['symbol']=company['symbol'];self.scope['company']=company.get('company')
+        self.scope['symbol']=company['symbol'];self.scope['company']=company.get('company');self.entity_carried=True
         self.audit['default_company']={'symbol':company['symbol'],'company':company.get('company'),'source':'bot_settings',
                                        'bot_id':company.get('bot_id'),'bot_name':company.get('bot_name')}
+
+    def entity_binds(self):
+        """Whether the scope's entity constrains this turn's reads.  One the previous turn or the bot's setting supplied is
+        a hint for the model: the request may be about something else (「我的持仓今天怎么样」 after an AAPL turn).  It
+        binds only on a refinement, which keeps its task by definition, or when the resolver could not say what was meant."""
+        return not self.entity_carried or self.refinement or self.resolver_failed
 
     def card(self,question,choices):
         identity=str(uuid.uuid4())
@@ -1099,8 +1155,8 @@ class Turn:
         messages=[{'role':'system','content':('The request below is outside what this product does. Do NOT answer it, '
             'not even partly, and do not restate it at length. Write at most two sentences, in the language of the '
             'request, naming two or three things this product can do instead: saved price history, saved SEC filings '
-            'and uploaded materials, saved AI analysis of those materials, public web research with citations, and '
-            'saved research forecasts. No greetings, no headings, no figures, no promises.')},
+            'and uploaded materials, saved AI analysis of those materials, public web research with citations, '
+            'saved research forecasts, holdings and P&L, and scheduled routines. No greetings, no headings, no figures, no promises.')},
             {'role':'user','content':json.dumps({'out_of_scope_request':self.original},ensure_ascii=False)}]
         for attempt in range(2):
             try:
@@ -1322,6 +1378,8 @@ class Turn:
         hint={'resolved_question':self.question,
               'referents':[r.get('text') or r.get('mention') for r in self.verified_referents if r.get('text') or r.get('mention')][:6],
               'classifier_scope':{k:self.scope.get(k) for k in ('symbol','symbols','mode','company','metrics','period','form','financial_only','latest','days_back','max_results','requested_actions') if self.scope.get(k) not in (None,[],'',False)}}
+        if self.scope.get('symbol') and not self.entity_binds():
+            hint['scope_entity_note']='The symbol and company above come from the previous turn or the bot setting, not from this request: use them only if the request is about them.'
         if self.tool_bias:
             hint['tool_bias']=self.tool_bias
             bias_notes={
@@ -1434,7 +1492,20 @@ class Turn:
         # A tool cannot silently broaden the entity fixed by the classifier.
         named=[str(v) for v in (self.scope.get('symbols') or []) if v]
         if self.scope.get('symbol') and args.get('symbol') and args['symbol']!=self.scope['symbol'] and self.route!='D' \
-           and args['symbol'] not in named and not contains(args['symbol'],self.original) and not contains(args['symbol'],self.question):raise ValueError('scope_not_grounded')
+           and args['symbol'] not in named and not contains(args['symbol'],self.original) and not contains(args['symbol'],self.question):
+            # Only a read may widen: a write's target stays as strict as it was.
+            policy=definitions().get(name)
+            if policy is None or policy.level!='read' or (self.entity_binds() and not self.symbol_discovered(args['symbol'])):raise ValueError('scope_not_grounded')
+
+    def symbol_discovered(self,symbol):
+        """A symbol this turn found in data rather than in the request.  The owner's own rows always count.  Other
+        accepted evidence counts only when the classifier named no entity: until answers are checked for which entity
+        a sentence is about, page text must not steer a turn away from the company the user asked about."""
+        written=re.compile(r'(?<![A-Za-z0-9.])'+re.escape(str(symbol).upper())+r'(?![A-Za-z0-9])')
+        for observation in self.observations:
+            if observation.get('accepted_evidence') and (observation.get('name')=='query_portfolio' or not self.classifier_named) \
+               and written.search(json.dumps(observation.get('result'),ensure_ascii=False,default=str)):return True
+        return False
 
     async def execute_read(self,name,args):
         call_id=self.active_call_id or str(uuid.uuid4());await self.emit({'event':'tool_start','call_id':call_id,'name':name,'arguments':args})
@@ -1569,7 +1640,13 @@ class Turn:
         if policy.level!='read' or name in admin_tools:
             self.feedback.append({'name':name,'result':outcome});return
         from .evidence import canonical_metric
-        requirements={key:self.scope.get(key) for key in ('company','metrics','period')}
+        # A carried or backfilled entity requires nothing of a row.  When the call itself reads that same symbol, the
+        # carried company still counts as a name for it: the page may say Apple where the call says AAPL.
+        hint_only=self.entity_backfilled or not self.entity_binds()
+        same_symbol=args.get('symbol') and self.scope.get('symbol') and str(args['symbol']).casefold()==str(self.scope['symbol']).casefold()
+        scope_symbol=None if hint_only else self.scope.get('symbol')
+        scope_company=None if hint_only and not same_symbol else self.scope.get('company')
+        requirements={'company':scope_company,'metrics':self.scope.get('metrics'),'period':self.scope.get('period')}
         if requirements.get('metrics'):requirements['metrics']=[canonical_metric(m) for m in requirements['metrics'] if canonical_metric(m)]
         requirements['entity_aliases']=self.scope.get('_entity_aliases',[])
         from ..agent_web_research import METRIC_GROUPS
@@ -1577,7 +1654,7 @@ class Turn:
         else:requirements['metrics']=None
         # Actual tool args define this source's scope, including a compound request's
         # independent company/window. No dictionary maps company names to tickers.
-        requirements['symbol']=args.get('symbol') or self.scope.get('symbol')
+        requirements['symbol']=args.get('symbol') or scope_symbol
         if args.get('symbol') and self.scope.get('symbol') and args['symbol']!=self.scope['symbol'] and not args.get('company'):
             requirements['company']=None
         if name=='search_configured_news':
@@ -1589,7 +1666,7 @@ class Turn:
             if not args.get('company'):
                 requirements['company']=None
         if name=='web_research':
-            requirements['company']=args.get('company') or self.scope.get('company');requirements['days_back']=args.get('days_back')
+            requirements['company']=args.get('company') or scope_company;requirements['days_back']=args.get('days_back')
             from ..agent_web_research import METRIC_GROUPS
             requested=requirements.get('metrics') or [k for k,terms in METRIC_GROUPS.items() if any(contains(t,self.question) for t in terms)]
             requirements['metrics']=[k for k in requested if k not in METRIC_GROUPS or any(contains(t,args.get('query','')) for t in METRIC_GROUPS[k])]
@@ -2516,6 +2593,10 @@ class Turn:
             # The code stays in audit.write_outcome; the user gets words, never internal vocabulary.
             # A revision with nothing to offer already said why and what to do next.
             if not noted and not self.revision_notice:answer+='\n操作未执行：'+REFUSAL_WORDS.get(code,'这项操作没有执行')+'。下一步：'+next_step
+        if self.mapped_entity and not self.pending:
+            # (A card already names its target.)  After every check, and the server's words, not the model's: a wrong mapping has to stay visible to be corrected.
+            line='按 {mention} = {title}（{symbol}）理解；如果不是这家公司，请告诉我。'.format(**self.mapped_entity)
+            answer=answer[:30000-len(line)-2].rstrip()+'\n\n'+line
         self.audit.update(stop_reason=reason,elapsed_ms=round((time.monotonic()-self.started)*1000))
         return {'answer':answer[:30000],'citations':self.citations,'status':status,'reason':reason,'route':self.route,
             'unverified_lines':list(self.unverified_lines),'audit':self.audit,'final_protocol':self.final_protocol,'pending_request':self.pending,'result_sets':self.sets,'previous_category':self.route,'previous_scope':{**self.scope,'_tool_categories':list(self.used_categories)}}
@@ -2778,9 +2859,10 @@ class Turn:
                     bad=json.dumps(function,sort_keys=True,default=str)
                     if bad in self.invalid_calls:stop='no_progress';break
                     self.invalid_calls.add(bad)
-                    code='read_channel_scope_mismatch' if str(exc)=='read_channel_scope_mismatch' else 'invalid_arguments'
+                    code=str(exc) if str(exc) in {'read_channel_scope_mismatch','scope_not_grounded'} else 'invalid_arguments'
                     self.audit['tool_calls']+=1;self.feedback.append({'name':name,'error_code':code})
                     reply=tools.error(code)
+                    if code=='scope_not_grounded':reply={**reply,'hint':SCOPE_NOT_GROUNDED_HINT}
                     if code=='invalid_arguments' and name in definitions():
                         # Re-send the contract with only the arguments the model supplied. Echoing a
                         # multi-kilobyte rejected call crowds out the schema it is meant to fix.
