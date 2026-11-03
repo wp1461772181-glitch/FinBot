@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { BloubAvatar, type BloubState, type LiveHandle } from "./BloubAvatar";
 import { BotOrb } from "./BotOrb";
 import { createDirector, shouldArrive, turnPhase, turnTransition } from "./bloub-director.mjs";
-import { bloubLook } from "./bloub-look.mjs";
+import { resolveLook } from "./bloub-look.mjs";
 import { parseAvatar } from "./orb.mjs";
 
 /** Bots whose arrival already played in this page session (module scope: survives remounts, resets on reload). */
@@ -27,8 +27,8 @@ function useReducedMotion() {
 
 type Msg = { role?: string; content?: string; status?: string; tool_trace?: ReadonlyArray<{ status?: string }> };
 
-export function LiveBotOrb({ avatar, name, seed, size = 30, chatState, messages, unread = false, onAcknowledge, className = "" }: {
-  avatar: string | null | undefined; name: string; seed?: string; size?: number;
+export function LiveBotOrb({ avatar, look: stored, name, seed, size = 30, chatState, messages, unread = false, onAcknowledge, className = "" }: {
+  avatar: string | null | undefined; look?: unknown; name: string; seed?: string; size?: number;
   chatState: string; messages: ReadonlyArray<Msg>; unread?: boolean; onAcknowledge?: () => void; className?: string;
 }) {
   const parsed = parseAvatar(avatar, name);
@@ -89,15 +89,15 @@ export function LiveBotOrb({ avatar, name, seed, size = 30, chatState, messages,
     };
   }, [director, live, reduced]);
 
-  if (parsed.kind === "text") return <BotOrb avatar={avatar} name={name} seed={seed} size={size} className={className} />;
-  const look = bloubLook(seed || name, avatar);
+  if (parsed.kind === "text") return <BotOrb avatar={avatar} look={stored} name={name} seed={seed} size={size} className={className} />;
+  const look = resolveLook(seed || name, avatar, stored);
   const hoverable = (e: ReactPointerEvent) => e.pointerType !== "touch";
   return <span className={`bot-orb bot-orb-live ${className}`.trim()} aria-hidden="true" style={{ width: size, height: size }}
     onPointerEnter={e => { if (hoverable(e)) director.send({ type: "hover", value: true }, nowSec()); }}
     onPointerLeave={e => { if (hoverable(e)) director.send({ type: "hover", value: false }, nowSec()); }}
     onClick={() => { director.send({ type: "click" }, nowSec()); ack.current?.(); }}>
     {reduced
-      ? <BloubAvatar size={size} shape={look.shape} color={look.color} state={still as BloubState} frozenAt={0} />
-      : <BloubAvatar size={size} shape={look.shape} color={look.color} live={live} />}
+      ? <BloubAvatar size={size} shape={look.shape} color={look.color} expression={look.expression} state={still as BloubState} frozenAt={0} />
+      : <BloubAvatar size={size} shape={look.shape} color={look.color} expression={look.expression} live={live} />}
   </span>;
 }

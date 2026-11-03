@@ -166,15 +166,25 @@ body { -webkit-font-smoothing: antialiased; }
 .bot-orb-hero { display: grid; justify-items: center; gap: 6px; margin: 4px 0 14px; }
 .bot-orb-hero small { color: var(--me-muted); font-size: 12px; }
 .bot-rail .bot-avatar { width: 40px; height: 40px; font-size: 18px; }
-.orb-swatches { display: grid; gap: 10px; margin: 0 0 12px; }
-.orb-swatches fieldset { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; border: 0; padding: 0; margin: 0; }
-.orb-swatches legend { font-size: 12px; color: var(--me-muted); padding: 0; margin: 0 0 6px; }
-.orb-swatch { display: grid; justify-items: center; gap: 4px; border-radius: 12px; border: 2px solid transparent; padding: 6px 4px; background: var(--me-surface-2); color: var(--me-ink); font-size: 12px; line-height: 1.2; cursor: pointer; }
-.orb-swatch-face { display: inline-block; line-height: 0; }
-.orb-swatch svg { width: 36px; height: 36px; }
-.orb-swatch[aria-pressed="true"] { border-color: var(--me-ink); }
-.orb-swatch:focus-visible { outline: 2px solid var(--me-accent); outline-offset: 2px; }
 .avatar-picker { display: grid; gap: 8px; }
+/* Customise panel (bloub's Customizer/BotTile, restyled with this app's tokens; works in both themes). */
+.bloub-hero { display: grid; place-items: center; padding: 10px 0 4px; }
+.bloub-customizer { display: grid; gap: 6px; margin: 0 0 12px; }
+.bloub-customizer h3 { margin: 10px 0 0; font-size: 13px; font-weight: 600; color: var(--me-ink); }
+.bloub-grid { display: grid; gap: 6px; margin-top: 4px; }
+.bloub-grid.is-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.bloub-grid.is-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.bloub-tile { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px 5px; border: 2px solid transparent; border-radius: 12px; background: var(--me-surface-2); color: var(--me-muted); cursor: pointer; transition: border-color .15s; }
+.bloub-tile span { font-size: 12px; line-height: 1.2; text-align: center; }
+.bloub-tile svg { width: 52px; height: 52px; }
+.bloub-tile:hover:not(:disabled) { border-color: var(--me-line-strong); }
+.bloub-tile[aria-pressed="true"] { border-color: var(--me-ink); color: var(--me-ink); }
+.bloub-swatch { display: flex; align-items: center; justify-content: center; aspect-ratio: 1; padding: 0; border: 2px solid transparent; border-radius: 50%; background: transparent; cursor: pointer; transition: border-color .15s; }
+.bloub-swatch span { display: block; width: 78%; height: 78%; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12); }
+.bloub-swatch:hover:not(:disabled) { border-color: var(--me-line-strong); }
+.bloub-swatch[aria-pressed="true"] { border-color: var(--me-ink); }
+.bloub-tile:focus-visible, .bloub-swatch:focus-visible { outline: 2px solid var(--me-accent); outline-offset: 2px; }
+.bloub-tile:disabled, .bloub-swatch:disabled { cursor: default; opacity: .6; }
 .avatar-picker-modes { display: flex; gap: 12px; font-size: 13px; }
 
 /* --- bot workspace (UX batch 2, P3): stock picker, data cards, ⤢ widths ------------------------ */

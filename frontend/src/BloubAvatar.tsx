@@ -5,6 +5,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { NOTIF_BLUE } from "./bloub/decor";
 import { BotEngine, type BotFrame } from "./bloub/engine";
 import { DEMI_VIEWBOX, RAYON } from "./bloub/repere";
+import { EXPRESSION_BY_ID } from "./bloub/expressions";
 import { COLOR_BY_ID, DEFAULT_COLOR, DEFAULT_SHAPE, SHAPE_BY_ID, mixHex } from "./bloub/skins";
 import type { StateId } from "./bloub/states";
 import type { Director } from "./bloub-director.mjs";
@@ -39,10 +40,13 @@ function subscribe(tick: Tick) {
 const reducedMotion = () => typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
 
 // The page's ink for the black "encre" body, so it stays visible in the dark theme.
+const PALE = new Set(["creme", "gris"]);
 const INK_VAR = "var(--me-ink, #0a0a0c)";
 
-export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, shape = DEFAULT_SHAPE, frozenAt, paper = "#f9f9f9", className, live }: {
+export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, shape = DEFAULT_SHAPE, expression, frozenAt, paper = "#f9f9f9", className, live }: {
   live?: LiveHandle; state?: BloubState; size?: number; color?: string; shape?: string;
+  /** Rest expression id (the customiser's face); unset: the engine's own neutral. State animations play on top of it. */
+  expression?: string;
   /** Seconds into the state. Set: one still frame, no animation loop (tiny icons, reduced motion). */
   frozenAt?: number; paper?: string; className?: string;
 }) {
@@ -51,10 +55,11 @@ export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, 
   const radiiRef = useRef<number[] | null>(null);
   const radii = useMemo(() => SHAPE_BY_ID.get(shape)?.radii ?? null, [shape]);
   radiiRef.current = radii;
+  const expr = useMemo(() => (expression ? EXPRESSION_BY_ID.get(expression) ?? null : null), [expression]);
   const hex = COLOR_BY_ID.get(color)?.hex ?? "#0a0a0c";
   const ink = color === "encre" ? INK_VAR : hex;
   const engine = useRef<BotEngine | null>(null);
-  if (!engine.current) engine.current = new BotEngine(RAYON, state, radii);
+  if (!engine.current) engine.current = new BotEngine(RAYON, state, radii, expr);
   const clock = useRef(0);
   const [frame, setFrame] = useState<BotFrame>(() => engine.current!.sample(still ?? 0));
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -66,6 +71,7 @@ export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, 
   // Prop changes go to the engine with the current clock so it morphs instead of jumping.
   useEffect(() => { if (live) return; engine.current!.setState(state, clock.current); if (still !== undefined) setFrame(engine.current!.sample(still)); }, [state, still, live]);
   useEffect(() => { if (liveRef.current && intro.current.on) return; engine.current!.setShape(radii, clock.current); if (still !== undefined) setFrame(engine.current!.sample(still)); }, [radii, still]);
+  useEffect(() => { engine.current!.setExpression(expr, clock.current); if (still !== undefined) setFrame(engine.current!.sample(still)); }, [expr, still]);
   useEffect(() => {
     if (still !== undefined) return;
     return subscribe(dt => {
@@ -128,6 +134,8 @@ export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, 
       {/* Opaque plate under the body so the eye holes do not show the back half of the rings; it takes the page surface. */}
       <path d={frame.bodyPath} style={{ fill: "var(--me-surface, #f9f9f9)" }} />
       <g mask={`url(#${maskId})`}><rect x={-DEMI_VIEWBOX} y={-DEMI_VIEWBOX} width={DEMI_VIEWBOX * 2} height={DEMI_VIEWBOX * 2} style={{ fill: ink }} /></g>
+      {/* Cream and light grey would vanish on a light page: a hairline keeps the silhouette readable. */}
+      {PALE.has(color) && <path d={frame.bodyPath} fill="none" stroke="var(--me-line-strong, rgba(0,0,0,.28))" strokeWidth={3} vectorEffect="non-scaling-stroke" />}
     </g>
     {!frame.dotsBehind && <g>{frame.dots.map((d, i) => dot(d, `pf${i}`))}</g>}
     {frame.notif && <circle cx={frame.notif.x} cy={frame.notif.y} r={frame.notif.r} fill={NOTIF_BLUE} />}

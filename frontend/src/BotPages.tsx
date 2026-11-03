@@ -14,10 +14,10 @@ import { toggleUsual, usableSkills } from "./skill-items.mjs";
 import { toolLabel } from "./agent-tool-labels.mjs";
 import { TaskManager } from "./BotRoutines";
 import { CATALOG } from "./model-profiles.mjs";
-import { BloubAvatar } from "./BloubAvatar";
 import { BotOrb } from "./BotOrb";
-import { faceLook } from "./bloub-look.mjs";
-import { BOT_MOODS, BOT_STYLES, botAvatar, DEFAULT_AVATAR, parseAvatar, type BotMood, type BotStyle } from "./orb.mjs";
+import { BloubCustomizer } from "./BloubCustomizer";
+import { lookForSave, normalizeLook, randomLook, resolveLook, type BloubLook } from "./bloub-look.mjs";
+import { DEFAULT_AVATAR, parseAvatar } from "./orb.mjs";
 import { WorkspaceCard } from "./WorkspaceCards";
 import { CARDS, addCard, botSymbol, loadLayout, moveCard, pinCardSymbol, removeCard, resetLayout, resizeCard, saveLayout, storeBotSymbol, symbolChoices, type CardId, type LayoutItem } from "./workspace-cards.mjs";
 
@@ -49,36 +49,24 @@ function useBotOptions() {
   return { catalog, tools, templates, error };
 }
 
-function BotAvatar({ bot, running = false, unread = false }: { bot: Pick<Bot, "id" | "avatar" | "name">; running?: boolean; unread?: boolean }) { return <BotOrb avatar={bot.avatar} name={bot.name} seed={bot.id} size={40} running={running} unread={unread} />; }
+function BotAvatar({ bot, running = false, unread = false }: { bot: Pick<Bot, "id" | "avatar" | "look" | "name">; running?: boolean; unread?: boolean }) { return <BotOrb avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={40} running={running} unread={unread} />; }
 
-const STYLE_LABELS: Record<string, string> = { kline: "K线胶囊", pure: "纯粹圆润", bull: "极简牛耳", square: "方糖终端" };
-const MOOD_LABELS: Record<string, string> = { idle: "翡翠绿", focus: "研报蓝", bull: "金牛黄", mono: "极客白" };
-
-/** A face is a silhouette and an eye colour, picked separately: 4 + 4 buttons rather than all 16 faces. */
-function OrbSwatches({ value, onPick, disabled }: { value: string; onPick: (avatar: string) => void; disabled?: boolean }) {
-  const { t } = useLocale();
-  const current = parseAvatar(value);
-  const style: BotStyle = current.kind === "bot" ? current.style : "kline", mood: BotMood = current.kind === "bot" ? current.mood : "idle";
-  const swatch = (s: BotStyle, m: BotMood, pressed: boolean, label: string) =>
-    <button key={`${s}-${m}`} type="button" className="orb-swatch" aria-pressed={pressed} onClick={() => onPick(botAvatar(s, m))}><span className="orb-swatch-face"><BloubAvatar size={36} {...faceLook(s, m)} frozenAt={0} /></span><span>{label}</span></button>;
-  return <div className="orb-swatches">
-    <fieldset disabled={disabled}><legend>{t("轮廓")}</legend>{BOT_STYLES.map(s => swatch(s, mood, s === style, t(STYLE_LABELS[s])))}</fieldset>
-    <fieldset disabled={disabled}><legend>{t("配色")}</legend>{BOT_MOODS.map(m => swatch(style, m, m === mood, t(MOOD_LABELS[m])))}</fieldset>
-  </div>;
-}
-
-/** 档案's avatar: one of the 16 faces, or a custom emoji / character as before. */
-function AvatarPicker({ value, name, onChange, disabled }: { value: string; name: string; onChange: (avatar: string) => void; disabled: boolean }) {
+/** 档案's avatar: the bloub bot — shape, face and colour chosen in the customiser, kept per bot on the server — or a custom emoji / character.
+ * `look` is what the user picked this session (null: not touched, the bot keeps what it has); `seed` is the bot id its hashed default comes from. */
+function AvatarPicker({ value, look, seed, name, onChange, disabled }: { value: string; look: BloubLook | null; seed: string; name: string; onChange: (patch: { avatar?: string; look?: BloubLook | null }) => void; disabled: boolean }) {
   const { t } = useLocale();
   const isOrb = parseAvatar(value, name).kind === "bot";
+  const shown = look ?? resolveLook(seed, value, null);
   return <div className="avatar-picker"><span>{t("头像")}</span>
     <div className="avatar-picker-modes">
-      <label className="bot-check"><input type="radio" checked={isOrb} disabled={disabled} onChange={() => onChange(DEFAULT_AVATAR)} />{t("机器人")}</label>
-      <label className="bot-check"><input type="radio" checked={!isOrb} disabled={disabled} onChange={() => onChange("")} />{t("自定义 emoji")}</label>
-      <BotOrb avatar={value} name={name || "·"} size={32} />
+      <label className="bot-check"><input type="radio" checked={isOrb} disabled={disabled} onChange={() => onChange({ avatar: DEFAULT_AVATAR })} />{t("机器人")}</label>
+      <label className="bot-check"><input type="radio" checked={!isOrb} disabled={disabled} onChange={() => onChange({ avatar: "" })} />{t("自定义 emoji")}</label>
     </div>
-    {isOrb ? <OrbSwatches value={value} onPick={onChange} disabled={disabled} />
-      : <input value={value} maxLength={16} disabled={disabled} onChange={e => onChange(e.target.value)} placeholder="📈" aria-label={t("头像")} />}
+    {isOrb ? <>
+      <div className="bloub-hero"><BotOrb avatar={value} look={shown} name={name || "·"} seed={seed} size={88} /></div>
+      <BloubCustomizer look={shown} disabled={disabled} onChange={next => onChange({ look: next })} />
+    </> : <><BotOrb avatar={value} name={name || "·"} size={32} />
+      <input value={value} maxLength={16} disabled={disabled} onChange={e => onChange({ avatar: e.target.value })} placeholder="📈" aria-label={t("头像")} /></>}
   </div>;
 }
 
@@ -129,7 +117,7 @@ export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutin
   </section>;
 }
 
-type Draft = ReturnType<typeof botDraft> & { avatar?: string; group?: string; pinned?: boolean; hidden?: boolean; daily_notify_cap?: number };
+type Draft = ReturnType<typeof botDraft> & { avatar?: string; look?: BloubLook | null; seed?: string; group?: string; pinned?: boolean; hidden?: boolean; daily_notify_cap?: number };
 
 /** The profile fields of a bot: shared by the new-bot dialog and the 档案 tab. */
 function BotForm({ draft, setDraft, tools, catalog, isDefault, disabled }: { draft: Draft; setDraft: (next: Draft) => void; tools: BotTool[]; catalog: ModelCatalog | null; isDefault: boolean; disabled: boolean }) {
@@ -159,7 +147,7 @@ function BotForm({ draft, setDraft, tools, catalog, isDefault, disabled }: { dra
       <label>{t("分组")}<input value={draft.group ?? ""} maxLength={40} disabled={disabled} onChange={e => update({ group: e.target.value })} placeholder={t("例如：公司")} /></label>
       <label>{t("每日通知上限")}<input type="number" min={0} max={50} value={draft.daily_notify_cap ?? 5} disabled={disabled} onChange={e => update({ daily_notify_cap: Math.max(0, Math.min(50, Number(e.target.value) || 0)) })} /></label>
     </div>
-    <AvatarPicker value={draft.avatar ?? ""} name={draft.name} disabled={disabled} onChange={avatar => update({ avatar })} />
+    <AvatarPicker value={draft.avatar ?? ""} look={draft.look ?? null} seed={draft.seed ?? ""} name={draft.name} disabled={disabled} onChange={update} />
     <div className="bot-form-row">
       <label className="bot-check"><input type="checkbox" checked={Boolean(draft.pinned)} disabled={disabled} onChange={e => update({ pinned: e.target.checked })} />{t("置顶")}</label>
       {!isDefault && <label className="bot-check"><input type="checkbox" checked={Boolean(draft.hidden)} disabled={disabled} onChange={e => update({ hidden: e.target.checked })} />{t("在侧栏隐藏")}</label>}
@@ -167,14 +155,15 @@ function BotForm({ draft, setDraft, tools, catalog, isDefault, disabled }: { dra
   </div>;
 }
 
-function fieldsOf(draft: Draft): BotFields {
-  return { name: draft.name.trim(), title: draft.title.trim(), description: draft.description, focus: { companies: draft.focus.companies, theme: draft.focus.theme?.trim() || null },
+function fieldsOf(draft: Draft, stored?: unknown): BotFields {
+  const look = lookForSave(draft.look, stored);
+  return { ...(look ? { look } : {}), name: draft.name.trim(), title: draft.title.trim(), description: draft.description, focus: { companies: draft.focus.companies, theme: draft.focus.theme?.trim() || null },
     tool_scope: draft.tool_scope, model: draft.model, avatar: (draft.avatar ?? "").trim(), group: (draft.group ?? "").trim(), pinned: Boolean(draft.pinned),
     ...(draft.hidden !== undefined ? { hidden: draft.hidden } : {}), ...(draft.daily_notify_cap !== undefined ? { daily_notify_cap: draft.daily_notify_cap } : {}), template: draft.template };
 }
 function draftOf(bot: Bot): Draft {
   return { name: bot.name, title: bot.title, description: bot.description, focus: bot.focus, tool_scope: bot.tool_scope, model: bot.model, template: bot.template,
-    avatar: bot.avatar, group: bot.group, pinned: bot.pinned, hidden: bot.hidden, daily_notify_cap: bot.daily_notify_cap };
+    avatar: bot.avatar, look: normalizeLook(bot.look), seed: bot.id, group: bot.group, pinned: bot.pinned, hidden: bot.hidden, daily_notify_cap: bot.daily_notify_cap };
 }
 
 /** New bot: one step.  A name is all it needs; a template is an optional shortcut that only pre-fills what was
@@ -183,8 +172,8 @@ export function NewBotDialog({ onClose, onCreated }: { onClose: () => void; onCr
   const { t } = useLocale();
   const [templates, setTemplates] = useState<BotTemplate[]>([]), [tools, setTools] = useState<BotTool[]>([]);
   const [name, setName] = useState(""), [picked, setPicked] = useState<BotTemplate | null>(null);
-  // A new bot is the default face unless another one is picked.
-  const [avatar, setAvatar] = useState(DEFAULT_AVATAR);
+  // A new bot starts from a random shape and colour of the catalog (shown, and stored on create): the customiser changes any of it.
+  const [look, setLook] = useState<BloubLook>(() => randomLook());
   const [busy, setBusy] = useState(false), [status, setStatus] = useState("");
   const dialog = useRef<HTMLElement>(null), nameBox = useRef<HTMLInputElement>(null);
   useEffect(() => { nameBox.current?.focus(); const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", key); return () => document.removeEventListener("keydown", key); }, [onClose]);
@@ -194,7 +183,7 @@ export function NewBotDialog({ onClose, onCreated }: { onClose: () => void; onCr
     getBotTemplates(controller.signal).then(v => { setTemplates(v.templates.filter(x => x.id !== "blank")); setTools(v.tools); }).catch(() => { /* create works without them */ });
     return () => controller.abort();
   }, []);
-  const fields = { ...newBotFields(name, picked, tools), avatar };
+  const fields = { ...newBotFields(name, picked, tools), avatar: DEFAULT_AVATAR, look };
   async function save(event?: React.FormEvent) {
     event?.preventDefault();
     if (!fields.name || busy) return;
@@ -206,8 +195,8 @@ export function NewBotDialog({ onClose, onCreated }: { onClose: () => void; onCr
       <button className="profile-close" onClick={onClose} aria-label={t("关闭")} disabled={busy}>×</button>
       <h2 id="new-bot-title">{t("新建 bot")}</h2>
       <form className="bot-create" onSubmit={e => void save(e)}>
-        <div className="bot-orb-hero"><BotOrb avatar={avatar} name={name || "FinBot"} size={96} /><small>{avatar === DEFAULT_AVATAR ? "FinBot" : name || t("新 bot")}</small></div>
-        <OrbSwatches value={avatar} onPick={setAvatar} disabled={busy} />
+        <div className="bot-orb-hero"><BotOrb avatar={DEFAULT_AVATAR} look={look} name={name || "FinBot"} size={96} /><small>{name || t("新 bot")}</small></div>
+        <BloubCustomizer look={look} onChange={setLook} disabled={busy} />
         <label>{t("名字")}<input ref={nameBox} value={name} maxLength={40} disabled={busy} onChange={e => setName(e.target.value)} placeholder={picked?.name || t("例如：读财报")} /></label>
         {templates.length > 0 && <fieldset className="bot-template-chips" disabled={busy}><legend>{t("模板（可选）")}</legend>
           {templates.map(tpl => <button key={tpl.id} type="button" className="bot-chip" aria-pressed={picked?.id === tpl.id} title={tpl.description ? t(tpl.description) : undefined} onClick={() => setPicked(picked?.id === tpl.id ? null : tpl)}>{t(tpl.label)}</button>)}
@@ -247,7 +236,7 @@ function BotProfileTab({ bot, onChanged, onDeleted }: { bot: Bot; onChanged: (bo
   const model = botModelLabel(bot, catalog);
   async function save() {
     setBusy(true); setStatus("");
-    try { const next = await updateBot(bot.id, fieldsOf(draft)); onChanged(next); setDraft(draftOf(next)); setStatus(t("已保存。下一轮按新设置运行。")); }
+    try { const next = await updateBot(bot.id, fieldsOf(draft, bot.look)); onChanged(next); setDraft(draftOf(next)); setStatus(t("已保存。下一轮按新设置运行。")); }
     catch (err) { setStatus(message(err, t("保存失败，请重试。"))); } finally { setBusy(false); }
   }
   async function remove() {
