@@ -2,8 +2,8 @@ import { BotOrb } from "./BotOrb";
 import { LiveBotOrb } from "./LiveBotOrb";
 import { BOT_AVATAR_SIZE } from "./bot-sizes.mjs";
 import { dispatchAgentAction } from "./agent-client-actions.mjs";
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { listSkills, type Skill, agentChatStream, restoreAgentChat, clearAgentConversation, getChatMode, setChatMode, listAgentConversations, renameAgentConversation, archiveAgentConversation, selectAgentConversation, personalChatLogin, getKnowledgeCitation, getMaterialAnalysisSettings, saveMaterialAnalysisSettings, resetMaterialAnalysisSettings, getModelCatalog, getTelegramBind, getPushover, savePushover, clearPushover, type PushoverStatus, saveTelegramToken, startTelegramBind, unbindTelegram, type CatalogModel, type Bot, type TelegramBindStatus, type KnowledgeCitationDetail, type ConversationSummary, type AgentChatMessage, type AgentChatEvent, type MaterialAnalysisSettings } from "./api";
+import { Fragment, createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { listSkills, type Skill, agentChatStream, restoreAgentChat, compactConversation, clearAgentConversation, getChatMode, setChatMode, listAgentConversations, renameAgentConversation, archiveAgentConversation, selectAgentConversation, personalChatLogin, getKnowledgeCitation, getMaterialAnalysisSettings, saveMaterialAnalysisSettings, resetMaterialAnalysisSettings, getModelCatalog, getTelegramBind, getPushover, savePushover, clearPushover, type PushoverStatus, saveTelegramToken, startTelegramBind, unbindTelegram, type CatalogModel, type Bot, type TelegramBindStatus, type KnowledgeCitationDetail, type ConversationSummary, type AgentChatMessage, type AgentChatEvent, type MaterialAnalysisSettings } from "./api";
 import { isTaskPostHead, parseTaskPostHead } from "./task-posts.mjs";
 import { chatTurnPreviews } from "./chat-thread.mjs";
 import { QuestionRail } from "./QuestionRail";
@@ -20,6 +20,7 @@ import { createLineStore, lineKey, loadDraft, saveDraft } from "./chat-lines.mjs
 import { planTailSync, pollDelay } from "./chat-sync.mjs";
 import { KnowledgeAdminPage } from './KnowledgeAdminPage';
 import { ContextMeter } from "./ContextMeter";
+import { noticesAfter, parseCompactCommand, type CompactionNotice } from "./context-usage.mjs";
 import { restoreConversationAfterPersistence, restoreConversationSafely } from "./chat-session.mjs";
 import { normalizeClarification, selectedClarification, selectedOptions, manualClarification, clarificationTitle, isActiveClarification } from "./chat-clarification.mjs";
 import { toolLabel } from "./agent-tool-labels.mjs";
@@ -48,7 +49,7 @@ function toolResultSummary(value:unknown):string {
   return "";
 }
 type FileHandle = { name: string; getFile: () => Promise<File>; createWritable: () => Promise<{ write: (value: string) => Promise<void>; close: () => Promise<void> }> };
-type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void>; lineStatus: { running: string[]; unseen: string[] }; freshExternal: boolean; ackExternal: () => void };
+type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void>; lineStatus: { running: string[]; unseen: string[] }; freshExternal: boolean; ackExternal: () => void; notices: CompactionNotice[]; compactNow: (focus:string)=>Promise<void> };
 const Context = createContext<ChatSession | null>(null);
 const WRITE_CARDS = new Set(["write_confirmation", "confirm_write", "choose_write_action", "choose_revision_sources"]);
 function Icon({ children }: { children: ReactNode }) {
@@ -172,6 +173,21 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   // Turns pulled in from outside this tab since the user last interacted: the main avatar shows its notification until then.
   const [freshExternal,setFreshExternal]=useState(false);
   useEffect(()=>{setFreshExternal(false)},[conversationId]);
+  // 「已压缩 N 轮」 lines of this conversation (the server writes one per summary version; the summary opens from it).
+  const [notices,setNotices]=useState<CompactionNotice[]>([]);
+  const refreshNotices=(id:string|null)=>{ if(!id){setNotices([]);return Promise.resolve();} return restoreAgentChat(id,undefined,false,null,1).then(page=>{ if(conversationIdRef.current===id) setNotices(page.compactions??[]); }).catch(()=>{}); };
+  useEffect(()=>{ void refreshNotices(conversationId); },[conversationId]);
+  // An automatic compression runs in the background after an answer; look again shortly after each one.
+  useEffect(()=>{ if(state==="sending"||!conversationId) return; const id=conversationId, timers=[setTimeout(()=>void refreshNotices(id),4000),setTimeout(()=>void refreshNotices(id),25000)]; return ()=>timers.forEach(clearTimeout); },[state,conversationId,messages.length]);
+  async function compactNow(focus:string) {
+    const id=conversationIdRef.current, line=lineRef.current;
+    if(!id){ setStatus(t("还没有对话可压缩。")); return; }
+    if(state==="sending"||state==="testing"){ setStatus(t("回答完成后再压缩。")); return; }
+    setStatus(t("正在压缩…"));
+    try { const result=await compactConversation(id,botRef.current?.id??null,focus); setStatus(t(result.message)); await refreshNotices(id); }
+    catch(error) { setStatus(t(error instanceof Error ? error.message : "压缩没有成功，稍后再试。")); }
+    finally { if(lineRef.current===line) apply(line,{draft:""}); }
+  }
   // Live refresh: while a conversation is open, pull in turns written from outside this tab (Telegram, reminders, pushes).
   // Polls the newest turns every few seconds (slowly while the tab is hidden) and appends only unseen turn ids; never touches a line that is
   // answering or restoring, and never the draft (see chat-sync.mjs).
@@ -220,6 +236,8 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   function translate(s: string) { return t(s); }
   async function send(e: FormEvent) {
     e.preventDefault();
+    const command=parseCompactCommand(draft.trim());
+    if (command.compact) { saveDraft(lineRef.current,""); await compactNow(command.focus); return; }
     await sendContent(draft.trim());
   }
   async function choose(value:string,requestId:string) {
@@ -319,7 +337,7 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
     else if(switched)clearLine(true);
   }
   const visibleMessages=archiveView?archiveView.messages as AgentChatMessage[]:messages;
-  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,lineStatus:{running:lines.current.running(),unseen:lines.current.unseen()},archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot , freshExternal, ackExternal: () => setFreshExternal(false) }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,lineStatus:{running:lines.current.running(),unseen:lines.current.unseen()},archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot , freshExternal, ackExternal: () => setFreshExternal(false), notices, compactNow }}>{children}</Context.Provider>;
 }
 function readLocalConversationId(){try{const key=`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,existing=window.localStorage.getItem(key);if(existing&&/^[\w-]{1,80}$/.test(existing))return existing;const id=crypto.randomUUID();window.localStorage.setItem(key,id);return id;}catch{return crypto.randomUUID();}}
 function archiveMessages(messages:AgentChatMessage[]){return messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role as "user"|"assistant",content:m.content,...(m.status?{status:m.status as "failed"|"cancelled"}:{}),...(m.role==="assistant"&&m.citations?{citations:m.citations}:{}),...(m.role==="assistant"&&m.unverified_lines?.length?{unverified_lines:m.unverified_lines}:{}),...(m.role==="assistant"&&m.tool_trace?{tool_trace:m.tool_trace.map(x=>({call_id:x.call_id,name:x.name,arguments:x.arguments,result:x.result,status:x.status as "running"|"complete"|"not_found"|"failed"|"cancelled"}))}:{})}));}
@@ -438,7 +456,7 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled 
           {c.messages.length === 0 ? <div className="agent-welcome"><h2>{t("从一个问题开始")}</h2><p>{t(c.verified ? "连接已就绪，可以输入问题或选择下方建议。" : "登录个人聊天后才能对话：模型由服务器模型目录提供。")}</p><div>{["查看 AAPL 最近行情", "AAPL 已保存的最新财报有哪些", "可信度星级是什么"].map(x => <button type="button" key={x} onClick={() => c.setDraft(t(x))}>{t(x)} <span aria-hidden="true">↗</span></button>)}</div></div> :
           <div className="agent-thread-grid">
             <QuestionRail turns={railTurns} activeTurn={activeTurn} transcriptRef={transcriptRef} conversationId={c.conversationId} />
-            <div className="agent-thread">{c.messages.map((m, i) => <article data-turn-index={m.role==="user"?turnPreviews.findIndex(turn=>turn.userIndex===i):undefined} id={`chat-message-${i}`} className={`agent-message is-${m.role}${m.role==="user"&&isTaskPostHead(m.content)?" is-task-post":""}${i===lastIndex?" is-last":""}`} key={i}>
+            <div className="agent-thread">{c.messages.map((m, i) => <Fragment key={i}><article data-turn-index={m.role==="user"?turnPreviews.findIndex(turn=>turn.userIndex===i):undefined} id={`chat-message-${i}`} className={`agent-message is-${m.role}${m.role==="user"&&isTaskPostHead(m.content)?" is-task-post":""}${i===lastIndex?" is-last":""}`}>
               {m.role === "assistant"&&<ThinkingPanel trace={m.trace} thinkingMs={m.thinking_ms} startedAt={m.started_at} running={i === lastIndex && c.state === "sending"} />}
               {m.role !== "user"&&<div className="agent-tool-badges">{m.reused_sources&&<span className="tool-badge status-complete">{t("复用已核实来源")}</span>}{!m.trace?.length&&m.tool_trace?.map((tool,j)=><span key={`${tool.name}-${j}`} className={`tool-badge status-${tool.status}`}>{t(toolLabel(tool.name))} · {t(tool.status === "complete" ? (tool.card ? "执行完成" : "已完成") : tool.status === "not_found" ? "没有匹配记录" : tool.status === "failed" ? "查询失败" : tool.status === "cancelled" ? "已取消" : tool.status === "submitted" ? "已提交" : "执行中")}{toolResultSummary(tool.result)&&` · ${toolResultSummary(tool.result)}`}</span>)}</div>}
               {m.role==="user"&&isTaskPostHead(m.content)?<TaskPostHead content={m.content} />:m.role==="user"?<div className="agent-user-bubble"><p>{m.content}</p><button type="button" className="agent-user-copy" aria-label={copied===i?t("已复制"):copied===-i-1?t("复制失败"):t("复制问题")} title={t("复制问题")} onClick={()=>void copyAnswer(m.content,i)}>{copied===i?<CheckIcon />:<CopyIcon />}</button></div>:<div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{table:({node,...props})=><div className="markdown-table-wrap"><table {...props}/></div>,a:({node,...props})=>{const href=String(props.href??"");const flag=parseFlagHref(href);if(flag){const flagged=m.unverified_lines?.[flag.index];return <span className={flag.kind==="numbers"?"unverified-flag unverified-flag-number":"unverified-flag"} role="note">{props.children}{flag.kind==="insufficient"&&flagged&&<button type="button" className="unverified-ask" onClick={()=>{c.setDraft(followUpQuestion(flagged.line));draftBox.current?.focus()}}>{t("追问依据")}</button>}</span>}const match=href.match(/^#citation-(\d+)$/);const ordinal=match?Number(match[1]):null;const citation=ordinal?m.citations?.find((item,index)=>citationOrdinal(item,index)===ordinal):undefined;if(match&&!citation)return <span className="citation-unmatched">[{props.children}]</span>;const citationLabel=citation?t("引用来源")+" "+ordinal+" · "+citation.title:undefined;return <a {...props} className={citation?"citation-ref":undefined} aria-label={citationLabel} title={citationLabel} href={citation?href:props.href} onClick={event=>{if(!citation)return;event.preventDefault();setOpenCitationTurn(i);["web","web_news","official_filing","saved_filing","saved_ai_analysis","reported_figure"].includes(citation.source_type)&&citation.source_url?window.open(citation.source_url,"_blank","noopener,noreferrer"):citation.chunk_id?void showCitation(citation.chunk_id,citation.source_type==="unavailable"):undefined}} target={citation?undefined:"_blank"} rel={citation?undefined:"noopener noreferrer"}/>} }}>{linkCitationMarkers(markUnverified(m.content,m.unverified_lines,{insufficient:t("证据不足"),numbers:t("数字未核实"),reason:code=>t(reasonKey(code))}),m.citations)}</ReactMarkdown></div>}
@@ -452,7 +470,7 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled 
                 </div>
                 {Boolean(m.citations?.length)&&<details className="citation-drawer" open={openCitationTurn===i}><summary>{t("引用来源")} · {m.citations!.length}</summary>{m.citations!.map((citation,j)=><div className="citation-item" key={citation.chunk_id??citation.source_url??citation.ordinal}><button type="button" onClick={()=>['web','web_news','official_filing','saved_filing','saved_ai_analysis','reported_figure'].includes(citation.source_type)&&citation.source_url?window.open(citation.source_url,"_blank","noopener,noreferrer"):citation.chunk_id?void showCitation(citation.chunk_id,citation.source_type==='unavailable'):undefined}><b>[{citation.ordinal??j+1}]</b><span>{citation.source_type==='ai_analysis'&&<strong>已保存 AI 分析（派生） · </strong>}{citation.source_type==='reported_figure'&&<strong>{t("SEC XBRL 披露值")} · </strong>}{citation.title}{citation.section?` · ${citation.section}`:""}</span><small>{['web','web_news'].includes(citation.source_type)?`网页 · ${citation.published_at||"发布日期未知"} · 抓取 ${citation.observed_at||"时间未知"}`:(citation.observed_at||t("观察时间未知"))}{citation.truncated?` · ${t("保存内容可能不完整")}`:""}</small>{['web','web_news'].includes(citation.source_type)&&citation.source_url&&<span style={{gridColumn:2}}>打开网页来源 ↗</span>}</button>{!citation.chunk_id&&citation.quote&&<details><summary>{t("引用来源")}</summary><p>{citation.quote}</p></details>}{citation.chunk_id&&citationDetails[citation.chunk_id]&&<div className="citation-detail"><div className="citation-detail-content"><p>{citationDetails[citation.chunk_id].derived&&<strong>已保存 AI 分析（派生内容） · v{citationDetails[citation.chunk_id].version_no ?? "?"} · {citationDetails[citation.chunk_id].analysis_version} · {citationDetails[citation.chunk_id].model}</strong>}{citationDetails[citation.chunk_id].excerpt||t("来源已撤回或不可访问")}</p>{(citationDetails[citation.chunk_id].original_quotes??[]).length>0&&<><strong>{t("原文引文：")}</strong><ul>{(citationDetails[citation.chunk_id].original_quotes??[]).map((quote,index)=><li key={index}>{quote}</li>)}</ul></>}</div>{citationDetails[citation.chunk_id].source_url&&<a href={citationDetails[citation.chunk_id].source_url!} target="_blank" rel="noreferrer">打开原始来源 ↗</a>}</div>}</div>)}</details>}
               </>}
-            </article>)}</div>
+            </article>{m.role==="assistant"&&noticesAfter(c.notices,m.turn_id).map(notice=><details className="agent-compaction" key={`compaction-${notice.id}`}><summary>{t("已压缩")} {notice.turns} {t("轮")}{notice.focus?` · ${notice.focus}`:""}</summary><pre>{notice.summary||t("（摘要为空）")}</pre></details>)}</Fragment>)}</div>
           </div>}
         </section>
         {c.status && <p className={`agent-chat-status ${c.state === "error" ? "is-error" : ""}`} role={c.state === "error" ? "alert" : "status"}>{c.status}</p>}
@@ -463,7 +481,7 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled 
           <div className="agent-composer-bottom">
             <span className="agent-composer-hint">{t("Enter 发送，Shift+Enter 换行")} · {t("模型和 key 只在服务器上，浏览器不保存 key。")}</span>
             <div className="agent-composer-tools">
-              <ContextMeter conversationId={c.conversationId} refreshKey={`${c.messages.length}:${c.state==="sending"?"sending":"settled"}`} />
+              <ContextMeter conversationId={c.conversationId} botId={c.bot?.id??null} onCompact={()=>void c.compactNow("")} refreshKey={`${c.messages.length}:${c.state==="sending"?"sending":"settled"}`} />
               
               {busy&&<button className="agent-stop" type="button" onClick={c.cancel}>{t("取消请求")}</button>}
               <button className="agent-send" type="submit" aria-label={c.state === "sending" ? t("等待回复…") : t("发送")} title={t("发送")} disabled={sendDisabled}><SendIcon /></button>

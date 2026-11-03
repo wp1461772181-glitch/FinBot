@@ -10,7 +10,7 @@ const RING = 2 * Math.PI * 7;
 
 /** The context the next message will carry, next to the model picker: how much of the budget is
  *  left, and on click which parts of it are used.  It hides itself when the numbers cannot be read. */
-export function ContextMeter({ conversationId, refreshKey }: { conversationId: string | null; refreshKey: string }) {
+export function ContextMeter({ conversationId, botId, refreshKey, onCompact }: { conversationId: string | null; botId?: string | null; refreshKey: string; onCompact?: () => void }) {
   const { t } = useLocale();
   const [usage, setUsage] = useState<ContextUsage | null>(null);
   const [open, setOpen] = useState(false);
@@ -18,11 +18,11 @@ export function ContextMeter({ conversationId, refreshKey }: { conversationId: s
 
   useEffect(() => {
     const controller = new AbortController();
-    getContextUsage(conversationId, controller.signal)
+    getContextUsage(conversationId, controller.signal, botId)
       .then(next => { if (!controller.signal.aborted) setUsage(next); })
       .catch(() => { if (!controller.signal.aborted) setUsage(null); });
     return () => controller.abort();
-  }, [conversationId, refreshKey]);
+  }, [conversationId, botId, refreshKey]);
 
   useEffect(() => {
     if (!open) return;
@@ -35,7 +35,7 @@ export function ContextMeter({ conversationId, refreshKey }: { conversationId: s
 
   if (!usage) return null;
   const tone = meterTone(usage);
-  const used = Math.min(1, Math.max(0, 1 - usage.remainingPercent / 100));
+  const used = Math.min(1, Math.max(0, usage.hasHistory ? usage.usedPercent / 100 : 1 - usage.remainingPercent / 100));
   return <div className="context-meter" ref={root}>
     <button type="button" className={`context-pill is-${tone}`} aria-expanded={open} aria-haspopup="dialog"
             title={t("上下文用量")} onClick={() => setOpen(value => !value)}>
@@ -43,7 +43,7 @@ export function ContextMeter({ conversationId, refreshKey }: { conversationId: s
         <circle cx="9" cy="9" r="7" className="context-ring-track" />
         <circle cx="9" cy="9" r="7" className="context-ring-used" strokeDasharray={`${(RING * used).toFixed(1)} ${RING.toFixed(1)}`} transform="rotate(-90 9 9)" />
       </svg>
-      <span><span className="context-pill-label">{t("上下文剩余")} </span>{usage.remainingPercent}%</span>
+      <span><span className="context-pill-label">{usage.hasHistory ? t("历史已用") : t("上下文剩余")} </span>{usage.hasHistory ? usage.usedPercent : usage.remainingPercent}%</span>
     </button>
     {open && <div className="context-card" role="dialog" aria-label={t("上下文用量")}>
       <header>
@@ -63,10 +63,11 @@ export function ContextMeter({ conversationId, refreshKey }: { conversationId: s
           <span className="context-part-size">{formatKb(part.bytes)} <small>≈ {formatTokens(part.tokens)} token</small></span>
         </li>)}
       </ul>
-      <p className="context-note">{t("历史预算")} {usage.budgetKb} KB</p>
+      <p className="context-note">{t("历史预算")} {usage.budgetKb} KB{usage.hasHistory ? <> · {t("已用")} {usage.usedPercent}% · {t("达到")} {usage.compactAtPercent}% {t("自动压缩")}</> : null}</p>
+      {onCompact && conversationId && <button type="button" className="context-compact" onClick={() => { setOpen(false); onCompact(); }}>{t("现在压缩")}</button>}
       {usage.compressing && <p className="context-note">{t("更早的内容已压缩：半压历史保留你的原话和答复的开头，更早的只剩摘要。")}</p>}
       {usage.hiddenTurns > 0 && <p className="context-note is-warn">{t("有更早的对话暂时不在上下文里，等待摘要。")}</p>}
-      <p className="context-note">{t("“剩余”指本产品的上下文预算，不是模型窗口；token 为按 字节÷4 的估算。")}</p>
+      <p className="context-note">{t("“剩余”指本产品的上下文预算，不是模型窗口；token 为按 字节÷3 的估算。")}</p>
     </div>}
   </div>;
 }

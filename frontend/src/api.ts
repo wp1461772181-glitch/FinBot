@@ -2,7 +2,7 @@ import type { DashboardResponse, EvidenceRevision, EvidenceRevisionInventory, Ev
 import { agentChatUrl } from "./agent-chat-url.mjs";
 import { fetchAgentChatModels } from "./agent-chat-models.mjs";
 import { apiErrorMessage } from "./api-errors.mjs";
-import { normalizeContextUsage, type ContextUsage } from "./context-usage.mjs";
+import { normalizeCompactions, normalizeContextUsage, type CompactionNotice, type ContextUsage } from "./context-usage.mjs";
 import { activeChatCredential, applyChatIdentity, changeChatMode, currentChatMode, conversationCreatedAtForMode, conversationForMode, selectConversationForMode } from "./chat-identity.mjs";
 import type { FlowNode } from "./turn-flow.mjs";
 
@@ -46,15 +46,26 @@ export async function personalChatLogin(code: string, signal?: AbortSignal): Pro
   return payload.credential;
 }
 export type ConversationSummary = { id:string; title:string; created_at:string; updated_at:string; custom_title?:boolean };
-export type { ContextUsage };
+export type { CompactionNotice, ContextUsage };
 /** What the next message of this conversation carries of the earlier ones, by part; null when it cannot be read.
  *  Without an id it is the fixed part only (a conversation that has not started). */
-export async function getContextUsage(id:string|null,signal?:AbortSignal): Promise<ContextUsage|null> {
+export async function getContextUsage(id:string|null,signal?:AbortSignal,botId?:string|null): Promise<ContextUsage|null> {
   const base = agentChatUrl("stream", configuredApiBaseUrl).replace(/stream$/, "");
-  const url = id ? `${base}conversations/${encodeURIComponent(id)}/context` : `${base}context`;
+  const query = botId ? `?bot_id=${encodeURIComponent(botId)}` : "";    // the bot's model sets the window, hence the budget
+  const url = (id ? `${base}conversations/${encodeURIComponent(id)}/context` : `${base}context`) + query;
   const response = await fetch(url,{signal,cache:"no-store",headers:{Accept:"application/json","X-Chat-Session":chatCredential()}});
   if(!response.ok) return null;
   return normalizeContextUsage(await response.json().catch(()=>null));
+}
+/** Compress the conversation now (the 「/压缩」 command and the context card's button).  The bot's own model does it. */
+export async function compactConversation(id:string,botId:string|null,focus:string,signal?:AbortSignal): Promise<{compacted:number;message:string}> {
+  const base = agentChatUrl("stream", configuredApiBaseUrl).replace(/stream$/, "");
+  const response = await fetch(`${base}conversations/${encodeURIComponent(id)}/compact`,{method:"POST",signal,cache:"no-store",
+    headers:{Accept:"application/json","Content-Type":"application/json","X-Chat-Session":chatCredential()},
+    body:JSON.stringify({focus:focus||null,bot_id:botId})});
+  const data=await response.json().catch(()=>null) as {compacted?:unknown;message?:unknown}|null;
+  if(!response.ok) throw new ApiError("压缩没有成功，稍后再试。",response.status);
+  return {compacted:typeof data?.compacted==="number"?data.compacted:0,message:typeof data?.message==="string"&&data.message?data.message:"完成。"};
 }
 /** Name one of the caller's conversations; resolves to the saved name, or null when it was cleared. */
 export async function renameAgentConversation(id:string,title:string,signal?:AbortSignal): Promise<string|null> {
@@ -281,7 +292,7 @@ export async function listAgentConversations(offset=0,signal?:AbortSignal): Prom
   const data=await response.json() as {conversations?:unknown;has_more?:unknown};
   return {conversations:Array.isArray(data.conversations)?data.conversations as unknown as ConversationSummary[]:[],hasMore:data.has_more===true};
 }
-export async function restoreAgentChat(selectedId?: string | null, signal?: AbortSignal, requireExisting=false, before?: number | null, limit=20): Promise<{ conversationId: string | null; createdAt:string|null; messages: AgentChatMessage[]; hasMore:boolean; nextBefore:number|null }> {
+export async function restoreAgentChat(selectedId?: string | null, signal?: AbortSignal, requireExisting=false, before?: number | null, limit=20): Promise<{ conversationId: string | null; createdAt:string|null; messages: AgentChatMessage[]; hasMore:boolean; nextBefore:number|null; compactions?:CompactionNotice[] }> {
   const conversationId = selectedId ?? conversationForMode(window.localStorage) ?? window.sessionStorage.getItem(chatConversationKey);
   if (!conversationId) return { conversationId: null, createdAt:null, messages: [], hasMore:false, nextBefore:null };
   const params = new URLSearchParams({ limit: String(limit) });
@@ -291,8 +302,9 @@ export async function restoreAgentChat(selectedId?: string | null, signal?: Abor
   });
   if (response.status === 404) { if(requireExisting)throw new ApiError("无法恢复服务端聊天记录。",404); return { conversationId: null, createdAt:null, messages: [], hasMore:false, nextBefore:null }; }
   if (!response.ok) throw new ApiError("无法恢复服务端聊天记录。", response.status);
-  const data = await response.json() as { messages?: AgentChatMessage[]; has_more?:unknown; next_before?:unknown };
+  const data = await response.json() as { messages?: AgentChatMessage[]; has_more?:unknown; next_before?:unknown; compactions?:unknown };
   return { conversationId, createdAt:conversationCreatedAtForMode(window.localStorage), messages: Array.isArray(data.messages) ? data.messages : [],
+    compactions: normalizeCompactions(data.compactions),
     hasMore: data.has_more === true, nextBefore: typeof data.next_before === "number" ? data.next_before : null };
 }
 export function clearAgentConversation(): void { selectConversationForMode(window.localStorage,window.sessionStorage,null); }

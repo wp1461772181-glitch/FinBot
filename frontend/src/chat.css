@@ -507,3 +507,8 @@
 .bot-template-chips legend { width: 100%; margin-bottom: 6px; font-size: 13px; }
 .bot-chip { min-height: 30px; padding: 0 12px; border: 1px solid var(--c-line); border-radius: 999px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
 .bot-chip[aria-pressed="true"] { border-color: var(--c-accent, #7aa2ff); background: var(--c-accent-soft, rgba(122, 162, 255, .16)); }
+.context-compact { margin-top: 8px; width: 100%; padding: 6px 10px; border: 1px solid var(--c-line); border-radius: 10px; background: transparent; color: var(--c-ink); font-size: 12px; cursor: pointer; }
+.context-compact:hover { background: var(--c-surface-2, rgba(127,127,127,.08)); }
+.agent-compaction { margin: 6px auto 10px; max-width: 760px; padding: 6px 12px; border: 1px dashed var(--c-line); border-radius: 10px; color: var(--c-muted); font-size: 12px; }
+.agent-compaction summary { cursor: pointer; }
+.agent-compaction pre { margin: 8px 0 2px; white-space: pre-wrap; word-break: break-word; font: inherit; color: var(--c-ink); }
