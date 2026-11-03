@@ -208,6 +208,7 @@ MESSAGE_MAX_CHARS = 3800
 CAP_TIMEZONE = "Asia/Shanghai"
 SEND_ATTEMPTS = 3
 COUNTED = ("notify", "alert")
+UNCAPPED = ("earnings",)  # at most two messages per filing: neither counted in nor held back by the daily cap
 _MARKER = re.compile(r"\[(\d{1,3})\]")
 _SEGMENT = re.compile(r"[^。！？!?；;\n]+")
 _DIGIT = re.compile(r"\d")
@@ -267,7 +268,7 @@ def enqueue(db, owner_hash: str, bot_id, text: str, *, source: str, now: datetim
     if channel is None and not _bound(db, owner_hash):
         raise NotifyError("telegram_not_bound")
     used = sent_today(db, owner_hash, bot.id, now)
-    if used >= bot.daily_notify_cap:
+    if source not in UNCAPPED and used >= bot.daily_notify_cap:
         raise NotifyError("notify_daily_cap")
     if channel is not None:
         text = text.removeprefix(f"【{bot.name}】\n")

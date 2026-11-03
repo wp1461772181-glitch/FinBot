@@ -594,7 +594,8 @@ def serialize_item(row: AgentInboxItem) -> dict:
 
 def add_item(owner_hash: str, *, section: str, kind: str, title: str, body: str = "", sources: list | None = None,
              payload: dict | None = None, task_id=None, conversation_id=None, dedupe_key: str | None = None, db=None,
-             bot_id=None, post: dict | None = None, now: datetime | None = None, telegram: bool = False) -> bool:
+             bot_id=None, post: dict | None = None, now: datetime | None = None, telegram: bool = False,
+             telegram_source: str = "alert") -> bool:
     """Store one inbox entry; False when an entry with the same ``dedupe_key`` exists (alerts run again
     and again over the same window).  ``post`` (a brief of a bot's task: ``{"head", "citations"}``) also
     posts it in the bot's line, now or, while the owner's turn there is unfinished, at the next flush.
@@ -643,7 +644,7 @@ def add_item(owner_hash: str, *, section: str, kind: str, title: str, body: str 
             text = telegram_out.render(bot.name if bot else "", f"{title}\n{body}", list(sources or []), cited)
             try:
                 with session.begin_nested():
-                    telegram_out.enqueue(session, owner_hash, bot_id, text, source="alert", now=now, inbox_item_id=identity)
+                    telegram_out.enqueue(session, owner_hash, bot_id, text, source=telegram_source, now=now, inbox_item_id=identity)
             except telegram_out.NotifyError:
                 pass
         return True

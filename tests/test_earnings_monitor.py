@@ -145,7 +145,7 @@ def test_holding_pushes_queue_records(owner):
     first(sources, reader, symbol="INTC", held=True)
     first(sources, reader, symbol="NVDA", held=False, accession="0001045810-26-000001")
     sent = outbox()
-    assert len(sent) == 1 and "INTC" in sent[0][1] and sent[0][0] == "alert"            # the holding is pushed ...
+    assert len(sent) == 1 and "INTC" in sent[0][1] and sent[0][0] == "earnings"        # the holding is pushed (earnings source: exempt from the daily cap) ...
     recorded = {key: bot for key, _, bot, _ in items()}
     assert set(recorded) == {f"earnings:{E_ACC}:first", "earnings:0001045810-26-000001:first"}
     assert recorded["earnings:0001045810-26-000001:first"] == focus["id"]               # ... the queue company only recorded, in the bot that follows it

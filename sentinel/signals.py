@@ -13,7 +13,7 @@ import sys
 import threading
 import urllib.request
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, time as dtime, timedelta
+from datetime import UTC, datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -337,8 +337,92 @@ def plan_crossings(symbol: str, prev_price: float | None, price: float | None, p
     return found
 
 
+# --- the push policy (.local/design-alert-policy.md) -----------------------------------------------------------
+# One event per symbol per New York date; the sentinel remembers one price for it, the anchor (the price in the
+# last message the owner got).  Entry signals above open the event; after that only the price travelling away
+# from the anchor can push.  Time passing never does, and neither does crossing a sigma line.
+
+STEP_MIN, STEP_MAX = 0.01, 0.03
+MIN_GAP = 10 * 60                 # seconds between price pushes on one symbol, no exceptions
+T1_HELD_STEPS = 1.0               # further from yesterday's close than the anchor, a holding
+T1_QUEUE_STEPS = 2.0              # same, a research-queue symbol
+T2_STEPS = 2.0                    # back toward yesterday's close
+T3_STEPS = 1.0                    # the 09:35 open check, either direction
+OPEN_CHECK_AT = dtime(9, 35)
+CONTINUATION_MAX_DAYS = 4
+
+
+def step_for(sigma: float | None) -> float:
+    """1 step = the stock's daily sigma clamped to 1%-3%; 2% when sigma is unknown."""
+    if not sigma:
+        return FALLBACK_UNIT
+    return min(STEP_MAX, max(STEP_MIN, float(sigma)))
+
+
+@dataclass(frozen=True)
+class Decision:
+    action: str                    # push | hold (a trigger fired but MIN_GAP holds it) | none
+    trigger: str = ""              # T0 | T1 | T2 | T3
+    reason: str = ""               # why it did not push: min_gap | inside_limits
+    dist: float = 0.0              # price / anchor - 1
+    steps: float = 0.0             # |dist| in steps
+    worse: bool = False            # further from yesterday's close than the anchor
+    open_checked: bool = False     # the T3 look was done at this poll; the caller records it
+    continuation: bool = False     # a first alert that repeats yesterday's last one
+
+
+def realert_limits(anchor: float, anchor_r: float, step: float, held: bool) -> tuple[float, float]:
+    """(low, high): the prices at which the next push happens, as measured from ``anchor``."""
+    worse_steps = T1_HELD_STEPS if held else T1_QUEUE_STEPS
+    if anchor_r > 0:
+        low_steps, high_steps = T2_STEPS, worse_steps
+    else:
+        low_steps, high_steps = worse_steps, T2_STEPS
+    return anchor * (1 - low_steps * step), anchor * (1 + high_steps * step)
+
+
+def decide_push(event: dict | None, price: float, prev_close: float, now: datetime, *, held: bool, entry: bool,
+                prev_event: dict | None = None, step: float | None = None) -> Decision:
+    """Whether this poll pushes.  ``event`` is today's event row (None before the first push of the day),
+    ``entry`` whether detect() produced a gap/daily/short signal at this poll.  Pure: no state is changed."""
+    r_now = price / prev_close - 1
+    if event is None:
+        if not entry:
+            return Decision("none", reason="no_signal")
+        use_step = step or FALLBACK_UNIT
+        continuation = False
+        if prev_event and prev_event.get("anchor_price"):
+            same_side = (prev_event["anchor_r"] > 0) == (r_now > 0)
+            near = abs(price / prev_event["anchor_price"] - 1) <= use_step
+            continuation = same_side and near
+        return Decision("push", "T0", continuation=continuation)
+
+    use_step = event["step"]
+    anchor = event["anchor_price"]
+    dist = price / anchor - 1
+    steps = abs(dist) / use_step
+    worse = abs(r_now) > abs(event["anchor_r"])
+    local = _et(now)
+    t3_due = (not event.get("open_checked")) and event.get("first_bucket") == "pre" and local.time() >= OPEN_CHECK_AT
+    gap_open = now.timestamp() - float(event.get("last_push_ts") or 0) >= MIN_GAP
+
+    trigger = ""
+    if t3_due and steps >= T3_STEPS:
+        trigger = "T3"
+    elif worse and steps >= (T1_HELD_STEPS if held else T1_QUEUE_STEPS):
+        trigger = "T1"
+    elif not worse and steps >= T2_STEPS:
+        trigger = "T2"
+    if not trigger:
+        return Decision("none", reason="inside_limits", dist=dist, steps=steps, worse=worse, open_checked=t3_due)
+    if not gap_open:
+        return Decision("hold", trigger, "min_gap", dist, steps, worse)   # T3 stays due: it is not marked done
+    return Decision("push", trigger, dist=dist, steps=steps, worse=worse, open_checked=t3_due)
+
+
 class Cooldown:
-    """One alert per (symbol, signal) in 30 minutes, unless the move went a further sigma the same way."""
+    """One alert per (symbol, signal) in 30 minutes, unless the move went a further sigma the same way.
+    No longer used for price moves (the anchor policy above replaced it); kept as a plain helper."""
 
     def __init__(self, store=None, window: float = COOLDOWN_SECONDS) -> None:
         self.window, self.store = window, store
@@ -443,9 +527,25 @@ def _money(value: float) -> str:
     return f"${abs(value):,.0f}"
 
 
-def format_alert(signal: Signal, position: dict | None, total_assets: float | None) -> str:
+BEIJING = timezone(timedelta(hours=8))
+SESSION_LABEL = {"pre": "盘前异动", "open30": "盘中异动", "mid": "盘中异动", "close30": "盘中异动", "post": "盘后异动"}
+
+
+def _clock(ts: float) -> str:
+    """Beijing time, the owner's clock, as HH:MM."""
+    return datetime.fromtimestamp(ts, BEIJING).strftime("%H:%M")
+
+
+def _limits_text(price: float, r: float, step: float, held: bool) -> str:
+    low, high = realert_limits(price, r, step, held)
+    return f"再次提醒线：≤{low:.2f} 或 ≥{high:.2f}"
+
+
+def format_alert(signal: Signal, position: dict | None, total_assets: float | None, *, now: datetime | None = None,
+                 step: float | None = None, day_r: float = 0.0, held: bool = False,
+                 earnings_at: float | None = None, continuation: bool = False) -> str:
     """The alert in Chinese; for a holding it says how much the move cost (or made) and what share of
-    total assets that is."""
+    total assets that is.  With ``step`` it is the first alert of the day and prints its own re-alert limits."""
     name = signal.symbol
     if signal.kind == "split":
         return (f"【拆股提醒】{name} 最近 {SPLIT_LOOKBACK_DAYS} 天有拆股/合股事件（{signal.detail}），"
@@ -457,12 +557,76 @@ def format_alert(signal: Signal, position: dict | None, total_assets: float | No
         return text + _position_line(signal, position, total_assets, with_move=False)
     where = {"short": f"{signal.window.replace('15m', '15 分钟').replace('5m', '5 分钟')}内" if signal.window else "短时", "daily": "较昨收", "gap": "开盘/盘前跳空，较昨收"}[signal.kind]
     arrow = "跌" if signal.direction == "down" else "涨"
-    head = f"【盘中异动】{name} {where}{arrow} {abs(signal.r) * 100:.1f}%（约 {signal.sigma_mult:.1f}σ），现价 {signal.price:.2f}。"
+    bucket = bucket_of(now) if now is not None else "mid"
+    head = f"【{SESSION_LABEL[bucket]}】{name} {where}{arrow} {abs(signal.r) * 100:.1f}%（约 {signal.sigma_mult:.1f}σ），现价 {signal.price:.2f}。"
     if signal.kind == "daily" and signal.level == 2:
         head += "超过 3σ。"
     if signal.volume_surge:
         head += "同时放量（5 分钟成交量超过同时段均值 5 倍）。"
-    return head + _position_line(signal, position, total_assets, with_move=True)
+    if earnings_at is not None:
+        head += f"\n财报 8-K 已于 {_clock(earnings_at)} 发布。"
+    text = head + _position_line(signal, position, total_assets, with_move=True)
+    if step is not None:
+        tail = ("今日首条（延续昨日提醒）。" if continuation else "今日首条。") + _limits_text(signal.price, day_r, step, held)
+        if bucket == "pre":
+            tail += "；开盘后 5 分钟再看一次"
+        text += "\n" + tail + "。"
+    return text
+
+
+def format_update(*, symbol: str, price: float, prev_close: float, event: dict, decision: Decision, now: datetime,
+                  sigma: float | None, position: dict | None, total_assets: float | None, held: bool) -> str:
+    """A re-alert, measured from the last push: how far since then, where that leaves the day, the new limits."""
+    anchor, dist = event["anchor_price"], decision.dist
+    r = price / prev_close - 1
+    unit = sigma or FALLBACK_UNIT
+    if decision.trigger == "T3":
+        head = f"【开盘更新】{symbol} 开盘后较盘前提醒（{anchor:.2f}）"
+    else:
+        head = f"【异动更新】{symbol} 较上次提醒（{anchor:.2f}，{_clock(event['anchor_ts'])}）"
+    if decision.worse:
+        move = "又跌" if dist < 0 else "又涨"
+    else:
+        move = "回升" if dist > 0 else "回落"
+    still = "仍" if (r < 0) == (event["anchor_r"] < 0) and not decision.worse else ""
+    side = "跌" if r < 0 else "涨"
+    text = (f"{head}{move} {abs(dist) * 100:.1f}%，现价 {price:.2f}。\n"
+            f"较昨收{still}{side} {abs(r) * 100:.1f}%（约 {abs(r) / unit:.1f}σ）。今日第 {int(event.get('pushes') or 1) + 1} 条。\n"
+            f"{_limits_text(price, r, event['step'], held)}。")
+    if position and position.get("shares"):
+        shares = float(position["shares"])
+        since, total_move = shares * (price - anchor), shares * (price - prev_close)
+        line = f"\n持仓 {shares:g} 股，较上次提醒又{'亏' if since < 0 else '赚'} {_money(since)}"
+        if total_assets:
+            line += f"，占总资产 {abs(since) / total_assets * 100:.2f}%"
+        line += f"；较昨收共{'亏' if total_move < 0 else '赚'} {_money(total_move)}"
+        if total_assets and position.get("market_value") is not None:
+            line += f"；现仓位占总资产 {position_weight(position, price, total_assets) * 100:.1f}%"
+        text += line + "。"
+    return text
+
+
+def format_digest_line(*, symbol: str, price: float, prev_close: float, event: dict, sigma: float | None,
+                       extreme: float | None) -> str:
+    """The one night-digest line of an event, written from where the price stands now."""
+    anchor = event["anchor_price"]
+    dist, r = price / anchor - 1, price / prev_close - 1
+    word = "又跌" if dist < 0 else "回升" if (r < 0) else "又涨"
+    text = (f"{symbol} 较上次提醒（{anchor:.2f}）{word} {abs(dist) * 100:.1f}%，现价 {price:.2f}，"
+            f"较昨收{'跌' if r < 0 else '涨'} {abs(r) * 100:.1f}%（约 {abs(r) / (sigma or FALLBACK_UNIT):.1f}σ）")
+    if extreme is not None:
+        text += f"；夜间一度到 {extreme:.2f}"
+    return text + "。"
+
+
+def format_merged(items: list[dict]) -> str:
+    """One message for a burst: what moved, no claim about why."""
+    downs = sum(1 for i in items if i.get("direction") == "down")
+    lines = [f"【多股异动】5 分钟内 {len(items)} 只股票触发提醒（跌 {downs} / 涨 {len(items) - downs}）："]
+    for item in items:
+        body = item["text"].splitlines()[0]
+        lines.append(f"· {body.split('】', 1)[-1]}")
+    return "\n".join(lines)
 
 
 def _position_line(signal: Signal, position: dict | None, total_assets: float | None, *, with_move: bool) -> str:

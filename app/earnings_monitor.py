@@ -392,7 +392,7 @@ def _deliver(event: EarningsEvent, kind: str, title: str, body: str, now: dateti
     bot_id = bot_for(event.owner_hash, event.symbol)
     return tasks.add_item(event.owner_hash, section="brief", kind="filing", title=title, body=body, bot_id=bot_id, now=now,
                           payload={"earnings": event.accession, "stage": kind, "symbol": event.symbol, "held": event.held},
-                          dedupe_key=f"earnings:{event.accession}:{kind}", telegram=bool(event.held),
+                          dedupe_key=f"earnings:{event.accession}:{kind}", telegram=bool(event.held), telegram_source="earnings",
                           post={"head": tasks.post_head("财报监控", now, "UTC"), "citations": []})
 
 
