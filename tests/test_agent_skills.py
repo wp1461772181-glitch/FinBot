@@ -74,7 +74,7 @@ def _turn(*, bot_id=None, decider=None, recognizer=None, question="q", active_sk
 
 
 def _names(turn):
-    return {t["function"]["name"] for t in turn.exposed_tools()}
+    return {t["function"]["name"] for t in turn.permitted_tools()}
 
 
 # --- saving --------------------------------------------------------------------------------------------

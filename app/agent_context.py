@@ -41,7 +41,21 @@ BYTES_PER_TOKEN = 3            # UTF-8 bytes per token: Chinese is ~3 bytes and 
 DEFAULT_WINDOW_TOKENS = 128_000
 TURN_INPUT_TOKENS, TURN_OUTPUT_TOKENS = 8_000, 2_000   # X and Y: one turn is at most X + Y tokens
 HISTORY_TURNS_WANTED = 8                                # N: turns of history worth carrying
-FIXED_TOKENS = 8_000                                    # system prompt, tool definitions, one turn's evidence
+EXTRAS_TOKENS = 4_000                                   # one turn's evidence, notes and profile on top of the measured part
+
+
+def measure_fixed_tokens() -> int:
+    """What every request carries, measured: the fixed system prompt with its category list, the tool
+    definitions of a default turn (the always-on set; categories come with load_tools or the intent),
+    plus ``EXTRAS_TOKENS`` for evidence and the turn's own notes.  Bytes count as ``BYTES_PER_TOKEN``."""
+    from .agent_system_prompt import INSTRUCTION, disclosure_note
+    from .agent_tool_catalog import ALWAYS_ON, TOOL_CATEGORIES, schemas
+    system = "\n".join(INSTRUCTION) + "\n" + disclosure_note(TOOL_CATEGORIES.values())
+    tool_bytes = len(json.dumps(schemas(owner=True, names=ALWAYS_ON), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    return -(-(len(system.encode("utf-8")) + tool_bytes) // BYTES_PER_TOKEN) + EXTRAS_TOKENS
+
+
+FIXED_TOKENS = measure_fixed_tokens()
 
 
 def parse_budget_kb(raw: str | None, ceiling: int | None = None) -> int:

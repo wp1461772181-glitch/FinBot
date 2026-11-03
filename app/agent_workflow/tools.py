@@ -302,49 +302,30 @@ async def _dispatch(name,args,context,is_owner,emit):
             limit=args.get('limit',10),
             refresh_first=bool(args.get('refresh_first',False)),
         )
-    if name=='list_news_sources':
+    if name=='manage_news_source':
         from .. import fin_news_engine as news
-        return await asyncio.to_thread(news.list_news_sources)
-    if name=='dry_run_news_source':
-        from .. import fin_news_engine as news
-        return await asyncio.to_thread(news.dry_run_news_source,args['source_id'])
-    if name=='diagnose_news_source':
-        from .. import fin_news_engine as news
-        return await asyncio.to_thread(news.diagnose_news_source,args['source_id'])
-    if name=='upsert_news_source':
-        from .. import fin_news_engine as news
+        action=args['action'];source_id=args.get('source_id')
+        if action=='list':return await asyncio.to_thread(news.list_news_sources)
+        if action=='dry_run':return await asyncio.to_thread(news.dry_run_news_source,source_id)
+        if action=='diagnose':return await asyncio.to_thread(news.diagnose_news_source,source_id)
         if not is_owner:return error('owner_login_required')
-        spec={k:v for k,v in args.items() if k!='require_confirm_on_major_change' and v is not None}
-        return await asyncio.to_thread(
-            news.upsert_news_source,
-            spec,
-            require_confirm_on_major_change=bool(args.get('require_confirm_on_major_change',False)),
-            owner_hash=context.owner_hash,
-        )
-    if name=='disable_news_source':
-        from .. import fin_news_engine as news
-        if not is_owner:return error('owner_login_required')
-        return await asyncio.to_thread(news.disable_news_source,args['source_id'],enabled=bool(args.get('enabled',False)))
-    if name=='set_news_source_alternate':
-        from .. import fin_news_engine as news
-        if not is_owner:return error('owner_login_required')
-        return await asyncio.to_thread(
-            news.set_news_source_alternate,
-            args['source_id'],
-            args.get('alternates') or [],
-            switch_to_first=bool(args.get('switch_to_first',False)),
-            require_confirm=bool(args.get('require_confirm',False)),
-            owner_hash=context.owner_hash,
-        )
-    if name=='repair_news_source_with_rea':
-        from .. import fin_news_engine as news
-        if not is_owner:return error('owner_login_required')
-        return await asyncio.to_thread(
-            news.repair_news_source_with_rea,
-            args['source_id'],
-            require_confirm=bool(args.get('require_confirm',True)),
-            owner_hash=context.owner_hash,
-        )
+        if action=='upsert':
+            spec={k:v for k,v in args.items() if k not in {'action','source_id','require_confirm_on_major_change','enabled','switch_to_first','require_confirm'} and v is not None}
+            if args.get('enabled') is not None:spec['enabled']=args['enabled']
+            return await asyncio.to_thread(
+                news.upsert_news_source,{**spec,'id':source_id},
+                require_confirm_on_major_change=bool(args.get('require_confirm_on_major_change')),
+                owner_hash=context.owner_hash)
+        if action=='set_enabled':return await asyncio.to_thread(news.disable_news_source,source_id,enabled=bool(args['enabled']))
+        if action=='set_alternate':
+            return await asyncio.to_thread(
+                news.set_news_source_alternate,source_id,args.get('alternates') or [],
+                switch_to_first=bool(args.get('switch_to_first')),require_confirm=bool(args.get('require_confirm')),
+                owner_hash=context.owner_hash)
+        if action=='repair':
+            return await asyncio.to_thread(
+                news.repair_news_source_with_rea,source_id,
+                require_confirm=args.get('require_confirm') is not False,owner_hash=context.owner_hash)
     return error('unknown_tool')
 
 

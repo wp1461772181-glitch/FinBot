@@ -187,39 +187,28 @@ class SearchConfiguredNewsArgs(Args):
     limit:int=Field(default=10,ge=1,le=30)
     refresh_first:bool=Field(default=False,description='Poll matching enabled sources once before searching (respects rate_limit).')
 
-class DryRunNewsSourceArgs(Args):
-    source_id:str=Field(min_length=1,max_length=80)
-
-class DiagnoseNewsSourceArgs(Args):
-    source_id:str=Field(min_length=1,max_length=80)
-
-class UpsertNewsSourceArgs(Args):
-    id:str=Field(min_length=2,max_length=80)
+class ManageNewsSourceArgs(Args):
+    action:Literal['list','dry_run','diagnose','upsert','set_enabled','set_alternate','repair']=Field(description='list: all sources and their health. dry_run: fetch a sample page. diagnose: health, failures, last error, repair eligibility. upsert: create or update (needs url). set_enabled: disable or re-enable (needs enabled). set_alternate: fallback URLs (alternates; switch_to_first to switch). repair: REA repair of a failing source.')
+    source_id:str|None=Field(default=None,min_length=1,max_length=80,description='The source id; every action except list needs it.')
     name:str|None=Field(default=None,max_length=160)
-    enabled:bool=True
-    kind:Literal['rss','http_json','http_html']='rss'
-    url:str=Field(min_length=8,max_length=2048)
+    enabled:bool|None=Field(default=None,description='set_enabled: false disables, true re-enables.')
+    kind:Literal['rss','http_json','http_html']|None=None
+    url:str|None=Field(default=None,min_length=8,max_length=2048)
     homepage:str|None=Field(default=None,max_length=2048)
-    language:str=Field(default='zh-CN',max_length=20)
-    tags:list[str]=Field(default_factory=list,max_length=20)
-    markets:list[str]=Field(default_factory=list,max_length=10)
-    rea_repair:bool=True
-    alternates:list[str]=Field(default_factory=list,max_length=10)
-    require_confirm_on_major_change:bool=False
-
-class DisableNewsSourceArgs(Args):
-    source_id:str=Field(min_length=2,max_length=80)
-    enabled:bool=False
-
-class SetNewsSourceAlternateArgs(Args):
-    source_id:str=Field(min_length=2,max_length=80)
-    alternates:list[str]=Field(default_factory=list,max_length=10)
-    switch_to_first:bool=False
-    require_confirm:bool=False
-
-class RepairNewsSourceWithReaArgs(Args):
-    source_id:str=Field(min_length=2,max_length=80)
-    require_confirm:bool=True
+    language:str|None=Field(default=None,max_length=20)
+    tags:list[str]|None=Field(default=None,max_length=20)
+    markets:list[str]|None=Field(default=None,max_length=10)
+    rea_repair:bool|None=None
+    alternates:list[str]|None=Field(default=None,max_length=10)
+    switch_to_first:bool|None=None
+    require_confirm:bool|None=Field(default=None,description='set_alternate / repair: ask the owner before a major change (repair defaults to true).')
+    require_confirm_on_major_change:bool|None=Field(default=None,description='upsert: ask the owner when the site or format changes.')
+    @model_validator(mode='after')
+    def action_has_its_arguments(self):
+        if self.action!='list' and not self.source_id:raise ValueError('source_id_required')
+        if self.action=='upsert' and (not self.url or len(self.source_id)<2):raise ValueError('url_required')
+        if self.action=='set_enabled' and self.enabled is None:raise ValueError('enabled_required')
+        return self
 
 class RecordTradeArgs(Args):
     kind:Literal['opening','buy','sell','dividend','split']=Field(description='buy/sell: a trade; opening: a position the user already holds (moves no cash); dividend: cash received; split: a stock split (ratio 2 for 1 into 2).')
@@ -243,6 +232,37 @@ class SetPositionPlanArgs(Args):
     def changes_something(self):
         if all(getattr(self,k) is None for k in ('plan_text','add_price','stop_price','target_price')):raise ValueError('nothing_to_change')
         return self
+
+@dataclass(frozen=True)
+class CategoryInfo:
+    name:str
+    summary:str
+    tools:tuple[str,...]
+
+# Progressive disclosure: the prompt names the categories (one line each); the full definitions of a
+# category ride on the model call only once load_tools (or the turn's intent) asks for them.
+ALWAYS_ON=frozenset({'ask_user','use_result_set','calculate','calculate_formula','read_history_citation','request_action','use_skill','load_tools'})
+TOOL_CATEGORIES:dict[str,CategoryInfo]={c.name:c for c in (
+ CategoryInfo('行情','股价、K 线与历史行情的读取和初始化',('query_stock_prices','initialize_prices')),
+ CategoryInfo('财报与SEC','SEC 申报、XBRL 财务数据、申报核验与抓取',('query_sec_filings','query_financials','review_filing','fetch_sec','refresh_sec','scan_official')),
+ CategoryInfo('资料库','已存资料、知识库检索、入库、索引、分析与翻译',('query_materials','query_material_analysis','search_material_analysis','search_knowledge','save_material_evidence','ingest_web_source','import','import_sources','index','retry_document_index','withdraw_knowledge_document','review_knowledge_candidate','analyze','translate_content','test_retrieval_diagnostics')),
+ CategoryInfo('新闻与网页','新闻搜索、网页检索和新闻源管理',('web_research','search_configured_news','manage_news_source')),
+ CategoryInfo('预测','已存预测的读取、新预测、修订与历史回放',('query_latest_forecast','forecast','revise_forecast','start_historical_replay')),
+ CategoryInfo('持仓','持仓与账本、可用资金、持仓计划',('query_portfolio','record_trade','set_available_funds','set_position_plan')),
+ CategoryInfo('例行与通知','定时例行任务和 Telegram 通知',('create_routine','list_routines','update_routine','delete_routine','notify_telegram')),
+ CategoryInfo('记忆与技能','记住或忘记偏好、回看过去的对话、保存技能',('remember','forget','recall_conversations','read_past_conversation','save_skill')),
+ CategoryInfo('工作区','工作区记录、系统状态、研究队列与 FAQ、选股和打开页面',('read_workspace','query_system_status','query_research_queue','add_to_research_queue','remove_from_research_queue','query_research_faq','select_stock','open_page')),
+)}
+CATEGORY_OF={tool:name for name,info in TOOL_CATEGORIES.items() for tool in info.tools}
+# Names that older bots and skills may still carry: they now mean the merged tool.
+LEGACY_TOOLS={n:'manage_news_source' for n in ('list_news_sources','dry_run_news_source','diagnose_news_source','upsert_news_source','disable_news_source','set_news_source_alternate','repair_news_source_with_rea')}
+def expand_legacy(names):
+    """A stored scope or skill that still names a retired tool gets the tool that replaced it."""
+    names=set(names)
+    return frozenset(names|{LEGACY_TOOLS[n] for n in names if n in LEGACY_TOOLS})
+CategoryName=Literal[tuple(TOOL_CATEGORIES)]
+class LoadToolsArgs(Args):
+    categories:list[CategoryName]=Field(min_length=1,max_length=len(TOOL_CATEGORIES),description='Category names from the system prompt.')
 
 @dataclass(frozen=True)
 class ToolPolicy:
@@ -303,14 +323,9 @@ EXTRA=(
  ('set_available_funds',SetAvailableFundsArgs,'reversible','Propose setting the owner\'s available funds (可用资金: the money they can use to add or top up positions, not a company\'s free cash flow) to the amount the USER states; the difference is recorded as an adjustment. Owner confirmation card.'),
  ('set_position_plan',SetPositionPlanArgs,'reversible','Propose saving the owner\'s own plan for one holding (free text and/or add, stop-loss and target prices) when the USER states it. Only what the user said; only the fields you pass change. Owner confirmation card.'),
  ('notify_telegram',NotifyArgs,'notify','Send the owner a short Telegram message, only when your work instruction (or the task\'s) says this is worth notifying; with nothing new, do not call it. It goes to the owner\'s own bound chat only (you cannot choose a recipient), starts with your bot name and reads as plain chat: the [n] you cite are checked, then dropped, and no sources list is added, so write any link the owner should open into the text itself; a figure without this turn\'s evidence number is refused. Not a write: no card, also in scheduled runs. Each bot has a daily limit; past it the message stays in the conversation only.'),
+ ('manage_news_source',ManageNewsSourceArgs,'read','Manage the configured news sources (RSS/JSON/HTML) with one action: list (health, defaults, watchlists, push settings), dry_run (fetch 1 sample page and check title, url, published_at), diagnose (health, consecutive failures, last error, REA repair eligibility, probe sample), upsert (create or update a source), set_enabled (disable or re-enable), set_alternate (fallback URLs, optionally switch to the first), repair (REA inspection/alternates for a failing source; rate-limited per source, major changes create an inline confirmation card). Owner only except list, dry_run and diagnose.'),
+ ('load_tools',LoadToolsArgs,'skill','Load the full definitions of tool categories listed in the system prompt; they are available from your NEXT step. Load every category the question needs in one call. Only tools this bot and turn may use appear.'),
  ('search_configured_news',SearchConfiguredNewsArgs,'read','Search news items from enabled user-configured news sources only (RSS/JSON/HTML). Call this FIRST for recent market/macro/company news before falling back to web_research. Every returned item has a URL and still goes through citation and numeric gates.'),
- ('list_news_sources',Empty,'read','List configured public news sources, health status, defaults, watchlists, and push settings (without sensitive headers).'),
- ('dry_run_news_source',DryRunNewsSourceArgs,'read','Fetch 1 sample page from a configured news source and verify normalized items contain title, url, and published_at.'),
- ('diagnose_news_source',DiagnoseNewsSourceArgs,'read','Diagnose a configured news source: return health, consecutive failures, last error, REA repair eligibility, and probe sample.'),
- ('upsert_news_source',UpsertNewsSourceArgs,'read','Create or update a configured news source (URL, kind, enabled, alternates, rea_repair). Human-Agent parity.'),
- ('disable_news_source',DisableNewsSourceArgs,'read','Disable or re-enable a configured news source by source_id.'),
- ('set_news_source_alternate',SetNewsSourceAlternateArgs,'read','Set alternate fallback URLs for a configured news source and optionally switch to the first alternate.'),
- ('repair_news_source_with_rea',RepairNewsSourceWithReaArgs,'read','Use REA inspection/alternates to repair a degraded or failing configured news source (rate-limited per source; major changes create an inline confirmation card).'),
 )
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
 OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan'}
@@ -332,9 +347,10 @@ def definitions():
     result['request_action']=ToolPolicy('request_action','Request owner approval for an agent-suggested operation that is NOT a user request. Arguments must match the target tool schema. No fetching or business writes before approval; at most one suggestion per turn.',RequestActionArgs,'card',True,False)
     return result
 
-def schemas(*,owner:bool,granted=()):
+def schemas(*,owner:bool,granted=(),names=None):
+    """Definitions in the catalogue's fixed order (a stable prefix); ``names`` limits them to the disclosed tools."""
     return [{'type':'function','function':{'name':p.name,'description':p.description,'parameters':p.args_schema.model_json_schema()}}
-        for p in definitions().values() if p.owner and(owner or p.guest) and (p.level not in {'reversible','costly'} or p.name in granted)]
+        for p in definitions().values() if p.owner and(owner or p.guest) and (names is None or p.name in names) and (p.level not in {'reversible','costly'} or p.name in granted)]
 
 def validate(name,args):
     policy=definitions().get(name)

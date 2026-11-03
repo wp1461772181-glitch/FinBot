@@ -223,7 +223,8 @@ def test_a_tool_outside_the_bots_scope_is_not_offered_and_not_run(owner):
     news = bots.create_bot(OWNER_HASH, {"name": "抓新闻", "tool_scope": ["web_research", "search_knowledge"]})
     settings = bots.turn_settings(OWNER_HASH, news["id"])
     offered, ran = [], []
-    steps = iter([_call("query_financials", {"symbol": "AAPL", "metrics": ["Revenues"]}, "c1"),
+    steps = iter([_call("load_tools", {"categories": ["新闻与网页", "财报与SEC"]}, "c0"),
+                  _call("query_financials", {"symbol": "AAPL", "metrics": ["Revenues"]}, "c1"),
                   _call("request_action", {"tool": "add_to_research_queue", "arguments": {"symbol": "AMD"},
                                            "reason": "竞争对手"}, "c2"),
                   {"content": "只能查新闻。"}])
@@ -240,7 +241,9 @@ def test_a_tool_outside_the_bots_scope_is_not_offered_and_not_run(owner):
                                           "requested_actions": ["add_to_research_queue"]},
                    decider=decider, executor=executor)
     assert offered and all(names <= settings["tool_scope"] for names in offered)
-    assert "query_financials" not in offered[0] and "web_research" in offered[0]
+    # Loading a category brings in only what the scope allows: web_research yes, query_financials never.
+    assert "web_research" not in offered[0] and all("query_financials" not in names for names in offered)
+    assert "web_research" in offered[1]
     assert "query_financials" not in ran and "add_to_research_queue" not in ran
     assert result["audit"]["out_of_scope_calls"] == ["query_financials"]
     assert not result.get("pending_request")  # no card for a tool the bot may not use

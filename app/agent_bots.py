@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import func
 
+from .agent_tool_catalog import expand_legacy
 from .agent_chat_models import AgentBot, AgentConversation, AgentInboxItem, AgentMessage, AgentProfileItem, AgentTask
 from .database import SessionLocal
 
@@ -47,7 +48,7 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 ALWAYS_ON = frozenset({"ask_user", "use_result_set", "calculate", "read_history_citation", "select_stock",
                        "open_page", "request_action", "notify_telegram", "use_skill", "save_skill",
                        "remember", "forget", "create_routine", "list_routines", "update_routine",
-                       "delete_routine", "record_trade", "set_available_funds", "set_position_plan"})
+                       "delete_routine", "record_trade", "set_available_funds", "set_position_plan", "load_tools"})
 
 TEMPLATES = {
     "blank": {"label": "空白", "name": "", "title": "", "description": "", "tool_scope": None},
@@ -459,7 +460,7 @@ def turn_settings(owner_hash: str, bot_id) -> dict | None:
                     "conversation_id": str(bot.conversation_id),
                     "model": bot.model, "description": bot.description, "theme": (bot.focus or {}).get("theme"),
                     "focus_companies": [c["symbol"] for c in (bot.focus or {}).get("companies") or []],
-                    "tool_scope": frozenset(bot.tool_scope) | ALWAYS_ON if bot.tool_scope is not None else None,
+                    "tool_scope": expand_legacy(bot.tool_scope) | ALWAYS_ON if bot.tool_scope is not None else None,
                     "default_company": {**company, "source": "bot_settings", "bot_id": str(bot.id), "bot_name": bot.name}
                     if company else None}
         settings["block"] = render_block(settings)

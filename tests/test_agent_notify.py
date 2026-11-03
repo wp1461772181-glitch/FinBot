@@ -105,7 +105,7 @@ def test_the_tool_has_no_recipient_and_is_offered_to_every_bot_without_a_card(ow
     assert "notify_telegram" in bots.turn_settings(OWNER_HASH, news["id"])["tool_scope"]
     direct, context, quiet = _turn(news["id"])
     turn = direct.Turn("q", context, quiet, [], {})
-    names = {t["function"]["name"] for t in turn.exposed_tools()}
+    names = {t["function"]["name"] for t in turn.permitted_tools()}
     assert "notify_telegram" in names and "fetch_sec" not in names  # unattended: still no write tool
 
 

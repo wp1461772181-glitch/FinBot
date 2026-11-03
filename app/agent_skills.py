@@ -24,6 +24,7 @@ import uuid
 
 from sqlalchemy import select, text as sql
 
+from .agent_tool_catalog import expand_legacy
 from .agent_chat_models import AgentBot, AgentSkill
 from .database import SessionLocal
 
@@ -362,7 +363,7 @@ def active(owner_hash: str, *, name: str | None = None, skill_id=None) -> dict |
     for row in rows:
         if (name is not None and row.name == name) or (skill_id is not None and str(row.id) == str(skill_id)):
             return {"id": str(row.id), "name": row.name, "version": row.version, "body": row.body,
-                    "output_template": row.output_template, "tools": frozenset(row.allowed_tools or [])}
+                    "output_template": row.output_template, "tools": expand_legacy(row.allowed_tools or [])}
     return None
 
 

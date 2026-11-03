@@ -62,13 +62,8 @@ export const TOOL_LABELS = {
   save_skill: "保存技能",
   calculate_formula: "公式计算",
   search_configured_news: "搜索已配置新闻源",
-  list_news_sources: "新闻源列表",
-  dry_run_news_source: "试运行新闻源",
-  diagnose_news_source: "诊断新闻源",
-  upsert_news_source: "保存新闻源",
-  disable_news_source: "停用新闻源",
-  set_news_source_alternate: "设置备用新闻源",
-  repair_news_source_with_rea: "修复新闻源（REA）",
+  manage_news_source: "管理新闻源",
+  load_tools: "加载工具",
 };
 
 /** The display name of a tool, falling back to its identifier when unknown. */
