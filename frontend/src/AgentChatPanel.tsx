@@ -1,4 +1,5 @@
 import { BotOrb } from "./BotOrb";
+import { LiveBotOrb } from "./LiveBotOrb";
 import { dispatchAgentAction } from "./agent-client-actions.mjs";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { listSkills, type Skill, agentChatStream, restoreAgentChat, clearAgentConversation, getChatMode, setChatMode, listAgentConversations, renameAgentConversation, archiveAgentConversation, selectAgentConversation, personalChatLogin, getKnowledgeCitation, getMaterialAnalysisSettings, saveMaterialAnalysisSettings, resetMaterialAnalysisSettings, getModelCatalog, getTelegramBind, getPushover, savePushover, clearPushover, type PushoverStatus, saveTelegramToken, startTelegramBind, unbindTelegram, type CatalogModel, type Bot, type TelegramBindStatus, type KnowledgeCitationDetail, type ConversationSummary, type AgentChatMessage, type AgentChatEvent, type MaterialAnalysisSettings } from "./api";
@@ -46,7 +47,7 @@ function toolResultSummary(value:unknown):string {
   return "";
 }
 type FileHandle = { name: string; getFile: () => Promise<File>; createWritable: () => Promise<{ write: (value: string) => Promise<void>; close: () => Promise<void> }> };
-type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void>; lineStatus: { running: string[]; unseen: string[] } };
+type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void>; lineStatus: { running: string[]; unseen: string[] }; freshExternal: boolean; ackExternal: () => void };
 const Context = createContext<ChatSession | null>(null);
 const WRITE_CARDS = new Set(["write_confirmation", "confirm_write", "choose_write_action", "choose_revision_sources"]);
 function Icon({ children }: { children: ReactNode }) {
@@ -167,6 +168,9 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   useEffect(() => () => { for (const [, s] of lines.current.all()) s.lifecycle.invalidate(); }, []);
   useEffect(() => { const line="local", lc=lines.current.get(line).lifecycle, controller=new AbortController(), id=lc.begin(controller); apply(line,{restoring:true,state:"restoring"}); void restoreConversationSafely(lc,id,controller.signal,signal=>restoreAgentChat(undefined,signal),saved=>{if(!saved.conversationId)clearAgentConversation();else{localId.current=saved.conversationId;createdAt.current=saved.createdAt??new Date().toISOString();try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,localId.current)}catch{}}apply(line,{conversationId:saved.conversationId,messages:saved.messages.filter(m=>m.role==="user"||m.role==="assistant"),historyHasMore:saved.hasMore,historyBefore:saved.nextBefore,state:"idle",loaded:true})}).catch(() => { if (lc.isCurrent(id)) apply(line,{status:t("历史记录暂时无法加载；可稍后重试。"),state:"idle"}); }).finally(()=>{if(lc.isCurrent(id))apply(line,{restoring:false})}); return () => { controller.abort(); earlierController.current?.abort(); lc.finish(id); }; }, []);
   const latestMessages=useRef(messages);latestMessages.current=messages;
+  // Turns pulled in from outside this tab since the user last interacted: the main avatar shows its notification until then.
+  const [freshExternal,setFreshExternal]=useState(false);
+  useEffect(()=>{setFreshExternal(false)},[conversationId]);
   // Live refresh: while a conversation is open, pull in turns written from outside this tab (Telegram, reminders, pushes).
   // Polls the newest turns every few seconds (slowly while the tab is hidden) and appends only unseen turn ids; never touches a line that is
   // answering or restoring, and never the draft (see chat-sync.mjs).
@@ -185,7 +189,7 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
         const page = await restoreAgentChat(target, controller.signal, true, null, 6);
         if (stopped || controller.signal.aborted || lineRef.current !== line || conversationIdRef.current !== target) return;
         const plan = planTailSync(lines.current.get(line), page.messages, target);
-        if (plan) apply(line, { messages: plan.messages });
+        if (plan) { apply(line, { messages: plan.messages }); setFreshExternal(true); }
         failures = 0;
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
@@ -314,7 +318,7 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
     else if(switched)clearLine(true);
   }
   const visibleMessages=archiveView?archiveView.messages as AgentChatMessage[]:messages;
-  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,lineStatus:{running:lines.current.running(),unseen:lines.current.unseen()},archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,lineStatus:{running:lines.current.running(),unseen:lines.current.unseen()},archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot , freshExternal, ackExternal: () => setFreshExternal(false) }}>{children}</Context.Provider>;
 }
 function readLocalConversationId(){try{const key=`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,existing=window.localStorage.getItem(key);if(existing&&/^[\w-]{1,80}$/.test(existing))return existing;const id=crypto.randomUUID();window.localStorage.setItem(key,id);return id;}catch{return crypto.randomUUID();}}
 function archiveMessages(messages:AgentChatMessage[]){return messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role as "user"|"assistant",content:m.content,...(m.status?{status:m.status as "failed"|"cancelled"}:{}),...(m.role==="assistant"&&m.citations?{citations:m.citations}:{}),...(m.role==="assistant"&&m.unverified_lines?.length?{unverified_lines:m.unverified_lines}:{}),...(m.role==="assistant"&&m.tool_trace?{tool_trace:m.tool_trace.map(x=>({call_id:x.call_id,name:x.name,arguments:x.arguments,result:x.result,status:x.status as "running"|"complete"|"not_found"|"failed"|"cancelled"}))}:{})}));}
@@ -407,7 +411,7 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled 
   const currentConversation=window.sessionStorage.getItem("market-evidence-agent:chat-conversation:v1");
   return <main className="workspace agent-page" aria-labelledby="agent-chat-title">
     <header className="workspace-heading agent-page-heading">
-      {bot?<div className="agent-title-row"><BotOrb avatar={bot.avatar} name={bot.name} seed={bot.id} size={30} running={c.state==="sending"} /><h1 id="agent-chat-title">{bot.name}</h1>{bot.title&&<small className="bot-title">{bot.title}</small>}</div>
+      {bot?<div className="agent-title-row"><LiveBotOrb key={bot.id} avatar={bot.avatar} name={bot.name} seed={bot.id} size={30} chatState={c.state} messages={c.messages} unread={bot.unread>0||c.freshExternal} onAcknowledge={c.ackExternal} /><h1 id="agent-chat-title">{bot.name}</h1>{bot.title&&<small className="bot-title">{bot.title}</small>}</div>
         :<div className="agent-title-row"><button type="button" className="mobile-history-toggle secondary-action" aria-expanded={historyOpen} onClick={()=>setHistoryOpen(x=>!x)}>{t("历史对话")}</button><h1 id="agent-chat-title">模型对话</h1></div>}
       <div className="agent-header-actions">{side&&<button type="button" className={`side-toggle${sideOpen?" is-open":""}`} aria-expanded={sideOpen} aria-controls="bot-side" aria-label={sideOpen?t("收起工作区"):t("打开工作区")} title={sideOpen?t("收起工作区"):t("打开工作区")} onClick={toggleSide}><PanelIcon /><span>{t("工作区")}</span></button>}<span>{mode==="personal"?t("个人模式"):t("访客模式")}</span><button className="secondary-action" onClick={switchMode} type="button">{t("切换模式")}</button><button className="secondary-action" onClick={onSettings} type="button">{t("设置")}</button></div>
     </header>

@@ -237,3 +237,4 @@ body { -webkit-font-smoothing: antialiased; }
 .pf-entry label, .pf-plan label { display: grid; gap: 4px; font-size: 13px; }
 .pf-ledger li { gap: 8px; }
 .pf-gain, .pf-loss, .pf-flat { font-variant-numeric: tabular-nums; }
+.bot-orb-live { cursor: pointer; }
