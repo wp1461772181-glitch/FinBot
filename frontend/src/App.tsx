@@ -20,7 +20,6 @@ import { MemoryPage, MePage, NewsSourcesPage, RoutinesPage, SkillsPage } from ".
 import { PortfolioIcon, PortfolioPage } from "./PortfolioPage";
 import { formatDelta } from "./delta.mjs";
 import { conversationFromHash } from "./memory-items.mjs";
-import { applyTheme, saveTheme, storedTheme, type ThemeChoice } from "./theme.mjs";
 
 const DEFAULT_SYMBOL = "AAPL";
 const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"];
@@ -455,7 +454,7 @@ function MoreMenu({ items, activeGroup, onPick, placement, drop = "up" }: { item
 }
 
 function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchInput, setWatchInput, addWatchSymbol, watchError, setWatchError, onModeChange, botRail, overlay, children }: { activeSection: WorkspaceSection; navigate: (section: WorkspaceSection) => void; symbol: string; symbols: string[]; onSelectStock: (ticker: SupportedSymbol) => void; watchInput: string; setWatchInput: (value: string) => void; addWatchSymbol: () => void; watchError: string; setWatchError: (value: string) => void; onModeChange:(mode:"guest"|"personal")=>void; botRail?: (close: () => void) => ReactNode; overlay?: ReactNode; children: ReactNode }) {
-  const { locale, setLocale, t } = useLocale();
+  const { t } = useLocale();
   const navRef = useRef<HTMLElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [menuOpen,setMenuOpen]=useState(false),[pinned,setPinned]=useState(()=>localStorage.getItem("market-evidence-agent:nav-pinned:v1")==="1");
@@ -498,7 +497,6 @@ function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchI
     { id: "portfolio", label: t("持仓"), icon: <PortfolioIcon />, active: activeSection === "portfolio" },
   ];
   const research = isResearchSection(activeSection);
-  const [theme, setTheme] = useState<ThemeChoice>(() => storedTheme());
   return <div className={`app-frame${effectivePinned?" is-nav-pinned":""}`}>
     <div className="nav-drawer-region" ref={menuRegion}>
       {isNarrow&&menuOpen&&<div className="nav-scrim" aria-hidden="true" onClick={()=>setMenuOpen(false)}/>}
@@ -528,21 +526,6 @@ function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchI
           </select>
         </div>}
         {research && <form className="watchlist-add" onSubmit={event => { event.preventDefault(); addWatchSymbol(); }}><label className="visually-hidden" htmlFor="watch-add">{t("添加股票")}</label><input id="watch-add" value={watchInput} onChange={event => { setWatchInput(event.target.value); setWatchError(""); }} placeholder={t("添加代码，如 AMD")} maxLength={10} /><button type="submit" aria-label={t("添加股票")}>+</button>{watchError && <span role="alert">{t(watchError)}</span>}</form>}
-        <div className="language-form theme-form">
-          <label htmlFor="theme">{t("外观")}</label>
-          <select id="theme" value={theme} onChange={(event) => { const choice = saveTheme(event.target.value as ThemeChoice); setTheme(choice); applyTheme(choice); }} aria-label={t("外观")}>
-            <option value="light">{t("浅色")}</option>
-            <option value="dark">{t("深色")}</option>
-            <option value="system">{t("跟随系统")}</option>
-          </select>
-        </div>
-        <div className="language-form">
-          <label htmlFor="locale">{t("语言")}</label>
-          <select id="locale" value={locale} onChange={(event) => setLocale(event.target.value as "zh-CN" | "en-US")} aria-label={t("语言")}>
-            <option value="zh-CN">中文</option>
-            <option value="en-US">English</option>
-          </select>
-        </div>
         </div>
       </header>
       {children}

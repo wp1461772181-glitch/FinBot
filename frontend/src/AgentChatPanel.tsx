@@ -12,6 +12,7 @@ import { followUpQuestion, markUnverified, normalizeUnverified, parseFlagHref, r
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Tx, useLocale } from "./i18n";
+import { applyTheme, saveTheme, storedTheme, type ThemeChoice } from "./theme.mjs";
 import { chatContext } from "./agentChatLifecycle.js";
 import { createLineStore, lineKey, loadDraft, saveDraft } from "./chat-lines.mjs";
 import { KnowledgeAdminPage } from './KnowledgeAdminPage';
@@ -449,7 +450,25 @@ export function AgentAdminPage({ onBack }: { onBack: () => void }) {
  // their import/export and the separate 后台任务模型 card are gone (tasks use the bot's catalog model or the default).
  return <main className="workspace agent-admin" aria-labelledby="agent-admin-title"><header className="workspace-heading"><div><p className="eyebrow">FinBot / {t("后台设置")}</p><h1 id="agent-admin-title">{t("模型连接设置")}</h1></div><div className="agent-header-actions"><button type="button" className="secondary-action" onClick={()=>setKnowledgeTab(true)}>研究知识库</button><button type="button" className="secondary-action" onClick={onBack}>{t("返回 Agent 对话")}</button></div></header>
   {getChatMode()!=="personal"&&<section className="agent-settings-card"><p>{t("登录个人聊天后才能配置模型：对话、bot 和定时任务都用服务器模型目录里的模型。")}</p></section>}
-  <ModelCatalogCard/><MaterialAnalysisDefaultCard/><ChatArchiveSettings/><TelegramBindCard/><PushoverCard/></main>;
+  <AppearanceCard/><ModelCatalogCard/><MaterialAnalysisDefaultCard/><ChatArchiveSettings/><TelegramBindCard/><PushoverCard/></main>;
+}
+
+/** 外观 and 语言 live here (moved out of the topbar); storage keys and behaviour are unchanged. */
+function AppearanceCard(){
+ const {t,locale,setLocale}=useLocale();
+ const [theme,setTheme]=useState<ThemeChoice>(()=>storedTheme());
+ return <section className="agent-settings-card appearance-settings" aria-labelledby="appearance-title">
+  <h2 id="appearance-title">{t("外观")}</h2>
+  <label htmlFor="theme">{t("外观")}
+   <select id="theme" value={theme} onChange={event=>{const choice=saveTheme(event.target.value as ThemeChoice);setTheme(choice);applyTheme(choice);}}>
+    <option value="light">{t("浅色")}</option><option value="dark">{t("深色")}</option><option value="system">{t("跟随系统")}</option>
+   </select></label>
+  <h2>{t("语言")}</h2>
+  <label htmlFor="locale">{t("语言")}
+   <select id="locale" value={locale} onChange={event=>setLocale(event.target.value as "zh-CN"|"en-US")}>
+    <option value="zh-CN">中文</option><option value="en-US">English</option>
+   </select></label>
+ </section>;
 }
 
 function MaterialAnalysisDefaultCard() {
