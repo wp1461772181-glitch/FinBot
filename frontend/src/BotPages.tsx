@@ -14,7 +14,7 @@ import { toggleUsual, usableSkills } from "./skill-items.mjs";
 import { toolLabel } from "./agent-tool-labels.mjs";
 import { TaskManager } from "./BotRoutines";
 import { CATALOG } from "./model-profiles.mjs";
-import { BotOrb } from "./BotOrb";
+import { BotOrb, RailBotOrb } from "./BotOrb";
 import { BOT_AVATAR_SIZE } from "./bot-sizes.mjs";
 import { BloubCustomizer } from "./BloubCustomizer";
 import { lookForSave, normalizeLook, randomLook, resolveLook, type BloubLook } from "./bloub-look.mjs";
@@ -50,7 +50,7 @@ function useBotOptions() {
   return { catalog, tools, templates, error };
 }
 
-function BotAvatar({ bot, running = false, unread = false }: { bot: Pick<Bot, "id" | "avatar" | "look" | "name">; running?: boolean; unread?: boolean }) { return <BotOrb avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.rail} running={running} unread={unread} />; }
+function BotAvatar({ bot, running = false, unread = false }: { bot: Pick<Bot, "id" | "avatar" | "look" | "name">; running?: boolean; unread?: boolean }) { return <RailBotOrb avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.rail} running={running} unread={unread} />; }
 
 /** 档案's avatar: the bloub bot — shape, face and colour chosen in the customiser, kept per bot on the server — or a custom emoji / character.
  * `look` is what the user picked this session (null: not touched, the bot keeps what it has); `seed` is the bot id its hashed default comes from. */

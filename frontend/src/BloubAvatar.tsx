@@ -9,6 +9,7 @@ import { EXPRESSION_BY_ID } from "./bloub/expressions";
 import { COLOR_BY_ID, DEFAULT_COLOR, DEFAULT_SHAPE, SHAPE_BY_ID, mixHex } from "./bloub/skins";
 import type { StateId } from "./bloub/states";
 import type { Director } from "./bloub-director.mjs";
+import { rowAim, type RowGazeHandle } from "./row-gaze.mjs";
 import { ENGAGE_TIME, aimFromPointer, easeOutQuint, followLook, pointerFresh, tourLook } from "./bloub-gaze.mjs";
 
 export type BloubState = StateId;
@@ -43,8 +44,10 @@ const reducedMotion = () => typeof window !== "undefined" && Boolean(window.matc
 const PALE = new Set(["creme", "gris"]);
 const INK_VAR = "var(--me-ink, #0a0a0c)";
 
-export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, shape = DEFAULT_SHAPE, expression, frozenAt, paper = "#f9f9f9", className, live }: {
-  live?: LiveHandle; state?: BloubState; size?: number; color?: string; shape?: string;
+export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, shape = DEFAULT_SHAPE, expression, frozenAt, paper = "#f9f9f9", className, live, rowGaze }: {
+  live?: LiveHandle;
+  /** Sidebar rows: set only while the row is hovered; the idle avatar's eyes follow `rowGaze.pointer`. Light avatars otherwise. */
+  rowGaze?: RowGazeHandle; state?: BloubState; size?: number; color?: string; shape?: string;
   /** Rest expression id (the customiser's face); unset: the engine's own neutral. State animations play on top of it. */
   expression?: string;
   /** Seconds into the state. Set: one still frame, no animation loop (tiny icons, reduced motion). */
@@ -52,6 +55,8 @@ export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, 
 }) {
   const still = frozenAt ?? (reducedMotion() ? 0 : undefined);
   const liveRef = useRef(live); liveRef.current = live;
+  const rowGazeRef = useRef(rowGaze); rowGazeRef.current = rowGaze;
+  const stateRef = useRef(state); stateRef.current = state;
   const radiiRef = useRef<number[] | null>(null);
   const radii = useMemo(() => SHAPE_BY_ID.get(shape)?.radii ?? null, [shape]);
   radiiRef.current = radii;
@@ -77,9 +82,21 @@ export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, 
     return subscribe(dt => {
       clock.current += dt;
       if (liveRef.current) drive(liveRef.current);
+      else if (rowGazeRef.current || gaze.current.aiming) steerRow(rowGazeRef.current?.pointer ?? null); // nothing runs for a row nobody hovers
       setFrame(engine.current!.sample(clock.current));
     });
   }, [still]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sidebar row: follow the hovered pointer on the idle base only; once the hover ends (or a state takes over) release it.
+  function steerRow(ptr: RowGazeHandle["pointer"]) {
+    const eng = engine.current!, c = clock.current, g = gaze.current;
+    const box = svgRef.current?.getBoundingClientRect();
+    const aim = rowAim(ptr, stateRef.current, nowSec(), box, { width: window.innerWidth, height: window.innerHeight });
+    if (aim) {
+      if (!g.aiming) { g.aiming = true; g.since = c; }
+      eng.setLook(followLook(aim, easeOutQuint((c - g.since) / ENGAGE_TIME)), c);
+    } else if (g.aiming) { g.aiming = false; eng.setLook(null, c, ENGAGE_TIME); }
+  }
 
   // Per-frame interaction: the director's state, then the gaze (arrival turn > pointer follow > released).
   // Gaze only drives baseFace states (idle): everywhere else the pose's own gaze IS the animation (orbit, wink...).
