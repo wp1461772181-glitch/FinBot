@@ -161,6 +161,41 @@ def test_intent_preloads_categories_without_load_step():
     assert FIN in turn.preload_categories() and "query_financials" in _names(turn.exposed_tools())
 
 
+def test_news_window_preloads_news_category():
+    # The classifier sets days_back only when the request is about news; that is the news intent signal.
+    direct, turn, *_ = _turn()
+    turn.route = "D"
+    turn.scope = {"mode": "none", "days_back": 7, "requested_actions": []}
+    assert NEWS in turn.preload_categories()
+    assert "web_research" in _names(turn.exposed_tools())
+    # No window, no news preload; B/C routes never preload; a bot scope without the news tools loads nothing.
+    direct, turn, *_ = _turn()
+    turn.route = "D"
+    turn.scope = {"mode": "none", "days_back": None, "requested_actions": []}
+    assert NEWS not in turn.preload_categories()
+    direct, turn, *_ = _turn()
+    turn.route = "B"
+    turn.scope = {"days_back": 7}
+    assert NEWS not in turn.preload_categories()
+    direct, turn, *_ = _turn(tool_scope=["query_stock_prices"])
+    turn.route = "D"
+    turn.scope = {"days_back": 7}
+    assert NEWS not in turn.preload_categories()
+
+
+def test_news_turn_needs_no_load_tools_step():
+    seen = []
+    steps = iter([_call("n1", "web_research", query="美光 新闻", days_back=7), {"content": "好。"}])
+
+    def decider(_messages, schemas):
+        seen.append(_names(schemas))
+        return next(steps)
+    direct, turn, context, quiet = _turn(decider=decider, executor=lambda n, a: {"ok": True, "data": []},
+                                         recognizer=lambda _p: {"category": "D", "days_back": 7, "requested_actions": []})
+    asyncio.run(direct.run_direct_turn("搜一下美光最近的新闻", context, emit=quiet))
+    assert "web_research" in seen[0] and "load_tools" in seen[0]
+
+
 def test_manage_news_source_validates_action():
     from app.agent_tool_catalog import validate
     assert validate("manage_news_source", {"action": "list"})["action"] == "list"

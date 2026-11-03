@@ -623,6 +623,8 @@ class Turn:
         wanted=[]
         for key in (self.scope.get('mode'),self.tool_bias):wanted+=by_mode.get(str(key or '').lower(),())
         if self.scope.get('form') or self.scope.get('financial_only'):wanted.append('财报与SEC')
+        # days_back is filled only for a request with a news freshness window: the classifier's own news signal.
+        if self.scope.get('days_back') is not None:wanted.append('新闻与网页')
         # A scheduled run exists to read and, when worth it, notify: its instruction may say so without any user words.
         if self.owner and self.unattended():wanted.append('例行与通知')
         for name in sorted({*self.granted_actions,*(self.scope.get('requested_actions') or [])}):
