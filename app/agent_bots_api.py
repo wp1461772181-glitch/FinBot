@@ -38,7 +38,7 @@ class BotBody(BaseModel):
     # null: the catalog's default model.
     model: str | None = Field(default=None, max_length=40)
     avatar: str | None = Field(default=None, max_length=16)
-    # Bloub look {shape, color, expression}; null clears it. Validated against the catalog in agent_bots._look.
+    # Bloub look {shape, color} (an old `expression` key is accepted and ignored); null clears it. Validated against the catalog in agent_bots._look.
     look: dict | None = None
     group: str | None = Field(default=None, max_length=40)
     pinned: bool | None = None

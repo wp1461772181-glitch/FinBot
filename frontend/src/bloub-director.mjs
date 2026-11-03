@@ -2,8 +2,13 @@
 // something unread, a hover or click, nothing for a while). A clockless state machine: every call carries `now`
 // (seconds), so node --test drives it with explicit times. React only forwards events and reads the result.
 //
+// The view also carries `expression`: CALM on every idle/notify/reaction/sleep base, the work-phase sequence (bloub-mood)
+// while the body is in a work state. The face is a layer on top of the state, never a replacement for it.
+//
 // Priority, high to low:  work (turn lifecycle + its stingers)  >  notify (unread)  >  reaction (hover / click)  >
 // life (sleep after a long idle)  >  idle.  Reactions never interrupt work; work pre-empts a reaction in progress.
+
+import { CALM, MOOD_MORPH, moodAt } from "./bloub-mood.mjs";
 
 /** Durations in seconds. DWELL is the engine's longest state morph (orbit, 0.6): the engine keeps ONE previous state,
  * so leaving a state sooner than that makes the fade jump instead of blend (bloub's MIN_BLOCK rule). */
@@ -54,11 +59,11 @@ export function createDirector({ now = 0, reducedMotion = false } = {}) {
       if (event.type !== "unread") m.lastActivity = t;
       switch (event.type) {
         case "turn-start":
-          m.turn = { phase: "waiting", since: t, quiet: Boolean(event.quiet) };
+          m.turn = { phase: "waiting", since: t, phaseSince: t, quiet: Boolean(event.quiet) };
           m.stinger = null; m.click = null;
           break;
         case "phase":
-          if (m.turn && S[event.phase]) m.turn.phase = event.phase;
+          if (m.turn && S[event.phase] && m.turn.phase !== event.phase) { m.turn.phase = event.phase; m.turn.phaseSince = t; }
           break;
         case "turn-end": {
           const was = m.turn; m.turn = null;
@@ -95,7 +100,10 @@ export function createDirector({ now = 0, reducedMotion = false } = {}) {
 
   function view(state, layer, t) {
     const idle = state === S.idle;
-    return { state, layer, follow: !m.reduced && idle, intro: idle && t < m.introUntil };
+    // The face layer rides on the work body only (orbit / thinking); every other base is calm.
+    const working = !m.reduced && m.turn && layer === "work" && (state === S.waiting || state === S.answer);
+    const expression = working ? moodAt(m.turn.phase, t - m.turn.phaseSince) : CALM;
+    return { state, layer, follow: !m.reduced && idle, intro: idle && t < m.introUntil, expression, moodMorph: MOOD_MORPH };
   }
 }
 

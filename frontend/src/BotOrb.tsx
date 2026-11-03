@@ -34,7 +34,7 @@ export function BotOrb({ avatar, look: stored, name, seed, size = 28, running = 
   if (parsed.kind === "text") return <span className={`bot-avatar ${className}`.trim()} aria-hidden="true">{parsed.text}</span>;
   const look = resolveLook(seed || name, avatar, stored);
   return <span className={`bot-orb ${className}`.trim()} aria-hidden="true" style={{ width: size, height: size }}>
-    <BloubAvatar size={size} shape={look.shape} color={look.color} expression={look.expression} state={bloubState({ running, unread })} frozenAt={frozen ? 0 : undefined} rowGaze={rowGaze} />
+    <BloubAvatar size={size} shape={look.shape} color={look.color} state={bloubState({ running, unread })} frozenAt={frozen ? 0 : undefined} rowGaze={rowGaze} />
   </span>;
 }
 

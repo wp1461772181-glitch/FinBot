@@ -4,7 +4,7 @@ export type DirectorEvent =
   | { type: "turn-start"; quiet?: boolean } | { type: "phase"; phase: "waiting" | "tool" | "answer" }
   | { type: "turn-end"; outcome: "done" | "error" | "cancel" } | { type: "unread"; value: boolean }
   | { type: "hover"; value: boolean } | { type: "click" } | { type: "activity" } | { type: "arrive" };
-export interface DirectorView { state: string; layer: "work" | "notify" | "reaction" | "life" | "idle"; follow: boolean; intro: boolean }
+export interface DirectorView { state: string; layer: "work" | "notify" | "reaction" | "life" | "idle"; follow: boolean; intro: boolean; expression: string; moodMorph: number }
 export interface Director { send(event: DirectorEvent, now: number): void; read(now: number): DirectorView }
 export function createDirector(options?: { now?: number; reducedMotion?: boolean }): Director;
 export function shouldArrive(seen: Set<string>, botId: string | null | undefined, reducedMotion: boolean): boolean;

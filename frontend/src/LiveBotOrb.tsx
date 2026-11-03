@@ -97,7 +97,7 @@ export function LiveBotOrb({ avatar, look: stored, name, seed, size = 30, chatSt
     onPointerLeave={e => { if (hoverable(e)) director.send({ type: "hover", value: false }, nowSec()); }}
     onClick={() => { director.send({ type: "click" }, nowSec()); ack.current?.(); }}>
     {reduced
-      ? <BloubAvatar size={size} shape={look.shape} color={look.color} expression={look.expression} state={still as BloubState} frozenAt={0} />
-      : <BloubAvatar size={size} shape={look.shape} color={look.color} expression={look.expression} live={live} />}
+      ? <BloubAvatar size={size} shape={look.shape} color={look.color} state={still as BloubState} frozenAt={0} />
+      : <BloubAvatar size={size} shape={look.shape} color={look.color} live={live} />}
   </span>;
 }

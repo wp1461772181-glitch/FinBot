@@ -221,7 +221,7 @@ class AgentBot(Base):
     tool_scope: Mapped[list | None] = mapped_column(JSON, nullable=True)
     model: Mapped[str | None] = mapped_column(String(40), nullable=True)
     avatar: Mapped[str] = mapped_column(String(16), nullable=False, default="")
-    # The bloub look the owner picked, ``{"shape", "color", "expression"}``; NULL: never customised (the frontend
+    # The bloub look the owner picked, ``{"shape", "color"}`` (an older ``expression`` key is ignored); NULL: never customised (the frontend
     # derives a default from the bot id).  Added to older tables by ``agent_bots.ensure_columns``.
     avatar_look: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     group_name: Mapped[str] = mapped_column(String(40), nullable=False, default="")

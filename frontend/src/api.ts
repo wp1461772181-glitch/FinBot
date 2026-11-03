@@ -726,7 +726,7 @@ export async function getKnowledgeCitation(chunkId:string):Promise<KnowledgeCita
 // catalog, so no key leaves the browser.  Catalog entries say configured / missing, never the key.
 export type BotFocus = { companies: Array<{ symbol: string; name?: string | null }>; theme: string | null };
 export type Bot = { id: string; name: string; title: string; description: string; focus: BotFocus; tool_scope: string[] | null; model: string | null;
-  skills: string[]; avatar: string; look: { shape: string; color: string; expression: string } | null; group: string; pinned: boolean; hidden: boolean; is_default: boolean; template: string; conversation_id: string | null;
+  skills: string[]; avatar: string; look: { shape: string; color: string } | null; group: string; pinned: boolean; hidden: boolean; is_default: boolean; template: string; conversation_id: string | null;
   daily_notify_cap: number; default_company: { symbol: string; company: string | null } | null; last_message: string | null; last_at: string | null; unread: number; pending: number;
   created_at?: string | null; updated_at?: string | null };
 export type BotTemplate = { id: string; label: string; name: string; title: string; description: string; tool_scope: string[] | null };

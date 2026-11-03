@@ -122,21 +122,21 @@ def _avatar(value) -> str:
     return avatar
 
 
-# The bloub catalog (frontend/src/bloub/skins.ts, expressions.ts; pinned b4bb3c1): a look names one of each.
+# The bloub catalog (frontend/src/bloub/skins.ts; pinned b4bb3c1): a look names a shape and a colour.  Expressions are not
+# customisable any more (every bot rests on the calm face; work phases drive the rest), so an `expression` key from an
+# older client or a stored look is accepted and ignored, never written.
 LOOK_SHAPES = frozenset({"cercle", "galet", "squircle", "capsule", "triangle", "hexagone", "nuage", "goutte"})
 LOOK_COLORS = frozenset({"encre", "creme", "brun", "rouge", "orange", "ambre", "vert", "turquoise", "bleu", "violet", "rose", "gris"})
-LOOK_EXPRESSIONS = frozenset({"neutre", "attentif", "surpris", "excite", "heureux", "hilare", "colere", "triste", "effraye",
-                              "mefiant", "confus", "curieux", "fier", "timide", "blase", "somnolent"})
 
 
 def _look(value) -> dict | None:
-    """None clears it; otherwise all three parts must be catalog ids (extra keys are refused, not dropped)."""
+    """None clears it; otherwise shape and colour must be catalog ids.  `expression` is tolerated and dropped; other keys are refused."""
     if value is None:
         return None
-    if (not isinstance(value, dict) or set(value) != {"shape", "color", "expression"}
-            or value["shape"] not in LOOK_SHAPES or value["color"] not in LOOK_COLORS or value["expression"] not in LOOK_EXPRESSIONS):
+    if (not isinstance(value, dict) or not {"shape", "color"} <= set(value) or not set(value) <= {"shape", "color", "expression"}
+            or value["shape"] not in LOOK_SHAPES or value["color"] not in LOOK_COLORS):
         raise BotError("invalid_look")
-    return {"shape": value["shape"], "color": value["color"], "expression": value["expression"]}
+    return {"shape": value["shape"], "color": value["color"]}
 
 
 def ensure_columns() -> None:

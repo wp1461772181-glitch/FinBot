@@ -9,6 +9,7 @@ import { EXPRESSION_BY_ID } from "./bloub/expressions";
 import { COLOR_BY_ID, DEFAULT_COLOR, DEFAULT_SHAPE, SHAPE_BY_ID, mixHex } from "./bloub/skins";
 import type { StateId } from "./bloub/states";
 import type { Director } from "./bloub-director.mjs";
+import { CALM, MOOD_MORPH, moodAt } from "./bloub-mood.mjs";
 import { rowAim, type RowGazeHandle } from "./row-gaze.mjs";
 import { ENGAGE_TIME, aimFromPointer, easeOutQuint, followLook, pointerFresh, tourLook } from "./bloub-gaze.mjs";
 
@@ -44,12 +45,10 @@ const reducedMotion = () => typeof window !== "undefined" && Boolean(window.matc
 const PALE = new Set(["creme", "gris"]);
 const INK_VAR = "var(--me-ink, #0a0a0c)";
 
-export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, shape = DEFAULT_SHAPE, expression, frozenAt, paper = "#f9f9f9", className, live, rowGaze }: {
+export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, shape = DEFAULT_SHAPE, frozenAt, paper = "#f9f9f9", className, live, rowGaze }: {
   live?: LiveHandle;
   /** Sidebar rows: set only while the row is hovered; the idle avatar's eyes follow `rowGaze.pointer`. Light avatars otherwise. */
   rowGaze?: RowGazeHandle; state?: BloubState; size?: number; color?: string; shape?: string;
-  /** Rest expression id (the customiser's face); unset: the engine's own neutral. State animations play on top of it. */
-  expression?: string;
   /** Seconds into the state. Set: one still frame, no animation loop (tiny icons, reduced motion). */
   frozenAt?: number; paper?: string; className?: string;
 }) {
@@ -60,7 +59,9 @@ export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, 
   const radiiRef = useRef<number[] | null>(null);
   const radii = useMemo(() => SHAPE_BY_ID.get(shape)?.radii ?? null, [shape]);
   radiiRef.current = radii;
-  const expr = useMemo(() => (expression ? EXPRESSION_BY_ID.get(expression) ?? null : null), [expression]);
+  // Every bot rests on the same calm face (not customisable); work phases lay a face over the orbit body (see setMood).
+  const expr = EXPRESSION_BY_ID.get(CALM) ?? null;
+  const moodRef = useRef({ id: CALM, orbitSince: 0, wasOrbit: false });
   const hex = COLOR_BY_ID.get(color)?.hex ?? "#0a0a0c";
   const ink = color === "encre" ? INK_VAR : hex;
   const engine = useRef<BotEngine | null>(null);
@@ -76,16 +77,29 @@ export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, 
   // Prop changes go to the engine with the current clock so it morphs instead of jumping.
   useEffect(() => { if (live) return; engine.current!.setState(state, clock.current); if (still !== undefined) setFrame(engine.current!.sample(still)); }, [state, still, live]);
   useEffect(() => { if (liveRef.current && intro.current.on) return; engine.current!.setShape(radii, clock.current); if (still !== undefined) setFrame(engine.current!.sample(still)); }, [radii, still]);
-  useEffect(() => { engine.current!.setExpression(expr, clock.current); if (still !== undefined) setFrame(engine.current!.sample(still)); }, [expr, still]);
   useEffect(() => {
     if (still !== undefined) return;
     return subscribe(dt => {
       clock.current += dt;
       if (liveRef.current) drive(liveRef.current);
-      else if (rowGazeRef.current || gaze.current.aiming) steerRow(rowGazeRef.current?.pointer ?? null); // nothing runs for a row nobody hovers
+      else { rowMood(); if (rowGazeRef.current || gaze.current.aiming) steerRow(rowGazeRef.current?.pointer ?? null); } // nothing else runs for a row nobody hovers
       setFrame(engine.current!.sample(clock.current));
     });
   }, [still]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The work face: same sequence as the main avatar's (bloub-mood). A row only knows "running", so it plays the waiting sequence.
+  function setMood(id: string, morph = MOOD_MORPH) {
+    const m = moodRef.current;
+    if (m.id === id) return;
+    m.id = id;
+    engine.current!.setMood(id === CALM ? null : EXPRESSION_BY_ID.get(id) ?? null, clock.current, morph);
+  }
+  function rowMood() {
+    const m = moodRef.current, orbit = stateRef.current === "orbit";
+    if (orbit && !m.wasOrbit) m.orbitSince = clock.current;
+    m.wasOrbit = orbit;
+    setMood(orbit ? moodAt("waiting", clock.current - m.orbitSince) : CALM);
+  }
 
   // Sidebar row: follow the hovered pointer on the idle base only; once the hover ends (or a state takes over) release it.
   function steerRow(ptr: RowGazeHandle["pointer"]) {
@@ -103,6 +117,7 @@ export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, 
   function drive(h: LiveHandle) {
     const eng = engine.current!, c = clock.current, view = h.director.read(nowSec());
     if (view.state !== eng.state) eng.setState(view.state as StateId, c);
+    setMood(view.expression, view.moodMorph);
     const g = gaze.current;
     if (view.intro) {
       if (!intro.current.on) {

@@ -11,8 +11,10 @@ export const BLOUB_EXPRESSIONS = ["neutre", "attentif", "surpris", "excite", "he
 /** The 14 animation states of the catalog, plus the UI-only `swirl` transition. */
 export const BLOUB_STATES = ["idle", "thinking", "wink", "wide", "alert", "notify", "exclaim", "sleep", "egg", "hexagon", "play",
   "orbit", "burst", "comet", "swirl"];
-export const DEFAULT_LOOK = { shape: "cercle", color: "encre", expression: "neutre" };
-const FIELDS = { shape: BLOUB_SHAPES, color: BLOUB_COLORS, expression: BLOUB_EXPRESSIONS };
+/** The one resting face of every bot (the catalogue's neutral/calm). Expressions are not customisable: work phases drive them (bloub-mood). */
+export const CALM_EXPRESSION = "neutre";
+export const DEFAULT_LOOK = { shape: "cercle", color: "encre" };
+const FIELDS = { shape: BLOUB_SHAPES, color: BLOUB_COLORS };
 
 // A face the user picked in the older editor (silhouette × eye colour) maps to a fixed look; kept for bots that never got a stored look.
 const STYLE_SHAPE = { kline: "cercle", pure: "galet", bull: "goutte", square: "squircle" };
@@ -31,17 +33,17 @@ export function hashString(value) {
 /** The default look of a bot that was never customised: shape and colour hashed from its id out of the full catalog, calm face. */
 export function defaultLook(id) {
   const h = hashString(id || "finbot");
-  return { shape: BLOUB_SHAPES[h % BLOUB_SHAPES.length], color: BLOUB_COLORS[Math.floor(h / BLOUB_SHAPES.length) % BLOUB_COLORS.length], expression: DEFAULT_LOOK.expression };
+  return { shape: BLOUB_SHAPES[h % BLOUB_SHAPES.length], color: BLOUB_COLORS[Math.floor(h / BLOUB_SHAPES.length) % BLOUB_COLORS.length] };
 }
 
-/** A full, valid {shape, color, expression} copy, or null for anything else (missing, partial, unknown ids). */
+/** A valid {shape, color} copy, or null for anything else (missing, partial, unknown ids). A stored `expression` (older looks) is ignored. */
 export function normalizeLook(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   for (const [field, list] of Object.entries(FIELDS)) if (!list.includes(raw[field])) return null;
-  return { shape: raw.shape, color: raw.color, expression: raw.expression };
+  return { shape: raw.shape, color: raw.color };
 }
 
-export function sameLook(a, b) { return Boolean(a && b) && a.shape === b.shape && a.color === b.color && a.expression === b.expression; }
+export function sameLook(a, b) { return Boolean(a && b) && a.shape === b.shape && a.color === b.color; }
 
 /** What a bot shows as its base: the stored look; else an explicit older face pick; else the hashed default. A broken stored value falls through. */
 export function resolveLook(id, avatar, stored) {
@@ -49,14 +51,14 @@ export function resolveLook(id, avatar, stored) {
   if (own) return own;
   const value = String(avatar ?? "").trim();
   const parsed = parseAvatar(value);
-  if (parsed.kind === "bot" && /^bot:/.test(value) && value !== DEFAULT_AVATAR) return { ...faceLook(parsed.style, parsed.mood), expression: DEFAULT_LOOK.expression };
+  if (parsed.kind === "bot" && /^bot:/.test(value) && value !== DEFAULT_AVATAR) return { ...faceLook(parsed.style, parsed.mood) };
   return defaultLook(id);
 }
 
 /** {shape, color} of {@link resolveLook} without a stored look (older call sites and tests). */
 export function bloubLook(id, avatar) { const { shape, color } = resolveLook(id, avatar, null); return { shape, color }; }
 
-/** Selector state: a copy of `look` with one field changed. An unknown field or id returns `look` itself. */
+/** Selector state: a copy of `look` with shape or colour changed. An unknown field or id returns `look` itself. */
 export function pickLook(look, field, id) {
   const list = FIELDS[field];
   return list && list.includes(id) ? { ...look, [field]: id } : look;
@@ -72,7 +74,7 @@ export function lookForSave(picked, stored) {
 /** A starting look for a bot being created: any shape and colour of the catalog, calm face. */
 export function randomLook(random = Math.random) {
   const at = list => list[Math.min(list.length - 1, Math.floor(random() * list.length))];
-  return { shape: at(BLOUB_SHAPES), color: at(BLOUB_COLORS), expression: DEFAULT_LOOK.expression };
+  return { shape: at(BLOUB_SHAPES), color: at(BLOUB_COLORS) };
 }
 
 /** Engine state: orbit while a turn is running, notify when there is something unread, otherwise idle. */

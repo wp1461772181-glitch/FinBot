@@ -146,6 +146,11 @@ export class BotEngine {
   private expr: BotExpression | null = null
   private exprPrev: BotExpression | null = null
   private exprAt = -10
+  /** Visage de travail (couche posee sur l'etat `orbit`) : voir `setMood`. null = le visage propre de la pose. */
+  private mood: BotExpression | null = null
+  private moodPrev: BotExpression | null = null
+  private moodAt = -10
+  private moodMorph = 0.8
   private look: Look = NO_LOOK
   private lookPrev: Look = NO_LOOK
   private lookAt = -10
@@ -184,6 +189,45 @@ export class BotEngine {
     this.exprPrev = this.expr
     this.expr = expression
     this.exprAt = now
+  }
+
+  /**
+   * Expression de TRAVAIL, posee par-dessus le corps de l'etat `orbit` (seul etat de travail dont les yeux
+   * sont visibles). Elle ne remplace que la forme des yeux et leur ecart : le regard de la pose (les yeux
+   * qui filent autour de la sphere) reste celui de l'animation. Le passage de l'une a l'autre — y compris
+   * depuis et vers « aucune » (null = les yeux propres de la pose) — est un morph de `morph` secondes avec
+   * la courbe des autres morphs du moteur, jamais un saut.
+   */
+  setMood(mood: BotExpression | null, now = 0, morph = 0.8) {
+    if (mood === this.mood) return
+    this.moodPrev = this.moodNow(now)
+    this.mood = mood
+    this.moodAt = now
+    this.moodMorph = morph
+  }
+
+  /** Visage de travail effectif a `now` : `mood` (ou `moodPrev`) pese 0..1 contre la pose. */
+  private moodNow(now: number): BotExpression | null {
+    return this.moodPair(now).mix
+  }
+
+  /** Les deux bornes du morph de travail, et la valeur melangee quand les deux existent. */
+  private moodPair(now: number): { from: BotExpression | null; to: BotExpression | null; k: number; mix: BotExpression | null } {
+    const from = this.moodPrev, to = this.mood
+    const k = clamp((now - this.moodAt) / this.moodMorph)
+    if (k >= 1) return { from, to, k: 1, mix: to }
+    if (from && to) return { from, to, k, mix: blendExpression(from, to, easings.easeOutQuint(k)) }
+    return { from, to, k, mix: null }
+  }
+
+  /** Applique le visage de travail aux yeux de `pose` (orbit seulement). */
+  private withMood(def: StateDef, pose: Pose, now: number): Pose {
+    if (def.id !== 'orbit') return pose
+    const { from, to, k, mix } = this.moodPair(now)
+    if (!from && !to) return pose
+    const own: BotExpression = { id: 'neutre', gaze: pose.gaze, split: pose.split, eyes: pose.eyes }
+    const face = mix ?? blendExpression(from ?? own, to ?? own, easings.easeOutQuint(k))
+    return { ...pose, split: face.split, eyes: face.eyes }
   }
 
   /** Expression effective a l'instant `now`, morph en cours compris. */
@@ -370,7 +414,7 @@ export class BotEngine {
     if (this.departFige) return this.departFige
     if (!this.prev) return null
     const prevDef = STATE_BY_ID.get(this.prev)!
-    return this.posed(prevDef, Math.max(0, now - this.tPrev), shape, expr)
+    return this.withMood(prevDef, this.posed(prevDef, Math.max(0, now - this.tPrev), shape, expr), now)
   }
 
   /**
@@ -382,7 +426,7 @@ export class BotEngine {
     const def = STATE_BY_ID.get(this.cur)!
     const shape = this.shapeAtTime(now)
     const expr = this.exprAtTime(now)
-    const pose = this.posed(def, Math.max(0, now - this.tCur), shape, expr)
+    const pose = this.withMood(def, this.posed(def, Math.max(0, now - this.tCur), shape, expr), now)
     const since = now - this.tCur
     if (since >= def.morph) return pose
     const origine = this.origine(now, shape, expr)
@@ -426,7 +470,7 @@ export class BotEngine {
     const def = STATE_BY_ID.get(this.cur)!
     const shape = this.shapeAtTime(now)
     const expr = this.exprAtTime(now)
-    let pose = this.posed(def, Math.max(0, now - this.tCur), shape, expr)
+    let pose = this.withMood(def, this.posed(def, Math.max(0, now - this.tCur), shape, expr), now)
     let decalage = this.decalageAtTime(now, this.cur)
 
     // --- transition -------------------------------------------------------
