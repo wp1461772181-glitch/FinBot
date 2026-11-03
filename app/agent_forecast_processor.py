@@ -11,6 +11,7 @@ from uuid import UUID
 
 from dotenv import load_dotenv
 
+from . import observability
 from .event_provider import configured_deepseek_model, create_deepseek_provider_from_env
 from .forecast_v2 import ForecastDraft
 from .forecast_v2_models import ForecastJobV2
@@ -79,6 +80,24 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
         }
 
     def __call__(self, job: ForecastJobV2) -> ForecastDraft:
+        """One Langfuse trace per forecast job (no-op unless configured); the decision-model call attaches below."""
+        trace = observability.start_trace("forecast", metadata={
+            "job_id": str(getattr(job, "id", "")), "symbol": getattr(job, "symbol", None),
+            "parent_version_id": str(getattr(job, "parent_version_id", "") or ""),
+            "root_version_id": str(getattr(job, "root_version_id", "") or ""),
+            "processor_version": PROCESSOR_VERSION})
+        self._trace = trace
+        try:
+            draft = self._process(job)
+        except BaseException as exc:
+            observability.end_trace(trace, error=type(exc).__name__)
+            raise
+        finally:
+            self._trace = None
+        observability.end_trace(trace, metadata={"result": "draft"})
+        return draft
+
+    def _process(self, job: ForecastJobV2) -> ForecastDraft:
         base = super().__call__(job)
         time_mode = getattr(job, "time_mode", "observed")
         parent = self._load_parent_for_brief(job)
@@ -265,12 +284,25 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
         The model must answer: a missing/unusable model or an answer that is not a normalised vector fails the
         job (no Jev stand-in, no invented numbers).  Jev is only the control: any failure there is recorded in
         the manifest and the primary goes on."""
+        generation = None
         try:
-            result = self._llm_provider_factory().evaluate(brief_data)
+            provider = self._llm_provider_factory()
+            generation = observability.start_generation(
+                getattr(self, "_trace", None), name="forecast-decision",
+                model=str((getattr(provider, "model", None) or {}).get("model", "")) or None, role="forecast",
+                input=brief_data)
+            result = provider.evaluate(brief_data)
         except ForecastModelError as exc:
+            observability.end_generation(generation, error=exc.code)
             raise ForecastInputError(f"forecast_{exc.code}", retryable=exc.retryable) from None
-        except Exception:
+        except Exception as exc:
+            observability.end_generation(generation, error=type(exc).__name__)
             raise ForecastInputError("forecast_model_error", retryable=True) from None
+        observability.end_generation(generation, output={"choice": result.choice, "probabilities": dict(result.probabilities),
+                                                         "reasoning": result.reasoning},
+                                     usage={k: v for k, v in (("prompt_tokens", result.usage.get("input_tokens")),
+                                                              ("completion_tokens", result.usage.get("output_tokens")))
+                                            if v is not None})
         model_manifest.update({
             "model_status": "experimental_llm",
             "decision_provider": {

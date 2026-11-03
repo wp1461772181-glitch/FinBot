@@ -12,6 +12,7 @@ from ..agent_tool_catalog import definitions,schemas,validate,ALWAYS_ON as DISCL
 from .. import agent_context as layers
 from .evidence import gate_row,number_rows,citation_errors,contains
 from . import tools,consent
+from .. import observability
 from .authorization import vetoed,authorized,routine_ask
 from .references import Referent,validate_referents,bounded_stage,normalized,assistant_message_sources,assistant_item_catalogue
 from .trace import TurnTrace,classifier_output,decision_output,resolver_output,verify_output
@@ -572,6 +573,8 @@ class Turn:
         # repeats itself has not run out of progress, it has lost the result it already holds.
         self.replays={};self.replayed=0
         self.last_issues=[];self.last_rejected=[];self.last_claim_issues=[];self.unverified_lines=[]
+        # Langfuse trace handle for this turn (None unless configured); only this Turn ever holds it.
+        self.obs=None
         self.completed_writes=set();self.resume_note=None;self.resuming=False
         # Every event of the turn, including the ones handed to tools.invoke, passes through here.
         self.trace=TurnTrace(emit,secret=context.api_key);self.emit=self.trace.relay
@@ -707,7 +710,13 @@ class Turn:
             cap=getattr(self.context,'token_budget',None)
             if isinstance(cap,int) and cap>0 and self.audit['token_usage']>=cap*TASK_HARD_CAP_FACTOR:raise ValueError('task_token_cap')
             self.audit['model_calls']+=1
-            response,message=await self.provider_request(messages,tool_schemas)
+            generation=observability.start_generation(self.obs,name='model-call',model=self.context.model,role='agent',
+                                                      input=messages,metadata={'provider':self.context.provider,'tools_offered':len(tool_schemas or [])})
+            try:response,message=await self.provider_request(messages,tool_schemas)
+            except BaseException as exc:
+                observability.end_generation(generation,error=exc.detail if isinstance(getattr(exc,'detail',None),str) else type(exc).__name__);raise
+            observability.end_generation(generation,output=message.get('content') if not message.get('tool_calls') else {'content':message.get('content'),'tool_calls':message.get('tool_calls')},
+                                         usage=response.get('usage') if isinstance(response,dict) else None)
             mark_progress()
             usage=response.get('usage',{}) if isinstance(response,dict) else {}
             actual=usage.get('total_tokens')
@@ -1362,6 +1371,8 @@ class Turn:
     async def execute_read(self,name,args):
         call_id=self.active_call_id or str(uuid.uuid4());await self.emit({'event':'tool_start','call_id':call_id,'name':name,'arguments':args})
         outcome=None
+        span=observability.start_span(self.obs,name='tool:'+name,input={'argument_keys':sorted(args) if isinstance(args,dict) else [],
+                                      **({'query':args['query']} if isinstance(args,dict) and isinstance(args.get('query'),str) else {})},metadata={'tool':name})
         attempts=max(1,min(MAX_RETRIES+1,MAX_ATTEMPTS.get(name,MAX_RETRIES+1)))
         for attempt in range(attempts):
             if self.budget(soft=False):break
@@ -1421,6 +1432,7 @@ class Turn:
             signature=json.dumps([name,args],sort_keys=True,default=str)
             if signature not in self.completed:self.completed.add(signature);self.audit['distinct_successful_calls']+=1
         self.last_call_id=call_id
+        observability.end_span(span,error=None if outcome.get('ok') else str(outcome.get('error_code') or 'tool_failed'),metadata={'tool_calls_so_far':self.audit['tool_calls']})
         return outcome
 
     async def publish_result(self,name,outcome):
@@ -1888,6 +1900,14 @@ class Turn:
             if not chosen:raise ValueError('confirmation_parameter_mismatch')
             operation={**operation,'arguments':{'version_id':operation['arguments']['version_id'],
                        'source_refs':[{'source_type':c['source_type'],'source_id':c['source_id']} for c in chosen]}}
+        span=observability.start_span(self.obs,name='tool:'+str(operation.get('name')),input={'argument_keys':sorted(operation['arguments']) if isinstance(operation.get('arguments'),dict) else []},metadata={'tool':operation.get('name'),'write':True})
+        try:result=self._execute_approved(operation,key)
+        except BaseException as exc:
+            observability.end_span(span,error=type(exc).__name__);raise
+        observability.end_span(span,error=None if not isinstance(result,dict) or result.get('ok',True) else str(result.get('error_code') or 'tool_failed'))
+        return result
+
+    def _execute_approved(self,operation,key):
         if operation.get('grant_only'):
             return asyncio.run(self.prepare_approved_sec(operation) if operation['name'] in {'fetch_sec','refresh_sec'} else self.prepare_approved_web(operation))
         if definitions()[operation['name']].level=='reversible':return asyncio.run(tools.execute_reversible(operation,key,self.context,emit=self.emit,overrides={'status':getattr(self,'skill_status',None)} if operation['name']=='save_skill' else None))
@@ -2819,7 +2839,17 @@ class Turn:
 
 async def run_direct_turn(question,context,*,emit,messages=None,state=None):
     turn=Turn(question,context,emit,messages,state)
-    result=await _guarded(turn)
+    g=lambda k:getattr(context,k,None)
+    turn.obs=observability.start_turn(conversation_id=str(g('conversation_id') or ''),turn_id=str((state or {}).get('turn_id') or ''),
+        bot_id=str(g('bot_id')) if g('bot_id') else None,owner_hash=str(g('owner_hash') or ''),
+        source=g('source') or ('task' if g('unattended') else 'web'),
+        model_role=f"agent:{g('provider')}/{g('model')}",question=question)
+    try:result=await _guarded(turn)
+    except BaseException as exc:
+        observability.end_trace(turn.obs,error=type(exc).__name__);raise
+    observability.score_citation_audit(turn.obs,verified=len(turn.citations),unverified=len(turn.unverified_lines or turn.last_issues),unverified_lines=turn.unverified_lines)
+    observability.end_trace(turn.obs,output=result.get('answer'),metadata={'status':result.get('status'),'reason':result.get('reason'),
+        'model_calls':turn.audit.get('model_calls'),'tool_calls':turn.audit.get('tool_calls'),'token_usage':turn.audit.get('token_usage')})
     # The graph closes here, once the turn has produced its last node.
     await turn.trace.finish(result)
     return {**result,'trace':turn.trace.nodes()}
