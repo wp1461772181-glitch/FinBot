@@ -201,12 +201,20 @@ def end_trace(trace: Handle | None, *, output: Any = None, metadata: dict | None
 
 
 def score_citation_audit(trace: Handle | None, *, verified: int, unverified: int,
-                         unverified_lines: list | None = None) -> None:
-    """The turn's own audit result as trace scores; no second audit pass."""
+                         unverified_lines: list | None = None, truncation_events: int | None = None,
+                         insufficient: int | None = None) -> None:
+    """The turn's own audit result as trace scores; no second audit pass.
+
+    ``truncation_events`` is the number of machine-path cuts the turn recorded (audit.truncation_events);
+    ``insufficient`` the lines left unchecked because their source was partial, apart from the unsupported ones."""
     if trace is None:
         return
     score(trace, "citation_verified", int(verified))
     score(trace, "citation_unverified", int(unverified))
+    if truncation_events is not None:
+        score(trace, "truncation_events", int(truncation_events))
+    if insufficient:
+        score(trace, "citation_insufficient", int(insufficient))
     if unverified_lines:
         lines = [str(x.get("line") if isinstance(x, dict) else x)[:200] for x in unverified_lines[:5]]
         score(trace, "unverified_lines", len(unverified_lines), comment=" | ".join(lines))

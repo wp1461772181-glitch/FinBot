@@ -32,6 +32,11 @@ async def _direct_agent_turn(state: AgentWorkflowState, runtime: Runtime[AgentRu
     result = await run_direct_turn(state.get("question", ""), runtime.context, emit=publish,
                                    messages=state.get("messages", []), state=state)
     answer = result["answer"]
+    # The turn's own checks have run: the full checking text of a source is not stored (a stored citation
+    # that loses it is marked evidence_incomplete), so a later reader treats a miss as insufficient.
+    from .evidence import persistable_citation, persistable_result_sets
+    result = {**result, "citations": [persistable_citation(c) for c in result.get("citations", [])],
+              "result_sets": persistable_result_sets(result.get("result_sets", []))}
     if result.get("pending_request"):
         pending=result["pending_request"]
         await publish({"event":"clarification","request_id":pending["id"],"reason":pending["reason"],"choices":pending["choices"],"display":pending.get("display"),"question":pending.get("question"),

@@ -300,9 +300,27 @@ class StreamRequest(BaseModel):
 
 def frame(event,data): return f"event: {event}\ndata: {json.dumps(data,ensure_ascii=False,separators=(',',':'))}\n\n"
 
-def bounded_tool_result(value, limit=TOOL_RESULT_BYTES):
- if len(json.dumps(value,ensure_ascii=False,separators=(",",":")).encode("utf-8"))<=limit:return value
+def bounded_tool_result(value, limit=TOOL_RESULT_BYTES, whole_items=False, on_cut=None):
+ """A tool result within ``limit`` bytes.  ``whole_items`` (the result a model reasons over) keeps whole
+ rows and says how many were left out; a row is cut field by field only when no whole row fits.
+ ``on_cut(original_bytes, kept_bytes)`` hears of every cut."""
+ original=len(json.dumps(value,ensure_ascii=False,separators=(",",":")).encode("utf-8"))
+ if original<=limit:return value
  data=value.get("data") if isinstance(value,dict) else None
+ if whole_items and isinstance(data,list) and data:
+  kept=[]
+  for item in data:
+   candidate={**value,"data":kept+[item],"truncated":True,"omitted_items":len(data)-len(kept)-1}
+   if _protocol_size(candidate)>limit:break
+   kept.append(item)
+  if kept:
+   result={**value,"data":kept,"truncated":True,"omitted_items":len(data)-len(kept)}
+   if on_cut:on_cut(original,_protocol_size(result))
+   return result
+ result=_bounded_by_fields(value, limit, data)
+ if on_cut:on_cut(original,_protocol_size(result))
+ return result
+def _bounded_by_fields(value, limit, data):
  kept=[]
  if isinstance(data,list):
   for item in data:

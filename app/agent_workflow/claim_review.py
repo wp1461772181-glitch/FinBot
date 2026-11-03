@@ -52,7 +52,8 @@ def collect_source_bodies(citations, observations=None) -> tuple[dict[int, str],
         except (TypeError, ValueError):
             continue
         quote = str(citation.get("quote") or "")
-        full = _row_text(citation, rows)
+        # The citation's own full checking text (never cut) outranks a row lookup; the quote is what is shown.
+        full = str(citation.get("check_text") or "") or _row_text(citation, rows)
         if full and len(full) > len(quote):
             bodies[ordinal] = full
         else:

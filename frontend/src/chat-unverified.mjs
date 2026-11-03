@@ -6,6 +6,7 @@
 export const REASON_KEYS = {
   unsupported_numeric_claim: "数字与引用的来源对不上",
   unsupported_numeric: "数字与引用的来源对不上",
+  insufficient_numeric_evidence: "来源内容不完整，这个数字无法核实",
   field_mismatch: "数字与引用的来源对不上",
   missing_citation: "这句话没有标注来源",
   invalid_citation: "引用的来源编号不存在",

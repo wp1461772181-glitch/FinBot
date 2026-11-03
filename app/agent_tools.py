@@ -108,7 +108,15 @@ async def _legacy_materials(symbol: str, keyword: str, limit: int) -> dict:
         source_truncated=row.pop("source_truncated",False);body_length=row.pop("body_length",0)
         row["excerpt_coverage"]="partial_excerpt" if source_truncated or body_length>3000 else "complete_saved_body"
         row["saved_text"]="frozen_80k_preview" if source_truncated else "full_document"
-        row["excerpt"] = row["excerpt"][:3000]
+        whole = row["excerpt"]
+        row["excerpt"] = whole[:3000]
+        # The shown excerpt is a cut; the whole saved text rides beside it (never shown) so the number
+        # checker reads all of it.  A body that is itself a frozen preview, or that the query only
+        # fetched the first 1200 characters of, is partial: a figure missing from it is "insufficient".
+        if len(whole) > 3000:
+            row["_evidence_text"] = whole
+        if source_truncated or (row.get("material_type") == "uploaded_media" and body_length > len(whole)):
+            row["evidence_incomplete"] = True
     return {"ok": True, "data": [{k:_json(v) for k,v in row.items()} for row in rows],
             "source": "uploaded_evidence + sec_filing_inventory (saved records)",
             "as_of": _json(max((r["observed_at"] for r in rows if r.get("observed_at")), default=None)),
@@ -716,13 +724,15 @@ async def query_material_analysis(symbol: str, accession_number: str | None = No
             for item in (row.get('payload') or {}).get(group,[]) or []:
                 for citation in item.get('citations',[]) if isinstance(item,dict) else []:
                     quote=citation.get('quote') if isinstance(citation,dict) else None
-                    if quote and quote in source_text and quote not in quotes: quotes.append(str(quote)[:500])
+                    if quote and quote in source_text and quote not in quotes: quotes.append(str(quote))
         manifest=row.get('source_manifest') or {}
         safe_manifest={key:manifest[key] for key in ('source_type','source_id','source_hash','content_sha256','truncated','coverage_incomplete') if key in manifest}
         verified.append({"source_type":row['source_type'],"source_id":str(row['source_id']),"accession_number":row.get('accession_number'),
           "source_url":original,"analysis_id":str(row['id']),"version_no":row['version_no'],"created_at":_json(row['created_at']),
           "published_at":_json(row['published_at']),"observed_at":_json(row['observed_at']),"model":row['actual_model'],
           "summary":summary[:900],"evidence_quotes":quotes[:3],"source_manifest":safe_manifest,
+          # The summary shown is capped; the whole of it rides beside it for the number checker.
+          **({"_evidence_text":summary} if len(summary)>900 else {}),
           "classification":"saved_ai_analysis_not_official_source_text"})
     latest=[];seen=set()
     for row in verified:

@@ -11,7 +11,7 @@ from ..agent_chat_identity import owner_credential_matches
 from ..agent_tool_catalog import definitions,schemas,validate,ALWAYS_ON as DISCLOSED,TOOL_CATEGORIES,CATEGORY_OF
 from .. import agent_context as layers
 from .evidence import gate_row,number_rows,citation_errors,contains
-from . import tools,consent
+from . import tools,consent,truncation
 from .. import observability
 from .authorization import vetoed,authorized,routine_ask
 from .references import Referent,validate_referents,bounded_stage,normalized,assistant_message_sources,assistant_item_catalogue
@@ -219,7 +219,7 @@ HISTORY_NOTE=('以下是本对话之前的轮次，只用来理解用户在指�
 UNDERSTANDING_NOTE='对当前问题的理解（来自前置步骤，以改写后的问题为准；时间窗口 days_back 与结果条数 max_results 按这里执行）：'
 CONTROL_PREFIXES=('confirm:','authorize:','cancel:','change:')
 SYNC_DONE={'complete','completed','created','succeeded','succeeded_no_change','already_exists'}
-REPAIRABLE={'unsupported_numeric_claim','unsupported_claim','invalid_citation','missing_citation',
+REPAIRABLE={'unsupported_numeric_claim','insufficient_numeric_evidence','unsupported_claim','invalid_citation','missing_citation',
             'quote_not_found','quote_too_short','unsupported_numeric','field_mismatch',
             'derived_requires_calculate','bad_ordinal','claims_missing'}
 MAX_REPAIR_ROUNDS=2
@@ -881,8 +881,12 @@ class Turn:
             symbol=str(self.scope['symbol'])
             others=[str(v) for v in (self.scope.get('symbols') or []) if v and str(v).casefold()!=symbol.casefold()]
             if not others and re.search(r'(?<![A-Za-z0-9.])'+re.escape(symbol.upper())+r'(?![A-Za-z0-9])',normalized(entity_trusted)):
-                from .entities import sec_title
-                title=await asyncio.to_thread(sec_title,symbol)
+                from .entities import issuer_words, sec_title
+                # Only a name with no Latin words gets anchored: a Latin company name that
+                # conflicts with the symbol's SEC title stays unbound (and is asked about),
+                # it is never silently overwritten.
+                if issuer_words(str(self.scope.get('company') or '')):title=None
+                else:title=await asyncio.to_thread(sec_title,symbol)
                 if title:
                     named=self.scope.get('company')
                     if named and not self.scope.get('company_mention') and normalized(named).casefold() in normalized(entity_trusted).casefold():
@@ -1252,7 +1256,18 @@ class Turn:
         memory=next((m for m in self.messages if isinstance(m,dict) and layers.is_memory_message(m)),None)
         catalogue=next((m for m in self.messages if isinstance(m,dict) and layers.is_catalogue_message(m)),None)
         turns=list(reversed(selected))
-        return ([{'role':'system','content':str(memory.get('content'))[:6000]}] if memory else []) + ([{'role':'system','content':str(catalogue.get('content'))}] if catalogue else [])+turns
+        memory_text=''
+        if memory:
+            # Whole memory lines within the budget; what does not fit is counted in the text and the audit.
+            memory_text,original,kept,dropped=truncation.cut_lines(str(memory.get('content')),6000)
+            if dropped:
+                self.note_truncation('prior_turns.memory',original,kept,dropped_lines=dropped)
+                memory_text+='\n（另有 %d 行较早记忆因长度已省略。）'%dropped
+        return ([{'role':'system','content':memory_text}] if memory else []) + ([{'role':'system','content':str(catalogue.get('content'))}] if catalogue else [])+turns
+
+    def note_truncation(self,site,original_chars,kept_chars,**extra):
+        """A machine-path cut (a model payload that did not fit whole): recorded as ``audit.truncation_events``."""
+        return truncation.record(self.audit,site,original_chars,kept_chars,**extra)
 
     def skill_messages(self):
         """The enabled skills' one-line list (stable, part of the cached prefix) and the active skill's steps."""
@@ -1283,7 +1298,8 @@ class Turn:
                 # Single-batch fallback: compact oversized tool payloads so a multi-symbol batch never overflows RUNNING_REQUEST_BYTES.
                 for m in self.protocol:
                     if m.get('role')=='tool' and isinstance(m.get('content'),str) and len(m['content'])>6000:
-                        m['content']=m['content'][:6000]
+                        before=len(m['content']);m['content']=truncation.compact_tool_content(m['content'],6000)
+                        self.note_truncation('protocol.tool_result',before,len(m['content']))
                 break
             self.protocol=self.protocol[starts[1]:]
         instruction='\n'.join(INSTRUCTION)
@@ -1321,11 +1337,49 @@ class Turn:
             {'role':'user','content':self.question},
             {'role':'system','content':UNDERSTANDING_NOTE+json.dumps(hint,ensure_ascii=False,default=str)},
             *([{'role':'system','content':self.resume_note}] if self.resume_note else []),*([] if closing else self.protocol),
-            {'role':'system','content':'Accepted evidence DATA (recent sources; all source identities remain in the response catalogue): '+json.dumps(accepted[-10:],ensure_ascii=False,default=str)[:22000]},
-            {'role':'system','content':'Tool statuses and validation errors (not factual evidence): '+json.dumps(self.feedback,ensure_ascii=False,default=str)[-8000:]},
-            {'role':'system','content':'Server result catalogue: '+json.dumps([{'id':s['id'],'scope':s.get('scope'),'items':[{'position':i+1,'title':r.get('title'),'id':r.get('id'),'url':r.get('url'),
+            {'role':'system','content':self.evidence_payload(accepted)},
+            {'role':'system','content':self.status_payload()},
+            {'role':'system','content':self.catalogue_payload()}]
+
+    def evidence_payload(self,accepted,budget=22000):
+        """The accepted evidence the model reasons over: whole sources, newest first, until the budget is spent.
+        What does not fit is left out by source, named in the text, and recorded in ``audit.truncation_events``."""
+        kept,omitted,original,used=truncation.fit_observations(accepted,budget)
+        note=''
+        if omitted:
+            self.note_truncation('tool_messages.accepted_evidence',original,used,omitted_sources=len(omitted))
+            note=' Left out for length (%d earlier source(s), not shown to you): %s.'%(len(omitted),' '.join(str(x) for x in omitted[:20]))
+        return 'Accepted evidence DATA (recent sources; all source identities remain in the response catalogue):'+note+' '+json.dumps(kept,ensure_ascii=False,default=str)
+
+    def status_payload(self,budget=8000):
+        """Tool statuses and validation errors: whole entries, newest first."""
+        kept,dropped,original,used=truncation.select_whole_items(self.feedback,budget)
+        note=''
+        if dropped:
+            self.note_truncation('tool_messages.feedback',original,used,omitted_entries=len(dropped))
+            note=' (%d earlier entr%s left out for length)'%(len(dropped),'y' if len(dropped)==1 else 'ies')
+        return 'Tool statuses and validation errors (not factual evidence)'+note+': '+json.dumps(kept,ensure_ascii=False,default=str)
+
+    def catalogue_payload(self,budget=14000):
+        """The server's result catalogue: whole sets, newest first; positions inside a set stay as numbered."""
+        def item(i,r):
+            return {'position':i+1,'title':r.get('title'),'id':r.get('id'),'url':r.get('url'),
                 'source_type':r.get('source_type'),'published_at':r.get('published_at') or r.get('filed_at'),
-                'preview':' '.join(str(r.get('excerpt') or r.get('summary') or r.get('answer') or '').split())[:160]} for i,r in enumerate(s['rows'][:8])]} for s in self.sets],ensure_ascii=False,default=str)[:14000]}]
+                'preview':' '.join(str(r.get('excerpt') or r.get('summary') or r.get('answer') or '').split())[:160]}
+        entries=[]
+        for s in self.sets:
+            rows=s['rows']
+            entry={'id':s['id'],'scope':s.get('scope'),'items':[item(i,r) for i,r in enumerate(rows[:8])]}
+            if len(rows)>8:
+                entry['items_not_listed']=len(rows)-8
+                self.note_truncation('tool_messages.result_catalogue.items',truncation.size_of([item(i,r) for i,r in enumerate(rows)]),truncation.size_of(entry['items']),omitted_items=len(rows)-8)
+            entries.append(entry)
+        kept,dropped,original,used=truncation.select_whole_items(entries,budget)
+        note=''
+        if dropped:
+            self.note_truncation('tool_messages.result_catalogue',original,used,omitted_sets=len(dropped))
+            note=' (%d earlier set(s) left out for length)'%len(dropped)
+        return 'Server result catalogue'+note+': '+json.dumps(kept,ensure_ascii=False,default=str)
 
     async def decision(self,closing=False,retry=False):
         if closing:
@@ -1575,6 +1629,11 @@ class Turn:
         signature=hashlib.sha256(json.dumps([{k:r.get(k) for k in ('id','set_id','symbol','source_id','url','source_url','content_hash','excerpt','summary','close','first_close','last_close')} for r in accepted],sort_keys=True,default=str).encode()).hexdigest()
         if signature in self.evidence_signatures:self.repeated_evidence+=1
         else:self.repeated_evidence=0;self.evidence_signatures.add(signature)
+        for shown in accepted:
+            # The model is shown the excerpt; the checker reads the whole text.  The difference is a machine-path
+            # cut (the row says `truncated`), so it is recorded.
+            whole=shown.get('_evidence_text');excerpt=shown.get('excerpt') if shown.get('excerpt') is not None else shown.get('summary')
+            if isinstance(whole,str) and isinstance(excerpt,str):self.note_truncation(name+'.excerpt',len(whole),len(excerpt))
         rows=number_rows(name,accepted,self.citations,requirements)
         self.last_accepted={'ok':True,'data':rows,'source':outcome.get('source')}
         self.observations.append({'name':name,'arguments':args,'result':self.last_accepted,'accepted_evidence':True})
@@ -2418,6 +2477,9 @@ class Turn:
                 from .answer_tidy import tidy_answer
                 self.last_rejected=rejected
                 self.audit['answer_issues']=issues
+                # "证据不完整" (a figure missing from a partial source) is its own count, never an unsupported number.
+                if 'insufficient_numeric_evidence' in issues:self.audit['insufficient_evidence_lines']=issues.count('insufficient_numeric_evidence')
+                else:self.audit.pop('insufficient_evidence_lines',None)
                 # What the check could not support, and why, so a flagged line can be diagnosed instead of guessed at.
                 self.audit['rejected_lines']=[{'line':line[:200],'reason':code} for line,code in self.last_rejected[:5]]
                 reason=issues[0]
@@ -2490,28 +2552,36 @@ class Turn:
             self.audit['decision_steps']+=1
             async with self.trace.step('repair',step=attempt) as node:
                 # Naming the numbers the check rejected is the difference between a repair and a guess.
-                rejected=[]
+                rejected=[];insufficient=[]
                 try:
-                    from .evidence import unsupported_number_values
-                    rejected=unsupported_number_values(draft,self.citations)[:8]
-                except Exception:rejected=[]
+                    from .evidence import number_check
+                    unsupported,missing=number_check(draft,self.citations)
+                    rejected=unsupported[:8];insufficient=missing[:8]
+                except Exception:rejected=[];insufficient=[]
                 # A rejected number is usually a citation slip, not a fabrication: the figure sits in the
                 # evidence the answer quoted elsewhere. Naming that ordinal turns 'drop it' into 're-source
                 # it', which is the difference between a repaired answer and an emptied one.
                 holders={}
-                if rejected:
+                if rejected or insufficient:
+                    from .evidence import citation_check_text
                     from .semantic import figure_values
-                    for number in rejected:
+                    for number in [*rejected,*insufficient]:
                         ordinals=[str(c.get('ordinal')) for c in self.citations
-                                  if number in figure_values(str(c.get('quote') or ''))]
+                                  if number in figure_values(citation_check_text(c))]
                         if ordinals:holders[str(number)]=ordinals
-                if attempt==1:self.audit['unsupported_numbers']=rejected[:8]
+                # Two different outcomes: figures the complete sources refute, and figures missing only from
+                # a source whose stored text is partial (证据不完整).
+                if attempt==1:
+                    self.audit['unsupported_numbers']=rejected[:8]
+                    if insufficient:self.audit['insufficient_numbers']=insufficient[:8]
                 payload={'rejected_lines':[{'line':line[:400],'reason':code} for line,code in best_pairs[:8]],
                          'unsupported_numbers':rejected}
+                if insufficient:payload['insufficient_numbers']=insufficient
                 if holders:payload['rejected_numbers_appear_in']=holders
-                # The full quote of every source the rejected lines cite or that holds their figures: the
-                # rewrite used to see only the last ten accepted sources cut to 22,000 characters.
-                sources=cited_sources(best_pairs[:8],self.citations,holders)
+                # The quote of every source the rejected lines cite or that holds their figures, whole sources
+                # within a budget (the rest named and recorded), never a quote cut mid-text.
+                sources=cited_sources(best_pairs[:8],self.citations,holders,
+                                      on_cut=lambda original,kept,left_out:self.note_truncation('repair.cited_sources',original,kept,left_out_sources=left_out))
                 if sources:payload['cited_sources']=sources
                 claim_issues=[{'id':item.get('id'),'reason':item.get('reason'),'citation_ordinal':item.get('citation_ordinal'),
                                'statement':str(item.get('statement') or '')[:300]} for item in self.last_claim_issues[:8]]
@@ -2719,8 +2789,16 @@ class Turn:
                         reply={'ok':False,'error_code':code,'required_arguments':list(schema.get('required') or []),
                                'arguments_you_supplied':supplied,
                                'note':'Fix only the argument names or values that are wrong; keep everything that already validated.'}
-                    self.protocol.append({'role':'tool','tool_call_id':call['id'],
-                        'content':json.dumps(reply,ensure_ascii=False,default=str)[:4000]});continue
+                    content=json.dumps(reply,ensure_ascii=False,default=str)
+                    if len(content)>4000 and isinstance(reply.get('arguments_you_supplied'),dict):
+                        # Whole arguments, never half of one: the oversized ones are named and left out.
+                        supplied=reply['arguments_you_supplied']
+                        lean={k:v for k,v in supplied.items() if len(json.dumps(v,ensure_ascii=False,default=str))<=500}
+                        reply={**reply,'arguments_you_supplied':lean,'arguments_left_out_for_length':sorted(set(supplied)-set(lean))}
+                        trimmed=json.dumps(reply,ensure_ascii=False,default=str)
+                        self.note_truncation('invalid_call_reply.arguments',len(content),len(trimmed))
+                        content=trimmed
+                    self.protocol.append({'role':'tool','tool_call_id':call['id'],'content':content});continue
                 signature=json.dumps([name,args],sort_keys=True,ensure_ascii=False)
                 if signature in self.seen:
                     replay=self.replays.get(signature)
@@ -2782,7 +2860,9 @@ class Turn:
                     self.audit['tool_calls']+=1;outcome=await self.notify(args);self.feedback.append(outcome)
                     await self.publish_result(name,outcome)
                 else:
-                    outcome=await self.execute_read(name,args);self.replays[signature]=outcome
+                    outcome=await self.execute_read(name,args)
+                    from .evidence import without_evidence_text
+                    self.replays[signature]=without_evidence_text(outcome)
                     self.accept(name,args,outcome);await self.publish_result(name,outcome)
                     if policy.level=='reversible':
                         if outcome.get('ok'):self.audit['write_outcome']='executed'
@@ -2794,7 +2874,7 @@ class Turn:
                         safe_result=feedback.get('result') or (feedback if 'ok' in feedback else None)
                     if safe_result is None:safe_result=tools.error(self.feedback[-1].get('error_code','zero_evidence') if self.feedback else 'zero_evidence')
                     from ..agent_chat_stream import bounded_tool_result
-                    self.protocol.append({'role':'tool','tool_call_id':call['id'],'content':json.dumps(bounded_tool_result(safe_result),ensure_ascii=False,default=str)})
+                    self.protocol.append({'role':'tool','tool_call_id':call['id'],'content':json.dumps(bounded_tool_result(safe_result,whole_items=True,on_cut=lambda original,kept:self.note_truncation('protocol.tool_result.size',original,kept)),ensure_ascii=False,default=str)})
                 if self.revision_notice and not self.pending:
                     return self.finish(self.revision_notice,status='succeeded',generated=True)
                 if self.pending:
@@ -2861,9 +2941,12 @@ async def run_direct_turn(question,context,*,emit,messages=None,state=None):
     try:result=await _guarded(turn)
     except BaseException as exc:
         observability.end_trace(turn.obs,error=type(exc).__name__);raise
-    observability.score_citation_audit(turn.obs,verified=len(turn.citations),unverified=len(turn.unverified_lines or turn.last_issues),unverified_lines=turn.unverified_lines)
+    events=turn.audit.get('truncation_events') or []
+    observability.score_citation_audit(turn.obs,verified=len(turn.citations),unverified=len(turn.unverified_lines or turn.last_issues),unverified_lines=turn.unverified_lines,
+        truncation_events=len(events),insufficient=turn.audit.get('insufficient_evidence_lines'))
     observability.end_trace(turn.obs,output=result.get('answer'),metadata={'status':result.get('status'),'reason':result.get('reason'),
-        'model_calls':turn.audit.get('model_calls'),'tool_calls':turn.audit.get('tool_calls'),'token_usage':turn.audit.get('token_usage')})
+        'model_calls':turn.audit.get('model_calls'),'tool_calls':turn.audit.get('tool_calls'),'token_usage':turn.audit.get('token_usage'),
+        'truncation_events':len(events),'truncation_sites':[e['site'] for e in events]})
     # The graph closes here, once the turn has produced its last node.
     await turn.trace.finish(result)
     return {**result,'trace':turn.trace.nodes()}

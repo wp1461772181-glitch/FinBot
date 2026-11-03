@@ -25,7 +25,16 @@ def test_figures_beyond_the_focused_excerpt_are_checked_against_the_cited_page()
     assert evidence.unsupported_number_values('Mounjaro 营收 109 亿美元 [1]',citations)==[109e8]
 
 
-def test_without_the_page_text_a_figure_outside_the_quote_stays_unsupported():
+def test_without_the_page_text_a_truncated_source_leaves_the_figure_insufficient():
+    # The row says it is a selection (truncated) and carries no page text: the figure may sit in the part
+    # that was never stored, so it is 证据不完整, not an unsupported number.
     citations=[]
     evidence.number_rows('web_research',[_row()],citations)
+    assert evidence.unsupported_number_values('Mounjaro 营收 107 亿美元 [1]',citations)==[]
+    assert evidence.insufficient_number_values('Mounjaro 营收 107 亿美元 [1]',citations)==[107e8]
+
+
+def test_without_the_page_text_a_complete_source_keeps_the_figure_unsupported():
+    citations=[]
+    evidence.number_rows('web_research',[_row(truncated=False)],citations)
     assert evidence.unsupported_number_values('Mounjaro 营收 107 亿美元 [1]',citations)==[107e8]

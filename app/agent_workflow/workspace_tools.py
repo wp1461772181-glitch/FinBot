@@ -137,7 +137,10 @@ def read_workspace(args,context):
         else:return error('unknown_workspace_read')
         actual_symbol=value.get('symbol') if isinstance(value,dict) else None
         if symbol and actual_symbol and symbol!=actual_symbol:return error('requested_entity_missing')
-        return result([{'id':identity,'symbol':actual_symbol or symbol,'source_type':'saved_workspace','title':'Workspace '+kind,'excerpt':json.dumps(safe(value),ensure_ascii=False,sort_keys=True,separators=(',',':'))[:5000],'tool_arguments':args}],'workspace '+kind)
+        whole=json.dumps(safe(value),ensure_ascii=False,sort_keys=True,separators=(',',':'))
+        # The excerpt shown is capped; the whole serialization rides beside it for the checker.
+        return result([{'id':identity,'symbol':actual_symbol or symbol,'source_type':'saved_workspace','title':'Workspace '+kind,'excerpt':whole[:5000],
+                        **({'truncated':True,'_evidence_text':whole} if len(whole)>5000 else {}),'tool_arguments':args}],'workspace '+kind)
 
 
 def write_workspace(name,args,key,context):

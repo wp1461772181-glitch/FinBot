@@ -12,7 +12,7 @@ import re
 _MARKER=re.compile(r'\[\d+\]')
 _NUMBER=re.compile(r'\d[\d,]*(?:\.\d+)?\s?(?:%|万亿|亿|万|千|百万|[Mm]illion|[Bb]illion|bn|[MBK])?')
 _LEAD=re.compile(r'^\s*(?:[-*+•]\s+|\d+[.)、]\s*|>\s*)')
-SOURCE_QUOTE_CAP=3000
+SOURCE_BUDGET=24000
 SOURCE_LIMIT=12
 
 
@@ -28,16 +28,17 @@ def markers(line):
 
 
 def _holders(value,citations):
+    from .evidence import citation_check_text
     from .semantic import figure_values
     return [int(c['ordinal']) for c in citations if isinstance(c,dict) and str(c.get('ordinal') or '').isdigit()
-            and value in figure_values(str(c.get('quote') or ''))]
+            and value in figure_values(citation_check_text(c))]
 
 
 def line_numbers(line,citations):
-    """The rejected figures of one line as written in it, and which of them no source holds at all."""
-    from .evidence import unsupported_number_values
+    """The unchecked figures of one line as written in it (unsupported or insufficient), and which of them no source holds at all."""
+    from .evidence import number_check
     from .semantic import figure_values
-    try:rejected=set(unsupported_number_values(line,citations))
+    try:rejected=set(v for part in number_check(line,citations) for v in part)
     except Exception:rejected=set()
     written=[]
     for token in _NUMBER.findall(_MARKER.sub('',line)):
@@ -79,15 +80,26 @@ def remap_citations(draft,rejected,citations):
     return text,changes
 
 
-def cited_sources(rejected,citations,holders=None):
-    """Full quotes of the sources the rejected lines cite and of the sources that hold their figures."""
+def cited_sources(rejected,citations,holders=None,*,on_cut=None):
+    """Quotes of the sources the rejected lines cite and of the sources that hold their figures.
+
+    Each quote is whole; the sources are taken in priority order (cited first) until the budget is
+    spent, and the rest are left out as sources.  ``on_cut(original_chars, kept_chars, left_out)`` hears of it."""
     wanted=[]
     for line,_ in rejected:wanted.extend(markers(line))
     for ordinals in (holders or {}).values():wanted.extend(int(o) for o in ordinals)
-    wanted=list(dict.fromkeys(wanted))[:SOURCE_LIMIT]
+    wanted=list(dict.fromkeys(wanted))
     by_ordinal={int(c['ordinal']):c for c in citations if isinstance(c,dict) and str(c.get('ordinal') or '').isdigit()}
-    return [{'ordinal':n,'title':str(by_ordinal[n].get('title') or '')[:160],'quote':str(by_ordinal[n].get('quote') or '')[:SOURCE_QUOTE_CAP]}
-            for n in wanted if n in by_ordinal]
+    sources=[{'ordinal':n,'title':str(by_ordinal[n].get('title') or '')[:160],'quote':str(by_ordinal[n].get('quote') or '')}
+             for n in wanted if n in by_ordinal]
+    kept=[];used=0
+    for source in sources:
+        cost=len(source['quote'])+len(source['title'])
+        if kept and (used+cost>SOURCE_BUDGET or len(kept)>=SOURCE_LIMIT):break
+        kept.append(source);used+=cost
+    if on_cut and len(kept)<len(sources):
+        on_cut(sum(len(s['quote'])+len(s['title']) for s in sources),used,[s['ordinal'] for s in sources[len(kept):]])
+    return kept
 
 
 def merge_repair(draft,rewrite):

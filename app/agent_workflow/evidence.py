@@ -278,6 +278,49 @@ def _citation_fields(row: dict) -> dict:
     return fields
 
 
+# What a citation shows (and the response catalogue lists) of its source.  It is a presentation cap: the
+# number and claim checkers read ``check_text`` as well, which is never cut.
+QUOTE_DISPLAY_CHARS = 5000
+
+
+def citation_check_text(citation: dict) -> str:
+    """Everything the checkers may read of one cited source: the shown quote, its figures, the full text."""
+    return ' '.join(str(citation.get(key) or '') for key in ('quote', 'figures', 'check_text'))
+
+
+def persistable_citation(citation: dict) -> dict:
+    """The citation as it is stored with the turn.
+
+    The full checking text serves the turn's own checks and is not kept; a stored citation that
+    loses it says so (``evidence_incomplete``), so a later reader treats a miss as insufficient."""
+    if not isinstance(citation, dict) or 'check_text' not in citation:
+        return citation
+    kept = {key: value for key, value in citation.items() if key != 'check_text'}
+    kept['evidence_incomplete'] = True
+    return kept
+
+
+def without_evidence_text(outcome):
+    """A tool outcome as a model may be shown it again: rows lose the checker-only full text."""
+    data = outcome.get('data') if isinstance(outcome, dict) else None
+    if not isinstance(data, list) or not any(isinstance(r, dict) and ('_evidence_text' in r or 'evidence_incomplete' in r) for r in data):
+        return outcome
+    return {**outcome, 'data': [{k: v for k, v in r.items() if k not in {'_evidence_text', 'evidence_incomplete'}} if isinstance(r, dict) else r for r in data]}
+
+
+def persistable_result_sets(sets):
+    """Saved result sets without the pages' full text; a row that loses it is marked partial for a later reuse."""
+    out = []
+    for saved in sets or []:
+        if not isinstance(saved, dict) or not any(isinstance(r, dict) and '_evidence_text' in r for r in saved.get('rows') or []):
+            out.append(saved)
+            continue
+        rows = [{**{k: v for k, v in r.items() if k != '_evidence_text'}, 'evidence_incomplete': True}
+                if isinstance(r, dict) and '_evidence_text' in r else r for r in saved['rows']]
+        out.append({**saved, 'rows': rows})
+    return out
+
+
 def _evidence_quotes(row: dict) -> list[str]:
     quotes=[]
     for quote in row.get('evidence_quotes') or []:
@@ -298,6 +341,8 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
         row=dict(original)
         rich=row.pop('_citations',[])
         page_text=row.pop('_evidence_text',None)
+        # A tool that knows its own text is partial says so; the flag never reaches the model's row.
+        declared_partial=bool(row.pop('evidence_incomplete',False))
         if rich:
             mapping={}
             for original_citation in rich:
@@ -305,8 +350,13 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
                 number=old['ordinal'] if old else len(citations)+1
                 mapping[original_citation['ordinal']]=number
                 if not old:
-                    citations.append({**original_citation,'quote':original_citation.get('quote') or str(row.get('excerpt') or row.get('answer') or '')[:5000],
-                        'ordinal':number,'fields':_citation_fields(row),'evidence_quotes':_evidence_quotes(row)})
+                    fallback=str(row.get('excerpt') or row.get('answer') or '')
+                    entry={**original_citation,'quote':original_citation.get('quote') or fallback[:QUOTE_DISPLAY_CHARS],
+                        'ordinal':number,'fields':_citation_fields(row),'evidence_quotes':_evidence_quotes(row)}
+                    check=page_text if isinstance(page_text,str) and page_text.strip() else (fallback if not original_citation.get('quote') and len(fallback)>QUOTE_DISPLAY_CHARS else None)
+                    if check:entry['check_text']=check
+                    if declared_partial or (entry.get('truncated') and not check):entry['evidence_incomplete']=True
+                    citations.append(entry)
                 else:
                     old.setdefault('fields',_citation_fields(row))
                     old.setdefault('evidence_quotes',_evidence_quotes(row))
@@ -396,11 +446,16 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
                 'source_name':row.get('source_name') or row.get('source'),
                 'url':resolved_url,'source_url':resolved_url,
                 'published_at':row.get('published_at') or row.get('filed_at') or row.get('trading_date'),
-                'observed_at':row.get('fetched_at') or row.get('observed_at'),'quote':body[:5000],
+                'observed_at':row.get('fetched_at') or row.get('observed_at'),'quote':body[:QUOTE_DISPLAY_CHARS],
                 'trading_date':row.get('trading_date'),'source':row.get('source'),'fetched_at':row.get('fetched_at'),
                 'symbol':row.get('symbol') or scope.get('symbol'),'analysis_id':row.get('analysis_id'),'derived':kind=='ai_analysis','truncated':bool(row.get('truncated')),
                 'fields':_citation_fields(row),'evidence_quotes':_evidence_quotes(row)})
-            if isinstance(page_text,str) and page_text.strip() and page_text!=body:citations[-1]['figures']=page_text[:5000]
+            # The quote is what is shown; the checker reads the whole text (the page the excerpt was
+            # selected from, or a body longer than the display cap).  Only a source whose own stored
+            # text is partial makes a figure's absence "insufficient" rather than "unsupported".
+            check=page_text if isinstance(page_text,str) and page_text.strip() and page_text!=body else (body if len(body)>QUOTE_DISPLAY_CHARS else None)
+            if check:citations[-1]['check_text']=check
+            citations[-1]['evidence_incomplete']=bool(declared_partial or (row.get('truncated') and not check))
         if kind=='saved_price':
             from .calculation import format_price
             for k in ('open','high','low','close'):
@@ -422,6 +477,11 @@ def unsupported_numbers(answer,citations):
     may be shown as percentages. This is a guard, not a semantic answer scorer.
     """
     return bool(unsupported_number_values(answer,citations))
+
+
+def insufficient_numbers(answer,citations):
+    """Whether a figure is missing from a source whose own stored text is partial (证据不完整)."""
+    return bool(insufficient_number_values(answer,citations))
 
 
 _DASHES=re.compile('[‐‑‒–—−]')
@@ -489,7 +549,21 @@ def unsupported_number_values(answer,citations,*,question=''):
     states it: exactly, in the unit the source's table is in ("(In millions)" 32,000 is 320 亿),
     or rounded to the precision the answer itself writes.  Digits inside identifiers and names
     are not figures when the turn's evidence or the question shows that identifier.
+
+    A figure absent from a *partial* source (``evidence_incomplete``) is not listed here: it may sit
+    in the part that was never stored, so it is ``insufficient_number_values``, a different outcome.
     """
+    return number_check(answer,citations,question=question)[0]
+
+
+def insufficient_number_values(answer,citations,*,question=''):
+    """The figures not found in the cited sources, all of which are partial (证据不完整), not refuted."""
+    return number_check(answer,citations,question=question)[1]
+
+
+def number_check(answer,citations,*,question=''):
+    """``(unsupported, insufficient)``: figures no complete cited source states, and figures missing
+    only from cited sources whose stored text is partial.  Unsupported wins when a figure is both."""
     from datetime import datetime, timedelta
     from .semantic import figure_values
     from .language import simplified
@@ -503,18 +577,24 @@ def unsupported_number_values(answer,citations,*,question=''):
         re.I
     )
     indexed={str(c['ordinal']):c for c in citations}
-    evidence=' '.join(str(c.get(k) or '') for c in citations for k in ('quote','title','source_url'))+' '+str(question or '')
+    evidence=' '.join(str(c.get(k) or '') for c in citations for k in ('quote','check_text','title','source_url'))+' '+str(question or '')
     grounds=' '.join(_DASHES.sub('-',evidence).split()).casefold()
-    rejected=[]
+    rejected=[];insufficient=[]
     for passage in cited_passages(answer):
         refs=citation_markers(passage,citations)
         cited=[indexed[r] for r in refs if r in indexed]
-        body=' '.join(str(c.get('quote',''))+' '+str(c.get('figures',''))+' '+str(c.get('published_at',''))+' '+str(c.get('source_url',''))+' '+str(c.get('title','')) for c in cited)
+        body=' '.join(citation_check_text(c)+' '+str(c.get('published_at',''))+' '+str(c.get('source_url',''))+' '+str(c.get('title','')) for c in cited)
         allowed=figure_values(body)
+        # A miss is "insufficient" only when every source cited for the passage is partial:
+        # if any cited source is complete, the figure had complete evidence and failed it.
+        partial=bool(cited) and all(c.get('evidence_incomplete') for c in cited)
         for citation in cited:
             quote=str(citation.get('quote',''))
+            # The text the checker holds is the whole source when there is one: a unit line ("In millions")
+            # beyond the shown quote still applies to the table it heads.
+            scanned=str(citation.get('check_text') or quote)
             for marker,scale in _SCALE:
-                if marker.search(quote):allowed|={round(v*scale,4) for v in figure_values(quote) if v>=1}
+                if marker.search(scanned):allowed|={round(v*scale,4) for v in figure_values(scanned) if v>=1}
             if citation.get('source_type')=='calculation':
                 # A result computed on values bound per million is itself in millions.
                 allowed|={round(v*1e6,4) for v in figure_values(quote) if abs(v)>=1}
@@ -555,8 +635,8 @@ def unsupported_number_values(answer,citations,*,question=''):
             support=allowed|headed if unitless else allowed
             if value in support or (percent and value/100 in allowed):continue
             if (digits>=3 or (digits>=2 and scaled)) and any(_round_to(a,digits)==_round_to(value,digits) for a in support if a):continue
-            rejected.append(value)
-    return sorted(set(rejected))
+            (insufficient if partial else rejected).append(value)
+    return sorted(set(rejected)),sorted(set(insufficient)-set(rejected))
 
 # Claim validation only. These concepts never route a request or choose a tool.
 RESIGNATION_TERMS=('resign','resigned','resignation','stepped down','stepping down','辞职','辞任','离职','退任')
@@ -604,7 +684,7 @@ def unsupported_claims(answer,citations):
         if not sources:
             if any(event_polarities(passage,terms) for terms in CLAIM_FEATURES[2:]):return True
             continue
-        evidence=simplified(' '.join(str(c.get('quote','')) for c in sources))
+        evidence=simplified(' '.join(citation_check_text(c) for c in sources))
         for terms in CLAIM_FEATURES:
             if any(contains(t,passage) for t in terms) and not any(contains(t,evidence) for t in supporting_event_terms(terms)):return True
         for terms in CLAIM_FEATURES[2:]:
@@ -664,9 +744,14 @@ def reviewed_passages(answer,citations,*,require_citations=False,check_claims=Tr
         is_heading = bool(re.match(r'^#{1,6}\s',stripped) or re.fullmatch(r'\*\*[^*]+\*\*\s*[：:]?',stripped))
         has_factual_content = factual_claim(stripped)
         code=('invalid_citation' if citation_errors(stripped,citations) else
-              'missing_citation' if require_citations and has_factual_content and not citation_markers(stripped,citations) and not uncertainty and not ((is_leadin or is_heading) and not _CLAIM_AMOUNT.search(stripped)) and not (stripped.endswith(('：',':')) and not _CLAIM_AMOUNT.search(stripped)) else
-              'unsupported_numeric_claim' if check_claims and unsupported_numbers(stripped,citations) else
-              'unsupported_claim' if check_claims and unsupported_claims(stripped,citations) else None)
+              'missing_citation' if require_citations and has_factual_content and not citation_markers(stripped,citations) and not uncertainty and not ((is_leadin or is_heading) and not _CLAIM_AMOUNT.search(stripped)) and not (stripped.endswith(('：',':')) and not _CLAIM_AMOUNT.search(stripped)) else None)
+        if not code and check_claims:
+            # Two outcomes: a figure the complete sources do not state is refuted; one missing only from a
+            # partial source is "证据不完整" (it may sit in the part that was never stored).
+            unsupported,insufficient=number_check(stripped,citations)
+            code=('unsupported_numeric_claim' if unsupported else
+                  'insufficient_numeric_evidence' if insufficient else
+                  'unsupported_claim' if unsupported_claims(stripped,citations) else None)
         if code:issues.append(code)
         else:accepted.append(stripped)
     return accepted,issues
@@ -886,13 +971,13 @@ def _source_body(bodies, ordinal, citation):
     text = bodies.get(ordinal) if isinstance(bodies, dict) else None
     if isinstance(text, str) and text.strip():
         return text, False
-    parts = [str(citation.get("quote") or "")]
+    parts = [str(citation.get("check_text") or citation.get("quote") or "")]
     parts.extend(str(quote) for quote in citation.get("evidence_quotes") or [] if isinstance(quote, str) and quote)
     return "\n".join(part for part in parts if part), True
 
 
 def _citation_material(citation):
-    parts = [str(citation.get(key) or "") for key in ("quote", "figures", "title",
+    parts = [str(citation.get(key) or "") for key in ("quote", "figures", "check_text", "title",
              "published_at", "observed_at", "filed_at", "analysis_id", "accession_number", "form")]
     fields = citation.get("fields")
     if isinstance(fields, dict):

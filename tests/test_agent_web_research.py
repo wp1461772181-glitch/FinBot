@@ -606,7 +606,10 @@ def test_focus_excerpt_is_empty_when_every_sentence_is_a_metric_sentence_about_n
     assert len(text) > 700 and focus_excerpt(text, "Apple revenue news") == ""
     source = {"excerpt": text}
     _focus_source(source, "Apple revenue news")
-    assert source == {"excerpt": "", "truncated": True}
+    assert source["excerpt"] == "" and source["truncated"] is True
+    # The full page text is carried along (never shown) so figures from this
+    # cited page remain checkable even when the focused excerpt is empty.
+    assert source["_evidence_text"] == text
 
 
 def test_focus_excerpt_metric_sentences_always_come_with_the_company_beside_them():

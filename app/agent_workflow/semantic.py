@@ -224,9 +224,12 @@ def save_result_set(existing: list[dict], result: dict, citations: list[dict], *
             continue
         shortened = len(excerpt) > 2500
         excerpt = excerpt[:2500]
-        saved_citation = {**citation, "truncated": bool(citation.get("truncated") or shortened)}
+        from .evidence import persistable_citation
+        saved_citation = {**persistable_citation(citation), "truncated": bool(citation.get("truncated") or shortened)}
         if citation.get("source_type") == "web":
             saved_citation["quote"] = excerpt
+            if shortened:
+                saved_citation["evidence_incomplete"] = True   # the saved quote is a cut; a later check treats a miss as insufficient
         items.append({"id": _id(owner, conversation, turn, task, source_id or url or "", str(len(items))),
                       "title": str(row.get("title") or citation.get("title") or source_id)[:300],
                       "source_url": url, "source_id": source_id or None, "excerpt": excerpt,

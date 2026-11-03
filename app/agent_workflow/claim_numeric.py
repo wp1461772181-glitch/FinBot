@@ -187,7 +187,7 @@ def _field_supported(key: str, value: Any, citation: dict) -> bool:
 
 def _citation_blob(citation: dict) -> str:
     parts: list[str] = []
-    for key in ("quote", "figures", "title", "trading_date", "concept", "period", "metric",
+    for key in ("quote", "figures", "check_text", "title", "trading_date", "concept", "period", "metric",
                 "published_at", "observed_at", "filed_at", "analysis_id", "accession_number", "form"):
         if citation.get(key) is not None:
             parts.append(str(citation[key]))

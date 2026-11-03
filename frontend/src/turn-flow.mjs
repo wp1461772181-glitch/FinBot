@@ -20,7 +20,7 @@ export const FLOW_LABELS = {
 
 export const CODE_LABELS = {
   missing_citation: "缺少引用标记", invalid_citation: "引用编号无效",
-  unsupported_numeric_claim: "数字与来源对不上", unsupported_claim: "表述与来源对不上",
+  unsupported_numeric_claim: "数字与来源对不上", insufficient_numeric_evidence: "来源内容不完整，数字无法核实", unsupported_claim: "表述与来源对不上",
   history_citation_not_found: "找不到这条历史引用", history_citation_unavailable: "历史来源已失效",
   history_citation_derived: "计算结果需先取回其来源", tool_timeout: "工具超时",
   tool_failed: "工具执行失败", no_progress: "多次检索没有进展", turn_budget: "达到本轮时间上限",

@@ -343,7 +343,8 @@ def focus_excerpt(text: str, query: str, limit: int = FOCUS_LIMIT, heading: str 
 
 def _focus_source(source: dict, query: str | None, company: str | None = None) -> None:
     """Replace a search row's leading-characters excerpt by the passages that match the query."""
-    text = source.get("excerpt")
+    # Passages are chosen from the whole page text when the row carries it, not from its first 5000 characters.
+    text = source.get("_evidence_text") or source.get("excerpt")
     if not query or not isinstance(text, str):
         return
     focused = focus_excerpt(text, query, heading=str(source.get("title") or ""),company=company)
@@ -399,15 +400,20 @@ def extract_page(body: str, url: str, fetched_at: datetime) -> dict:
     parser = _ReadableHTML()
     parser.feed(body[:MAX_PAGE_BYTES])
     excerpt = re.sub(r"[ \t]+", " ", " ".join(parser.text_parts))
-    excerpt = re.sub(r"\s*\n\s*", "\n", html.unescape(excerpt)).strip()[:MAX_EXCERPT]
-    return {
+    full = re.sub(r"\s*\n\s*", "\n", html.unescape(excerpt)).strip()
+    page = {
         "title": " ".join(" ".join(parser.title_parts).split())[:300] or urlsplit(url).hostname,
         "url": url,
-        "excerpt": excerpt,
+        "excerpt": full[:MAX_EXCERPT],
         "fetched_at": fetched_at.astimezone(UTC).isoformat(),
         "published_at": parser.published_at,
         "truncated": len(body.encode("utf-8", "ignore")) > MAX_EXCERPT,
     }
+    if len(full) > MAX_EXCERPT:
+        # The excerpt is what is shown; the whole page text travels with the row (never shown) so a
+        # figure the answer takes from this cited page is checked against all of it, not its first 5000.
+        page["_evidence_text"] = full
+    return page
 
 
 async def _read_bounded(response: httpx.Response, limit: int) -> bytes:
@@ -490,6 +496,10 @@ async def _search(query: str, include_raw_content: bool = True, max_results: int
                  "snippet": text_field(row, "content", 1000),
                  "raw_content": text_field(row, "raw_content", MAX_EXCERPT),
                  "published_at": _valid_timestamp(row.get("published_date") or ""),
+                 # The shown excerpt is capped; the whole extracted text (bounded by the search response
+                 # itself) travels beside it for the checker.
+                 **({"raw_content_full": row["raw_content"]} if isinstance(row.get("raw_content"), str)
+                    and len(row["raw_content"]) > MAX_EXCERPT else {}),
                  **({"raw_content_truncated": True} if isinstance(row.get("raw_content"), str)
                     and len(row["raw_content"]) > MAX_EXCERPT else {})}
                 for row in rows[:max_results] if isinstance(row, dict)]
@@ -553,8 +563,12 @@ async def _research(query_or_url: str, days_back: int | None = None, max_results
             page["body_provenance"] = "public_page_fetch"
             page["search_snippet"] = result.get("snippet") or None
             if result.get("raw_content"):
-                page["excerpt"] = result["raw_content"][:MAX_EXCERPT]
-                page["truncated"] = len(result["raw_content"]) >= MAX_EXCERPT
+                whole = result.get("raw_content_full") or result["raw_content"]
+                page["excerpt"] = whole[:MAX_EXCERPT]
+                page["truncated"] = len(whole) >= MAX_EXCERPT
+                page.pop("_evidence_text", None)
+                if len(whole) > MAX_EXCERPT:
+                    page["_evidence_text"] = whole
                 page["body_provenance"] = "tavily_extracted_content"
             if is_boilerplate_page(page["excerpt"]):
                 raise ValueError("boilerplate_page")
@@ -568,11 +582,13 @@ async def _research(query_or_url: str, days_back: int | None = None, max_results
                 return {"ok":False,"data":[],"source":"public webpage excerpt","as_of":fetched_at.isoformat(),"error_code":"web_page_unavailable"}
             raw_content = result.get("raw_content")
             if isinstance(raw_content, str) and raw_content.strip() and not is_boilerplate_page(raw_content):
+                whole = result.get("raw_content_full") or raw_content
                 fallback = {"title": result.get("title") or result["url"], "url": result["url"],
-                            "excerpt": raw_content[:MAX_EXCERPT], "search_snippet": result.get("snippet") or None,
+                            "excerpt": whole[:MAX_EXCERPT], "search_snippet": result.get("snippet") or None,
                             "fetched_at": fetched_at.isoformat(), "published_at": result.get("published_at"),
-                            "truncated": bool(result.get("raw_content_truncated")) or len(raw_content) > MAX_EXCERPT,
-                            "body_provenance": "tavily_extracted_content"}
+                            "truncated": bool(result.get("raw_content_truncated")) or len(whole) > MAX_EXCERPT,
+                            "body_provenance": "tavily_extracted_content",
+                            **({"_evidence_text": whole} if len(whole) > MAX_EXCERPT else {})}
                 _focus_source(fallback, focus_query,company)
                 sources.append(fallback)
                 continue

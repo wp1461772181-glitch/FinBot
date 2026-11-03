@@ -32,7 +32,7 @@ def calculate(args, citations):
     for item in args['inputs']:
         name=item['name'];source=indexed.get(item['source_ordinal'])
         if not re.fullmatch(r'[a-z]',name) or name in values or not source:raise ValueError('calculation_input_unbound')
-        text=unicodedata.normalize('NFKC',str(source.get('quote',''))+' '+str(source.get('figures',''))).replace('萬','万').replace('億','亿')
+        text=unicodedata.normalize('NFKC',str(source.get('quote',''))+' '+str(source.get('figures',''))+' '+str(source.get('check_text',''))).replace('萬','万').replace('億','亿')
         text=PERIOD_TEXT.sub(' ',ACCESSION.sub(' ',SOURCE_ID.sub(' ',TASK_ID.sub(' ',text))))
         text=re.sub(r'(?<=\d),(?=\d{3}(?!\d))','',text)
         found=_FIGURE.findall(text)
@@ -82,7 +82,7 @@ def bindable_values(citations, args):
         ordinal=item.get('source_ordinal') if isinstance(item,dict) else None
         source=indexed.get(ordinal)
         if not source:continue
-        text=unicodedata.normalize('NFKC',str(source.get('quote',''))+' '+str(source.get('figures',''))).replace('萬','万').replace('億','亿')
+        text=unicodedata.normalize('NFKC',str(source.get('quote',''))+' '+str(source.get('figures',''))+' '+str(source.get('check_text',''))).replace('萬','万').replace('億','亿')
         text=PERIOD_TEXT.sub(' ',ACCESSION.sub(' ',SOURCE_ID.sub(' ',TASK_ID.sub(' ',text))))
         text=re.sub(r'(?<=\d),(?=\d{3}(?!\d))','',text)
         values=[str(Decimal(n)*Decimal(str(_MAGNITUDE.get(unit.lower(),1)))) for n,unit in _FIGURE.findall(text)]
