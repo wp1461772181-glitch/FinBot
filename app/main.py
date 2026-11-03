@@ -209,6 +209,8 @@ def create_tables() -> None:
     # Stage E: a bot's usual skills, and the built-in skills seeded (a changed text gets a new version).
     from . import agent_skills as skills_store
     skills_store.ensure_columns()
+    from . import agent_bots as bots_store
+    bots_store.ensure_columns()
     _safe_hook(skills_store.seed_builtins)
     # Bots (second edition): the conversation's bot column, the earlier model settings folded into the
     # catalog once, and a line per catalog model saying whether it can be used (never a key).

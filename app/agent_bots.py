@@ -97,7 +97,7 @@ def _stamp(value):
 def serialize(bot: AgentBot, last: dict | None = None, counts: dict | None = None) -> dict:
     return {"id": str(bot.id), "name": bot.name, "title": bot.title, "description": bot.description,
             "focus": bot.focus or {"companies": [], "theme": None}, "tool_scope": bot.tool_scope, "model": bot.model,
-            "avatar": bot.avatar, "group": bot.group_name, "pinned": bot.pinned, "hidden": bot.hidden,
+            "avatar": bot.avatar, "look": bot.avatar_look or None, "group": bot.group_name, "pinned": bot.pinned, "hidden": bot.hidden,
             "is_default": bot.is_default, "template": bot.template,
             "conversation_id": str(bot.conversation_id) if bot.conversation_id else None,
             "daily_notify_cap": bot.daily_notify_cap, "default_company": default_company(bot),
@@ -119,6 +119,31 @@ def _avatar(value) -> str:
     if avatar.startswith("orb:") and avatar[4:] not in ORB_COLORS:
         raise BotError("invalid_avatar")
     return avatar
+
+
+# The bloub catalog (frontend/src/bloub/skins.ts, expressions.ts; pinned b4bb3c1): a look names one of each.
+LOOK_SHAPES = frozenset({"cercle", "galet", "squircle", "capsule", "triangle", "hexagone", "nuage", "goutte"})
+LOOK_COLORS = frozenset({"encre", "creme", "brun", "rouge", "orange", "ambre", "vert", "turquoise", "bleu", "violet", "rose", "gris"})
+LOOK_EXPRESSIONS = frozenset({"neutre", "attentif", "surpris", "excite", "heureux", "hilare", "colere", "triste", "effraye",
+                              "mefiant", "confus", "curieux", "fier", "timide", "blase", "somnolent"})
+
+
+def _look(value) -> dict | None:
+    """None clears it; otherwise all three parts must be catalog ids (extra keys are refused, not dropped)."""
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or set(value) != {"shape", "color", "expression"}
+            or value["shape"] not in LOOK_SHAPES or value["color"] not in LOOK_COLORS or value["expression"] not in LOOK_EXPRESSIONS):
+        raise BotError("invalid_look")
+    return {"shape": value["shape"], "color": value["color"], "expression": value["expression"]}
+
+
+def ensure_columns() -> None:
+    """Add the avatar look column to a bots table made before it.  A fresh database gets it from the model."""
+    from .database import engine
+    from sqlalchemy import text
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE agent_bots ADD COLUMN IF NOT EXISTS avatar_look JSON"))
 
 
 def _text(value, limit: int, code: str, *, required: bool = False) -> str:
@@ -195,6 +220,8 @@ def _apply(bot: AgentBot, fields: dict) -> None:
         bot.model = _model(fields["model"])
     if "avatar" in fields:
         bot.avatar = _avatar(fields["avatar"])
+    if "look" in fields:
+        bot.avatar_look = _look(fields["look"])
     if "group" in fields:
         bot.group_name = _text(fields["group"], 40, "invalid_group")
     if "pinned" in fields:

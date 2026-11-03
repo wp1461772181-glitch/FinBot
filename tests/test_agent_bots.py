@@ -414,3 +414,50 @@ def test_an_orb_avatar_must_name_a_palette_colour_and_emoji_still_work(owner):
         bots.update_bot(identity, made["id"], {"avatar": "orb:neon"})
     assert bots.update_bot(identity, made["id"], {"avatar": "📈"})["avatar"] == "📈"
     assert bots.update_bot(identity, made["id"], {"avatar": "orb:finbot"})["avatar"] == "orb:finbot"
+
+
+# --- bloub avatar look (shape / colour / rest expression), stored per bot --------------------------------
+
+def test_a_bot_without_a_look_reports_none_and_a_chosen_look_is_stored_and_read_back(owner):
+    identity = OWNER_HASH
+    made = bots.create_bot(identity, {"name": "外观-" + uuid.uuid4().hex[:6]})
+    assert made["look"] is None  # never customised: the frontend falls back to the hash of the bot id
+    look = {"shape": "nuage", "color": "creme", "expression": "hilare"}
+    saved = bots.update_bot(identity, made["id"], {"look": look})
+    assert saved["look"] == look
+    assert [b for b in bots.list_bots(identity) if b["id"] == made["id"]][0]["look"] == look
+
+
+def test_the_default_combination_chosen_explicitly_is_kept_as_chosen(owner):
+    """ux3 quirk: picking the default combination used to look like 'never picked'. A stored look is a choice."""
+    made = bots.create_bot(OWNER_HASH, {"name": "默认组合-" + uuid.uuid4().hex[:6],
+                                        "look": {"shape": "cercle", "color": "encre", "expression": "neutre"}})
+    assert made["look"] == {"shape": "cercle", "color": "encre", "expression": "neutre"}
+
+
+def test_a_look_is_validated_against_the_catalog_and_null_clears_it(owner):
+    identity = OWNER_HASH
+    made = bots.create_bot(identity, {"name": "校验-" + uuid.uuid4().hex[:6], "look": {"shape": "goutte", "color": "bleu", "expression": "fier"}})
+    for bad in ({"shape": "star", "color": "bleu", "expression": "fier"}, {"shape": "goutte", "color": "neon", "expression": "fier"},
+                {"shape": "goutte", "color": "bleu", "expression": "angry"}, {"shape": "goutte"}, "nuage", []):
+        with pytest.raises(bots.BotError) as caught:
+            bots.update_bot(identity, made["id"], {"look": bad})
+        assert str(caught.value) == "invalid_look"
+    assert bots.update_bot(identity, made["id"], {"look": None})["look"] is None
+
+
+def test_the_look_goes_through_the_api_and_the_column_migration_runs_on_an_old_table(owner, client):
+    made = client.post("/agent-chat/bots", headers=H, json={"name": "接口-" + uuid.uuid4().hex[:6], "look": {"shape": "triangle", "color": "rose", "expression": "timide"}})
+    assert made.status_code in (200, 201), made.text
+    assert made.json()["bot"]["look"] == {"shape": "triangle", "color": "rose", "expression": "timide"}
+    patched = client.patch(f"/agent-chat/bots/{made.json()['bot']['id']}", headers=H, json={"look": {"shape": "capsule", "color": "gris", "expression": "blase"}})
+    assert patched.status_code == 200 and patched.json()["bot"]["look"]["shape"] == "capsule"
+    refused = client.patch(f"/agent-chat/bots/{made.json()['bot']['id']}", headers=H, json={"look": {"shape": "star", "color": "gris", "expression": "blase"}})
+    assert refused.status_code == 422 and refused.json()["detail"] == "invalid_look"
+    from sqlalchemy import text
+    with engine.begin() as connection:  # an older table has no such column; ensure_columns adds it (idempotent)
+        connection.execute(text("ALTER TABLE agent_bots DROP COLUMN avatar_look"))
+    bots.ensure_columns()
+    bots.ensure_columns()
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM information_schema.columns WHERE table_name='agent_bots' AND column_name='avatar_look'")).scalar() == 1

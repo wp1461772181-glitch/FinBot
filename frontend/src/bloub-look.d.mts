@@ -1,6 +1,17 @@
+export type BloubLook = { shape: string; color: string; expression: string };
 export declare const BLOUB_SHAPES: string[];
 export declare const BLOUB_COLORS: string[];
+export declare const BLOUB_EXPRESSIONS: string[];
+export declare const BLOUB_STATES: string[];
+export declare const DEFAULT_LOOK: BloubLook;
 export declare function hashString(value: string): number;
+export declare function defaultLook(id: string | null | undefined): BloubLook;
+export declare function normalizeLook(raw: unknown): BloubLook | null;
+export declare function sameLook(a: BloubLook | null | undefined, b: BloubLook | null | undefined): boolean;
+export declare function resolveLook(id: string | null | undefined, avatar: string | null | undefined, stored?: unknown): BloubLook;
 export declare function bloubLook(id: string | null | undefined, avatar: string | null | undefined): { shape: string; color: string };
+export declare function pickLook(look: BloubLook, field: "shape" | "color" | "expression" | string, id: string): BloubLook;
+export declare function lookForSave(picked: BloubLook | null | undefined, stored?: unknown): BloubLook | undefined;
+export declare function randomLook(random?: () => number): BloubLook;
 export declare function bloubState(flags?: { running?: boolean; unread?: boolean }): "idle" | "orbit" | "notify";
 export declare function faceLook(style: string, mood: string): { shape: string; color: string };
