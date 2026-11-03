@@ -589,7 +589,7 @@ def _scores_for(
     """Return scores only when this version has a scoreable probability vector."""
 
     probabilities: dict[str, Any] | None
-    is_jev = version.model_status == "experimental_jev"
+    is_jev = version.model_status in ("experimental_jev", "experimental_llm")
     if version.model_status == "experimental_joint":
         probabilities = version.joint_probabilities
     elif version.model_status == "baseline_only":
@@ -605,7 +605,7 @@ def _scores_for(
     if probabilities is None:
         raise ValueError("scoreable model status has no probability vector")
     if is_jev:
-        _validate_jev_cohort_metadata(version)
+        _validate_jev_cohort_metadata(version, llm=version.model_status == "experimental_llm")
         values = _validated_probabilities(
             probabilities,
             allow_zero=True,
@@ -642,7 +642,7 @@ def _validated_probabilities(
     return values  # type: ignore[return-value]
 
 
-def _validate_jev_cohort_metadata(version: ForecastVersionV2) -> None:
+def _validate_jev_cohort_metadata(version: ForecastVersionV2, *, llm: bool = False) -> None:
     """Require frozen labels that keep Jev results in separate cohorts."""
     manifest = version.model_manifest
     provider = manifest.get("decision_provider") if isinstance(manifest, dict) else None
@@ -651,7 +651,10 @@ def _validate_jev_cohort_metadata(version: ForecastVersionV2) -> None:
         raise ValueError("experimental_jev is missing a valid time_mode cohort label")
     if not isinstance(provider, dict):
         raise ValueError("experimental_jev is missing decision_provider cohort metadata")
-    if provider.get("provider") != "openrouter":
+    if llm:
+        if not isinstance(provider.get("provider"), str) or not provider["provider"].strip():
+            raise ValueError("experimental_llm has an invalid decision provider")
+    elif provider.get("provider") != "openrouter":
         raise ValueError("experimental_jev has an invalid decision provider")
     if not isinstance(provider.get("actual_model"), str) or not provider["actual_model"].strip():
         raise ValueError("experimental_jev is missing its actual model cohort label")

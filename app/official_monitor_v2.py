@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from .forecast_evaluation_v2 import run_evaluation_batch
 from .forecast_jobs import DEFAULT_STOCKS, enqueue_job
 from .symbols import normalize_market_symbol
-from .forecast_v2_models import ForecastJobV2, ForecastVersionV2, OfficialMonitorRunV2
+from .forecast_v2_models import ForecastJobV2, ForecastVersionV2, OfficialMonitorRunV2, not_hidden_control
 from .evidence_context import MAX_NEW_DOCUMENTS
 from .market_time import xnys_session_close_at
 from .models import SecFilingInventory
@@ -535,6 +535,7 @@ def _latest_observed_root(*, db: Session, symbol: str, observed_at: datetime) ->
             ForecastVersionV2.symbol == symbol,
             ForecastVersionV2.root_id == ForecastVersionV2.id,
             ForecastVersionV2.created_at <= observed_at,
+            not_hidden_control(),
         )
         .order_by(ForecastVersionV2.created_at.desc(), ForecastVersionV2.id.desc())
         .limit(1)

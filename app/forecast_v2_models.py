@@ -149,7 +149,7 @@ class ForecastVersionV2(Base):
         UniqueConstraint("root_id", "version_no", name="uq_forecast_versions_v2_root_version_no"),
         CheckConstraint("version_no >= 1", name="ck_forecast_versions_v2_version_no"),
         CheckConstraint(
-            "model_status IN ('research_only', 'experimental_joint', 'experimental_jev', 'baseline_only', 'blocked_data')",
+            "model_status IN ('research_only', 'experimental_joint', 'experimental_jev', 'experimental_llm', 'baseline_only', 'blocked_data')",
             name="ck_forecast_versions_v2_model_status",
         ),
     )
@@ -191,6 +191,11 @@ class ForecastVersionV2(Base):
     change_reason: Mapped[str | None] = mapped_column(String(1_000), nullable=True)
     trigger_type: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+def not_hidden_control():
+    """SQL predicate: the version is a real forecast, not the hidden Jev control that only feeds evaluation."""
+    return ForecastVersionV2.model_manifest["hidden_control"].astext.is_distinct_from("true")
 
 
 class OfficialMonitorRunV2(Base):

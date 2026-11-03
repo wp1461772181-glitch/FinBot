@@ -1,7 +1,7 @@
 """Which catalog model does which job (``agent_model_roles(owner_hash, role, model_name)``).
 
-``earnings`` is the earnings-release reader (earnings_reader).  ``forecast`` is only reserved here: the
-forecast job will read it later.  No row, or a row naming a model that has since left the catalog, means the
+``earnings`` is the earnings-release reader (earnings_reader).  ``forecast`` is the model that gives the
+forecast's direction probabilities (forecast_model_provider).  No row, or a row naming a model that has since left the catalog, means the
 server's default model.  The table is made by ``Base.metadata.create_all`` at startup like the catalog's."""
 from __future__ import annotations
 
@@ -54,3 +54,12 @@ def resolve(owner_hash: str | None, role: str) -> dict:
     if name and not catalog.exists(name):
         name = None
     return catalog.resolve(name)
+
+
+def forecast_owner() -> str | None:
+    """The owner whose role=forecast row decides the forecast model.  The forecast job belongs to no chat
+    session, and this is a single-owner deployment: the newest forecast row wins, none means unset."""
+    from sqlalchemy import select
+    with SessionLocal() as db:
+        return db.scalar(select(AgentModelRole.owner_hash).where(AgentModelRole.role == "forecast")
+                         .order_by(AgentModelRole.updated_at.desc(), AgentModelRole.owner_hash).limit(1))

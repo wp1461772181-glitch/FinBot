@@ -22,7 +22,7 @@ from sqlalchemy import inspect
 from .database import SessionLocal
 from .agent_forecast_processor import AgentForecastProcessor
 from .forecast_jobs import claim_next_job, finish_job, heartbeat_job
-from .forecast_v2 import ForecastDraft, ForecastPublicationError, publish_forecast_version
+from .forecast_v2 import ForecastDraft, ForecastPublicationError, publish_forecast_version, publish_hidden_control
 from .forecast_v2_models import ForecastJobV2
 from .forecast_v2_processor import ForecastInputError, ResearchOnlyForecastProcessor
 
@@ -167,6 +167,13 @@ def run_once(
             "job_id": str(job.id),
             "result_version_id": str(version.id),
         }
+        if created and getattr(draft, "hidden_control", None):
+            # Hidden Jev control (Task 14): best effort, after the primary is durable; never changes the result.
+            try:
+                with session_factory() as db:
+                    publish_hidden_control(db=db, primary=version, control=draft.hidden_control)
+            except Exception:
+                pass
         if created and getattr(job, "time_mode", "observed") == "historical_research":
             try:
                 from .forecast_evaluation_v2 import run_evaluation_batch

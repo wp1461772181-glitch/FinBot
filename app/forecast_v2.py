@@ -22,6 +22,9 @@ from .forecast_v2_models import ForecastJobV2, ForecastVersionV2
 from .market_time import normalize_utc, xnys_session_close_at
 
 
+_DECISION_STATUSES = ("experimental_jev", "experimental_llm")
+
+
 class ForecastPublicationError(ValueError):
     def __init__(self, message: str, *, code: str = "invalid_publication") -> None:
         super().__init__(message)
@@ -45,6 +48,8 @@ class ForecastDraft:
     trigger_type: str = "manual"
     decision_probabilities: dict[str, float] | None = None
     research_brief: dict[str, Any] | None = None
+    # Task 14: the Jev answer to the same brief, published after this draft as a hidden control (never listed).
+    hidden_control: dict[str, Any] | None = None
 
 
 def publish_forecast_version(
@@ -71,7 +76,7 @@ def publish_forecast_version(
     _validate_probability_vector(draft.baseline_probabilities, "baseline_probabilities")
     _validate_probability_vector(draft.joint_probabilities, "joint_probabilities")
     _validate_probability_vector(draft.decision_probabilities, "decision_probabilities", tolerance=1e-6)
-    if draft.model_status not in {"research_only", "experimental_joint", "experimental_jev"}:
+    if draft.model_status not in {"research_only", "experimental_joint", "experimental_jev", "experimental_llm"}:
         raise ForecastPublicationError("unsupported model status")
     if draft.model_status == "research_only" and draft.joint_probabilities is not None:
         raise ForecastPublicationError("research_only cannot publish joint probabilities")
@@ -80,16 +85,17 @@ def publish_forecast_version(
     if draft.model_status == "research_only" and draft.decision_probabilities is not None:
         raise ForecastPublicationError("research_only cannot publish decision probabilities")
     validated_brief = None
-    if draft.model_status == "experimental_jev":
+    if draft.model_status in _DECISION_STATUSES:
+        status = draft.model_status
         if draft.decision_probabilities is None or draft.research_brief is None:
-            raise ForecastPublicationError("experimental_jev requires decision probabilities and a research brief")
+            raise ForecastPublicationError(f"{status} requires decision probabilities and a research brief")
         if draft.joint_probabilities is not None or draft.baseline_probabilities is not None:
-            raise ForecastPublicationError("experimental_jev cannot populate legacy probability fields")
+            raise ForecastPublicationError(f"{status} cannot populate legacy probability fields")
         try:
             from .research_brief import ResearchBriefError, validate_research_brief
             validated_brief = validate_research_brief(draft.research_brief)
         except ResearchBriefError as exc:
-            raise ForecastPublicationError("experimental_jev research brief is invalid", code=exc.code) from exc
+            raise ForecastPublicationError(f"{status} research brief is invalid", code=exc.code) from exc
         if validated_brief.decision_at != decision_at:
             raise ForecastPublicationError("research brief decision cutoff does not match the forecast")
         market_as_of = validated_brief.market_summary.get("as_of")
@@ -103,9 +109,9 @@ def publish_forecast_version(
         if brief_market_cutoff != market_cutoff:
             raise ForecastPublicationError("research brief market cutoff does not match the forecast")
         if validated_brief.input_quality.status == "insufficient":
-            raise ForecastPublicationError("experimental_jev cannot publish an insufficient research brief")
+            raise ForecastPublicationError(f"{status} cannot publish an insufficient research brief")
     elif draft.decision_probabilities is not None:
-        raise ForecastPublicationError("decision probabilities are reserved for experimental_jev")
+        raise ForecastPublicationError("decision probabilities are reserved for experimental_jev / experimental_llm")
 
     try:
         canonical_contract = target_contract_from_dict(draft.target_contract).as_dict()
@@ -116,7 +122,7 @@ def publish_forecast_version(
         if draft_job is None:
             raise ForecastPublicationError("job not found", code="not_found")
         if validated_brief.symbol != draft_job.symbol or validated_brief.target_contract != canonical_contract:
-            raise ForecastPublicationError("experimental_jev brief does not match its forecast")
+            raise ForecastPublicationError(f"{draft.model_status} brief does not match its forecast")
     contract_hash = _digest(canonical_contract)
     input_fingerprint = _digest(
         {
@@ -301,3 +307,63 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     ).hexdigest()
+
+
+def publish_hidden_control(*, db: Session, primary: ForecastVersionV2, control: dict[str, Any]) -> ForecastVersionV2 | None:
+    """Write the Jev control of ``primary`` as its own hidden, immutable root.  Never raises: a control that
+    cannot be written is logged and skipped, so it can never fail or roll back the primary forecast.
+
+    The row is an ``experimental_jev`` version flagged ``model_manifest.hidden_control`` with the same target,
+    brief and cutoffs as the primary, so the maturity evaluation scores it like any other version.  A
+    succeeded job row (idempotency key ``control:<primary job>``) carries it; a retry returns the same row."""
+    import logging
+    key = f"control:{primary.job_id}"
+    try:
+        from .forecast_v2_models import ForecastJobV2 as Job
+        existing_job = db.scalar(select(Job).where(Job.idempotency_key == key))
+        if existing_job is not None and existing_job.result_version_id is not None:
+            return db.get(ForecastVersionV2, existing_job.result_version_id)
+        primary_job = db.get(Job, primary.job_id)
+        version_id = uuid4()
+        manifest = {
+            **control["model_manifest"], "hidden_control": True,
+            "control_of_version_id": str(primary.id), "control_of_root_id": str(primary.root_id),
+        }
+        probabilities = control["decision_probabilities"]
+        _validate_probability_vector(probabilities, "decision_probabilities", tolerance=1e-6)
+        if manifest.get("time_mode") not in {"observed", "historical_research"}:
+            raise ForecastPublicationError("control needs the primary's time mode")
+        instant = datetime.now(UTC)
+        job = Job(
+            symbol=primary.symbol, kind="new", status="succeeded", current_stage="succeeded",
+            time_mode=manifest["time_mode"], idempotency_key=key,
+            request_fingerprint=_digest({"control_of": str(primary.id)}),
+            input_fingerprint=_digest({"control_of": str(primary.id), "model": manifest}),
+            model_fingerprint=_digest(manifest), source_refs=primary_job.source_refs if primary_job else [],
+            requested_decision_at=primary_job.requested_decision_at if primary_job else None,
+            completed_at=instant,
+        )
+        db.add(job)
+        db.flush()
+        version = ForecastVersionV2(
+            id=version_id, root_id=version_id, parent_version_id=None, job_id=job.id, version_no=1,
+            symbol=primary.symbol, target_contract=primary.target_contract,
+            target_contract_hash=primary.target_contract_hash, decision_at=primary.decision_at,
+            market_cutoff_at=primary.market_cutoff_at, price_input_manifest=primary.price_input_manifest,
+            evidence_version_manifest=primary.evidence_version_manifest, feature_snapshot=primary.feature_snapshot,
+            baseline_probabilities=None, joint_probabilities=None, model_status="experimental_jev",
+            model_manifest=manifest, research_report=primary.research_report, decision_probabilities=probabilities,
+            research_brief=primary.research_brief, change_reason="hidden Jev control for the model forecast",
+            trigger_type=primary.trigger_type,
+        )
+        db.add(version)
+        db.flush()
+        job.result_version_id = version.id
+        db.commit()
+        db.refresh(version)
+        return version
+    except Exception:
+        db.rollback()
+        logging.getLogger(__name__).warning("hidden Jev control for forecast %s was not written", primary.id,
+                                            exc_info=True)
+        return None

@@ -52,8 +52,8 @@ def usable_for_revision(db,source_type,identity,context):
 def current_forecast(db,symbol):
     """The newest version of the symbol's newest forward-looking forecast; a historical replay is a
     retrospective study, never the forecast a user means by "the forecast"."""
-    from ..forecast_v2_models import ForecastJobV2,ForecastVersionV2
-    roots=db.scalars(select(ForecastVersionV2).where(ForecastVersionV2.symbol==symbol,ForecastVersionV2.root_id==ForecastVersionV2.id)
+    from ..forecast_v2_models import ForecastJobV2,ForecastVersionV2,not_hidden_control
+    roots=db.scalars(select(ForecastVersionV2).where(ForecastVersionV2.symbol==symbol,ForecastVersionV2.root_id==ForecastVersionV2.id,not_hidden_control())
                      .order_by(ForecastVersionV2.created_at.desc(),ForecastVersionV2.id.desc())).all()
     for root in roots:
         job=db.get(ForecastJobV2,root.job_id)

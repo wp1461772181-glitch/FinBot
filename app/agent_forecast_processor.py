@@ -15,6 +15,7 @@ from .event_provider import configured_deepseek_model, create_deepseek_provider_
 from .forecast_v2 import ForecastDraft
 from .forecast_v2_models import ForecastJobV2
 from .forecast_v2_processor import ForecastInputError, ResearchOnlyForecastProcessor
+from .forecast_model_provider import ForecastModelError, create_forecast_provider
 from .jev_provider import JevProviderError, create_jev_provider_from_env
 from .material_analysis import (
     get_material_analysis,
@@ -45,6 +46,7 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
         material_provider_factory: Callable[[], Any] | None = None,
         brief_provider_factory: Callable[[], Any] | None = None,
         jev_provider_factory: Callable[[], Any] | None = None,
+        llm_provider_factory: Callable[[], Any] | None = None,
         analysis_requester=request_material_analysis,
         analysis_runner=run_material_analysis_once,
         analysis_getter=get_material_analysis,
@@ -58,6 +60,8 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
         # wiring. Live forecasts no longer make a second DeepSeek call to
         # synthesize the brief; they assemble it from saved material analyses.
         self._jev_provider_factory = jev_provider_factory or create_jev_provider_from_env
+        # decision_mode "llm" (Task 14): the role=forecast model gives the forecast, Jev only a hidden control.
+        self._llm_provider_factory = llm_provider_factory or create_forecast_provider
         self._analysis_requester = analysis_requester
         self._analysis_runner = analysis_runner
         self._analysis_getter = analysis_getter
@@ -222,6 +226,12 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
                     "reason": "historical_replay_is_not_live_calibrated",
                 }
 
+        hidden_control = None
+        if self._decision_mode == "llm" and brief_data.get("input_quality", {}).get("status") != "insufficient":
+            decision_probabilities, model_status, hidden_control = self._llm_decision(
+                brief_data, base=base, time_mode=time_mode, model_manifest=model_manifest,
+            )
+
         feature_snapshot = dict(base.feature_snapshot)
         feature_snapshot["research_brief_input_quality"] = brief_data.get("input_quality", {}).get("status")
         prior_report = dict(base.research_report or {})
@@ -246,7 +256,72 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
             trigger_type=base.trigger_type,
             decision_probabilities=decision_probabilities,
             research_brief=brief_data,
+            hidden_control=hidden_control,
         )
+
+    def _llm_decision(self, brief_data, *, base, time_mode, model_manifest):
+        """Primary forecast from the role=forecast model, then one Jev question on the same brief.
+
+        The model must answer: a missing/unusable model or an answer that is not a normalised vector fails the
+        job (no Jev stand-in, no invented numbers).  Jev is only the control: any failure there is recorded in
+        the manifest and the primary goes on."""
+        try:
+            result = self._llm_provider_factory().evaluate(brief_data)
+        except ForecastModelError as exc:
+            raise ForecastInputError(f"forecast_{exc.code}", retryable=exc.retryable) from None
+        except Exception:
+            raise ForecastInputError("forecast_model_error", retryable=True) from None
+        model_manifest.update({
+            "model_status": "experimental_llm",
+            "decision_provider": {
+                "provider": result.provider,
+                "requested_model": result.requested_model,
+                "actual_model": result.actual_model,
+                "request_id": result.request_id,
+                "usage": result.usage,
+                "latency_ms": result.latency_ms,
+                "question_version": result.question_version,
+                "input_sha256": result.input_sha256,
+                "choice": result.choice,
+                "confidence": result.confidence,
+                "raw_probabilities": dict(result.probabilities),
+                "reasoning": result.reasoning,
+            },
+            "local_calibration": {"status": "not_applied", "reason": "llm_forecast_is_not_calibrated"},
+        })
+        control = None
+        try:
+            jev = self._jev_provider_factory().evaluate(brief_data)
+            control = {
+                "decision_probabilities": dict(jev.probabilities),
+                "model_manifest": {
+                    "processor_version": PROCESSOR_VERSION,
+                    "model_status": "experimental_jev",
+                    "decision_mode": "jev_control",
+                    "time_mode": time_mode,
+                    "research_brief_sha256": model_manifest.get("research_brief_sha256"),
+                    "decision_provider": {
+                        "provider": "openrouter",
+                        "requested_model": jev.requested_model,
+                        "actual_model": jev.actual_model,
+                        "request_id": jev.request_id,
+                        "usage": jev.usage,
+                        "latency_ms": jev.latency_ms,
+                        "question_version": jev.question_version,
+                        "input_sha256": jev.input_sha256,
+                        "choice": jev.choice,
+                        "confidence": jev.confidence,
+                        "raw_probabilities": dict(jev.probabilities),
+                    },
+                    "local_calibration": {"status": "not_applied", "reason": "hidden_control_is_raw"},
+                },
+            }
+            model_manifest["control"] = {"status": "answered"}
+        except JevProviderError as exc:
+            model_manifest["control"] = {"status": "failed", "reason": f"jev_{exc.code}"}
+        except Exception:
+            model_manifest["control"] = {"status": "failed", "reason": "jev_provider_error"}
+        return dict(result.probabilities), "experimental_llm", control
 
     def _load_parent_for_brief(self, job: ForecastJobV2):
         if job.parent_version_id is None:
@@ -332,7 +407,7 @@ def _decision_mode(value: str | None) -> str:
     if value is None:
         load_dotenv(__import__("pathlib").Path(__file__).resolve().parent.parent / ".env", override=False)
         value = os.getenv("FORECAST_DECISION_MODE", "research_only")
-    if not isinstance(value, str) or value.strip().lower() not in {"research_only", "jev"}:
+    if not isinstance(value, str) or value.strip().lower() not in {"research_only", "jev", "llm"}:
         raise ForecastInputError("invalid_forecast_decision_mode")
     return value.strip().lower()
 

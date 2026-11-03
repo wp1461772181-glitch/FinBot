@@ -31,7 +31,7 @@ def schema_state(db_engine: Engine) -> dict[str, object]:
     return {
         "table_present": True,
         "missing_columns": [name for name in REQUIRED_COLUMNS if name not in columns],
-        "jev_status_enabled": bool(constraint and "experimental_jev" in constraint),
+        "jev_status_enabled": bool(constraint and "experimental_jev" in constraint and "experimental_llm" in constraint),
     }
 
 
@@ -47,12 +47,12 @@ def apply_schema(db_engine: Engine) -> dict[str, object]:
         constraint = connection.execute(
             text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'forecast_versions_v2'::regclass AND conname = 'ck_forecast_versions_v2_model_status'")
         ).scalar_one_or_none()
-        if constraint is None or "experimental_jev" not in constraint:
+        if constraint is None or "experimental_jev" not in constraint or "experimental_llm" not in constraint:
             connection.execute(text("ALTER TABLE forecast_versions_v2 DROP CONSTRAINT IF EXISTS ck_forecast_versions_v2_model_status"))
             connection.execute(
                 text(
                     "ALTER TABLE forecast_versions_v2 ADD CONSTRAINT ck_forecast_versions_v2_model_status "
-                    "CHECK (model_status IN ('research_only', 'experimental_joint', 'experimental_jev', 'baseline_only', 'blocked_data'))"
+                    "CHECK (model_status IN ('research_only', 'experimental_joint', 'experimental_jev', 'experimental_llm', 'baseline_only', 'blocked_data'))"
                 )
             )
     return schema_state(db_engine)

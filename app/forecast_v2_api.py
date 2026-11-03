@@ -26,7 +26,9 @@ from .forecast_contract import future_xnys_sessions, latest_completed_xnys_sessi
 from .forecast_jobs import ForecastJobError, enqueue_job
 from .forecast_revision_candidates import REVISION_LOOKAHEAD, REVISION_LOOKBACK, assess_revision_sources, window_category
 from .jev_learning import jev_learning_status
-from .forecast_v2_models import ForecastEvaluationV2, ForecastJobV2, ForecastVersionV2, OfficialMonitorRunV2
+from .forecast_v2_models import (
+    ForecastEvaluationV2, ForecastJobV2, ForecastVersionV2, OfficialMonitorRunV2, not_hidden_control,
+)
 from .market_time import xnys_session_close_at
 from .material_analysis_models import MaterialAnalysisVersion
 from .models import SecFilingInventory, UploadedEvidence
@@ -381,7 +383,8 @@ def list_v2_forecast_roots(symbol: str, db: Session = Depends(get_v2_db)) -> dic
         normalized = _supported_symbol(symbol)
         roots = db.scalars(
             select(ForecastVersionV2)
-            .where(ForecastVersionV2.symbol == normalized, ForecastVersionV2.root_id == ForecastVersionV2.id)
+            .where(ForecastVersionV2.symbol == normalized, ForecastVersionV2.root_id == ForecastVersionV2.id,
+                   not_hidden_control())
             .order_by(ForecastVersionV2.decision_at.desc(), ForecastVersionV2.created_at.desc(), ForecastVersionV2.id.desc())
         ).all()
         roots = [root for root in roots if _persisted_time_mode(root) != "historical_research"][:FORECAST_ROOT_LIST_LIMIT]
@@ -404,7 +407,8 @@ def get_v2_stock_workspace(symbol: str, db: Session = Depends(get_v2_db)) -> dic
         normalized = _supported_symbol(symbol)
         root_candidates = db.scalars(
             select(ForecastVersionV2)
-            .where(ForecastVersionV2.symbol == normalized, ForecastVersionV2.root_id == ForecastVersionV2.id)
+            .where(ForecastVersionV2.symbol == normalized, ForecastVersionV2.root_id == ForecastVersionV2.id,
+                   not_hidden_control())
             .order_by(ForecastVersionV2.created_at.desc(), ForecastVersionV2.id.desc())
         ).all()
         root = next((candidate for candidate in root_candidates if _persisted_time_mode(candidate) != "historical_research"), None)
@@ -781,6 +785,8 @@ def _evaluations_payload(
         "unknown": {},
     }
     for version in versions:
+        if _is_hidden_control(version):
+            continue            # controls only appear in model_cohorts, never in the time-mode cohorts
         time_mode = _persisted_time_mode(version)
         cohort = _evaluation_cohort(time_mode)
         root = roots_by_cohort[cohort].setdefault(
@@ -841,14 +847,15 @@ def _model_evaluation_cohorts(
     This additive view prevents joint, baseline, and Jev scores (including
     different Jev model or question versions) from sharing a denominator.
     """
-    groups: dict[tuple[str, str, str, str, str], dict[UUID, list[ForecastVersionV2]]] = {}
+    groups: dict[tuple[str, str, str, str, str, bool], dict[UUID, list[ForecastVersionV2]]] = {}
     for version in versions:
         identity = _model_evaluation_identity(version)
-        groups.setdefault(identity, {}).setdefault(version.root_id, []).append(version)
+        # A hidden control is its own root per publication; it counts once per forecast root it controls.
+        groups.setdefault(identity, {}).setdefault(_control_root_id(version), []).append(version)
 
     payloads: list[dict[str, Any]] = []
     for identity, root_versions in groups.items():
-        time_mode, model_status, provider_name, actual_model, question_version = identity
+        time_mode, model_status, provider_name, actual_model, question_version, is_control = identity
         roots: list[dict[str, Any]] = []
         labelled_roots = 0
         scored_roots = 0
@@ -897,8 +904,9 @@ def _model_evaluation_cohorts(
             "provider": provider_name,
             "actual_model": actual_model,
             "question_version": question_version or None,
+            "control": is_control,
             "log_loss_zero_probability_floor": (
-                JEV_LOG_LOSS_EPSILON if model_status == "experimental_jev" else None
+                JEV_LOG_LOSS_EPSILON if model_status in ("experimental_jev", "experimental_llm") else None
             ),
             "status": status,
             "sample": {
@@ -913,12 +921,12 @@ def _model_evaluation_cohorts(
         payloads,
         key=lambda item: (
             item["time_mode"], item["model_status"], item["provider"],
-            item["actual_model"], item["question_version"] or "",
+            item["actual_model"], item["question_version"] or "", item["control"],
         ),
     )
 
 
-def _model_evaluation_identity(version: ForecastVersionV2) -> tuple[str, str, str, str, str]:
+def _model_evaluation_identity(version: ForecastVersionV2) -> tuple[str, str, str, str, str, bool]:
     time_mode = _persisted_time_mode(version)
     manifest = version.model_manifest if isinstance(version.model_manifest, dict) else {}
     provider_metadata = manifest.get("decision_provider")
@@ -930,7 +938,23 @@ def _model_evaluation_identity(version: ForecastVersionV2) -> tuple[str, str, st
         provider = version.model_status
         actual_model = str(manifest.get("actual_model") or manifest.get("model_version") or version.model_status)
         question_version = ""
-    return time_mode, version.model_status, provider, actual_model, question_version
+    return time_mode, version.model_status, provider, actual_model, question_version, _is_hidden_control(version)
+
+
+def _is_hidden_control(version: ForecastVersionV2) -> bool:
+    manifest = version.model_manifest
+    return isinstance(manifest, dict) and manifest.get("hidden_control") is True
+
+
+def _control_root_id(version: ForecastVersionV2) -> UUID:
+    """The forecast root a hidden control stands for (its own root id when it is not a control)."""
+    manifest = version.model_manifest
+    if _is_hidden_control(version) and isinstance(manifest, dict):
+        try:
+            return UUID(str(manifest.get("control_of_root_id")))
+        except ValueError:
+            pass
+    return version.root_id
 
 
 def _evaluation_cohort_payload(*, name: str, roots: dict[UUID, dict[str, Any]]) -> dict[str, Any]:
