@@ -15,6 +15,7 @@ import { Tx, useLocale } from "./i18n";
 import { applyTheme, saveTheme, storedTheme, type ThemeChoice } from "./theme.mjs";
 import { chatContext } from "./agentChatLifecycle.js";
 import { createLineStore, lineKey, loadDraft, saveDraft } from "./chat-lines.mjs";
+import { planTailSync, pollDelay } from "./chat-sync.mjs";
 import { KnowledgeAdminPage } from './KnowledgeAdminPage';
 import { ContextMeter } from "./ContextMeter";
 import { restoreConversationAfterPersistence, restoreConversationSafely } from "./chat-session.mjs";
@@ -166,6 +167,37 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   useEffect(() => () => { for (const [, s] of lines.current.all()) s.lifecycle.invalidate(); }, []);
   useEffect(() => { const line="local", lc=lines.current.get(line).lifecycle, controller=new AbortController(), id=lc.begin(controller); apply(line,{restoring:true,state:"restoring"}); void restoreConversationSafely(lc,id,controller.signal,signal=>restoreAgentChat(undefined,signal),saved=>{if(!saved.conversationId)clearAgentConversation();else{localId.current=saved.conversationId;createdAt.current=saved.createdAt??new Date().toISOString();try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,localId.current)}catch{}}apply(line,{conversationId:saved.conversationId,messages:saved.messages.filter(m=>m.role==="user"||m.role==="assistant"),historyHasMore:saved.hasMore,historyBefore:saved.nextBefore,state:"idle",loaded:true})}).catch(() => { if (lc.isCurrent(id)) apply(line,{status:t("历史记录暂时无法加载；可稍后重试。"),state:"idle"}); }).finally(()=>{if(lc.isCurrent(id))apply(line,{restoring:false})}); return () => { controller.abort(); earlierController.current?.abort(); lc.finish(id); }; }, []);
   const latestMessages=useRef(messages);latestMessages.current=messages;
+  // Live refresh: while a conversation is open, pull in turns written from outside this tab (Telegram, reminders, pushes).
+  // Polls the newest turns every few seconds (slowly while the tab is hidden) and appends only unseen turn ids; never touches a line that is
+  // answering or restoring, and never the draft (see chat-sync.mjs).
+  useEffect(() => {
+    if (!conversationId || archiveView || importedReadOnly) return;
+    const line = lineRef.current, target = conversationId;
+    let timer = 0, failures = 0, controller: AbortController | null = null, stopped = false;
+    const schedule = () => { if (!stopped) timer = window.setTimeout(() => void poll(), pollDelay({ hidden: document.visibilityState === "hidden", failures })); };
+    async function poll() {
+      if (stopped) return;
+      if (document.visibilityState === "hidden") { schedule(); return; }
+      const current = lines.current.get(line);
+      if (lineRef.current !== line || current.restoring || current.state === "sending" || current.state === "testing" || current.state === "restoring") { schedule(); return; }
+      controller = new AbortController();
+      try {
+        const page = await restoreAgentChat(target, controller.signal, true, null, 6);
+        if (stopped || controller.signal.aborted || lineRef.current !== line || conversationIdRef.current !== target) return;
+        const plan = planTailSync(lines.current.get(line), page.messages, target);
+        if (plan) apply(line, { messages: plan.messages });
+        failures = 0;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        failures += 1;
+      }
+      schedule();
+    }
+    const onVisible = () => { if (document.visibilityState === "visible" && !stopped) { window.clearTimeout(timer); controller?.abort(); void poll(); } };
+    document.addEventListener("visibilitychange", onVisible);
+    schedule();
+    return () => { stopped = true; window.clearTimeout(timer); controller?.abort(); document.removeEventListener("visibilitychange", onVisible); };
+  }, [conversationId, archiveView, importedReadOnly]);
   useEffect(()=>{if(!handle.current||(state!=="ready"&&state!=="error")||archiveView||importedReadOnly||messages.length===0)return;const timer=window.setTimeout(()=>void persistConversation(messages),700);return()=>window.clearTimeout(timer);},[messages,state,archiveView,importedReadOnly]);
   async function persistConversation(items:AgentChatMessage[]){const target=handle.current;if(!target||items.length===0)return;try{const now=new Date().toISOString(),conversation:ArchiveConversation={id:localId.current,created_at:createdAt.current,updated_at:now,messages:archiveMessages(items)};const merged=mergeConversation(connectedArchive.current??createArchive(),conversation);connectedArchive.current=merged;const version=epoch.current;await writer.current(target,serializeArchive(merged));if(version===epoch.current&&!importedReadOnly){archiveRef.current=merged;setArchive(merged);setArchiveStatus(`${t("上次成功保存时间")}: ${new Date().toLocaleTimeString()}`);}}catch(e){setArchiveStatus(`${t("自动保存失败")}: ${e instanceof Error?e.message:""}`);}}
   async function connectFile(){try{const w=window as Window&{showSaveFilePicker?: (options:unknown)=>Promise<FileHandle>};if(!w.showSaveFilePicker){setArchiveStatus(t("当前浏览器不支持自动写入文件；请使用导出和导入。"));return;}const target=await w.showSaveFilePicker({suggestedName:"market-evidence-chat.json",types:[{description:"JSON chat archive",accept:{"application/json":[".json"]}}]});const file=await target.getFile();if(file.size>5_000_000)throw Error("归档文件超过 5 MB 限制");const loaded=file.size?validateArchive(await file.text()):createArchive();epoch.current++;handle.current=target;connectedArchive.current=loaded;archiveRef.current=loaded;setImportedReadOnly(false);setArchiveView(null);setArchive(loaded);setFileName(target.name);setArchiveStatus(t("本地归档已连接"));if(latestMessages.current.length)await persistConversation(latestMessages.current);}catch(e){if(isPickerCancelled(e))return;setArchiveStatus(`${t("无法连接归档文件")}: ${e instanceof Error?e.message:""}`);}}

@@ -646,7 +646,7 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
    if traces_by_turn.get(row["turn_id"]):item["tool_trace"]=traces_by_turn[row["turn_id"]]
    elif isinstance(row.get("tool_calls"),dict) and isinstance(row["tool_calls"].get("tool_trace"),list):item["tool_trace"]=row["tool_calls"]["tool_trace"]
    messages.append(item)
-  elif row.get("role")=="user":messages.append({"role":"user","content":row["content"],"status":row["status"]})
+  elif row.get("role")=="user":messages.append({"role":"user","content":row["content"],"status":row["status"],"turn_id":row["turn_id"]})
 
   # A card-answering call has no tool result of its own: whether it is still running or already done
   # depends on what happened to the card.  Ask the server instead of guessing.
