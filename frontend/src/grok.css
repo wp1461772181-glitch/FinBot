@@ -99,7 +99,7 @@ body { -webkit-font-smoothing: antialiased; }
 .agent-page { padding-top: 8px; gap: 6px; background: var(--me-bg); }
 .agent-page .agent-page-heading { border-bottom: 0; padding: 4px 0 6px; }
 .agent-page .agent-page-heading h1 { font-size: 16px; font-weight: 600; }
-.agent-title-row .bot-avatar { width: 30px; height: 30px; background: var(--me-surface-2); color: var(--me-ink); }
+.agent-title-row .bot-avatar { width: 48px; height: 48px; background: var(--me-surface-2); color: var(--me-ink); }
 .agent-header-actions .secondary-action, .side-toggle { border: 1px solid var(--me-line); background: transparent; color: var(--me-muted); border-radius: 999px; min-height: 32px; padding: 0 12px; }
 .agent-header-actions .secondary-action:hover, .side-toggle:hover { color: var(--me-ink); background: var(--me-surface-2); }
 .side-toggle.is-open { color: var(--me-ink); background: var(--me-surface-2); }
@@ -162,10 +162,19 @@ body { -webkit-font-smoothing: antialiased; }
 .orb-eyes { transform-box: fill-box; transform-origin: center; animation: orb-blink 5.5s infinite; animation-delay: var(--blink-delay, 0s); }
 @keyframes orb-blink { 0%, 94%, 100% { transform: scaleY(1); } 96.5% { transform: scaleY(.12); } }
 @media (prefers-reduced-motion: reduce) { .orb-eyes { animation: none; } .orb-pupils { transition: none; transform: none !important; } }
-.agent-title-row .bot-orb { width: 30px; height: 30px; }
+.agent-title-row .bot-orb { width: 48px; height: 48px; }
 .bot-orb-hero { display: grid; justify-items: center; gap: 6px; margin: 4px 0 14px; }
 .bot-orb-hero small { color: var(--me-muted); font-size: 12px; }
-.bot-rail .bot-avatar { width: 40px; height: 40px; font-size: 18px; }
+.bot-rail .bot-avatar { width: 48px; height: 48px; font-size: 22px; }
+/* Text yields to the avatar: tighter rows, smaller secondary text, ellipsis everywhere. */
+.bot-row { gap: 8px; padding: 4px 6px; }
+.bot-row-text { min-width: 0; line-height: 1.25; }
+.bot-row-text strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-row-text small { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-title-row { gap: 8px; }
+.agent-title-row h1 { font-size: 16px; line-height: 1.2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: anywhere; }
+.agent-title-row .bot-title { font-size: 11px; min-width: 0; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 520px) { .agent-title-row .bot-title { display: none; } }
 .avatar-picker { display: grid; gap: 8px; }
 /* Customise panel (bloub's Customizer/BotTile, restyled with this app's tokens; works in both themes). */
 .bloub-hero { display: grid; place-items: center; padding: 10px 0 4px; }
