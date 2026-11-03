@@ -377,7 +377,7 @@ def test_recall_finds_compacted_detail_in_the_same_bots_line(line):
     top = hits[0]
     assert top["kind"] == "message" and "7.35 亿美元" in top["snippet"] and top["turn_id"] == tid(1)
     assert top["sequence"] <= 8
-    assert any(h["role"] == "assistant" and h["citation_ordinals"] == [1] for h in hits)
+    assert any(h["role"] == "assistant" and h["saved_sources"] == [1] for h in hits)
     assert recall.search_messages(owner_hash("stranger"), "Orbit 外包成本", bot_ids=[BOT_A]) == []
 
 
@@ -397,10 +397,10 @@ def test_recall_conversations_tool_adds_message_hits_for_a_bot(line):
     context = AgentRuntimeContext("custom", "test", "dummy", identity_credential="owner", owner_hash=owner_hash("owner"),
                                   conversation_id=a, bot_id=BOT_A, bot_is_default=False)
     result = asyncio.run(tools._dispatch("recall_conversations", {"query": "Orbit 外包成本", "limit": 3}, context, True, None))
-    kinds = {row.get("kind") for row in result["data"]}
-    assert "message" in kinds and "往事" in result["label"]
-    message = next(r for r in result["data"] if r["kind"] == "message")
-    assert "turn_id" in message and "7.35" in message["snippet"]
+    assert [r["conversation_id"] for r in result["data"]] == [a]                    # still one row per conversation
+    assert "往事" in result["label"] and "citation" not in json.dumps(result["data"])
+    message = result["data"][0]["matches"][0]
+    assert message["turn_id"] and "7.35" in message["snippet"]
 
 
 def test_read_history_citation_accepts_a_summary_marker_or_a_compacted_turn(line, monkeypatch):
@@ -421,3 +421,12 @@ def test_read_history_citation_accepts_a_summary_marker_or_a_compacted_turn(line
     reached.clear()
     out = asyncio.run(history_citations.read_history_citation({"turn_id": tid(99), "ordinal": 1}, ctx))
     assert reached == [] and out["error_code"] == "history_citation_not_found"                  # unknown turn: refused at the gate
+
+
+def test_an_archived_older_line_of_the_bot_gets_a_row_of_its_own_in_recall(line):
+    from app import agent_recall as recall
+    old = _stored_line("owner", BOT_A, archived=True)
+    hits = recall.search_messages(recall_owner := __import__("app.agent_chat_store", fromlist=["x"]).owner_hash("owner"),
+                                  "Orbit 外包成本", bot_ids=[BOT_A])
+    rows = recall.attach_matches([], hits)
+    assert [r["conversation_id"] for r in rows] == [old] and rows[0]["kind"] == "messages" and rows[0]["matches"]

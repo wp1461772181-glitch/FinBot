@@ -243,8 +243,8 @@ def _snippet(text: str, wanted: list[str]) -> str:
 def search_messages(owner: str, query: str, limit: int = MAX_LIMIT, *, bot_ids=None) -> list[dict]:
     """The original messages of one bot's lines that match the query: what a rolling summary no longer
     holds in detail.  ``bot_ids`` are the bots whose conversations are searched, archived ones included
-    (a bot has one live line, but clearing it archives the old one).  Each hit names its turn, so a
-    citation of that turn can be fetched with ``read_history_citation(turn_id, ordinal)``; like every
+    (a bot has one live line, but clearing it archives the old one).  Each hit names its turn and the
+    numbers of the sources saved with it (``saved_sources``), which ``read_history_citation(turn_id, ordinal)`` can fetch; like every
     recall result it is memory, not evidence."""
     wanted = terms(query)[:MESSAGE_TERM_LIMIT]
     if not wanted or not bot_ids:
@@ -283,9 +283,25 @@ def search_messages(owner: str, query: str, limit: int = MAX_LIMIT, *, bot_ids=N
         out.append({"kind": "message", "conversation_id": str(message.conversation_id), "turn_id": str(message.turn_id),
                     "sequence": message.sequence, "role": message.role,
                     "date": message.created_at.date().isoformat() if message.created_at else None,
-                    "snippet": _snippet(message.content, wanted), "citation_ordinals": ordinals,
+                    "snippet": _snippet(message.content, wanted), "saved_sources": ordinals,
                     "link": f"#agent/{message.conversation_id}"})
     return out
+
+
+def attach_matches(rows: list[dict], hits: list[dict]) -> list[dict]:
+    """Message hits ride on the conversation row they belong to (one row per conversation, as before); a
+    conversation only the messages found (an archived older line) gets a row of its own."""
+    by_conversation: dict[str, list[dict]] = {}
+    for hit in hits:
+        by_conversation.setdefault(hit["conversation_id"], []).append(
+            {key: hit[key] for key in ("turn_id", "sequence", "role", "date", "snippet", "saved_sources")})
+    merged = [{**row, "matches": by_conversation.pop(row["conversation_id"])} if row["conversation_id"] in by_conversation
+              else row for row in rows]
+    for conversation_id, matches in by_conversation.items():
+        merged.append({"kind": "messages", "conversation_id": conversation_id, "title": "", "date": matches[0]["date"],
+                       "summary": "", "link": f"#agent/{conversation_id}", "bot_id": None, "bot_name": None,
+                       "matches": matches})
+    return merged
 
 
 def recent(owner: str, limit: int = 20, *, exclude: str | None = None, bot_ids=None) -> list[dict]:

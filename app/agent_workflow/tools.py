@@ -104,7 +104,8 @@ async def _dispatch(name,args,context,is_owner,emit):
                                          bot_ids=None if context.bot_is_default else [bot])
             # Details a summary no longer holds: the original messages of this bot's own lines (with the
             # turn_id, so a citation there can be fetched with read_history_citation).
-            rows=rows+await asyncio.to_thread(recall.search_messages,context.owner_hash,args['query'],args.get('limit',3),bot_ids=[bot])
+            hits=await asyncio.to_thread(recall.search_messages,context.owner_hash,args['query'],args.get('limit',3),bot_ids=[bot])
+            rows=recall.attach_matches(rows,hits)
         else:rows=await asyncio.to_thread(recall.search,context.owner_hash,args['query'],args.get('limit',3),exclude=context.conversation_id)
         return {**result(rows,'past conversations'),'label':recall.LABEL,'note':recall.NOTE}
     if name=='read_past_conversation':
