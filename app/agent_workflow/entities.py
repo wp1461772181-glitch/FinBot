@@ -33,6 +33,13 @@ def resolve_ticker(company):
         return next(iter(symbols)) if len(symbols)==1 else None
     except Exception:return None
 
+def sec_title(symbol):
+    """The official SEC title of a listed ticker, or None when SEC does not list it."""
+    if not symbol:return None
+    try:
+        return next((r['title'] for r in ticker_records() if r['ticker'].casefold()==str(symbol).casefold()),None)
+    except Exception:return None
+
 def verified_pair(company,symbol):
     if not company or not symbol:return False
     words=issuer_words(company)

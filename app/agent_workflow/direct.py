@@ -874,6 +874,20 @@ class Turn:
             mention=self.scope.get('company_mention') or ''
             if other and other!=self.scope['symbol'] and contains(self.scope['symbol'],entity_trusted) and mention and normalized(mention).casefold() in normalized(entity_trusted).casefold():
                 self.scope['symbols']=[self.scope['symbol'],other];entities=[];self.audit['multi_entity_scope']=self.scope['symbols']
+        if entities and self.scope.get('symbol'):
+            # A name with no Latin words (礼来) cannot be compared with an SEC title, but the ticker the user or
+            # the quoted reference wrote verbatim can: SEC lists it, so the pair is grounded in that ticker and
+            # the stored company becomes SEC's official title, never the model's name form.
+            symbol=str(self.scope['symbol'])
+            others=[str(v) for v in (self.scope.get('symbols') or []) if v and str(v).casefold()!=symbol.casefold()]
+            if not others and re.search(r'(?<![A-Za-z0-9.])'+re.escape(symbol.upper())+r'(?![A-Za-z0-9])',normalized(entity_trusted)):
+                from .entities import sec_title
+                title=await asyncio.to_thread(sec_title,symbol)
+                if title:
+                    named=self.scope.get('company')
+                    if named and not self.scope.get('company_mention') and normalized(named).casefold() in normalized(entity_trusted).casefold():
+                        self.scope['company_mention']=named
+                    self.scope['company']=title;entities=[];self.audit['entity_mapping_verified']=True;self.audit['entity_symbol_anchored']=symbol
         if entities:
             self.reference_stage(False,'classifier_entity_unbound',skipped=self.reference_value is None)
             self.pending=self.card('请确认这次指代的公司。',[]);return

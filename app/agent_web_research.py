@@ -349,6 +349,9 @@ def _focus_source(source: dict, query: str | None, company: str | None = None) -
     focused = focus_excerpt(text, query, heading=str(source.get("title") or ""),company=company)
     if focused != text:
         source["excerpt"] = focused
+        # The page text the selection came from stays with the row (never shown) so a figure the answer
+        # takes from this same cited page can be checked against it; number_rows moves it to the citation.
+        source["_evidence_text"] = text
         source["truncated"] = True            # a selection: the page text is no longer complete
 
 

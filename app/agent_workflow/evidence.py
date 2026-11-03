@@ -297,6 +297,7 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
     for original in rows:
         row=dict(original)
         rich=row.pop('_citations',[])
+        page_text=row.pop('_evidence_text',None)
         if rich:
             mapping={}
             for original_citation in rich:
@@ -399,6 +400,7 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
                 'trading_date':row.get('trading_date'),'source':row.get('source'),'fetched_at':row.get('fetched_at'),
                 'symbol':row.get('symbol') or scope.get('symbol'),'analysis_id':row.get('analysis_id'),'derived':kind=='ai_analysis','truncated':bool(row.get('truncated')),
                 'fields':_citation_fields(row),'evidence_quotes':_evidence_quotes(row)})
+            if isinstance(page_text,str) and page_text.strip() and page_text!=body:citations[-1]['figures']=page_text[:5000]
         if kind=='saved_price':
             from .calculation import format_price
             for k in ('open','high','low','close'):
