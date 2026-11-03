@@ -14,7 +14,9 @@ import { toggleUsual, usableSkills } from "./skill-items.mjs";
 import { toolLabel } from "./agent-tool-labels.mjs";
 import { TaskManager } from "./BotRoutines";
 import { CATALOG } from "./model-profiles.mjs";
-import { BotFace, BotOrb } from "./BotOrb";
+import { BloubAvatar } from "./BloubAvatar";
+import { BotOrb } from "./BotOrb";
+import { faceLook } from "./bloub-look.mjs";
 import { BOT_MOODS, BOT_STYLES, botAvatar, DEFAULT_AVATAR, parseAvatar, type BotMood, type BotStyle } from "./orb.mjs";
 import { WorkspaceCard } from "./WorkspaceCards";
 import { CARDS, addCard, botSymbol, loadLayout, moveCard, pinCardSymbol, removeCard, resetLayout, resizeCard, saveLayout, storeBotSymbol, symbolChoices, type CardId, type LayoutItem } from "./workspace-cards.mjs";
@@ -47,7 +49,7 @@ function useBotOptions() {
   return { catalog, tools, templates, error };
 }
 
-function BotAvatar({ bot, track = false }: { bot: Pick<Bot, "avatar" | "name">; track?: boolean }) { return <BotOrb avatar={bot.avatar} name={bot.name} size={40} track={track} />; }
+function BotAvatar({ bot, running = false, unread = false }: { bot: Pick<Bot, "id" | "avatar" | "name">; running?: boolean; unread?: boolean }) { return <BotOrb avatar={bot.avatar} name={bot.name} seed={bot.id} size={40} running={running} unread={unread} />; }
 
 const STYLE_LABELS: Record<string, string> = { kline: "K线胶囊", pure: "纯粹圆润", bull: "极简牛耳", square: "方糖终端" };
 const MOOD_LABELS: Record<string, string> = { idle: "翡翠绿", focus: "研报蓝", bull: "金牛黄", mono: "极客白" };
@@ -58,7 +60,7 @@ function OrbSwatches({ value, onPick, disabled }: { value: string; onPick: (avat
   const current = parseAvatar(value);
   const style: BotStyle = current.kind === "bot" ? current.style : "kline", mood: BotMood = current.kind === "bot" ? current.mood : "idle";
   const swatch = (s: BotStyle, m: BotMood, pressed: boolean, label: string) =>
-    <button key={`${s}-${m}`} type="button" className="orb-swatch" aria-pressed={pressed} onClick={() => onPick(botAvatar(s, m))}><BotFace style={s} mood={m} /><span>{label}</span></button>;
+    <button key={`${s}-${m}`} type="button" className="orb-swatch" aria-pressed={pressed} onClick={() => onPick(botAvatar(s, m))}><span className="orb-swatch-face"><BloubAvatar size={36} {...faceLook(s, m)} frozenAt={0} /></span><span>{label}</span></button>;
   return <div className="orb-swatches">
     <fieldset disabled={disabled}><legend>{t("轮廓")}</legend>{BOT_STYLES.map(s => swatch(s, mood, s === style, t(STYLE_LABELS[s])))}</fieldset>
     <fieldset disabled={disabled}><legend>{t("配色")}</legend>{BOT_MOODS.map(m => swatch(style, m, m === mood, t(MOOD_LABELS[m])))}</fieldset>
@@ -73,7 +75,7 @@ function AvatarPicker({ value, name, onChange, disabled }: { value: string; name
     <div className="avatar-picker-modes">
       <label className="bot-check"><input type="radio" checked={isOrb} disabled={disabled} onChange={() => onChange(DEFAULT_AVATAR)} />{t("机器人")}</label>
       <label className="bot-check"><input type="radio" checked={!isOrb} disabled={disabled} onChange={() => onChange("")} />{t("自定义 emoji")}</label>
-      <BotOrb avatar={value} name={name || "·"} size={32} track />
+      <BotOrb avatar={value} name={name || "·"} size={32} />
     </div>
     {isOrb ? <OrbSwatches value={value} onPick={onChange} disabled={disabled} />
       : <input value={value} maxLength={16} disabled={disabled} onChange={e => onChange(e.target.value)} placeholder="📈" aria-label={t("头像")} />}
@@ -102,11 +104,8 @@ export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutin
   const { t } = useLocale();
   const { top, groups } = botSections(bots);
   const pending = bots.reduce((sum, b) => sum + (b.pending || 0), 0);
-  // Only the current bot and the row under the pointer look around; the rest of the list stays still.
-  const [hovered, setHovered] = useState<string | null>(null);
-  const row = (bot: Bot) => <li key={bot.id}><button type="button" className={`bot-row${bot.id === activeBotId ? " is-active" : ""}`} aria-current={bot.id === activeBotId ? "page" : undefined} onClick={() => onOpen(bot)}
-    onPointerEnter={() => setHovered(bot.id)} onPointerLeave={() => setHovered(h => h === bot.id ? null : h)}>
-    <BotAvatar bot={bot} track={bot.id === activeBotId || bot.id === hovered} /><span className="bot-row-text"><strong>{bot.name}{bot.is_default && bot.avatar !== "★" && <span className="bot-star" aria-label={t("默认")}> ★</span>}</strong><small>{bot.last_message || bot.title || t("还没有消息")}</small></span>
+  const row = (bot: Bot) => <li key={bot.id}><button type="button" className={`bot-row${bot.id === activeBotId ? " is-active" : ""}`} aria-current={bot.id === activeBotId ? "page" : undefined} onClick={() => onOpen(bot)}>
+    <BotAvatar bot={bot} running={Boolean(lineStatus?.running.includes(`bot:${bot.id}`))} unread={bot.unread > 0 || Boolean(lineStatus?.unseen.includes(`bot:${bot.id}`))} /><span className="bot-row-text"><strong>{bot.name}{bot.is_default && bot.avatar !== "★" && <span className="bot-star" aria-label={t("默认")}> ★</span>}</strong><small>{bot.last_message || bot.title || t("还没有消息")}</small></span>
     {lineStatus?.running.includes(`bot:${bot.id}`) && bot.id !== activeBotId && <span className="bot-pending-dot" role="img" aria-label={t("回答中")} title={t("回答中")} />}
     {lineStatus?.unseen.includes(`bot:${bot.id}`) && bot.id !== activeBotId && <span className="bot-unread" aria-label={t("新回答")}>{t("新回答")}</span>}
     {bot.pending > 0 && <span className="bot-pending-dot" role="img" aria-label={t("有待你确认的建议")} title={t("有待你确认的建议")} />}
@@ -207,7 +206,7 @@ export function NewBotDialog({ onClose, onCreated }: { onClose: () => void; onCr
       <button className="profile-close" onClick={onClose} aria-label={t("关闭")} disabled={busy}>×</button>
       <h2 id="new-bot-title">{t("新建 bot")}</h2>
       <form className="bot-create" onSubmit={e => void save(e)}>
-        <div className="bot-orb-hero"><BotOrb avatar={avatar} name={name || "FinBot"} size={96} track /><small>{avatar === DEFAULT_AVATAR ? "FinBot" : name || t("新 bot")}</small></div>
+        <div className="bot-orb-hero"><BotOrb avatar={avatar} name={name || "FinBot"} size={96} /><small>{avatar === DEFAULT_AVATAR ? "FinBot" : name || t("新 bot")}</small></div>
         <OrbSwatches value={avatar} onPick={setAvatar} disabled={busy} />
         <label>{t("名字")}<input ref={nameBox} value={name} maxLength={40} disabled={busy} onChange={e => setName(e.target.value)} placeholder={picked?.name || t("例如：读财报")} /></label>
         {templates.length > 0 && <fieldset className="bot-template-chips" disabled={busy}><legend>{t("模板（可选）")}</legend>

@@ -374,7 +374,7 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled 
   const currentConversation=window.sessionStorage.getItem("market-evidence-agent:chat-conversation:v1");
   return <main className="workspace agent-page" aria-labelledby="agent-chat-title">
     <header className="workspace-heading agent-page-heading">
-      {bot?<div className="agent-title-row"><BotOrb avatar={bot.avatar} name={bot.name} size={30} track /><h1 id="agent-chat-title">{bot.name}</h1>{bot.title&&<small className="bot-title">{bot.title}</small>}</div>
+      {bot?<div className="agent-title-row"><BotOrb avatar={bot.avatar} name={bot.name} seed={bot.id} size={30} running={c.state==="sending"} /><h1 id="agent-chat-title">{bot.name}</h1>{bot.title&&<small className="bot-title">{bot.title}</small>}</div>
         :<div className="agent-title-row"><button type="button" className="mobile-history-toggle secondary-action" aria-expanded={historyOpen} onClick={()=>setHistoryOpen(x=>!x)}>{t("历史对话")}</button><h1 id="agent-chat-title">模型对话</h1></div>}
       <div className="agent-header-actions">{side&&<button type="button" className={`side-toggle${sideOpen?" is-open":""}`} aria-expanded={sideOpen} aria-controls="bot-side" aria-label={sideOpen?t("收起工作区"):t("打开工作区")} title={sideOpen?t("收起工作区"):t("打开工作区")} onClick={toggleSide}><PanelIcon /><span>{t("工作区")}</span></button>}<span>{mode==="personal"?t("个人模式"):t("访客模式")}</span><button className="secondary-action" onClick={switchMode} type="button">{t("切换模式")}</button><button className="secondary-action" onClick={onSettings} type="button">{t("设置")}</button></div>
     </header>
