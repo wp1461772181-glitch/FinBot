@@ -21,6 +21,10 @@ if [ ! -f /etc/finbot/muse.env ]; then
         printf 'RAG_ENABLED=true\nRAG_REMOTE_URL=http://127.0.0.1:18765\nRAG_REMOTE_TOKEN=CHANGE_ME\n'
         printf 'RAG_INDEXING_ENABLED=false\nBACKGROUND_LOOPS=true\n'
         printf 'FINBOT_NEWS_SOURCES_CONFIG=%s/config/news_sources.yaml\n' "$DATA"
+        for k in TAVILY_API_KEY SEC_EDGAR_USER_AGENT; do
+            v=$(grep -E "^$k=" "$ROOT/.env" 2>/dev/null | head -n 1 | cut -d= -f2- || true)
+            if [ -n "$v" ]; then printf '%s=%s\n' "$k" "$v"; fi
+        done
     } > /etc/finbot/muse.env
     echo "wrote /etc/finbot/muse.env — set RAG_REMOTE_TOKEN to the same value as on the Mac"
 fi
