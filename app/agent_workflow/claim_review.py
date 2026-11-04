@@ -268,12 +268,13 @@ def _enforce_lines(prose, accepted, issues, citations, bodies, *, claims_missing
 
 def _line_warning(stripped, reasons_for, *, claims_missing: bool, accepted):
     """Why a line could not be bound to a quote; only DROP_REASONS remove it."""
-    if claims_missing and factual_claim(stripped):
+    needs_claim = factual_claim(stripped) or bool(_CITATION_MARKER.search(stripped))
+    if claims_missing and needs_claim:
         return "claims_missing"
     for statement, reason in reasons_for.items():
         if _statement_in_line(statement, stripped):
             return reason or "quote_not_found"
-    if not accepted and reasons_for and factual_claim(stripped):
+    if not accepted and reasons_for and needs_claim:
         return next(iter(reasons_for.values())) or "quote_not_found"
     return None
 

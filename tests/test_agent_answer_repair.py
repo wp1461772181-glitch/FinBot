@@ -8,6 +8,17 @@ def call(name,**args):return {'tool_calls':[{'id':name,'function':{'name':name,'
 # The repair returns a Markdown answer, as the model writes any answer; markers bind the sources.
 def repair(text,citations=(1,)):return {'content':text+''.join('['+str(n)+']' for n in citations)}
 
+PRICE_ROWS_WITH_HOLDERS=[
+    {'id':'p1','symbol':'AMD','close':100,'trading_date':'2026-10-20'},
+    {'id':'p2','symbol':'AMD','close':999,'trading_date':'2026-10-19'},
+    {'id':'p3','symbol':'AMD','close':999,'trading_date':'2026-10-18'},
+]
+CITES_WITH_HOLDERS=[
+    {'ordinal':1,'quote':'100','source_type':'saved_price'},
+    {'ordinal':2,'quote':'999','source_type':'saved_price'},
+    {'ordinal':3,'quote':'999','source_type':'saved_price'},
+]
+
 @pytest.mark.parametrize('replacement,reason',[
     (repair('AMD 收盘价为 100 美元'),None),
     (repair('AMD 收盘价为 888 美元'),'unsupported_numeric_claim'),
@@ -27,7 +38,7 @@ def test_numeric_repair_is_single_tool_free_and_still_guarded(replacement,reason
     retried=bool(replacement.get('tool_calls'))
     schemas=[];executed=[]
     def decide(messages,tools):schemas.append(tools);return next(steps)
-    def execute(name,args):executed.append(name);return {'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]}
+    def execute(name,args):executed.append(name);return {'ok':True,'data':PRICE_ROWS_WITH_HOLDERS}
     ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=decide,executor=execute)
     result=asyncio.run(direct.run_direct_turn('AMD 收盘价',ctx,emit=emit))
     # The repair may only fix [n] markers: a reply that swaps the figure or the claim is not taken, the
@@ -42,7 +53,7 @@ def test_numeric_repair_continues_beyond_old_token_budget():
     calls=[]
     ctx=AgentRuntimeContext('custom','test','dummy',decider=lambda *_:calls.append(1) or repair('AMD 收盘价为100美元'))
     turn=direct.Turn('AMD 收盘价',ctx,emit,[],{})
-    turn.route='A';turn.citations=[{'ordinal':1,'quote':'100','source_type':'saved_price'}]
+    turn.route='A';turn.citations=list(CITES_WITH_HOLDERS)
     turn.observations=[{'accepted_evidence':True}];turn.audit['token_usage']=1_000_000
     result=asyncio.run(turn.finish_answer('AMD 收盘价为999美元[1]'))
     assert result['status']=='partially_succeeded' and calls==[1]
@@ -51,7 +62,7 @@ def test_numeric_repair_continues_beyond_old_token_budget():
 
 def test_structured_repair_binds_each_sentence_and_rejects_a_second_bad_number():
     steps=iter([call('query_stock_prices',symbol='AMD'),{'content':'AMD 收盘价为999美元[1]。'},repair('AMD 收盘价为100美元。AMD 收盘价为888美元')])
-    ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=lambda *_:next(steps),executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]})
+    ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=lambda *_:next(steps),executor=lambda *_:{'ok':True,'data':PRICE_ROWS_WITH_HOLDERS})
     result=asyncio.run(direct.run_direct_turn('AMD 收盘价',ctx,emit=emit))
     # The unbound first sentence and the unsupported second one both stay out of the answer.
     assert result['reason'] in {'missing_citation','unsupported_numeric_claim'} and '888' not in result['answer'] and result['audit']['answer_repair_count']==1
@@ -61,7 +72,7 @@ def test_repair_never_retries_a_malformed_native_protocol(monkeypatch):
     async def bad(*args,**kwargs):calls.append(1);return {'usage':{'total_tokens':1}},{'content':'<|tool_calls|>'}
     monkeypatch.setattr(direct,'decision_request',bad)
     turn=direct.Turn('AMD 收盘价',AgentRuntimeContext('custom','test','dummy'),emit,[],{})
-    turn.route='A';turn.citations=[{'ordinal':1,'quote':'100','source_type':'saved_price'}]
+    turn.route='A';turn.citations=list(CITES_WITH_HOLDERS)
     turn.observations=[{'name':'query_stock_prices','result':{'ok':True,'data':[{'close':100}]},'accepted_evidence':True}]
     result=asyncio.run(turn.finish_answer('AMD 收盘价为999美元[1]'))
     assert calls==[1] and result['reason']=='unsupported_numeric_claim' and turn.audit['model_calls']==1
@@ -115,7 +126,7 @@ def test_repair_is_told_which_numbers_the_source_check_rejected():
     seen=[]
     steps=iter([call('query_stock_prices',symbol='AMD'),{'content':'AMD 收盘价为999美元[1]。'},repair('AMD 收盘价为100美元')])
     def decide(messages,tools):seen.append(json.dumps(messages,ensure_ascii=False,default=str));return next(steps)
-    ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=decide,executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]})
+    ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=decide,executor=lambda *_:{'ok':True,'data':PRICE_ROWS_WITH_HOLDERS})
     result=asyncio.run(direct.run_direct_turn('AMD 收盘价',ctx,emit=emit))
     assert result['status']=='partially_succeeded'
     repair_request=[m for m in json.loads(seen[-1]) if m.get('role')=='user'][-1]['content']
@@ -150,10 +161,10 @@ def test_repair_accepts_a_fenced_markdown_answer():
     assert 'answer_repair_error' not in result['audit'] and '```' not in result['answer']
 
 def test_repair_keeps_the_version_with_fewer_unsupported_lines():
-    draft='- 收盘价 100 美元\n- 开盘价 998 美元 [1]\n- 最高价 997 美元 [1]\n- 成交量 100 [1]'
+    draft='- 收盘价 100 美元\n- 开盘价 998 美元 [1]\n- 最高价 997 美元 [1]\n- 成交量 200 [1]'
     better='- 收盘价 100 美元 [1]\n- 开盘价 998 美元 [1]'
     steps=iter([call('query_stock_prices',symbol='AMD'),{'content':draft},{'content':better},{'content':better}])
-    ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=lambda *_:next(steps),executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]})
+    ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=lambda *_:next(steps),executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100,'volume':200}]})
     result=asyncio.run(direct.run_direct_turn('AMD 行情',ctx,emit=emit))
     # The marker fix is taken; the lines the reply left out are not lost, they stay and are flagged.
     assert result['status']=='partially_succeeded' and '收盘价 100 美元 [1]' in result['answer']
@@ -164,7 +175,7 @@ def test_a_failed_repair_call_is_recorded_with_its_cause():
         yield call('query_stock_prices',symbol='AMD');yield {'content':'AMD 收盘价为 999 美元 [1]。'}
         raise RuntimeError('provider down')
     it=steps()
-    ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=lambda *_:next(it),executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]})
+    ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=lambda *_:next(it),executor=lambda *_:{'ok':True,'data':PRICE_ROWS_WITH_HOLDERS})
     result=asyncio.run(direct.run_direct_turn('AMD 收盘价',ctx,emit=emit))
     assert result['audit']['answer_repair_error']=='repair_unavailable:RuntimeError'
 
@@ -177,7 +188,7 @@ def test_a_verified_browser_receipt_is_not_rewritten_by_the_repair(replacement):
     turn.accept('open_page',{'page':'sec'},
         {'ok':True,'data':[{'client_action':{'action':'open_page','page':'sec'}}]})
     result=asyncio.run(turn.finish_answer('已打开 SEC 页面，事件时间为 2026-10-24 02:40 UTC。'))
-    assert calls
+    assert not calls
     # An unconfirmed timestamp is flagged, not deleted by the model.
     assert result['status']=='partially_succeeded' and '02:40' in result['answer'] and result['unverified_lines']
 
@@ -201,6 +212,8 @@ def _repair_turn(decide,citations,observations=None):
 
 def _forty_three_sources():
     sources=[{'ordinal':n,'quote':'第 %d 条来源的背景材料，与资本开支无关。'%n*20,'source_type':'web','title':'来源 %d'%n} for n in range(1,44)]
+    sources[0]['quote']+=' 历史增幅 45%。'
+    sources[1]['quote']+=' 历史增幅 45%。'
     # The call transcript is source 38; the unique tail is past any 22,000-character truncation of the context.
     sources[37]['quote']='管理层在电话会上表示 2027 年资本开支将大幅上升。'+'补充说明。'*400+'TAIL-OF-SOURCE-38'
     return sources

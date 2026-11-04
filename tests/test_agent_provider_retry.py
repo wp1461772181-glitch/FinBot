@@ -43,7 +43,9 @@ def test_a_failed_repair_records_the_provider_reason():
     from app.agent_workflow import direct as d
     async def boom(*_a,**_k):raise HTTPException(504,'provider_timeout')
     turn=d.Turn('AMD 收盘价',AgentRuntimeContext('custom','test','dummy'),emit,[],{})
-    turn.route='A';turn.citations=[{'ordinal':1,'quote':'100','source_type':'saved_price'}]
+    turn.route='A';turn.citations=[{'ordinal':1,'quote':'100','source_type':'saved_price'},
+                    {'ordinal':2,'quote':'999','source_type':'saved_price'},
+                    {'ordinal':3,'quote':'999','source_type':'saved_price'}]
     turn.observations=[{'accepted_evidence':True}]
     turn.model=boom
     result=asyncio.run(turn.finish_answer('AMD 收盘价为999美元[1]'))

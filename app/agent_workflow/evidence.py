@@ -1005,8 +1005,13 @@ def event_polarities(text,terms):
             states.add(negative)
     return states
 
+_NUMERIC_ONLY_SOURCE_TYPES = frozenset({
+    'saved_price', 'saved_price_set', 'market_quote',
+    'reported_figure', 'calculation', 'formula_calculation',
+})
+
 def unsupported_claims(answer,citations):
-    """Reject source-kind and explicit claim-feature mismatches, not prove full entailment."""
+    """Reject source-kind and explicit claim-feature polarity mismatches, not prove full entailment."""
     from .language import simplified
     answer=simplified(answer)
     indexed={str(c['ordinal']):c for c in citations}
@@ -1016,11 +1021,33 @@ def unsupported_claims(answer,citations):
         if re.search(r'没有(?:可核验)?(?:资料|证据)|无法(?:核实|确认)|no (?:verified )?evidence',passage,re.I):continue
         if not sources:
             continue
+        if all(c.get('source_type') in _NUMERIC_ONLY_SOURCE_TYPES for c in sources):
+            if any(event_polarities(passage,terms) for terms in CLAIM_FEATURES):
+                return True
         evidence=simplified(' '.join(citation_check_text(c) for c in sources))
         for terms in CLAIM_FEATURES:
             claim_polarity=event_polarities(passage,terms)
             evidence_polarity=event_polarities(evidence,supporting_event_terms(terms))
             if claim_polarity and evidence_polarity and not claim_polarity<=evidence_polarity:return True
+    return False
+
+_PARTIAL_8K_TEXTS = frozenset({'exhibit_99_1_only', 'primary_document_only'})
+
+def _partial_8k_claim_missing(passage, citations):
+    """Whether a cited passage asserts an event absent from a partially stored 8-K filing."""
+    from .language import simplified
+    passage = simplified(passage)
+    if re.search(r'没有(?:可核验)?(?:资料|证据)|无法(?:核实|确认)|no (?:verified )?evidence', passage, re.I):
+        return False
+    indexed = {str(c['ordinal']): c for c in citations}
+    refs = citation_markers(passage, citations)
+    sources = [indexed[r] for r in refs if r in indexed]
+    if not sources or not all(c.get('saved_text') in _PARTIAL_8K_TEXTS for c in sources):
+        return False
+    evidence = simplified(' '.join(citation_check_text(c) for c in sources))
+    for terms in CLAIM_FEATURES:
+        if event_polarities(passage, terms) and not any(contains(t, evidence) for t in supporting_event_terms(terms)):
+            return True
     return False
 
 
@@ -1108,13 +1135,11 @@ def reviewed_passages(answer,citations,*,require_citations=False,check_claims=Tr
             # not that a source disagrees.  An absence report states no fact.
             if unsupported and not marked and uncertainty:unsupported=[]
             claim_issue=None
-            if not labelled and unsupported_claims(stripped,citations):
-                refs=citation_markers(stripped,citations)
-                cited=[c for c in citations if str(c.get('ordinal')) in refs]
-                if any(c.get('saved_text') in {'exhibit_99_1_only','primary_document_only'} for c in cited):
-                    claim_issue='source_part_not_stored'
-                else:
+            if not labelled:
+                if unsupported_claims(stripped,citations):
                     claim_issue='unsupported_claim'
+                elif _partial_8k_claim_missing(stripped,citations):
+                    claim_issue='source_part_not_stored'
             code=(('unsupported_numeric_claim' if marked else 'missing_citation') if unsupported else
                   'insufficient_numeric_evidence' if insufficient else
                   claim_issue)

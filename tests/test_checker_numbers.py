@@ -227,7 +227,7 @@ def test_calculate_accepts_literals_and_records_them():
     assert ratio['value'] == '25.00'
 
 
-@pytest.mark.parametrize('expression', ['a*0+394', 'a-a+394', 'a/a*394', 'a*1001', 'a*0.00001', 'a**2'])
+@pytest.mark.parametrize('expression', ['a*0+394', 'a-a+394', 'a/a*394', 'a*1001', 'a*0.00001', 'a**0+394', 'a**21'])
 def test_a_constant_cannot_be_laundered_into_a_result(expression):
     with pytest.raises(ValueError, match='invalid_calculation'):
         calculate({'expression': expression, 'inputs': [{'name': 'a', 'value': '100', 'source_ordinal': 1}]},

@@ -151,17 +151,27 @@ def test_f12_acquisition_phrasing_and_polarity_reversal():
     assert unsupported_claims('收购了 [1]', cites_neg)
 
 
-def test_8k_primary_document_unsupported_claim_reports_source_part_not_stored():
+def test_8k_partial_storage_distinguishes_missing_part_from_contradiction():
     from app.agent_workflow.evidence import reviewed_passages
-    citations = [{
+    partial_99_1 = [{
+        'ordinal': 1,
+        'source_type': 'official_filing',
+        'saved_text': 'exhibit_99_1_only',
+        'quote': 'Q3 revenue was $10 billion. Operating margin was 32%.',
+    }]
+    _, issues = reviewed_passages('公司同时宣布任命新任 CEO [1]。', partial_99_1, check_claims=True)
+    assert 'source_part_not_stored' in issues
+    assert 'unsupported_claim' not in issues
+
+    contradicted_8k = [{
         'ordinal': 1,
         'source_type': 'official_filing',
         'saved_text': 'primary_document_only',
         'quote': 'Item 2.02 Results of Operations. The company did not acquire ExampleCo.',
     }]
-    _, issues = reviewed_passages('收购了 [1]', citations, check_claims=True)
-    assert 'source_part_not_stored' in issues
-    assert 'unsupported_claim' not in issues
+    _, issues_neg = reviewed_passages('收购了 ExampleCo [1]。', contradicted_8k, check_claims=True)
+    assert 'unsupported_claim' in issues_neg
+    assert 'source_part_not_stored' not in issues_neg
 
 
 def test_cagr_power_calculation():

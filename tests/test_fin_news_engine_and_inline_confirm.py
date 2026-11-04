@@ -209,7 +209,8 @@ def test_4_numeric_gate_enforced_on_configured_news_claims(news_env):
     assert result["status"] == "partially_succeeded"
     assert "88 billion" in result["answer"]
     assert result["unverified_lines"] and result["unverified_lines"][0]["numbers"]
-    assert result["audit"].get("answer_repair_count", 0) >= 1
+    assert result["audit"].get("answer_repair_reason") == "unsupported_numeric_claim"
+    assert result["audit"].get("answer_repair_count") is None
 
 
 def test_5_push_summary_max_tokens_truncation_and_validation(news_env, client):

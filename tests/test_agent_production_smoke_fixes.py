@@ -41,9 +41,9 @@ def test_a_heading_that_states_an_amount_still_needs_its_source():
     assert reviewed_answer('## 营收 999 亿美元\n\n营收 109,417 百万美元 [1]。',SEGMENTS,require_citations=True)[1]
 
 def test_a_list_item_keeps_its_sentences_that_passed():
-    text='- AI 分析并未给出营收的具体金额。营收为 109,417 百万美元 [1]。'
+    text='- 另有 999 亿美元的说法。营收为 109,417 百万美元 [1]。'
     kept,issues=reviewed_answer(text,SEGMENTS,require_citations=True)
-    assert issues==['missing_citation'] and kept.startswith('- ') and '109,417 百万美元 [1]' in kept and '并未给出' not in kept
+    assert issues==['missing_citation'] and kept.startswith('- ') and '109,417 百万美元 [1]' in kept and '999' not in kept
 
 def _turn(question='AMD 收盘价',**context):
     return direct.Turn(question,AgentRuntimeContext('custom','test','dummy',**context),emit,[],{})

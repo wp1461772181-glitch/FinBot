@@ -253,16 +253,24 @@ def _grounded_with_status(entry, key: str, haystack: str) -> tuple[float | None,
     quote = entry.get("quote") if isinstance(entry.get("quote"), str) else ""
     _norm = _squash
     in_haystack = _in_text(quote, haystack) or (bool(quote.strip()) and _norm(quote).replace(",", "") in _norm(haystack).replace(",", ""))
-    if key in ("revenue_b", "revenue") and abs(value) >= 1000:
-        value = round(value / 1000.0, 4)
-    raw = str(token if token is not None else entry.get("number", "")).strip().replace(",", "")
+    raw = str(token if token is not None else entry.get("number", "")).strip().replace("$", "").replace("%", "").replace(",", "").strip()
     clean_quote = quote.replace(",", "")
-    scaled = str(int(round(value * 1000))) if value < 1000 else ""
+    scaled = str(int(round(value * 1000))) if abs(value) < 1000 else ""
+    quote_nums = [_number(m) for m in re.findall(r"\d+(?:\.\d+)?", clean_quote)]
+    million_equiv = any(
+        qn is not None and abs(value) < 1000 and qn >= 1000 and (
+            abs(qn / 1000.0 - value) <= 0.01
+            or round(qn / 1000.0, 2) == round(value, 2)
+            or round(qn / 1000.0, 3) == round(value, 3)
+        )
+        for qn in quote_nums
+    )
     matched = bool(
         in_haystack
         and (
-            re.search(r"(?<!\d)" + re.escape(raw) + r"(?!\d)", clean_quote)
+            (raw and re.search(r"(?<!\d)" + re.escape(raw) + r"(?!\d)", clean_quote))
             or (scaled and re.search(r"(?<!\d)" + re.escape(scaled) + r"(?!\d)", clean_quote))
+            or million_equiv
         )
     )
     return value, matched
@@ -277,7 +285,9 @@ def _grounded(entry, key: str, haystack: str) -> float | None:
 def _billions(entry, value: float | None) -> float | None:
     if value is None:
         return None
-    return value / 1000 if str(entry.get("unit", "B")).upper() == "M" else value
+    if (isinstance(entry, dict) and str(entry.get("unit", "B")).upper() == "M") or abs(value) >= 1000:
+        return round(value / 1000.0, 6)
+    return value
 
 
 async def extract_release(text: str, model: dict) -> ReleaseFacts:

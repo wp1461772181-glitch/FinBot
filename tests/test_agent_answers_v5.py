@@ -22,11 +22,11 @@ def test_stock_source_does_not_require_a_stock_keyword_in_every_sentence():
     assert result['status']=='succeeded' and '以上为历史记录' in result['answer']
 
 def test_ordinary_uncited_fact_cannot_survive_a_supported_price_sentence():
+    # F4 decision: a qualitative metric sentence without figures or named events needs no citation marker.
     t=turn();t.observations=[{'accepted_evidence':True}]
     result=t.finish('AMD 收盘价为100美元[1]。\nAMD revenue declined materially.')
-    assert result['status']=='partially_succeeded' and '100美元' in result['answer']
-    assert 'declined' in result['answer'] and result['reason']=='missing_citation'
-    assert [x['line'] for x in result['unverified_lines']]==['AMD revenue declined materially.']
+    assert result['status']=='succeeded' and '100美元' in result['answer']
+    assert 'declined' in result['answer'] and result['unverified_lines']==[]
 
 def test_bare_factual_number_is_checked_against_the_attached_source():
     result=turn().finish('AMD revenue was 999 [1].')

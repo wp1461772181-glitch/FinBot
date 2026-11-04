@@ -154,12 +154,20 @@ def test_fill_only_looks_at_recent_releases_before_today(owner):
 
 
 def test_skipped_rows_are_listed_with_delivered_false(owner, client):
+    # Batch 4 (N2): new follow-ups always deliver ("sent"), even when unclear or low-confidence.
     judge_once(reader=FakeReader("unclear", "low"))
     judge_once(reader=FakeReader("down", "low"), symbol="NVDA", held=False, accession="0001045810-26-000001")
     rows = {r["symbol"]: r for r in listed(client)}
-    assert rows["INTC"]["followup_status"] == "skipped_unclear" and rows["INTC"]["delivered"] is False
-    assert rows["NVDA"]["followup_status"] == "skipped_low_confidence" and rows["NVDA"]["delivered"] is False
+    assert rows["INTC"]["followup_status"] == "sent" and rows["INTC"]["delivered"] is True
+    assert rows["NVDA"]["followup_status"] == "sent" and rows["NVDA"]["delivered"] is True
     assert rows["NVDA"]["reasons"] and rows["NVDA"]["counter_argument"]
+    # Legacy DB rows written before Batch 4 with skipped_* status still read back as delivered=False.
+    with SessionLocal() as db:
+        intc_ev = db.query(EarningsEvent).filter(EarningsEvent.symbol == "INTC").one()
+        intc_ev.followup_status = "skipped_unclear"
+        db.commit()
+    rows_after = {r["symbol"]: r for r in listed(client)}
+    assert rows_after["INTC"]["followup_status"] == "skipped_unclear" and rows_after["INTC"]["delivered"] is False
     assert [r["symbol"] for r in listed(client, "?symbol=nvda")] == ["NVDA"]
     assert len(listed(client, "?limit=1")) == 1
 

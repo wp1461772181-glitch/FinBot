@@ -86,7 +86,7 @@ def calculate(args, citations, user_text=''):
             value=evaluate(node.operand,env);return value if isinstance(node.op,ast.UAdd) else -value
         if isinstance(node,ast.BinOp) and isinstance(node.op,ast.Pow):
             base=evaluate(node.left,env);exp=evaluate(node.right,{})
-            if abs(exp)>Decimal(20) or (base<0 and exp!=int(exp)):raise ValueError('unsupported_expression')
+            if exp==0 or abs(exp)>Decimal(20) or (base<0 and exp!=int(exp)):raise ValueError('invalid_calculation')
             return Decimal(str(float(base)**float(exp)))
         if isinstance(node,ast.BinOp) and isinstance(node.op,(ast.Add,ast.Sub,ast.Mult,ast.Div)):
             left,right=evaluate(node.left,env),evaluate(node.right,env)

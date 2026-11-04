@@ -15,7 +15,7 @@ export const REASON_KEYS = {
   quote_too_short: "引用的来源里找不到这个说法",
   claims_missing: "没有给出可核对的依据",
   derived_requires_calculate: "推算值没有对应的计算结果",
-  source_part_not_stored: "引用的申报只保存了主文件，未保存 8-K 附件",
+  source_part_not_stored: "引用的 8-K 申报仅保存了部分文件（仅附件 99.1 或仅主表），该细节无法在库内核对",
 };
 export const DEFAULT_REASON_KEY = "未能与来源核对";
 

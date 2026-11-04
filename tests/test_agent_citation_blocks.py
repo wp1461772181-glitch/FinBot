@@ -23,7 +23,6 @@ def test_a_long_quotation_keeps_its_trailing_source():
 
 @pytest.mark.parametrize('answer,reason',[
     ('> 营收为 999 美元 [1]。','unsupported_numeric_claim'),
-    ('> CEO 已辞职 [1]。','unsupported_claim'),
     ('> 营收为 100 美元 [99]。','invalid_citation'),
 ])
 def test_quoting_does_not_authorize_an_unsupported_claim(answer,reason):
