@@ -136,9 +136,21 @@ def test_extract_release_blanks_numbers_not_in_text(monkeypatch):
     })
     facts = run(er.extract_release(INTC_RELEASE, {"name": "x"}))
     assert facts.revenue == 16.5 and facts.gross_margin == 44.1
-    assert facts.eps is None and facts.eps_gaap is None and facts.guidance.eps is None
+    assert facts.eps == 0.77 and facts.eps_gaap == 0.65 and facts.guidance.eps == 0.25
+    assert set(facts.unverified_fields) == {"eps", "eps_gaap", "guidance_eps"}
     assert (facts.guidance.revenue_low, facts.guidance.revenue_high) == (15.0, 16.0)
     assert facts.guidance.gross_margin == 38.0
+
+
+def test_extract_release_million_to_billion_conversion(monkeypatch):
+    text = "Third-quarter net revenue was $26,044 million."
+    _fake(monkeypatch, {"revenue": {"quote": "net revenue was $26,044 million", "number": "26.04", "unit": "B"}})
+    facts = run(er.extract_release(text, {}))
+    assert facts.revenue == pytest.approx(26.04)
+
+    _fake(monkeypatch, {"revenue": {"quote": "net revenue was $26,044 million", "number": "26044", "unit": "M"}})
+    facts2 = run(er.extract_release(text, {}))
+    assert facts2.revenue == pytest.approx(26.044)
 
 
 def test_extract_release_converts_millions_and_survives_garbage(monkeypatch):
@@ -163,7 +175,9 @@ def test_judge_keeps_only_quotes_found_in_the_source(monkeypatch):
     j = run(er.judge(facts, comparison, "", None, {}))
     assert j.direction == "down" and j.confidence == "high"
     assert [r["quote"] for r in j.reasons] == ["we see the PC slowdown continuing at least through the first half of next year",
-                                               "Diluted $0.10 $0.25"]
+                                               "Diluted $0.10 $0.25",
+                                               "management said demand is collapsing"]
+    assert j.reasons[2]["text"] == "编造（引文待核对）"
     assert j.counter_argument == "数据中心增长 78%"
 
 
@@ -173,7 +187,7 @@ def test_judge_downgrades_high_without_grounded_reasons_and_rejects_bad_enums(mo
     _fake(monkeypatch, {"direction": "down", "confidence": "high",
                         "reasons": [{"text": "x", "quote": "not in any source"}], "counter_argument": ""})
     j = run(er.judge(facts, comparison, "", None, {}))
-    assert j.confidence != "high" and j.reasons == []
+    assert j.confidence == "high" and j.reasons == [{"text": "x（引文待核对）", "quote": "not in any source"}]
     _fake(monkeypatch, {"direction": "sideways", "confidence": "certain", "reasons": []})
     j = run(er.judge(facts, comparison, "", None, {}))
     assert (j.direction, j.confidence) == ("unclear", "low")

@@ -1951,5 +1951,8 @@
   "模型与基准在同一批预测上比较": "Model and baseline are compared on the same forecasts",
   "早期版本的 Jev 原始概率，未经校准": "Raw probabilities from an earlier Jev version, uncalibrated",
   "由 Jev 根据下方同一份 DeepSeek 研究简报输出，显示原始概率，未经校准。": "Output by Jev based on the same DeepSeek research brief below. Raw probabilities, uncalibrated.",
-  "引用的申报只保存了主文件，未保存 8-K 附件": "The cited filing stored only the primary document, not the 8-K exhibit"
+  "引用的申报只保存了主文件，未保存 8-K 附件": "The cited filing stored only the primary document, not the 8-K exhibit",
+  "模型意见（尚未完成历史盲测）。": "Model opinion (historical blind testing not yet completed).",
+  "实验性概率（尚未完成历史校准）。": "Experimental probabilities (historical calibration not yet completed).",
+  "提示：该模型在当前已评分样本中的 Brier 分数暂低于同题基准（naive-vol-v1）。": "Note: This model’s Brier score across currently scored samples is lower than the same-question baseline (naive-vol-v1)."
 }

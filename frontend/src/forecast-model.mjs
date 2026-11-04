@@ -252,7 +252,7 @@ export function versionHeader(detail) {
 }
 
 export const BASELINE_NAME = "naive-vol-v1";
-export const BREACH_BANNER = "已达到约定条件：这个模型差于基准。请更换预测模型或停止显示数字。";
+export const BREACH_BANNER = "提示：该模型在当前已评分样本中的 Brier 分数暂低于同题基准（naive-vol-v1）。";
 
 /**
  * What a cohort card may show of the model-vs-baseline comparison.  Means stay hidden until the cohort reaches

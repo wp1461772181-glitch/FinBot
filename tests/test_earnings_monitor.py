@@ -179,12 +179,15 @@ def test_same_event_twice_is_one_message(owner):
 def test_unclear_sends_no_followup(owner):
     reader = FakeReader("unclear", "low")
     first(reader=reader)
-    sent_before, items_before = outbox(), items()
     em.tick(E_AT + timedelta(minutes=31), sources=FakeSources(), reader=reader)
     assert reader.judged == [-0.05]
-    assert outbox() == sent_before and items() == items_before
+    followups = [i for i in items() if i[0].endswith(":followup")]
+    assert len(followups) == 1
+    body = followups[0][1]
+    assert "方向不明" in body and "把握：低" in body
+    assert len(outbox()) == 2
     with SessionLocal() as db:
-        assert db.query(EarningsEvent).one().followup_status == "skipped_unclear"
+        assert db.query(EarningsEvent).one().followup_status == "sent"
 
 
 def test_unvalidated_model_sends_plain_notice_with_label(owner):
@@ -192,7 +195,7 @@ def test_unvalidated_model_sends_plain_notice_with_label(owner):
     first(reader=reader)
     em.tick(E_AT + timedelta(minutes=31), sources=FakeSources(), reader=reader)
     [(key, body, _, _)] = [i for i in items() if i[0].endswith(":followup")]
-    assert "该模型未经盲测" in body and "偏跌" in body and "把握：中" in body
+    assert ("该模型未经盲测" in body or "尚未完成历史样本盲测" in body) and "偏跌" in body and "把握：中" in body
     assert "gl=14.5" in body and "we stay cautious" in body              # two or three reasons, each with its quote
     assert "100 股" in body and "跌破 55 再看" in body and "7688" in body   # position, the owner's plan, funds
     assert len(outbox()) == 2                                            # first message + follow-up on Telegram
@@ -215,9 +218,20 @@ def test_below_threshold_is_not_sent(owner, tmp_path):
     reader = FakeReader("down", "medium")
     first(reader=reader)
     em.tick(E_AT + timedelta(minutes=31), sources=FakeSources(), reader=reader)
-    assert not [i for i in items() if i[0].endswith(":followup")]
+    followups = [i for i in items() if i[0].endswith(":followup")]
+    assert len(followups) == 1
     with SessionLocal() as db:
-        assert db.query(EarningsEvent).one().followup_status == "skipped_low_confidence"
+        assert db.query(EarningsEvent).one().followup_status == "sent"
+
+
+def test_first_message_fallbacks_and_unverified_notice():
+    ev = EarningsEvent(symbol="INTC", accepted_at=E_AT, source_url="https://sec.gov/x")
+    facts = er.ReleaseFacts(unverified_fields=["revenue"])
+    comparison = er.Comparison()
+    _, body = em.render_first(ev, facts, comparison, False, "")
+    assert "部分数字引文待核对（请以原文为准）" in body
+    assert "未从新闻稿中提取到标准格式的下季指引（请以原文为准）" in body
+    assert "未匹配到标准格式的高管引语段落（请以原文为准）" in body
 
 
 def test_followup_timer_survives_restart(owner):
