@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_LAYOUT, addCard, botSymbol, cleanLayout, loadLayout, moveCard, pinCardSymbol, priceSummary, removeCard, resetLayout, saveLayout, storeBotSymbol, symbolChoices } from "../src/workspace-cards.mjs";
+import { DEFAULT_LAYOUT, addCard, botSymbol, cleanLayout, forecastCardModel, loadLayout, moveCard, pinCardSymbol, priceSummary, removeCard, resetLayout, saveLayout, storeBotSymbol, symbolChoices } from "../src/workspace-cards.mjs";
 
 const memory = () => { const m = new Map(); return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; };
 

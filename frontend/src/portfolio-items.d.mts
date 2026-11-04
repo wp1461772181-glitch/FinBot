@@ -18,3 +18,12 @@ export function planForm(plan: { plan_text?: string; add_price?: string | null; 
 export function planBody(form: PortfolioPlanForm): { body: { plan_text: string; add_price: string | null; stop_price: string | null; target_price: string | null } } | { error: string };
 export function planChanged(plan: Parameters<typeof planForm>[0], form: PortfolioPlanForm): boolean;
 export function warningLabels(codes: string[] | null | undefined): string[];
+export type ResearchRecord = {
+  forecast: (import("./forecast-home.mjs").FormalRowModel & { percent: { bearish: number; neutral: number; bullish: number } | null }) | null;
+  judgment: import("./forecast-home.mjs").JudgmentRowModel | null;
+};
+export function researchRecord(
+  symbol: string,
+  forecasts: import("./forecast-home.mjs").ForecastRowLike[] | null | undefined,
+  judgments: import("./forecast-home.mjs").JudgmentLike[] | null | undefined,
+): ResearchRecord;

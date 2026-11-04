@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { addPortfolioTransaction, deletePortfolioTransaction, getPortfolio, putPortfolioCash, putPortfolioPlan, type PortfolioPosition, type PortfolioSummary } from "./api";
+import { addPortfolioTransaction, deletePortfolioTransaction, getEarningsJudgments, getPortfolio, getV2Forecasts, putPortfolioCash, putPortfolioPlan, type EarningsJudgment, type PortfolioPosition, type PortfolioSummary, type V2ForecastListRow } from "./api";
 import { translatePhrase, useLocale } from "./i18n";
-import { ENTRY_KINDS, KIND_LABELS, blankEntry, entryBody, entryDetail, formatMoney, formatPercent, formatPrice, formatShares, parseAmount, planBody, planChanged, planForm, pnlTone, warningLabels, type PortfolioEntryForm, type PortfolioPlanForm } from "./portfolio-items.mjs";
+import { ENTRY_KINDS, KIND_LABELS, blankEntry, entryBody, entryDetail, formatMoney, formatPercent, formatPrice, formatShares, parseAmount, planBody, planChanged, planForm, pnlTone, researchRecord, warningLabels, type PortfolioEntryForm, type PortfolioPlanForm } from "./portfolio-items.mjs";
+import { Parts } from "./ForecastShared";
+import { NOT_RECORDED } from "./forecast-model.mjs";
 
 // The 持仓 page (personal finance assistant, Task 6): positions with average cost (primary) and diluted cost, floating and
 // today's P&L, weight, 可用资金 (the owner's money for adding positions, not a company's free cash flow), the owner's own
 // plan per position, and the ledger.  Manual entry here or by telling the assistant; no broker statement import in v1.
-// Facts and the owner's own plan prices only: nothing here recommends a trade.
+// Facts and the owner's own plan prices only: nothing here recommends a trade.  The one addition is a read-only
+// 研究记录 line under a position's plan (its latest open forecast and latest earnings judgment); it sits apart from
+// 补仓价 / 止损价 / 目标价 and carries no colour, so an uncalibrated number never reads as a signal beside a plan.
 
 const message = (error: unknown, fallback: string) => translatePhrase(error instanceof Error ? error.message : fallback);
 const TRADE_KINDS = new Set(["opening", "buy", "sell"]);
@@ -26,6 +30,17 @@ export function PortfolioPage() {
   const load = useCallback((signal?: AbortSignal) => getPortfolio(signal).then(next => { setData(next); setError(""); })
     .catch(e => { if (!signal?.aborted) setError(message(e, "持仓暂时无法读取。")); }), []);
   useEffect(() => { const ctrl = new AbortController(); void load(ctrl.signal); return () => ctrl.abort(); }, [load]);
+
+  // The 研究记录 lines: one forecast list and one judgments list for the whole page, never one call per position.
+  const [forecasts, setForecasts] = useState<V2ForecastListRow[]>([]), [judgments, setJudgments] = useState<EarningsJudgment[]>([]);
+  const heldKey = (data?.positions ?? []).map(position => position.symbol).slice(0, 30).join(",");
+  useEffect(() => {
+    if (!heldKey) return;
+    const ctrl = new AbortController();
+    getV2Forecasts({ symbols: heldKey.split(","), state: "open", limit: 200 }, ctrl.signal).then(next => { if (!ctrl.signal.aborted) setForecasts(next.forecasts); }).catch(() => { /* the line is simply absent */ });
+    getEarningsJudgments({ limit: 200 }, ctrl.signal).then(next => { if (!ctrl.signal.aborted) setJudgments(next); }).catch(() => { /* a guest or a failed read: no judgment line */ });
+    return () => ctrl.abort();
+  }, [heldKey]);
 
   async function act(work: () => Promise<{ warnings?: string[] } | unknown>, done: string) {
     setBusy(true); setStatus(""); setError("");
@@ -121,6 +136,7 @@ export function PortfolioPage() {
               </div>
               <div className="memory-actions"><button type="submit" className="secondary-action" disabled={busy || !planChanged(position.plan, form)}>{t("保存计划")}</button></div>
             </form>
+            <ResearchRecordLine symbol={position.symbol} forecasts={forecasts} judgments={judgments} />
           </article>;
         })}
       </section>
@@ -152,6 +168,30 @@ export function PortfolioPage() {
       </section>}
     </>}
   </main>;
+}
+
+/** Read-only: what the research side holds on this symbol.  Plain text, no colour, apart from the plan above it. */
+function ResearchRecordLine({ symbol, forecasts, judgments }: { symbol: string; forecasts: V2ForecastListRow[]; judgments: EarningsJudgment[] }) {
+  const { t } = useLocale();
+  const { forecast, judgment } = researchRecord(symbol, forecasts, judgments);
+  if (!forecast && !judgment) return null;
+  return <div className="pf-research" aria-label={t("研究记录")}>
+    <small className="ws-muted">{t("研究记录")}</small>
+    {forecast && <p>
+      <a href={forecast.hash}><Parts parts={forecast.titleParts} /></a>
+      {forecast.percent
+        ? ` · ${t("下跌")} ${forecast.percent.bearish}% · ${t("持平")} ${forecast.percent.neutral}% · ${t("上涨")} ${forecast.percent.bullish}%`
+        : ""}
+      {` · ${t("目标日")} ${forecast.targetDate ?? t(NOT_RECORDED)} · ${t("决策模型")} ${forecast.model ?? t(NOT_RECORDED)}`}
+    </p>}
+    {judgment && <p>
+      <a href={judgment.hash}>{t(judgment.typeLabel)}</a>
+      {` · ${t(judgment.direction)}${judgment.confidence ? ` · ${t(judgment.confidence)}` : ""} · ${t(judgment.result)}`}
+      {judgment.afterHours && <> · <Parts parts={judgment.afterHours.parts} /></>}
+      {!judgment.delivered && ` · ${t("未发送")}`}
+    </p>}
+    {forecast?.percent && <small className="ws-muted">{t("概率未经校准，属实验性信息。仅供参考，买不买由你决定。")}</small>}
+  </div>;
 }
 
 export function PortfolioIcon() {

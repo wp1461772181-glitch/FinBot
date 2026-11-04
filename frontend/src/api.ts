@@ -1,4 +1,4 @@
-import type { DashboardResponse, EvidenceRevision, EvidenceRevisionInventory, EvidenceRevisionRequest, FilingContent, FilingInventory, FilingReview, FilingScanResult, ForecastRunResult, LocalizationResult, MaterialAnalysisHistory, MaterialAnalysisJob, MaterialAnalysisVersion, MaterialItem, MaterialLibraryResponse, MaterialOriginal, MaterialSourceType, PriceHistory, UploadedEvidence, UploadedEvidenceInventory, V2EvaluationResponse, V2ForecastJob, V2ForecastRoots, V2MonitorStatus, V2SourceRef, V2Timeline, V2VersionDetail, V2Workspace } from "./types";
+import type { DashboardResponse, EvidenceRevision, EvidenceRevisionInventory, EvidenceRevisionRequest, FilingContent, FilingInventory, FilingReview, FilingScanResult, ForecastRunResult, LocalizationResult, MaterialAnalysisHistory, MaterialAnalysisJob, MaterialAnalysisVersion, MaterialItem, MaterialLibraryResponse, MaterialOriginal, MaterialSourceType, PriceHistory, UploadedEvidence, UploadedEvidenceInventory, V2EvaluationResponse, V2ForecastJob, V2ForecastRoots, V2ModelStatus, V2MonitorStatus, V2Probabilities,V2SourceRef, V2Timeline, V2VersionDetail, V2Workspace } from "./types";
 import { agentChatUrl } from "./agent-chat-url.mjs";
 import { fetchAgentChatModels } from "./agent-chat-models.mjs";
 import { apiErrorMessage } from "./api-errors.mjs";
@@ -587,6 +587,86 @@ export async function getV2MonitorStatus(signal?: AbortSignal): Promise<V2Monito
 export async function getV2Evaluations(symbol?: string, signal?: AbortSignal): Promise<V2EvaluationResponse> {
   const query = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
   return requestJson<V2EvaluationResponse>(`/api/v2/evaluations${query}`, { signal });
+}
+
+export type V2Decider = {
+  provider: string | null;
+  actual_model: string | null;
+  question_version: string | null;
+  time_mode: string | null;
+  decision_mode: string | null;
+  binding: { source: "role" | "server_default" | "role_model_missing"; role_model: string | null } | null;
+  calibration_status: string | null;
+};
+export type V2ForecastListRow = {
+  id: string;
+  symbol: string;
+  decision_at: string;
+  target_end_date: string | null;
+  model_status: V2ModelStatus;
+  latest_version_id: string;
+  latest_version_no: number;
+  expired: boolean | null;
+  decider: V2Decider;
+  probabilities: V2Probabilities | null;
+  evaluation: { status: string; actual_label: "bearish" | "neutral" | "bullish" | null; result_version: number } | null;
+};
+export type V2JobAlert = { symbol: string; job_id: string; status: string; error_type: string | null; created_at: string };
+export type V2ForecastList = { forecasts: V2ForecastListRow[]; limit: number; pending_job_count: number; job_alerts: V2JobAlert[] };
+
+/** Every company's forecasts in one call (public, no personal data); the browser merges holdings and the queue. */
+export async function getV2Forecasts(options: { symbols?: string[]; state?: "open" | "matured" | "all"; limit?: number } = {}, signal?: AbortSignal): Promise<V2ForecastList> {
+  const query = new URLSearchParams();
+  if (options.symbols?.length) query.set("symbols", options.symbols.join(","));
+  if (options.state) query.set("state", options.state);
+  if (options.limit) query.set("limit", String(options.limit));
+  const text = query.toString();
+  return requestJson<V2ForecastList>(`/api/v2/forecasts${text ? `?${text}` : ""}`, { signal });
+}
+
+export type EarningsJudgment = {
+  id: string;
+  symbol: string;
+  accession: string;
+  source_url: string | null;
+  accepted_at: string;
+  held: boolean;
+  followup_status: string;
+  delivered: boolean;
+  direction: "up" | "down" | "unclear" | null;
+  confidence: "high" | "medium" | "low" | null;
+  /** A fraction: 0.126 is +12.6%. */
+  after_hours: number | null;
+  reasons: Array<{ text: string; quote: string }>;
+  counter_argument: string | null;
+  validated: boolean;
+  model: string | null;
+  model_source: "followup" | "first_stage" | null;
+  reader_version: string | null;
+  outcome: { status: "pending" | "matched" | "mismatched" | "no_marked_move" | "not_applicable"; reaction: number | null; sigma: number | null };
+  filing_source_id: string | null;
+  promotion: { available: boolean; reason: "first_session_open" | "filing_not_in_library" | null };
+};
+
+async function ownerGet<T>(path: string, failure: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(agentPath(path), { signal, cache: "no-store", headers: ownerHeaders() });
+  if (!response.ok) throw new ApiError(failure, response.status);
+  return await response.json() as T;
+}
+
+/** The owner's earnings judgments, sent or skipped.  A guest gets 401/403, which callers treat as "no such lane". */
+export async function getEarningsJudgments(options: { symbol?: string; limit?: number } = {}, signal?: AbortSignal): Promise<EarningsJudgment[]> {
+  const query = new URLSearchParams();
+  if (options.symbol) query.set("symbol", options.symbol);
+  if (options.limit) query.set("limit", String(options.limit));
+  const text = query.toString();
+  const data = await ownerGet<{ judgments?: EarningsJudgment[] }>(`earnings-judgments${text ? `?${text}` : ""}`, "财报判断暂时无法读取。", signal);
+  return Array.isArray(data.judgments) ? data.judgments : [];
+}
+
+export async function getEarningsJudgment(id: string, signal?: AbortSignal): Promise<EarningsJudgment> {
+  const data = await ownerGet<{ judgment: EarningsJudgment }>(`earnings-judgments/${encodeURIComponent(id)}`, "财报判断暂时无法读取。", signal);
+  return data.judgment;
 }
 
 export async function getV2ForecastVersion(versionId: string, signal?: AbortSignal): Promise<V2VersionDetail> {

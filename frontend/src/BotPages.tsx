@@ -81,6 +81,14 @@ export function RoutineIcon() {
 }
 
 /** 新闻源: a newspaper, drawn as an SVG for the same reason as the routine icon. */
+/** A small chart-with-target mark, drawn like its neighbours (stroke, 1em, currentColor). */
+export function ForecastIcon() {
+  return <svg className="forecast-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="1.8"
+    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="M4 20V4" /><path d="M4 20h16" /><path d="M7 15l4-4 3 3 5-6" /><circle cx="19" cy="8" r="1.4" />
+  </svg>;
+}
+
 export function NewsIcon() {
   return <svg className="news-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="1.8"
     strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
@@ -89,7 +97,7 @@ export function NewsIcon() {
   </svg>;
 }
 
-export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutines, portfolioActive, onPortfolio, newsActive, onNews, onOpen, onNew, lineStatus }: { lineStatus?: { running: string[]; unseen: string[] }; bots: Bot[]; error: string; activeBotId: string | null; routinesActive: boolean; onRoutines: () => void; portfolioActive: boolean; onPortfolio: () => void; newsActive: boolean; onNews: () => void; onOpen: (bot: Bot) => void; onNew: () => void }) {
+export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutines, portfolioActive, onPortfolio, forecastActive, onForecast, newsActive, onNews, onOpen, onNew, lineStatus }: { lineStatus?: { running: string[]; unseen: string[] }; bots: Bot[]; error: string; activeBotId: string | null; routinesActive: boolean; onRoutines: () => void; portfolioActive: boolean; onPortfolio: () => void; forecastActive: boolean; onForecast: () => void; newsActive: boolean; onNews: () => void; onOpen: (bot: Bot) => void; onNew: () => void }) {
   const { t } = useLocale();
   const { top, groups } = botSections(bots);
   const pending = bots.reduce((sum, b) => sum + (b.pending || 0), 0);
@@ -107,6 +115,9 @@ export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutin
     </button>
     <button type="button" className={`bot-row bot-confirm${portfolioActive ? " is-active" : ""}`} aria-current={portfolioActive ? "page" : undefined} onClick={onPortfolio}>
       <span className="bot-avatar" aria-hidden="true"><PortfolioIcon /></span><span className="bot-row-text"><strong>{t("持仓")}</strong></span>
+    </button>
+    <button type="button" className={`bot-row bot-confirm${forecastActive ? " is-active" : ""}`} aria-current={forecastActive ? "page" : undefined} onClick={onForecast}>
+      <span className="bot-avatar" aria-hidden="true"><ForecastIcon /></span><span className="bot-row-text"><strong>{t("预测")}</strong></span>
     </button>
     <button type="button" className={`bot-row bot-confirm${newsActive ? " is-active" : ""}`} aria-current={newsActive ? "page" : undefined} onClick={onNews}>
       <span className="bot-avatar" aria-hidden="true"><NewsIcon /></span><span className="bot-row-text"><strong>{t("新闻源")}</strong></span>

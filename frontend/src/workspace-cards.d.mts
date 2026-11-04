@@ -17,4 +17,6 @@ type BotLike = { id: string; focus?: { companies?: { symbol: string }[] }; defau
 export declare function botSymbol(bot: BotLike, globalSymbol: string, storage?: unknown): string;
 export declare function storeBotSymbol(botId: string, symbol: string, storage?: unknown): string | null;
 export declare function symbolChoices(bot: BotLike, watchlist?: string[], current?: string): string[];
+export type ForecastCardModel = import("./forecast-home.mjs").FormalRowModel & { decisionAt: string; percent: Record<"bearish" | "neutral" | "bullish", number> | null };
+export declare function forecastCardModel(rows: import("./forecast-home.mjs").ForecastRowLike[] | null | undefined, symbol: string): ForecastCardModel | null;
 export declare function priceSummary(candles: { trading_date: string; close: number }[]): { date: string; close: number; change: number | null; pct: number | null } | null;

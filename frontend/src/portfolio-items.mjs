@@ -2,6 +2,8 @@
 // node tests read them.  The server sends money as plain decimal strings ("1999.00"); they are formatted here as
 // strings, never through a float, so a figure on screen is the figure the ledger holds.
 
+import { formalRowModel, judgmentRowModel, probabilityPercents } from "./forecast-home.mjs";
+
 const DECIMAL = /^(-?)(\d+)(?:\.(\d+))?$/;
 const group = (digits) => digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
@@ -159,3 +161,26 @@ export const WARNING_LABELS = {
   price_missing: "有持仓没有取到最新价，总资产与仓位占比不完整。",
 };
 export const warningLabels = (codes) => (Array.isArray(codes) ? codes : []).map((code) => WARNING_LABELS[code]).filter(Boolean);
+
+// The read-only 研究记录 line under a position's plan: the latest open forecast and the latest earnings judgment
+// for the symbol, from the two lists the page reads once.  It is a record, not a signal: no colours, nothing
+// beside 补仓价 / 止损价 / 目标价, and a judgment keeps its own words (never a percentage).
+
+const upper = (value) => String(value ?? "").toUpperCase();
+const newestFirst = (field) => (a, b) => (Date.parse(b[field]) || 0) - (Date.parse(a[field]) || 0);
+
+/** @returns {{ forecast: null | (ReturnType<typeof formalRowModel> & { percent: object | null }), judgment: null | ReturnType<typeof judgmentRowModel> }} */
+export function researchRecord(symbol, forecasts, judgments) {
+  const key = upper(symbol);
+  const open = (Array.isArray(forecasts) ? forecasts : [])
+    .filter((row) => upper(row?.symbol) === key && row.expired !== true)
+    .sort(newestFirst("decision_at"))[0] ?? null;
+  const latestJudgment = (Array.isArray(judgments) ? judgments : [])
+    .filter((item) => upper(item?.symbol) === key)
+    .sort(newestFirst("accepted_at"))[0] ?? null;
+  const model = open ? formalRowModel(open) : null;
+  return {
+    forecast: model && { ...model, percent: probabilityPercents(model.probabilities) },
+    judgment: latestJudgment ? judgmentRowModel(latestJudgment) : null,
+  };
+}

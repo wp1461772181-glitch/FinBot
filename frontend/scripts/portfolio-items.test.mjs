@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ENTRY_KINDS, blankEntry, entryBody, entryLine, formatMoney, formatPercent, formatPrice, formatShares, parseAmount, planBody, planChanged, planForm, pnlTone, warningLabels } from "../src/portfolio-items.mjs";
+import { ENTRY_KINDS, blankEntry, entryBody, entryLine, formatMoney, formatPercent, formatPrice, formatShares, parseAmount, planBody, planChanged, planForm, pnlTone, researchRecord, warningLabels } from "../src/portfolio-items.mjs";
 
 test("money: two places, thousands separators, a sign only where asked, a dash when unknown", () => {
   assert.equal(formatMoney("1999"), "1,999.00");
@@ -83,4 +83,52 @@ test("the plan form round-trips; a blank price is cleared, junk is refused", () 
 test("warnings read as sentences; unknown codes are dropped", () => {
   assert.deepEqual(warningLabels(["available_funds_negative", "x"]).length, 1);
   assert.deepEqual(warningLabels(undefined), []);
+});
+
+// The 研究记录 line under a position: the latest open forecast and the latest judgment for that symbol only.
+const forecastRow = (id, symbol, extra = {}) => ({
+  id, symbol, decision_at: "2026-10-01T20:00:00Z", target_end_date: "2026-12-15", expired: false, model_status: "experimental_llm",
+  latest_version_no: 2, decider: { actual_model: "glm-5.3-flash" }, probabilities: { bearish: 0.33, neutral: 0.34, bullish: 0.33 }, evaluation: null, ...extra,
+});
+const judgmentItem = (id, symbol, extra = {}) => ({
+  id, symbol, accepted_at: "2026-10-30T20:05:00Z", direction: "up", confidence: "high", after_hours: 0.126, model: "glm-5.3-flash",
+  model_source: "followup", delivered: true, outcome: { status: "pending" }, ...extra,
+});
+
+test("research record: a symbol with neither a forecast nor a judgment has no line", () => {
+  assert.deepEqual(researchRecord("AMD", [forecastRow("r", "NVDA")], [judgmentItem("j", "NVDA")]), { forecast: null, judgment: null });
+  assert.deepEqual(researchRecord("AMD", undefined, undefined), { forecast: null, judgment: null });
+});
+
+test("research record: an open forecast alone, with whole-number percents and a link", () => {
+  const record = researchRecord("amd", [forecastRow("r1", "AMD")], []);
+  assert.equal(record.judgment, null);
+  assert.equal(record.forecast.hash, "#forecast/r1");
+  assert.deepEqual(record.forecast.percent, { bearish: 33, neutral: 34, bullish: 33 });
+  assert.equal(record.forecast.model, "glm-5.3-flash");
+  assert.equal(record.forecast.targetDate, "2026-12-15");
+});
+
+test("research record: an expired forecast is not an open one, and the newest open one wins", () => {
+  const rows = [
+    forecastRow("old", "AMD", { decision_at: "2026-09-01T20:00:00Z" }),
+    forecastRow("gone", "AMD", { expired: true, decision_at: "2026-10-20T20:00:00Z" }),
+    forecastRow("new", "AMD", { decision_at: "2026-10-10T20:00:00Z" }),
+  ];
+  assert.equal(researchRecord("AMD", rows, []).forecast.id, "new");
+  assert.equal(researchRecord("AMD", [rows[1]], []).forecast, null);
+});
+
+test("research record: a judgment alone keeps its own words and never a probability", () => {
+  const record = researchRecord("AMD", [], [judgmentItem("j1", "AMD"), judgmentItem("j0", "AMD", { accepted_at: "2026-07-30T20:05:00Z", direction: "down" })]);
+  assert.equal(record.forecast, null);
+  assert.equal(record.judgment.id, "j1");
+  assert.equal(record.judgment.direction, "偏涨");
+  assert.equal("probabilities" in record.judgment, false);
+  assert.equal(record.judgment.hash, "#forecast/judgment/j1");
+});
+
+test("research record: a skipped judgment is still the latest one, and says it was not delivered", () => {
+  const record = researchRecord("AMD", [], [judgmentItem("j", "AMD", { delivered: false })]);
+  assert.equal(record.judgment.delivered, false);
 });

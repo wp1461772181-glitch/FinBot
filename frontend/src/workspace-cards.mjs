@@ -1,6 +1,8 @@
 // The bot workspace (UX batch 2, P3): a per-bot current stock and an editable list of data cards, kept in
 // this browser (localStorage).  A second phase may move the layout to the server (agent_bots.workspace_layout).
 
+import { forecastBySymbol, formalRowModel, probabilityPercents } from "./forecast-home.mjs";
+
 export const CARDS = [
   { id: "price", title: "行情", size: "m" },
   { id: "forecast", title: "研究预测", size: "m" },
@@ -101,6 +103,18 @@ export function symbolChoices(bot, watchlist = [], current = "") {
     if (s && TICKER.test(s) && !out.includes(s)) out.push(s);
   }
   return out;
+}
+
+/**
+ * What the 研究预测 card shows for one stock: its newest forecast with the deciding model, target date and
+ * probabilities, linking to that forecast's own page.  null when the stock has none.  Facts only: the card
+ * carries no direction word, and the model is null (shown as 未记录) when the version never recorded one.
+ */
+export function forecastCardModel(rows, symbol) {
+  const latest = (forecastBySymbol(rows).get(String(symbol ?? "").toUpperCase()) ?? [])[0];
+  if (!latest) return null;
+  const model = formalRowModel(latest);
+  return { ...model, decisionAt: latest.decision_at, percent: probabilityPercents(model.probabilities) };
 }
 
 /** Last close, previous close and the change, as facts (no direction advice). */

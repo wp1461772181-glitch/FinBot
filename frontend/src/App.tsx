@@ -4,10 +4,16 @@ import { BrandLogo } from "./BotOrb";
 import { botFromHash } from "./bot-items.mjs";
 import { Tx, formatDateTime as formatLocalizedDateTime, getLocalePreference, translatePhrase, useLocale } from "./i18n";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ApiError, markBotRead, type Bot, getFilingInventory, getMaterialLibrary, getV2ForecastRoots, getV2MonitorStatus, getV2Prices, getV2Workspace, initializeMarketData, scanOfficialFilings } from "./api";
+import { ApiError, markBotRead, type Bot, type EarningsJudgment, type V2ForecastList, getEarningsJudgments, getFilingInventory, getMaterialLibrary, getV2ForecastRoots, getV2Forecasts, getV2MonitorStatus, getV2Prices, initializeMarketData, scanOfficialFilings } from "./api";
+import { forecastBySymbol, judgmentLane, type JudgmentLane } from "./forecast-home.mjs";
+import { researchRecord } from "./portfolio-items.mjs";
 import type { FilingInventory, PriceHistory } from "./types";
 import { ModelScoresPage, modelStatusLabel } from "./ModelScoresPage";
-import { V2ForecastWorkspace } from "./V2ForecastWorkspace";
+import { ForecastPage } from "./ForecastPage";
+import { ForecastHome } from "./ForecastHome";
+import { EarningsJudgmentPage } from "./EarningsJudgmentPage";
+import { ForecastMonitorPage } from "./ForecastMonitorPage";
+import { parseForecastHash } from "./forecast-routes.mjs";
 import { EvidenceCenter } from "./EvidenceCenter";
 import { MaterialLibrary } from "./MaterialLibrary";
 import { MATERIAL_FOCUS_KEY, materialLinkFromHash } from "./material-focus.mjs";
@@ -29,13 +35,17 @@ type SupportedSymbol = string;
 type FilingState = { kind: "idle" } | { kind: "loading" } | { kind: "ready"; data: FilingInventory } | { kind: "error"; message: string };
 type WorkspaceSection = "overview" | "forecast" | "evidence" | "materials" | "revisions" | "evaluation" | "replay" | "agent" | "bot" | "admin" | "routines" | "portfolio" | "news" | "skills" | "memory" | "me";
 type ResearchSection = Exclude<WorkspaceSection, "agent" | "bot" | "admin" | "routines" | "portfolio" | "news" | "skills" | "memory" | "me">;
-// The personal-agent navigation groups the older sections: 公司 holds 总览; 预测 holds 预测工作台, 修订, 到期评估
-// and 历史回放; 资料库 holds 材料库 and 证据.  Those six (公司、预测、资料库、技能、记忆、设置) are one 「更多」
-// control on the rail and on the mobile tab bar.  例行任务 is not one of them: it is a bot-rail row (with 持仓 and
-// 新闻源 beside it) and its own mobile tab, so it stays primary chrome.  The older hashes stay the addresses, so links
-// inside the older pages (#materials, #evidence/<id>/…) and the agent's open_page keep working unchanged.
+// The personal-agent navigation groups the older sections: 公司 holds 总览; 预测 holds the forecast home, one
+// forecast's page, 模型成绩 (#evaluation) and 历史回放, and #revisions opens the versions of a forecast; 资料库 holds
+// 材料库 and 证据.  Those six (公司、预测、资料库、技能、记忆、设置) are one 「更多」 control on the mobile tab bar and
+// for guests.  On the desktop rail an owner has 预测 as a row of its own and the other five in 「更多」.  例行任务 is
+// not one of them: it is a bot-rail row (with 持仓, 预测 and 新闻源 beside it) and its own mobile tab, so it stays
+// primary chrome.  The older hashes stay the addresses, so links inside the older pages (#materials,
+// #evidence/<id>/…) and the agent's open_page keep working unchanged.
 type NavGroup = "chat" | "routines" | "portfolio" | "news" | "company" | "forecast" | "library" | "skills" | "memory" | "settings";
 const FORECAST_TABS = ["forecast", "revisions", "evaluation", "replay"] as const;
+// #revisions is still an address of the group, but it has no tab of its own: it is a part of one forecast's page.
+const FORECAST_TAB_BUTTONS = ["forecast", "evaluation", "replay"] as const;
 const LIBRARY_TABS = ["materials", "evidence"] as const;
 // #briefs was the 待你确认 page; it is the 例行任务 page now.
 const HASH_ALIASES: Record<string, WorkspaceSection> = { chat: "agent", company: "overview", library: "materials", settings: "admin", briefs: "routines" };
@@ -50,7 +60,7 @@ function navGroup(section: WorkspaceSection): NavGroup {
 }
 function isResearchSection(section: WorkspaceSection): section is ResearchSection { const group = navGroup(section); return group === "company" || group === "forecast" || group === "library"; }
 const WORKSPACE_SECTION_TITLE: Record<ResearchSection, string> = {
-  overview: "研究总览", forecast: "预测工作台", evidence: "证据中心", materials: "材料库", revisions: "预测修订", evaluation: "到期评估", replay: "历史回放",
+  overview: "研究总览", forecast: "预测", evidence: "证据中心", materials: "材料库", revisions: "预测修订", evaluation: "模型成绩", replay: "历史回放",
 };
 
 export function App() {
@@ -71,6 +81,7 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
   const [watchInput, setWatchInput] = useState("");
   const [watchError, setWatchError] = useState("");
   const [activeSection, setActiveSection] = useState<WorkspaceSection>(sectionFromHash());
+  const [forecastRoute, setForecastRoute] = useState(() => parseForecastHash(window.location.hash));
   const [activeData, setActiveData] = useState<{ kind: "loading"; symbol: string } | { kind: "ready"; symbol: string; filings: FilingState; priceHistory: PriceHistory | null; priceError: string | null }>({ kind: "loading", symbol: DEFAULT_SYMBOL });
   const [retryKey, setRetryKey] = useState(0);
   const requestVersion = useRef(0);
@@ -143,7 +154,7 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
       setMaterialFocusKey((value) => value + 1);
     };
     openMaterialLink();
-    const onHashChange = () => { setActiveSection(sectionFromHash()); openMaterialLink(); };
+    const onHashChange = () => { setActiveSection(sectionFromHash()); setForecastRoute(parseForecastHash(window.location.hash)); openMaterialLink(); };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
@@ -183,6 +194,8 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
     if (section === "agent") setPastConversation(false);
     if (section === activeSection) {
       if (section === "evidence" && window.location.hash !== "#evidence") window.location.hash = "evidence";
+      // From one forecast's page, the 预测 tab goes back to the forecast home.
+      if (section === "forecast" && window.location.hash !== "#forecast") window.location.hash = "forecast";
       return;
     }
     window.location.hash = section;
@@ -216,7 +229,7 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
 
   function addWatchSymbol() { const ticker = normalizeTicker(watchInput); if (!ticker) { setWatchError("请输入有效的美股代码，例如 AMD 或 BRK.B。"); return; } if (symbols.includes(ticker)) { setWatchError("该代码已在关注列表中。"); return; } if (symbols.length >= MAX_WATCHLIST) { setWatchError("关注列表最多保存 30 个代码。"); return; } setSymbols(items => [...items, ticker]); setWatchInput(""); setWatchError(""); openStock(ticker); }
   function removeWatchSymbol(ticker: string) { const remaining = symbols.filter(item => item !== ticker); setSymbols(remaining); setRequestedSymbol(current => selectionForWatchlist(current, remaining)); }
-  const botRail = personal ? (close: () => void) => <BotRailList bots={botList.bots} routinesActive={activeSection === "routines"} onRoutines={() => { close(); navigate("routines"); }} portfolioActive={activeSection === "portfolio"} onPortfolio={() => { close(); navigate("portfolio"); }} newsActive={activeSection === "news"} onNews={() => { close(); navigate("news"); }} error={botList.error} activeBotId={activeBot?.id ?? null} lineStatus={lineStatus} onOpen={bot => { close(); openBot(bot); }} onNew={() => { close(); setNewBotOpen(true); }} /> : undefined;
+  const botRail = personal ? (close: () => void) => <BotRailList bots={botList.bots} routinesActive={activeSection === "routines"} onRoutines={() => { close(); navigate("routines"); }} portfolioActive={activeSection === "portfolio"} onPortfolio={() => { close(); navigate("portfolio"); }} forecastActive={navGroup(activeSection) === "forecast"} onForecast={() => { close(); navigate("forecast"); }} newsActive={activeSection === "news"} onNews={() => { close(); navigate("news"); }} error={botList.error} activeBotId={activeBot?.id ?? null} lineStatus={lineStatus} onOpen={bot => { close(); openBot(bot); }} onNew={() => { close(); setNewBotOpen(true); }} /> : undefined;
   const newBotDialog = newBotOpen && <NewBotDialog onClose={() => setNewBotOpen(false)} onCreated={bot => { setNewBotOpen(false); void botList.reload().then(() => openBot(bot)); }} />;
   const shellProps = { activeSection, navigate, symbol: requestedSymbol, symbols, onSelectStock: openStock, watchInput, setWatchInput, addWatchSymbol, watchError, setWatchError, onModeChange, botRail, overlay: newBotDialog };
   if (activeBot) return <Shell {...shellProps}><BotPage bot={activeBot} symbol={requestedSymbol} watchlist={symbols} onSelectSymbol={setRequestedSymbol} onOpenCompany={(ticker, section) => { const clean = normalizeTicker(ticker); if (clean) { if (!symbols.includes(clean) && symbols.length < MAX_WATCHLIST) setSymbols(items => [...items, clean]); openStock(clean, section === "forecast" ? "forecast" : "overview"); } }} onChanged={() => void botList.reload()} onDeleted={() => { void botList.reload(); navigate("agent"); }} onSettings={() => navigate("admin")} onModeChange={onModeChange} /></Shell>;
@@ -241,20 +254,28 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
     return result;
   }
 
+  // One forecast: the company comes from the record itself, so nothing waits on the selected stock's data.
+  // The forecast group: the home, one forecast, one earnings judgment, the monitor.  None of them waits on the selected stock.
+  if (activeSection === "forecast") {
+    const goHome = () => { window.location.hash = "forecast"; };
+    return <Shell {...shellProps}><main className="workspace"><SectionTabs section={activeSection} navigate={navigate} />
+      {forecastRoute.view === "forecast" && forecastRoute.rootId ? <ForecastPage key={`${forecastRoute.rootId}:${forecastRoute.versionId ?? ""}`} rootId={forecastRoute.rootId} versionId={forecastRoute.versionId} onHome={goHome} />
+        : forecastRoute.view === "judgment" && forecastRoute.judgmentId ? <EarningsJudgmentPage key={forecastRoute.judgmentId} judgmentId={forecastRoute.judgmentId} onHome={goHome} />
+        : forecastRoute.view === "monitor" ? <ForecastMonitorPage onHome={goHome} />
+        : <ForecastHome queue={symbols} personal={personal} symbolFilter={forecastRoute.symbol} onClearSymbol={goHome} />}
+    </main></Shell>;
+  }
+  // #revisions: the version section of the selected stock's latest forecast, or the forecast home when it has none.
+  if (activeSection === "revisions") return <Shell {...shellProps}><main className="workspace"><SectionTabs section={activeSection} navigate={navigate} /><LatestForecastVersions key={requestedSymbol} symbol={requestedSymbol} onNone={() => navigate("forecast")} onHome={() => navigate("forecast")} /></main></Shell>;
   if (activeSection === "materials") return <Shell {...shellProps}><SectionTabs section={activeSection} navigate={navigate} /><MaterialLibrary key={`${requestedSymbol}:${materialFocusKey}`} symbol={requestedSymbol} onScan={async () => { const result = await startFilingScan(); setRetryKey((value) => value + 1); return result; }} /></Shell>;
   if (!symbols.length) return <Shell {...shellProps}><main className="workspace"><section className="empty-watchlist"><h1>{translatePhrase("关注列表为空")}</h1><p>{translatePhrase("添加一只股票，或恢复默认关注股票，继续查看研究总览。")}</p><button className="primary-action" onClick={() => { setSymbols(DEFAULT_SYMBOLS); setRequestedSymbol(DEFAULT_SYMBOL); }}>{translatePhrase("恢复默认股票")}</button></section></main></Shell>;
   if (activeData.kind === "loading" || activeData.symbol !== requestedSymbol) return <Shell {...shellProps}><Loading symbol={requestedSymbol} /></Shell>;
   const supported = isSupportedSymbol(requestedSymbol);
-  const revisionsNavigate = activeSection === "revisions" ? "revisions" : "forecast";
   return <Shell {...shellProps}>
     <main className="workspace" aria-labelledby="workspace-title">
       <WorkspacePageHeader symbol={requestedSymbol} section={activeSection as ResearchSection} recordCount={null} supported={supported} />
       <SectionTabs section={activeSection} navigate={navigate} />
-      {activeSection === "overview" && <CurrentOverviewWorkspace symbols={symbols} onRemove={removeWatchSymbol} symbol={requestedSymbol} currentFilings={activeData.filings} priceHistory={activeData.priceHistory} priceError={activeData.priceError} onNavigate={navigate} onOpenStock={openStock} onPricesInitialized={() => setRetryKey(value => value + 1)} />}
-      {(activeSection === "forecast" || activeSection === "revisions") && <section className="workspace-stack">
-        <V2ForecastWorkspace key={`${requestedSymbol}-${revisionsNavigate}`} mode={revisionsNavigate} symbol={requestedSymbol} filings={activeData.filings.kind === "ready" ? activeData.filings.data : null} priceHistory={activeData.priceHistory} onOpenForecast={() => navigate("forecast")} />
-        {activeData.priceError && <p className="inventory-status inventory-error" role="status">行情暂不可用：{activeData.priceError}</p>}
-      </section>}
+      {activeSection === "overview" && <CurrentOverviewWorkspace symbols={symbols} personal={personal} onRemove={removeWatchSymbol} symbol={requestedSymbol} currentFilings={activeData.filings} priceHistory={activeData.priceHistory} priceError={activeData.priceError} onNavigate={navigate} onOpenStock={openStock} onPricesInitialized={() => setRetryKey(value => value + 1)} />}
       {activeSection === "evidence" && <EvidenceCenter key={requestedSymbol} symbol={requestedSymbol} supported={supported} onOpenForecast={() => navigate("forecast")} />}
       {activeSection === "evaluation" && <ModelScoresPage />}
       {activeSection === "replay" && <HistoricalReplayWorkspace key={requestedSymbol} initialSymbol={requestedSymbol} symbols={symbols} />}
@@ -269,63 +290,87 @@ function BotPage({ bot, symbol, watchlist, onSelectSymbol, onOpenCompany, onChan
   return <AgentChatPanel bot={bot} onSettings={onSettings} onModeChange={onModeChange} onTurnSettled={onChanged} side={<BotSide key={bot.id} bot={bot} symbol={symbol} watchlist={watchlist} onSelectSymbol={onSelectSymbol} onOpenCompany={onOpenCompany} onChanged={onChanged} onDeleted={onDeleted} />} />;
 }
 
-function CurrentOverviewWorkspace({ symbols, onRemove, symbol, currentFilings, priceHistory, priceError, onNavigate, onOpenStock, onPricesInitialized }: { symbols: string[]; onRemove: (ticker: string) => void; symbol: string; currentFilings: FilingState; priceHistory: PriceHistory | null; priceError: string | null; onNavigate: (section: WorkspaceSection) => void; onOpenStock: (ticker: SupportedSymbol) => void; onPricesInitialized: () => void }) {
+/** #revisions: the version section of the selected stock's latest forecast; no forecast sends the reader home. */
+function LatestForecastVersions({ symbol, onNone, onHome }: { symbol: string; onNone: () => void; onHome: () => void }) {
+  const [state, setState] = useState<{ kind: "loading" } | { kind: "ready"; rootId: string | null } | { kind: "error" }>({ kind: "loading" });
+  useEffect(() => {
+    const controller = new AbortController();
+    setState({ kind: "loading" });
+    getV2ForecastRoots(symbol, controller.signal)
+      .then((roots) => { if (!controller.signal.aborted) setState({ kind: "ready", rootId: roots.roots[0]?.id ?? null }); })
+      .catch(() => { if (!controller.signal.aborted) setState({ kind: "error" }); });
+    return () => controller.abort();
+  }, [symbol]);
+  const noForecast = state.kind === "ready" && state.rootId === null;
+  useEffect(() => { if (noForecast) onNone(); }, [noForecast]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (state.kind === "loading") return <p role="status">{translatePhrase("正在读取…")}</p>;
+  if (state.kind === "error") return <p className="v2-notice error" role="alert">{translatePhrase("暂时无法读取预测日期列表。")} <button className="text-button" type="button" onClick={onHome}>{translatePhrase("回到预测首页")}</button></p>;
+  if (state.rootId === null) return null;
+  return <ForecastPage key={state.rootId} rootId={state.rootId} focusVersions onHome={onHome} />;
+}
+
+function CurrentOverviewWorkspace({ symbols, personal, onRemove, symbol, currentFilings, priceHistory, priceError, onNavigate, onOpenStock, onPricesInitialized }: { symbols: string[]; personal: boolean; onRemove: (ticker: string) => void; symbol: string; currentFilings: FilingState; priceHistory: PriceHistory | null; priceError: string | null; onNavigate: (section: WorkspaceSection) => void; onOpenStock: (ticker: SupportedSymbol) => void; onPricesInitialized: () => void }) {
   const { t } = useLocale();
-  type UniverseItem = { workspace?: Awaited<ReturnType<typeof getV2Workspace>>; workspaceState: "loading" | "ready" | "error"; roots?: Awaited<ReturnType<typeof getV2ForecastRoots>>; materials?: number; filings?: FilingInventory; error?: string; loading: boolean };
-  const [universe, setUniverse] = useState<Record<string, UniverseItem>>(() => Object.fromEntries(symbols.map((ticker) => [ticker, { workspaceState: "loading", loading: true }])));
+  // One forecast list feeds every queue card (no per-stock fan-out); materials and SEC counts belong to the current stock only.
+  const [list, setList] = useState<{ kind: "loading" } | { kind: "ready"; data: V2ForecastList } | { kind: "error" }>({ kind: "loading" });
+  const [lane, setLane] = useState<JudgmentLane<EarningsJudgment> | null>(null);
+  const [materialCount, setMaterialCount] = useState<number | null>(null);
   const [monitor, setMonitor] = useState<{ kind: "loading" } | { kind: "ready"; data: Awaited<ReturnType<typeof getV2MonitorStatus>> } | { kind: "error" }>({ kind: "loading" });
   const [priceSeedState, setPriceSeedState] = useState("");
   async function initializePrices() { if (priceSeedState === "正在初始化行情…") return; setPriceSeedState("正在初始化行情…"); try { const result = await initializeMarketData(symbol); setPriceSeedState(result.inserted_count ? "行情初始化成功，新增行情已自动刷新。" : "初始化完成，但供应商没有返回可保存的行情。"); onPricesInitialized(); } catch (error) { setPriceSeedState(actionMessage(error, "行情初始化失败，请登录个人账户后重试。")); } }
   useEffect(() => {
     const controller = new AbortController();
     setMonitor({ kind: "loading" });
-    setUniverse(Object.fromEntries(symbols.map((ticker) => [ticker, { workspaceState: "loading", loading: true }])));
-    Promise.all(symbols.map(async (ticker) => {
-      const [workspace, roots, materials, filings] = await Promise.allSettled([
-        getV2Workspace(ticker, controller.signal), getV2ForecastRoots(ticker, controller.signal),
-        getMaterialLibrary(ticker, { limit: 1, signal: controller.signal }), getFilingInventory(ticker, controller.signal),
-      ]);
-      if (controller.signal.aborted) return [ticker, { workspaceState: "loading" as const, loading: false }] as const;
-      const firstError = [workspace, roots, materials, filings].find((value) => value.status === "rejected");
-      return [ticker, {
-        ...(workspace.status === "fulfilled" ? { workspace: workspace.value } : {}),
-        workspaceState: workspace.status === "fulfilled" ? "ready" as const : "error" as const,
-        ...(roots.status === "fulfilled" ? { roots: roots.value } : {}),
-        ...(materials.status === "fulfilled" ? { materials: materials.value.total } : {}),
-        ...(filings.status === "fulfilled" ? { filings: filings.value } : {}),
-        ...(firstError ? { error: actionMessage(firstError.reason, "暂时无法读取该股票的研究状态。") } : {}), loading: false,
-      }] as const;
-    })).then((entries) => { if (!controller.signal.aborted) setUniverse(Object.fromEntries(entries)); });
+    setList({ kind: "loading" });
+    setMaterialCount(null);
+    getV2Forecasts({ symbols: symbols.slice(0, MAX_WATCHLIST), limit: 200 }, controller.signal)
+      .then((data) => { if (!controller.signal.aborted) setList({ kind: "ready", data }); })
+      .catch(() => { if (!controller.signal.aborted) setList({ kind: "error" }); });
+    getMaterialLibrary(symbol, { limit: 1, signal: controller.signal })
+      .then((library) => { if (!controller.signal.aborted) setMaterialCount(library.total); })
+      .catch(() => { /* the count stays a dash */ });
+    if (personal) Promise.allSettled([getEarningsJudgments({ limit: 100 }, controller.signal)]).then(([result]) => { if (!controller.signal.aborted) setLane(judgmentLane(result)); });
+    else setLane({ lane: "hidden" });
     getV2MonitorStatus(controller.signal).then((data) => { if (!controller.signal.aborted) setMonitor({ kind: "ready", data }); }).catch(() => { if (!controller.signal.aborted) setMonitor({ kind: "error" }); });
     return () => controller.abort();
-  }, [symbol, symbols.join(",")]);
-  const current = universe[symbol];
-  const currentWorkspaceState = current?.workspaceState ?? "loading";
-  const currentVersion = currentWorkspaceState === "ready" ? current?.workspace?.current_version : null;
+  }, [symbol, symbols.join(","), personal]);
+  const bySymbol = forecastBySymbol(list.kind === "ready" ? list.data.forecasts : []);
+  const currentRows = bySymbol.get(symbol.toUpperCase()) ?? [];
+  const currentWorkspaceState = list.kind;
+  const currentVersion = currentWorkspaceState === "ready" ? currentRows[0] ?? null : null;
+  const currentJobs = list.kind === "ready" ? list.data.job_alerts.filter((alert) => alert.symbol === symbol && (alert.status === "queued" || alert.status === "running")).length : 0;
+  const currentRecord = researchRecord(symbol, list.kind === "ready" ? list.data.forecasts : [], lane?.lane === "ready" ? lane.judgments : []);
+  // 打开预测 goes to the forecast itself; with none, to the home filtered to this stock, where it can be created.
+  const openForecast = () => { window.location.hash = currentVersion ? `forecast/${currentVersion.id}` : `forecast?symbol=${encodeURIComponent(symbol)}`; };
   const currentFilingsList = currentFilings.kind === "ready" ? currentFilings.data.filings : [];
   const officialFilingCount = currentFilings.kind === "ready" ? currentFilingsList.length : null;
   return <section className="workspace-stack overview-workspace">
-    <WorkspaceIntro eyebrow={t("研究总览")} title={t("从单股研究队列开始")} description={t("队列汇总独立预测、官方资料和已保存材料。没有预测时仍可上传材料、读取 SEC 原文并开始新研究。")} />
+    <WorkspaceIntro eyebrow={t("研究总览")} title={t("从你的研究队列开始")} description={t("队列汇总独立预测、官方资料和已保存材料。没有预测时仍可上传材料、读取 SEC 原文并开始新研究。")} />
     <section className="overview-focus" aria-label={`${symbol} ${t("当前研究状态")}`}>
-      <div><p className="eyebrow">{t("当前股票")} / {symbol}</p><h2>{currentWorkspaceState === "loading" ? t("正在读取研究状态") : currentWorkspaceState === "error" ? t("研究状态暂不可用") : currentVersion ? `${t("预测版本")} ${currentVersion.version_no}` : t("可开始一项新研究")}</h2><p>{currentWorkspaceState === "loading" ? t("正在读取当前预测与研究记录。") : currentWorkspaceState === "error" ? t("当前预测状态读取失败，请稍后重试。") : currentVersion ? `${t("最近决策时间")} ${formatUtc(currentVersion.decision_at)}; ${t("选择预测区查看简报、固定目标和行情。")}` : t("目前没有当前预测版本。历史行情与材料仍可查看，也可以直接创建预测。")}</p></div>
-      <div className="overview-focus-actions"><button className="primary-action" disabled={currentWorkspaceState === "loading"} onClick={() => onNavigate("forecast")}>{currentWorkspaceState === "loading" ? t("正在读取…") : currentVersion ? t("打开预测") : currentWorkspaceState === "ready" ? t("创建预测") : t("查看预测工作台")}</button><button className="secondary-action" onClick={() => onNavigate("materials")}>{<Tx text={"查看材料库"} />}</button></div>
+      <div><p className="eyebrow">{t("当前股票")} / {symbol}</p><h2>{currentWorkspaceState === "loading" ? t("正在读取研究状态") : currentWorkspaceState === "error" ? t("研究状态暂不可用") : currentVersion ? `${t("预测版本")} ${currentVersion.latest_version_no}` : t("可开始一项新研究")}</h2><p>{currentWorkspaceState === "loading" ? t("正在读取当前预测与研究记录。") : currentWorkspaceState === "error" ? t("当前预测状态读取失败，请稍后重试。") : currentVersion ? `${t("最近决策时间")} ${formatUtc(currentVersion.decision_at)}; ${t("决策模型")} ${currentVersion.decider.actual_model ?? t("未记录")}${currentVersion.target_end_date ? `; ${t("目标日")} ${currentVersion.target_end_date}` : ""}` : t("目前没有当前预测版本。历史行情与材料仍可查看，也可以直接创建预测。")}</p>
+        {currentRecord.judgment && <p><a href={currentRecord.judgment.hash}>{t(currentRecord.judgment.typeLabel)}</a> · {t(currentRecord.judgment.direction)} · {t(currentRecord.judgment.result)}</p>}
+        {currentVersion?.probabilities && <p className="fine-print">{t("概率未经校准，属实验性信息。仅供参考，买不买由你决定。")}</p>}</div>
+      <div className="overview-focus-actions"><button className="primary-action" disabled={currentWorkspaceState === "loading"} onClick={openForecast}>{currentWorkspaceState === "loading" ? t("正在读取…") : currentVersion ? t("打开预测") : currentWorkspaceState === "ready" ? t("创建预测") : t("打开预测")}</button><button className="secondary-action" onClick={() => onNavigate("materials")}>{<Tx text={"查看材料库"} />}</button></div>
     </section>
     <section className="overview-metrics" aria-label={t("当前研究状态")}>
-      <article><span>{<Tx text={"独立预测数"} />}</span><strong>{current?.roots?.roots.length ?? "—"}</strong><small>{current?.workspace?.pending_job_count ? `${current.workspace.pending_job_count} ${t("项任务处理中")}` : t("按当前预测记录统计")}</small></article>
-      <article><span>{<Tx text={"材料总数"} />}</span><strong>{current?.materials ?? "—"}</strong><small>{<Tx text={"已保存官方和上传材料"} />}</small></article>
+      <article><span>{<Tx text={"独立预测数"} />}</span><strong>{list.kind === "ready" ? currentRows.length : "—"}</strong><small>{currentJobs ? `${currentJobs} ${t("项任务处理中")}` : t("按当前预测记录统计")}</small></article>
+      <article><span>{<Tx text={"材料总数"} />}</span><strong>{materialCount ?? "—"}</strong><small>{<Tx text={"已保存官方和上传材料"} />}</small></article>
       <article><span>{<Tx text={"SEC 官方材料"} />}</span><strong>{officialFilingCount ?? "—"}</strong><small>{currentFilings.kind === "error" ? t("官方资料目录暂不可用") : t("当前股票已保存的官方文件")}</small></article>
       <article><span>{<Tx text={"监控状态"} />}</span><strong>{monitor.kind === "loading" ? t("正在读取") : monitor.kind === "error" ? t("暂不可用") : t(monitorHealthLabel(monitor.data.health))}</strong><small>{monitor.kind === "loading" ? t("正在读取监控记录") : monitor.kind === "error" ? t("无法读取监控状态") : monitor.data.last_success?.completed_at ? `${t("最近成功")} ${formatUtc(monitor.data.last_success.completed_at)}` : t("尚无成功运行记录")}</small></article>
     </section>
     <section className="universe-section" aria-labelledby="universe-title"><div className="section-heading"><div><p className="eyebrow">{<Tx text={"研究队列"} />}</p><h2 id="universe-title">{<Tx text={"自选股票"} />}</h2></div><span>{<Tx text={"按当前研究数据读取"} />}</span></div><div className="universe-grid">
       {symbols.map((ticker) => {
-        const item = universe[ticker];
-        const count = item?.roots?.roots.length;
-        const filingCount = item?.filings?.filings.length;
-        return <article className={`universe-card ${ticker === symbol ? "is-current" : ""}`} key={ticker}>
-          <div className="universe-card-top"><strong>{ticker}</strong>{ticker === symbol && <span>{<Tx text={"当前"} />}</span>}</div>
-          {item?.loading && <p className="universe-pending">{<Tx text={"正在读取研究状态…"} />}</p>}
-          {item?.error && <p className="universe-error" role="status">{item.error}</p>}
-          {item && !item.loading && <><dl><div><dt>{<Tx text={"独立预测"} />}</dt><dd>{count ?? "—"}</dd></div><div><dt>{<Tx text={"材料"} />}</dt><dd>{item.materials ?? "—"}</dd></div><div><dt>{<Tx text={"SEC 官方材料"} />}</dt><dd>{filingCount ?? "—"}</dd></div></dl><small>{item.workspaceState === "loading" ? t("正在读取预测状态") : item.workspaceState === "error" ? t("预测状态暂不可用") : item.workspace?.current_version ? `${t("最新版本")} ${item.workspace.current_version.version_no} · ${t(modelStatusLabel(item.workspace.current_version.model_status))}` : t("当前没有预测版本")}</small></>}
+        const tickerRows = bySymbol.get(ticker.toUpperCase()) ?? [];
+        const latest = tickerRows[0] ?? null;
+        const isCurrent = ticker === symbol;
+        return <article className={`universe-card ${isCurrent ? "is-current" : ""}`} key={ticker}>
+          <div className="universe-card-top"><strong>{ticker}</strong>{isCurrent && <span>{<Tx text={"当前"} />}</span>}</div>
+          {list.kind === "loading" && <p className="universe-pending">{<Tx text={"正在读取研究状态…"} />}</p>}
+          {list.kind === "error" && <p className="universe-error" role="status">{t("暂时无法读取该股票的研究状态。")}</p>}
+          {list.kind === "ready" && <><dl><div><dt>{<Tx text={"独立预测"} />}</dt><dd>{tickerRows.length}</dd></div>{isCurrent && <><div><dt>{<Tx text={"材料"} />}</dt><dd>{materialCount ?? "—"}</dd></div><div><dt>{<Tx text={"SEC 官方材料"} />}</dt><dd>{officialFilingCount ?? "—"}</dd></div></>}</dl>
+            {latest
+              ? <small><a href={`#forecast/${latest.id}`}>{t("最新版本")} {latest.latest_version_no}</a> · {latest.probabilities ? `${t("下跌")} ${Math.round(latest.probabilities.bearish * 100)}% · ${t("持平")} ${Math.round(latest.probabilities.neutral * 100)}% · ${t("上涨")} ${Math.round(latest.probabilities.bullish * 100)}%` : t(modelStatusLabel(latest.model_status))} · {t("决策模型")} {latest.decider.actual_model ?? t("未记录")}{latest.target_end_date ? ` · ${t("目标日")} ${latest.target_end_date}` : ""}</small>
+              : <small>{t("当前没有预测版本")}</small>}</>}
           <div className="watch-card-actions"><button className="universe-open" type="button" onClick={() => onOpenStock(ticker)}>{t("打开")} {ticker} {t("总览")} <span aria-hidden="true">→</span></button><button className="watch-remove" type="button" onClick={() => onRemove(ticker)} aria-label={`${t("从关注列表移除")} ${ticker}`}>×</button></div>
         </article>;
       })}
@@ -436,22 +481,27 @@ function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchI
     { id: "memory", group: "memory", label: t("记忆"), hint: t("画像和往事"), icon: "◇" },
     { id: "admin", group: "settings", label: t("设置"), hint: t("模型与账户"), icon: "⚙" },
   ];
+  // On the desktop rail (owner only) 预测 is a bot-rail row of its own, so it leaves the 更多 menu there.
+  // The mobile tab bar and guests, who have no rail row, keep it in 更多.
+  const railMoreItems = botRail ? moreItems.filter(item => item.id !== "forecast") : moreItems;
   const mobileTabs: Array<{ id: WorkspaceSection; label: string; icon: React.ReactNode; active: boolean }> = [
     { id: "agent", label: t("对话"), icon: "✳", active: activeSection === "agent" || activeSection === "bot" },
     { id: "routines", label: t("例行任务"), icon: <RoutineIcon />, active: activeSection === "routines" },
     { id: "portfolio", label: t("持仓"), icon: <PortfolioIcon />, active: activeSection === "portfolio" },
   ];
   const research = isResearchSection(activeSection);
+  // The forecast group takes its company from the record, so it has no stock picker.
+  const stockPicker = research && navGroup(activeSection) !== "forecast";
   return <div className={`app-frame${effectivePinned?" is-nav-pinned":""}`}>
     <div className="nav-drawer-region" ref={menuRegion}>
       {isNarrow&&menuOpen&&<div className="nav-scrim" aria-hidden="true" onClick={()=>setMenuOpen(false)}/>}
       <aside id="workspace-navigation" className={`app-rail ${menuOpen||effectivePinned?"is-open":""}`} aria-label={t("主要导航")}>
         <button className="rail-nav-close" type="button" aria-label={t("收起导航")} aria-controls="workspace-navigation" onClick={closeNavDrawer}><span aria-hidden="true">×</span></button>
-      <a className="workspace-brand" href="#agent" onClick={() => navigate("agent")} aria-label={`FinBot · ${t("对话")}`}><BrandLogo /><span>FinBot<br /><em>{t("研究助理")}</em></span></a>
+      <a className="workspace-brand" href="#agent" onClick={() => navigate("agent")} aria-label={`FinBot · ${t("对话")}`}><BrandLogo /><span>FinBot<br /><em>{t("理财助手")}</em></span></a>
       {botRail?.(() => { if (isNarrow || !pinned) setMenuOpen(false); })}
       <nav ref={navRef} className={`workspace-nav${botRail ? " is-bottom" : ""}`}>
         {!botRail && <button type="button" className={navGroup(activeSection) === "chat" ? "active" : ""} aria-current={navGroup(activeSection) === "chat" ? "page" : undefined} onClick={() => drawerNavigate("agent")}><span aria-hidden="true">✳</span><span><strong>{t("对话")}</strong><small>{t("首页")}</small></span></button>}
-        <MoreMenu items={moreItems} activeGroup={navGroup(activeSection)} onPick={drawerNavigate} placement="rail" drop={botRail ? "up" : "down"} />
+        <MoreMenu items={railMoreItems} activeGroup={navGroup(activeSection)} onPick={drawerNavigate} placement="rail" drop={botRail ? "up" : "down"} />
       </nav>
       <div className="rail-bottom">{research && <span><span className="rail-review-dot" aria-hidden="true" />{<Tx text={"判断可回到原始来源查看"} />}</span>}</div>
       </aside>
@@ -460,17 +510,17 @@ function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchI
       <header className="topbar">
         <div className="topbar-lead">
           <button ref={triggerRef} className="nav-menu-trigger" type="button" aria-label={t(isNarrow?(menuOpen?"收起导航":"打开导航菜单"):(pinned?"收起导航":"打开导航菜单"))} aria-expanded={isNarrow?menuOpen:menuOpen||effectivePinned} aria-controls="workspace-navigation" onClick={toggleNavDrawer}>☰</button>
-          {research && <div className="topbar-path"><span>{<Tx text={"研究工作台"} />}</span><b>/</b><strong>{symbol}</strong></div>}
+          {stockPicker && <div className="topbar-path"><span>{<Tx text={"公司研究"} />}</span><b>/</b><strong>{symbol}</strong></div>}
         </div>
         <div className="toolbar-controls">
-        {research && <div className="symbol-form">
+        {stockPicker && <div className="symbol-form">
           <label htmlFor="symbol">{<Tx text={"切换股票"} />}</label>
           <select id="symbol" value={symbol} onChange={(event) => onSelectStock(event.target.value as SupportedSymbol)} aria-label={t("切换股票")}>
             {!symbols.includes(symbol) && <option value={symbol}>{symbol} · {t("当前")}</option>}
             {symbols.map((ticker) => <option key={ticker} value={ticker}>{ticker}</option>)}
           </select>
         </div>}
-        {research && <form className="watchlist-add" onSubmit={event => { event.preventDefault(); addWatchSymbol(); }}><label className="visually-hidden" htmlFor="watch-add">{t("添加股票")}</label><input id="watch-add" value={watchInput} onChange={event => { setWatchInput(event.target.value); setWatchError(""); }} placeholder={t("添加代码，如 AMD")} maxLength={10} /><button type="submit" aria-label={t("添加股票")}>+</button>{watchError && <span role="alert">{t(watchError)}</span>}</form>}
+        {stockPicker && <form className="watchlist-add" onSubmit={event => { event.preventDefault(); addWatchSymbol(); }}><label className="visually-hidden" htmlFor="watch-add">{t("添加股票")}</label><input id="watch-add" value={watchInput} onChange={event => { setWatchInput(event.target.value); setWatchError(""); }} placeholder={t("添加代码，如 AMD")} maxLength={10} /><button type="submit" aria-label={t("添加股票")}>+</button>{watchError && <span role="alert">{t(watchError)}</span>}</form>}
         </div>
       </header>
       {children}
@@ -487,20 +537,20 @@ function Shell({ activeSection, navigate, symbol, symbols, onSelectStock, watchI
 
 function Loading({ symbol }: { symbol: string }) {
   const { t } = useLocale();
-  return <main className="state-card" aria-live="polite" aria-busy="true"><span className="loading-mark" aria-hidden="true" /><p className="kicker">{<Tx text={"研究工作台"} />}</p><h1>{t("正在读取")} {symbol} {t("的研究资料")}</h1><p>{<Tx text={"正在读取本地预测、SEC 目录和行情。"} />}</p></main>;
+  return <main className="state-card" aria-live="polite" aria-busy="true"><span className="loading-mark" aria-hidden="true" /><p className="kicker">{<Tx text={"公司研究"} />}</p><h1>{t("正在读取")} {symbol} {t("的研究资料")}</h1><p>{<Tx text={"正在读取本地预测、SEC 目录和行情。"} />}</p></main>;
 }
 
 function SectionTabs({ section, navigate }: { section: WorkspaceSection; navigate: (section: WorkspaceSection) => void }) {
   const { t } = useLocale();
   const group = navGroup(section);
   const forecastTab = (FORECAST_TABS as readonly string[]).includes(section);
-  const labels: Record<string, string> = { overview: "总览", forecast: "预测", revisions: "预测修订", evaluation: "到期评估", replay: "历史回放", materials: "材料库", evidence: "证据" };
+  const labels: Record<string, string> = { overview: "总览", forecast: "预测", revisions: "预测修订", evaluation: "模型成绩", replay: "历史回放", materials: "材料库", evidence: "证据" };
   const tab = (id: WorkspaceSection, active: boolean, label = labels[id]) => <button key={id} type="button" aria-current={active ? "page" : undefined} onClick={() => navigate(id)}>{t(label)}</button>;
   if (group === "library") return <nav className="section-tabs" aria-label={t("资料库")}>{LIBRARY_TABS.map(id => tab(id, section === id))}</nav>;
   if (group !== "company" && group !== "forecast") return null;
   return <>
     <nav className="section-tabs" aria-label={t("公司")}>{tab("overview", section === "overview")}{tab("forecast", forecastTab)}</nav>
-    {forecastTab && <nav className="section-tabs is-secondary" aria-label={t("预测")}>{FORECAST_TABS.map(id => tab(id, section === id, id === "forecast" ? "预测工作台" : labels[id]))}</nav>}
+    {forecastTab && <nav className="section-tabs is-secondary" aria-label={t("预测")}>{FORECAST_TAB_BUTTONS.map(id => tab(id, section === id || (id === "forecast" && section === "revisions")))}</nav>}
   </>;
 }
 
