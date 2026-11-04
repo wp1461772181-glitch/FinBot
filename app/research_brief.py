@@ -585,6 +585,16 @@ def _sanitize_synthesis_citations(synthesis: ResearchSynthesis, selected: list[d
         for section in SECTIONS:
             available.update((analysis_id, section, item.id) for item in getattr(payload, section))
 
+    raw_had_items = any([
+        synthesis.new_facts,
+        synthesis.supporting,
+        synthesis.counter,
+        synthesis.background,
+        synthesis.conflicts,
+        synthesis.unknowns,
+        synthesis.changes,
+    ])
+
     sanitized_new_facts: list[EvidenceText] = []
     for item in synthesis.new_facts:
         valid_cites = [
@@ -671,6 +681,18 @@ def _sanitize_synthesis_citations(synthesis: ResearchSynthesis, selected: list[d
         else:
             sanitized_changes.append(item)
 
+    has_items_after = any([
+        sanitized_new_facts,
+        sanitized_supporting,
+        sanitized_counter,
+        sanitized_background,
+        sanitized_conflicts,
+        sanitized_unknowns,
+        sanitized_changes,
+    ])
+    if raw_had_items and not has_items_after:
+        raise ResearchBriefError("synthesis cites an unknown analysis item", code="unknown_reference")
+
     return ResearchSynthesis(
         new_facts=sanitized_new_facts[:40],
         supporting=sanitized_supporting[:24],
@@ -690,9 +712,6 @@ def _check_citations(synthesis, selected):
         (new_ids if row["new"] else background_ids).add(analysis_id)
         for section in SECTIONS:
             available.update((analysis_id, section, item.id) for item in getattr(payload, section))
-    if not any([synthesis.new_facts, synthesis.supporting, synthesis.counter,
-                synthesis.background, synthesis.conflicts, synthesis.unknowns, synthesis.changes]):
-        raise ResearchBriefError("synthesis cites an unknown analysis item", code="unknown_reference")
     for row in synthesis.new_facts:
         for cite in row.citations:
             key = (cite.analysis_id, cite.section, cite.item_id)
