@@ -1,4 +1,4 @@
-import type { DashboardResponse, EvidenceRevision, EvidenceRevisionInventory, EvidenceRevisionRequest, FilingContent, FilingInventory, FilingReview, FilingScanResult, ForecastRunResult, JevLearningStatus, LocalizationResult, MaterialAnalysisHistory, MaterialAnalysisJob, MaterialAnalysisVersion, MaterialItem, MaterialLibraryResponse, MaterialOriginal, MaterialSourceType, PriceHistory, UploadedEvidence, UploadedEvidenceInventory, V2EvaluationResponse, V2ForecastJob, V2ForecastRoots, V2MonitorStatus, V2SourceRef, V2Timeline, V2VersionDetail, V2Workspace } from "./types";
+import type { DashboardResponse, EvidenceRevision, EvidenceRevisionInventory, EvidenceRevisionRequest, FilingContent, FilingInventory, FilingReview, FilingScanResult, ForecastRunResult, LocalizationResult, MaterialAnalysisHistory, MaterialAnalysisJob, MaterialAnalysisVersion, MaterialItem, MaterialLibraryResponse, MaterialOriginal, MaterialSourceType, PriceHistory, UploadedEvidence, UploadedEvidenceInventory, V2EvaluationResponse, V2ForecastJob, V2ForecastRoots, V2MonitorStatus, V2SourceRef, V2Timeline, V2VersionDetail, V2Workspace } from "./types";
 import { agentChatUrl } from "./agent-chat-url.mjs";
 import { fetchAgentChatModels } from "./agent-chat-models.mjs";
 import { apiErrorMessage } from "./api-errors.mjs";
@@ -586,10 +586,6 @@ export async function getV2MonitorStatus(signal?: AbortSignal): Promise<V2Monito
 
 export async function getV2Evaluations(symbol: string, signal?: AbortSignal): Promise<V2EvaluationResponse> {
   return requestJson<V2EvaluationResponse>(`/api/v2/evaluations?symbol=${encodeURIComponent(symbol)}`, { signal });
-}
-
-export async function getJevLearningStatus(symbol: string, signal?: AbortSignal): Promise<JevLearningStatus> {
-  return requestJson<JevLearningStatus>(`/api/v2/jev-learning/status?symbol=${encodeURIComponent(symbol)}`, { signal });
 }
 
 export async function getV2ForecastVersion(versionId: string, signal?: AbortSignal): Promise<V2VersionDetail> {

@@ -990,7 +990,7 @@ body{background:var(--canvas);color:var(--ink)}
 
 .research-brief{display:grid;gap:16px;padding:20px;border:1px solid #bfd3ca;border-radius:12px;background:#fbfcfa}
 
-.research-brief-header,.brief-section-heading,.brief-jev-heading{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.research-brief-header,.brief-section-heading,.brief-decision-heading{display:flex;align-items:center;justify-content:space-between;gap:14px}
 
 .research-brief-header{padding-bottom:13px;border-bottom:1px solid #d9e4de}
 
@@ -1012,17 +1012,17 @@ body{background:var(--canvas);color:var(--ink)}
 
 .brief-market strong{font:600 13px var(--serif);font-variant-numeric:tabular-nums}
 
-.brief-jev{padding:15px;border:1px solid #b8d1c6;border-radius:9px;background:#f1f7f3}
+.brief-decision{padding:15px;border:1px solid #b8d1c6;border-radius:9px;background:#f1f7f3}
 
-.brief-jev-heading h3{margin:3px 0 0;font:500 20px/1.1 var(--serif)}
+.brief-decision-heading h3{margin:3px 0 0;font:500 20px/1.1 var(--serif)}
 
-.brief-jev-heading>strong{padding:5px 8px;border-radius:4px;background:#fff0d7;color:#815819;font-size:10px}
+.brief-decision-heading>strong{padding:5px 8px;border-radius:4px;background:#fff0d7;color:#815819;font-size:10px}
 
-.brief-jev>p{max-width:800px;margin:10px 0;color:#53675f;font-size:11px;line-height:1.55}
+.brief-decision>p{max-width:800px;margin:10px 0;color:#53675f;font-size:11px;line-height:1.55}
 
-.brief-jev>small{display:block;margin-top:10px;color:var(--muted);font-size:9px}
+.brief-decision>small{display:block;margin-top:10px;color:var(--muted);font-size:9px}
 
-.brief-jev-probabilities{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.brief-decision-probabilities{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 
 .brief-probability{position:relative;display:grid;grid-template-columns:1fr auto;align-items:center;gap:3px 10px;overflow:hidden;padding:9px 10px 13px;border:1px solid #d5e1db;border-radius:6px;background:#fff}
 
@@ -1086,7 +1086,7 @@ body{background:var(--canvas);color:var(--ink)}
 
 .brief-omitted ul{display:grid;gap:5px;margin:8px 0 0;padding-left:18px}
 
-@media(max-width:760px){.research-brief{padding:15px}.research-brief-header{align-items:flex-start;flex-direction:column}.brief-market{grid-template-columns:repeat(2,minmax(0,1fr))}.brief-jev-probabilities{grid-template-columns:1fr}.brief-sections{grid-template-columns:1fr}.brief-material-list article{align-items:flex-start;flex-direction:column}.brief-material-list button{width:100%}}
+@media(max-width:760px){.research-brief{padding:15px}.research-brief-header{align-items:flex-start;flex-direction:column}.brief-market{grid-template-columns:repeat(2,minmax(0,1fr))}.brief-decision-probabilities{grid-template-columns:1fr}.brief-sections{grid-template-columns:1fr}.brief-material-list article{align-items:flex-start;flex-direction:column}.brief-material-list button{width:100%}}
 
 .material-library{min-width:0}
 
@@ -1603,12 +1603,15 @@ body{background:var(--canvas);color:var(--ink)}
 .v2-raw-probability{display:grid;gap:7px;margin-top:11px;padding-top:10px;border-top:1px solid #dce5e1}
 
 .v2-raw-probability>span{color:var(--muted);font-size:10px}
+.v2-model-view{display:grid;gap:5px;margin-top:11px;padding-top:10px;border-top:1px solid #dce5e1}
+.v2-model-view>span{color:var(--muted);font-size:10px;font-weight:700}
+.v2-model-view>p{margin:0;font-size:12px;line-height:1.6;white-space:pre-line}
 
-.brief-raw-jev{margin-top:12px;padding-top:10px;border-top:1px solid #d6e3dc}
+.brief-raw-decision{margin-top:12px;padding-top:10px;border-top:1px solid #d6e3dc}
 
-.brief-raw-jev summary{cursor:pointer;color:var(--accent);font-size:10px;font-weight:700}
+.brief-raw-decision summary{cursor:pointer;color:var(--accent);font-size:10px;font-weight:700}
 
-.brief-raw-jev .brief-jev-probabilities{margin-top:9px}
+.brief-raw-decision .brief-decision-probabilities{margin-top:9px}
 
 @media(max-width:760px){.jev-learning-metrics{grid-template-columns:1fr 1fr}.jev-learning-validation{grid-template-columns:1fr}.jev-learning-validation strong,.jev-learning-validation small{grid-column:auto}}
 

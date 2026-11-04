@@ -1,4 +1,5 @@
 import { Tx } from "./i18n";
+import { forecastCopy } from "./forecast-model.mjs";
 import { formatDateTime, useLocale } from "./i18n";
 import type { ResearchBrief, ResearchEvidencePointer, ResearchMaterialReference, V2Probabilities } from "./types";
 import { EvidenceProcessingSummary } from "./EvidenceProcessing";
@@ -8,6 +9,7 @@ export function ResearchBriefView({
   brief,
   versionId,
   probabilities,
+  modelStatus,
   modelManifest,
   evidenceManifest,
   onOpenAnalysis,
@@ -15,6 +17,7 @@ export function ResearchBriefView({
   brief: ResearchBrief;
   versionId: string;
   probabilities: V2Probabilities | null;
+  modelStatus: string;
   modelManifest: Record<string, unknown>;
   evidenceManifest: Array<Record<string, unknown>>;
   onOpenAnalysis: (material: ResearchMaterialReference) => void;
@@ -29,8 +32,9 @@ export function ResearchBriefView({
   const rawProbabilities = probabilityVector(provider.raw_probabilities);
   const calibrated = calibration.status === "active";
   const confidence = provider.confidence;
+  const copy = forecastCopy({ model_status: modelStatus, provider: text(provider.provider), actual_model: text(provider.actual_model), calibrated });
   return <section className="research-brief" aria-labelledby="research-brief-title">
-    <header className="research-brief-header"><div><p className="section-label">{brief.time_mode === "historical_research" ? t("历史回放 · 回填材料研究") : "DeepSeek · material analysis summary"}</p><h2 id="research-brief-title">{<Tx text={"股票研究简报"} />}</h2><p>{brief.symbol} · {t("截止")} {formatTime(brief.decision_at, locale)}</p></div><span className={`brief-quality quality-${brief.input_quality.status}`}>{qualityLabel(brief.input_quality.status, t)} · {t("输入质量")}</span></header>
+    <header className="research-brief-header"><div><p className="section-label">{brief.time_mode === "historical_research" ? t("历史回放 · 回填材料研究") : t("材料分析汇总")}</p><h2 id="research-brief-title">{<Tx text={"股票研究简报"} />}</h2><p>{brief.symbol} · {t("截止")} {formatTime(brief.decision_at, locale)}</p></div><span className={`brief-quality quality-${brief.input_quality.status}`}>{qualityLabel(brief.input_quality.status, t)} · {t("输入质量")}</span></header>
     {locale === "en-US" && localization.kind === "loading" && <p className="localization-status" role="status">{t("Translating saved research brief…")}</p>}
     {locale === "en-US" && localization.kind === "error" && <p className="localization-status" role="status">{t("English translation is temporarily unavailable; showing the saved original.")}</p>}
     {brief.time_mode === "historical_research" && <p className="historical-replay-warning">{<Tx text={"这是使用现行流程对历史时点进行的回放；材料和行情可能在当时之后才被系统获取，结果属于历史研究，不计入真实前向表现。"} />}</p>}
@@ -46,13 +50,13 @@ export function ResearchBriefView({
       <div><small>{<Tx text={"距目标剩余交易日"} />}</small><strong>{numberText(market.remaining_sessions)}</strong></div>
     </section>
 
-    {probabilities ? <section className="brief-jev" aria-label={t("Jev 实验性概率")}>
-      <div className="brief-jev-heading"><div><p className="section-label">OpenRouter · Jev</p><h3>{calibrated ? t("Jev 判断 · 本地校准") : t("Jev 原始三分类判断")}</h3></div><strong>{calibrated ? t("时间外验证通过") : t("未校准")}</strong></div>
-      <p>{calibrated ? t("主结果经过本地校准器调整；原始 Jev 输出在下方保留以便比较。校准器不会更新 Jev 的内部参数。") : t("以下是 Jev 对固定目标合同的实验性原始输出，不代表已验证概率。DeepSeek 只分析单份材料；系统复用这些已保存的分析并在本地汇总简报。")}</p>
-      <div className="brief-jev-probabilities"><Probability name={t("看涨")} value={probabilities.bullish} tone="bullish" /><Probability name={t("中性")} value={probabilities.neutral} tone="neutral" /><Probability name={t("看跌")} value={probabilities.bearish} tone="bearish" /></div>
-      {calibrated && rawProbabilities && <details className="brief-raw-jev"><summary>{<Tx text={"查看校准前 Jev 原始输出"} />}</summary><div className="brief-jev-probabilities"><Probability name={t("看涨")} value={rawProbabilities.bullish} tone="bullish" /><Probability name={t("中性")} value={rawProbabilities.neutral} tone="neutral" /><Probability name={t("看跌")} value={rawProbabilities.bearish} tone="bearish" /></div></details>}
-      <small>{t("模型")} {text(provider.actual_model) ?? "Jev"}{text(provider.question_version) ? ` · ${text(provider.question_version)}` : ""}{typeof confidence === "number" ? ` · ${t("分布集中度")} ${Math.round(confidence * 100)}%${locale === "en-US" ? ` (${t("不是准确率")})` : `（${t("不是准确率")}）`}` : ""}</small>
-    </section> : <p className="brief-no-probability">{<Tx text={"该版本为仅研究模式，没有保存 Jev 数值判断；页面不会回填旧版概率。"} />}</p>}
+    {probabilities ? <section className="brief-decision" aria-label={t(copy.briefAria)}>
+      <div className="brief-decision-heading"><div><p className="section-label">{t(copy.briefKickerProvider)} · {t(copy.briefKickerModel)}</p><h3>{t(copy.briefTitle)}</h3></div><strong>{t(copy.briefBadge)}</strong></div>
+      <p>{t(copy.briefNote)}</p>
+      <div className="brief-decision-probabilities"><Probability name={t("上涨")} value={probabilities.bullish} tone="bullish" /><Probability name={t("持平")} value={probabilities.neutral} tone="neutral" /><Probability name={t("下跌")} value={probabilities.bearish} tone="bearish" /></div>
+      {calibrated && rawProbabilities && <details className="brief-raw-decision"><summary>{<Tx text={"查看校准前 Jev 原始输出"} />}</summary><div className="brief-decision-probabilities"><Probability name={t("上涨")} value={rawProbabilities.bullish} tone="bullish" /><Probability name={t("持平")} value={rawProbabilities.neutral} tone="neutral" /><Probability name={t("下跌")} value={rawProbabilities.bearish} tone="bearish" /></div></details>}
+      <small>{t("模型")} {t(copy.model)}{text(provider.question_version) ? ` · ${text(provider.question_version)}` : ""}{typeof confidence === "number" ? ` · ${t("分布集中度")} ${Math.round(confidence * 100)}%${locale === "en-US" ? ` (${t("不是准确率")})` : `（${t("不是准确率")}）`}` : ""}</small>
+    </section> : <p className="brief-no-probability">{t(copy.noProbabilityNote)}</p>}
 
     {brief.input_quality.reasons.length > 0 && <ul className="brief-quality-reasons">{brief.input_quality.reasons.map((reason, index) => <li key={`${reason}:${index}`}>{reason}</li>)}</ul>}
 

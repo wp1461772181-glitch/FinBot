@@ -1,0 +1,32 @@
+export declare const NOT_RECORDED: "未记录";
+export declare function hasDecisionProbabilities(status: unknown): boolean;
+export type ForecastCopyInput = {
+  model_status?: string | null;
+  provider?: string | null;
+  actual_model?: string | null;
+  calibrated?: boolean;
+};
+export type ForecastCopy = {
+  model: string;
+  provider: string;
+  statusName: string;
+  statusNote: string;
+  stripLabel: string;
+  summaryNoteBefore: string;
+  summaryNoteAfter: string;
+  timelineStripLabel: string;
+  evalLabel: string;
+  evalAria: string;
+  evalNoMatchBody: string;
+  evalScoreLabel: string;
+  briefAria: string;
+  briefTitle: string;
+  briefNote: string;
+  briefBadge: string;
+  briefKickerProvider: string;
+  briefKickerModel: string;
+  noProbabilityNote: string;
+  earlier: boolean;
+};
+export declare function forecastCopy(input?: ForecastCopyInput): ForecastCopy;
+export declare function jobFailurePhrase(code?: string | null): string | null;

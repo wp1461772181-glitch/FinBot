@@ -22,13 +22,13 @@ export function EvidenceProcessingSummary({
   const notIncludedCount = evidenceManifest.length - includedCount;
 
   return <section className="evidence-processing" aria-label={t("冻结候选与简报材料范围")}>
-    <div className="brief-section-heading"><div><p className="section-label">{<Tx text={"本次预测的材料范围"} />}</p><h3>{<Tx text={"冻结候选不等于 Jev 实际输入"} />}</h3></div></div>
+    <div className="brief-section-heading"><div><p className="section-label">{<Tx text={"本次预测的材料范围"} />}</p><h3>{<Tx text={"冻结候选不等于模型实际输入"} />}</h3></div></div>
     <div className="evidence-processing-counts">
       <div><strong>{evidenceManifest.length}</strong><span>{<Tx text={"冻结候选"} />}</span></div>
       <div><strong>{includedCount}</strong><span>{<Tx text={"分析成功并进入简报"} />}</span></div>
       <div><strong>{notIncludedCount}</strong><span>{<Tx text={"未进入简报"} />}</span></div>
     </div>
-      <p className="evidence-processing-note">{<Tx text={"冻结清单用于保存预测当时可用的来源快照。Jev（若本版启用）读取的是通过校验的研究简报及其引用，不会把冻结清单中的所有候选都直接当作输入。"} />}</p>
+      <p className="evidence-processing-note">{<Tx text={"冻结清单保存预测当时可用的来源快照。模型读取的是通过校验的研究简报及其引用，不会直接读取所有候选。"} />}</p>
     <div className="evidence-processing-list">
       {evidenceManifest.length ? evidenceManifest.map((item, index) => {
         const ref = brief.material_refs.find((candidate) => sourceKey(candidate) === sourceKey(item));
@@ -47,7 +47,7 @@ export function processingStatus(item: FrozenEvidence, brief: ResearchBrief | nu
   if (!brief) return { label: t("无简报状态记录"), detail: t("此版本没有保存研究简报，无法判断材料的分析与纳入结果。"), tone: "unknown" };
 
   const included = brief.material_refs.find((ref) => sourceKey(ref) === sourceKey(item));
-  if (included) return { label: t("已分析 · 已进入简报"), detail: t("这份分析被 DeepSeek 简报引用；如本版启用 Jev，它属于 Jev 的简报输入。"), tone: "included" };
+  if (included) return { label: t("已分析 · 已进入简报"), detail: t("这份分析被研究简报引用，属于模型的输入。"), tone: "included" };
 
   const omitted = brief.omitted.find((row) => sourceKey(row) === sourceKey(item));
   if (!omitted) return { label: t("冻结候选 · 未进入材料分析"), detail: t("材料保存在预测快照中，但未进入本轮简报分析范围。"), tone: "candidate" };

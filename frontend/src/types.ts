@@ -558,7 +558,7 @@ export type V2ModelEvaluationCohort = {
   provider: string;
   actual_model: string;
   question_version: string | null;
-  /** true: the hidden Jev control that runs next to every model forecast (never in the forecast list). */
+  /** true: a retired hidden control record from the earlier flow (never in the forecast list). */
   control?: boolean;
   log_loss_zero_probability_floor: number | null;
   status: "pending" | "insufficient_samples" | "available";
@@ -573,51 +573,6 @@ export type V2EvaluationResponse = {
   cohorts: Record<"prospective" | "historical_research" | "unknown", V2EvaluationCohort>;
   model_cohorts?: V2ModelEvaluationCohort[];
   model_cohort_selection_rule?: string;
-};
-
-export type JevLearningStatus = {
-  status: "collecting" | "ready";
-  symbol: string | null;
-  required_mature_roots: number;
-  validation_fraction: number;
-  minimum_validation_months: number;
-  observed_mature_roots: number;
-  observed_forecast_roots: number;
-  observed_pending_roots: number;
-  historical_replay_mature_roots_excluded: number;
-  observed_roots_missing_raw_probabilities: number;
-  cohorts: Array<{
-    cohort_key: string;
-    provider: string;
-    actual_model: string;
-    question_version: string;
-    target_spec_version: string | null;
-    forecast_roots: number;
-    pending_roots: number;
-    symbol_forecast_counts: Record<string, number>;
-    matured_roots: number;
-    training: {
-      ready: boolean;
-      matured_roots: number;
-      required_roots: number;
-      training_roots: number;
-      validation_roots: number;
-      training_months: number;
-      validation_months: number;
-      training_class_counts: Record<string, number>;
-      validation_class_counts: Record<string, number>;
-      reasons: string[];
-    };
-    active_model: null | {
-      id: string;
-      activated_at: string | null;
-      sample_count: number;
-      parameters_sha256: string;
-      test_metrics: Record<string, unknown> | null;
-      acceptance: Record<string, unknown> | null;
-    };
-  }>;
-  policy: string;
 };
 
 export type V2Workspace = {

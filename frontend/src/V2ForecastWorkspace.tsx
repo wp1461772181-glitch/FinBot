@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, createV2ForecastJob, createV2ManualRevisionJob, getV2Evaluations, getV2ForecastRoots, getV2ForecastVersion, getV2Job, getV2MonitorStatus, getV2RevisionCandidates, getV2Timeline, getV2Workspace } from "./api";
 import type { V2RevisionCandidates } from "./api";
 import type { FilingInventory, ResearchMaterialReference, V2EvaluationCohort, V2EvaluationResponse, V2EvaluationRoot, V2EvaluationVersion, V2ForecastJob, V2ForecastRoot, V2ForecastRoots, V2ModelEvaluationCohort, V2MonitorStatus, V2Probabilities, V2Timeline, V2TimelineEntry, V2VersionDetail, V2Workspace } from "./types";
+import { forecastCopy, hasDecisionProbabilities, jobFailurePhrase } from "./forecast-model.mjs";
 import { ResearchBriefView } from "./ResearchBriefView";
 import { evidenceTitle, processingStatus, sourceKey } from "./EvidenceProcessing";
 import { CandlestickChart } from "./CandlestickChart";
@@ -44,12 +45,7 @@ function formatTime(value: string | null) {
 }
 
 function modelStatusText(status: V2Workspace["joint_model_status"] | V2TimelineEntry["model_status"]) {
-  if (status === "experimental_jev") return translatePhrase("Jev 实验判断（尚未校准）");
-  if (status === "experimental_llm") return translatePhrase("推理模型实验判断（尚未校准）");
-  if (status === "experimental_joint") return translatePhrase("联合研究模型");
-  if (status === "baseline_only") return translatePhrase("行情基线模型");
-  if (status === "research_only") return translatePhrase("研究结果（未输出概率）");
-  return translatePhrase("当前模型尚未验证");
+  return translatePhrase(forecastCopy({ model_status: status }).statusName);
 }
 
 function jobStatusText(job: V2ForecastJob) {
@@ -62,25 +58,8 @@ function jobStatusText(job: V2ForecastJob) {
 }
 
 function jobFailureText(code?: string | null) {
-  if (!code) return translatePhrase("任务没有返回可识别的失败原因。");
-  const known: Record<string, string> = {
-    research_brief_failed: "研究简报构建失败，请查看服务日志后重试。",
-    research_brief_provider_error: "DeepSeek 简报服务暂不可用，可稍后重新创建任务。",
-    research_brief_invalid_model_output: "DeepSeek 简报格式或引用校验未通过，可重新创建任务。",
-    research_brief_invalid_background_reference: "模型把新材料当成背景材料引用，未通过来源分类校验；请重新创建预测。",
-    research_brief_provider_required: "当前没有可用的 DeepSeek 配置，无法生成简报。",
-    research_brief_invalid_brief_output: "简报没有通过结构校验，未发布预测。",
-    jev_missing_api_key: "缺少 Jev 服务配置，未生成数值判断。",
-    jev_authorization_or_billing_error: "Jev 服务的授权或账单状态需要处理。",
-    jev_upstream_unavailable: "Jev 服务暂不可用，可稍后重新创建任务。",
-    jev_transport_error: "连接 Jev 服务失败，可稍后重新创建任务。",
-    market_refresh_failed: "行情刷新失败，可稍后重试。",
-    no_completed_market_session: "没有可用的已完成交易日行情。",
-    insufficient_observed_market_history: "可观察行情不足，暂时无法建立预测输入。",
-  };
-  if (known[code]) return translatePhrase(known[code]);
-  if (code.startsWith("research_brief_")) return translatePhrase("研究简报未通过处理或引用校验，未发布预测。");
-  if (code.startsWith("jev_")) return translatePhrase("Jev 判断未完成，未发布数值概率。");
+  const phrase = jobFailurePhrase(code);
+  if (phrase) return translatePhrase(phrase);
   return `${translatePhrase("任务未完成（")}${code}${translatePhrase("），没有发布预测版本。")}`;
 }
 
@@ -330,9 +309,9 @@ export function V2ForecastWorkspace({ symbol, priceHistory, mode, onOpenForecast
       </>}
 
     {mode === "forecast" && <>
-      <p className="v2-workflow-note">{<Tx text={"创建预测后，系统会冻结本次行情和材料，并自动为入选材料请求或生成单份 AI 分析，再用成功的分析生成研究简报；启用 Jev 时，只有通过引用校验的简报才会交给 Jev。无需先在“材料库”手动分析。若分析失败或证据不足，系统不会跳过分析直接把原文交给 Jev。"} />}</p>
+      <p className="v2-workflow-note">{<Tx text={"创建预测后，系统会冻结当时的行情和材料，为入选材料生成分析并汇总成研究简报。简报通过引用校验后，由设置中选定的预测模型（未选时用服务器默认模型）给出 20 个交易日的涨、平、跌概率。无需先到「材料库」手动分析。证据不足时只保存简报，不输出概率。概率未经校准，属实验性信息。仅供参考，买不买由你决定。"} />}</p>
       <div className="v2-status-grid">
-        <article><span>{<Tx text={"预测判断"} />}</span><strong>{selectedRoot ? modelStatusText(modelStatus) : t("尚无预测结果")}</strong><small>{selectedRoot ? modelStatus === "experimental_llm" ? t("由「预测模型」给出的实验概率，未经校准；Jev 对照在到期评估里单独显示") : modelStatus === "experimental_jev" ? selectedCalibration?.status === "active" ? t("Jev 输出已通过本地时间外校准；原始值可展开查看") : t("当前使用 Jev 原始概率；本地校准器仍在积累到期样本") : modelStatus === "research_only" ? t("当前只提供材料研究简报，没有数值概率") : t("请将模型结果视为研究信息") : t("创建一项研究后，这里会显示对应结果。")}</small></article>
+        <article><span>{<Tx text={"预测判断"} />}</span><strong>{selectedRoot ? modelStatusText(modelStatus) : t("尚无预测结果")}</strong><small>{selectedRoot ? t(forecastCopy({ model_status: modelStatus, calibrated: selectedCalibration?.status === "active" }).statusNote) : t("创建一项研究后，这里会显示对应结果。")}</small></article>
         <MonitorCard monitor={monitor} />
         <article><span>{<Tx text={"待处理任务"} />}</span><strong>{workspace.kind === "ready" ? workspace.data.pending_job_count : "—"}</strong><small>{<Tx text={"排队只表示服务已接收，不表示预测已生成。"} />}</small></article>
       </div>
@@ -349,7 +328,8 @@ export function V2ForecastWorkspace({ symbol, priceHistory, mode, onOpenForecast
       {versionDetails?.kind === "ready" && versionDetails.data.current.research_brief && <ResearchBriefView
         brief={versionDetails.data.current.research_brief}
         versionId={versionDetails.data.current.id}
-        probabilities={(versionDetails.data.current.model_status === "experimental_jev" || versionDetails.data.current.model_status === "experimental_llm") ? versionDetails.data.current.decision_probabilities ?? null : null}
+        probabilities={hasDecisionProbabilities(versionDetails.data.current.model_status) ? versionDetails.data.current.decision_probabilities ?? null : null}
+        modelStatus={versionDetails.data.current.model_status}
         modelManifest={versionDetails.data.current.model_manifest}
         evidenceManifest={versionDetails.data.current.evidence_version_manifest}
         onOpenAnalysis={openResearchMaterial}
@@ -593,10 +573,12 @@ function EvaluationReadout({ evaluations, selectedRootId, selectedVersionId, sel
   const { locale, t } = useLocale();
   if (evaluations.kind === "loading") return <section className="v2-evaluation"><p>{<Tx text={"正在读取所选预测的到期评估…"} />}</p></section>;
   if (evaluations.kind === "error") return <section className="v2-evaluation"><p className="v2-notice error" role="alert">{evaluations.message}</p></section>;
-  if (selectedVersionDetail && (selectedVersionDetail.model_status === "experimental_jev" || selectedVersionDetail.model_status === "experimental_llm")) {
-    const jevCohort = jevEvaluationCohort(evaluations.data, selectedVersionDetail);
-    if (!jevCohort) return <section className="v2-evaluation"><p className="section-label">{<Tx text={selectedVersionDetail.model_status === "experimental_llm" ? "预测模型到期评估" : "Jev 到期评估"} />}</p><h3>{t(evaluations.data.model_cohorts ? "尚无匹配的模型分组" : "模型分组评估尚不可用")}</h3><p>{t(evaluations.data.model_cohorts ? "当前评估数据没有与此版本的时间模式、Jev 服务方、实际模型和问题版本完全匹配的 cohort；不会使用混合旧分组代替。" : "API 尚未提供按模型隔离的评估分组；为避免混淆样本分母，不使用旧的混合分组代替。")}</p></section>;
-    const root = jevCohort.roots.find((item) => item.root_id === selectedRootId);
+  if (selectedVersionDetail && hasDecisionProbabilities(selectedVersionDetail.model_status)) {
+    const modelCohort = modelEvaluationCohort(evaluations.data, selectedVersionDetail);
+    const decisionProvider = asRecord(selectedVersionDetail.model_manifest.decision_provider);
+    const copy = forecastCopy({ model_status: selectedVersionDetail.model_status, provider: asText(decisionProvider.provider), actual_model: asText(decisionProvider.actual_model) });
+    if (!modelCohort) return <section className="v2-evaluation"><p className="section-label">{t(copy.evalLabel)}</p><h3>{t(evaluations.data.model_cohorts ? "尚无匹配的模型分组" : "模型分组评估尚不可用")}</h3><p>{t(evaluations.data.model_cohorts ? copy.evalNoMatchBody : "API 尚未提供按模型隔离的评估分组；为避免混淆样本分母，不使用旧的混合分组代替。")}</p></section>;
+    const root = modelCohort.roots.find((item) => item.root_id === selectedRootId);
     const representative = root?.versions[0];
     const representsSelected = representative?.id === selectedVersionId;
     const evaluation = representsSelected ? representative?.latest_evaluation ?? null : null;
@@ -606,12 +588,12 @@ function EvaluationReadout({ evaluations, selectedRootId, selectedVersionId, sel
       evaluation.log_loss !== null ? `Log loss ${scoreText(evaluation.log_loss)}` : null,
       evaluation.direction_correct !== null ? `${t("方向")}${t(evaluation.direction_correct ? "正确" : "错误")}` : null,
     ].filter((part): part is string => part !== null) : [];
-    return <section className="v2-evaluation" aria-label={t("所选 Jev 预测的分组到期评估")}>
-      <div><p className="section-label">{<Tx text={selectedVersionDetail.model_status === "experimental_llm" ? "预测模型到期评估 · 同一模型组" : "Jev 到期评估 · 同一模型组"} />}</p><h3>{representsSelected ? state : t("显示该独立预测的最新代表版本")}</h3><p>{t("模型")} {jevCohort.actual_model} · {t("问题")} {jevCohort.question_version ?? t("未记录")} · {root?.target_end_date ?? t("目标日未记录")}</p></div>
-      <div className="v2-evaluation-sample"><span>{<Tx text={"独立预测样本"} />}</span><strong>{t("标签")} {jevCohort.sample.labelled_root_count} · {t("评分")} {jevCohort.sample.scored_root_count} / {jevCohort.sample.root_denominator}</strong><small>{locale === "en-US" ? `${cohortStatusText(jevCohort.status).trim()}; ${t("按服务方、模型、问题版本和时间模式分组，每项独立预测只计一个代表版本。")}` : `${cohortStatusText(jevCohort.status)}；${t("按服务方、模型、问题版本和时间模式分组，每项独立预测只计一个代表版本。")}`}</small></div>
-      {evaluation?.status === "succeeded" && <div className="v2-evaluation-result"><span>{<Tx text={"真实标签"} />}</span><strong>{labelText(evaluation.actual_label)}</strong><small>{evaluation.actual_target_close === null ? t("目标收盘价未记录") : `${t("目标收盘")} ${evaluation.actual_target_close}`}{evaluation.label_available_at ? ` · ${formatTime(evaluation.label_available_at)} ${t("可用")}` : ""}</small><p>{t("Jev 实验性判断评分（模型未校准）：")} {scoreParts.length ? scoreParts.join(" · ") : t("无可用数值评分")}</p></div>}
+    return <section className="v2-evaluation" aria-label={t(copy.evalAria)}>
+      <div><p className="section-label">{t(copy.evalLabel)}</p><h3>{representsSelected ? state : t("显示该独立预测的最新代表版本")}</h3><p>{t("模型")} {modelCohort.actual_model} · {t("问题")} {modelCohort.question_version ?? t("未记录")} · {root?.target_end_date ?? t("目标日未记录")}</p></div>
+      <div className="v2-evaluation-sample"><span>{<Tx text={"独立预测样本"} />}</span><strong>{t("标签")} {modelCohort.sample.labelled_root_count} · {t("评分")} {modelCohort.sample.scored_root_count} / {modelCohort.sample.root_denominator}</strong><small>{locale === "en-US" ? `${cohortStatusText(modelCohort.status).trim()}; ${t("按服务方、模型、问题版本和时间模式分组，每项独立预测只计一个代表版本。")}` : `${cohortStatusText(modelCohort.status)}；${t("按服务方、模型、问题版本和时间模式分组，每项独立预测只计一个代表版本。")}`}</small></div>
+      {evaluation?.status === "succeeded" && <div className="v2-evaluation-result"><span>{<Tx text={"真实标签"} />}</span><strong>{labelText(evaluation.actual_label)}</strong><small>{evaluation.actual_target_close === null ? t("目标收盘价未记录") : `${t("目标收盘")} ${evaluation.actual_target_close}`}{evaluation.label_available_at ? ` · ${formatTime(evaluation.label_available_at)} ${t("可用")}` : ""}</small><p>{t(copy.evalScoreLabel)} {scoreParts.length ? scoreParts.join(" · ") : t("无可用数值评分")}</p></div>}
       {!representsSelected && <p className="v2-evaluation-note">{<Tx text={"每项独立预测只按最高版本号统计；当前选中的旧版本没有单独计入这组分数。"} />}</p>}
-      {representative && <p className="v2-evaluation-note">{t("代表版本：")} {t("第")} {representative.version_no} {t("版")} · {t("分组")} {jevCohort.provider} / {jevCohort.actual_model} / {jevCohort.question_version ?? "—"} · {t("选择规则：")} {evaluations.data.model_cohort_selection_rule ?? t("每项独立预测按最高版本号选一个代表版本")}</p>}
+      {representative && <p className="v2-evaluation-note">{t("代表版本：")} {t("第")} {representative.version_no} {t("版")} · {t("分组")} {modelCohort.provider} / {modelCohort.actual_model} / {modelCohort.question_version ?? "—"} · {t("选择规则：")} {evaluations.data.model_cohort_selection_rule ?? t("每项独立预测按最高版本号选一个代表版本")}</p>}
     </section>;
   }
   const match = evaluationRootFor(evaluations.data, selectedRootId);
@@ -646,7 +628,7 @@ function evaluationRootFor(response: V2EvaluationResponse, rootId: string): { co
   return null;
 }
 
-function jevEvaluationCohort(response: V2EvaluationResponse, version: V2VersionDetail): V2ModelEvaluationCohort | null {
+function modelEvaluationCohort(response: V2EvaluationResponse, version: V2VersionDetail): V2ModelEvaluationCohort | null {
   const timeMode = declaredTimeMode(version);
   const manifest = version.model_manifest;
   const provider = asRecord(manifest.decision_provider);
@@ -672,6 +654,10 @@ function declaredTimeMode(version: V2VersionDetail): V2ModelEvaluationCohort["ti
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asText(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 function evaluationStateText(status: "pending" | "succeeded" | "blocked_price" | "failed" | undefined, targetEndDate: string | null) {
@@ -751,7 +737,7 @@ function VersionPicker({ timeline, selectedVersionId, onSelect }: {
 }
 
 function versionProbabilityText(version: V2TimelineEntry) {
-  const probabilities = (version.model_status === "experimental_jev" || version.model_status === "experimental_llm")
+  const probabilities = hasDecisionProbabilities(version.model_status)
     ? version.decision_probabilities
     : version.model_status === "experimental_joint" ? version.joint_probabilities : null;
   if (!probabilities) return modelStatusText(version.model_status);
@@ -770,18 +756,24 @@ function ForecastSummary({ root, roots, detail }: { root: V2ForecastRoot | null;
   const current = detail?.kind === "ready" ? detail.data.current : null;
   if (!current) return <section className="v2-card"><p className="section-label">{<Tx text={"所选预测"} />}</p><h3>{<Tx text={"无法读取所选预测的当前版本"} />}</h3><p>{<Tx text={"可重新选择预测日期或刷新页面；不会用其他预测的版本代替它。"} />}</p></section>;
   const joint = current.model_status === "experimental_joint" ? current.joint_probabilities : null;
-  const jev = (current.model_status === "experimental_jev" || current.model_status === "experimental_llm") ? current.decision_probabilities : null;
+  const decision = hasDecisionProbabilities(current.model_status) ? current.decision_probabilities : null;
   const calibration = current.model_manifest.local_calibration as Record<string, unknown> | undefined;
   const provider = current.model_manifest.decision_provider as Record<string, unknown> | undefined;
   const rawProbabilities = provider?.raw_probabilities as V2Probabilities | undefined;
   const calibrated = calibration?.status === "active";
+  const copy = forecastCopy({ model_status: current.model_status, provider: asText(provider?.provider), actual_model: asText(provider?.actual_model), calibrated });
+  const thesis = asText(provider?.reasoning);
   return <section className="v2-card">
     <p className="section-label">{t("所选预测")} · {t("第")} {current.version_no} {t("版")}</p>
     <h3>{modelStatusText(current.model_status)}</h3>
     <dl><div><dt>{<Tx text={"固定目标日"} />}</dt><dd>{root.target_end_date}</dd></div><div><dt>{<Tx text={"决策时点"} />}</dt><dd>{formatTime(current.decision_at)}</dd></div><div><dt>{<Tx text={"行情截止"} />}</dt><dd>{formatTime(current.market_cutoff_at)}</dd></div></dl>
-    {jev ? <><ProbabilityStrip probabilities={jev} label={t(calibrated ? "Jev 经本地校准的实验性概率" : "Jev 原始实验性概率 · 未校准")} />{calibrated && rawProbabilities && <div className="v2-raw-probability"><span>{<Tx text={"校准前 Jev 原始输出"} />}</span><ProbabilityStrip probabilities={rawProbabilities} label={t("原始概率")} compact /></div>}<p className="v2-limit">{t(calibrated ? "本地校准器只调整三类概率分布；Jev 原始输出保存在下方，模型和目标版本均有记录。" : "由 Jev 根据下方同一份 DeepSeek 研究简报输出。当前尚无通过时间外验证的本地校准器，因此显示原始概率。")}</p></>
+    {decision ? <><ProbabilityStrip probabilities={decision} label={t(copy.stripLabel)} />
+      <p className="v2-limit v2-target-definition">{<Tx text={"上涨：目标日收盘比锚点收盘高 2% 以上。下跌：低 2% 以上。持平：在 ±2% 以内（含边界）。"} />}</p>
+      {thesis && <div className="v2-model-view"><span>{<Tx text={"模型的看法"} />}</span><p>{thesis}</p></div>}
+      {calibrated && rawProbabilities && <div className="v2-raw-probability"><span>{<Tx text={"校准前 Jev 原始输出"} />}</span><ProbabilityStrip probabilities={rawProbabilities} label={t("原始概率")} compact /></div>}
+      <p className="v2-limit">{copy.summaryNoteBefore ? <>{t(copy.summaryNoteBefore)} {copy.model} {t(copy.summaryNoteAfter)}</> : t(copy.summaryNoteAfter)}</p></>
       : joint ? <ProbabilityStrip probabilities={joint} label={t("实验性联合概率")} />
-      : <p className="v2-limit">{t(current.model_status === "research_only" ? "研究结果（未输出概率）：无数值预测。DeepSeek 简报用于材料研究，不会回填旧版概率。" : "当前版本没有可显示的数值判断。")}</p>}
+      : <p className="v2-limit">{t(copy.noProbabilityNote)}</p>}
   </section>;
 }
 
@@ -812,7 +804,7 @@ function EvidenceEvents({ timeline, detail, selectedVersionId, onSelect }: {
     {timeline.data.versions.map((version) => <li key={version.id} className={version.id === selectedVersionId ? "is-selected" : ""}>
       <span className="v2-event-dot" aria-hidden="true" />
       <button type="button" className="v2-event-select" onClick={() => onSelect(version.id)}><strong>{t("第")} {version.version_no} {t("版")} · {t(version.parent_version_id ? "修订版本" : "初始版本")}</strong><p>{formatTime(version.decision_at)} · {modelStatusText(version.model_status)} · {triggerTypeText(version.trigger_type)}</p>{version.change_reason && <small>{changeReasonText(version.change_reason, locale)}</small>}</button>
-      {(version.model_status === "experimental_jev" || version.model_status === "experimental_llm") && version.decision_probabilities && <div className="v2-timeline-probabilities"><ProbabilityStrip probabilities={version.decision_probabilities} label={t(version.local_calibration_status === "active" ? "Jev + 本地校准" : "Jev 原始实验性概率")} compact />{version.local_calibration_status === "active" && version.raw_decision_probabilities && <small>{t("校准前")} {percentProbabilities(version.raw_decision_probabilities)}</small>}</div>}
+      {hasDecisionProbabilities(version.model_status) && version.decision_probabilities && <div className="v2-timeline-probabilities"><ProbabilityStrip probabilities={version.decision_probabilities} label={t(forecastCopy({ model_status: version.model_status, calibrated: version.local_calibration_status === "active" }).timelineStripLabel)} compact />{version.local_calibration_status === "active" && version.raw_decision_probabilities && <small>{t("校准前")} {percentProbabilities(version.raw_decision_probabilities)}</small>}</div>}
       {version.model_status === "experimental_joint" && version.joint_probabilities && <ProbabilityStrip probabilities={version.joint_probabilities} label={t("实验性联合概率")} compact />}
     </li>)}
   </ol><EvidenceDetail detail={detail} /></section>;
@@ -865,7 +857,7 @@ function EvidenceDetail({ detail }: { detail: ResourceState<{ current: V2Version
   const includedCount = currentSources.filter((item) => includedKeys.has(sourceKey(item))).length;
   return <section className="v2-detail" aria-label={t("所选版本的保存的输入")}>
     <div><p className="section-label">{t("所选第")} {current.version_no} {t("版的来源差异")}</p><h3>{parent ? `${t("新增")} ${added.length} · ${t("状态替换")} ${replaced.length} · ${t("移除")} ${removed.length} · ${t("继承")} ${inherited}` : locale === "en-US" ? `Frozen candidates: ${countLabel(currentSources.length)}` : `${t("冻结候选")} ${countLabel(currentSources.length)}`}</h3><p>{parent ? locale === "en-US" ? `Source composition: ${countLabel(inherited)} inherited from the parent, ${countLabel(explicitCount)} manually selected, and ${countLabel(automaticAddedCount)} automatically added by the system.` : `${t("本版来源构成：父版继承")} ${inherited} ${t("条，人工选入")} ${explicitCount} ${t("条，系统自动新增")} ${automaticAddedCount} ${t("条。")}` : t("初始版本没有父版本可比较。")}</p></div>
-    <div className="v2-detail-material-counts"><strong>{brief ? locale === "en-US" ? `Actually cited in the brief: ${countLabel(includedCount)}` : `${t("简报实际引用")} ${countLabel(includedCount)}` : t("该版本未保存简报引用")}</strong><span>{brief ? locale === "en-US" ? `Not included in the brief: ${countLabel(Math.max(0, currentSources.length - includedCount))}. The frozen list records candidate sources available at the time; it does not mean every source was analyzed or sent to Jev.` : `${t("未进入简报")} ${countLabel(Math.max(0, currentSources.length - includedCount))}。冻结清单记录当时的候选来源，不表示这些来源都被分析或交给 Jev。` : t("没有简报记录时，无法从此版本确认哪些材料完成了分析。")}</span></div>
+    <div className="v2-detail-material-counts"><strong>{brief ? locale === "en-US" ? `Actually cited in the brief: ${countLabel(includedCount)}` : `${t("简报实际引用")} ${countLabel(includedCount)}` : t("该版本未保存简报引用")}</strong><span>{brief ? locale === "en-US" ? `Not included in the brief: ${countLabel(Math.max(0, currentSources.length - includedCount))}. The frozen list records candidate sources available at the time; it does not mean every source was analyzed or entered the brief.` : `${t("未进入简报")} ${countLabel(Math.max(0, currentSources.length - includedCount))}。冻结清单记录当时的候选来源，不表示这些来源都被分析或进入了简报。` : t("没有简报记录时，无法从此版本确认哪些材料完成了分析。")}</span></div>
     <dl><div><dt>{<Tx text={"行情数据截止"} />}</dt><dd>{formatTime(String(market.market_cutoff_at ?? current.market_cutoff_at))}</dd></div><div><dt>{<Tx text={"最近完整交易日"} />}</dt><dd>{String(market.latest_completed_session ?? "未记录")}</dd></div><div><dt>{<Tx text={"价格输入哈希"} />}</dt><dd>{shortHash(market.price_input_sha256)}</dd></div><div><dt>{<Tx text={"研究报告"} />}</dt><dd>{researchStatus}</dd></div></dl>
     <div className="v2-source-list">{currentSources.length ? currentSources.map((item, index) => {
       const sourceUrl = typeof item.source_url === "string" ? item.source_url : null;

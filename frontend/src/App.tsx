@@ -4,8 +4,8 @@ import { BrandLogo } from "./BotOrb";
 import { botFromHash } from "./bot-items.mjs";
 import { Tx, formatDateTime as formatLocalizedDateTime, getLocalePreference, translatePhrase, useLocale } from "./i18n";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ApiError, markBotRead, type Bot, getFilingInventory, getJevLearningStatus, getMaterialLibrary, getV2Evaluations, getV2ForecastRoots, getV2MonitorStatus, getV2Prices, getV2Workspace, initializeMarketData, scanOfficialFilings } from "./api";
-import type { FilingInventory, JevLearningStatus, PriceHistory, V2ModelEvaluationCohort } from "./types";
+import { ApiError, markBotRead, type Bot, getFilingInventory, getMaterialLibrary, getV2Evaluations, getV2ForecastRoots, getV2MonitorStatus, getV2Prices, getV2Workspace, initializeMarketData, scanOfficialFilings } from "./api";
+import type { FilingInventory, PriceHistory, V2ModelEvaluationCohort } from "./types";
 import { V2ForecastWorkspace } from "./V2ForecastWorkspace";
 import { EvidenceCenter } from "./EvidenceCenter";
 import { MaterialLibrary } from "./MaterialLibrary";
@@ -336,31 +336,26 @@ function CurrentOverviewWorkspace({ symbols, onRemove, symbol, currentFilings, p
 function V2EvaluationWorkspace({ symbol }: { symbol: string }) {
   const { t } = useLocale();
   const [state, setState] = useState<{ kind: "loading" } | { kind: "ready"; data: Awaited<ReturnType<typeof getV2Evaluations>> } | { kind: "error"; message: string }>({ kind: "loading" });
-  const [learning, setLearning] = useState<{ kind: "loading" } | { kind: "ready"; data: JevLearningStatus } | { kind: "error"; message: string }>({ kind: "loading" });
   useEffect(() => {
     const controller = new AbortController();
     setState({ kind: "loading" });
-    setLearning({ kind: "loading" });
     getV2Evaluations(symbol, controller.signal).then((data) => { if (!controller.signal.aborted) setState({ kind: "ready", data }); }).catch((error: unknown) => { if (!controller.signal.aborted) setState({ kind: "error", message: actionMessage(error, "暂时无法读取到期评估。") }); });
-    getJevLearningStatus(symbol, controller.signal).then((data) => { if (!controller.signal.aborted) setLearning({ kind: "ready", data }); }).catch((error: unknown) => { if (!controller.signal.aborted) setLearning({ kind: "error", message: actionMessage(error, "暂时无法读取 Jev 学习状态。") }); });
     return () => controller.abort();
   }, [symbol]);
   return <section className="workspace-stack">
     <WorkspaceIntro eyebrow="到期评估" title="按模型分组查看已到期预测" description="每组只统计同一时间模式、模型、服务方和问题版本的代表版本。未到期样本显示为待评，不混入其他模型的指标。" />
-    <JevLearningReadout state={learning} />
     {state.kind === "loading" && <p className="inventory-status">{<Tx text={"正在读取评估结果…"} />}</p>}
     {state.kind === "error" && <p className="inventory-status inventory-error" role="alert">{state.message}</p>}
-    {state.kind === "ready" && (state.data.model_cohorts?.length ? <ModelCohortGroups cohorts={state.data.model_cohorts} /> : <div className="model-cohort-list"><div className="evaluation-empty-state"><h2>{state.data.model_cohorts ? t("还没有模型分组评估") : t("模型分组数据暂不可用")}</h2><p>{<Tx text={"这里不会用旧版离线报告或跨模型混合分组填补。预测到期并获得可用行情后，结果会进入对应模型组。"} />}</p></div></div>)}
+    {state.kind === "ready" && (state.data.model_cohorts?.length ? <ModelCohortGroups cohorts={state.data.model_cohorts} minimumScoredRoots={state.data.minimum_scored_roots} /> : <div className="model-cohort-list"><div className="evaluation-empty-state"><h2>{state.data.model_cohorts ? t("还没有模型分组评估") : t("模型分组数据暂不可用")}</h2><p>{<Tx text={"这里不会用旧版离线报告或跨模型混合分组填补。预测到期并获得可用行情后，结果会进入对应模型组。"} />}</p></div></div>)}
   </section>;
 }
 
-/** Task 14: the model forecast (LLM group) and its hidden Jev control are scored side by side but never pooled. */
-function ModelCohortGroups({ cohorts }: { cohorts: V2ModelEvaluationCohort[] }) {
-  const { t } = useLocale();
+/** Forecast-model cohorts are scored apart from earlier records (old Jev forecasts, the retired control) and never pooled. */
+function ModelCohortGroups({ cohorts, minimumScoredRoots }: { cohorts: V2ModelEvaluationCohort[]; minimumScoredRoots: number }) {
+  const { locale, t } = useLocale();
   const groups = [
-    { key: "llm", title: "推理模型组", note: "「预测模型」给出的预测，每个独立预测算一个样本。", items: cohorts.filter((c) => !c.control && c.model_status === "experimental_llm") },
-    { key: "control", title: "Jev 对照组", note: "每次预测同时问一次 Jev，结果不进预测列表，只在这里与上一组对照。", items: cohorts.filter((c) => c.control) },
-    { key: "other", title: "其他分组", note: "更早的预测（含 Jev 直接给出的旧预测）。", items: cohorts.filter((c) => !c.control && c.model_status !== "experimental_llm") },
+    { key: "llm", title: "预测模型", note: "设置中选定的预测模型给出的预测，每个独立预测算一个样本。", items: cohorts.filter((c) => !c.control && c.model_status === "experimental_llm") },
+    { key: "earlier", title: "早期版本", note: "更早的记录，包括 Jev 直接给出的旧预测和已停用的对照记录。", items: cohorts.filter((c) => c.control || c.model_status !== "experimental_llm") },
   ].filter((group) => group.items.length);
   return <div className="model-cohort-list">{groups.map((group) => <section key={group.key} className={`model-cohort-group model-cohort-group-${group.key}`}>
     <h2 className="model-cohort-group-title">{t(group.title)}</h2><p className="fine-print">{t(group.note)}</p>
@@ -369,40 +364,16 @@ function ModelCohortGroups({ cohorts }: { cohorts: V2ModelEvaluationCohort[] }) 
       const scored = versions.map((version) => version.latest_evaluation).filter((evaluation) => evaluation?.status === "succeeded");
       const average = (values: Array<number | null | undefined>) => { const valid = values.filter((value): value is number => typeof value === "number"); return valid.length ? (valid.reduce((sum, value) => sum + value, 0) / valid.length).toFixed(3) : "—"; };
       return <article className="model-cohort-card" key={`${cohort.model_status}-${cohort.provider}-${cohort.actual_model}-${cohort.question_version ?? "none"}-${cohort.time_mode}-${index}`}>
-        <div className="section-heading"><div><p className="eyebrow">{t(cohort.time_mode === "observed" ? "真实观察" : cohort.time_mode === "historical_research" ? "历史研究" : "时间模式未分类")} · {t(modelStatusLabel(cohort.model_status))}</p><h2>{cohort.provider} / {cohort.actual_model}</h2></div><span>{t(cohort.status === "available" ? "指标可用" : cohort.status === "pending" ? "等待到期" : "样本不足")}</span></div>
+        <div className="section-heading"><div><p className="eyebrow">{t(cohort.time_mode === "observed" ? "真实观察" : cohort.time_mode === "historical_research" ? "历史研究" : "时间模式未分类")} · {t(modelStatusLabel(cohort.model_status))}{cohort.control ? ` · ${t("已停用的对照")}` : ""}</p><h2>{cohort.provider} / {cohort.actual_model}</h2></div><span>{t(cohort.status === "available" ? "指标可用" : cohort.status === "pending" ? "等待到期" : "样本不足")}</span></div>
         <p className="fine-print">{t("问题版本")}: {cohort.question_version ?? t("未记录")} · {t("样本按同组最高版本计数")}</p>
-        <div className="overview-metrics"><article><span>{<Tx text={"独立预测样本"} />}</span><strong>{cohort.sample.root_denominator}</strong><small>{<Tx text={"同组代表记录"} />}</small></article><article><span>{<Tx text={"已标注 / 已评分"} />}</span><strong>{cohort.sample.labelled_root_count} / {cohort.sample.scored_root_count}</strong><small>{cohort.sample.unscored_root_count} {t("条尚未评分")}</small></article><article><span>{<Tx text={"平均 Brier"} />}</span><strong>{average(scored.map((value) => value?.brier_score))}</strong><small>{<Tx text={"仅已成功评分的版本"} />}</small></article><article><span>{<Tx text={"平均 Log loss"} />}</span><strong>{average(scored.map((value) => value?.log_loss))}</strong><small>{<Tx text={"仅已成功评分的版本"} />}</small></article></div>
+        <div className="overview-metrics"><article><span>{<Tx text={"独立预测样本"} />}</span><strong>{cohort.sample.root_denominator}</strong><small>{<Tx text={"同组代表记录"} />}</small></article><article><span>{<Tx text={"已标注 / 已评分"} />}</span><strong>{cohort.sample.labelled_root_count} / {cohort.sample.scored_root_count}</strong><small>{cohort.sample.unscored_root_count} {t("条尚未评分")}</small></article>{cohort.status === "available"
+          ? <><article><span>{<Tx text={"平均 Brier"} />}</span><strong>{average(scored.map((value) => value?.brier_score))}</strong><small>{<Tx text={"仅已成功评分的版本"} />}</small></article><article><span>{<Tx text={"平均 Log loss"} />}</span><strong>{average(scored.map((value) => value?.log_loss))}</strong><small>{<Tx text={"仅已成功评分的版本"} />}</small></article></>
+          : <article><span>{<Tx text={"平均分数"} />}</span><strong>{locale === "en-US" ? `${t("样本不足")} (${cohort.sample.scored_root_count}/${minimumScoredRoots})` : `${t("样本不足")}（${cohort.sample.scored_root_count}/${minimumScoredRoots}）`}</strong><small>{<Tx text={"已评分的独立预测达到下限后才显示平均值"} />}</small></article>}</div>
       </article>;
     })}
   </section>)}</div>;
 }
 
-function JevLearningReadout({ state }: { state: { kind: "loading" } | { kind: "ready"; data: JevLearningStatus } | { kind: "error"; message: string } }) {
-  const { locale, t } = useLocale();
-  if (state.kind === "loading") return <section className="jev-learning-card"><p className="eyebrow">{<Tx text={"Jev 本地校准"} />}</p><p>{<Tx text={"正在读取学习状态…"} />}</p></section>;
-  if (state.kind === "error") return <section className="jev-learning-card"><p className="eyebrow">{<Tx text={"Jev 本地校准"} />}</p><p className="inventory-error" role="alert">{state.message}</p></section>;
-  const status = state.data;
-  const cohorts = status.cohorts;
-  const current = cohorts[0] ?? null;
-  const active = current?.active_model ?? null;
-  const metrics = active?.test_metrics && typeof active.test_metrics === "object" ? active.test_metrics as Record<string, unknown> : null;
-  const rawMetrics = metrics?.raw_jev && typeof metrics.raw_jev === "object" ? metrics.raw_jev as Record<string, unknown> : null;
-  const correctedMetrics = metrics?.candidate && typeof metrics.candidate === "object" ? metrics.candidate as Record<string, unknown> : null;
-  const priorMetrics = metrics?.training_prior_baseline && typeof metrics.training_prior_baseline === "object" ? metrics.training_prior_baseline as Record<string, unknown> : null;
-  const metric = (value: unknown) => typeof value === "number" ? value.toFixed(3) : "—";
-  return <section className="jev-learning-card" aria-label={t("Jev 本地校准器学习状态")}>
-    <div className="section-heading"><div><p className="eyebrow">{<Tx text={"Jev 本地校准"} />}</p><h2>{active ? t("已启用经过时间外验证的校准器") : t("正在积累可训练的真实预测结果")}</h2></div><span>{active ? t("已启用") : t("收集样本中")}</span></div>
-    <p>{current ? `${current.actual_model} · ${t("问题版本")} ${current.question_version}` : t("当前股票还没有可统计的 Jev 预测组。")} {t("校准器只学习如何调整 Jev 的三类概率，不修改 Jev 本身，也不声称改变它的内部参数。")}</p>
-    <div className="overview-metrics jev-learning-metrics">
-      <article><span>{<Tx text={"当前预测组"} />}</span><strong>{current?.forecast_roots ?? 0}</strong><small>{<Tx text={"独立根预测"} />}</small></article>
-      <article><span>{<Tx text={"已到期并评分"} />}</span><strong>{current?.matured_roots ?? 0} / {status.required_mature_roots}</strong><small>{locale === "en-US" ? `At least ${status.minimum_validation_months} months of out-of-time validation` : `至少 ${status.minimum_validation_months} 个月时间外验证`}</small></article>
-      <article><span>{<Tx text={"待到期"} />}</span><strong>{current?.pending_roots ?? 0}</strong><small>{<Tx text={"预测目标为 20 个交易日"} />}</small></article>
-      <article><span>{<Tx text={"历史回放排除"} />}</span><strong>{status.historical_replay_mature_roots_excluded}</strong><small>{<Tx text={"不进入实时校准训练"} />}</small></article>
-    </div>
-    {active && <div className="jev-learning-validation"><strong>{<Tx text={"最近校准器的封存时间外结果"} />}</strong><span>{t("原始 Jev Brier")} {metric(rawMetrics?.brier)} → {t("校准后")} {metric(correctedMetrics?.brier)}</span><span>{t("训练期类别基线 Brier")} {metric(priorMetrics?.brier)} → {t("校准后")} {metric(correctedMetrics?.brier)}</span><span>{t("原始 Log loss")} {metric(rawMetrics?.log_loss)} → {t("校准后")} {metric(correctedMetrics?.log_loss)}</span><small>{<Tx text={"启用条件：按月份分块的 95% 置信区间显示 Brier 同时优于 Jev 和训练期类别基线，且 Log loss 没有明显退化。新的成熟结果会进入下一轮验证。"} />}</small></div>}
-    {!active && <p className="jev-learning-note">{<Tx text={"校准器目前没有启用，所以新预测继续显示原始 Jev 概率。只有足够的真实观察结果通过时间顺序留出验证后才会自动启用；历史回放和同一目标的修订不会混入训练。"} />}</p>}
-  </section>;
-}
 function WorkspacePageHeader({ symbol, section, recordCount, supported }: { symbol: string; section: ResearchSection; recordCount: number | null; supported: boolean }) {
   const { t } = useLocale();
   const title = t(WORKSPACE_SECTION_TITLE[section]);

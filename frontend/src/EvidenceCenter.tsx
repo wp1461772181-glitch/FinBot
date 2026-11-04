@@ -57,7 +57,7 @@ function rootLabel(root: V2ForecastRoots["roots"][number], t: (text: string) => 
 }
 
 function versionLabel(version: V2Timeline["versions"][number], t: (text: string) => string) {
-  const model = version.model_status === "experimental_jev" ? "Jev" : version.model_status === "experimental_llm" ? t("推理模型") : version.model_status === "research_only" ? t("研究简报") : version.model_status === "experimental_joint" ? t("联合研究") : t("行情基线");
+  const model = version.model_status === "experimental_jev" ? t("Jev（早期版本）") : version.model_status === "experimental_llm" ? t("推理模型") : version.model_status === "research_only" ? t("研究简报") : version.model_status === "experimental_joint" ? t("联合研究") : t("行情基线");
   return `${t("第")} ${version.version_no} ${t("版")} · ${formatTime(version.decision_at)} · ${model}`;
 }
 

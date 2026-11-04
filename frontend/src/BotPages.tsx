@@ -517,7 +517,7 @@ export function ModelCatalogCard() {
     </div>}
     {catalog && !catalog.models.length && <small>{t("目录是空的：先添加一个模型，bot 才能回答。")}</small>}
     {catalog && catalog.models.length > 0 && <RoleModelSelect catalog={catalog} role="earnings" label="财报判断模型" hint="读财报、判断涨跌用的模型；不选就用服务器默认模型。" />}
-    {catalog && catalog.models.length > 0 && <RoleModelSelect catalog={catalog} role="forecast" label="预测模型" hint="给出 20 个交易日涨/平/跌概率的模型，建议选推理模型；不选就用服务器默认模型。Jev 会同时作为隐藏对照运行。" />}
+    {catalog && catalog.models.length > 0 && <RoleModelSelect catalog={catalog} role="forecast" label="预测模型" hint="给出 20 个交易日涨/平/跌概率的模型，建议选推理模型；不选就用服务器默认模型。" />}
     {status && <p role="status">{status}</p>}
     {entry && <div className="profile-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) close(); }}>
       <section ref={modal} className="profile-modal" role="dialog" aria-modal="true" aria-labelledby="catalog-entry-title">

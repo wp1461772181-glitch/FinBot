@@ -72,7 +72,7 @@ function ForecastCard({ symbol, onOpen }: { symbol: string; onOpen: () => void }
       ? <p>{t("最新版本")} v{v.current_version.version_no} · {t("决策日")} {day(v.current_version.decision_at)}</p>
       : <p className="ws-muted">{t("还没有研究预测。")}</p>}</Body>
     <button type="button" className="text-button" onClick={onOpen}>{t("打开预测工作台")} →</button>
-    <small className="ws-muted ws-fine">{t("研究预测只是研究记录，不构成投资建议。")}</small>
+    <small className="ws-muted ws-fine">{t("模型意见，未经校准，仅供参考。")}</small>
   </>;
 }
 

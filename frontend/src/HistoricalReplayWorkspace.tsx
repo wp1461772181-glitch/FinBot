@@ -1,4 +1,5 @@
 import { Tx, formatDate as formatLocalizedDate, getLocalePreference, translatePhrase, useLocale } from "./i18n";
+import { hasDecisionProbabilities } from "./forecast-model.mjs";
 import { ResearchBriefView } from "./ResearchBriefView";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { ApiError, createV2HistoricalReplayJob, getV2Evaluations, getV2ForecastVersion, getV2Job } from "./api";
@@ -147,7 +148,8 @@ function ReplayDetail({ result }: { result: ReplayResult }) {
     {version.research_brief && <ResearchBriefView
       brief={version.research_brief}
       versionId={version.id}
-      probabilities={(version.model_status === "experimental_jev" || version.model_status === "experimental_llm") ? version.decision_probabilities ?? null : null}
+      probabilities={hasDecisionProbabilities(version.model_status) ? version.decision_probabilities ?? null : null}
+      modelStatus={version.model_status}
       modelManifest={version.model_manifest}
       evidenceManifest={version.evidence_version_manifest}
       onOpenAnalysis={openReplayMaterial}
