@@ -1411,6 +1411,7 @@ class Turn:
             {'role':'system','content':UNDERSTANDING_NOTE+json.dumps(hint,ensure_ascii=False,default=str)},
             *([{'role':'system','content':self.resume_note}] if self.resume_note else []),*([] if closing else self.protocol),
             {'role':'system','content':self.evidence_payload(accepted)},
+            *([{'role':'system','content':self.recall_payload()}] if getattr(self,'recalls',None) else []),
             {'role':'system','content':self.status_payload()},
             {'role':'system','content':self.catalogue_payload()}]
 
@@ -1423,6 +1424,16 @@ class Turn:
             self.note_truncation('tool_messages.accepted_evidence',original,used,omitted_sources=len(omitted))
             note=' Left out for length (%d earlier source(s), not shown to you): %s.'%(len(omitted),' '.join(str(x) for x in omitted[:20]))
         return 'Accepted evidence DATA (recent sources; all source identities remain in the response catalogue):'+note+' '+json.dumps(kept,ensure_ascii=False,default=str)
+
+    def recall_payload(self,budget=16000):
+        """Past-conversation recalls (memory only, never numbered evidence): whole entries, newest first, dedicated 16 KB budget."""
+        recalls=getattr(self,'recalls',None) or []
+        kept,dropped,original,used=truncation.select_whole_items(recalls,budget)
+        note=''
+        if dropped:
+            self.note_truncation('tool_messages.recalls',original,used,omitted_entries=len(dropped))
+            note=' (%d earlier recall%s left out for length)'%(len(dropped),'' if len(dropped)==1 else 's')
+        return 'Past conversation recalls (memory only, never numbered evidence or citation)'+note+': '+json.dumps(kept,ensure_ascii=False,default=str)
 
     def status_payload(self,budget=8000):
         """Tool statuses and validation errors: whole entries, newest first."""
@@ -1632,16 +1643,19 @@ class Turn:
             self.feedback.append({'name':name,'result':safe});return
         if name=='recall_conversations':
             # Memory, not evidence: no ordinal, no citation, not accepted_evidence.
+            keep_keys=('conversation_id','title','kind','bot_id','bot_name','date','summary','link','matches','saved_sources')
             shown={'ok':True,'label':outcome.get('label'),'note':outcome.get('note'),
-                   'data':[{k:r.get(k) for k in ('conversation_id','title','date','summary','link')} for r in rows if isinstance(r,dict)]}
+                   'data':[{k:r[k] for k in keep_keys if k in r and r[k] is not None} for r in rows if isinstance(r,dict)]}
+            self.last_accepted=shown
             self.recalls.append({'name':name,'kind':'recall','arguments':args,'result':shown,'accepted_evidence':False})
             self.audit['recalled_conversations']=self.audit.get('recalled_conversations',0)+len(shown['data'])
-            self.feedback.append({'name':name,'result':shown});return
+            return
         if name=='read_past_conversation':
             # The same memory as a recall row, only longer: never evidence, never numbered.
             shown={'ok':True,'label':outcome.get('label'),'note':outcome.get('note'),'data':rows}
+            self.last_accepted=shown
             self.recalls.append({'name':name,'kind':'recall','arguments':args,'result':shown,'accepted_evidence':False})
-            self.feedback.append({'name':name,'result':shown});return
+            return
         if name=='query_portfolio':
             # The owner's own ledger: its rows state their figures in the excerpt and need no question/period/entity gate.
             accepted=[copy.deepcopy(r) for r in rows if isinstance(r,dict)]

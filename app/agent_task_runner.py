@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -59,6 +60,28 @@ DIGEST_POSTS = 20
 def is_quiet(answer: str) -> bool:
     text = "".join(str(answer or "").split()).strip("。.！!「」\"'")
     return text == QUIET_ANSWER
+
+
+_NO_EVIDENCE_RE = re.compile(
+    r"没有(?:可核验|可引用|找到|生成可用的回答)|"
+    r"没找到(?:带来源|可核验|可引用|新)|"
+    r"无法确认本次请求中的事实|"
+    r"暂无法与来源核实|"
+    r"no (?:verifiable|verified) (?:material|evidence)",
+    re.I,
+)
+
+
+def is_no_evidence(result: dict, sources: list[dict]) -> bool:
+    """True when a brief turn produced no usable conclusion (empty text, zero-evidence stop, or a no-material notice without sources)."""
+    answer = (result.get("answer") or "").strip()
+    if not answer:
+        return True
+    if result.get("reason") in {"zero_evidence", "tool_failures", "no_progress"}:
+        return True
+    if not sources and _NO_EVIDENCE_RE.search(answer):
+        return True
+    return False
 
 
 def owner_credential() -> str | None:
@@ -447,10 +470,12 @@ async def run_brief(task_id, credential: str, *, now: datetime, missed: int = 1)
     sources = citation_sources(citations)
     if result["status"] == "failed":
         status = "failed"
-    elif is_quiet(result["answer"]) or not result["answer"].strip():
-        status = "quiet" if is_quiet(result["answer"]) else "no_evidence"
+    elif is_quiet(result["answer"]):
+        status = "quiet"
     elif result.get("pending"):
         status = "needs_input"
+    elif is_no_evidence(result, sources):
+        status = "no_evidence"
     else:
         status = "ok"
     # Only a conclusion is posted in the bot's line (and counts as unread); a quiet run, an empty run

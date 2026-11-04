@@ -300,7 +300,7 @@ def test_unattended_write_goes_to_the_inbox_and_runs_only_after_the_card_is_pres
         _call("fetch_sec", {"symbol": "NVDA", "form": "10-Q"}, "c1"),
         # Then the suggestion path: it must land in the inbox, not in a card here.
         _call("request_action", {"tool": "add_to_research_queue", "arguments": {"symbol": "AMD"}, "reason": "AMD 是 NVDA 的主要对手"}, "c2"),
-        {"content": ""},
+        {"content": "研究队列今天没有可引用的新资料。"},
     ])
     seen = []
     # The classifier is fooled into granting the writes the task's words mention.
