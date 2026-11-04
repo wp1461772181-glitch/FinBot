@@ -13,7 +13,7 @@ from .. import agent_context as layers
 from .evidence import gate_row,number_rows,citation_errors,contains,HINT_REASONS
 from . import tools,consent,truncation
 from .. import observability
-from .authorization import vetoed,authorized,routine_ask
+from .authorization import vetoed,vetoed_phrase,authorized,routine_ask
 from .references import Referent,validate_referents,bounded_stage,normalized,assistant_message_sources,assistant_item_catalogue
 from .trace import TurnTrace,classifier_output,decision_output,resolver_output,verify_output
 
@@ -685,6 +685,17 @@ class Turn:
         if self.unattended():return False
         if name not in self.granted_actions or not self.in_scope(name):return False
         return not vetoed(name,self.authorization_question)
+    def veto_downgraded(self,name):
+        """An attended owner's granted write whose only obstacle is a negation in their own words: it still goes
+        to a confirmation card (which carries a reminder quoting the negation) instead of being refused.
+        Never for remember (its narrow refusal stays hard), a guest (their queue path has no card, so vetoed is
+        the only gate), an unattended run, or a model suggestion (request_action keeps its hard veto).
+        forget and revise_forecast build their cards elsewhere and have no reminder line yet: they stay hard too."""
+        return bool(self.owner and not self.unattended() and name not in {'remember','forget','revise_forecast'} and name in self.granted_actions and self.in_scope(name)
+                    and vetoed(name,self.authorization_question))
+    def veto_reminder(self,name):
+        phrase=vetoed_phrase(name,self.authorization_question)
+        return f'提醒：你的话里有「{phrase}」，请确认这一步是不是你的本意；不是就点取消。' if phrase else ''
     def stage(self,name,value):self.audit['stages'][name]=bounded_stage(value,self.context.api_key)
     def reference_stage(self,passed=True,reason=None,*,skipped=False):
         value=self.reference_value
@@ -1789,7 +1800,8 @@ class Turn:
         if not self.owner:return self.write_error(name,'owner_login_required')
         if self.unattended():return self.write_error(name,'unattended_read_only')
         if name in self.completed_writes:return tools.error('already_executed')
-        if not self.write_allowed(name):return self.write_error(name,'write_negated' if name in self.granted_actions else 'write_tool_not_granted')
+        downgraded=self.veto_downgraded(name)
+        if not downgraded and not self.write_allowed(name):return self.write_error(name,'write_negated' if name in self.granted_actions else 'write_tool_not_granted')
         if name=='revise_forecast':return await self.propose_revision(args)
         if name in {'remember','forget'}:return await self.propose_profile(name,args)
         operation={'name':name,'arguments':copy.deepcopy(args)}
@@ -1857,6 +1869,7 @@ class Turn:
             display['targets']=[{**operation['arguments'],'title':self.filing_title(operation['discovery'],operation['arguments'].get('symbol') or ''),
                 'form':operation['discovery']['form'],'web_date':operation['discovery']['filed_at'],'url':operation['discovery']['source_url']}]
             display['title']='确认登记并拉取 SEC 官方原文'
+        if downgraded:display['alternative']=' '.join(filter(None,[self.veto_reminder(name),display.get('alternative')]))
         self.proposals.append(([operation],display))
         self.audit['write_outcome']='proposed'
         return {'ok':True,'data':[{'status':'awaiting_confirmation','title':display.get('title')}]}
@@ -2188,7 +2201,9 @@ class Turn:
         required={'ingest_web_source' if (r.get('url') and not (r.get('id') or r.get('source_id'))) else args['action'] for r in chosen}
         if self.scope.get('write_condition')=='newer_than_saved' and 'ingest_web_source' in required:
             return tools.error('comparison_citation_required')
-        for name in required:
+        reminders=[]
+        for name in sorted(required):
+            if self.veto_downgraded(name):reminders.append(self.veto_reminder(name));continue
             if not self.write_allowed(name):return self.write_error(name,'write_negated' if name in self.granted_actions else 'write_tool_not_granted')
         operations=[]
         for row in chosen:
@@ -2198,7 +2213,9 @@ class Turn:
                 operations.append({'name':'ingest_web_source','arguments':{'url':row['url'],'symbol':saved.get('scope',{}).get('symbol'),'company':saved.get('scope',{}).get('company'),'newer_than':None},'snapshot':freeze_snapshot(row),'published_at':row.get('published_at'),'entity_aliases':saved.get('scope',{}).get('entity_aliases',[])})
             else:
                 operations.append({'name':args['action'],'arguments':{'symbol':row.get('symbol') or saved.get('scope',{}).get('symbol'),'source_id':str(row.get('analysis_id') if row.get('source_type')=='ai_analysis' else row.get('source_id') or row.get('id')),'source_type':row.get('source_type','official_filing')}})
-        self.proposals.append((operations,{'title':f'仅找到 {len(positions)}/{count} 项，请核对实际目标' if partial else '确认实际可用的所选资料','targets':[{'title':r.get('title'),'url':r.get('url'),'source_id':r.get('id')} for r in chosen],**partial}))
+        display={'title':f'仅找到 {len(positions)}/{count} 项，请核对实际目标' if partial else '确认实际可用的所选资料','targets':[{'title':r.get('title'),'url':r.get('url'),'source_id':r.get('id')} for r in chosen],**partial}
+        if reminders:display['alternative']=' '.join(dict.fromkeys(filter(None,reminders)))
+        self.proposals.append((operations,display))
         self.audit['write_outcome']='proposed'
         return {'ok':True,'data':[{'status':'awaiting_confirmation','count':len(operations)}]}
 
@@ -3012,7 +3029,7 @@ class Turn:
                     if policy.level=='costly':batch_failed=True
                     self.audit['tool_calls']+=1;self.feedback.append(tools.error('owner_login_required'))
                     self.protocol.append({'role':'tool','tool_call_id':call['id'],'content':json.dumps(tools.error('owner_login_required'))});continue
-                if policy.level in {'reversible','costly'} and not self.write_allowed(name):
+                if policy.level in {'reversible','costly'} and not self.veto_downgraded(name) and not self.write_allowed(name):
                     self.audit['tool_calls']+=1;outcome=self.write_error(name,'write_negated' if name in self.granted_actions else 'write_tool_not_granted');self.feedback.append(outcome)
                     self.protocol.append({'role':'tool','tool_call_id':call['id'],'content':json.dumps(outcome)});batch_failed=True;continue
                 if policy.level=='costly' or (policy.level=='reversible' and self.owner):

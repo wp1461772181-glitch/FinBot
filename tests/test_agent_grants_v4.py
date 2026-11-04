@@ -37,8 +37,16 @@ def test_only_classified_server_write_is_registered_and_proposed(monkeypatch):
     assert result['audit']['write_outcome']=='proposed'
 
 def test_negation_is_only_a_veto_not_positive_verb_authorization(monkeypatch):
+    # Contract (veto downgrade, Alan-approved): on this owner+granted direct-call path a negation never
+    # executes the write and is not a positive authorization; it yields a confirmation card whose
+    # reminder quotes the user's negation, instead of the old hard 'refused:' outcome.
     result,_,writes=run(monkeypatch,'先别加入AMD，只比较',grants=['add_to_research_queue'],steps=[call('add_to_research_queue',{'symbol':'AMD'})])
-    assert not writes and 'refused:' in result['audit']['write_outcome']
+    assert not writes
+    assert result['audit']['write_outcome']=='proposed'
+    pending=result['pending_request']
+    assert pending and pending['reason']=='write_confirmation'
+    alternative=pending['display']['alternative']
+    assert alternative.startswith('提醒：') and '别' in alternative
 
 def test_unknown_requested_actions_are_discarded():
     from app.agent_workflow.routing import Routing

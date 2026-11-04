@@ -72,3 +72,16 @@ def vetoed(name,words):
         return False
     return has_negated
 
+def vetoed_phrase(name,words):
+    """The user's own negated wording that made vetoed() fire, for quoting back on a card; '' when it does not fire.
+    Reads only; it never decides anything."""
+    if not vetoed(name,words):return ''
+    if name=='remember':
+        found=_REMEMBER_REFUSED.search(words)
+        return found.group(0) if found else ''
+    verb_pattern='|'.join(r'(?<![A-Za-z])'+p+r'(?![A-Za-z])' if p.isascii() else p for p in VERBS[name].split('|'))
+    clean_words=_POLITE_NON_NEGATION.sub('',words)
+    for n in NEGATION.finditer(clean_words):
+        if re.search(verb_pattern,n.group(0),re.I):return n.group(0).strip()
+    return ''
+
