@@ -142,3 +142,115 @@ export function jobFailurePhrase(code) {
   if (code.startsWith("jev_")) return "早期 Jev 流程未完成，未发布概率。";
   return null;
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// Version header (design §3.1 and §3.2).  `versionHeader(detail)` reads one saved version and returns the rows
+// the header shows, never collapsed.  A row is `{ id, label, items }`; an item is `{ t }` (a zh-CN phrase key
+// the component translates), `{ v }` (a value taken from the version, shown as is) or `{ time }` (an ISO time
+// the component formats).  The 模型来源 (binding) row is added in a later batch.
+// ---------------------------------------------------------------------------------------------------------
+
+function record(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function percent(value) {
+  return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 100)}%` : NOT_RECORDED;
+}
+
+/** Provider and models recorded on a version, normalised (null when not recorded). */
+export function recordedModel(detail) {
+  const provider = record(record(detail?.model_manifest).decision_provider);
+  return { provider: text(provider.provider), actual_model: text(provider.actual_model), requested_model: text(provider.requested_model) };
+}
+
+/** True when `current` was decided by a different provider or actual model than `parent`.  No parent: false. */
+export function modelChanged(current, parent) {
+  if (!current || !parent) return false;
+  const a = recordedModel(current);
+  const b = recordedModel(parent);
+  return a.provider !== b.provider || a.actual_model !== b.actual_model;
+}
+
+function isInsufficient(detail) {
+  return record(record(detail?.research_brief).input_quality).status === "insufficient"
+    || record(detail?.feature_snapshot).research_brief_input_quality === "insufficient"
+    || record(detail?.research_report).research_conclusions_status === "insufficient";
+}
+
+function timeMode(detail) {
+  return record(detail?.model_manifest).time_mode ?? record(detail?.research_report).time_mode ?? null;
+}
+
+function modelItems(detail, copy) {
+  const status = detail?.model_status;
+  const { provider, actual_model, requested_model } = recordedModel(detail);
+  if (status === "research_only") {
+    if (isInsufficient(detail)) return [{ t: "仅研究 · 本版没有输出概率：证据不足，模型未作判断" }];
+    if (record(detail?.model_manifest).decision_mode === "research_only") return [{ t: "仅研究 · 当前配置不生成概率" }];
+    return [{ t: copy.statusName }];
+  }
+  if (status === "experimental_llm" || status === "experimental_jev") {
+    const items = [{ v: actual_model ?? NOT_RECORDED }];
+    if (provider) items.push({ v: ` · ${provider}` });
+    if (status === "experimental_jev") items.push({ t: "（早期版本）" });
+    if (actual_model && requested_model && requested_model !== actual_model) {
+      items.push({ v: " · " }, { t: "请求" }, { v: ` ${requested_model}` }, { t: "，实际返回" }, { v: ` ${actual_model}` });
+    }
+    return items;
+  }
+  // Older joint or baseline versions keep their own names, marked 早期版本; an unknown status reads 未记录.
+  if (status === "experimental_joint" || status === "baseline_only") return [{ t: copy.statusName }, { t: "（早期版本）" }];
+  return [{ v: NOT_RECORDED }];
+}
+
+/** Rows of the version header for one saved version (the version as the API returns it). */
+export function versionHeader(detail) {
+  const status = detail?.model_status;
+  const manifest = record(detail?.model_manifest);
+  const decision = record(manifest.decision_provider);
+  const calibrated = status === "experimental_jev" && record(manifest.local_calibration).status === "active";
+  const copy = forecastCopy({ model_status: status, provider: decision.provider, actual_model: decision.actual_model, calibrated });
+  const rows = [];
+
+  rows.push({ id: "model", label: "决策模型", items: modelItems(detail, copy) });
+  rows.push({ id: "method", label: "决策方式", items: [{ t: status === "experimental_llm" ? "推理模型" : copy.statusName }] });
+
+  const contract = record(detail?.target_contract);
+  const horizon = typeof contract.horizon_sessions === "number" ? String(contract.horizon_sessions) : null;
+  const threshold = typeof contract.threshold === "number" ? `${Math.round(contract.threshold * 10000) / 100}%` : null;
+  const question = horizon && threshold
+    ? [{ v: horizon }, { t: "个交易日收盘相对锚点 ±" }, { v: threshold }]
+    : [{ v: NOT_RECORDED }];
+  if (hasDecisionProbabilities(status)) question.push({ v: ` · ${text(decision.question_version) ?? NOT_RECORDED}` });
+  rows.push({ id: "question", label: "问题", items: question });
+
+  rows.push({ id: "calibration", label: "校准状态", items: [{ t: calibrated ? "已通过本地时间外校准" : "未校准" }] });
+
+  const probabilities = hasDecisionProbabilities(status) ? record(detail?.decision_probabilities) : null;
+  if (probabilities && Object.keys(probabilities).length > 0) {
+    rows.push({
+      id: "probabilities",
+      label: "概率",
+      items: [
+        { t: "下跌 <−2%" }, { v: ` ${percent(probabilities.bearish)} · ` },
+        { t: "持平 ±2%" }, { v: ` ${percent(probabilities.neutral)} · ` },
+        { t: "上涨 >+2%" }, { v: ` ${percent(probabilities.bullish)}` },
+      ],
+    });
+  }
+
+  rows.push({
+    id: "times",
+    label: "时间",
+    items: [
+      { t: "决策" }, { v: " " }, { time: detail?.decision_at ?? null }, { v: " · " },
+      { t: "行情截止" }, { v: " " }, { time: detail?.market_cutoff_at ?? null }, { v: " · " },
+      { t: "目标日" }, { v: ` ${text(contract.target_end_date) ?? NOT_RECORDED} · ` },
+      { t: "第" }, { v: ` ${detail?.version_no ?? "—"} ` }, { t: "版" },
+    ],
+  });
+
+  if (timeMode(detail) === "historical_research") rows.push({ id: "time_mode", label: "时间模式", items: [{ t: "历史回放" }] });
+  return rows;
+}

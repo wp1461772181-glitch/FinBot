@@ -30,3 +30,20 @@ export type ForecastCopy = {
 };
 export declare function forecastCopy(input?: ForecastCopyInput): ForecastCopy;
 export declare function jobFailurePhrase(code?: string | null): string | null;
+export type HeaderItem = { t: string } | { v: string } | { time: string | null };
+export type HeaderRow = { id: string; label: string; items: HeaderItem[] };
+export type HeaderVersion = {
+  model_status?: string | null;
+  model_manifest?: Record<string, unknown> | null;
+  target_contract?: Record<string, unknown> | null;
+  decision_probabilities?: Record<string, number> | null;
+  research_brief?: unknown;
+  research_report?: Record<string, unknown> | null;
+  feature_snapshot?: Record<string, unknown> | null;
+  decision_at?: string | null;
+  market_cutoff_at?: string | null;
+  version_no?: number | null;
+};
+export declare function recordedModel(detail?: HeaderVersion | null): { provider: string | null; actual_model: string | null; requested_model: string | null };
+export declare function modelChanged(current?: HeaderVersion | null, parent?: HeaderVersion | null): boolean;
+export declare function versionHeader(detail?: HeaderVersion | null): HeaderRow[];

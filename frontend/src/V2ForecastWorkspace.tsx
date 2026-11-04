@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, createV2ForecastJob, createV2ManualRevisionJob, getV2Evaluations, getV2ForecastRoots, getV2ForecastVersion, getV2Job, getV2MonitorStatus, getV2RevisionCandidates, getV2Timeline, getV2Workspace } from "./api";
 import type { V2RevisionCandidates } from "./api";
 import type { FilingInventory, ResearchMaterialReference, V2EvaluationCohort, V2EvaluationResponse, V2EvaluationRoot, V2EvaluationVersion, V2ForecastJob, V2ForecastRoot, V2ForecastRoots, V2ModelEvaluationCohort, V2MonitorStatus, V2Probabilities, V2Timeline, V2TimelineEntry, V2VersionDetail, V2Workspace } from "./types";
-import { forecastCopy, hasDecisionProbabilities, jobFailurePhrase } from "./forecast-model.mjs";
+import { forecastCopy, hasDecisionProbabilities, jobFailurePhrase, modelChanged } from "./forecast-model.mjs";
+import { ForecastVersionHeader } from "./ForecastVersionHeader";
 import { ResearchBriefView } from "./ResearchBriefView";
 import { evidenceTitle, processingStatus, sourceKey } from "./EvidenceProcessing";
 import { CandlestickChart } from "./CandlestickChart";
@@ -275,9 +276,11 @@ export function V2ForecastWorkspace({ symbol, priceHistory, mode, onOpenForecast
     }
   }
 
-  const modelStatus = selectedRoot?.model_status ?? (workspace.kind === "ready" ? workspace.data.joint_model_status : "unavailable");
-  const selectedCurrentVersion = versionDetails?.kind === "ready" && versionDetails.data.current.id === selectedVersionId ? versionDetails.data.current : null;
-  const selectedCalibration = selectedCurrentVersion?.model_manifest.local_calibration as Record<string, unknown> | undefined;
+  // The status card describes the version being viewed, not the chain's latest one.
+  const selectedEntry = versions.find((version) => version.id === selectedVersionId) ?? null;
+  const modelStatus = selectedEntry?.model_status ?? selectedRoot?.model_status ?? (workspace.kind === "ready" ? workspace.data.joint_model_status : "unavailable");
+  const selectedCalibrated = selectedEntry?.local_calibration_status === "active";
+  const selectedHeaderVersion = versionDetails?.kind === "ready" && versionDetails.data.current.id === selectedVersionId ? versionDetails.data.current : null;
   const rootIsRevisable = selectedRoot?.expired === false;
   const revisionDisabledReason = selectedRoot?.expired === true ? t("该预测的目标已到期，只能查看历史版本。") : selectedRoot?.expired === null ? t("该预测的目标合同无效，只能查看历史版本。") : null;
   const canCreateRevision = Boolean(chosenVersion && revisionCandidatesData && !revisionCandidatesData.expired && chosenSources.length > 0 && chosenSources.length <= 10 && !isActiveJob(activeJob));
@@ -311,7 +314,7 @@ export function V2ForecastWorkspace({ symbol, priceHistory, mode, onOpenForecast
     {mode === "forecast" && <>
       <p className="v2-workflow-note">{<Tx text={"创建预测后，系统会冻结当时的行情和材料，为入选材料生成分析并汇总成研究简报。简报通过引用校验后，由设置中选定的预测模型（未选时用服务器默认模型）给出 20 个交易日的涨、平、跌概率。无需先到「材料库」手动分析。证据不足时只保存简报，不输出概率。概率未经校准，属实验性信息。仅供参考，买不买由你决定。"} />}</p>
       <div className="v2-status-grid">
-        <article><span>{<Tx text={"预测判断"} />}</span><strong>{selectedRoot ? modelStatusText(modelStatus) : t("尚无预测结果")}</strong><small>{selectedRoot ? t(forecastCopy({ model_status: modelStatus, calibrated: selectedCalibration?.status === "active" }).statusNote) : t("创建一项研究后，这里会显示对应结果。")}</small></article>
+        <article><span>{<Tx text={"预测判断"} />}</span><strong>{selectedRoot ? modelStatusText(modelStatus) : t("尚无预测结果")}</strong><small>{selectedRoot ? t(forecastCopy({ model_status: modelStatus, calibrated: selectedCalibrated }).statusNote) : t("创建一项研究后，这里会显示对应结果。")}</small></article>
         <MonitorCard monitor={monitor} />
         <article><span>{<Tx text={"待处理任务"} />}</span><strong>{workspace.kind === "ready" ? workspace.data.pending_job_count : "—"}</strong><small>{<Tx text={"排队只表示服务已接收，不表示预测已生成。"} />}</small></article>
       </div>
@@ -323,6 +326,7 @@ export function V2ForecastWorkspace({ symbol, priceHistory, mode, onOpenForecast
     {actionError && <p className="v2-notice error" role="alert">{actionError}</p>}
 
     {mode === "forecast" && <>
+      {selectedHeaderVersion && <ForecastVersionHeader version={selectedHeaderVersion} />}
       <ForecastSummary root={selectedRoot} roots={roots} detail={versionDetails} />
       <ForecastPriceContextChart symbol={symbol} history={priceHistory} detail={versionDetails} showHistoricalOnly={roots.kind === "ready" && !selectedRoot} />
       {versionDetails?.kind === "ready" && versionDetails.data.current.research_brief && <ResearchBriefView
@@ -343,6 +347,7 @@ export function V2ForecastWorkspace({ symbol, priceHistory, mode, onOpenForecast
     </>}
 
     {mode === "revisions" && !hasNoRevisionRoot && <>
+      {selectedHeaderVersion && <ForecastVersionHeader version={selectedHeaderVersion} />}
       <ForecastSummary root={selectedRoot} roots={roots} detail={versionDetails} />
       <RevisionComparison timeline={timeline} detail={versionDetails} />
       <EvidenceEvents timeline={timeline} detail={versionDetails} selectedVersionId={selectedVersionId} onSelect={setSelectedVersionId} />
@@ -788,6 +793,7 @@ function RevisionComparison({ timeline, detail }: { timeline: ResourceState<V2Ti
   return <section className="v2-card"><p className="section-label">{<Tx text={"修订对比"} />}</p><h3>{versions.length ? locale === "en-US" ? `${versions.length} historical ${versions.length === 1 ? "version" : "versions"}` : `${versions.length} ${t("个历史版本")}` : t("尚无版本链")}</h3>
     {versions.length > 1 ? <p>{<Tx text={"每个子版本保留固定目标合同；版本差异见下方事件记录。"} />}</p> : <p>{<Tx text={"出现新的合规材料后，可以从这里选择版本发起人工修订。"} />}</p>}
     {versions.length > 0 && <dl><div><dt>{<Tx text={"固定目标"} />}</dt><dd>{String(timeline?.kind === "ready" ? timeline.data.target_contract.target_end_date ?? t("已记录") : "—")}</dd></div><div><dt>{<Tx text={"当前版本"} />}</dt><dd>{t("第")} {versions.at(-1)?.version_no} {t("版")}</dd></div></dl>}
+    {detail?.kind === "ready" && modelChanged(detail.data.current, detail.data.parent) && <p className="v2-limit v2-model-change">{t("决策模型与上一版不同：概率变化可能来自模型，不一定来自新材料。")}</p>}
     {detail?.kind === "ready" && detail.data.parent && <p className="v2-limit">{locale === "en-US" ? `${t("市场输入：")} ${marketChanged ? t("已更新（见下方截止时间）") : t("与父版清单一致")}. ${t("本系统尚未验证各输入对市场结果的定量归因。")}` : `${t("市场输入：")}${marketChanged ? t("已更新（见下方截止时间）") : t("与父版清单一致")}。${t("本系统尚未验证各输入对市场结果的定量归因。")}`}</p>}
   </section>;
 }
@@ -800,7 +806,9 @@ function EvidenceEvents({ timeline, detail, selectedVersionId, onSelect }: {
 }) {
   const { locale, t } = useLocale();
   if (timeline?.kind !== "ready" || timeline.data.versions.length === 0) return null;
-  return <section className="v2-events" aria-labelledby="v2-events-title"><div className="section-heading"><div><p className="eyebrow">{<Tx text={"版本与来源"} />}</p><h2 id="v2-events-title">{<Tx text={"预测版本记录"} />}</h2></div><span>{<Tx text={"同一固定目标"} />}</span></div><ol>
+  return <section className="v2-events" aria-labelledby="v2-events-title"><div className="section-heading"><div><p className="eyebrow">{<Tx text={"版本与来源"} />}</p><h2 id="v2-events-title">{<Tx text={"预测版本记录"} />}</h2></div><span>{<Tx text={"同一固定目标"} />}</span></div>
+  {detail?.kind === "ready" && modelChanged(detail.data.current, detail.data.parent) && <p className="v2-limit v2-model-change">{t("决策模型与上一版不同：概率变化可能来自模型，不一定来自新材料。")}</p>}
+  <ol>
     {timeline.data.versions.map((version) => <li key={version.id} className={version.id === selectedVersionId ? "is-selected" : ""}>
       <span className="v2-event-dot" aria-hidden="true" />
       <button type="button" className="v2-event-select" onClick={() => onSelect(version.id)}><strong>{t("第")} {version.version_no} {t("版")} · {t(version.parent_version_id ? "修订版本" : "初始版本")}</strong><p>{formatTime(version.decision_at)} · {modelStatusText(version.model_status)} · {triggerTypeText(version.trigger_type)}</p>{version.change_reason && <small>{changeReasonText(version.change_reason, locale)}</small>}</button>
