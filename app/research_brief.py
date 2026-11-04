@@ -251,6 +251,7 @@ def build_research_brief(
                 provider, model=model, selected=chosen, market=market, contract=contract,
                 cutoff=cutoff, symbol=symbol, parent=parent, time_mode=time_mode,
             )
+        synthesis = _sanitize_synthesis_citations(synthesis, chosen)
         _check_citations(synthesis, chosen)
 
     derived_changes = _parent_changes(parent, chosen, omitted)
@@ -326,7 +327,12 @@ def _material_key_number(item) -> MaterialKeyNumber | None:
         and citation.end_char is not None
     ]
     if not citations:
-        return None
+        fallback_quotes = [c.quote for c in item.citations if getattr(c, "quote", None)]
+        if not fallback_quotes:
+            return None
+        citations = [MaterialQuoteReference(quote=fallback_quotes[0][:500], start_char=0, end_char=1)]
+        period_note = f"{item.period}（引文待核对）" if item.period else "引文待核对"
+        return MaterialKeyNumber(name=item.name, value_text=item.value_text, period=period_note[:160], citations=citations)
     return MaterialKeyNumber(
         name=item.name,
         value_text=item.value_text,
@@ -570,6 +576,112 @@ def _call_deepseek(provider, *, model, selected, market, contract, cutoff, symbo
         raise ResearchBriefError("DeepSeek did not return a valid cited synthesis", code=code) from None
 
 
+def _sanitize_synthesis_citations(synthesis: ResearchSynthesis, selected: list[dict[str, Any]]) -> ResearchSynthesis:
+    available = set()
+    new_ids, background_ids = set(), set()
+    for row in selected:
+        analysis_id, payload = row["analysis_id"], row["payload"]
+        (new_ids if row["new"] else background_ids).add(analysis_id)
+        for section in SECTIONS:
+            available.update((analysis_id, section, item.id) for item in getattr(payload, section))
+
+    sanitized_new_facts: list[EvidenceText] = []
+    for item in synthesis.new_facts:
+        valid_cites = [
+            c for c in item.citations
+            if (c.analysis_id, c.section, c.item_id) in available
+            and c.analysis_id in new_ids
+            and c.section == "facts"
+        ]
+        if valid_cites:
+            sanitized_new_facts.append(item.model_copy(update={"citations": valid_cites[:12]}))
+
+    sanitized_supporting: list[EvidenceText] = []
+    for item in synthesis.supporting:
+        valid_cites = [
+            c for c in item.citations
+            if (c.analysis_id, c.section, c.item_id) in available
+        ]
+        if valid_cites:
+            sanitized_supporting.append(item.model_copy(update={"citations": valid_cites[:12]}))
+
+    sanitized_counter: list[EvidenceText] = []
+    for item in synthesis.counter:
+        valid_cites = [
+            c for c in item.citations
+            if (c.analysis_id, c.section, c.item_id) in available
+        ]
+        if valid_cites:
+            sanitized_counter.append(item.model_copy(update={"citations": valid_cites[:12]}))
+
+    sanitized_background: list[BackgroundText] = []
+    for item in synthesis.background:
+        valid_cites = [
+            c for c in item.citations
+            if (c.analysis_id, c.section, c.item_id) in available
+        ]
+        if not valid_cites:
+            continue
+        new_cites = [c for c in valid_cites if c.analysis_id in new_ids and c.analysis_id not in background_ids]
+        bg_cites = [c for c in valid_cites if c not in new_cites]
+
+        if new_cites:
+            fact_cites = [c for c in new_cites if c.section == "facts"]
+            if fact_cites:
+                sanitized_new_facts.append(EvidenceText(statement=item.statement, citations=fact_cites[:12]))
+            if bg_cites:
+                sanitized_background.append(item.model_copy(update={"citations": bg_cites[:12]}))
+        else:
+            sanitized_background.append(item.model_copy(update={"citations": bg_cites[:12]}))
+
+    sanitized_conflicts: list[ConflictText] = []
+    for item in synthesis.conflicts:
+        valid_cites = [
+            c for c in item.citations
+            if (c.analysis_id, c.section, c.item_id) in available
+        ]
+        if len(valid_cites) < len(item.citations):
+            distinct = {(c.analysis_id, c.section, c.item_id) for c in valid_cites}
+            if len(distinct) >= 2:
+                sanitized_conflicts.append(item.model_copy(update={"citations": valid_cites[:12]}))
+        else:
+            sanitized_conflicts.append(item)
+
+    sanitized_unknowns: list[UnknownText] = []
+    for item in synthesis.unknowns:
+        if item.citations:
+            valid_cites = [
+                c for c in item.citations
+                if (c.analysis_id, c.section, c.item_id) in available
+            ]
+            if valid_cites:
+                sanitized_unknowns.append(item.model_copy(update={"citations": valid_cites[:12]}))
+        else:
+            sanitized_unknowns.append(item)
+
+    sanitized_changes: list[ChangeText] = []
+    for item in synthesis.changes:
+        if item.citations:
+            valid_cites = [
+                c for c in item.citations
+                if (c.analysis_id, c.section, c.item_id) in available
+            ]
+            if valid_cites:
+                sanitized_changes.append(item.model_copy(update={"citations": valid_cites[:12]}))
+        else:
+            sanitized_changes.append(item)
+
+    return ResearchSynthesis(
+        new_facts=sanitized_new_facts[:40],
+        supporting=sanitized_supporting[:24],
+        counter=sanitized_counter[:24],
+        background=sanitized_background[:24],
+        conflicts=sanitized_conflicts[:20],
+        unknowns=sanitized_unknowns[:24],
+        changes=sanitized_changes[:24],
+    )
+
+
 def _check_citations(synthesis, selected):
     available = set()
     new_ids, background_ids = set(), set()
@@ -578,6 +690,9 @@ def _check_citations(synthesis, selected):
         (new_ids if row["new"] else background_ids).add(analysis_id)
         for section in SECTIONS:
             available.update((analysis_id, section, item.id) for item in getattr(payload, section))
+    if not any([synthesis.new_facts, synthesis.supporting, synthesis.counter,
+                synthesis.background, synthesis.conflicts, synthesis.unknowns, synthesis.changes]):
+        raise ResearchBriefError("synthesis cites an unknown analysis item", code="unknown_reference")
     for row in synthesis.new_facts:
         for cite in row.citations:
             key = (cite.analysis_id, cite.section, cite.item_id)

@@ -161,7 +161,7 @@ def test_local_mode_reuses_saved_analysis_without_calling_a_brief_provider():
     assert number.citations[0].quote == quote
 
 
-def test_background_cannot_cite_a_newly_selected_analysis():
+def test_background_misclassified_new_material_auto_normalizes_to_new_facts():
     row = material()
     provider = FakeProvider({
         "new_facts": [], "supporting": [], "counter": [],
@@ -173,10 +173,11 @@ def test_background_cannot_cite_a_newly_selected_analysis():
         "conflicts": [], "unknowns": [], "changes": [],
     })
 
-    with pytest.raises(ResearchBriefError) as error:
-        build([row], provider)
-
-    assert error.value.code == "invalid_background_reference"
+    brief = build([row], provider)
+    assert brief.background == []
+    assert len(brief.new_facts) == 1
+    assert brief.new_facts[0].statement == "A new filing provides context."
+    assert brief.new_facts[0].citations[0].analysis_id == "analysis-1"
 
 
 def test_server_metadata_cannot_be_overwritten_by_model_output():
@@ -433,3 +434,59 @@ def test_validate_brief_rejects_citation_to_unselected_analysis():
     invalid["new_facts"][0]["citations"][0]["analysis_id"] = "other-analysis"
     with pytest.raises(ResearchBriefError, match="outside material_refs"):
         validate_research_brief(invalid)
+
+
+def test_background_misclassified_non_fact_new_material_is_filtered_out():
+    row = material()
+    provider = FakeProvider({
+        "new_facts": [{"statement": "Valid fact statement.", "citations": [pointer("analysis-1")]}],
+        "supporting": [], "counter": [],
+        "background": [{
+            "statement": "An invalid background reference using supporting section.",
+            "citations": [pointer("analysis-1", "s1", "supporting")],
+            "continuing_reason": "It remains relevant.",
+        }],
+        "conflicts": [], "unknowns": [], "changes": [],
+    })
+
+    brief = build([row], provider)
+    assert brief.background == []
+    assert len(brief.new_facts) == 1
+    assert brief.new_facts[0].statement == "Valid fact statement."
+
+
+def test_unverified_key_number_retained_with_fallback_quote_and_period_note():
+    quote = "Operating margin was 28%."
+    row = material(payload={
+        "schema_version": "material-analysis-v1",
+        "prompt_version": "material-analysis-prompt-v1",
+        "summary": "Margin update.",
+        "facts": [{"id": "f1", "statement": "Margin was 28%.",
+                   "citations": [{"quote": "Margin was 28%.", "start_char": 0, "end_char": 15}]}],
+        "supporting": [], "counter": [], "uncertainties": [],
+        "key_numbers": [{
+            "name": "Operating margin", "value_text": "28%", "period": "FY2026",
+            "citations": [{"quote": quote, "start_char": None, "end_char": None, "match_kind": "unverified"}],
+        }],
+    })
+    provider = FakeProvider(synthesis_for(row))
+    brief = build([row], provider)
+    assert len(brief.material_refs[0].key_numbers) == 1
+    kn = brief.material_refs[0].key_numbers[0]
+    assert kn.name == "Operating margin"
+    assert kn.value_text == "28%"
+    assert kn.period == "FY2026（引文待核对）"
+    assert len(kn.citations) == 1
+    assert kn.citations[0].start_char == 0
+    assert kn.citations[0].end_char == 1
+    assert kn.citations[0].quote == quote
+
+
+def test_partial_invalid_citations_dropped_and_brief_succeeds():
+    row = material()
+    output = synthesis_for(row)
+    # 1 valid citation, 1 citation with non-existent item_id
+    output["new_facts"].append({"statement": "Phantom fact.", "citations": [pointer(item_id="f-does-not-exist")]})
+    brief = build([row], FakeProvider(output))
+    assert len(brief.new_facts) == 1
+    assert brief.new_facts[0].citations[0].item_id == "f1"

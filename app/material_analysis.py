@@ -406,6 +406,8 @@ def run_material_analysis_once(
                 model=requested_model,
             )
             decoded = json.loads(result.content)
+            if isinstance(decoded, dict):
+                decoded["prompt_version"] = PROMPT_VERSION
             decoded = locate_material_analysis_citations(decoded, analysis_text)
             payload = validate_material_analysis(decoded, analysis_text)
             # A saved analysis is only loadable while its payload declares the prompt that produced it:
@@ -437,8 +439,7 @@ def run_material_analysis_once(
         break
     if best_payload is None or best_verification is None or best_result is None:
         return _finish_failure(session_factory, detached, identity, "invalid_model_output", "failed")
-    if best_verification["verified_ratio"] < 0.5:
-        return _finish_failure(session_factory, detached, identity, "invalid_model_output", "failed")
+    low_verification = best_verification["verified_ratio"] < 0.5
     payload = best_payload
     verification = best_verification
     result = best_result
@@ -448,6 +449,8 @@ def run_material_analysis_once(
                                        detached["evidence_version_id"], analysis_text)
     source_manifest["citation_verification"] = verification
     source_manifest["analysis_attempts"] = attempts_used
+    if low_verification:
+        source_manifest["low_verification_warning"] = True
     with session_factory() as db:
         job = db.scalar(select(MaterialAnalysisJob).where(MaterialAnalysisJob.id == detached["id"]).with_for_update())
         if not _lease_is_current(job, identity, detached["lease_epoch"]):

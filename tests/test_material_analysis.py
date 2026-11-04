@@ -256,8 +256,7 @@ def test_material_analysis_cache_force_new_version_failure_preserves_previous():
     assert cached["analysis_id"] == first_result_id(source_id)
 
     forced = _request(source_id, key="force", force=True)
-    bad = FakeProvider(content=json.dumps(_payload() | {"summary": "bad"}, ensure_ascii=False))
-    bad.content = json.dumps(_payload() | {"facts": [{"id": "f1", "statement": "invalid", "citations": [{"quote": "not present"}]}]}, ensure_ascii=False)
+    bad = FakeProvider(content=json.dumps({"schema_version": "invalid-schema", "summary": "bad"}, ensure_ascii=False))
     result = run_material_analysis_once(session_factory=SessionLocal, provider=bad, job_id=UUID(forced["job_id"]))
     assert result["status"] == "failed"
     with SessionLocal() as db:
@@ -411,7 +410,7 @@ def test_worker_blocks_a_queued_job_after_its_analysis_contract_changes():
     assert versions == []
 
 
-def test_a_payload_from_another_prompt_version_is_never_saved():
+def test_a_payload_from_another_prompt_version_is_aligned_and_saved():
     source_id = _upload("AAPL", "Revenue grew by 8% this quarter.")
     result = _request(source_id)
     output = run_material_analysis_once(
@@ -419,9 +418,12 @@ def test_a_payload_from_another_prompt_version_is_never_saved():
         provider=FakeProvider(json.dumps(_payload(prompt_version="material-analysis-prompt-v1"), ensure_ascii=False)),
         job_id=UUID(result["job_id"]),
     )
-    assert output["status"] == "failed"
+    assert output["status"] == "succeeded"
     with SessionLocal() as db:
-        assert db.scalar(select(MaterialAnalysisVersion).where(MaterialAnalysisVersion.source_id == source_id)) is None
+        version = db.scalar(select(MaterialAnalysisVersion).where(MaterialAnalysisVersion.source_id == source_id))
+        assert version is not None
+        assert version.prompt_version == PROMPT_VERSION
+        assert version.payload["prompt_version"] == PROMPT_VERSION
 
 def _payload_with_quotes(quotes: list[str]) -> dict:
     payload = _payload()
@@ -551,3 +553,28 @@ def test_worker_builds_the_frozen_provider_config_and_clears_its_key(monkeypatch
         config = db.get(MaterialAnalysisJobModelConfig, UUID(job["job_id"]))
         assert config is not None
         assert config.ciphertext is None
+
+
+def test_material_analysis_low_verification_warning_soft_landing():
+    text = "Revenue grew by 8% this quarter."
+    source_id = _upload("AAPL", text)
+    result = _request(source_id, key="low-verify-04")
+    # 5 quotes: 2 verified ("Revenue grew by 8%"), 3 unverified -> verified_ratio = 2/5 = 0.4
+    quotes = ["Revenue grew by 8%", "Revenue grew by 8%"] + [f"Unmatched quote text {i}" for i in range(3)]
+    payload = _payload_with_quotes(quotes)
+    provider = FakeProvider(content=json.dumps(payload, ensure_ascii=False))
+    outcome = run_material_analysis_once(
+        session_factory=SessionLocal, provider=provider, job_id=UUID(result["job_id"]),
+    )
+    assert outcome["status"] == "succeeded"
+    with SessionLocal() as db:
+        row = db.scalar(select(MaterialAnalysisVersion).where(
+            MaterialAnalysisVersion.job_id == UUID(result["job_id"])
+        ))
+        assert row is not None
+        assert row.source_manifest["low_verification_warning"] is True
+        verification = row.source_manifest["citation_verification"]
+        assert verification["total"] == 5
+        assert verification["verified"] == 2
+        assert verification["unverified"] == 3
+        assert verification["verified_ratio"] == 0.4
