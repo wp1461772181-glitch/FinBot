@@ -17,7 +17,11 @@ def test_a_rounded_figure_matches_at_its_own_precision():
     assert unsupported_number_values('营业收入约 3,318 亿美元 [1]',[FIGURE])==[]
     assert unsupported_number_values('Revenue was about $331.8 billion [1]',[FIGURE])==[]
     assert unsupported_number_values('营业收入约 3,300 亿美元 [1]',[FIGURE])==[]
+    # F6 (checker-numbers brief): an approximation word licenses a rounding only within the 5% bound:
+    # 约 3,000 against 3,318 is 9.6% off, so it is refused even though it rounds at its own precision.
     assert unsupported_number_values('营业收入约 3,000 亿美元 [1]',[FIGURE])==[3e11]
+    assert unsupported_number_values('营业收入 3,000 亿美元 [1]',[FIGURE])==[3e11]
+    assert unsupported_number_values('营业收入约 2,000 亿美元 [1]',[FIGURE])==[2e11]
 
 def test_a_rounded_percentage_matches_the_calculation():
     assert unsupported_number_values('同比约 +17.8% [2]',[FIGURE,CALC])==[]

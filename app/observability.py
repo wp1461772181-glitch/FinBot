@@ -202,13 +202,23 @@ def end_trace(trace: Handle | None, *, output: Any = None, metadata: dict | None
 
 def score_citation_audit(trace: Handle | None, *, verified: int, unverified: int,
                          unverified_lines: list | None = None, truncation_events: int | None = None,
-                         insufficient: int | None = None) -> None:
+                         insufficient: int | None = None, scope: dict | None = None) -> None:
     """The turn's own audit result as trace scores; no second audit pass.
 
     ``truncation_events`` is the number of machine-path cuts the turn recorded (audit.truncation_events);
-    ``insufficient`` the lines left unchecked because their source was partial, apart from the unsupported ones."""
+    ``insufficient`` the lines left unchecked because their source was partial, apart from the unsupported ones.
+    ``scope`` is audit.scope: what the number check looked at.  Its counts are scores; the values of the
+    figures it left alone (``unmarked_exempted``) and of those no source holds (``unmarked_no_holder``) go in
+    the comment, because those lists are the ones to read by hand."""
     if trace is None:
         return
+    if isinstance(scope, dict) and isinstance(scope.get("counts"), dict):
+        for name, count in scope["counts"].items():
+            comment = None
+            if name in {"unmarked_exempted", "unmarked_no_holder"} and count:
+                items = scope.get(name) or []
+                comment = " | ".join(f"{item.get('value')}: {item.get('line')}" for item in items[:10] if isinstance(item, dict))[:900]
+            score(trace, "scope_" + name, int(count), comment=comment)
     score(trace, "citation_verified", int(verified))
     score(trace, "citation_unverified", int(unverified))
     if truncation_events is not None:

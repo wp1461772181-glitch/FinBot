@@ -122,7 +122,8 @@ def _restore_citations(items,credential=None):
     from .agent_workflow.calculation import calculate
     payload=item.get('calculation') or {}
     try:
-     recomputed=calculate({'expression':payload['expression'],'inputs':payload['inputs']},verified)
+     # The user's words are not at hand on a replay: a user-stated input stays as it was bound.
+     recomputed=calculate({'expression':payload['expression'],'inputs':payload['inputs']},verified,None)
      live=recomputed.get('value')==payload.get('value')
     except (ValueError,KeyError,TypeError):
      live=False

@@ -12,15 +12,13 @@ import unicodedata
 from typing import Any
 
 from app.agent_workflow.claim_units import FieldEvidence
-from app.agent_workflow.evidence import _CLAIM_NUMBER, _round_to, _significant
+from app.agent_workflow.evidence import _CLAIM_NUMBER, _round_to, _significant, BARE_MONTH, COUNT_UNITS, INDEX_NAME
 from app.agent_workflow.semantic import _MAGNITUDE, figure_values
 
 
 _TIME = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
-_DURATION = re.compile(
-    r"\d+(?:\.\d+)?\s*(?:天|日|个月|年|周|条|篇|份|项|页|行|个(?!百分点)|次|点|位|名|步|轮|倍|小时|分|秒|字符|字|days?|hours?|items?|times?|points?|characters?|chars?)",
-    re.I,
-)
+# The shared list of counting words, plus this module's own 个: "3 个百分点" stays a figure here.
+_DURATION = re.compile(r"\d+(?:\.\d+)?\s*(?:" + COUNT_UNITS + r"|个(?!百分点))", re.I)
 _DATE = re.compile(
     r"(?<!\d)(?:\d{4}\s*[-/年]\s*)?\d{1,2}\s*[-/月]\s*\d{1,2}(?:\s*日)?(?!\d)|(?<!\d)\d{4}\s*年\s*\d{1,2}\s*月|"
     r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|"
@@ -93,6 +91,8 @@ def _prepare(text: str) -> str:
     prepared = unicodedata.normalize("NFKC", text or "").replace("萬", "万").replace("億", "亿")
     prepared = _TIME.sub(" ", prepared)
     prepared = _DATE.sub(" ", prepared)
+    prepared = BARE_MONTH.sub(lambda m: " " if 1 <= int(m[1]) <= 12 else m[0], prepared)
+    prepared = INDEX_NAME.sub(r"\1 ", prepared)
     prepared = _DURATION.sub(" ", prepared)
     return _comma_strip(prepared)
 

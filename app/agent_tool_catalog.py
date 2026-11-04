@@ -11,7 +11,13 @@ class Empty(Args):pass
 class CalculationInput(Args):
     name:str=Field(pattern=r'^[a-z]$')
     value:str=Field(pattern=r'^-?\d{1,24}(?:\.\d{1,12})?$')
-    source_ordinal:int=Field(ge=1,le=1000)
+    # Exactly one origin: a cited source's number, or a figure the user wrote in this conversation.
+    source_ordinal:int|None=Field(default=None,ge=1,le=1000)
+    user_stated:bool=False
+    @model_validator(mode='after')
+    def one_origin(self):
+        if (self.source_ordinal is not None)==self.user_stated:raise ValueError('exactly one of source_ordinal and user_stated')
+        return self
 class CalculateArgs(Args):
     expression:str=Field(min_length=1,max_length=200)
     inputs:list[CalculationInput]=Field(min_length=1,max_length=8)
@@ -278,7 +284,7 @@ class ToolPolicy:
 
 EXTRA=(
  ('read_history_citation',HistoryCitationArgs,'read','Read the saved source behind a citation in an earlier answer. Cite the new number returned for this turn, never the old number. Derived citations cannot be read directly; read their parents first.'),
- ('calculate',CalculateArgs,'read','Calculate derived figures from cited source values. Only a..z, + - * / parentheses, the constants 0, 1, 100 and powers of ten for unit conversion (1000, 10000, 1000000, 100000000, 1000000000, 1000000000000). Inputs must occur in the chosen evidence. Formula and parents are recorded; derived results are not official originals. For series statistics use calculate_formula.'),
+ ('calculate',CalculateArgs,'read','Calculate derived figures. Only a..z, + - * / parentheses, number literals (abs<=1000, <=4 decimals; powers of ten convert units). Each input is a cited source number (source_ordinal) or one the user wrote (user_stated:true). Result must depend on the inputs. Formula and parents are recorded; derived results are not official originals. For series statistics use calculate_formula.'),
  ('calculate_formula',CalculateFormulaArgs,'read','Run a pure Python/numpy formula def f(...) -> float over one or more saved_price_set vectors (e.g. volatility, Sharpe, drawdown, returns across up to 20 bindings in a single call). math and np are pre-injected; do not write import. Verified by server replay.'),
  ('read_workspace',WorkspaceArgs,'read','Read a saved forecast/version timeline, analysis history/original, knowledge chunks/candidates, importable catalogue or revision candidates. Private records remain owner-scoped.'),
  ('start_historical_replay',ReplayArgs,'costly','Propose a retrospective replay for a specific past decision date; this is not a forward prediction. Confirmation required.'),

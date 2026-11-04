@@ -1,7 +1,11 @@
 """Deterministic evidence validation; these parsers never select a route or tool."""
 from __future__ import annotations
+import copy
+import functools
 import hashlib
+import itertools
 import json
+import math
 import re
 import unicodedata
 from datetime import UTC, datetime
@@ -284,8 +288,10 @@ QUOTE_DISPLAY_CHARS = 5000
 
 
 def citation_check_text(citation: dict) -> str:
-    """Everything the checkers may read of one cited source: the shown quote, its figures, the full text."""
-    return ' '.join(str(citation.get(key) or '') for key in ('quote', 'figures', 'check_text'))
+    """Everything the checkers may read of one cited source: the shown quote, its figures, the full text and
+    the evidence quotes a saved analysis carries (they are source text to the claim gate as well)."""
+    quotes = [quote for quote in citation.get('evidence_quotes') or [] if isinstance(quote, str) and quote]
+    return ' '.join([str(citation.get(key) or '') for key in ('quote', 'figures', 'check_text')] + quotes)
 
 
 def persistable_citation(citation: dict) -> dict:
@@ -470,20 +476,6 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
     return accepted
 
 
-def unsupported_numbers(answer,citations):
-    """Check cited quantitative claims without inferring facts or entity aliases.
-
-    Unit-normalized amounts may be translated (10 billion / 100亿) and probabilities
-    may be shown as percentages. This is a guard, not a semantic answer scorer.
-    """
-    return bool(unsupported_number_values(answer,citations))
-
-
-def insufficient_numbers(answer,citations):
-    """Whether a figure is missing from a source whose own stored text is partial (证据不完整)."""
-    return bool(insufficient_number_values(answer,citations))
-
-
 _DASHES=re.compile('[‐‑‒–—−]')
 # Never figures: a form or a section reference states no amount whatever the evidence says.
 _ALWAYS_IDENTIFIERS=re.compile(r'\b(?:10-K|10-Q|8-K|20-F|6-K|S-1|DEF\s*14A)\b|\b(?:Note|Item|Part|CIK)\s*\d+[A-Z]?\b',re.I)
@@ -497,6 +489,16 @@ _BARE_LINK=re.compile(r'(?<![\w@/.-])(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,6}/[^\s|
 _SCALE=((re.compile(r'\(?\s*in\s+millions|百万美元|单位[:：]\s*百万',re.I),1e6),
         (re.compile(r'\(?\s*in\s+thousands|千美元|单位[:：]\s*千',re.I),1e3),
         (re.compile(r'\(?\s*in\s+billions|十亿美元',re.I),1e9))
+# Words that count things, not money.  Shared with claim_numeric so the two checkers cannot drift.  The
+# lone 个 differs on purpose and is appended by each module: evidence strips every 个, claim_numeric keeps
+# "个百分点" (a percentage-point change) as a figure.
+COUNT_UNITS=(r'天|日|个月|年|周|条|篇|份|项|页|行|次|点|位|名|步|轮|倍|小时|分|秒|字符|字|家|只|种|档|岁|期|季|'
+             r'days?|hours?|items?|times?|points?|characters?|chars?|months?|years?|weeks?|quarters?')
+# A month on its own ("12 月", "3月份") is a date part, not an amount.
+BARE_MONTH=re.compile(r'(?<![\d.])(\d{1,2})\s*月份?(?!\s*(?:万|亿|千|百万|美元|元|%|％|billion|million))')
+# An index's name carries digits ("标普500", "S&P 500"); a figure written after it ("标普500 上涨 1.2%") still counts.
+INDEX_NAME=re.compile(r'(标普|标准普尔|纳指|纳斯达克|罗素|道指|沪深|中证|上证|S&P)\s*(?:1000|2000|3000|500|300|100|50|30)'
+                      r'(?![\d.,]|\s*(?:%|％|点|万|亿|千|百万|美元|元|billion|million|trillion|bn|mn))',re.I)
 _CLAIM_NUMBER=re.compile(r'(\$\s*)?(\d+(?:\.\d+)?)\s*(万亿|千万|百万|亿|万|千|trillion|billion|million|thousand|bn|mn|b|k|m)?(?![A-Za-z])(\s*(?:%|％))?(\s*(?:美元|元|dollars?|USD))?',re.I)
 
 
@@ -527,21 +529,384 @@ def _round_to(value,digits):
     return round(value,-int(math.floor(math.log10(abs(value))))+digits-1)
 
 
-def _claim_figures(text):
-    """Each stated amount with its precision; the same exclusions as ``figure_values``."""
+@functools.lru_cache(maxsize=512)
+def _figures_of(text):
+    """The amounts one source text states (cached: a checked answer reads the same long page many times)."""
+    from .semantic import figure_values
+    return frozenset(figure_values(text))
+
+
+# --- who may ground a figure besides the cited source -------------------------------------------------
+
+_ZH_DIGIT={'零':0,'〇':0,'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9}
+_ZH_TEN={'十':10,'百':100,'千':1000}
+_ZH_AMOUNT_RUN=re.compile(r'[零〇一二两三四五六七八九十][零〇一二两三四五六七八九十百千万亿]*')
+
+
+def _zh_section(text):
+    total=0;number=0;pending=False
+    for char in text:
+        if char in _ZH_DIGIT:number=_ZH_DIGIT[char];pending=True
+        elif char in _ZH_TEN:total+=(number if pending else 1)*_ZH_TEN[char];number=0;pending=False
+    return total+number
+
+
+def _zh_amount(text):
+    total=0
+    if '亿' in text:
+        head,text=text.split('亿',1);total+=_zh_amount(head or '一')*10**8
+    if '万' in text:
+        head,text=text.split('万',1);total+=_zh_section(head or '一')*10**4
+    return total+_zh_section(text)
+
+
+def user_figure_values(user_text):
+    """The amounts the user wrote (Chinese numerals included: 五万 is 50000, 两百万 is 2000000).
+
+    Only what a person typed this conversation goes in here (``Turn.user_stated_text``), never
+    the model's rewrite of the question and never an assistant message."""
+    if not user_text:return set()
+    text=unicodedata.normalize('NFKC',str(user_text))
+    values=set(_figures_of(text))
+    from .semantic import figure_values
+    values|=figure_values(text,zh=True)
+    for run in _ZH_AMOUNT_RUN.findall(text):
+        if any(char in run for char in '十百千万亿'):values.add(float(_zh_amount(run)))
+    return {round(v,4) for v in values if v}
+
+
+# --- one record per written figure --------------------------------------------------------------------
+
+_CURRENCY_BEFORE=re.compile(r'[$¥￥€£＄]\s*$')
+_CURRENCY_AFTER=re.compile(r'\s*(?:人民币|港元|港币|欧元|日元|英镑|美金|RMB|CNY|EUR|GBP|JPY|HKD)',re.I)
+_CLOCK=re.compile(r'(?<![\d.:])\d{1,2}:\d{2}(?::\d{2})?(?![\d:])')
+
+
+def _figure_records(text):
+    """Each stated amount with its precision and what kind of figure it is; the same exclusions as ``figure_values``."""
     from .semantic import ACCESSION,SOURCE_ID,TASK_ID,PERIOD_TEXT,_MAGNITUDE
     text=unicodedata.normalize('NFKC',text).replace('萬','万').replace('億','亿')
     text=re.sub(r'(?<=\d)T(?=\d{2}:)',' ',text)
     text=PERIOD_TEXT.sub(' ',ACCESSION.sub(' ',SOURCE_ID.sub(' ',TASK_ID.sub(' ',text))))
     text=re.sub(r'(?<=\d),(?=\d{3}(?!\d))','',text)
     found=[]
-    for dollar,number,unit,percent,currency in _CLAIM_NUMBER.findall(text):
+    for match in _CLAIM_NUMBER.finditer(text):
+        dollar,number,unit,percent,currency=match.groups()
+        unit=unit or ''
         value=round(float(number)*_MAGNITUDE.get(unit.lower(),1.0),4)
-        found.append((value,_significant(number),bool(unit or percent),not(dollar or unit or percent or currency)))
+        money=bool(dollar or currency or _CURRENCY_BEFORE.search(text[:match.start()]) or _CURRENCY_AFTER.match(text,match.end()))
+        found.append({'value':value,'digits':_significant(number),'scaled':bool(unit or percent),
+                      'unitless':not(dollar or unit or percent or currency),'money':money,'magnitude':bool(unit),
+                      'pct':bool(percent),'integer':'.' not in number,'decimals':len(number.partition('.')[2])})
     return found
 
 
-def unsupported_number_values(answer,citations,*,question=''):
+def _claim_figures(text):
+    """Each stated amount with its precision; the same exclusions as ``figure_values``."""
+    return [(r['value'],r['digits'],r['scaled'],r['unitless']) for r in _figure_records(text)]
+
+
+# --- scope: [n] is the declaration ---------------------------------------------------------------------
+# A sentence with a marker is checked for every figure it writes.  One without is checked only for the
+# figures a reader would take as a claim about the world: money, magnitude amounts, percentages, table
+# rows, decimals and integers of 1000 or more.  A bare integer below 1000 in unmarked prose (21:25 is
+# no longer one, 13 家, 12 月, 标普500) is not.
+
+def _backstop_figure(record,table_row):
+    if table_row or record['money'] or record['magnitude'] or record['pct']:return True
+    if not record['unitless']:return True
+    return not record['integer'] or record['value']>=1000
+
+
+# A sentence that says it is an inference states no fact, so its figures need their premises, not a source.
+_LABEL_START=r'^\s*(?:>\s*)*(?:#{1,6}\s+)?(?:(?:[-*+•]|\d+[.)、])\s+)?(?:\*\*|__|\*|_)*\s*'
+_LABEL_WORD=r'(?:推断|估算|推算|假设)'
+_INFERENCE_LABEL=re.compile(
+    _LABEL_START+r'(?:(?:[（(]\s*'+_LABEL_WORD+r'\s*[）)])|(?:(?:若|如果|如)\s*)?'+_LABEL_WORD+r')'
+    r'|^\s*(?:>\s*)*(?:#{1,6}\s+)?(?:(?:[-*+•]|\d+[.)、])\s+)?(?:\*\*|__|\*|_)*\s*(?:inference|estimate[d]?|assuming|assumption|hypothetically)\b'
+    r'|[（(]\s*'+_LABEL_WORD+r'\s*[）)]\s*(?:\[\d+\]\s*)*[。.!！]*\s*$',re.I)
+# The approximation words: 约 and 近 count only straight in front of a figure (最近, 附近, 合约, 约束 do not).
+_APPROXIMATION=re.compile(
+    r'大约|接近|将近|左右|上下|约合|\b(?:about|roughly|approximately|around|nearly|almost)\b'
+    r'|(?<![合制契大预公条最附贴亲邻靠临])[约近]\s*(?=[\d$¥￥€£＄])|[~≈～]\s*(?=[\d$¥￥€£＄])',re.I)
+APPROXIMATION_TOLERANCE=0.05
+
+
+def is_inference_label(passage):
+    """Whether a sentence opens with (or ends in) the label the prompt asks for.  Anchored, so
+    「这不是推断，营收 $500 billion [1]」 is not labelled."""
+    return bool(_INFERENCE_LABEL.search(passage or ''))
+
+
+def _match(record,support,percent_pool,percent,approximate):
+    """How a written figure is held by ``support``: 'exact', 'rounded' (at the precision written) or 'approx'."""
+    value,digits,scaled=record['value'],record['digits'],record['scaled']
+    if value in support or (percent and value/100 in percent_pool):return 'exact'
+    if (digits>=3 or (digits>=2 and scaled)) and any(_round_to(a,digits)==_round_to(value,digits) for a in support if a):return 'rounded'
+    if approximate and any(a and abs(a-value)<=APPROXIMATION_TOLERANCE*abs(a) for a in support):return 'approx'
+    return None
+
+
+# --- closure: a sum, difference, ratio or change of cited figures ------------------------------------------
+# With a large pool nearly any number is a sum of something, which would defeat the checker.  So the
+# number of candidates a pool offers is held against the number of values the answer's precision can
+# tell apart; a pool offering more than this share of them is not searched at all.
+CLOSURE_FALSE_ACCEPT_BOUND=0.05
+
+
+def _operand_pool(values):
+    return sorted(v for v in values if v>0 and not (v==int(v) and (v<=10 or 1900<=v<=2100)))
+
+
+def _amount_closure(value,digits,pool):
+    """``(kind, operands, candidates, bins)`` when a sum or difference of 2-3 pool figures is the written amount."""
+    n=len(pool)
+    if n<2:return None
+    bins=18*10**(digits-1)
+    two=n*(n-1)//2+n*(n-1)
+    three=two+n*(n-1)*(n-2)//6+n*(n-1)//2*(n-2)+n*((n-1)*(n-2)//2)
+    if two>CLOSURE_FALSE_ACCEPT_BOUND*bins:return None
+    target=_round_to(value,digits)
+    hit=lambda x:x>0 and _round_to(x,digits)==target
+    for a,b in itertools.combinations(pool,2):
+        if hit(a+b):return 'sum',[a,b],two,bins
+        if hit(abs(a-b)):return 'difference',[max(a,b),min(a,b)],two,bins
+    if three>CLOSURE_FALSE_ACCEPT_BOUND*bins:return None
+    for a,b,c in itertools.combinations(pool,3):
+        if hit(a+b+c):return 'sum',[a,b,c],three,bins
+    for a,b in itertools.combinations(pool,2):
+        for c in pool:
+            if c!=a and c!=b and hit(a+b-c):return 'difference',[a,b,c],three,bins
+    for a in pool:
+        for b,c in itertools.combinations(pool,2):
+            if a!=b and a!=c and hit(a-b-c):return 'difference',[a,b,c],three,bins
+    return None
+
+
+def _percent_closure(value,decimals,pool):
+    n=len(pool)
+    if n<2:return None
+    bins=200*10**decimals;count=2*n*(n-1)
+    if count>CLOSURE_FALSE_ACCEPT_BOUND*bins:return None
+    target=round(value,decimals)
+    for a,b in itertools.permutations(pool,2):
+        if round(a/b*100,decimals)==target:return 'ratio',[a,b],count,bins
+        if round(abs(a-b)/b*100,decimals)==target:return 'change',[a,b],count,bins
+    return None
+
+
+def _closure(record,source_pool,verified):
+    """The closure of one figure over the cited sources' figures, or None.  Two pools in order: the figures
+    this answer has already verified that the cited sources also hold (small), then all the sources' figures."""
+    pool=_operand_pool(source_pool)
+    pools=(('verified',[v for v in pool if v in verified]),('sources',pool))
+    seen=None
+    for name,operands in pools:
+        if operands==seen:continue
+        seen=operands
+        found=(_percent_closure(record['value'],record['decimals'],operands) if record['pct']
+               else _amount_closure(record['value'],record['digits'],operands))
+        if found:
+            kind,used,count,bins=found
+            return {'value':record['value'],'kind':kind,'operands':used,'pool':name,'candidates':count,'bins':bins}
+    return None
+
+
+# --- one sentence --------------------------------------------------------------------------------------
+
+_DATE_PATTERN=re.compile(
+    # Chinese dates are often typeset with spaces ("2025 年 12 月 31 日"), and a CJK neighbour is a word
+    # character, so the date is bounded by digits rather than by \b.
+    r'(?<!\d)(?:\d{4}\s*[-/年]\s*)?\d{1,2}\s*[-/月]\s*\d{1,2}(?:\s*日)?(?!\d)|(?<!\d)\d{4}\s*年\s*\d{1,2}\s*月|'
+    r'\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}\b|'
+    r'\b\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b',
+    re.I)
+_NUMBER_TEXT=r'\d+(?:,\d{3})*(?:\.\d+)?'
+_MAGNITUDE_TEXT=r'(?:万亿|千万|百万|亿|万|千|trillion|billion|million|thousand|bn|mn|b|k|m)?'
+
+
+class _Context:
+    """What one check reads besides the sentence: the turn's sources, the user's own figures, the verified set."""
+
+    def __init__(self,citations,question='',user_text='',verified=None,state_check=False):
+        self.indexed={str(c['ordinal']):c for c in citations}
+        evidence=' '.join(str(c.get(k) or '') for c in citations for k in ('quote','check_text','title','source_url'))+' '+str(question or '')
+        self.grounds=' '.join(_DASHES.sub('-',evidence).split()).casefold()
+        self.user=user_figure_values(user_text)
+        self.verified=set(verified or ())
+        # Against the system's own state log a clock time is a checkable fact, not prose colour.
+        self.state_check=state_check
+
+
+def _calculation_result(citation):
+    calculation=citation.get('calculation')
+    if not isinstance(calculation,dict):
+        try:calculation=json.loads(str(citation.get('quote') or ''))
+        except ValueError:return None
+    try:return float(calculation.get('value')) if isinstance(calculation,dict) else None
+    except (TypeError,ValueError):return None
+
+
+def _review_passage(passage,citations,ctx,*,closure=False):
+    """The numeric verdict of one sentence.
+
+    ``rejected``/``insufficient`` are the figures no source holds; ``direct`` the written figures its
+    cited sources state; ``closure`` those only a sum/difference/ratio of cited figures reaches (kept
+    apart, because the answer-wide verified set is built from both); ``figures`` every checked figure
+    with how it was settled, for the scope audit."""
+    from datetime import datetime, timedelta
+    refs=citation_markers(passage,citations)
+    cited=[ctx.indexed[r] for r in refs if r in ctx.indexed]
+    marked=bool(refs)
+    labelled=is_inference_label(passage)
+    out={'marked':marked,'labelled':labelled,'rejected':[],'insufficient':[],'direct':set(),'closure':set(),'closures':[],'figures':[]}
+    body=' '.join(citation_check_text(c)+' '+str(c.get('published_at',''))+' '+str(c.get('source_url',''))+' '+str(c.get('title','')) for c in cited)
+    allowed=set(_figures_of(body))
+    source_pool=set();percent_pool=set()
+    # A miss is "insufficient" only when every source cited for the passage is partial:
+    # if any cited source is complete, the figure had complete evidence and failed it.
+    partial=bool(cited) and all(c.get('evidence_incomplete') for c in cited)
+    for citation in cited:
+        quote=str(citation.get('quote',''))
+        # The text the checker holds is the whole source when there is one: a unit line ("In millions")
+        # beyond the shown quote still applies to the table it heads.
+        scanned=str(citation.get('check_text') or quote)
+        own=set(_figures_of(citation_check_text(citation)))
+        percent_pool|=own;source_pool|=own
+        for marker,scale in _SCALE:
+            if marker.search(scanned):
+                scaled_values={round(v*scale,4) for v in _figures_of(scanned) if v>=1}
+                allowed|=scaled_values;source_pool|=scaled_values
+        if citation.get('source_type')=='calculation':
+            # A result computed on values bound per million is itself in millions.
+            allowed|={round(v*1e6,4) for v in _figures_of(quote) if abs(v)>=1}
+            # The whole-number part of a result is how people write "219.78 shares".
+            result=_calculation_result(citation)
+            if result is not None and result>=1:allowed.add(float(math.floor(result)))
+        pub = citation.get('published_at') or citation.get('filed_at') or citation.get('trading_date')
+        if pub and isinstance(pub, str):
+            try:
+                dt = datetime.fromisoformat(pub.replace('Z', '+00:00'))
+                allowed.add(float(dt.day))
+                allowed.add(float((dt + timedelta(hours=8)).day))
+                allowed.add(float((dt - timedelta(hours=8)).day))
+                allowed.add(float(dt.month))
+                allowed.add(float((dt + timedelta(hours=8)).month))
+            except (ValueError, TypeError):
+                pass
+    # A full reported value may be written bare in a table headed in millions, 亿 or billions; a
+    # number that carries its own unit ("54.2 美元") is held to that unit.
+    headed={round(v/scale,4) for v in allowed if abs(v)>=1e6 for scale in (1e6,1e8,1e9)}
+    checked=re.sub(r'\[\d+\](?:\([^)]*\))?','',passage)
+    checked=re.sub(r'https?://\S+','',checked)
+    # Its digits are not figures when the turn's evidence shows that link; an unknown link keeps them.
+    checked=_BARE_LINK.sub(lambda m:' ' if m.group(0).casefold().rstrip('/.,;:') in ctx.grounds else m.group(0),checked)
+    checked=_without_identifiers(checked,ctx.grounds)
+    # A clock time and an index's name are no amounts, marked sentence or not.  The state check is
+    # the exception: it holds narration to the machine's own log, where a time is a fact.
+    if not ctx.state_check:checked=_CLOCK.sub(' ',checked)
+    checked=INDEX_NAME.sub(r'\1 ',checked)
+    # Bare financial amounts are also claims. Strip only citation identities,
+    # list labels and grounded date/period syntax, never arbitrary numbers.
+    bare=re.sub(r'^\s*\d+[.、)]\s*','',checked)
+    bare=_DATE_PATTERN.sub('',bare)
+    bare=BARE_MONTH.sub(lambda m:' ' if 1<=int(m[1])<=12 else m[0],bare)
+    bare=re.sub(r'\d+(?:\.\d+)?\s*(?:'+COUNT_UNITS+'|个)', ' ', bare)
+    # Amounts with a currency or percent are read before list labels are stripped: "0.5万亿美元"
+    # must not become "5万亿美元".
+    amounts=re.findall(_NUMBER_TEXT+r'\s*'+_MAGNITUDE_TEXT+r'\s*(?:美元|元|dollars?|USD|%|％)',checked,re.I)
+    amounts+=re.findall(r'\$\s*'+_NUMBER_TEXT+r'\s*'+_MAGNITUDE_TEXT,checked,re.I)
+    percent=bool(re.search(r'%|％|百分',passage))
+    approximate=bool(_APPROXIMATION.search(passage))
+    table_row=passage.lstrip().startswith('|')
+    held=allowed|ctx.user|ctx.verified
+    pending=[];settled=[];seen=set()
+    for record in _figure_records(' '.join(amounts))+_figure_records(bare):
+        value,unitless=record['value'],record['unitless']
+        # An amount read with its unit and again bare is one figure.
+        identity=(value,unitless,record['scaled'],record['money'],record['pct'],record['magnitude'])
+        if identity in seen:continue
+        seen.add(identity)
+        # Exclude list numbering and calendar years to avoid false positive claim rejections
+        if (1.0<=value<=10.0 and value==int(value)) or (1990<=value<=2035 and value==int(value)):continue
+        figure={'value':value,'marked':marked}
+        if not marked:
+            if labelled:figure['how']='exempt:labelled_inference';out['figures'].append(figure);continue
+            if not _backstop_figure(record,table_row):figure['how']='exempt:below_backstop';out['figures'].append(figure);continue
+            figure['backstop']=True
+        support=allowed|headed if unitless else allowed
+        how=_match(record,support,allowed,percent,approximate)
+        if how:
+            if how!='approx' and not labelled:out['direct'].add(value)
+            figure['how']='source:'+how;settled.append(figure);out['figures'].append(figure);continue
+        support=held|headed if unitless else held
+        how=_match(record,support,held,percent,approximate)
+        if how:
+            figure['how']='set:'+how;settled.append(figure);out['figures'].append(figure);continue
+        if (closure or labelled) and cited:
+            found=_closure(record,source_pool if not record['pct'] else percent_pool,ctx.verified|out['direct'])
+            if found:
+                if not labelled:out['closure'].add(value)
+                out['closures'].append(found)
+                figure['how']='closure:'+found['kind'];settled.append(figure);out['figures'].append(figure);continue
+        figure['how']='rejected';out['figures'].append(figure)
+        pending.append(value)
+    # A labelled inference stands on its premises: one verified figure is enough, none means they failed.
+    if labelled and marked and settled:pending=[]
+    for value in pending:(out['insufficient'] if partial else out['rejected']).append(value)
+    return out
+
+
+def _passages(answer):
+    from .language import simplified
+    return cited_passages(simplified(answer))
+
+
+def _verified_set(passages,citations,ctx,closure_log=None):
+    """The figures this answer's own cited sources hold, then those only a closure reaches.  Computed once
+    over the whole answer and in two steps, so that it does not depend on the order of the sentences."""
+    plain=copy.copy(ctx);plain.verified=set()
+    direct=set()
+    for passage in passages:direct|=_review_passage(passage,citations,plain)['direct']
+    base=copy.copy(ctx);base.verified=set(direct)
+    reached=set()
+    for passage in passages:
+        review=_review_passage(passage,citations,base,closure=True)
+        reached|=review['closure']
+        if closure_log is not None:closure_log.extend(review['closures'])
+    return direct|reached
+
+
+def verified_figures(answer,citations,*,question='',user_text='',closure_log=None):
+    """The answer-wide verified set of one text (see ``answer_verified_figures`` for a whole answer)."""
+    ctx=_Context(citations,question,user_text)
+    return _verified_set(_passages(answer),citations,ctx,closure_log)
+
+
+def answer_verified_figures(answer,citations,*,question='',user_text='',closure_log=None):
+    """The answer-wide verified set, from the text each line is checked as (a table row inherits its table's markers).
+
+    A figure in it passes wherever the answer restates it, so every line-level caller is handed the same set.
+    Figures of a labelled inference are not in it: an estimate does not become evidence by being repeated."""
+    checked='\n'.join(text for _,_,text in _reviewable_lines(answer,citations) if text is not None)
+    return verified_figures(checked,citations,question=question,user_text=user_text,closure_log=closure_log)
+
+
+def unsupported_numbers(answer,citations,*,user_text=''):
+    """Check cited quantitative claims without inferring facts or entity aliases.
+
+    Unit-normalized amounts may be translated (10 billion / 100亿) and probabilities
+    may be shown as percentages. This is a guard, not a semantic answer scorer.
+    """
+    return bool(unsupported_number_values(answer,citations,user_text=user_text))
+
+
+def insufficient_numbers(answer,citations,*,user_text=''):
+    """Whether a figure is missing from a source whose own stored text is partial (证据不完整)."""
+    return bool(insufficient_number_values(answer,citations,user_text=user_text))
+
+
+def unsupported_number_values(answer,citations,*,question='',user_text='',verified=None,state_check=False):
     """The candidate numbers no cited source supports, so a repair can name them.
 
     Same rules as ``unsupported_numbers``; the list only tells the rewriting model what to
@@ -553,90 +918,59 @@ def unsupported_number_values(answer,citations,*,question=''):
     A figure absent from a *partial* source (``evidence_incomplete``) is not listed here: it may sit
     in the part that was never stored, so it is ``insufficient_number_values``, a different outcome.
     """
-    return number_check(answer,citations,question=question)[0]
+    return number_check(answer,citations,question=question,user_text=user_text,verified=verified,state_check=state_check)[0]
 
 
-def insufficient_number_values(answer,citations,*,question=''):
+def insufficient_number_values(answer,citations,*,question='',user_text='',verified=None):
     """The figures not found in the cited sources, all of which are partial (证据不完整), not refuted."""
-    return number_check(answer,citations,question=question)[1]
+    return number_check(answer,citations,question=question,user_text=user_text,verified=verified)[1]
 
 
-def number_check(answer,citations,*,question=''):
+def number_review(answer,citations,*,question='',user_text='',verified=None,closure_log=None,state_check=False):
+    """Every sentence's verdict (see ``_review_passage``), the verified set made once for the whole text if none is given."""
+    passages=_passages(answer)
+    ctx=_Context(citations,question,user_text,state_check=state_check)
+    ctx.verified=set(verified) if verified is not None else _verified_set(passages,citations,ctx,closure_log)
+    return [_review_passage(passage,citations,ctx) for passage in passages]
+
+
+def number_check(answer,citations,*,question='',user_text='',verified=None,closure_log=None,state_check=False):
     """``(unsupported, insufficient)``: figures no complete cited source states, and figures missing
-    only from cited sources whose stored text is partial.  Unsupported wins when a figure is both."""
-    from datetime import datetime, timedelta
-    from .semantic import figure_values
-    from .language import simplified
-    answer=simplified(answer)
-    # Chinese dates are often typeset with spaces ("2025 年 12 月 31 日"), and a CJK neighbour is a word
-    # character, so the date is bounded by digits rather than by \b.
-    date_pat = re.compile(
-        r'(?<!\d)(?:\d{4}\s*[-/年]\s*)?\d{1,2}\s*[-/月]\s*\d{1,2}(?:\s*日)?(?!\d)|(?<!\d)\d{4}\s*年\s*\d{1,2}\s*月|'
-        r'\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}\b|'
-        r'\b\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b',
-        re.I
-    )
-    indexed={str(c['ordinal']):c for c in citations}
-    evidence=' '.join(str(c.get(k) or '') for c in citations for k in ('quote','check_text','title','source_url'))+' '+str(question or '')
-    grounds=' '.join(_DASHES.sub('-',evidence).split()).casefold()
+    only from cited sources whose stored text is partial.  Unsupported wins when a figure is both.
+
+    A sentence with a ``[n]`` is checked for every figure; one without only for the backstop classes
+    (money, magnitude amounts, percentages, table rows, decimals, integers of 1000 or more).  A figure
+    the user wrote, one the answer has verified elsewhere, or one that is the sum, difference, ratio
+    or change of the cited sources' figures (within the false-accept bound) is held too."""
     rejected=[];insufficient=[]
-    for passage in cited_passages(answer):
-        refs=citation_markers(passage,citations)
-        cited=[indexed[r] for r in refs if r in indexed]
-        body=' '.join(citation_check_text(c)+' '+str(c.get('published_at',''))+' '+str(c.get('source_url',''))+' '+str(c.get('title','')) for c in cited)
-        allowed=figure_values(body)
-        # A miss is "insufficient" only when every source cited for the passage is partial:
-        # if any cited source is complete, the figure had complete evidence and failed it.
-        partial=bool(cited) and all(c.get('evidence_incomplete') for c in cited)
-        for citation in cited:
-            quote=str(citation.get('quote',''))
-            # The text the checker holds is the whole source when there is one: a unit line ("In millions")
-            # beyond the shown quote still applies to the table it heads.
-            scanned=str(citation.get('check_text') or quote)
-            for marker,scale in _SCALE:
-                if marker.search(scanned):allowed|={round(v*scale,4) for v in figure_values(scanned) if v>=1}
-            if citation.get('source_type')=='calculation':
-                # A result computed on values bound per million is itself in millions.
-                allowed|={round(v*1e6,4) for v in figure_values(quote) if abs(v)>=1}
-            pub = citation.get('published_at') or citation.get('filed_at') or citation.get('trading_date')
-            if pub and isinstance(pub, str):
-                try:
-                    dt = datetime.fromisoformat(pub.replace('Z', '+00:00'))
-                    allowed.add(float(dt.day))
-                    allowed.add(float((dt + timedelta(hours=8)).day))
-                    allowed.add(float((dt - timedelta(hours=8)).day))
-                    allowed.add(float(dt.month))
-                    allowed.add(float((dt + timedelta(hours=8)).month))
-                except (ValueError, TypeError):
-                    pass
-        # A full reported value may be written bare in a table headed in millions, 亿 or billions; a
-        # number that carries its own unit ("54.2 美元") is held to that unit.
-        headed={round(v/scale,4) for v in allowed if abs(v)>=1e6 for scale in (1e6,1e8,1e9)}
-        checked=re.sub(r'\[\d+\](?:\([^)]*\))?','',passage)
-        checked=re.sub(r'https?://\S+','',checked)
-        # Its digits are not figures when the turn's evidence shows that link; an unknown link keeps them.
-        checked=_BARE_LINK.sub(lambda m:' ' if m.group(0).casefold().rstrip('/.,;:') in grounds else m.group(0),checked)
-        checked=_without_identifiers(checked,grounds)
-        # Bare financial amounts are also claims. Strip only citation identities,
-        # list labels and grounded date/period syntax, never arbitrary numbers.
-        bare=re.sub(r'^\s*\d+[.、)]\s*','',checked)
-        bare=date_pat.sub('',bare)
-        bare=re.sub(r'\d+(?:\.\d+)?\s*(?:天|日|个月|年|周|条|篇|份|项|页|行|个|次|点|位|名|步|轮|倍|小时|分|秒|字符|字|days?|hours?|items?|times?|points?|characters?|chars?)', ' ', bare)
-        number=r'\d+(?:,\d{3})*(?:\.\d+)?'
-        magnitude=r'(?:万亿|千万|百万|亿|万|千|trillion|billion|million|thousand|bn|mn|b|k|m)?'
-        # Amounts with a currency or percent are read before list labels are stripped: "0.5万亿美元"
-        # must not become "5万亿美元".
-        amounts=re.findall(number+r'\s*'+magnitude+r'\s*(?:美元|元|dollars?|USD|%|％)',checked,re.I)
-        amounts+=re.findall(r'\$\s*'+number+r'\s*'+magnitude,checked,re.I)
-        percent=bool(re.search(r'%|％|百分',passage))
-        for value,digits,scaled,unitless in _claim_figures(' '.join(amounts))+_claim_figures(bare):
-            # Exclude list numbering and calendar years to avoid false positive claim rejections
-            if (1.0<=value<=10.0 and value==int(value)) or (1990<=value<=2035 and value==int(value)):continue
-            support=allowed|headed if unitless else allowed
-            if value in support or (percent and value/100 in allowed):continue
-            if (digits>=3 or (digits>=2 and scaled)) and any(_round_to(a,digits)==_round_to(value,digits) for a in support if a):continue
-            (insufficient if partial else rejected).append(value)
+    for review in number_review(answer,citations,question=question,user_text=user_text,verified=verified,closure_log=closure_log,state_check=state_check):
+        rejected+=review['rejected'];insufficient+=review['insufficient']
     return sorted(set(rejected)),sorted(set(insufficient)-set(rejected))
+
+
+def answer_scope(answer,citations,*,question='',user_text='',verified=None,limit=20):
+    """What the check looked at, for the turn's audit: figures in marked sentences, the unmarked ones the
+    backstop checked, the unmarked ones it did not (with their line), and those no source of the turn holds."""
+    from .language import simplified
+    ctx=_Context(citations,question,user_text)
+    lines=[(stripped,checked) for _,stripped,checked in _reviewable_lines(answer,citations) if checked is not None]
+    ctx.verified=set(verified) if verified is not None else verified_figures('\n'.join(checked for _,checked in lines),citations,question=question,user_text=user_text)
+    held=set()
+    for citation in citations:held|=_figures_of(citation_check_text(citation))
+    marked=0;backstopped=[];exempted=[];no_holder=[]
+    for stripped,checked in lines:
+        for passage in cited_passages(simplified(checked)):
+            review=_review_passage(passage,citations,ctx)
+            text=passage.strip()[:200]
+            for figure in review['figures']:
+                if figure['marked']:marked+=1;continue
+                item={'value':figure['value'],'line':text}
+                if figure['how'].startswith('exempt:'):exempted.append({**item,'why':figure['how'][7:]})
+                else:backstopped.append({**item,'flagged':figure['how']=='rejected'})
+                if figure['value'] not in held and figure['value'] not in ctx.user:no_holder.append(item)
+    counts={'marked_figures':marked,'unmarked_backstopped':len(backstopped),'unmarked_exempted':len(exempted),'unmarked_no_holder':len(no_holder)}
+    return {'marked_figures':marked,'unmarked_backstopped':backstopped[:limit],'unmarked_exempted':exempted[:limit],
+            'unmarked_no_holder':no_holder[:limit],'counts':counts}
 
 # Claim validation only. These concepts never route a request or choose a tool.
 RESIGNATION_TERMS=('resign','resigned','resignation','stepped down','stepping down','辞职','辞任','离职','退任')
@@ -731,27 +1065,54 @@ def factual_claim(text):
     return any(any(contains(t, text) for t in terms) for terms in METRIC_GROUPS.values())
 
 
-def reviewed_passages(answer,citations,*,require_citations=False,check_claims=True):
-    """Diagnostics apply to affected passages, never erase other verified content."""
+def _restated_amounts_held(text,held):
+    """Whether every amount a marker-less sentence states is one the answer has already verified (or the user
+    wrote), and it names no event: a recap line repeating a cited figure needs no marker of its own."""
+    from .semantic import figure_values
+    found=list(_CLAIM_AMOUNT.finditer(text))
+    if not found or any(any(contains(k,text) for k in group) for group in CLAIM_FEATURES):return False
+    any_held=False
+    for match in found:
+        # The numeric check does not read list numbers, small integers and years as amounts; neither does this.
+        values={v for v in figure_values(match.group(0)) if not ((1<=v<=10 or 1990<=v<=2035) and v==int(v))}
+        if not values:continue
+        if not values<=held:return False
+        any_held=True
+    return any_held
+
+
+def reviewed_passages(answer,citations,*,require_citations=False,check_claims=True,user_text='',verified=None,state_check=False):
+    """Diagnostics apply to affected passages, never erase other verified content.
+
+    ``verified`` is the answer-wide verified set (``answer_verified_figures``); a caller that reviews one
+    line at a time passes the whole answer's, so every verdict agrees.  Without it the set is made from
+    ``answer`` itself."""
     accepted=[];issues=[]
+    if verified is None and (check_claims or require_citations):verified=verified_figures(answer,citations,user_text=user_text)
+    held=set(verified or ())|user_figure_values(user_text)
     for passage in cited_passages(answer):
         stripped = passage.strip()
         if not stripped:continue
         uncertainty=reports_absence(stripped)
+        labelled=is_inference_label(stripped)
         is_leadin = bool(re.match(r'^(?:以下|根据|综上|总结|如上|经查询|查询结果|核验结果|提示|注意|说明|确认后|请核对|已为您|请注意)[^。！？\n]{0,35}[：:\n]?', stripped)) or (len(stripped) < 35 and stripped.endswith(('：', ':')))
         # A heading names what follows ("## 二、营收对比", "**单季营收（FY2026 Q3）**"); one that states no
         # amount asserts nothing to cite.
         is_heading = bool(re.match(r'^#{1,6}\s',stripped) or re.fullmatch(r'\*\*[^*]+\*\*\s*[：:]?',stripped))
         has_factual_content = factual_claim(stripped)
         code=('invalid_citation' if citation_errors(stripped,citations) else
-              'missing_citation' if require_citations and has_factual_content and not citation_markers(stripped,citations) and not uncertainty and not ((is_leadin or is_heading) and not _CLAIM_AMOUNT.search(stripped)) and not (stripped.endswith(('：',':')) and not _CLAIM_AMOUNT.search(stripped)) else None)
+              'missing_citation' if require_citations and has_factual_content and not labelled and not citation_markers(stripped,citations) and not uncertainty and not ((is_leadin or is_heading) and not _CLAIM_AMOUNT.search(stripped)) and not (stripped.endswith(('：',':')) and not _CLAIM_AMOUNT.search(stripped)) and not _restated_amounts_held(stripped,held) else None)
         if not code and check_claims:
             # Two outcomes: a figure the complete sources do not state is refuted; one missing only from a
             # partial source is "证据不完整" (it may sit in the part that was never stored).
-            unsupported,insufficient=number_check(stripped,citations)
-            code=('unsupported_numeric_claim' if unsupported else
+            unsupported,insufficient=number_check(stripped,citations,user_text=user_text,verified=verified,state_check=state_check)
+            marked=bool(citation_markers(stripped,citations))
+            # An unmarked sentence is held to the backstop only: what we know is that it names no source,
+            # not that a source disagrees.  An absence report states no fact.
+            if unsupported and not marked and uncertainty:unsupported=[]
+            code=(('unsupported_numeric_claim' if marked else 'missing_citation') if unsupported else
                   'insufficient_numeric_evidence' if insufficient else
-                  'unsupported_claim' if unsupported_claims(stripped,citations) else None)
+                  'unsupported_claim' if not labelled and unsupported_claims(stripped,citations) else None)
         if code:issues.append(code)
         else:accepted.append(stripped)
     return accepted,issues
@@ -807,7 +1168,7 @@ def _reviewable_lines(answer,citations):
     return out
 
 
-def reviewed_answer(answer,citations,*,require_citations=False,check_claims=True):
+def reviewed_answer(answer,citations,*,require_citations=False,check_claims=True,user_text='',verified=None):
     """Drop only what cannot be supported, line by line, so the answer keeps its formatting.
 
     ``reviewed_passages`` reads sentences; the answer is written in lines.  A rejected passage used
@@ -817,12 +1178,13 @@ def reviewed_answer(answer,citations,*,require_citations=False,check_claims=True
     sentence), and a prose line keeps the sentences that passed.
     """
     kept=[];issues=[]
+    if verified is None and (check_claims or require_citations):verified=answer_verified_figures(answer,citations,user_text=user_text)
     for line,stripped,checked in _reviewable_lines(answer,citations):
         if checked is None:
             kept.append(line);continue
         # A list marker is not a sentence ("1." would otherwise split off as one).
         bullet=_BULLET.match(stripped)
-        accepted,line_issues=reviewed_passages(checked[bullet.end():] if bullet else checked,citations,require_citations=require_citations,check_claims=check_claims)
+        accepted,line_issues=reviewed_passages(checked[bullet.end():] if bullet else checked,citations,require_citations=require_citations,check_claims=check_claims,user_text=user_text,verified=verified)
         if not line_issues:
             kept.append(line);continue
         issues.extend(line_issues)
@@ -835,14 +1197,29 @@ def reviewed_answer(answer,citations,*,require_citations=False,check_claims=True
     return text,issues
 
 
-def rejected_lines(answer,citations,*,require_citations=False,check_claims=True):
+def rejected_lines(answer,citations,*,require_citations=False,check_claims=True,user_text='',verified=None,state_check=False):
     """The lines ``reviewed_answer`` drops or trims, each with its first reason, for the repair."""
     out=[]
+    if verified is None and (check_claims or require_citations):verified=answer_verified_figures(answer,citations,user_text=user_text)
     for _,stripped,checked in _reviewable_lines(answer,citations):
         if checked is None:continue
         bullet=_BULLET.match(stripped)
-        _,issues=reviewed_passages(checked[bullet.end():] if bullet else checked,citations,require_citations=require_citations,check_claims=check_claims)
+        _,issues=reviewed_passages(checked[bullet.end():] if bullet else checked,citations,require_citations=require_citations,check_claims=check_claims,user_text=user_text,verified=verified,state_check=state_check)
         if issues:out.append((stripped,issues[0]))
+    return out
+
+
+def labelled_inference_lines(answer,citations,*,user_text=''):
+    """The sentences that carry an inference label (推断/估算/推算/假设) and passed: their premises hold, or they
+    cite nothing.  For a later surface to show them as inference; nothing displays them yet."""
+    verified=answer_verified_figures(answer,citations,user_text=user_text)
+    out=[]
+    for _,_,checked in _reviewable_lines(answer,citations):
+        if checked is None:continue
+        for passage in cited_passages(checked):
+            stripped=passage.strip()
+            if stripped and is_inference_label(stripped) and not reviewed_passages(stripped,citations,check_claims=True,user_text=user_text,verified=verified)[1]:
+                out.append(stripped)
     return out
 
 

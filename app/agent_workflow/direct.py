@@ -230,6 +230,8 @@ REPAIRABLE={'unsupported_numeric_claim','insufficient_numeric_evidence','unsuppo
             'quote_not_found','quote_too_short','unsupported_numeric','field_mismatch',
             'derived_requires_calculate','bad_ordinal','claims_missing'}
 MAX_REPAIR_ROUNDS=2
+# Tools whose results are the product's own state; an answer narrating them is held to that state.
+SYSTEM_STATE_TOOLS={'query_system_status','query_research_queue','add_to_research_queue','remove_from_research_queue','open_page','select_stock','list_routines'}
 REPAIR_INSTRUCTION=('上面草稿里的这些行没有通过来源核对。请原样输出完整回答（Markdown，表格和标题保持不变），只允许修正行内的来源编号 [n]：'
     '被拒的数字改用 rejected_numbers_appear_in 指出的来源编号，或 cited_sources 里确实载有该数字的来源编号；'
     '缺少来源编号的事实句，按 cited_sources 补上正确的 [n]。'
@@ -1266,6 +1268,17 @@ class Turn:
         if self.original.startswith(CONTROL_PREFIXES):return self.request_words()
         return self.original
 
+    def user_stated_text(self):
+        """Everything the person typed in this conversation: this turn's words and the user messages of the
+        history.  Never ``self.question`` (the model's rewrite of it) and never an assistant or system message:
+        a model must not be able to ground a figure by writing it.  A figure in here is the user's own, so
+        the answer may restate it and ``calculate`` may bind it."""
+        parts=[self.user_words()]
+        for message in layers.conversation_messages([m for m in self.messages if isinstance(m,dict)]):
+            content=message.get('content')
+            if message.get('role')=='user' and isinstance(content,str) and not content.startswith(CONTROL_PREFIXES):parts.append(content)
+        return '\n'.join(part for part in parts if part)
+
     def clarification_labels(self,offsets):
         """Render only the model-selected, server-owned answer openings."""
         catalogue={entry.get('answers_back'):entry for entry in self.context.history_citation_catalogue if isinstance(entry,dict)}
@@ -1521,7 +1534,7 @@ class Turn:
                     if name=='calculate':
                         from .calculation import bindable_values, calculate
                         try:
-                            value=calculate(args,self.citations)
+                            value=calculate(args,self.citations,self.user_stated_text())
                         except ValueError as exc:
                             # The reason is actionable: it says which input is unbound and which
                             # numbers the cited source really holds.
@@ -2237,7 +2250,7 @@ class Turn:
 
     def system_state_text(self):
         """What this turn read from the product's own state: the ground for an answer about that state."""
-        names={'query_system_status','query_research_queue','add_to_research_queue','remove_from_research_queue','open_page','select_stock','list_routines'}
+        names=SYSTEM_STATE_TOOLS
         parts=[]
         for f in self.feedback:
             if not (isinstance(f,dict) and f.get('name') in names and isinstance(f.get('result'),dict) and f['result'].get('ok')):continue
@@ -2487,20 +2500,26 @@ class Turn:
                     return "操作已完成。"
                 answer='\n\n'.join(_fmt_op(f) for f in operational)
         if self.route in {'A','D'}:
-            from .evidence import rejected_lines, reviewed_answer
+            from .evidence import answer_scope, answer_verified_figures, rejected_lines, reviewed_answer
             has_configured_news = any(c.get('source_type')=='configured_news' or c.get('origin')=='configured_news' for c in self.citations)
             is_web = any(getattr(obs,'tool_name',None) in {'web_research','ingest_web_source'} or (isinstance(obs,dict) and (obs.get('name') in {'web_research','ingest_web_source'} or obs.get('route')=='public_web_research')) for obs in self.observations) or any(c.get('source_type')=='web' for c in self.citations)
             check_claims = not generated and (self.route=='A' or has_configured_news or not is_web)
             require_citations = not generated and (self.route=='A' or has_configured_news or (bool(self.observations) and not is_web and not self.pending))
             state=self.system_state_text() if check_claims and not self.citations else ''
-            if state:
+            # A state tool that was attempted but failed supplies no trusted state; the narration is
+            # still held to the (empty) state, so a success it claims with an invented time is flagged.
+            attempted_state=bool(check_claims and not self.citations and not state and any(
+                isinstance(f,dict) and f.get('name') in SYSTEM_STATE_TOOLS for f in self.feedback))
+            state_cited=None;state_citation=None
+            if state or attempted_state:
                 # An answer about the product's own state (the research queue, a task) has no source to
                 # cite; its check is that every figure it states is in that state.
                 from .evidence import unsupported_number_values
                 # Every sentence is held to the state, not only a line's last one.
                 cited='\n'.join(re.sub(r'([。！？])',r' [1]\1',line)+' [1]' if line.strip() else line for line in answer.splitlines())
-                if not unsupported_number_values(cited,[{'ordinal':1,'quote':state,'source_type':'system_state'}]):
-                    check_claims=require_citations=False
+                state_cited=cited;state_citation=[{'ordinal':1,'quote':state,'source_type':'system_state'}]
+                if not unsupported_number_values(cited,state_citation,user_text=self.user_stated_text(),state_check=True):
+                    check_claims=require_citations=False;state_cited=None
             from .claim_gate_flags import (
                 claim_jev_max_per_turn, claim_jev_support_mode, claim_jev_support_threshold,
                 claim_quote_gate_mode, claim_quote_min_chars, legacy_prose_guards_enabled,
@@ -2531,19 +2550,36 @@ class Turn:
                 self.last_claim_issues=list(application.issues)
                 answer=application.prose
                 self.audit['claim_gate' if gate_mode=='enforce' else 'claim_gate_shadow']=application.audit
+            # One verified set for the whole answer, handed to every line-level check so their verdicts agree.
+            user_text=self.user_stated_text();closure_log=[]
+            verified=answer_verified_figures(answer,self.citations,user_text=user_text,closure_log=closure_log)
+            if closure_log:self.audit['closure_accepted']=closure_log[:8]
+            else:self.audit.pop('closure_accepted',None)
+            # What the number check looked at, so the figures it left alone can be read by hand (Langfuse).
+            try:self.audit['scope']=answer_scope(answer,self.citations,user_text=user_text,verified=verified)
+            except Exception as exc:self.audit['scope']={'error':type(exc).__name__}
             if gate_mode=='enforce' and application is not None:
                 kept,issues=application.kept_prose,list(application.display_issues)
                 rejected=list(application.dropped_lines)
                 if legacy_prose_guards_enabled():
-                    _,legacy_issues=reviewed_answer(answer,self.citations,require_citations=require_citations,check_claims=check_claims)
+                    _,legacy_issues=reviewed_answer(answer,self.citations,require_citations=require_citations,check_claims=check_claims,user_text=user_text,verified=verified)
                     self.audit['legacy_guard_warnings']=list(legacy_issues)
                     notes=application.audit['answer_quality_notes']
                     notes['legacy_issue_count']=len(legacy_issues)
                     notes['claim_drop_count']=len(application.dropped_lines)
                     notes['legacy_disagreement']=bool(legacy_issues)!=bool(application.issues)
             else:
-                kept,issues=reviewed_answer(answer,self.citations,require_citations=require_citations,check_claims=check_claims)
-                rejected=rejected_lines(answer,self.citations,require_citations=require_citations,check_claims=check_claims) if issues else []
+                kept,issues=reviewed_answer(answer,self.citations,require_citations=require_citations,check_claims=check_claims,user_text=user_text,verified=verified)
+                rejected=rejected_lines(answer,self.citations,require_citations=require_citations,check_claims=check_claims,user_text=user_text,verified=verified) if issues else []
+                if state_cited is not None and check_claims:
+                    # The scope exemptions are calibrated for prose about the world.  Narration of the
+                    # system's own actions is held to the state log in full (a clock time included), so
+                    # its rejected lines join the answer's: an unconfirmed receipt is flagged, not lost.
+                    seen={line for line,_ in rejected}
+                    for line,code in rejected_lines(state_cited,state_citation,require_citations=False,check_claims=True,user_text=user_text,verified=verified,state_check=True):
+                        plain=re.sub(r'\s*\[1\]','',line).strip()
+                        if plain and plain not in seen:
+                            rejected.append((plain,code));issues.append(code);seen.add(plain)
                 if application is not None:
                     notes=application.audit['answer_quality_notes']
                     notes['legacy_issue_count']=len(issues)
@@ -2572,7 +2608,7 @@ class Turn:
                 else:
                     # Annotate, never delete: the sentence stays as written and is reported as unverified.
                     from .unverified import entries
-                    self.unverified_lines=entries(self.last_rejected,self.citations)
+                    self.unverified_lines=entries(self.last_rejected,self.citations,user_text=user_text,verified=verified)
                     self.audit['unverified_lines']=self.unverified_lines
                     answer=answer.rstrip()+'\n\n（另有 %d 处表述未能与来源核对，已保留并标注“证据不足”。）' % len(self.last_rejected or issues)
                     status='partially_succeeded'
@@ -2614,20 +2650,28 @@ class Turn:
         if result['reason'] not in REPAIRABLE or not (self.observations or self.system_state_text()) or self.pending or self.budget(soft=False):
             return result
         best=result;best_issues=list(self.last_issues);draft=answer;retry_note=False
+        best_markers=len(re.findall(r'\[\d+\]',best['answer']))
         best_rejected=list(self.audit.get('rejected_lines') or [])
         best_pairs=list(self.last_rejected)
         self.audit['answer_repair_reason']=result['reason']
         # Code first: a citation slip it can prove is re-pointed here, and the model only sees what is left.
         from .unverified import cited_sources,merge_repair,remap_citations
+        from .evidence import answer_verified_figures
+        user_text=self.user_stated_text()
+        # What the audit says of scope and closure describes the answer returned, like the rest of it.
+        snapshot=lambda:{key:self.audit.get(key) for key in ('scope','closure_accepted')}
+        best_audit=snapshot()
         if best_pairs:
-            remapped,changes=remap_citations(draft,best_pairs,self.citations)
+            remapped,changes=remap_citations(draft,best_pairs,self.citations,user_text=user_text,
+                                             verified=answer_verified_figures(draft,self.citations,user_text=user_text))
             if changes:
                 self.audit['citation_remaps']=changes
                 candidate=self.finish(remapped)
                 if candidate['status']=='succeeded':return candidate
-                if len(self.last_issues)<len(best_issues):
+                if len(self.last_issues)<len(best_issues) or (len(self.last_issues)==len(best_issues) and len(re.findall(r'\[\d+\]',candidate['answer']))>best_markers):
                     best,best_issues,draft=candidate,list(self.last_issues),remapped
-                    best_rejected=list(self.audit.get('rejected_lines') or []);best_pairs=list(self.last_rejected)
+                    best_markers=len(re.findall(r'\[\d+\]',candidate['answer']))
+                    best_rejected=list(self.audit.get('rejected_lines') or []);best_pairs=list(self.last_rejected);best_audit=snapshot()
         for attempt in range(1,MAX_REPAIR_ROUNDS+1):
             self.audit['answer_repair_count']=attempt
             self.audit['decision_steps']+=1
@@ -2636,7 +2680,7 @@ class Turn:
                 rejected=[];insufficient=[]
                 try:
                     from .evidence import number_check
-                    unsupported,missing=number_check(draft,self.citations)
+                    unsupported,missing=number_check(draft,self.citations,user_text=user_text)
                     rejected=unsupported[:8];insufficient=missing[:8]
                 except Exception:rejected=[];insufficient=[]
                 # A rejected number is usually a citation slip, not a fabrication: the figure sits in the
@@ -2698,13 +2742,19 @@ class Turn:
                 if candidate['status']=='succeeded':return candidate
                 # A repair that fixed nothing is not a better answer; keep whichever states the most.  An
                 # answer that kept nothing at all is replaced by the attempt, whatever it now fails on.
-                progressed=len(self.last_issues)<len(best_issues)
+                # On an issue tie, a version that attaches more of its citations is the better answer.
+                cand_markers=len(re.findall(r'\[\d+\]',candidate['answer']))
+                progressed=len(self.last_issues)<len(best_issues) or (len(self.last_issues)==len(best_issues) and cand_markers>best_markers)
                 if progressed or best['status']=='failed':
                     best,best_issues,draft=candidate,list(self.last_issues),text
-                    best_rejected=list(self.audit.get('rejected_lines') or []);best_pairs=list(self.last_rejected)
+                    best_markers=cand_markers
+                    best_rejected=list(self.audit.get('rejected_lines') or []);best_pairs=list(self.last_rejected);best_audit=snapshot()
                 if not progressed:break
         # The audit describes the answer returned, not the last attempt.
         self.audit['stop_reason']=best['reason'];self.audit['answer_issues']=best_issues
+        for key,value in best_audit.items():
+            if value is None:self.audit.pop(key,None)
+            else:self.audit[key]=value
         if best_rejected:self.audit['rejected_lines']=best_rejected
         self.audit['unverified_lines']=best.get('unverified_lines') or []
         if not self.audit['unverified_lines']:self.audit.pop('unverified_lines')
@@ -3025,7 +3075,7 @@ async def run_direct_turn(question,context,*,emit,messages=None,state=None):
         observability.end_trace(turn.obs,error=type(exc).__name__);raise
     events=turn.audit.get('truncation_events') or []
     observability.score_citation_audit(turn.obs,verified=len(turn.citations),unverified=len(turn.unverified_lines or turn.last_issues),unverified_lines=turn.unverified_lines,
-        truncation_events=len(events),insufficient=turn.audit.get('insufficient_evidence_lines'))
+        truncation_events=len(events),insufficient=turn.audit.get('insufficient_evidence_lines'),scope=turn.audit.get('scope'))
     observability.end_trace(turn.obs,output=result.get('answer'),metadata={'status':result.get('status'),'reason':result.get('reason'),
         'model_calls':turn.audit.get('model_calls'),'tool_calls':turn.audit.get('tool_calls'),'token_usage':turn.audit.get('token_usage'),
         'truncation_events':len(events),'truncation_sites':[e['site'] for e in events]})

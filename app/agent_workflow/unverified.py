@@ -34,11 +34,13 @@ def _holders(value,citations):
             and value in figure_values(citation_check_text(c))]
 
 
-def line_numbers(line,citations):
-    """The unchecked figures of one line as written in it (unsupported or insufficient), and which of them no source holds at all."""
+def line_numbers(line,citations,*,user_text='',verified=None):
+    """The unchecked figures of one line as written in it (unsupported or insufficient), and which of them no source holds at all.
+
+    ``verified`` is the answer-wide verified set, so that this line agrees with the verdict on the whole answer."""
     from .evidence import number_check
     from .semantic import figure_values
-    try:rejected=set(v for part in number_check(line,citations) for v in part)
+    try:rejected=set(v for part in number_check(line,citations,user_text=user_text,verified=verified) for v in part)
     except Exception:rejected=set()
     written=[]
     for token in _NUMBER.findall(_MARKER.sub('',line)):
@@ -47,17 +49,17 @@ def line_numbers(line,citations):
     return rejected,written
 
 
-def entries(rejected,citations):
+def entries(rejected,citations,*,user_text='',verified=None):
     """``[{line, reason, numbers}]``: ``numbers`` are the figures written in the line that no source states."""
     out=[]
     for line,code in rejected:
-        _,written=line_numbers(line,citations)
+        _,written=line_numbers(line,citations,user_text=user_text,verified=verified)
         missing=[token for token,values in written if not any(_holders(v,citations) for v in values)]
         out.append({'line':line[:400],'reason':str(code),'numbers':list(dict.fromkeys(missing))})
     return out
 
 
-def remap_citations(draft,rejected,citations):
+def remap_citations(draft,rejected,citations,*,user_text='',verified=None):
     """Re-point a ``[n]`` slip when exactly one source holds every figure the check rejected on the line.
 
     Deterministic and conservative: only a line whose single marker names a source that does not hold
@@ -65,7 +67,7 @@ def remap_citations(draft,rejected,citations):
     """
     changes=[];text=draft
     for line,_ in rejected:
-        rejected_values,_ = line_numbers(line,citations)
+        rejected_values,_ = line_numbers(line,citations,user_text=user_text,verified=verified)
         used=markers(line)
         if not rejected_values or len(set(used))!=1:continue
         common=None
@@ -104,9 +106,17 @@ def cited_sources(rejected,citations,holders=None,*,on_cut=None):
 
 def merge_repair(draft,rewrite):
     """Take only the ``[n]`` edits of a rewrite: every line of the draft stays, the rewrite's version of
-    it is used when it is the same sentence, and lines the rewrite added are ignored."""
+    it is used when it is the same sentence, and lines the rewrite added are ignored.
+
+    A marker is a declaration ("check this sentence"), so a rewrite that removes every marker from a line that
+    had one is refused and the draft's line stays: deleting the marker must not be a way out of the check."""
     candidates={}
     for line in rewrite.split('\n'):
         key=line_key(line)
         if key:candidates[key]=line
-    return '\n'.join(candidates.get(line_key(line),line) if line_key(line) else line for line in draft.split('\n'))
+    def merged(line):
+        key=line_key(line)
+        if not key:return line
+        chosen=candidates.get(key,line)
+        return line if markers(line) and not markers(chosen) else chosen
+    return '\n'.join(merged(line) for line in draft.split('\n'))

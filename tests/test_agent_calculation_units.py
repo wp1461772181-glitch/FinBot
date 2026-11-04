@@ -13,8 +13,11 @@ def test_a_value_may_be_converted_to_billions_with_a_power_of_ten():
     assert result['value']=='50.12'
 
 def test_an_arbitrary_constant_is_still_refused():
-    with pytest.raises(ValueError):
-        calculate({'expression':'a*7','inputs':[{'name':'a','value':'50115000000','source_ordinal':1}]},SOURCE)
+    # F2 (checker-numbers brief): a literal up to 1000 with up to 4 decimals is allowed now (a*7 was refused);
+    # anything larger or finer is still refused.
+    for expression in ('a*1001','a*0.00001','a*7777'):
+        with pytest.raises(ValueError):
+            calculate({'expression':expression,'inputs':[{'name':'a','value':'50115000000','source_ordinal':1}]},SOURCE)
 
 def test_a_provider_failure_mid_loop_answers_from_the_evidence_gathered():
     steps=iter([{'tool_calls':[{'id':'1','function':{'name':'query_stock_prices','arguments':json.dumps({'symbol':'AMD'})}}]}])
