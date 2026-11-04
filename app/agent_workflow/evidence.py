@@ -372,7 +372,7 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
             row['_citations']=[{**c,'ordinal':mapping[c['ordinal']]} for c in rich]
             accepted.append(row)
             continue
-        kind=row.get('source_type') or ('configured_news' if name=='search_configured_news' else 'web' if name=='web_research' else 'official_filing' if name=='query_sec_filings' else 'saved_price' if name=='query_stock_prices' else 'saved_forecast' if name=='query_latest_forecast' else 'ai_analysis' if 'analysis' in name else 'research_faq' if 'faq' in name else 'saved_material')
+        kind=row.get('source_type') or ('market_quote' if name=='query_market_quote' else 'configured_news' if name=='search_configured_news' else 'web' if name=='web_research' else 'official_filing' if name=='query_sec_filings' else 'saved_price' if name=='query_stock_prices' else 'saved_forecast' if name=='query_latest_forecast' else 'ai_analysis' if 'analysis' in name else 'research_faq' if 'faq' in name else 'saved_material')
         if kind=='configured_news' and not _has_valid_http_url(row.get('url') or row.get('source_url')):
             continue
         if kind=='saved_price_set':
@@ -472,9 +472,23 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
             # The quote stays the close (the restore check compares it); the row's other prices are
             # kept beside it so an answer that states the open, high, low or volume can be checked.
             citations[ordinal-1]['figures']=' '.join(f'{k} {row[k]}' for k in ('trading_date','open','high','low','close','volume') if row.get(k) is not None)
+        elif kind=='market_quote':
+            from .calculation import format_price
+            for k in ('price','close','prev_close'):
+                if row.get(k) is not None:
+                    try: row[k]=float(format_price(row[k]))
+                    except Exception: pass
+            citations[ordinal-1]['fields']=_citation_fields(row)
+            citations[ordinal-1]['figures']=' '.join(f'{k} {row[k]}' for k in ('trading_date','price','close','prev_close','change_pct') if row.get(k) is not None)
         row['citation']=f'[{ordinal}]';row['source_type']=kind
         accepted.append(row)
     return accepted
+
+
+def citation_from_row(name: str, row: dict, citations: list[dict], scope: dict | None = None) -> dict:
+    """Build citation for a single row according to number_rows logic."""
+    res = number_rows(name, [row], citations, scope)
+    return res[0] if res else row
 
 
 _DASHES=re.compile('[‐‑‒–—−]')
@@ -1121,6 +1135,63 @@ def claim_hints(answer,citations,*,user_text='',verified=None,state_check=False)
                 out.append({'line':stripped,'reason':'event_not_in_source','sentence':passage,'ordinal':int(sources[0]['ordinal']),
                             'terms':[event],'snippet':''})
     return out
+
+_NON_TICKER_WORDS = frozenset({
+    'SEC', 'FY', 'EPS', 'URL', 'HTTPS', 'HTTP', 'USD', 'CEO', 'CFO', 'CTO', 'COO',
+    'AI', 'PE', 'PB', 'PS', 'ROE', 'ROA', 'GAAP', 'NON', 'TTM',
+    'Q1', 'Q2', 'Q3', 'Q4', 'H1', 'H2', 'EST', 'EDT', 'CST', 'CDT', 'PST', 'PDT', 'UTC', 'GMT',
+    'AND', 'OR', 'NOT', 'FOR', 'THE', 'IN', 'ON', 'AT', 'TO', 'BY', 'OF', 'WITH',
+    'A', 'I', 'IT', 'IS', 'AS', 'BE', 'DO', 'AN', 'NO', 'SO', 'UP',
+})
+
+def shadow_entity_attribution_check(answer: str, citations: list[dict]) -> list[tuple[str, str, list[str | None]]]:
+    """Shadow-mode check for sentences attributing a claim to the wrong ticker.
+
+    Detects when a sentence cites sources whose symbol is all Y, but the sentence body
+    only mentions a different ticker X.
+    Only logged to audit/results for observation; never blocks or modifies answer.
+    """
+    if not answer or not citations:
+        return []
+    indexed = {int(c['ordinal']): c for c in citations if isinstance(c, dict) and isinstance(c.get('ordinal'), int)}
+    mismatches = []
+
+    for line in answer.splitlines():
+        line_str = line.strip()
+        if not line_str:
+            continue
+        markers = citation_markers(line_str, citations)
+        if not markers:
+            continue
+        cited = [indexed[int(m)] for m in markers if int(m) in indexed]
+        if not cited:
+            continue
+        cited_symbols = [c.get('symbol') for c in cited]
+        if not cited_symbols or not all(s and isinstance(s, str) and s.strip() for s in cited_symbols):
+            continue
+        unique_cited = {s.strip().upper() for s in cited_symbols}
+        if len(unique_cited) != 1:
+            continue
+        y_sym = next(iter(unique_cited))
+
+        plain = re.sub(r'\[\d+\]', '', line_str)
+        found_tokens = re.findall(r'(?<![A-Za-z0-9])[A-Z]{1,5}(?:\.[A-Z]{1,2})?(?![A-Za-z0-9])', plain)
+        valid_tickers = {t.upper() for t in found_tokens if t.upper() not in _NON_TICKER_WORDS}
+
+        if len(valid_tickers) == 1:
+            x_sym = next(iter(valid_tickers))
+            if x_sym != y_sym:
+                mismatches.append((line_str, x_sym, [c.get('symbol') for c in cited]))
+
+    return mismatches
+
+def check_answer(answer: str, citations: list[dict], **kwargs) -> dict:
+    """Shadow entity attribution and answer-level check helper."""
+    mismatches = shadow_entity_attribution_check(answer, citations)
+    return {
+        "shadow_entity_mismatches": mismatches,
+        "audit": {"shadow_entity_mismatches": mismatches},
+    }
 
 _PARTIAL_8K_TEXTS = frozenset({'exhibit_99_1_only', 'primary_document_only'})
 

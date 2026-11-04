@@ -1,8 +1,10 @@
 from __future__ import annotations
 import asyncio
+import copy
 import json
 import os
 import re
+import time
 import hashlib
 from datetime import UTC, date, datetime
 from typing import Literal
@@ -11,6 +13,7 @@ from langchain_core.tools import tool
 from sqlalchemy import text
 from .config import DATABASE_URL
 from .symbols import normalize_market_symbol
+from .knowledge.runtime import current_research_context
 from .knowledge.retrieval import KnowledgeUnavailable, retrieve_faq, retrieve_materials, retrieve_analysis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -768,7 +771,6 @@ class PortfolioQueryArgs(BaseModel):
 @tool(args_schema=PortfolioQueryArgs)
 async def query_portfolio(symbol: str | None = None) -> dict:
     """Read the owner's own portfolio (持仓): available funds (可用资金), total assets, each position's shares, average cost (平均成本), diluted cost (摊薄成本), latest price with its data date, floating and today's P&L (今日盈亏), position weight (仓位占比), realized P&L and the owner's plan prices. Owner only. Every figure is in the row's excerpt, so cite its [n]; to price a hypothetical purchase read the stock's price and use calculate."""
-    from .knowledge.runtime import current_research_context
     from . import portfolio
     context = current_research_context()
     owner = context.owner_hash if context else None
@@ -784,9 +786,268 @@ async def query_portfolio(symbol: str | None = None) -> dict:
     return {"ok": True, "data": rows, "source": "portfolio (owner's manual ledger + saved market_prices)",
             "as_of": summary.get("price_date")}
 
+_QUOTE_CACHE: dict[str, tuple[float, dict]] = {}
+
+class MarketQuoteArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbols: list[str] = Field(min_length=1, max_length=50, description="Fetch latest read-only market quote and recent daily close for up to 5 US tickers (including symbols not yet saved in market_prices).")
+
+def _fetch_yahoo_market_quote(sym: str, timeout: float = 5.0) -> dict | None:
+    import urllib.request
+    yahoo_sym = sym.strip().upper().replace(".", "-")
+    url = f"https://query2.finance.yahoo.com/v8/finance/chart/{yahoo_sym}?interval=1d&range=5d"
+    req = urllib.request.Request(url, headers={"User-Agent": "market-evidence-agent/0.1 (+sentinel intraday)"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    result = ((payload.get("chart") or {}).get("result") or [None])[0] or {}
+    stamps = result.get("timestamp") or []
+    quote = (((result.get("indicators") or {}).get("quote")) or [{}])[0]
+    closes = quote.get("close") or []
+    meta = result.get("meta") or {}
+    prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+
+    valid_points = [(stamps[i], float(closes[i])) for i in range(min(len(stamps), len(closes))) if closes[i] is not None]
+    if not valid_points:
+        return None
+    last_stamp, last_close = valid_points[-1]
+    trading_date = datetime.fromtimestamp(last_stamp, UTC).date().isoformat()
+    price = round(last_close, 2)
+    prev_close = round(float(prev), 2) if prev is not None else (round(valid_points[-2][1], 2) if len(valid_points) >= 2 else price)
+    change_pct = round((price / prev_close - 1) * 100, 2) if prev_close else 0.0
+    return {
+        "price": price,
+        "prev_close": prev_close,
+        "change_pct": change_pct,
+        "trading_date": trading_date,
+    }
+
+@tool(args_schema=MarketQuoteArgs)
+async def query_market_quote(symbols: list[str]) -> dict:
+    """Fetch latest read-only market quote and recent daily close for up to 5 US tickers (including symbols not yet saved in market_prices)."""
+    target_symbols = []
+    for s in symbols:
+        raw = str(s or "").strip().upper()
+        if not raw:
+            continue
+        try:
+            sym = normalize_agent_symbol(raw)
+        except Exception:
+            sym = raw
+        if sym not in target_symbols:
+            target_symbols.append(sym)
+
+    capped = len(target_symbols) > 5
+    target_symbols = target_symbols[:5]
+
+    now_ts = time.time()
+    data = []
+
+    for sym in target_symbols:
+        cached = _QUOTE_CACHE.get(sym)
+        if cached and (now_ts - cached[0] < 60.0):
+            data.append(copy.deepcopy(cached[1]))
+            continue
+
+        record = None
+        # 1. Query local market_prices table
+        try:
+            db_rows = await _query(
+                "SELECT trading_date, close FROM market_prices WHERE symbol=:symbol ORDER BY trading_date DESC LIMIT 2",
+                {"symbol": sym}
+            )
+            if db_rows:
+                price = round(float(db_rows[0]["close"]), 2)
+                trading_date = _iso_date_str(db_rows[0]["trading_date"])
+                if len(db_rows) >= 2 and db_rows[1]["close"] is not None:
+                    prev_close = round(float(db_rows[1]["close"]), 2)
+                else:
+                    prev_close = price
+                change_pct = round((price / prev_close - 1) * 100, 2) if prev_close else 0.0
+                record = {
+                    "source_type": "market_quote",
+                    "symbol": sym,
+                    "price": price,
+                    "close": price,
+                    "prev_close": prev_close,
+                    "change_pct": change_pct,
+                    "trading_date": trading_date,
+                    "excerpt": f"{sym} 最新收盘价 {price}（交易日 {trading_date}，前收 {prev_close}，涨跌幅 {change_pct}%）。",
+                    "status": "ok",
+                }
+        except Exception:
+            pass
+
+        # 2. If not found locally, call Yahoo Finance chart API with timeout 5.0s
+        if not record:
+            try:
+                remote_info = await asyncio.to_thread(_fetch_yahoo_market_quote, sym, timeout=5.0)
+                if remote_info:
+                    p = remote_info["price"]
+                    pc = remote_info["prev_close"]
+                    cp = remote_info["change_pct"]
+                    td = remote_info["trading_date"]
+                    record = {
+                        "source_type": "market_quote",
+                        "symbol": sym,
+                        "price": p,
+                        "close": p,
+                        "prev_close": pc,
+                        "change_pct": cp,
+                        "trading_date": td,
+                        "excerpt": f"{sym} 最新收盘价 {p}（交易日 {td}，前收 {pc}，涨跌幅 {cp}%）。",
+                        "status": "ok",
+                    }
+            except Exception:
+                pass
+
+        # 3. Fallback when unavailable
+        if not record:
+            record = {
+                "source_type": "market_quote",
+                "symbol": sym,
+                "status": "unavailable",
+                "excerpt": f"{sym} 暂无可用的市场报价。",
+            }
+        else:
+            _QUOTE_CACHE[sym] = (now_ts, copy.deepcopy(record))
+
+        data.append(record)
+
+    meta = {}
+    if capped:
+        meta["capped_at"] = 5
+    return {"ok": True, "data": data, "meta": meta, "source": "market_quote (read-only)"}
+
+class AlertsArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str | None = Field(default=None, min_length=1, max_length=12, description="Optional symbol to filter sentinel alerts.")
+    limit: int = Field(default=20, ge=1, le=50, description="Max alerts to read (up to 50).")
+
+    @field_validator("symbol")
+    @classmethod
+    def valid_symbol(cls, value): return None if value is None else normalize_agent_symbol(value)
+
+@tool(args_schema=AlertsArgs)
+async def query_alerts(symbol: str | None = None, limit: int = 20) -> dict:
+    """Read recent price/news/filing sentinel alerts from the local alert store."""
+    from pathlib import Path
+    import sqlite3
+    db_env = os.environ.get("SENTINEL_DB_PATH")
+    path = Path(db_env) if db_env else (Path(__file__).resolve().parent.parent / "data" / "sentinel.db")
+    if not path.exists() or not path.is_file():
+        return {"ok": True, "status": "ok", "data": [], "meta": {"note": "sentinel_db_not_found"}}
+
+    limit_val = min(max(1, limit), 50)
+
+    def _read_alerts_ro() -> list[dict]:
+        try:
+            conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=2.0)
+            conn.row_factory = sqlite3.Row
+            try:
+                if symbol:
+                    cur = conn.execute(
+                        "SELECT id, symbol, kind, text, created_at FROM alerts WHERE symbol = ? ORDER BY id DESC LIMIT ?",
+                        (symbol, limit_val)
+                    )
+                else:
+                    cur = conn.execute(
+                        "SELECT id, symbol, kind, text, created_at FROM alerts ORDER BY id DESC LIMIT ?",
+                        (limit_val,)
+                    )
+                db_rows = cur.fetchall()
+            finally:
+                conn.close()
+        except Exception:
+            return []
+
+        results = []
+        for r in db_rows:
+            row_id = r["id"]
+            sym = r["symbol"]
+            kind = r["kind"]
+            txt = r["text"] or ""
+            created_at = r["created_at"]
+            try:
+                dt_str = datetime.fromtimestamp(created_at, UTC).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                dt_str = str(created_at)
+            excerpt = f"[{dt_str}] {sym} {kind}: {txt}".strip()
+            results.append({
+                "id": f"alert:{row_id}",
+                "source_type": "portfolio",
+                "symbol": sym,
+                "kind": kind,
+                "text": txt,
+                "created_at": created_at,
+                "excerpt": excerpt,
+            })
+        return results
+
+    rows = await asyncio.to_thread(_read_alerts_ro)
+    return {"ok": True, "status": "ok", "data": rows, "source": "sentinel.db alerts"}
+
+class HoldingsOverviewArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+@tool(args_schema=HoldingsOverviewArgs)
+async def query_holdings_overview() -> dict:
+    """Read the owner's portfolio positions together with each holding's latest formal forecast, earnings judgment, and position plan in one call."""
+    from . import portfolio
+    context = current_research_context()
+    owner = context.owner_hash if context else None
+    if not owner:
+        return {"ok": False, "data": [], "error_code": "owner_login_required"}
+    summary = await asyncio.to_thread(portfolio.build_summary, owner)
+    rows = portfolio.evidence_rows(summary)
+
+    for r in rows:
+        sym = r.get("symbol")
+        if not sym:
+            continue
+        try:
+            fc_rows = await _query(
+                "SELECT id, version_no, decision_at, decision_probabilities, joint_probabilities, baseline_probabilities, target_contract "
+                "FROM forecast_versions_v2 WHERE symbol=:symbol ORDER BY created_at DESC, version_no DESC, id DESC LIMIT 1",
+                {"symbol": sym}
+            )
+            if fc_rows:
+                fc = fc_rows[0]
+                v_no = fc.get("version_no") or 1
+                d_date = _iso_date_str(fc.get("decision_at"))
+                probs = next((fc.get(k) for k in ('decision_probabilities', 'joint_probabilities', 'baseline_probabilities') if fc.get(k) not in (None, 'null')), None)
+                if isinstance(probs, str):
+                    try:
+                        probs = json.loads(probs)
+                    except Exception:
+                        probs = {}
+                if isinstance(probs, dict):
+                    bullish = probs.get("bullish")
+                    neutral = probs.get("neutral")
+                    bearish = probs.get("bearish")
+                    if bullish is not None and neutral is not None and bearish is not None:
+                        b_pct = f"{float(bullish)*100:.1f}" if float(bullish) <= 1.0 else f"{float(bullish):.1f}"
+                        n_pct = f"{float(neutral)*100:.1f}" if float(neutral) <= 1.0 else f"{float(neutral):.1f}"
+                        be_pct = f"{float(bearish)*100:.1f}" if float(bearish) <= 1.0 else f"{float(bearish):.1f}"
+                        fc_text = f"最新 20 交易日预测（第 {v_no} 版，决策日 {d_date}）：看涨 {b_pct}%、持平 {n_pct}%、看跌 {be_pct}%。"
+                        r["excerpt"] = (r.get("excerpt", "").rstrip("。") + "；" + fc_text).strip("；")
+                        r["forecast_probabilities"] = probs
+                        r["forecast_version_no"] = v_no
+        except Exception:
+            pass
+
+    return {"ok": True, "data": rows, "source": "portfolio (owner's manual ledger + latest forecasts)",
+            "as_of": summary.get("price_date")}
+
 from .agent_web_research import web_research
 
-TOOL_REGISTRY={item.name:item for item in [query_stock_prices,query_latest_forecast,query_materials,query_sec_filings,query_financials,query_research_faq,query_material_analysis,search_material_analysis,web_research,query_portfolio]}
+TOOL_REGISTRY={item.name:item for item in [
+    query_stock_prices, query_latest_forecast, query_materials, query_sec_filings,
+    query_financials, query_research_faq, query_material_analysis, search_material_analysis,
+    web_research, query_portfolio, query_market_quote, query_alerts, query_holdings_overview
+]}
 def tool_schemas(*, owner: bool = True):
     from .agent_tool_catalog import schemas
     return schemas(owner=owner)

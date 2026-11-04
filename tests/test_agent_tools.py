@@ -3,7 +3,11 @@ import asyncio
 
 
 def test_fixed_read_only_registry_and_provider_schemas():
-    assert set(TOOL_REGISTRY) == {"query_stock_prices", "query_latest_forecast", "query_materials", "query_sec_filings", "query_financials", "query_research_faq", "query_material_analysis", "search_material_analysis", "web_research", "query_portfolio"}
+    assert set(TOOL_REGISTRY) == {
+        "query_stock_prices", "query_latest_forecast", "query_materials", "query_sec_filings",
+        "query_financials", "query_research_faq", "query_material_analysis", "search_material_analysis",
+        "web_research", "query_portfolio", "query_market_quote", "query_alerts", "query_holdings_overview"
+    }
     assert set(TOOL_REGISTRY) <= {x["function"]["name"] for x in tool_schemas()}
     assert normalize_agent_symbol(" brk-b ") == "BRK.B"
     assert normalize_agent_symbol("amd") == "AMD"
@@ -394,3 +398,236 @@ def test_sec_filing_tool_reads_the_full_text_and_reports_its_size(monkeypatch):
     assert row['excerpt'].startswith('Item 7.')
     assert len(row['excerpt']) <= tools.FILING_EXCERPT_BYTES
     assert 'content_text' not in row
+
+
+def test_evidence_class_declarations():
+    from app.agent_tool_catalog import definitions
+    defs = definitions()
+    assert defs["query_portfolio"].evidence_class == "owner_record"
+    assert defs["query_alerts"].evidence_class == "owner_record"
+    assert defs["query_holdings_overview"].evidence_class == "owner_record"
+    assert defs["query_stock_prices"].evidence_class == "subject_row"
+    assert defs["query_market_quote"].evidence_class == "subject_row"
+    assert defs["query_financials"].evidence_class == "subject_row"
+    assert defs["query_sec_filings"].evidence_class == "subject_row"
+    assert defs["recall_conversations"].evidence_class == "memory"
+    assert defs["calculate"].evidence_class == "derived"
+    assert defs["calculate_formula"].evidence_class == "derived"
+
+
+def test_query_market_quote_read_only_and_fallback(monkeypatch):
+    import app.agent_tools as tools
+    tools._QUOTE_CACHE.clear()
+
+    async def mock_query(sql, params):
+        if params.get("symbol") == "AAPL":
+            return [
+                {"trading_date": "2026-11-03", "close": 230.5},
+                {"trading_date": "2026-11-02", "close": 228.0},
+            ]
+        return []
+
+    monkeypatch.setattr(tools, "_query", mock_query)
+
+    def mock_fetch_yahoo(sym, timeout=5.0):
+        if sym == "MSFT":
+            return {
+                "price": 420.0,
+                "prev_close": 415.0,
+                "change_pct": 1.20,
+                "trading_date": "2026-11-03",
+            }
+        raise RuntimeError("remote unavailable")
+
+    monkeypatch.setattr(tools, "_fetch_yahoo_market_quote", mock_fetch_yahoo)
+
+    # 1. Successful local DB lookup
+    res_aapl = asyncio.run(tools.query_market_quote.ainvoke({"symbols": ["AAPL"]}))
+    assert res_aapl["ok"] is True
+    row_aapl = res_aapl["data"][0]
+    assert row_aapl["symbol"] == "AAPL"
+    assert row_aapl["price"] == 230.5
+    assert row_aapl["prev_close"] == 228.0
+    assert row_aapl["change_pct"] == 1.1
+    assert "230.5" in row_aapl["excerpt"]
+    assert "228.0" in row_aapl["excerpt"]
+
+    # 2. Remote Yahoo fallback for uncached/unpersisted symbol
+    res_msft = asyncio.run(tools.query_market_quote.ainvoke({"symbols": ["MSFT"]}))
+    assert res_msft["ok"] is True
+    row_msft = res_msft["data"][0]
+    assert row_msft["symbol"] == "MSFT"
+    assert row_msft["price"] == 420.0
+    assert "420.0" in row_msft["excerpt"]
+
+    # 3. Remote failure gracefully degrades to unavailable
+    res_fail = asyncio.run(tools.query_market_quote.ainvoke({"symbols": ["UNKNOWN"]}))
+    assert res_fail["ok"] is True
+    row_fail = res_fail["data"][0]
+    assert row_fail["symbol"] == "UNKNOWN"
+    assert row_fail["status"] == "unavailable"
+
+    # 4. Truncation to 5 symbols
+    symbols_6 = ["S1", "S2", "S3", "S4", "S5", "S6"]
+    res_capped = asyncio.run(tools.query_market_quote.ainvoke({"symbols": symbols_6}))
+    assert res_capped["ok"] is True
+    assert len(res_capped["data"]) == 5
+    assert res_capped["meta"].get("capped_at") == 5
+
+
+def test_query_alerts_read_only_and_fallback(tmp_path, monkeypatch):
+    import app.agent_tools as tools
+    import sqlite3
+
+    # 1. Missing db file -> silent graceful return
+    monkeypatch.setenv("SENTINEL_DB_PATH", str(tmp_path / "nonexistent.db"))
+    res_missing = asyncio.run(tools.query_alerts.ainvoke({}))
+    assert res_missing["ok"] is True
+    assert res_missing["data"] == []
+    assert res_missing["meta"]["note"] == "sentinel_db_not_found"
+
+    # 2. Existing db with test alerts
+    db_file = tmp_path / "sentinel.db"
+    conn = sqlite3.connect(db_file)
+    conn.execute("CREATE TABLE alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, kind TEXT, text TEXT, created_at REAL)")
+    conn.execute("INSERT INTO alerts (symbol, kind, text, created_at) VALUES ('AAPL', 'daily', 'AAPL 涨超 5%', 1793750000.0)")
+    conn.execute("INSERT INTO alerts (symbol, kind, text, created_at) VALUES ('MSFT', 'short', 'MSFT 5分钟异动', 1793751000.0)")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("SENTINEL_DB_PATH", str(db_file))
+    res_all = asyncio.run(tools.query_alerts.ainvoke({}))
+    assert res_all["ok"] is True
+    assert len(res_all["data"]) == 2
+    assert res_all["data"][0]["source_type"] == "portfolio"
+    assert res_all["data"][0]["id"].startswith("alert:")
+    assert "MSFT" in res_all["data"][0]["excerpt"]
+
+    # Filter by symbol
+    res_aapl = asyncio.run(tools.query_alerts.ainvoke({"symbol": "AAPL"}))
+    assert res_aapl["ok"] is True
+    assert len(res_aapl["data"]) == 1
+    assert res_aapl["data"][0]["symbol"] == "AAPL"
+
+
+def test_query_holdings_overview_aggregation(monkeypatch):
+    import app.agent_tools as tools
+    import app.portfolio as portfolio
+    import json
+    from app.knowledge.runtime import research_context
+
+    mock_summary = {
+        "price_date": "2026-11-03",
+        "available_funds": "10000.00",
+        "positions_value": "5000.00",
+        "total_assets": "15000.00",
+        "floating_pnl": "500.00",
+        "today_pnl": "100.00",
+        "today_pnl_reference_only": False,
+        "realized_pnl": "0.00",
+        "warnings": [],
+        "positions": [
+            {
+                "symbol": "NVDA",
+                "shares": "10",
+                "avg_cost": "120.00",
+                "diluted_cost": "120.00",
+                "cost": "1200.00",
+                "price": "135.00",
+                "price_date": "2026-11-03",
+                "market_value": "1350.00",
+                "floating_pnl": "150.00",
+                "floating_pnl_pct": "12.50",
+                "today_pnl": "20.00",
+                "today_pnl_reference_only": False,
+                "weight_pct": "9.00",
+                "realized_pnl": "0.00",
+                "plan": {},
+            }
+        ],
+    }
+
+    monkeypatch.setattr(portfolio, "build_summary", lambda owner: mock_summary)
+
+    async def mock_query(sql, params):
+        if params.get("symbol") == "NVDA":
+            return [{
+                "id": "fc-uuid",
+                "version_no": 3,
+                "decision_at": "2026-11-01",
+                "decision_probabilities": json.dumps({"bullish": 0.65, "neutral": 0.25, "bearish": 0.10}),
+                "joint_probabilities": None,
+                "baseline_probabilities": None,
+                "target_contract": {},
+            }]
+        return []
+
+    monkeypatch.setattr(tools, "_query", mock_query)
+
+    with research_context("test_owner"):
+        res = asyncio.run(tools.query_holdings_overview.ainvoke({}))
+    assert res["ok"] is True
+    # rows: 1 account row + 1 holding row
+    assert len(res["data"]) == 2
+    holding = res["data"][1]
+    assert holding["symbol"] == "NVDA"
+    assert "最新 20 交易日预测（第 3 版，决策日 2026-11-01）：看涨 65.0%、持平 25.0%、看跌 10.0%。" in holding["excerpt"]
+
+
+def test_owner_record_evidence_class_auto_accept(monkeypatch):
+    from app.agent_workflow.direct import Turn
+    from app.agent_workflow.state import AgentRuntimeContext
+
+    t = Turn("持仓和提醒", AgentRuntimeContext("custom", "test", "dummy"), None, [], {})
+    t.route = "A"
+
+    outcome = {
+        "ok": True,
+        "source": "mock_owner_tool",
+        "data": [
+            {"id": "alert:1", "source_type": "portfolio", "symbol": "AAPL", "excerpt": "AAPL 盘前异动 5%。"}
+        ]
+    }
+
+    # Calling accept with query_alerts (which has evidence_class='owner_record')
+    t.accept("query_alerts", {}, outcome)
+    assert t.last_accepted is not None
+    assert len(t.citations) == 1
+    assert t.citations[0]["symbol"] == "AAPL"
+    assert "[1]" in t.last_accepted["data"][0]["citation"]
+
+
+def test_shadow_entity_attribution_check():
+    from app.agent_workflow.evidence import shadow_entity_attribution_check
+    from app.agent_workflow.direct import Turn
+    from app.agent_workflow.state import AgentRuntimeContext
+
+    citations = [
+        {"ordinal": 1, "quote": "100", "source_type": "saved_price", "symbol": "MSFT"}
+    ]
+
+    # 1. Plain mismatch: sentence body names AAPL, but citation 1 belongs to MSFT
+    answer_mismatch = "AAPL 收盘价为 100 美元 [1]。"
+    mismatches = shadow_entity_attribution_check(answer_mismatch, citations)
+    assert len(mismatches) == 1
+    assert mismatches[0][0] == answer_mismatch
+    assert mismatches[0][1] == "AAPL"
+    assert mismatches[0][2] == ["MSFT"]
+
+    # 2. Matching entity: no mismatch
+    answer_match = "MSFT 收盘价为 100 美元 [1]。"
+    assert shadow_entity_attribution_check(answer_match, citations) == []
+
+    # 3. Turn.finish integration: recorded in audit and result dict, but not in issues, not in unverified_lines
+    t = Turn("AAPL 股价", AgentRuntimeContext("custom", "test", "dummy"), None, [], {})
+    t.route = "A"
+    t.citations = citations
+    t.observations = [{"accepted_evidence": True}]
+
+    res = t.finish(answer_mismatch)
+    assert len(res["shadow_entity_mismatches"]) == 1
+    assert res["shadow_entity_mismatches"][0][1] == "AAPL"
+    assert res["audit"]["shadow_entity_mismatches"] == res["shadow_entity_mismatches"]
+    # Red line: shadow attribution MUST NOT add to unverified_lines, issues, or status degradation
+    assert res["unverified_lines"] == []
+    assert res["status"] == "succeeded"

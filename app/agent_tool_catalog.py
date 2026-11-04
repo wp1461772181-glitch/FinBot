@@ -249,12 +249,12 @@ class CategoryInfo:
 # category ride on the model call only once load_tools (or the turn's intent) asks for them.
 ALWAYS_ON=frozenset({'ask_user','use_result_set','calculate','calculate_formula','read_history_citation','request_action','use_skill','load_tools'})
 TOOL_CATEGORIES:dict[str,CategoryInfo]={c.name:c for c in (
- CategoryInfo('行情','股价、K 线与历史行情的读取和初始化',('query_stock_prices','initialize_prices')),
+ CategoryInfo('行情','股价、K 线与历史行情的读取和初始化',('query_stock_prices','query_market_quote','initialize_prices')),
  CategoryInfo('财报与SEC','SEC 申报、XBRL 财务数据、申报核验与抓取',('query_sec_filings','query_financials','review_filing','fetch_sec','refresh_sec','scan_official')),
  CategoryInfo('资料库','已存资料、知识库检索、入库、索引、分析与翻译',('query_materials','query_material_analysis','search_material_analysis','search_knowledge','save_material_evidence','ingest_web_source','import','import_sources','index','retry_document_index','withdraw_knowledge_document','review_knowledge_candidate','analyze','translate_content','test_retrieval_diagnostics')),
- CategoryInfo('新闻与网页','新闻搜索、网页检索和新闻源管理',('web_research','search_configured_news','manage_news_source')),
+ CategoryInfo('新闻与网页','新闻搜索、网页检索和新闻源管理',('web_research','search_configured_news','manage_news_source','query_alerts')),
  CategoryInfo('预测','已存预测的读取、新预测、修订与历史回放',('query_latest_forecast','forecast','revise_forecast','start_historical_replay')),
- CategoryInfo('持仓','持仓与账本、可用资金、持仓计划',('query_portfolio','record_trade','set_available_funds','set_position_plan')),
+ CategoryInfo('持仓','持仓与账本、可用资金、持仓计划',('query_portfolio','query_holdings_overview','record_trade','set_available_funds','set_position_plan')),
  CategoryInfo('例行与通知','定时例行任务和 Telegram 通知',('create_routine','list_routines','update_routine','delete_routine','notify_telegram')),
  CategoryInfo('记忆与技能','记住或忘记偏好、回看过去的对话、保存技能',('remember','forget','recall_conversations','read_past_conversation','save_skill')),
  CategoryInfo('工作区','工作区记录、系统状态、研究队列与 FAQ、选股和打开页面',('read_workspace','query_system_status','query_research_queue','add_to_research_queue','remove_from_research_queue','query_research_faq','select_stock','open_page')),
@@ -281,6 +281,7 @@ class ToolPolicy:
     confirmation:bool=False
     errors:tuple[str,...]=('invalid_arguments','scope_not_grounded','tool_unavailable')
     actionable_error:str='Correct the typed arguments, choose a returned source, or explain the missing evidence.'
+    evidence_class:str="public_page"  # owner_record | subject_row | public_page | system_state | memory | derived
 
 EXTRA=(
  ('read_history_citation',HistoryCitationArgs,'read','Read the saved source behind a citation in an earlier answer. Cite the new number returned for this turn, never the old number. Derived citations cannot be read directly; read their parents first.'),
@@ -334,7 +335,7 @@ EXTRA=(
  ('search_configured_news',SearchConfiguredNewsArgs,'read','Search news items from enabled user-configured news sources only (RSS/JSON/HTML). Call this FIRST for recent market/macro/company news before falling back to web_research. Every returned item has a URL and still goes through citation and numeric gates.'),
 )
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
-OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan'}
+OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview'}
 
 # Every base registry entry is read-only; write names come from catalogue levels.
 WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'})]
@@ -345,13 +346,45 @@ class RequestActionArgs(Args):
 
 def write_tool_names():return {n for n,p in definitions().items() if p.level in {'reversible','costly'}}
 
+_EVIDENCE_CLASS: dict[str, str] = {
+    'query_portfolio': 'owner_record',
+    'query_alerts': 'owner_record',
+    'query_holdings_overview': 'owner_record',
+    'query_stock_prices': 'subject_row',
+    'query_financials': 'subject_row',
+    'query_latest_forecast': 'subject_row',
+    'query_materials': 'subject_row',
+    'query_sec_filings': 'subject_row',
+    'query_material_analysis': 'subject_row',
+    'query_market_quote': 'subject_row',
+    'recall_conversations': 'memory',
+    'read_past_conversation': 'memory',
+    'calculate': 'derived',
+    'calculate_formula': 'derived',
+}
+
 def definitions():
     from .agent_tools import TOOL_REGISTRY
-    result={name:ToolPolicy(name,tool.description,tool.args_schema,'read',True,name not in OWNER_ONLY) for name,tool in TOOL_REGISTRY.items()}
+    result={name:ToolPolicy(name,tool.description,tool.args_schema,'read',True,name not in OWNER_ONLY,
+                            evidence_class=_EVIDENCE_CLASS.get(name,'public_page')) for name,tool in TOOL_REGISTRY.items()}
     for name,schema,level,description in EXTRA:
-        result[name]=ToolPolicy(name,description,schema,level,True,level!='costly' and name not in OWNER_ONLY,level in {'reversible','costly'})
-    result['request_action']=ToolPolicy('request_action','Request owner approval for an agent-suggested operation that is NOT a user request. Arguments must match the target tool schema. No fetching or business writes before approval; at most one suggestion per turn.',RequestActionArgs,'card',True,False)
+        result[name]=ToolPolicy(name,description,schema,level,True,level!='costly' and name not in OWNER_ONLY,level in {'reversible','costly'},
+                                evidence_class=_EVIDENCE_CLASS.get(name,'public_page'))
+    result['request_action']=ToolPolicy('request_action','Request owner approval for an agent-suggested operation that is NOT a user request. Arguments must match the target tool schema. No fetching or business writes before approval; at most one suggestion per turn.',RequestActionArgs,'card',True,False,evidence_class='system_state')
     return result
+
+class _ToolPoliciesProxy(dict):
+    def get(self, key, default=None): return definitions().get(key, default)
+    def __getitem__(self, key): return definitions()[key]
+    def __contains__(self, key): return key in definitions()
+    def __iter__(self): return iter(definitions())
+    def __len__(self): return len(definitions())
+    def items(self): return definitions().items()
+    def values(self): return definitions().values()
+    def keys(self): return definitions().keys()
+
+TOOL_POLICIES = _ToolPoliciesProxy()
+CATALOG = TOOL_POLICIES
 
 def schemas(*,owner:bool,granted=(),names=None):
     """Definitions in the catalogue's fixed order (a stable prefix); ``names`` limits them to the disclosed tools."""

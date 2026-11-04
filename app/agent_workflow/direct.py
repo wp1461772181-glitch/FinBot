@@ -1665,7 +1665,7 @@ class Turn:
             self.last_accepted=shown
             self.recalls.append({'name':name,'kind':'recall','arguments':args,'result':shown,'accepted_evidence':False})
             return
-        if name=='query_portfolio':
+        if name=='query_portfolio' or getattr(policy, 'evidence_class', None) == 'owner_record':
             # The owner's own ledger: its rows state their figures in the excerpt and need no question/period/entity gate.
             accepted=[copy.deepcopy(r) for r in rows if isinstance(r,dict)]
             self.repeated_evidence=0
@@ -1695,6 +1695,14 @@ class Turn:
         requirements['symbol']=args.get('symbol') or scope_symbol
         if args.get('symbol') and self.scope.get('symbol') and args['symbol']!=self.scope['symbol'] and not args.get('company'):
             requirements['company']=None
+        if name=='query_market_quote':
+            symbols_arg=args.get('symbols') or []
+            if len(symbols_arg)==1:
+                requirements['symbol']=str(symbols_arg[0]).upper()
+            elif len(symbols_arg)>1:
+                requirements['symbol']=None
+            if not args.get('company'):
+                requirements['company']=None
         if name=='search_configured_news':
             tickers_arg=args.get('tickers') or []
             if len(tickers_arg)==1:
@@ -2641,6 +2649,15 @@ class Turn:
                 # Whole count, no cut: the hit rate is what a later stage scores.
                 if items:self.audit[hint_reason]={'count':len(items),'items':[{k:(v[:400] if isinstance(v,str) else v) for k,v in h.items() if k!='reason'} for h in items]}
                 else:self.audit.pop(hint_reason,None)
+            shadow_mismatches=[]
+            try:
+                from .evidence import shadow_entity_attribution_check
+                shadow_mismatches=shadow_entity_attribution_check(answer,self.citations)
+            except Exception as exc:self.audit['shadow_check_error']=type(exc).__name__
+            if shadow_mismatches:
+                self.audit['shadow_entity_mismatches']=shadow_mismatches
+            else:
+                self.audit.pop('shadow_entity_mismatches',None)
             if issues:
                 from .answer_tidy import tidy_answer
                 self.last_rejected=rejected
@@ -2704,7 +2721,7 @@ class Turn:
             answer=answer[:30000-len(line)-2].rstrip()+'\n\n'+line
         self.audit.update(stop_reason=reason,elapsed_ms=round((time.monotonic()-self.started)*1000))
         return {'answer':answer[:30000],'citations':self.citations,'status':status,'reason':reason,'route':self.route,
-            'unverified_lines':list(self.unverified_lines),'audit':self.audit,'final_protocol':self.final_protocol,'pending_request':self.pending,'result_sets':self.sets,'previous_category':self.route,'previous_scope':{**self.scope,'_tool_categories':list(self.used_categories)}}
+            'unverified_lines':list(self.unverified_lines),'audit':self.audit,'shadow_entity_mismatches':self.audit.get('shadow_entity_mismatches',[]),'final_protocol':self.final_protocol,'pending_request':self.pending,'result_sets':self.sets,'previous_category':self.route,'previous_scope':{**self.scope,'_tool_categories':list(self.used_categories)}}
 
     async def finish_answer(self,answer):
         await self.emit({'event':'status','status':'writing_answer'})
