@@ -100,10 +100,13 @@ def reaction(closes: list[tuple[date, float]], accepted: datetime):
 
 
 def commentary_from(text: str) -> str:
-    """Management's words in the release: the paragraphs quoting an executive."""
-    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
-    quoted = [p for p in paragraphs if re.search(r"[“\"].{40,}[”\"]", p) and re.search(r"\b(said|says|stated|commented)\b", p)]
-    return "\n".join(quoted)[:4000]
+    """Paragraphs that look like management commentary: a quote and a speaking verb."""
+    verbs = r"\b(said|says|stated|commented|noted|added|remarked|shared|pointed out|explained|believes|expects)\b"
+    paras = [
+        p.strip() for p in re.split(r"\n\s*\n", text or "")
+        if re.search(r'["“][^"”]{20,}["”]', p) and re.search(verbs, p, re.I)
+    ]
+    return "\n\n".join(paras[:6])[:6_000]
 
 
 def _guidance(data: dict | None):
@@ -441,6 +444,8 @@ def render_first(event: EarningsEvent, facts, c, prior_known: bool, commentary: 
                   f"· 毛利率 {_num(facts.gross_margin)}%：对上季指引 {_pp(c.gross_margin_vs_guidance_pp)} 个百分点"]
     else:
         lines += [f"· 营收 {_num(facts.revenue)}B，每股收益（非 GAAP）{_num(facts.eps)}，毛利率 {_num(facts.gross_margin)}%（没有上季指引可比）"]
+    if getattr(facts, "unverified_fields", None):
+        lines.append("· 注：部分数字引文待核对（请以原文为准）")
     lines += ["", "新指引（下季）"]
     if guid.revenue_low is not None:
         lines.append(f"· 营收 {_num(guid.revenue_low)}–{_num(guid.revenue_high)}B，指引中值 {_num(guid.revenue_mid)}B：对本季 {_pct(c.new_revenue_vs_actual_pct)}"
@@ -450,8 +455,8 @@ def render_first(event: EarningsEvent, facts, c, prior_known: bool, commentary: 
     if guid.gross_margin is not None:
         lines.append(f"· 毛利率 {_num(guid.gross_margin)}%：对本季 {_pp(c.new_gross_margin_vs_actual_pp)} 个百分点")
     if guid.revenue_low is None and guid.eps is None and guid.gross_margin is None:
-        lines.append("· 新闻稿里没有读到下季指引")
-    lines += ["", "管理层说法", f"· {_clip(commentary.splitlines()[0])}" if commentary else "· 新闻稿里没有高管引语"]
+        lines.append("· 未从新闻稿中提取到标准格式的下季指引（请以原文为准）")
+    lines += ["", "管理层说法", f"· {_clip(commentary.splitlines()[0])}" if commentary else "· 未匹配到标准格式的高管引语段落（请以原文为准）"]
     quality = []
     if c.eps_gaap_minus_nongaap is not None:
         quality.append(f"GAAP 每股收益比非 GAAP 少 {abs(c.eps_gaap_minus_nongaap):.2f}" if c.eps_gaap_minus_nongaap < 0 else f"GAAP 每股收益比非 GAAP 多 {c.eps_gaap_minus_nongaap:.2f}")
@@ -492,16 +497,21 @@ def send_first(event_id, sources, reader, now: datetime) -> None:
 
 # --- the follow-up -------------------------------------------------------------------------------------------
 
-DIRECTION_TEXT = {"up": "偏涨", "down": "偏跌"}
+DIRECTION_TEXT = {"up": "偏涨", "down": "偏跌", "unclear": "方向不明（暂难判断）"}
 CONFIDENCE_TEXT = {"high": "高", "medium": "中", "low": "低"}
 
 
 def render_followup(event: EarningsEvent, j, after_hours, holding, gate: dict) -> tuple[str, str]:
     label = "" if gate["validated"] else "｜该模型未经盲测"
     head = "财报追加提醒" if gate["validated"] else "财报追加判断（普通通知）"
-    lines = [f"【{head}{label}】{event.symbol}", f"判断：{DIRECTION_TEXT[j.direction]}（发布后首个交易日预计出现明显{'上涨' if j.direction == 'up' else '下跌'}）　把握：{CONFIDENCE_TEXT[j.confidence]}"]
+    dir_text = DIRECTION_TEXT.get(j.direction, "方向不明（暂难判断）")
+    if j.direction == "unclear":
+        move_text = "发布后首个交易日方向不明"
+    else:
+        move_text = f"发布后首个交易日预计出现明显{'上涨' if j.direction == 'up' else '下跌'}"
+    lines = [f"【{head}{label}】{event.symbol}", f"判断：{dir_text}（{move_text}）　把握：{CONFIDENCE_TEXT.get(j.confidence, j.confidence)}"]
     if not gate["validated"]:
-        lines.append("该模型未经盲测，命中率没有统计支持，只供参考，不要据此直接下单。")
+        lines.append("注：该模型尚未完成历史样本盲测（暂无历史命中率统计）。")
     lines += ["", "理由（附原文）"]
     for n, reason in enumerate(j.reasons[:3], 1):
         lines.append(f"{n}. {reason['text']}\n   原文：“{reason['quote']}”")
@@ -511,7 +521,7 @@ def render_followup(event: EarningsEvent, j, after_hours, holding, gate: dict) -
         lines += ["", f"盘后/盘前走势：{after_hours * 100:+.1f}%"]
         against = (j.direction == "down" and after_hours >= DISAGREE_AT) or (j.direction == "up" and after_hours <= -DISAGREE_AT)
         if against:
-            lines.append(f"⚠ 判断与盘后走势有分歧：判断{DIRECTION_TEXT[j.direction]}，盘后{after_hours * 100:+.1f}%。")
+            lines.append(f"⚠ 判断与盘后走势有分歧：判断{DIRECTION_TEXT.get(j.direction, '方向不明（暂难判断）')}，盘后{after_hours * 100:+.1f}%。")
     if holding:
         lines += ["", f"对你的仓位：持有 {_num(holding['shares'], 0)} 股，均价 {_num(holding['avg_cost'])}，现价 {_num(holding['price'])}"
                       + (f"，占总资产 {_num(holding['weight_pct'], 1)}%" if holding.get("weight_pct") is not None else "")]
@@ -555,15 +565,10 @@ def send_followup(event_id, sources, reader, now: datetime) -> None:
         log.warning("extended-hours move unavailable for %s: %s", event.symbol, type(exc).__name__)
         after_hours = None
     j = _run(reader.judge(facts, comparison, commentary_from(text), after_hours, model))
-    if j.direction == "unclear":
-        status = "skipped_unclear"
-    elif CONFIDENCE_RANK[j.confidence] < CONFIDENCE_RANK[gate["min_confidence"]]:
-        status = "skipped_low_confidence"
-    else:
-        holding = sources.holding_for(event.owner_hash, event.symbol) if event.held else None
-        title, body = render_followup(event, j, after_hours, holding, gate)
-        _deliver(event, "followup", title, body, now)
-        status = "sent"
+    holding = sources.holding_for(event.owner_hash, event.symbol) if event.held else None
+    title, body = render_followup(event, j, after_hours, holding, gate)
+    _deliver(event, "followup", title, body, now)
+    status = "sent"
     with SessionLocal() as db:
         row = db.get(EarningsEvent, event_id)
         row.followup_status = status

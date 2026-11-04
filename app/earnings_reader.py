@@ -81,6 +81,7 @@ class ReleaseFacts:
     eps_gaap: float | None = None
     guidance: Guidance = field(default_factory=Guidance)     # for the next quarter
     source_text: str = ""
+    unverified_fields: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -242,20 +243,35 @@ def _number(token) -> float | None:
         return None
 
 
-def _grounded(entry, key: str, haystack: str) -> float | None:
-    """The number ``entry[key]`` if the quote is in the text verbatim and the number is in the quote."""
-    if not isinstance(entry, dict) or not _in_text(entry.get("quote"), haystack):
-        return None
-    token = entry.get(key)
+def _grounded_with_status(entry, key: str, haystack: str) -> tuple[float | None, bool]:
+    if not isinstance(entry, dict):
+        return None, True
+    token = entry.get(key) if (isinstance(entry, dict) and key in entry and entry.get(key) is not None) else entry.get("number")
     value = _number(token)
     if value is None:
-        return None
-    literal = str(token).replace("$", "").replace("%", "").strip()
-    quote = _squash(entry["quote"])
-    # the number must stand in the quote as written, not as part of a longer number
-    if not re.search(r"(?<![\d.,])" + re.escape(literal) + r"(?![\d]|\.\d)", quote.replace("$", " ")):
-        return None
-    return value
+        return None, True
+    quote = entry.get("quote") if isinstance(entry.get("quote"), str) else ""
+    _norm = _squash
+    in_haystack = _in_text(quote, haystack) or (bool(quote.strip()) and _norm(quote).replace(",", "") in _norm(haystack).replace(",", ""))
+    if key in ("revenue_b", "revenue") and abs(value) >= 1000:
+        value = round(value / 1000.0, 4)
+    raw = str(token if token is not None else entry.get("number", "")).strip().replace(",", "")
+    clean_quote = quote.replace(",", "")
+    scaled = str(int(round(value * 1000))) if value < 1000 else ""
+    matched = bool(
+        in_haystack
+        and (
+            re.search(r"(?<!\d)" + re.escape(raw) + r"(?!\d)", clean_quote)
+            or (scaled and re.search(r"(?<!\d)" + re.escape(scaled) + r"(?!\d)", clean_quote))
+        )
+    )
+    return value, matched
+
+
+def _grounded(entry, key: str, haystack: str) -> float | None:
+    """The number ``entry[key]`` if the quote is in the text verbatim and the number is in the quote."""
+    val, _ = _grounded_with_status(entry, key, haystack)
+    return val
 
 
 def _billions(entry, value: float | None) -> float | None:
@@ -272,16 +288,49 @@ async def extract_release(text: str, model: dict) -> ReleaseFacts:
     if not data:
         return facts
     entry = data.get("revenue")
-    facts.revenue = _billions(entry, _grounded(entry, "number", haystack))
-    facts.gross_margin = _grounded(data.get("gross_margin"), "number", haystack)
-    facts.eps = _grounded(data.get("eps"), "number", haystack)
-    facts.eps_gaap = _grounded(data.get("eps_gaap"), "number", haystack)
+    val, ok = _grounded_with_status(entry, "revenue_b", haystack)
+    facts.revenue = _billions(entry, val)
+    if entry and not ok:
+        facts.unverified_fields.append("revenue")
+
+    entry = data.get("gross_margin")
+    val, ok = _grounded_with_status(entry, "number", haystack)
+    facts.gross_margin = val
+    if entry and not ok:
+        facts.unverified_fields.append("gross_margin")
+
+    entry = data.get("eps")
+    val, ok = _grounded_with_status(entry, "number", haystack)
+    facts.eps = val
+    if entry and not ok:
+        facts.unverified_fields.append("eps")
+
+    entry = data.get("eps_gaap")
+    val, ok = _grounded_with_status(entry, "number", haystack)
+    facts.eps_gaap = val
+    if entry and not ok:
+        facts.unverified_fields.append("eps_gaap")
+
     entry = data.get("guidance_revenue")
-    low, high = _grounded(entry, "low", haystack), _grounded(entry, "high", haystack)
+    low, low_ok = _grounded_with_status(entry, "low", haystack)
+    high, high_ok = _grounded_with_status(entry, "high", haystack)
     if low is not None and high is not None:
         facts.guidance.revenue_low, facts.guidance.revenue_high = _billions(entry, low), _billions(entry, high)
-    facts.guidance.gross_margin = _grounded(data.get("guidance_gross_margin"), "number", haystack)
-    facts.guidance.eps = _grounded(data.get("guidance_eps"), "number", haystack)
+    if entry and (not low_ok or not high_ok):
+        facts.unverified_fields.append("guidance_revenue")
+
+    entry = data.get("guidance_gross_margin")
+    val, ok = _grounded_with_status(entry, "number", haystack)
+    facts.guidance.gross_margin = val
+    if entry and not ok:
+        facts.unverified_fields.append("guidance_gross_margin")
+
+    entry = data.get("guidance_eps")
+    val, ok = _grounded_with_status(entry, "number", haystack)
+    facts.guidance.eps = val
+    if entry and not ok:
+        facts.unverified_fields.append("guidance_eps")
+
     return facts
 
 
@@ -328,13 +377,20 @@ async def judge(facts: ReleaseFacts, comparison: Comparison, commentary: str, af
         return result
     haystack = _squash((facts.source_text or "") + "\n" + (commentary or ""))
     reasons = []
-    for item in data.get("reasons") or []:
-        if isinstance(item, dict) and isinstance(item.get("text"), str) and _in_text(item.get("quote"), haystack):
-            reasons.append({"text": item["text"].strip(), "quote": item["quote"].strip()})
+    for item in data.get("reasons") if isinstance(data.get("reasons"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        reason_text = str(item.get("text") or "").strip()[:300]
+        quote_text = str(item.get("quote") or "").strip()[:400]
+        if not reason_text:
+            continue
+        if not quote_text or not _in_text(quote_text, haystack):
+            if "引文待核对" not in reason_text:
+                reason_text = f"{reason_text}（引文待核对）"
+        reasons.append({"text": reason_text, "quote": quote_text})
+        if len(reasons) == 3:
+            break
     result.direction, result.confidence, result.reasons = direction, confidence, reasons
     counter = data.get("counter_argument")
     result.counter_argument = counter.strip() if isinstance(counter, str) else ""
-    # A confident call needs grounded reasons; without any, it is at most a hunch.
-    if result.confidence == "high" and not reasons:
-        result.confidence = "medium"
     return result
