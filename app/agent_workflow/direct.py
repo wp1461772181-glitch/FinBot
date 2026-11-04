@@ -57,7 +57,8 @@ SCOPE_NOTICE={
 }
 # What the model is told when a tool argument names something this turn has no ground for.  The real reason, so
 # it can act on it: fixing the argument's format (the advice for invalid_arguments) would not help.
-SCOPE_NOT_GROUNDED_HINT='The requested symbol is not in the question, portfolio, or accepted evidence.'
+SCOPE_NOT_GROUNDED_HINT=('This symbol or identifier is not grounded in this turn. A symbol must be one the request names or one in the '
+    "owner's holdings (query_portfolio); an identifier must come from a returned result. Use one of those, or say what is missing.")
 MARKERS=('<｜｜DSML｜｜','<|tool_calls|>','<|python|>')
 # A model given no tools sometimes writes its tool call as text (DeepSeek: "<｜DSML｜ calls>…").  The
 # whole block is protocol, never part of an answer.
@@ -919,61 +920,16 @@ class Turn:
             others=[str(v) for v in (self.scope.get('symbols') or []) if v and str(v).casefold()!=symbol.casefold()]
             native=self.native_mention()
             if native and not others:
-                from .entities import mapped_title, loose_pair
+                from .entities import mapped_title
                 parts=re.split(r'[（(，,）):：\s]',str(self.scope.get('company_mention') or ''))
                 title=await asyncio.to_thread(mapped_title,[self.scope.get('company'),*parts],symbol)
-                if not title:
-                    title=await asyncio.to_thread(loose_pair,symbol,self.scope.get('company') or native)
                 if title:
-                    mention_label=native or self.scope.get('company_mention') or self.scope.get('company')
                     if not self.scope.get('company_mention'):self.scope['company_mention']=native
                     self.scope['company']=title;entities=[];self.audit['entity_mapping_accepted']='mapped'
-                    self.scope['mapped_disclosure']=f"按 {mention_label} = {title}（{symbol}）理解。"
                     self.disclose_mapping(title)
         if entities:
-            symbol=self.scope.get('symbol')
-            company=self.scope.get('company')
             self.reference_stage(False,'classifier_entity_unbound',skipped=self.reference_value is None)
-            from .entities import sec_title, ticker_records
-            def is_valid_ticker(t: str) -> bool:
-                try:
-                    if sec_title(t) is not None:
-                        return True
-                    rows=ticker_records()
-                    if rows:
-                        return False
-                except Exception:
-                    return True
-                return False
-            orig_tickers=[t for t in _extract_ticker_tokens(self.original or '') if is_valid_ticker(t)]
-            canon_tickers=[t for t in _extract_ticker_tokens(self.question or '') if is_valid_ticker(t)]
-            valid_tickers=orig_tickers or canon_tickers
-            prev=self.state.get('previous_scope',{})
-            prev_symbol=prev.get('symbol')
-            if valid_tickers:
-                primary=valid_tickers[0]
-                self.scope['symbol']=primary
-                self.scope['symbols']=valid_tickers
-                title=sec_title(primary)
-                if title:
-                    self.scope['company']=title
-                elif prev.get('company'):
-                    self.scope['company']=prev.get('company')
-                self.scope['company_mention']=primary
-                self.audit['fallback_literal_ticker']=primary
-            elif prev_symbol:
-                self.scope['symbol']=prev_symbol
-                self.scope['symbols']=list(prev.get('symbols') or [prev_symbol])
-                self.scope['company']=prev.get('company')
-                self.scope['company_mention']=prev.get('company_mention')
-                self.audit['fallback_previous_scope']=prev_symbol
-            else:
-                self.scope['symbol']=None
-                self.scope['symbols']=[]
-                self.scope['company']=None
-                self.scope['company_mention']=None
-                self.audit['discarded_ungrounded_entity']={'symbol':symbol,'company':company}
-            return
+            self.pending=self.card('请确认这次指代的公司。',[]);return
         mention=self.scope.get('company_mention') or ''
         mention_parts=[part.strip() for part in re.split(r'[（(，,）):：\s]',mention) if part.strip()]
         if mention_parts and any(normalized(part).casefold() in normalized(entity_trusted).casefold() for part in mention_parts):
@@ -1144,8 +1100,6 @@ class Turn:
                     self.scope['symbols']=list(previous['symbols'])
                 elif not self.scope.get('symbols') and self.scope.get('symbol'):
                     self.scope['symbols']=[self.scope['symbol']]
-                if not self.refinement and not self.resolver_failed:
-                    self.scope['carried_only']=True
 
     def default_company(self):
         company=getattr(self.context,'default_company',None)
@@ -1159,8 +1113,6 @@ class Turn:
         if any(self.scope.get(k) for k in ('symbol','symbols','company','company_mention')):return
         if self.followup and (self.state.get('previous_scope') or {}).get('symbol'):return
         self.scope['symbol']=company['symbol'];self.scope['company']=company.get('company');self.entity_carried=True
-        if not self.refinement and not self.resolver_failed:
-            self.scope['carried_only']=True
         self.audit['default_company']={'symbol':company['symbol'],'company':company.get('company'),'source':'bot_settings',
                                        'bot_id':company.get('bot_id'),'bot_name':company.get('bot_name')}
 
@@ -1168,8 +1120,6 @@ class Turn:
         """Whether the scope's entity constrains this turn's reads.  One the previous turn or the bot's setting supplied is
         a hint for the model: the request may be about something else (「我的持仓今天怎么样」 after an AAPL turn).  It
         binds only on a refinement, which keeps its task by definition, or when the resolver could not say what was meant."""
-        if self.scope.get('carried_only'):
-            return False
         return not self.entity_carried or self.refinement or self.resolver_failed
 
     def card(self,question,choices):
@@ -1560,12 +1510,7 @@ class Turn:
            and args['symbol'] not in named and not contains(args['symbol'],self.original) and not contains(args['symbol'],self.question):
             # Only a read may widen: a write's target stays as strict as it was.
             policy=definitions().get(name)
-            if policy is None or policy.level!='read':raise ValueError('scope_not_grounded')
-            if not self.scope.get('carried_only') and self.entity_binds():
-                allowed_evidence_symbols = {c.get('symbol') for c in self.citations if c.get('symbol')}
-                portfolio_symbols = {r.get('symbol') for o in self.observations if (o.get('name')=='query_portfolio' or o.get('tool')=='query_portfolio') for r in ((o.get('result') or {}).get('data') or []) if isinstance(r,dict) and r.get('symbol')}
-                if args['symbol'] not in allowed_evidence_symbols and args['symbol'] not in portfolio_symbols and not self.symbol_discovered(args['symbol']):
-                    raise ValueError('scope_not_grounded')
+            if policy is None or policy.level!='read' or (self.entity_binds() and not self.symbol_discovered(args['symbol'])):raise ValueError('scope_not_grounded')
 
     def symbol_discovered(self,symbol):
         """A symbol this turn found in data rather than in the request.  The owner's own rows always count.  Other
@@ -1712,10 +1657,10 @@ class Turn:
         from .evidence import canonical_metric
         # A carried or backfilled entity requires nothing of a row.  When the call itself reads that same symbol, the
         # carried company still counts as a name for it: the page may say Apple where the call says AAPL.
-        hint_only=self.entity_backfilled or not self.entity_binds() or bool(self.scope.get('carried_only'))
+        hint_only=self.entity_backfilled or not self.entity_binds()
         same_symbol=args.get('symbol') and self.scope.get('symbol') and str(args['symbol']).casefold()==str(self.scope['symbol']).casefold()
-        scope_symbol=None if (hint_only or self.scope.get('carried_only')) else self.scope.get('symbol')
-        scope_company=None if ((hint_only or self.scope.get('carried_only')) and not same_symbol) else self.scope.get('company')
+        scope_symbol=None if hint_only else self.scope.get('symbol')
+        scope_company=None if hint_only and not same_symbol else self.scope.get('company')
         requirements={'company':scope_company,'metrics':self.scope.get('metrics'),'period':self.scope.get('period')}
         if requirements.get('metrics'):requirements['metrics']=[canonical_metric(m) for m in requirements['metrics'] if canonical_metric(m)]
         requirements['entity_aliases']=self.scope.get('_entity_aliases',[])
@@ -2690,10 +2635,6 @@ class Turn:
             # (A card already names its target.)  After every check, and the server's words, not the model's: a wrong mapping has to stay visible to be corrected.
             line='按 {mention} = {title}（{symbol}）理解；如果不是这家公司，请告诉我。'.format(**self.mapped_entity)
             answer=answer[:30000-len(line)-2].rstrip()+'\n\n'+line
-        elif self.scope.get('mapped_disclosure') and not self.pending:
-            line=self.scope['mapped_disclosure']
-            if line not in answer:
-                answer=answer[:30000-len(line)-2].rstrip()+'\n\n'+line
         self.audit.update(stop_reason=reason,elapsed_ms=round((time.monotonic()-self.started)*1000))
         return {'answer':answer[:30000],'citations':self.citations,'status':status,'reason':reason,'route':self.route,
             'unverified_lines':list(self.unverified_lines),'audit':self.audit,'final_protocol':self.final_protocol,'pending_request':self.pending,'result_sets':self.sets,'previous_category':self.route,'previous_scope':{**self.scope,'_tool_categories':list(self.used_categories)}}

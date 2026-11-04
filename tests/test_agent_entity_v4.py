@@ -76,9 +76,7 @@ def test_symbol_anchored_grounding_passes_a_chinese_named_issuer(monkeypatch):
 
 def test_symbol_anchored_grounding_still_rejects_a_symbol_sec_does_not_list(monkeypatch):
     result=_run_gate(monkeypatch,{'company':'礼来制药公司','symbol':'ZZZQ','company_mention':'礼来'},'礼来 ZZZQ 的营收是多少',[{'ticker':'LLY','title':'ELI LILLY & Co'}])
-    assert not result['pending_request']
-    assert result['audit'].get('discarded_ungrounded_entity') == {'symbol': 'ZZZQ', 'company': '礼来制药公司'}
-    assert result['previous_scope']['symbol'] is None
+    assert result['pending_request']
 
 def test_chinese_name_without_any_ticker_in_the_text_proceeds_with_the_mapping_stated(monkeypatch):
     # Changed on purpose (scope model Phase 1): nobody would call 礼来 ambiguous, so it no longer gets a card.
