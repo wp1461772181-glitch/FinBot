@@ -204,7 +204,7 @@ def gate_row(question: str, row: dict, *, symbol: str | None=None, company: str 
     requested=period or question
     if not period_match(requested,body+' '+str(row.get('report_period') or '')+' '+str(row.get('filed_at') or row.get('trading_date') or row.get('decision_at') or row.get('start_date') or '')+' '+str(row.get('end_date') or '')):
         return _gate_outcome(False,'requested_period_missing',soft)
-    if days_back is not None and (row.get('published_at') or row.get('filed_at')) and not published_within(row.get('published_at') or row.get('filed_at'),days_back,now or datetime.now(UTC)):
+    if days_back is not None and not published_within(row.get('published_at') or row.get('filed_at'),days_back,now or datetime.now(UTC)):
         return _gate_outcome(False,'requested_time_window_missing',soft)
     query_without_url=re.sub(r'https://\S+',' ',question)
     from ..agent_web_research import _GENERIC_LATIN
@@ -228,7 +228,7 @@ def deterministic_confidence_gate(question: str,result: dict,citations=None,veri
             reason=next((why for _,why in outcomes),'zero_evidence')
             if reason=='requested_time_window_missing' and any(not r.get('published_at') for r in rows):reason='publisher_date_unavailable'
             return False,reason
-    if requirements.get('days_back') and any(r.get('published_at') and not published_within(r.get('published_at'),requirements['days_back'],datetime.now(UTC)) for r in rows):return False,'publisher_date_unavailable'
+    if requirements.get('days_back') and any(not published_within(r.get('published_at'),requirements['days_back'],datetime.now(UTC)) for r in rows):return False,'publisher_date_unavailable'
     return True,'heuristic_coverage_pass'
 
 

@@ -706,7 +706,7 @@ def test_focus_excerpt_does_not_filter_analysts_reuters_management_subjects():
     assert mgmt in out
 
 
-def test_research_preserves_undated_pages_with_flag_and_filters_old(monkeypatch):
+def test_research_named_span_leaves_out_undated_and_old_pages(monkeypatch):
     import asyncio
     from datetime import datetime, timezone, timedelta
     import app.agent_web_research as web
@@ -736,9 +736,9 @@ def test_research_preserves_undated_pages_with_flag_and_filters_old(monkeypatch)
     res = asyncio.run(web._research("NVDA news", days_back=7))
     assert res["ok"]
     urls = [r["url"] for r in res["data"]]
-    assert "https://example.com/undated" in urls
+    # A named span is a strict freshness contract (see tests/test_freshness.py): a page
+    # with no readable date cannot be shown to be inside it, so it is left out, as is
+    # the dated page outside the span.  Undated pages are kept when no span is named.
+    assert "https://example.com/undated" not in urls
     assert "https://example.com/fresh" in urls
     assert "https://example.com/old" not in urls
-
-    undated_row = next(r for r in res["data"] if r["url"] == "https://example.com/undated")
-    assert undated_row.get("date_unverified") is True
