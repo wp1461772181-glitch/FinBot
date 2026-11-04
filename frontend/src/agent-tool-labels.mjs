@@ -64,6 +64,9 @@ export const TOOL_LABELS = {
   search_configured_news: "搜索已配置新闻源",
   manage_news_source: "管理新闻源",
   load_tools: "加载工具",
+  query_market_quote: "行情查询",
+  query_alerts: "提醒查询",
+  query_holdings_overview: "持仓总览",
 };
 
 /** The display name of a tool, falling back to its identifier when unknown. */
