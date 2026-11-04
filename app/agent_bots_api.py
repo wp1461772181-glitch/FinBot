@@ -319,3 +319,23 @@ async def bot_telegram_unbind(bot_id: str, x_chat_session: str | None = Header(d
 async def bot_telegram_delete(bot_id: str, x_chat_session: str | None = Header(default=None)):
     from . import agent_telegram_bots as own
     return await _bot_telegram(own.delete_token, x_chat_session, bot_id)
+
+
+# --- earnings judgments (read path over earnings_events.detail); owner only, since GETs are otherwise public.
+
+@router.get("/earnings-judgments")
+async def earnings_judgments_endpoint(symbol: str | None = None, limit: int = 50, x_chat_session: str | None = Header(default=None)):
+    """Follow-up judgments, sent or skipped, with their own model and the outcome once the first post-release session closed."""
+    from . import earnings_monitor as monitor
+    credential = _owner_only(x_chat_session)
+    return {"judgments": await asyncio.to_thread(monitor.list_judgments, owner_hash(credential), symbol, limit)}
+
+
+@router.get("/earnings-judgments/{judgment_id}")
+async def earnings_judgment_endpoint(judgment_id: str, x_chat_session: str | None = Header(default=None)):
+    from . import earnings_monitor as monitor
+    credential = _owner_only(x_chat_session)
+    found = await asyncio.to_thread(monitor.get_judgment, owner_hash(credential), judgment_id)
+    if found is None:
+        raise HTTPException(404, "judgment_not_found")
+    return {"judgment": found}

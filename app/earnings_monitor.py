@@ -372,7 +372,39 @@ def tick(now: datetime | None = None, *, sources=None, reader=None) -> dict:
             with SessionLocal() as db:
                 db.get(EarningsEvent, event_id).followup_status = "failed"
                 db.commit()
+    try:
+        fill_due_outcomes(now, sources, reader)
+    except Exception:   # outcomes are a bonus of the tick; they never fail it
+        log.exception("earnings outcome fill failed")
     return done
+
+
+OUTCOME_WINDOW = timedelta(days=14)
+OUTCOME_THROTTLE = timedelta(hours=1)
+_last_fill: dict[str, datetime] = {}   # tick also runs from background.py and sentinel_api.py: at most one fill per symbol per hour
+
+
+def fill_due_outcomes(now: datetime, sources, reader) -> list[str]:
+    """Fill R / σ / verdict of recent releases whose first session has closed, so a judgment's outcome does not wait for
+    the next quarter's release.  ``_fill_reactions`` keeps the rule that nothing is filled before that session's close.
+    Returns the symbols attempted; one symbol's failure is logged and does not stop the others."""
+    today = now.astimezone(NY).date()
+    with SessionLocal() as db:
+        rows = db.execute(select(EarningsHistory.symbol, EarningsHistory.released_at)
+                          .where(EarningsHistory.reaction.is_(None), EarningsHistory.released_at >= now - OUTCOME_WINDOW)).all()
+    symbols = sorted({symbol for symbol, released in rows if _utc(released).astimezone(NY).date() < today})
+    attempted = []
+    for symbol in symbols:
+        last = _last_fill.get(symbol)
+        if last is not None and now - last < OUTCOME_THROTTLE:
+            continue
+        _last_fill[symbol] = now
+        attempted.append(symbol)
+        try:
+            _fill_reactions(symbol, sources.daily_closes(symbol), reader, now)
+        except Exception as exc:
+            log.warning("earnings outcome fill for %s failed: %s", symbol, type(exc).__name__)
+    return attempted
 
 
 # --- delivery ------------------------------------------------------------------------------------------------
@@ -391,7 +423,8 @@ def _deliver(event: EarningsEvent, kind: str, title: str, body: str, now: dateti
     """Record in the bot's line; a holding is also queued for Telegram.  Same key = same message, never twice."""
     bot_id = bot_for(event.owner_hash, event.symbol)
     return tasks.add_item(event.owner_hash, section="brief", kind="filing", title=title, body=body, bot_id=bot_id, now=now,
-                          payload={"earnings": event.accession, "stage": kind, "symbol": event.symbol, "held": event.held},
+                          payload={"earnings": event.accession, "stage": kind, "symbol": event.symbol, "held": event.held,
+                                   "event_id": str(event.id)},
                           dedupe_key=f"earnings:{event.accession}:{kind}", telegram=bool(event.held), telegram_source="earnings",
                           post={"head": tasks.post_head("财报监控", now, "UTC"), "citations": []})
 
@@ -537,5 +570,97 @@ def send_followup(event_id, sources, reader, now: datetime) -> None:
         row.followup_sent_at = now if status == "sent" else None
         row.detail = {**(row.detail or {}), "followup": {"direction": j.direction, "confidence": j.confidence, "after_hours": after_hours,
                                                          "validated": gate["validated"], "bar": gate["min_confidence"], "reasons": j.reasons,
-                                                         "counter_argument": j.counter_argument}}
+                                                         "counter_argument": j.counter_argument,
+                                                         "model": model["model"], "reader_version": reader.READER_VERSION}}
         db.commit()
+
+
+# --- reading judgments back ----------------------------------------------------------------------------------
+
+def _outcome(direction: str | None, history) -> dict:
+    """The outcome is the defined label only (first-session close against max(2σ, 3%)); after-hours moves never set it."""
+    verdict = getattr(history, "verdict", None)
+    if direction == "unclear":
+        status = "not_applicable"
+    elif verdict is None:
+        status = "pending"
+    elif verdict == "flat":
+        status = "no_marked_move"
+    else:
+        status = "matched" if verdict == direction else "mismatched"
+    return {"status": status, "reaction": getattr(history, "reaction", None), "sigma": getattr(history, "sigma", None)}
+
+
+def _judgment_row(event: EarningsEvent, history, filing_source_id: str | None) -> dict:
+    detail = event.detail or {}
+    follow = detail["followup"]
+    if follow.get("model"):
+        model, model_source = follow["model"], "followup"
+    elif detail.get("model"):
+        model, model_source = detail["model"], "first_stage"   # older rows: the model of the first message
+    else:
+        model, model_source = None, None
+    outcome = _outcome(follow.get("direction"), history)
+    if outcome["status"] == "pending":
+        promotion = {"available": False, "reason": "first_session_open"}
+    elif filing_source_id is None:
+        promotion = {"available": False, "reason": "filing_not_in_library"}
+    else:
+        promotion = {"available": True, "reason": None}
+    return {"id": str(event.id), "symbol": event.symbol, "accession": event.accession, "source_url": event.source_url,
+            "accepted_at": _utc(event.accepted_at).isoformat(), "held": bool(event.held), "followup_status": event.followup_status,
+            "delivered": event.followup_status == "sent", "direction": follow.get("direction"), "confidence": follow.get("confidence"),
+            "after_hours": follow.get("after_hours"), "reasons": follow.get("reasons") or [],
+            "counter_argument": follow.get("counter_argument"), "validated": bool(follow.get("validated")),
+            "model": model, "model_source": model_source,
+            "reader_version": follow.get("reader_version") or detail.get("reader_version"),
+            "outcome": outcome, "filing_source_id": filing_source_id, "promotion": promotion}
+
+
+def _judgment_rows(events: list[EarningsEvent]) -> list[dict]:
+    """Rows for events that have a judgment; outcomes and library ids each come from one query for the whole page."""
+    if not events:
+        return []
+    from .models import SecFilingInventory
+    accessions = sorted({e.accession for e in events})
+    with SessionLocal() as db:
+        history = {r.accession: r for r in db.scalars(select(EarningsHistory).where(EarningsHistory.accession.in_(accessions)))}
+        library: dict[str, str] = {}
+        for accession, source_id in db.execute(select(SecFilingInventory.accession_number, SecFilingInventory.id)
+                                               .where(SecFilingInventory.accession_number.in_(accessions))
+                                               .order_by(SecFilingInventory.observed_at.desc())):
+            library.setdefault(accession, str(source_id))
+        db.expunge_all()
+    return [_judgment_row(e, history.get(e.accession), library.get(e.accession)) for e in events]
+
+
+def list_judgments(owner: str, symbol: str | None = None, limit: int = 50) -> list[dict]:
+    """Every event of the owner with a follow-up judgment (sent or skipped), newest release first."""
+    limit = max(1, min(int(limit or 50), 200))
+    query = select(EarningsEvent).where(EarningsEvent.owner_hash == owner).order_by(EarningsEvent.accepted_at.desc())
+    if symbol:
+        query = query.where(EarningsEvent.symbol == symbol.strip().upper())
+    with SessionLocal() as db:
+        events = []
+        for event in db.scalars(query):
+            if (event.detail or {}).get("followup"):
+                db.expunge(event)
+                events.append(event)
+                if len(events) >= limit:
+                    break
+    return _judgment_rows(events)
+
+
+def get_judgment(owner: str, judgment_id) -> dict | None:
+    """One judgment by event id; None for an unknown id, another owner's event, or an event with no judgment yet."""
+    import uuid
+    try:
+        key = uuid.UUID(str(judgment_id))
+    except ValueError:
+        return None
+    with SessionLocal() as db:
+        event = db.get(EarningsEvent, key)
+        if event is None or event.owner_hash != owner or not (event.detail or {}).get("followup"):
+            return None
+        db.expunge(event)
+    return _judgment_rows([event])[0]
