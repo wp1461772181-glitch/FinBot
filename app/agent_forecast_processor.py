@@ -279,11 +279,10 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
         )
 
     def _llm_decision(self, brief_data, *, base, time_mode, model_manifest):
-        """Primary forecast from the role=forecast model, then one Jev question on the same brief.
+        """Primary forecast from the role=forecast model.
 
         The model must answer: a missing/unusable model or an answer that is not a normalised vector fails the
-        job (no Jev stand-in, no invented numbers).  Jev is only the control: any failure there is recorded in
-        the manifest and the primary goes on."""
+        job (no stand-in, no invented numbers).  Jev is no longer asked: no control is run or written."""
         generation = None
         try:
             provider = self._llm_provider_factory()
@@ -321,39 +320,7 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
             },
             "local_calibration": {"status": "not_applied", "reason": "llm_forecast_is_not_calibrated"},
         })
-        control = None
-        try:
-            jev = self._jev_provider_factory().evaluate(brief_data)
-            control = {
-                "decision_probabilities": dict(jev.probabilities),
-                "model_manifest": {
-                    "processor_version": PROCESSOR_VERSION,
-                    "model_status": "experimental_jev",
-                    "decision_mode": "jev_control",
-                    "time_mode": time_mode,
-                    "research_brief_sha256": model_manifest.get("research_brief_sha256"),
-                    "decision_provider": {
-                        "provider": "openrouter",
-                        "requested_model": jev.requested_model,
-                        "actual_model": jev.actual_model,
-                        "request_id": jev.request_id,
-                        "usage": jev.usage,
-                        "latency_ms": jev.latency_ms,
-                        "question_version": jev.question_version,
-                        "input_sha256": jev.input_sha256,
-                        "choice": jev.choice,
-                        "confidence": jev.confidence,
-                        "raw_probabilities": dict(jev.probabilities),
-                    },
-                    "local_calibration": {"status": "not_applied", "reason": "hidden_control_is_raw"},
-                },
-            }
-            model_manifest["control"] = {"status": "answered"}
-        except JevProviderError as exc:
-            model_manifest["control"] = {"status": "failed", "reason": f"jev_{exc.code}"}
-        except Exception:
-            model_manifest["control"] = {"status": "failed", "reason": "jev_provider_error"}
-        return dict(result.probabilities), "experimental_llm", control
+        return dict(result.probabilities), "experimental_llm", None
 
     def _load_parent_for_brief(self, job: ForecastJobV2):
         if job.parent_version_id is None:

@@ -195,26 +195,15 @@ def test_primary_is_experimental_llm_from_role_model(forecast_model, monkeypatch
         assert "hidden_control" not in version.model_manifest
 
 
-def test_control_failure_does_not_fail_primary(forecast_model, monkeypatch):
-    def broken():
-        return SimpleNamespace(evaluate=lambda _b: (_ for _ in ()).throw(JevProviderError("upstream_unavailable")))
-    draft, primary_id = _run(monkeypatch, "AMD", jev_factory=broken)
+def test_llm_forecast_makes_no_jev_call(forecast_model, monkeypatch):
+    def forbidden():
+        raise AssertionError("Jev must not be asked")
+    draft, primary_id = _run(monkeypatch, "AMD", jev_factory=forbidden)
     assert draft.hidden_control is None
-    assert draft.model_manifest["control"] == {"status": "failed", "reason": "jev_upstream_unavailable"}
+    assert "control" not in draft.model_manifest
     with SessionLocal() as db:
         assert db.get(ForecastVersionV2, primary_id).model_status == "experimental_llm"
         assert db.query(ForecastVersionV2).filter(ForecastVersionV2.symbol == "AMD").count() == 1
-
-    # also a generic crash in the control provider, and a failure while writing the control row
-    def crashing():
-        raise RuntimeError("boom")
-    draft, _ = _run(monkeypatch, "AMD", jev_factory=crashing)
-    assert draft.hidden_control is None and draft.model_status == "experimental_llm"
-    draft, primary_id = _run(monkeypatch, "AMD", jev_factory=lambda: SimpleNamespace(evaluate=lambda _b: JEV_RESULT))
-    with SessionLocal() as db:
-        primary = db.get(ForecastVersionV2, primary_id)
-        assert publish_hidden_control(db=db, primary=primary, control={"bad": True}) is None   # swallowed, logged
-        assert db.query(ForecastVersionV2).filter(ForecastVersionV2.symbol == "AMD").count() == 3
 
 
 def test_missing_role_model_blocks_forecast_without_calling_jev(owner, monkeypatch):
@@ -231,17 +220,31 @@ def test_missing_role_model_blocks_forecast_without_calling_jev(owner, monkeypat
 
 def test_control_hidden_from_list_but_in_cohorts(forecast_model, monkeypatch):
     draft, primary_id = _run(monkeypatch, "TSLA", jev_factory=lambda: SimpleNamespace(evaluate=lambda _b: JEV_RESULT))
-    assert draft.hidden_control is not None
+    assert draft.hidden_control is None
+    # The processor no longer writes controls; the one that exists is a retired row, so seed it directly.
+    control_payload = {
+        "decision_probabilities": dict(JEV_RESULT.probabilities),
+        "model_manifest": {
+            "processor_version": "agent-forecast-processor-v1", "model_status": "experimental_jev",
+            "decision_mode": "jev_control", "time_mode": "observed",
+            "decision_provider": {
+                "provider": "openrouter", "requested_model": JEV_RESULT.requested_model,
+                "actual_model": JEV_RESULT.actual_model, "question_version": JEV_RESULT.question_version,
+                "raw_probabilities": dict(JEV_RESULT.probabilities),
+            },
+            "local_calibration": {"status": "not_applied", "reason": "hidden_control_is_raw"},
+        },
+    }
     with SessionLocal() as db:
         primary = db.get(ForecastVersionV2, primary_id)
-        control = publish_hidden_control(db=db, primary=primary, control=draft.hidden_control)
+        control = publish_hidden_control(db=db, primary=primary, control=control_payload)
         assert control is not None
         assert control.model_status == "experimental_jev" and control.root_id != primary.root_id
         assert control.decision_probabilities == JEV_RESULT.probabilities
         assert control.model_manifest["hidden_control"] is True
         assert control.model_manifest["control_of_version_id"] == str(primary_id)
         # republishing the same control is idempotent
-        again = publish_hidden_control(db=db, primary=primary, control=draft.hidden_control)
+        again = publish_hidden_control(db=db, primary=primary, control=control_payload)
         assert again.id == control.id
         assert db.query(ForecastVersionV2).filter(ForecastVersionV2.symbol == "TSLA").count() == 2
 

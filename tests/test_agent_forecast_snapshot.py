@@ -34,11 +34,14 @@ def tables(disposable_database):
     forget_symbols(['SNA', 'SNB', 'SNC'])
 
 
-def _version(symbol, *, parent=None, version_no=1, probabilities=None, brief=None):
-    now = datetime.now(UTC)
+def _version(symbol, *, parent=None, version_no=1, probabilities=None, brief=None, manifest=None,
+             time_mode='observed', age_minutes=0):
+    now = datetime.now(UTC) - timedelta(minutes=age_minutes)
     with SessionLocal() as db:
         job = enqueue_job(db=db, symbol=symbol, kind='new' if parent is None else 'manual_revision',
-                          idempotency_key=f'snapshot-{uuid.uuid4()}',
+                          idempotency_key=f'snapshot-{uuid.uuid4()}', time_mode=time_mode,
+                          **({'requested_decision_at': now - timedelta(days=30)}
+                             if time_mode == 'historical_research' else {}),
                           **({} if parent is None else {'root_version_id': parent, 'parent_version_id': parent}))
         row = ForecastVersionV2(
             id=uuid.uuid4(), root_id=parent or uuid.uuid4(), parent_version_id=parent, job_id=job.id,
@@ -46,7 +49,7 @@ def _version(symbol, *, parent=None, version_no=1, probabilities=None, brief=Non
             decision_at=now - timedelta(hours=10 - version_no), market_cutoff_at=now - timedelta(hours=11 - version_no),
             price_input_manifest={}, evidence_version_manifest=[], feature_snapshot={},
             decision_probabilities=probabilities or {'bearish': 0.03, 'bullish': 0.01, 'neutral': 0.96},
-            model_status='experimental_jev', model_manifest={}, trigger_type='manual' if parent is None else 'manual_revision',
+            model_status='experimental_jev', model_manifest=manifest or {}, trigger_type='manual' if parent is None else 'manual_revision',
             research_brief=brief,
         )
         if parent is None:
@@ -144,3 +147,31 @@ def test_a_forecast_citation_whose_probabilities_changed_is_expired(tables):
             'title': 'SNC forecast', 'quote': json.dumps(quoted, ensure_ascii=False, default=str)}
 
     assert _restore_citations([item], 'guest-session')[0]['source_type'] == 'unavailable'
+
+
+def test_latest_forecast_skips_the_hidden_control_root(tables):
+    real = _version('SNA', probabilities={'bearish': 0.33, 'bullish': 0.33, 'neutral': 0.34})
+    _version('SNA', probabilities={'bearish': 0.1, 'bullish': 0.7, 'neutral': 0.2},
+             manifest={'hidden_control': True, 'control_of_root_id': str(real)})
+
+    rows = asyncio.run(agent_tools.query_latest_forecast.coroutine(symbol='SNA'))['data']
+
+    assert [row['id'] for row in rows] == [str(real)]
+    assert rows[0]['probabilities']['neutral'] == 0.34
+
+
+def test_latest_forecast_skips_a_historical_replay_root(tables):
+    real = _version('SNB', probabilities={'bearish': 0.33, 'bullish': 0.33, 'neutral': 0.34})
+    _version('SNB', probabilities={'bearish': 0.1, 'bullish': 0.7, 'neutral': 0.2}, time_mode='historical_research')
+
+    rows = asyncio.run(agent_tools.query_latest_forecast.coroutine(symbol='SNB'))['data']
+
+    assert [row['id'] for row in rows] == [str(real)]
+
+
+def test_latest_forecast_with_only_a_control_returns_nothing(tables):
+    _version('SNC', manifest={'hidden_control': True})
+
+    result = asyncio.run(agent_tools.query_latest_forecast.coroutine(symbol='SNC'))
+
+    assert result['ok'] is True and result['data'] == []

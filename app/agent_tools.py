@@ -423,7 +423,7 @@ async def query_latest_forecast(symbol: str) -> dict:
     (role previous_version), each with its probabilities and reasons, so comparing the two needs no other read."""
     columns="id, root_id, version_no, decision_at, model_status, decision_probabilities, joint_probabilities, baseline_probabilities, research_brief, created_at, target_contract, parent_version_id"
     try:
-        rows = await _query("SELECT "+columns+" FROM forecast_versions_v2 WHERE symbol=:symbol AND root_id IN (SELECT id FROM forecast_versions_v2 WHERE symbol=:symbol AND root_id=id ORDER BY created_at DESC, id DESC LIMIT 1) ORDER BY version_no DESC, created_at DESC, id DESC LIMIT 1", {"symbol":symbol})
+        rows = await _query("SELECT "+columns+" FROM forecast_versions_v2 WHERE symbol=:symbol AND root_id IN (SELECT v.id FROM forecast_versions_v2 v JOIN forecast_jobs_v2 j ON j.id = v.job_id WHERE v.symbol=:symbol AND v.root_id=v.id AND v.model_manifest->>'hidden_control' IS DISTINCT FROM 'true' AND j.time_mode IS DISTINCT FROM 'historical_research' ORDER BY v.created_at DESC, v.id DESC LIMIT 1) ORDER BY version_no DESC, created_at DESC, id DESC LIMIT 1", {"symbol":symbol})
         if rows:
             row=rows[0]
             data=[forecast_snapshot(row)]
