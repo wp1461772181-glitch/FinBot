@@ -1581,7 +1581,7 @@ class Turn:
                         # one search and they are thrown away afterwards, so the index still holds
                         # one copy of each passage.
                         from ..knowledge.query_understanding import use_expander
-                        with use_expander(self.expander):outcome=await tools.invoke(name,args,self.context,emit=self.emit)
+                        with use_expander(getattr(self.context,'query_expander',None)):outcome=await tools.invoke(name,args,self.context,emit=self.emit)
             except _CalculationRefused as refused:outcome=refused.outcome
             except (TimeoutError,ConnectionError):outcome=tools.error('tool_timeout')
             except Exception:outcome=tools.error('tool_failed')
@@ -2921,6 +2921,10 @@ class Turn:
             self.no_new=0
         stop=None
         while not(stop or self.budget()):
+            if self.audit['decision_steps']>=1 and self.citations and (time.monotonic()-self.started)>=180:
+                stop='soft_time_budget_closing'
+                self.audit['stop_reason']='soft_time_budget_closing'
+                break
             self.audit['decision_steps']+=1
             try:
                 async with self.trace.step('decide',step=self.audit['decision_steps']) as node:
@@ -3109,6 +3113,7 @@ class Turn:
             await self.trace.end(node,output={'stop_reason':stop})
         notes={'no_progress':'几次检索都没有得到新的结果，已停止。',
             'turn_budget':'为控制等待时间，本轮在已取得的资料上停止。',
+            'soft_time_budget_closing':'为控制等待时间，本轮在已取得的资料上停止。',
             'provider_unstable':'模型这次的响应不完整，本轮在已取得的资料上停止。',
             'tool_failures':f'“{self.audit.get("failed_tool","工具")}”工具连续失败 {self.audit.get("failed_attempts",3)} 次（原因：{self.audit.get("failure_code","tool_unavailable")}），已停止重试。',
             'provider_protocol_invalid':'模型返回了无效工具协议，已停止。'}
