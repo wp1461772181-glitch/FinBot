@@ -35,7 +35,7 @@ _CLASSES = ("bearish", "neutral", "bullish")
 # Jev's contract permits zero, so apply the standard explicit lower floor only
 # for log-loss calculation; Brier and the archived forecast probabilities stay
 # untouched. This is small enough not to affect ordinary finite probabilities.
-JEV_LOG_LOSS_EPSILON = 1e-15
+LOG_LOSS_EPSILON = 1e-15
 JEV_PROBABILITY_SUM_TOLERANCE = 1e-6
 
 
@@ -617,7 +617,7 @@ def _scores_for(
     brier = sum((value - (1.0 if index == actual_index else 0.0)) ** 2 for index, value in enumerate(values))
     probability_of_actual = values[actual_index]
     if is_jev:
-        log_loss = -math.log(max(probability_of_actual, JEV_LOG_LOSS_EPSILON))
+        log_loss = -math.log(max(probability_of_actual, LOG_LOSS_EPSILON))
     else:
         log_loss = -math.log(probability_of_actual)
     predicted = _CLASSES[max(range(len(values)), key=lambda index: values[index])]

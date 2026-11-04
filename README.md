@@ -33,9 +33,9 @@
 - **一条研究闭环 / One research loop** — 材料采集 → 证据入库 → AI 分析（可配置模型）→ 引用核验 → ResearchBrief → 预测版本 → 修订候选 → 复盘。
 - **过程看得见 / Thinking you can inspect** — 每轮回答带“已思考 N 秒 · M 步”的步骤图，指代消解、意图识别、工具调用、证据核验与修复各有状态和耗时；刷新可回放，取消后不会留下转圈节点。
 
-> **2026-11 发布 / Latest release** — FinBot 从「研究证据工作台」扩展为**个人金融助手**：多 bot、持仓、例行任务、Telegram 通道、财报监控与提醒、推理模型预测（Jev 隐藏对照）、工具渐进披露、上下文滚动压缩。逐项前后数据与**尚待实测**的清单见[前后对比报告](docs/reports/2026-11-personal-finance-before-after.md)；真人真机验收尚未统一执行，README 只写已上线且可核验的内容。
+> **2026-11 发布 / Latest release** — FinBot 从「研究证据工作台」扩展为**个人金融助手**：多 bot、持仓、例行任务、Telegram 通道、财报监控与提醒、推理模型预测（以 naive-vol-v1 为免费基准）、工具渐进披露、上下文滚动压缩。逐项前后数据与**尚待实测**的清单见[前后对比报告](docs/reports/2026-11-personal-finance-before-after.md)；真人真机验收尚未统一执行，README 只写已上线且可核验的内容。
 >
-> The 2026-11 release extends FinBot from a research evidence workbench into a **personal finance assistant**: multiple bots, portfolio, routines, a Telegram channel, earnings monitoring and alerts, reasoning-model forecasts (with a hidden Jev control), progressive tool disclosure and rolling context compaction. Per-item before/after numbers — and the list of metrics that still await measurement — are in the [before/after report](docs/reports/2026-11-personal-finance-before-after.md). Human, on-device acceptance has not yet been run as a whole; this README only states what is deployed and verifiable.
+> The 2026-11 release extends FinBot from a research evidence workbench into a **personal finance assistant**: multiple bots, portfolio, routines, a Telegram channel, earnings monitoring and alerts, reasoning-model forecasts (scored against the free `naive-vol-v1` baseline), progressive tool disclosure and rolling context compaction. Per-item before/after numbers — and the list of metrics that still await measurement — are in the [before/after report](docs/reports/2026-11-personal-finance-before-after.md). Human, on-device acceptance has not yet been run as a whole; this README only states what is deployed and verifiable.
 
 > **2026-10-22 发布 / Previous release** — 在 2026-10-20 的可配置分析与分层引用核验之上，本次加入 **可查看的思考过程**：
 >
@@ -58,7 +58,7 @@ flowchart LR
     T -. checkpoint .-> DB[(PostgreSQL)]
     D -. checkpoint .-> DB
     DB --> M[Saved materials and analysis / 已保存材料与分析]
-    M --> J[Jev research output / Jev 研究输出]
+    M --> J[Research brief and forecast model output / 研究简报与预测模型输出]
     J --> V[Immutable version / 不可变版本]
 ```
 
@@ -105,7 +105,7 @@ FinBot 是一个**个人金融助手**，面向自己研究美股的个人投资
 - **Telegram 通道**：每个 bot 可绑定 Telegram；桥会持续显示「正在输入」、先回占位消息再随步骤编辑、同 bot 排队/不同 bot 并行；网页与 Telegram 都支持 `/压缩`。
 - **财报监控与提醒**：独立的哨兵进程监控 SEC 8-K（仅 Item 2.02），财报窗口内约每 2 分钟轮询；发现后第一条给出对上季指引的对比，约 30 分钟后在判断不为 unclear 且把握达标时追加一条带原文理由的判断。持仓公司推送，研究队列公司只记入对话；哨兵若 2 分钟内没有被 API 接收，会直发「财报已出，分析暂时不可用」。**财报判断模型未经全量盲测前，追加提醒会注明「该模型未经盲测」。**
 - **盘中异动与升级提醒**：按个股自身波动率判断的短时/日内/跳空信号；提醒带「收到」按钮，持仓下跌类提醒 1 分钟未确认可升级到 Pushover 紧急级，夜间只响两类（其余早 8 点汇总）。真实 Pushover 响铃尚未实测。
-- **预测改用推理模型**：设置页「预测模型」选定后（`FORECAST_DECISION_MODE=llm`），主预测由所配模型给出（`experimental_llm`），Jev 作为隐藏对照同输入双跑，到期评估页两组分开显示。预测成绩需 20 个交易日到期，尚无结论。
+- **预测改用推理模型**：设置页「预测模型」选定后（`FORECAST_DECISION_MODE=llm`），主预测由所配模型给出（`experimental_llm`）。每个到期版本都与免费基准 `naive-vol-v1`（按 20 日波动率读时计算，不入库）比较，跨公司的模型成绩页按模型分组、满 30 个独立预测才给结论。预测成绩需 20 个交易日到期，尚无结论。Jev 不再参与预测，早期 Jev 预测仍可查看并保留评分。
 - **工具渐进披露**：每轮默认只携带 8 个常驻工具（定义约 6.8 KB，改前 36 个 / 约 27.3 KB）；其余工具按分类由 `load_tools` 或意图预加载按需加入，写工具仍需授权与确认卡。
 - **上下文滚动压缩**：历史预算跟所选模型的上下文窗口走（窗口的 50%）；用量达 80% 自动、在后台把旧轮次合并进一份结构化滚动摘要（目标 / 结论 / 未办完 / 偏好 / 关键数字），结论与数字必须带 `{turn_id, ordinal}` 来源标记，缺来源的整份拒收，模型失败时旧摘要不丢；对话里显示可展开的「已压缩 N 轮」；`recall_conversations` 可回查同一 bot 的原文。
 - **答案不删句，只标注**：来源核对不上的句子保留在回答里并标「证据不足」，同时给出追问依据入口；数字在任何来源里都找不到时另标「数字未核实」。
@@ -146,7 +146,7 @@ Agent 可提出写操作：只有所有者确认冻结目标的卡片后才执�
 
 ### 可追溯分析与实验性判断
 
-单份材料分析可汇总为 `ResearchBrief`，记录引用材料、来源版本与决策时点。预测版本不可变，并关联固定目标合同。Jev 输出看跌 / 中性 / 看涨三类概率，默认 `FORECAST_DECISION_MODE=research_only`。成熟度评估区分尚未到期和可评估目标；历史回放与校准研究不证明前向准确率，本地校准也不等于微调 Jev。
+单份材料分析可汇总为 `ResearchBrief`，记录引用材料、来源版本与决策时点。预测版本不可变，并关联固定目标合同。设置中选定的预测模型输出看跌 / 中性 / 看涨三类概率（±2% 定义），默认 `FORECAST_DECISION_MODE=research_only`（只出研究简报）。成熟度评估区分尚未到期和可评估目标，并与 `naive-vol-v1` 基准对比；历史回放不证明前向准确率。早期由 Jev 给出的版本标注「早期版本」，仍保留评分；本地校准器已停用。
 
 ### 可选知识检索（RAG）
 
@@ -167,7 +167,7 @@ Agent 可提出写操作：只有所有者确认冻结目标的卡片后才执�
 | 持仓 | [持仓计算](app/portfolio.py)、[持仓 API](app/portfolio_api.py) |
 | 财报监控与提醒 | [哨兵进程](sentinel/main.py)、[SEC 财报发现](sentinel/filings.py)、[盘中异动](sentinel/signals.py)、[升级提醒](sentinel/escalation.py)、[财报阅读器](app/earnings_reader.py)、[财报推送](app/earnings_monitor.py) |
 | 工具渐进披露 | [工具分类目录](app/agent_tool_catalog.py)（`TOOL_CATEGORIES`、`ALWAYS_ON`）、[`load_tools`](app/agent_workflow/direct.py) |
-| 预测（推理模型 + Jev 对照） | [推理模型预测](app/forecast_model_provider.py)、[预测处理器](app/agent_forecast_processor.py) |
+| 预测（推理模型 + naive-vol-v1 基准） | [推理模型预测](app/forecast_model_provider.py)、[预测处理器](app/agent_forecast_processor.py) |
 | 思考过程 | 每轮步骤图与耗时；[轨迹记录](app/agent_workflow/trace.py)、[步骤面板](frontend/src/ThinkingPanel.tsx)、[图布局与文案](frontend/src/turn-flow.mjs) |
 | 研究数据 | [保存数据工具](app/agent_tools.py)、[网页研究](app/agent_web_research.py)、[材料分析](app/material_analysis.py)、[ResearchBrief](app/research_brief.py) |
 | 模型配置 | [provider catalog](app/model_providers.py)、[加密凭证盒](app/secret_box.py)；11 种 OpenAI-compatible provider 配置（含自定义端点） |
@@ -229,7 +229,7 @@ npm run build
 
 - [对话上下文与预算](docs/agent-context.md)
 - [对话系统设计与思考过程数据](docs/agent-dialogue-engineering.zh-CN.md)
-- [Jev 本地校准与成熟度边界](docs/jev-local-learning.md)
+- [Jev 本地校准（已停用，仅存档）](docs/jev-local-learning.md)
 - [自定义股票代码支持](docs/custom-stock-support.md)
 - [Agent 工作流设计说明](docs/agent-research-v3-spec.md)
 - [模型配置文件存储](docs/model-profile-storage.md)
@@ -314,7 +314,7 @@ A copy of already-used content under another record is still rejected.
 
 ### Traceable analysis and experimental judgments
 
-Individual material analyses can be synthesized into a `ResearchBrief` with source-version references and a decision time. Forecast versions are immutable and linked to a fixed target contract. Jev produces bearish / neutral / bullish probabilities, with `FORECAST_DECISION_MODE=research_only` as the default. Maturity evaluation distinguishes pending targets from evaluable ones; historical replay and calibration research do not establish forward accuracy, and local calibration is not model fine-tuning.
+Individual material analyses can be synthesized into a `ResearchBrief` with source-version references and a decision time. Forecast versions are immutable and linked to a fixed target contract. The forecast model chosen in settings produces bearish / neutral / bullish probabilities (±2% definition), with `FORECAST_DECISION_MODE=research_only` (research brief only) as the default. Maturity evaluation distinguishes pending targets from evaluable ones and compares each matured version with the free `naive-vol-v1` baseline; historical replay does not establish forward accuracy. Earlier versions made by Jev are labelled as earlier versions and keep their scores; the local calibrator is retired.
 
 ### Optional knowledge retrieval (RAG)
 
@@ -391,7 +391,7 @@ npm run build
 
 - [Conversation context and budget](docs/agent-context.md)
 - [Dialogue system design and thinking-process measurements (Chinese)](docs/agent-dialogue-engineering.zh-CN.md)
-- [Jev local calibration and maturity boundaries](docs/jev-local-learning.md)
+- [Jev local calibration (retired, archive only)](docs/jev-local-learning.md)
 - [Custom stock-symbol support](docs/custom-stock-support.md)
 - [Agent workflow design](docs/agent-research-v3-spec.md)
 - [Model-profile storage](docs/model-profile-storage.md)

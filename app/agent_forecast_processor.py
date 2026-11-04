@@ -209,7 +209,7 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
         """Primary forecast from the role=forecast model.
 
         The model must answer: a missing/unusable model or an answer that is not a normalised vector fails the
-        job (no stand-in, no invented numbers).  Jev is no longer asked: no control is run or written."""
+        job (no stand-in, no invented numbers).  No control forecast is run or written."""
         generation = None
         try:
             provider = self._llm_provider_factory()

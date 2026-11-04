@@ -11,7 +11,6 @@ import app.forecast_v2_api as api
 from app.database import Base, SessionLocal, engine
 from app.evidence_context import freeze_evidence_context
 from app.forecast_jobs import enqueue_job
-from app.jev_learning import run_jev_learning_cycle
 from app.forecast_v2_models import (
     ForecastEvaluationV2,
     ForecastJobV2,
@@ -811,49 +810,8 @@ def test_main_application_exposes_v2_router_without_running_a_forecast():
         assert response.json()["result_version_id"] is None
 
 
-def test_jev_learning_status_shows_pending_observed_rows_and_excludes_historical_replays(client):
-    observed_id = _create_version(symbol="AAPL")
-    historical_id = _create_version(symbol="AAPL")
-    with SessionLocal() as db:
-        observed = db.get(ForecastVersionV2, observed_id)
-        historical = db.get(ForecastVersionV2, historical_id)
-        provider = {
-            "provider": "openrouter",
-            "actual_model": "fixture/jev",
-            "question_version": "jev-direction-test",
-            "raw_probabilities": {"bearish": 0.2, "neutral": 0.3, "bullish": 0.5},
-        }
-        observed.model_status = "experimental_jev"
-        observed.decision_probabilities = provider["raw_probabilities"]
-        observed.model_manifest = {"time_mode": "observed", "decision_provider": provider}
-        historical.model_status = "experimental_jev"
-        historical.decision_probabilities = provider["raw_probabilities"]
-        historical.model_manifest = {"time_mode": "historical_research", "decision_provider": provider}
-        db.add(ForecastEvaluationV2(
-            forecast_version_id=historical.id,
-            target_contract_hash=historical.target_contract_hash,
-            actual_label="bullish",
-            status="succeeded",
-            result_version=1,
-        ))
-        db.commit()
-
-    response = client.get("/v2/jev-learning/status?symbol=AAPL")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "collecting"
-    assert payload["required_mature_roots"] == 420
-    assert payload["observed_forecast_roots"] == 1
-    assert payload["observed_pending_roots"] == 1
-    assert payload["historical_replay_mature_roots_excluded"] == 1
-    assert payload["cohorts"][0]["matured_roots"] == 0
-    assert payload["cohorts"][0]["forecast_roots"] == 1
-    with SessionLocal() as db:
-        cycle = run_jev_learning_cycle(db=db)
-    assert cycle["observed_mature_roots"] == 0
-    assert cycle["historical_replay_mature_roots_excluded"] == 1
-    assert cycle["trained_candidates"] == 0
-    _delete_owned_evaluation_fixture_versions([observed_id, historical_id])
+def test_jev_learning_endpoint_is_gone(client):
+    assert client.get("/v2/jev-learning/status?symbol=AAPL").status_code == 404
 
 
 # --- naive-vol-v1 baseline and cross-company model cohorts -----------------

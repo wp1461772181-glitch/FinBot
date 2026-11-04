@@ -19,7 +19,7 @@ function text(value) {
  * Copy for every spot that used to assume Jev.  `model` and `provider` come from the saved version and read
  * 未记录 when the version did not record them; they are never guessed.
  */
-export function forecastCopy({ model_status, provider, actual_model, calibrated } = {}) {
+export function forecastCopy({ model_status, provider, actual_model } = {}) {
   const base = { model: text(actual_model) ?? NOT_RECORDED, provider: text(provider) ?? NOT_RECORDED };
   if (model_status === "experimental_llm") {
     return {
@@ -48,23 +48,19 @@ export function forecastCopy({ model_status, provider, actual_model, calibrated 
     return {
       ...base,
       statusName: "Jev 实验判断（早期版本，尚未校准）",
-      statusNote: calibrated ? "Jev 输出已通过本地时间外校准；原始值可展开查看" : "当前使用 Jev 原始概率；本地校准器仍在积累到期样本",
-      stripLabel: calibrated ? "Jev 经本地校准的实验性概率" : "Jev 原始实验性概率 · 未校准",
+      statusNote: "早期版本的 Jev 原始概率，未经校准",
+      stripLabel: "Jev 原始实验性概率 · 未校准",
       summaryNoteBefore: "",
-      summaryNoteAfter: calibrated
-        ? "本地校准器只调整三类概率分布；Jev 原始输出保存在下方，模型和目标版本均有记录。"
-        : "由 Jev 根据下方同一份 DeepSeek 研究简报输出。当前尚无通过时间外验证的本地校准器，因此显示原始概率。",
-      timelineStripLabel: calibrated ? "Jev + 本地校准" : "Jev 原始实验性概率",
+      summaryNoteAfter: "由 Jev 根据下方同一份 DeepSeek 研究简报输出，显示原始概率，未经校准。",
+      timelineStripLabel: "Jev 原始实验性概率",
       evalLabel: "Jev 到期评估 · 同一模型组",
       evalAria: "所选 Jev 预测的分组到期评估",
       evalNoMatchBody: "当前评估数据没有与此版本的时间模式、Jev 服务方、实际模型和问题版本完全匹配的 cohort；不会使用混合旧分组代替。",
       evalScoreLabel: "Jev 实验性判断评分（模型未校准）：",
       briefAria: "Jev 实验性概率",
-      briefTitle: calibrated ? "Jev 判断 · 本地校准" : "Jev 原始三分类判断",
-      briefNote: calibrated
-        ? "主结果经过本地校准器调整；原始 Jev 输出在下方保留以便比较。校准器不会更新 Jev 的内部参数。"
-        : "以下是 Jev 对固定目标合同的实验性原始输出，不代表已验证概率。DeepSeek 只分析单份材料；系统复用这些已保存的分析并在本地汇总简报。",
-      briefBadge: calibrated ? "时间外验证通过" : "未校准",
+      briefTitle: "Jev 原始三分类判断",
+      briefNote: "以下是 Jev 对固定目标合同的实验性原始输出，不代表已验证概率。DeepSeek 只分析单份材料；系统复用这些已保存的分析并在本地汇总简报。",
+      briefBadge: "未校准",
       briefKickerProvider: "OpenRouter",
       briefKickerModel: "Jev（早期版本）",
       noProbabilityNote: "该版本为仅研究模式，没有保存 Jev 数值判断；页面不会回填旧版概率。",
@@ -210,8 +206,7 @@ export function versionHeader(detail) {
   const status = detail?.model_status;
   const manifest = record(detail?.model_manifest);
   const decision = record(manifest.decision_provider);
-  const calibrated = status === "experimental_jev" && record(manifest.local_calibration).status === "active";
-  const copy = forecastCopy({ model_status: status, provider: decision.provider, actual_model: decision.actual_model, calibrated });
+  const copy = forecastCopy({ model_status: status, provider: decision.provider, actual_model: decision.actual_model });
   const rows = [];
 
   rows.push({ id: "model", label: "决策模型", items: modelItems(detail, copy) });
@@ -226,7 +221,7 @@ export function versionHeader(detail) {
   if (hasDecisionProbabilities(status)) question.push({ v: ` · ${text(decision.question_version) ?? NOT_RECORDED}` });
   rows.push({ id: "question", label: "问题", items: question });
 
-  rows.push({ id: "calibration", label: "校准状态", items: [{ t: calibrated ? "已通过本地时间外校准" : "未校准" }] });
+  rows.push({ id: "calibration", label: "校准状态", items: [{ t: "未校准" }] });
 
   const probabilities = hasDecisionProbabilities(status) ? record(detail?.decision_probabilities) : null;
   if (probabilities && Object.keys(probabilities).length > 0) {

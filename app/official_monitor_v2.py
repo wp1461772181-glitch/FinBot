@@ -85,7 +85,7 @@ def scan_only(
     """Persist one bounded SEC scan and queue eligible V2 automatic revisions.
 
     This is exactly the effect a user confirms: the filing directory moves, and
-    nothing else.  Market evaluation and JEV learning belong to the scheduled
+    nothing else.  Market evaluation belongs to the scheduled
     monitor (``monitor_tick``), not to a request the user asked to be quick.
 
     A successful, complete scan advances only its own stock's watermark.  A
@@ -328,21 +328,7 @@ def _evaluate_and_learn(*, db: Session, run_id) -> None:
             raise RuntimeError("persisted monitor run disappeared before evaluation summary")
         run.evaluation_summary = {"status": "failed", "error": str(exc)}
     else:
-        try:
-            from .jev_learning import run_jev_learning_cycle
-
-            learning_summary = run_jev_learning_cycle(db=db)
-        except Exception:
-            # An unavailable learner must not roll back the independently
-            # committed SEC scan or its valid point-in-time evaluation.
-            db.rollback()
-            run = db.get(OfficialMonitorRunV2, run_id)
-            learning_summary = {"status": "failed", "reason": "jev_learning_cycle_failed"}
-        run.evaluation_summary = {
-            "status": "succeeded",
-            **evaluation_summary,
-            "jev_learning": learning_summary,
-        }
+        run.evaluation_summary = {"status": "succeeded", **evaluation_summary}
     db.commit()
 
 

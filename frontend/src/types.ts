@@ -442,10 +442,7 @@ export type V2VersionDetail = V2Version & {
 export type V2TimelineEntry = Pick<V2Version,
   "id" | "parent_version_id" | "version_no" | "decision_at" | "market_cutoff_at" |
   "baseline_probabilities" | "joint_probabilities" | "decision_probabilities" | "model_status" | "change_reason" | "trigger_type" | "created_at"
-> & {
-  local_calibration_status?: "active" | "not_applied" | null;
-  raw_decision_probabilities?: V2Probabilities | null;
-};
+>;
 
 export type V2Timeline = {
   root_id: string;

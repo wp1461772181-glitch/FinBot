@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { forecastCopy, hasDecisionProbabilities, jobFailurePhrase, modelChanged, NOT_RECORDED, versionHeader } from "../src/forecast-model.mjs";
 
-const LLM = { model_status: "experimental_llm", provider: "zhipu", actual_model: "glm-5.3-flash", calibrated: false };
+const LLM = { model_status: "experimental_llm", provider: "zhipu", actual_model: "glm-5.3-flash" };
 const BANNED = /Jev|OpenRouter|DeepSeek/;
 
 test("an LLM version never shows Jev, OpenRouter or DeepSeek wording", () => {
@@ -12,8 +12,7 @@ test("an LLM version never shows Jev, OpenRouter or DeepSeek wording", () => {
   }
   assert.equal(copy.model, "glm-5.3-flash");
   assert.equal(copy.earlier, false);
-  // A requested calibration flag does not turn the LLM into a calibrated forecast.
-  assert.doesNotMatch(forecastCopy({ ...LLM, calibrated: true }).stripLabel, /校准[^未]/);
+  assert.doesNotMatch(copy.stripLabel, /校准[^未]/);
 });
 
 test("a Jev version names Jev and is marked as an earlier version", () => {
@@ -179,11 +178,10 @@ test("§3.2: older joint and baseline versions keep their names, marked 早期�
   assert.equal(flat(versionHeader(version({ model_status: "baseline_only", model_manifest: {}, decision_probabilities: null })), "model"), "行情基线模型（早期版本）");
 });
 
-test("a calibrated Jev version says its calibration passed; an LLM version never does", () => {
-  const calibrated = jevVersion();
-  calibrated.model_manifest.local_calibration = { status: "active" };
-  assert.match(flat(versionHeader(calibrated), "calibration"), /校准/);
-  assert.notEqual(flat(versionHeader(calibrated), "calibration"), "未校准");
+test("the calibrator is retired: no version, even one carrying an old local_calibration, claims to be calibrated", () => {
+  const old = jevVersion();
+  old.model_manifest.local_calibration = { status: "active" };
+  assert.equal(flat(versionHeader(old), "calibration"), "未校准");
   const llm = version();
   llm.model_manifest.local_calibration = { status: "active" };
   assert.equal(flat(versionHeader(llm), "calibration"), "未校准");

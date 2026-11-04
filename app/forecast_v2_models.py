@@ -258,10 +258,10 @@ class ForecastEvaluationV2(Base):
 
 
 class JevCalibrationModelV2(Base):
-    """Versioned local probability calibrator trained only from matured Jev roots.
+    """Retired: the table is retained (existing rows, CHECK constraint) but its writer is gone.
 
-    Coefficients and their validation manifest are immutable after insertion;
-    only the lifecycle status may advance from rejected to active/retired.
+    It held versioned local calibrators trained from matured Jev roots. Nothing creates or reads
+    these rows any more; do not drop the table or change its constraints.
     """
 
     __tablename__ = "jev_calibration_models_v2"

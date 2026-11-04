@@ -123,9 +123,6 @@ def read_workspace(args,context):
         elif kind=='revision_candidates':
             if not symbol:return error('symbol_required')
             value=revision_plan(symbol,identity,context)
-        elif kind=='learning':
-            from ..jev_learning import jev_learning_status
-            value=jev_learning_status(db=db,symbol=symbol)
         elif kind in {'analysis_history','original'}:
             from ..material_analysis_api import material_analysis_history,material_original
             value=(material_analysis_history if kind=='analysis_history' else material_original)(source_type,UUID(identity),db)

@@ -4,7 +4,6 @@ export type ForecastCopyInput = {
   model_status?: string | null;
   provider?: string | null;
   actual_model?: string | null;
-  calibrated?: boolean;
 };
 export type ForecastCopy = {
   model: string;

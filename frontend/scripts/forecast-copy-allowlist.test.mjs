@@ -5,7 +5,7 @@ import test from "node:test";
 
 // "Jev" and "DeepSeek" may appear in the forecast path only where a record Jev made, or a legacy error code, needs
 // them.  Anything else is copy that would tell the user a model ran when it did not.  The list starts generous
-// (B1) and is tightened when the calibrator and its branches are removed (B5).
+// (B1) and was tightened to its final list when the calibrator and its branches were removed (B5).
 const SRC = new URL("../src/", import.meta.url).pathname;
 const SKIP_DIRS = new Set(["locales"]);
 const EXTENSIONS = /\.(tsx?|mjs|js|css)$/;
@@ -17,8 +17,7 @@ const ALLOWED = {
     "HistoricalReplayWorkspace.tsx",  // modelLabel for an old Jev replay
     "App.tsx",                        // modelStatusLabel branch and the 早期版本 cohort note
     "ModelScoresPage.tsx",            // B3: inherited App.tsx's cohort groups (modelStatusLabel, 早期版本 note)
-    "V2ForecastWorkspace.tsx",        // calibrated-branch label (removed with the calibrator, B5)
-    "ResearchBriefView.tsx",          // calibrated-branch label (removed with the calibrator, B5)
+    "types.ts",                       // the V2ModelStatus union keeps experimental_jev
   ]),
   DeepSeek: new Set([
     "forecast-model.mjs",             // the Jev branch note that names the brief provider
@@ -51,9 +50,9 @@ for (const word of Object.keys(ALLOWED)) {
   });
 }
 
-test("CSS carries no Jev-named brief classes", () => {
+test("CSS carries no Jev-named or calibrator classes", () => {
   for (const path of sources(SRC).filter((file) => file.endsWith(".css"))) {
-    assert.doesNotMatch(readFileSync(path, "utf8"), /brief-(raw-)?jev/, relative(SRC, path));
+    assert.doesNotMatch(readFileSync(path, "utf8"), /jev|brief-raw-decision|v2-raw-probability/i, relative(SRC, path));
   }
 });
 

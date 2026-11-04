@@ -279,7 +279,6 @@ export function V2ForecastWorkspace({ symbol, priceHistory, mode, onOpenForecast
   // The status card describes the version being viewed, not the chain's latest one.
   const selectedEntry = versions.find((version) => version.id === selectedVersionId) ?? null;
   const modelStatus = selectedEntry?.model_status ?? selectedRoot?.model_status ?? (workspace.kind === "ready" ? workspace.data.joint_model_status : "unavailable");
-  const selectedCalibrated = selectedEntry?.local_calibration_status === "active";
   const selectedHeaderVersion = versionDetails?.kind === "ready" && versionDetails.data.current.id === selectedVersionId ? versionDetails.data.current : null;
   const rootIsRevisable = selectedRoot?.expired === false;
   const revisionDisabledReason = selectedRoot?.expired === true ? t("该预测的目标已到期，只能查看历史版本。") : selectedRoot?.expired === null ? t("该预测的目标合同无效，只能查看历史版本。") : null;
@@ -314,7 +313,7 @@ export function V2ForecastWorkspace({ symbol, priceHistory, mode, onOpenForecast
     {mode === "forecast" && <>
       <p className="v2-workflow-note">{<Tx text={"创建预测后，系统会冻结当时的行情和材料，为入选材料生成分析并汇总成研究简报。简报通过引用校验后，由设置中选定的预测模型（未选时用服务器默认模型）给出 20 个交易日的涨、平、跌概率。无需先到「材料库」手动分析。证据不足时只保存简报，不输出概率。概率未经校准，属实验性信息。仅供参考，买不买由你决定。"} />}</p>
       <div className="v2-status-grid">
-        <article><span>{<Tx text={"预测判断"} />}</span><strong>{selectedRoot ? modelStatusText(modelStatus) : t("尚无预测结果")}</strong><small>{selectedRoot ? t(forecastCopy({ model_status: modelStatus, calibrated: selectedCalibrated }).statusNote) : t("创建一项研究后，这里会显示对应结果。")}</small></article>
+        <article><span>{<Tx text={"预测判断"} />}</span><strong>{selectedRoot ? modelStatusText(modelStatus) : t("尚无预测结果")}</strong><small>{selectedRoot ? t(forecastCopy({ model_status: modelStatus }).statusNote) : t("创建一项研究后，这里会显示对应结果。")}</small></article>
         <MonitorCard monitor={monitor} />
         <article><span>{<Tx text={"待处理任务"} />}</span><strong>{workspace.kind === "ready" ? workspace.data.pending_job_count : "—"}</strong><small>{<Tx text={"排队只表示服务已接收，不表示预测已生成。"} />}</small></article>
       </div>
@@ -750,10 +749,6 @@ function versionProbabilityText(version: V2TimelineEntry) {
   return `${translatePhrase("跌")} ${Math.round(probabilities.bearish * 100)}% · ${translatePhrase("平")} ${Math.round(probabilities.neutral * 100)}% · ${translatePhrase("涨")} ${Math.round(probabilities.bullish * 100)}%`;
 }
 
-function percentProbabilities(probabilities: V2Probabilities) {
-  return `${translatePhrase("跌")} ${Math.round(probabilities.bearish * 100)}% · ${translatePhrase("平")} ${Math.round(probabilities.neutral * 100)}% · ${translatePhrase("涨")} ${Math.round(probabilities.bullish * 100)}%`;
-}
-
 function ForecastSummary({ root, roots, detail }: { root: V2ForecastRoot | null; roots: ResourceState<V2ForecastRoots>; detail: ResourceState<{ current: V2VersionDetail; parent: V2VersionDetail | null }> | null }) {
   const { t } = useLocale();
   if (roots.kind === "loading" || detail?.kind === "loading") return <section className="v2-card"><p>{<Tx text={"正在读取所选预测状态…"} />}</p></section>;
@@ -763,11 +758,8 @@ function ForecastSummary({ root, roots, detail }: { root: V2ForecastRoot | null;
   if (!current) return <section className="v2-card"><p className="section-label">{<Tx text={"所选预测"} />}</p><h3>{<Tx text={"无法读取所选预测的当前版本"} />}</h3><p>{<Tx text={"可重新选择预测日期或刷新页面；不会用其他预测的版本代替它。"} />}</p></section>;
   const joint = current.model_status === "experimental_joint" ? current.joint_probabilities : null;
   const decision = hasDecisionProbabilities(current.model_status) ? current.decision_probabilities : null;
-  const calibration = current.model_manifest.local_calibration as Record<string, unknown> | undefined;
   const provider = current.model_manifest.decision_provider as Record<string, unknown> | undefined;
-  const rawProbabilities = provider?.raw_probabilities as V2Probabilities | undefined;
-  const calibrated = calibration?.status === "active";
-  const copy = forecastCopy({ model_status: current.model_status, provider: asText(provider?.provider), actual_model: asText(provider?.actual_model), calibrated });
+  const copy = forecastCopy({ model_status: current.model_status, provider: asText(provider?.provider), actual_model: asText(provider?.actual_model) });
   const thesis = asText(provider?.reasoning);
   return <section className="v2-card">
     <p className="section-label">{t("所选预测")} · {t("第")} {current.version_no} {t("版")}</p>
@@ -776,7 +768,6 @@ function ForecastSummary({ root, roots, detail }: { root: V2ForecastRoot | null;
     {decision ? <><ProbabilityStrip probabilities={decision} label={t(copy.stripLabel)} />
       <p className="v2-limit v2-target-definition">{<Tx text={"上涨：目标日收盘比锚点收盘高 2% 以上。下跌：低 2% 以上。持平：在 ±2% 以内（含边界）。"} />}</p>
       {thesis && <div className="v2-model-view"><span>{<Tx text={"模型的看法"} />}</span><p>{thesis}</p></div>}
-      {calibrated && rawProbabilities && <div className="v2-raw-probability"><span>{<Tx text={"校准前 Jev 原始输出"} />}</span><ProbabilityStrip probabilities={rawProbabilities} label={t("原始概率")} compact /></div>}
       <p className="v2-limit">{copy.summaryNoteBefore ? <>{t(copy.summaryNoteBefore)} {copy.model} {t(copy.summaryNoteAfter)}</> : t(copy.summaryNoteAfter)}</p></>
       : joint ? <ProbabilityStrip probabilities={joint} label={t("实验性联合概率")} />
       : <p className="v2-limit">{t(copy.noProbabilityNote)}</p>}
@@ -813,7 +804,7 @@ function EvidenceEvents({ timeline, detail, selectedVersionId, onSelect }: {
     {timeline.data.versions.map((version) => <li key={version.id} className={version.id === selectedVersionId ? "is-selected" : ""}>
       <span className="v2-event-dot" aria-hidden="true" />
       <button type="button" className="v2-event-select" onClick={() => onSelect(version.id)}><strong>{t("第")} {version.version_no} {t("版")} · {t(version.parent_version_id ? "修订版本" : "初始版本")}</strong><p>{formatTime(version.decision_at)} · {modelStatusText(version.model_status)} · {triggerTypeText(version.trigger_type)}</p>{version.change_reason && <small>{changeReasonText(version.change_reason, locale)}</small>}</button>
-      {hasDecisionProbabilities(version.model_status) && version.decision_probabilities && <div className="v2-timeline-probabilities"><ProbabilityStrip probabilities={version.decision_probabilities} label={t(forecastCopy({ model_status: version.model_status, calibrated: version.local_calibration_status === "active" }).timelineStripLabel)} compact />{version.local_calibration_status === "active" && version.raw_decision_probabilities && <small>{t("校准前")} {percentProbabilities(version.raw_decision_probabilities)}</small>}</div>}
+      {hasDecisionProbabilities(version.model_status) && version.decision_probabilities && <div className="v2-timeline-probabilities"><ProbabilityStrip probabilities={version.decision_probabilities} label={t(forecastCopy({ model_status: version.model_status }).timelineStripLabel)} compact /></div>}
       {version.model_status === "experimental_joint" && version.joint_probabilities && <ProbabilityStrip probabilities={version.joint_probabilities} label={t("实验性联合概率")} compact />}
     </li>)}
   </ol><EvidenceDetail detail={detail} /></section>;

@@ -1572,48 +1572,9 @@ body{background:var(--canvas);color:var(--ink)}
 
 @media(max-width:480px){.historical-replay-form{grid-template-columns:1fr}.historical-replay-form .primary-action,.historical-replay-form p{grid-column:auto}.replay-job-status{align-items:flex-start;flex-direction:column}.replay-history-item{align-items:flex-start;flex-direction:column;gap:6px}}
 
-.jev-learning-card{display:grid;gap:12px;padding:19px 20px;border:1px solid #b9cec5;border-radius:12px;background:linear-gradient(135deg,#f2f7f4,#fffdf8)}
-
-.jev-learning-card .section-heading{margin:0}
-
-.jev-learning-card .section-heading h2{margin:3px 0 0;font:500 22px/1.1 var(--serif)}
-
-.jev-learning-card .section-heading>span{padding:5px 9px;border-radius:5px;background:#fff0d7;color:#815819;font-size:10px;font-weight:700}
-
-.jev-learning-card>p{max-width:900px;margin:0;color:var(--muted);font-size:11px;line-height:1.6}
-
-.jev-learning-metrics{gap:8px}
-
-.jev-learning-metrics article{padding:11px 12px;border:1px solid #d8e3dd;border-radius:7px;background:rgba(255,255,255,.78)}
-
-.jev-learning-metrics article strong{font-size:19px}
-
-.jev-learning-validation{display:grid;grid-template-columns:1fr 1fr;gap:7px 16px;padding:12px 14px;border:1px solid #c7d8d0;border-radius:7px;background:#fff}
-
-.jev-learning-validation strong,.jev-learning-validation small{grid-column:1/-1}
-
-.jev-learning-validation strong{font:600 14px var(--serif)}
-
-.jev-learning-validation span{font-size:11px;font-variant-numeric:tabular-nums}
-
-.jev-learning-validation small{color:var(--muted);font-size:10px;line-height:1.5}
-
-.jev-learning-note{padding:11px 13px;border-left:3px solid var(--me-line-strong);background:var(--me-surface-2)}
-
-.v2-raw-probability{display:grid;gap:7px;margin-top:11px;padding-top:10px;border-top:1px solid #dce5e1}
-
-.v2-raw-probability>span{color:var(--muted);font-size:10px}
 .v2-model-view{display:grid;gap:5px;margin-top:11px;padding-top:10px;border-top:1px solid #dce5e1}
 .v2-model-view>span{color:var(--muted);font-size:10px;font-weight:700}
 .v2-model-view>p{margin:0;font-size:12px;line-height:1.6;white-space:pre-line}
-
-.brief-raw-decision{margin-top:12px;padding-top:10px;border-top:1px solid #d6e3dc}
-
-.brief-raw-decision summary{cursor:pointer;color:var(--accent);font-size:10px;font-weight:700}
-
-.brief-raw-decision .brief-decision-probabilities{margin-top:9px}
-
-@media(max-width:760px){.jev-learning-metrics{grid-template-columns:1fr 1fr}.jev-learning-validation{grid-template-columns:1fr}.jev-learning-validation strong,.jev-learning-validation small{grid-column:auto}}
 
 .v2-timeline-probabilities{display:grid;gap:4px;justify-items:end}
 

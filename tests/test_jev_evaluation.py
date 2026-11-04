@@ -9,7 +9,7 @@ from sqlalchemy import delete
 
 from app.database import Base, SessionLocal, engine
 from app.forecast_contract import create_root_contract
-from app.forecast_evaluation_v2 import JEV_LOG_LOSS_EPSILON, run_evaluation_batch
+from app.forecast_evaluation_v2 import LOG_LOSS_EPSILON, run_evaluation_batch
 from app.forecast_v2_api import _evaluations_payload
 from app.forecast_v2_models import ForecastEvaluationV2, ForecastJobV2, ForecastVersionV2
 from app.models import MarketPriceRevision
@@ -153,7 +153,7 @@ def test_jev_scores_decision_probabilities_and_zero_actual_probability(jev_rows)
     assert summary.inserted == 1
     assert result.status == "succeeded" and result.actual_label == "bullish"
     assert result.brier_score == pytest.approx(1.68)
-    assert result.log_loss == pytest.approx(-math.log(JEV_LOG_LOSS_EPSILON))
+    assert result.log_loss == pytest.approx(-math.log(LOG_LOSS_EPSILON))
     assert result.direction_correct is False
 
 

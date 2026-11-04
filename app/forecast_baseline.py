@@ -11,7 +11,7 @@ import math
 from statistics import NormalDist
 from typing import Any
 
-from .forecast_evaluation_v2 import JEV_LOG_LOSS_EPSILON
+from .forecast_evaluation_v2 import LOG_LOSS_EPSILON
 
 BASELINE_VERSION = "naive-vol-v1"
 _CLASSES = ("bearish", "neutral", "bullish")
@@ -58,5 +58,5 @@ def score_against_label(probabilities: dict[str, float], actual_label: str) -> d
     brier = sum(
         (float(probabilities[name]) - (1.0 if name == actual_label else 0.0)) ** 2 for name in _CLASSES
     )
-    log_loss = -math.log(max(float(probabilities[actual_label]), JEV_LOG_LOSS_EPSILON))
+    log_loss = -math.log(max(float(probabilities[actual_label]), LOG_LOSS_EPSILON))
     return {"brier_score": brier, "log_loss": log_loss}

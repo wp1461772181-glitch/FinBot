@@ -22,11 +22,10 @@ from .database import SessionLocal
 from .dashboard import dashboard_price_history
 from .evidence_context import EvidenceContextError, freeze_evidence_context
 from .forecast_baseline import BASELINE_VERSION, naive_vol_probabilities, score_against_label
-from .forecast_evaluation_v2 import JEV_LOG_LOSS_EPSILON
+from .forecast_evaluation_v2 import LOG_LOSS_EPSILON
 from .forecast_contract import future_xnys_sessions, latest_completed_xnys_session
 from .forecast_jobs import ForecastJobError, enqueue_job
 from .forecast_revision_candidates import REVISION_LOOKAHEAD, REVISION_LOOKBACK, assess_revision_sources, window_category
-from .jev_learning import jev_learning_status
 from .forecast_v2_models import (
     ForecastEvaluationV2, ForecastJobV2, ForecastVersionV2, OfficialMonitorRunV2, not_hidden_control,
 )
@@ -362,18 +361,6 @@ def get_v2_evaluations(symbol: str | None = None, db: Session = Depends(get_v2_d
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail="V2 job store is unavailable") from exc
-
-
-@router.get("/jev-learning/status")
-def get_jev_learning_status(symbol: str | None = None, db: Session = Depends(get_v2_db)) -> dict[str, Any]:
-    """Expose live-calibrator readiness, active versions, and strict cohort gates."""
-    try:
-        normalized = _supported_symbol(symbol) if symbol else None
-        return jev_learning_status(db=db, symbol=normalized)
-    except V2RequestError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    except SQLAlchemyError as exc:
-        raise HTTPException(status_code=503, detail="Jev 学习状态暂不可用，请确认数据库迁移已完成。") from exc
 
 
 @router.get("/stocks/{symbol}/forecast-roots")
@@ -922,7 +909,7 @@ def _model_evaluation_cohorts(
             "question_version": question_version or None,
             "control": is_control,
             "log_loss_zero_probability_floor": (
-                JEV_LOG_LOSS_EPSILON if model_status in ("experimental_jev", "experimental_llm") else None
+                LOG_LOSS_EPSILON if model_status in ("experimental_jev", "experimental_llm") else None
             ),
             "status": status,
             "sample": {

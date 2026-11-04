@@ -1,6 +1,8 @@
 # Jev through OpenRouter
 
-`app/jev_provider.py` implements the Decisions API as an independent adapter. It sends a validated research brief as `state` to `https://openrouter.ai/api/alpha/decisions` and asks one `choice` question named `direction`. The criteria are exactly `bullish`, `neutral`, and `bearish`. This adapter does not use Chat Completions and is not connected to the production forecast default.
+> **Direction forecasting is retired (2026-11).** Everything below up to "Claim support" describes the former `direction` provider (`app/jev_provider.py`, `scripts/probe_jev.py`), which has been removed, along with the `jev` forecast mode. It is kept as an archive. Only the claim-support section still applies.
+
+`app/jev_provider.py` implemented the Decisions API as an independent adapter. It sends a validated research brief as `state` to `https://openrouter.ai/api/alpha/decisions` and asks one `choice` question named `direction`. The criteria are exactly `bullish`, `neutral`, and `bearish`. This adapter does not use Chat Completions and is not connected to the production forecast default.
 
 The request and response shape was checked against [OpenRouter's Jev Decisions example](https://openrouter.ai/blog/insights/what-is-jev/), [TypeSafe Choice](https://docs.typesafe.ai/primitives/choice), and [TypeSafe state](https://docs.typesafe.ai/concepts/state). The documented request has top-level `model`, `state`, and `questions`; each choice question supplies `type`, `instructions`, and a `criteria` map. A response carries `answers.<question_id>.choice`, a probability for each option, and optional confidence, with actual model, usage, and request ID at the top level. The project's request shape matches those fields. TypeSafe permits structured JSON as state, which is appropriate for the ResearchBrief object. No response schema discrepancy was found in the documentation checked on 2026-09-26.
 
@@ -48,6 +50,6 @@ Budget, on purpose tighter than the direction adapter:
 
 Failure isolation: HTTP errors, timeouts, validation failures, `unrelated`, and `supports` below `CLAIM_JEV_SUPPORT_THRESHOLD` (default 0.7) are audit-only `semantic_unchecked`. They do not downgrade the answer. In `CLAIM_JEV_SUPPORT=enforce`, only an explicit `does_not_support` drops that claim. Do not turn those failures into a whole-answer “待核对”.
 
-Do not write claim-support choices into forecast learning or calibration (`app/jev_learning.py` is not imported). Do not set `CLAIM_JEV_SUPPORT=enforce` until a labelled set has been scored and the metrics are recorded under `docs/reports/`. The labelling rules are in [claim-support-label-protocol.md](claim-support-label-protocol.md). `scripts/probe_jev.py` remains the direction probe and is unchanged.
+Do not write claim-support choices into any forecast record or score (the forecast calibrator is retired). Do not set `CLAIM_JEV_SUPPORT=enforce` until a labelled set has been scored and the metrics are recorded under `docs/reports/`. The labelling rules are in [claim-support-label-protocol.md](claim-support-label-protocol.md). `scripts/probe_jev.py` remains the direction probe and is unchanged.
 
 `CLAIM_QUOTE_GATE` and `CLAIM_JEV_SUPPORT` both default to `off` in code when unset; `.env.example` and the runbook in [claim-support-label-protocol.md](claim-support-label-protocol.md) set `shadow` with `CLAIM_JEV_DAILY_CAP=200`. Shadow runs the check and records latency, bind results, and quality notes while the legacy prose guards still decide the visible answer. See `.env.example`.

@@ -28,11 +28,8 @@ export function ResearchBriefView({
   const target = brief.target_contract;
   const market = brief.market_summary;
   const provider = record(modelManifest.decision_provider);
-  const calibration = record(modelManifest.local_calibration);
-  const rawProbabilities = probabilityVector(provider.raw_probabilities);
-  const calibrated = calibration.status === "active";
   const confidence = provider.confidence;
-  const copy = forecastCopy({ model_status: modelStatus, provider: text(provider.provider), actual_model: text(provider.actual_model), calibrated });
+  const copy = forecastCopy({ model_status: modelStatus, provider: text(provider.provider), actual_model: text(provider.actual_model) });
   return <section className="research-brief" aria-labelledby="research-brief-title">
     <header className="research-brief-header"><div><p className="section-label">{brief.time_mode === "historical_research" ? t("历史回放 · 回填材料研究") : t("材料分析汇总")}</p><h2 id="research-brief-title">{<Tx text={"股票研究简报"} />}</h2><p>{brief.symbol} · {t("截止")} {formatTime(brief.decision_at, locale)}</p></div><span className={`brief-quality quality-${brief.input_quality.status}`}>{qualityLabel(brief.input_quality.status, t)} · {t("输入质量")}</span></header>
     {locale === "en-US" && localization.kind === "loading" && <p className="localization-status" role="status">{t("Translating saved research brief…")}</p>}
@@ -54,7 +51,6 @@ export function ResearchBriefView({
       <div className="brief-decision-heading"><div><p className="section-label">{t(copy.briefKickerProvider)} · {t(copy.briefKickerModel)}</p><h3>{t(copy.briefTitle)}</h3></div><strong>{t(copy.briefBadge)}</strong></div>
       <p>{t(copy.briefNote)}</p>
       <div className="brief-decision-probabilities"><Probability name={t("上涨")} value={probabilities.bullish} tone="bullish" /><Probability name={t("持平")} value={probabilities.neutral} tone="neutral" /><Probability name={t("下跌")} value={probabilities.bearish} tone="bearish" /></div>
-      {calibrated && rawProbabilities && <details className="brief-raw-decision"><summary>{<Tx text={"查看校准前 Jev 原始输出"} />}</summary><div className="brief-decision-probabilities"><Probability name={t("上涨")} value={rawProbabilities.bullish} tone="bullish" /><Probability name={t("持平")} value={rawProbabilities.neutral} tone="neutral" /><Probability name={t("下跌")} value={rawProbabilities.bearish} tone="bearish" /></div></details>}
       <small>{t("模型")} {t(copy.model)}{text(provider.question_version) ? ` · ${text(provider.question_version)}` : ""}{typeof confidence === "number" ? ` · ${t("分布集中度")} ${Math.round(confidence * 100)}%${locale === "en-US" ? ` (${t("不是准确率")})` : `（${t("不是准确率")}）`}` : ""}</small>
     </section> : <p className="brief-no-probability">{t(copy.noProbabilityNote)}</p>}
 
@@ -118,10 +114,3 @@ function sectionText(value: ResearchEvidencePointer["section"], locale: "zh-CN" 
 function changeLabel(value: string, t: (text: string) => string) { return ({ added: t("新增"), withdrawn: t("撤回"), modified: t("修订"), source_status_changed: t("来源状态变化") } as Record<string, string>)[value] ?? value; }
 function sourceTypeLabel(value: string, locale: "zh-CN" | "en-US") { return locale === "en-US" ? value === "official_filing" ? "SEC filing" : "Uploaded material" : value === "official_filing" ? "SEC 官方来源" : "用户上传材料"; }
 function record(value: unknown): Record<string, unknown> { return typeof value === "object" && value !== null ? value as Record<string, unknown> : {}; }
-function probabilityVector(value: unknown): V2Probabilities | null {
-  const candidate = record(value);
-  if ([candidate.bearish, candidate.neutral, candidate.bullish].every((item) => typeof item === "number" && Number.isFinite(item))) {
-    return { bearish: candidate.bearish as number, neutral: candidate.neutral as number, bullish: candidate.bullish as number };
-  }
-  return null;
-}

@@ -476,18 +476,14 @@ def test_explicit_lookback_replaces_the_incremental_window(disposable_database):
     assert backfill_provider.calls == [("AAPL", NOW.date() - timedelta(days=365), NOW.date())]
 
 
-def test_a_confirmed_scan_neither_labels_nor_learns(disposable_database, monkeypatch):
+def test_a_confirmed_scan_does_not_label(disposable_database, monkeypatch):
     Base.metadata.create_all(bind=engine)
     _clear_monitor_runs()
 
     def unexpected_evaluation(*, db, evaluated_at):
         raise AssertionError("a confirmed scan must not run the scheduled evaluator")
 
-    def unexpected_learning(*, db):
-        raise AssertionError("a confirmed scan must not run the scheduled learner")
-
     monkeypatch.setattr("app.official_monitor_v2.run_evaluation_batch", unexpected_evaluation)
-    monkeypatch.setattr("app.jev_learning.run_jev_learning_cycle", unexpected_learning)
     with SessionLocal() as db:
         result = scan_only(
             db=db,
@@ -502,7 +498,7 @@ def test_a_confirmed_scan_neither_labels_nor_learns(disposable_database, monkeyp
     assert stored.evaluation_summary == {"status": "deferred", "reason": "scan_only"}
 
 
-def test_the_scheduled_tick_labels_and_learns_after_its_scan(disposable_database, monkeypatch):
+def test_the_scheduled_tick_labels_after_its_scan(disposable_database, monkeypatch):
     Base.metadata.create_all(bind=engine)
     _clear_monitor_runs()
     seen: dict[str, object] = {}
@@ -516,9 +512,6 @@ def test_the_scheduled_tick_labels_and_learns_after_its_scan(disposable_database
         return Summary()
 
     monkeypatch.setattr("app.official_monitor_v2.run_evaluation_batch", evaluated)
-    monkeypatch.setattr(
-        "app.jev_learning.run_jev_learning_cycle", lambda *, db: {"status": "idle"}
-    )
     with SessionLocal() as db:
         result = monitor_tick(
             db=db,
@@ -535,5 +528,5 @@ def test_the_scheduled_tick_labels_and_learns_after_its_scan(disposable_database
         "status": "succeeded",
         "examined": 3,
         "inserted": 0,
-        "jev_learning": {"status": "idle"},
     }
+    assert "jev_learning" not in stored.evaluation_summary
