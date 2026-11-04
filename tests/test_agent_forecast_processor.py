@@ -383,29 +383,51 @@ def _frozen_brief(*, symbol, source_refs):
     return manifest, selected, brief.model_dump(mode="json")
 
 
+def _cleanup_seed(source_id):
+    """The suite shares one disposable database for the whole run, so a seeded 8-K and everything the
+    frozen-brief pipeline wrote for it (analysis job/version, frozen event version, inventory row) must be
+    removed again, or later tests read our rows (seen in CI: the AMD material-analysis queries)."""
+    from app.forecast_v2_models import EvidenceEventVersionV2
+    from app.material_analysis_models import MaterialAnalysisJob, MaterialAnalysisVersion
+    from app.models import SecFilingInventory
+    with SessionLocal() as db:
+        # Job and version point at each other (job.result_analysis_id, version.job_id), so break the cycle
+        # first, then delete version, job, frozen event version, inventory row.
+        db.query(MaterialAnalysisJob).filter(MaterialAnalysisJob.source_id == source_id).update(
+            {"result_analysis_id": None}, synchronize_session=False)
+        db.query(MaterialAnalysisVersion).filter(MaterialAnalysisVersion.source_id == source_id).delete(synchronize_session=False)
+        db.query(MaterialAnalysisJob).filter(MaterialAnalysisJob.source_id == source_id).delete(synchronize_session=False)
+        db.query(EvidenceEventVersionV2).filter(EvidenceEventVersionV2.source_id == source_id).delete(synchronize_session=False)
+        db.query(SecFilingInventory).filter(SecFilingInventory.id == source_id).delete(synchronize_session=False)
+        db.commit()
+
+
 def test_explicit_8k_ref_reaches_the_brief():
     """The promotion button names a library 8-K by its SecFilingInventory id.  The request is accepted, the
     freezer puts that 8-K in the manifest, only manifest sources are analysed, and the 8-K is in the brief."""
     from app.forecast_v2_api import V2RequestError, _validate_source_refs
     source_id, _accession = _seed_8k()
-    ref = {"source_type": "official_filing", "source_id": str(source_id)}
+    try:
+        ref = {"source_type": "official_filing", "source_id": str(source_id)}
 
-    # 1. The request check accepts a library declaration for this symbol, and still refuses another symbol's.
-    with SessionLocal() as db:
-        _validate_source_refs(db, refs=[ref], symbol="AMD", decision_at=datetime.now(UTC))
-        with pytest.raises(V2RequestError):
-            _validate_source_refs(db, refs=[ref], symbol="MSFT", decision_at=datetime.now(UTC))
+        # 1. The request check accepts a library declaration for this symbol, and still refuses another symbol's.
+        with SessionLocal() as db:
+            _validate_source_refs(db, refs=[ref], symbol="AMD", decision_at=datetime.now(UTC))
+            with pytest.raises(V2RequestError):
+                _validate_source_refs(db, refs=[ref], symbol="MSFT", decision_at=datetime.now(UTC))
 
-    # 2. Selection works on the frozen manifest alone: a reference that is not in it is never analysed.
-    manifest, selected, brief = _frozen_brief(symbol="AMD", source_refs=[ref])
-    assert [item["source_id"] for item in manifest] == [str(source_id)]
-    stray = {"source_type": "official_filing", "source_id": str(uuid4())}
-    picked, _explicit, _excluded = _select_manifest_events(manifest, [ref, stray])
-    assert [item["source_id"] for item in picked] == [str(source_id)]
+        # 2. Selection works on the frozen manifest alone: a reference that is not in it is never analysed.
+        manifest, selected, brief = _frozen_brief(symbol="AMD", source_refs=[ref])
+        assert [item["source_id"] for item in manifest] == [str(source_id)]
+        stray = {"source_type": "official_filing", "source_id": str(uuid4())}
+        picked, _explicit, _excluded = _select_manifest_events(manifest, [ref, stray])
+        assert [item["source_id"] for item in picked] == [str(source_id)]
 
-    # 3. The 8-K itself is in the brief.
-    assert [item["source_id"] for item in selected] == [str(source_id)]
-    assert [(r["source_type"], r["source_id"]) for r in brief["material_refs"]] == [("official_filing", str(source_id))]
+        # 3. The 8-K itself is in the brief.
+        assert [item["source_id"] for item in selected] == [str(source_id)]
+        assert [(r["source_type"], r["source_id"]) for r in brief["material_refs"]] == [("official_filing", str(source_id))]
+    finally:
+        _cleanup_seed(source_id)
 
 
 def test_promoted_forecast_has_no_trace_of_the_judgment():
@@ -424,6 +446,7 @@ def test_promoted_forecast_has_no_trace_of_the_judgment():
                                  "counter_argument": markers["counter"], "validated": True}},
         ))
         db.commit()
+    job_columns = {}
     try:
         # Exactly what the button sends, and the job the API stores from it.
         request = {"symbol": "AMD", "kind": "new",
@@ -440,6 +463,10 @@ def test_promoted_forecast_has_no_trace_of_the_judgment():
             assert marker not in everything, f"the judgment's {name} reached the job or the brief"
         assert str(event_id) not in everything
     finally:
+        from app.forecast_v2_models import ForecastJobV2
         with SessionLocal() as db:
             db.query(EarningsEvent).filter(EarningsEvent.id == event_id).delete(synchronize_session=False)
+            if job_columns.get("id") is not None:
+                db.query(ForecastJobV2).filter(ForecastJobV2.id == job_columns["id"]).delete(synchronize_session=False)
             db.commit()
+        _cleanup_seed(source_id)
