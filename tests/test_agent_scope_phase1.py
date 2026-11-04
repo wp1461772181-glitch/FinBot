@@ -404,7 +404,6 @@ def test_a_new_tool_answers_an_unseen_question_with_no_edit_to_the_workflow(monk
     _kind_nobody_designed_for()
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason="evidence_class arrives in Phase 2; drop this marker then")
 def test_a_new_tool_with_a_made_up_evidence_class_answers_an_unseen_question(monkeypatch):
     policy = ToolPolicy("query_made_up_ledger", "Read a ledger nobody designed for.", Empty, "read", evidence_class="made_up")
     _with_fixture_tool(monkeypatch, policy)
