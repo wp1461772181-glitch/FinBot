@@ -546,10 +546,29 @@ export type V2EvaluationCohort = {
   roots: V2EvaluationRoot[];
 };
 
+/** naive-vol-v1, computed at read time from the version's frozen snapshot; present only once the version has a numeric score. */
+export type V2NaiveBaseline = {
+  version: string;
+  probabilities: { bearish: number; neutral: number; bullish: number };
+  brier_score: number;
+  log_loss: number;
+};
+export type V2NaiveBaselineSummary = {
+  version: string;
+  paired_root_count: number;
+  baseline_unavailable_root_count: number;
+  model_mean_brier: number | null;
+  baseline_mean_brier: number | null;
+  model_mean_log_loss: number | null;
+  baseline_mean_log_loss: number | null;
+};
+export type V2ReviewRule = { threshold: number; paired_root_count: number; state: "collecting" | "breached" | "passed" };
+
 export type V2ModelEvaluationVersion = V2EvaluationVersion & {
   provider: string;
   actual_model: string;
   question_version: string | null;
+  naive_baseline?: V2NaiveBaseline | null;
 };
 export type V2ModelEvaluationRoot = Omit<V2EvaluationRoot, "versions"> & { versions: V2ModelEvaluationVersion[] };
 export type V2ModelEvaluationCohort = {
@@ -563,11 +582,15 @@ export type V2ModelEvaluationCohort = {
   log_loss_zero_probability_floor: number | null;
   status: "pending" | "insufficient_samples" | "available";
   sample: Pick<V2EvaluationCohort["sample"], "root_denominator" | "labelled_root_count" | "scored_root_count" | "unscored_root_count">;
+  naive_baseline_summary?: V2NaiveBaselineSummary;
+  /** Only on observed, non-control LLM cohorts. Informational: nothing acts on `state`. */
+  review_rule?: V2ReviewRule;
   roots: V2ModelEvaluationRoot[];
 };
 
 export type V2EvaluationResponse = {
-  symbol: string;
+  /** null when read across every symbol. */
+  symbol: string | null;
   status: "pending" | "insufficient_samples" | "available";
   minimum_scored_roots: number;
   cohorts: Record<"prospective" | "historical_research" | "unknown", V2EvaluationCohort>;

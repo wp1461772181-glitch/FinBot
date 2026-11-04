@@ -16,6 +16,7 @@ const ALLOWED = {
     "EvidenceCenter.tsx",             // version label for an old Jev version
     "HistoricalReplayWorkspace.tsx",  // modelLabel for an old Jev replay
     "App.tsx",                        // modelStatusLabel branch and the 早期版本 cohort note
+    "ModelScoresPage.tsx",            // B3: inherited App.tsx's cohort groups (modelStatusLabel, 早期版本 note)
     "V2ForecastWorkspace.tsx",        // calibrated-branch label (removed with the calibrator, B5)
     "ResearchBriefView.tsx",          // calibrated-branch label (removed with the calibrator, B5)
   ]),

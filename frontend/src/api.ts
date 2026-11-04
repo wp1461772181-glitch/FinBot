@@ -584,8 +584,9 @@ export async function getV2MonitorStatus(signal?: AbortSignal): Promise<V2Monito
   return requestJson<V2MonitorStatus>("/api/v2/monitor/status", { signal });
 }
 
-export async function getV2Evaluations(symbol: string, signal?: AbortSignal): Promise<V2EvaluationResponse> {
-  return requestJson<V2EvaluationResponse>(`/api/v2/evaluations?symbol=${encodeURIComponent(symbol)}`, { signal });
+export async function getV2Evaluations(symbol?: string, signal?: AbortSignal): Promise<V2EvaluationResponse> {
+  const query = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+  return requestJson<V2EvaluationResponse>(`/api/v2/evaluations${query}`, { signal });
 }
 
 export async function getV2ForecastVersion(versionId: string, signal?: AbortSignal): Promise<V2VersionDetail> {

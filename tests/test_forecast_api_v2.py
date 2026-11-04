@@ -854,3 +854,142 @@ def test_jev_learning_status_shows_pending_observed_rows_and_excludes_historical
     assert cycle["historical_replay_mature_roots_excluded"] == 1
     assert cycle["trained_candidates"] == 0
     _delete_owned_evaluation_fixture_versions([observed_id, historical_id])
+
+
+# --- naive-vol-v1 baseline and cross-company model cohorts -----------------
+
+_GOOD_SNAPSHOT = {"volatility_20d": 0.40, "remaining_sessions": 20, "realized_return_from_anchor": 0.0}
+_BASELINE_BULLISH_BRIER = 0.52977
+
+
+def _llm_root(
+    *,
+    symbol="AAPL",
+    actual_model="llm-a",
+    time_mode="observed",
+    control=False,
+    snapshot=None,
+    scored=True,
+    label="bullish",
+    brier=0.3,
+    log_loss=0.7,
+):
+    root_id = _create_version(symbol=symbol, target_end=date(2025, 1, 2))
+    manifest = {
+        "time_mode": time_mode,
+        "decision_provider": {"provider": "llm", "actual_model": actual_model, "question_version": "q1"},
+    }
+    if control:
+        manifest["hidden_control"] = True
+        manifest["control_of_root_id"] = str(uuid4())
+    with SessionLocal() as db:
+        version = db.get(ForecastVersionV2, root_id)
+        version.model_status = "experimental_llm"
+        version.model_manifest = manifest
+        version.feature_snapshot = _GOOD_SNAPSHOT if snapshot is None else snapshot
+        version.decision_probabilities = {"bearish": 0.3, "neutral": 0.3, "bullish": 0.4}
+        if scored:
+            db.add(
+                ForecastEvaluationV2(
+                    forecast_version_id=version.id,
+                    target_contract_hash=version.target_contract_hash,
+                    actual_target_close=101.0,
+                    actual_label=label,
+                    label_available_at=datetime.now(UTC),
+                    brier_score=brier,
+                    log_loss=log_loss,
+                    direction_correct=True,
+                    status="succeeded",
+                    result_version=1,
+                    price_input_version={"revision": 1},
+                )
+            )
+        db.commit()
+    return root_id
+
+
+def _cohort(payload, actual_model="llm-a", control=False, time_mode="observed"):
+    matches = [
+        c for c in payload["model_cohorts"]
+        if c["actual_model"] == actual_model and c["control"] is control and c["time_mode"] == time_mode
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_evaluations_without_symbol_cover_all_symbols(client):
+    _llm_root(symbol="AAPL")
+    _llm_root(symbol="MSFT")
+    payload = client.get("/v2/evaluations").json()
+    assert payload["symbol"] is None
+    cohort = _cohort(payload)
+    assert cohort["sample"]["scored_root_count"] == 2
+    assert cohort["naive_baseline_summary"]["paired_root_count"] == 2
+    assert client.get("/v2/evaluations?symbol=AAPL").json()["symbol"] == "AAPL"
+
+
+def test_baseline_absent_until_the_version_is_scored(client):
+    _llm_root(scored=False)
+    cohort = _cohort(client.get("/v2/evaluations").json())
+    assert cohort["roots"][0]["versions"][0]["naive_baseline"] is None
+    assert cohort["naive_baseline_summary"]["paired_root_count"] == 0
+    assert cohort["naive_baseline_summary"]["baseline_unavailable_root_count"] == 0
+    assert cohort["naive_baseline_summary"]["baseline_mean_brier"] is None
+
+    _llm_root(actual_model="llm-b")
+    scored = _cohort(client.get("/v2/evaluations").json(), actual_model="llm-b")
+    baseline = scored["roots"][0]["versions"][0]["naive_baseline"]
+    assert baseline["version"] == "naive-vol-v1"
+    assert baseline["brier_score"] == pytest.approx(_BASELINE_BULLISH_BRIER, abs=5e-4)
+    assert baseline["log_loss"] == pytest.approx(0.84498, abs=5e-4)
+    assert baseline["probabilities"]["bullish"] == pytest.approx(0.42957, abs=5e-4)
+
+
+def test_baseline_summary_uses_paired_roots_only(client):
+    _llm_root(brier=0.2, log_loss=0.5)
+    _llm_root(brier=0.4, log_loss=0.9)
+    for bad in (
+        {"volatility_20d": 0, "remaining_sessions": 20, "realized_return_from_anchor": 0.0},
+        {"volatility_20d": "0.4", "remaining_sessions": 20, "realized_return_from_anchor": 0.0},
+        {"volatility_20d": 0.4, "remaining_sessions": 0, "realized_return_from_anchor": 0.0},
+    ):
+        _llm_root(snapshot=bad, brier=3.0, log_loss=9.0)
+    summary = _cohort(client.get("/v2/evaluations").json())["naive_baseline_summary"]
+    assert summary["version"] == "naive-vol-v1"
+    assert summary["paired_root_count"] == 2
+    assert summary["baseline_unavailable_root_count"] == 3
+    assert summary["model_mean_brier"] == pytest.approx(0.3)
+    assert summary["model_mean_log_loss"] == pytest.approx(0.7)
+    assert summary["baseline_mean_brier"] == pytest.approx(_BASELINE_BULLISH_BRIER, abs=5e-4)
+    assert summary["baseline_mean_log_loss"] == pytest.approx(0.84498, abs=5e-4)
+
+
+def test_review_rule_states(client):
+    for _ in range(29):
+        _llm_root(actual_model="llm-29", brier=0.9)
+    for _ in range(30):
+        _llm_root(actual_model="llm-worse", brier=0.9)
+    for _ in range(30):
+        _llm_root(actual_model="llm-better", brier=0.3)
+    _llm_root(actual_model="llm-replay", time_mode="historical_research")
+    _llm_root(actual_model="llm-ctl", control=True)
+
+    payload = client.get("/v2/evaluations").json()
+    assert _cohort(payload, "llm-29")["review_rule"] == {"threshold": 30, "paired_root_count": 29, "state": "collecting"}
+    assert _cohort(payload, "llm-worse")["review_rule"] == {"threshold": 30, "paired_root_count": 30, "state": "breached"}
+    assert _cohort(payload, "llm-better")["review_rule"] == {"threshold": 30, "paired_root_count": 30, "state": "passed"}
+    assert "review_rule" not in _cohort(payload, "llm-replay", time_mode="historical_research")
+    assert "review_rule" not in _cohort(payload, "llm-ctl", control=True)
+
+
+def test_baseline_read_writes_nothing(client):
+    root = _llm_root()
+    with SessionLocal() as db:
+        before = (db.query(ForecastVersionV2).count(), db.query(ForecastEvaluationV2).count())
+        row = db.get(ForecastVersionV2, root)
+        snapshot = (row.feature_snapshot, row.model_manifest, row.decision_probabilities)
+    assert client.get("/v2/evaluations").status_code == 200
+    with SessionLocal() as db:
+        assert (db.query(ForecastVersionV2).count(), db.query(ForecastEvaluationV2).count()) == before
+        row = db.get(ForecastVersionV2, root)
+        assert (row.feature_snapshot, row.model_manifest, row.decision_probabilities) == snapshot

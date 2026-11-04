@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from .database import SessionLocal
 from .dashboard import dashboard_price_history
 from .evidence_context import EvidenceContextError, freeze_evidence_context
+from .forecast_baseline import BASELINE_VERSION, naive_vol_probabilities, score_against_label
 from .forecast_evaluation_v2 import JEV_LOG_LOSS_EPSILON
 from .forecast_contract import future_xnys_sessions, latest_completed_xnys_session
 from .forecast_jobs import ForecastJobError, enqueue_job
@@ -326,25 +327,30 @@ def get_v2_monitor_status(db: Session = Depends(get_v2_db)) -> dict[str, Any]:
 
 
 @router.get("/evaluations")
-def get_v2_evaluations(symbol: str, db: Session = Depends(get_v2_db)) -> dict[str, Any]:
+def get_v2_evaluations(symbol: str | None = None, db: Session = Depends(get_v2_db)) -> dict[str, Any]:
     """Read persisted V2 evaluation history without fetching prices or writing rows.
 
     Forecast roots are the statistical unit. A root can have several revision
     versions for one fixed target, so version-level scores are returned for
     audit while each root appears only once in a cohort denominator.
+
+    Without ``symbol`` every symbol is read (``"symbol": null``): model cohorts
+    are cross-company, since the 30-root rule means nothing per symbol.
     """
     try:
-        normalized = _supported_symbol(symbol)
+        normalized = _supported_symbol(symbol) if symbol else None
+        versions_query = select(ForecastVersionV2)
+        evaluations_query = select(ForecastEvaluationV2).join(
+            ForecastVersionV2, ForecastEvaluationV2.forecast_version_id == ForecastVersionV2.id
+        )
+        if normalized is not None:
+            versions_query = versions_query.where(ForecastVersionV2.symbol == normalized)
+            evaluations_query = evaluations_query.where(ForecastVersionV2.symbol == normalized)
         versions = db.scalars(
-            select(ForecastVersionV2)
-            .where(ForecastVersionV2.symbol == normalized)
-            .order_by(ForecastVersionV2.root_id, ForecastVersionV2.version_no, ForecastVersionV2.created_at)
+            versions_query.order_by(ForecastVersionV2.root_id, ForecastVersionV2.version_no, ForecastVersionV2.created_at)
         ).all()
         evaluations = db.scalars(
-            select(ForecastEvaluationV2)
-            .join(ForecastVersionV2, ForecastEvaluationV2.forecast_version_id == ForecastVersionV2.id)
-            .where(ForecastVersionV2.symbol == normalized)
-            .order_by(
+            evaluations_query.order_by(
                 ForecastEvaluationV2.forecast_version_id,
                 ForecastEvaluationV2.result_version.desc(),
                 ForecastEvaluationV2.created_at.desc(),
@@ -771,7 +777,7 @@ def _workspace_version(version: ForecastVersionV2) -> dict[str, Any]:
 
 def _evaluations_payload(
     *,
-    symbol: str,
+    symbol: str | None,
     versions: list[ForecastVersionV2],
     evaluations: list[ForecastEvaluationV2],
 ) -> dict[str, Any]:
@@ -859,6 +865,8 @@ def _model_evaluation_cohorts(
         roots: list[dict[str, Any]] = []
         labelled_roots = 0
         scored_roots = 0
+        baseline_unavailable = 0
+        paired: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for root_id, candidates in root_versions.items():
             selected = max(
                 candidates,
@@ -889,8 +897,16 @@ def _model_evaluation_cohorts(
             latest = root["versions"][0]["latest_evaluation"]
             if latest is not None and latest["status"] == "succeeded" and latest["actual_label"] is not None:
                 labelled_roots += 1
+            baseline = None
             if _has_numeric_scores(latest):
                 scored_roots += 1
+                # Read-time only (P3): shown once this version has a succeeded, scored evaluation.
+                baseline = _naive_baseline_for(selected, latest)
+                if baseline is None:
+                    baseline_unavailable += 1
+                else:
+                    paired.append((latest, baseline))
+            root["versions"][0]["naive_baseline"] = baseline
 
         roots.sort(key=lambda root: (root["versions"][0]["decision_at"], root["root_id"]), reverse=True)
         status = (
@@ -915,8 +931,11 @@ def _model_evaluation_cohorts(
                 "scored_root_count": scored_roots,
                 "unscored_root_count": len(root_versions) - scored_roots,
             },
+            "naive_baseline_summary": _naive_baseline_summary(paired, baseline_unavailable),
             "roots": roots,
         })
+        if time_mode == "observed" and model_status == "experimental_llm" and not is_control:
+            payloads[-1]["review_rule"] = _review_rule(payloads[-1]["naive_baseline_summary"])
     return sorted(
         payloads,
         key=lambda item: (
@@ -924,6 +943,51 @@ def _model_evaluation_cohorts(
             item["actual_model"], item["question_version"] or "", item["control"],
         ),
     )
+
+
+REVIEW_RULE_THRESHOLD = 30
+
+
+def _naive_baseline_for(version: ForecastVersionV2, latest: dict[str, Any]) -> dict[str, Any] | None:
+    """``naive-vol-v1`` for one version's frozen snapshot, scored on its realised label; never stored."""
+    label = latest.get("actual_label")
+    probabilities = naive_vol_probabilities(version.feature_snapshot)
+    if probabilities is None or label not in ("bearish", "neutral", "bullish"):
+        return None
+    scores = score_against_label(probabilities, label)
+    return {"version": BASELINE_VERSION, "probabilities": probabilities, **scores}
+
+
+def _naive_baseline_summary(
+    paired: list[tuple[dict[str, Any], dict[str, Any]]], unavailable: int
+) -> dict[str, Any]:
+    """Means over paired roots only, so model and baseline cover the same roots."""
+    count = len(paired)
+
+    def mean(values: list[float]) -> float | None:
+        return sum(values) / count if count else None
+
+    return {
+        "version": BASELINE_VERSION,
+        "paired_root_count": count,
+        "baseline_unavailable_root_count": unavailable,
+        "model_mean_brier": mean([float(m["brier_score"]) for m, _ in paired]),
+        "baseline_mean_brier": mean([b["brier_score"] for _, b in paired]),
+        "model_mean_log_loss": mean([float(m["log_loss"]) for m, _ in paired]),
+        "baseline_mean_log_loss": mean([b["log_loss"] for _, b in paired]),
+    }
+
+
+def _review_rule(summary: dict[str, Any]) -> dict[str, Any]:
+    """Informational only: nothing acts on ``state``."""
+    count = summary["paired_root_count"]
+    if count < REVIEW_RULE_THRESHOLD:
+        state = "collecting"
+    elif summary["model_mean_brier"] > summary["baseline_mean_brier"]:
+        state = "breached"
+    else:
+        state = "passed"
+    return {"threshold": REVIEW_RULE_THRESHOLD, "paired_root_count": count, "state": state}
 
 
 def _model_evaluation_identity(version: ForecastVersionV2) -> tuple[str, str, str, str, str, bool]:

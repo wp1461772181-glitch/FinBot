@@ -47,3 +47,29 @@ export type HeaderVersion = {
 export declare function recordedModel(detail?: HeaderVersion | null): { provider: string | null; actual_model: string | null; requested_model: string | null };
 export declare function modelChanged(current?: HeaderVersion | null, parent?: HeaderVersion | null): boolean;
 export declare function versionHeader(detail?: HeaderVersion | null): HeaderRow[];
+export declare const BASELINE_NAME: "naive-vol-v1";
+export declare const BREACH_BANNER: string;
+export type ScoreCardInput = {
+  status?: string;
+  naive_baseline_summary?: {
+    paired_root_count: number;
+    baseline_unavailable_root_count: number;
+    model_mean_brier: number | null;
+    baseline_mean_brier: number | null;
+    model_mean_log_loss: number | null;
+    baseline_mean_log_loss: number | null;
+  } | null;
+  review_rule?: { threshold: number; paired_root_count: number; state: "collecting" | "breached" | "passed" } | null;
+};
+export type ScoreCard = {
+  showMeans: boolean;
+  pairedRootCount: number;
+  baselineUnavailableRootCount: number;
+  modelBrier: number | null;
+  baselineBrier: number | null;
+  modelLogLoss: number | null;
+  baselineLogLoss: number | null;
+  breached: boolean;
+  bannerKey: string | null;
+};
+export declare function scoreCard(cohort?: ScoreCardInput | null): ScoreCard;

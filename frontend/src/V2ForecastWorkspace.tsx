@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, createV2ForecastJob, createV2ManualRevisionJob, getV2Evaluations, getV2ForecastRoots, getV2ForecastVersion, getV2Job, getV2MonitorStatus, getV2RevisionCandidates, getV2Timeline, getV2Workspace } from "./api";
 import type { V2RevisionCandidates } from "./api";
 import type { FilingInventory, ResearchMaterialReference, V2EvaluationCohort, V2EvaluationResponse, V2EvaluationRoot, V2EvaluationVersion, V2ForecastJob, V2ForecastRoot, V2ForecastRoots, V2ModelEvaluationCohort, V2MonitorStatus, V2Probabilities, V2Timeline, V2TimelineEntry, V2VersionDetail, V2Workspace } from "./types";
-import { forecastCopy, hasDecisionProbabilities, jobFailurePhrase, modelChanged } from "./forecast-model.mjs";
+import { BASELINE_NAME, forecastCopy, hasDecisionProbabilities, jobFailurePhrase, modelChanged } from "./forecast-model.mjs";
 import { ForecastVersionHeader } from "./ForecastVersionHeader";
 import { ResearchBriefView } from "./ResearchBriefView";
 import { evidenceTitle, processingStatus, sourceKey } from "./EvidenceProcessing";
@@ -597,6 +597,7 @@ function EvaluationReadout({ evaluations, selectedRootId, selectedVersionId, sel
       <div><p className="section-label">{t(copy.evalLabel)}</p><h3>{representsSelected ? state : t("显示该独立预测的最新代表版本")}</h3><p>{t("模型")} {modelCohort.actual_model} · {t("问题")} {modelCohort.question_version ?? t("未记录")} · {root?.target_end_date ?? t("目标日未记录")}</p></div>
       <div className="v2-evaluation-sample"><span>{<Tx text={"独立预测样本"} />}</span><strong>{t("标签")} {modelCohort.sample.labelled_root_count} · {t("评分")} {modelCohort.sample.scored_root_count} / {modelCohort.sample.root_denominator}</strong><small>{locale === "en-US" ? `${cohortStatusText(modelCohort.status).trim()}; ${t("按服务方、模型、问题版本和时间模式分组，每项独立预测只计一个代表版本。")}` : `${cohortStatusText(modelCohort.status)}；${t("按服务方、模型、问题版本和时间模式分组，每项独立预测只计一个代表版本。")}`}</small></div>
       {evaluation?.status === "succeeded" && <div className="v2-evaluation-result"><span>{<Tx text={"真实标签"} />}</span><strong>{labelText(evaluation.actual_label)}</strong><small>{evaluation.actual_target_close === null ? t("目标收盘价未记录") : `${t("目标收盘")} ${evaluation.actual_target_close}`}{evaluation.label_available_at ? ` · ${formatTime(evaluation.label_available_at)} ${t("可用")}` : ""}</small><p>{t(copy.evalScoreLabel)} {scoreParts.length ? scoreParts.join(" · ") : t("无可用数值评分")}</p></div>}
+      {representsSelected && representative?.naive_baseline && <p className="v2-evaluation-note">{t("同题基准")} {BASELINE_NAME}：Brier {scoreText(representative.naive_baseline.brier_score)} · Log loss {scoreText(representative.naive_baseline.log_loss)}</p>}
       {!representsSelected && <p className="v2-evaluation-note">{<Tx text={"每项独立预测只按最高版本号统计；当前选中的旧版本没有单独计入这组分数。"} />}</p>}
       {representative && <p className="v2-evaluation-note">{t("代表版本：")} {t("第")} {representative.version_no} {t("版")} · {t("分组")} {modelCohort.provider} / {modelCohort.actual_model} / {modelCohort.question_version ?? "—"} · {t("选择规则：")} {evaluations.data.model_cohort_selection_rule ?? t("每项独立预测按最高版本号选一个代表版本")}</p>}
     </section>;

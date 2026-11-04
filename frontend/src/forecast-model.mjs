@@ -254,3 +254,29 @@ export function versionHeader(detail) {
   if (timeMode(detail) === "historical_research") rows.push({ id: "time_mode", label: "时间模式", items: [{ t: "历史回放" }] });
   return rows;
 }
+
+export const BASELINE_NAME = "naive-vol-v1";
+export const BREACH_BANNER = "已达到约定条件：这个模型差于基准。请更换预测模型或停止显示数字。";
+
+/**
+ * What a cohort card may show of the model-vs-baseline comparison.  Means stay hidden until the cohort reaches
+ * `available` (the same floor as the model's own averages), so a thin sample never reads as a result.  The
+ * breach banner comes only from the API's `review_rule.state`; nothing here recomputes the rule.
+ */
+export function scoreCard(cohort) {
+  const summary = cohort?.naive_baseline_summary ?? null;
+  const shown = cohort?.status === "available" && summary !== null && summary.paired_root_count > 0;
+  const pick = (value) => (shown && typeof value === "number" && Number.isFinite(value) ? value : null);
+  const breached = cohort?.review_rule?.state === "breached";
+  return {
+    showMeans: shown,
+    pairedRootCount: summary?.paired_root_count ?? 0,
+    baselineUnavailableRootCount: summary?.baseline_unavailable_root_count ?? 0,
+    modelBrier: pick(summary?.model_mean_brier),
+    baselineBrier: pick(summary?.baseline_mean_brier),
+    modelLogLoss: pick(summary?.model_mean_log_loss),
+    baselineLogLoss: pick(summary?.baseline_mean_log_loss),
+    breached,
+    bannerKey: breached ? BREACH_BANNER : null,
+  };
+}
