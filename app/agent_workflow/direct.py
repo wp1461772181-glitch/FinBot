@@ -2673,32 +2673,35 @@ class Turn:
                     best_markers=len(re.findall(r'\[\d+\]',candidate['answer']))
                     best_rejected=list(self.audit.get('rejected_lines') or []);best_pairs=list(self.last_rejected);best_audit=snapshot()
         for attempt in range(1,MAX_REPAIR_ROUNDS+1):
+            # Naming the numbers the check rejected is the difference between a repair and a guess.
+            rejected=[];insufficient=[]
+            try:
+                from .evidence import number_check
+                unsupported,missing=number_check(draft,self.citations,user_text=user_text)
+                rejected=unsupported[:8];insufficient=missing[:8]
+            except Exception:rejected=[];insufficient=[]
+            # A rejected number is usually a citation slip, not a fabrication: the figure sits in the
+            # evidence the answer quoted elsewhere. Naming that ordinal turns 'drop it' into 're-source
+            # it', which is the difference between a repaired answer and an emptied one.
+            holders={}
+            if rejected or insufficient:
+                from .evidence import citation_check_text
+                from .semantic import figure_values
+                for number in [*rejected,*insufficient]:
+                    ordinals=[str(c.get('ordinal')) for c in self.citations
+                              if number in figure_values(citation_check_text(c))]
+                    if ordinals:holders[str(number)]=ordinals
+            # Two different outcomes: figures the complete sources refute, and figures missing only from
+            # a source whose stored text is partial (证据不完整).
+            if attempt==1:
+                self.audit['unsupported_numbers']=rejected[:8]
+                if insufficient:self.audit['insufficient_numbers']=insufficient[:8]
+            repairable_reasons={r for _,r in best_pairs if r in REPAIRABLE}
+            if repairable_reasons and repairable_reasons<={'unsupported_numeric_claim','insufficient_numeric_evidence'} and not holders:
+                break
             self.audit['answer_repair_count']=attempt
             self.audit['decision_steps']+=1
             async with self.trace.step('repair',step=attempt) as node:
-                # Naming the numbers the check rejected is the difference between a repair and a guess.
-                rejected=[];insufficient=[]
-                try:
-                    from .evidence import number_check
-                    unsupported,missing=number_check(draft,self.citations,user_text=user_text)
-                    rejected=unsupported[:8];insufficient=missing[:8]
-                except Exception:rejected=[];insufficient=[]
-                # A rejected number is usually a citation slip, not a fabrication: the figure sits in the
-                # evidence the answer quoted elsewhere. Naming that ordinal turns 'drop it' into 're-source
-                # it', which is the difference between a repaired answer and an emptied one.
-                holders={}
-                if rejected or insufficient:
-                    from .evidence import citation_check_text
-                    from .semantic import figure_values
-                    for number in [*rejected,*insufficient]:
-                        ordinals=[str(c.get('ordinal')) for c in self.citations
-                                  if number in figure_values(citation_check_text(c))]
-                        if ordinals:holders[str(number)]=ordinals
-                # Two different outcomes: figures the complete sources refute, and figures missing only from
-                # a source whose stored text is partial (证据不完整).
-                if attempt==1:
-                    self.audit['unsupported_numbers']=rejected[:8]
-                    if insufficient:self.audit['insufficient_numbers']=insufficient[:8]
                 payload={'rejected_lines':[{'line':line[:400],'reason':code} for line,code in best_pairs[:8]],
                          'unsupported_numbers':rejected}
                 if insufficient:payload['insufficient_numbers']=insufficient
@@ -3048,11 +3051,16 @@ class Turn:
             return result
         # The model closing is untrusted even though the stop is the server's; with evidence in hand it
         # is checked and repaired like any answer.
+        closing_fallback='已完成：取得 '+str(len(self.citations))+' 项来源；未完成：剩余请求。'
         result=await self.finish_answer(closing)
-        if result['status']=='failed' or not re.search(r'\[\d+\]',result['answer']):
+        if not closing or not closing.strip() or closing==closing_fallback or result['status']=='failed' or not result.get('answer','').strip():
             # Invalid model prose must not discard independently verified partial evidence.
             self.audit['closing_guard']=result['reason']
             return self.finish(self.unanswered(notes.get(stop,stop)),status='partially_succeeded',reason=stop,generated=True)
+        if not re.search(r'\[\d+\]',result['answer']):
+            sources_text='\n'.join(self.gathered_sources())
+            if sources_text and sources_text not in result['answer']:
+                result['answer']=f"{result['answer'].rstrip()}\n\n{sources_text}"
         if stop in GATHERING_STOPS:
             if GATHERING_STOPS[stop]:result['answer']+='\n\n'+GATHERING_STOPS[stop]
         else:
