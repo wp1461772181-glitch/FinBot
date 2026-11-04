@@ -1946,6 +1946,7 @@
   "预测模型给出的概率不合规（缺项、越界或总和不为 1），未发布预测。": "The model's probabilities were invalid (missing, out of range or not summing to 1), so nothing was published.",
   "研究简报无法提交给预测模型，未发布预测。": "The research brief couldn't be sent to the forecast model, so nothing was published.",
   "预测模型调用失败，未发布预测，可稍后重试。": "The forecast model call failed, so nothing was published. Try again later.",
+  "服务器的预测模式配置无效，未发布预测。": "The server's forecast mode setting is invalid, so nothing was published.",
   "预测模型未完成判断，未发布预测。": "The forecast model didn't finish, so nothing was published.",
   "研究简报服务暂不可用，可稍后重新创建任务。": "The research brief service is temporarily unavailable. You can create the task again later.",
   "研究简报的格式或引用校验未通过，可重新创建任务。": "The research brief failed format or citation checks. You can create the task again.",

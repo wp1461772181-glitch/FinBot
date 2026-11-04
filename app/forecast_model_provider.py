@@ -1,8 +1,8 @@
 """Forecast direction from the model chosen for role ``forecast`` (settings page 预测模型).
 
-Same answer shape as ``jev_provider`` (probabilities for bullish / neutral / bearish, 20 trading days, +-2%),
-but the judgement is made by a reasoning model from the research brief.  ``model_status`` of the version is
-``experimental_llm`` and the question version ``llm-direction-v1``.  Nothing here falls back to Jev or to a
+Answer shape: probabilities for bullish / neutral / bearish over 20 trading days, +-2%, judged by a
+reasoning model from the research brief.  ``model_status`` of the version is
+``experimental_llm`` and the question version ``llm-direction-v1``.  Nothing here falls back to a
 made-up vector: an unusable model or an answer that does not parse into a normalised vector is an error.
 """
 

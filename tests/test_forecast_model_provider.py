@@ -1,4 +1,7 @@
-"""Task 14：预测改走 role=forecast 配置的推理模型，Jev 作为隐藏对照双跑。全部外部调用用 fake。"""
+"""Task 14：预测改走 role=forecast 配置的推理模型。全部外部调用用 fake。
+
+B4 后：Jev 对照双跑已退役（历史 Jev 版本与既有对照行保留并照常评分），残留 jev 模式会显式报错。
+"""
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -19,11 +22,10 @@ from app.forecast_model_provider import (
     ForecastModelProvider,
     create_forecast_provider,
 )
-from app.forecast_v2 import ForecastDraft, publish_forecast_version, publish_hidden_control
+from app.forecast_v2 import ForecastDraft, publish_forecast_version
 from app.forecast_v2_api import get_v2_evaluations, get_v2_stock_workspace, list_v2_forecast_roots
-from app.forecast_v2_models import ForecastVersionV2
+from app.forecast_v2_models import ForecastJobV2, ForecastVersionV2
 from app.forecast_v2_processor import ForecastInputError, ResearchOnlyForecastProcessor
-from app.jev_provider import JevProviderError
 from tests.test_agent_bots import KEY_A, OWNER_HASH, owner  # noqa: F401  (fixture)
 
 BRIEF = {"symbol": "X", "input_quality": {"status": "ready"}, "market_summary": {"latest_close": 100.0}}
@@ -158,18 +160,24 @@ JEV_RESULT = SimpleNamespace(
 )
 
 
-def _run(monkeypatch, symbol, *, jev_factory, llm_call=None, instant=None):
-    instant = instant or datetime.now(UTC)
-    base = _base(symbol, instant)
-    monkeypatch.setattr(ResearchOnlyForecastProcessor, "__call__", lambda _self, _job: base)
+def _claim(symbol, *, kind="new", root_id=None, parent_id=None):
     with SessionLocal() as db:
-        job = enqueue_job(db=db, symbol=symbol, kind="new", idempotency_key=f"t14-{uuid4()}")
+        job = enqueue_job(db=db, symbol=symbol, kind=kind, idempotency_key=f"t14-{uuid4()}",
+                          root_version_id=root_id, parent_version_id=parent_id)
         job = claim_next_job(db=db, worker_id="t14", job_id=job.id)
         job_id, lease = job.id, job.lease_epoch
         db.expunge(job)
+    return job, job_id, lease
+
+
+def _run(monkeypatch, symbol, *, llm_call=None, instant=None, kind="new", root_id=None, parent_id=None):
+    instant = instant or datetime.now(UTC)
+    base = _base(symbol, instant)
+    monkeypatch.setattr(ResearchOnlyForecastProcessor, "__call__", lambda _self, _job: base)
+    job, job_id, lease = _claim(symbol, kind=kind, root_id=root_id, parent_id=parent_id)
     processor = AgentForecastProcessor(
         session_factory=SessionLocal, decision_mode="llm", now_factory=lambda: base.decision_at,
-        material_provider_factory=lambda: None, jev_provider_factory=jev_factory,
+        material_provider_factory=lambda: None,
         llm_provider_factory=lambda: create_forecast_provider(call=llm_call or _fake_call(GOOD)),
         brief_builder=lambda **kw: _brief(symbol, target=kw["target_contract"], decision_at=kw["decision_at"],
                                           market_cutoff_at=base.market_cutoff_at),
@@ -183,7 +191,7 @@ def _run(monkeypatch, symbol, *, jev_factory, llm_call=None, instant=None):
 
 
 def test_primary_is_experimental_llm_from_role_model(forecast_model, monkeypatch):
-    draft, primary_id = _run(monkeypatch, "NVDA", jev_factory=lambda: SimpleNamespace(evaluate=lambda _b: JEV_RESULT))
+    draft, primary_id = _run(monkeypatch, "NVDA")
     with SessionLocal() as db:
         version = db.get(ForecastVersionV2, primary_id)
         assert version.model_status == "experimental_llm"
@@ -196,10 +204,10 @@ def test_primary_is_experimental_llm_from_role_model(forecast_model, monkeypatch
 
 
 def test_llm_forecast_makes_no_jev_call(forecast_model, monkeypatch):
-    def forbidden():
-        raise AssertionError("Jev must not be asked")
-    draft, primary_id = _run(monkeypatch, "AMD", jev_factory=forbidden)
-    assert draft.hidden_control is None
+    # The processor has no Jev provider at all, so no call is possible; no control is drafted or written.
+    assert not hasattr(AgentForecastProcessor, "_jev_provider_factory")
+    draft, primary_id = _run(monkeypatch, "AMD")
+    assert not hasattr(draft, "hidden_control")
     assert "control" not in draft.model_manifest
     with SessionLocal() as db:
         assert db.get(ForecastVersionV2, primary_id).model_status == "experimental_llm"
@@ -211,41 +219,101 @@ def test_missing_role_model_blocks_forecast_without_calling_jev(owner, monkeypat
         db.query(AgentModelRole).delete()
         db.query(AgentModelEntry).delete()
         db.commit()
-    asked = []
     with pytest.raises(ForecastInputError) as caught:
-        _run(monkeypatch, "INTC", jev_factory=lambda: SimpleNamespace(evaluate=lambda _b: asked.append(1) or JEV_RESULT))
+        _run(monkeypatch, "INTC")
     assert caught.value.reason == "forecast_model_not_configured" and caught.value.retryable is False
-    assert asked == []
+
+
+def _insert_retired_control(db, primary):
+    """Seed a retired hidden Jev control exactly as the old writer stored it (job ``control:<primary job>``,
+    its own root, ``hidden_control: true``).  Nothing in the app writes these any more; one real row exists."""
+    manifest = {
+        "processor_version": "agent-forecast-processor-v1", "model_status": "experimental_jev",
+        "decision_mode": "jev_control", "time_mode": "observed",
+        "decision_provider": {
+            "provider": "openrouter", "requested_model": JEV_RESULT.requested_model,
+            "actual_model": JEV_RESULT.actual_model, "question_version": JEV_RESULT.question_version,
+            "raw_probabilities": dict(JEV_RESULT.probabilities),
+        },
+        "local_calibration": {"status": "not_applied", "reason": "hidden_control_is_raw"},
+        "hidden_control": True,
+        "control_of_version_id": str(primary.id), "control_of_root_id": str(primary.root_id),
+    }
+    job = ForecastJobV2(
+        symbol=primary.symbol, kind="new", status="succeeded", current_stage="succeeded", time_mode="observed",
+        idempotency_key=f"control:{primary.job_id}", request_fingerprint="r" * 64, input_fingerprint="i" * 64,
+        model_fingerprint="m" * 64, source_refs=[], completed_at=datetime.now(UTC),
+    )
+    db.add(job)
+    db.flush()
+    version_id = uuid4()
+    version = ForecastVersionV2(
+        id=version_id, root_id=version_id, parent_version_id=None, job_id=job.id, version_no=1,
+        symbol=primary.symbol, target_contract=primary.target_contract,
+        target_contract_hash=primary.target_contract_hash, decision_at=primary.decision_at,
+        market_cutoff_at=primary.market_cutoff_at, price_input_manifest=primary.price_input_manifest,
+        evidence_version_manifest=primary.evidence_version_manifest, feature_snapshot=primary.feature_snapshot,
+        baseline_probabilities=None, joint_probabilities=None, model_status="experimental_jev",
+        model_manifest=manifest, research_report=primary.research_report,
+        decision_probabilities=dict(JEV_RESULT.probabilities), research_brief=primary.research_brief,
+        change_reason="hidden Jev control for the model forecast", trigger_type=primary.trigger_type,
+    )
+    db.add(version)
+    db.flush()
+    job.result_version_id = version.id
+    db.commit()
+    db.refresh(version)
+    return version
+
+
+def test_llm_revision_of_a_jev_chain_still_publishes(forecast_model, monkeypatch):
+    """Old Jev v1 stays as it was; an LLM revision on the same root publishes as v2 with its own model."""
+    from dataclasses import replace
+
+    instant = datetime.now(UTC)
+    base = _base("NFLX", instant)
+    brief = _brief("NFLX", target=base.target_contract, decision_at=base.decision_at,
+                   market_cutoff_at=base.market_cutoff_at)
+    jev_draft = replace(
+        base, model_status="experimental_jev", decision_probabilities=dict(JEV_RESULT.probabilities),
+        research_brief=brief,
+        model_manifest={
+            "time_mode": "observed", "model_status": "experimental_jev", "decision_mode": "jev",
+            "decision_provider": {"provider": "openrouter", "actual_model": JEV_RESULT.actual_model,
+                                  "question_version": JEV_RESULT.question_version},
+            "local_calibration": {"status": "not_applied", "reason": "no_validated_cohort_model"},
+        },
+    )
+    _job, job_id, lease = _claim("NFLX")
+    with SessionLocal() as db:
+        jev_root, created = publish_forecast_version(db=db, job_id=job_id, worker_id="t14", lease_epoch=lease,
+                                                     draft=jev_draft, now=instant)
+        assert created and jev_root.model_status == "experimental_jev"
+        jev_id, jev_probs = jev_root.id, dict(jev_root.decision_probabilities)
+
+    _draft, revision_id = _run(monkeypatch, "NFLX", instant=instant, kind="manual_revision",
+                               root_id=jev_id, parent_id=jev_id)
+    with SessionLocal() as db:
+        revision = db.get(ForecastVersionV2, revision_id)
+        assert revision.root_id == jev_id and revision.parent_version_id == jev_id and revision.version_no == 2
+        assert revision.model_status == "experimental_llm"
+        assert revision.model_manifest["decision_provider"]["actual_model"] == "m-bravo"
+        original = db.get(ForecastVersionV2, jev_id)
+        assert original.model_status == "experimental_jev" and original.decision_probabilities == jev_probs
+        assert original.model_manifest["decision_mode"] == "jev"
 
 
 def test_control_hidden_from_list_but_in_cohorts(forecast_model, monkeypatch):
-    draft, primary_id = _run(monkeypatch, "TSLA", jev_factory=lambda: SimpleNamespace(evaluate=lambda _b: JEV_RESULT))
-    assert draft.hidden_control is None
-    # The processor no longer writes controls; the one that exists is a retired row, so seed it directly.
-    control_payload = {
-        "decision_probabilities": dict(JEV_RESULT.probabilities),
-        "model_manifest": {
-            "processor_version": "agent-forecast-processor-v1", "model_status": "experimental_jev",
-            "decision_mode": "jev_control", "time_mode": "observed",
-            "decision_provider": {
-                "provider": "openrouter", "requested_model": JEV_RESULT.requested_model,
-                "actual_model": JEV_RESULT.actual_model, "question_version": JEV_RESULT.question_version,
-                "raw_probabilities": dict(JEV_RESULT.probabilities),
-            },
-            "local_calibration": {"status": "not_applied", "reason": "hidden_control_is_raw"},
-        },
-    }
+    """Guards the real AMD control row: filters keep it out of lists, cohorts still score it."""
+    draft, primary_id = _run(monkeypatch, "TSLA")
+    assert not hasattr(draft, "hidden_control")
     with SessionLocal() as db:
         primary = db.get(ForecastVersionV2, primary_id)
-        control = publish_hidden_control(db=db, primary=primary, control=control_payload)
-        assert control is not None
+        control = _insert_retired_control(db, primary)
         assert control.model_status == "experimental_jev" and control.root_id != primary.root_id
         assert control.decision_probabilities == JEV_RESULT.probabilities
         assert control.model_manifest["hidden_control"] is True
         assert control.model_manifest["control_of_version_id"] == str(primary_id)
-        # republishing the same control is idempotent
-        again = publish_hidden_control(db=db, primary=primary, control=control_payload)
-        assert again.id == control.id
         assert db.query(ForecastVersionV2).filter(ForecastVersionV2.symbol == "TSLA").count() == 2
 
         roots = list_v2_forecast_roots("TSLA", db)["roots"]

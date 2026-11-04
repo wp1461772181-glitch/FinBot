@@ -82,7 +82,7 @@ class _BriefProvider:
         )
 
 
-class _JevProvider:
+class _LlmProvider:
     def __init__(self):
         self.calls = []
 
@@ -93,13 +93,15 @@ class _JevProvider:
             probabilities={"bearish": 0.1, "neutral": 0.2 + index * 0.01, "bullish": 0.7 - index * 0.01},
             choice="bullish",
             confidence=0.7,
-            requested_model="typesafe/jev-1.13",
-            actual_model="typesafe/jev-1.13",
-            request_id=f"fixture-jev-{index}",
+            requested_model="fixture-model",
+            actual_model="fixture-model",
+            request_id=f"fixture-llm-{index}",
             usage={"fixture": True},
             latency_ms=1,
-            question_version="jev-direction-v1",
+            question_version="llm-direction-v1",
             input_sha256=f"{index:064x}",
+            provider="fixture",
+            reasoning=None,
         )
 
 
@@ -161,6 +163,7 @@ def _source(*, accepted_at: datetime, observed_at: datetime, content: str) -> UU
 
 
 def _agent_processor(*, now: datetime, rows_by_symbol, jev, analyses, briefs):
+    # ``jev`` is the (now LLM) decision-provider fixture; the parameter name is kept to limit churn.
     def analysis_requester(*, source_type, source_id, **_kwargs):
         key = (source_type, str(source_id))
         if key not in analyses:
@@ -201,7 +204,7 @@ def _agent_processor(*, now: datetime, rows_by_symbol, jev, analyses, briefs):
 
     return AgentForecastProcessor(
         session_factory=SessionLocal,
-        decision_mode="jev",
+        decision_mode="llm",
         market_provider_factory=lambda: _MarketProvider(rows_by_symbol),
         now_factory=lambda: now,
         market_ingester=lambda *_args, **_kwargs: None,
@@ -218,7 +221,7 @@ def _agent_processor(*, now: datetime, rows_by_symbol, jev, analyses, briefs):
             AssertionError("forecast brief must not make a second DeepSeek call")
         ),
         brief_builder=brief_builder,
-        jev_provider_factory=lambda: jev,
+        llm_provider_factory=lambda: jev,
     )
 
 
@@ -250,7 +253,7 @@ def _cleanup(job_ids: list[UUID], source_ids: list[UUID]) -> None:
         db.commit()
 
 
-def test_jev_agent_revision_keeps_the_root_target_and_preserves_manual_branch(disposable_database, monkeypatch):
+def test_llm_agent_revision_keeps_the_root_target_and_preserves_manual_branch(disposable_database, monkeypatch):
     Base.metadata.create_all(bind=engine)
     import app.forecast_worker as forecast_worker
 
@@ -282,7 +285,7 @@ def test_jev_agent_revision_keeps_the_root_target_and_preserves_manual_branch(di
     jobs: list[UUID] = []
     analyses: dict[tuple[str, str], dict] = {}
     briefs: list[dict | None] = []
-    jev = _JevProvider()
+    jev = _LlmProvider()
 
     def submit(kind: str, *, now: datetime, parent: ForecastVersionV2 | None, refs: list[UUID]):
         with SessionLocal() as db:

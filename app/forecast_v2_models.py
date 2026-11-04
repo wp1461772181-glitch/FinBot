@@ -194,7 +194,7 @@ class ForecastVersionV2(Base):
 
 
 def not_hidden_control():
-    """SQL predicate: the version is a real forecast, not the hidden Jev control that only feeds evaluation."""
+    """SQL predicate: the version is a real forecast. Filters the retired hidden Jev control rows that still exist (writing them is gone)."""
     return ForecastVersionV2.model_manifest["hidden_control"].astext.is_distinct_from("true")
 
 

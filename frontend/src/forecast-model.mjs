@@ -112,6 +112,7 @@ const JOB_FAILURES = {
   forecast_invalid_probabilities: "预测模型给出的概率不合规（缺项、越界或总和不为 1），未发布预测。",
   forecast_invalid_brief: "研究简报无法提交给预测模型，未发布预测。",
   forecast_model_error: "预测模型调用失败，未发布预测，可稍后重试。",
+  invalid_forecast_decision_mode: "服务器的预测模式配置无效，未发布预测。",
   // Research brief.
   research_brief_failed: "研究简报构建失败，请查看服务日志后重试。",
   research_brief_provider_error: "研究简报服务暂不可用，可稍后重新创建任务。",

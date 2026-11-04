@@ -48,8 +48,6 @@ class ForecastDraft:
     trigger_type: str = "manual"
     decision_probabilities: dict[str, float] | None = None
     research_brief: dict[str, Any] | None = None
-    # Task 14: the Jev answer to the same brief, published after this draft as a hidden control (never listed).
-    hidden_control: dict[str, Any] | None = None
 
 
 def publish_forecast_version(
@@ -307,63 +305,3 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     ).hexdigest()
-
-
-def publish_hidden_control(*, db: Session, primary: ForecastVersionV2, control: dict[str, Any]) -> ForecastVersionV2 | None:
-    """Write the Jev control of ``primary`` as its own hidden, immutable root.  Never raises: a control that
-    cannot be written is logged and skipped, so it can never fail or roll back the primary forecast.
-
-    The row is an ``experimental_jev`` version flagged ``model_manifest.hidden_control`` with the same target,
-    brief and cutoffs as the primary, so the maturity evaluation scores it like any other version.  A
-    succeeded job row (idempotency key ``control:<primary job>``) carries it; a retry returns the same row."""
-    import logging
-    key = f"control:{primary.job_id}"
-    try:
-        from .forecast_v2_models import ForecastJobV2 as Job
-        existing_job = db.scalar(select(Job).where(Job.idempotency_key == key))
-        if existing_job is not None and existing_job.result_version_id is not None:
-            return db.get(ForecastVersionV2, existing_job.result_version_id)
-        primary_job = db.get(Job, primary.job_id)
-        version_id = uuid4()
-        manifest = {
-            **control["model_manifest"], "hidden_control": True,
-            "control_of_version_id": str(primary.id), "control_of_root_id": str(primary.root_id),
-        }
-        probabilities = control["decision_probabilities"]
-        _validate_probability_vector(probabilities, "decision_probabilities", tolerance=1e-6)
-        if manifest.get("time_mode") not in {"observed", "historical_research"}:
-            raise ForecastPublicationError("control needs the primary's time mode")
-        instant = datetime.now(UTC)
-        job = Job(
-            symbol=primary.symbol, kind="new", status="succeeded", current_stage="succeeded",
-            time_mode=manifest["time_mode"], idempotency_key=key,
-            request_fingerprint=_digest({"control_of": str(primary.id)}),
-            input_fingerprint=_digest({"control_of": str(primary.id), "model": manifest}),
-            model_fingerprint=_digest(manifest), source_refs=primary_job.source_refs if primary_job else [],
-            requested_decision_at=primary_job.requested_decision_at if primary_job else None,
-            completed_at=instant,
-        )
-        db.add(job)
-        db.flush()
-        version = ForecastVersionV2(
-            id=version_id, root_id=version_id, parent_version_id=None, job_id=job.id, version_no=1,
-            symbol=primary.symbol, target_contract=primary.target_contract,
-            target_contract_hash=primary.target_contract_hash, decision_at=primary.decision_at,
-            market_cutoff_at=primary.market_cutoff_at, price_input_manifest=primary.price_input_manifest,
-            evidence_version_manifest=primary.evidence_version_manifest, feature_snapshot=primary.feature_snapshot,
-            baseline_probabilities=None, joint_probabilities=None, model_status="experimental_jev",
-            model_manifest=manifest, research_report=primary.research_report, decision_probabilities=probabilities,
-            research_brief=primary.research_brief, change_reason="hidden Jev control for the model forecast",
-            trigger_type=primary.trigger_type,
-        )
-        db.add(version)
-        db.flush()
-        job.result_version_id = version.id
-        db.commit()
-        db.refresh(version)
-        return version
-    except Exception:
-        db.rollback()
-        logging.getLogger(__name__).warning("hidden Jev control for forecast %s was not written", primary.id,
-                                            exc_info=True)
-        return None

@@ -10,7 +10,7 @@ from app.database import Base, SessionLocal, engine
 from app.evidence_context import freeze_evidence_context
 from app.agent_forecast_processor import AgentForecastProcessor, _forecast_brief_error, _market_summary, _select_manifest_events
 from app.forecast_v2 import ForecastDraft
-from app.forecast_v2_processor import ResearchOnlyForecastProcessor
+from app.forecast_v2_processor import ForecastInputError, ResearchOnlyForecastProcessor
 from app.forecast_jobs import enqueue_job
 from app.material_analysis import PROMPT_VERSION, get_material_analysis, request_material_analysis, run_material_analysis_once
 from app.models import UploadedEvidence
@@ -244,7 +244,7 @@ def test_invalid_material_analysis_failure_is_cached_until_forced_retry():
     assert forced["job_id"] != first["job_id"]
 
 
-def test_insufficient_material_inputs_skip_jev_even_when_mode_is_enabled():
+def test_insufficient_material_inputs_skip_the_model_even_when_llm_mode_is_enabled():
     import sys
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
     from test_forecast_v2_processor import _Provider, _rows
@@ -260,18 +260,18 @@ def test_insufficient_material_inputs_skip_jev_even_when_mode_is_enabled():
         job = enqueue_job(db=db, symbol="AMZN", kind="new", idempotency_key=f"agent-insufficient-{uuid4()}")
         job_id = job.id
 
-    def fail_jev():
-        raise AssertionError("insufficient brief must not instantiate Jev")
+    def fail_model():
+        raise AssertionError("insufficient brief must not instantiate the forecast model")
 
     processor = AgentForecastProcessor(
-        session_factory=SessionLocal, decision_mode="jev",
+        session_factory=SessionLocal, decision_mode="llm",
         market_provider_factory=lambda: _Provider(rows_by_symbol),
         now_factory=lambda: now,
         market_ingester=lambda *_args, **_kwargs: None,
         market_loader=lambda ticker, **_kwargs: rows_by_symbol[ticker],
         material_provider_factory=lambda: (_ for _ in ()).throw(AssertionError("there are no materials")),
         brief_provider_factory=lambda: SimpleNamespace(extract=lambda **_kwargs: None),
-        jev_provider_factory=fail_jev,
+        llm_provider_factory=fail_model,
     )
     with SessionLocal() as db:
         from app.forecast_v2_models import ForecastJobV2
@@ -285,67 +285,8 @@ def test_insufficient_material_inputs_skip_jev_even_when_mode_is_enabled():
     assert draft.research_brief["symbol"] == "AMZN"
 
 
-@pytest.mark.parametrize("calibrator_available", [False, True])
-def test_jev_processor_preserves_raw_output_and_records_calibration_fallback(monkeypatch, calibrator_available):
-    import app.jev_learning as learning
-
-    instant = datetime(2026, 9, 28, 15, tzinfo=UTC)
-    raw = {"bearish": 0.2, "neutral": 0.3, "bullish": 0.5}
-    calibrated = {"bearish": 0.3, "neutral": 0.4, "bullish": 0.3}
-    base = ForecastDraft(
-        target_contract={"target_spec_version": "absolute-close-v1", "horizon_sessions": 20, "threshold": 0.05},
-        decision_at=instant,
-        market_cutoff_at=instant - timedelta(minutes=1),
-        price_input_manifest={"rows": {"MSFT": [{"close": 410.0}], "SPY": [{"close": 500.0}]}},
-        evidence_version_manifest=[],
-        feature_snapshot={"remaining_sessions": 20},
-        baseline_probabilities=None,
-        joint_probabilities=None,
-        model_status="research_only",
-        model_manifest={"time_mode": "observed"},
-    )
-    monkeypatch.setattr(ResearchOnlyForecastProcessor, "__call__", lambda _self, _job: base)
-
-    class EmptySession:
-        def __enter__(self): return self
-        def __exit__(self, *_args): return False
-
-    provider_result = SimpleNamespace(
-        probabilities=raw,
-        requested_model="typesafe/jev-1.13",
-        actual_model="typesafe/jev-1.13-20260917",
-        request_id="fixture-request",
-        usage={},
-        latency_ms=10,
-        question_version="jev-direction-v1",
-        input_sha256="a" * 64,
-        choice="neutral",
-        confidence=0.5,
-    )
-    model = SimpleNamespace(id=uuid4(), parameters_sha256="b" * 64, training_manifest={"fixture": True})
-    monkeypatch.setattr(
-        learning,
-        "active_jev_calibrator",
-        lambda **_kwargs: model if calibrator_available else None,
-    )
-    monkeypatch.setattr(learning, "apply_jev_calibrator", lambda *_args: calibrated)
-    processor = AgentForecastProcessor(
-        session_factory=EmptySession,
-        decision_mode="jev",
-        now_factory=lambda: instant,
-        material_provider_factory=lambda: None,
-        brief_provider_factory=lambda: None,
-        jev_provider_factory=lambda: SimpleNamespace(evaluate=lambda _brief: provider_result),
-        brief_builder=lambda **_kwargs: {"schema_version": "research-brief-v1", "input_quality": {"status": "ready"}, "material_refs": []},
-    )
-    job = SimpleNamespace(id=uuid4(), parent_version_id=None, source_refs=[], symbol="MSFT", time_mode="observed")
-
-    draft = processor(job)
-
-    assert draft.model_manifest["decision_provider"]["raw_probabilities"] == raw
-    if calibrator_available:
-        assert draft.decision_probabilities == calibrated
-        assert draft.model_manifest["local_calibration"]["status"] == "active"
-    else:
-        assert draft.decision_probabilities == raw
-        assert draft.model_manifest["local_calibration"]["status"] == "not_applied"
+def test_leftover_jev_mode_fails_visibly():
+    """A server still configured with FORECAST_DECISION_MODE=jev must fail, not silently run research-only."""
+    with pytest.raises(ForecastInputError) as caught:
+        AgentForecastProcessor(session_factory=SessionLocal, decision_mode="jev")
+    assert caught.value.reason == "invalid_forecast_decision_mode"
