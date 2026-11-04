@@ -148,8 +148,10 @@ def test_a_classifier_company_absent_from_canonical_and_original_still_asks(monk
     result,_=run('最近有什么新闻？',
         resolver=lambda _:{'relationship':'new','canonical_question':'最近有什么新闻？'},
         classifier=lambda _:{'category':'D','company':'Microsoft Corporation','symbol':'MSFT'})
-    assert result['status']=='waiting_for_input'
-    assert result['pending_request']['question']=='请确认这次指代的公司。'
+    assert result['pending_request'] is None
+    assert result['status'] != 'waiting_for_input'
+    assert result['audit'].get('discarded_ungrounded_entity') == {'symbol': 'MSFT', 'company': 'Microsoft Corporation'}
+    assert result['previous_scope']['symbol'] is None
 
 def test_a_company_mention_with_ticker_and_exchange_is_grounded_by_a_written_part(monkeypatch):
     from app.agent_workflow import entities
@@ -170,8 +172,10 @@ def test_a_company_mention_written_nowhere_still_asks(monkeypatch):
     result,_=run('最近有什么新闻？',
         resolver=lambda _:{'relationship':'new','canonical_question':'最近有什么新闻？'},
         classifier=lambda _:{'category':'D','company':'Microsoft Corporation','symbol':'MSFT','company_mention':mention})
-    assert result['status']=='waiting_for_input'
-    assert result['pending_request']['question']=='请确认这次指代的公司。'
+    assert result['pending_request'] is None
+    assert result['status'] != 'waiting_for_input'
+    assert result['audit'].get('discarded_ungrounded_entity') == {'symbol': 'MSFT', 'company': 'Microsoft Corporation'}
+    assert result['previous_scope']['symbol'] is None
 
 def test_a_mention_from_another_company_does_not_ground_the_classifier_pair(monkeypatch):
     from app.agent_workflow import entities
@@ -180,8 +184,9 @@ def test_a_mention_from_another_company_does_not_ground_the_classifier_pair(monk
     result,_=run('AAPL 的营收',
         resolver=lambda _:{'relationship':'new','canonical_question':'微软（Microsoft，NASDAQ: MSFT）2025 财年（2024-07-01 至 2025-06-30）的营业收入是多少？'},
         classifier=lambda _:{'category':'D','company':'Microsoft Corporation','symbol':'MSFT','company_mention':'AAPL'})
-    assert result['status']=='waiting_for_input'
-    assert result['pending_request']['question']=='请确认这次指代的公司。'
+    assert result['pending_request'] is None
+    assert result['status'] != 'waiting_for_input'
+    assert result['previous_scope']['symbol'] == 'AAPL'
 
 def test_a_different_company_in_the_canonical_does_not_ground_the_classifier_pair(monkeypatch):
     from app.agent_workflow import entities
@@ -189,5 +194,6 @@ def test_a_different_company_in_the_canonical_does_not_ground_the_classifier_pai
     result,_=run('AAPL 的营收',
         resolver=lambda _:{'relationship':'new','canonical_question':'苹果公司（AAPL）的营收是多少？'},
         classifier=lambda _:{'category':'D','company':'Microsoft Corporation','symbol':'MSFT'})
-    assert result['status']=='waiting_for_input'
-    assert result['pending_request']['question']=='请确认这次指代的公司。'
+    assert result['pending_request'] is None
+    assert result['status'] != 'waiting_for_input'
+    assert result['previous_scope']['symbol'] == 'AAPL'

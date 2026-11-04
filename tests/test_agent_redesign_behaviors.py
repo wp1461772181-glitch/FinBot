@@ -349,14 +349,15 @@ def test_confirmation_previews_original_title_without_treating_it_as_an_answer_c
     assert r['status']=='waiting_for_input'
     assert r['pending_request']['display']['title']==p['title']
 
-@pytest.mark.parametrize('original,canonical,blocked',[('它的营收呢','Micron 的营收',True),('微软的营收呢','微软的营收',False)])
-def test_followup_cannot_change_known_symbol_without_an_explicit_new_entity(original,canonical,blocked):
+@pytest.mark.parametrize('original,canonical,expected_sym',[('它的营收呢','Micron 的营收','MU'),('微软的营收呢','微软的营收','MSFT')])
+def test_followup_cannot_change_known_symbol_without_an_explicit_new_entity(original,canonical,expected_sym):
     r,c,_,_=run(original,scope={'company':'Microsoft','symbol':'MSFT','company_mention':'微软'},state={'previous_scope':{'company':'Micron','symbol':'MU'}},
         messages=[{'role':'user','content':'Micron 营收'}],resolver=lambda _:{'relationship':'followup','canonical_question':canonical})
-    assert bool(r['pending_request'])==blocked
-    if blocked:assert not c
+    assert r['pending_request'] is None
+    assert r['previous_scope']['symbol']==expected_sym
 
 def test_followup_company_only_classifier_cannot_replace_the_known_target():
     r,c,_,_=run('它的营收呢',scope={'company':'Microsoft','symbol':None},state={'previous_scope':{'company':'Micron','symbol':'MU'}},
         messages=[{'role':'user','content':'Micron 营收'}],resolver=lambda _:{'relationship':'followup','canonical_question':'Micron revenue'})
-    assert r['pending_request'] and not c
+    assert r['pending_request'] is None
+    assert r['previous_scope']['symbol']=='MU'

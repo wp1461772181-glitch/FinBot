@@ -48,6 +48,19 @@ def verified_pair(company,symbol):
         return any(r['ticker'].casefold()==symbol.casefold() and issuer_words(r['title'])[:len(words)]==words for r in ticker_records())
     except Exception:return False
 
+def loose_pair(symbol: str | None, company: str | None) -> str | None:
+    if not symbol:return None
+    title=sec_title(symbol)
+    if not title:return None
+    if not company:return title
+    c_words=[w for w in issuer_words(company) if w not in _NAME_FILLER]
+    if not re.search(r'[A-Za-z]',str(company)):
+        return title
+    t_words=[w for w in issuer_words(title) if w not in _NAME_FILLER]
+    if c_words and t_words and (set(c_words) & set(t_words)):
+        return title
+    return None
+
 # Words that say what kind of thing an issuer is, not which one: 'Eli Lilly and Company' and 'ELI LILLY & Co' are one name.
 _NAME_FILLER=frozenset({'and','the','of','co','company','companies','corp','corporation','inc','incorporated','ltd','limited','plc','sa','llc','group','holding','holdings'})
 # A rewrite writes 微软（Microsoft，NASDAQ: MSFT）: the listing venue is not a claim about which company it is.
