@@ -455,6 +455,7 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
                 'observed_at':row.get('fetched_at') or row.get('observed_at'),'quote':body[:QUOTE_DISPLAY_CHARS],
                 'trading_date':row.get('trading_date'),'source':row.get('source'),'fetched_at':row.get('fetched_at'),
                 'symbol':row.get('symbol') or scope.get('symbol'),'analysis_id':row.get('analysis_id'),'derived':kind=='ai_analysis','truncated':bool(row.get('truncated')),
+                'saved_text':row.get('saved_text'),
                 'fields':_citation_fields(row),'evidence_quotes':_evidence_quotes(row)})
             # The quote is what is shown; the checker reads the whole text (the page the excerpt was
             # selected from, or a body longer than the display cap).  Only a source whose own stored
@@ -620,7 +621,7 @@ def _backstop_figure(record,table_row):
 
 # A sentence that says it is an inference states no fact, so its figures need their premises, not a source.
 _LABEL_START=r'^\s*(?:>\s*)*(?:#{1,6}\s+)?(?:(?:[-*+•]|\d+[.)、])\s+)?(?:\*\*|__|\*|_)*\s*'
-_LABEL_WORD=r'(?:推断|估算|推算|假设)'
+_LABEL_WORD=r'(?:推断|估算|推算|假设|由此推断|据此估算|预计|预估|测算|建议)'
 _INFERENCE_LABEL=re.compile(
     _LABEL_START+r'(?:(?:[（(]\s*'+_LABEL_WORD+r'\s*[）)])|(?:(?:若|如果|如)\s*)?'+_LABEL_WORD+r')'
     r'|^\s*(?:>\s*)*(?:#{1,6}\s+)?(?:(?:[-*+•]|\d+[.)、])\s+)?(?:\*\*|__|\*|_)*\s*(?:inference|estimate[d]?|assuming|assumption|hypothetically)\b'
@@ -975,15 +976,13 @@ def answer_scope(answer,citations,*,question='',user_text='',verified=None,limit
 # Claim validation only. These concepts never route a request or choose a tool.
 RESIGNATION_TERMS=('resign','resigned','resignation','stepped down','stepping down','辞职','辞任','离职','退任')
 DEPARTURE_TERMS=('departure','departed','departing','left','leave','retired','retires','离任','卸任','退任','离职','走人')
-APPOINTMENT_TERMS=('appoint','appointed','appointment','named','promoted','elected','tapped','hired','join','joined','joins','任命','出任','就任','委任','担任')
+APPOINTMENT_TERMS=('appoint','appointed','appoints','named','hire','hired','promote','promoted','elect','elected','resign','resigned','step down','stepped down','retire','retired','replace','replaced','任命','聘任','出任','升任','辞职','卸任','离任','退休','接替')
 ROLE_START_TERMS=('takes charge','took charge','taking charge','takes office','took office','上任','接任','接棒')
 CLAIM_FEATURES=(
- ('CEO','chief executive','首席执行官','执行长'),
- ('CFO','chief financial','首席财务官','财务主管'),
  RESIGNATION_TERMS,
  APPOINTMENT_TERMS,
  ('bankruptcy','bankrupt','chapter 11','insolvent','insolvency','liquidation','破产','清算'),
- ('acquisition','acquire','acquired','收购','buy','bought','purchased','purchase','merger','merged','deal','transaction','investment','invested','takeover','stake','买入','入股','全资','并入','买下'),
+ ('acquisition','acquire','acquired','acquiring','merger','merge','merged','takeover','buyout','divest','divested','spin-off','spinoff','收购','并购','合并','剥离','分拆'),
  DEPARTURE_TERMS,
  ROLE_START_TERMS,
 )
@@ -1016,14 +1015,12 @@ def unsupported_claims(answer,citations):
         sources=[indexed[r] for r in refs if r in indexed]
         if re.search(r'没有(?:可核验)?(?:资料|证据)|无法(?:核实|确认)|no (?:verified )?evidence',passage,re.I):continue
         if not sources:
-            if any(event_polarities(passage,terms) for terms in CLAIM_FEATURES[2:]):return True
             continue
         evidence=simplified(' '.join(citation_check_text(c) for c in sources))
         for terms in CLAIM_FEATURES:
-            if any(contains(t,passage) for t in terms) and not any(contains(t,evidence) for t in supporting_event_terms(terms)):return True
-        for terms in CLAIM_FEATURES[2:]:
             claim_polarity=event_polarities(passage,terms)
-            if claim_polarity and not claim_polarity<=event_polarities(evidence,supporting_event_terms(terms)):return True
+            evidence_polarity=event_polarities(evidence,supporting_event_terms(terms))
+            if claim_polarity and evidence_polarity and not claim_polarity<=evidence_polarity:return True
     return False
 
 
@@ -1062,7 +1059,7 @@ def factual_claim(text):
     """
     if _CLAIM_AMOUNT.search(text):return True
     if any(any(contains(k, text) for k in group) for group in CLAIM_FEATURES):return True
-    return any(any(contains(t, text) for t in terms) for terms in METRIC_GROUPS.values())
+    return False
 
 
 def _restated_amounts_held(text,held):
@@ -1110,9 +1107,17 @@ def reviewed_passages(answer,citations,*,require_citations=False,check_claims=Tr
             # An unmarked sentence is held to the backstop only: what we know is that it names no source,
             # not that a source disagrees.  An absence report states no fact.
             if unsupported and not marked and uncertainty:unsupported=[]
+            claim_issue=None
+            if not labelled and unsupported_claims(stripped,citations):
+                refs=citation_markers(stripped,citations)
+                cited=[c for c in citations if str(c.get('ordinal')) in refs]
+                if any(c.get('saved_text') in {'exhibit_99_1_only','primary_document_only'} for c in cited):
+                    claim_issue='source_part_not_stored'
+                else:
+                    claim_issue='unsupported_claim'
             code=(('unsupported_numeric_claim' if marked else 'missing_citation') if unsupported else
                   'insufficient_numeric_evidence' if insufficient else
-                  'unsupported_claim' if not labelled and unsupported_claims(stripped,citations) else None)
+                  claim_issue)
         if code:issues.append(code)
         else:accepted.append(stripped)
     return accepted,issues

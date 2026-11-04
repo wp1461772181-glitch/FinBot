@@ -496,7 +496,7 @@ async def query_sec_filings(symbol: str, form: str | None = None, accession_numb
         filters+=" AND id=CAST(:source_id AS uuid)";params["source_id"]=source_id
     if filed_year is not None: filters+=" AND EXTRACT(YEAR FROM filed_at)=:year";params["year"]=filed_year
     if financial_only: filters+=" AND form IN ('10-K','10-Q')"
-    rows=await _query("SELECT id, symbol, accession_number, form, filed_at, source_url, content_source_url, content_status, content_truncated, content_excerpt_sha256, content_excerpt, content_text, content_text_sha256, content_length, observed_at FROM sec_filing_inventory WHERE symbol=:symbol AND content_status='fetched' AND observed_at<=:cutoff AND content_observed_at<=:cutoff AND filed_at<=CAST(:cutoff AS date)"+filters+" ORDER BY filed_at DESC, accession_number DESC LIMIT :limit",params)
+    rows=await _query("SELECT id, symbol, accession_number, form, filed_at, source_url, content_source_url, content_status, content_truncated, content_excerpt_sha256, content_excerpt, content_text, content_text_sha256, content_length, observed_at, content_kind, content_document_name, related_attachment_status FROM sec_filing_inventory WHERE symbol=:symbol AND content_status='fetched' AND observed_at<=:cutoff AND content_observed_at<=:cutoff AND filed_at<=CAST(:cutoff AS date)"+filters+" ORDER BY filed_at DESC, accession_number DESC LIMIT :limit",params)
     for row in rows:
         full=row.get("content_text") or ""
         excerpt,body_hash_valid=saved_filing_excerpt(row)
@@ -506,7 +506,12 @@ async def query_sec_filings(symbol: str, form: str | None = None, accession_numb
         # Two different questions: how much of the saved body is shown here, and
         # whether the saved body is the whole filing or the frozen preview.
         row["excerpt_coverage"]="complete_saved_body" if len(excerpt)>=body_length else "partial_excerpt"
-        row["saved_text"]="full_document" if full else "frozen_80k_preview"
+        if row.get("content_kind") == "exhibit_99_1":
+            row["saved_text"] = "exhibit_99_1_only"
+        elif row.get("form") == "8-K" and row.get("content_kind") == "primary_document":
+            row["saved_text"] = "primary_document_only"
+        else:
+            row["saved_text"] = "full_document" if full else "frozen_80k_preview"
         row["saved_characters"]=body_length
         for key in ("content_excerpt","content_excerpt_sha256","content_text","content_text_sha256","content_length"): row.pop(key,None)
     rows=[row for row in rows if row.get('body_hash_valid')]

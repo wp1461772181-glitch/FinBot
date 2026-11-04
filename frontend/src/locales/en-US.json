@@ -1950,5 +1950,6 @@
   "条缺少基准输入，未计入比较": "lack baseline inputs and are left out of the comparison",
   "模型与基准在同一批预测上比较": "Model and baseline are compared on the same forecasts",
   "早期版本的 Jev 原始概率，未经校准": "Raw probabilities from an earlier Jev version, uncalibrated",
-  "由 Jev 根据下方同一份 DeepSeek 研究简报输出，显示原始概率，未经校准。": "Output by Jev based on the same DeepSeek research brief below. Raw probabilities, uncalibrated."
+  "由 Jev 根据下方同一份 DeepSeek 研究简报输出，显示原始概率，未经校准。": "Output by Jev based on the same DeepSeek research brief below. Raw probabilities, uncalibrated.",
+  "引用的申报只保存了主文件，未保存 8-K 附件": "The cited filing stored only the primary document, not the 8-K exhibit"
 }
