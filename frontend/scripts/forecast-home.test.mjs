@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   attentionLabel, filterRows, filterScopes, forecastBySymbol, formalRowModel, judgmentLane, judgmentResultText, judgmentRowModel,
-  sortForAttention, splitDelivered, symbolMark, symbolsWithBoth,
+  promotionRequest, promotionState, sortForAttention, splitDelivered, symbolMark, symbolsWithBoth,
 } from "../src/forecast-home.mjs";
 
 const NOW = new Date("2026-11-04T12:00:00Z");
@@ -168,4 +168,44 @@ test("one list is grouped by symbol for the queue cards, newest decision first",
 test("symbols that have both a forecast and a judgment are found", () => {
   const both = symbolsWithBoth([row("r", "AMD"), row("s", "NVDA")], [judgment("j", "AMD"), judgment("k", "TSLA")]);
   assert.deepEqual([...both], ["AMD"]);
+});
+
+const FILING = "0b9d7e52-6c41-4f08-9a3e-5d2f1c8b7a64";
+// A judgment row as the server sends it, with every field that must NOT reach the request.
+const promotable = (extra = {}) => ({
+  id: "j-1", symbol: "AMD", filing_source_id: FILING, direction: "down", confidence: "high", reasons: [{ text: "r", quote: "q" }],
+  counter_argument: "c", model: "m", promotion: { available: true, reason: null }, ...extra,
+});
+
+test("the promotion request is exactly the company, \"new\" and the one library filing", () => {
+  assert.deepEqual(promotionRequest(promotable()), {
+    symbol: "AMD", kind: "new", source_refs: [{ source_type: "official_filing", source_id: FILING }],
+  });
+  // Nothing of the judgment travels with it, whatever the row carries.
+  const request = promotionRequest(promotable());
+  assert.deepEqual(Object.keys(request).sort(), ["kind", "source_refs", "symbol"]);
+  assert.deepEqual(Object.keys(request.source_refs[0]).sort(), ["source_id", "source_type"]);
+  assert.equal(JSON.stringify(request).includes("down"), false);
+  // No filing in the library, nothing to name.
+  assert.equal(promotionRequest(promotable({ filing_source_id: null })), null);
+  assert.equal(promotionRequest(promotable({ filing_source_id: "" })), null);
+  assert.equal(promotionRequest(undefined), null);
+});
+
+test("promotion state: create, revise, or unavailable with the server's reason", () => {
+  assert.deepEqual(promotionState(promotable(), null), { state: "create", reason: null });
+  assert.deepEqual(promotionState(promotable(), undefined), { state: "create", reason: null });
+  assert.deepEqual(promotionState(promotable(), { id: "root-1" }), { state: "revise", reason: null });
+  // The first session has not closed: unavailable, with or without an open forecast.
+  const early = promotable({ promotion: { available: false, reason: "first_session_open" } });
+  assert.deepEqual(promotionState(early, null), { state: "unavailable", reason: "first_session_open" });
+  assert.deepEqual(promotionState(early, { id: "root-1" }), { state: "unavailable", reason: "first_session_open" });
+  // The filing is not in the library: unavailable, whatever promotion says.
+  const missing = promotable({ filing_source_id: null, promotion: { available: false, reason: "filing_not_in_library" } });
+  assert.deepEqual(promotionState(missing, null), { state: "unavailable", reason: "filing_not_in_library" });
+  assert.deepEqual(promotionState(promotable({ filing_source_id: null }), null), { state: "unavailable", reason: "filing_not_in_library" });
+  // A row from a server that sends no promotion is not offered, and gives no reason to show.
+  assert.deepEqual(promotionState(promotable({ promotion: undefined }), null), { state: "unavailable", reason: null });
+  assert.deepEqual(promotionState(promotable({ promotion: { available: false, reason: null } }), null), { state: "unavailable", reason: null });
+  assert.deepEqual(promotionState(undefined, null), { state: "unavailable", reason: "filing_not_in_library" });
 });

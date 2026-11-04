@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Tx, useLocale } from "./i18n";
 import { ApiError, createV2ManualRevisionJob, getV2Evaluations, getV2ForecastVersion, getV2Job, getV2Prices, getV2RevisionCandidates, getV2Timeline } from "./api";
 import type { V2RevisionCandidates } from "./api";
@@ -38,8 +38,9 @@ function expiredFromTarget(target: unknown): boolean | null {
  * views, which were two views of the same record.  The company comes from the root itself, never from a picker,
  * and a root that cannot be read is reported as such; no other forecast ever stands in for it.
  */
-export function ForecastPage({ rootId, versionId, focusVersions = false, onHome }: { rootId: string; versionId?: string; focusVersions?: boolean; onHome: () => void }) {
+export function ForecastPage({ rootId, versionId, reviseSourceId, focusVersions = false, onHome }: { rootId: string; versionId?: string; reviseSourceId?: string; focusVersions?: boolean; onHome: () => void }) {
   const { t } = useLocale();
+  const reviseApplied = useRef(false);
   const [timeline, setTimeline] = useState<ResourceState<V2Timeline>>({ kind: "loading" });
   const [notFound, setNotFound] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -156,6 +157,17 @@ export function ForecastPage({ rootId, versionId, focusVersions = false, onHome 
     revisionType: candidate.category,
   })), [revisionCandidatesData]);
   const chosenSources = revisionSourceOptions.filter((source) => selectedSourceKeys.includes(source.key));
+
+  // Arriving from a judgment's 用这份财报修订: open the existing revision form once the versions are known, and tick that
+  // filing once the server lists it as a candidate.  If it is not a candidate the form just stays open, untouched.
+  useEffect(() => {
+    if (!reviseSourceId || reviseApplied.current || !versions.length) return;
+    if (!revisionOpen) { setRevisionOpen(true); return; }
+    const match = revisionSourceOptions.find((source) => source.source_type === "official_filing" && source.source_id.toLowerCase() === reviseSourceId);
+    if (!match) return;
+    reviseApplied.current = true;
+    setSelectedSourceKeys([match.key]);
+  }, [reviseSourceId, versions, revisionOpen, revisionSourceOptions]);
 
   async function createRevision() {
     if (!chosenVersion || !revisionCandidatesData || chosenSources.length === 0) return;

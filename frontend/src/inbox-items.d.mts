@@ -4,6 +4,7 @@ export function inboxKindLabel(kind: string): string;
 export function scheduleLabel(task: Pick<AgentTask, "schedule_kind" | "schedule_time" | "every_value" | "every_unit">): string;
 export function runsLabel(task: Pick<AgentTask, "max_runs">): string;
 export function inboxOrder(items: InboxItem[]): InboxItem[];
+export function judgmentLink(item: Pick<InboxItem, "payload"> | null | undefined): string | null;
 export function numberedSources(item: InboxItem): InboxSource[];
 export function parseSymbols(text: string): string[];
 export function parsePriceLines(text: string): PriceLine[] | null;

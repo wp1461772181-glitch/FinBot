@@ -141,7 +141,7 @@ export async function listRecall(query="",signal?:AbortSignal,botId?:string|null
 // when saved and never comes back: the server answers with has_key only.
 export type InboxSource = { ordinal:number; title:string; url:string|null; source_type:string|null; published_at?:string|null };
 export type InboxItem = { id:string; section:"brief"|"confirm"; kind:"task_brief"|"filing"|"news"|"price"|"action"; title:string; body:string; sources:InboxSource[];
-  payload:{ task_name?:string; channel_pending?:string; missed_slots?:number; display?:{ title?:string; targets?:unknown[]; alternative?:string }; confirmation_state?:string; action_token?:string; short_code?:string };
+  payload:{ task_name?:string; channel_pending?:string; missed_slots?:number; display?:{ title?:string; targets?:unknown[]; alternative?:string }; confirmation_state?:string; action_token?:string; short_code?:string; event_id?:string };
   confirmation_state?:"pending_confirm"|"confirmed"|"skipped"|"expired"; action_token?:string|null; short_code?:string|null;
   actions?:Array<{ id:"confirm"|"skip"|"later"; label:string; kind:string }>;
   task_id:string|null; bot_id:string|null; posted:boolean; conversation_id:string|null; status:"unread"|"read"|"done"|"dismissed"; created_at:string|null };

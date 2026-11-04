@@ -68,4 +68,15 @@ export type JudgmentRowModel = {
   delivered: boolean;
   hash: string;
 };
+export type PromotionJudgmentLike = {
+  symbol: string;
+  filing_source_id: string | null;
+  promotion?: { available: boolean; reason: "first_session_open" | "filing_not_in_library" | null } | null;
+};
+export type PromotionRequest = { symbol: string; kind: "new"; source_refs: Array<{ source_type: "official_filing"; source_id: string }> };
+export type PromotionState =
+  | { state: "create" | "revise"; reason: null }
+  | { state: "unavailable"; reason: "first_session_open" | "filing_not_in_library" | null };
+export declare function promotionRequest(judgment: Pick<PromotionJudgmentLike, "symbol" | "filing_source_id"> | null | undefined): PromotionRequest | null;
+export declare function promotionState(judgment: PromotionJudgmentLike | null | undefined, openRoot: { id: string } | null | undefined): PromotionState;
 export declare function judgmentRowModel(judgment: JudgmentLike): JudgmentRowModel;

@@ -27,6 +27,12 @@ export function inboxOrder(items) {
   return list.sort((a, b) => unread(a) - unread(b) || String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
 }
 
+/** Where an earnings item leads: its judgment page.  Only items that carry `payload.event_id` link; older ones do not. */
+export function judgmentLink(item) {
+  const id = item?.payload?.event_id;
+  return typeof id === "string" && id.trim() ? `#forecast/judgment/${encodeURIComponent(id.trim())}` : null;
+}
+
 /** Sources by their number, with only http(s) links kept (a source without a link still shows its title). */
 export function numberedSources(item) {
   return (Array.isArray(item?.sources) ? item.sources : [])

@@ -2013,5 +2013,12 @@
   "刚完成到期评估": "Just evaluated",
   "从你的研究队列开始": "Start from your research queue",
   "理财助手": "Finance assistant",
-  "公司研究": "Company research"
+  "公司研究": "Company research",
+  "打开这份预测": "Open this forecast",
+  "基于这份财报": "From this earnings filing",
+  "基于这份财报创建正式预测": "Create a formal forecast from this filing",
+  "用这份财报修订": "Revise with this filing",
+  "首个交易日收盘后可用": "Available after the first session closes",
+  "这份财报还没进资料库，先到材料库扫描": "This filing isn't in the library yet. Scan for it in Materials first",
+  "新预测只从这份财报的原文出发，不带这条判断的方向和理由。": "The new forecast starts from this filing's text alone, without this judgment's direction or reasons."
 }

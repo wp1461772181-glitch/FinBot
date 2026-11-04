@@ -1890,13 +1890,13 @@ html,body,#root{max-width:100%}
 .v2-audit-rows>div{display:flex;flex-wrap:wrap;gap:4px 12px}
 .v2-audit-rows dt{min-width:92px;color:var(--muted);font-size:11px}
 .v2-audit-rows dd{margin:0;overflow-wrap:anywhere;font-size:11px}
-.v2-audit-raw pre{max-height:320px;overflow:auto;padding:10px;border-radius:8px;background:#f4f7f3;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}
+.v2-audit-raw pre{max-height:320px;overflow:auto;padding:10px;border-radius:8px;background:#f4f7f3;color:#142b30;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}
 
 .forecast-home{display:grid;gap:14px}
 .forecast-create{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .forecast-filters{display:flex;flex-wrap:wrap;gap:6px}
 .forecast-filters button{padding:5px 12px;border:1px solid #dce5e1;border-radius:999px;background:transparent;font-size:12px;cursor:pointer}
-.forecast-filters button.is-active{background:#e6efe9;font-weight:700}
+.forecast-filters button.is-active{background:#e6efe9;color:#142b30;font-weight:700}
 .forecast-lane h3{margin:0 0 8px}
 .forecast-rows{display:grid;gap:8px;margin:0;padding:0;list-style:none}
 .forecast-row{border:1px solid #dce5e1;border-radius:8px}

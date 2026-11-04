@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatPriceLines, inboxKindLabel, inboxOrder, numberedSources, parsePriceLines, parseSymbols, runsLabel, scheduleLabel } from "../src/inbox-items.mjs";
+import { formatPriceLines, inboxKindLabel, inboxOrder, judgmentLink, numberedSources, parsePriceLines, parseSymbols, runsLabel, scheduleLabel } from "../src/inbox-items.mjs";
 
 test("schedules read as the owner set them", () => {
   assert.equal(scheduleLabel({ schedule_kind: "weekdays", schedule_time: "08:00" }), "工作日 08:00");
@@ -23,6 +23,15 @@ test("unread first, newest first, dismissed hidden", () => {
     { id: "new-unread", status: "unread", created_at: "2026-10-02" }, { id: "gone", status: "dismissed", created_at: "2026-10-04" },
   ];
   assert.deepEqual(inboxOrder(items).map(i => i.id), ["new-unread", "old-unread", "new-read"]);
+});
+
+test("an earnings item links to its judgment only when it carries an event_id", () => {
+  assert.equal(judgmentLink({ payload: { earnings: "0000002488-26-000188", stage: "followup", event_id: "3f2a-9" } }), "#forecast/judgment/3f2a-9");
+  assert.equal(judgmentLink({ payload: { earnings: "0000002488-26-000188", stage: "followup" } }), null);
+  assert.equal(judgmentLink({ payload: { event_id: "  " } }), null);
+  assert.equal(judgmentLink({ payload: { event_id: 7 } }), null);
+  assert.equal(judgmentLink({}), null);
+  assert.equal(judgmentLink(null), null);
 });
 
 test("sources are numbered in order and only web links stay links", () => {

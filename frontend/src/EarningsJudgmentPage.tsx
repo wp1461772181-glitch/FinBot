@@ -1,11 +1,19 @@
 import { useEffect, useState } from "react";
 import { Tx, useLocale } from "./i18n";
-import { ApiError, getEarningsJudgment, getV2Forecasts } from "./api";
+import { ApiError, createV2ForecastJob, getEarningsJudgment, getV2Forecasts, getV2Job } from "./api";
 import type { EarningsJudgment, V2ForecastListRow } from "./api";
+import type { V2ForecastJob } from "./types";
 import { NOT_RECORDED } from "./forecast-model.mjs";
-import { judgmentRowModel } from "./forecast-home.mjs";
+import { judgmentRowModel, promotionRequest, promotionState } from "./forecast-home.mjs";
+import { reviseHash } from "./forecast-routes.mjs";
 import { Parts, formatTime } from "./ForecastShared";
 import type { ResourceState } from "./ForecastShared";
+import { JobStatus, errorMessage, isActiveJob, saveJob } from "./ForecastJob";
+
+const PROMOTION_REASON: Record<string, string> = {
+  first_session_open: "首个交易日收盘后可用",
+  filing_not_in_library: "这份财报还没进资料库，先到材料库扫描",
+};
 
 /**
  * `#forecast/judgment/<id>`: one earnings judgment with its reasons and the quotes they rest on.  It is a
@@ -16,6 +24,9 @@ export function EarningsJudgmentPage({ judgmentId, onHome }: { judgmentId: strin
   const [state, setState] = useState<ResourceState<EarningsJudgment>>({ kind: "loading" });
   const [status, setStatus] = useState<number | null>(null);
   const [forecasts, setForecasts] = useState<V2ForecastListRow[]>([]);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [activeJob, setActiveJob] = useState<V2ForecastJob | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -39,7 +50,32 @@ export function EarningsJudgmentPage({ judgmentId, onHome }: { judgmentId: strin
       .then((next) => { if (!controller.signal.aborted) setForecasts(next.forecasts); })
       .catch(() => { if (!controller.signal.aborted) setForecasts([]); });
     return () => controller.abort();
-  }, [symbol]);
+  }, [symbol, reloadKey]);
+
+  // A started forecast is polled like on the home page; when it ends the open-forecast read above runs again.
+  useEffect(() => {
+    if (activeJob === null || !isActiveJob(activeJob)) return;
+    const jobId = activeJob.id;
+    const timer = window.setInterval(() => {
+      getV2Job(jobId)
+        .then((next) => { setActiveJob(next); if (!isActiveJob(next)) setReloadKey((value) => value + 1); })
+        .catch((error: unknown) => setActionError(errorMessage(error, "无法刷新预测任务状态。")));
+    }, 3_000);
+    return () => window.clearInterval(timer);
+  }, [activeJob]);
+
+  async function promote(judgment: EarningsJudgment) {
+    const request = promotionRequest(judgment);
+    if (!request) return;
+    setActionError(null);
+    try {
+      const job = await createV2ForecastJob(request.symbol, request.source_refs);
+      setActiveJob(job);
+      saveJob(request.symbol, job);
+    } catch (error) {
+      setActionError(errorMessage(error, "无法创建预测任务。"));
+    }
+  }
 
   if (state.kind === "loading") return <section className="v2-desk"><p role="status">{t("正在读取…")}</p></section>;
   if (state.kind === "error") {
@@ -54,6 +90,7 @@ export function EarningsJudgmentPage({ judgmentId, onHome }: { judgmentId: strin
   const judgment = state.data;
   const model = judgmentRowModel(judgment);
   const openForecast = forecasts[0] ?? null;
+  const promotion = promotionState(judgment, openForecast);
   return <section className="v2-desk judgment-page" aria-labelledby="judgment-title">
     <header className="v2-desk-heading">
       <div>
@@ -83,6 +120,21 @@ export function EarningsJudgmentPage({ judgmentId, onHome }: { judgmentId: strin
         <div><dt>{t("财报发布时间")}</dt><dd>{formatTime(judgment.accepted_at)}</dd></div>
         {judgment.source_url && <div><dt>{t("原文")}</dt><dd><a href={judgment.source_url} target="_blank" rel="noopener noreferrer">{<Tx text={"打开原始来源"} />}</a></dd></div>}
       </dl>
+    </section>
+
+    <section className="v2-card judgment-promotion" aria-label={t("基于这份财报")}>
+      <p className="section-label">{t("基于这份财报")}</p>
+      {promotion.state === "create" && <button className="primary-action" type="button" onClick={() => void promote(judgment)} disabled={isActiveJob(activeJob)}>
+        {isActiveJob(activeJob) ? t("任务处理中…") : t("基于这份财报创建正式预测")}
+      </button>}
+      {promotion.state === "revise" && openForecast && judgment.filing_source_id && <a className="secondary-action" href={reviseHash(openForecast.id, judgment.filing_source_id)}>{t("用这份财报修订")}</a>}
+      {promotion.state === "unavailable" && promotion.reason && <p role="status">
+        {t(PROMOTION_REASON[promotion.reason])}
+        {promotion.reason === "filing_not_in_library" && <> · <a href={`#materials?symbol=${encodeURIComponent(judgment.symbol)}`}>{t("打开资料库")}</a></>}
+      </p>}
+      {promotion.state !== "unavailable" && <small className="v2-limit">{t("新预测只从这份财报的原文出发，不带这条判断的方向和理由。")}</small>}
+      {activeJob && <JobStatus job={activeJob} />}
+      {actionError && <p className="v2-notice error" role="alert">{actionError}</p>}
     </section>
 
     {openForecast && <p className="v2-limit">

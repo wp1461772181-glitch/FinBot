@@ -43,6 +43,27 @@ test("current stock is per bot: picked › default company › first focus › p
   assert.deepEqual(symbolChoices(apple, ["NVDA", "AAPL"], "MSFT"), ["MSFT", "AAPL", "NVDA"]);
 });
 
+test("the 研究预测 card shows the newest forecast of the stock: model, target date, probabilities, link to its page", () => {
+  const rows = [
+    { id: "r-old", symbol: "AMD", latest_version_no: 1, decision_at: "2026-10-01T00:00:00Z", target_end_date: "2026-10-29", model_status: "experimental_llm",
+      decider: { actual_model: "model-old" }, probabilities: { bearish: 0.5, neutral: 0.3, bullish: 0.2 } },
+    { id: "r-new", symbol: "AMD", latest_version_no: 3, decision_at: "2026-11-02T00:00:00Z", target_end_date: "2026-12-01", model_status: "experimental_llm",
+      decider: { actual_model: "model-new" }, probabilities: { bearish: 0.2, neutral: 0.3, bullish: 0.5 } },
+    { id: "r-other", symbol: "NVDA", latest_version_no: 1, decision_at: "2026-11-03T00:00:00Z", target_end_date: "2026-12-02", model_status: "experimental_llm", decider: {}, probabilities: null },
+  ];
+  const card = forecastCardModel(rows, "amd");
+  assert.equal(card.hash, "#forecast/r-new");
+  assert.equal(card.model, "model-new");
+  assert.equal(card.targetDate, "2026-12-01");
+  assert.deepEqual(card.percent, { bearish: 20, neutral: 30, bullish: 50 });
+  assert.equal(card.decisionAt, "2026-11-02T00:00:00Z");
+  assert.equal(forecastCardModel(rows, "TSLA"), null);
+  assert.equal(forecastCardModel(undefined, "AMD"), null);
+  const bare = forecastCardModel(rows, "NVDA");
+  assert.equal(bare.model, null);
+  assert.equal(bare.percent, null);
+});
+
 test("price summary is facts only", () => {
   assert.equal(priceSummary([]), null);
   const p = priceSummary([{ trading_date: "2026-10-26", close: 100 }, { trading_date: "2026-10-27", close: 102 }]);

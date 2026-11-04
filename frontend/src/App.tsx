@@ -38,9 +38,9 @@ type ResearchSection = Exclude<WorkspaceSection, "agent" | "bot" | "admin" | "ro
 // The personal-agent navigation groups the older sections: 公司 holds 总览; 预测 holds the forecast home, one
 // forecast's page, 模型成绩 (#evaluation) and 历史回放, and #revisions opens the versions of a forecast; 资料库 holds
 // 材料库 and 证据.  Those six (公司、预测、资料库、技能、记忆、设置) are one 「更多」 control on the mobile tab bar and
-// for guests.  On the desktop rail an owner has 预测 as a row of its own and the other five in 「更多」.  例行任务 is
-// not one of them: it is a bot-rail row (with 持仓, 预测 and 新闻源 beside it) and its own mobile tab, so it stays
-// primary chrome.  The older hashes stay the addresses, so links inside the older pages (#materials,
+// for guests.  On the desktop rail an owner has 预测 as a row of its own and the other five in 「更多」.
+// 例行任务 is not one of them: it is a bot-rail row (with 持仓, 预测 and 新闻源 beside it) and its own mobile tab, so
+// it stays primary chrome.  The older hashes stay the addresses, so links inside the older pages (#materials,
 // #evidence/<id>/…) and the agent's open_page keep working unchanged.
 type NavGroup = "chat" | "routines" | "portfolio" | "news" | "company" | "forecast" | "library" | "skills" | "memory" | "settings";
 const FORECAST_TABS = ["forecast", "revisions", "evaluation", "replay"] as const;
@@ -259,7 +259,7 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
   if (activeSection === "forecast") {
     const goHome = () => { window.location.hash = "forecast"; };
     return <Shell {...shellProps}><main className="workspace"><SectionTabs section={activeSection} navigate={navigate} />
-      {forecastRoute.view === "forecast" && forecastRoute.rootId ? <ForecastPage key={`${forecastRoute.rootId}:${forecastRoute.versionId ?? ""}`} rootId={forecastRoute.rootId} versionId={forecastRoute.versionId} onHome={goHome} />
+      {forecastRoute.view === "forecast" && forecastRoute.rootId ? <ForecastPage key={`${forecastRoute.rootId}:${forecastRoute.versionId ?? ""}:${forecastRoute.reviseSourceId ?? ""}`} rootId={forecastRoute.rootId} versionId={forecastRoute.versionId} reviseSourceId={forecastRoute.reviseSourceId} onHome={goHome} />
         : forecastRoute.view === "judgment" && forecastRoute.judgmentId ? <EarningsJudgmentPage key={forecastRoute.judgmentId} judgmentId={forecastRoute.judgmentId} onHome={goHome} />
         : forecastRoute.view === "monitor" ? <ForecastMonitorPage onHome={goHome} />
         : <ForecastHome queue={symbols} personal={personal} symbolFilter={forecastRoute.symbol} onClearSymbol={goHome} />}

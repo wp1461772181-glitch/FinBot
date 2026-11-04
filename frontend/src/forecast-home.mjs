@@ -173,6 +173,31 @@ export function formalRowModel(row, { holdings, queue } = {}) {
   };
 }
 
+/**
+ * The body of 基于这份财报创建正式预测, and nothing else: the company, "new", and the one library filing the judgment
+ * was made from.  The judgment itself (direction, reasons, counter-argument) is never part of it, so the forecast
+ * that follows starts independent of it.  null when the filing is not in the library (there is nothing to name).
+ */
+export function promotionRequest(judgment) {
+  const sourceId = judgment?.filing_source_id;
+  if (typeof judgment?.symbol !== "string" || typeof sourceId !== "string" || !sourceId) return null;
+  return { symbol: judgment.symbol, kind: "new", source_refs: [{ source_type: "official_filing", source_id: sourceId }] };
+}
+
+/**
+ * What the judgment page offers for 这份财报: "create" a formal forecast, "revise" the company's open one with it, or
+ * "unavailable" with the reason (a key of the judgment's `promotion`: first_session_open, filing_not_in_library).
+ * The server owns availability; this only reads it.  A judgment whose `promotion` is missing is unavailable with
+ * no reason, and a filing that is not in the library is never offered, whatever else the row says.
+ */
+export function promotionState(judgment, openRoot) {
+  const promotion = judgment?.promotion;
+  if (!judgment?.filing_source_id) return { state: "unavailable", reason: "filing_not_in_library" };
+  if (!promotion || typeof promotion !== "object") return { state: "unavailable", reason: null };
+  if (promotion.available !== true) return { state: "unavailable", reason: promotion.reason ?? null };
+  return { state: openRoot?.id ? "revise" : "create", reason: null };
+}
+
 /** View model of one judgment row.  It has no probabilities; its only percentage is the after-hours move it knew. */
 export function judgmentRowModel(judgment) {
   const direction = judgment?.direction === "up" ? "偏涨" : judgment?.direction === "down" ? "偏跌" : "没有明确方向";

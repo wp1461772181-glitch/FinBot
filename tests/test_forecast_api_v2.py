@@ -160,6 +160,19 @@ def test_new_job_is_durable_idempotent_and_does_not_run_forecast_work(client):
         assert db.get(ForecastJobV2, first.json()["id"]).status == "queued"
 
 
+def test_promotion_request_is_accepted_and_nothing_extra_can_ride_along(client):
+    """The 预测 page's promotion button sends this exact body; a field naming the judgment is refused."""
+    source_id = _official_source(symbol="AAPL")
+    body = {"symbol": "AAPL", "kind": "new", "source_refs": [{"source_type": "official_filing", "source_id": str(source_id)}]}
+    ok = client.post("/v2/forecast-jobs", json=body, headers={"Idempotency-Key": f"promote-{uuid4()}"})
+    assert ok.status_code == 202
+    with SessionLocal() as db:
+        assert db.get(ForecastJobV2, ok.json()["id"]).source_refs == body["source_refs"]
+    for extra in ({"judgment_id": str(uuid4())}, {"direction": "down"}, {"reasons": ["x"]}):
+        refused = client.post("/v2/forecast-jobs", json={**body, **extra}, headers={"Idempotency-Key": f"promote-{uuid4()}"})
+        assert refused.status_code == 422, extra
+
+
 def test_new_job_requires_header_and_rejects_reused_key_with_a_different_request(client):
     missing = client.post("/v2/forecast-jobs", json={"symbol": "AAPL", "kind": "new"})
     assert missing.status_code == 422

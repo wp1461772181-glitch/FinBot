@@ -1,10 +1,13 @@
 // The bot workspace's data cards (UX batch 2, P3).  Each card loads on its own, so one failing read never blanks
 // the others.  Facts only: prices, dates, counts and titles; no buy/sell wording anywhere.
 import { useEffect, useState } from "react";
-import { getFilingInventory, getMaterialLibrary, getPortfolio, getResearchQueue, getV2Prices, getV2Workspace, listAgentTasks, listInbox, listTaskProposals, type Bot } from "./api";
+import { getFilingInventory, getMaterialLibrary, getPortfolio, getResearchQueue, getV2Forecasts, getV2Prices, listAgentTasks, listInbox, listTaskProposals, type Bot } from "./api";
 import { formatDate, getLocalePreference, useLocale } from "./i18n";
-import { CARDS, priceSummary, type LayoutItem } from "./workspace-cards.mjs";
-import { waitingCount } from "./inbox-items.mjs";
+import { CARDS, forecastCardModel, priceSummary, type LayoutItem } from "./workspace-cards.mjs";
+import { NOT_RECORDED } from "./forecast-model.mjs";
+import { ProbabilityStrip, modelStatusText } from "./ForecastShared";
+import type { V2ModelStatus } from "./types";
+import { judgmentLink, waitingCount } from "./inbox-items.mjs";
 import { formatMoney, formatPercent, pnlTone } from "./portfolio-items.mjs";
 import { materialHref } from "./material-focus.mjs";
 
@@ -64,14 +67,18 @@ function PriceCard({ symbol, wide }: { symbol: string; wide: boolean }) {
   }}</Body>;
 }
 
-function ForecastCard({ symbol, onOpen }: { symbol: string; onOpen: () => void }) {
+// One list call for this card's stock (the workspace read has no deciding model, target date or rootId in the row
+// shape the home page uses).  The card links to that forecast's own page, #forecast/<rootId>.
+function ForecastCard({ symbol }: { symbol: string }) {
   const { t } = useLocale();
-  const [state] = useLoad(`forecast:${symbol}`, signal => getV2Workspace(symbol, signal));
+  const [state] = useLoad(`forecast:${symbol}`, signal => getV2Forecasts({ symbols: [symbol], state: "all", limit: 20 }, signal)
+    .then(list => forecastCardModel(list.forecasts, symbol)));
   return <>
-    <Body state={state}>{v => v.current_version
-      ? <p>{t("最新版本")} v{v.current_version.version_no} · {t("决策日")} {day(v.current_version.decision_at)}</p>
-      : <p className="ws-muted">{t("还没有研究预测。")}</p>}</Body>
-    <button type="button" className="text-button" onClick={onOpen}>{t("打开预测工作台")} →</button>
+    <Body state={state} empty={v => v === null}>{v => v && <>
+      <p><strong>{t("决策模型")}</strong> {v.model ?? t(NOT_RECORDED)} · {t("目标日")} {v.targetDate ?? t(NOT_RECORDED)}</p>
+      {v.probabilities ? <ProbabilityStrip probabilities={v.probabilities} label={t("三类概率")} compact /> : <p className="ws-muted">{modelStatusText(v.modelStatus as V2ModelStatus)}</p>}
+      <small className="ws-muted">{t("最新版本")} v{v.versionNo} · {t("决策日")} {day(v.decisionAt)}</small>
+      <a className="text-button" href={v.hash}>{t("打开这份预测")} →</a></>}</Body>
     <small className="ws-muted ws-fine">{t("模型意见，未经校准，仅供参考。")}</small>
   </>;
 }
@@ -138,7 +145,7 @@ function PortfolioCard() {
 function BriefCard({ bot }: { bot: Bot }) {
   const [state] = useLoad(`brief:${bot.id}`, signal => listInbox("brief", signal, bot.id));
   return <Body state={state} empty={v => !v.length}>{v => <ul className="ws-list">{v.slice(0, 3).map(item =>
-    <li key={item.id}><span>{item.title}</span><small className="ws-muted"> {day(item.created_at)}</small></li>)}</ul>}</Body>;
+    <li key={item.id}>{judgmentLink(item) ? <a href={judgmentLink(item)!}>{item.title}</a> : <span>{item.title}</span>}<small className="ws-muted"> {day(item.created_at)}</small></li>)}</ul>}</Body>;
 }
 
 function WatchlistCard({ onPick }: { onPick: (symbol: string) => void }) {
@@ -153,7 +160,7 @@ export function WorkspaceCard({ item, bot, symbol, wide, onOpenCompany, onPickSy
   const card = CARDS.find(c => c.id === item.card)!;
   const sym = item.symbol || symbol;
   const body = item.card === "price" ? <PriceCard symbol={sym} wide={wide || item.size === "l"} />
-    : item.card === "forecast" ? <ForecastCard symbol={sym} onOpen={() => onOpenCompany(sym, "forecast")} />
+    : item.card === "forecast" ? <ForecastCard symbol={sym} />
     : item.card === "materials" ? <MaterialsCard symbol={sym} />
     : item.card === "filings" ? <FilingsCard symbol={sym} />
     : item.card === "routines" ? <RoutinesCard bot={bot} />

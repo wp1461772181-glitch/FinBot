@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { forecastHash, forecastHomeHash, judgmentHash, legacyForecastSection, parseForecastHash } from "../src/forecast-routes.mjs";
+import { forecastHash, forecastHomeHash, judgmentHash, legacyForecastSection, parseForecastHash, reviseHash } from "../src/forecast-routes.mjs";
 
 const ROOT = "3f2b8c1e-9d4a-4e6b-8a57-1c0d2e3f4a5b";
 const VERSION = "a1b2c3d4-0000-4000-8000-123456789abc";
@@ -22,6 +22,15 @@ test("#forecast/<rootId> opens one forecast, with an optional version", () => {
   assert.deepEqual(parseForecastHash(`#forecast/${ROOT}`), { view: "forecast", rootId: ROOT });
   assert.deepEqual(parseForecastHash(`#forecast/${ROOT}?version=${VERSION}`), { view: "forecast", rootId: ROOT, versionId: VERSION });
   assert.deepEqual(parseForecastHash(`#forecast/${ROOT.toUpperCase()}`), { view: "forecast", rootId: ROOT });
+});
+
+test("?revise=<filing id> opens one forecast on a library filing; an unreadable id is ignored, not guessed at", () => {
+  const FILING = "0b9d7e52-6c41-4f08-9a3e-5d2f1c8b7a64";
+  assert.deepEqual(parseForecastHash(reviseHash(ROOT, FILING)), { view: "forecast", rootId: ROOT, reviseSourceId: FILING });
+  assert.deepEqual(parseForecastHash(`#forecast/${ROOT}?version=${VERSION}&revise=${FILING}`),
+    { view: "forecast", rootId: ROOT, versionId: VERSION, reviseSourceId: FILING });
+  assert.deepEqual(parseForecastHash(`#forecast/${ROOT}?revise=nope`), { view: "forecast", rootId: ROOT });
+  assert.deepEqual(parseForecastHash(`#forecast/not-a-uuid?revise=${FILING}`), { view: "home" });
 });
 
 test("judgment and monitor routes", () => {

@@ -4,6 +4,7 @@
 //   #forecast?symbol=AMD              home, filtered to one symbol
 //   #forecast/<rootId>                one forecast
 //   #forecast/<rootId>?version=<id>   one forecast, that version selected
+//   #forecast/<rootId>?revise=<id>    one forecast, its revision form open on that library filing
 //   #forecast/judgment/<eventId>      one earnings judgment
 //   #forecast/monitor                 monitor status
 //
@@ -26,7 +27,7 @@ function uuid(value) {
   return typeof value === "string" && UUID.test(value) ? value.toLowerCase() : null;
 }
 
-/** @returns {{view: "home" | "forecast" | "judgment" | "monitor", rootId?: string, versionId?: string, judgmentId?: string, symbol?: string}} */
+/** @returns {{view: "home" | "forecast" | "judgment" | "monitor", rootId?: string, versionId?: string, reviseSourceId?: string, judgmentId?: string, symbol?: string}} */
 export function parseForecastHash(hash) {
   const { segments, params } = splitHash(hash);
   const home = { view: "home" };
@@ -44,9 +45,16 @@ export function parseForecastHash(hash) {
   if (segments.length === 2) {
     const rootId = uuid(segments[1]);
     if (!rootId) return home;
-    if (!params.has("version")) return { view: "forecast", rootId };
-    const versionId = uuid(params.get("version"));
-    return versionId ? { view: "forecast", rootId, versionId } : home;
+    const route = { view: "forecast", rootId };
+    if (params.has("version")) {
+      const versionId = uuid(params.get("version"));
+      if (!versionId) return home;
+      route.versionId = versionId;
+    }
+    // A library filing the reader asked to revise this forecast with; an unreadable one is ignored, the page still opens.
+    const reviseSourceId = uuid(params.get("revise"));
+    if (reviseSourceId) route.reviseSourceId = reviseSourceId;
+    return route;
   }
   return home;
 }
@@ -59,6 +67,11 @@ export function legacyForecastSection(hash) {
 
 export function forecastHash(rootId, versionId) {
   return versionId ? `#forecast/${rootId}?version=${versionId}` : `#forecast/${rootId}`;
+}
+
+/** One forecast, with its revision form opened on a library filing (the judgment page's 用这份财报修订). */
+export function reviseHash(rootId, sourceId) {
+  return `#forecast/${rootId}?revise=${sourceId}`;
 }
 
 export function judgmentHash(judgmentId) {

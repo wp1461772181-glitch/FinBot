@@ -290,3 +290,156 @@ def test_leftover_jev_mode_fails_visibly():
     with pytest.raises(ForecastInputError) as caught:
         AgentForecastProcessor(session_factory=SessionLocal, decision_mode="jev")
     assert caught.value.reason == "invalid_forecast_decision_mode"
+
+
+# --- B12: a judgment's "create a forecast" button ------------------------------------------------------------
+# The button posts {symbol, kind: "new", source_refs: [{source_type: "official_filing", source_id}]} and nothing
+# else.  These two tests pin what that request can and cannot carry into a forecast.
+
+_8K_TEXT = "Revenue grew."
+
+
+def _seed_8k(*, symbol="AMD"):
+    """One fetched 8-K of the library, public and observed a little while ago; returns (id, accession)."""
+    from app.models import SecFilingInventory
+    Base.metadata.create_all(bind=engine)
+    instant = datetime.now(UTC)
+    accepted_at = instant - timedelta(hours=2)
+    observed_at = instant - timedelta(hours=1)
+    accession = f"0000002488-26-{uuid4().int % 1_000_000:06d}"
+    with SessionLocal() as db:
+        row = SecFilingInventory(
+            symbol=symbol, cik="0000002488", accession_number=accession, form="8-K", filed_at=instant.date(),
+            accepted_at=accepted_at.isoformat(), primary_document="ex99.htm",
+            source_url="https://www.sec.gov/Archives/example/ex99.htm", source="sec-edgar", review_status="accepted",
+            observed_at=observed_at, content_status="fetched", content_observed_at=observed_at,
+            content_excerpt=_8K_TEXT, content_excerpt_sha256=hashlib.sha256(_8K_TEXT.encode()).hexdigest(),
+            content_truncated=False, related_attachment_status="not_found",
+        )
+        db.add(row)
+        db.commit()
+        return row.id, accession
+
+
+def _frozen_brief(*, symbol, source_refs):
+    """Freeze the way the worker does for a new forecast, analyse with a fake model, build the brief.
+
+    Returns (manifest, selected events, brief as a dict).  Only the model is faked: the freezer, the manifest
+    selection, the material-analysis pipeline and the brief builder are the real ones.
+    """
+    from uuid import UUID
+    refs = [{"source_type": ref["source_type"], "source_id": UUID(str(ref["source_id"]))} for ref in source_refs]
+    with SessionLocal() as db:
+        context = freeze_evidence_context(
+            db=db, symbol=symbol, decision_at=datetime.now(UTC), mode="observed", source_refs=refs,
+            include_automatic_new_sources=False,
+        )
+    manifest = [event.as_manifest_item() for event in context.events]
+    selected, explicit, excluded = _select_manifest_events(manifest, list(source_refs))
+
+    class AnalysisProvider:
+        def extract(self, **_kwargs):
+            return SimpleNamespace(content=json.dumps({
+                "schema_version": "material-analysis-v1", "prompt_version": PROMPT_VERSION,
+                "summary": "Revenue increased.",
+                "facts": [{"id": "f1", "statement": _8K_TEXT, "citations": [{"quote": _8K_TEXT}]}],
+                "supporting": [], "counter": [], "uncertainties": [], "key_numbers": [],
+            }), response_model="fixture-model", usage={})
+
+    class BriefProvider:
+        def extract(self, **_kwargs):
+            return SimpleNamespace(content=json.dumps({
+                "new_facts": [], "supporting": [], "counter": [], "background": [],
+                "conflicts": [], "unknowns": [], "changes": [],
+            }), response_model="fixture-model", usage={})
+
+    analyses = []
+    for event in selected:
+        with SessionLocal() as db:
+            queued = request_material_analysis(db=db, source_type=event["source_type"], source_id=UUID(event["source_id"]),
+                                               idempotency_key=f"b12-{uuid4()}")
+        outcome = run_material_analysis_once(session_factory=SessionLocal, provider=AnalysisProvider(),
+                                             job_id=UUID(queued["job_id"]), worker_id="b12-test")
+        assert outcome["status"] == "succeeded"
+        with SessionLocal() as db:
+            analysis = get_material_analysis(db=db, analysis_id=UUID(outcome["analysis_id"]))
+        # The same steps as AgentForecastProcessor._process: the analysis must belong to the frozen content.
+        source_manifest = dict(analysis.get("source_manifest") or {})
+        assert source_manifest.get("content_sha256") == event.get("content_sha256")
+        source_manifest.update({"review_status": event.get("review_status", "pending_review"),
+                                "user_rating_stars": event.get("user_rating_stars"),
+                                "is_active": event.get("is_active", True),
+                                "is_corrected_or_withdrawn": event.get("is_corrected_or_withdrawn", False)})
+        analysis["source_manifest"] = source_manifest
+        analyses.append(analysis)
+    cutoff = datetime.now(UTC) + timedelta(seconds=1)
+    brief = build_research_brief(
+        market_summary={"symbol": symbol, "as_of": cutoff.isoformat(), "latest_close": 100.0,
+                        "return_5_sessions": 0.01, "return_20_sessions": 0.03,
+                        "volatility_20_sessions": 0.2, "volume_ratio_20_sessions": 1.0},
+        analyses=analyses, target_contract={"target_end_date": "2026-12-01"}, decision_at=cutoff, parent_brief=None,
+        provider=BriefProvider(), explicit_source_refs=explicit, excluded_source_refs=excluded,
+    )
+    return manifest, selected, brief.model_dump(mode="json")
+
+
+def test_explicit_8k_ref_reaches_the_brief():
+    """The promotion button names a library 8-K by its SecFilingInventory id.  The request is accepted, the
+    freezer puts that 8-K in the manifest, only manifest sources are analysed, and the 8-K is in the brief."""
+    from app.forecast_v2_api import V2RequestError, _validate_source_refs
+    source_id, _accession = _seed_8k()
+    ref = {"source_type": "official_filing", "source_id": str(source_id)}
+
+    # 1. The request check accepts a library declaration for this symbol, and still refuses another symbol's.
+    with SessionLocal() as db:
+        _validate_source_refs(db, refs=[ref], symbol="AMD", decision_at=datetime.now(UTC))
+        with pytest.raises(V2RequestError):
+            _validate_source_refs(db, refs=[ref], symbol="MSFT", decision_at=datetime.now(UTC))
+
+    # 2. Selection works on the frozen manifest alone: a reference that is not in it is never analysed.
+    manifest, selected, brief = _frozen_brief(symbol="AMD", source_refs=[ref])
+    assert [item["source_id"] for item in manifest] == [str(source_id)]
+    stray = {"source_type": "official_filing", "source_id": str(uuid4())}
+    picked, _explicit, _excluded = _select_manifest_events(manifest, [ref, stray])
+    assert [item["source_id"] for item in picked] == [str(source_id)]
+
+    # 3. The 8-K itself is in the brief.
+    assert [item["source_id"] for item in selected] == [str(source_id)]
+    assert [(r["source_type"], r["source_id"]) for r in brief["material_refs"]] == [("official_filing", str(source_id))]
+
+
+def test_promoted_forecast_has_no_trace_of_the_judgment():
+    """A forecast started from a judgment is an independent forecast: the judgment's direction, reasons and
+    counter-argument exist only in earnings_events, and nothing about the request or the freeze can carry them."""
+    from app.agent_chat_models import EarningsEvent
+    markers = {"direction": "ZQX-DIRECTION-2093", "reason": "ZQX-REASON-7781", "counter": "ZQX-COUNTER-4410"}
+    source_id, accession = _seed_8k()
+    event_id = uuid4()
+    with SessionLocal() as db:
+        db.add(EarningsEvent(
+            id=event_id, owner_hash="b12-owner", symbol="AMD", accession=accession, cik="0000002488", held=True,
+            accepted_at=datetime.now(UTC) - timedelta(hours=2), status="first_sent", followup_status="sent",
+            detail={"followup": {"direction": markers["direction"], "confidence": "high",
+                                 "reasons": [{"text": markers["reason"], "quote": markers["reason"]}],
+                                 "counter_argument": markers["counter"], "validated": True}},
+        ))
+        db.commit()
+    try:
+        # Exactly what the button sends, and the job the API stores from it.
+        request = {"symbol": "AMD", "kind": "new",
+                   "source_refs": [{"source_type": "official_filing", "source_id": str(source_id)}]}
+        with SessionLocal() as db:
+            job = enqueue_job(db=db, symbol=request["symbol"], kind=request["kind"],
+                              idempotency_key=f"b12-{uuid4()}", source_refs=request["source_refs"])
+            job_columns = {column.name: getattr(job, column.name) for column in job.__table__.columns}
+        assert job_columns["source_refs"] == request["source_refs"]
+        manifest, _selected, brief = _frozen_brief(symbol="AMD", source_refs=job_columns["source_refs"])
+
+        everything = json.dumps({"job": job_columns, "manifest": manifest, "brief": brief}, default=str, ensure_ascii=False)
+        for name, marker in markers.items():
+            assert marker not in everything, f"the judgment's {name} reached the job or the brief"
+        assert str(event_id) not in everything
+    finally:
+        with SessionLocal() as db:
+            db.query(EarningsEvent).filter(EarningsEvent.id == event_id).delete(synchronize_session=False)
+            db.commit()
