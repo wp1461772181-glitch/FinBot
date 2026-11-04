@@ -179,6 +179,17 @@ def test_the_summary_is_one_note_that_says_who_wrote_it_and_that_it_is_not_evide
     assert layers.conversation_messages([{"role": "user", "content": "你好"}, note]) == [{"role": "user", "content": "你好"}]
 
 
+def test_omitted_turns_are_named_so_they_can_be_recalled():
+    hint = layers.history_messages([_turn(1, "甲")], omitted=2)
+    assert hint[0]["role"] == "user" and hint[0]["content"] == (
+        "[系统提示：有 2 轮更早的对话因长度限制未直接展开，如需回查请调用 recall_conversations。]")
+    assert hint[1]["content"] == "甲"
+    assert layers.history_messages([_turn(1, "甲")])[0]["content"] == "甲"
+    quiet = {"overflow": [], "half_turns": [], "budget": 1000, "l1_bytes": 10, "segments": []}
+    assert layers.should_compact(quiet) is False
+    assert layers.should_compact({**quiet, "overflow": [_turn(1, "更早")]}) is True
+
+
 def test_the_note_goes_after_the_question_and_the_head_is_only_the_turns():
     messages = layers.history_messages([_turn(1, "甲"), _turn(2, "乙")])
     assert [m["role"] for m in messages] == ["user", "assistant", "user", "assistant"]

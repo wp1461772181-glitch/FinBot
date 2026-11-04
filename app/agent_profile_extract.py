@@ -35,6 +35,10 @@ MAX_CANDIDATES = 3
 MESSAGE_MAX_CHARS = 2000
 # Evidence not copied exactly must still match this share of its characters in one span of the message.
 SNAP_MIN_RATIO = 0.6
+# A quote that is the owner's words but that the gate did not confirm is kept, with this note.
+PROFILE_GATE_NOTE = "［注：记忆判断未确认，请自行核对］"
+# "记住这个" is a pointer, not an instruction. A stored fallback has to carry the instruction itself.
+_FALLBACK_MIN_CHARS = 8
 # Button presses and card replies are the server's words, not the owner's.
 _CONTROL_PREFIXES = ("confirm:", "cancel:", "change:", "authorize:", "reply:")
 
@@ -114,6 +118,9 @@ def candidates(raw, message: str, *, in_bot: bool = False) -> list[dict]:
             continue
         if topic is not None and not isinstance(topic, str):
             continue
+        from .agent_context_summary import claims_write_authority
+        if claims_write_authority(text) or claims_write_authority(quote):
+            continue
         quote, exact = snap_evidence(quote, message)
         if not quote:
             continue
@@ -125,9 +132,21 @@ def candidates(raw, message: str, *, in_bot: bool = False) -> list[dict]:
     return kept
 
 
+def _annotate_unconfirmed(text: str) -> str:
+    if PROFILE_GATE_NOTE in text:
+        return text
+    room = profile.TEXT_MAX_CHARS - len(PROFILE_GATE_NOTE)
+    body = text if len(text) + len(PROFILE_GATE_NOTE) <= profile.TEXT_MAX_CHARS else text[:room].rstrip()
+    return body + PROFILE_GATE_NOTE
+
+
 def admitted(found: list[dict], message: str) -> list[dict]:
-    """The candidates Jev lets through (P(remember) >= threshold).  When Jev gives no answer for one, it
-    passes only if its evidence was copied exactly (the rule before the gate)."""
+    """Candidates whose quote is the owner's words.
+
+    Jev confirming one leaves the text as the model wrote it. When Jev disallows a quote that is
+    still the owner's words, the item is kept and the text says the gate did not confirm it.
+    When Jev gives no answer, an exact copy is kept unmarked, as before. A quote that is not the
+    owner's words never reaches here."""
     from . import jev_memory_gate as gate
     kept = []
     for item in found:
@@ -135,9 +154,56 @@ def admitted(found: list[dict], message: str) -> list[dict]:
         exact = item.pop("exact", False)
         if verdict.allows() or (verdict.status != "ok" and exact):
             kept.append(item)
+        elif profile.quote_in_message(item["quote"], message):
+            item["text"] = _annotate_unconfirmed(item["text"])
+            kept.append(item)
         else:
             log.info("profile candidate not admitted status=%s", verdict.status)
     return kept
+
+
+def explicit_memory_fallback(message: str) -> dict | None:
+    """The owner's own instruction, when the extractor returned nothing.
+
+    The cue is the one the turn already uses (``authorized('remember')``). A question, a bare
+    pointer, or a claim that a write was authorized is not stored."""
+    from .agent_context_summary import claims_write_authority
+    from .agent_workflow.authorization import authorized
+    text = " ".join(str(message or "").split())
+    if not _FALLBACK_MIN_CHARS <= len(text) <= profile.TEXT_MAX_CHARS:
+        return None
+    if "?" in text or "？" in text or not authorized("remember", text):
+        return None
+    if claims_write_authority(text):
+        return None
+    return {"kind": "instruction", "topic": None, "text": text, "quote": text}
+
+
+def _model_items(raw) -> list | None:
+    """The items array the model offered, or None when the reply was not a usable item list."""
+    from .agent_context_summary import SummaryRejected, _json_object
+    try:
+        value = _json_object(raw)
+    except SummaryRejected:
+        return None
+    items = value.get("items")
+    return items if isinstance(items, list) else None
+
+
+async def store_explicit_fallback(owner_hash: str, message: str, *, conversation_id: str, turn_id: str) -> bool:
+    """Write the fallback instruction. False when there is nothing to write or the row is refused."""
+    item = explicit_memory_fallback(message)
+    if not item or not owner_hash:
+        return False
+    try:
+        source = await asyncio.to_thread(profile.user_message_id, conversation_id, turn_id)
+        outcome = await asyncio.to_thread(
+            profile.add_item, owner_hash, origin="explicit", message=message,
+            source_message_id=source, **item)
+    except profile.ProfileError as exc:
+        log.info("explicit memory fallback dropped reason=%s", exc)
+        return False
+    return outcome.get("status") in {"added", "duplicate"}
 
 
 def worth_reading(message: str) -> bool:
@@ -173,11 +239,23 @@ async def extract_from_turn(owner_hash: str, message: str, *, conversation_id: s
         payload["bot"] = bot
     messages = [{"role": "system", "content": EXTRACT_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]
-    async with asyncio.timeout(EXTRACT_TIMEOUT_SECONDS):
-        _response, decision = await decision_request(provider, model, api_key, messages, [], base_url)
-    found = candidates(decision.get("content") if isinstance(decision, dict) else None, message, in_bot=bot is not None)
-    if found:
-        found = await asyncio.to_thread(admitted, found, message)
+    content = None
+    try:
+        async with asyncio.timeout(EXTRACT_TIMEOUT_SECONDS):
+            _response, decision = await decision_request(provider, model, api_key, messages, [], base_url)
+        content = decision.get("content") if isinstance(decision, dict) else None
+    except TimeoutError:
+        content = None
+    offered = _model_items(content)
+    found: list[dict] = []
+    if offered:
+        found = candidates(content, message, in_bot=bot is not None)
+        if found:
+            found = await asyncio.to_thread(admitted, found, message)
+    # Empty, unusable, or timed out: keep the owner's own instruction. Items the quote floor
+    # dropped are not "nothing" — those stay dropped.
+    if not found and not offered:
+        return int(await store_explicit_fallback(owner_hash, message, conversation_id=conversation_id, turn_id=turn_id))
     if not found:
         return 0
     source = await asyncio.to_thread(profile.user_message_id, conversation_id, turn_id)

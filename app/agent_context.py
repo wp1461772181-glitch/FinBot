@@ -446,9 +446,17 @@ def conversation_messages(messages: list[dict]) -> list[dict]:
     return [message for message in messages if not is_memory_message(message) and not is_catalogue_message(message)]
 
 
-def history_messages(half_turns: list[Turn]) -> list[dict]:
-    """The head of a request before layer 1: the half-compressed turns, oldest first."""
+def history_messages(half_turns: list[Turn], *, omitted: int = 0) -> list[dict]:
+    """The head of a request before layer 1: the half-compressed turns, oldest first.
+
+    ``omitted`` is how many older turns the byte budget left out. They are named here so the
+    model can call ``recall_conversations`` instead of treating the gap as an empty history."""
     messages: list[dict] = []
+    if omitted > 0:
+        messages.append({
+            "role": "user",
+            "content": f"[系统提示：有 {omitted} 轮更早的对话因长度限制未直接展开，如需回查请调用 recall_conversations。]",
+        })
     for turn in half_turns:
         messages.extend(half_messages(turn))
     return messages
@@ -499,6 +507,12 @@ def history_usage(context: dict) -> dict:
 
 
 def should_compact(context: dict) -> bool:
+    """Compress at ``COMPACT_AT`` of the budget, and also when the budget has already left turns out.
+
+    A turn that fits neither layer is ``overflow`` even while the counted fraction is still under
+    the line. Waiting for the fraction would leave those turns unsummarized and unmentioned."""
+    if context.get("overflow"):
+        return True
     return history_usage(context)["fraction"] >= COMPACT_AT
 
 
@@ -522,7 +536,7 @@ def usage_report(*, system_bytes: int, tools_bytes: int, summary_bytes: int, sum
         "budget_bytes": budget_bytes,
         "compact_at_percent": round(100 * COMPACT_AT),
         "history_used_percent": round(100 * used_fraction),
-        "will_compact": used_fraction >= COMPACT_AT,
+        "will_compact": used_fraction >= COMPACT_AT or hidden_turns > 0,
         "capacity_bytes": capacity,
         "used_bytes": fixed + history,
         "remaining_bytes": remaining,

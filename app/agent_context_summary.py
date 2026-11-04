@@ -51,6 +51,42 @@ SUMMARY_PROMPT = (
 _RUNNING: dict[str, asyncio.Task] = {}
 _COMPANY_LIMIT = 64            # a summary may name more companies than one question ever does
 _CLOCK_TIME = re.compile(r"(?<!\d)[0-2]?\d\s*[:：]\s*[0-5]\d(?!\d)|(?<!\d)\d{1,2}\s*[ap]\.?m\.?(?![a-z])", re.I)
+# A summary is memory, not a grant. This matches a claim that a write was already authorized,
+# not every use of the word (an SEC repurchase authorization is not this claim).
+_FORBIDDEN_AUTHORITY = re.compile(r"已确认授权|授权执行写入|确认授权执行|confirmed write authorization", re.I)
+FIGURE_REL_TOL = 0.02
+DRIFT_NOTE = "[注：摘要中部分数字或名称与原轮次表述存在差异，具体内容请以原轮次为准。]"
+
+
+def claims_write_authority(text: str) -> bool:
+    """True when text claims a write was already authorized. Summaries and memories never carry that."""
+    return bool(_FORBIDDEN_AUTHORITY.search(text or ""))
+
+
+def _figure_supported(item: float, known: set[float]) -> bool:
+    """A stated figure matches a source figure, or is the same figure rounded within 2%."""
+    for candidate in known:
+        if item == candidate:
+            return True
+        if abs(item - candidate) / max(abs(candidate), 1e-9) <= FIGURE_REL_TOL:
+            return True
+    return False
+
+
+def _summary_drift(text: str, source: str) -> bool:
+    """True when a name or a figure is not in the turns. Rounding within 2% is not drift."""
+    from .agent_workflow.semantic import figure_values, named_companies
+    if any(not _grounded(entity, source) for entity in named_companies(text, _COMPANY_LIMIT)):
+        return True
+    claimed = figure_values(_CLOCK_TIME.sub(" ", text))
+    known = figure_values(source, zh=True)
+    return any(not _figure_supported(item, known) for item in claimed)
+
+
+def _with_drift_note(text: str) -> str:
+    if DRIFT_NOTE in text:
+        return text
+    return text.rstrip() + "\n" + DRIFT_NOTE
 
 
 class SummaryRejected(ValueError):
@@ -110,9 +146,11 @@ def _json_object(raw) -> dict:
 
 
 def validate_summary(raw, source: str) -> str:
-    """The segment text, or SummaryRejected.  Grounds are checked, not wording: a company or a
-    figure that the summarized turns do not contain makes the whole segment unusable."""
-    from .agent_workflow.semantic import figure_values, named_companies
+    """The segment text, or SummaryRejected.
+
+    Shape, emptiness, length and a fabricated write-authorization stay hard rejects. A rounded
+    figure (within 2%) or a short name is kept; a figure or a name the turns do not support is
+    kept as well, with a note that the wording differs from the turns."""
     value = _json_object(raw)
     text = value.get("summary")
     if set(value) != {"summary"} or not isinstance(text, str):
@@ -122,11 +160,10 @@ def validate_summary(raw, source: str) -> str:
         raise SummaryRejected("empty")
     if len(text) > SEGMENT_MAX_CHARS:
         raise SummaryRejected("too_long")
-    if any(not _grounded(entity, source) for entity in named_companies(text, _COMPANY_LIMIT)):
-        raise SummaryRejected("ungrounded_company")
-    # A time of day is a way of writing what the user said ("下午三点" as "15:00"), not an amount.
-    if figure_values(_CLOCK_TIME.sub(" ", text)) - figure_values(source, zh=True):
-        raise SummaryRejected("ungrounded_figure")
+    if claims_write_authority(text):
+        raise SummaryRejected("forbidden_authority")
+    if _summary_drift(text, source):
+        return _with_drift_note(text)
     return text
 
 
@@ -213,10 +250,10 @@ def validate_rolling(raw, *, source: str, allowed: set, old: dict | None) -> dic
     """The merged summary (without version fields), or SummaryRejected.
 
     A conclusion or number needs a marker naming a turn and a source ordinal that were offered to the
-    model (``allowed``); any figure or company in the text must appear in ``source`` (the merged texts).
-    Whatever sourced items the old version had and the model dropped are carried over, so a merge can
-    refine a summary but never silently lose a sourced finding."""
-    from .agent_workflow.semantic import figure_values, named_companies
+    model (``allowed``). A figure within 2% of a source figure counts as the same figure. A name or a
+    figure the merged texts do not support is kept, and ``open`` gains a note. Whatever sourced items
+    the old version had and the model dropped are carried over, so a merge can refine a summary but
+    never silently lose a sourced finding. A claim that a write was already authorized is refused."""
     value = _json_object(raw)
     if set(value) - set(layers.ROLLING_LISTS):
         raise SummaryRejected("schema")
@@ -249,16 +286,18 @@ def validate_rolling(raw, *, source: str, allowed: set, old: dict | None) -> dic
     if not texts:
         raise SummaryRejected("empty")
     blob = "\n".join(texts)
-    if any(not _grounded(entity, source) for entity in named_companies(blob, _COMPANY_LIMIT)):
-        raise SummaryRejected("ungrounded_company")
-    if figure_values(_CLOCK_TIME.sub(" ", blob)) - figure_values(source, zh=True):
-        raise SummaryRejected("ungrounded_figure")
+    if claims_write_authority(blob):
+        raise SummaryRejected("forbidden_authority")
+    drift = _summary_drift(blob, source)
     for key in layers.ROLLING_SOURCED:
         have = {(i["text"], i["turn_id"], i["ordinal"]) for i in out[key]}
         carried = [i for i in (old or {}).get(key, []) if _marker(i) and (i.get("text"), i["turn_id"], i["ordinal"]) not in have]
         out[key] = (carried + out[key])[-LIST_LIMITS[key]:]
     for key in ("goals", "open", "preferences"):
         out[key] = out[key][:LIST_LIMITS[key]]
+    if drift:
+        kept = [item for item in out["open"] if item != DRIFT_NOTE]
+        out["open"] = (kept + [DRIFT_NOTE])[-LIST_LIMITS["open"]:]
     return out
 
 

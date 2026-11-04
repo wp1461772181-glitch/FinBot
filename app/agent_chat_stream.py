@@ -463,7 +463,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    # Older turns come first (layer 2), then the newest raw turns (layer 1).  The layer-3 note goes
    # after the user's own message, so that everything before it stays a byte-identical prefix from
    # one turn to the next and a provider can keep caching it.
-   messages.extend(layers.history_messages(context.get("half_turns",[])))
+   messages.extend(layers.history_messages(context.get("half_turns",[]), omitted=len(context.get("overflow") or [])))
    for group in layers.complete_turns(history_rows):
     messages.extend(layers.project_turn_history(group))
    skill_block,active_skill,question=await _skills(x_chat_session,bot,payload.message) if not payload.pending_request_id else (None,None,payload.message)

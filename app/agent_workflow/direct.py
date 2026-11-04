@@ -1874,10 +1874,12 @@ class Turn:
         is waiting.  A refused remember stays refused: this never runs after the model's remember failed."""
         if not self.audit.get('profile_ask') or self.pending or self.proposals or self.resuming:return False
         if 'remember' in self.write_reasons or self.audit.get('remember_called') or not self.write_allowed('remember'):return False
-        from ..agent_profile_extract import EXTRACT_PROMPT,candidates,ExtractionRejected
+        from ..agent_profile_extract import (EXTRACT_PROMPT,candidates,ExtractionRejected,_model_items,
+                                             store_explicit_fallback)
         words=self.user_words()
         payload={'message':words[:2000],'known':[]}
         if self.context.bot_id:payload['bot']={'name':self.context.bot_name or ''}
+        content=None
         try:
             messages=[{'role':'system','content':EXTRACT_PROMPT},
                       {'role':'user','content':json.dumps(payload,ensure_ascii=False,separators=(',',':'))}]
@@ -1886,8 +1888,17 @@ class Turn:
                 message=await injected(decider,messages,[])
                 message=message[1] if isinstance(message,tuple) else message
             else:message=await self.model(messages,[],protocol_retries=0)
-            found=candidates(message.get('content'),words,in_bot=bool(self.context.bot_id))
-        except (ExtractionRejected,ValueError,HTTPException,RuntimeError):found=[]
+            content=message.get('content') if isinstance(message,dict) else None
+            found=candidates(content,words,in_bot=bool(self.context.bot_id)) if _model_items(content) else []
+        except (ExtractionRejected,ValueError,HTTPException,RuntimeError,TimeoutError):
+            found=[];content=None
+        offered=_model_items(content)
+        if not found and not offered:
+            saved=await store_explicit_fallback(self.context.owner_hash,words,
+                                                conversation_id=self.context.conversation_id or '',
+                                                turn_id=str(self.state.get('turn_id') or ''))
+            self.audit['memory_fallback']=bool(saved)
+            return False
         self.audit['remember_recovered']=bool(found)
         if not found:return False
         item=found[0];item.pop('exact',None)
@@ -2657,6 +2668,10 @@ class Turn:
             if marker in answer:answer=answer.replace(marker,'').strip()
         if not answer:answer='模型返回了无效工具协议，请重试。';reason='provider_protocol_invalid';status='failed'
 
+        if self.audit.get('memory_fallback'):
+            self.audit['write_outcome']='executed'
+            if '已按你的原话记下' not in answer:
+                answer=answer.rstrip()+'\n已按你的原话记下这条偏好。'
         requested=self.scope.get('requested_actions') or []
         if not self.resuming and not self.pending and self.audit.get('write_outcome')!='executed' and (requested or self.write_reasons):
             code=next(iter(self.write_reasons.values()),'write_not_proposed')

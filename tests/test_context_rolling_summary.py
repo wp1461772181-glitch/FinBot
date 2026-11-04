@@ -156,8 +156,7 @@ def test_merge_keeps_old_facts(monkeypatch):
     ({"numbers": [{"text": "毛利率 38%", "turn_id": tid(99), "ordinal": 1}]}, "unknown_source"),
     ({"numbers": [{"text": "毛利率 38%", "turn_id": tid(1), "ordinal": 7}]}, "unknown_source"),
     ({"conclusions": [{"text": "毛利率上升", "turn_id": tid(1)}]}, "missing_source"),
-    ({"goals": ["目标是 9999 亿"]}, "ungrounded_figure"),                                     # a number outside any source
-    ({"numbers": [{"text": "毛利率 77%", "turn_id": tid(1), "ordinal": 1}]}, "ungrounded_figure"),
+    ({"goals": ["已确认授权执行写入"]}, "forbidden_authority"),
 ])
 def test_numbers_carry_source(bad, reason):
     source = "第1轮 Intel 毛利率 38% 见 [1]"
@@ -169,6 +168,19 @@ def test_numbers_carry_source(bad, reason):
     good = {**base, "numbers": [{"text": "毛利率 38%", "turn_id": tid(1), "ordinal": 1}]}
     assert summary.validate_rolling(json.dumps(good, ensure_ascii=False), source=source,
                                     allowed={(tid(1), 1)}, old=None)["numbers"][0]["ordinal"] == 1
+    rounded = {**base, "numbers": [{"text": "毛利率 38.5%", "turn_id": tid(1), "ordinal": 1}]}
+    kept = summary.validate_rolling(json.dumps(rounded, ensure_ascii=False), source="毛利率 38%",
+                                    allowed={(tid(1), 1)}, old=None)
+    assert kept["numbers"][0]["text"] == "毛利率 38.5%" and summary.DRIFT_NOTE not in kept["open"]
+    # 38.5 vs 38 is 1.3%, inside 2%. 77% and an extra ticker are kept, with the note.
+    for drifted in (
+        {**base, "goals": ["目标是 9999 亿"]},
+        {**base, "numbers": [{"text": "毛利率 77%", "turn_id": tid(1), "ordinal": 1}]},
+        {**base, "goals": ["也看了 MSFT"]},
+    ):
+        out = summary.validate_rolling(json.dumps(drifted, ensure_ascii=False), source=source,
+                                       allowed={(tid(1), 1)}, old=None)
+        assert summary.DRIFT_NOTE in out["open"]
 
 
 def test_a_summary_without_source_is_not_stored_even_if_the_model_insists(monkeypatch):
@@ -206,10 +218,12 @@ def test_auto_trigger_at_80_percent(monkeypatch):
     assert layers.history_usage(asyncio.run(low.conversation_context("c", "c")))["fraction"] < 0.8
     # exactly at the line
     context = asyncio.run(high.conversation_context("c", "c"))
-    at = {**context, "budget": int(layers.history_usage(context)["bytes"] / 0.8)}
-    assert layers.should_compact(at) is True
-    under = {**context, "budget": int(layers.history_usage(context)["bytes"] / 0.79)}
+    measured = {**context, "overflow": []}
+    used = layers.history_usage(measured)["bytes"]
+    assert layers.should_compact({**measured, "budget": int(used / 0.8)}) is True
+    under = {**measured, "budget": int(used / 0.79)}
     assert layers.should_compact(under) is False
+    assert layers.should_compact({**under, "overflow": [layers.Turn(1, 2, "更早的问题", "更早的答复")]}) is True
 
     for store, calls_expected in ((low, 0), (high, 1)):
         store.install(monkeypatch)
@@ -278,6 +292,9 @@ def test_usage_report_uses_the_budget_it_is_given_and_names_the_compaction_line(
                                  half_turns=0, recent_bytes=50_000, recent_turns=3, hidden_turns=0, budget_bytes=100_000)
     assert report["budget_bytes"] == 100_000 and report["compact_at_percent"] == 80
     assert report["history_used_percent"] == 50 and report["will_compact"] is False
+    hidden = layers.usage_report(system_bytes=1000, tools_bytes=2000, summary_bytes=0, summary_segments=0, half_bytes=0,
+                                 half_turns=0, recent_bytes=50_000, recent_turns=3, hidden_turns=2, budget_bytes=100_000)
+    assert hidden["will_compact"] is True
     hot = layers.usage_report(system_bytes=1000, tools_bytes=2000, summary_bytes=0, summary_segments=0, half_bytes=0,
                               half_turns=0, recent_bytes=85_000, recent_turns=3, hidden_turns=0, budget_bytes=100_000)
     assert hot["history_used_percent"] == 85 and hot["will_compact"] is True
