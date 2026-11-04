@@ -12,17 +12,18 @@ import math
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased, load_only
 
 from .database import SessionLocal
 from .dashboard import dashboard_price_history
 from .evidence_context import EvidenceContextError, freeze_evidence_context
 from .forecast_baseline import BASELINE_VERSION, naive_vol_probabilities, score_against_label
 from .forecast_evaluation_v2 import LOG_LOSS_EPSILON
+from .forecast_decider import decider_from_manifest
 from .forecast_contract import future_xnys_sessions, latest_completed_xnys_session
 from .forecast_jobs import ForecastJobError, enqueue_job
 from .forecast_revision_candidates import REVISION_LOOKAHEAD, REVISION_LOOKBACK, assess_revision_sources, window_category
@@ -39,6 +40,11 @@ from .symbols import normalize_market_symbol
 
 router = APIRouter(prefix="/v2", tags=["forecast-v2"])
 FORECAST_ROOT_LIST_LIMIT = 50
+FORECAST_LIST_DEFAULT_LIMIT = 100
+FORECAST_LIST_MAX_LIMIT = 200
+FORECAST_LIST_MAX_SYMBOLS = 30
+FORECAST_ALERT_LIMIT = 20
+FORECAST_ALERT_DAYS = 7
 MONITOR_INTERVAL_SECONDS = 60 * 60
 MONITOR_STALE_AFTER_SECONDS = MONITOR_INTERVAL_SECONDS * 2
 # Scores from revisions share a target with their root.  Keep the threshold
@@ -361,6 +367,145 @@ def get_v2_evaluations(symbol: str | None = None, db: Session = Depends(get_v2_d
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail="V2 job store is unavailable") from exc
+
+
+@router.get("/forecasts")
+def list_v2_forecasts(
+    symbols: str | None = None,
+    state: Literal["open", "matured", "all"] = "all",
+    limit: int = Query(FORECAST_LIST_DEFAULT_LIMIT, ge=1, le=FORECAST_LIST_MAX_LIMIT),
+    db: Session = Depends(get_v2_db),
+) -> dict[str, Any]:
+    """Cross-company forecast list, newest root first (the browser sorts by attention).
+
+    Public and free of personal data.  Hidden controls and historical replays are excluded; the heavy
+    manifests are never loaded and the latest version of every root comes from one query."""
+    now = datetime.now(UTC)
+    try:
+        wanted = _list_symbols(symbols)
+        replay_mode = "historical_research"
+        root_query = (
+            select(ForecastVersionV2)
+            .join(ForecastJobV2, ForecastJobV2.id == ForecastVersionV2.job_id)
+            .options(load_only(*_LIST_ROOT_COLUMNS))
+            .where(ForecastVersionV2.root_id == ForecastVersionV2.id, not_hidden_control(),
+                   ForecastJobV2.time_mode.is_distinct_from(replay_mode),
+                   ForecastVersionV2.model_manifest["time_mode"].astext.is_distinct_from(replay_mode),
+                   ForecastVersionV2.research_report["time_mode"].astext.is_distinct_from(replay_mode))
+            .order_by(ForecastVersionV2.decision_at.desc(), ForecastVersionV2.created_at.desc(), ForecastVersionV2.id.desc())
+        )
+        if wanted:
+            root_query = root_query.where(ForecastVersionV2.symbol.in_(wanted))
+        roots = []
+        for root in db.scalars(root_query):
+            _, expired = _root_target_end(root, now=now)
+            if state == "open" and expired:
+                continue
+            if state == "matured" and not expired:
+                continue
+            roots.append(root)
+            if len(roots) >= limit:
+                break
+        latest_by_root: dict[UUID, ForecastVersionV2] = {}
+        evaluation_by_version: dict[UUID, ForecastEvaluationV2] = {}
+        if roots:
+            latest_rows = db.scalars(
+                select(ForecastVersionV2)
+                .options(load_only(*_LIST_LATEST_COLUMNS))
+                .where(ForecastVersionV2.root_id.in_([root.id for root in roots]))
+                .distinct(ForecastVersionV2.root_id)
+                .order_by(ForecastVersionV2.root_id, ForecastVersionV2.version_no.desc(),
+                          ForecastVersionV2.created_at.desc(), ForecastVersionV2.id.desc())
+            ).all()
+            latest_by_root = {row.root_id: row for row in latest_rows}
+            evaluations = db.scalars(
+                select(ForecastEvaluationV2)
+                .options(load_only(ForecastEvaluationV2.forecast_version_id, ForecastEvaluationV2.status,
+                                   ForecastEvaluationV2.actual_label, ForecastEvaluationV2.result_version))
+                .where(ForecastEvaluationV2.forecast_version_id.in_([row.id for row in latest_rows]))
+                .order_by(ForecastEvaluationV2.result_version)
+            ).all()
+            evaluation_by_version = {item.forecast_version_id: item for item in evaluations}  # highest result_version wins
+        rows = []
+        for root in roots:
+            selected = latest_by_root.get(root.id) or root
+            evaluation = evaluation_by_version.get(selected.id)
+            rows.append({
+                **_root_entry(root=root, selected=selected, now=now),
+                "symbol": root.symbol,
+                "probabilities": next((value for value in (selected.decision_probabilities, selected.joint_probabilities,
+                                                           selected.baseline_probabilities) if value), None),
+                "evaluation": None if evaluation is None else {
+                    "status": evaluation.status, "actual_label": evaluation.actual_label,
+                    "result_version": evaluation.result_version,
+                },
+            })
+        return {
+            "forecasts": rows,
+            "limit": limit,
+            **_list_job_state(db=db, symbols=wanted, now=now),
+        }
+    except V2RequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=503, detail="V2 job store is unavailable") from exc
+
+
+_LIST_ROOT_COLUMNS = (
+    ForecastVersionV2.id, ForecastVersionV2.root_id, ForecastVersionV2.symbol, ForecastVersionV2.job_id,
+    ForecastVersionV2.version_no, ForecastVersionV2.decision_at, ForecastVersionV2.created_at,
+    ForecastVersionV2.target_contract, ForecastVersionV2.model_status, ForecastVersionV2.model_manifest,
+    ForecastVersionV2.research_report, ForecastVersionV2.decision_probabilities,
+    ForecastVersionV2.joint_probabilities, ForecastVersionV2.baseline_probabilities,
+)
+_LIST_LATEST_COLUMNS = _LIST_ROOT_COLUMNS
+
+
+def _list_symbols(raw: str | None) -> list[str]:
+    if raw is None or not raw.strip():
+        return []
+    parts = [part for part in raw.split(",")]
+    if len(parts) > FORECAST_LIST_MAX_SYMBOLS:
+        raise V2RequestError(f"at most {FORECAST_LIST_MAX_SYMBOLS} symbols are allowed")
+    return list(dict.fromkeys(_supported_symbol(part) for part in parts))
+
+
+def _list_job_state(*, db: Session, symbols: list[str], now: datetime) -> dict[str, Any]:
+    """Open work and unresolved failures across symbols (replays excluded)."""
+    not_replay = ForecastJobV2.time_mode.is_distinct_from("historical_research")
+    scope = [not_replay, *([ForecastJobV2.symbol.in_(symbols)] if symbols else [])]
+    pending = db.scalar(
+        select(func.count()).select_from(ForecastJobV2)
+        .where(*scope, ForecastJobV2.status.in_(("queued", "running")))
+    ) or 0
+    later = aliased(ForecastJobV2)
+    later_success = (
+        select(1).where(later.symbol == ForecastJobV2.symbol, later.created_at > ForecastJobV2.created_at,
+                        later.status.in_(("succeeded", "succeeded_no_change")),
+                        later.time_mode.is_distinct_from("historical_research"))
+        .exists()
+    )
+    recent = now - timedelta(days=FORECAST_ALERT_DAYS)
+    jobs = db.scalars(
+        select(ForecastJobV2)
+        .options(load_only(ForecastJobV2.id, ForecastJobV2.symbol, ForecastJobV2.status,
+                           ForecastJobV2.error_type, ForecastJobV2.created_at))
+        .where(*scope, or_(
+            ForecastJobV2.status.in_(("queued", "running")),
+            and_(ForecastJobV2.status.in_(("failed", "blocked_data")), ForecastJobV2.created_at >= recent,
+                 ~later_success),
+        ))
+        .order_by(ForecastJobV2.created_at.desc(), ForecastJobV2.id.desc())
+        .limit(FORECAST_ALERT_LIMIT)
+    ).all()
+    return {
+        "pending_job_count": int(pending),
+        "job_alerts": [
+            {"symbol": job.symbol, "job_id": str(job.id), "status": job.status, "error_type": job.error_type,
+             "created_at": job.created_at}
+            for job in jobs
+        ],
+    }
 
 
 @router.get("/stocks/{symbol}/forecast-roots")
@@ -743,6 +888,7 @@ def _timeline_entry(version: ForecastVersionV2) -> dict[str, Any]:
         "local_calibration_status": calibration.get("status"),
         "raw_decision_probabilities": raw_probabilities,
         "model_status": version.model_status,
+        "decider": decider_from_manifest(version.model_manifest, version.research_report),
         "change_reason": version.change_reason,
         "trigger_type": version.trigger_type,
         "created_at": version.created_at,
@@ -756,6 +902,7 @@ def _workspace_version(version: ForecastVersionV2) -> dict[str, Any]:
         "decision_at": version.decision_at,
         "market_cutoff_at": version.market_cutoff_at,
         "model_status": version.model_status,
+        "decider": decider_from_manifest(version.model_manifest, version.research_report),
         "baseline_probabilities": version.baseline_probabilities,
         "joint_probabilities": version.joint_probabilities,
         "decision_probabilities": version.decision_probabilities,
@@ -1123,7 +1270,10 @@ def _root_list_entry(*, db: Session, root: ForecastVersionV2, now: datetime) -> 
     )
     # A root always has itself, but retain a safe partial record rather than
     # turning this read endpoint into a 500 if historical storage is damaged.
-    selected = latest or root
+    return _root_entry(root=root, selected=latest or root, now=now)
+
+
+def _root_entry(*, root: ForecastVersionV2, selected: ForecastVersionV2, now: datetime) -> dict[str, Any]:
     target_end_date, expired = _root_target_end(root, now=now)
     return {
         "id": str(root.id),
@@ -1133,6 +1283,7 @@ def _root_list_entry(*, db: Session, root: ForecastVersionV2, now: datetime) -> 
         "latest_version_id": str(selected.id),
         "latest_version_no": selected.version_no,
         "expired": expired,
+        "decider": decider_from_manifest(selected.model_manifest, selected.research_report),
     }
 
 

@@ -68,9 +68,11 @@ def _default_call(model: dict, system: str, user: str) -> tuple[str, dict]:
 
 
 class ForecastModelProvider:
-    def __init__(self, *, model: dict, call: Callable[..., Any] | None = None):
+    def __init__(self, *, model: dict, call: Callable[..., Any] | None = None, binding: dict | None = None):
         self.model = model
         self._call = call or _default_call
+        # How the forecast role resolved ({source, role_model}); None when the caller did not say.
+        self.binding = binding
 
     def evaluate(self, brief: dict) -> ForecastModelResult:
         if not isinstance(brief, dict):
@@ -123,10 +125,10 @@ def create_forecast_provider(*, call: Callable[..., Any] | None = None) -> Forec
     from . import agent_model_catalog as catalog
     from . import agent_model_roles
     try:
-        model = agent_model_roles.resolve(agent_model_roles.forecast_owner(), "forecast")
+        model, binding = agent_model_roles.resolve_with_source(agent_model_roles.forecast_owner(), "forecast")
     except catalog.CatalogError as exc:
         raise ForecastModelError(str(exc)) from None
-    return ForecastModelProvider(model=model, call=call)
+    return ForecastModelProvider(model=model, call=call, binding=binding)
 
 
 def _json_object(raw: Any) -> dict | None:

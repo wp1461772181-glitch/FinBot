@@ -247,6 +247,9 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
             },
             "local_calibration": {"status": "not_applied", "reason": "llm_forecast_is_not_calibrated"},
         })
+        binding = getattr(provider, "binding", None)
+        if isinstance(binding, dict):  # forward-only: older versions simply lack the key
+            model_manifest["decision_provider"]["binding"] = dict(binding)
         return dict(result.probabilities), "experimental_llm"
 
     def _load_parent_for_brief(self, job: ForecastJobV2):

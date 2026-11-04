@@ -149,6 +149,58 @@ def test_a_forecast_citation_whose_probabilities_changed_is_expired(tables):
     assert _restore_citations([item], 'guest-session')[0]['source_type'] == 'unavailable'
 
 
+def test_snapshot_has_decider_but_not_the_manifest(tables):
+    manifest = {'time_mode': 'observed', 'decision_mode': 'llm', 'huge': 'x' * 5000,
+                'decision_provider': {'provider': 'zhipu', 'actual_model': 'glm-5.3-flash', 'question_version': 'llm-direction-v1',
+                                      'binding': {'source': 'role', 'role_model': 'glm'}, 'reasoning': 'y' * 500},
+                'local_calibration': {'status': 'not_applied'}}
+    _version('SNA', manifest=manifest)
+
+    row = asyncio.run(agent_tools.query_latest_forecast.coroutine(symbol='SNA'))['data'][0]
+
+    assert row['decider']['actual_model'] == 'glm-5.3-flash' and row['decider']['calibration_status'] == 'not_applied'
+    assert row['decider']['binding'] == {'source': 'role', 'role_model': 'glm'}
+    assert 'model_manifest' not in row and 'research_report' not in row and 'huge' not in json.dumps(row)
+
+
+def test_snapshot_tolerates_a_payload_without_manifest(tables):
+    version = _version('SNB')
+    with SessionLocal() as db:
+        row = db.get(ForecastVersionV2, version)
+        payload = {key: getattr(row, key) for key in ('id', 'root_id', 'version_no', 'decision_at', 'model_status',
+                   'decision_probabilities', 'joint_probabilities', 'baseline_probabilities', 'research_brief',
+                   'created_at', 'target_contract')}
+
+    snapshot = forecast_snapshot(payload)
+
+    assert snapshot['decider'] == {'provider': None, 'actual_model': None, 'question_version': None, 'time_mode': None,
+                                   'decision_mode': None, 'binding': None, 'calibration_status': None}
+    assert snapshot['probabilities']['neutral'] == 0.96
+
+
+def test_a_stored_citation_to_a_control_still_restores(tables):
+    real = _version('SNC', probabilities={'bearish': 0.33, 'bullish': 0.33, 'neutral': 0.34})
+    control = _version('SNC', probabilities={'bearish': 0.1, 'bullish': 0.7, 'neutral': 0.2},
+                       manifest={'hidden_control': True, 'control_of_root_id': str(real),
+                                 'decision_provider': {'provider': 'jev', 'actual_model': 'jev-1'}})
+    with SessionLocal() as db:
+        row = db.get(ForecastVersionV2, control)
+        payload = {key: getattr(row, key) for key in ('id', 'root_id', 'version_no', 'decision_at', 'model_status',
+                   'decision_probabilities', 'joint_probabilities', 'baseline_probabilities', 'research_brief',
+                   'created_at', 'target_contract', 'model_manifest', 'research_report')}
+    cite = lambda quoted: {'ordinal': 1, 'source_type': 'saved_forecast', 'source_id': str(control), 'symbol': 'SNC',
+                           'title': 'SNC forecast', 'quote': json.dumps(quoted, ensure_ascii=False, default=str)}
+    current = forecast_snapshot(payload)
+    # Cited before B6: no decider, and a payload read with no manifest at all.
+    legacy = {key: value for key, value in current.items() if key != 'decider'}
+
+    assert current['decider']['actual_model'] == 'jev-1'
+    assert _restore_citations([cite(current)], 'guest-session')[0]['source_type'] == 'saved_forecast'
+    assert _restore_citations([cite(legacy)], 'guest-session')[0]['source_type'] == 'saved_forecast'
+    forged = {**current, 'decider': {**current['decider'], 'actual_model': 'other'}}
+    assert _restore_citations([cite(forged)], 'guest-session')[0]['source_type'] == 'unavailable'
+
+
 def test_latest_forecast_skips_the_hidden_control_root(tables):
     real = _version('SNA', probabilities={'bearish': 0.33, 'bullish': 0.33, 'neutral': 0.34})
     _version('SNA', probabilities={'bearish': 0.1, 'bullish': 0.7, 'neutral': 0.2},

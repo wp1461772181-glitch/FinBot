@@ -102,7 +102,7 @@ def _restore_citations(items,credential=None):
       from .forecast_v2_models import ForecastVersionV2
       from .agent_tools import forecast_snapshot
       source=session.get(ForecastVersionV2,UUID(item.get('source_id','')))
-      payload={key:getattr(source,key) for key in ('id','root_id','version_no','decision_at','model_status','decision_probabilities','joint_probabilities','baseline_probabilities','research_brief','created_at','target_contract')} if source else {}
+      payload={key:getattr(source,key) for key in ('id','root_id','version_no','decision_at','model_status','decision_probabilities','joint_probabilities','baseline_probabilities','research_brief','created_at','target_contract','model_manifest','research_report')} if source else {}
       # The cited row also carries the gate's notes and the reader's labels; what must still hold is
       # every value of the saved projection.
       quoted=json.loads(item.get('quote','{}'))
@@ -111,6 +111,9 @@ def _restore_citations(items,credential=None):
           # Rows cited before 2026-10-26 carried the brief's first 1,200 characters instead of its reasons.
           brief=payload.get('research_brief');projection.pop('reasons')
           projection['research_brief_summary']=str(brief)[:1200] if brief is not None else None
+      if isinstance(quoted,dict) and 'decider' not in quoted:
+          # Rows cited before the decider existed never quoted it; every other value must still hold.
+          projection.pop('decider',None)
       valid=bool(source and source.symbol==item.get('symbol') and isinstance(quoted,dict)
                  and all(quoted.get(key)==value for key,value in projection.items()))
      verified.append(item if valid else {'ordinal':ordinal,'source_type':'unavailable','title':'来源已失效','section':'','truncated':False})

@@ -45,15 +45,24 @@ def set_role(owner_hash: str, role: str, model_name: str | None) -> str | None:
     return model_name
 
 
-def resolve(owner_hash: str | None, role: str) -> dict:
-    """Provider settings (with the key, in memory only) for the role's model; the catalog default when
-    the role is unset or its model is gone.  Raises catalog.CatalogError when nothing can be used."""
+def resolve_with_source(owner_hash: str | None, role: str) -> tuple[dict, dict]:
+    """``resolve`` plus how the model was chosen: ``{source, role_model}`` where source is ``role`` (the
+    role's model is in the catalog), ``server_default`` (role unset) or ``role_model_missing`` (the role
+    names a model that has left the catalog; the server default is used and ``role_model`` says which)."""
     if role not in ROLES:
         raise RoleError("unknown_role")
     name = get(owner_hash, role) if owner_hash else None
-    if name and not catalog.exists(name):
-        name = None
-    return catalog.resolve(name)
+    if name and catalog.exists(name):
+        return catalog.resolve(name), {"source": "role", "role_model": name}
+    if name:
+        return catalog.resolve(None), {"source": "role_model_missing", "role_model": name}
+    return catalog.resolve(None), {"source": "server_default", "role_model": None}
+
+
+def resolve(owner_hash: str | None, role: str) -> dict:
+    """Provider settings (with the key, in memory only) for the role's model; the catalog default when
+    the role is unset or its model is gone.  Raises catalog.CatalogError when nothing can be used."""
+    return resolve_with_source(owner_hash, role)[0]
 
 
 def forecast_owner() -> str | None:

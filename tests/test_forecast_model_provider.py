@@ -111,6 +111,35 @@ def test_unusable_model_is_an_error_not_a_silent_prediction(owner):
     assert caught.value.code == "model_not_configured"
 
 
+# --- binding (how the forecast role resolved; design §3.2) ----------------------------------------------
+
+def test_binding_role_bound(forecast_model):
+    assert create_forecast_provider(call=_fake_call(GOOD)).binding == {"source": "role", "role_model": "bravo"}
+
+
+def test_binding_role_unset(forecast_model):
+    roles.set_role(OWNER_HASH, "forecast", None)
+    provider = create_forecast_provider(call=_fake_call(GOOD))
+    assert provider.binding == {"source": "server_default", "role_model": None}
+    assert provider.model["name"] == "alpha"
+    assert ForecastModelProvider(model=provider.model).binding is None   # default when nobody says
+
+
+def test_binding_role_model_removed(forecast_model):
+    catalog.delete_entry("bravo")
+    provider = create_forecast_provider(call=_fake_call(GOOD))
+    assert provider.binding == {"source": "role_model_missing", "role_model": "bravo"}
+    assert provider.model["name"] == "alpha"                              # the server default is what ran
+
+
+def test_the_binding_is_written_to_the_version_manifest(forecast_model, monkeypatch):
+    # Not AMD: test_llm_forecast_makes_no_jev_call counts every AMD version in the shared test DB.
+    _, version_id = _run(monkeypatch, "MSFT")
+    with SessionLocal() as db:
+        provider = db.get(ForecastVersionV2, version_id).model_manifest["decision_provider"]
+    assert provider["binding"] == {"source": "role", "role_model": "bravo"}
+
+
 # --- processor / publication --------------------------------------------------------------------------
 
 def _base(symbol, instant):

@@ -411,8 +411,11 @@ def forecast_reasons(brief):
 def forecast_snapshot(row):
     """The exact saved forecast projection shared by read tools and citation restore."""
     probabilities=next((row.get(k) for k in ('decision_probabilities','joint_probabilities','baseline_probabilities') if row.get(k) not in (None,'null')),None)
-    data={k:_json(v) for k,v in row.items() if k not in ('research_brief','decision_probabilities','joint_probabilities','baseline_probabilities','target_contract','parent_version_id')}
+    # The manifest and report are read only to derive `decider`; they never enter the projection (tool results are bounded).
+    data={k:_json(v) for k,v in row.items() if k not in ('research_brief','decision_probabilities','joint_probabilities','baseline_probabilities','target_contract','parent_version_id','model_manifest','research_report')}
     data['probabilities']=probabilities
+    from .forecast_decider import decider_from_manifest
+    data['decider']=decider_from_manifest(row.get('model_manifest'),row.get('research_report'))
     data['target']=forecast_target(row.get('target_contract'))
     data['reasons']=forecast_reasons(row.get('research_brief'))
     return data
@@ -421,7 +424,7 @@ def forecast_snapshot(row):
 async def query_latest_forecast(symbol: str) -> dict:
     """Read the latest saved research forecast snapshot. A revision comes with the version it revised
     (role previous_version), each with its probabilities and reasons, so comparing the two needs no other read."""
-    columns="id, root_id, version_no, decision_at, model_status, decision_probabilities, joint_probabilities, baseline_probabilities, research_brief, created_at, target_contract, parent_version_id"
+    columns="id, root_id, version_no, decision_at, model_status, decision_probabilities, joint_probabilities, baseline_probabilities, research_brief, created_at, target_contract, parent_version_id, model_manifest, research_report"
     try:
         rows = await _query("SELECT "+columns+" FROM forecast_versions_v2 WHERE symbol=:symbol AND root_id IN (SELECT v.id FROM forecast_versions_v2 v JOIN forecast_jobs_v2 j ON j.id = v.job_id WHERE v.symbol=:symbol AND v.root_id=v.id AND v.model_manifest->>'hidden_control' IS DISTINCT FROM 'true' AND j.time_mode IS DISTINCT FROM 'historical_research' ORDER BY v.created_at DESC, v.id DESC LIMIT 1) ORDER BY version_no DESC, created_at DESC, id DESC LIMIT 1", {"symbol":symbol})
         if rows:

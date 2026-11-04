@@ -572,6 +572,16 @@ def test_root_list_keeps_multiple_forecast_dates_selectable_and_excludes_other_s
         "latest_version_id": str(child.id),
         "latest_version_no": 2,
         "expired": False,
+        # B6: every root entry carries its decider; an empty manifest records nothing (all None).
+        "decider": {
+            "provider": None,
+            "actual_model": None,
+            "question_version": None,
+            "time_mode": None,
+            "decision_mode": None,
+            "binding": None,
+            "calibration_status": None,
+        },
     }
     assert payload["roots"][1]["target_end_date"] == "2025-01-02"
     assert payload["roots"][1]["expired"] is True
@@ -951,3 +961,80 @@ def test_baseline_read_writes_nothing(client):
         assert (db.query(ForecastVersionV2).count(), db.query(ForecastEvaluationV2).count()) == before
         row = db.get(ForecastVersionV2, root)
         assert (row.feature_snapshot, row.model_manifest, row.decision_probabilities) == snapshot
+
+
+# --- B6: cross-company list --------------------------------------------------
+
+def _job(symbol, *, status, error_type=None, age_hours=1, time_mode="observed"):
+    replay = time_mode == "historical_research"
+    with SessionLocal() as db:
+        job = enqueue_job(db=db, symbol=symbol, kind="new", idempotency_key=f"list-job-{uuid4()}", time_mode=time_mode,
+                          **({"requested_decision_at": datetime.now(UTC) - timedelta(days=30)} if replay else {}))
+        job.status = status
+        job.error_type = error_type
+        job.created_at = datetime.now(UTC) - timedelta(hours=age_hours)
+        db.commit()
+        return job.id
+
+
+def test_forecast_list_spans_symbols_and_hides_controls_and_replays(client):
+    aapl = _llm_root(symbol="AAPL", actual_model="glm-5.3-flash", scored=False)
+    msft = _llm_root(symbol="MSFT", scored=False)
+    _llm_root(symbol="AAPL", control=True, scored=False)
+    _llm_root(symbol="MSFT", time_mode="historical_research", scored=False)
+
+    body = client.get("/v2/forecasts").json()
+
+    assert {row["id"] for row in body["forecasts"]} == {str(aapl), str(msft)}
+    row = next(item for item in body["forecasts"] if item["id"] == str(aapl))
+    assert row["symbol"] == "AAPL" and row["decider"]["actual_model"] == "glm-5.3-flash"
+    assert row["decider"]["binding"] is None and row["probabilities"]["bullish"] == 0.4
+    assert row["latest_version_no"] == 1 and row["evaluation"] is None
+    assert "price_input_manifest" not in row and "evidence_version_manifest" not in row
+    assert [item["symbol"] for item in client.get("/v2/forecasts?symbols=msft").json()["forecasts"]] == ["MSFT"]
+    assert len(client.get("/v2/forecasts?limit=1").json()["forecasts"]) == 1
+
+
+def test_forecast_list_state_filter(client):
+    matured = _llm_root(symbol="AAPL", scored=True, label="neutral")   # target 2025-01-02, long past
+    open_root = _create_version(symbol="MSFT", target_end=date(2027, 1, 29))
+
+    ids = lambda query: {row["id"] for row in client.get(f"/v2/forecasts?state={query}").json()["forecasts"]}
+
+    assert ids("open") == {str(open_root)}
+    assert ids("matured") == {str(matured)}
+    assert ids("all") == {str(open_root), str(matured)}
+    done = client.get("/v2/forecasts?state=matured").json()["forecasts"][0]
+    assert done["expired"] is True and done["evaluation"]["status"] == "succeeded"
+    assert done["evaluation"]["actual_label"] == "neutral"
+    assert client.get("/v2/forecasts?state=bogus").status_code == 422
+
+
+def test_forecast_list_rejects_bad_symbols(client):
+    assert client.get("/v2/forecasts?symbols=AAPL,not%20a%20ticker!").status_code == 422
+    assert client.get("/v2/forecasts?symbols=AAPL,,MSFT").status_code == 422
+    too_many = ",".join(f"A{chr(65 + i // 26)}{chr(65 + i % 26)}" for i in range(31))
+    assert client.get(f"/v2/forecasts?symbols={too_many}").status_code == 422
+    assert client.get("/v2/forecasts?limit=201").status_code == 422
+    assert client.get("/v2/forecasts?limit=0").status_code == 422
+    assert client.get("/v2/forecasts?symbols=AAPL,MSFT").status_code == 200
+
+
+def test_job_alerts_clear_after_a_later_success(client):
+    running = _job("AAPL", status="running", age_hours=2)
+    failed = _job("MSFT", status="failed", error_type="forecast_provider_error", age_hours=5)
+    cleared = _job("NVDA", status="failed", error_type="x", age_hours=5)
+    _job("NVDA", status="succeeded", age_hours=1)
+    _job("TSLA", status="failed", error_type="old", age_hours=24 * 8)
+    _job("AMD", status="failed", error_type="replay", time_mode="historical_research")
+    _job("AMD", status="queued", time_mode="historical_research")
+
+    body = client.get("/v2/forecasts").json()
+
+    alerts = {item["job_id"]: item for item in body["job_alerts"]}
+    assert set(alerts) == {str(running), str(failed)}
+    assert str(cleared) not in alerts
+    assert alerts[str(failed)]["error_type"] == "forecast_provider_error" and alerts[str(failed)]["symbol"] == "MSFT"
+    assert set(alerts[str(running)]) == {"symbol", "job_id", "status", "error_type", "created_at"}
+    assert body["pending_job_count"] == 1
+    assert client.get("/v2/forecasts?symbols=MSFT").json()["pending_job_count"] == 0
