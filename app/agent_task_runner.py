@@ -447,16 +447,14 @@ async def run_brief(task_id, credential: str, *, now: datetime, missed: int = 1)
     sources = citation_sources(citations)
     if result["status"] == "failed":
         status = "failed"
-    elif is_quiet(result["answer"]):
-        status = "quiet"
+    elif is_quiet(result["answer"]) or not result["answer"].strip():
+        status = "quiet" if is_quiet(result["answer"]) else "no_evidence"
     elif result.get("pending"):
         status = "needs_input"
-    elif not sources:
-        status = "no_evidence"
     else:
         status = "ok"
-    # Only a conclusion is posted in the bot's line (and counts as unread); a quiet run, a run without
-    # cited evidence and a failed one leave the line alone, and the task's status says what happened.
+    # Only a conclusion is posted in the bot's line (and counts as unread); a quiet run, an empty run
+    # and a failed one leave the line alone, and the task's status says what happened.
     posted = 0
     if status in {"ok", "needs_input"}:
         posted = int(tasks.add_item(owner, section="brief", kind="task_brief", title=f"{name} · {local:%Y-%m-%d %H:%M}",

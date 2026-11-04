@@ -228,6 +228,12 @@ def _restore_citations(items,credential=None):
      else:verified.append({'ordinal':ordinal,'source_type':'unavailable','title':'来源已失效','section':'','truncated':False})
     except Exception:verified.append({'ordinal':ordinal,'source_type':'unavailable','title':'来源已失效','section':'','truncated':False})
     continue
+   if item.get('source_type')=='portfolio':
+    if owner and isinstance(item.get('quote'),str) and item.get('quote').strip():
+     verified.append({**item,'chunk_id':None,'document_id':None,'source_url':None})
+    else:
+     verified.append({'ordinal':ordinal,'source_type':'unavailable','title':'来源已失效','section':'','truncated':False})
+    continue
    if item.get('source_type')=='web_news' and not item.get('chunk_id'):
     from .agent_workflow.models import AgentWebSource
     try:

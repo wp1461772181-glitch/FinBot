@@ -300,7 +300,7 @@ def test_unattended_write_goes_to_the_inbox_and_runs_only_after_the_card_is_pres
         _call("fetch_sec", {"symbol": "NVDA", "form": "10-Q"}, "c1"),
         # Then the suggestion path: it must land in the inbox, not in a card here.
         _call("request_action", {"tool": "add_to_research_queue", "arguments": {"symbol": "AMD"}, "reason": "AMD 是 NVDA 的主要对手"}, "c2"),
-        {"content": "研究队列今天没有可引用的新资料。"},
+        {"content": ""},
     ])
     seen = []
     # The classifier is fooled into granting the writes the task's words mention.
@@ -319,7 +319,7 @@ def test_unattended_write_goes_to_the_inbox_and_runs_only_after_the_card_is_pres
     assert len(confirm) == 1 and confirm[0]["kind"] == "action" and confirm[0]["status"] == "unread"
     assert "这是 Agent 的建议" in confirm[0]["title"]
     assert "operation" not in confirm[0]["payload"]  # the list shows what it is, not the stored operation
-    # Stage C: a run without cited evidence posts nothing (no brief, nothing in the bot's line).
+    # Stage C: an empty run posts nothing (no brief, nothing in the bot's line).
     assert tasks.list_inbox(OWNER_HASH, section="brief") == []
     assert _task(task["id"]).last_status == "no_evidence"
 
@@ -490,6 +490,17 @@ def test_brief_with_citations_goes_to_the_inbox_with_numbered_sources(owner, mon
     assert brief["conversation_id"] and brief["kind"] == "task_brief"
     assert tasks.list_runs(OWNER_HASH)[0]["tokens"] == 1234
     assert not {"run_token_cap", "daily_token_cap", "tokens_today"} & set(tasks.serialize_task(_task(task["id"])))
+
+
+def test_brief_without_citations_but_nonempty_answer_is_posted(owner, monkeypatch):
+    _with_key()
+    calls = _stub_turn(monkeypatch, [{"answer": "今日市场平稳，无重要异动。", "citations": [],
+                                      "audit": {"token_usage": 500}}])
+    task = tasks.create_task(OWNER_HASH, _brief(), now=at(2026, 10, 30, 7, 0))
+    assert run(runner.run_due(now=at(2026, 10, 30, 8, 0), credential=OWNER)) == {task["id"]: "ok"}
+    brief = tasks.list_inbox(OWNER_HASH, section="brief")[0]
+    assert brief["sources"] == [] and brief["body"] == "今日市场平稳，无重要异动。"
+    assert brief["kind"] == "task_brief" and _task(task["id"]).last_status == "ok"
 
 
 def test_a_run_cap_ends_the_task_after_its_last_run(owner):
