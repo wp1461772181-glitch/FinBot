@@ -86,3 +86,79 @@ def test_an_unusable_verdict_falls_back_to_the_fixed_sentence(monkeypatch):
     answer, verdict = asyncio.run(turn.refusal_verdict('no_evidence_retrieved'))
     assert answer == '没有可核验资料，无法确认本次请求中的事实。'
     assert verdict['route'] == 'insufficient_evidence'
+
+
+def test_finish_answer_skips_repair_when_unsupported_number_has_no_holder():
+    """F9: when all repairable issues are numeric and no citation holds the rejected figure, skip repair."""
+    from app.agent_workflow import direct
+    from app.agent_workflow.state import AgentRuntimeContext
+
+    repair_calls = []
+
+    async def fake_decider(*args):
+        repair_calls.append(args)
+        return {'content': '苹果 FY2025 营收为 999.9 亿美元 [1]。'}
+
+    ctx = AgentRuntimeContext('custom', 'm', 'k', conversation_id='c', owner_hash='o', decider=fake_decider)
+    turn = direct.Turn('苹果营收多少', ctx, None, [], {})
+    turn.route = 'A'
+    turn.observations = [{'name': 'search_knowledge', 'result': {'ok': True, 'data': [APPLE]}, 'accepted_evidence': True}]
+    turn.citations = [{'ordinal': 1, 'symbol': 'AAPL', 'title': 'AAPL 10-K', 'filed_at': '2025-10-31',
+                       'source_type': 'official_filing', 'quote': APPLE['excerpt']}]
+    result = asyncio.run(turn.finish_answer('苹果 FY2025 营收为 999.9 亿美元 [1]。'))
+    assert repair_calls == []
+    assert turn.audit.get('answer_repair_count') is None
+    assert turn.audit.get('unsupported_numbers') == [999.9e8]
+    assert result['status'] == 'partially_succeeded'
+    assert any(item['reason'] == 'unsupported_numeric_claim' for item in result['unverified_lines'])
+
+
+def test_closing_without_citation_marker_preserves_prose_and_appends_gathered_sources():
+    """F10: a non-empty closing answer without [n] keeps its prose, marks unverified lines, and appends gathered sources."""
+    from app.agent_workflow import direct
+    from app.agent_workflow.state import AgentRuntimeContext
+
+    closing_prose = '苹果 FY2025 营收达到 $391,035 million，毛利率为 46.2%，整体表现稳健。'
+    ctx = AgentRuntimeContext(
+        'custom', 'm', 'k', conversation_id='c', owner_hash='o',
+        answerer=lambda *_: closing_prose,
+        decider=lambda *_: {'content': closing_prose},
+    )
+    turn = direct.Turn('苹果营收多少', ctx, None, [], {})
+    turn.route = 'A'
+    turn.scope = {'mode': 'none', 'symbol': 'AAPL', 'company': 'Apple'}
+    turn.observations = [{'name': 'search_knowledge', 'result': {'ok': True, 'data': [APPLE]}, 'accepted_evidence': True}]
+    turn.citations = [{'ordinal': 1, 'symbol': 'AAPL', 'title': 'AAPL 10-K', 'filed_at': '2025-10-31',
+                       'source_type': 'official_filing', 'quote': APPLE['excerpt']}]
+    turn.audit['token_usage'] = turn.token_cap() + 1
+
+    result = asyncio.run(turn.agent_loop())
+    assert result['status'] == 'partially_succeeded'
+    assert closing_prose in result['answer']
+    assert 'AAPL · AAPL 10-K · 2025-10-31 [1]' in result['answer']
+    assert '没能整理出能与来源逐条核对的回答' not in result['answer']
+    assert any(item['reason'] == 'missing_citation' for item in result['unverified_lines'])
+
+
+def test_empty_closing_still_falls_back_to_unanswered_sources_list():
+    """F10 guard: when closing produces no prose at all, self.unanswered(...) fallback stays intact."""
+    from app.agent_workflow import direct
+    from app.agent_workflow.state import AgentRuntimeContext
+
+    ctx = AgentRuntimeContext(
+        'custom', 'm', 'k', conversation_id='c', owner_hash='o',
+        answerer=lambda *_: '',
+    )
+    turn = direct.Turn('苹果营收多少', ctx, None, [], {})
+    turn.route = 'A'
+    turn.scope = {'mode': 'none', 'symbol': 'AAPL', 'company': 'Apple'}
+    turn.observations = [{'name': 'search_knowledge', 'result': {'ok': True, 'data': [APPLE]}, 'accepted_evidence': True}]
+    turn.citations = [{'ordinal': 1, 'symbol': 'AAPL', 'title': 'AAPL 10-K', 'filed_at': '2025-10-31',
+                       'source_type': 'official_filing', 'quote': APPLE['excerpt']}]
+    turn.audit['token_usage'] = turn.token_cap() + 1
+
+    result = asyncio.run(turn.agent_loop())
+    assert result['status'] == 'partially_succeeded'
+    assert '部分完成。' in result['answer']
+    assert '没能整理出能与来源逐条核对的回答' in result['answer']
+    assert 'AAPL · AAPL 10-K · 2025-10-31 [1]' in result['answer']
