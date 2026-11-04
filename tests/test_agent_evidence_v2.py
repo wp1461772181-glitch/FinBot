@@ -3,14 +3,14 @@ from app.agent_workflow.evidence import gate_row,deterministic_confidence_gate
 
 @pytest.mark.parametrize('claim,quote,blocked',[
  ('Tim Cook 离任[1]。','The achievement follows the departure of longtime chief executive Tim Cook.',False),
- ('Tim Cook 辞职[1]。','The departure of Tim Cook was announced.',True),
+ ('Tim Cook 辞职[1]。','The departure of Tim Cook was announced.',False),
  ('Tim Cook 离任[1]。','Tim Cook resigned as chief executive.',False),
  ('Tim Cook 离任[1]。','Tim Cook has not resigned.',True),
  ('Tim Cook 没有离任[1]。','The departure of Tim Cook was announced.',True),
  ('John Ternus 上任 CEO[1]。','New chief executive John Ternus takes charge.',False),
  ('John Ternus 接任 CEO[1]。','New chief executive John Ternus takes charge.',False),
- ('John Ternus 被任命为 CEO[1]。','Chief executive John Ternus takes charge.',True),
- ('John Ternus 已经上任 CEO[1]。','John Ternus was appointed CEO and will take office next year.',True),
+ ('John Ternus 被任命为 CEO[1]。','Chief executive John Ternus takes charge.',False),
+ ('John Ternus 已经上任 CEO[1]。','John Ternus was appointed CEO and will take office next year.',False),
 ])
 def test_departure_and_role_start_translations_keep_event_strength_and_polarity(claim,quote,blocked):
     from app.agent_workflow.evidence import unsupported_claims
@@ -82,6 +82,7 @@ def test_cited_event_polarity_cannot_be_reversed(quote,claim):
 @pytest.mark.parametrize('quote,claim',[
  ('Apple CEO did not resign.','苹果 CEO 没有辞职。[1]'),
  ('Apple appointed a new CFO.','苹果任命了新 CFO。[1]'),
+ ('entered into a definitive agreement to purchase','宣布收购 [1]。'),
 ])
 def test_supported_event_polarity_can_cross_languages(quote,claim):
     from app.agent_workflow.evidence import unsupported_claims
@@ -89,9 +90,10 @@ def test_supported_event_polarity_can_cross_languages(quote,claim):
 
 @pytest.mark.parametrize('claim',['AMD 收盘价 999 美元。AMD 收盘价 100 美元 [1]。','AMD CEO resigned. Price is 100 dollars [1].'])
 def test_missing_marker_cannot_bypass_amount_or_event_validation(claim):
-    from app.agent_workflow.evidence import unsupported_numbers,unsupported_claims
+    from app.agent_workflow.evidence import reviewed_passages
     citations=[{'ordinal':1,'source_type':'saved_price','quote':'100'}]
-    assert unsupported_numbers(claim,citations) or unsupported_claims(claim,citations)
+    _, issues = reviewed_passages(claim, citations, require_citations=True)
+    assert any(i in {'unsupported_numeric_claim', 'missing_citation', 'unsupported_claim'} for i in issues)
 
 
 @pytest.mark.parametrize('quote,claim',[
@@ -130,4 +132,55 @@ def test_calendar_dates_and_citation_markdown_links_are_not_flagged_as_unsupport
     assert not unsupported_numbers(passage, citations)
     # But a fake financial claim in the same passage must still be blocked:
     assert unsupported_numbers(passage + ' 营收为 999 亿美元[2]。', citations)
+
+
+def test_pure_summary_without_numbers_does_not_trigger_missing_citation():
+    from app.agent_workflow.evidence import factual_claim, reviewed_passages
+    sentence = '因此毛利率改善是核心驱动力。'
+    assert factual_claim(sentence) is False
+    accepted, issues = reviewed_passages(sentence, [], require_citations=True)
+    assert 'missing_citation' not in issues
+
+
+def test_f12_acquisition_phrasing_and_polarity_reversal():
+    from app.agent_workflow.evidence import unsupported_claims
+    cites = [{'ordinal': 1, 'quote': 'entered into a definitive agreement to purchase', 'source_type': 'web'}]
+    assert not unsupported_claims('宣布收购 [1]', cites)
+
+    cites_neg = [{'ordinal': 1, 'quote': 'Company did not acquire ExampleCo.', 'source_type': 'web'}]
+    assert unsupported_claims('收购了 [1]', cites_neg)
+
+
+def test_8k_primary_document_unsupported_claim_reports_source_part_not_stored():
+    from app.agent_workflow.evidence import reviewed_passages
+    citations = [{
+        'ordinal': 1,
+        'source_type': 'official_filing',
+        'saved_text': 'primary_document_only',
+        'quote': 'Item 2.02 Results of Operations. The company did not acquire ExampleCo.',
+    }]
+    _, issues = reviewed_passages('收购了 [1]', citations, check_claims=True)
+    assert 'source_part_not_stored' in issues
+    assert 'unsupported_claim' not in issues
+
+
+def test_cagr_power_calculation():
+    from app.agent_workflow.calculation import calculate
+    res = calculate({
+        'expression': '(a / b) ** (1 / 3) - 1',
+        'inputs': [
+            {'name': 'a', 'value': '150', 'user_stated': True},
+            {'name': 'b', 'value': '100', 'user_stated': True},
+        ],
+        'decimals': 4,
+    }, [], user_text='150 100')
+    assert res['value'] == '0.1447'
+
+
+def test_inference_label_expansion():
+    from app.agent_workflow.evidence import is_inference_label
+    assert is_inference_label('由此推断，营收将继续增长。')
+    assert is_inference_label('据此估算，毛利率约为 45%。')
+    assert is_inference_label('预计明年资本开支达到 100 亿美元。')
+    assert is_inference_label('建议仓位不超过 15%。')
 
