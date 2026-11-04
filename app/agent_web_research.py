@@ -33,7 +33,7 @@ class WebResearchArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
     query: str = Field(min_length=1, max_length=512, validation_alias=AliasChoices("query", "query_or_url"))
     company: str | None = Field(default=None,max_length=160)
-    days_back: int | None = Field(default=None, ge=1, le=366, description="News time window in days. Recent/latest means 7; half a month means 15. Omit only if the user requested no freshness window.")
+    days_back: int | None = Field(default=None, ge=1, le=365, description="Recency window in days (1=today/24h, 7=this week, 30=this month). Set when the user asks for a specific recency window; omit for general background or undated pages.")
     max_results: int = Field(default=5, ge=1, le=5)
 
     @field_validator("query")
@@ -134,7 +134,7 @@ def _valid_timestamp(value: str) -> str | None:
 # names the metric the user asked about.  Search rows therefore carry the passages of the page
 # text that match the query, within that same bound.  This only chooses which fetched text is
 # shown; the evidence gate still decides what counts as evidence, and nothing here adds text.
-FOCUS_LIMIT = 700
+FOCUS_LIMIT = 4_000
 _GAP = " … "
 # The tables of deterministic_confidence_gate (agent_workflow/graph.py); a test reads that source
 # and fails when either side drifts.
@@ -286,18 +286,9 @@ def focus_excerpt(text: str, query: str, limit: int = FOCUS_LIMIT, heading: str 
         """A metric sentence that does not name the company itself."""
         return strict and bool(hits[index] & metric) and not hits[index] & entity
 
-    def other_company(index: int) -> bool:
-        """The sentence names a company the query did not ask for (and not the asked one)."""
-        start, end = spans[index]
-        passage=text[start:end]
-        subjects=re.findall(r"\b([A-Z][A-Za-z]+)(?:'s)?\s+(?:said|reported|revenue|sales|earnings|announced|introduced)\b",passage)
-        return any(not any(groups[n].search(subject) for n in entity) and subject.casefold() not in _GENERIC_LATIN for subject in subjects)
-
     def eligible(index: int) -> bool:
         if not needs_neighbour(index):
             return True
-        if other_company(index):   # its own subject is another company: nothing before it can change that
-            return False
         return (index > 0 and bool(hits[index - 1] & entity)) or (index == 0 and titled)
 
     def render(indices: list[int]) -> str:
@@ -600,7 +591,14 @@ async def _research(query_or_url: str, days_back: int | None = None, max_results
     sources = ([source for source in sources if not source.get("fetch_error")][:max_results]
                + [source for source in sources if source.get("fetch_error")])[:max_results]
     if span is not None:
-        sources=[r for r in sources if published_within(r.get("published_at"),span,fetched_at)]
+        kept_sources = []
+        for r in sources:
+            if r.get("published_at") is None:
+                r["date_unverified"] = True
+                kept_sources.append(r)
+            elif published_within(r.get("published_at"), span, fetched_at):
+                kept_sources.append(r)
+        sources = kept_sources
     return {"ok": bool(sources), "data": sources,
             "source": "public web search and fetched page excerpts" if not is_url else "public webpage excerpt",
             "as_of": fetched_at.isoformat(), "error_code": None if sources else "web_research_unavailable"}
@@ -608,7 +606,7 @@ async def _research(query_or_url: str, days_back: int | None = None, max_results
 
 @tool(args_schema=WebResearchArgs)
 async def web_research(query: str = "", days_back: int | None = None, max_results: int = 5, company: str | None = None, query_or_url: str | None = None) -> dict:
-    """Search public web sources or read a public HTTPS page. ALWAYS set days_back for news freshness: recent/latest=7, half a month=15; preserve the interpreted request window. Supply company as named in page text. Search snippets are leads, not evidence."""
+    """Search the public web and return sanitized source excerpts (untrusted external text). Set days_back when the user asks for recent news within a specific window (e.g. 7 for this week, 30 for this month), and set symbol/company when the query is about a specific issuer."""
     try:
         # Just inside the executor's WEB_RESEARCH_TIMEOUT_SECONDS, so a slow search ends with its own error code.
         async with asyncio.timeout(max(5.0, min(300.0, float(os.getenv("WEB_RESEARCH_TIMEOUT_SECONDS", "120")))) - 3):

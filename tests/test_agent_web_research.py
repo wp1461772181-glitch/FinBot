@@ -37,7 +37,7 @@ def test_web_research_is_registered_as_one_read_only_agent_tool():
     fields = TOOL_REGISTRY["web_research"].args_schema.model_fields
     assert set(fields) == {"query", "company", "days_back", "max_results"}
     assert any(getattr(item, "ge", None) == 1 for item in fields["days_back"].metadata)
-    assert any(getattr(item, "le", None) == 366 for item in fields["days_back"].metadata)
+    assert any(getattr(item, "le", None) == 365 for item in fields["days_back"].metadata)
 
 
 def test_literal_url_read_never_calls_search_backend(monkeypatch):
@@ -277,11 +277,11 @@ def test_focus_excerpt_keeps_the_sentence_that_names_the_requested_metric():
     text = _long_text(APPLE_HIT)
     assert text.index(APPLE_HIT) > 1500 and len(text) > 2000
     out = focus_excerpt(text, "Apple revenue news")
-    assert len(out) <= 700
+    assert len(out) <= 4000
     assert APPLE_HIT in out
     assert out.startswith(LEAD)                      # the first sentence is kept while the budget allows
     assert out.index(LEAD) < out.index(APPLE_HIT)    # original order
-    assert " … " in out                              # non-adjacent passages are marked, not glued
+    assert " … " not in out                          # the widened budget covers lead-to-hit contiguously, nothing is skipped
     assert _pieces_are_verbatim(out, text)
 
 
@@ -335,7 +335,7 @@ def test_focus_excerpt_understands_cjk_terms_with_and_without_spaces():
     for query in ("苹果 营收 新闻", "苹果营收新闻", "帮我找一下跟苹果营收相关的新闻报道"):
         out = focus_excerpt(text, query, company="Apple")
         assert hit in out, query
-        assert len(out) <= 700 and out.startswith(lead) and _pieces_are_verbatim(out, text)
+        assert len(out) <= 4000 and out.startswith(lead) and _pieces_are_verbatim(out, text)
     assert hit in focus_excerpt(text, "AAPL revenue",company="苹果")             # ticker and metric words in another script
 
 
@@ -373,10 +373,10 @@ def test_focus_excerpt_does_not_cut_a_requested_term_in_two():
     from app.agent_web_research import focus_excerpt
     cjk = "介" * 347 + "营收增长明显" + "安" * 1500      # the hard cut would fall between 营 and 收
     out = focus_excerpt(cjk, "营收")
-    assert len(out) <= 700 and "营收增长明显" in out
+    assert len(out) <= 4000 and "营收增长明显" in out
     latin = "Apple " + "ab " * 113 + "net income rose 6% in the period " + "cd " * 400   # a space cut would split the phrase
     out = focus_excerpt(latin, "Apple net income")
-    assert len(out) <= 700 and "net income rose 6%" in out
+    assert len(out) <= 4000 and "net income rose 6%" in out
 
 
 def test_focus_excerpt_fills_the_budget_by_score_before_it_adds_plain_text():
@@ -394,7 +394,7 @@ def test_focus_excerpt_uses_explicit_company_for_alias_spellings():
     chinese = "苹果公司在巴黎新开了一家零售店。"
     for hit, query in ((english, "AAPL news"), (chinese, "Apple news"), (english, "苹果 新闻")):
         out = focus_excerpt(_long_text(hit), query,company="苹果" if "苹果" in hit else "Apple")
-        assert len(out) <= 700 and hit in out, query
+        assert len(out) <= 4000 and hit in out, query
 
 
 def test_focus_excerpt_short_terms_match_whole_words_only():
@@ -445,9 +445,9 @@ def test_web_research_returns_the_matching_passages_not_the_leading_characters(m
     result = asyncio.run(web.web_research.coroutine(query_or_url="Apple revenue news"))
     row = result["data"][0]
     assert result["ok"] and row["body_provenance"] == "public_page_fetch"
-    assert len(row["excerpt"]) <= 700
+    assert len(row["excerpt"]) <= 4000
     assert APPLE_HIT in row["excerpt"] and row["excerpt"].startswith(LEAD)
-    assert row["truncated"] is True                  # the excerpt is a selection, not the whole page
+    assert row["truncated"] is False                 # the widened budget now covers this page in full
 
 
 def test_web_research_applies_the_same_selection_to_extracted_and_fallback_content(monkeypatch):
@@ -461,7 +461,7 @@ def test_web_research_applies_the_same_selection_to_extracted_and_fallback_conte
     rows = asyncio.run(web.web_research.coroutine(query_or_url="Apple revenue news"))["data"]
     assert [row["body_provenance"] for row in rows] == ["tavily_extracted_content"] * 2
     for row in rows:
-        assert len(row["excerpt"]) <= 700 and APPLE_HIT in row["excerpt"] and row["truncated"] is True
+        assert len(row["excerpt"]) <= 4000 and APPLE_HIT in row["excerpt"] and row["truncated"] is False
 
 
 def test_web_research_leaves_a_page_without_any_match_exactly_as_before(monkeypatch):
@@ -527,7 +527,7 @@ def test_focus_excerpt_does_not_select_a_metric_sentence_that_follows_another_co
     text = " ".join([APPLE_LEAD, SAMSUNG, SUBJECTLESS, *_fillers(30)])
     out = focus_excerpt(text, "Apple revenue news")
     assert "revenue rose 20%" not in out
-    assert out.startswith(APPLE_LEAD) and len(out) <= 700 and _pieces_are_verbatim(out, text)
+    assert out.startswith(APPLE_LEAD) and len(out) <= 4000 and _pieces_are_verbatim(out, text)
 
 
 def test_focus_excerpt_keeps_a_metric_sentence_together_with_the_sentence_that_names_the_company():
@@ -538,7 +538,7 @@ def test_focus_excerpt_keeps_a_metric_sentence_together_with_the_sentence_that_n
     text = " ".join([LEAD, *apples, *_fillers(10), MENTION, METRIC_NEXT, *_fillers(8, 100)])
     out = focus_excerpt(text, "Apple revenue news")
     assert f"{MENTION} {METRIC_NEXT}" in out
-    assert len(out) <= 700 and _pieces_are_verbatim(out, text)
+    assert len(out) <= 4000 and _pieces_are_verbatim(out, text)
 
 
 def test_focus_excerpt_fill_never_adds_a_metric_sentence_without_the_company_beside_it():
@@ -687,3 +687,58 @@ def test_fallback_row_is_truncated_exactly_when_the_search_text_was_cut(monkeypa
     rows = asyncio.run(web.web_research.coroutine(query_or_url="Apple revenue news"))["data"]
     assert [row["body_provenance"] for row in rows] == ["tavily_extracted_content"] * 2
     assert [row["truncated"] for row in rows] == [True, False]
+
+
+def test_focus_excerpt_does_not_filter_analysts_reuters_management_subjects():
+    from app.agent_web_research import focus_excerpt
+    lead = "Nvidia reported record financial results for the quarter."
+    reuters = "Reuters reported revenue of $30 billion."
+    analysts = "Analysts expect revenue to reach $12B."
+    mgmt = "Management guided Q4 margin to 75%."
+    # Under titled heading, analyst expectations at index 0 are preserved
+    out_analysts = focus_excerpt(f"{analysts} Further details followed.", "NVDA revenue", heading="Nvidia Earnings", company="Nvidia")
+    assert analysts in out_analysts
+
+    # Following company lead, Reuters and Management sentences are preserved
+    text = f"{lead} {reuters} {lead} {mgmt}"
+    out = focus_excerpt(text, "NVDA revenue margin", heading="Nvidia", company="Nvidia")
+    assert reuters in out
+    assert mgmt in out
+
+
+def test_research_preserves_undated_pages_with_flag_and_filters_old(monkeypatch):
+    import asyncio
+    from datetime import datetime, timezone, timedelta
+    import app.agent_web_research as web
+
+    now = datetime(2026, 11, 4, tzinfo=timezone.utc)
+    old_time = (now - timedelta(days=30)).isoformat()
+    fresh_time = (now - timedelta(days=2)).isoformat()
+
+    rows = [
+        {"url": "https://example.com/undated", "title": "Undated News", "snippet": "snippet",
+         "raw_content": "Undated news content", "published_at": None},
+        {"url": "https://example.com/fresh", "title": "Fresh News", "snippet": "snippet",
+         "raw_content": "Fresh news content", "published_at": fresh_time},
+        {"url": "https://example.com/old", "title": "Old News", "snippet": "snippet",
+         "raw_content": "Old news content", "published_at": old_time},
+    ]
+
+    async def search(query, include_raw_content=True, max_results=5, days_back=None):
+        return [r for r in rows if r["published_at"] is None or web.published_within(r["published_at"], days_back, now)]
+
+    async def fetch(url, limit):
+        return url, "text/html", b"<html><body><p>News body</p></body></html>"
+
+    monkeypatch.setattr(web, "_search", search)
+    monkeypatch.setattr(web, "_get_public", fetch)
+
+    res = asyncio.run(web._research("NVDA news", days_back=7))
+    assert res["ok"]
+    urls = [r["url"] for r in res["data"]]
+    assert "https://example.com/undated" in urls
+    assert "https://example.com/fresh" in urls
+    assert "https://example.com/old" not in urls
+
+    undated_row = next(r for r in res["data"] if r["url"] == "https://example.com/undated")
+    assert undated_row.get("date_unverified") is True
