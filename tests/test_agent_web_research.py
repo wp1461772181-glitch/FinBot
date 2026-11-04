@@ -520,14 +520,34 @@ def _fillers(count, start=0):
     return [_filler(start + index) for index in range(count)]
 
 
-def test_focus_excerpt_does_not_select_a_metric_sentence_that_follows_another_companys_sentence():
-    """RED (G2 item 8): Apple lead, a Samsung sentence, then 'the company's revenue rose 20%'.  The
-    revenue sentence belongs to Samsung's paragraph; it must not be shown as Apple's."""
+def test_focus_excerpt_keeps_a_metric_sentence_that_follows_another_companys_sentence_and_carries_its_context():
+    """Wordlist cleanup (b): Apple lead, a Samsung sentence, then 'the company's revenue rose 20%'.
+    The revenue sentence has no company beside it, so it is demoted - not dropped.  With budget
+    to spare it is shown, together with the sentence before it, after the anchored lead."""
     from app.agent_web_research import focus_excerpt
-    text = " ".join([APPLE_LEAD, SAMSUNG, SUBJECTLESS, *_fillers(30)])
+    text = " ".join([APPLE_LEAD, SAMSUNG, SUBJECTLESS, *_fillers(60)])
+    assert len(text) > 4000
     out = focus_excerpt(text, "Apple revenue news")
-    assert "revenue rose 20%" not in out
     assert out.startswith(APPLE_LEAD) and len(out) <= 4000 and _pieces_are_verbatim(out, text)
+    assert f"{SAMSUNG} {SUBJECTLESS}" in out                  # kept, with its previous sentence for context
+
+
+def test_focus_excerpt_demoted_metric_sentences_only_get_the_budget_the_anchored_ones_leave():
+    """Anchored sentences (the company named in or right before the metric sentence) are packed first;
+    a demoted one then takes what is left - with its previous sentence when both fit, alone when not."""
+    from app.agent_web_research import focus_excerpt
+    anchored_metric = "Apple revenue rose 6% in the period, the company said."
+    text = " ".join([APPLE_LEAD, SAMSUNG, SUBJECTLESS, *_fillers(5), anchored_metric, *_fillers(5, 50)])
+    assert len(text) > 1000
+    tight = focus_excerpt(text, "Apple revenue news", limit=150)       # room for the anchored pair only
+    assert APPLE_LEAD in tight and anchored_metric in tight and "revenue rose 20%" not in tight
+    alone = focus_excerpt(text, "Apple revenue news", limit=250)       # room for the demoted sentence, not its neighbour
+    assert SUBJECTLESS in alone and SAMSUNG not in alone and anchored_metric in alone
+    both = focus_excerpt(text, "Apple revenue news", limit=400)        # room for the demoted sentence with its neighbour
+    assert f"{SAMSUNG} {SUBJECTLESS}" in both and anchored_metric in both
+    for out in (tight, alone, both):
+        assert out.index(APPLE_LEAD) < out.index(anchored_metric) and _pieces_are_verbatim(out, text)
+    assert alone.index(SUBJECTLESS) < alone.index(anchored_metric)    # original order is kept
 
 
 def test_focus_excerpt_keeps_a_metric_sentence_together_with_the_sentence_that_names_the_company():
@@ -541,15 +561,19 @@ def test_focus_excerpt_keeps_a_metric_sentence_together_with_the_sentence_that_n
     assert len(out) <= 4000 and _pieces_are_verbatim(out, text)
 
 
-def test_focus_excerpt_fill_never_adds_a_metric_sentence_without_the_company_beside_it():
-    """RED: many metric sentences about other companies; the budget is large enough for all of
-    them, and none is added by the fill phase."""
+def test_focus_excerpt_fill_takes_demoted_metric_sentences_before_plain_text():
+    """Many metric sentences about other companies (demoted): they are not dropped.  The fill phase
+    takes them, in original order, ahead of plain filler text, after the anchored lead."""
     from app.agent_web_research import focus_excerpt
     others = [f"Samsung revenue rose {n}% in the period, the company said." for n in range(8, 20)]
     text = " ".join([APPLE_LEAD, *_fillers(1), *others, *_fillers(30, 50)])
-    out = focus_excerpt(text, "Apple revenue news")
-    assert not any(sentence in out for sentence in others)
-    assert out.startswith(APPLE_LEAD) and _pieces_are_verbatim(out, text)
+    out = focus_excerpt(text, "Apple revenue news", limit=600)
+    assert len(text) > 600 and len(out) <= 600
+    assert out.startswith(APPLE_LEAD) and others[0] in out and others[3] in out
+    assert _filler(50) not in out                    # the budget went to the metric sentences, not to filler
+    assert [out.index(sentence) for sentence in others if sentence in out] == sorted(
+        out.index(sentence) for sentence in others if sentence in out)
+    assert _pieces_are_verbatim(out, text)
 
 
 def test_focus_excerpt_a_metric_sentence_that_names_the_company_itself_needs_no_neighbour():
@@ -562,61 +586,77 @@ def test_focus_excerpt_a_metric_sentence_that_names_the_company_itself_needs_no_
 
 
 def test_focus_excerpt_query_without_a_company_or_without_a_metric_is_unchanged():
-    """GUARD: the neighbour rule needs a company AND a metric in the query."""
+    """GUARD: the ranking needs a company AND a metric in the query; whichever the query, a metric
+    sentence is no longer dropped for lack of a company beside it."""
     from app.agent_web_research import focus_excerpt
-    text = " ".join([LEAD, *_fillers(30), SUBJECTLESS, *_fillers(8, 100)])
+    text = " ".join([LEAD, *_fillers(60), SUBJECTLESS, *_fillers(8, 100)])
+    assert len(text) > 4000
     assert SUBJECTLESS in focus_excerpt(text, "revenue news")          # no company in the query
-    assert SUBJECTLESS not in focus_excerpt(text, "Samsung revenue")       # a company the gate has no alias for
-    text = " ".join([LEAD, *_fillers(30), "Apple opened a new store in Paris.", *_fillers(8, 100)])
+    assert SUBJECTLESS in focus_excerpt(text, "Samsung revenue")       # demoted, but kept: its metric is still uncovered
+    text = " ".join([LEAD, *_fillers(60), "Apple opened a new store in Paris.", *_fillers(8, 100)])
     assert "Apple opened a new store in Paris." in focus_excerpt(text, "Apple news")   # no metric in the query
 
 
-def test_a_subjectless_revenue_sentence_beside_another_company_no_longer_passes_the_gate(monkeypatch):
-    """RED, end to end with the unchanged gate: before, the excerpt held the Samsung paragraph's
-    revenue sentence and the pooled-text gate called it Apple revenue evidence."""
+def test_a_subjectless_revenue_sentence_beside_another_company_is_now_shown_to_the_model(monkeypatch):
+    """Wordlist cleanup (b), end to end: the excerpt is no longer filtered by the neighbour rule, so
+    the Samsung paragraph's revenue sentence reaches the model with its context.  Whose figure it
+    is, is the model's reading (and the user's, through the citation); the pooled-text gate is
+    not asserted here."""
     import asyncio
     from app.agent_chat_stream import bounded_tool_result
-    from app.agent_workflow.graph import deterministic_confidence_gate
     url = "https://news.example.com/roundup"
     paragraphs = [APPLE_LEAD, SAMSUNG, SUBJECTLESS, *_fillers(30)]
     page = ("<html><head><title>Phone roundup</title></head><body>"
             + "".join(f"<p>{text}</p>" for text in paragraphs) + "</body></html>")
     web = _fake_web(monkeypatch, [_row(url, "Phone roundup")], {url: page})
     bounded = bounded_tool_result(asyncio.run(web.web_research.coroutine(query_or_url="Apple revenue news")))
-    assert "revenue rose 20%" not in bounded["data"][0]["excerpt"]
-    assert deterministic_confidence_gate("Apple revenue news", bounded, [], ["AAPL"]) == (
-        False, "requested_entity_missing")
+    excerpt = bounded["data"][0]["excerpt"]
+    assert "revenue rose 20%" in excerpt and "Samsung said on Wednesday" in excerpt and excerpt.startswith(APPLE_LEAD)
 
 
-def test_focus_excerpt_never_keeps_a_leading_metric_sentence_that_names_no_company():
-    """RED: the first sentence is normally kept as the lead; a metric sentence about nobody is not
-    a lead.  Nothing precedes it, so no neighbour can make it eligible."""
+def test_focus_excerpt_a_leading_metric_sentence_that_names_no_company_is_not_the_lead():
+    """The first sentence is normally kept as the lead; a metric sentence about nobody is demoted, so
+    it is not kept as the lead ahead of anchored sentences.  Nothing precedes it, so no neighbour
+    can anchor it.  Under a tight budget the anchored sentence wins; with room it is shown too."""
     from app.agent_web_research import focus_excerpt
-    text = " ".join([SUBJECTLESS, APPLE_LEAD, *_fillers(30)])
-    out = focus_excerpt(text, "Apple revenue news")
-    assert "revenue rose 20%" not in out and APPLE_LEAD in out
+    anchored_metric = "Apple revenue rose 6% in the period, the company said."
+    text = " ".join([SUBJECTLESS, APPLE_LEAD, anchored_metric, *_fillers(30)])
+    tight = focus_excerpt(text, "Apple revenue news", limit=169)       # holds the two anchored sentences, not the lead as well
+    anchored_block = f"{APPLE_LEAD} {anchored_metric}"
+    # Invariants (not an exact string: leftover budget may be filled with plain sentences, by the
+    # ordinary fill semantics): the excerpt opens with the anchored lead and its metric sentence,
+    # the subjectless metric sentence neither leads nor takes their place, and whatever follows the
+    # anchored block is only whole plain filler sentences.
+    assert len(tight) <= 169
+    assert tight.startswith(anchored_block)
+    assert not tight.startswith(SUBJECTLESS) and SUBJECTLESS not in tight
+    tail = [piece.strip() for piece in tight[len(anchored_block):].split("…") if piece.strip()]
+    assert all(any(piece in filler for filler in _fillers(30)) for piece in tail)
+    roomy = focus_excerpt(text, "Apple revenue news", limit=250)       # room: demoted, not dropped
+    assert roomy.startswith(SUBJECTLESS) and anchored_metric in roomy
 
 
-def test_focus_excerpt_is_empty_when_every_sentence_is_a_metric_sentence_about_nobody():
-    """A page made only of revenue statements that never name the company has nothing that can be
-    shown as that company's: the excerpt is empty (the row is then dropped as without excerpt),
-    never the leading characters."""
+def test_focus_excerpt_is_not_empty_when_every_sentence_is_a_metric_sentence_about_nobody():
+    """A page made only of revenue statements that never name the company used to come back empty
+    (the row was dropped as without excerpt).  Those sentences are demoted, not dropped: the
+    budget is filled with them, and the model reads whose figures they are."""
     from app.agent_web_research import _focus_source, focus_excerpt
     text = " ".join(f"The company's revenue rose {i}% year over year." for i in range(60))
-    assert len(text) > 700 and focus_excerpt(text, "Apple revenue news") == ""
+    assert 700 < len(text) <= 4000
+    assert focus_excerpt(text, "Apple revenue news") == text           # fits: returned as it is
     source = {"excerpt": text}
     _focus_source(source, "Apple revenue news")
-    assert source["excerpt"] == "" and source["truncated"] is True
-    # The full page text is carried along (never shown) so figures from this
-    # cited page remain checkable even when the focused excerpt is empty.
-    assert source["_evidence_text"] == text
+    assert source["excerpt"] == text and "truncated" not in source
+    small = focus_excerpt(text, "Apple revenue news", limit=300)       # does not fit: filled with them
+    assert 0 < len(small) <= 300 and _pieces_are_verbatim(small, text)
+    assert small.startswith("The company's revenue rose 0%")
 
 
-def test_focus_excerpt_metric_sentences_always_come_with_the_company_beside_them():
+def test_focus_excerpt_demotion_never_breaks_the_bound_the_order_or_verbatim_text():
     """Property (seeded): over random pages of Apple sentences, subjectless revenue sentences,
-    other companies' revenue sentences and filler, every metric sentence that is shown either names
-    Apple or follows a sentence that does, and in the second case that sentence is shown right
-    before it.  Output stays within the bound and made of verbatim pieces."""
+    other companies' revenue sentences and filler, output stays within the bound and is made of
+    verbatim pieces in original order, and a page that fits comes back unchanged (nothing is
+    dropped for lack of a company beside a metric sentence any more)."""
     import random
     from app.agent_web_research import focus_excerpt
     pools = {
@@ -637,16 +677,10 @@ def test_focus_excerpt_metric_sentences_always_come_with_the_company_beside_them
             assert len(out) <= max(limit, len(text) if len(text) <= limit else 0)
             assert _pieces_are_verbatim(out, text), (seed, limit)
             if len(text) <= limit:
-                # A page that fits is held to the same rule (2026-10-14): only a metric sentence that
-                # has no company beside it is left out; every other sentence stays, as it was.
-                assert out == text or len(out) < len(text)
-            for index, (kind, sentence) in enumerate(zip(kinds, sentences)):
-                if kind not in {"subjectless", "other", "apple_metric"} or sentence not in out:
-                    continue
-                if kind == "apple_metric":
-                    continue                                      # names the company itself
-                assert index > 0 and kinds[index - 1] in {"apple", "apple_metric"}, (seed, limit, sentence)
-                assert f"{sentences[index - 1]} {sentence}" in out, (seed, limit, sentence)
+                assert out == text                                 # a page that fits is never filtered
+                continue
+            positions = [text.index(piece) for piece in out.split(" … ")]
+            assert positions == sorted(positions), (seed, limit)    # original order
 
 
 # --- G2-B1: the truncated flag of a fallback row is computed before the cut ----------------------

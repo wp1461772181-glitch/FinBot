@@ -248,30 +248,26 @@ def focus_excerpt(text: str, query: str, limit: int = FOCUS_LIMIT, heading: str 
     an ellipsis.  text comes back unchanged when it already fits, when the query holds no usable
     term, or when nothing in it matches, so the caller keeps today's leading characters.
 
-    When the query names a company the gate knows AND a metric, a sentence that holds the metric
-    is shown only if it names the company itself or the sentence right before it (in the original
-    text) does, and then together with that sentence.  The gate pools the text of all rows, so a
-    revenue sentence of another company's paragraph beside an Apple headline would otherwise be
-    accepted as Apple's revenue.  When nothing eligible is left (a page of revenue statements that
-    never name the company) the result is empty and the row is dropped for lack of an excerpt.
+    When the query names a company AND a metric, a sentence that holds the metric but does not
+    name the company itself is "anchored" only if the sentence right before it (in the original
+    text) does, or it is the first sentence of a page whose ``heading`` (the page's title, no part
+    of the text) names the company.  The other metric sentences are not dropped: they rank after
+    every anchored sentence, i.e. they only get the budget the anchored sentences leave, and each
+    travels together with the sentence before it for context when both fit (alone otherwise).  The
+    result is still in original order.  Who a figure belongs to is for the reader to judge.
 
-    A text that already fits is held to the same rule: it comes back unchanged unless the query
-    asks for a company and a metric and a metric sentence of it has no company beside it, and then
-    only that sentence is left out.  ``heading`` (the page's title, which is no part of the text)
-    counts as the sentence before the first one for that rule."""
+    A text that already fits comes back unchanged."""
     if not isinstance(text, str) or not isinstance(query, str):
         return text
     fits = len(text) <= limit
     groups, roles = _query_groups(query,company)
-    if not groups:
+    if not groups or fits:
         return text
-    # Company filtering is grounded in the explicit query terms. There is no global
+    # Company ranking is grounded in the explicit query terms. There is no global
     # company directory or "other company" list in this retrieval path.
     entity = frozenset(n for n,role in enumerate(roles) if role=="entity")
     metric = frozenset(n for n, role in enumerate(roles) if role == "metric")
     strict = bool(entity and metric)
-    if fits and not strict:
-        return text
     spans = _passage_spans(text, max(1, (limit - len(_GAP)) // 2),
                            re.compile("|".join(group.pattern for group in groups), re.I))
     hits = [frozenset(n for n, group in enumerate(groups) if group.search(text, start, end)) for start, end in spans]
@@ -284,7 +280,8 @@ def focus_excerpt(text: str, query: str, limit: int = FOCUS_LIMIT, heading: str 
         """A metric sentence that does not name the company itself."""
         return strict and bool(hits[index] & metric) and not hits[index] & entity
 
-    def eligible(index: int) -> bool:
+    def anchored(index: int) -> bool:
+        """False only for a metric sentence with no company beside it: it ranks after all others."""
         if not needs_neighbour(index):
             return True
         return (index > 0 and bool(hits[index - 1] & entity)) or (index == 0 and titled)
@@ -300,32 +297,32 @@ def focus_excerpt(text: str, query: str, limit: int = FOCUS_LIMIT, heading: str 
             previous = index
         return "".join(parts)
 
-    if fits:  # nothing is chosen from it: only a metric sentence with no company beside it is left out
-        left = [index for index in range(len(spans)) if eligible(index)]
-        return text if len(left) == len(spans) else render(left)
-
     chosen: set[int] = set()
 
     def add(index: int) -> bool:
-        if index in chosen or not eligible(index):
+        if index in chosen:
             return False
-        # The neighbour that makes a metric sentence eligible travels with it (both or neither).
-        needed = {index, index - 1} if needs_neighbour(index) and index > 0 else {index}
-        if len(render(sorted(chosen | needed))) > limit:
-            return False
-        chosen.update(needed)
-        return True
+        # A metric sentence that names no company brings the sentence before it (context), when both fit.
+        pair = {index, index - 1} if needs_neighbour(index) and index > 0 else {index}
+        for needed in (pair, {index}):
+            if len(render(sorted(chosen | needed))) <= limit:
+                chosen.update(needed)
+                return True
+        return False
 
+    # Anchored sentences come before the others at every step; the others get what budget is left.
     covered: set[int] = set()
     while True:
         candidates = sorted((index for index in range(len(spans)) if index not in chosen and hits[index] - covered),
-                            key=lambda index: (-len(hits[index] - covered), index))
+                            key=lambda index: (not anchored(index), -len(hits[index] - covered), index))
         picked = next((index for index in candidates if add(index)), None)
         if picked is None:
             break
         covered |= hits[picked]
-    add(0)
-    for index in sorted(range(len(spans)), key=lambda index: (-len(hits[index]), index)):
+    if anchored(0):
+        add(0)
+    for index in sorted(range(len(spans)),
+                        key=lambda index: (not hits[index], not anchored(index), -len(hits[index]), index)):
         add(index)
     return render(sorted(chosen))
 

@@ -6,10 +6,11 @@ from __future__ import annotations
 
 
 def test_the_code_does_not_decide_which_company_a_sentence_is_about_by_a_name_list():
-    """The known-company list is retired: a metric sentence is judged only by the company/neighbour
-    rule (named company in the sentence, in the sentence before it, or in the headline when it is
-    the first).  Whose figure it is, is the model's reading; the sentence is no longer dropped
-    because its subject is a company name from a list."""
+    """The known-company list is retired, and the company/neighbour rule only ranks (anchored
+    sentences first: company named in the sentence, in the sentence before it, or in the headline
+    when it is the first); it drops nothing.  Whose figure it is, is the model's reading; a
+    sentence is never left out because its subject is a company name from a list.  (These texts fit
+    the bound, so they come back whole.)"""
     from app.agent_web_research import focus_excerpt
     assert "revenue rose 20%" in focus_excerpt(
         "Samsung revenue rose 20% in 2025.", "Apple revenue news", heading="Apple revenue report")
