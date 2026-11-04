@@ -10,7 +10,7 @@ from ..agent_progress import progress_watchdog,mark_progress
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_tool_catalog import definitions,schemas,validate,ALWAYS_ON as DISCLOSED,TOOL_CATEGORIES,CATEGORY_OF
 from .. import agent_context as layers
-from .evidence import gate_row,number_rows,citation_errors,contains
+from .evidence import gate_row,number_rows,citation_errors,contains,HINT_REASONS
 from . import tools,consent,truncation
 from .. import observability
 from .authorization import vetoed,authorized,routine_ask
@@ -2602,6 +2602,19 @@ class Turn:
                     notes['claim_drop_count']=len(application.issues)
                     notes['legacy_disagreement']=bool(issues)!=bool(application.issues)
             self.last_issues=list(issues)
+            # Hints are not verdicts: a sentence that reads opposite to its source, or an event word beside a figure
+            # the source does hold.  They never enter last_issues, the repair, the status or the footnote.
+            hints=[]
+            if check_claims:
+                try:
+                    from .evidence import claim_hints
+                    hints=claim_hints(answer,self.citations,user_text=user_text,verified=verified)
+                except Exception as exc:self.audit['claim_hints_error']=type(exc).__name__
+            for hint_reason in ('polarity_conflict','event_not_in_source'):
+                items=[h for h in hints if h['reason']==hint_reason]
+                # Whole count, no cut: the hit rate is what a later stage scores.
+                if items:self.audit[hint_reason]={'count':len(items),'items':[{k:(v[:400] if isinstance(v,str) else v) for k,v in h.items() if k!='reason'} for h in items]}
+                else:self.audit.pop(hint_reason,None)
             if issues:
                 from .answer_tidy import tidy_answer
                 self.last_rejected=rejected
@@ -2630,6 +2643,16 @@ class Turn:
                     status='partially_succeeded'
             elif gate_mode=='enforce' and application is not None:
                 answer=application.kept_prose
+            if hints:
+                # Shown beside the kept sentence through the same list as the unverified lines; a sentence that is
+                # already flagged keeps its own flag.
+                from .unverified import line_key
+                taken={line_key(item['line']) for item in self.unverified_lines}
+                for hint in hints:
+                    key=line_key(hint['line'])
+                    if key in taken:continue
+                    taken.add(key)
+                    self.unverified_lines.append({'line':hint['line'][:400],'reason':hint['reason'],'numbers':[],'ordinal':hint['ordinal'],'snippet':hint['snippet']})
         for marker in MARKERS:
             if marker in answer:answer=answer.replace(marker,'').strip()
         if not answer:answer='模型返回了无效工具协议，请重试。';reason='provider_protocol_invalid';status='failed'
@@ -2675,7 +2698,7 @@ class Turn:
         from .evidence import answer_verified_figures
         user_text=self.user_stated_text()
         # What the audit says of scope and closure describes the answer returned, like the rest of it.
-        snapshot=lambda:{key:self.audit.get(key) for key in ('scope','closure_accepted')}
+        snapshot=lambda:{key:self.audit.get(key) for key in ('scope','closure_accepted','polarity_conflict','event_not_in_source')}
         best_audit=snapshot()
         if best_pairs:
             remapped,changes=remap_citations(draft,best_pairs,self.citations,user_text=user_text,
@@ -3098,7 +3121,9 @@ async def run_direct_turn(question,context,*,emit,messages=None,state=None):
     except BaseException as exc:
         observability.end_trace(turn.obs,error=type(exc).__name__);raise
     events=turn.audit.get('truncation_events') or []
-    observability.score_citation_audit(turn.obs,verified=len(turn.citations),unverified=len(turn.unverified_lines or turn.last_issues),unverified_lines=turn.unverified_lines,
+    # Hints (polarity_conflict, event_not_in_source) are not unverified sentences: they are counted in the audit on their own.
+    flagged=[item for item in turn.unverified_lines if not (isinstance(item,dict) and item.get('reason') in HINT_REASONS)]
+    observability.score_citation_audit(turn.obs,verified=len(turn.citations),unverified=len(flagged or turn.last_issues),unverified_lines=flagged,
         truncation_events=len(events),insufficient=turn.audit.get('insufficient_evidence_lines'),scope=turn.audit.get('scope'))
     observability.end_trace(turn.obs,output=result.get('answer'),metadata={'status':result.get('status'),'reason':result.get('reason'),
         'model_calls':turn.audit.get('model_calls'),'tool_calls':turn.audit.get('tool_calls'),'token_usage':turn.audit.get('token_usage'),

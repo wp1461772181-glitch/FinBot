@@ -992,44 +992,135 @@ def supporting_event_terms(terms):
     if terms==DEPARTURE_TERMS:return terms+RESIGNATION_TERMS
     return terms
 
-def event_polarities(text,terms):
-    """Local explicit negation guard; intentionally not a full natural-language parser."""
+def _event_matches(text,terms):
+    """``(simplified text, [(term, start, end, negative)])``: every event word found and whether a negation sits before it.
+
+    The negation rule is frozen (polarity is a hint only, see ``polarity_conflicts``): no new words, no patches."""
     from .language import simplified
-    text=simplified(text);states=set()
+    text=simplified(text);found=[]
     for term in terms:
         pattern=re.escape(term)
         if term.isascii():pattern=r'(?<![A-Za-z])'+pattern+r'(?![A-Za-z])'
         for match in re.finditer(pattern,text,re.I):
             prefix=re.split(r'[。！？;；.!?\n,，]',text[:match.start()])[-1][-80:]
             negative=bool(re.search(r"(?:\b(?:not|never|no)|n.t)\s+(?:[A-Za-z]+\s+){0,2}$|(?:没有|并非|从未|未曾|并未|未有|不曾|不再|并不|未见|未|不)(?![来断论仅管])[^，。；;.!?\n]{0,10}$",prefix,re.I))
-            states.add(negative)
-    return states
+            found.append((term,match.start(),match.end(),negative))
+    return text,found
+
+def event_polarities(text,terms):
+    """Local explicit negation guard; intentionally not a full natural-language parser."""
+    return {negative for *_,negative in _event_matches(text,terms)[1]}
 
 _NUMERIC_ONLY_SOURCE_TYPES = frozenset({
     'saved_price', 'saved_price_set', 'market_quote',
     'reported_figure', 'calculation', 'formula_calculation',
 })
 
+# Notes that travel with a kept sentence (``unverified_lines`` items) but are not a verdict: they never
+# enter the repair, never lower the turn's status and never add the 「证据不足」 footnote.
+HINT_REASONS=frozenset({'polarity_conflict','event_not_in_source'})
+_NO_EVIDENCE_PASSAGE=re.compile(r'没有(?:可核验)?(?:资料|证据)|无法(?:核实|确认)|no (?:verified )?evidence',re.I)
+
+def _passage_sources(passage,citations,indexed):
+    """The sources a sentence cites; none for a sentence that itself says no evidence was found."""
+    if _NO_EVIDENCE_PASSAGE.search(passage):return []
+    return [indexed[r] for r in citation_markers(passage,citations) if r in indexed]
+
+def _numeric_only_event(passage,sources):
+    """The first event word of a sentence whose every cited source is a bare number (a price, a figure); else ''."""
+    if not all(c.get('source_type') in _NUMERIC_ONLY_SOURCE_TYPES for c in sources):return ''
+    for terms in CLAIM_FEATURES:
+        found=_event_matches(passage,terms)[1]
+        if found:return found[0][0]
+    return ''
+
 def unsupported_claims(answer,citations):
-    """Reject source-kind and explicit claim-feature polarity mismatches, not prove full entailment."""
+    """Source-kind rule only: an event asserted on a source that is only a number.  Not a proof of entailment.
+
+    Polarity (the sentence says the opposite of its source) is ``polarity_conflicts``: a hint, not this verdict."""
     from .language import simplified
     answer=simplified(answer)
     indexed={str(c['ordinal']):c for c in citations}
     for passage in cited_passages(answer):
-        refs=citation_markers(passage,citations)
-        sources=[indexed[r] for r in refs if r in indexed]
-        if re.search(r'没有(?:可核验)?(?:资料|证据)|无法(?:核实|确认)|no (?:verified )?evidence',passage,re.I):continue
-        if not sources:
-            continue
-        if all(c.get('source_type') in _NUMERIC_ONLY_SOURCE_TYPES for c in sources):
-            if any(event_polarities(passage,terms) for terms in CLAIM_FEATURES):
-                return True
+        sources=_passage_sources(passage,citations,indexed)
+        if sources and _numeric_only_event(passage,sources):return True
+    return False
+
+_SENTENCE_END=re.compile(r'[。！？；;\n]|(?<=[A-Za-z0-9)”"])[.!?](?=\s|$)')
+
+def _source_sentence(text,start,end,limit=200):
+    """The sentence of ``text`` holding the span ``start:end``, cut to ``limit`` characters around the span."""
+    left=0;right=len(text)
+    for match in _SENTENCE_END.finditer(text):
+        if match.end()<=start:left=match.end()
+        elif match.start()>=end:right=match.start();break
+    segment=text[left:right]
+    if len(segment)>limit:
+        low=max(0,min(start-left-limit//2,len(segment)-limit))
+        segment=('…' if low else '')+segment[low:low+limit]+('…' if low+limit<len(segment) else '')
+    return ' '.join(segment.split())
+
+def polarity_conflicts(answer,citations):
+    """Sentences whose event word is negated on one side only, with the source sentence that says so.
+
+    A hint, never a verdict: the word list is frozen and misreads ("不久前辞职", a different subject), so a hit
+    only shows the owner what the cited source says.  Each item: ``sentence``, ``ordinal`` (the source),
+    ``terms`` (the sentence's word), ``source_term`` and ``snippet`` (the source's own sentence)."""
+    from .language import simplified
+    answer=simplified(answer)
+    indexed={str(c['ordinal']):c for c in citations}
+    out=[]
+    for passage in cited_passages(answer):
+        sources=_passage_sources(passage,citations,indexed)
+        if not sources:continue
         evidence=simplified(' '.join(citation_check_text(c) for c in sources))
         for terms in CLAIM_FEATURES:
             claim_polarity=event_polarities(passage,terms)
             evidence_polarity=event_polarities(evidence,supporting_event_terms(terms))
-            if claim_polarity and evidence_polarity and not claim_polarity<=evidence_polarity:return True
-    return False
+            if not (claim_polarity and evidence_polarity and not claim_polarity<=evidence_polarity):continue
+            # The sentence's word that the source does not share, and the first place a source uses its own.
+            claim_word=next(term for term,_,_,negative in _event_matches(passage,terms)[1] if negative not in evidence_polarity)
+            for source in sources:
+                text,found=_event_matches(citation_check_text(source),supporting_event_terms(terms))
+                if found:
+                    term,start,end,_=found[0]
+                    out.append({'sentence':passage.strip(),'ordinal':int(source['ordinal']),'terms':[claim_word],
+                                'source_term':term,'snippet':_source_sentence(text,start,end)})
+                    break
+            break
+    return out
+
+def figures_confirmed(passage,citations,*,user_text='',verified=None,state_check=False):
+    """Whether the sentence writes a figure its own cited sources state, and none they refute or lack."""
+    reviews=number_review(passage,citations,user_text=user_text,verified=verified,state_check=state_check)
+    return any(r['direct'] for r in reviews) and not any(r['rejected'] or r['insufficient'] for r in reviews)
+
+def claim_hints(answer,citations,*,user_text='',verified=None,state_check=False):
+    """Line-level hints for ``unverified_lines`` (see ``HINT_REASONS``), one per sentence that earns one.
+
+    ``polarity_conflict``: the sentence and its source disagree on an event word.  ``event_not_in_source``: the
+    sentence states an event on a source that is only a number, but the figure it writes is that source's own
+    (the event word is background, so it is shown, not repaired).  Items carry ``line`` (the answer's line),
+    ``reason``, ``sentence``, ``ordinal``, ``terms`` and ``snippet``."""
+    if verified is None:verified=answer_verified_figures(answer,citations,user_text=user_text)
+    indexed={str(c['ordinal']):c for c in citations}
+    out=[]
+    for _,stripped,checked in _reviewable_lines(answer,citations):
+        if checked is None:continue
+        bullet=_BULLET.match(stripped)
+        for passage in cited_passages(checked[bullet.end():] if bullet else checked):
+            passage=passage.strip()
+            if not passage or is_inference_label(passage):continue
+            sources=_passage_sources(passage,citations,indexed)
+            if not sources:continue
+            found=polarity_conflicts(passage,citations)
+            if found:
+                out.append({'line':stripped,'reason':'polarity_conflict',**found[0]});continue
+            event=_numeric_only_event(passage,sources)
+            if event and figures_confirmed(passage,citations,user_text=user_text,verified=verified,state_check=state_check):
+                out.append({'line':stripped,'reason':'event_not_in_source','sentence':passage,'ordinal':int(sources[0]['ordinal']),
+                            'terms':[event],'snippet':''})
+    return out
 
 _PARTIAL_8K_TEXTS = frozenset({'exhibit_99_1_only', 'primary_document_only'})
 
@@ -1136,9 +1227,12 @@ def reviewed_passages(answer,citations,*,require_citations=False,check_claims=Tr
             if unsupported and not marked and uncertainty:unsupported=[]
             claim_issue=None
             if not labelled:
-                if unsupported_claims(stripped,citations):
+                source_kind=unsupported_claims(stripped,citations)
+                # An event word beside a figure that the cited source itself states is background: it is
+                # shown as a hint (``claim_hints``), not sent to repair.
+                if source_kind and not figures_confirmed(stripped,citations,user_text=user_text,verified=verified,state_check=state_check):
                     claim_issue='unsupported_claim'
-                elif _partial_8k_claim_missing(stripped,citations):
+                elif not source_kind and _partial_8k_claim_missing(stripped,citations):
                     claim_issue='source_part_not_stored'
             code=(('unsupported_numeric_claim' if marked else 'missing_citation') if unsupported else
                   'insufficient_numeric_evidence' if insufficient else

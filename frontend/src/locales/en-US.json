@@ -1795,6 +1795,8 @@
   "没有给出可核对的依据": "No checkable basis was given",
   "推算值没有对应的计算结果": "The derived value has no matching calculation",
   "未能与来源核对": "Could not be checked against a source",
+  "这句与 [{n}] 的说法可能相反：“{quote}”，请自行判断": "This may say the opposite of [{n}]: “{quote}”. Please judge for yourself.",
+  "数字与 [{n}] 一致，但这句里的事件说法在该来源中没有出现，请自行判断": "The figure matches [{n}], but the event described here does not appear in that source. Please judge for yourself.",
   "财报判断模型": "Earnings judgment model",
   "读财报、判断涨跌用的模型；不选就用服务器默认模型。": "The model that reads earnings releases and judges up or down; leave unset to use the server default model.",
   "没有这个模型用途。": "Unknown model purpose.",

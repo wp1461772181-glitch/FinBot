@@ -19,6 +19,15 @@ export const REASON_KEYS = {
 };
 export const DEFAULT_REASON_KEY = "未能与来源核对";
 
+/**
+ * Hints, not verdicts: the sentence stays as written and the server only shows what the source says
+ * (`ordinal`, `snippet`). Phrase keys carry `{n}` and `{quote}` placeholders; the caller translates, then fills them.
+ */
+export const HINT_KEYS = {
+  polarity_conflict: "这句与 [{n}] 的说法可能相反：“{quote}”，请自行判断",
+  event_not_in_source: "数字与 [{n}] 一致，但这句里的事件说法在该来源中没有出现，请自行判断",
+};
+
 const MARKER = /\[\d+(?:\s*[,，、;；]\s*\d+)*\]/g;
 const LEAD = /^\s*(?:[-*+•]\s+|\d+[.)、]\s*|>\s*)/;
 const MIN_PREFIX = 60;
@@ -37,8 +46,20 @@ export function normalizeUnverified(items) {
       line: item.line,
       reason: typeof item.reason === "string" ? item.reason : "",
       numbers: Array.isArray(item.numbers) ? item.numbers.filter((n) => typeof n === "string" && n.trim()).map((n) => n.trim()) : [],
+      ...(Number.isInteger(item.ordinal) ? { ordinal: item.ordinal } : {}),
+      ...(typeof item.snippet === "string" && item.snippet.trim() ? { snippet: item.snippet.trim() } : {}),
     }));
 }
+
+/** The hint sentence for an item whose reason is a hint, otherwise null. `t` translates a phrase key. */
+export function hintText(item, t = (text) => text) {
+  const key = HINT_KEYS[item?.reason];
+  if (!key) return null;
+  return t(key).replace("{n}", String(item.ordinal ?? "?")).replace("{quote}", item.snippet ?? "");
+}
+
+// Hint text carries a `[n]` the reader should see, so its brackets are escaped rather than removed.
+const escapeHint = (text) => String(text).replace(/\\/g, "").replace(/\s+/g, " ").trim().replace(/([[\]])/g, "\\$1");
 
 export function reasonKey(reason) {
   return REASON_KEYS[reason] ?? DEFAULT_REASON_KEY;
@@ -80,7 +101,11 @@ export function markUnverified(content, items, labels) {
     const index = matched[row];
     if (index < 0) return raw;
     const item = list[index];
-    const flags = [`[${escapeLabel(`${labels.insufficient}：${labels.reason(item.reason)}`)}](#unverified-${index})`];
+    // A hint reads as a note on the sentence, not as 「证据不足」.
+    const hint = labels.hint ? labels.hint(item) : null;
+    const flags = [hint
+      ? `[${escapeHint(hint)}](#unverified-${index})`
+      : `[${escapeLabel(`${labels.insufficient}：${labels.reason(item.reason)}`)}](#unverified-${index})`];
     if (item.numbers.length) flags.push(`[${escapeLabel(`${labels.numbers}：${item.numbers.join("、")}`)}](#unverified-num-${index})`);
     const suffix = ` ${flags.join(" ")}`;
     // A table row keeps its closing bar so the flag stays inside the last cell.
