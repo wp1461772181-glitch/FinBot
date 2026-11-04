@@ -84,8 +84,6 @@ RETRYABLE_PROVIDER={'provider_protocol_too_large','provider_incomplete_stream','
 # Each attempt of a slow-reachability tool costs a whole per-tool budget, so an immediate retry
 # turns one bad search into minutes of silence. Public web research gets a single attempt.
 MAX_ATTEMPTS={'web_research':1}
-# Authorization guards only: these words never select a route or tool.
-NEGATED_WRITE=re.compile(r'(?:不要|别|勿|无需|不用|不能|不想|禁止|do not|don.t|never|without)[^，。；;.!?\n]{0,35}(?:导入|入库|放入|保存|抓取|刷新|分析|索引|预测|初始化|扫描|加入|移除|import|save|ingest|fetch|refresh|analy[sz]e|forecast|scan|index|add|remove)',re.I)
 URL=re.compile(r'https://[^\s<>"）)]+',re.I)
 SCOPE_ID=re.compile(r'\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b|\b\d{10}-\d{2}-\d{6}\b')
 
