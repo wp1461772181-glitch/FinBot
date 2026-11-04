@@ -228,7 +228,7 @@ CONTROL_PREFIXES=('confirm:','authorize:','cancel:','change:')
 SYNC_DONE={'complete','completed','created','succeeded','succeeded_no_change','already_exists'}
 REPAIRABLE={'unsupported_numeric_claim','insufficient_numeric_evidence','unsupported_claim','invalid_citation','missing_citation',
             'quote_not_found','quote_too_short','unsupported_numeric','field_mismatch',
-            'derived_requires_calculate','bad_ordinal','claims_missing'}
+            'bad_ordinal','claims_missing'}
 MAX_REPAIR_ROUNDS=2
 # Tools whose results are the product's own state; an answer narrating them is held to that state.
 SYSTEM_STATE_TOOLS={'query_system_status','query_research_queue','add_to_research_queue','remove_from_research_queue','open_page','select_stock','list_routines'}
@@ -241,7 +241,7 @@ REPAIR_RETRY_NOTE=('上一次修订回复调用了工具或没有正文。修订
     '没有来源支持的句子保持原样，只输出原样的回答正文，只改 [n] 编号。')
 CLAIM_REPAIR_NOTE=('claim_issues 里 quote_not_found 或 quote_too_short 的句子，如果 cited_sources 里有对应原文，请只把 [n] 改到载有该说法的来源；'
     '对不上来源的句子保持原样，不要删、不要改写、不要写成待核对。'
-    'derived_requires_calculate 的增长率、毛利率、差额、波动率只能引用本轮已有的 calculate 或 calculate_formula 结果，没有就保持原样。'
+    'unsupported_numeric 的数字如果是推算值（增长率、毛利率、差额、波动率等），只能引用本轮已有的 calculate 或 calculate_formula 结果，没有就保持原样。'
     '价格、XBRL、已保存预测、calculate 和 calculate_formula 用 evidence.type=field 绑定字段和数值，不要编造一段引文。')
 CLAIM_EVIDENCE_NOTE=('【依据】回答正文之后另起一段，只输出一个 JSON 对象 {"claims":[...]}，不要用它代替正文。'
     '每条包含 id、statement、citation_ordinal 和 evidence。'
@@ -2753,7 +2753,7 @@ class Turn:
                 claim_issues=[{'id':item.get('id'),'reason':item.get('reason'),'citation_ordinal':item.get('citation_ordinal'),
                                'statement':str(item.get('statement') or '')[:300]} for item in self.last_claim_issues[:8]]
                 if claim_issues:payload['claim_issues']=claim_issues
-                quote_guidance=any(item.get('reason') in {'quote_not_found','quote_too_short','derived_requires_calculate','field_mismatch'} for item in claim_issues)
+                quote_guidance=any(item.get('reason') in {'quote_not_found','quote_too_short','unsupported_numeric','field_mismatch'} for item in claim_issues)
                 messages=[*self.tool_messages(True),{'role':'assistant','content':draft},
                     {'role':'user','content':json.dumps(payload,ensure_ascii=False)},
                     {'role':'system','content':REPAIR_INSTRUCTION},

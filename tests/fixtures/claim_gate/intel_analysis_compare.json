@@ -114,5 +114,5 @@
     ]
   },
   "expect_accepted": ["version2", "model2", "assets", "direct_growth"],
-  "expect_reasons": ["derived_requires_calculate", "field_mismatch", "quote_not_found"]
+  "expect_reasons": ["unsupported_numeric", "field_mismatch", "quote_not_found"]
 }

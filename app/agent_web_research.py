@@ -136,13 +136,6 @@ def _valid_timestamp(value: str) -> str | None:
 # shown; the evidence gate still decides what counts as evidence, and nothing here adds text.
 FOCUS_LIMIT = 4_000
 _GAP = " … "
-# Subjects that really are companies when they head a metric sentence.  Analysts, outlets,
-# executives and product lines (Reuters, Management, iPhone) are NOT other companies: they
-# are how the asked company's own news is phrased, and filtering them gutted the excerpts.
-_KNOWN_COMPANY_SUBJECTS = frozenset((
-    "samsung", "google", "microsoft", "meta", "amazon", "intel", "nvidia", "tesla",
-    "apple", "qualcomm", "broadcom", "tsmc", "oracle", "netflix", "amd",
-))
 # The tables of deterministic_confidence_gate (agent_workflow/graph.py); a test reads that source
 # and fails when either side drifts.
 METRIC_GROUPS = {
@@ -168,8 +161,6 @@ _CLAUSE_BREAK = re.compile(r"[\s,，、;；:：]")
 _MAX_GROUPS = 12
 
 
-# A company the sentence names that the query did not ask for: its figures are not the asked company's,
-# whatever sentence or headline comes before them.
 def _member_pattern(member: str, *, whole_word: bool = False) -> str:
     escaped = re.escape(member)
     if not member.isascii():
@@ -293,20 +284,9 @@ def focus_excerpt(text: str, query: str, limit: int = FOCUS_LIMIT, heading: str 
         """A metric sentence that does not name the company itself."""
         return strict and bool(hits[index] & metric) and not hits[index] & entity
 
-    def other_company(index: int) -> bool:
-        """The sentence names a known company the query did not ask for (and not the asked one)."""
-        start, end = spans[index]
-        passage=text[start:end]
-        subjects=re.findall(r"\b([A-Z][A-Za-z]+)(?:'s)?\s+(?:said|reported|revenue|sales|earnings|announced|introduced)\b",passage)
-        return any(subject.casefold() in _KNOWN_COMPANY_SUBJECTS
-                   and not any(groups[n].search(subject) for n in entity)
-                   and subject.casefold() not in _GENERIC_LATIN for subject in subjects)
-
     def eligible(index: int) -> bool:
         if not needs_neighbour(index):
             return True
-        if other_company(index):   # its own subject is a known other company: nothing before it can change that
-            return False
         return (index > 0 and bool(hits[index - 1] & entity)) or (index == 0 and titled)
 
     def render(indices: list[int]) -> str:

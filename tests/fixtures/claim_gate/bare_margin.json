@@ -21,5 +21,5 @@
     ]
   },
   "expect_accepted": [],
-  "expect_reasons": ["derived_requires_calculate"]
+  "expect_reasons": ["unsupported_numeric"]
 }

@@ -87,7 +87,7 @@ def test_field_evidence_price_ok_and_bad_ordinal_drops():
     assert issues[0]["reason"] == "bad_ordinal"
 
 
-def test_computed_margin_requires_calculate_but_directly_reported_margin_passes():
+def test_computed_margin_is_unsupported_numeric_but_directly_reported_margin_passes():
     raw_cells = "Revenue was 100.0 and cost of sales was 53.8 for the fiscal year."
     computed = _quote_claim("Gross margin was 46.2%.", raw_cells)
     accepted, issues = reviewed_claims(
@@ -96,7 +96,7 @@ def test_computed_margin_requires_calculate_but_directly_reported_margin_passes(
         {1: raw_cells},
     )
     assert accepted == []
-    assert issues[0]["reason"] == "derived_requires_calculate"
+    assert issues[0]["reason"] == "unsupported_numeric"
 
     reported = "Gross margin was 46.2 percent for the fiscal year ended September 28."
     direct = _quote_claim("Gross margin was 46.2%.", reported)

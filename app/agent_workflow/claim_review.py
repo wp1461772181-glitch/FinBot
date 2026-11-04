@@ -253,9 +253,12 @@ def _enforce_lines(prose, accepted, issues, citations, bodies, *, claims_missing
             kept_lines.append(line)
             continue
         reason = _line_warning(stripped, reasons_for, claims_missing=claims_missing, accepted=accepted)
-        if numbers_supported(_CITATION_MARKER.sub(" ", stripped), allowed, header_context=header):
+        row_miss = bool(numbers_supported(_CITATION_MARKER.sub(" ", stripped), allowed, header_context=header))
+        if row_miss:
             reason = "unsupported_numeric"
-        if reason in DROP_REASONS:
+        # A claim whose figure the cited source lacks only warns when some evidence of the turn holds
+        # that figure (a wrong [n], not an invented number); the row-level check above decides removal.
+        if reason in DROP_REASONS and not (reason == "unsupported_numeric" and not row_miss):
             dropped.append((stripped, reason))
             if reason not in display:
                 display.append(reason)

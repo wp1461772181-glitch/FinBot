@@ -1347,13 +1347,6 @@ def labelled_inference_lines(answer,citations,*,user_text=''):
     return out
 
 
-# Derived rates are not free rewrites of a raw cell. Keyword list stays small and fixture-driven.
-_DERIVED_CLAIM = re.compile(
-    r"growth|margin|yoy|year-over-year|同比|增长率|毛利率|净利率|差额|增速",
-    re.I,
-)
-
-
 class ClaimGateResult:
     """Accepted claims plus drop issues. Iterates as ``(accepted, issues)``."""
 
@@ -1404,7 +1397,6 @@ def reviewed_claims(claims, citations, source_bodies=None, *, min_chars=24):
         if citation is None:
             _drop(issues, audit, claim, "bad_ordinal")
             continue
-        derived = bool(_DERIVED_CLAIM.search(claim.statement)) and not _calculation_citation(citation)
         if isinstance(claim.evidence, FieldEvidence):
             if not field_evidence_matches(claim.evidence, citation):
                 _drop(issues, audit, claim, "field_mismatch")
@@ -1412,7 +1404,7 @@ def reviewed_claims(claims, citations, source_bodies=None, *, min_chars=24):
             material = _citation_material(citation)
             unsupported = numbers_supported(claim.statement, material)
             if unsupported:
-                _drop(issues, audit, claim, "derived_requires_calculate" if derived else "unsupported_numeric", values=unsupported)
+                _drop(issues, audit, claim, "unsupported_numeric", values=unsupported)
                 continue
             accepted.append(claim)
             continue
@@ -1429,7 +1421,7 @@ def reviewed_claims(claims, citations, source_bodies=None, *, min_chars=24):
         context = header_context(source, bound.start_char)
         unsupported = numbers_supported(claim.statement, bound.resolved_quote, header_context=context)
         if unsupported:
-            _drop(issues, audit, claim, "derived_requires_calculate" if derived else "unsupported_numeric", values=unsupported)
+            _drop(issues, audit, claim, "unsupported_numeric", values=unsupported)
             continue
         audit["quote_match_kinds"].append(bound.match_kind)
         audit["resolved_span_hashes"].append(hashlib.sha256(bound.resolved_quote.encode()).hexdigest())
@@ -1462,10 +1454,6 @@ def _drop(issues, audit, claim, reason, **extra):
         **extra,
     })
     audit["drop_reasons"].append(reason)
-
-
-def _calculation_citation(citation):
-    return citation.get("source_type") in {"calculation", "calculate", "formula_calculation"} or isinstance(citation.get("calculation"), dict)
 
 
 def _source_body(bodies, ordinal, citation):
