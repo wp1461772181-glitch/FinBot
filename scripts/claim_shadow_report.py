@@ -162,7 +162,7 @@ def run_preflight(args: argparse.Namespace) -> int:
     dir_path = Path(args.dir or os.environ.get("CLAIM_JUDGE_SHADOW_DIR", "/opt/finbot/judge-shadow"))
 
     try:
-        from app.agent_model_catalog import catalog
+        from app import agent_model_catalog as catalog
         resolved = catalog.resolve(model_name)
         key_len = len(resolved.get("api_key") or "")
         key_status = f"present (len {key_len})" if key_len > 0 else "missing"

@@ -507,3 +507,50 @@ def test_private_turn_leaves_no_raw_text(monkeypatch, tmp_path: Path):
         assert "100000" not in content
 
     asyncio.run(_run())
+
+
+def test_real_catalog_resolve_import_regression(monkeypatch, tmp_path: Path):
+    """Regression test: real catalog resolve import path without set_test_resolve_fn."""
+    async def _run():
+        monkeypatch.setenv("CLAIM_JUDGE_SHADOW", "on")
+        monkeypatch.setenv("CLAIM_JUDGE_SHADOW_DIR", str(tmp_path.resolve()))
+        monkeypatch.setenv("CLAIM_JUDGE_SHADOW_MODEL", "background")
+        monkeypatch.setenv("CLAIM_JUDGE_SHADOW_EXPECT_MODEL", "deepseek/deepseek-v4-flash")
+        monkeypatch.setattr("app.agent_chat_identity.owner_credential_matches", lambda cred: True)
+
+        monkeypatch.setattr(
+            "app.agent_model_catalog.resolve",
+            lambda name: {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash", "api_key": "fake"},
+        )
+        set_test_judge_fn(AsyncMock(return_value=JudgeResult(status="ok", verdict="supported", quote="revenue rose 8%", quote_verified=True, quote_ordinal=1)))
+
+        direct_result = {
+            "answer": "Northwind 第三季度营收增长 8% [1]。",
+            "citations": [{"ordinal": 1, "quote": "revenue rose 8%", "source_type": "official_filing", "saved_text": "full_document"}],
+            "result_sets": [],
+            "status": "succeeded",
+            "reason": "normal",
+            "route": "A",
+            "unverified_lines": [],
+            "audit": {},
+        }
+
+        runtime = MagicMock()
+        runtime.context = MagicMock(unattended=False, provider="openrouter", model="deepseek/deepseek-v4-flash", identity_credential="owner-cred")
+        state = {"question": "Northwind 营收情况？", "messages": []}
+
+        with patch("app.agent_workflow.direct.run_direct_turn", AsyncMock(return_value=dict(direct_result))):
+            with patch("app.agent_workflow.graph.get_stream_writer") as mock_writer:
+                mock_writer.return_value = MagicMock()
+                await _direct_agent_turn(state, runtime)
+
+                if _TASKS:
+                    await asyncio.gather(*list(_TASKS))
+
+                files = list(tmp_path.glob("*.jsonl"))
+                assert len(files) == 1
+                record = json.loads(files[0].read_text(encoding="utf-8").splitlines()[0])
+                assert record["outcome"] == "judged"
+
+    asyncio.run(_run())
+

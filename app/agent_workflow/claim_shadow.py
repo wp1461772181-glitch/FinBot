@@ -341,7 +341,8 @@ async def _run(snapshot: ShadowTurn) -> None:
                 resolved = None
         else:
             try:
-                from app.agent_model_catalog import catalog, CatalogError
+                from app import agent_model_catalog as catalog
+                from app.agent_model_catalog import CatalogError
                 resolved = await asyncio.to_thread(catalog.resolve, model_name)
             except (CatalogError, Exception) as exc:
                 logger.warning("Catalog resolve failed: %s", type(exc).__name__)
