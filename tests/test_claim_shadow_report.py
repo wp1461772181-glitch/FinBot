@@ -1,4 +1,5 @@
 """Unit tests for scripts/claim_shadow_report.py (§4.3, §4.5, §5, §6.3)."""
+import argparse
 import json
 from pathlib import Path
 
@@ -8,6 +9,9 @@ from scripts.claim_shadow_report import (
     determine_conclusion,
     load_jsonl_turns,
     load_reviews,
+    run_export,
+    run_progress,
+    run_report,
     scan_for_secrets,
     wilson_interval,
 )
@@ -159,3 +163,65 @@ def test_secret_scan_detects_bearer_and_sk(tmp_path: Path):
     clean2, note2 = scan_for_secrets(tmp_path)
     assert clean2 is False
     assert note2 == "leaked.jsonl"
+
+
+def _write_shadow_turns(directory: Path, rows: list[dict]) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "2026-11-05.1.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+
+
+def test_progress_reads_env_dir_when_dir_arg_is_empty(tmp_path: Path, monkeypatch, capsys):
+    """Regression: --dir defaults to "", and Path("") read the current directory, so --progress printed 0 turns."""
+    shadow = tmp_path / "shadow"
+    _write_shadow_turns(shadow, [
+        {"turn_id": "t1", "outcome": "judged", "counted": True, "sentence_candidates": 2},
+        {"turn_id": "t2", "outcome": "skipped", "counted": False, "sentence_candidates": 0},
+        {"turn_id": "t3", "outcome": "judged", "counted": True, "sentence_candidates": 1},
+    ])
+    monkeypatch.setenv("CLAIM_JUDGE_SHADOW_DIR", str(shadow))
+    monkeypatch.delenv("CLAIM_JUDGE_SHADOW_TARGET_TURNS", raising=False)
+
+    assert run_progress(argparse.Namespace(dir="")) == 0
+
+    out = capsys.readouterr().out
+    assert "Total turns recorded: 3" in out
+    assert "Counted turns: 2 / 100" in out
+
+
+def test_export_reads_env_dir_when_dir_arg_is_empty(tmp_path: Path, monkeypatch, capsys):
+    """Same fallback for --export: an empty --dir must not read the current directory."""
+    shadow = tmp_path / "shadow"
+    _write_shadow_turns(shadow, [{
+        "turn_id": "t1", "question": "q", "counted": True, "sources": {},
+        "sentences": [{"idx": 0, "text": "AMD closed at 100.", "status": "ok", "verdict": "contradiction",
+                       "quote_verified": True, "ordinals": [1]}],
+    }])
+    monkeypatch.setenv("CLAIM_JUDGE_SHADOW_DIR", str(shadow))
+    args = argparse.Namespace(export="full", dir="", out=str(tmp_path / "out"), seed=42,
+                              all_supported=False, pretriage="")
+
+    assert run_export(args) == 0
+
+    assert "Exported 1 items" in capsys.readouterr().out
+
+
+def test_report_reads_env_dir_when_dir_arg_is_empty(tmp_path: Path, monkeypatch):
+    """Same fallback for --report: the counted-turn line must come from the env directory."""
+    shadow = tmp_path / "shadow"
+    _write_shadow_turns(shadow, [
+        {"turn_id": "t1", "outcome": "judged", "counted": True},
+        {"turn_id": "t2", "outcome": "skipped", "counted": False},
+    ])
+    monkeypatch.setenv("CLAIM_JUDGE_SHADOW_DIR", str(shadow))
+    monkeypatch.delenv("CLAIM_JUDGE_SHADOW_TARGET_TURNS", raising=False)
+    out_path = tmp_path / "report.md"
+    args = argparse.Namespace(dir="", reviews=str(tmp_path / "reviews.jsonl"), out=str(out_path),
+                              stage1="", exclude_conversation=[])
+
+    assert run_report(args) == 0
+
+    text = out_path.read_text(encoding="utf-8")
+    assert "总记录轮数: 2" in text
+    assert "计入轮数 (counted=true): 1 / 100" in text

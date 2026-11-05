@@ -46,6 +46,27 @@ MAX_LITERAL=Decimal(1000)
 MAX_LITERAL_DECIMALS=4
 
 
+# Literals the reconciliation never rewrites to an input: CONSTANTS, and 2 (a plain factor the reader sees; it is not in CONSTANTS).
+RECONCILE_EXEMPT=CONSTANTS|{2}
+
+
+class _Unbound(Exception):pass
+
+
+def _bind_literals(tree,values):
+    """Literal reconciliation: a formula that writes a sourced input's number out in full ("(507.12-521.91)/521.91*100")
+    is rewritten to the input names, so it then passes the same checks as any named formula.  Every literal that is not
+    a constant must equal exactly one input's value; an unmatched or ambiguous literal means no binding (``None``)."""
+    class Rename(ast.NodeTransformer):
+        def visit_Constant(self,node):
+            if type(node.value) not in (int,float) or node.value in RECONCILE_EXEMPT:return node
+            matches=[name for name,value in values.items() if value==Decimal(str(node.value))]
+            if len(matches)!=1:raise _Unbound()
+            return ast.copy_location(ast.Name(id=matches[0],ctx=ast.Load()),node)
+    try:return Rename().visit(tree)
+    except _Unbound:return None
+
+
 def calculate(args, citations, user_text=''):
     """``user_text`` is what the person typed (``Turn.user_stated_text``); an input marked ``user_stated`` must be
     one of its figures.  ``None`` is a replay of a stored calculation: its user-stated inputs were bound when
@@ -98,7 +119,12 @@ def calculate(args, citations, user_text=''):
     try:
         tree=ast.parse(expression,mode='eval')
         if len(list(ast.walk(tree)))>80:raise ValueError('invalid_calculation')
-        if {n.id for n in ast.walk(tree) if isinstance(n,ast.Name)}!=set(values):raise ValueError('invalid_calculation')
+        if {n.id for n in ast.walk(tree) if isinstance(n,ast.Name)}!=set(values):
+            # Names and inputs disagree: the formula may have written an input's number out in full.  Rewrite
+            # those literals to the input names, then run every check below on the rewritten formula, unchanged.
+            tree=_bind_literals(tree,values)
+            if tree is None or {n.id for n in ast.walk(tree) if isinstance(n,ast.Name)}!=set(values):raise ValueError('invalid_calculation')
+            expression=ast.unparse(tree.body)
         decimals=args.get('decimals',2)
         if type(decimals) is not int or not 0<=decimals<=8:raise ValueError('invalid_calculation')
         with localcontext() as ctx:

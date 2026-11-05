@@ -88,3 +88,45 @@ def test_exact_figures_unchanged():
             calculate({'expression':'a','inputs':[{'name':'a','value':wrong,'source_ordinal':1}]},source)
     assert format_price(PRICE)=='92.07' and format_price(100.0)=='100' and format_price(65.76000213623047)=='65.76'
     assert matches_source(Decimal('92.07'),{Decimal(str(PRICE))}) and not matches_source(Decimal('92.1'),{Decimal(str(PRICE))})
+
+
+# --- Literal reconciliation: a formula that writes a sourced input's number out in full ----------------------------
+
+MSFT_SOURCES=[{'ordinal':3,'source_type':'saved_price','quote':'507.12'},{'ordinal':4,'source_type':'saved_price','quote':'521.91'}]
+MSFT_INPUTS=[{'name':'a','value':'507.12','source_ordinal':3},{'name':'b','value':'521.91','source_ordinal':4}]
+
+def test_a_formula_written_with_sourced_numbers_is_reconciled_to_its_inputs():
+    result=calculate({'expression':'(507.12-521.91)/521.91*100','inputs':MSFT_INPUTS},MSFT_SOURCES)
+    assert result['value']=='-2.83'
+    assert result['parents']==[3,4]
+    assert result['expression']=='(a - b) / b * 100'
+
+def test_a_written_number_matching_no_input_is_still_refused():
+    with pytest.raises(ValueError,match='invalid_calculation'):
+        calculate({'expression':'(507.12-521.91)/521.91*100','inputs':[MSFT_INPUTS[0]]},MSFT_SOURCES)
+
+def test_a_written_number_held_by_two_inputs_from_different_sources_is_ambiguous():
+    sources=MSFT_SOURCES+[{'ordinal':5,'source_type':'reported_figure','quote':'521.91'}]
+    inputs=MSFT_INPUTS+[{'name':'c','value':'521.91','source_ordinal':5}]
+    with pytest.raises(ValueError,match='invalid_calculation'):
+        calculate({'expression':'(507.12-521.91)/521.91*100','inputs':inputs},sources)
+
+def test_a_constant_is_not_rewritten_even_when_an_input_holds_the_same_value():
+    # 100 is also an input's value here.  Rewriting it would give "(a - b) / c * c": same number, different citation.
+    sources=MSFT_SOURCES+[{'ordinal':5,'source_type':'reported_figure','quote':'100'}]
+    inputs=MSFT_INPUTS+[{'name':'c','value':'100','source_ordinal':5}]
+    result=calculate({'expression':'(507.12-b)/c*100','inputs':inputs},sources)
+    assert result['expression']=='(a - b) / c * 100'
+    assert result['value']=='-14.79'
+    assert 'constants' not in result
+
+def test_a_big_number_written_into_the_formula_still_launders_nothing():
+    sources=[{'ordinal':1,'source_type':'saved_price','quote':'25'}]
+    # Names match the inputs, so the literal path and the laundering guard decide: a*0+394 never moves with a.
+    with pytest.raises(ValueError,match='invalid_calculation'):
+        calculate({'expression':'a*0+394','inputs':[{'name':'a','value':'25','source_ordinal':1}]},sources)
+    # Names do not match: the 394 has no input to bind to, so reconciliation refuses it.
+    sources=sources+[{'ordinal':2,'source_type':'saved_price','quote':'12'}]
+    inputs=[{'name':'a','value':'25','source_ordinal':1},{'name':'b','value':'12','source_ordinal':2}]
+    with pytest.raises(ValueError,match='invalid_calculation'):
+        calculate({'expression':'a*0+394','inputs':inputs},sources)

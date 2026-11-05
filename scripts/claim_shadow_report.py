@@ -205,7 +205,7 @@ def run_preflight(args: argparse.Namespace) -> int:
 
 
 def run_progress(args: argparse.Namespace) -> int:
-    dir_path = Path(args.dir)
+    dir_path = Path(args.dir or os.environ.get("CLAIM_JUDGE_SHADOW_DIR", "/opt/finbot/judge-shadow"))
     target_turns = int(os.environ.get("CLAIM_JUDGE_SHADOW_TARGET_TURNS", DEFAULT_TARGET_TURNS))
     turns, skipped_lines = load_jsonl_turns(dir_path)
 
@@ -265,7 +265,7 @@ def classify_sentence_stratum(s: dict, turn: dict) -> str:
 
 def run_export(args: argparse.Namespace) -> int:
     mode = args.export  # "full" or "spot"
-    dir_path = Path(args.dir)
+    dir_path = Path(args.dir or os.environ.get("CLAIM_JUDGE_SHADOW_DIR", "/opt/finbot/judge-shadow"))
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     seed = getattr(args, "seed", 42)
@@ -458,7 +458,7 @@ def determine_conclusion(
 
 
 def run_report(args: argparse.Namespace) -> int:
-    dir_path = Path(args.dir)
+    dir_path = Path(args.dir or os.environ.get("CLAIM_JUDGE_SHADOW_DIR", "/opt/finbot/judge-shadow"))
     reviews_path = Path(args.reviews)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
