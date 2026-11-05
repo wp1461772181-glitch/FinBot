@@ -32,6 +32,12 @@ async def _direct_agent_turn(state: AgentWorkflowState, runtime: Runtime[AgentRu
     result = await run_direct_turn(state.get("question", ""), runtime.context, emit=publish,
                                    messages=state.get("messages", []), state=state)
     answer = result["answer"]
+    # LLM claim judge, stage 2 (shadow): takes a snapshot and returns at once; never touches the answer.
+    try:
+        from .claim_shadow import maybe_schedule
+        maybe_schedule(result, runtime.context, state)
+    except Exception:
+        pass
     # The turn's own checks have run: the full checking text of a source is not stored (a stored citation
     # that loses it is marked evidence_incomplete), so a later reader treats a miss as insufficient.
     from .evidence import persistable_citation, persistable_result_sets
