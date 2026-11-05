@@ -53,7 +53,7 @@ class FakeProvider:
         self.calls += 1
         assert "JSON" in system_prompt
         assert '"document_id":' in document_payload
-        assert model == "deepseek-flash"
+        assert model == "deepseek/deepseek-v4-flash"
         return ProviderResult(content=self.response, response_model="deepseek-flash-actual", usage={"total_tokens": 12})
 
 
@@ -217,7 +217,7 @@ def test_invalid_model_quote_never_reaches_cache():
     with SessionLocal() as db, pytest.raises(EventExtractionError, match="exact substring"):
         extract_document(document, db=db, provider_factory=lambda: provider)
     with SessionLocal() as db:
-        assert db.get(EventExtraction, cache_key_for(document, provider="deepseek", model="deepseek-flash", prompt_version=PROMPT_VERSION)) is None
+        assert db.get(EventExtraction, cache_key_for(document, provider="deepseek", model="deepseek/deepseek-v4-flash", prompt_version=PROMPT_VERSION)) is None
 
 
 def test_corrupted_cached_result_fails_without_building_a_provider():
@@ -225,7 +225,7 @@ def test_corrupted_cached_result_fails_without_building_a_provider():
     document = _document(document_id="corrupt-cache")
     with SessionLocal() as db:
         extract_document(document, db=db, provider_factory=lambda: FakeProvider(_valid_response()))
-        key = cache_key_for(document, provider="deepseek", model="deepseek-flash", prompt_version=PROMPT_VERSION)
+        key = cache_key_for(document, provider="deepseek", model="deepseek/deepseek-v4-flash", prompt_version=PROMPT_VERSION)
         row = db.get(EventExtraction, key)
         assert row is not None
         row.result = {
@@ -296,7 +296,7 @@ def test_deepseek_adapter_uses_json_mode_and_rejects_non_stop_response():
     assert result.content == '{"events":[]}'
     assert result.usage == {"total_tokens": 7}
     assert captured["response_format"] == {"type": "json_object"}
-    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert captured["extra_body"] == {"reasoning": {"effort": "none"}}
     assert captured["temperature"] == 0
     assert captured["max_tokens"] == 4096
 
@@ -339,7 +339,7 @@ def test_deepseek_adapter_rejects_a_refusal_even_when_content_is_present():
 
 
 def test_missing_key_is_a_clean_configuration_error(monkeypatch):
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(DeepSeekEventProvider, "_load_project_env", staticmethod(lambda: None))
-    with pytest.raises(EventProviderError, match="DEEPSEEK_API_KEY"):
+    with pytest.raises(EventProviderError, match="OPENROUTER_API_KEY"):
         DeepSeekEventProvider()

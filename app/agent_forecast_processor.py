@@ -281,7 +281,7 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
             # mapped to the validated material schema. Retry that bounded
             # failure once with a stronger model; a failed retry still leaves
             # the forecast explicitly without this analysis.
-            fallback_model = os.getenv("DEEPSEEK_ANALYSIS_RETRY_MODEL", "deepseek-v4-pro").strip()
+            fallback_model = os.getenv("DEEPSEEK_ANALYSIS_RETRY_MODEL", "deepseek/deepseek-v4-pro").strip()
             retry_key = f"{idempotency_key}:quality-retry-v1"
             try:
                 with self._session_factory() as db:
@@ -327,7 +327,7 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
                 db=db, source_type=source_type, source_id=source_id,
                 idempotency_key=idempotency_key,
                 force=False,
-                **({"model_override": os.getenv("DEEPSEEK_ANALYSIS_RETRY_MODEL", "deepseek-v4-pro").strip()}
+                **({"model_override": os.getenv("DEEPSEEK_ANALYSIS_RETRY_MODEL", "deepseek/deepseek-v4-pro").strip()}
                    if idempotency_key.endswith(":quality-retry-v1") else {}),
             )
 

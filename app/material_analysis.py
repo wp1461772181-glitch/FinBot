@@ -74,7 +74,7 @@ def request_material_analysis(
         if not api_key or len(api_key) < 8 or len(api_key) > 2048 or api_key.strip() != api_key:
             raise MaterialAnalysisError("api_key must be a trimmed string of 8 to 2048 characters")
     elif model_override is not None:
-        config = {"provider": "deepseek", "base_url": None, "model": model_override.strip(),
+        config = {"provider": "openrouter", "base_url": "https://openrouter.ai/api/v1", "model": model_override.strip(),
                   "api_key": None, "source": "environment"}
     else:
         config = _default_model_config(db)
@@ -202,7 +202,7 @@ def _default_model_config(db: Session) -> dict[str, Any]:
             model = configured_deepseek_model()
         except EventProviderError as exc:
             raise MaterialAnalysisError(str(exc), code="analysis_model_unconfigured", status_code=503) from exc
-        return {"provider": "deepseek", "base_url": None, "model": model, "api_key": None, "source": "environment"}
+        return {"provider": "openrouter", "base_url": "https://openrouter.ai/api/v1", "model": model, "api_key": None, "source": "environment"}
     api_key = None
     if settings.ciphertext:
         try:
@@ -229,8 +229,9 @@ def analysis_settings_summary(db: Session) -> dict[str, Any]:
             model = configured_deepseek_model()
         except EventProviderError:
             model = ""
-        return {"source": "environment", "provider": "deepseek", "base_url": None, "model": model,
-                "has_api_key": bool(os.getenv("DEEPSEEK_API_KEY")), "api_key_last4": None}
+        return {"source": "environment", "provider": "openrouter",
+                "base_url": "https://openrouter.ai/api/v1", "model": model,
+                "has_api_key": bool(os.getenv("OPENROUTER_API_KEY")), "api_key_last4": None}
     return {"source": "settings", "provider": settings.provider, "base_url": settings.base_url,
             "model": settings.model, "has_api_key": bool(settings.ciphertext),
             "api_key_last4": secret_last4(settings.ciphertext) if settings.ciphertext else None}

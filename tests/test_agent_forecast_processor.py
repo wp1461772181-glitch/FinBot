@@ -177,7 +177,7 @@ def test_failed_material_analysis_retries_once_with_stronger_deepseek_model(monk
         result_analysis_id = analysis_id
         return {"analysis_id": str(analysis_id), "source_manifest": {"content_sha256": "a" * 64}}
 
-    monkeypatch.setenv("DEEPSEEK_ANALYSIS_RETRY_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("DEEPSEEK_ANALYSIS_RETRY_MODEL", "deepseek/deepseek-v4-pro")
     processor = AgentForecastProcessor(
         session_factory=EmptySession,
         analysis_requester=requester,
@@ -195,7 +195,7 @@ def test_failed_material_analysis_retries_once_with_stronger_deepseek_model(monk
     assert len(calls) == 4
     assert calls[0]["idempotency_key"] == calls[1]["idempotency_key"]
     assert calls[2]["idempotency_key"].endswith(":quality-retry-v1")
-    assert calls[2]["model_override"] == "deepseek-v4-pro"
+    assert calls[2]["model_override"] == "deepseek/deepseek-v4-pro"
     assert calls[2]["force"] is False
 
 

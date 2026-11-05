@@ -1,4 +1,4 @@
-"""Small DeepSeek adapter for Week 6 event extraction.
+"""Call DeepSeek through OpenRouter for event extraction.
 
 The adapter deliberately exposes one JSON-only operation.  It has no web
 tools, retrieval, or agent loop: documents are fetched and stored separately
@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEFAULT_DEEPSEEK_MODEL = "deepseek-flash"
+DEEPSEEK_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_DEEPSEEK_MODEL = "deepseek/deepseek-v4-flash"
 
 
 class EventProviderError(RuntimeError):
@@ -46,9 +46,9 @@ class DeepSeekEventProvider:
         if client is None:
             if api_key is None:
                 self._load_project_env()
-                api_key = os.getenv("DEEPSEEK_API_KEY")
+                api_key = os.getenv("OPENROUTER_API_KEY")
             if not api_key:
-                raise EventProviderError("DEEPSEEK_API_KEY is required for an uncached DeepSeek extraction")
+                raise EventProviderError("OPENROUTER_API_KEY is required for an uncached DeepSeek extraction")
             client = self._create_client(api_key)
         self.model = model or os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)
         if not self.model.strip():
@@ -85,7 +85,7 @@ class DeepSeekEventProvider:
                     {"role": "user", "content": document_payload},
                 ],
                 response_format={"type": "json_object"},
-                extra_body={"thinking": {"type": "disabled"}},
+                extra_body={"reasoning": {"effort": "none"}},
                 temperature=0,
                 max_tokens=self._max_tokens,
             )
