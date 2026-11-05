@@ -320,8 +320,11 @@ def chat_text(text: str, unverified: list[dict] | None = None) -> str:
     """The answer as a Telegram chat message: the trailing sources block (a 「来源：」 heading, a rule, a list of
     [n] lines) is cut and the [n] markers are dropped from the sentences; links in the body stay.  A line the
     source check could not support (``unverified``, the stream's unverified_lines) stays and ends with 「（未核实）」."""
+    from .agent_workflow.evidence import HINT_REASONS
     lines = str(text or "").replace("\r\n", "\n").split("\n")
-    flagged = {key for key in (_line_key(item.get("line")) for item in (unverified or []) if isinstance(item, dict)) if key}
+    # A hint is a note on the sentence, not an unverified sentence: it gets no 「（未核实）」.
+    flagged = {key for key in (_line_key(item.get("line")) for item in (unverified or [])
+                               if isinstance(item, dict) and item.get("reason") not in HINT_REASONS) if key}
     # Walk up from the end over the appendix.  A blank line or a rule is cut only above a heading or a [n]
     # line, so an answer that merely ends with a rule keeps it.
     cut, found = len(lines), False

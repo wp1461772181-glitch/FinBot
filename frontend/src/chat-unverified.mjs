@@ -26,6 +26,17 @@ export const DEFAULT_REASON_KEY = "未能与来源核对";
 export const HINT_KEYS = {
   polarity_conflict: "这句与 [{n}] 的说法可能相反：“{quote}”，请自行判断",
   event_not_in_source: "数字与 [{n}] 一致，但这句里的事件说法在该来源中没有出现，请自行判断",
+  number_read_from_source: "这句里的数字在 [{n}] 等来源中有依据，依据如下，请自行判断",
+};
+
+/**
+ * The evidence the number review attached to an item (`evidence` on the item): what a source says, in its own
+ * words, and where it is. Never 「已核实」: a found figure is "written as", a derived one is "derived from".
+ */
+export const EVIDENCE_KEYS = {
+  found: "来源 [{n}] 写作「{quote}」，读作 {read}",
+  derived: "由 {sources} 推算：{method}（模型给出，请自行复核）",
+  conflict: "来源 [{n}] 对同一个量写作「{quote}」，与这句不一致，请自行判断",
 };
 
 const MARKER = /\[\d+(?:\s*[,，、;；]\s*\d+)*\]/g;
@@ -48,7 +59,25 @@ export function normalizeUnverified(items) {
       numbers: Array.isArray(item.numbers) ? item.numbers.filter((n) => typeof n === "string" && n.trim()).map((n) => n.trim()) : [],
       ...(Number.isInteger(item.ordinal) ? { ordinal: item.ordinal } : {}),
       ...(typeof item.snippet === "string" && item.snippet.trim() ? { snippet: item.snippet.trim() } : {}),
+      ...(Array.isArray(item.evidence) ? { evidence: item.evidence.filter(isEvidence) } : {}),
     }));
+}
+
+const isEvidence = (item) => Boolean(item) && typeof item === "object" && typeof item.figure === "string"
+  && ["found", "derived", "conflict"].includes(item.kind);
+
+const EVIDENCE_NO_BAR = (text) => String(text ?? "").replace(/\|/g, "｜");
+
+/** The text of one evidence item, or null. `t` translates a phrase key. Placeholders are filled by function, so a `$` in a quote stays as written. */
+export function evidenceText(evidence, t = (text) => text) {
+  const fill = (text, values) => Object.entries(values).reduce((out, [key, value]) => out.replace(`{${key}}`, () => EVIDENCE_NO_BAR(value)), text);
+  if (evidence?.kind === "found") return fill(t(EVIDENCE_KEYS.found), { n: evidence.ordinal ?? "?", quote: evidence.quote ?? "", read: evidence.read_as ?? "" });
+  if (evidence?.kind === "conflict") return fill(t(EVIDENCE_KEYS.conflict), { n: evidence.ordinal ?? "?", quote: evidence.quote ?? "" });
+  if (evidence?.kind === "derived") {
+    const sources = (evidence.operands ?? []).map((operand) => `[${operand.ordinal ?? "?"}]「${operand.quote ?? ""}」`).join(" 与 ");
+    return fill(t(EVIDENCE_KEYS.derived), { sources, method: evidence.method ?? "" });
+  }
+  return null;
 }
 
 /** The hint sentence for an item whose reason is a hint, otherwise null. `t` translates a phrase key. */
@@ -107,16 +136,23 @@ export function markUnverified(content, items, labels) {
       ? `[${escapeHint(hint)}](#unverified-${index})`
       : `[${escapeLabel(`${labels.insufficient}：${labels.reason(item.reason)}`)}](#unverified-${index})`];
     if (item.numbers.length) flags.push(`[${escapeLabel(`${labels.numbers}：${item.numbers.join("、")}`)}](#unverified-num-${index})`);
+    // What the sources say about the figures, shown beside the sentence whatever its state.
+    for (const evidence of item.evidence ?? []) {
+      const text = labels.evidence ? labels.evidence(evidence) : evidenceText(evidence);
+      if (text) flags.push(`[${escapeHint(text)}](#unverified-ev-${index})`);
+    }
     const suffix = ` ${flags.join(" ")}`;
     // A table row keeps its closing bar so the flag stays inside the last cell.
     return /^\s*\|.*\|\s*$/.test(raw) ? raw.replace(/\s*\|\s*$/, `${suffix} |`) : raw + suffix;
   }).join("\n");
 }
 
-/** `{ kind: "insufficient" | "numbers", index }` for a flag link, otherwise null. */
+/** `{ kind: "insufficient" | "numbers" | "evidence", index }` for a flag link, otherwise null. */
 export function parseFlagHref(href) {
-  const match = /^#unverified-(num-)?(\d+)$/.exec(String(href ?? ""));
-  return match ? { kind: match[1] ? "numbers" : "insufficient", index: Number(match[2]) } : null;
+  const match = /^#unverified-(num-|ev-)?(\d+)$/.exec(String(href ?? ""));
+  if (!match) return null;
+  const kind = match[1] === "num-" ? "numbers" : match[1] === "ev-" ? "evidence" : "insufficient";
+  return { kind, index: Number(match[2]) };
 }
 
 /** The sentence as the owner would repeat it: no markers, bullet or table bars. */

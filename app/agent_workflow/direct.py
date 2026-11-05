@@ -587,6 +587,8 @@ class Turn:
         # repeats itself has not run out of progress, it has lost the result it already holds.
         self.replays={};self.replayed=0
         self.last_issues=[];self.last_rejected=[];self.last_claim_issues=[];self.unverified_lines=[]
+        # Set when run() stops the turn early and marks it partially_succeeded; the number review keeps that status.
+        self.stop_partial=False
         # Langfuse trace handle for this turn (None unless configured); only this Turn ever holds it.
         self.obs=None
         self.completed_writes=set();self.resume_note=None;self.resuming=False
@@ -3155,6 +3157,7 @@ class Turn:
         if stop in GATHERING_STOPS:
             if GATHERING_STOPS[stop]:result['answer']+='\n\n'+GATHERING_STOPS[stop]
         else:
+            self.stop_partial=True
             if result['status']=='succeeded':result['status']='partially_succeeded'
             if result['reason']!=stop:self.audit['closing_guard']=result['reason']
             result['answer']=notes[stop]+'\n'+result['answer'] if stop in notes else result['answer']
@@ -3172,6 +3175,10 @@ async def run_direct_turn(question,context,*,emit,messages=None,state=None):
     try:result=await _guarded(turn)
     except BaseException as exc:
         observability.end_trace(turn.obs,error=type(exc).__name__);raise
+    # Number review (number_review.py): after the gate and every repair, before the terminal event; at most one
+    # batched judge call, and any failure leaves the unverified lines as they are.
+    from .number_review import settle as number_review_settle
+    result=await number_review_settle(turn,result)
     events=turn.audit.get('truncation_events') or []
     # Hints (polarity_conflict, event_not_in_source) are not unverified sentences: they are counted in the audit on their own.
     flagged=[item for item in turn.unverified_lines if not (isinstance(item,dict) and item.get('reason') in HINT_REASONS)]

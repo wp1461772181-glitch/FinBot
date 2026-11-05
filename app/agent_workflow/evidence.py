@@ -1032,7 +1032,9 @@ _NUMERIC_ONLY_SOURCE_TYPES = frozenset({
 
 # Notes that travel with a kept sentence (``unverified_lines`` items) but are not a verdict: they never
 # enter the repair, never lower the turn's status and never add the 「证据不足」 footnote.
-HINT_REASONS=frozenset({'polarity_conflict','event_not_in_source'})
+# ``number_read_from_source``: every figure of the line was read from a source by the number review
+# (``number_review.py``); its evidence travels with the item.
+HINT_REASONS=frozenset({'polarity_conflict','event_not_in_source','number_read_from_source'})
 _NO_EVIDENCE_PASSAGE=re.compile(r'没有(?:可核验)?(?:资料|证据)|无法(?:核实|确认)|no (?:verified )?evidence',re.I)
 
 def _passage_sources(passage,citations,indexed):
