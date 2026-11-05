@@ -326,3 +326,145 @@ def test_a_derived_binding_recalls_only_allowlisted_parents(monkeypatch):
     assert result["audit"]["history_citation_recall"]["reads"]==[
         {"turn_id":"old","ordinal":1,"ok":True},
         {"turn_id":"old","ordinal":3,"ok":True}]
+
+
+def _stored_web_answer(stored):
+    """An earlier answer whose manifest holds ``stored`` (as the turn persisted it), in the owner's conversation."""
+    from app.database import Base, SessionLocal, engine
+    from app.agent_chat_models import AgentConversation, AgentMessage
+    from app.agent_chat_store import owner_hash
+    Base.metadata.create_all(bind=engine)
+    conversation, turn = uuid4(), uuid4()
+    with SessionLocal() as db:
+        db.add(AgentConversation(id=conversation, owner_hash=owner_hash("owner")))
+        db.add(AgentMessage(conversation_id=conversation, turn_id=turn, sequence=1, role="assistant",
+                            content="苹果第三季度营收 949 亿美元 [1]。", status="complete", tool_calls={"citations": [stored]}))
+        db.commit()
+    return conversation, turn
+
+
+_APPLE_EXCERPT = "苹果第三季度营收 949 亿美元，同比增长 6%。"
+
+
+def _apple_page(services_line="服务收入达到 242 亿美元，同比增长 14%。"):
+    return _APPLE_EXCERPT + "门店与员工安排的段落。" * 200 + services_line
+
+
+def _apple_citation(check_text):
+    return {"ordinal": 1, "source_type": "web", "source_url": "https://example.com/apple-q3", "title": "苹果第三季度财报",
+            "observed_at": "2026-10-12T00:00:00+00:00", "published_at": None, "quote": _APPLE_EXCERPT,
+            "check_text": check_text, "truncated": True}
+
+
+def _read_back(conversation, turn):
+    from app.agent_workflow import evidence
+    from app.agent_workflow.history_citations import bind_history_citation, read_history_citation
+    context = AgentRuntimeContext("p", "m", "k", conversation_id=str(conversation), identity_credential="owner",
+        history_citation_catalogue=({"turn_id": str(turn), "answers_back": 1,
+                                     "sources": [{"ordinal": 1, "source_type": "web", "available": True}]},))
+    result = asyncio.run(read_history_citation({"turn_id": str(turn), "ordinal": 1}, context))
+    assert result["ok"], result
+    citations = []
+    assert bind_history_citation(result, citations)["ok"]
+    return citations
+
+
+def test_a_figure_only_in_the_full_page_checks_after_a_follow_up_reads_the_saved_source(disposable_database):
+    """The 追问轮 replay: the earlier answer cited a page whose excerpt does not state the figure; the page text does.
+    The saved manifest keeps that text, so the follow-up's figure checks out, while a figure the page never
+    states stays unsupported."""
+    from app.agent_workflow import evidence
+    from app.agent_workflow.evidence import persistable_citation
+    page = _apple_page()
+    conversation, turn = _stored_web_answer(persistable_citation(_apple_citation(page)))
+    citations = _read_back(conversation, turn)
+    assert citations[0]["check_text"] == page
+    assert evidence.number_check("服务收入达到 242 亿美元 [1]。", citations) == ([], [])
+    assert evidence.number_check("研发投入 777 亿美元 [1]。", citations) == ([777e8], [])
+
+
+def test_a_source_over_the_storage_cap_reads_back_partial_and_its_figure_is_insufficient(disposable_database):
+    from app.agent_workflow import evidence
+    from app.agent_workflow.evidence import persistable_citation
+    page = _apple_page() + "补充。" * (evidence.STORED_CHECK_TEXT_CHARS // 3)
+    assert len(page) > evidence.STORED_CHECK_TEXT_CHARS
+    conversation, turn = _stored_web_answer(persistable_citation(_apple_citation(page)))
+    citations = _read_back(conversation, turn)
+    assert "check_text" not in citations[0] and citations[0]["evidence_incomplete"] is True
+    assert evidence.number_check("服务收入达到 242 亿美元 [1]。", citations) == ([], [242e8])
+
+
+def test_the_browser_history_never_receives_the_checking_text(monkeypatch):
+    import app.agent_chat_stream as stream
+    page = _apple_page()
+    stored = {**_apple_citation(page), "evidence_incomplete": False}
+    rows = [{"role": "user", "content": "营收多少？", "status": "complete", "turn_id": "t1", "sequence": 1, "tool_calls": None},
+            {"role": "assistant", "content": "苹果第三季度营收 949 亿美元 [1]。", "status": "complete", "turn_id": "t1",
+             "sequence": 2, "tool_calls": {"citations": [stored], "audit": {}}}]
+    async def page_of_rows(*_args, **_kwargs):
+        return {"messages": rows, "has_more": False, "next_before": None}
+    monkeypatch.setattr(stream, "owned_message_page", page_of_rows)
+    body = asyncio.run(stream.get_messages("c", before=None, limit=20, x_chat_session="s" * 40))
+    shown = next(m for m in body["messages"] if m["role"] == "assistant")["citations"][0]
+    assert "check_text" not in shown and shown["quote"] == _APPLE_EXCERPT
+    assert "check_text" not in stream._client_citations([stored])[0]
+    assert stored["check_text"] == page
+
+
+def test_a_reference_binds_every_available_source_of_the_answer_it_names():
+    async def resolver(_):
+        return {"relationship":"followup","canonical_question":"引用原文","history_citations":[{"answers_back":3,"ordinal":11}]}
+    catalogue=({"turn_id":"latest","answers_back":1,"opening":"最新回答","sources":[]},
+               {"turn_id":"older","answers_back":3,"opening":"第一个问题的回答","sources":[
+                   {"ordinal":11,"available":True},{"ordinal":12,"available":True},{"ordinal":13,"available":False}]})
+    turn=_resolve_turn("第一个问题的回答里，这句话的依据是什么？",resolver,catalogue)
+    asyncio.run(turn.reference())
+    assert [(b["turn_id"],b["ordinal"]) for b in turn.bound_history_citations]==[("older",11),("older",12)]
+    assert "history_citation_binding_rejected" not in turn.audit
+
+
+def test_a_binding_stops_at_the_cap_and_says_how_many_sources_it_left_out():
+    async def resolver(_):
+        return {"relationship":"followup","canonical_question":"引用原文","history_citations":[{"answers_back":3,"ordinal":11}]}
+    catalogue=({"turn_id":"latest","answers_back":1,"opening":"最新回答","sources":[]},
+               {"turn_id":"older","answers_back":3,"opening":"第一个问题的回答","sources":[
+                   {"ordinal":n,"available":True} for n in range(11,19)]})
+    turn=_resolve_turn("第一个问题的回答里，这句话的依据是什么？",resolver,catalogue)
+    asyncio.run(turn.reference())
+    assert [b["ordinal"] for b in turn.bound_history_citations]==list(range(11,17))
+    assert turn.audit["history_citation_capped"]==2
+
+
+def test_a_source_already_read_is_not_read_again_for_a_derived_binding(monkeypatch):
+    from app.agent_workflow.direct import Turn
+    catalogue=({"turn_id":"old","answers_back":1,"sources":[
+        {"ordinal":12,"available":True},{"ordinal":13,"available":True},
+        {"ordinal":14,"available":True,"derived":True,"parents":[12]}]},)
+    context=AgentRuntimeContext("p","m","k",conversation_id="c",history_citation_catalogue=catalogue)
+    async def emit(_): pass
+    turn=Turn("原文",context,emit,[],{})
+    turn.bound_history_citations=[
+        {"turn_id":"old","ordinal":12,"answers_back":1,"derived":False,"parents":[]},
+        {"turn_id":"old","ordinal":13,"answers_back":1,"derived":False,"parents":[]},
+        {"turn_id":"old","ordinal":14,"answers_back":1,"derived":True,"parents":[12]}]
+    calls=[]
+    async def execute(name,args): calls.append(args["ordinal"]);return {"ok":True,"data":[{"quote":"source"}]}
+    turn.execute_read=execute
+    turn.accept=lambda *args: setattr(turn,"last_accepted",{"ok":True,"data":[{"quote":"source"}]})
+    async def publish(*_): pass
+    turn.publish_result=publish
+    assert asyncio.run(turn.recall_bound_citations()) is True
+    assert calls==[12,13]
+    recall=turn.audit["history_citation_recall"]
+    assert recall["reads"]==[{"turn_id":"old","ordinal":12,"ok":True},{"turn_id":"old","ordinal":13,"ok":True}]
+    assert recall["bindings"]==[{"turn_id":"old","ordinal":12,"derived":False},{"turn_id":"old","ordinal":13,"derived":False},
+                                {"turn_id":"old","ordinal":14,"derived":True}]
+
+
+def test_an_ordinary_follow_up_binds_nothing():
+    async def resolver(_):
+        return {"relationship":"followup","canonical_question":"再解释一下市盈率","history_citations":[]}
+    turn=_resolve_turn("再解释一下市盈率",resolver)
+    asyncio.run(turn.reference())
+    assert turn.bound_history_citations==[] and turn.pending is None
+    assert "history_citation_capped" not in turn.audit

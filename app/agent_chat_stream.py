@@ -268,6 +268,10 @@ def _restore_citations(items,credential=None):
    if valid and (not item.get('quote') or item['quote']==chunk.answer[:5000]):verified.append(item)
    else:verified.append({'ordinal':ordinal,'chunk_id':str(chunk.id),'title':'来源已失效','section':'','source_url':None,'observed_at':None,'source_type':'unavailable','truncated':False})
  return verified
+def _client_citations(items):
+ """Citations as the browser receives them.  The full checking text (check_text) is for the server's checks and
+ for reading a source back in a later answer; it is never sent to a client."""
+ return [{key:value for key,value in item.items() if key!="check_text"} if isinstance(item,dict) else item for item in items]
 class StreamRequest(BaseModel):
  @model_validator(mode="before")
  @classmethod
@@ -548,7 +552,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
                           bot=bot,asked_to_remember=bool((event.get("audit") or {}).get("profile_ask")),
                           provider=chosen.provider,model=chosen.model,
                           api_key=chosen.key(),base_url=chosen.base_url)
-     if restored:yield frame("citations",{"turn_id":turn,"items":restored})
+     if restored:yield frame("citations",{"turn_id":turn,"items":_client_citations(restored)})
      if unverified:yield frame("unverified_lines",{"turn_id":turn,"items":unverified})
      yield frame("done",{"conversation_id":cid,"turn_id":turn,"status":event.get("status","complete"),"reason":event.get("reason"),"thinking_ms":thinking_ms})
    if not terminal:raise HTTPException(502,"workflow_incomplete")
@@ -568,7 +572,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    await finish_conversation(cid,"failed")
    await mark_terminal_status(owner_hash(x_chat_session),cid,"failed",text_out)
    code=exc.detail if isinstance(exc,HTTPException) else "chat_failed"
-   if restored:yield frame("citations",{"turn_id":turn,"items":restored})
+   if restored:yield frame("citations",{"turn_id":turn,"items":_client_citations(restored)})
    diagnostic={"code":code,"status":"failed"}
    if isinstance(exc,ProviderFailure):
     diagnostic.update(stage=exc.stage,provider_status=exc.provider_status,
@@ -671,7 +675,7 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
    if isinstance(row.get("tool_calls"),dict) and isinstance(row["tool_calls"].get("audit"),dict):
     item["status"]=row["tool_calls"]["audit"].get("terminal_status",item["status"])
     item["reused_sources"]=row["tool_calls"]["audit"].get("reused_sources") is True
-   if isinstance(row.get("tool_calls"),dict) and isinstance(row["tool_calls"].get("citations"),list):item["citations"]=_restore_citations(row["tool_calls"]["citations"],x_chat_session)
+   if isinstance(row.get("tool_calls"),dict) and isinstance(row["tool_calls"].get("citations"),list):item["citations"]=_client_citations(_restore_citations(row["tool_calls"]["citations"],x_chat_session))
    if isinstance(row.get("tool_calls"),dict):
     stored_protocol=row["tool_calls"]
     if isinstance(stored_protocol.get("trace"),list):item["trace"]=stored_protocol["trace"]

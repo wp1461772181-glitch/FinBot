@@ -87,10 +87,10 @@ def test_zero_impact_on_answer_when_switch_off(monkeypatch, tmp_path: Path):
     assert len(list(tmp_path.glob("*.jsonl"))) == 0
 
 
-def test_direct_agent_turn_identical_output_and_check_text_stripped(monkeypatch, tmp_path: Path):
+def test_direct_agent_turn_identical_output_and_check_text_kept_within_cap(monkeypatch, tmp_path: Path):
     """Answer, citations, status, unverified_lines, audit completely identical;
 
-    stored citations lose check_text while shadow snapshot retains it.
+    stored citations keep their check_text (it is under the storage cap), and the shadow snapshot has it too.
     """
     async def _run():
         monkeypatch.setenv("CLAIM_JUDGE_SHADOW", "on")
@@ -109,7 +109,7 @@ def test_direct_agent_turn_identical_output_and_check_text_stripped(monkeypatch,
             "quote": "revenue rose 8%",
             "source_type": "official_filing",
             "saved_text": "full_document",
-            "check_text": "very long checking text that will be stripped by persistable_citation",
+            "check_text": "very long checking text kept by persistable_citation",
         }]
 
         direct_result = {
@@ -138,9 +138,9 @@ def test_direct_agent_turn_identical_output_and_check_text_stripped(monkeypatch,
                 if _TASKS:
                     await asyncio.gather(*list(_TASKS))
 
-                # The returned result citations MUST NOT have check_text
-                assert "check_text" not in res["citations"][0]
-                assert res["citations"][0]["evidence_incomplete"] is True
+                # The stored citations keep the full checking text (under the cap) and are not marked partial
+                assert res["citations"][0]["check_text"] == "very long checking text kept by persistable_citation"
+                assert "evidence_incomplete" not in res["citations"][0]
                 assert res["answer"] == direct_result["answer"]
                 assert res["audit"] == direct_result["audit"]
                 assert "shadow" not in res["audit"]  # No new keys in audit

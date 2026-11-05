@@ -273,6 +273,9 @@ def focus_excerpt(text: str, query: str, limit: int = FOCUS_LIMIT, heading: str 
     hits = [frozenset(n for n, group in enumerate(groups) if group.search(text, start, end)) for start, end in spans]
     if not any(hits):
         return text
+    # A navigation passage (mostly links) is not the lead of the page and fills no budget; it may still hold a hit.
+    navigation = frozenset(index for index, (start, end) in enumerate(spans)
+                           if link_share(text[start:end]) >= LINK_HEAVY_SHARE)
     titled = bool(entity and isinstance(heading, str) and heading
                   and any(groups[n].search(heading) for n in entity))
 
@@ -319,10 +322,12 @@ def focus_excerpt(text: str, query: str, limit: int = FOCUS_LIMIT, heading: str 
         if picked is None:
             break
         covered |= hits[picked]
-    if anchored(0):
+    if anchored(0) and 0 not in navigation:
         add(0)
     for index in sorted(range(len(spans)),
                         key=lambda index: (not hits[index], not anchored(index), -len(hits[index]), index)):
+        if index in navigation and not hits[index]:
+            continue
         add(index)
     return render(sorted(chosen))
 
@@ -352,10 +357,17 @@ def is_challenge_page(text: str) -> bool:
 
 
 _MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\([^)]*\)|https?://\S+")
+# From this share of link characters a text is navigation (a menu, a list of links), not prose.
+LINK_HEAVY_SHARE = 0.6
 BOILERPLATE_MARKERS = ("oops, something went wrong", "access denied", "403 forbidden", "404 not found",
                        "page not found", "enable javascript", "please enable cookies", "sign in to continue",
                        "are you a robot", "just a moment", "request blocked", "this page isn't available",
                        "页面不存在", "访问被拒绝", "请开启 javascript", "请启用 javascript")
+
+
+def link_share(text: str) -> float:
+    """The share of a text's characters that sit inside markdown links or bare URLs."""
+    return (len(text) - len(_MARKDOWN_LINK.sub("", text))) / len(text) if text else 0.0
 
 
 def boilerplate_reason(text: object) -> str | None:
@@ -369,8 +381,7 @@ def boilerplate_reason(text: object) -> str | None:
     prose = re.sub(r"[\s#*_>|\-–—•·]+", " ", _MARKDOWN_LINK.sub(" ", text)).strip()
     if any(marker in text[:400].lower() for marker in BOILERPLATE_MARKERS) and len(prose) < 600:
         return 'page_fetch_blocked'
-    link_chars = len(text) - len(_MARKDOWN_LINK.sub("", text))
-    if len(text) >= 300 and link_chars / len(text) >= 0.6 and len(prose) < 300:
+    if len(text) >= 300 and link_share(text) >= LINK_HEAVY_SHARE and len(prose) < 300:
         return 'page_without_text'
     return None
 
@@ -393,7 +404,7 @@ def extract_page(body: str, url: str, fetched_at: datetime) -> dict:
         "excerpt": full[:MAX_EXCERPT],
         "fetched_at": fetched_at.astimezone(UTC).isoformat(),
         "published_at": parser.published_at,
-        "truncated": len(body.encode("utf-8", "ignore")) > MAX_EXCERPT,
+        "truncated": len(full) > MAX_EXCERPT,
     }
     if len(full) > MAX_EXCERPT:
         # The excerpt is what is shown; the whole page text travels with the row (never shown) so a

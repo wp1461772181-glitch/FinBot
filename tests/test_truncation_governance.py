@@ -98,14 +98,37 @@ def test_unsupported_wins_when_a_figure_is_missing_from_a_complete_and_a_partial
     assert unsupported == [777e8] and insufficient == []
 
 
-def test_a_stored_citation_without_its_full_text_is_marked_partial():
-    stored = evidence.persistable_citation({'ordinal': 1, 'quote': 'x', 'check_text': 'x' * 9000})
-    assert 'check_text' not in stored and stored['evidence_incomplete'] is True
-    plain = {'ordinal': 2, 'quote': 'y'}
+def test_a_stored_citation_keeps_its_full_checking_text_up_to_the_cap():
+    """The full text is stored with the turn, so a later answer's figure can be checked against the source it cites.
+    Text over the cap is not kept, and the citation says so; text under it is complete and is not marked."""
+    cap = evidence.STORED_CHECK_TEXT_CHARS
+    kept = evidence.persistable_citation({'ordinal': 1, 'quote': 'x', 'check_text': 'x' * 9000})
+    assert kept['check_text'] == 'x' * 9000 and 'evidence_incomplete' not in kept
+    at_cap = {'ordinal': 2, 'quote': 'y', 'check_text': 'y' * cap}
+    assert evidence.persistable_citation(at_cap)['check_text'] == 'y' * cap
+    over = evidence.persistable_citation({'ordinal': 3, 'quote': 'z', 'check_text': 'z' * (cap + 1)})
+    assert 'check_text' not in over and over['evidence_incomplete'] is True and over['quote'] == 'z'
+    plain = {'ordinal': 4, 'quote': 'w'}
     assert evidence.persistable_citation(plain) is plain
-    sets = [{'id': 's', 'rows': [{'excerpt': 'a', '_evidence_text': 'a' * 9000}, {'excerpt': 'b'}]}]
+    sets = [{'id': 's', 'rows': [{'excerpt': 'a', '_evidence_text': 'a' * 9000}, {'excerpt': 'b'},
+                                 {'excerpt': 'c', '_evidence_text': 'c' * (cap + 1)}]}]
     rows = evidence.persistable_result_sets(sets)[0]['rows']
-    assert '_evidence_text' not in rows[0] and rows[0]['evidence_incomplete'] is True and rows[1] == {'excerpt': 'b'}
+    assert rows[0]['_evidence_text'] == 'a' * 9000 and 'evidence_incomplete' not in rows[0]
+    assert rows[1] == {'excerpt': 'b'}
+    assert '_evidence_text' not in rows[2] and rows[2]['evidence_incomplete'] is True
+
+
+def test_the_legacy_web_hydration_store_still_keeps_no_checking_text():
+    """semantic.save_result_set has its own 64 KB cap and is not the turn record: it keeps the old stripping."""
+    from app.agent_workflow.semantic import save_result_set
+    citation = {'ordinal': 1, 'source_type': 'web', 'source_url': 'https://example.com/a', 'quote': 'Revenue rose 12%.',
+                'title': 'A', 'observed_at': '2026-10-12T00:00:00+00:00', 'check_text': 'Revenue rose 12%. ' + 'x' * 100}
+    row = {'url': 'https://example.com/a', 'excerpt': 'Revenue rose 12%.', 'body_provenance': 'verified_server_gate',
+           'fetched_at': '2026-10-12T00:00:00+00:00', 'title': 'A'}
+    saved = save_result_set([], {'ok': True, 'data': [row]}, [citation], owner='o', conversation='c', turn='t',
+                            task='k', scope={})
+    stored = saved[0]['items'][0]['citation']
+    assert 'check_text' not in stored and stored['evidence_incomplete'] is True
 
 
 def _turn():

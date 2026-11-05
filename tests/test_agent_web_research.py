@@ -776,3 +776,30 @@ def test_research_named_span_leaves_out_undated_and_old_pages(monkeypatch):
     assert "https://example.com/undated" not in urls
     assert "https://example.com/fresh" in urls
     assert "https://example.com/old" not in urls
+
+
+def test_a_complete_short_page_in_long_markup_is_not_marked_truncated():
+    """The page text decides whether the excerpt was cut: a one-sentence article inside 10 KB of empty markup is complete."""
+    from app.agent_web_research import MAX_EXCERPT
+    markup = '<span class="nav-item" data-track="menu"></span>' * 200
+    html = f"<html><head><title>Short</title></head><body>{markup}<p>Revenue rose 12% in the quarter.</p></body></html>"
+    assert len(html.encode("utf-8")) > MAX_EXCERPT
+    page = extract_page(html, "https://example.com/", datetime(2026, 10, 12, tzinfo=timezone.utc))
+    assert page["excerpt"] == "Revenue rose 12% in the quarter."
+    assert page["truncated"] is False and "_evidence_text" not in page
+    long_html = f"<html><body><p>{'Revenue rose 12%. ' * 400}</p></body></html>"
+    long_page = extract_page(long_html, "https://example.com/", datetime(2026, 10, 12, tzinfo=timezone.utc))
+    assert long_page["truncated"] is True and len(long_page["_evidence_text"]) > MAX_EXCERPT
+
+
+def test_a_link_heavy_first_passage_is_neither_the_lead_nor_filler_of_the_excerpt():
+    """A navigation bar at the top of a page is mostly links: it is not kept as the lead and the budget
+    is not spent on it; the sentence holding the query terms is kept."""
+    from app.agent_web_research import focus_excerpt
+    nav = ("[Home](https://example.com/) [Markets](https://example.com/markets) "
+           "[Stocks](https://example.com/stocks) [News](https://example.com/news)")
+    text = "\n".join([nav, *(_filler(i) for i in range(70)), APPLE_HIT, *(_filler(100 + i) for i in range(10))])
+    assert len(text) > 4000
+    excerpt = focus_excerpt(text, "Apple revenue")
+    assert APPLE_HIT in excerpt
+    assert "[Home]" not in excerpt and "example.com/markets" not in excerpt

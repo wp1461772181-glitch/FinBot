@@ -294,11 +294,31 @@ def citation_check_text(citation: dict) -> str:
     return ' '.join([str(citation.get(key) or '') for key in ('quote', 'figures', 'check_text')] + quotes)
 
 
-def persistable_citation(citation: dict) -> dict:
-    """The citation as it is stored with the turn.
+# The full checking text a stored citation keeps.  A later answer that reads the source back checks its figures
+# against this text, so a figure the excerpt does not show is not "insufficient" for that reason alone.  Text over
+# the cap is not kept, and the citation says so (``evidence_incomplete``).
+STORED_CHECK_TEXT_CHARS = 120_000
 
-    The full checking text serves the turn's own checks and is not kept; a stored citation that
-    loses it says so (``evidence_incomplete``), so a later reader treats a miss as insufficient."""
+
+def _kept_text(value) -> bool:
+    return isinstance(value, str) and len(value) <= STORED_CHECK_TEXT_CHARS
+
+
+def persistable_citation(citation: dict) -> dict:
+    """The citation as it is stored with the turn: its full checking text is kept up to STORED_CHECK_TEXT_CHARS.
+
+    Text over the cap is dropped and the citation is marked ``evidence_incomplete``, so a later reader treats a
+    miss as insufficient.  Complete text is not marked."""
+    if not isinstance(citation, dict) or 'check_text' not in citation or _kept_text(citation['check_text']):
+        return citation
+    kept = {key: value for key, value in citation.items() if key != 'check_text'}
+    kept['evidence_incomplete'] = True
+    return kept
+
+
+def without_check_text(citation: dict) -> dict:
+    """The citation without its checking text, marked partial: for a store with its own size cap that is not the
+    turn record (the legacy web hydration in semantic.py)."""
     if not isinstance(citation, dict) or 'check_text' not in citation:
         return citation
     kept = {key: value for key, value in citation.items() if key != 'check_text'}
@@ -315,14 +335,16 @@ def without_evidence_text(outcome):
 
 
 def persistable_result_sets(sets):
-    """Saved result sets without the pages' full text; a row that loses it is marked partial for a later reuse."""
+    """Saved result sets with each page's full text kept up to STORED_CHECK_TEXT_CHARS; a row whose text is longer
+    loses it and is marked partial, so a later reuse treats a miss as insufficient."""
     out = []
     for saved in sets or []:
-        if not isinstance(saved, dict) or not any(isinstance(r, dict) and '_evidence_text' in r for r in saved.get('rows') or []):
+        if not isinstance(saved, dict) or not any(isinstance(r, dict) and '_evidence_text' in r and not _kept_text(r['_evidence_text'])
+                                                  for r in saved.get('rows') or []):
             out.append(saved)
             continue
         rows = [{**{k: v for k, v in r.items() if k != '_evidence_text'}, 'evidence_incomplete': True}
-                if isinstance(r, dict) and '_evidence_text' in r else r for r in saved['rows']]
+                if isinstance(r, dict) and '_evidence_text' in r and not _kept_text(r['_evidence_text']) else r for r in saved['rows']]
         out.append({**saved, 'rows': rows})
     return out
 

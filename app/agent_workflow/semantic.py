@@ -224,8 +224,9 @@ def save_result_set(existing: list[dict], result: dict, citations: list[dict], *
             continue
         shortened = len(excerpt) > 2500
         excerpt = excerpt[:2500]
-        from .evidence import persistable_citation
-        saved_citation = {**persistable_citation(citation), "truncated": bool(citation.get("truncated") or shortened)}
+        # This store has its own 64 KB cap and is not the turn record: it keeps no checking text.
+        from .evidence import without_check_text
+        saved_citation = {**without_check_text(citation), "truncated": bool(citation.get("truncated") or shortened)}
         if citation.get("source_type") == "web":
             saved_citation["quote"] = excerpt
             if shortened:

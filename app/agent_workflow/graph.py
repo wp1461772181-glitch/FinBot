@@ -38,8 +38,10 @@ async def _direct_agent_turn(state: AgentWorkflowState, runtime: Runtime[AgentRu
         maybe_schedule(result, runtime.context, state)
     except Exception:
         pass
-    # The turn's own checks have run: the full checking text of a source is not stored (a stored citation
-    # that loses it is marked evidence_incomplete), so a later reader treats a miss as insufficient.
+    # The turn's own checks have run.  Stored citations and result sets keep the full checking text of a source up
+    # to STORED_CHECK_TEXT_CHARS: a later answer that reads the source back checks its figures against it.  Text over
+    # the cap is dropped and the citation is marked evidence_incomplete, so a later reader treats a miss as insufficient.
+    # Clients never receive check_text (agent_chat_stream._client_citations).
     from .evidence import persistable_citation, persistable_result_sets
     result = {**result, "citations": [persistable_citation(c) for c in result.get("citations", [])],
               "result_sets": persistable_result_sets(result.get("result_sets", []))}

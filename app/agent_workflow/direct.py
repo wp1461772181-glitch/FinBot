@@ -122,6 +122,9 @@ def _extract_ticker_tokens(text: str) -> list[str]:
     return out
 
 
+# Most earlier-answer handles a turn binds and reads (the resolver's own list is capped at the same number).
+HISTORY_BINDING_LIMIT=6
+
 class HistoryCitationRef(BaseModel):
     model_config=ConfigDict(extra='forbid')
     answers_back:int=Field(ge=1,le=50)
@@ -285,7 +288,7 @@ REFERENCE_PROMPT=(
  'Preserve the active parent list across intervening detailed explanations. '
  'If no server item exists, quote a short exact source substring using assistant_previous, assistant_message:<id>, user_history or result_set:<id>. '
  'Earlier answer citations use their own namespace: source ordinal is NOT an assistant list position. Use history_citations, leaving referents empty unless there is a separate object reference. '
- 'Select answers_back and ordinal from citation_catalogue. If the user names a particular earlier answer (such as 第一个问题的回答 or 上上条), bind that answer even when the latest has no such source. '
+ 'Select answers_back and ordinal from citation_catalogue. 用户问上一回答中某句话或某个结论的依据、来源，且没有写出编号时，绑定 citation_catalogue 中该回答列出的全部来源（answers_back 为该回答，逐个 ordinal），不要只挑一个。 If the user names a particular earlier answer (such as 第一个问题的回答 or 上上条), bind that answer even when the latest has no such source. '
  'A bare [n] defaults to answers_back=1. If the latest assistant answer lacks it but an older answer has it, return relationship=clarify, history_citations=[], and clarification_answers containing the answers_back of the source-holding answer(s). The server renders their exact openings plus 另一个回答，请补充说明 when needed; never replace the real candidate with only the latest answer or a generic alternative. '
  'Example: answer 1 explains P/E without citations, answer 2 reports Apple revenue with source 1. “第一个问题的回答里引用 [1] 的原文” binds history_citations=[{answers_back:2,ordinal:1}]. “引用 [1] 的原文” instead returns relationship=clarify, clarification_answers=[2], history_citations=[]. '
  'For other genuine ambiguities provide a nonempty question and at least two distinct choices. In a clarification question use 编号 {n}, never citation-marker syntax such as [n], and make no financial factual claims. '
@@ -1306,21 +1309,36 @@ class Turn:
         return labels
 
     def bind_history_citations(self,value):
-        """Bind resolver-selected answer offsets to server-owned allowlisted handles."""
+        """Bind resolver-selected answer offsets to server-owned allowlisted handles.
+
+        A reference names an earlier answer, so every available source that answer lists is bound with it, the
+        one the resolver named first.  A handle is bound once.  Past HISTORY_BINDING_LIMIT the rest is counted in
+        the audit, not bound."""
         catalogue={}
         for entry in self.context.history_citation_catalogue:
             if isinstance(entry,dict):
                 catalogue[entry.get('answers_back')]=entry
-        bound=[];rejected=[]
+        bound=[];rejected=[];seen=set();left_out=0
+        def take(entry,source):
+            nonlocal left_out
+            key=(entry.get('turn_id'),source['ordinal'])
+            if key in seen:return
+            seen.add(key)
+            if len(bound)>=HISTORY_BINDING_LIMIT:left_out+=1;return
+            bound.append({'turn_id':entry.get('turn_id'),'ordinal':source['ordinal'],'answers_back':entry['answers_back'],
+                          'derived':bool(source.get('derived')),'parents':list(source.get('parents') or [])})
         for item in value or []:
             ref=item.model_dump() if isinstance(item,HistoryCitationRef) else item
             entry=catalogue.get(ref.get('answers_back')) if isinstance(ref,dict) else None
             source=next((s for s in (entry or {}).get('sources',[]) if isinstance(s,dict) and s.get('ordinal')==ref.get('ordinal')),None)
             if not entry or not source or not source.get('available',True):
                 rejected.append(ref);continue
-            bound.append({'turn_id':entry.get('turn_id'),'ordinal':source['ordinal'],'answers_back':entry['answers_back'],
-                          'derived':bool(source.get('derived')),'parents':list(source.get('parents') or [])})
+            take(entry,source)
+            for other in entry.get('sources',[]):
+                if isinstance(other,dict) and other.get('available',True) and type(other.get('ordinal')) is int:
+                    take(entry,other)
         if rejected:self.audit['history_citation_binding_rejected']=rejected
+        if left_out:self.audit['history_citation_capped']=left_out
         self.bound_history_citations=bound
         return bound
 
@@ -2879,15 +2897,15 @@ class Turn:
         return await self.agent_loop()
 
     async def recall_bound_citations(self):
-        """Recall resolver-bound citations before the normal A-route prelude."""
-        unique=[];seen=set()
+        """Recall resolver-bound citations before the normal A-route prelude.
+
+        Each saved source is read once: a derived binding reads its parents, and a parent that is named again
+        (by another binding, or as a parent of another derived one) is read at its first mention only."""
+        plan=[];planned=set();skipped=[];bindings=[];named=set()
         for binding in self.bound_history_citations:
-            key=(binding.get('turn_id'),binding.get('ordinal'))
-            if key in seen:continue
-            seen.add(key);unique.append(binding)
-        unique=unique[:6]
-        read_ok=0;skipped=[];reads=[]
-        for binding in unique:
+            name=(binding.get('turn_id'),binding.get('ordinal'))
+            if name not in named:
+                named.add(name);bindings.append({'turn_id':name[0],'ordinal':name[1],'derived':bool(binding.get('derived'))})
             targets=[]
             if binding.get('derived'):
                 entry=next((e for e in self.context.history_citation_catalogue if isinstance(e,dict) and e.get('turn_id')==binding.get('turn_id')),None)
@@ -2898,13 +2916,18 @@ class Turn:
                     targets.append(ordinal)
             else:targets=[binding.get('ordinal')]
             for ordinal in targets:
-                args={'turn_id':binding.get('turn_id'),'ordinal':ordinal}
-                outcome=await self.execute_read('read_history_citation',args)
-                reads.append({'turn_id':args['turn_id'],'ordinal':args['ordinal'],'ok':outcome.get('ok') is True})
-                self.accept('read_history_citation',args,outcome)
-                await self.publish_result('read_history_citation',outcome)
-                if outcome.get('ok') and self.last_accepted and self.last_accepted.get('ok'):read_ok+=1
-        self.audit['history_citation_recall']={'bound':len(unique),'read_ok':read_ok,'skipped_parents':skipped,'reads':reads}
+                key=(binding.get('turn_id'),ordinal)
+                if key in planned:continue
+                planned.add(key);plan.append({'turn_id':binding.get('turn_id'),'ordinal':ordinal})
+        read_ok=0;reads=[]
+        for args in plan[:HISTORY_BINDING_LIMIT]:
+            outcome=await self.execute_read('read_history_citation',args)
+            reads.append({'turn_id':args['turn_id'],'ordinal':args['ordinal'],'ok':outcome.get('ok') is True})
+            self.accept('read_history_citation',args,outcome)
+            await self.publish_result('read_history_citation',outcome)
+            if outcome.get('ok') and self.last_accepted and self.last_accepted.get('ok'):read_ok+=1
+        self.audit['history_citation_recall']={'bound':len(bindings),'bindings':bindings,'read_ok':read_ok,'skipped_parents':skipped,
+                                               'reads':reads,'unread':max(0,len(plan)-HISTORY_BINDING_LIMIT)}
         return read_ok>0
 
     async def agent_loop(self):
