@@ -35,6 +35,7 @@ from .agent_chat_api import router as agent_chat_router
 from .agent_chat_stream import router as agent_chat_stream_router
 from .knowledge.api import router as knowledge_router
 from .agent_chat_identity import router as agent_chat_identity_router
+from .agent_public_marks_api import router as agent_public_marks_router
 from .agent_chat_models import AgentConversation, AgentMessage, AgentFAQ
 from .agent_workflow.models import AgentConsent, AgentWebSource
 from .agent_faq_seed import seed_faq
@@ -130,6 +131,7 @@ from .sentinel_api import router as sentinel_router
 app.include_router(sentinel_router)
 app.include_router(knowledge_router)
 app.include_router(agent_chat_identity_router)
+app.include_router(agent_public_marks_router)
 app.include_router(forecast_v2_router)
 app.include_router(material_analysis_router)
 app.include_router(localization_router)

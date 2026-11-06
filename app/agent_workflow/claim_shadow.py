@@ -619,6 +619,14 @@ async def _run(snapshot: ShadowTurn) -> None:
         from .claim_shadow_store import append_turn
         await asyncio.to_thread(append_turn, dir_path, record)
 
+        # U9 wiring: the record is on disk; the public gate decides what may display.  Its failure never
+        # affects the shadow record or the answer.
+        try:
+            from .claim_public_wire import process_record
+            await asyncio.to_thread(process_record, dir_path, record)
+        except Exception as exc:
+            logger.warning("Claim public gate error: %s", type(exc).__name__)
+
     except asyncio.CancelledError:
         raise
     except Exception as exc:

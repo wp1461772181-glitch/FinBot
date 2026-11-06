@@ -716,6 +716,12 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
     # An ask/clarify card is answered by the next message in the conversation.
     status="complete" if position<len(messages)-1 else "running"
    for trace in pending: trace["status"]=status;trace["card"]=True
+ # U9: public contradiction marks of these turns (only what the gate has displayed; none while paused).
+ # Keyed by the shadow record's turn_id, which is the same turn id stored on the assistant message.
+ from .agent_workflow.claim_public_wire import public_marks_for_turns
+ marks_by_turn=await asyncio.to_thread(public_marks_for_turns,[str(item["turn_id"]) for item in messages if item.get("role")=="assistant" and item.get("turn_id")])
+ for item in messages:
+  if item.get("role")=="assistant" and marks_by_turn.get(str(item.get("turn_id"))):item["public_marks"]=marks_by_turn[str(item["turn_id"])]
  return {"messages":messages,"has_more":page["has_more"],"next_before":page["next_before"],"compactions":page.get("compactions",[])}
 
 
