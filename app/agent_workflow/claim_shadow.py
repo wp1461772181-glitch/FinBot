@@ -30,7 +30,7 @@ CALL_CONCURRENCY = 3
 BACKOFF_SECONDS = 600
 TURN_BUDGET_SECONDS = 300
 RETENTION_DAYS = 180
-PROMPT_VERSION = "judge-v3"
+PROMPT_VERSION = "judge-v4"
 
 # Module-level state
 _TASKS: set[asyncio.Task] = set()
@@ -477,6 +477,25 @@ async def _run(snapshot: ShadowTurn) -> None:
                             _CALLS_TODAY += 1
                             review = await review_candidate(candidate.text, context, c_sources, judge_res, resolved)
 
+                    attribution_reviews = []
+                    if _TEST_JUDGE_FN is None:
+                        from .claim_short_review import review_attribution
+                        pos = snapshot.answer.find(candidate.text)
+                        context = ""
+                        if pos >= 0:
+                            start = snapshot.answer.rfind("\n\n", 0, pos)
+                            end = snapshot.answer.find("\n\n", pos + len(candidate.text))
+                            context = snapshot.answer[start + 2 if start >= 0 else 0:
+                                                      end if end >= 0 else len(snapshot.answer)]
+                        for attribution in judge_res.attribution_candidates:
+                            if _CALLS_TODAY >= daily_calls or os.path.exists(stop_path):
+                                break
+                            async with _SEMAPHORE:
+                                _CALLS_TODAY += 1
+                                checked = await review_attribution(candidate.text, context, c_sources,
+                                                                   attribution["text"], resolved)
+                            attribution_reviews.append({"span": attribution["span"], "review": checked})
+
                     sent_dict = {
                         "idx": candidate.idx,
                         "text": candidate.text,
@@ -485,6 +504,8 @@ async def _run(snapshot: ShadowTurn) -> None:
                         "status": judge_res.status,
                         "verdict": judge_res.verdict,
                         "short_review": review,
+                        "attribution_candidates": judge_res.attribution_candidates,
+                        "attribution_reviews": attribution_reviews,
                         "subtype": judge_res.subtype,
                         "name_span": judge_res.name_span,
                         "name_ordinal": judge_res.name_ordinal,

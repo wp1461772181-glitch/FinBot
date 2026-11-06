@@ -60,3 +60,29 @@ async def review_candidate(sentence: str, answer_context: str, sources: Sequence
     if any(value not in ('yes', 'no', 'uncertain') for value in answers.values()):
         return {**result, 'status': 'parse_error'}
     return {**result, 'status': 'ok', 'answers': answers, 'passed': all(value == 'yes' for value in answers.values())}
+
+
+async def review_attribution(sentence: str, answer_context: str, sources: Sequence[JudgeSource],
+                             figure: str, model: Mapping[str, Any], *, call=None,
+                             timeout_seconds: float = 45.0) -> dict:
+    """Recheck a source attribution without seeing the first judge's answer or reasoning."""
+    from .claim_attribution import number_presence
+    result = {'version': REVIEW_VERSION, 'status': 'not_reviewed', 'passed': False, 'answers': {}}
+    if number_presence(figure, list(sources)) != 'absent':
+        return result
+    payload = {'sentence': sentence, 'answer_context': answer_context, 'figure': figure,
+               'required': REQUIRED['attribution'],
+               'sources': [{'ordinal': s.ordinal, 'text': s.text, 'complete': s.complete} for s in sources]}
+    try:
+        _, message = await asyncio.wait_for((call or _default_call)(model, PROMPT, json.dumps(payload, ensure_ascii=False)), timeout_seconds)
+    except asyncio.TimeoutError:
+        return {**result, 'status': 'timeout'}
+    except Exception:
+        return {**result, 'status': 'provider_error'}
+    parsed = _json_object(message.get('content', '')) if isinstance(message, Mapping) else None
+    if not isinstance(parsed, dict):
+        return {**result, 'status': 'parse_error'}
+    answers = {key: parsed.get(key) for key in REQUIRED['attribution']}
+    if any(value not in ('yes', 'no', 'uncertain') for value in answers.values()):
+        return {**result, 'status': 'parse_error'}
+    return {**result, 'status': 'ok', 'answers': answers, 'passed': all(value == 'yes' for value in answers.values())}

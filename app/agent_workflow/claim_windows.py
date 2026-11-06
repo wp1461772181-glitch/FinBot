@@ -13,7 +13,7 @@ _NUMBER = re.compile(
     r'(?<![A-Za-z0-9_.])(?P<sign>[-−+＋]?)(?P<currency>[$¥￥€£]?)'
     r'(?P<number>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)'
     r'[ \t]*(?P<scale>万亿|千万|百万|万|亿|千|trillion|billion|million|thousand|bn|mn|[bkm])?'
-    r'[ \t]*(?P<unit>%|％|股|shares?|USD|CNY|元)?(?![A-Za-z0-9_.])', re.I)
+    r'[ \t]*(?P<unit>%|％|股|shares?|USD|CNY|元)?(?![A-Za-z0-9_]|\.\d)', re.I)
 
 
 @dataclass(frozen=True)

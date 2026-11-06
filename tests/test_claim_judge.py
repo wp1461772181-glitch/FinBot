@@ -33,7 +33,7 @@ def test_supported_with_verified_quote_and_usage():
     result = run("Northwind 第三季度营收增长约 8%。", [SRC], replying(reply_json("supported", "四舍五入", SRC.text), usage))
     assert result.status == "ok" and result.verdict == "supported"
     assert result.quote_verified and result.quote_ordinal == 1
-    assert result.usage == usage and result.prompt_version == "judge-v3"
+    assert result.usage == usage and result.prompt_version == "judge-v4"
 
 
 def test_contradiction_with_quote():

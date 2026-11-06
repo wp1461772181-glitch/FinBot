@@ -25,3 +25,16 @@ def test_subject_needs_verified_name_and_complete_quote_block():
                             quote_verified=True, quote_ordinal=1)
     result = asyncio.run(review_candidate('Beta sold 10', '', [JudgeSource(1, 'Alpha sold 10')], candidate, {}))
     assert result['status'] == 'not_reviewed' and not result['passed']
+
+
+def test_attribution_review_is_independent_and_requires_all_yes():
+    from app.agent_workflow.claim_short_review import review_attribution
+    async def call(model, system, user):
+        payload = json.loads(user)
+        assert 'verdict' not in payload and 'reason' not in payload
+        return {}, {'content': json.dumps(dict.fromkeys(payload['required'], 'yes'))}
+    source = JudgeSource(1, 'Revenue was $0.25.', complete=True)
+    result = asyncio.run(review_attribution('Reported $0.43', '', [source], '$0.43', {}, call=call))
+    assert result['passed']
+    result = asyncio.run(review_attribution('Reported $0.43', '', [JudgeSource(1, source.text)], '$0.43', {}, call=call))
+    assert result['status'] == 'not_reviewed'

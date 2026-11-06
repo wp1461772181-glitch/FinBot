@@ -143,7 +143,13 @@ def scan_counters(
                             and isinstance(sentence.get("short_review"), dict)
                             and sentence["short_review"].get("status") in {"ok", "timeout", "provider_error", "parse_error"}
                         )
-                        calls_today += calls + review_calls
+                        attribution_calls = sum(
+                            1 for sentence in sentences if isinstance(sentence, dict)
+                            for item in (sentence.get("attribution_reviews") or []) if isinstance(item, dict)
+                            and isinstance(item.get("review"), dict)
+                            and item["review"].get("status") in {"ok", "timeout", "provider_error", "parse_error"}
+                        )
+                        calls_today += calls + review_calls + attribution_calls
         except OSError:
             continue
 
