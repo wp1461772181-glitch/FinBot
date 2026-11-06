@@ -32,3 +32,12 @@ def test_later_table_rows_keep_original_header():
     source = JudgeSource(2, '| Name | Amount |\n|---|---|\n| A | 23 |\n| B | 42 |')
     result = numeric_windows('42 [2]', [source])
     assert result['windows'][0]['headers'][0]['text'] == '| Name | Amount |'
+
+
+def test_judge_receives_location_windows_without_attribution():
+    import json
+    from app.agent_workflow.claim_judge import _user_message
+    source = JudgeSource(1, '- Holder A removed 21,071,170 shares')
+    payload = json.loads(_user_message('减少约 2,107 万股', [source]))
+    assert payload['numeric_windows']['windows'][0]['text'] == source.text
+    assert '归属于' not in json.dumps(payload['numeric_windows'], ensure_ascii=False)
