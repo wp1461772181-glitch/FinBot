@@ -16,10 +16,10 @@ def number_presence(token: str, sources: list[JudgeSource], *, truncated: bool =
     if len(target) != 1 or not sources or truncated:
         return 'unknown'
     target = target[0]
+    # Magnitude only: a sentence often states direction in words ('下降约 19.2%') while the source writes '−19.2%'.
+    # A sign difference is a direction question for the judge, never a reason to call the number absent.
     for source in sources:
         for item in figures(source.text):
-            if (target.value < 0) != (item.value < 0):
-                continue
             record = {'value': abs(target.value), 'digits': target.digits, 'scaled': target.scaled}
             if _match(record, {abs(item.value)}, set(), False, False) in {'exact', 'rounded'}:
                 return 'present'

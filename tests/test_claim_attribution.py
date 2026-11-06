@@ -24,3 +24,9 @@ def test_attribution_candidate_needs_closed_confirmation_and_complete_source():
     assert asyncio.run(run(True, 'yes')).attribution_candidates
     assert not asyncio.run(run(True, 'no')).attribution_candidates
     assert not asyncio.run(run(False, 'yes')).attribution_candidates
+
+
+def test_direction_in_words_is_not_absence():
+    # 'declined about 19.2%' with the source's '−19.2%' is present; only a missing magnitude is absent.
+    assert number_presence('19.2%', [JudgeSource(1, 'Q2 2026 | −19.2%', complete=True)]) == 'present'
+    assert number_presence('19.3%', [JudgeSource(1, 'Q2 2026 | −19.2%', complete=True)]) == 'absent'
