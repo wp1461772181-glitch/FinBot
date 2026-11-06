@@ -137,7 +137,13 @@ def scan_counters(
                             if isinstance(s, dict)
                             and not str(s.get("status", "")).startswith("skipped")
                         )
-                        calls_today += calls
+                        review_calls = sum(
+                            1 for sentence in sentences
+                            if isinstance(sentence, dict)
+                            and isinstance(sentence.get("short_review"), dict)
+                            and sentence["short_review"].get("status") in {"ok", "timeout", "provider_error", "parse_error"}
+                        )
+                        calls_today += calls + review_calls
         except OSError:
             continue
 

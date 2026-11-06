@@ -461,6 +461,22 @@ async def _run(snapshot: ShadowTurn) -> None:
                                 candidate.text, c_sources, resolved, timeout_seconds=45.0
                             )
 
+                    review = None
+                    if (judge_res.status == "ok" and judge_res.verdict == "contradiction"
+                            and judge_res.quote_verified and _TEST_JUDGE_FN is None
+                            and _CALLS_TODAY < daily_calls and not os.path.exists(stop_path)):
+                        from .claim_review import review_candidate
+                        pos = snapshot.answer.find(candidate.text)
+                        context = ""
+                        if pos >= 0:
+                            start = snapshot.answer.rfind("\n\n", 0, pos)
+                            end = snapshot.answer.find("\n\n", pos + len(candidate.text))
+                            context = snapshot.answer[start + 2 if start >= 0 else 0:
+                                                      end if end >= 0 else len(snapshot.answer)]
+                        async with _SEMAPHORE:
+                            _CALLS_TODAY += 1
+                            review = await review_candidate(candidate.text, context, c_sources, judge_res, resolved)
+
                     sent_dict = {
                         "idx": candidate.idx,
                         "text": candidate.text,
@@ -468,6 +484,7 @@ async def _run(snapshot: ShadowTurn) -> None:
                         "tier": candidate.tier,
                         "status": judge_res.status,
                         "verdict": judge_res.verdict,
+                        "short_review": review,
                         "subtype": judge_res.subtype,
                         "name_span": judge_res.name_span,
                         "name_ordinal": judge_res.name_ordinal,
