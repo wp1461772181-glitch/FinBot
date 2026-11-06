@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Sequence
 
 from .claim_judge import JudgeSource
@@ -61,14 +61,20 @@ def _block(text: str, start: int, end: int) -> tuple[int, int, list[tuple[int, i
     line = text[line_start:line_end]
     headers = []
     if line.lstrip().startswith('|'):
-        previous_end = line_start - 1
-        previous_start = text.rfind('\n', 0, previous_end) + 1
-        previous = text[previous_start:previous_end]
-        if re.fullmatch(r'\s*\|?[\s:|\-]+\|?\s*', previous) and '-' in previous:
-            header_end = previous_start - 1
-            header_start = text.rfind('\n', 0, header_end) + 1
-            if text[header_start:header_end].lstrip().startswith('|'):
-                headers.append((header_start, header_end))
+        cursor = line_start
+        while cursor > 0:
+            previous_end = cursor - 1
+            previous_start = text.rfind('\n', 0, previous_end) + 1
+            previous = text[previous_start:previous_end]
+            if not previous.lstrip().startswith('|'):
+                break
+            if re.fullmatch(r'\s*\|?[\s:|\-]+\|?\s*', previous) and '-' in previous:
+                header_end = previous_start - 1
+                header_start = text.rfind('\n', 0, header_end) + 1
+                if text[header_start:header_end].lstrip().startswith('|'):
+                    headers.append((header_start, header_end))
+                break
+            cursor = previous_start
     elif not re.match(r'\s*(?:[-*+]\s+|\d+[.)]\s+)', line):
         # Paragraphs are delimited by blank lines; do not join independent list items.
         prior = text.rfind('\n\n', 0, start)
@@ -108,6 +114,7 @@ def numeric_windows(sentence: str, sources: Sequence[JudgeSource], *, max_window
                 used += size
                 windows.append({'ordinal': source.ordinal, 'answer_span': [anchor.start, anchor.end],
                                 'source_number_span': [source_figure.start, source_figure.end],
+                                'answer_figure': asdict(anchor), 'source_figure': asdict(source_figure),
                                 'source_span': [start, end], 'text': source.text[start:end],
                                 'headers': [{'span': [a, b], 'text': source.text[a:b]} for a, b in headers],
                                 'match': match})

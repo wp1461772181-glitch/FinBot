@@ -26,3 +26,9 @@ def test_limits_record_omitted_without_negative_conclusion():
     result = numeric_windows('100 [1]', [JudgeSource(1, '- 100\n- 100')], max_windows=1)
     assert len(result['windows']) == 1 and result['omitted'] == 1
     assert figures('二千四百六十六万股') == []
+
+
+def test_later_table_rows_keep_original_header():
+    source = JudgeSource(2, '| Name | Amount |\n|---|---|\n| A | 23 |\n| B | 42 |')
+    result = numeric_windows('42 [2]', [source])
+    assert result['windows'][0]['headers'][0]['text'] == '| Name | Amount |'
