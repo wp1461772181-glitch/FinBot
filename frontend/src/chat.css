@@ -72,6 +72,14 @@
 .citation-unmatched { color: #8a5b48; cursor: help; border-bottom: 1px dotted currentColor; }
 .unverified-flag { display: inline-flex; align-items: baseline; gap: .4em; margin-left: .35em; padding: 0 .5em; border-radius: 999px; font-size: .78em; line-height: 1.7; color: #8a5b48; background: rgba(176, 125, 62, .14); border: 1px solid rgba(176, 125, 62, .45); vertical-align: baseline; }
 .unverified-flag-number { color: #8f2f2f; background: rgba(176, 58, 58, .16); border: 1px solid rgba(176, 58, 58, .7); font-weight: 600; }
+/* U9 public marks: a small neutral glyph; the bubble is shown on hover, focus, or tap (is-open). */
+.public-mark { position: relative; display: inline-block; margin-left: .2em; vertical-align: baseline; }
+.public-mark-button { border: 0; background: none; padding: 0 .25em; color: #7a6f63; font-size: .85em; line-height: 1; cursor: pointer; }
+.public-mark-bubble { display: none; position: absolute; z-index: 5; left: 0; top: 1.7em; width: min(22rem, 80vw); padding: .6em .75em; border-radius: 8px; background: #fffdf8; border: 1px solid #d8cfc2; box-shadow: 0 4px 14px rgba(0, 0, 0, .12); color: #3a342e; font-size: .85rem; line-height: 1.5; text-align: left; white-space: normal; }
+.public-mark:hover .public-mark-bubble, .public-mark:focus-within .public-mark-bubble, .public-mark.is-open .public-mark-bubble { display: block; }
+.public-mark-template { display: block; }
+.public-mark-quote { display: block; margin-top: .35em; color: #5a5249; }
+.public-mark-cite { margin-top: .4em; border: 0; background: none; padding: 0; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
 .unverified-ask { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
 .unverified-ask:hover, .unverified-ask:focus-visible { text-decoration-thickness: 2px; }
 .markdown-body a.citation-ref {
