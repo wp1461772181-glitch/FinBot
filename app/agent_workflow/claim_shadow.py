@@ -296,7 +296,11 @@ async def _run(snapshot: ShadowTurn) -> None:
         await _ensure_initialized(dir_path)
 
         # Step 2: Sentence extraction and source adaptation
-        from .claim_shadow_extract import select_sentences, to_judge_sources
+        from .claim_shadow_extract import is_private_citation, select_sentences, to_judge_sources
+        # Without provenance for every answer fragment, a mixed turn cannot safely be sent.
+        if any(is_private_citation(c, snapshot.citations)[0] for c in snapshot.citations):
+            await _write_outcome_record(dir_path, snapshot, "private_turn", started_monotonic)
+            return
         selection = await asyncio.to_thread(select_sentences, snapshot.answer, snapshot.citations)
 
         # Step 3: No judgeable sentences

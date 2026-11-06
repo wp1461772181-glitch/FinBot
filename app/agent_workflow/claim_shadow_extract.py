@@ -103,7 +103,7 @@ def _is_too_short(text: str) -> bool:
 
 
 def _is_allowed_source_direct(c: dict) -> bool:
-    if c.get("scope") == "private":
+    if c.get("scope") not in (None, "public"):
         return False
     st = c.get("source_type") or ""
     if st in ALLOWED_SOURCE_TYPES:
@@ -122,7 +122,7 @@ def is_private_citation(c: dict, all_citations: Sequence[dict]) -> tuple[bool, s
     st = c.get("source_type") or ""
     unknown = st if st and st not in KNOWN_SOURCE_TYPES else None
 
-    if c.get("scope") == "private":
+    if c.get("scope") not in (None, "public"):
         return True, unknown
 
     if st in ALLOWED_SOURCE_TYPES:
@@ -389,7 +389,7 @@ def to_judge_sources(
 
     for ord_val in ordinals[:MAX_SOURCES]:
         c = indexed.get(ord_val)
-        if c:
+        if c and not is_private_citation(c, citations)[0]:
             src, meta = to_judge_source(c)
             sources.append(src)
             meta_dict[str(ord_val)] = meta
