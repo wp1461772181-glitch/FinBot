@@ -127,6 +127,25 @@ def is_private_citation(c: dict, all_citations: Sequence[dict]) -> tuple[bool, s
 
     Returns (is_private, unknown_source_type_name_or_None).
     """
+    if not isinstance(c, dict):
+        return True, None
+    result = _private_citation(c, all_citations, set())
+    if result[0]:
+        return result
+    # Parent checks alone do not establish the provenance of generated labels
+    # and appended source fragments. Keep these paths closed until U1 tracks
+    # every outbound block. Preserve the existing single-level admission only.
+    if c.get("source_type") == "formula_calculation":
+        return True, result[1]
+    if c.get("source_type") == "calculation" and any(
+        other is not c and (not isinstance(other, dict) or not _is_allowed_source_direct(other))
+        for other in all_citations
+    ):
+        return True, result[1]
+    return result
+
+
+def _private_citation(c: dict, all_citations: Sequence[dict], visiting: set[int]) -> tuple[bool, str | None]:
     st = c.get("source_type") or ""
     unknown = st if st and st not in KNOWN_SOURCE_TYPES else None
 
@@ -159,28 +178,37 @@ def is_private_citation(c: dict, all_citations: Sequence[dict]) -> tuple[bool, s
         return True, unknown
 
     if st in {"calculation", "formula_calculation"}:
-        # A calculation can use user-stated inputs even in an otherwise public
-        # turn. Require recorded input provenance, not just public neighbours.
-        # Formula inputs have a different provenance format and remain local
-        # until that format is checked here as well.
+        # Traverse recorded operands, never infer provenance from nearby sources.
+        # Cycles, ambiguous ordinals and inconsistent parent lists fail closed.
+        if id(c) in visiting:
+            return True, unknown
         calculation = c.get("calculation")
-        if st != "calculation" or not isinstance(calculation, dict):
+        if not isinstance(calculation, dict):
             return True, unknown
         inputs = calculation.get("inputs")
+        if st == "formula_calculation":
+            if not isinstance(inputs, dict) or not inputs:
+                return True, unknown
+            inputs = list(inputs.values())
         if not isinstance(inputs, list) or not inputs:
             return True, unknown
+        next_visiting = visiting | {id(c)}
+        parent_ordinals = set()
         for item in inputs:
             if not isinstance(item, dict) or item.get("user_stated") or item.get("origin") == "user_stated":
                 return True, unknown
             ordinal = item.get("source_ordinal")
             matches = [other for other in all_citations if isinstance(other, dict)
                        and str(other.get("ordinal")) == str(ordinal)] if ordinal is not None else []
-            if (len(matches) != 1 or not _is_allowed_source_direct(matches[0])
-                    or is_private_citation(matches[0], all_citations)[0]):
+            if len(matches) != 1 or _private_citation(matches[0], all_citations, next_visiting)[0]:
                 return True, unknown
-        # Also reject mixed turns and chains whose full provenance is unknown.
-        for other in all_citations:
-            if other is not c and not _is_allowed_source_direct(other):
+            if st == "formula_calculation" and (matches[0].get("source_type") != "saved_price_set"
+                                                or not item.get("field")):
+                return True, unknown
+            parent_ordinals.add(str(ordinal))
+        for parents in (c.get("parents"), calculation.get("parents")):
+            if parents is not None and (not isinstance(parents, list)
+                                        or {str(p) for p in parents} != parent_ordinals):
                 return True, unknown
         return False, unknown
 

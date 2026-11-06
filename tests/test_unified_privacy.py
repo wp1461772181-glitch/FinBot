@@ -2,7 +2,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from app.agent_workflow.claim_shadow_extract import is_private_citation, to_judge_sources
+from app.agent_workflow.claim_shadow_extract import is_private_citation, to_judge_sources, _private_citation
 from app.agent_workflow import number_review
 
 
@@ -76,3 +76,31 @@ def test_number_review_does_not_discard_malformed_citation(monkeypatch):
     result = {"answer": "A figure", "unverified_lines": [{"line": "A figure"}]}
     assert asyncio.run(number_review.settle(turn, result)) is result
     assert turn.audit["number_review"]["skipped"] == "private_turn"
+
+
+def test_calculation_provenance_follows_chains_and_rejects_cycles():
+    public = {"ordinal": 1, "source_type": "web"}
+    first = {"ordinal": 2, "source_type": "calculation", "calculation": {
+        "inputs": [{"source_ordinal": 1}]}}
+    second = {"ordinal": 3, "source_type": "calculation", "calculation": {
+        "inputs": [{"source_ordinal": 2}]}}
+    assert not _private_citation(second, [public, first, second], set())[0]
+    assert is_private_citation(second, [public, first, second])[0]
+    private = {**public, "source_type": "portfolio"}
+    assert is_private_citation(second, [private, first, second])[0]
+    first["calculation"]["inputs"] = [{"source_ordinal": 3}]
+    assert is_private_citation(second, [public, first, second])[0]
+
+
+def test_formula_provenance_checks_inputs_and_both_parent_lists():
+    price = {"ordinal": 1, "source_type": "saved_price_set"}
+    formula = {"ordinal": 2, "source_type": "formula_calculation", "parents": [1],
+               "calculation": {"inputs": {"x": {"source_ordinal": 1, "field": "close"}},
+                               "parents": [1]}}
+    assert not _private_citation(formula, [price, formula], set())[0]
+    assert is_private_citation(formula, [price, formula])[0]
+    formula["calculation"]["parents"] = [3]
+    assert is_private_citation(formula, [price, formula])[0]
+    formula["calculation"]["parents"] = [1]
+    assert is_private_citation(formula, [{**price, "scope": "private"}, formula])[0]
+    assert is_private_citation(None, [price, formula])[0]
