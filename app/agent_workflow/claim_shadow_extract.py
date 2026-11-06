@@ -53,8 +53,10 @@ class SelectionResult(tuple):
         unknown_types: list[str],
         sentences_over_cap: int = 0,
         sentence_candidates: int = 0,
+        skipped_audit: list[dict] | None = None,
     ):
         instance = super().__new__(cls, (candidates, skipped, unknown_types))
+        instance.skipped_audit = skipped_audit or []
         instance.candidates = candidates
         instance.skipped = skipped
         instance.unknown_types = unknown_types
@@ -71,6 +73,16 @@ def _is_too_short(text: str) -> bool:
     clean = re.sub(r"\[\d+\]", "", text)
     clean_chars = re.sub(r"[\s\W_]+", "", clean)
     return len(clean_chars) < 6
+
+
+AUDIT_RATE_PERCENT = 10
+
+
+def _audit(audit: list[dict], category: str, text: str) -> None:
+    """Deterministic audit sample of skipped items: picked by hash of the item, never judged or counted as support."""
+    digest = hashlib.sha256(f"{category}\n{text}".encode("utf-8")).hexdigest()
+    if int(digest[:8], 16) % 100 < AUDIT_RATE_PERCENT:
+        audit.append({"category": category, "text": text.strip()[:300], "sha256": digest[:16]})
 
 
 def classify_tier(passage: str, sources: Sequence[dict]) -> int:
@@ -112,6 +124,7 @@ def select_sentences(
         "unavailable_source": 0,
     }
     unknown_types: list[str] = []
+    audit: list[dict] = []
     candidates: list[Candidate] = []
     seen_passages: set[str] = set()
     indexed = {str(c["ordinal"]): c for c in citations if isinstance(c, dict) and "ordinal" in c}
@@ -132,15 +145,18 @@ def select_sentences(
                     break
             if not table_header:
                 skipped["table_row"] += 1
+                _audit(audit, "table_row", stripped)
                 continue
 
         if _SOURCE_LIST_LINE.match(stripped):
             if citation_markers(stripped, citations):
                 skipped["source_list"] += 1
+                _audit(audit, "source_list", stripped)
             continue
 
         if _is_heading(stripped) and not citation_markers(checked, citations):
             skipped["heading"] += 1
+            _audit(audit, "heading", checked)
             continue
 
         bullet = _BULLET.match(stripped)
@@ -157,15 +173,18 @@ def select_sentences(
 
             if reports_absence(p):
                 skipped["absence"] += 1
+                _audit(audit, "absence", p)
                 continue
 
             if _is_too_short(p):
                 skipped["too_short"] += 1
+                _audit(audit, "too_short", p)
                 continue
 
             squashed = re.sub(r"\s+", " ", p).strip()
             if squashed in seen_passages:
                 skipped["duplicate"] += 1
+                _audit(audit, "duplicate", p)
                 continue
             seen_passages.add(squashed)
 
@@ -174,10 +193,12 @@ def select_sentences(
             if not p_sources:
                 if raw_cited and all(s.get("source_type") == "unavailable" for s in raw_cited):
                     skipped["unavailable_source"] += 1
+                    _audit(audit, "unavailable_source", p)
                 continue
 
             if all(s.get("source_type") == "unavailable" for s in p_sources):
                 skipped["unavailable_source"] += 1
+                _audit(audit, "unavailable_source", p)
                 continue
 
             ordinals_list: list[int] = []
@@ -221,6 +242,7 @@ def select_sentences(
         unknown_types=unknown_types,
         sentences_over_cap=over_cap,
         sentence_candidates=total_candidates,
+        skipped_audit=audit,
     )
 
 
