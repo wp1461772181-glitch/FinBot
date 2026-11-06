@@ -228,3 +228,38 @@ def test_a_long_chinese_think_past_one_megabyte_is_not_too_large(monkeypatch):
     assert sum(map(len,chunks))>1_000_000
     text,_=collect(chunks,monkeypatch)
     assert text=="ok"
+
+
+def test_openrouter_takes_every_documented_effort_tier_and_a_bot_setting_beats_the_environment(monkeypatch):
+    monkeypatch.setattr(provider, "REASONING_EFFORT", "low")
+    for tier in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
+        assert provider.reasoning_options("openrouter", tier) == {"reasoning": {"effort": tier}}
+    assert provider.reasoning_options("openrouter") == {"reasoning": {"effort": "low"}}   # no bot setting: the environment
+    assert provider.reasoning_options("openrouter", "turbo") == {}                         # unknown values send nothing
+
+
+def test_deepseek_maps_each_tier_onto_its_own_levels(monkeypatch):
+    monkeypatch.setattr(provider, "REASONING_EFFORT", "low")
+    assert provider.reasoning_options("deepseek") == {"thinking": {"type": "enabled"}, "reasoning_effort": "low"}
+    expected = {"none": {"thinking": {"type": "disabled"}}, "minimal": {"thinking": {"type": "enabled"}, "reasoning_effort": "low"},
+                "low": {"thinking": {"type": "enabled"}, "reasoning_effort": "low"},
+                "medium": {"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
+                "high": {"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
+                "xhigh": {"thinking": {"type": "enabled"}, "reasoning_effort": "max"},
+                "max": {"thinking": {"type": "enabled"}, "reasoning_effort": "max"}}
+    for tier, body in expected.items():
+        assert provider.reasoning_options("deepseek", tier) == body, tier
+
+
+def test_decision_request_sends_the_bot_effort_and_without_one_keeps_the_environment_body(monkeypatch):
+    seen = _capture_bodies(monkeypatch)
+    monkeypatch.setattr(provider, "REASONING_EFFORT", "low")
+
+    async def run():
+        await provider.decision_request("openrouter", "m", "k", [{"role": "user", "content": "x"}], [], reasoning_effort="high")
+        await provider.decision_request("openrouter", "m", "k", [{"role": "user", "content": "x"}], [])
+
+    asyncio.run(run())
+    assert seen[0]["reasoning"] == {"effort": "high"}
+    assert seen[1]["reasoning"] == {"effort": "low"}
+    assert set(seen[1]) == {"model", "messages", "max_tokens", "stream", "reasoning"}

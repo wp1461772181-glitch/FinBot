@@ -98,6 +98,7 @@ async def stream_workflow(*, question: str, messages: list[dict], provider: str,
         profile_block=profile_block, unattended=unattended, token_budget=token_budget, action_sink=action_sink,
         bot_id=bot.get("bot_id"), bot_name=bot.get("bot_name"), bot_is_default=bool(bot.get("is_default")),
         bot_block=bot.get("block"), tool_scope=bot.get("tool_scope"),
+        reasoning_effort=bot.get("reasoning_effort"),
         default_company=bot.get("default_company"), skill_block=skill_block, active_skill=active_skill,
         context_window=context_window or layers_default_window())
     thread = checkpoint_thread_id(owner_hash, conversation_id)

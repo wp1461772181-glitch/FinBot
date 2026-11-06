@@ -5,7 +5,7 @@ from datetime import UTC,datetime
 from typing import Annotated
 from pydantic import BaseModel,ConfigDict,Field
 from fastapi import HTTPException
-from ..agent_chat_provider import decision_request,decision_session
+from ..agent_chat_provider import decision_request,decision_session,sent_effort
 from ..agent_progress import progress_watchdog,mark_progress
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_tool_catalog import definitions,schemas,validate,ALWAYS_ON as DISCLOSED,TOOL_CATEGORIES,CATEGORY_OF
@@ -577,7 +577,9 @@ class Turn:
         self.active_skill=getattr(context,'active_skill',None)
         self.sets=[x for x in self.state.get('result_sets',[]) if x.get('owner')==context.owner_hash and x.get('conversation')==context.conversation_id and isinstance(x.get('rows'),list)][-6:]
         self.pending=None;self.proposals=[];self.proposal_calls={};self.followup=False;self.refinement=False;self.seen=set();self.evidence_signatures=set();self.no_new=0;self.repeated_evidence=0
-        self.audit={'tool_calls':0,'distinct_successful_calls':0,'retry_count':0,'decision_steps':0,'model_calls':0,'token_usage':0,'usage_mode':'actual','nodes':[],'stop_reason':None,'stages':{}}
+        # model and reasoning_effort: which model and effort answered this turn (the bot's setting, else the environment default).
+        self.audit={'tool_calls':0,'distinct_successful_calls':0,'retry_count':0,'decision_steps':0,'model_calls':0,'token_usage':0,'usage_mode':'actual','nodes':[],'stop_reason':None,'stages':{},
+                    'model':context.model,'reasoning_effort':sent_effort(getattr(context,'reasoning_effort',None)) or 'default'}
         self.reference_value=None;self.verified_referents=[];self.bound_history_citations=[]
         self.granted_actions=set();self.write_reasons={}
         # Tool categories whose definitions ride on the model call (progressive disclosure), in load order;
@@ -725,7 +727,9 @@ class Turn:
         for attempt in range(2):
             try:
                 async with progress_watchdog(IDLE_SECONDS):
-                    return await decision_request(self.context.provider,self.context.model,self.context.api_key,messages,tool_schemas,self.context.base_url)
+                    # The bot's own effort goes only when it set one: without it the call is exactly as before.
+                    effort={'reasoning_effort':self.context.reasoning_effort} if getattr(self.context,'reasoning_effort',None) else {}
+                    return await decision_request(self.context.provider,self.context.model,self.context.api_key,messages,tool_schemas,self.context.base_url,**effort)
             except HTTPException as exc:
                 if attempt or getattr(exc,'detail',None) not in RETRYABLE_PROVIDER:raise
                 self.audit['provider_retries']=self.audit.get('provider_retries',0)+1

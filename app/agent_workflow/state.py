@@ -58,6 +58,8 @@ class AgentRuntimeContext:
     bot_name: str | None = None
     bot_is_default: bool = False
     bot_block: str | None = field(default=None, repr=False, compare=False)
+    # The bot's own reasoning effort (agent_bots: its setting); None: the environment default (agent_chat_provider).
+    reasoning_effort: str | None = None
     tool_scope: frozenset | None = field(default=None, compare=False)
     default_company: dict | None = field(default=None, compare=False)
     # Skills (agent_skills): the listing of enabled skills, and a skill started for this turn (「/名字」 or a

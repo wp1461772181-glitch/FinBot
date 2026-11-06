@@ -208,6 +208,13 @@ def exists(name: str | None) -> bool:
     return bool(name) and any(item["name"] == name for item in entries()[0])
 
 
+def configured(name: str | None) -> bool:
+    """True when ``name`` is an entry whose key is present (configured), not merely listed."""
+    listed, _ = entries()
+    entry = next((item for item in listed if item["name"] == name), None) if name else None
+    return entry is not None and _key_for(entry) is not None
+
+
 def resolve(name: str | None) -> dict:
     """The provider settings of ``name`` (None: the catalog's default) with the key, for one request.
 

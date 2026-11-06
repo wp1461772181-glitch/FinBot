@@ -54,17 +54,32 @@ MAX_OUTPUT_TOKENS = 32768
 # minutes and runs into the request timeout.  OpenRouter takes one unified parameter for the effort (a model
 # without reasoning ignores it).  "default" sends nothing and leaves it to the model.
 REASONING_EFFORT = os.getenv("AGENT_REASONING_EFFORT", "low").strip().lower()
-_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
+# The full set OpenRouter documents for ``reasoning.effort`` (reasoning-tokens guide, 2026-11).  A bot may
+# name any of them (agent_bots); the environment default is read from the same set.
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+_REASONING_EFFORTS = frozenset(REASONING_EFFORTS)
 
 
-def reasoning_options(provider: str) -> dict:
-    if REASONING_EFFORT not in _REASONING_EFFORTS:
+def sent_effort(effort: str | None = None) -> str | None:
+    """The effort a request carries: the given one (a bot's setting), else the environment default.  None when
+    nothing is sent (the environment says "default", or the value is not a known tier)."""
+    value = REASONING_EFFORT if effort is None else effort
+    return value if value in _REASONING_EFFORTS else None
+
+
+def reasoning_options(provider: str, effort: str | None = None) -> dict:
+    value = sent_effort(effort)
+    if value is None:
         return {}
     if provider == "deepseek":
-        effort={"minimal":"low","medium":"high"}.get(REASONING_EFFORT,REASONING_EFFORT)
-        return {"thinking":{"type":"enabled"},"reasoning_effort":effort}
+        # DeepSeek's own levels are high and max.  low and medium keep their existing mapping (the server
+        # folds them into high); minimal stays low as before; xhigh is max; none turns thinking off.
+        if value == "none":
+            return {"thinking": {"type": "disabled"}}
+        mapped = {"minimal": "low", "medium": "high", "xhigh": "max"}.get(value, value)
+        return {"thinking": {"type": "enabled"}, "reasoning_effort": mapped}
     if provider == "openrouter":
-        return {"reasoning": {"effort": REASONING_EFFORT}}
+        return {"reasoning": {"effort": value}}
     return {}
 
 
@@ -103,11 +118,11 @@ def endpoint(provider, base_url=None):
     if base_url is None: return PROVIDERS[provider]
     base=base_url.rstrip("/")
     return base if base.endswith("/chat/completions") else base+"/chat/completions"
-async def decision_request(provider, model, api_key, messages, schemas, base_url=None):
+async def decision_request(provider, model, api_key, messages, schemas, base_url=None, reasoning_effort=None):
     body={"model":model,"messages":messages,"max_tokens":MAX_OUTPUT_TOKENS,"stream":True}
     if schemas: body.update(tools=schemas,tool_choice="auto")
     if provider=="minimax":body["reasoning_split"]=True
-    body.update(reasoning_options(provider))
+    body.update(reasoning_options(provider,reasoning_effort))
     return await _post(provider,api_key,body,base_url)
 def _semantic_delta(delta):
     return (any(isinstance(delta.get(k),str) and delta[k] for k in ('content','reasoning_content'))

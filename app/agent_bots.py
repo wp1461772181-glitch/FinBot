@@ -8,6 +8,8 @@
   catalog; it can only remove tools).  Exactly one focus company makes it the default company of a question
   that names none; the turn's audit records that the company came from the bot's settings.
 * ``model`` names a catalog entry (agent_model_catalog); the bot never holds a key.
+* ``reasoning_effort`` is one of the provider's tiers (agent_chat_provider.REASONING_EFFORTS); NULL uses the environment
+  default.  The owner picks both on the chat badge; a turn of the bot carries them, Telegram included (same stream).
 * Deleting a bot archives its conversation (a logical delete) and its own memory items, and touches no other
   bot.  Memory is in two layers (agent_profile): global, and each bot's own; 「助理」 reads every bot's.
 * Routine tasks belong to a bot (agent_tasks); deleting the bot deletes its tasks.  The list carries each
@@ -98,6 +100,7 @@ def _stamp(value):
 def serialize(bot: AgentBot, last: dict | None = None, counts: dict | None = None) -> dict:
     return {"id": str(bot.id), "name": bot.name, "title": bot.title, "description": bot.description,
             "focus": bot.focus or {"companies": [], "theme": None}, "tool_scope": bot.tool_scope, "model": bot.model,
+            "reasoning_effort": bot.reasoning_effort,
             "avatar": bot.avatar, "look": bot.avatar_look or None, "group": bot.group_name, "pinned": bot.pinned, "hidden": bot.hidden,
             "is_default": bot.is_default, "template": bot.template,
             "conversation_id": str(bot.conversation_id) if bot.conversation_id else None,
@@ -140,11 +143,12 @@ def _look(value) -> dict | None:
 
 
 def ensure_columns() -> None:
-    """Add the avatar look column to a bots table made before it.  A fresh database gets it from the model."""
+    """Add the avatar look and reasoning effort columns to a bots table made before them.  A fresh database gets them from the model."""
     from .database import engine
     from sqlalchemy import text
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE agent_bots ADD COLUMN IF NOT EXISTS avatar_look JSON"))
+        connection.execute(text("ALTER TABLE agent_bots ADD COLUMN IF NOT EXISTS reasoning_effort VARCHAR(16)"))
 
 
 def _text(value, limit: int, code: str, *, required: bool = False) -> str:
@@ -206,6 +210,17 @@ def _model(value) -> str | None:
     return value
 
 
+def _reasoning_effort(value) -> str | None:
+    """A bot's own reasoning effort: one of the provider's tiers (agent_chat_provider.REASONING_EFFORTS), or None
+    for the environment default.  Anything else is refused, never silently mapped."""
+    if value is None:
+        return None
+    from .agent_chat_provider import REASONING_EFFORTS
+    if not isinstance(value, str) or value not in REASONING_EFFORTS:
+        raise BotError("invalid_reasoning_effort")
+    return value
+
+
 def _apply(bot: AgentBot, fields: dict) -> None:
     if "name" in fields:
         bot.name = _text(fields["name"], 40, "invalid_name", required=True)
@@ -219,6 +234,8 @@ def _apply(bot: AgentBot, fields: dict) -> None:
         bot.tool_scope = _tool_scope(fields["tool_scope"])
     if "model" in fields:
         bot.model = _model(fields["model"])
+    if "reasoning_effort" in fields:
+        bot.reasoning_effort = _reasoning_effort(fields["reasoning_effort"])
     if "avatar" in fields:
         bot.avatar = _avatar(fields["avatar"])
     if "look" in fields:
@@ -458,7 +475,7 @@ def turn_settings(owner_hash: str, bot_id) -> dict | None:
         company = default_company(bot)
         settings = {"bot_id": str(bot.id), "bot_name": bot.name, "is_default": bool(bot.is_default),
                     "conversation_id": str(bot.conversation_id),
-                    "model": bot.model, "description": bot.description, "theme": (bot.focus or {}).get("theme"),
+                    "model": bot.model, "reasoning_effort": bot.reasoning_effort, "description": bot.description, "theme": (bot.focus or {}).get("theme"),
                     "focus_companies": [c["symbol"] for c in (bot.focus or {}).get("companies") or []],
                     "tool_scope": expand_legacy(bot.tool_scope) | ALWAYS_ON if bot.tool_scope is not None else None,
                     "default_company": {**company, "source": "bot_settings", "bot_id": str(bot.id), "bot_name": bot.name}

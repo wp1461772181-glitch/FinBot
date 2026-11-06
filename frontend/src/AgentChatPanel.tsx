@@ -8,6 +8,7 @@ import { isTaskPostHead, parseTaskPostHead } from "./task-posts.mjs";
 import { chatTurnPreviews } from "./chat-thread.mjs";
 import { QuestionRail } from "./QuestionRail";
 import { ModelCatalogCard } from "./BotPages";
+import { ModelEffortPicker } from "./ModelEffortPicker";
 import { slashMatches } from "./skill-items.mjs";
 import { citationOrdinal, linkCitationMarkers } from "./chat-citations.mjs";
 import { evidenceText, followUpQuestion, hintText, markUnverified, normalizeUnverified, parseFlagHref, reasonKey } from "./chat-unverified.mjs";
@@ -351,7 +352,7 @@ export function useLineStatus() { return useChat().lineStatus; }
 
 const SIDE_OPEN_KEY="market-evidence-agent:bot-side-open:v1";
 function PanelIcon(){return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg>}
-export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled }: { onSettings: () => void; onModeChange:(mode:"guest"|"personal")=>void; bot?: Bot | null; side?: ReactNode; onTurnSettled?: () => void }) {
+export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled,onBotChanged }: { onSettings: () => void; onModeChange:(mode:"guest"|"personal")=>void; bot?: Bot | null; side?: ReactNode; onTurnSettled?: () => void; onBotChanged?: () => void }) {
   const { t } = useLocale(), c = useChat(), transcriptRef = useRef<HTMLElement>(null);
   // A finished turn changes the bot's last line (and gives a new bot its conversation): tell the list.
   const wasSending=useRef(false);
@@ -448,7 +449,7 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled 
       </aside></>}
       <div className="agent-main-column">
         {c.archiveView&&<div className="chat-archive-banner"><span>{t("本地归档只读查看")}</span><button className="secondary-action" onClick={c.returnLive}>{t("返回当前对话")}</button><button className="secondary-action" onClick={()=>{c.returnLive();c.clear()}}>{t("新建对话")}</button></div>}
-        <div className="agent-capability"><span aria-hidden="true">✳</span><p>{t("消息和研究工具轨迹会保存到服务端；工具按权限读取资料并执行明确请求的系统任务。")}</p><span className={`agent-connection ${c.verified ? "is-ready" : ""}`}>{bot ? `${t("模型")} · ${bot.model ?? t("服务器默认模型")}` : c.verified ? `${t("模型")} · ${t("服务器默认模型")}` : t("登录后可用")}</span></div>
+        <div className="agent-capability"><span aria-hidden="true">✳</span><p>{t("消息和研究工具轨迹会保存到服务端；工具按权限读取资料并执行明确请求的系统任务。")}</p>{bot ? <ModelEffortPicker bot={bot} onBotChanged={onBotChanged ?? (() => undefined)} /> : <span className={`agent-connection ${c.verified ? "is-ready" : ""}`}>{c.verified ? `${t("模型")} · ${t("服务器默认模型")}` : t("登录后可用")}</span>}</div>
         <section ref={transcriptRef} className="agent-transcript" aria-live="polite" onScroll={e=>{if(e.currentTarget.scrollTop<32)void loadEarlierAtTop();}}>
           {!c.archiveView&&c.historyHasMore&&<div className="agent-earlier"><button type="button" className="secondary-action" onClick={()=>void loadEarlierAtTop()} disabled={c.loadingEarlier}>{c.loadingEarlier?t("正在加载更早消息…"):t("加载更早消息")}</button></div>}
           {c.restoring&&<p role="status">{t("正在恢复对话…")}</p>}

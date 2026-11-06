@@ -37,6 +37,8 @@ class BotBody(BaseModel):
     tool_scope: list[str] | None = Field(default=None, max_length=80)
     # null: the catalog's default model.
     model: str | None = Field(default=None, max_length=40)
+    # null: the environment default; else one of the provider's reasoning tiers (validated in agent_bots).
+    reasoning_effort: str | None = Field(default=None, max_length=16)
     avatar: str | None = Field(default=None, max_length=16)
     # Bloub look {shape, color} (an old `expression` key is accepted and ignored); null clears it. Validated against the catalog in agent_bots._look.
     look: dict | None = None
@@ -79,7 +81,19 @@ def _fields(body: BotBody) -> dict:
     fields = body.model_dump(exclude_unset=True)
     if "focus" in fields and fields["focus"] is not None:
         fields["focus"] = body.focus.model_dump()
+    _usable_model(fields.get("model"))
     return fields
+
+
+def _usable_model(name: str | None) -> None:
+    """A bot's model must be a catalog entry whose key is configured (null: the catalog default).  Checked here,
+    where the owner's request comes in; agent_bots itself keeps only the name check."""
+    if not name:
+        return
+    if not catalog.exists(name):
+        raise HTTPException(422, "unknown_model")
+    if not catalog.configured(name):
+        raise HTTPException(422, "model_key_missing")
 
 
 # --- bots -----------------------------------------------------------------------------------------------

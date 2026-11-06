@@ -287,7 +287,7 @@ function WorkspaceApp({onModeChange}:{onModeChange:(mode:"guest"|"personal")=>vo
 function BotPage({ bot, symbol, watchlist, onSelectSymbol, onOpenCompany, onChanged, onDeleted, onSettings, onModeChange }: { bot: Bot; symbol: string; watchlist: string[]; onSelectSymbol: (symbol: string) => void; onOpenCompany: (ticker: string, section?: "overview" | "forecast") => void; onChanged: () => void; onDeleted: () => void; onSettings: () => void; onModeChange: (mode: "guest" | "personal") => void }) {
   const selectBot = useSelectBot();
   useEffect(() => { void selectBot(bot); }, [bot]); // eslint-disable-line react-hooks/exhaustive-deps
-  return <AgentChatPanel bot={bot} onSettings={onSettings} onModeChange={onModeChange} onTurnSettled={onChanged} side={<BotSide key={bot.id} bot={bot} symbol={symbol} watchlist={watchlist} onSelectSymbol={onSelectSymbol} onOpenCompany={onOpenCompany} onChanged={onChanged} onDeleted={onDeleted} />} />;
+  return <AgentChatPanel bot={bot} onSettings={onSettings} onModeChange={onModeChange} onTurnSettled={onChanged} onBotChanged={onChanged} side={<BotSide key={bot.id} bot={bot} symbol={symbol} watchlist={watchlist} onSelectSymbol={onSelectSymbol} onOpenCompany={onOpenCompany} onChanged={onChanged} onDeleted={onDeleted} />} />;
 }
 
 /** #revisions: the version section of the selected stock's latest forecast; no forecast sends the reader home. */

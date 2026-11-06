@@ -220,6 +220,9 @@ class AgentBot(Base):
     focus: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     tool_scope: Mapped[list | None] = mapped_column(JSON, nullable=True)
     model: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # The bot's reasoning effort (a provider tier, agent_chat_provider.REASONING_EFFORTS); NULL: the environment default.
+    # Added to older tables by ``agent_bots.ensure_columns``.
+    reasoning_effort: Mapped[str | None] = mapped_column(String(16), nullable=True)
     avatar: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     # The bloub look the owner picked, ``{"shape", "color"}`` (an older ``expression`` key is ignored); NULL: never customised (the frontend
     # derives a default from the bot id).  Added to older tables by ``agent_bots.ensure_columns``.

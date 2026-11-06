@@ -74,7 +74,7 @@ async def _quiet(_event):
     pass
 
 
-def _turn(question, settings, *, recognizer, decider, executor=None):
+def _turn(question, settings, *, recognizer, decider, executor=None, reasoning_effort=None):
     """One real Turn of a bot with injected model callbacks."""
     from app.agent_workflow import direct
     from app.agent_workflow.state import AgentRuntimeContext
@@ -82,7 +82,7 @@ def _turn(question, settings, *, recognizer, decider, executor=None):
                                   conversation_id=settings["conversation_id"], intent_recognizer=recognizer,
                                   decider=decider, executor=executor, bot_id=settings["bot_id"],
                                   bot_block=settings["block"], tool_scope=settings["tool_scope"],
-                                  default_company=settings["default_company"])
+                                  default_company=settings["default_company"], reasoning_effort=reasoning_effort)
     return asyncio.run(direct.run_direct_turn(question, context, emit=_quiet))
 
 
@@ -467,3 +467,96 @@ def test_the_look_goes_through_the_api_and_the_column_migration_runs_on_an_old_t
     bots.ensure_columns()
     with engine.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM information_schema.columns WHERE table_name='agent_bots' AND column_name='avatar_look'")).scalar() == 1
+
+
+# --- the owner's model and reasoning effort per bot (quick select on the chat badge) ----------------
+
+def test_bot_model_and_reasoning_effort_round_trip_through_the_api_and_null_restores_the_defaults(owner, client):
+    catalog.save_entry("alpha", provider="openrouter", model="test/model", api_key=KEY_A, create=True, is_default=True)
+    made = client.post("/agent-chat/bots", headers=H, json={"name": "强度-" + uuid.uuid4().hex[:6]})
+    assert made.status_code in (200, 201), made.text
+    bot_id = made.json()["bot"]["id"]
+    assert made.json()["bot"]["reasoning_effort"] is None
+    patched = client.patch(f"/agent-chat/bots/{bot_id}", headers=H, json={"model": "alpha", "reasoning_effort": "xhigh"})
+    assert patched.status_code == 200, patched.text
+    read = client.get(f"/agent-chat/bots/{bot_id}", headers=H).json()["bot"]
+    assert read["model"] == "alpha" and read["reasoning_effort"] == "xhigh"
+    cleared = client.patch(f"/agent-chat/bots/{bot_id}", headers=H, json={"model": None, "reasoning_effort": None})
+    assert cleared.status_code == 200 and cleared.json()["bot"]["model"] is None
+    assert cleared.json()["bot"]["reasoning_effort"] is None
+
+
+def test_reasoning_effort_outside_the_provider_tiers_is_422(owner, client):
+    bot_id = client.post("/agent-chat/bots", headers=H, json={"name": "档位-" + uuid.uuid4().hex[:6]}).json()["bot"]["id"]
+    for bad in ("turbo", "ultra", "minimal ", "", 3):
+        response = client.patch(f"/agent-chat/bots/{bot_id}", headers=H, json={"reasoning_effort": bad})
+        assert response.status_code == 422, (bad, response.text)
+    for tier in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
+        assert client.patch(f"/agent-chat/bots/{bot_id}", headers=H, json={"reasoning_effort": tier}).status_code == 200
+
+
+def test_bot_model_must_be_a_catalog_entry_whose_key_is_configured(owner, client, monkeypatch):
+    monkeypatch.delenv("NOKEY_API_KEY", raising=False)
+    catalog.save_entry("nokey", provider="deepseek", model="deepseek-chat", key_env="NOKEY_API_KEY", create=True)
+    bot_id = client.post("/agent-chat/bots", headers=H, json={"name": "模型-" + uuid.uuid4().hex[:6]}).json()["bot"]["id"]
+    missing_name = client.patch(f"/agent-chat/bots/{bot_id}", headers=H, json={"model": "ghost"})
+    assert missing_name.status_code == 422 and missing_name.json()["detail"] == "unknown_model"
+    no_key = client.patch(f"/agent-chat/bots/{bot_id}", headers=H, json={"model": "nokey"})
+    assert no_key.status_code == 422 and no_key.json()["detail"] == "model_key_missing"
+    assert client.get(f"/agent-chat/bots/{bot_id}", headers=H).json()["bot"]["model"] is None
+
+
+def test_a_bot_effort_reaches_the_turn_and_the_provider_request_and_the_audit(owner, client, monkeypatch):
+    from app.agent_workflow import direct
+    monkeypatch.setenv("AGENT_REASONING_EFFORT", "low")
+    catalog.save_entry("alpha", provider="openrouter", model="test/model", api_key=KEY_A, create=True, is_default=True)
+    bot = bots.create_bot(OWNER_HASH, {"name": "思考-" + uuid.uuid4().hex[:6], "model": "alpha", "reasoning_effort": "high"})
+    settings = bots.turn_settings(OWNER_HASH, bot["id"])
+    assert settings["reasoning_effort"] == "high"
+    sent = []
+
+    async def fake_decision(provider, model, key, messages, schemas, base_url=None, **kwargs):
+        sent.append(kwargs)
+        return {"usage": {}}, {"content": "好的。"}
+    monkeypatch.setattr(direct, "decision_request", fake_decision)
+    from app.agent_workflow.state import AgentRuntimeContext
+    context = AgentRuntimeContext("openrouter", "test/model", "dummy", identity_credential=OWNER, owner_hash=OWNER_HASH,
+                                  conversation_id=settings["conversation_id"], bot_id=settings["bot_id"],
+                                  reasoning_effort=settings["reasoning_effort"])
+    turn = direct.Turn("hi", context, _quiet, [], None)
+    asyncio.run(turn.provider_request([{"role": "user", "content": "hi"}], []))
+    assert sent == [{"reasoning_effort": "high"}]
+    result = _turn("hi", settings, recognizer=lambda _p: {"category": "B", "days_back": None, "requested_actions": [], "metrics": []},
+                   decider=lambda *_: {"content": "好的。"}, reasoning_effort="high")
+    assert result["audit"]["model"] == "test" and result["audit"]["reasoning_effort"] == "high"
+
+
+def test_the_stream_hands_the_bots_saved_effort_to_the_workflow_on_each_turn(owner, client, monkeypatch):
+    catalog.save_entry("alpha", provider="deepseek", model="deepseek-chat", api_key=KEY_A, create=True, is_default=True)
+    bot = client.post("/agent-chat/bots", headers=H, json={"name": "流-" + uuid.uuid4().hex[:6], "model": "alpha"}).json()["bot"]
+    seen = []
+
+    async def stream_workflow(**kwargs):
+        seen.append(kwargs)
+        yield {"event": "delta", "text": "好的。"}
+        yield {"event": "done", "status": "complete", "citations": [], "final_protocol": {}, "audit": {}}
+    import app.agent_chat_stream as stream
+    monkeypatch.setattr(stream, "stream_workflow", stream_workflow)
+    monkeypatch.setattr("app.agent_context_summary.schedule_summary", lambda *a, **k: None)
+    monkeypatch.setattr("app.agent_profile_extract.schedule_extraction", lambda *a, **k: None)
+    client.patch(f"/agent-chat/bots/{bot['id']}", headers=H, json={"reasoning_effort": "high"})
+    assert client.post("/agent-chat/stream", headers=H, json={"message": "营收", "bot_id": bot["id"]}).status_code == 200
+    client.patch(f"/agent-chat/bots/{bot['id']}", headers=H, json={"reasoning_effort": None})
+    assert client.post("/agent-chat/stream", headers=H, json={"message": "那前年", "bot_id": bot["id"]}).status_code == 200
+    assert seen[0]["bot"]["reasoning_effort"] == "high"
+    assert seen[1]["bot"]["reasoning_effort"] is None
+
+
+def test_the_reasoning_effort_column_is_added_to_an_old_table(owner):
+    from sqlalchemy import text
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE agent_bots DROP COLUMN IF EXISTS reasoning_effort"))
+    bots.ensure_columns()
+    bots.ensure_columns()
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM information_schema.columns WHERE table_name='agent_bots' AND column_name='reasoning_effort'")).scalar() == 1
