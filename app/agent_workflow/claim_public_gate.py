@@ -31,7 +31,8 @@ TEMPLATES = {
     "number": "来源 [{ordinal}] 中同一指标的数值与此句不同",
     "direction": "来源 [{ordinal}] 中该变动的方向与此句不同",
     "state": "来源 [{ordinal}] 中该事项的状态与此句不同",
-    "subject": "来源中这组数据属于另一主体（{name}）",
+    # A pointer only: code must not assert who holds the figure (U3 revision); the reader checks the source text.
+    "subject": "请对照来源 [{ordinal}] 中关于「{name}」的原文",
     "other": "来源 [{ordinal}] 中有与此句不一致的表述",
 }
 FORBIDDEN_PUBLIC_WORDS = ("矛盾", "编造", "已核验", "核实", "证据不足", "数字未核实")
@@ -176,6 +177,15 @@ def review_displayed(state: dict, mark_id: str, outcome: str) -> None:
         state["paused"] = True
         state["pause_reason"] = (f"{confirmed} confirmed mislabels in the latest {len(reviewed)} reviewed "
                                  f"public marks; back to shadow, replay the frozen set")
+
+
+def displayable_marks(record: Mapping[str, Any], state: Mapping[str, Any]) -> list[dict]:
+    """The marks the public surface may show for one shadow record: only those the gate has displayed,
+    and none at all while the gate is paused."""
+    if state.get("paused"):
+        return []
+    shown = {e["id"] for e in state.get("displayed", [])}
+    return [m for m in annotations_from_record(record) if m["id"] in shown]
 
 
 def resume(state: dict, *, replay_ref: str, note: str) -> None:

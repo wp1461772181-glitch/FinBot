@@ -37,7 +37,7 @@ def test_mark_has_code_template_and_no_judge_free_text():
     mark = _mark(3, subtype='subject', name='BlackRock')
     dumped = json.dumps(mark, ensure_ascii=False)
     assert 'REASON-SECRET' not in dumped
-    assert mark['template'] == '来源中这组数据属于另一主体（BlackRock）'
+    assert mark['template'] == '请对照来源 [1] 中关于「BlackRock」的原文'
     assert mark['hover']['evidence'] == {'ordinal': 1, 'quote': 'Holder A removed 21,071,170 shares',
                                          'completeness': 'complete'}
     assert mark['marker'] == 'neutral' and mark['hit_kind'] == 'subject'
@@ -113,3 +113,22 @@ def test_state_file_is_private_and_round_trips(tmp_path):
     gate.save_state(path, state)
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     assert gate.load_state(path) == state
+
+
+def test_subject_template_points_to_source_and_asserts_no_owner():
+    m = _mark(0, subtype="subject", name="Holder B")
+    assert "Holder B" in m["template"] and "[1]" in m["template"]
+    assert "属于" not in m["template"]
+
+
+def test_displayable_marks_follow_gate_displays_and_pause():
+    rec = _record([_sentence(0), _sentence(1, passed=False)])
+    state = gate.new_state()
+    state["phase"] = "auto"
+    marks = gate.annotations_from_record(rec)
+    assert len(marks) == 1
+    assert gate.displayable_marks(rec, state) == []
+    assert gate.submit(state, marks[0]) == "display"
+    assert [m["id"] for m in gate.displayable_marks(rec, state)] == [marks[0]["id"]]
+    state["paused"] = True
+    assert gate.displayable_marks(rec, state) == []
