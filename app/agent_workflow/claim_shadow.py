@@ -465,7 +465,7 @@ async def _run(snapshot: ShadowTurn) -> None:
                     if (judge_res.status == "ok" and judge_res.verdict == "contradiction"
                             and judge_res.quote_verified and _TEST_JUDGE_FN is None
                             and _CALLS_TODAY < daily_calls and not os.path.exists(stop_path)):
-                        from .claim_review import review_candidate
+                        from .claim_short_review import review_candidate
                         pos = snapshot.answer.find(candidate.text)
                         context = ""
                         if pos >= 0:

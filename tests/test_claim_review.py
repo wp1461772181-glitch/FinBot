@@ -2,7 +2,7 @@ import asyncio
 import json
 
 from app.agent_workflow.claim_judge import JudgeResult, JudgeSource
-from app.agent_workflow.claim_review import review_candidate
+from app.agent_workflow.claim_short_review import review_candidate
 
 
 def test_closed_review_hides_first_verdict_and_fails_closed():
