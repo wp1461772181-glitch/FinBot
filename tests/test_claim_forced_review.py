@@ -37,3 +37,34 @@ def test_control_quote_is_the_line_with_the_q2_period(tmp_path):
     assert [c['id'] for c in cases] == ['practice-C2-00']
     assert cases[0]['quote'] == '| Q2 2026 | −12.3% |'
     assert cases[0]['quote'] in pack[0]['sources'][0]['text']
+
+
+def _sentence_number_yi(sentence: str) -> float:
+    import re
+    m = re.search(r'([\d.]+) 亿美元', sentence)
+    assert m, sentence
+    return float(m.group(1))
+
+
+def test_total_vs_float_twin_sentence_is_unit_aligned_with_the_source():
+    """Source is in $ billions; 1 bn = 10 亿美元, so the sentence number must be source * 10."""
+    import re
+    cases = [c for c in forced.build_s4() if c['kind'] == 'total_vs_float_mktcap']
+    assert len(cases) == 20
+    for case in cases:
+        source_text = case['sources'][0].text
+        total_bn = float(re.search(r'Total market cap: \$([\d.]+) billion', source_text).group(1))
+        assert '亿美元' in case['sentence'] and 'billion' not in case['sentence']
+        assert abs(_sentence_number_yi(case['sentence']) - total_bn * 10) < 1e-6, case['id']
+
+
+def test_fiscal_vs_calendar_twin_sentence_is_unit_aligned_with_the_source():
+    """Source header is 'Revenue ($bn)'; the calendar row is in $ billions, so the sentence number must be cal * 10."""
+    import re
+    cases = [c for c in forced.build_s4() if c['kind'] == 'fiscal_vs_calendar']
+    assert len(cases) == 20
+    for case in cases:
+        source_text = case['sources'][0].text
+        assert 'Revenue ($bn)' in source_text
+        cal_bn = float(re.search(r'\| Calendar Q2 2026 \(Apr-Jun\) \| ([\d.]+) \|', source_text).group(1))
+        assert abs(_sentence_number_yi(case['sentence']) - cal_bn * 10) < 1e-6, case['id']
