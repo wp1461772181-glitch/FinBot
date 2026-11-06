@@ -103,13 +103,21 @@ def _is_too_short(text: str) -> bool:
 
 
 def _is_allowed_source_direct(c: dict) -> bool:
-    if c.get("scope") not in (None, "public"):
+    if c.get("scope") not in (None, "public") or c.get("visibility") not in (None, "public"):
+        return False
+    fields = c.get("fields")
+    if fields is not None and not isinstance(fields, dict):
+        return False
+    material_type = (fields or {}).get("material_type")
+    if material_type in ("portfolio", "saved_workspace", "uploaded_media"):
         return False
     st = c.get("source_type") or ""
     if st in ALLOWED_SOURCE_TYPES:
         return True
     if st == "saved_material":
-        fields = c.get("fields") or {}
+        fields = c.get("fields")
+        if not isinstance(fields, dict):
+            return False
         return fields.get("material_type") == "official_filing"
     return False
 
@@ -122,14 +130,30 @@ def is_private_citation(c: dict, all_citations: Sequence[dict]) -> tuple[bool, s
     st = c.get("source_type") or ""
     unknown = st if st and st not in KNOWN_SOURCE_TYPES else None
 
-    if c.get("scope") not in (None, "public"):
+    if c.get("scope") not in (None, "public") or c.get("visibility") not in (None, "public"):
+        return True, unknown
+
+    # An ordinal identifies one source. Ambiguous duplicates must not let a
+    # public record mask private or conflicting material with the same marker.
+    ordinal = c.get("ordinal")
+    if ordinal is not None and any(
+        other is not c and str(other.get("ordinal")) == str(ordinal) and other != c
+        for other in all_citations if isinstance(other, dict)
+    ):
+        return True, unknown
+
+    fields = c.get("fields")
+    if fields is not None and not isinstance(fields, dict):
+        return True, unknown
+    material_type = (fields or {}).get("material_type")
+    if st != "saved_material" and material_type in ("portfolio", "saved_workspace", "uploaded_media"):
         return True, unknown
 
     if st in ALLOWED_SOURCE_TYPES:
         return False, unknown
 
     if st == "saved_material":
-        fields = c.get("fields") or {}
+        fields = fields or {}
         if fields.get("material_type") == "official_filing":
             return False, unknown
         return True, unknown

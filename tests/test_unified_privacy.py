@@ -18,6 +18,20 @@ def test_source_admission_rejects_private_unknown_and_conflicting_scope():
     assert not is_private_citation({"source_type": "web"}, [])[0]
 
 
+def test_conflicting_metadata_and_ordinal_cannot_mask_private_material():
+    for source in (
+        {"source_type": "web", "visibility": "private"},
+        {"source_type": "web", "fields": {"material_type": "uploaded_media"}},
+        {"source_type": "saved_material", "fields": "official_filing"},
+    ):
+        assert is_private_citation(source, [source])[0]
+    public = {"ordinal": 1, "source_type": "web", "quote": "public"}
+    private = {"ordinal": 1, "source_type": "portfolio", "quote": "secret"}
+    assert is_private_citation(public, [public, private])[0]
+    sources, _ = to_judge_sources([1], [private, public])
+    assert not sources
+
+
 def test_calculation_inherits_private_turn_and_packaging_filters():
     citations = [{"ordinal": 1, "source_type": "web", "quote": "public"},
                  {"ordinal": 2, "source_type": "portfolio", "quote": "secret"},
