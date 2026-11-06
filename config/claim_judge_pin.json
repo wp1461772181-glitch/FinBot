@@ -8,9 +8,9 @@
   "versions": {
     "prompt": "judge-v5",
     "window": "numeric-window-v2",
-    "review": "claim-review-v1",
+    "review": "claim-review-v2",
     "pool": "pool-review-v2",
     "public_gate": "public-gate-v1"
   },
-  "notes": "judge.name is the operator catalog label and must exist there; the API key stays in the catalog, never in this file. Changing any version here or in code requires a new frozen acceptance run."
+  "notes": "judge.name is the operator catalog label and must exist there; the API key stays in the catalog, never in this file. Changing any version here or in code requires a new frozen acceptance run. 2026-11-06: review claim-review-v1 -> claim-review-v2 because the forced-candidate run (.local/forced-review-v2-fix.json, after fixing the S4 twin units) met the spec 3-D bar (S1+S2+S4 passing sentences 1, S3 0); the code was already v2, so the pin now matches it."
 }
