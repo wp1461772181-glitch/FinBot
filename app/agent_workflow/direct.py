@@ -943,7 +943,12 @@ class Turn:
                     self.disclose_mapping(title)
         if entities:
             self.reference_stage(False,'classifier_entity_unbound',skipped=self.reference_value is None)
-            self.pending=self.card('请确认这次指代的公司。',[]);return
+            # The names the classifier meant and could not ground, each one a choice (first mention first, no repeats).
+            choices=[]
+            for name in entities:
+                text=str(name or '').strip()
+                if text and text.casefold() not in {c.casefold() for c in choices}:choices.append(text)
+            self.pending=self.card('请确认这次指代的公司。',choices);return
         mention=self.scope.get('company_mention') or ''
         mention_parts=[part.strip() for part in re.split(r'[（(，,）):：\s]',mention) if part.strip()]
         if mention_parts and any(normalized(part).casefold() in normalized(entity_trusted).casefold() for part in mention_parts):
@@ -2364,7 +2369,9 @@ class Turn:
             from .web_sources import timestamp
             expires=timestamp(pending.get('expires_at'))
             if not expires or expires<=datetime.now(UTC):raise ValueError('pending_request_expired')
-            self.question=self.original.removeprefix('reply:');return None
+            # The reply: prefix is transport. The words the user chose are what every later stage reads (the reference
+            # payload, the authorization words), so the press and a typed reply reach them identically.
+            self.original=self.question=self.authorization_question=self.original.removeprefix('reply:');return None
         saved=await asyncio.to_thread(consent.lookup,self.context.identity_credential,self.context.conversation_id,request_id)
         if self.original.startswith(('cancel:','change:')):
             if self.original.split(':',1)[1]!=request_id:raise ValueError('pending_request_mismatch')
