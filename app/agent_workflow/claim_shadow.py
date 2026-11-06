@@ -478,6 +478,20 @@ async def _run(snapshot: ShadowTurn) -> None:
                             _CALLS_TODAY += 1
                             review = await review_candidate(candidate.text, context, c_sources, judge_res, resolved)
 
+                    # Whole visible pool (U8): only after the cited sources failed to support the sentence.
+                    pool_check = None
+                    if (_TEST_JUDGE_FN is None and judge_res.status == "ok"
+                            and judge_res.verdict in {"contradiction", "not_in_source"}
+                            and _CALLS_TODAY < daily_calls and not os.path.exists(stop_path)):
+                        from .claim_pool_review import confirm_pool_support, pool_record
+                        visible = sorted({int(c["ordinal"]) for c in snapshot.citations
+                                          if isinstance(c, dict) and str(c.get("ordinal", "")).isdigit()})
+                        other = [o for o in visible if o not in candidate.ordinals]
+                        if other:
+                            pool_sources, _pool_meta = to_judge_sources(other, snapshot.citations)
+                            async with _SEMAPHORE:
+                                _CALLS_TODAY += 1
+                                pool_check = pool_record(await confirm_pool_support(candidate.text, pool_sources, resolved))
                     attribution_reviews = []
                     if _TEST_JUDGE_FN is None:
                         from .claim_short_review import review_attribution
@@ -507,6 +521,7 @@ async def _run(snapshot: ShadowTurn) -> None:
                         "short_review": review,
                         "attribution_candidates": judge_res.attribution_candidates,
                         "attribution_reviews": attribution_reviews,
+                        "pool_check": pool_check,
                         "subtype": judge_res.subtype,
                         "name_span": judge_res.name_span,
                         "name_ordinal": judge_res.name_ordinal,
