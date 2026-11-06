@@ -71,13 +71,14 @@ async def judge_item(item, model, sem, timeout_seconds):
         if result.verdict == 'contradiction' and result.quote_verified:
             review = await review_candidate(item['text'], '', item['sources'], result, model,
                                             timeout_seconds=timeout_seconds)
-            row['review'] = {'status': review['status'], 'passed': review['passed']}
+            row['review'] = {'status': review['status'], 'passed': review['passed'], 'answers': review.get('answers')}
             row['door_open'] = bool(review['passed'])
         for figure in result.attribution_candidates:
             review = await review_attribution(item['text'], '', item['sources'], figure['text'], model,
                                               timeout_seconds=timeout_seconds)
             row.setdefault('attribution_reviews', []).append({'status': review['status'],
-                                                              'passed': review['passed']})
+                                                              'passed': review['passed'],
+                                                              'answers': review.get('answers')})
             row['door_open'] = row['door_open'] or bool(review['passed'])
         return row
 
