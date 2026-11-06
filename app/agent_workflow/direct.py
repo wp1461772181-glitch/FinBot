@@ -2739,6 +2739,13 @@ class Turn:
             # (A card already names its target.)  After every check, and the server's words, not the model's: a wrong mapping has to stay visible to be corrected.
             line='按 {mention} = {title}（{symbol}）理解；如果不是这家公司，请告诉我。'.format(**self.mapped_entity)
             answer=answer[:30000-len(line)-2].rstrip()+'\n\n'+line
+        # The delivered text: a marker that names no source of this turn points at nothing, so the marker goes and
+        # nothing else.  The gate, the number check and the unverified flags were all decided on the text above.
+        # The unverified lines carry the same sentence, so they lose the dead marker too; number review matches by line.
+        from .evidence import strip_invalid_markers
+        stripped=strip_invalid_markers(answer,self.citations)
+        if stripped.strip():answer=stripped
+        self.unverified_lines=[{**e,'line':strip_invalid_markers(e['line'],self.citations)} if isinstance(e,dict) and isinstance(e.get('line'),str) else e for e in self.unverified_lines]
         self.audit.update(stop_reason=reason,elapsed_ms=round((time.monotonic()-self.started)*1000))
         return {'answer':answer[:30000],'citations':self.citations,'status':status,'reason':reason,'route':self.route,
             'unverified_lines':list(self.unverified_lines),'audit':self.audit,'shadow_entity_mismatches':self.audit.get('shadow_entity_mismatches',[]),'final_protocol':self.final_protocol,'pending_request':self.pending,'result_sets':self.sets,'previous_category':self.route,'previous_scope':{**self.scope,'_tool_categories':list(self.used_categories)}}
