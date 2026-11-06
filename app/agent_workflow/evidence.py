@@ -249,7 +249,8 @@ def citation_markers(answer,citations):
     return re.findall(r'\[(\d+)\]',literal_titles(answer,citations))
 
 
-def citation_errors(answer: str,citations: list[dict]) -> list[int]:
+def citation_valid_ordinals(citations: list[dict]) -> set[int]:
+    """The ``[n]`` numbers this turn's evidence pool can resolve; any other marker points at no source."""
     valid=set()
     for c in citations:
         if type(c.get('ordinal')) is not int:continue
@@ -257,7 +258,56 @@ def citation_errors(answer: str,citations: list[dict]) -> list[int]:
         if (c.get('source_type') in {'configured_news'} or c.get('origin')=='configured_news') and not _has_valid_http_url(c.get('url') or c.get('source_url')):
             continue
         valid.add(int(c['ordinal']))
+    return valid
+
+
+def citation_errors(answer: str,citations: list[dict]) -> list[int]:
+    valid=citation_valid_ordinals(citations)
     return [int(n) for n in citation_markers(answer,citations) if int(n) not in valid]
+
+
+_MARKER=re.compile(r'\[(\d+)\]')
+# A run of adjacent markers, with the horizontal white space before and after it.
+_MARKER_RUN=re.compile(r'(?P<lead>[ \t]*)(?P<run>(?:\[\d+\])+)(?P<trail>[ \t]*)')
+
+
+def _literal_title_spans(answer: str,citations: list[dict]) -> list[tuple[int,int]]:
+    """Where the exact source titles that carry brackets sit in ``answer``: their brackets are text (see literal_titles)."""
+    from .language import simplified
+    spans=[]
+    for title in {str(c.get('title') or '') for c in citations}:
+        if not re.search(r'\[\d+\]',title):continue
+        for variant in {title,simplified(title)}:
+            start=answer.find(variant)
+            while start!=-1:
+                spans.append((start,start+len(variant)))
+                start=answer.find(variant,start+len(variant))
+    return spans
+
+
+def strip_invalid_markers(answer: str,citations: list[dict]) -> str:
+    """``answer`` without the ``[n]`` markers that name no source of this turn.
+
+    Only the marker goes: the words, the figures and every resolvable marker stay as written.  A marker that
+    lies inside an exact source title is text, not a handle, and is kept.  Resolution is ``citation_errors``'
+    own, so what is removed is exactly what the gate counted as invalid.
+    """
+    valid=citation_valid_ordinals(citations)
+    spans=_literal_title_spans(answer,citations)
+    def _protected(position: int) -> bool:
+        return any(start<=position<end for start,end in spans)
+    def _replace(match: re.Match) -> str:
+        kept=[];dropped=False
+        for marker in _MARKER.finditer(match['run']):
+            if int(marker[1]) in valid or _protected(match.start('run')+marker.start()):kept.append(marker[0])
+            else:dropped=True
+        if not dropped:return match[0]
+        if kept:return match['lead']+''.join(kept)+match['trail']
+        # Every marker of the run is dead.  At a line or cell start the white space after it goes; mid-line the
+        # white space before it goes, so the sentence keeps one clean gap.
+        before=answer[match.start()-1] if match.start() else '\n'
+        return match['lead'] if before in '\n|' else match['trail']
+    return _MARKER_RUN.sub(_replace,answer)
 
 
 _CITATION_FIELD_SKIP={'excerpt','answer','summary','content','text','body','quote','raw_content','content_text',

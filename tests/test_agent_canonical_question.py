@@ -150,6 +150,17 @@ def test_a_classifier_company_absent_from_canonical_and_original_still_asks(monk
         classifier=lambda _:{'category':'D','company':'Microsoft Corporation','symbol':'MSFT'})
     assert result['status']=='waiting_for_input'
     assert result['pending_request']['question']=='请确认这次指代的公司。'
+    # Each name the classifier meant and could not ground is a choice, symbol first, as a typed reply would be.
+    assert [c['value'] for c in result['pending_request']['choices']]==['reply:MSFT','reply:Microsoft Corporation']
+
+def test_the_unbound_names_become_choices_once_each_in_mention_order(monkeypatch):
+    from app.agent_workflow import entities
+    monkeypatch.setattr(entities,'resolve_ticker',lambda _:None)
+    result,_=run('最近有什么新闻？',
+        resolver=lambda _:{'relationship':'new','canonical_question':'最近有什么新闻？'},
+        classifier=lambda _:{'category':'D','company':'msft','symbol':'MSFT'})
+    assert result['status']=='waiting_for_input'
+    assert result['pending_request']['choices']==[{'label':'MSFT','value':'reply:MSFT'}]
 
 def test_a_company_mention_with_ticker_and_exchange_is_grounded_by_a_written_part(monkeypatch):
     from app.agent_workflow import entities
