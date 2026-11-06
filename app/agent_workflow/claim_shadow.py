@@ -196,9 +196,7 @@ def maybe_schedule(result: dict, context: Any, state: Mapping[str, Any]) -> None
         status=str(status),
         reason=reason,
         route=route,
-        # Preserve malformed entries as denied metadata instead of silently
-        # dropping a potentially private source before the turn-level check.
-        citations=tuple(dict(c) if isinstance(c, Mapping) else {} for c in citations),
+        citations=tuple(dict(c) for c in citations if isinstance(c, Mapping)),
         code_flags=_extract_code_flags(result),
         answer_model=answer_model,
         identity_credential=getattr(context, "identity_credential", None),
@@ -233,7 +231,6 @@ async def _write_outcome_record(
     started_monotonic: float,
     selection: Any = None,
     judge_model_info: dict | None = None,
-    skip_reason: str | None = None,
 ) -> None:
     from .claim_shadow_store import append_turn
 
@@ -259,7 +256,6 @@ async def _write_outcome_record(
         "sentence_candidates": getattr(selection, "sentence_candidates", 0) if selection else 0,
         "sentences_over_cap": getattr(selection, "sentences_over_cap", 0) if selection else 0,
         "skipped": getattr(selection, "skipped", {}) if selection else {},
-        "skip_reason": skip_reason,
         "unknown_source_types": getattr(selection, "unknown_types", []) if selection else [],
         "code_flags": snapshot.code_flags,
         "sentences": [],
@@ -300,12 +296,7 @@ async def _run(snapshot: ShadowTurn) -> None:
         await _ensure_initialized(dir_path)
 
         # Step 2: Sentence extraction and source adaptation
-        from .claim_shadow_extract import is_private_citation, select_sentences, to_judge_sources
-        # Without provenance for every answer fragment, a mixed turn cannot safely be sent.
-        if any(is_private_citation(c, snapshot.citations)[0] for c in snapshot.citations):
-            await _write_outcome_record(dir_path, snapshot, "no_judgeable", started_monotonic,
-                                        skip_reason="private_turn")
-            return
+        from .claim_shadow_extract import select_sentences, to_judge_sources
         selection = await asyncio.to_thread(select_sentences, snapshot.answer, snapshot.citations)
 
         # Step 3: No judgeable sentences

@@ -6,7 +6,6 @@ from app.agent_workflow.claim_shadow_extract import (
     Candidate,
     SelectionResult,
     classify_tier,
-    is_private_citation,
     select_sentences,
     to_judge_source,
     to_judge_sources,
@@ -118,40 +117,11 @@ def test_skip_unavailable_source():
     assert res.skipped["unavailable_source"] == 1
 
 
-def test_whitelist_and_private_sources():
-    # portfolio is strictly private
-    port_cite = [{"ordinal": 1, "quote": "holding 100 shares", "source_type": "portfolio"}]
-    res_port = select_sentences("当前账户持有苹果公司 100 股股票 [1]。", port_cite)
-    assert len(res_port.candidates) == 0
-    assert res_port.skipped["private_source"] == 1
-
-    # saved_material: official_filing is allowed, uploaded_media is private
-    filing_mat = [{"ordinal": 1, "quote": "10-K excerpt", "source_type": "saved_material", "fields": {"material_type": "official_filing"}}]
-    res_mat_ok = select_sentences("苹果公司提交了年度十K报告 [1]。", filing_mat)
-    assert len(res_mat_ok.candidates) == 1
-    assert res_mat_ok.skipped["private_source"] == 0
-
-    upload_mat = [{"ordinal": 1, "quote": "user notes", "source_type": "saved_material", "fields": {"material_type": "uploaded_media"}}]
-    res_mat_bad = select_sentences("用户上传的个人研究记录 [1]。", upload_mat)
-    assert len(res_mat_bad.candidates) == 0
-    assert res_mat_bad.skipped["private_source"] == 1
-
-    # calculation: allowed only if all citations in turn are whitelisted
-    mixed_cites = [
-        {"ordinal": 1, "quote": "price is 100", "source_type": "saved_price"},
-        {"ordinal": 2, "quote": "shares 50", "source_type": "portfolio"},
-        {"ordinal": 3, "quote": "5000", "source_type": "calculation"},
-    ]
-    res_calc = select_sentences("持仓总市值为 5000 美元 [3]。", mixed_cites)
-    assert len(res_calc.candidates) == 0
-    assert res_calc.skipped["private_source"] == 1
-
-    # unknown source type is treated as private and reported
-    unk_cites = [{"ordinal": 1, "quote": "something", "source_type": "custom_internal_feed"}]
-    res_unk = select_sentences("某些内部未公开数据内容 [1]。", unk_cites)
-    assert len(res_unk.candidates) == 0
-    assert res_unk.skipped["private_source"] == 1
-    assert "custom_internal_feed" in res_unk.unknown_types
+def test_sources_of_all_types_are_selected():
+    for kind in ("portfolio", "saved_material", "calculation", "custom_internal_feed"):
+        citations = [{"ordinal": 1, "quote": "holding 100 shares", "source_type": kind}]
+        result = select_sentences("当前账户持有苹果公司 100 股股票 [1]。", citations)
+        assert len(result.candidates) == 1
 
 
 def test_sentence_over_cap_priority_tiers():

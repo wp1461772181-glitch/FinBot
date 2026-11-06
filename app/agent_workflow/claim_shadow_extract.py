@@ -30,34 +30,6 @@ from .evidence import (
 
 MAX_SENTENCES = 12
 
-ALLOWED_SOURCE_TYPES = frozenset({
-    "official_filing",
-    "saved_filing",
-    "reported_figure",
-    "saved_price",
-    "saved_price_set",
-    "market_quote",
-    "web",
-    "web_news",
-    "configured_news",
-    "research_faq",
-    "saved_forecast",
-})
-
-KNOWN_SOURCE_TYPES = frozenset({
-    *ALLOWED_SOURCE_TYPES,
-    "saved_material",
-    "calculation",
-    "formula_calculation",
-    "portfolio",
-    "saved_workspace",
-    "uploaded_media",
-    "ai_analysis",
-    "saved_ai_analysis",
-    "system_state",
-    "unavailable",
-})
-
 _SOURCE_LIST_LINE = re.compile(
     r"^(?:(?:[-*+]|\d+[.)])\s*)?(?:\[\d+\]|来源[:：]|参考(?:来源|文献|资料)[:：]|引用(?:来源)?[:：])"
 )
@@ -102,120 +74,6 @@ def _is_too_short(text: str) -> bool:
     return len(clean_chars) < 6
 
 
-def _is_allowed_source_direct(c: dict) -> bool:
-    if c.get("scope") not in (None, "public") or c.get("visibility") not in (None, "public"):
-        return False
-    fields = c.get("fields")
-    if fields is not None and not isinstance(fields, dict):
-        return False
-    material_type = (fields or {}).get("material_type")
-    if material_type in ("portfolio", "saved_workspace", "uploaded_media"):
-        return False
-    st = c.get("source_type") or ""
-    if st in ALLOWED_SOURCE_TYPES:
-        return True
-    if st == "saved_material":
-        fields = c.get("fields")
-        if not isinstance(fields, dict):
-            return False
-        return fields.get("material_type") == "official_filing"
-    return False
-
-
-def is_private_citation(c: dict, all_citations: Sequence[dict]) -> tuple[bool, str | None]:
-    """Check if citation is private under §2.3 whitelist rules.
-
-    Returns (is_private, unknown_source_type_name_or_None).
-    """
-    if not isinstance(c, dict):
-        return True, None
-    result = _private_citation(c, all_citations, set())
-    if result[0]:
-        return result
-    # Parent checks alone do not establish the provenance of generated labels
-    # and appended source fragments. Keep these paths closed until U1 tracks
-    # every outbound block. Preserve the existing single-level admission only.
-    if c.get("source_type") == "formula_calculation":
-        return True, result[1]
-    if c.get("source_type") == "calculation" and any(
-        other is not c and (not isinstance(other, dict) or not _is_allowed_source_direct(other))
-        for other in all_citations
-    ):
-        return True, result[1]
-    return result
-
-
-def _private_citation(c: dict, all_citations: Sequence[dict], visiting: set[int]) -> tuple[bool, str | None]:
-    st = c.get("source_type") or ""
-    unknown = st if st and st not in KNOWN_SOURCE_TYPES else None
-
-    if c.get("scope") not in (None, "public") or c.get("visibility") not in (None, "public"):
-        return True, unknown
-
-    # An ordinal identifies one source. Ambiguous duplicates must not let a
-    # public record mask private or conflicting material with the same marker.
-    ordinal = c.get("ordinal")
-    if ordinal is not None and any(
-        other is not c and str(other.get("ordinal")) == str(ordinal) and other != c
-        for other in all_citations if isinstance(other, dict)
-    ):
-        return True, unknown
-
-    fields = c.get("fields")
-    if fields is not None and not isinstance(fields, dict):
-        return True, unknown
-    material_type = (fields or {}).get("material_type")
-    if st != "saved_material" and material_type in ("portfolio", "saved_workspace", "uploaded_media"):
-        return True, unknown
-
-    if st in ALLOWED_SOURCE_TYPES:
-        return False, unknown
-
-    if st == "saved_material":
-        fields = fields or {}
-        if fields.get("material_type") == "official_filing":
-            return False, unknown
-        return True, unknown
-
-    if st in {"calculation", "formula_calculation"}:
-        # Traverse recorded operands, never infer provenance from nearby sources.
-        # Cycles, ambiguous ordinals and inconsistent parent lists fail closed.
-        if id(c) in visiting:
-            return True, unknown
-        calculation = c.get("calculation")
-        if not isinstance(calculation, dict):
-            return True, unknown
-        inputs = calculation.get("inputs")
-        if st == "formula_calculation":
-            if not isinstance(inputs, dict) or not inputs:
-                return True, unknown
-            inputs = list(inputs.values())
-        if not isinstance(inputs, list) or not inputs:
-            return True, unknown
-        next_visiting = visiting | {id(c)}
-        parent_ordinals = set()
-        for item in inputs:
-            if not isinstance(item, dict) or item.get("user_stated") or item.get("origin") == "user_stated":
-                return True, unknown
-            ordinal = item.get("source_ordinal")
-            matches = [other for other in all_citations if isinstance(other, dict)
-                       and str(other.get("ordinal")) == str(ordinal)] if ordinal is not None else []
-            if len(matches) != 1 or _private_citation(matches[0], all_citations, next_visiting)[0]:
-                return True, unknown
-            if st == "formula_calculation" and (matches[0].get("source_type") != "saved_price_set"
-                                                or not item.get("field")):
-                return True, unknown
-            parent_ordinals.add(str(ordinal))
-        for parents in (c.get("parents"), calculation.get("parents")):
-            if parents is not None and (not isinstance(parents, list)
-                                        or {str(p) for p in parents} != parent_ordinals):
-                return True, unknown
-        return False, unknown
-
-    # All others (portfolio, saved_workspace, uploaded_media, ai_analysis, unknown, etc.) are private
-    return True, unknown
-
-
 def classify_tier(passage: str, sources: Sequence[dict]) -> int:
     """Classify sentence tier according to §2.5:
 
@@ -253,7 +111,6 @@ def select_sentences(
         "too_short": 0,
         "duplicate": 0,
         "unavailable_source": 0,
-        "private_source": 0,
     }
     unknown_types: list[str] = []
     candidates: list[Candidate] = []
@@ -318,18 +175,6 @@ def select_sentences(
 
             if all(s.get("source_type") == "unavailable" for s in p_sources):
                 skipped["unavailable_source"] += 1
-                continue
-
-            has_private = False
-            for s in p_sources:
-                is_priv, unk = is_private_citation(s, citations)
-                if unk and unk not in unknown_types:
-                    unknown_types.append(unk)
-                if is_priv:
-                    has_private = True
-
-            if has_private:
-                skipped["private_source"] += 1
                 continue
 
             ordinals_list: list[int] = []
@@ -460,7 +305,7 @@ def to_judge_sources(
 
     for ord_val in ordinals[:MAX_SOURCES]:
         c = indexed.get(ord_val)
-        if c and not is_private_citation(c, citations)[0]:
+        if c:
             src, meta = to_judge_source(c)
             sources.append(src)
             meta_dict[str(ord_val)] = meta

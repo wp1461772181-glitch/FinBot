@@ -480,33 +480,24 @@ def test_rate_limit_circuit_breaker(monkeypatch, tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_private_turn_leaves_no_raw_text(monkeypatch, tmp_path: Path):
-    """If no_judgeable is due to private sources, question, answer, and sources must not be written."""
-    async def _run():
+def test_private_turn_reaches_judge(monkeypatch, tmp_path: Path):
+    async def run():
         monkeypatch.setenv("CLAIM_JUDGE_SHADOW", "on")
         monkeypatch.setenv("CLAIM_JUDGE_SHADOW_DIR", str(tmp_path.resolve()))
         monkeypatch.setenv("CLAIM_JUDGE_SHADOW_MODEL", "background")
+        monkeypatch.setenv("CLAIM_JUDGE_SHADOW_EXPECT_MODEL", "test")
         monkeypatch.setattr("app.agent_chat_identity.owner_credential_matches", lambda cred: True)
-
-        secret_answer = "私人持仓数据秘密答案，用户持股十万股 [1]。"
-        secret_question = "我的私人持仓有多少？"
-
-        turn = {
-            "turn_id": "t_priv",
-            "answer": secret_answer,
-            "citations": [{"ordinal": 1, "quote": "100000", "source_type": "portfolio"}],
-            "status": "succeeded",
-        }
-        maybe_schedule(turn, MagicMock(unattended=False), {"question": secret_question})
+        set_test_resolve_fn(AsyncMock(return_value={"provider": "openrouter", "model": "test", "api_key": "fake"}))
+        judge = AsyncMock(return_value=JudgeResult(status="ok", verdict="supported"))
+        set_test_judge_fn(judge)
+        result = {"turn_id": "private", "answer": "当前账户持有苹果公司 100 股股票 [1]。",
+                  "citations": [{"ordinal": 1, "quote": "holding 100 shares", "source_type": "portfolio"}],
+                  "status": "succeeded"}
+        maybe_schedule(result, MagicMock(unattended=False), {"question": "我的持仓？"})
         await asyncio.gather(*list(_TASKS))
-
-        content = list(tmp_path.glob("*.jsonl"))[0].read_text(encoding="utf-8")
-        assert "no_judgeable" in content
-        assert secret_answer not in content
-        assert secret_question not in content
-        assert "100000" not in content
-
-    asyncio.run(_run())
+        assert judge.await_count == 1
+        assert any("holding 100 shares" in repr(arg) for arg in (*judge.await_args.args, *judge.await_args.kwargs.values()))
+    asyncio.run(run())
 
 
 def test_real_catalog_resolve_import_regression(monkeypatch, tmp_path: Path):

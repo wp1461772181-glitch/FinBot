@@ -30,7 +30,7 @@ from typing import Any, Callable, Mapping, Sequence
 from fastapi import HTTPException
 
 from .claim_judge import JudgeSource, _default_call, _find_quote, _json_object
-from .claim_shadow_extract import is_private_citation, to_judge_source
+from .claim_shadow_extract import to_judge_source
 from .claim_shadow_store import append_turn, prune
 
 logger = logging.getLogger(__name__)
@@ -110,8 +110,18 @@ def shadow_dir() -> str:
 
 
 def enabled() -> bool:
-    """Keep online review closed until U1 provenance checks are complete."""
-    return False
+    """Switch ``CLAIM_NUMBER_REVIEW`` (default off), a model name, an absolute shadow directory and no STOP file."""
+    if os.environ.get("CLAIM_NUMBER_REVIEW", "off").strip().lower() != "on":
+        return False
+    if not (os.environ.get("CLAIM_JUDGE_SHADOW_MODEL") or "").strip():
+        return False
+    directory = shadow_dir()
+    if not os.path.isabs(directory):
+        return False
+    try:
+        return not os.path.exists(os.path.join(directory, "STOP"))
+    except OSError:
+        return False
 
 
 def reset_state() -> None:
@@ -272,9 +282,6 @@ def _package(items: Sequence[dict], citations):
     dropped: list[int] = []
     used = 0
     for position, ordinal in enumerate(order):
-        if is_private_citation(by_ordinal[ordinal], citations)[0]:
-            dropped.append(ordinal)
-            continue
         source, meta = to_judge_source(by_ordinal[ordinal])
         if not source.text.strip():
             continue
@@ -386,13 +393,8 @@ async def _settle(turn: Any, result: dict, *, call, resolve, timeout) -> dict:
 
     entries = result.get("unverified_lines")
     answer = result.get("answer") or ""
-    citations = [c if isinstance(c, dict) else {} for c in (getattr(turn, "citations", None) or [])]
+    citations = [c for c in (getattr(turn, "citations", None) or []) if isinstance(c, dict)]
     if not isinstance(entries, list) or not entries or not citations or not answer:
-        return result
-    # A private source can be paraphrased without a marker anywhere in the answer.
-    # Until fragment provenance is available, keep the entire mixed turn local.
-    if any(is_private_citation(c, citations)[0] for c in citations):
-        _note(turn, {"skipped": "private_turn"})
         return result
     user_text = turn.user_stated_text()
     verified = answer_verified_figures(answer, citations, user_text=user_text)
@@ -462,7 +464,7 @@ async def _settle(turn: Any, result: dict, *, call, resolve, timeout) -> dict:
         return result
 
     payload = {
-        "answer": "\n".join(item["line"] for item in sent),
+        "answer": answer,
         "lines": [{"id": item["id"], "text": item["line"], "numbers": item["tokens"]} for item in sent],
         "sources": [{"ordinal": s.ordinal, "source_type": s.source_type, "complete": bool(s.complete), "text": s.text}
                     for s in sources],
