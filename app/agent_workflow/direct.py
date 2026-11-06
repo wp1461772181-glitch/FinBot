@@ -1,7 +1,7 @@
 """Two semantic stages followed by one permission-aware, bounded tool loop."""
 from __future__ import annotations
 import asyncio,copy,hashlib,inspect,json,os,re,time,uuid
-from datetime import UTC,datetime
+from datetime import UTC,date,datetime,timedelta,timezone
 from typing import Annotated
 from pydantic import BaseModel,ConfigDict,Field
 from fastapi import HTTPException
@@ -556,6 +556,80 @@ def execution_fallback(facts: list[dict],question: str='',targets: list[dict]|No
     return head+'\n'+'\n'.join(lines)
 
 
+# Governance of a model that answers without its tools (see the tests in test_agent_notools_governance.py).
+KL_TZ=timezone(timedelta(hours=8))   # Asia/Kuala_Lumpur, which has no daylight saving time
+PRICE_PREFETCH_LIMIT=4               # a prices turn reads at most this many explicit tickers before the loop
+PRICE_PREFETCH_ROWS=10               # about two trading weeks of closes per ticker
+DRAFT_COPY_LIMIT=2000                # characters of a discarded model draft kept in the audit for review
+NUDGE_NOTE=('系统事实：本轮你尚未调用任何工具，没有任何可引用的证据。本题可用的工具：{tools}。'
+    '需要事实时请调用工具取数；查不到就直说，不要凭记忆写出数字、日期或状态。')
+EMPTY_CLOSE_NOTE=('系统事实：你上一步没有产出正文。本轮已取得的证据：{sources}。'
+    '请直接写给用户的回答正文，用上面证据的 [n] 引用；需要时仍可调用工具。')
+# A sentence that says a named past or present date is still ahead.  Negated phrases are not claims.
+FUTURE_PHRASES=('尚未到来','还未到来','未到来','还没到','尚未到','还没有到','未来','将来','尚未发生','还没发生','未发生','还没有发生',
+    'not yet','hasn\'t arrived','has not arrived','yet to come','in the future','has not happened','hasn\'t happened','has yet to')
+FUTURE_NEGATIONS=('不是未来','并非未来','不在未来','不属于未来','not in the future','not a future','isn\'t in the future','is not in the future')
+_FULL_DATE=re.compile(r'(?<!\d)(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})')
+_MONTH_DAY=re.compile(r'(?<![\d年])(\d{1,2})\s*月\s*(\d{1,2})\s*日')
+# Past days a request names in words: they resolve against the user's own today, so they are always past.
+RELATIVE_PAST_DAYS={'前天':2,'昨天':1,'昨日':1}
+
+
+def requested_dates(text,today):
+    """The dates a request names, each with its position relative to ``today`` (a date in the user's zone).
+
+    A month and day without a year take the year of ``today`` and are marked ``year_inferred``.  A relative
+    past day (昨天, 前天) is resolved and marked with the word it came from."""
+    found=[]
+    def add(value,inferred,written=None):
+        iso=value.isoformat()
+        if any(item['date']==iso for item in found):return
+        relation='past' if value<today else 'today' if value==today else 'future'
+        item={'date':iso,'relation_to_today':relation,'year_inferred':inferred}
+        if written:item['written_as']=written
+        found.append(item)
+    body=text or ''
+    for year,month,day in _FULL_DATE.findall(body):
+        try:add(date(int(year),int(month),int(day)),False)
+        except ValueError:continue
+    for month,day in _MONTH_DAY.findall(body):
+        try:add(date(today.year,int(month),int(day)),True)
+        except ValueError:continue
+    for word,days in RELATIVE_PAST_DAYS.items():
+        if word in body:add(today-timedelta(days=days),False,word)
+    return found
+
+
+def future_date_claim(text,dates):
+    """True when one sentence names a requested date that is past or today and also says that date is still ahead.
+
+    This is the one text check on a refusal, and it is tied to a fact the code computed: a date that has
+    already come cannot be reported as not yet arrived."""
+    past={item['date']:date.fromisoformat(item['date']) for item in dates if item.get('relation_to_today') in {'past','today'}}
+    if not past:return False
+    for sentence in re.split(r'[。！？!?;；\n]+',text or ''):
+        low=sentence.lower()
+        if any(negation in low for negation in FUTURE_NEGATIONS):continue
+        if not any(phrase in low for phrase in FUTURE_PHRASES):continue
+        for value in past.values():
+            full=re.compile(r'(?<!\d)'+str(value.year)+r'\s*[-/年]\s*0?'+str(value.month)+r'\s*[-/月]\s*0?'+str(value.day)+r'(?!\d)')
+            month_day=re.compile(r'(?<![\d年])0?'+str(value.month)+r'\s*月\s*0?'+str(value.day)+r'\s*日')
+            if full.search(sentence) or month_day.search(sentence):return True
+    return False
+
+
+def tool_facts(entries):
+    """What a list of tool results said, as facts a refusal may quote: name, status, and the error code when there is one."""
+    facts=[]
+    for entry in entries[:8]:
+        if not isinstance(entry,dict) or not entry.get('name'):continue
+        status=entry.get('status') or ('ok' if entry.get('ok') is True else 'failed')
+        item={'name':entry['name'],'status':status}
+        if entry.get('error_code'):item['error_code']=entry['error_code']
+        facts.append(item)
+    return facts
+
+
 class Turn:
 
     def __init__(self,question,context,emit,messages,state):
@@ -579,7 +653,10 @@ class Turn:
         self.pending=None;self.proposals=[];self.proposal_calls={};self.followup=False;self.refinement=False;self.seen=set();self.evidence_signatures=set();self.no_new=0;self.repeated_evidence=0
         # model and reasoning_effort: which model and effort answered this turn (the bot's setting, else the environment default).
         self.audit={'tool_calls':0,'distinct_successful_calls':0,'retry_count':0,'decision_steps':0,'model_calls':0,'token_usage':0,'usage_mode':'actual','nodes':[],'stop_reason':None,'stages':{},
-                    'model':context.model,'reasoning_effort':sent_effort(getattr(context,'reasoning_effort',None)) or 'default'}
+                    'model':context.model,'reasoning_effort':sent_effort(getattr(context,'reasoning_effort',None)) or 'default',
+                    'model_tool_requests':0,'first_decision_zero_tool':False,'prefetch_hit':False,'nudge_outcome':None}
+        # Tool results from the model's own requests start here; the system's prefetch sits before it.
+        self.model_feedback_from=0
         self.reference_value=None;self.verified_referents=[];self.bound_history_citations=[]
         self.granted_actions=set();self.write_reasons={}
         # Tool categories whose definitions ride on the model call (progressive disclosure), in load order;
@@ -947,7 +1024,12 @@ class Turn:
                     self.disclose_mapping(title)
         if entities:
             self.reference_stage(False,'classifier_entity_unbound',skipped=self.reference_value is None)
-            self.pending=self.card('请确认这次指代的公司。',[]);return
+            # The names the classifier meant and could not ground, each one a choice (first mention first, no repeats).
+            choices=[]
+            for name in entities:
+                text=str(name or '').strip()
+                if text and text.casefold() not in {c.casefold() for c in choices}:choices.append(text)
+            self.pending=self.card('请确认这次指代的公司。',choices);return
         mention=self.scope.get('company_mention') or ''
         mention_parts=[part.strip() for part in re.split(r'[（(，,）):：\s]',mention) if part.strip()]
         if mention_parts and any(normalized(part).casefold() in normalized(entity_trusted).casefold() for part in mention_parts):
@@ -1197,19 +1279,36 @@ class Turn:
         Returns (answer, verdict) where verdict is {useful, reply, reason, route}.  ``useful`` is
         False by construction: this is only called when the turn has nothing to answer from.  The
         record lands in the question pool with its route so the misses can be reviewed later.
+        The model writes the reason from facts the code computed (the date, what this turn's tools did,
+        the dates the request names); it may not state a fact outside them.
         """
         language='Chinese' if re.search(r'[\u3400-\u9fff]',self.original) else 'English'
+        now=datetime.now(UTC)
+        today_local=now.astimezone(KL_TZ).date()
+        dates=requested_dates(self.original+' '+self.question,today_local)
+        state=self.refusal_state()
+        self.audit['refusal_state']=state
+        facts={'today':{'user_timezone':'Asia/Kuala_Lumpur','date_in_user_timezone':today_local.isoformat(),'date_utc':now.date().isoformat()},
+               'turn_state':state,
+               'tools_run_by_model':tool_facts(self.feedback[self.model_feedback_from:]),
+               'tools_run_by_system':tool_facts(self.feedback[:self.model_feedback_from]),
+               'dates_in_request':dates}
         messages=[{'role':'system','content':(
             f'The turn gathered no usable evidence for the user\'s request. Return ONLY JSON: '
             f'{{"useful": false, "reply": string, "reason": string, "route": string}}. '
+            f'The facts message is the only ground you may state: today\'s date, turn_state, what the tools did, '
+            f'and each date the request names with its position relative to today. '
+            f'turn_state no_tool_called means the model called no tool at all; searched_empty means tools ran and found nothing; '
+            f'tool_failed means a tool failed, with its error code. '
             f'reply is what the user reads: say plainly that there is no verifiable material for this '
             f'question, in {language}, at most two sentences, and name what would make it answerable '
             f'(a company, a period, a source, or owner confirmation for a write). '
+            f'Write reply and reason from facts only: never claim a turn_state or a tool result that facts does not show, '
+            f'and never say a date is in the future unless facts places that date in the future. '
             f'reason states which information is missing, for internal review, at most 200 characters. '
             f'route is one of insufficient_evidence, owner_action_required, out_of_scope. '
             f'Never invent a fact, a number or a source.')},
-            {'role':'user','content':json.dumps({'request':self.question,'observed':why,
-                'tools_tried':[f['name'] for f in self.feedback if isinstance(f,dict) and f.get('name')]},ensure_ascii=False,default=str)}]
+            {'role':'user','content':'facts: '+json.dumps({'request':self.question,'observed':why,**facts},ensure_ascii=False,default=str)}]
         for attempt in range(2):
             try:
                 async with progress_watchdog(IDLE_SECONDS):message=await self.model(messages,[],protocol_retries=0)
@@ -1220,15 +1319,37 @@ class Turn:
                 route=str(raw.get('route') or 'insufficient_evidence')
                 if route not in {'insufficient_evidence','owner_action_required','out_of_scope'}:route='insufficient_evidence'
                 notice=NO_EVIDENCE_NOTICE['zh' if language=='Chinese' else 'en']
+                reason=str(raw.get('reason') or '')[:200]
+                if future_date_claim('\n'.join([reply,reason]),dates):
+                    # The only check on the verdict: it says a date that has already come is still ahead.  The whole verdict is void.
+                    verdict={'useful':False,'reply':notice,'reason':'refusal_reason_rejected_future_claim','route':route}
+                    self.audit['refusal']=verdict
+                    await asyncio.to_thread(self.record_question,verdict)
+                    return notice,verdict
                 text=reply.strip()
                 if notice.split('，')[0] not in text:   # keep the product's own term for the absence
                     text=notice+'\n'+text
-                verdict={'useful':False,'reply':text,'reason':str(raw.get('reason') or '')[:200],'route':route}
+                verdict={'useful':False,'reply':text,'reason':reason,'route':route}
                 self.audit['refusal']=verdict
                 await asyncio.to_thread(self.record_question,verdict)
                 return text,verdict
             except Exception:continue
         return '没有可核验资料，无法确认本次请求中的事实。',{'useful':False,'reply':'','reason':'verdict_unavailable','route':'insufficient_evidence'}
+
+    def refusal_state(self):
+        """What the model's own tool requests this turn did: none made, a call that failed, or calls that found nothing.
+
+        The system's prefetch is not the model's call; it is reported as tools_run_by_system in the facts.  A failed call
+        leaves a feedback entry with an error_code and without ok=True; a success has neither."""
+        if not self.audit.get('model_tool_requests'):return 'no_tool_called'
+        failed=[f for f in self.feedback[self.model_feedback_from:] if isinstance(f,dict) and f.get('ok') is not True and 'error_code' in f]
+        return 'tool_failed' if failed else 'searched_empty'
+
+    def pool_reason(self,verdict):
+        """The reason kept in the question pool, capped at its column (80): the turn's tool state leads, so it survives the cap."""
+        state=self.audit.get('refusal_state')
+        reason=f"{verdict['route']}:{verdict['reason']}"
+        return (f"{state}:{reason}" if state else reason)[:80]
 
     def record_question(self,verdict):
         """Keep the miss with what was missing, so the gate can be reviewed instead of guessed at."""
@@ -1238,7 +1359,7 @@ class Turn:
             with SessionLocal() as session:
                 session.add(LowConfidenceQuestion(question=self.original[:4000],
                     conversation_id=self.context.conversation_id,turn_id=str(self.state.get('turn_id') or ''),
-                    entry_point='agent_chat',reason=f"{verdict['route']}:{verdict['reason']}"[:80],
+                    entry_point='agent_chat',reason=self.pool_reason(verdict),
                     owner_hash=self.context.owner_hash));session.commit()
         except Exception:self.audit['refusal_record_failed']=True
 
@@ -1421,7 +1542,7 @@ class Turn:
             instruction+=('\n当前身份：游客。抓取、导入、初始化、索引、AI 分析任务、预测、扫描等写操作只有所有者能确认；游客要求时直接说明这一点，'
                 '不要改用无关的读取或卡片代替。扫描官方申报不是读取已存申报。')
         instruction+='\n'+('工具已关闭：直接用已取得的证据回答规范问题，证据覆盖不到的部分简短说明缺什么；不要写出任何工具调用。' if closing else
-            '选择工具或直接作答。')
+            f'本轮状态（事实）：已调用工具 {self.audit["tool_calls"]} 次，已接受证据 {len(accepted)} 条。')
         prior=self.prior_turns()
         hint={'resolved_question':self.question,
               'referents':[r.get('text') or r.get('mention') for r in self.verified_referents if r.get('text') or r.get('mention')][:6],
@@ -2368,7 +2489,9 @@ class Turn:
             from .web_sources import timestamp
             expires=timestamp(pending.get('expires_at'))
             if not expires or expires<=datetime.now(UTC):raise ValueError('pending_request_expired')
-            self.question=self.original.removeprefix('reply:');return None
+            # The reply: prefix is transport. The words the user chose are what every later stage reads (the reference
+            # payload, the authorization words), so the press and a typed reply reach them identically.
+            self.original=self.question=self.authorization_question=self.original.removeprefix('reply:');return None
         saved=await asyncio.to_thread(consent.lookup,self.context.identity_credential,self.context.conversation_id,request_id)
         if self.original.startswith(('cancel:','change:')):
             if self.original.split(':',1)[1]!=request_id:raise ValueError('pending_request_mismatch')
@@ -2743,6 +2866,13 @@ class Turn:
             # (A card already names its target.)  After every check, and the server's words, not the model's: a wrong mapping has to stay visible to be corrected.
             line='按 {mention} = {title}（{symbol}）理解；如果不是这家公司，请告诉我。'.format(**self.mapped_entity)
             answer=answer[:30000-len(line)-2].rstrip()+'\n\n'+line
+        # The delivered text: a marker that names no source of this turn points at nothing, so the marker goes and
+        # nothing else.  The gate, the number check and the unverified flags were all decided on the text above.
+        # The unverified lines carry the same sentence, so they lose the dead marker too; number review matches by line.
+        from .evidence import strip_invalid_markers
+        stripped=strip_invalid_markers(answer,self.citations)
+        if stripped.strip():answer=stripped
+        self.unverified_lines=[{**e,'line':strip_invalid_markers(e['line'],self.citations)} if isinstance(e,dict) and isinstance(e.get('line'),str) else e for e in self.unverified_lines]
         self.audit.update(stop_reason=reason,elapsed_ms=round((time.monotonic()-self.started)*1000))
         return {'answer':answer[:30000],'citations':self.citations,'status':status,'reason':reason,'route':self.route,
             'unverified_lines':list(self.unverified_lines),'audit':self.audit,'shadow_entity_mismatches':self.audit.get('shadow_entity_mismatches',[]),'final_protocol':self.final_protocol,'pending_request':self.pending,'result_sets':self.sets,'previous_category':self.route,'previous_scope':{**self.scope,'_tool_categories':list(self.used_categories)}}
@@ -2934,6 +3064,48 @@ class Turn:
                                                'reads':reads,'unread':max(0,len(plan)-HISTORY_BINDING_LIMIT)}
         return read_ok>0
 
+    def evidence_sources(self):
+        """The numbered sources this turn holds, named for a note to the model."""
+        items=[f"[{c.get('ordinal')}] {str(c.get('title') or c.get('source_type') or '')[:80]}" for c in self.citations[:12]]
+        return '；'.join(items) or '（没有编号的来源）'
+
+    async def prefetch_prices(self):
+        """M3: a prices turn whose classifier named its tickers reads their recent closes before the loop.
+
+        The same read tool and the same grounding the model's own call would meet, one call per ticker, at most
+        PRICE_PREFETCH_LIMIT tickers.  A read that finds nothing or fails is recorded and does not stop the turn."""
+        name='query_stock_prices'
+        if self.route!='A' or str(self.scope.get('mode') or '').strip().lower()!='prices':return
+        listed=self.scope.get('symbols') or [self.scope.get('symbol')]
+        symbols=list(dict.fromkeys(str(s).strip().upper() for s in listed if s and str(s).strip()))
+        if not symbols:return
+        if not self.classifier_named or self.entity_carried:
+            # The tickers came from the previous turn or the bot's default, not from this request: nothing is read for them.
+            self.audit['prefetch']={'skipped':'entity_not_in_request','symbols':symbols};return
+        if len(symbols)>PRICE_PREFETCH_LIMIT:
+            self.audit['prefetch']={'skipped':'too_many_symbols','symbols':symbols};return
+        policy=definitions().get(name)
+        if policy is None or not self.in_scope(name) or name not in {t['function']['name'] for t in self.permitted_tools()} \
+           or (not self.owner and not policy.guest):
+            self.audit['prefetch']={'skipped':'tool_not_available','symbols':symbols};return
+        from .evidence import without_evidence_text
+        results=[]
+        for symbol in symbols:
+            args={'symbol':symbol,'limit':PRICE_PREFETCH_ROWS}
+            try:self.ground_arguments(name,args)
+            except ValueError:
+                results.append({'symbol':symbol,'status':'not_grounded'});continue
+            outcome=await self.execute_read(name,args)
+            before=len(self.observations)
+            self.accept(name,args,outcome)
+            await self.publish_result(name,outcome)
+            accepted=any(o.get('accepted_evidence') for o in self.observations[before:])
+            results.append({'symbol':symbol,'status':'accepted' if accepted else 'failed' if not outcome.get('ok') else 'empty'})
+            signature=json.dumps([name,args],sort_keys=True,ensure_ascii=False)
+            self.seen.add(signature);self.replays[signature]=without_evidence_text(outcome)
+        self.audit['prefetch']={'symbols':symbols,'results':results}
+        self.audit['prefetch_hit']=any(r['status']=='accepted' for r in results)
+
     async def agent_loop(self):
         """The tool loop and the closing answer: shared by a new request and a resumed one."""
         recalled=await self.recall_bound_citations()
@@ -2965,6 +3137,8 @@ class Turn:
         elif recalled:
             self.audit['retrieval_gate']='history_citation_recalled'
             self.no_new=0
+        await self.prefetch_prices()
+        self.model_feedback_from=len(self.feedback)
         stop=None
         while not(stop or self.budget()):
             if self.audit['decision_steps']>=1 and self.citations and (time.monotonic()-self.started)>=180:
@@ -2983,9 +3157,20 @@ class Turn:
                 self.audit['provider_failure']=exc.detail;stop='provider_unstable';break
             if not isinstance(decision,dict):stop='provider_protocol_invalid';break
             calls=decision.get('tool_calls') or []
+            if self.audit['decision_steps']==1:self.audit['first_decision_zero_tool']=bool(self.route=='A' and not calls)
             if not calls:
                 content=decision.get('content') or ''
+                if self.audit.get('empty_close_retried') and self.audit.get('empty_close_outcome') is None:
+                    self.audit['empty_close_outcome']='recovered' if content.strip() else 'failed'
                 if self.route=='A' and not self.observations:
+                    if not self.audit['model_tool_requests'] and not self.audit.get('nudged'):
+                        # M2: no tool called and no evidence held.  The model is told so, with its real tools, once.
+                        self.audit['nudged']=True
+                        self.audit['nudged_draft']=content[:DRAFT_COPY_LIMIT]
+                        self.protocol.append({'role':'system','content':NUDGE_NOTE.format(tools='、'.join(t['function']['name'] for t in self.exposed_tools()))})
+                        continue
+                    if self.audit.get('nudged') and self.audit.get('nudge_outcome') is None:self.audit['nudge_outcome']='failed'
+                    if content.strip():self.audit['discarded_draft']=content[:DRAFT_COPY_LIMIT]
                     # Nothing was gathered, so there is nothing to substantiate: report the absence in
                     # the fixed shape instead of citation-checking a sentence about the absence itself.
                     # A failed retrieval and an empty one are different outcomes for the user.
@@ -2995,10 +3180,17 @@ class Turn:
                     answer,verdict=await self.refusal_verdict(why)
                     return self.finish(answer,reason='tool_failures' if failed else 'zero_evidence',
                                        status='succeeded',generated=True)
+                if self.route=='A' and self.observations and not content.strip() and not self.audit.get('empty_close_retried'):
+                    # M2b: evidence is in hand but the close is blank.  Asked once more with the sources named.
+                    self.audit['empty_close_retried']=True
+                    self.protocol.append({'role':'system','content':EMPTY_CLOSE_NOTE.format(sources=self.evidence_sources())})
+                    continue
                 if await self.recover_remember():return self.remember_card_finish()
                 return await self.finish_answer(content or '没有生成可用的回答。')
             if not isinstance(calls,list) or len(calls)>12:stop='provider_protocol_invalid';break
             if any(not isinstance(c,dict) or not isinstance(c.get('id'),str) for c in calls):stop='provider_protocol_invalid';break
+            self.audit['model_tool_requests']+=len(calls)
+            if self.audit.get('nudged') and self.audit.get('nudge_outcome') is None:self.audit['nudge_outcome']='recovered'
             assistant={k:v for k,v in decision.items() if k in {'content','tool_calls','reasoning_content','reasoning_details'}}
             self.protocol.append({'role':'assistant',**assistant})
             await self.emit({'event':'assistant_tool_request','protocol':{'calls':calls,**{k:v for k,v in assistant.items() if k.startswith('reasoning_')}}})

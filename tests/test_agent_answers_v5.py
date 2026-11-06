@@ -13,8 +13,10 @@ def turn():
 def test_bad_passage_does_not_erase_supported_passage(bad):
     result=turn().finish('AMD 收盘价为100美元[1]。\n'+bad)
     assert '100美元' in result['answer'] and '[1]' in result['answer']
-    # The unsupported passage is kept, and reported as unverified; nothing is deleted.
-    assert bad in result['answer'] and len(result['unverified_lines'])==1 and result['unverified_lines'][0]['line'].startswith(bad.rstrip('。')[:6])
+    # The unsupported passage is kept, and reported as unverified; nothing is deleted.  A marker that names no
+    # source of the turn ([99]) is removed from the delivered text; the sentence around it is not.
+    delivered=bad.replace('[99]','')
+    assert delivered in result['answer'] and len(result['unverified_lines'])==1 and result['unverified_lines'][0]['line'].startswith(bad.rstrip('。')[:6])
     assert result['status']=='partially_succeeded'
 
 def test_stock_source_does_not_require_a_stock_keyword_in_every_sentence():

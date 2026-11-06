@@ -101,7 +101,8 @@ def test_explicit_task_switch_overrides_inconsistent_refinement(question):
         classifier=lambda _:{'category':'A','mode':'prices','company':'Micron','symbol':'MU','metrics':['price'],'days_back':15,'explicit_task_change':True},
         decider=lambda *_:next(steps),executor=lambda n,a:executed.append(n) or {'ok':True,'data':[] if n=='search_knowledge' else [{'id':'p','symbol':'MU','close':100}]})
     result=asyncio.run(direct.run_direct_turn(question,ctx,emit=emit,messages=[{'role':'user','content':'Micron 最近新闻'}],state={'previous_scope':{'company':'Micron','symbol':'MU','metrics':[]}}))
-    assert executed==['query_stock_prices'] and result['status']=='succeeded'
+    # The price prefetch (explicit ticker on a prices turn) reads MU before the model's own call.
+    assert executed==['query_stock_prices','query_stock_prices'] and result['status']=='succeeded'
     assert result['audit']['explicit_task_switch'] and result['previous_scope']['metrics']==['price']
 
 @pytest.mark.parametrize('question',['不要股价，只看最近15天新闻','do not show stock prices; only news in the last 15 days','股价这个词不要纳入检索','Do not include the word price in the search'])
@@ -119,7 +120,8 @@ def test_explicit_task_switch_with_consistent_semantic_stages_reads_prices(relat
         classifier=lambda _:{'category':'A','mode':'prices','company':'Micron','symbol':'MU','metrics':['price'],'days_back':15},decider=lambda *_:next(steps),
         executor=lambda n,a:executed.append(n) or {'ok':True,'data':[] if n=='search_knowledge' else [{'id':'p','symbol':'MU','close':100}]})
     result=asyncio.run(direct.run_direct_turn('改成看 Micron 过去15天股价',ctx,emit=emit,messages=[{'role':'user','content':'Micron 最近新闻'}],state={'previous_scope':{'company':'Micron','symbol':'MU','metrics':[]}}))
-    assert executed==['query_stock_prices'] and result['status']=='succeeded'
+    # The price prefetch (explicit ticker on a prices turn) reads MU before the model's own call.
+    assert executed==['query_stock_prices','query_stock_prices'] and result['status']=='succeeded'
 
 
 def test_repair_is_told_which_numbers_the_source_check_rejected():

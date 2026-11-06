@@ -223,5 +223,6 @@ def test_agent_loop_does_not_soft_stop_without_citations(monkeypatch):
     turn.started = time.monotonic() - 185  # Over 180s
 
     result = asyncio.run(turn.agent_loop())
-    assert decide_count == 1, "Should proceed to decision when citations is empty"
+    # Two decisions: the first is a text answer with no tool and no evidence, so the M2 nudge asks once more with the facts.
+    assert decide_count == 2, "Should proceed to decision when citations is empty"
     assert turn.audit.get("stop_reason") != "soft_time_budget_closing"
