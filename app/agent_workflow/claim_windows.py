@@ -8,12 +8,26 @@ from typing import Sequence
 from .claim_judge import JudgeSource
 from .evidence import _figure_records, _match
 
-WINDOW_VERSION = "numeric-window-v1"
+WINDOW_VERSION = "numeric-window-v2"
 _NUMBER = re.compile(
     r'(?<![A-Za-z0-9_.])(?P<sign>[-−+＋]?)(?P<currency>[$¥￥€£]?)'
     r'(?P<number>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)'
     r'[ \t]*(?P<scale>万亿|千万|百万|万|亿|千|trillion|billion|million|thousand|bn|mn|[bkm])?'
     r'[ \t]*(?P<unit>%|％|股|shares?|USD|CNY|元)?(?![A-Za-z0-9_]|\.\d)', re.I)
+
+
+_PERIOD = re.compile(
+    r'(?:(?:19|20)\d{2}\s*年?\s*)?第?[一二三四1-4]\s*季度'
+    r'|(?<![A-Za-z])[Qq][1-4](?:\s*(?:FY)?\s*\'?(?:19|20)?\d{2})?(?![A-Za-z0-9])'
+    r'|(?:19|20)\d{2}\s*年?\s*(?:上半年|下半年|全年|H[12]\b|FY\b)'
+    r'|(?<![\d,.])(?:19|20)\d{2}[-/年](?:\d{1,2}[-/月](?:\d{1,2}日?)?)?'
+    r'|(?<![\d,.])(?:19|20)\d{2}(?![\d,.]\d)',
+    re.I)
+
+
+def periods(text: str, base: int = 0) -> list[dict]:
+    """Literal period expressions with original offsets (base shifts them into the source text)."""
+    return [{'text': m.group(0), 'span': [base + m.start(), base + m.end()]} for m in _PERIOD.finditer(text)]
 
 
 @dataclass(frozen=True)
@@ -112,10 +126,18 @@ def numeric_windows(sentence: str, sources: Sequence[JudgeSource], *, max_window
                     omitted += 1
                     continue
                 used += size
+                # Period: the expression nearest the number, in the block or its table header; None if absent.
+                found = periods(source.text[start:end], start)
+                for a, b in headers:
+                    found += periods(source.text[a:b], a)
+                period = min(found, key=lambda p: abs(p['span'][0] - source_figure.start)) if found else None
                 windows.append({'ordinal': source.ordinal, 'answer_span': [anchor.start, anchor.end],
                                 'source_number_span': [source_figure.start, source_figure.end],
                                 'answer_figure': asdict(anchor), 'source_figure': asdict(source_figure),
                                 'source_span': [start, end], 'text': source.text[start:end],
                                 'headers': [{'span': [a, b], 'text': source.text[a:b]} for a, b in headers],
+                                'period': period,
                                 'match': match})
-    return {'version': WINDOW_VERSION, 'windows': windows, 'omitted': omitted}
+    answer_periods = periods(re.sub(r'\[\d+\]', lambda m: ' ' * len(m.group()), sentence))
+    return {'version': WINDOW_VERSION, 'windows': windows, 'omitted': omitted,
+            'answer_periods': [p['text'] for p in answer_periods]}
