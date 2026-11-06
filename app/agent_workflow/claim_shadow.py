@@ -30,7 +30,7 @@ CALL_CONCURRENCY = 3
 BACKOFF_SECONDS = 600
 TURN_BUDGET_SECONDS = 300
 RETENTION_DAYS = 180
-PROMPT_VERSION = "judge-v2"
+PROMPT_VERSION = "judge-v3"
 
 # Module-level state
 _TASKS: set[asyncio.Task] = set()
@@ -468,6 +468,9 @@ async def _run(snapshot: ShadowTurn) -> None:
                         "tier": candidate.tier,
                         "status": judge_res.status,
                         "verdict": judge_res.verdict,
+                        "subtype": judge_res.subtype,
+                        "name_span": judge_res.name_span,
+                        "name_ordinal": judge_res.name_ordinal,
                         "reason": judge_res.reason,
                         "quote": judge_res.quote,
                         "quote_verified": judge_res.quote_verified,

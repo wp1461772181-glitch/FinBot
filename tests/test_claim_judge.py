@@ -33,7 +33,7 @@ def test_supported_with_verified_quote_and_usage():
     result = run("Northwind 第三季度营收增长约 8%。", [SRC], replying(reply_json("supported", "四舍五入", SRC.text), usage))
     assert result.status == "ok" and result.verdict == "supported"
     assert result.quote_verified and result.quote_ordinal == 1
-    assert result.usage == usage and result.prompt_version == "judge-v2"
+    assert result.usage == usage and result.prompt_version == "judge-v3"
 
 
 def test_contradiction_with_quote():
@@ -224,3 +224,15 @@ def test_model_config_and_key_never_reach_the_result():
         dumped = json.dumps(dataclasses.asdict(result), default=str)
         assert FAKE_KEY not in dumped and "api_key" not in dumped and "fake-1" not in dumped and "x.invalid" not in dumped
         assert not hasattr(result, "model") and not hasattr(result, "api_key")
+
+
+def test_subject_name_requires_literal_quote_location():
+    async def run(name):
+        async def call(model, system, user):
+            return {}, {'content': json.dumps({'verdict': 'contradiction', 'subtype': 'subject',
+                                                'quote': 'Alpha removed 200 shares', 'name_span': name})}
+        return await cj.judge_claims('Beta sold shares', [cj.JudgeSource(1, 'Alpha removed 200 shares')], {}, call=call)
+    result = asyncio.run(run('Alpha'))
+    assert result.subtype == 'subject' and result.name_span == 'Alpha' and result.name_ordinal == 1
+    result = asyncio.run(run('Beta'))
+    assert result.subtype == 'subject' and not result.name_span and result.name_ordinal is None

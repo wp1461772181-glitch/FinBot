@@ -18,7 +18,7 @@ from typing import Any, Awaitable, Callable, Literal, Mapping, Sequence
 
 from fastapi import HTTPException
 
-PROMPT_VERSION = "judge-v2"
+PROMPT_VERSION = "judge-v3"
 Verdict = Literal["supported", "contradiction", "not_in_source"]
 Status = Literal["ok", "no_sources", "timeout", "provider_error", "parse_error", "invalid_verdict"]
 VERDICTS = ("supported", "contradiction", "not_in_source")
@@ -51,6 +51,9 @@ class JudgeResult:
     usage: dict = field(default_factory=dict)  # the provider's usage object as returned; may be empty
     error_code: str | None = None      # a short code, never exception text
     prompt_version: str = PROMPT_VERSION
+    subtype: str | None = None
+    name_span: str = ""
+    name_ordinal: int | None = None
 
 
 # Returns (data, message) like ``decision_request``; tests inject a fake.
@@ -96,6 +99,8 @@ complete 为 false 时，这个判定只表示「给到的部分里没看到」�
 
 只输出一个 JSON 对象，不要解释，不要代码块：
 {"verdict": "supported 或 contradiction 或 not_in_source", "reason": "不超过 60 字的中文说明", "quote": "来源原文"}
+
+contradiction 时额外填写 subtype：number、direction、state、subject 中一项；subject 时 name_span 填来源原文中的名称。名称存在只用于定位，不证明其角色。拿不准时 subtype 填 null。
 
 quote 必须从 text 里逐字复制，不翻译、不改写、不超过 120 字：
 - contradiction：必填，抄和句子冲突的那句。
@@ -218,6 +223,15 @@ async def judge_claims(
     reason = reason[:MAX_REASON_CHARS] if isinstance(reason, str) else ""
     quote = quote[:MAX_QUOTE_CHARS] if isinstance(quote, str) else ""
     ordinal = _find_quote(quote, prepared)
+    subtype = parsed.get("subtype") if verdict == "contradiction" else None
+    if subtype not in {"number", "direction", "state", "subject"}:
+        subtype = None
+    name = parsed.get("name_span") if subtype == "subject" else None
+    name = name.strip()[:120] if isinstance(name, str) else ""
+    # Names must appear literally in the quoted block, not merely somewhere in the source.
+    if not name or not quote or name not in quote or ordinal is None:
+        name = ""
     return JudgeResult(status="ok", verdict=verdict, reason=reason, quote=quote,
                        quote_verified=ordinal is not None, quote_ordinal=ordinal,
-                       truncated=truncated, latency_ms=latency, usage=usage)
+                       truncated=truncated, latency_ms=latency, usage=usage, subtype=subtype,
+                       name_span=name, name_ordinal=ordinal if name else None)
