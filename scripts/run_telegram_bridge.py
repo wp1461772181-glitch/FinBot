@@ -10,7 +10,8 @@ message id, so replying to it continues with that bot.  Answers go out as plain 
 and no sources list (agent_telegram.chat_text); links written in the answer stay.  Consent cards become
 inline keyboard buttons with a short id (the real token stays in this process); pressing one sends the
 card's own button value to that bot's line, exactly as the web page does, so the write runs through the
-same confirmed handler (save to 资料库, index, ...) and the receipt is the bot's own report.
+same confirmed handler (save to 资料库, index, ...) and the receipt is the bot's own report.  A single-choice
+card (「请确认这次指代的公司」) gets one button per choice, pressed the same way with the choice's own value.
 Messages the bots queued (notify_telegram, alerts with 也发 Telegram) are sent from the outbox to the
 bound chat only.
 
@@ -570,8 +571,10 @@ def format_turn(events: list[tuple[str, dict]]):
 
 def _make_keyboard(cards: list[dict], pending: dict, cid: str, credential: str, bot_id: str | None = None,
                    bot_name: str = "") -> list | None:
-    """Inline buttons for the write cards: 同意 and 取消.  A card that needs ticking (forecast revision
-    sources) has no Telegram form and gets no buttons."""
+    """Inline buttons for the cards Telegram can answer with a tap.  A write card gets 同意 and 取消 on one row.
+    A single-choice card (its choices are ``reply:`` values) gets one button per choice, one per row, labelled
+    with the choice.  A card that needs ticking (forecast revision sources, ``options``) has no Telegram form
+    and gets no buttons."""
     buttons = []
     for card in cards:
         if not isinstance(card, dict) or card.get("options"):
@@ -579,23 +582,33 @@ def _make_keyboard(cards: list[dict], pending: dict, cid: str, credential: str, 
         card_id = card.get("id") or card.get("request_id")
         if not card_id:
             continue
-        row = []
+        row, picks, group = [], [], []
         for choice in card.get("choices") or []:
             value = str((choice or {}).get("value", "")) if isinstance(choice, dict) else ""
-            kind = "ok" if value.startswith("confirm:") else "no" if value.startswith("cancel:") else None
-            if not kind:
+            if value.startswith("confirm:"):
+                kind, default = "ok", "同意"
+            elif value.startswith("cancel:"):
+                kind, default = "no", "取消"
+            elif value.startswith("reply:"):
+                kind, default = "pick", value.removeprefix("reply:")
+            else:
+                continue
+            label = str(choice.get("label") or default)[:20]
+            if not label:
                 continue
             short_id = _make_short_id()
-            label = str(choice.get("label") or ("同意" if kind == "ok" else "取消"))[:20]
             pending[short_id] = {"value": value, "card_id": str(card_id), "conversation_id": cid,
                                  "credential": credential, "bot_id": bot_id, "bot_name": bot_name, "label": label, "group": []}
-            row.append({"text": label, "callback_data": f"{kind}:{short_id}"})
-        # Either button of a card uses the card up, so pressing one forgets the other.
-        group = [b["callback_data"].split(":", 1)[1] for b in row]
+            group.append(short_id)
+            button = {"text": label, "callback_data": f"{kind}:{short_id}"}
+            if kind == "pick":
+                picks.append([button])
+            else:
+                row.append(button)
+        # Any button of a card uses the card up, so pressing one forgets the others.
         for short_id in group:
             pending[short_id]["group"] = group
-        if row:
-            buttons.append(row)
+        buttons.extend(([row] if row else []) + picks)
     return buttons or None
 
 
@@ -625,7 +638,7 @@ async def _handle_callback(client, callback: dict, pending: dict, owner: str, cr
     if kind == "ack":
         await _ack_alert_press(client, bot_token, cb_id, chat_id, message.get("message_id"), short_id)
         return
-    if kind not in {"ok", "no"}:
+    if kind not in {"ok", "no", "pick"}:
         await _answer_callback(client, bot_token, cb_id)
         return
     entry = pending.pop(short_id, None)
@@ -643,7 +656,7 @@ async def _handle_callback(client, callback: dict, pending: dict, owner: str, cr
         _USED_CARDS[other] = None
     while len(_USED_CARDS) > USED_CARDS_KEPT:
         _USED_CARDS.pop(next(iter(_USED_CARDS)))
-    await _answer_callback(client, bot_token, cb_id, "正在执行……" if kind == "ok" else "正在取消……")
+    await _answer_callback(client, bot_token, cb_id, {"ok": "正在执行……", "no": "正在取消……"}.get(kind, "正在处理……"))
     # The card's buttons go at once, so the card cannot be pressed again while its turn runs.
     await _clear_keyboard(client, bot_token, chat_id, message.get("message_id"))
     if not entry.get("bot_id"):
