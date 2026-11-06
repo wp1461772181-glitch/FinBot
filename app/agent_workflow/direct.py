@@ -2369,7 +2369,9 @@ class Turn:
             from .web_sources import timestamp
             expires=timestamp(pending.get('expires_at'))
             if not expires or expires<=datetime.now(UTC):raise ValueError('pending_request_expired')
-            self.question=self.original.removeprefix('reply:');return None
+            # The reply: prefix is transport. The words the user chose are what every later stage reads (the reference
+            # payload, the authorization words), so the press and a typed reply reach them identically.
+            self.original=self.question=self.authorization_question=self.original.removeprefix('reply:');return None
         saved=await asyncio.to_thread(consent.lookup,self.context.identity_credential,self.context.conversation_id,request_id)
         if self.original.startswith(('cancel:','change:')):
             if self.original.split(':',1)[1]!=request_id:raise ValueError('pending_request_mismatch')
