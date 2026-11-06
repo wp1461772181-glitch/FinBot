@@ -138,13 +138,16 @@ def _twin(kind: str, rng: random.Random, k: int):
         mc = round(rng.uniform(5, 900), 1)
         flo = round(mc * rng.uniform(0.4, 0.9), 1)
         text = f'* [1] Float market cap: ${flo} billion (shares available to trade)\n* [1] Total market cap: ${mc} billion'
-        return f'{name} 市值约 {mc} 亿美元 [1]', text, text.split('\n')[0]
+        # Source is in $ billions; 1 billion USD = 10 亿美元, so the sentence value is mc * 10 (unit-aligned).
+        return f'{name} 市值约 {round(mc * 10, 1)} 亿美元 [1]', text, text.split('\n')[0]
     if kind == 'fiscal_vs_calendar':
         cal = round(rng.uniform(1, 90), 2)
         fy = round(cal * rng.uniform(0.6, 1.4), 2)
         text = (f'| Period | Revenue ($bn) |\n|---|---|\n| Fiscal Q2 FY2026 (ended 2026-07-31) | {fy} |\n'
                 f'| Calendar Q2 2026 (Apr-Jun) | {cal} |')
-        return f'{name} 2026 年第二季度（日历口径）营收为 {cal} 亿美元 [1]', text, '| Fiscal Q2 FY2026 (ended 2026-07-31) | ' + f'{fy} |'
+        # Source header is "Revenue ($bn)"; the calendar value is in $ billions, so 1 bn = 10 亿美元: cal * 10.
+        return (f'{name} 2026 年第二季度（日历口径）营收为 {round(cal * 10, 2)} 亿美元 [1]', text,
+                '| Fiscal Q2 FY2026 (ended 2026-07-31) | ' + f'{fy} |')
     if kind == 'gaap_vs_adjusted':
         gaap = round(rng.uniform(0.1, 9), 2)
         adj = round(gaap * rng.uniform(1.1, 1.8), 2)
