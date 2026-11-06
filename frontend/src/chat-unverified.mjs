@@ -27,6 +27,7 @@ export const HINT_KEYS = {
   polarity_conflict: "这句与 [{n}] 的说法可能相反：“{quote}”，请自行判断",
   event_not_in_source: "数字与 [{n}] 一致，但这句里的事件说法在该来源中没有出现，请自行判断",
   number_read_from_source: "这句里的数字在 [{n}] 等来源中有依据，依据如下，请自行判断",
+  number_computed: "这句中的数字由来源数据计算，依据如下，请自行判断",
 };
 
 /**
@@ -35,7 +36,8 @@ export const HINT_KEYS = {
  */
 export const EVIDENCE_KEYS = {
   found: "来源 [{n}] 写作「{quote}」，读作 {read}",
-  derived: "由 {sources} 推算：{method}（模型给出，请自行复核）",
+  derived: "由 {sources} 计算，已自动复算，请自行判断",
+  arithmetic_difference: "根据 {sources} 复算与此数不同，请自行判断",
   conflict: "来源 [{n}] 对同一个量写作「{quote}」，与这句不一致，请自行判断",
 };
 
@@ -64,7 +66,7 @@ export function normalizeUnverified(items) {
 }
 
 const isEvidence = (item) => Boolean(item) && typeof item === "object" && typeof item.figure === "string"
-  && ["found", "derived", "conflict"].includes(item.kind);
+  && ["found", "derived", "conflict", "arithmetic_difference"].includes(item.kind);
 
 const EVIDENCE_NO_BAR = (text) => String(text ?? "").replace(/\|/g, "｜");
 
@@ -73,9 +75,9 @@ export function evidenceText(evidence, t = (text) => text) {
   const fill = (text, values) => Object.entries(values).reduce((out, [key, value]) => out.replace(`{${key}}`, () => EVIDENCE_NO_BAR(value)), text);
   if (evidence?.kind === "found") return fill(t(EVIDENCE_KEYS.found), { n: evidence.ordinal ?? "?", quote: evidence.quote ?? "", read: evidence.read_as ?? "" });
   if (evidence?.kind === "conflict") return fill(t(EVIDENCE_KEYS.conflict), { n: evidence.ordinal ?? "?", quote: evidence.quote ?? "" });
-  if (evidence?.kind === "derived") {
+  if (evidence?.kind === "derived" || evidence?.kind === "arithmetic_difference") {
     const sources = (evidence.operands ?? []).map((operand) => `[${operand.ordinal ?? "?"}]「${operand.quote ?? ""}」`).join(" 与 ");
-    return fill(t(EVIDENCE_KEYS.derived), { sources, method: evidence.method ?? "" });
+    return fill(t(EVIDENCE_KEYS[evidence.kind]), { sources });
   }
   return null;
 }

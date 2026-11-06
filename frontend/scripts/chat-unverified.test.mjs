@@ -89,7 +89,7 @@ test("evidence lines say what a source writes or how a figure is derived, and ke
     "来源 [2] 写作「costs $5 ｜ half」，读作 0.5%");
   assert.equal(evidenceText({ kind: "derived", figure: "1.4", method: "41.5 减 40.1",
     operands: [{ ordinal: 1, quote: "close 41.5" }, { ordinal: 2, quote: "previous close 40.1" }] }),
-    "由 [1]「close 41.5」 与 [2]「previous close 40.1」 推算：41.5 减 40.1（模型给出，请自行复核）");
+    "由 [1]「close 41.5」 与 [2]「previous close 40.1」 计算，已自动复算，请自行判断");
   assert.equal(evidenceText({ kind: "conflict", figure: "8.5%", ordinal: 1, quote: "grew 6.2%" }),
     "来源 [1] 对同一个量写作「grew 6.2%」，与这句不一致，请自行判断");
   assert.equal(evidenceText({ kind: "unknown", figure: "1" }), null);

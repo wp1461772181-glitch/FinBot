@@ -156,15 +156,16 @@ def test_derived_figure_with_quoted_operands_is_taken_off_with_its_method(switch
     result = _result(answer, citations)
     judge = FakeJudge({"results": [{"id": 0, "numbers": [
         {"figure": "1.4", "status": "derived",
-         "operands": ["Northwind close 41.5", "Northwind previous close 40.1"],
-         "method": "41.5 减 40.1 等于 1.4"}]}]})
+         "operands": [{"name":"a", "quote":"Northwind close 41.5", "value":"41.5"},
+                      {"name":"b", "quote":"Northwind previous close 40.1", "value":"40.1"}],
+         "expression": "a-b", "relations": dict.fromkeys(("subject", "metric", "unit", "period", "denominator"), "yes")}]}]})
     out = _settle(FakeTurn(citations), result, judge)
     (item,) = out["unverified_lines"]
-    assert item["reason"] == nr.NUMBER_READ
+    assert item["reason"] == "number_computed"
     assert item["evidence"] == [{"kind": "derived", "figure": "1.4",
                                  "operands": [{"ordinal": 1, "quote": "Northwind close 41.5"},
                                               {"ordinal": 2, "quote": "Northwind previous close 40.1"}],
-                                 "method": "41.5 减 40.1 等于 1.4"}]
+                                 "calculation_status": "checked"}]
 
 
 def test_conflict_keeps_the_line_and_adds_the_conflicting_source_text(switched_on):
@@ -408,3 +409,14 @@ def test_report_script_lists_hints_and_samples_kept(switched_on, capsys):
     assert "原句：Contoso 把政策利率下调了 0.5% [1]。" in out
     assert "来源 [1] 写作「cut its policy rate by half a percentage point」，读作 0.5%" in out
     assert "保留的抽样（0 / 0 条" in out
+
+
+def test_derived_requires_relations_and_auditable_arithmetic():
+    sources = [nr.JudgeSource(1, 'close 41.5'), nr.JudgeSource(2, 'previous 40.1')]
+    raw = {'status': 'derived', 'operands': [{'name': 'a', 'quote': 'close 41.5', 'value': '41.5'},
+                                            {'name': 'b', 'quote': 'previous 40.1', 'value': '40.1'}],
+           'expression': 'a-b', 'relations': dict.fromkeys(('subject', 'metric', 'unit', 'period', 'denominator'), 'yes')}
+    assert nr._verdict('1.4', raw, {1.4}, sources)['status'] == 'derived'
+    assert nr._verdict('1.5', raw, {1.5}, sources)['reason'] == 'arithmetic_difference'
+    assert nr._verdict('1.4', {**raw, 'relations': {**raw['relations'], 'period': 'uncertain'}}, {1.4}, sources)['status'] == 'none'
+    assert nr._verdict('1.4', {**raw, 'expression': 'a/0'}, {1.4}, sources)['status'] == 'none'
