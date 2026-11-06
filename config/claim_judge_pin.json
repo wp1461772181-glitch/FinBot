@@ -1,0 +1,16 @@
+{
+  "pin_version": "claim-judge-pin-v1",
+  "judge": {
+    "name": "glm-5.3-flash",
+    "provider": "zhipu",
+    "model": "glm-5.3-flash"
+  },
+  "versions": {
+    "prompt": "judge-v5",
+    "window": "numeric-window-v2",
+    "review": "claim-review-v1",
+    "pool": "pool-review-v2",
+    "public_gate": "public-gate-v1"
+  },
+  "notes": "judge.name is the operator catalog label and must exist there; the API key stays in the catalog, never in this file. Changing any version here or in code requires a new frozen acceptance run."
+}

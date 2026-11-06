@@ -85,8 +85,12 @@ def enabled() -> bool:
     if not dir_val or not os.path.isabs(dir_val):
         return False
 
-    model_val = os.environ.get("CLAIM_JUDGE_SHADOW_MODEL")
-    if not model_val or not model_val.strip():
+    # Global default model comes from the frozen pin; code whose versions differ from the pin does not run.
+    from .claim_judge_pin import shadow_model_name, version_mismatches
+    if not shadow_model_name():
+        return False
+    if version_mismatches():
+        logger.warning("Claim shadow disabled: code versions differ from config/claim_judge_pin.json")
         return False
 
     stop_path = os.path.join(dir_val, "STOP")
@@ -273,8 +277,9 @@ async def _run(snapshot: ShadowTurn) -> None:
 
     started_monotonic = time.monotonic()
     dir_path = os.environ.get("CLAIM_JUDGE_SHADOW_DIR", "")
-    model_name = os.environ.get("CLAIM_JUDGE_SHADOW_MODEL", "")
-    expect_model = os.environ.get("CLAIM_JUDGE_SHADOW_EXPECT_MODEL", "")
+    from .claim_judge_pin import expected_model, shadow_model_name
+    model_name = shadow_model_name()
+    expect_model = expected_model()
 
     try:
         daily_calls = int(os.environ.get("CLAIM_JUDGE_SHADOW_DAILY_CALLS", DEFAULT_DAILY_CALLS))
