@@ -1,3 +1,4 @@
+// Public display went live 2026-11-07 (Alan's ruling: qualifying marks display directly, no pre-review hold).
 // Places the public contradiction marks (U9) on the sentences of an answer. The server sends only the gate's public
 // fields (see claim-public-mark.mjs for the shape); this module finds each mark's sentence in the rendered text and
 // appends one small neutral marker to that line. The sentence itself is never changed, and no wording is added here
