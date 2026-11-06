@@ -30,7 +30,7 @@ CALL_CONCURRENCY = 3
 BACKOFF_SECONDS = 600
 TURN_BUDGET_SECONDS = 300
 RETENTION_DAYS = 180
-PROMPT_VERSION = "judge-v4"
+PROMPT_VERSION = "judge-v5"
 
 # Module-level state
 _TASKS: set[asyncio.Task] = set()

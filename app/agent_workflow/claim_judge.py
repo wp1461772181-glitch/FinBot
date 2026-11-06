@@ -18,7 +18,7 @@ from typing import Any, Awaitable, Callable, Literal, Mapping, Sequence
 
 from fastapi import HTTPException
 
-PROMPT_VERSION = "judge-v4"
+PROMPT_VERSION = "judge-v5"
 Verdict = Literal["supported", "contradiction", "not_in_source"]
 Status = Literal["ok", "no_sources", "timeout", "provider_error", "parse_error", "invalid_verdict"]
 VERDICTS = ("supported", "contradiction", "not_in_source")
@@ -77,7 +77,7 @@ supported：来源说了这件事。以下都算：
 - 换说法、中英互译、繁简差异、同义词。
 - 单位换算、合理的四舍五入、用来源里的数字做的简单计算。
 - 对来源内容的概括。
-- 句子明确写成推断或观点（如「可能」「或许」「推断」「看起来」），依据来自来源。
+- 推断、假设、估计和预测的结论本身不要求来源；其中当作事实陈述的前提仍需核对，不因带推断标签免核。
 不要求逐字一致。结构化字段（如 close=100、value=391035000000）和写成句子是一回事。
 
 contradiction：来源对同一件事的说法和句子不相容，而且你能抄出那句原文。包括：

@@ -57,8 +57,8 @@ def test_skip_table_row():
     citations = [{"ordinal": 1, "quote": "100", "source_type": "official_filing", "saved_text": "full_document"}]
     answer = "| 指标 | 数值 |\n| --- | --- |\n| 营收 | 100 亿元 [1] |"
     res = select_sentences(answer, citations)
-    assert len(res.candidates) == 0
-    assert res.skipped["table_row"] >= 1
+    assert len(res.candidates) == 1
+    assert "| 指标 | 数值 |" in res.candidates[0].text
 
 
 def test_skip_source_list():
@@ -73,16 +73,14 @@ def test_skip_heading():
     citations = [{"ordinal": 1, "quote": "report", "source_type": "official_filing", "saved_text": "full_document"}]
     answer = "# 第一章 核心财务分析 [1]\n**重点经营数据总结 [1]**"
     res = select_sentences(answer, citations)
-    assert len(res.candidates) == 0
-    assert res.skipped["heading"] >= 1
+    assert len(res.candidates) == 2
 
 
 def test_skip_inference():
     citations = [{"ordinal": 1, "quote": "report", "source_type": "official_filing", "saved_text": "full_document"}]
     answer = "（推断）根据已知趋势公司第四季度营收可能继续扩大 [1]。"
     res = select_sentences(answer, citations)
-    assert len(res.candidates) == 0
-    assert res.skipped["inference"] == 1
+    assert len(res.candidates) == 1
 
 
 def test_skip_absence():

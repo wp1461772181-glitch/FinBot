@@ -23,7 +23,6 @@ from .evidence import (
     _reviewable_lines,
     citation_markers,
     cited_passages,
-    is_inference_label,
     reports_absence,
     CLAIM_FEATURES,
 )
@@ -117,23 +116,31 @@ def select_sentences(
     seen_passages: set[str] = set()
     indexed = {str(c["ordinal"]): c for c in citations if isinstance(c, dict) and "ordinal" in c}
 
-    for _line, stripped, checked in _reviewable_lines(answer, citations):
+    rows = _reviewable_lines(answer, citations)
+    for row_index, (_line, stripped, checked) in enumerate(rows):
         if checked is None:
             continue
 
+        table_header = ""
         if stripped.startswith("|"):
-            if citation_markers(stripped, citations):
+            for prior in range(row_index - 1, -1, -1):
+                previous = rows[prior][1]
+                if not previous.startswith("|"):
+                    break
+                if rows[prior][2] is None and "-" in previous and prior > 0:
+                    table_header = rows[prior - 1][1]
+                    break
+            if not table_header:
                 skipped["table_row"] += 1
-            continue
+                continue
 
         if _SOURCE_LIST_LINE.match(stripped):
             if citation_markers(stripped, citations):
                 skipped["source_list"] += 1
             continue
 
-        if _is_heading(stripped):
-            if citation_markers(stripped, citations):
-                skipped["heading"] += 1
+        if _is_heading(stripped) and not citation_markers(checked, citations):
+            skipped["heading"] += 1
             continue
 
         bullet = _BULLET.match(stripped)
@@ -146,10 +153,6 @@ def select_sentences(
 
             markers = citation_markers(p, citations)
             if not markers:
-                continue
-
-            if is_inference_label(p):
-                skipped["inference"] += 1
                 continue
 
             if reports_absence(p):
@@ -190,7 +193,7 @@ def select_sentences(
             tier = classify_tier(p, p_sources)
             candidates.append(Candidate(
                 idx=len(candidates),
-                text=p,
+                text=(table_header + "\n" + p if table_header else p),
                 ordinals=ordinals,
                 tier=tier,
                 original_idx=len(candidates),
