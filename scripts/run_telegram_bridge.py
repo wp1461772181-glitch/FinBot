@@ -438,7 +438,10 @@ async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pendin
         if typing:
             typing.cancel()
     keyboard = _make_keyboard(cards, pending_cards, cid, credential, bot_id, bot_name) if cid else None
-    if cards and not keyboard:
+    # Only a ticking card (``options``) has a web form Telegram lacks; a card with no choices has nothing to
+    # answer on either side, and a typed reply works on both, so the note would mislead there.
+    ticked = any(isinstance(card, dict) and card.get("options") for card in cards)
+    if ticked and not keyboard:
         answer = answer.strip() + "\n\n（这一步需要在网页里选择后确认。）"
     answer = ("" if channel else f"【{bot_name}】\n") + (answer.strip() or ("完成。" if keyboard else "（这条回复没有内容。）"))
     chunks = [answer[i:i+ANSWER_MAX_CHARS] for i in range(0, len(answer), ANSWER_MAX_CHARS)]

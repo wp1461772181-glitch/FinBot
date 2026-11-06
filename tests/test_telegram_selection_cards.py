@@ -144,8 +144,9 @@ def test_a_multi_select_card_gets_no_buttons_and_keeps_the_web_note(monkeypatch)
     assert text.endswith(WEB_NOTE)
 
 
-def test_a_selection_card_with_no_choices_gets_no_buttons_and_keeps_the_web_note(monkeypatch):
-    """A card the backend built with an empty choice list has nothing to render; the note stays."""
+def test_a_selection_card_with_no_choices_gets_no_buttons_and_no_web_note(monkeypatch):
+    """A card with an empty choice list has nothing to tap on either side: a typed reply answers it on the web
+    and on Telegram alike, so the 「需要在网页里选择后确认」 note would only mislead."""
     conversation = "tg-line-" + uuid.uuid4().hex[:8]
     card = _selection_card(choices=[])
     sent, pending = [], {}
@@ -155,5 +156,19 @@ def test_a_selection_card_with_no_choices_gets_no_buttons_and_keeps_the_web_note
     asyncio.run(bridge._bot_turn(None, "owner", OWNER_HASH, OWNER_ID, pending, _Telegram(), "b-1", "助理", "哪个"))
 
     text, keyboard = sent[-1]
+    assert keyboard is None and pending == {}
+    assert WEB_NOTE not in text and "网页" not in text
+
+
+def test_a_card_without_a_choices_key_gets_no_web_note(monkeypatch):
+    conversation = "tg-line-" + uuid.uuid4().hex[:8]
+    card = {"request_id": str(uuid.uuid4()), "reason": "missing_information", "question": "请补充一下。", "display": None}
+    sent, pending = [], {}
+    _patch_telegram(monkeypatch, sent)
+    monkeypatch.setattr(bridge, "_ask_agent", _stream_with(card, conversation))
+
+    asyncio.run(bridge._bot_turn(None, "owner", OWNER_HASH, OWNER_ID, pending, _Telegram(), "b-1", "助理", "哪个"))
+
+    text, keyboard = sent[-1]
     assert keyboard is None
-    assert text.endswith(WEB_NOTE)
+    assert WEB_NOTE not in text

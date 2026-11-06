@@ -943,7 +943,12 @@ class Turn:
                     self.disclose_mapping(title)
         if entities:
             self.reference_stage(False,'classifier_entity_unbound',skipped=self.reference_value is None)
-            self.pending=self.card('请确认这次指代的公司。',[]);return
+            # The names the classifier meant and could not ground, each one a choice (first mention first, no repeats).
+            choices=[]
+            for name in entities:
+                text=str(name or '').strip()
+                if text and text.casefold() not in {c.casefold() for c in choices}:choices.append(text)
+            self.pending=self.card('请确认这次指代的公司。',choices);return
         mention=self.scope.get('company_mention') or ''
         mention_parts=[part.strip() for part in re.split(r'[（(，,）):：\s]',mention) if part.strip()]
         if mention_parts and any(normalized(part).casefold() in normalized(entity_trusted).casefold() for part in mention_parts):
