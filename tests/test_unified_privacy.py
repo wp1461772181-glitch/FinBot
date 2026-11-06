@@ -55,3 +55,24 @@ def test_number_review_keeps_mixed_turn_local(monkeypatch):
 def test_number_review_remains_closed_even_if_switch_is_on(monkeypatch):
     monkeypatch.setenv("CLAIM_NUMBER_REVIEW", "on")
     assert not number_review.enabled()
+
+
+def test_calculation_requires_public_operand_provenance():
+    public = {"ordinal": 1, "source_type": "web", "quote": "price 10"}
+    calc = {"ordinal": 2, "source_type": "calculation", "calculation": {
+        "inputs": [{"name": "a", "source_ordinal": 1, "value": "10"}]}}
+    assert not is_private_citation(calc, [public, calc])[0]
+    for inputs in ([], [{"name": "a", "user_stated": True, "value": "10"}],
+                   [{"name": "a", "origin": "user_stated", "value": "10"}],
+                   [{"name": "a", "source_ordinal": 9}], [None]):
+        bad = {**calc, "calculation": {"inputs": inputs}}
+        assert is_private_citation(bad, [public, bad])[0]
+    assert is_private_citation({"source_type": "formula_calculation"}, [public])[0]
+
+
+def test_number_review_does_not_discard_malformed_citation(monkeypatch):
+    monkeypatch.setattr(number_review, "enabled", lambda: True)
+    turn = SimpleNamespace(citations=[{"ordinal": 1, "source_type": "web"}, None], audit={})
+    result = {"answer": "A figure", "unverified_lines": [{"line": "A figure"}]}
+    assert asyncio.run(number_review.settle(turn, result)) is result
+    assert turn.audit["number_review"]["skipped"] == "private_turn"

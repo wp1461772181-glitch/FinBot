@@ -159,9 +159,28 @@ def is_private_citation(c: dict, all_citations: Sequence[dict]) -> tuple[bool, s
         return True, unknown
 
     if st in {"calculation", "formula_calculation"}:
-        # Allowed only if every citation in the whole turn is allowed
+        # A calculation can use user-stated inputs even in an otherwise public
+        # turn. Require recorded input provenance, not just public neighbours.
+        # Formula inputs have a different provenance format and remain local
+        # until that format is checked here as well.
+        calculation = c.get("calculation")
+        if st != "calculation" or not isinstance(calculation, dict):
+            return True, unknown
+        inputs = calculation.get("inputs")
+        if not isinstance(inputs, list) or not inputs:
+            return True, unknown
+        for item in inputs:
+            if not isinstance(item, dict) or item.get("user_stated") or item.get("origin") == "user_stated":
+                return True, unknown
+            ordinal = item.get("source_ordinal")
+            matches = [other for other in all_citations if isinstance(other, dict)
+                       and str(other.get("ordinal")) == str(ordinal)] if ordinal is not None else []
+            if (len(matches) != 1 or not _is_allowed_source_direct(matches[0])
+                    or is_private_citation(matches[0], all_citations)[0]):
+                return True, unknown
+        # Also reject mixed turns and chains whose full provenance is unknown.
         for other in all_citations:
-            if not _is_allowed_source_direct(other):
+            if other is not c and not _is_allowed_source_direct(other):
                 return True, unknown
         return False, unknown
 

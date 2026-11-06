@@ -196,7 +196,9 @@ def maybe_schedule(result: dict, context: Any, state: Mapping[str, Any]) -> None
         status=str(status),
         reason=reason,
         route=route,
-        citations=tuple(dict(c) for c in citations if isinstance(c, Mapping)),
+        # Preserve malformed entries as denied metadata instead of silently
+        # dropping a potentially private source before the turn-level check.
+        citations=tuple(dict(c) if isinstance(c, Mapping) else {} for c in citations),
         code_flags=_extract_code_flags(result),
         answer_model=answer_model,
         identity_credential=getattr(context, "identity_credential", None),

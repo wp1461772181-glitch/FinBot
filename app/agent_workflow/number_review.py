@@ -386,7 +386,7 @@ async def _settle(turn: Any, result: dict, *, call, resolve, timeout) -> dict:
 
     entries = result.get("unverified_lines")
     answer = result.get("answer") or ""
-    citations = [c for c in (getattr(turn, "citations", None) or []) if isinstance(c, dict)]
+    citations = [c if isinstance(c, dict) else {} for c in (getattr(turn, "citations", None) or [])]
     if not isinstance(entries, list) or not entries or not citations or not answer:
         return result
     # A private source can be paraphrased without a marker anywhere in the answer.
