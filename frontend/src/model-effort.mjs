@@ -12,10 +12,49 @@ export function effortLabel(value) {
   return EFFORT_LABELS[value] ?? String(value);
 }
 
-/** 默认 first (null: no setting), then every tier; exactly the current one is ticked. */
-export function effortChoices(current) {
+/**
+ * The catalog entry a bot's badge is about: the bot's own model, or the server default when the bot names none.
+ * null when no entry can be found (the strength list then falls back to every tier).
+ */
+export function effectiveEntry(catalog, model) {
+  if (!catalog) return null;
+  const name = model ?? catalog.default ?? null;
+  return name === null ? null : catalog.models.find((entry) => entry.name === name) ?? null;
+}
+
+/**
+ * The strength tiers a model takes, from what the catalog says about it (OpenRouter's reasoning block):
+ * reasoning_supported false means it takes no effort at all; a supported_efforts list means only those tiers;
+ * null or missing fields (unknown) mean every tier, in the display order below.
+ */
+export function effortSupport(entry) {
+  if (entry?.reasoning_supported === false) return { reasoning: false, levels: [] };
+  const declared = entry?.supported_efforts;
+  if (Array.isArray(declared)) {
+    const levels = EFFORT_LEVELS.filter((level) => declared.includes(level));
+    return { reasoning: levels.length > 0, levels };
+  }
+  return { reasoning: true, levels: EFFORT_LEVELS };
+}
+
+/** True when the model takes no reasoning effort, so only 默认 is offered and the panel says so. */
+export function noEffort(entry) {
+  return !effortSupport(entry).reasoning;
+}
+
+/**
+ * 默认 first (null: no setting), then the tiers the model takes (every tier when unknown); exactly the current one
+ * is ticked.  A stored value the model does not take is kept at the top, ticked and marked, so the owner sees what
+ * is stored; choosing any other row saves over it.
+ */
+export function effortChoices(current, entry = null) {
   const now = current ?? null;
-  return [null, ...EFFORT_LEVELS].map((value) => ({ value, label: effortLabel(value), checked: value === now, disabled: false }));
+  const { levels } = effortSupport(entry);
+  const choices = [null, ...levels].map((value) => ({ value, label: effortLabel(value), checked: value === now, disabled: false }));
+  if (now !== null && !levels.includes(now)) {
+    choices.unshift({ value: now, label: effortLabel(now), checked: true, disabled: false, unsupported: true });
+  }
+  return choices;
 }
 
 /**

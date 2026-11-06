@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { EFFORT_LEVELS, effortChoices, effortLabel, modelChoices, patchFor, badgeText } from "../src/model-effort.mjs";
+import { EFFORT_LEVELS, badgeText, effectiveEntry, effortChoices, effortLabel, effortSupport, modelChoices, noEffort, patchFor } from "../src/model-effort.mjs";
 
 const tsx = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/chat.css", import.meta.url), "utf8");
@@ -74,4 +74,78 @@ test("picker is wired to the chat badge: updateBot with the changed field only, 
   assert.match(tsx("AgentChatPanel.tsx"), /<ModelEffortPicker/);
   assert.match(tsx("App.tsx"), /onBotChanged=\{onChanged\}/);
   assert.match(css, /\.model-effort-pop\s*\{/);
+});
+
+// --- strength tiers follow the model the badge shows (OpenRouter's reasoning block, via /model-catalog) ---
+
+const ALL = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+const withSupport = (fields) => ({ name: "m", display_name: "M", model: "v/m", key_status: "configured", ...fields });
+const values = (choices) => choices.map((c) => c.value);
+
+test("the badge's model: the bot's own entry, else the server default entry; unknown is null", () => {
+  assert.equal(effectiveEntry(catalog, "gamma").name, "gamma");
+  assert.equal(effectiveEntry(catalog, null).name, "alpha");
+  assert.equal(effectiveEntry(catalog, "nope"), null);
+  assert.equal(effectiveEntry({ default: null, models: [] }, null), null);
+  assert.equal(effectiveEntry(null, "alpha"), null);
+});
+
+test("tiers, supported list: only the listed tiers after 默认, in the display order, ticked where current", () => {
+  const entry = withSupport({ reasoning_supported: true, supported_efforts: ["max", "high", "low", "none"] });
+  assert.deepEqual(effortSupport(entry).levels, ["none", "low", "high", "max"]);
+  assert.deepEqual(values(effortChoices("high", entry)), [null, "none", "low", "high", "max"]);
+  assert.deepEqual(effortChoices("high", entry).filter((c) => c.checked).map((c) => c.value), ["high"]);
+  assert.equal(noEffort(entry), false);
+  // Tiers the list does not name, and any the server does not know, never appear.
+  const narrow = withSupport({ reasoning_supported: true, supported_efforts: ["high", "medium", "none", "bogus"] });
+  assert.deepEqual(values(effortChoices(null, narrow)), [null, "none", "medium", "high"]);
+  assert.ok(effortChoices(null, narrow).every((c) => !c.unsupported));
+});
+
+test("tiers, null or unknown: every tier (the fallback), so an unknown model keeps the full list", () => {
+  const accepts_all = withSupport({ reasoning_supported: true, supported_efforts: null });
+  const missing = withSupport({});
+  assert.deepEqual(values(effortChoices("medium", accepts_all)), [null, ...ALL]);
+  assert.deepEqual(values(effortChoices("medium", missing)), [null, ...ALL]);
+  assert.deepEqual(values(effortChoices("medium", null)), [null, ...ALL]);
+  assert.deepEqual(values(effortChoices("medium")), [null, ...ALL]);
+  assert.equal(noEffort(missing), false);
+  assert.equal(noEffort(null), false);
+});
+
+test("tiers, model takes no reasoning effort: only 默认 is offered and the panel says so", () => {
+  const plain = withSupport({ reasoning_supported: false });
+  assert.deepEqual(values(effortChoices(null, plain)), [null]);
+  assert.deepEqual(effortChoices(null, plain).map((c) => c.checked), [true]);
+  assert.equal(noEffort(plain), true);
+  assert.deepEqual(effortSupport(plain).levels, []);
+});
+
+test("tiers, stored value the model does not take: shown at the top, ticked and marked, nothing silently dropped or changed", () => {
+  const entry = withSupport({ reasoning_supported: true, supported_efforts: ["high", "none"] });
+  const choices = effortChoices("xhigh", entry);
+  assert.deepEqual(values(choices), ["xhigh", null, "none", "high"]);
+  assert.equal(choices[0].unsupported, true);
+  assert.equal(choices[0].checked, true);
+  assert.deepEqual(choices.filter((c) => c.checked).map((c) => c.value), ["xhigh"]);
+  assert.equal(choices[0].label, "极高");
+  // A model that takes no effort at all still shows the stored value above 默认.
+  const plain = withSupport({ reasoning_supported: false });
+  assert.deepEqual(values(effortChoices("low", plain)), ["low", null]);
+  assert.equal(effortChoices("low", plain)[0].unsupported, true);
+});
+
+test("tiers, stored value the model takes: no duplicate row, ordinary tick", () => {
+  const entry = withSupport({ reasoning_supported: true, supported_efforts: ["high", "none"] });
+  const choices = effortChoices("high", entry);
+  assert.equal(choices.filter((c) => c.value === "high").length, 1);
+  assert.ok(choices.every((c) => !c.unsupported));
+});
+
+test("tiers: the picker reads the effective entry and passes it to the strength list", () => {
+  const picker = tsx("ModelEffortPicker.tsx");
+  assert.match(picker, /effectiveEntry\(catalog, shown\.model\)/);
+  assert.match(picker, /effortChoices\(shown\.reasoning_effort, entry\)/);
+  assert.match(picker, /noEffort\(entry\)/);
+  assert.match(picker, /choice\.unsupported && <small>[^<]*当前模型不支持/);
 });

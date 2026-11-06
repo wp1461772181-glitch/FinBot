@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from "react";
 import { getModelCatalog, updateBot, type Bot, type ModelCatalog } from "./api";
 import { useLocale } from "./i18n";
-import { badgeText, effortChoices, modelChoices, patchFor } from "./model-effort.mjs";
+import { badgeText, effectiveEntry, effortChoices, modelChoices, noEffort, patchFor } from "./model-effort.mjs";
 
 /**
  * The chat badge as a quick select: the bot's model and reasoning effort.  A choice is saved at once; a failed
@@ -16,6 +16,8 @@ export function ModelEffortPicker({ bot, onBotChanged }: { bot: Bot; onBotChange
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const rootRef = useRef<HTMLSpanElement>(null);
+  // The strength tiers follow the model the badge shows: the bot's own, or the server default when it has none.
+  const entry = effectiveEntry(catalog, shown.model);
 
   // A reloaded bot (the list changed) is the truth again.
   useEffect(() => setShown(bot), [bot]);
@@ -78,12 +80,14 @@ export function ModelEffortPicker({ bot, onBotChanged }: { bot: Bot; onBotChange
             </div>
           )}
           <p className="model-effort-head">{t("推理强度")}</p>
+          {noEffort(entry) && <p className="model-effort-note">{t("该模型不支持思考强度")}</p>}
           <div role="radiogroup" aria-label={t("推理强度")}>
-            {effortChoices(shown.reasoning_effort).map((choice) => (
+            {effortChoices(shown.reasoning_effort, entry).map((choice) => (
               <button key={`e:${choice.value ?? "default"}`} type="button" role="radio" aria-checked={choice.checked}
                 className={`model-effort-option${choice.checked ? " is-current" : ""}`} disabled={busy} onClick={() => void choose("effort", choice.value)}>
                 <span className="model-effort-mark" aria-hidden="true">{choice.checked ? "✓" : ""}</span>
                 <span>{t(choice.label)}</span>
+                {choice.unsupported && <small> · {t("当前模型不支持")}</small>}
               </button>
             ))}
           </div>

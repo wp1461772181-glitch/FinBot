@@ -16,11 +16,18 @@ Whoever deploys the server lists the models here; a bot names one entry and neve
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import re
 import stat
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import httpx
 
 from .agent_chat_models import AgentBackgroundModel, AgentModelEntry
 from .database import SessionLocal
@@ -187,6 +194,98 @@ def _key_status(entry: dict) -> str:
     return "configured" if _key_for(entry) else "missing"
 
 
+# --- what OpenRouter says each model accepts for reasoning effort ----------------------------------------
+# GET {OPENROUTER_MODELS_URL} (public, no key) lists every model with a ``reasoning`` block when it takes an effort
+# (``supported_efforts``: a list, or null for every gateway tier).  The browser uses it to offer only the tiers the
+# chosen model takes.  Advisory only: no request is refused or changed because of it, and any failure simply leaves
+# the fields out (the browser then offers every tier, as before).
+
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+OPENROUTER_TIMEOUT = 5.0
+REASONING_TTL = 6 * 3600        # a fetched index is kept this long
+REASONING_RETRY = 300           # after a failed fetch, do not try again sooner (keeps /model-catalog quick while it is down)
+REASONING_MAX_BYTES = 8_000_000
+_reasoning_lock = threading.Lock()
+_reasoning: dict = {"at": None, "ttl": 0.0, "index": {}}
+
+
+async def _openrouter_models_json():
+    """The model list as parsed JSON, through the same egress rules as model discovery (pinned public address or
+    the operator's egress proxy; never the ambient proxy).  Raises on anything but a 200 with a JSON body."""
+    from .agent_chat_api import model_transport
+    async with asyncio.timeout(OPENROUTER_TIMEOUT):
+        async with httpx.AsyncClient(timeout=httpx.Timeout(OPENROUTER_TIMEOUT), follow_redirects=False, trust_env=False,
+                                     transport=model_transport("https://openrouter.ai/api/v1")) as client:
+            async with client.stream("GET", OPENROUTER_MODELS_URL, headers={"Accept": "application/json", "X-Title": "FinBot"}) as response:
+                if response.status_code != 200:
+                    raise ValueError(f"status {response.status_code}")
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > REASONING_MAX_BYTES:
+                        raise ValueError("too_large")
+    return json.loads(bytes(body))
+
+
+def _load_openrouter_models():
+    """Blocking fetch.  The coroutine runs on its own loop in a helper thread, so this works from any thread,
+    including one that already has a loop running."""
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(asyncio.run, _openrouter_models_json()).result(timeout=OPENROUTER_TIMEOUT + 1)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _index_of(payload) -> dict[str, dict]:
+    """Model id -> {"reasoning": bool, "supported_efforts": list | None (only when the list says so)}."""
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError("no model list")
+    index: dict[str, dict] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            continue
+        reasoning = row.get("reasoning")
+        info: dict = {"reasoning": isinstance(reasoning, dict)}
+        if info["reasoning"] and "supported_efforts" in reasoning:
+            declared = reasoning["supported_efforts"]
+            if declared is None:
+                info["supported_efforts"] = None
+            elif isinstance(declared, list) and all(isinstance(level, str) for level in declared):
+                info["supported_efforts"] = list(declared)
+        index[row["id"]] = info
+    return index
+
+
+def reasoning_index() -> dict[str, dict]:
+    """The OpenRouter reasoning index, refreshed when older than its TTL.  Any failure gives an empty index."""
+    with _reasoning_lock:
+        now = time.monotonic()
+        if _reasoning["at"] is not None and now - _reasoning["at"] < _reasoning["ttl"]:
+            return _reasoning["index"]
+        try:
+            index, ttl = _index_of(_load_openrouter_models()), REASONING_TTL
+        except Exception as exc:  # the catalog never fails or stalls because of this
+            logger.warning("model reasoning info from OpenRouter unavailable: %s", type(exc).__name__)
+            index, ttl = {}, REASONING_RETRY
+        _reasoning.update(at=now, ttl=ttl, index=index)
+        return index
+
+
+def _reasoning_fields(entry: dict) -> dict:
+    """supported_efforts / reasoning_supported for an OpenRouter entry whose model id is in the index; nothing otherwise."""
+    if entry.get("provider") != "openrouter":
+        return {}
+    info = reasoning_index().get(entry.get("model"))
+    if info is None:
+        return {}
+    fields = {"reasoning_supported": info["reasoning"]}
+    if info["reasoning"] and "supported_efforts" in info:
+        fields["supported_efforts"] = info["supported_efforts"]
+    return fields
+
+
 def public(entry: dict, default: str | None = None) -> dict:
     """What the browser may see of an entry: never the key, nor any part of it."""
     return {"name": entry["name"], "display_name": entry["display_name"], "provider": entry["provider"],
@@ -194,7 +293,7 @@ def public(entry: dict, default: str | None = None) -> dict:
             "key_source": entry["key_source"], "key_env": entry.get("key_env"),
             "key_status": _key_status(entry), "is_default": entry["name"] == default,
             "migrated": bool(entry.get("migrated_from")), "context_window": window_of(entry),
-            "context_window_set": bool(entry.get("context_window"))}
+            "context_window_set": bool(entry.get("context_window")), **_reasoning_fields(entry)}
 
 
 def list_public() -> dict:

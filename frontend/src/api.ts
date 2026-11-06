@@ -810,7 +810,9 @@ export type BotTemplate = { id: string; label: string; name: string; title: stri
 export type BotTool = { name: string; level: string; owner_only: boolean };
 export type BotFields = Partial<Pick<Bot, "name" | "title" | "description" | "focus" | "tool_scope" | "model" | "reasoning_effort" | "avatar" | "look" | "group" | "pinned" | "hidden" | "template" | "daily_notify_cap" | "skills">>;
 export type CatalogModel = { name: string; display_name: string; provider: string; model: string; base_url: string | null; origin: "file" | "server";
-  key_source: "vault" | "env"; key_env: string | null; key_status: "configured" | "missing"; is_default: boolean; migrated: boolean };
+  key_source: "vault" | "env"; key_env: string | null; key_status: "configured" | "missing"; is_default: boolean; migrated: boolean;
+  /** From the provider's model list (OpenRouter only).  Absent means unknown; supported_efforts null means every tier. */
+  supported_efforts?: string[] | null; reasoning_supported?: boolean };
 export type ModelCatalog = { models: CatalogModel[]; default: string | null; config_file: { present: boolean; problems: string[] } };
 const BOT_ERRORS:Record<string,string>={invalid_name:"名字无效（1 到 40 字）。",name_taken:"已有同名 bot。",invalid_title:"头衔最多 60 字。",invalid_description:"说明最多 4000 字。",
   invalid_reasoning_effort:"推理强度不在可选范围内。",invalid_focus:"关注范围无效。",invalid_focus_symbol:"股票代码无效，例如 AAPL 或 BRK.B。",too_many_companies:"关注公司最多 20 家。",invalid_tool_scope:"工具范围无效。",
