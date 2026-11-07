@@ -749,7 +749,16 @@ async def review_rounds(positions_all: list[dict], evidence: Evidence, model, *,
             except asyncio.TimeoutError:
                 status = 'timeout'
             except Exception as exc:
-                status = 'provider_error:' + type(exc).__name__
+                detail = getattr(exc, 'detail', None)
+                safe_details = {'provider_timeout', 'provider_network_error', 'provider_rate_or_quota_error',
+                                'provider_invalid_key', 'provider_model_access_denied',
+                                'provider_model_unavailable_or_invalid_request'}
+                if detail == 'provider_timeout':
+                    status = 'timeout'
+                elif isinstance(detail, str) and detail in safe_details:
+                    status = 'provider_error:' + detail
+                else:
+                    status = 'provider_error:' + type(exc).__name__
                 if isinstance(getattr(exc, 'provider_status', None), int):
                     status += ':http_' + str(exc.provider_status)
             await emit('response', attempt=attempt, effort=effort, status=status, raw_response=raw, usage=usage)
