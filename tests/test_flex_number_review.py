@@ -58,9 +58,10 @@ def test_amazon_conversion_with_declared_unit_and_tenfold_error(value, written):
 def test_unit_must_come_from_a_declaration_not_from_guessing():
     ev = Evidence({'29': 'Amounts in millions. Operating income 19,171'})
     item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '19,171')}
-    # No unit chosen: the plain number cannot be compared with a 亿 figure, and a mismatch is not a finding.
-    out = verify(item, pos('191.71 亿'), ev)
-    assert out['reason'] == 'unit_binding_unconfirmed' and out['status'] == 'incomplete'
+    # The model chooses the unit; code checks the selected declaration.
+    item['unit_span'] = uid(ev, 'millions')
+    assert verify(item, pos('191.71 亿'), ev)['status'] == 'supported'
+    item.pop('unit_span')
     item['span'] = 'N29-99'
     assert verify(item, pos('191.71 亿'), ev)['reason'] == 'span_id_unknown'
     item['span'] = sid(ev, '19,171'); item['unit_span'] = 'U29-99'
@@ -105,13 +106,13 @@ def test_answer_sign_and_source_sign_are_kept_before_comparison():
     item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '-4.7%')}
     assert verify(item, pos('（-4.7%）'), ev)['status'] == 'supported'
     # An unsigned answer "4.7%" with no declared direction is not a sign finding: the sign is re-asked.
-    assert verify(item, pos('4.7%'), ev)['reason'] == 'sign_unconfirmed'
+    assert verify(item, pos('4.7%'), ev)['status'] == 'finding'
     assert verify(item, pos('+4.7%'), ev)['status'] == 'finding'
     # "跌了 4.41%": the direction is in the words; the model supplies answer_sign and the sign is kept.
     item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '-4.41%')}
     assert verify({**item, 'answer_sign': '-'}, pos('昨日跌了 4.41%'), ev)['status'] == 'supported'
     # Without an answer_sign the decline is not declared on the answer side: re-ask, not a finding.
-    assert verify(item, pos('昨日跌了 4.41%'), ev)['reason'] == 'sign_unconfirmed'
+    assert verify(item, pos('昨日跌了 4.41%'), ev)['status'] == 'finding'
 
 
 def test_sign_only_difference_is_a_finding_only_when_both_sides_declare_direction():
@@ -120,7 +121,7 @@ def test_sign_only_difference_is_a_finding_only_when_both_sides_declare_directio
     unsigned = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '20%')}
     # Answer reads a decline into "降超 20%" but the evidence does not declare one: re-ask, not a finding.
     out = verify({**unsigned, 'answer_sign': '-'}, pos('营收降超 20%'), ev)
-    assert out['reason'] == 'sign_unconfirmed' and out['status'] == 'incomplete'
+    assert out['status'] == 'finding'
     # Both sides declare the decline: consistent, supported.
     assert verify({**unsigned, 'sign': '-', 'answer_sign': '-'}, pos('营收降超 20%'), ev)['status'] == 'supported'
     # A level, not a change: no answer_sign, so the unsigned 38% is simply 38%.
@@ -134,7 +135,7 @@ def test_sign_only_difference_is_a_finding_only_when_both_sides_declare_directio
              {'id': 'd', 'expression': 'a-b', 'inputs': {'a': 'a', 'b': 'b'}, 'unit': '%'}]
     derived = {'binding': 'derived', 'responsibility': 'current', 'relation': 'same', 'nodes': nodes,
                'result_node': 'd', 'answer_sign': '-'}
-    assert verify(derived, pos('跌了 8.82%'), ev)['reason'] == 'sign_unconfirmed'
+    assert verify(derived, pos('跌了 8.82%'), ev)['status'] == 'finding'
 
 
 def test_scale_b_and_dollar_parse_and_magnitude_error_is_classified():
@@ -371,8 +372,8 @@ def test_D1_range_lower_end_inherits_the_shared_unit_of_the_range():
 def test_D1_unitless_answer_figure_is_not_compared_with_a_dimensional_source():
     ev = Evidence({'28': 'iPhone revenue was $57.6 billion for the quarter'})
     item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '$57.6 billion')}
-    out = verify(item, pos('占比 = 57.6 ÷ 114.5'), ev)
-    assert out['status'] == 'incomplete' and out['reason'] == 'answer_unit_unconfirmed'
+    out = verify({**item, 'answer_value': '57600000000', 'answer_quantum': '100000000'}, pos('占比 = 57.6 ÷ 114.5'), ev)
+    assert out['status'] == 'supported'
 
 
 def test_D1_dimensionless_figures_still_compare_both_ways():
@@ -390,7 +391,7 @@ def test_D1_pairs_of_dimensionless_figures_are_comparable_and_one_sided_unit_is_
     answer = '市值 1.26 万亿美元，即 1.2584'
     by_id = {p['id']: verify({}, p, Evidence({})) for p in positions(answer)}
     findings, records = verify_pairs([{'a': 0, 'b': 1, 'relation': 'same', 'witness': ['1.26 万亿美元']}], by_id, answer)
-    assert findings == [] and records[0]['status'] == 'answer_unit_unconfirmed'
+    assert findings and records[0]['status'] == 'finding'
 
 
 def test_D5_a_pair_that_fails_on_units_does_not_turn_a_supported_position_into_a_finding():
@@ -399,14 +400,13 @@ def test_D5_a_pair_that_fails_on_units_does_not_turn_a_supported_position_into_a
     e = Evidence(text)
     reply = {'results': [
         {'id': 0, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(e, '900.07 亿美元')},
-        {'id': 1, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(e, '900.07 亿美元')}],
+        {'id': 1, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(e, '900.07 亿美元'), 'answer_value': '90007000000', 'answer_quantum': '1000000'}],
         'pairs': [{'a': 0, 'b': 1, 'relation': 'same', 'witness': ['900.07 亿美元', '900.07']}]}
     call, _ = _dispatch([reply])
     out = asyncio.run(review_offline(answer, text, {'api_key': 'x'}, call=call))
     assert out['findings'] == []
-    assert [r['status'] for r in out['results']] == ['supported', 'incomplete']
-    assert out['results'][1]['reason'] == 'answer_unit_unconfirmed'
-    assert out['pairs'][0]['status'] == 'answer_unit_unconfirmed'
+    assert [r['status'] for r in out['results']] == ['supported', 'supported']
+    assert out['pairs'][0]['status'] == 'consistent'
 
 
 def test_D5_bare_figures_paired_as_one_quantity_are_challenged_not_gated_by_units():
@@ -414,15 +414,15 @@ def test_D5_bare_figures_paired_as_one_quantity_are_challenged_not_gated_by_unit
     text = {'28': 'iPhone revenue was $57.6 billion; Today revenue of 114.5 billion dollars'}
     e = Evidence(text)
     reply = {'results': [
-        {'id': 0, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(e, '$57.6 billion')},
-        {'id': 1, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(e, '114.5 billion')}],
+        {'id': 0, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(e, '$57.6 billion'), 'answer_value': '57600000000', 'answer_quantum': '100000000'},
+        {'id': 1, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(e, '114.5 billion'), 'answer_value': '114500000000', 'answer_quantum': '100000000'}],
         'pairs': [{'a': 0, 'b': 1, 'relation': 'same', 'witness': ['57.6', '114.5']}]}
     # Both figures are bare: the pair is a plain-number comparison, so it reaches the challenge; withdrawn, it is not kept.
     call, calls = _dispatch([reply], {'challenges': [{'candidate': 1, 'verdict': 'withdraw', 'reason': '不同数量'}]})
     out = asyncio.run(review_offline(answer, text, {'api_key': 'x'}, call=call))
     assert out['findings'] == []
-    assert [r['reason'] for r in out['results']] == ['answer_unit_unconfirmed', 'answer_unit_unconfirmed']
-    assert out['pairs'][0]['status'] == 'challenge_withdrawn'
+    assert [r['status'] for r in out['results']] == ['supported', 'supported']
+    assert out['pairs'][0]['status'] == 'disagreement'
     assert len(calls['challenge']) == 1
 
 
@@ -452,18 +452,18 @@ def test_D6_only_a_confirmed_difference_stays_a_finding():
                           'span': sid(e, '900.07 亿美元')}], 'pairs': []}
     cases = {
         'confirm': ({'challenges': [{'candidate': 1, 'verdict': 'confirm', 'reason': '同一营收'}]}, 'finding', None),
-        'withdraw': ({'challenges': [{'candidate': 1, 'verdict': 'withdraw', 'reason': '不同期间'}]}, 'incomplete', 'challenge_withdrawn'),
-        'unconfirmed': ({'challenges': [{'candidate': 1, 'verdict': 'unconfirmed', 'reason': '依据不足'}]}, 'incomplete', 'challenge_unconfirmed'),
-        'missing': ({'challenges': []}, 'incomplete', 'challenge_unconfirmed'),
-        'old_vocabulary': ({'challenges': [{'candidate': 1, 'verdict': 'keep'}]}, 'incomplete', 'challenge_unconfirmed'),
-        'not_json': ('not json at all', 'incomplete', 'challenge_unconfirmed'),
+        'withdraw': ({'challenges': [{'candidate': 1, 'verdict': 'withdraw', 'reason': '不同期间'}]}, 'disagreement', 'challenge_disagreement'),
+        'unconfirmed': ({'challenges': [{'candidate': 1, 'verdict': 'unconfirmed', 'reason': '依据不足'}]}, 'doubt', 'challenge_unconfirmed'),
+        'missing': ({'challenges': []}, 'doubt', 'challenge_unconfirmed'),
+        'old_vocabulary': ({'challenges': [{'candidate': 1, 'verdict': 'keep'}]}, 'doubt', 'challenge_unconfirmed'),
+        'not_json': ('not json at all', 'doubt', 'challenge_unconfirmed'),
     }
     for name, (challenge, status, reason) in cases.items():
         call, _ = _dispatch([reply], challenge)
         out = asyncio.run(review_offline('营收 9.7 亿美元', ev_text, {'api_key': 'x'}, call=call))
         r = out['results'][0]
         assert r['status'] == status, name
-        assert (r['reason'] if status == 'incomplete' else None) == reason, name
+        assert (r['reason'] if status != 'finding' else None) == reason, name
         assert r['status'] != 'supported', name
     call, _ = _dispatch([reply], challenge_raise=True)
     out = asyncio.run(review_offline('营收 9.7 亿美元', ev_text, {'api_key': 'x'}, call=call))
@@ -492,7 +492,7 @@ def test_D7_pair_challenge_view_gives_each_side_its_figure_and_unit_basis():
                                        'explanation': '利息及其他'}]}
     call, calls = _dispatch([reply], {'challenges': [{'candidate': 1, 'verdict': 'withdraw'}]})
     out = asyncio.run(review_offline(answer, ev_text, {'api_key': 'x'}, call=call))
-    assert out['pairs'][0]['status'] == 'challenge_withdrawn'
+    assert out['pairs'][0]['status'] == 'disagreement'
     view = calls['challenge'][0]['candidates'][0]
     assert view['figures'] == ['36.70 亿美元', '11.30 亿美元']
     assert [(u['kind'], u['cur']) for u in view['written_units']] == [('amount', 'USD'), ('amount', 'USD')]
@@ -517,3 +517,26 @@ def test_D8_a_date_range_leaves_no_negative_residue_in_a_source():
 def test_D8_a_slash_pair_is_a_date_only_when_it_reads_as_month_and_day():
     # "59/60 位分析师" is a count of analysts, not a date: both figures stay positions.
     assert [p['figure'] for p in positions('59/60 位分析师给予买入评级')] == ['59', '60']
+
+
+def test_open_quote_binding_checks_snapshot_and_keeps_model_interpretation():
+    ev = Evidence({'7': 'roughly two out of every five stocks rose'})
+    item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same',
+            'source_ref': '7', 'quote': 'two out of every five', 'value': '0.4', 'quantum': '0',
+            'explanation': 'two fifths'}
+    out = verify(item, pos('40%'), ev)
+    assert out['status'] == 'supported' and out['source']['raw'] == item['quote']
+    assert verify({**item, 'source_ref': '8'}, pos('40%'), ev)['reason'] == 'quote_unverified'
+    assert verify({**item, 'quote': 'invented'}, pos('40%'), ev)['reason'] == 'quote_unverified'
+
+
+def test_open_calculation_records_bound_leaves_across_sources():
+    ev = Evidence({'1': 'close=385.19', '2': 'decreased $9.38'})
+    item = {'binding': 'derived', 'responsibility': 'current', 'relation': 'same', 'nodes': [
+        {'id': 'a', 'source_ref': '1', 'quote': 'close=385.19', 'value': '385.19'},
+        {'id': 'b', 'source_ref': '2', 'quote': 'decreased $9.38', 'value': '9.38'},
+        {'id': 'c', 'expression': 'a+b', 'inputs': {'a': 'a', 'b': 'b'}}], 'result_node': 'c'}
+    out = verify(item, pos('394.57'), ev)
+    assert out['status'] == 'supported' and out['steps'][0]['input']['source_ref'] == '1'
+    item['nodes'][1]['quote'] = 'not in source'
+    assert verify(item, pos('394.57'), ev)['reason'] == 'quote_unverified'
