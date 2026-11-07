@@ -316,3 +316,188 @@ def test_shadow_scheduling_does_not_wait_for_review(monkeypatch):
         release.set()
         await asyncio.gather(*list(flex._TASKS))
     asyncio.run(check())
+
+
+# ---- Round 5 (Haiku flex5, defects D1-D7 from the 2026-11-07 reproduction set) ----
+
+from app.agent_workflow import flex_number_review as flex  # noqa: E402
+
+
+def _dispatch(main_replies, challenge_reply=None, challenge_raise=False):
+    """Stub by system prompt: main review replies in order; one challenge reply (or a failure)."""
+    calls = {'main': [], 'challenge': []}
+
+    async def call(model, system, user):
+        if system == flex.CHALLENGE_PROMPT:
+            calls['challenge'].append(json.loads(user))
+            if challenge_raise:
+                raise RuntimeError('provider down')
+            content = challenge_reply if isinstance(challenge_reply, str) else json.dumps(challenge_reply, ensure_ascii=False)
+            return {}, {'content': content}
+        calls['main'].append(json.loads(user))
+        reply = main_replies[min(len(calls['main']) - 1, len(main_replies) - 1)]
+        return {}, {'content': json.dumps(reply, ensure_ascii=False)}
+    return call, calls
+
+
+def test_D4_glued_word_before_digits_keeps_the_number_and_codes_stay_out():
+    ev = Evidence({'3': 'Dividend yield2.19% and COVID19 and Q4 cut 3%'})
+    assert sorted(v['raw'] for v in ev.spans.values() if v['type'] == 'N') == ['2.19%', '3%']
+    assert [p['figure'] for p in positions('股息率 yield2.19%')] == ['2.19%']
+    item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '2.19%')}
+    assert verify(item, pos('股息率 2.19%'), ev)['status'] == 'supported'
+
+
+def test_D2_comparison_uses_both_sides_display_precision_not_only_the_answers():
+    ev = Evidence({'5': 'Oracle shares fell 5% on the day'})
+    item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '5%')}
+    # The source states 5% (display precision 1 point); 5.48% lies inside that rounding interval: no difference.
+    assert verify(item, pos('下跌 5.48%'), ev)['status'] == 'supported'
+    # A real difference outside both intervals is still a finding.
+    assert verify(item, pos('下跌 5.9%'), ev)['status'] == 'finding'
+
+
+def test_D1_range_lower_end_inherits_the_shared_unit_of_the_range():
+    answer = '营收 150–160 亿美元'
+    ev = Evidence({'28': 'Q4 revenue guidance $15 billion to $16 billion'})
+    lo, hi = positions(answer)
+    assert lo['figure'] == '150' and lo['quantity']['cur'] == 'USD' and lo['quantity']['kind'] == 'amount'
+    assert verify({'binding': 'direct', 'responsibility': 'current', 'relation': 'same',
+                   'span': sid(ev, '$15 billion')}, lo, ev)['status'] == 'supported'
+    assert verify({'binding': 'direct', 'responsibility': 'current', 'relation': 'same',
+                   'span': sid(ev, '$16 billion')}, hi, ev)['status'] == 'supported'
+
+
+def test_D1_unitless_answer_figure_is_not_compared_with_a_dimensional_source():
+    ev = Evidence({'28': 'iPhone revenue was $57.6 billion for the quarter'})
+    item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '$57.6 billion')}
+    out = verify(item, pos('占比 = 57.6 ÷ 114.5'), ev)
+    assert out['status'] == 'incomplete' and out['reason'] == 'answer_unit_unconfirmed'
+
+
+def test_D1_dimensionless_figures_still_compare_both_ways():
+    ev = Evidence({'1': 'The filing lists 4 patents granted'})
+    item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '4')}
+    assert verify(item, pos('获得 3 项专利'), ev)['status'] == 'finding'
+    assert verify(item, pos('获得 4 项专利'), ev)['status'] == 'supported'
+
+
+def test_D1_pairs_of_dimensionless_figures_are_comparable_and_one_sided_unit_is_not_a_finding():
+    answer = '共 3 家，即 4 家'
+    by_id = {p['id']: verify({}, p, Evidence({})) for p in positions(answer)}
+    findings, records = verify_pairs([{'a': 0, 'b': 1, 'relation': 'same', 'witness': ['3 家', '4 家']}], by_id, answer)
+    assert findings and findings[0]['reason'] == 'internal_inconsistency'
+    answer = '市值 1.26 万亿美元，即 1.2584'
+    by_id = {p['id']: verify({}, p, Evidence({})) for p in positions(answer)}
+    findings, records = verify_pairs([{'a': 0, 'b': 1, 'relation': 'same', 'witness': ['1.26 万亿美元']}], by_id, answer)
+    assert findings == [] and records[0]['status'] == 'answer_unit_unconfirmed'
+
+
+def test_D5_a_pair_that_fails_on_units_does_not_turn_a_supported_position_into_a_finding():
+    answer = '营收 900.07 亿美元，即 900.07'
+    text = {'1': 'Revenue 900.07 亿美元 for the quarter'}
+    e = Evidence(text)
+    reply = {'results': [
+        {'id': 0, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(e, '900.07 亿美元')},
+        {'id': 1, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(e, '900.07 亿美元')}],
+        'pairs': [{'a': 0, 'b': 1, 'relation': 'same', 'witness': ['900.07 亿美元', '900.07']}]}
+    call, _ = _dispatch([reply])
+    out = asyncio.run(review_offline(answer, text, {'api_key': 'x'}, call=call))
+    assert out['findings'] == []
+    assert [r['status'] for r in out['results']] == ['supported', 'incomplete']
+    assert out['results'][1]['reason'] == 'answer_unit_unconfirmed'
+    assert out['pairs'][0]['status'] == 'answer_unit_unconfirmed'
+
+
+def test_D5_bare_figures_paired_as_one_quantity_are_challenged_not_gated_by_units():
+    answer = '占比 = 57.6 ÷ 114.5'
+    text = {'28': 'iPhone revenue was $57.6 billion; Today revenue of 114.5 billion dollars'}
+    e = Evidence(text)
+    reply = {'results': [
+        {'id': 0, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(e, '$57.6 billion')},
+        {'id': 1, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(e, '114.5 billion')}],
+        'pairs': [{'a': 0, 'b': 1, 'relation': 'same', 'witness': ['57.6', '114.5']}]}
+    # Both figures are bare: the pair is a plain-number comparison, so it reaches the challenge; withdrawn, it is not kept.
+    call, calls = _dispatch([reply], {'challenges': [{'candidate': 1, 'verdict': 'withdraw', 'reason': '不同数量'}]})
+    out = asyncio.run(review_offline(answer, text, {'api_key': 'x'}, call=call))
+    assert out['findings'] == []
+    assert [r['reason'] for r in out['results']] == ['answer_unit_unconfirmed', 'answer_unit_unconfirmed']
+    assert out['pairs'][0]['status'] == 'challenge_withdrawn'
+    assert len(calls['challenge']) == 1
+
+
+def test_D3_declared_scale_with_a_qualifier_applies_only_where_the_model_says_so():
+    ev = Evidence({'33': 'Amounts in millions, except per share data. Diluted EPS 2.46 1.08 4.85'})
+    unit = uid(ev, 'millions')
+    assert ev.spans[unit]['qualifier'] == {'text': 'per share data'}
+    item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '2.46'), 'unit_span': unit}
+    assert verify(item, pos('稀释 EPS 为 2.46 美元'), ev)['status'] == 'finding'
+    assert verify({**item, 'unit_excepted': True}, pos('稀释 EPS 为 2.46 美元'), ev)['status'] == 'supported'
+    # A declaration with no qualifier has no exception to apply: the flag is ignored, the scale still applies.
+    plain = Evidence({'29': 'Amounts in millions. Operating income 19,171'})
+    item2 = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(plain, '19,171'),
+             'unit_span': uid(plain, 'millions'), 'unit_excepted': True}
+    assert verify(item2, pos('191.71 亿'), plain)['status'] == 'supported'
+
+
+def test_D3_chinese_qualifier_is_parsed_into_the_declaration():
+    ev = Evidence({'3': '单位：百万美元，每股数据除外。每股收益 2.46'})
+    assert ev.spans[uid(ev, '百万美元')]['qualifier'] == {'text': '每股数据'}
+
+
+def test_D6_only_a_confirmed_difference_stays_a_finding():
+    ev_text = {'1': 'Revenue 900.07 亿美元'}
+    e = Evidence(ev_text)
+    reply = {'results': [{'id': 0, 'binding': 'direct', 'responsibility': 'current', 'relation': 'same',
+                          'span': sid(e, '900.07 亿美元')}], 'pairs': []}
+    cases = {
+        'confirm': ({'challenges': [{'candidate': 1, 'verdict': 'confirm', 'reason': '同一营收'}]}, 'finding', None),
+        'withdraw': ({'challenges': [{'candidate': 1, 'verdict': 'withdraw', 'reason': '不同期间'}]}, 'incomplete', 'challenge_withdrawn'),
+        'unconfirmed': ({'challenges': [{'candidate': 1, 'verdict': 'unconfirmed', 'reason': '依据不足'}]}, 'incomplete', 'challenge_unconfirmed'),
+        'missing': ({'challenges': []}, 'incomplete', 'challenge_unconfirmed'),
+        'old_vocabulary': ({'challenges': [{'candidate': 1, 'verdict': 'keep'}]}, 'incomplete', 'challenge_unconfirmed'),
+        'not_json': ('not json at all', 'incomplete', 'challenge_unconfirmed'),
+    }
+    for name, (challenge, status, reason) in cases.items():
+        call, _ = _dispatch([reply], challenge)
+        out = asyncio.run(review_offline('营收 9.7 亿美元', ev_text, {'api_key': 'x'}, call=call))
+        r = out['results'][0]
+        assert r['status'] == status, name
+        assert (r['reason'] if status == 'incomplete' else None) == reason, name
+        assert r['status'] != 'supported', name
+    call, _ = _dispatch([reply], challenge_raise=True)
+    out = asyncio.run(review_offline('营收 9.7 亿美元', ev_text, {'api_key': 'x'}, call=call))
+    assert out['results'][0]['reason'] == 'challenge_unconfirmed' and out['findings'] == []
+
+
+def test_D6_challenge_input_carries_unit_basis_and_calculation_steps():
+    ev_text = {'1': 'Revenue 900.07 亿美元 and 764.41 亿美元'}
+    e = Evidence(ev_text)
+    nodes = [{'id': 'a', 'span': sid(e, '900.07 亿美元')}, {'id': 'b', 'span': sid(e, '764.41 亿美元')},
+             {'id': 'diff', 'expression': 'a-b', 'inputs': {'a': 'a', 'b': 'b'}, 'unit': 'USD'}]
+    reply = {'results': [{'id': 0, 'binding': 'derived', 'responsibility': 'current', 'relation': 'same', 'nodes': nodes,
+                          'result_node': 'diff'}], 'pairs': []}
+    call, calls = _dispatch([reply], {'challenges': [{'candidate': 1, 'verdict': 'confirm'}]})
+    asyncio.run(review_offline('营收增加 9 亿美元', ev_text, {'api_key': 'x'}, call=call))
+    cand = calls['challenge'][0]['candidates'][0]
+    assert len(cand['steps']) >= 3 and Decimal(cand['computed_value']) == Decimal('13566000000')
+    assert cand['written_unit']['kind'] == 'amount' and cand['written_unit']['cur'] == 'USD'
+    assert 'source' in cand and 'figure' in cand and 'explanation' in cand
+
+
+def test_D7_pair_challenge_view_gives_each_side_its_figure_and_unit_basis():
+    answer = '去年同期 36.70 亿美元，本期 11.30 亿美元'
+    ev_text = {'27': 'interest and other income of 36.70 and 11.30'}
+    reply = {'results': [], 'pairs': [{'a': 0, 'b': 1, 'relation': 'same', 'witness': ['36.70 亿美元', '11.30 亿美元'],
+                                       'explanation': '利息及其他'}]}
+    call, calls = _dispatch([reply], {'challenges': [{'candidate': 1, 'verdict': 'withdraw'}]})
+    out = asyncio.run(review_offline(answer, ev_text, {'api_key': 'x'}, call=call))
+    assert out['pairs'][0]['status'] == 'challenge_withdrawn'
+    view = calls['challenge'][0]['candidates'][0]
+    assert view['figures'] == ['36.70 亿美元', '11.30 亿美元']
+    assert [(u['kind'], u['cur']) for u in view['written_units']] == [('amount', 'USD'), ('amount', 'USD')]
+
+
+def test_D7_prompts_name_the_pair_pitfalls_the_model_must_judge():
+    for needle in ('同比', '中心值', '指引', '被减数'):
+        assert needle in flex.PROMPT and needle in flex.CHALLENGE_PROMPT

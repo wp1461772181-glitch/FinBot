@@ -43,7 +43,8 @@ from claim_replay_185 import HIDDEN, adjacent_contexts, load_items  # noqa: E402
 from run_trap_pack import load_items as load_trap_items  # noqa: E402
 
 POSITION_FIELDS = ("id", "figure", "responsibility", "kind", "relation", "status", "reason", "written_value",
-                   "computed_value", "answer_sign", "selection", "source", "steps", "error_type", "explanation")
+                   "computed_value", "answer_sign", "selection", "source", "steps", "error_type", "explanation",
+                   "challenge")
 
 
 def is_candidate(result: dict) -> bool:
@@ -120,6 +121,11 @@ def summarize_185(rows: list[dict], frozen: dict) -> dict:
         }
     out["positions"] = position_summary(rows)
     out["flex_candidate_reasons"] = dict(Counter(f["reason"] for r in rows for f in r["findings"]))
+    # Challenge verdicts (confirm / withdraw / unconfirmed, with the reason it is not kept), per position and per pair.
+    out["challenge_verdicts"] = dict(Counter(
+        [f"position:{p['challenge']['verdict']}" for r in rows for p in r["positions"]
+         if isinstance(p.get("challenge"), dict)]
+        + [f"pair:{x['status']}" for r in rows for x in r["pairs"] if x.get("status") and x.get("status") != "not_same"]))
     out["flex_candidate_problem_list"] = [f"{r['turn']}#{r['idx']}" for r in rows if r["gold"] == "problem" and r["candidate"]]
     out["flex_candidate_clean_list"] = [f"{r['turn']}#{r['idx']}" for r in rows if r["gold"] == "clean" and r["candidate"]]
     return out
