@@ -177,7 +177,18 @@ def verify(item: Mapping, position: Mapping, sources: Mapping[str, str]) -> dict
     return {**out, 'status': 'supported', 'reason': 'calculation_supported' if kind == 'derived' else 'direct_supported'}
 
 
-def compare_groups(groups, pos):
+def _percent(figure):
+    return bool(re.search(r'[%％]\s*$', str(figure)))
+
+
+def _verified_ids(results):
+    return {r['id'] for r in results if r.get('status') in {'supported', 'finding'} and r.get('computed_value') is not None}
+
+
+def compare_groups(groups, pos, verified=None):
+    """Same-quantity differences.  Only figures verified to a value (``verified``: ids with a computed value; None
+    means no filter) and of the same kind (percent or amount) are compared.  A grouping that puts a percentage beside
+    an amount is not a claim that they are the same quantity."""
     by_id = {p['id']: p for p in pos}
     findings = []
     if not isinstance(groups, list):
@@ -189,7 +200,9 @@ def compare_groups(groups, pos):
             if not isinstance(a, int) or not isinstance(b, int) or a not in by_id or b not in by_id:
                 continue
             pa, pb = amount(by_id[a]['figure']), amount(by_id[b]['figure'])
-            if pa and pb and not equivalent(pa[0], by_id[b]['figure']) and not equivalent(pb[0], by_id[a]['figure']):
+            if pa and pb and _percent(by_id[a]['figure']) == _percent(by_id[b]['figure']) \
+                    and (verified is None or (a in verified and b in verified)) \
+                    and not equivalent(pa[0], by_id[b]['figure']) and not equivalent(pb[0], by_id[a]['figure']):
                 findings.append({'reason': 'same_quantity_difference', 'ids': [a, b], 'values': [str(pa[0]), str(pb[0])]})
     return findings
 
@@ -258,7 +271,7 @@ async def review_offline(answer: str, sources: Mapping[str, str], model: Mapping
         base['context'] = context
     outcome = await review_rounds(pos, {str(k): v for k, v in sources.items()}, model, base_payload=base,
                                   call=call, timeout=timeout)
-    return {'results': outcome['results'], 'findings': compare_groups(outcome['groups'], pos),
+    return {'results': outcome['results'], 'findings': compare_groups(outcome['groups'], pos, _verified_ids(outcome['results'])),
             'pending_ids': outcome['pending_ids']}
 
 
@@ -309,7 +322,7 @@ async def run_shadow(turn: Any, result: dict, *, call=None, resolve=None, timeou
         if outcome['budget_exhausted']:
             await note('final', status='budget_exhausted', pending_ids=outcome['pending_ids'])
             return
-        final = {'results': outcome['results'], 'findings': compare_groups(outcome['groups'], payload['positions']),
+        final = {'results': outcome['results'], 'findings': compare_groups(outcome['groups'], payload['positions'], _verified_ids(outcome['results'])),
                  'pending_ids': outcome['pending_ids'], 'legacy_unverified_lines': payload['legacy_unverified_lines']}
         await note('final', **final)
     except asyncio.CancelledError:

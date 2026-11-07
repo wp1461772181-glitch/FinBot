@@ -145,3 +145,14 @@ def test_unit_evidence_must_really_contain_unit_and_leaf_value():
     assert verify(item, {'id': 0, 'figure':'191.71 亿'}, source)['reason'] == 'unit_binding_unconfirmed'
     item['unit_quote'] = 'unit million'; item['value'] = '19'
     assert verify(item, {'id': 0, 'figure':'191.71 亿'}, source)['reason'] == 'operand_value_unconfirmed'
+
+
+def test_same_quantity_comparison_needs_verified_same_kind_figures():
+    from app.agent_workflow.flex_number_review import compare_groups
+    pos = [{'id': 0, 'figure': '2027'}, {'id': 1, 'figure': '80%'}, {'id': 2, 'figure': '1,258.4 亿'},
+           {'id': 3, 'figure': '1.26 万亿'}]
+    # A percentage beside an amount is not one quantity; unverified figures are never compared.
+    assert compare_groups([[0, 1]], pos, {0, 1}) == []
+    assert compare_groups([[2, 3]], pos, {2}) == []
+    flagged = compare_groups([[2, 3]], pos, {2, 3})
+    assert flagged and flagged[0]['reason'] == 'same_quantity_difference'
