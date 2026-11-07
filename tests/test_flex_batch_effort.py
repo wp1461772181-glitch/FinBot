@@ -8,6 +8,8 @@ from app.agent_workflow import flex_number_review as f
 def test_batches_keep_same_line_and_stable_ids():
     ps = f.positions('1 plus 2 equals 3\n4\n5\n6')
     assert [[p['id'] for p in b] for b in f._batches(ps)] == [[0, 1, 2], [3, 4, 5]]
+    assert [len(b) for b in f._batches(f.positions('1, 2, 3, 4, 5, 6, 7'))] == [3, 3, 1]
+    assert [len(b) for b in f._batches(f.positions('1 + 2 + 3 + 4 = 10'))] == [5]
 
 
 def test_failed_batch_does_not_erase_completed_batch_and_network_retries_low():

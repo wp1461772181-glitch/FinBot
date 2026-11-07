@@ -685,13 +685,33 @@ def _plain(result: Mapping) -> dict:
 
 
 def _batches(positions_all: list[dict]) -> list[list[dict]]:
-    """Keep positions on a line together, including table rows and formulas."""
-    groups: list[list[dict]] = []
+    """Keep table rows and adjacent arithmetic operands together before packing targets."""
+    lines: list[list[dict]] = []
     for p in positions_all:
-        if groups and groups[-1][0]['context'] == p['context']:
-            groups[-1].append(p)
+        if lines and lines[-1][0]['context'] == p['context']:
+            lines[-1].append(p)
         else:
-            groups.append([p])
+            lines.append([p])
+    groups: list[list[dict]] = []
+    for line in lines:
+        context = line[0]['context']
+        if context.lstrip().startswith('|'):
+            groups.append(line)
+            continue
+        previous_end = 0
+        group: list[dict] = []
+        for p in line:
+            start = context.find(p['figure'], previous_end)
+            gap = context[previous_end:start] if start >= 0 else ''
+            # Operators are structural signals only; the model makes semantic relation judgments.
+            linked = bool(group and re.search(r'[=＝+＋×*÷/]', gap))
+            if group and not linked:
+                groups.append(group)
+                group = []
+            group.append(p)
+            previous_end = start + len(p['figure']) if start >= 0 else previous_end
+        if group:
+            groups.append(group)
     batches: list[list[dict]] = []
     for group in groups:
         if batches and len(batches[-1]) + len(group) <= 3:
