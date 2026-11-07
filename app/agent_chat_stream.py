@@ -122,12 +122,13 @@ def _restore_citations(items,credential=None):
    if item.get('source_type')=='calculation':
     # A calculation is live only while its inputs still bind to this turn's
     # verified sources and the expression still produces the recorded value.
-    from .agent_workflow.calculation import calculate
+    from .agent_workflow.calculation import calculate, agrees_at_recorded_precision
     payload=item.get('calculation') or {}
     try:
-     # The user's words are not at hand on a replay: a user-stated input stays as it was bound.
-     recomputed=calculate({'expression':payload['expression'],'inputs':payload['inputs']},verified,None)
-     live=recomputed.get('value')==payload.get('value')
+     # The user's words are not at hand on a replay: a user-stated input stays as it was bound.  Recomputed at the
+     # finest precision so the single rounding is to the recorded value's own decimals (the record is at display precision).
+     recomputed=calculate({'expression':payload['expression'],'inputs':payload['inputs'],'decimals':8},verified,None)
+     live=agrees_at_recorded_precision(recomputed.get('value'),payload.get('value'))
     except (ValueError,KeyError,TypeError):
      live=False
     verified.append({**item,'chunk_id':None,'document_id':None} if live else

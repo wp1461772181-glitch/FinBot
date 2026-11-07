@@ -25,6 +25,29 @@ def matches_source(value, numbers):
     return any(n.quantize(step,rounding=ROUND_HALF_UP)==value for n in numbers if n.is_finite())
 
 
+def _as_decimal(value):
+    """A recorded or recomputed figure as a Decimal: int, float (via its repr), Decimal or a numeric string."""
+    if isinstance(value,bool) or value is None:raise TypeError('not a figure')
+    if isinstance(value,Decimal):return value
+    if isinstance(value,float):return Decimal(repr(value))
+    if isinstance(value,(int,str)):return Decimal(value.strip() if isinstance(value,str) else value)
+    raise TypeError('not a figure')
+
+
+def agrees_at_recorded_precision(recomputed, recorded):
+    """A recomputed value agrees with a recorded one when it rounds (half-up, as ``matches_source``) to the recorded
+    value's own decimal places and equals it there.  The tolerance is the recording's precision and nothing wider:
+    3218 agrees with 3218.00, 1258.4 with 1258.41, 391.1 with 391.05; 1258.4 does not agree with 1259.9."""
+    try:
+        with localcontext() as ctx:
+            ctx.prec=60
+            want=_as_decimal(recorded);got=_as_decimal(recomputed)
+            if not want.is_finite() or not got.is_finite():return False
+            places=max(0,-want.as_tuple().exponent)
+            return got.quantize(Decimal(1).scaleb(-places),rounding=ROUND_HALF_UP)==want
+    except (InvalidOperation,TypeError,ValueError):return False
+
+
 def source_numbers(text):
     """The numbers one text states, as a calculation input may bind them: in full, and (for "331,839 百万美元")
     the unit-less digits too, so a value can be computed in millions."""
