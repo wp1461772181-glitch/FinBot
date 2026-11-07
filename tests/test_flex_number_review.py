@@ -98,6 +98,47 @@ def test_issuance_rejects_unknown_stale_ambiguous_and_does_not_reuse_ids():
     assert first['citation_id'] != second['citation_id']
 
 
+def test_shadow_daily_budget_limits_attempts_and_records_skip(tmp_path, monkeypatch):
+    monkeypatch.setenv('FLEX_NUMBER_SHADOW', 'on')
+    monkeypatch.setenv('FLEX_NUMBER_DAILY_CALL_LIMIT', '1')
+    monkeypatch.setenv('CLAIM_JUDGE_SHADOW_DIR', str(tmp_path))
+    monkeypatch.setenv('CLAIM_JUDGE_SHADOW_MODEL', 'test')
+    calls = []
+    async def call(*args):
+        calls.append(1)
+        return {}, {'content': 'invalid'}
+    async def resolve(name): return {'api_key': 'x'}
+    turn = SimpleNamespace(owner=True, state={}, citations=[])
+    asyncio.run(run_shadow(turn, {'answer': 'Revenue 123'}, call=call, resolve=resolve))
+    rows = [json.loads(line) for line in next((tmp_path / 'flex-numbers').glob('*.jsonl')).read_text().splitlines()]
+    assert len(calls) == 1
+    assert rows[-1]['status'] == 'budget_exhausted'
+    assert rows[-1]['pending_ids'] == [0]
+
+
+def test_shadow_scheduling_does_not_wait_for_review(monkeypatch):
+    from app.agent_workflow import flex_number_review as flex
+    monkeypatch.setenv('FLEX_NUMBER_SHADOW', 'on')
+    async def check():
+        started, release = asyncio.Event(), asyncio.Event()
+        captured = []
+        async def slow(turn, result):
+            captured.append((turn, result))
+            started.set()
+            await release.wait()
+        monkeypatch.setattr(flex, 'run_shadow', slow)
+        turn = SimpleNamespace(owner=True, state={'turn_id': 'one'}, citations=[])
+        result = {'answer': '123'}
+        flex.schedule_shadow(turn, result)
+        result['answer'] = 'changed'
+        await started.wait()
+        assert captured[0][1]['answer'] == '123'
+        assert flex._TASKS
+        release.set()
+        await asyncio.gather(*list(flex._TASKS))
+    asyncio.run(check())
+
+
 def test_unit_evidence_must_really_contain_unit_and_leaf_value():
     source = {'1': 'Revenue 19,171; unit million'}
     item = result('direct', source_ref='1', quote='Revenue 19,171', value='19,171', unit='million', unit_quote='Revenue')
