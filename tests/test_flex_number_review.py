@@ -55,7 +55,7 @@ def test_amazon_conversion_with_declared_unit_and_tenfold_error(value, written):
     assert out['status'] == 'finding' and out['error_type'] == 'magnitude'
 
 
-def test_unit_must_come_from_a_declaration_not_from_guessing():
+def test_selected_unit_declaration_must_exist():
     ev = Evidence({'29': 'Amounts in millions. Operating income 19,171'})
     item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '19,171')}
     # The model chooses the unit; code checks the selected declaration.
@@ -105,21 +105,21 @@ def test_answer_sign_and_source_sign_are_kept_before_comparison():
     # Answer "（-4.7%）": the sign is written in the answer, so it must reach the comparison.
     item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '-4.7%')}
     assert verify(item, pos('（-4.7%）'), ev)['status'] == 'supported'
-    # An unsigned answer "4.7%" with no declared direction is not a sign finding: the sign is re-asked.
+    # The model did not supply a direction, so the comparison uses the literal unsigned value.
     assert verify(item, pos('4.7%'), ev)['status'] == 'finding'
     assert verify(item, pos('+4.7%'), ev)['status'] == 'finding'
     # "跌了 4.41%": the direction is in the words; the model supplies answer_sign and the sign is kept.
     item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '-4.41%')}
     assert verify({**item, 'answer_sign': '-'}, pos('昨日跌了 4.41%'), ev)['status'] == 'supported'
-    # Without an answer_sign the decline is not declared on the answer side: re-ask, not a finding.
+    # Without answer_sign, the literal unsigned value is compared.
     assert verify(item, pos('昨日跌了 4.41%'), ev)['status'] == 'finding'
 
 
-def test_sign_only_difference_is_a_finding_only_when_both_sides_declare_direction():
+def test_model_selected_direction_is_used_in_comparison():
     ev = Evidence({'13': 'client revenue to decline more than 20% sequentially; guidance down to 38%; +4.41% close; '
                          '-4.41% open'})
     unsigned = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '20%')}
-    # Answer reads a decline into "降超 20%" but the evidence does not declare one: re-ask, not a finding.
+    # The model-selected answer direction is used in the comparison.
     out = verify({**unsigned, 'answer_sign': '-'}, pos('营收降超 20%'), ev)
     assert out['status'] == 'finding'
     # Both sides declare the decline: consistent, supported.
@@ -130,7 +130,7 @@ def test_sign_only_difference_is_a_finding_only_when_both_sides_declare_directio
     opposite = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '+4.41%')}
     out = verify({**opposite, 'answer_sign': '-'}, pos('跌了 4.41%'), ev)
     assert out['status'] == 'finding' and out['error_type'] == 'sign'
-    # A computed value's sign is the expression's direction: a sign-only mismatch there is re-asked, never a finding.
+    # Computed direction follows the model's expression and answer interpretation.
     nodes = [{'id': 'a', 'span': sid(ev, '+4.41%')}, {'id': 'b', 'span': sid(ev, '-4.41%')},
              {'id': 'd', 'expression': 'a-b', 'inputs': {'a': 'a', 'b': 'b'}, 'unit': '%'}]
     derived = {'binding': 'derived', 'responsibility': 'current', 'relation': 'same', 'nodes': nodes,
@@ -369,7 +369,7 @@ def test_D1_range_lower_end_inherits_the_shared_unit_of_the_range():
                    'span': sid(ev, '$16 billion')}, hi, ev)['status'] == 'supported'
 
 
-def test_D1_unitless_answer_figure_is_not_compared_with_a_dimensional_source():
+def test_model_interprets_unitless_answer_from_context():
     ev = Evidence({'28': 'iPhone revenue was $57.6 billion for the quarter'})
     item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '$57.6 billion')}
     out = verify({**item, 'answer_value': '57600000000', 'answer_quantum': '100000000'}, pos('占比 = 57.6 ÷ 114.5'), ev)
@@ -383,7 +383,7 @@ def test_D1_dimensionless_figures_still_compare_both_ways():
     assert verify(item, pos('获得 4 项专利'), ev)['status'] == 'supported'
 
 
-def test_D1_pairs_of_dimensionless_figures_are_comparable_and_one_sided_unit_is_not_a_finding():
+def test_model_selected_pairs_are_compared():
     answer = '共 3 家，即 4 家'
     by_id = {p['id']: verify({}, p, Evidence({})) for p in positions(answer)}
     findings, records = verify_pairs([{'a': 0, 'b': 1, 'relation': 'same', 'witness': ['3 家', '4 家']}], by_id, answer)
@@ -394,7 +394,7 @@ def test_D1_pairs_of_dimensionless_figures_are_comparable_and_one_sided_unit_is_
     assert findings and records[0]['status'] == 'finding'
 
 
-def test_D5_a_pair_that_fails_on_units_does_not_turn_a_supported_position_into_a_finding():
+def test_D5_model_interpretation_keeps_consistent_pair_supported():
     answer = '营收 900.07 亿美元，即 900.07'
     text = {'1': 'Revenue 900.07 亿美元 for the quarter'}
     e = Evidence(text)
