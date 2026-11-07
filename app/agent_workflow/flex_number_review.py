@@ -111,16 +111,24 @@ PROMPT = '''核查最终答案中的数字。对 positions 里的每一个数字
 _MON = r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?'
 BRACKET = re.compile(r'\[\d+(?:\s*[,，、;；]\s*\d+)*(?:\s*→\s*注)?\]|【\d+】')
 URL = re.compile(r'https?://\S+|www\.\S+|data:(?:image|application|text)/[^\s)\]]+', re.I)
-# Date and period objects are whole objects: they are never numeric positions or candidates.
+# Date, period, ordinal and filing-form objects are whole objects: they are never numeric positions or candidates.
+# (Shapes only, no word lists: a date range leaves no negative residue, a month or a short date is one object.)
 DATE = re.compile(r'(?<![\d.,])(?:' + '|'.join([
     r'\d{4}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:Z|UTC|[+-]\d{2}:?\d{2}))?)?',
     r'\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]m\b)?',
     r'\d{4}\s*年(?:\s*\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?)?',
     r'\d{1,2}\s*月\s*\d{1,2}\s*日',
     r'\bQ[1-4]\s*(?:FY\s*)?\d{2,4}\b|\b\d{4}\s*Q[1-4]\b|\bFY\s*\d{2,4}\b',
-    r'\b' + _MON + r'\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?\b',
+    r'\b' + _MON + r'\s+\d{4}\b',
+    r'\b' + _MON + r'\s+\d{1,2}(?:st|nd|rd|th)?(?:\s*[-–~]\s*\d{1,2})?(?:,?\s+\d{4})?\b',
     r'\d{1,2}(?:st|nd|rd|th)?\s+' + _MON + r'(?:\s+\d{4})?\b',
     r'\d{1,2}-\d{1,2}(?![\d.,]|\s*(?:%|％|亿|万|百万|千|美元|元|股|million|billion|trillion|thousand|[BMKT]\b))',
+    r'\d{1,2}\s*月(?:份|底|初|末|中)?',                        # a month: "10 月", "9 月纪要"
+    r'(?<![\d.,/])(?:(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])(?![\d.,/%])'  # a short date "11/03"
+    r'|\d{1,2}/\d{1,2}(?=\s+(?-i:[A-Z])[A-Za-z]))',                   # a brand name "24/7 Wall St"
+    r'第\s*\d+',                                               # an ordinal: "第 20 大"
+    r'\d{1,3}\s*(?:天|周|个月)',                               # a period: "过去 5 天"
+    r'\d{1,2}-[A-Za-z](?![A-Za-z0-9])',                        # a filing form: "10-Q", "8-K"
 ]) + ')', re.I)
 # A number token with optional sign, currency prefix, scale word, currency/share suffix and percent.
 NUMBER = re.compile(

@@ -501,3 +501,19 @@ def test_D7_pair_challenge_view_gives_each_side_its_figure_and_unit_basis():
 def test_D7_prompts_name_the_pair_pitfalls_the_model_must_judge():
     for needle in ('同比', '中心值', '指引', '被减数'):
         assert needle in flex.PROMPT and needle in flex.CHALLENGE_PROMPT
+
+
+def test_D8_month_slash_range_rank_period_and_form_tokens_are_not_positions():
+    text = ('10 月议息会、9 月纪要、11/03 盘前、24/7 Wall St、第 20 大、过去 5 天、10-Q 申报、'
+            'December 8-9 加息、Dec 2025 财报、涨超3%')
+    assert [p['figure'] for p in positions(text)] == ['3%']
+
+
+def test_D8_a_date_range_leaves_no_negative_residue_in_a_source():
+    ev = Evidence({'6': 'FOMC December 8-9 meeting; dividend yield2.19%'})
+    assert sorted(v['raw'] for v in ev.spans.values() if v['type'] == 'N') == ['2.19%']
+
+
+def test_D8_a_slash_pair_is_a_date_only_when_it_reads_as_month_and_day():
+    # "59/60 位分析师" is a count of analysts, not a date: both figures stay positions.
+    assert [p['figure'] for p in positions('59/60 位分析师给予买入评级')] == ['59', '60']
