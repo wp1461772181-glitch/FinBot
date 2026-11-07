@@ -41,12 +41,18 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from app.agent_workflow.flex_number_review import TECHNICAL, VERSION, review_offline  # noqa: E402
 from claim_replay_185 import HIDDEN, adjacent_contexts, load_items  # noqa: E402
 from run_trap_pack import load_items as load_trap_items  # noqa: E402
-from app.agent_chat_provider import _post, reasoning_options, MAX_OUTPUT_TOKENS  # noqa: E402
+from app.agent_chat_provider import _post, reasoning_options, MAX_OUTPUT_TOKENS, ProviderFailure  # noqa: E402
 
 async def replay_call(model, system, user):
     body = {"model": model["model"], "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "max_tokens": MAX_OUTPUT_TOKENS, "stream": True, "temperature": 0}
     body.update(reasoning_options(model["provider"]))
-    return await _post(model["provider"], model["api_key"], body, model.get("base_url"))
+    for attempt in range(3):
+        try:
+            return await _post(model["provider"], model["api_key"], body, model.get("base_url"))
+        except ProviderFailure as exc:
+            if not exc.retryable or attempt == 2:
+                raise
+            await asyncio.sleep(2 ** attempt)
 
 POSITION_FIELDS = ("id", "figure", "responsibility", "kind", "relation", "status", "reason", "written_value",
                    "computed_value", "answer_sign", "selection", "source", "steps", "error_type", "explanation",

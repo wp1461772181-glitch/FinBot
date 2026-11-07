@@ -719,6 +719,8 @@ async def review_rounds(positions_all: list[dict], evidence: Evidence, model, *,
             status = 'timeout'
         except Exception as exc:
             status = 'provider_error:' + type(exc).__name__
+            if isinstance(getattr(exc, 'provider_status', None), int):
+                status += ':http_' + str(exc.provider_status)
         await emit('response', attempt=attempt, status=status, raw_response=raw, usage=usage)
         parsed = _parse_reply(raw) if isinstance(raw, str) else None
         replies = parsed.get('results', []) if isinstance(parsed, Mapping) else []
