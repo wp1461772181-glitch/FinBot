@@ -82,3 +82,25 @@ def test_shadow_retries_and_saves_invalid_raw_without_public_mutation(tmp_path, 
     rows = [json.loads(line) for line in next((tmp_path/'flex-numbers').glob('*.jsonl')).read_text().splitlines()]
     assert [r['raw_response'] for r in rows if r['kind']=='response'] == ['invalid json']*2
     assert rows[-1]['pending_ids'] == [0] and result0 == {'answer':'Revenue 135.7','unverified_lines':[]}
+
+
+def test_issuance_rejects_unknown_stale_ambiguous_and_does_not_reuse_ids():
+    issuer = CitationIssuer({'s': 'repeated repeated; one-off'})
+    issuer.register_block('b', 1)
+    def item(ref, quote, revision=1):
+        return {'anchor': {'block_id': 'b', 'revision': revision}, 'source_ref': ref, 'quote': quote}
+    assert issuer.issue(item('outside', 'one-off'))['error'] == 'source_not_in_turn'
+    assert issuer.issue(item('s', 'repeated'))['error'] == 'quote_ambiguous'
+    first = issuer.issue(item('s', 'one-off'))['item']
+    issuer.register_block('b', 2)
+    assert issuer.issue(item('s', 'one-off'))['error'] == 'anchor_revision_changed'
+    second = issuer.issue(item('s', 'one-off', 2))['item']
+    assert first['citation_id'] != second['citation_id']
+
+
+def test_unit_evidence_must_really_contain_unit_and_leaf_value():
+    source = {'1': 'Revenue 19,171; unit million'}
+    item = result('direct', source_ref='1', quote='Revenue 19,171', value='19,171', unit='million', unit_quote='Revenue')
+    assert verify(item, {'id': 0, 'figure':'191.71 亿'}, source)['reason'] == 'unit_binding_unconfirmed'
+    item['unit_quote'] = 'unit million'; item['value'] = '19'
+    assert verify(item, {'id': 0, 'figure':'191.71 亿'}, source)['reason'] == 'operand_value_unconfirmed'
