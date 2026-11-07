@@ -7,7 +7,17 @@ import pytest
 
 from app.agent_workflow.citation_issuance import CitationIssuer
 from app.agent_workflow.flex_number_review import (
-    Evidence, positions, review_offline, run_shadow, unit_of_text, verify, verify_pairs)
+    Evidence, positions, review_offline, run_shadow, unit_of_text, verify as raw_verify, verify_pairs)
+from app.agent_workflow.flex_number_review import _written
+
+
+def verify(item, position, evidence):
+    # Existing model stubs interpret the answer as its literal parsed value by default.
+    item = dict(item)
+    if "answer_value" not in item:
+        value = _written(position, item.get("answer_sign"))
+        item.update(answer_value=str(value["value"]), answer_quantum=str(value["quantum"]))
+    return raw_verify(item, position, evidence)
 
 
 def sid(ev, raw):
@@ -336,7 +346,18 @@ def _dispatch(main_replies, challenge_reply=None, challenge_raise=False):
             content = challenge_reply if isinstance(challenge_reply, str) else json.dumps(challenge_reply, ensure_ascii=False)
             return {}, {'content': content}
         calls['main'].append(json.loads(user))
-        reply = main_replies[min(len(calls['main']) - 1, len(main_replies) - 1)]
+        reply = json.loads(json.dumps(main_replies[min(len(calls['main']) - 1, len(main_replies) - 1)]))
+        parsed_positions = {p['id']: p for p in positions(calls['main'][-1]['answer'])}
+        existing = {r['id'] for r in reply.get('results', [])}
+        for pair in reply.get('pairs', []):
+            for ident in (pair.get('a'), pair.get('b')):
+                if ident in parsed_positions and ident not in existing:
+                    reply.setdefault('results', []).append({'id': ident})
+                    existing.add(ident)
+        for result in reply.get('results', []):
+            if result.get('id') in parsed_positions and 'answer_value' not in result:
+                value = _written(parsed_positions[result['id']], result.get('answer_sign'))
+                result.update(answer_value=str(value['value']), answer_quantum=str(value['quantum']))
         return {}, {'content': json.dumps(reply, ensure_ascii=False)}
     return call, calls
 
@@ -540,3 +561,10 @@ def test_open_calculation_records_bound_leaves_across_sources():
     assert out['status'] == 'supported' and out['steps'][0]['input']['source_ref'] == '1'
     item['nodes'][1]['quote'] = 'not in source'
     assert verify(item, pos('394.57'), ev)['reason'] == 'quote_unverified'
+
+
+def test_uninterpreted_mismatch_remains_a_doubt():
+    ev = Evidence({'1': 'revenue $57.6 billion'})
+    item = {'binding': 'direct', 'responsibility': 'current', 'relation': 'same', 'span': sid(ev, '$57.6 billion')}
+    out = raw_verify(item, pos('57.6'), ev)
+    assert out['status'] == 'incomplete' and out['reason'] == 'answer_value_unconfirmed'
