@@ -192,7 +192,7 @@ def _merge_delta(message, calls, delta):
         if not isinstance(part,dict) or type(part.get('index')) is not int or not 0<=part['index']<12:
             raise HTTPException(502,'provider_incompatible_response')
         target=calls.setdefault(part['index'],{'id':'','type':'function','function':{'name':'','arguments':''}})
-        if part.get('type','function')!='function':raise HTTPException(502,'provider_incompatible_response')
+        if part.get('type') not in (None,'function'):raise HTTPException(502,'provider_incompatible_response')
         fn=part.get('function',{})
         if not isinstance(fn,dict):raise HTTPException(502,'provider_incompatible_response')
         for container, key, value in ((target,'id',part.get('id')),
