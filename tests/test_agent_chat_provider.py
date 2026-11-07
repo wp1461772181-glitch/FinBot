@@ -251,6 +251,20 @@ def test_deepseek_maps_each_tier_onto_its_own_levels(monkeypatch):
         assert provider.reasoning_options("deepseek", tier) == body, tier
 
 
+def test_zhipu_maps_each_tier_onto_glm53_levels(monkeypatch):
+    # GLM-5.3-Flash accepts only low/high/max and refuses a disabled thinking switch, so
+    # "none" folds onto low instead of the disabled body DeepSeek takes.
+    monkeypatch.setattr(provider, "REASONING_EFFORT", "low")
+    assert provider.reasoning_options("zhipu") == {"thinking": {"type": "enabled"}, "reasoning_effort": "low"}
+    expected = {"none": "low", "minimal": "low", "low": "low", "medium": "high",
+                "high": "high", "xhigh": "max", "max": "max"}
+    for tier, mapped in expected.items():
+        assert provider.reasoning_options("zhipu", tier) == {"thinking": {"type": "enabled"}, "reasoning_effort": mapped}, tier
+    assert provider.reasoning_options("zhipu", "turbo") == {}  # unknown values send nothing
+    monkeypatch.setattr(provider, "REASONING_EFFORT", "default")
+    assert provider.reasoning_options("zhipu") == {}
+
+
 def test_decision_request_sends_the_bot_effort_and_without_one_keeps_the_environment_body(monkeypatch):
     seen = _capture_bodies(monkeypatch)
     monkeypatch.setattr(provider, "REASONING_EFFORT", "low")

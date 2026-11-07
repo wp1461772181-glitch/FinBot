@@ -78,6 +78,14 @@ def reasoning_options(provider: str, effort: str | None = None) -> dict:
             return {"thinking": {"type": "disabled"}}
         mapped = {"minimal": "low", "medium": "high", "xhigh": "max"}.get(value, value)
         return {"thinking": {"type": "enabled"}, "reasoning_effort": mapped}
+    if provider == "zhipu":
+        # Zhipu's GLM-5.3 / GLM-5.3-Flash accept only low, high and max, and thinking cannot be
+        # disabled on them (sending "disabled" or any other tier is a 400).  Fold the internal
+        # tiers onto those three; "none" cannot turn thinking off, so it lands on the lightest
+        # tier instead of sending a value the API would reject.  Without this branch the effort
+        # was silently dropped and GLM ran at the platform default, which is max.
+        mapped = {"none": "low", "minimal": "low", "medium": "high", "xhigh": "max"}.get(value, value)
+        return {"thinking": {"type": "enabled"}, "reasoning_effort": mapped}
     if provider == "openrouter":
         return {"reasoning": {"effort": value}}
     return {}
