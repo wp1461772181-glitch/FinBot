@@ -262,6 +262,20 @@ def write_tool_catalogue():
             for policy in definitions().values() if policy.level in {'reversible', 'costly'}]
 
 
+CITATION_V2_NOTE=('引用协议：本回合引用由 issue_citation 工具签发。正文不要手写 [n] 或【n】编号；需要标注来源时，'
+ '对该来源的逐字原文调用 issue_citation（source_ref 为证据编号，quote 必须逐字摘自该来源）。'
+ '被拒绝时回执会说明哪项不过、有哪些可用的来源与原文，据此改正后重试。')
+HAND_MARKER=re.compile(r'[ \t]*(?:\[\d+(?:\s*[,，、;；]\s*\d+)*(?:\s*→\s*注)?\]|【\d+】)+')
+def strip_all_markers(text):
+    return HAND_MARKER.sub('',str(text or ''))
+def v2_gate_text(answer,ordinals):
+    """What the v2 gate reads: hand-written markers removed (they never bind), then one block-level binding per
+    paragraph for every node issued this turn.  Tables and headings get none."""
+    body=strip_all_markers(answer)
+    if not ordinals:return body
+    marks=''.join(f'[{o}]' for o in dict.fromkeys(int(o) for o in ordinals if str(o).isdigit()))
+    paragraphs=body.split('\n\n')
+    return '\n\n'.join(p+marks if p.strip() and not p.lstrip().startswith(('|','#')) else p for p in paragraphs)
 def schema(name,description,model):return [{'type':'function','function':{'name':name,'description':description,'parameters':model.model_json_schema()}}]
 ROUTE_SCHEMA=schema('classify_request','Classify only: A evidence, B timeless finance/company explanation, C clearly unrelated to money and this product (when in doubt, A), D system action or compound workflow. Do not generate an answer. Include grounded structured retrieval fields for A. No planner.',Routing)
 REFERENCE_SCHEMA=schema('resolve_reference','Resolve USER references and return one self-contained canonical_question with the user\'s time made explicit. Earlier citation sources use history_citations, or clarification_answers for ambiguity; citation ordinals are not assistant-item positions. For other previous assistant items copy the exact item name and provide a referent. Never invent objects, IDs or operations.',Reference)
@@ -637,6 +651,9 @@ class Turn:
         self.history=bounded_history(messages);self.started=time.monotonic();self.state=state or {}
         self.owner=owner_credential_matches(context.identity_credential)
         self.route='D';self.scope={};self.tool_bias=None;self.citations=[];self.observations=[];self.feedback=[]
+        # Citation protocol, fixed for the whole turn: v1 (hand-written markers) or v2 (tool-issued nodes).
+        from .citation_issuance import citation_protocol
+        self.citation_protocol=citation_protocol();self.citation_issuer=None;self.citation_issuer_failed=False
         # Where the scope's entity came from, which decides whether it constrains this turn (entity_binds).  Kept off
         # self.scope so it never rides into previous_scope.  The defaults are a resumed turn's: its scope binds as it did.
         self.classifier_named=True      # the classifier itself named an entity
@@ -708,12 +725,15 @@ class Turn:
         set, then each loaded category in catalogue order -- so a turn's tool block is the same bytes whatever order
         the categories were asked for in (the provider's prefix cache lives on that)."""
         permitted=self.permitted_tools()
-        if self.active_skill:return permitted
+        if self.active_skill:return self.with_citation_tool(permitted)
         by_name={t['function']['name']:t for t in permitted}
         order=[n for n in by_name if n in DISCLOSED]
         for category,info in TOOL_CATEGORIES.items():
             if category in self.loaded:order+=[n for n in info.tools if n in by_name]
-        return [by_name[n] for n in order]
+        return self.with_citation_tool([by_name[n] for n in order])
+    def with_citation_tool(self,tools):
+        from .citation_issuance import ISSUE_CITATION_SCHEMA
+        return [*tools,ISSUE_CITATION_SCHEMA] if self.citation_protocol=='v2' and self.citations else tools
     def load_category(self,category):
         if category not in self.loaded:self.loaded.append(category)
     def preload_categories(self):
@@ -1686,6 +1706,24 @@ class Turn:
             if observation.get('accepted_evidence') and (observation.get('name')=='query_portfolio' or not self.classifier_named) \
                and written.search(json.dumps(observation.get('result'),ensure_ascii=False,default=str)):return True
         return False
+
+    def issue_citation(self,args):
+        """Protocol v2: sign one citation against this turn's evidence pool.  A failure is a receipt, not an exception."""
+        from .citation_issuance import issue_for_turn,new_turn_issuer
+        from .claim_shadow_extract import to_judge_source
+        try:
+            pool={}
+            for citation in self.citations:
+                if isinstance(citation,dict) and 'ordinal' in citation:
+                    source,_=to_judge_source(citation);pool[str(source.ordinal)]=source.text
+            if self.citation_issuer is None:self.citation_issuer=new_turn_issuer(pool)
+            else:self.citation_issuer.refresh(pool)
+            return issue_for_turn(self.citation_issuer,args)
+        except Exception as exc:
+            self.citation_issuer_failed=True;self.audit['citation_issuer_error']=type(exc).__name__
+            return {'ok':False,'error':'citation_service_unavailable'}
+    def v2_nodes(self):
+        return [] if self.citation_protocol!='v2' or self.citation_issuer_failed or self.citation_issuer is None else list(self.citation_issuer.nodes)
 
     async def execute_read(self,name,args):
         call_id=self.active_call_id or str(uuid.uuid4());await self.emit({'event':'tool_start','call_id':call_id,'name':name,'arguments':args})
@@ -2667,6 +2705,9 @@ class Turn:
     def finish(self,answer,*,status='succeeded',reason=None,generated=False):
         from .language import format_answer
         self.unverified_lines=[]
+        nodes=self.v2_nodes()
+        if self.citation_protocol=='v2':
+            answer=v2_gate_text(answer,[n['source_ref'] for n in nodes])
         answer=format_answer(without_tool_markup(answer),self.request_words(),self.citations)
         if self.context.api_key:answer=answer.replace(self.context.api_key,'[redacted]')
         if citation_errors(answer,self.citations) and not self.observations:
@@ -2873,8 +2914,13 @@ class Turn:
         stripped=strip_invalid_markers(answer,self.citations)
         if stripped.strip():answer=stripped
         self.unverified_lines=[{**e,'line':strip_invalid_markers(e['line'],self.citations)} if isinstance(e,dict) and isinstance(e.get('line'),str) else e for e in self.unverified_lines]
+        protocol_fields={}
+        if self.citation_protocol=='v2':
+            answer=strip_all_markers(answer)
+            self.unverified_lines=[{**e,'line':strip_all_markers(e['line'])} if isinstance(e,dict) and isinstance(e.get('line'),str) else e for e in self.unverified_lines]
+            protocol_fields={'citation_protocol':'v2','citation_nodes':nodes}
         self.audit.update(stop_reason=reason,elapsed_ms=round((time.monotonic()-self.started)*1000))
-        return {'answer':answer[:30000],'citations':self.citations,'status':status,'reason':reason,'route':self.route,
+        return {**protocol_fields,'answer':answer[:30000],'citations':self.citations,'status':status,'reason':reason,'route':self.route,
             'unverified_lines':list(self.unverified_lines),'audit':self.audit,'shadow_entity_mismatches':self.audit.get('shadow_entity_mismatches',[]),'final_protocol':self.final_protocol,'pending_request':self.pending,'result_sets':self.sets,'previous_category':self.route,'previous_scope':{**self.scope,'_tool_categories':list(self.used_categories)}}
 
     async def finish_answer(self,answer):
@@ -3146,6 +3192,9 @@ class Turn:
                 self.audit['stop_reason']='soft_time_budget_closing'
                 break
             self.audit['decision_steps']+=1
+            if self.citation_protocol=='v2' and self.citations and not self.audit.get('citation_v2_note'):
+                self.audit['citation_v2_note']=True
+                self.protocol.append({'role':'system','content':CITATION_V2_NOTE})
             try:
                 async with self.trace.step('decide',step=self.audit['decision_steps']) as node:
                     decision=await self.decision()
@@ -3213,6 +3262,14 @@ class Turn:
                     code='owner_login_required' if not self.owner and not definitions()[name].guest else ('write_negated' if write and vetoed(name,self.authorization_question) else 'write_tool_not_granted')
                     self.audit['tool_calls']+=1;outcome=self.write_error(name,code);self.feedback.append(outcome)
                     self.protocol.append({'role':'tool','tool_call_id':call['id'],'content':json.dumps(outcome)});batch_failed=True;continue
+                if name=='issue_citation' and self.citation_protocol=='v2':
+                    # Malformed arguments are a receipt like any other refusal, never an exception in the loop.
+                    args=function.get('arguments') or {}
+                    if isinstance(args,str):
+                        try:args=json.loads(args)
+                        except ValueError:args=None
+                    self.audit['tool_calls']+=1;outcome=self.issue_citation(args)
+                    self.protocol.append({'role':'tool','tool_call_id':call['id'],'content':json.dumps(outcome,ensure_ascii=False,default=str)});continue
                 try:
                     args=function.get('arguments') or {};args=json.loads(args) if isinstance(args,str) else args
                     args=validate(name,args)
@@ -3398,6 +3455,10 @@ async def run_direct_turn(question,context,*,emit,messages=None,state=None):
     # batched judge call, and any failure leaves the unverified lines as they are.
     from .number_review import settle as number_review_settle
     result=await number_review_settle(turn,result)
+    # Experimental final-answer review is private and cannot alter the production result.
+    from .flex_number_review import schedule_shadow as flex_number_shadow
+    try: flex_number_shadow(turn,result)
+    except Exception: pass
     events=turn.audit.get('truncation_events') or []
     # Hints (polarity_conflict, event_not_in_source) are not unverified sentences: they are counted in the audit on their own.
     flagged=[item for item in turn.unverified_lines if not (isinstance(item,dict) and item.get('reason') in HINT_REASONS)]

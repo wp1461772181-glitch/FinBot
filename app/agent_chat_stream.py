@@ -535,6 +535,8 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      # reload shows the same flags.
      unverified=event.get("unverified_lines") or []
      if unverified:protocol["unverified_lines"]=unverified
+     # Citation protocol v2: the issued nodes are the citation components; stored with the message so a reload keeps them.
+     if event.get("citation_protocol")=="v2":protocol["citation_protocol"]="v2";protocol["citation_nodes"]=event.get("citation_nodes") or []
      if event.get("reason") in {"retrieval_unavailable","zero_evidence","web_page_excerpt_unavailable","missing_source_coverage","publisher_date_unavailable"} or str(event.get("reason","")).startswith(("requested_","weak_")):
       await asyncio.to_thread(_record_low_confidence,payload.message,cid,turn,owner_hash(x_chat_session),event["reason"])
      await append_message(cid,turn,"assistant",text_out,tool_calls=protocol,status="failed" if event.get("status")=="failed" else "complete")
@@ -555,7 +557,8 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
                           api_key=chosen.key(),base_url=chosen.base_url)
      if restored:yield frame("citations",{"turn_id":turn,"items":_client_citations(restored)})
      if unverified:yield frame("unverified_lines",{"turn_id":turn,"items":unverified})
-     yield frame("done",{"conversation_id":cid,"turn_id":turn,"status":event.get("status","complete"),"reason":event.get("reason"),"thinking_ms":thinking_ms})
+     v2_fields={"citation_protocol":"v2","citation_nodes":protocol["citation_nodes"]} if protocol.get("citation_protocol")=="v2" else {}
+     yield frame("done",{"conversation_id":cid,"turn_id":turn,"status":event.get("status","complete"),"reason":event.get("reason"),"thinking_ms":thinking_ms,**v2_fields})
    if not terminal:raise HTTPException(502,"workflow_incomplete")
   except asyncio.CancelledError:
    await asyncio.shield(append_message(cid,turn,"assistant",text_out,status="cancelled",
@@ -681,6 +684,7 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
     stored_protocol=row["tool_calls"]
     if isinstance(stored_protocol.get("trace"),list):item["trace"]=stored_protocol["trace"]
     if isinstance(stored_protocol.get("unverified_lines"),list) and stored_protocol["unverified_lines"]:item["unverified_lines"]=stored_protocol["unverified_lines"]
+    if stored_protocol.get("citation_protocol")=="v2":item["citation_protocol"]="v2";item["citation_nodes"]=stored_protocol.get("citation_nodes") or []
     # Older turns only know the audit's elapsed time; either one is what the reader counted.
     stored_audit=stored_protocol.get("audit")
     thinking=stored_protocol.get("thinking_ms")

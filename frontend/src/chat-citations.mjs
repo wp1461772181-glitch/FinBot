@@ -18,3 +18,26 @@ export function linkCitationMarkers(text, citations) {
     return numbers.map((number, index) => linked[index] ?? `[${number}]`).join("");
   });
 }
+
+// Citation protocol v2 (server-issued nodes).  Under v2 the answer text is shown as written: a hand-typed
+// [n] is plain text, never a link.  The citation components are the issued nodes only, in issue order, each
+// resolved to this answer's own citation for that ordinal.  Under v1 nothing changes.
+export function renderAnswerText(text, citations, protocol) {
+  return protocol === "v2" ? String(text ?? "") : linkCitationMarkers(text, citations);
+}
+
+export function citationsToShow(protocol, citations, nodes) {
+  const list = Array.isArray(citations) ? citations : [];
+  if (protocol !== "v2") return list;
+  const shown = [];
+  const seen = new Set();
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    const ref = String(node?.source_ref ?? "");
+    if (!ref || seen.has(ref)) continue;
+    const index = list.findIndex((citation, i) => String(citationOrdinal(citation, i)) === ref);
+    if (index === -1) continue;
+    seen.add(ref);
+    shown.push(list[index]);
+  }
+  return shown;
+}

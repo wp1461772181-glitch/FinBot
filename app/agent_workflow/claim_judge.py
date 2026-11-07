@@ -177,11 +177,11 @@ def _find_quote(quote: str, sources: Sequence[JudgeSource]) -> int | None:
     return None
 
 
-async def _default_call(model: Mapping[str, Any], system: str, user: str) -> tuple[dict, dict]:
+async def _default_call(model: Mapping[str, Any], system: str, user: str, *, reasoning_effort=None) -> tuple[dict, dict]:
     from app.agent_chat_provider import decision_request  # lazy: keeps this module import-light
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     return await decision_request(model["provider"], model["model"], model["api_key"], messages, [],
-                                  model.get("base_url"))
+                                  model.get("base_url"), reasoning_effort=reasoning_effort)
 
 
 def _elapsed_ms(started: float) -> int:
