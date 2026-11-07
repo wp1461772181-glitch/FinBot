@@ -41,6 +41,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from app.agent_workflow.flex_number_review import TECHNICAL, VERSION, review_offline  # noqa: E402
 from claim_replay_185 import HIDDEN, adjacent_contexts, load_items  # noqa: E402
 from run_trap_pack import load_items as load_trap_items  # noqa: E402
+from app.agent_chat_provider import _post, reasoning_options, MAX_OUTPUT_TOKENS  # noqa: E402
+
+async def replay_call(model, system, user):
+    body = {"model": model["model"], "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "max_tokens": MAX_OUTPUT_TOKENS, "stream": True, "temperature": 0}
+    body.update(reasoning_options(model["provider"]))
+    return await _post(model["provider"], model["api_key"], body, model.get("base_url"))
 
 POSITION_FIELDS = ("id", "figure", "responsibility", "kind", "relation", "status", "reason", "written_value",
                    "computed_value", "answer_sign", "selection", "source", "steps", "error_type", "explanation",
@@ -68,7 +74,7 @@ async def run_all(jobs, model, timeout, concurrency):
         async with sem:
             try:
                 result = await review_offline(job["text"], job["sources"], model, context=job["context"],
-                                              timeout=timeout)
+                                              timeout=timeout, call=replay_call, question=job.get("question", ""))
                 return record(job["key"], job["gold"], result, None)
             except Exception as exc:  # noqa: BLE001 - a replay row never aborts the run
                 return record(job["key"], job["gold"], None, type(exc).__name__)
@@ -97,7 +103,7 @@ def check_unique(jobs) -> None:
 
 def position_summary(rows: list[dict]) -> dict:
     positions = [p for r in rows for p in r["positions"]]
-    incomplete = Counter(p["reason"] for p in positions if p["status"] == "incomplete")
+    incomplete = Counter(p["reason"] for p in positions if p["status"] in ("incomplete", "doubt", "disagreement"))
     technical = sum(v for k, v in incomplete.items() if k in TECHNICAL)
     total = len(positions)
     return {"total": total, "incomplete": sum(incomplete.values()), "incomplete_rate": round(sum(incomplete.values()) / total, 4) if total else None,
@@ -179,9 +185,16 @@ async def main_async(args) -> None:
     if args.suite == "185":
         items = load_items(HIDDEN / "corpus185.json", HIDDEN / "gold-final.json")
         contexts = adjacent_contexts(items) if args.context == "adjacent" else {}
+        corpus = json.loads((HIDDEN / "corpus185.json").read_text())
+        pools, questions = {}, {}
+        for row in corpus:
+            turn = row['turn_id'][:8]
+            questions[turn] = row.get('question', '')
+            for ref, source in row['cited'].items():
+                pools.setdefault(turn, {})[str(ref)] = source['text']
         items = select_185(items, args.only)
         jobs = [{"key": {"turn": it["turn"], "idx": it["idx"]}, "gold": it["gold"], "text": it["text"],
-                 "sources": {str(s.ordinal): s.text for s in it["sources"]},
+                 "sources": pools[it["turn"]], "question": questions[it["turn"]],
                  "context": contexts.get((it["turn"], it["idx"]), "")} for it in items]
         check_unique(jobs)
         frozen = frozen_index(Path(args.frozen).expanduser() if args.frozen else None,
@@ -200,7 +213,7 @@ async def main_async(args) -> None:
         summary = summarize_trap(rows, frozen)
     items_view = [item_view(r) for r in rows] if args.suite == "185" else []
     Path(args.out).write_text(json.dumps({"review_version": VERSION, "model": args.model, "provider": args.provider,
-                                          "suite": args.suite, "only": args.only, "summary": summary,
+                                          "suite": args.suite, "only": args.only, "temperature": 0, "summary": summary,
                                           "items": items_view, "rows": rows},
                                          ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=1))
