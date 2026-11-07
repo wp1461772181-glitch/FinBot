@@ -3,8 +3,8 @@
 Offline tool: no database, no answer flow.  It reads the frozen corpus and gold (read-only) and applies the
 gold erratum (``.local/spec-gold-erratum.md``): 4af91120 idx4 and idx5 count as clean.  Each sentence goes
 through ``judge_claims``; a contradiction candidate then goes through ``review_candidate`` and an attribution
-candidate through ``review_attribution`` (the short review).  A sentence "opens the door" only when a
-candidate passes its short review, which is the public gate the spec describes.
+candidate through ``review_attribution`` (the short review).  A sentence "opens the door" when a contradiction candidate passes its short review.
+Attribution review passes are reported separately and do not open the production public gate.
 
 Usage:
     python scripts/claim_replay_185.py --model deepseek-flash --provider deepseek \
@@ -107,7 +107,6 @@ async def judge_item(item, model, sem, timeout_seconds, context=''):
             row.setdefault('attribution_reviews', []).append({'status': review['status'],
                                                               'passed': review['passed'],
                                                               'answers': review.get('answers')})
-            row['door_open'] = row['door_open'] or bool(review['passed'])
         return row
 
 
@@ -135,6 +134,8 @@ def summarize(rows, context_mode):
         'problem_missed_by_door': [f"{r['turn']}#{r['idx']}" for r in problems if not r['door_open']],
         'clean_door_open_list': [f"{r['turn']}#{r['idx']}" for r in cleans if r['door_open']],
         'contradiction_candidates': sum(1 for r in rows if r['verdict'] == 'contradiction' and r['quote_verified']),
+        'attribution_reviews_passed': sum(bool(a['passed']) for r in rows
+                                          for a in r.get('attribution_reviews', [])),
         'reviewed': len(reviewed),
         'reviewed_status': dict(Counter(r['review']['status'] for r in reviewed)),
         'reviewed_by_gold': dict(Counter(r['gold'] for r in reviewed)),
