@@ -3398,6 +3398,9 @@ async def run_direct_turn(question,context,*,emit,messages=None,state=None):
     # batched judge call, and any failure leaves the unverified lines as they are.
     from .number_review import settle as number_review_settle
     result=await number_review_settle(turn,result)
+    # Experimental final-answer review is private and cannot alter the production result.
+    from .flex_number_review import run_shadow as flex_number_shadow
+    await flex_number_shadow(turn,result)
     events=turn.audit.get('truncation_events') or []
     # Hints (polarity_conflict, event_not_in_source) are not unverified sentences: they are counted in the audit on their own.
     flagged=[item for item in turn.unverified_lines if not (isinstance(item,dict) and item.get('reason') in HINT_REASONS)]
