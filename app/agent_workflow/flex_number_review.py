@@ -17,6 +17,7 @@ import contextvars
 import copy
 import fcntl
 import json
+import inspect
 import os
 import re
 import time
@@ -41,7 +42,7 @@ RESPONSIBILITIES = {'current', 'historical', 'negated', 'hypothesis', 'premise'}
 # "answer_unit_unconfirmed" is not technical: the answer text itself states no unit, so a re-ask cannot change it.
 UNIT_REASONS = {'unit_span_unknown', 'unit_binding_unconfirmed', 'unit_not_comparable'}
 TECHNICAL = {'no_answer', 'responsibility_unconfirmed', 'binding_unconfirmed', 'span_id_unknown', 'sign_unconfirmed'} | (
-    UNIT_REASONS | {'calculation_unconfirmed', 'calculation_inputs_unknown', 'operands_missing', 'result_node_missing', 'answer_value_unconfirmed'})
+    UNIT_REASONS | {'calculation_unconfirmed', 'calculation_inputs_unknown', 'operands_missing', 'result_node_missing', 'answer_value_unconfirmed', 'quote_unverified', 'quote_value_unconfirmed'})
 # Challenge verdicts: a difference is kept only on "confirm"; "withdraw" and "unconfirmed" (or any failure) are not kept.
 CHALLENGE_VERDICTS = ('confirm', 'withdraw', 'unconfirmed')
 MINUS = '-−－'
@@ -106,6 +107,7 @@ PROMPT = '''核查最终答案中的数字。对 positions 里的每一个数字
 - 收到 receipt 时只重答其中的位置，并重新给出完整的 pairs。
 
 新增口径（优先于上述标记限制）：候选标记仅供定位，你可在任意来源自行选择逐字引文。direct 或 derived 叶子可用 source_ref、quote、value、quantum 代替 span；quote 必须是对应来源原文连续逐字片段，value 是结合上下文解释后的普通数值（百分比用小数），quantum 是该值展示精度。词形数也可以这样绑定。单位、方向、期间由你结合答案与来源判断；每一位置必须给出 answer_value 和 answer_quantum：答案数字结合上下文换算后的普通数值与展示精度（百分比用小数），以便与来源值处于同一口径；不确定就说明并选 insufficient/uncertain。允许使用任意来源、表头、结构化字段及 question 前提，可跨来源和多级计算；每一级提供绑定和算式。不要把用户前提误当外部事实。
+若材料可能包含对应证据但你尚未建立关系，填 evidence_likely=true 并说明；材料确实不足时不要填 true。relation_positions 列出所有位置以便检查跨批同量关系；只需对 positions 作答，pairs 可引用 relation_positions 中任意位置。
 输出 JSON：{"results": [对象...], "pairs": [...]}。'''
 
 
@@ -682,15 +684,34 @@ def _plain(result: Mapping) -> dict:
     return {k: v for k, v in result.items() if not k.startswith('_')}
 
 
-async def review_rounds(positions_all: list[dict], evidence: Evidence, model, *, base_payload: Mapping,
-                        call=None, timeout: float = 40.0, reserve=None, note=None) -> dict:
-    """The one review loop used by the shadow and by the offline replay.
+def _batches(positions_all: list[dict]) -> list[list[dict]]:
+    """Keep positions on a line together, including table rows and formulas."""
+    groups: list[list[dict]] = []
+    for p in positions_all:
+        if groups and groups[-1][0]['context'] == p['context']:
+            groups[-1].append(p)
+        else:
+            groups.append([p])
+    batches: list[list[dict]] = []
+    for group in groups:
+        if batches and len(batches[-1]) + len(group) <= 3:
+            batches[-1].extend(group)
+        else:
+            batches.append(list(group))
+    return batches
 
-    Round 0 answers every position.  Round 1 re-asks only the positions whose failure a re-ask can fix, with a
-    receipt (failure reason, previous selection, candidate IDs).  Positions that already reached a final status are
-    never re-judged.  The latest reply's pairs replace earlier pairs.  ``reserve`` (async, returns bool) gates every
-    provider call; ``note`` (async) receives each request, raw reply and parse before verification.
-    """
+
+async def _call_effort(call, model, system, user, effort):
+    func = call or _default_call
+    params = inspect.signature(func).parameters
+    if 'reasoning_effort' in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return await func(model, system, user, reasoning_effort=effort)
+    return await func(model, system, user)
+
+
+async def review_rounds(positions_all: list[dict], evidence: Evidence, model, *, base_payload: Mapping,
+                        call=None, timeout: float = 60.0, reserve=None, note=None) -> dict:
+    """Review independent batches under a shared row deadline, preserving completed results."""
     async def emit(kind, **data):
         if note is not None:
             await note(kind, **data)
@@ -698,58 +719,86 @@ async def review_rounds(positions_all: list[dict], evidence: Evidence, model, *,
     answer = str(base_payload.get('answer') or '')
     by_id_result: dict[int, dict] = {}
     pairs: list = []
-    targets = list(positions_all)
-    receipt: list[dict] = []
-    start = time.monotonic()
-    for attempt in range(2):
-        remaining = timeout - (time.monotonic() - start)
-        if remaining <= 0:
+    deadline = time.monotonic() + 300.0
+    budget_exhausted = False
+    all_public = [_public(p) for p in positions_all]
+    for batch in _batches(positions_all):
+        targets = batch
+        receipt = []
+        effort = 'low'
+        for attempt in range(2):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if reserve is not None and not await reserve():
+                budget_exhausted = True
+                break
+            request = {**base_payload, 'positions': [_public(p) for p in targets], 'relation_positions': all_public}
+            if receipt:
+                request['receipt'] = receipt
+            await emit('request', attempt=attempt, effort=effort, payload=request)
+            raw = None
+            usage = {}
+            status = 'ok'
+            try:
+                data, message = await asyncio.wait_for(
+                    _call_effort(call, model, PROMPT, json.dumps(request, ensure_ascii=False), effort),
+                    min(remaining, timeout if effort == 'low' else 120.0))
+                usage = data.get('usage', {}) if isinstance(data, Mapping) else {}
+                raw = message.get('content') if isinstance(message, Mapping) else None
+            except asyncio.TimeoutError:
+                status = 'timeout'
+            except Exception as exc:
+                status = 'provider_error:' + type(exc).__name__
+                if isinstance(getattr(exc, 'provider_status', None), int):
+                    status += ':http_' + str(exc.provider_status)
+            await emit('response', attempt=attempt, effort=effort, status=status, raw_response=raw, usage=usage)
+            parsed = _parse_reply(raw) if isinstance(raw, str) else None
+            replies = parsed.get('results', []) if isinstance(parsed, Mapping) else []
+            items = {_as_int(r.get('id')): r for r in replies if isinstance(r, Mapping)} if isinstance(replies, list) else {}
+            if isinstance(parsed, Mapping) and isinstance(parsed.get('pairs'), list):
+                ids = {p['id'] for p in targets}
+                if attempt:
+                    pairs = [pair for pair in pairs if not isinstance(pair, Mapping) or
+                             not ({_as_int(pair.get('a')), _as_int(pair.get('b'))} & ids)]
+                for pair in parsed['pairs']:
+                    if pair not in pairs:
+                        pairs.append(pair)
+            for p in targets:
+                by_id_result[p['id']] = {**verify(items.get(p['id'], {}), p, evidence), 'attempt': attempt}
+            await emit('parsed', attempt=attempt, parsed=parsed, results=[_plain(by_id_result[p['id']]) for p in targets])
+            if attempt:
+                break
+            retry = []
+            for p in targets:
+                result = by_id_result[p['id']]
+                item = items.get(p['id'], {})
+                reason = result['reason']
+                if status != 'ok' or parsed is None or reason in TECHNICAL or reason in {'quote_unverified', 'quote_value_unconfirmed'} or (reason in {'no_binding', 'relation_unconfirmed', 'insufficient_material'} and item.get('evidence_likely') is True):
+                    retry.append(p)
+            if not retry:
+                break
+            receipt = [_receipt(p, items.get(p['id'], {}), by_id_result[p['id']], evidence) for p in retry]
+            for entry in receipt:
+                if status != 'ok':
+                    entry['reason'] = status
+                elif items.get(entry['id'], {}).get('evidence_likely') is True:
+                    entry['reason'] = 'evidence_likely_relation_unestablished'
+            targets = retry
+            effort = 'low' if status != 'ok' or parsed is None else 'high'
+        if budget_exhausted:
             break
-        if reserve is not None and not await reserve():
-            return {'budget_exhausted': True, 'results': [_plain(r) for r in by_id_result.values()], 'pairs': [],
-                    'findings': [], 'pending_ids': [p['id'] for p in targets]}
-        request = {**base_payload, 'positions': [_public(p) for p in positions_all]}
-        if receipt:
-            request['receipt'] = receipt
-        await emit('request', attempt=attempt, payload=request)
-        raw = None
-        usage: dict = {}
-        status = 'ok'
-        try:
-            data, message = await asyncio.wait_for(
-                (call or _default_call)(model, PROMPT, json.dumps(request, ensure_ascii=False)),
-                min(remaining, timeout / 2) if attempt == 0 else remaining)
-            usage = data.get('usage', {}) if isinstance(data, Mapping) else {}
-            raw = message.get('content') if isinstance(message, Mapping) else None
-        except asyncio.TimeoutError:
-            status = 'timeout'
-        except Exception as exc:
-            status = 'provider_error:' + type(exc).__name__
-            if isinstance(getattr(exc, 'provider_status', None), int):
-                status += ':http_' + str(exc.provider_status)
-        await emit('response', attempt=attempt, status=status, raw_response=raw, usage=usage)
-        parsed = _parse_reply(raw) if isinstance(raw, str) else None
-        replies = parsed.get('results', []) if isinstance(parsed, Mapping) else []
-        items = {_as_int(r.get('id')): r for r in replies if isinstance(r, Mapping)} if isinstance(replies, list) else {}
-        if isinstance(parsed, Mapping) and isinstance(parsed.get('pairs'), list):
-            pairs = parsed['pairs']
-        by_position = {p['id']: p for p in positions_all}
-        for p in targets:
-            by_id_result[p['id']] = {**verify(items.get(p['id'], {}), by_position[p['id']], evidence), 'attempt': attempt}
-        await emit('parsed', attempt=attempt, parsed=parsed, results=[_plain(r) for r in by_id_result.values()])
-        retry = [p for p in positions_all if p['id'] in by_id_result
-                 and by_id_result[p['id']]['status'] == 'incomplete' and by_id_result[p['id']]['reason'] in TECHNICAL]
-        if not retry or attempt == 1:
-            break
-        receipt = [_receipt(p, items.get(p['id'], {}), by_id_result[p['id']], evidence) for p in retry]
-        targets = retry
+    for p in positions_all:
+        if p['id'] not in by_id_result:
+            by_id_result[p['id']] = {**verify({}, p, evidence), 'attempt': 0}
     pair_findings, pair_records = verify_pairs(pairs, by_id_result, answer)
     candidates = _candidates(by_id_result, pair_findings)
     if candidates:
-        verdicts = await _challenge(candidates, answer, model, call=call, timeout=timeout, reserve=reserve, emit=emit, base_payload=base_payload)
+        remaining = max(0.0, deadline - time.monotonic())
+        verdicts = await _challenge(candidates, answer, model, call=call, timeout=min(120.0, remaining), reserve=reserve, emit=emit, base_payload=base_payload)
         _apply_challenge(candidates, verdicts, by_id_result, pair_findings, pair_records)
     results = [by_id_result[k] for k in sorted(by_id_result)]
-    for result in by_id_result.values():
+    for result in results:
         if result['status'] == 'incomplete':
             result['status'] = 'doubt'
     position_findings = [{'reason': r['reason'], 'ids': [r['id']], 'error_type': r.get('error_type'),
@@ -757,11 +806,9 @@ async def review_rounds(positions_all: list[dict], evidence: Evidence, model, *,
                           'source': r.get('source'), 'context': r['context'], 'explanation': r.get('explanation'),
                           'challenge': r.get('challenge')}
                          for r in results if r['status'] == 'finding']
-    return {'budget_exhausted': False, 'results': [_plain(r) for r in results],
-            'findings': position_findings + [{k: v for k, v in f.items()} for f in pair_findings if f is not None],
-            'pairs': pair_records,
-            'pending_ids': [r['id'] for r in results if r['status'] in ('incomplete', 'doubt') and r['reason'] in TECHNICAL]}
-
+    return {'budget_exhausted': budget_exhausted, 'results': [_plain(r) for r in results],
+            'findings': position_findings + [dict(f) for f in pair_findings], 'pairs': pair_records,
+            'pending_ids': [r['id'] for r in results if r['status'] == 'doubt' and r['reason'] in TECHNICAL]}
 
 CHALLENGE_PROMPT = '''下面是对同一个答案的若干数字差异候选，每个都是此前判断得出的。请逐个复核，并给出三选一的结论。
 
@@ -820,8 +867,8 @@ async def _challenge(candidates: list[dict], answer: str, model, *, call, timeou
     await emit('challenge_request', payload=request)
     raw = None
     try:
-        data, message = await asyncio.wait_for((call or _default_call)(model, CHALLENGE_PROMPT,
-                                                                       json.dumps(request, ensure_ascii=False)), timeout)
+        data, message = await asyncio.wait_for(_call_effort(call, model, CHALLENGE_PROMPT,
+                                                                       json.dumps(request, ensure_ascii=False), 'high'), timeout)
         raw = message.get('content') if isinstance(message, Mapping) else None
     except Exception as exc:  # noqa: BLE001 - a failed challenge is not a verdict; the candidate is not kept
         await emit('challenge_response', raw_response=None, status='error:' + type(exc).__name__)
@@ -878,7 +925,7 @@ def _apply_challenge(candidates, verdicts, by_id_result, pair_findings, pair_rec
 
 
 async def review_offline(answer: str, sources: Mapping[str, str], model: Mapping, *, context: str = '',
-                         call=None, timeout: float = 40.0, note=None, question: str = '') -> dict:
+                         call=None, timeout: float = 60.0, note=None, question: str = '') -> dict:
     """Offline entry (replay gate): same positions, verification and retry as the shadow; no ledger, no budget.
 
     ``sources`` maps source_ref -> the frozen source text.  ``context`` is answer context for the model only.
@@ -908,7 +955,7 @@ async def review_offline(answer: str, sources: Mapping[str, str], model: Mapping
             'pending_ids': outcome['pending_ids'], 'trace': trace}
 
 
-async def run_shadow(turn: Any, result: dict, *, call=None, resolve=None, timeout: float = 40.0) -> None:
+async def run_shadow(turn: Any, result: dict, *, call=None, resolve=None, timeout: float = 60.0) -> None:
     """Review the delivered answer without mutating the turn or public result."""
     if os.environ.get('FLEX_NUMBER_SHADOW', 'off').lower() != 'on' or not getattr(turn, 'owner', False):
         return

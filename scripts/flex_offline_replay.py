@@ -43,9 +43,9 @@ from claim_replay_185 import HIDDEN, adjacent_contexts, load_items  # noqa: E402
 from run_trap_pack import load_items as load_trap_items  # noqa: E402
 from app.agent_chat_provider import _post, reasoning_options, MAX_OUTPUT_TOKENS, ProviderFailure  # noqa: E402
 
-async def replay_call(model, system, user):
+async def replay_call(model, system, user, *, reasoning_effort=None):
     body = {"model": model["model"], "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "max_tokens": MAX_OUTPUT_TOKENS, "stream": True, "temperature": 0}
-    body.update(reasoning_options(model["provider"]))
+    body.update(reasoning_options(model["provider"], reasoning_effort))
     for attempt in range(3):
         try:
             return await _post(model["provider"], model["api_key"], body, model.get("base_url"))
@@ -237,8 +237,8 @@ def main() -> None:
     p.add_argument("--key-env", default="OPENROUTER_API_KEY")
     p.add_argument("--env-file", default=None)
     p.add_argument("--out", required=True)
-    p.add_argument("--concurrency", type=int, default=4)
-    p.add_argument("--timeout", type=float, default=40.0)
+    p.add_argument("--concurrency", type=int, default=2)
+    p.add_argument("--timeout", type=float, default=60.0)
     p.add_argument("--context", choices=["adjacent", "none"], default="adjacent")
     args = p.parse_args()
     if args.suite == "trap" and not args.pack:
