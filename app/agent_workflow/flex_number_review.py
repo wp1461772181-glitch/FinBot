@@ -193,6 +193,75 @@ def compare_groups(groups, pos):
                 findings.append({'reason': 'same_quantity_difference', 'ids': [a, b], 'values': [str(pa[0]), str(pb[0])]})
     return findings
 
+async def review_rounds(pending, sources, model, *, base_payload, call=None, timeout=40.0, reserve=None, note=None):
+    """The one review loop used by the shadow and by the offline replay.
+
+    ``reserve`` (async, returns bool) gates every provider call; ``note`` (async) receives each record
+    before it is parsed, so an unparsed reply is durable first.  Neither changes the verdicts.
+    """
+    async def emit(kind, **data):
+        if note is not None:
+            await note(kind, **data)
+
+    results: dict = {}
+    groups: list = []
+    pending = list(pending)
+    start = time.monotonic()
+    for attempt in range(2):
+        remaining = timeout - (time.monotonic() - start)
+        if remaining <= 0:
+            break
+        if reserve is not None and not await reserve():
+            return {'budget_exhausted': True, 'results': list(results.values()), 'groups': groups,
+                    'pending_ids': [p['id'] for p in pending]}
+        request = {**base_payload, 'positions': pending, 'retry': attempt == 1}
+        await emit('request', attempt=attempt, payload=request)
+        raw = None
+        usage = {}
+        status = 'ok'
+        try:
+            data, message = await asyncio.wait_for((call or _default_call)(model, PROMPT, json.dumps(request, ensure_ascii=False)), min(remaining, timeout / 2) if attempt == 0 else remaining)
+            usage = data.get('usage', {}) if isinstance(data, Mapping) else {}
+            raw = message.get('content') if isinstance(message, Mapping) else None
+        except asyncio.TimeoutError:
+            status = 'timeout'
+        except Exception as exc:
+            status = 'provider_error:' + type(exc).__name__
+        await emit('response', attempt=attempt, status=status, raw_response=raw, usage=usage)
+        parsed = _json_object(raw) if isinstance(raw, str) else None
+        replies = parsed.get('results', []) if isinstance(parsed, Mapping) else []
+        by_id = {r.get('id'): r for r in replies if isinstance(r, Mapping) and isinstance(r.get('id'), int)} if isinstance(replies, list) else {}
+        if isinstance(parsed, Mapping) and isinstance(parsed.get('same_quantity_groups'), list):
+            groups.extend(parsed['same_quantity_groups'])
+        for position in pending:
+            results[position['id']] = verify(by_id.get(position['id'], {}), position, sources)
+        pending = [p for p in pending if results[p['id']]['status'] == 'incomplete']
+        await emit('parsed', attempt=attempt, parsed=parsed, results=list(results.values()))
+        if not pending:
+            break
+    return {'budget_exhausted': False, 'results': list(results.values()), 'groups': groups,
+            'pending_ids': [p['id'] for p in pending]}
+
+
+async def review_offline(answer: str, sources: Mapping[str, str], model: Mapping, *, context: str = '',
+                         call=None, timeout: float = 40.0) -> dict:
+    """Offline entry (replay gate): same positions, verification and retry as the shadow; no ledger, no budget.
+
+    ``sources`` maps source_ref -> the frozen source text.  ``context`` is answer context for the model only.
+    """
+    pos = positions(answer)[:80]
+    if not pos:
+        return {'results': [], 'findings': [], 'pending_ids': []}
+    base = {'answer': answer, 'positions': pos,
+            'sources': [{'source_ref': str(k), 'text': v} for k, v in sources.items()]}
+    if context:
+        base['context'] = context
+    outcome = await review_rounds(pos, {str(k): v for k, v in sources.items()}, model, base_payload=base,
+                                  call=call, timeout=timeout)
+    return {'results': outcome['results'], 'findings': compare_groups(outcome['groups'], pos),
+            'pending_ids': outcome['pending_ids']}
+
+
 async def run_shadow(turn: Any, result: dict, *, call=None, resolve=None, timeout: float = 40.0) -> None:
     """Review the delivered answer without mutating the turn or public result."""
     if os.environ.get('FLEX_NUMBER_SHADOW', 'off').lower() != 'on' or not getattr(turn, 'owner', False):
@@ -228,49 +297,21 @@ async def run_shadow(turn: Any, result: dict, *, call=None, resolve=None, timeou
             await asyncio.to_thread(append_turn, ledger, {**base, 'kind': 'final', 'status': 'model_unavailable'})
             return
         sources = {s['source_ref']: s['text'] for s in snapshots}
-        pending = payload['positions']
-        results = {}
-        groups = []
-        start = time.monotonic()
-        for attempt in range(2):
-            remaining = timeout - (time.monotonic() - start)
-            if remaining <= 0:
-                break
-            if not await asyncio.to_thread(_reserve_call, ledger):
-                await asyncio.to_thread(append_turn, ledger, {**base, 'kind': 'final', 'status': 'budget_exhausted',
-                                                               'pending_ids': [p['id'] for p in pending]})
-                return
-            request = {**payload, 'positions': pending, 'retry': attempt == 1}
-            await asyncio.to_thread(append_turn, ledger, {**base, 'kind': 'request', 'attempt': attempt, 'payload': request})
-            raw = None
-            usage = {}
-            status = 'ok'
-            try:
-                data, message = await asyncio.wait_for((call or _default_call)(model, PROMPT, json.dumps(request, ensure_ascii=False)), min(remaining, timeout / 2) if attempt == 0 else remaining)
-                usage = data.get('usage', {}) if isinstance(data, Mapping) else {}
-                raw = message.get('content') if isinstance(message, Mapping) else None
-            except asyncio.TimeoutError:
-                status = 'timeout'
-            except Exception as exc:
-                status = 'provider_error:' + type(exc).__name__
-            # The unparsed response must be durable before any parsing or finding.
-            await asyncio.to_thread(append_turn, ledger, {**base, 'kind': 'response', 'attempt': attempt,
-                                                           'status': status, 'raw_response': raw, 'usage': usage})
-            parsed = _json_object(raw) if isinstance(raw, str) else None
-            replies = parsed.get('results', []) if isinstance(parsed, Mapping) else []
-            by_id = {r.get('id'): r for r in replies if isinstance(r, Mapping) and isinstance(r.get('id'), int)} if isinstance(replies, list) else {}
-            if isinstance(parsed, Mapping) and isinstance(parsed.get('same_quantity_groups'), list):
-                groups.extend(parsed['same_quantity_groups'])
-            for position in pending:
-                results[position['id']] = verify(by_id.get(position['id'], {}), position, sources)
-            pending = [p for p in pending if results[p['id']]['status'] == 'incomplete']
-            await asyncio.to_thread(append_turn, ledger, {**base, 'kind': 'parsed', 'attempt': attempt,
-                                                           'parsed': parsed, 'results': list(results.values())})
-            if not pending:
-                break
-        final = {'results': list(results.values()), 'findings': compare_groups(groups, payload['positions']),
-                 'pending_ids': [p['id'] for p in pending], 'legacy_unverified_lines': payload['legacy_unverified_lines']}
-        await asyncio.to_thread(append_turn, ledger, {**base, 'kind': 'final', **final})
+
+        async def note(kind, **data):
+            await asyncio.to_thread(append_turn, ledger, {**base, 'kind': kind, **data})
+
+        async def reserve():
+            return await asyncio.to_thread(_reserve_call, ledger)
+
+        outcome = await review_rounds(payload['positions'], sources, model, base_payload=payload, call=call,
+                                      timeout=timeout, reserve=reserve, note=note)
+        if outcome['budget_exhausted']:
+            await note('final', status='budget_exhausted', pending_ids=outcome['pending_ids'])
+            return
+        final = {'results': outcome['results'], 'findings': compare_groups(outcome['groups'], payload['positions']),
+                 'pending_ids': outcome['pending_ids'], 'legacy_unverified_lines': payload['legacy_unverified_lines']}
+        await note('final', **final)
     except asyncio.CancelledError:
         raise
     except Exception:
