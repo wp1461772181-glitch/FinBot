@@ -93,7 +93,7 @@ def test_explicit_query_expander_is_used_when_provided(monkeypatch):
 
 
 def test_agent_loop_soft_time_budget_closing(monkeypatch):
-    """When decision_steps >= 1, citations is non-empty, and elapsed >= 180s,
+    """When decision_steps >= 1, citations is non-empty, and elapsed >= 300s,
     agent_loop exits with stop_reason='soft_time_budget_closing' and enters closing."""
     decide_count = 0
 
@@ -138,9 +138,9 @@ def test_agent_loop_soft_time_budget_closing(monkeypatch):
     monkeypatch.setattr(turn, "decision", fake_decide)
     monkeypatch.setattr(turn, "closing_answer", fake_closing)
 
-    # Simulate at least 1 decision step already completed, and elapsed time >= 180s
+    # Simulate at least 1 decision step already completed, and elapsed time >= 300s
     turn.audit["decision_steps"] = 1
-    turn.started = time.monotonic() - 185
+    turn.started = time.monotonic() - 305
 
     result = asyncio.run(turn.agent_loop())
 
@@ -154,8 +154,8 @@ def test_agent_loop_soft_time_budget_closing(monkeypatch):
     assert result.get("reason") == "soft_time_budget_closing"
 
 
-def test_agent_loop_does_not_soft_stop_when_elapsed_under_180s(monkeypatch):
-    """When elapsed < 180s, agent_loop does not trigger soft_time_budget_closing."""
+def test_agent_loop_does_not_soft_stop_when_elapsed_under_300s(monkeypatch):
+    """When elapsed < 300s, agent_loop does not trigger soft_time_budget_closing."""
     decide_count = 0
 
     async def fake_decide():
@@ -192,7 +192,7 @@ def test_agent_loop_does_not_soft_stop_when_elapsed_under_180s(monkeypatch):
     turn.started = time.monotonic() - 10  # Only 10s elapsed
 
     result = asyncio.run(turn.agent_loop())
-    assert decide_count == 1, "Should proceed to decision when under 180s"
+    assert decide_count == 1, "Should proceed to decision when under 300s"
     assert turn.audit.get("stop_reason") != "soft_time_budget_closing"
 
 
@@ -220,7 +220,7 @@ def test_agent_loop_does_not_soft_stop_without_citations(monkeypatch):
 
     monkeypatch.setattr(turn, "decision", fake_decide)
     turn.audit["decision_steps"] = 1
-    turn.started = time.monotonic() - 185  # Over 180s
+    turn.started = time.monotonic() - 305  # Over 300s
 
     result = asyncio.run(turn.agent_loop())
     # Two decisions: the first is a text answer with no tool and no evidence, so the M2 nudge asks once more with the facts.

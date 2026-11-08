@@ -31,6 +31,9 @@ MAX_INVALID_CALLS=6
 # the loop answers from the evidence it already holds.  A token_budget a caller passes still applies.
 SOFT_TURN_SECONDS=600
 SOFT_TURN_TOKENS=1_000_000
+# Once a turn already holds citations, gathering stops and the turn closes from that evidence past
+# this many seconds — a wait-control nudge, well below the soft/hard ceilings above.
+CLOSING_AFTER_SECONDS=300
 # A scheduled task stops gathering at its per-run cap; past this multiple of it no model call starts at all.
 TASK_HARD_CAP_FACTOR=1.5
 UNATTENDED_NOTE=('当前是所有者设定的定时任务，无人值守：只能用读取工具，本轮没有任何可直接执行或提出确认卡的写操作。'
@@ -3187,7 +3190,7 @@ class Turn:
         self.model_feedback_from=len(self.feedback)
         stop=None
         while not(stop or self.budget()):
-            if self.audit['decision_steps']>=1 and self.citations and (time.monotonic()-self.started)>=180:
+            if self.audit['decision_steps']>=1 and self.citations and (time.monotonic()-self.started)>=CLOSING_AFTER_SECONDS:
                 stop='soft_time_budget_closing'
                 self.audit['stop_reason']='soft_time_budget_closing'
                 break
