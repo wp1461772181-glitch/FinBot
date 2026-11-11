@@ -131,3 +131,65 @@ def test_reaching_the_target_writes_one_marker_and_judging_goes_on(shadow_env):
         assert not (shadow_env / "STOP").exists()
 
     asyncio.run(_run())
+
+
+# ---- WP0 step 11: the citation scores read legacy_review and say so ----------------------------
+
+from app import observability  # noqa: E402
+from app.agent_workflow.direct import run_direct_turn  # noqa: E402
+from app.agent_workflow.state import AgentRuntimeContext  # noqa: E402
+
+
+@pytest.fixture
+def traced(monkeypatch):
+    recorded = {'scores': [], 'metadata': []}
+    sentinel = object()
+    monkeypatch.setattr(observability, 'start_turn', lambda **_kwargs: sentinel)
+    monkeypatch.setattr(observability, 'score',
+                        lambda trace, name, value, *, comment=None: recorded['scores'].append((name, value, comment)))
+    monkeypatch.setattr(observability, 'end_trace',
+                        lambda trace, *, output=None, metadata=None, error=None: recorded['metadata'].append(metadata))
+    return recorded
+
+
+async def _emit(_event):
+    return None
+
+
+def _priced_turn(answer):
+    """A route D turn that reads one price row and answers with the given text."""
+    steps = iter([{'tool_calls': [{'id': 'price', 'function': {'name': 'query_stock_prices', 'arguments': '{"symbol":"AMD"}'}}]},
+                  {'content': answer}])
+    ctx = AgentRuntimeContext('custom', 'test', 'dummy', classifier=lambda _: 'D', decider=lambda *_: next(steps),
+                              executor=lambda *_: {'ok': True, 'data': [{'id': 'p', 'symbol': 'AMD', 'close': 100}]})
+    return asyncio.run(run_direct_turn('AMD 收盘价', ctx, emit=_emit))
+
+
+def test_legacy_sourced_scores_are_marked_legacy_and_code_side_counts_still_come(traced):
+    result = _priced_turn('AMD 收盘价为 999 美元 [1]。')
+    legacy = result['audit']['legacy_review']
+    names = {name for name, _value, _comment in traced['scores']}
+    # The code-side counts are still produced.
+    assert {'citation_verified', 'citation_unverified'} <= names
+    verified = next(value for name, value, _c in traced['scores'] if name == 'citation_verified')
+    assert verified == len(result['citations'])
+    # The unverified count is the one the legacy check gave.
+    flagged = [item for item in legacy['unverified_lines'] if item.get('reason') not in {'polarity_conflict', 'event_not_in_source',
+                                                                                       'number_read_from_source', 'number_computed'}]
+    expected = len(flagged) or len(legacy['issues'])
+    unverified = next(value for name, value, _c in traced['scores'] if name == 'citation_unverified')
+    assert unverified == expected
+    # The legacy marker is on the scores' trace: a score with the comment, and the trace metadata.
+    assert ('legacy_review', 1, 'legacy=True') in traced['scores']
+    assert traced['metadata'][-1].get('legacy') is True
+
+
+def test_a_turn_without_legacy_review_has_no_legacy_marker(traced, monkeypatch):
+    steps = iter([{'content': '你好，我可以帮你查看公司资料。'}])
+    ctx = AgentRuntimeContext('custom', 'test', 'dummy', classifier=lambda _: 'B', decider=lambda *_: next(steps))
+    result = asyncio.run(run_direct_turn('你好', ctx, emit=_emit))
+    assert 'legacy_review' not in result['audit']
+    names = {name for name, _value, _comment in traced['scores']}
+    assert 'citation_verified' in names
+    assert ('legacy_review', 1, 'legacy=True') not in traced['scores']
+    assert 'legacy' not in traced['metadata'][-1]

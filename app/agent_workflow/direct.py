@@ -3435,13 +3435,25 @@ async def run_direct_turn(question,context,*,emit,messages=None,state=None):
     try: flex_number_shadow(turn,result)
     except Exception: pass
     events=turn.audit.get('truncation_events') or []
-    # Hints (polarity_conflict, event_not_in_source) are not unverified sentences: they are counted in the audit on their own.
-    flagged=[item for item in turn.unverified_lines if not (isinstance(item,dict) and item.get('reason') in HINT_REASONS)]
-    observability.score_citation_audit(turn.obs,verified=len(turn.citations),unverified=len(flagged or turn.last_issues),unverified_lines=flagged,
-        truncation_events=len(events),insufficient=turn.audit.get('insufficient_evidence_lines'),scope=turn.audit.get('scope'))
+    # WP0 step 11: the legacy check's numbers come from audit.legacy_review; a turn without it (routes B and C, or a
+    # row stored before S0) keeps the top-level reads. Hints (polarity_conflict, event_not_in_source) are not unverified
+    # sentences: they are counted in the audit on their own.
+    legacy=turn.audit.get('legacy_review') if isinstance(turn.audit.get('legacy_review'),dict) else None
+    if legacy is not None:
+        flagged=[item for item in (legacy.get('unverified_lines') or []) if not (isinstance(item,dict) and item.get('reason') in HINT_REASONS)]
+        issues=list(legacy.get('issues') or [])
+        insufficient=legacy.get('insufficient_evidence_lines')
+    else:
+        flagged=[item for item in turn.unverified_lines if not (isinstance(item,dict) and item.get('reason') in HINT_REASONS)]
+        issues=turn.last_issues
+        insufficient=turn.audit.get('insufficient_evidence_lines')
+    observability.score_citation_audit(turn.obs,verified=len(turn.citations),unverified=len(flagged or issues),unverified_lines=flagged,
+        truncation_events=len(events),insufficient=insufficient,scope=turn.audit.get('scope'))
+    # Langfuse marks the scores that came from the legacy check, so a dashboard does not read them as user-visible counts.
+    if legacy is not None:observability.score(turn.obs,'legacy_review',1,comment='legacy=True')
     observability.end_trace(turn.obs,output=result.get('answer'),metadata={'status':result.get('status'),'reason':result.get('reason'),
         'model_calls':turn.audit.get('model_calls'),'tool_calls':turn.audit.get('tool_calls'),'token_usage':turn.audit.get('token_usage'),
-        'truncation_events':len(events),'truncation_sites':[e['site'] for e in events]})
+        'truncation_events':len(events),'truncation_sites':[e['site'] for e in events],**({'legacy':True} if legacy is not None else {})})
     # The graph closes here, once the turn has produced its last node.
     await turn.trace.finish(result)
     return {**result,'trace':turn.trace.nodes()}
