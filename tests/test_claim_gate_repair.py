@@ -44,5 +44,7 @@ def test_a_quote_that_does_not_match_word_for_word_is_delivered_without_a_repair
     assert seen == []
     assert result["status"] == "succeeded"
     assert result["answer"] == "Revenue was 16,128 [1]."
-    assert result["audit"]["claim_gate"]["drop_reasons"] == ["quote_not_found"]
-    assert result["audit"]["claim_gate"]["warned_lines"][0]["reason"] == "quote_not_found"
+    # S0: enforce is retired; the bad quote is recorded by the shadow gate and no line is dropped.
+    assert result["audit"]["claim_gate_retired"] == "enforce->shadow"
+    assert "claim_gate" not in result["audit"]
+    assert result["audit"]["claim_gate_shadow"]["drop_reasons"] == ["quote_not_found"]

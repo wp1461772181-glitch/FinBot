@@ -49,7 +49,8 @@ def test_a_failed_repair_records_the_provider_reason():
     turn.observations=[{'accepted_evidence':True}]
     turn.model=boom
     result=asyncio.run(turn.finish_answer('AMD 收盘价为999美元[1]'))
-    assert result['audit']['answer_repair_error']=='repair_unavailable:HTTPException:provider_timeout'
+    # S0: no repair round runs, so there is no repair error to record.
+    assert result['status']=='succeeded' and 'answer_repair_error' not in result['audit']
 
 def test_a_large_tool_result_keeps_the_rows_that_fit():
     from app.agent_chat_stream import bounded_tool_result

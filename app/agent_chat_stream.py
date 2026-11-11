@@ -531,10 +531,6 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
       # A revision card lists the materials to tick; the restored history shows the same card.
       if pending.get("options"):protocol["clarification"].update(options=pending["options"],select=pending.get("select"))
      if citation_sidecar:protocol["citations"]=citation_sidecar
-     # Lines the source check could not support stay in the answer; they are stored with the message so a
-     # reload shows the same flags.
-     unverified=event.get("unverified_lines") or []
-     if unverified:protocol["unverified_lines"]=unverified
      # Citation protocol v2: the issued nodes are the citation components; stored with the message so a reload keeps them.
      if event.get("citation_protocol")=="v2":protocol["citation_protocol"]="v2";protocol["citation_nodes"]=event.get("citation_nodes") or []
      if event.get("reason") in {"retrieval_unavailable","zero_evidence","web_page_excerpt_unavailable","missing_source_coverage","publisher_date_unavailable"} or str(event.get("reason","")).startswith(("requested_","weak_")):
@@ -556,7 +552,8 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
                           provider=chosen.provider,model=chosen.model,
                           api_key=chosen.key(),base_url=chosen.base_url)
      if restored:yield frame("citations",{"turn_id":turn,"items":_client_citations(restored)})
-     if unverified:yield frame("unverified_lines",{"turn_id":turn,"items":unverified})
+     # WP0 step 8: no unverified_lines frame. The check no longer produces them (audit.legacy_review holds its verdicts),
+     # and the replay projects the stored ones of older turns (legacy_projection).
      v2_fields={"citation_protocol":"v2","citation_nodes":protocol["citation_nodes"]} if protocol.get("citation_protocol")=="v2" else {}
      yield frame("done",{"conversation_id":cid,"turn_id":turn,"status":event.get("status","complete"),"reason":event.get("reason"),"thinking_ms":thinking_ms,**v2_fields})
    if not terminal:raise HTTPException(502,"workflow_incomplete")
@@ -671,11 +668,15 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
      trace["status"]="failed" if not result.get("ok") else "not_found" if isinstance(result.get("data"),list) and not result["data"] else "complete"
      break
  messages=[]
- for row in rows:
+ from .agent_workflow.legacy_projection import RETIRED_FLAG, project_rows
+ projected=await asyncio.to_thread(project_rows,rows)
+ for index,row in enumerate(rows):
   protocol=row.get("tool_calls")
   is_tool_request=bool(protocol.get("calls")) if isinstance(protocol,dict) else bool(protocol)
   if row.get("role")=="assistant" and not is_tool_request and (row.get("content") or row.get("status") in {"failed","cancelled"}):
-   item={"role":"assistant","content":row["content"],"status":row["status"],"turn_id":row["turn_id"]}
+   shown,retired=projected[index]
+   item={"role":"assistant","content":shown,"status":row["status"],"turn_id":row["turn_id"]}
+   if retired:item[RETIRED_FLAG]=True
    if isinstance(row.get("tool_calls"),dict) and isinstance(row["tool_calls"].get("audit"),dict):
     item["status"]=row["tool_calls"]["audit"].get("terminal_status",item["status"])
     item["reused_sources"]=row["tool_calls"]["audit"].get("reused_sources") is True
@@ -683,7 +684,6 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
    if isinstance(row.get("tool_calls"),dict):
     stored_protocol=row["tool_calls"]
     if isinstance(stored_protocol.get("trace"),list):item["trace"]=stored_protocol["trace"]
-    if isinstance(stored_protocol.get("unverified_lines"),list) and stored_protocol["unverified_lines"]:item["unverified_lines"]=stored_protocol["unverified_lines"]
     if stored_protocol.get("citation_protocol")=="v2":item["citation_protocol"]="v2";item["citation_nodes"]=stored_protocol.get("citation_nodes") or []
     # Older turns only know the audit's elapsed time; either one is what the reader counted.
     stored_audit=stored_protocol.get("audit")
@@ -1009,9 +1009,10 @@ async def list_inbox_endpoint(section: Literal["brief", "confirm"] | None = None
     """简报 (briefs and alerts, each with numbered sources; also posted in their bot's line) and 待你确认
     (writes an unattended run suggested), each with the bot it came from."""
     from .agent_tasks import list_inbox
+    from .agent_workflow.legacy_projection import project_inbox_items
     credential = _owner_only(x_chat_session)
-    return {"items": await asyncio.to_thread(list_inbox, owner_hash(credential), section=section, limit=limit,
-                                             bot_id=bot_id)}
+    items = await asyncio.to_thread(list_inbox, owner_hash(credential), section=section, limit=limit, bot_id=bot_id)
+    return {"items": await asyncio.to_thread(project_inbox_items, items)}
 
 
 @router.post("/inbox/{item_id}/status")

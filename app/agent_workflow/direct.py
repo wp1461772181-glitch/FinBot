@@ -2707,6 +2707,9 @@ class Turn:
 
     def finish(self,answer,*,status='succeeded',reason=None,generated=False):
         from .language import format_answer
+        from .claim_gate_flags import claim_gate_retirement
+        retired=claim_gate_retirement()
+        if retired:self.audit['claim_gate_retired']=retired
         self.unverified_lines=[]
         nodes=self.v2_nodes()
         if self.citation_protocol=='v2':
@@ -2763,8 +2766,9 @@ class Turn:
                     check_claims=require_citations=False;state_cited=None
             from .claim_gate_flags import (
                 claim_jev_max_per_turn, claim_jev_support_mode, claim_jev_support_threshold,
-                claim_quote_gate_mode, claim_quote_min_chars, legacy_prose_guards_enabled,
+                claim_quote_gate_mode, claim_quote_min_chars,
             )
+            from .claim_units import extract_claims_payload
             gate_mode=claim_quote_gate_mode()
             # The server's own words (a confirmed write's report, a consent reply) carry no claims and
             # cite nothing: enforcing would replace 「已保存《…营收增长 8%…》」 with 「无法与来源核实」 after the
@@ -2789,8 +2793,9 @@ class Turn:
                     support_threshold=claim_jev_support_threshold(),max_per_turn=claim_jev_max_per_turn(),
                 )
                 self.last_claim_issues=list(application.issues)
-                answer=application.prose
-                self.audit['claim_gate' if gate_mode=='enforce' else 'claim_gate_shadow']=application.audit
+                # The claims JSON is split off the visible text, as the shadow gate always did. Its verdicts no longer change the answer.
+                answer=extract_claims_payload(answer)[1]
+                self.audit['claim_gate_shadow']=application.audit
             # One verified set for the whole answer, handed to every line-level check so their verdicts agree.
             user_text=self.user_stated_text();closure_log=[]
             verified=answer_verified_figures(answer,self.citations,user_text=user_text,closure_log=closure_log)
@@ -2799,34 +2804,24 @@ class Turn:
             # What the number check looked at, so the figures it left alone can be read by hand (Langfuse).
             try:self.audit['scope']=answer_scope(answer,self.citations,user_text=user_text,verified=verified)
             except Exception as exc:self.audit['scope']={'error':type(exc).__name__}
-            if gate_mode=='enforce' and application is not None:
-                kept,issues=application.kept_prose,list(application.display_issues)
-                rejected=list(application.dropped_lines)
-                if legacy_prose_guards_enabled():
-                    _,legacy_issues=reviewed_answer(answer,self.citations,require_citations=require_citations,check_claims=check_claims,user_text=user_text,verified=verified)
-                    self.audit['legacy_guard_warnings']=list(legacy_issues)
-                    notes=application.audit['answer_quality_notes']
-                    notes['legacy_issue_count']=len(legacy_issues)
-                    notes['claim_drop_count']=len(application.dropped_lines)
-                    notes['legacy_disagreement']=bool(legacy_issues)!=bool(application.issues)
-            else:
-                kept,issues=reviewed_answer(answer,self.citations,require_citations=require_citations,check_claims=check_claims,user_text=user_text,verified=verified)
-                rejected=rejected_lines(answer,self.citations,require_citations=require_citations,check_claims=check_claims,user_text=user_text,verified=verified) if issues else []
-                if state_cited is not None and check_claims:
-                    # The scope exemptions are calibrated for prose about the world.  Narration of the
-                    # system's own actions is held to the state log in full (a clock time included), so
-                    # its rejected lines join the answer's: an unconfirmed receipt is flagged, not lost.
-                    seen={line for line,_ in rejected}
-                    for line,code in rejected_lines(state_cited,state_citation,require_citations=False,check_claims=True,user_text=user_text,verified=verified,state_check=True):
-                        plain=re.sub(r'\s*\[1\]','',line).strip()
-                        if plain and plain not in seen:
-                            rejected.append((plain,code));issues.append(code);seen.add(plain)
-                if application is not None:
-                    notes=application.audit['answer_quality_notes']
-                    notes['legacy_issue_count']=len(issues)
-                    notes['claim_drop_count']=len(application.issues)
-                    notes['legacy_disagreement']=bool(issues)!=bool(application.issues)
+            _,issues=reviewed_answer(answer,self.citations,require_citations=require_citations,check_claims=check_claims,user_text=user_text,verified=verified)
+            rejected=rejected_lines(answer,self.citations,require_citations=require_citations,check_claims=check_claims,user_text=user_text,verified=verified) if issues else []
+            if state_cited is not None and check_claims:
+                # The scope exemptions are calibrated for prose about the world.  Narration of the
+                # system's own actions is held to the state log in full (a clock time included), so
+                # its rejected lines join the answer's: an unconfirmed receipt is flagged, not lost.
+                seen={line for line,_ in rejected}
+                for line,code in rejected_lines(state_cited,state_citation,require_citations=False,check_claims=True,user_text=user_text,verified=verified,state_check=True):
+                    plain=re.sub(r'\s*\[1\]','',line).strip()
+                    if plain and plain not in seen:
+                        rejected.append((plain,code));issues.append(code);seen.add(plain)
+            if application is not None:
+                notes=application.audit['answer_quality_notes']
+                notes['legacy_issue_count']=len(issues)
+                notes['claim_drop_count']=len(application.issues)
+                notes['legacy_disagreement']=bool(issues)!=bool(application.issues)
             self.last_issues=list(issues)
+            self.last_rejected=rejected
             # Hints are not verdicts: a sentence that reads opposite to its source, or an event word beside a figure
             # the source does hold.  They never enter last_issues, the repair, the status or the footnote.
             hints=[]
@@ -2835,11 +2830,11 @@ class Turn:
                     from .evidence import claim_hints
                     hints=claim_hints(answer,self.citations,user_text=user_text,verified=verified)
                 except Exception as exc:self.audit['claim_hints_error']=type(exc).__name__
+            legacy_hints={}
             for hint_reason in ('polarity_conflict','event_not_in_source'):
                 items=[h for h in hints if h['reason']==hint_reason]
                 # Whole count, no cut: the hit rate is what a later stage scores.
-                if items:self.audit[hint_reason]={'count':len(items),'items':[{k:(v[:400] if isinstance(v,str) else v) for k,v in h.items() if k!='reason'} for h in items]}
-                else:self.audit.pop(hint_reason,None)
+                if items:legacy_hints[hint_reason]={'count':len(items),'items':[{k:(v[:400] if isinstance(v,str) else v) for k,v in h.items() if k!='reason'} for h in items]}
             shadow_mismatches=[]
             try:
                 from .evidence import shadow_entity_attribution_check
@@ -2849,44 +2844,16 @@ class Turn:
                 self.audit['shadow_entity_mismatches']=shadow_mismatches
             else:
                 self.audit.pop('shadow_entity_mismatches',None)
-            if issues:
-                from .answer_tidy import tidy_answer
-                self.last_rejected=rejected
-                self.audit['answer_issues']=issues
-                # "证据不完整" (a figure missing from a partial source) is its own count, never an unsupported number.
-                if 'insufficient_numeric_evidence' in issues:self.audit['insufficient_evidence_lines']=issues.count('insufficient_numeric_evidence')
-                else:self.audit.pop('insufficient_evidence_lines',None)
-                # What the check could not support, and why, so a flagged line can be diagnosed instead of guessed at.
-                self.audit['rejected_lines']=[{'line':line[:200],'reason':code} for line,code in self.last_rejected[:5]]
-                reason=issues[0]
-                if gate_mode=='enforce':
-                    # The CLAIM gate in enforce mode still drops its own lines (not changed here).
-                    kept=tidy_answer(kept)
-                    if kept:
-                        answer=kept+'\n\n（另有 %d 处表述未能与来源核对，已略去。）' % len(issues)
-                        status='partially_succeeded'
-                    else:
-                        answer='本次表述暂无法与来源核实，请缩小问题或补充资料。'
-                        status='failed'
-                else:
-                    # Annotate, never delete: the sentence stays as written and is reported as unverified.
-                    from .unverified import entries
-                    self.unverified_lines=entries(self.last_rejected,self.citations,user_text=user_text,verified=verified)
-                    self.audit['unverified_lines']=self.unverified_lines
-                    answer=answer.rstrip()+'\n\n（另有 %d 处表述未能与来源核对，已保留并标注“证据不足”。）' % len(self.last_rejected or issues)
-                    status='partially_succeeded'
-            elif gate_mode=='enforce' and application is not None:
-                answer=application.kept_prose
-            if hints:
-                # Shown beside the kept sentence through the same list as the unverified lines; a sentence that is
-                # already flagged keeps its own flag.
-                from .unverified import line_key
-                taken={line_key(item['line']) for item in self.unverified_lines}
-                for hint in hints:
-                    key=line_key(hint['line'])
-                    if key in taken:continue
-                    taken.add(key)
-                    self.unverified_lines.append({'line':hint['line'][:400],'reason':hint['reason'],'numbers':[],'ordinal':hint['ordinal'],'snippet':hint['snippet']})
+            # The legacy verdicts are kept for audit only. They never reach the answer, its status, its reason, or the
+            # unverified lines the user sees: self.unverified_lines stays empty.
+            from .unverified import entries
+            legacy_unverified=entries(self.last_rejected,self.citations,user_text=user_text,verified=verified) if issues else []
+            self.audit['legacy_review']={'version':'legacy-v1','scope':self.audit.get('scope'),'issues':list(issues),
+                'rejected_lines':[{'line':line[:200],'reason':code} for line,code in self.last_rejected[:5]],
+                'unverified_lines':legacy_unverified,
+                # Hints are not verdicts. They are recorded here and never shown as flags.
+                'hints':[{k:(v[:400] if isinstance(v,str) else v) for k,v in h.items()} for h in hints],
+                'insufficient_evidence_lines':issues.count('insufficient_numeric_evidence'),**legacy_hints}
         for marker in MARKERS:
             if marker in answer:answer=answer.replace(marker,'').strip()
         if not answer:answer='模型返回了无效工具协议，请重试。';reason='provider_protocol_invalid';status='failed'
@@ -2917,10 +2884,13 @@ class Turn:
         stripped=strip_invalid_markers(answer,self.citations)
         if stripped.strip():answer=stripped
         self.unverified_lines=[{**e,'line':strip_invalid_markers(e['line'],self.citations)} if isinstance(e,dict) and isinstance(e.get('line'),str) else e for e in self.unverified_lines]
+        legacy=self.audit.get('legacy_review')
+        if isinstance(legacy,dict):legacy['unverified_lines']=[{**e,'line':strip_invalid_markers(e['line'],self.citations)} if isinstance(e,dict) and isinstance(e.get('line'),str) else e for e in legacy['unverified_lines']]
         protocol_fields={}
         if self.citation_protocol=='v2':
             answer=strip_all_markers(answer)
             self.unverified_lines=[{**e,'line':strip_all_markers(e['line'])} if isinstance(e,dict) and isinstance(e.get('line'),str) else e for e in self.unverified_lines]
+            if isinstance(legacy,dict):legacy['unverified_lines']=[{**e,'line':strip_all_markers(e['line'])} if isinstance(e,dict) and isinstance(e.get('line'),str) else e for e in legacy['unverified_lines']]
             protocol_fields={'citation_protocol':'v2','citation_nodes':nodes}
         self.audit.update(stop_reason=reason,elapsed_ms=round((time.monotonic()-self.started)*1000))
         return {**protocol_fields,'answer':answer[:30000],'citations':self.citations,'status':status,'reason':reason,'route':self.route,
@@ -2936,6 +2906,8 @@ class Turn:
         async with self.trace.step('verify') as node:
             result=self.finish(answer)
             status,output=verify_output(result,self.last_issues,len(self.citations));await self.trace.end(node,status=status,output=output)
+        # S0 起不可达：修复回合、引用重绑（remap_citations / merge_repair）保留在下面但不再执行。
+        return result
         if result['reason'] not in REPAIRABLE or not (self.observations or self.system_state_text()) or self.pending or self.budget(soft=False):
             return result
         best=result;best_issues=list(self.last_issues);draft=answer;retry_note=False
@@ -3463,13 +3435,25 @@ async def run_direct_turn(question,context,*,emit,messages=None,state=None):
     try: flex_number_shadow(turn,result)
     except Exception: pass
     events=turn.audit.get('truncation_events') or []
-    # Hints (polarity_conflict, event_not_in_source) are not unverified sentences: they are counted in the audit on their own.
-    flagged=[item for item in turn.unverified_lines if not (isinstance(item,dict) and item.get('reason') in HINT_REASONS)]
-    observability.score_citation_audit(turn.obs,verified=len(turn.citations),unverified=len(flagged or turn.last_issues),unverified_lines=flagged,
-        truncation_events=len(events),insufficient=turn.audit.get('insufficient_evidence_lines'),scope=turn.audit.get('scope'))
+    # WP0 step 11: the legacy check's numbers come from audit.legacy_review; a turn without it (routes B and C, or a
+    # row stored before S0) keeps the top-level reads. Hints (polarity_conflict, event_not_in_source) are not unverified
+    # sentences: they are counted in the audit on their own.
+    legacy=turn.audit.get('legacy_review') if isinstance(turn.audit.get('legacy_review'),dict) else None
+    if legacy is not None:
+        flagged=[item for item in (legacy.get('unverified_lines') or []) if not (isinstance(item,dict) and item.get('reason') in HINT_REASONS)]
+        issues=list(legacy.get('issues') or [])
+        insufficient=legacy.get('insufficient_evidence_lines')
+    else:
+        flagged=[item for item in turn.unverified_lines if not (isinstance(item,dict) and item.get('reason') in HINT_REASONS)]
+        issues=turn.last_issues
+        insufficient=turn.audit.get('insufficient_evidence_lines')
+    observability.score_citation_audit(turn.obs,verified=len(turn.citations),unverified=len(flagged or issues),unverified_lines=flagged,
+        truncation_events=len(events),insufficient=insufficient,scope=turn.audit.get('scope'))
+    # Langfuse marks the scores that came from the legacy check, so a dashboard does not read them as user-visible counts.
+    if legacy is not None:observability.score(turn.obs,'legacy_review',1,comment='legacy=True')
     observability.end_trace(turn.obs,output=result.get('answer'),metadata={'status':result.get('status'),'reason':result.get('reason'),
         'model_calls':turn.audit.get('model_calls'),'tool_calls':turn.audit.get('tool_calls'),'token_usage':turn.audit.get('token_usage'),
-        'truncation_events':len(events),'truncation_sites':[e['site'] for e in events]})
+        'truncation_events':len(events),'truncation_sites':[e['site'] for e in events],**({'legacy':True} if legacy is not None else {})})
     # The graph closes here, once the turn has produced its last node.
     await turn.trace.finish(result)
     return {**result,'trace':turn.trace.nodes()}

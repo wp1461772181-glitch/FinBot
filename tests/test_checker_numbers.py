@@ -210,7 +210,8 @@ def test_a_turn_with_the_users_figure_in_its_history_is_not_flagged_for_restatin
     other.route = 'A'
     other.citations = [{'ordinal': 1, 'quote': '227.5', 'source_type': 'saved_price'}]
     flagged = other.finish('按你的 5 万美元和收盘价 227.5 [1]。')
-    assert flagged['status'] == 'partially_succeeded' and flagged['unverified_lines']
+    # S0: the flag is audit-only and does not change status or the visible lines.
+    assert flagged['status'] == 'succeeded' and flagged['unverified_lines']==[] and flagged['audit']['legacy_review']['unverified_lines']
 
 
 # --- F2: constants, the laundering guard, closure ----------------------------------------------------------

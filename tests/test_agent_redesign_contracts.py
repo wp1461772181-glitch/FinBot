@@ -28,8 +28,9 @@ def test_unregistered_citation_is_never_final_success():
     context=AgentRuntimeContext('custom','test','test',classifier=lambda _: 'D',decider=lambda *_:{'content':'Revenue 999 [99]'})
     result=asyncio.run(run_direct_turn('revenue',context,emit=_emit))
     # Never a clean success; the line stays and is reported instead of being deleted.
-    assert result['status']!='succeeded' and result['reason'] in {'invalid_citation','zero_evidence'}
-    assert result['unverified_lines'] or result['reason']=='zero_evidence'
+    # S0: the citation check no longer changes status or the visible lines; the rejected citation is recorded for audit.
+    assert result['status']=='succeeded' and result['unverified_lines']==[]
+    assert '[99]' not in result['answer'] and result['audit']['legacy_review']['issues']
 
 def test_operational_result_is_returned_as_success_to_the_next_native_decision():
     seen=[]
@@ -60,7 +61,9 @@ def test_numeric_claim_must_be_in_the_cited_evidence():
     decisions=iter([{'tool_calls':[{'id':'price','function':{'name':'query_stock_prices','arguments':'{"symbol":"AMD"}'}}]},{'content':'AMD 收盘价为 999 美元 [1]。'}])
     context=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=lambda *_:next(decisions),executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]})
     result=asyncio.run(run_direct_turn('AMD 收盘价',context,emit=_emit))
-    assert result['reason']=='unsupported_numeric_claim' and '999' in result['answer'] and result['unverified_lines']
+    # S0: the number check no longer sets the reason or the visible lines; it is recorded in the audit.
+    assert result['reason'] is None and '999' in result['answer'] and result['unverified_lines']==[]
+    assert 'unsupported_numeric_claim' in result['audit']['legacy_review']['issues']
 
 def test_unrelated_write_verb_does_not_authorize_an_import(monkeypatch):
     import app.agent_workflow.direct as direct
@@ -75,8 +78,9 @@ def test_price_citation_cannot_authorize_an_unrelated_executive_event():
     choices=iter([{'tool_calls':[{'id':'price','function':{'name':'query_stock_prices','arguments':'{"symbol":"AAPL"}'}}]},{'content':'苹果 CEO 已辞职。[1]'}])
     ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'A',decider=lambda *_:next(choices),executor=lambda name,args:{'ok':True,'data':[] if name=='search_knowledge' else [{'id':'p','symbol':'AAPL','close':100}]})
     result=asyncio.run(run_direct_turn('苹果今天的股价',ctx,emit=_emit))
-    assert result['status']=='partially_succeeded' and result['reason']=='unsupported_claim'
-    assert any('CEO' in x['line'] for x in result['unverified_lines'])
+    # S0: the claim check no longer sets status or the visible lines; the flagged sentence is kept in the audit.
+    assert result['status']=='succeeded' and result['unverified_lines']==[]
+    assert any('CEO' in x['line'] for x in result['audit']['legacy_review']['unverified_lines'])
 
 def test_rejected_success_body_is_not_in_sse_or_persistable_tool_events():
     events=[]
@@ -93,5 +97,5 @@ def test_rejected_closing_text_keeps_stagnation_partial_results(monkeypatch):
         decider=lambda *_:{'tool_calls':[{'id':'p','function':{'name':'query_stock_prices','arguments':'{"symbol":"AMD"}'}}]},
         executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]},answerer=lambda *_:'AMD CEO 辞职了 [1]。')
     result=asyncio.run(run_direct_turn('查 AMD 价格及其他目标',context,emit=_emit))
-    assert result['reason']=='no_progress' and result['status']=='partially_succeeded'
-    assert '[1]' in result['answer'] and any('CEO' in x['line'] for x in result['unverified_lines'])
+    assert result['reason']=='no_progress' and result['status']=='succeeded'
+    assert '[1]' in result['answer'] and result['unverified_lines']==[]

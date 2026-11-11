@@ -362,7 +362,7 @@ def test_counted_five_conditions_and_target_reached(monkeypatch, tmp_path: Path)
         maybe_schedule({"turn_id": "t4", "answer": "公司第四季度营收实现稳步增长 [1]。", "citations": [{"ordinal": 1, "quote": "revenue rose steadily", "source_type": "official_filing"}], "status": "succeeded"}, MagicMock(unattended=False), {})
         await asyncio.gather(*list(_TASKS))
 
-        # Turn 5: Already reached TARGET -> writes target_reached outcome once, does not call model
+        # Turn 5: Already reached TARGET -> the experiment marker is written once, and judging goes on (WP0 step 7)
         judge_called = False
 
         async def check_called(*args, **kwargs):
@@ -373,7 +373,7 @@ def test_counted_five_conditions_and_target_reached(monkeypatch, tmp_path: Path)
         set_test_judge_fn(check_called)
         maybe_schedule({"turn_id": "t5", "answer": "公司年度总营收实现稳步增长 [1]。", "citations": [{"ordinal": 1, "quote": "revenue rose steadily", "source_type": "official_filing"}], "status": "succeeded"}, MagicMock(unattended=False), {})
         await asyncio.gather(*list(_TASKS))
-        assert not judge_called
+        assert judge_called
 
         # Check JSONL records
         records = [json.loads(line) for line in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
@@ -381,13 +381,13 @@ def test_counted_five_conditions_and_target_reached(monkeypatch, tmp_path: Path)
         t2_rec = next(r for r in records if r["turn_id"] == "t2")
         t3_rec = next(r for r in records if r["turn_id"] == "t3")
         t4_rec = next(r for r in records if r["turn_id"] == "t4")
-        t5_rec = next(r for r in records if r["turn_id"] == "t5")
+        t5_outcomes = [r["outcome"] for r in records if r["turn_id"] == "t5"]
 
         assert t1_rec["counted"] is False  # All failed
         assert t2_rec["counted"] is True
         assert t3_rec["counted"] is False  # Duplicate answer_sha256
         assert t4_rec["counted"] is True
-        assert t5_rec["outcome"] == "target_reached"
+        assert t5_outcomes == ["experiment_target_reached", "judged"]
 
     asyncio.run(_run())
 

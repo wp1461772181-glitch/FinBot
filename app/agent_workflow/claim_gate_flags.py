@@ -5,7 +5,10 @@ this path cannot inherit the direction provider's 3×30s budget.
 """
 from __future__ import annotations
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 _MODES = {"off", "shadow", "enforce"}
 
@@ -13,6 +16,14 @@ _MODES = {"off", "shadow", "enforce"}
 def _mode(name: str, default: str = "off") -> str:
     value = (os.environ.get(name) or default).strip().lower()
     return value if value in _MODES else default
+
+
+def _log_claim_gate_retirement() -> None:
+    if _mode("CLAIM_QUOTE_GATE") == "enforce":
+        logger.warning("CLAIM_QUOTE_GATE=enforce is retired (S0): the claim quote gate runs as shadow.")
+
+
+_log_claim_gate_retirement()
 
 
 def _int(name: str, default: int, *, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -31,7 +42,14 @@ def _int(name: str, default: int, *, minimum: int | None = None, maximum: int | 
 
 
 def claim_quote_gate_mode() -> str:
-    return _mode("CLAIM_QUOTE_GATE")
+    """Enforce is retired (S0): a configured enforce runs as shadow, which never drops a line."""
+    mode = _mode("CLAIM_QUOTE_GATE")
+    return "shadow" if mode == "enforce" else mode
+
+
+def claim_gate_retirement() -> str | None:
+    """The audit marker for a retired mode: 'enforce->shadow' when the environment still asks for enforce."""
+    return "enforce->shadow" if _mode("CLAIM_QUOTE_GATE") == "enforce" else None
 
 
 def claim_jev_support_mode() -> str:

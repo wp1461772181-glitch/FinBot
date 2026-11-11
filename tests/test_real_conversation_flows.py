@@ -149,7 +149,8 @@ def test_a_figure_read_from_a_past_conversation_is_not_stated_without_a_fresh_re
     context = _context(conversation_id=str(main.conversation_id), bot_id=str(main.id), bot_is_default=True,
                        intent_recognizer=_route(), decider=lambda *_: next(steps))
     result = _turn("把研报那次说的英伟达收入告诉我", context)
-    assert result["unverified_lines"] and "467" in result["unverified_lines"][0]["line"] and not result["citations"]
+    # S0: the figure is still stated, with no citation; the flag is audit-only.
+    assert result["unverified_lines"]==[] and "467" in result["audit"]["legacy_review"]["unverified_lines"][0]["line"] and not result["citations"]
 
 
 def test_another_owners_conversation_cannot_be_read(owner):
@@ -279,12 +280,10 @@ def test_enforce_keeps_a_paraphrase_and_drops_only_the_unsupported_figure(owner,
 
     # Route A searches saved knowledge first (empty here), then the price the model asked for.
     assert executed[-1] == "query_stock_prices" and result["citations"]
-    assert "100 美元附近" in result["answer"]          # the reworded sentence is delivered
-    assert "5000" not in result["answer"]               # the figure no evidence holds is not
-    assert "evidence_quote" not in result["answer"] and "待核对" not in result["answer"]
-    gate = result["audit"]["claim_gate"]
-    assert "quote_not_found" in gate["drop_reasons"]     # the paraphrase is recorded, not cut
-    assert any(row["reason"] == "quote_not_found" for row in gate["warned_lines"])
+    # S0: enforce is retired, so nothing is cut. The shadow gate records the paraphrase's quote miss.
+    assert "100 美元附近" in result["answer"] and "evidence_quote" not in result["answer"] and "待核对" not in result["answer"]
+    assert result["audit"]["claim_gate_retired"] == "enforce->shadow" and "claim_gate" not in result["audit"]
+    assert "quote_not_found" in result["audit"]["claim_gate_shadow"]["drop_reasons"]
 
 
 def test_enforce_delivers_a_fully_paraphrased_answer_untouched(owner, monkeypatch):

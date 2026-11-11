@@ -25,7 +25,8 @@ def test_an_answer_about_the_research_queue_is_checked_against_the_queue_itself(
 def test_a_queue_answer_stating_a_figure_the_queue_does_not_is_still_checked():
     turn=_turn('研究队列里现在有哪些股票？');turn.route='D';turn.feedback=[QUEUE]
     result=turn.finish('研究队列当前有 3 只股票，合计市值 9,876 亿美元。')
-    assert '9,876' in result['answer'] and result['unverified_lines'][0]['numbers'][0].startswith('9,876')
+    assert '9,876' in result['answer'] and result['unverified_lines']==[]
+    assert result['audit']['legacy_review']['unverified_lines'][0]['numbers'][0].startswith('9,876')
 
 def test_execution_facts_name_the_operation_and_symbol_the_card_carried():
     assert direct.execution_facts(QUEUE_ADDED,ADD_MSFT['operations'])==[{'action':'add_to_research_queue','symbol':'MSFT','ok':True}]
@@ -55,7 +56,9 @@ def test_a_continuation_for_a_write_only_request_that_the_check_trims_gives_way_
     turn=_resuming('已保存。该新闻发布于 2026-10-14，正文 4,321 字 [1]。',executed)
     turn.state['previous_scope']={'symbol':'MSFT','requested_actions':['add_to_research_queue']}
     turn.state['pending_request']['original_question']='把 MSFT 加入研究队列'
-    assert asyncio.run(turn.resume_after_execution(QUEUE_ADDED,ADD_MSFT)) is None
+    # S0: the check no longer trims the continuation, so the continuation is returned instead of None.
+    result=asyncio.run(turn.resume_after_execution(QUEUE_ADDED,ADD_MSFT))
+    assert result is not None and result['status']=='succeeded' and result['unverified_lines']==[]
 
 def _reporting(answer):
     turn=_turn('confirm:tok',{'pending_request':{'id':'req-1','reason':'write_confirmation','original_question':'把第二条保存到资料库',

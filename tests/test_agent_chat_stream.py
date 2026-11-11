@@ -68,14 +68,10 @@ def test_invalid_citation_is_flagged_not_deleted_and_stored_for_replay(stream_fi
     send,classification,_,_,stored,_,decisions=stream_fixture;classification['category']='D';decisions.append({'content':'made up [99]'})
     events=frames(asyncio.run(send()));final=next(d for e,d in events if e=='done')
     # The sentence stays; the stream and the stored message carry it as an unverified line.
-    assert final['reason']=='invalid_citation' and 'made up' in ''.join(d.get('text','') for e,d in events)
-    flagged=next(d for e,d in events if e=='unverified_lines')['items']
-    assert flagged[0]['line'].startswith('made up') and flagged[0]['reason']=='invalid_citation'
-    protocol=next(k['tool_calls'] for _,k in stored if isinstance(k.get('tool_calls'),dict) and k['tool_calls'].get('unverified_lines'))
-    assert protocol['unverified_lines']==flagged
-    async def rows(*_a,**_k):return {'messages':[{'role':'assistant','content':'made up [99]','status':'complete','turn_id':'turn','tool_calls':protocol}],'has_more':False,'next_before':None}
-    monkeypatch.setattr(stream,'owned_message_page',rows)
-    assert asyncio.run(stream.get_messages('conversation','owner'))['messages'][0]['unverified_lines']==flagged
+    # S0: the check no longer flags the sentence to the reader or stores flags; the sentence is still delivered.
+    assert final['reason'] is None and 'made up' in ''.join(d.get('text','') for e,d in events)
+    assert not any(e=='unverified_lines' for e,_ in events)
+    assert not any(isinstance(k.get('tool_calls'),dict) and k['tool_calls'].get('unverified_lines') for _,k in stored)
 
 
 def test_ask_user_card_survives_sse_and_history(stream_fixture,monkeypatch):
@@ -210,3 +206,19 @@ def test_exception_after_terminal_citation_keeps_raw_manifest_not_restore_placeh
     saved=next(kwargs['tool_calls']['citations'] for _,kwargs in stored
         if kwargs.get('status')=='failed' and kwargs.get('tool_calls',{}).get('citations'))
     assert saved==original and saved[0]['source_type']=='official_filing'
+
+
+def test_the_realtime_stream_never_sends_an_unverified_frame_or_stores_one(stream_fixture, monkeypatch):
+    """WP0 step 8 regression guard: even when the workflow hands over unverified lines, the stream sends no
+    unverified_lines frame and stores none on the turn."""
+    import app.agent_chat_stream as stream
+    send,_,_,_,stored,_,_=stream_fixture
+    async def workflow(**_kwargs):
+        yield {"event":"delta","text":"AMD 收盘价为 100 美元 [1]。"}
+        yield {"event":"done","status":"succeeded","reason":None,"final_protocol":{},"audit":{},"citations":[],
+               "route":"A","trace":[],"unverified_lines":[{"line":"AMD 成交量为 999 万股 [1]。",
+                                                          "reason":"unsupported_numeric_claim","numbers":["999 万"]}]}
+    monkeypatch.setattr(stream,"stream_workflow",workflow)
+    wire=asyncio.run(send())
+    assert 'event: unverified_lines' not in wire and 'event: done' in wire
+    assert not any(isinstance(kwargs.get('tool_calls'),dict) and 'unverified_lines' in kwargs['tool_calls'] for _,kwargs in stored)

@@ -33,4 +33,5 @@ def test_the_audit_keeps_the_lines_the_check_removed():
     turn=direct.Turn('AMD 收盘价',AgentRuntimeContext('custom','test','dummy'),emit,[],{})
     turn.route='A';turn.citations=[{'ordinal':1,'quote':'100','source_type':'saved_price'}]
     result=turn.finish('AMD 收盘价为 100 美元 [1]。\nAMD 开盘价为 999 美元 [1]。')
-    assert result['audit']['rejected_lines']==[{'line':'AMD 开盘价为 999 美元 [1]。','reason':'unsupported_numeric_claim'}]
+    # S0: the audit keeps the check's removed line under legacy_review, not at the top level.
+    assert result['audit']['legacy_review']['rejected_lines']==[{'line':'AMD 开盘价为 999 美元 [1]。','reason':'unsupported_numeric_claim'}]

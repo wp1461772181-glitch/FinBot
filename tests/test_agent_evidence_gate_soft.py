@@ -108,9 +108,9 @@ def test_finish_answer_skips_repair_when_unsupported_number_has_no_holder():
     result = asyncio.run(turn.finish_answer('苹果 FY2025 营收为 999.9 亿美元 [1]。'))
     assert repair_calls == []
     assert turn.audit.get('answer_repair_count') is None
-    assert turn.audit.get('unsupported_numbers') == [999.9e8]
-    assert result['status'] == 'partially_succeeded'
-    assert any(item['reason'] == 'unsupported_numeric_claim' for item in result['unverified_lines'])
+    # S0: no repair round; the check is recorded for audit only and never changes status or the visible lines.
+    assert result['status'] == 'succeeded' and result['unverified_lines'] == []
+    assert 'unsupported_numeric_claim' in result['audit']['legacy_review']['issues']
 
 
 def test_closing_without_citation_marker_preserves_prose_and_appends_gathered_sources():
@@ -133,11 +133,11 @@ def test_closing_without_citation_marker_preserves_prose_and_appends_gathered_so
     turn.audit['token_usage'] = turn.token_cap() + 1
 
     result = asyncio.run(turn.agent_loop())
-    assert result['status'] == 'partially_succeeded'
+    assert result['status'] == 'succeeded'
     assert closing_prose in result['answer']
     assert 'AAPL · AAPL 10-K · 2025-10-31 [1]' in result['answer']
     assert '没能整理出能与来源逐条核对的回答' not in result['answer']
-    assert any(item['reason'] == 'missing_citation' for item in result['unverified_lines'])
+    assert result['unverified_lines'] == []
 
 
 def test_empty_closing_still_falls_back_to_unanswered_sources_list():

@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping, Sequence
 logger = logging.getLogger(__name__)
 
 # Constants and limits from spec §1, §3.4, §7.3
+# DEFAULT_TARGET_TURNS is the experiment report point (WP0 step 7): reaching it writes one marker, judging goes on.
 DEFAULT_TARGET_TURNS = 100  # Overridden default per user request (spec default was 200)
 DEFAULT_DAILY_CALLS = 600
 MAX_SENTENCES = 12
@@ -119,21 +120,47 @@ class ShadowTurn:
     identity_credential: str | None = field(repr=False)
 
 
-def _extract_code_flags(result: dict) -> dict:
-    audit = result.get("audit") if isinstance(result.get("audit"), Mapping) else {}
+def _truncate_list(items: Any, limit: int = 200) -> list[str]:
+    if not isinstance(items, (list, tuple)):
+        return []
+    res = []
+    for item in items:
+        if isinstance(item, Mapping):
+            text = str(item.get("sentence") or item.get("line") or item)
+        else:
+            text = str(item)
+        res.append(text[:limit])
+    return res
 
-    def _truncate_list(items: Any, limit: int = 200) -> list[str]:
-        if not isinstance(items, (list, tuple)):
-            return []
-        res = []
-        for item in items:
-            if isinstance(item, Mapping):
-                text = str(item.get("sentence") or item.get("line") or item)
-            else:
-                text = str(item)
-            res.append(text[:limit])
-        return res
 
+def _legacy_unverified_count(legacy: Mapping) -> int:
+    """How many unverified lines the user used to see: the rejected lines, then each hint whose sentence is
+    not already among them. The same count the visible list gave before S0 (lines up to 400 characters)."""
+    from .unverified import line_key
+
+    entries = [item for item in (legacy.get("unverified_lines") or []) if isinstance(item, Mapping)]
+    taken = {line_key(item.get("line")) for item in entries}
+    extra = set()
+    for hint in legacy.get("hints") or []:
+        if isinstance(hint, Mapping):
+            key = line_key(hint.get("line"))
+            if key not in taken:
+                extra.add(key)
+    return len(entries) + len(extra)
+
+
+def _legacy_code_flags(legacy: Mapping) -> dict:
+    issues = legacy.get("issues")
+    return {
+        "polarity_conflict": _truncate_list(legacy.get("polarity_conflict")),
+        "event_not_in_source": _truncate_list(legacy.get("event_not_in_source")),
+        "answer_issues": list(issues) if isinstance(issues, (list, tuple)) else [],
+        "unverified_lines": _legacy_unverified_count(legacy),
+    }
+
+
+def _top_level_code_flags(result: dict, audit: Mapping) -> dict:
+    """Rows stored before S0 kept these keys at the top of the audit (and the visible unverified list)."""
     unverified_count = 0
     if isinstance(result.get("unverified_lines"), (list, tuple)):
         unverified_count = len(result["unverified_lines"])
@@ -146,6 +173,16 @@ def _extract_code_flags(result: dict) -> dict:
         "answer_issues": list(audit.get("answer_issues") or []) if isinstance(audit.get("answer_issues"), (list, tuple)) else [],
         "unverified_lines": unverified_count,
     }
+
+
+def _extract_code_flags(result: dict) -> dict:
+    """The judge's code-side view of the legacy check: audit.legacy_review when the turn has it (S0 onward),
+    otherwise the top-level keys of a row stored before S0. Only the source moved; the counting is unchanged."""
+    audit = result.get("audit") if isinstance(result.get("audit"), Mapping) else {}
+    legacy = audit.get("legacy_review")
+    if isinstance(legacy, Mapping):
+        return _legacy_code_flags(legacy)
+    return _top_level_code_flags(result, audit)
 
 
 def maybe_schedule(result: dict, context: Any, state: Mapping[str, Any]) -> None:
@@ -235,6 +272,7 @@ async def _write_outcome_record(
     started_monotonic: float,
     selection: Any = None,
     judge_model_info: dict | None = None,
+    extra: dict | None = None,
 ) -> None:
     from .claim_shadow_store import append_turn
 
@@ -265,6 +303,9 @@ async def _write_outcome_record(
         "code_flags": snapshot.code_flags,
         "sentences": [],
     }
+
+    if extra:
+        record.update(extra)
 
     try:
         await asyncio.to_thread(append_turn, dir_path, record)
@@ -317,13 +358,17 @@ async def _run(snapshot: ShadowTurn) -> None:
         if os.path.exists(stop_path):
             return
 
-        if _COUNTED_TURNS >= target_turns:
-            if not _TARGET_REACHED_WRITTEN:
-                _TARGET_REACHED_WRITTEN = True
-                await _write_outcome_record(
-                    dir_path, snapshot, "target_reached", started_monotonic, selection=selection
-                )
-            return
+        # The target is the experiment's report point, not a stop: the marker is written once and judging goes on.
+        if _COUNTED_TURNS >= target_turns and not _TARGET_REACHED_WRITTEN:
+            _TARGET_REACHED_WRITTEN = True
+            await _write_outcome_record(
+                dir_path,
+                snapshot,
+                "experiment_target_reached",
+                started_monotonic,
+                selection=selection,
+                extra={"target_turns": target_turns, "counted_turns": _COUNTED_TURNS},
+            )
 
         if _CALLS_TODAY >= daily_calls:
             await _write_outcome_record(
