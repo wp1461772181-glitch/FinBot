@@ -617,6 +617,9 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
                       request_id=exc.request_id,retryable=exc.retryable)
    yield frame("error",diagnostic)
   finally:
+   # Stop the workflow with the consumer: a disconnected turn must not keep running. No await here; this task may be cancelled.
+   if pump_task is not None and not pump_task.done(): pump_task.cancel()
+   if getter is not None and not getter.done(): getter.cancel()
    release_resources()
  return _ResourceStreamingResponse(events(),media_type="text/event-stream",headers={"Cache-Control":"no-store","X-Accel-Buffering":"no"},background=BackgroundTask(release_resources),cleanup=release_resources)
 
