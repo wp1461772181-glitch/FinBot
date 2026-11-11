@@ -1,5 +1,4 @@
 """FP2: the earlier conversation the answering model sees follows its window, and a long answer is cut head+tail."""
-import asyncio
 import re
 import pytest
 from app.agent_workflow import direct, truncation
