@@ -22,7 +22,10 @@ def test_decider_sees_prior_turns_and_only_the_canonical_question():
     users=[m['content'] for m in messages if m['role']=='user']
     assert users[0]=='查 MSFT 最近一期年报的营业收入' and users[-1]=='MSFT 最近一期年报营业收入的同比变化'
     assert any(m['role']=='assistant' and m['content'].startswith('MSFT FY2026') for m in messages)
-    assert not any(m['role']=='system' and ('用户本轮原话' in m['content'] or '它同比怎么样？' in m['content']) for m in messages)
+    understanding=next(m['content'] for m in messages if m['role']=='system' and m['content'].startswith(direct.UNDERSTANDING_NOTE))
+    assert json.loads(understanding[len(direct.UNDERSTANDING_NOTE):])['user_original_words']=='它同比怎么样？'
+    assert not any(m['role']=='user' and '它同比怎么样？' in m['content'] for m in messages)
+    assert not any(m['role']=='system' and not m['content'].startswith(direct.UNDERSTANDING_NOTE) and ('用户本轮原话' in m['content'] or '它同比怎么样？' in m['content']) for m in messages)
     assert any(m['role']=='system' and 'MSFT 最近一期年报营业收入的同比变化' in m['content'] for m in messages)
 
 def test_result_catalogue_shows_what_each_earlier_item_said():
