@@ -119,21 +119,47 @@ class ShadowTurn:
     identity_credential: str | None = field(repr=False)
 
 
-def _extract_code_flags(result: dict) -> dict:
-    audit = result.get("audit") if isinstance(result.get("audit"), Mapping) else {}
+def _truncate_list(items: Any, limit: int = 200) -> list[str]:
+    if not isinstance(items, (list, tuple)):
+        return []
+    res = []
+    for item in items:
+        if isinstance(item, Mapping):
+            text = str(item.get("sentence") or item.get("line") or item)
+        else:
+            text = str(item)
+        res.append(text[:limit])
+    return res
 
-    def _truncate_list(items: Any, limit: int = 200) -> list[str]:
-        if not isinstance(items, (list, tuple)):
-            return []
-        res = []
-        for item in items:
-            if isinstance(item, Mapping):
-                text = str(item.get("sentence") or item.get("line") or item)
-            else:
-                text = str(item)
-            res.append(text[:limit])
-        return res
 
+def _legacy_unverified_count(legacy: Mapping) -> int:
+    """How many unverified lines the user used to see: the rejected lines, then each hint whose sentence is
+    not already among them. The same count the visible list gave before S0 (lines up to 400 characters)."""
+    from .unverified import line_key
+
+    entries = [item for item in (legacy.get("unverified_lines") or []) if isinstance(item, Mapping)]
+    taken = {line_key(item.get("line")) for item in entries}
+    extra = set()
+    for hint in legacy.get("hints") or []:
+        if isinstance(hint, Mapping):
+            key = line_key(hint.get("line"))
+            if key not in taken:
+                extra.add(key)
+    return len(entries) + len(extra)
+
+
+def _legacy_code_flags(legacy: Mapping) -> dict:
+    issues = legacy.get("issues")
+    return {
+        "polarity_conflict": _truncate_list(legacy.get("polarity_conflict")),
+        "event_not_in_source": _truncate_list(legacy.get("event_not_in_source")),
+        "answer_issues": list(issues) if isinstance(issues, (list, tuple)) else [],
+        "unverified_lines": _legacy_unverified_count(legacy),
+    }
+
+
+def _top_level_code_flags(result: dict, audit: Mapping) -> dict:
+    """Rows stored before S0 kept these keys at the top of the audit (and the visible unverified list)."""
     unverified_count = 0
     if isinstance(result.get("unverified_lines"), (list, tuple)):
         unverified_count = len(result["unverified_lines"])
@@ -146,6 +172,16 @@ def _extract_code_flags(result: dict) -> dict:
         "answer_issues": list(audit.get("answer_issues") or []) if isinstance(audit.get("answer_issues"), (list, tuple)) else [],
         "unverified_lines": unverified_count,
     }
+
+
+def _extract_code_flags(result: dict) -> dict:
+    """The judge's code-side view of the legacy check: audit.legacy_review when the turn has it (S0 onward),
+    otherwise the top-level keys of a row stored before S0. Only the source moved; the counting is unchanged."""
+    audit = result.get("audit") if isinstance(result.get("audit"), Mapping) else {}
+    legacy = audit.get("legacy_review")
+    if isinstance(legacy, Mapping):
+        return _legacy_code_flags(legacy)
+    return _top_level_code_flags(result, audit)
 
 
 def maybe_schedule(result: dict, context: Any, state: Mapping[str, Any]) -> None:
