@@ -519,7 +519,20 @@ async def _search(query: str, include_raw_content: bool = True, max_results: int
     return rows
 
 
+def _empty_meta(reason: str, span: int | None, found: int, undated: int) -> dict:
+    """Why a search that ran returned nothing, in terms the model can act on."""
+    suggestion = ("搜索后端有结果，但没有一条能确认发布在最近 %d 天内。可以放宽 days_back 重新搜索，或不带 days_back 搜索后自行核对日期。" % span
+                  if reason == "date_window" and span is not None else
+                  "搜索后端正常返回，但这个查询没有结果。可以换关键词、改用公司全名或代码，或放宽 days_back。")
+    return {"empty_reason": reason, "applied_window_days": span, "results_before_window": found,
+            "undated_left_out": undated, "widen_suggestion": suggestion,
+            "hint": "The search ran and found nothing usable; this is not a backend failure. Do not retry the same query unchanged."}
+
+
 async def _research(query_or_url: str, days_back: int | None = None, max_results: int = 5, company: str | None = None) -> dict:
+    from .agent_workflow.fp_flags import flag
+
+    fp8_enabled = flag("FINBOT_FP8_WEB_EMPTY", True)
     fetched_at = datetime.now(UTC)
     is_url = query_or_url.lower().startswith("https://")
     if is_url:
@@ -537,12 +550,17 @@ async def _research(query_or_url: str, days_back: int | None = None, max_results
     # freshness.py remains the bounded parser fallback for legacy direct callers.
     span = days_back if days_back is not None else window_days(query_or_url)
     if not is_url and span is not None:
+        found = len(candidates)
         # A span the user named ("半个月内"): the search backend's range is only the nearest one that holds it,
         # so what is older than the span, or cannot be dated, is left out.
         candidates = [item for item in candidates if item.get("published_at") is None or published_within(item.get("published_at"), span, fetched_at)]
         if not candidates:
-            return {"ok": True, "data": [], "source": "public web search and fetched page excerpts",
-                    "as_of": fetched_at.isoformat(), "error_code": None}
+            result = {"ok": True, "data": [], "source": "public web search and fetched page excerpts",
+                      "as_of": fetched_at.isoformat(), "error_code": None}
+            if fp8_enabled:
+                reason = "date_window" if found else "no_search_results"
+                result.update(status="not_found", meta=_empty_meta(reason, span, found, 0))
+            return result
     sources = []
     focus_query = None if is_url else query_or_url      # an exact URL read keeps its leading text
     started = time.monotonic()
@@ -596,8 +614,23 @@ async def _research(query_or_url: str, days_back: int | None = None, max_results
     # Pages that gave text come first (at most three); a failed one is reported only to fill the list.
     sources = ([source for source in sources if not source.get("fetch_error")][:max_results]
                + [source for source in sources if source.get("fetch_error")])[:max_results]
+    before = len(sources)
+    undated = sum(1 for row in sources if not isinstance(row.get("published_at"), str) or not row["published_at"].strip())
     if span is not None:
         sources=[r for r in sources if published_within(r.get("published_at"),span,fetched_at)]
+    if fp8_enabled:
+        if sources and all(row.get("fetch_error") for row in sources):
+            return {"ok": True, "data": sources,
+                    "source": "public web search and fetched page excerpts" if not is_url else "public webpage excerpt",
+                    "as_of": fetched_at.isoformat(), "error_code": None, "status": "partial",
+                    "meta": {"pages_failed": len(sources), "hint": "Pages were found but none of their bodies could be read. search_snippet is the search engine's own summary, not the page text."}}
+        if not sources and not is_url:
+            reason = "date_window" if span is not None and before > 0 else "no_search_results" if not candidates else None
+            if reason:
+                return {"ok": True, "data": [], "source": "public web search and fetched page excerpts",
+                        "as_of": fetched_at.isoformat(), "error_code": None, "status": "not_found",
+                        "meta": _empty_meta(reason, span, before if reason == "date_window" else 0,
+                                            undated if reason == "date_window" else 0)}
     return {"ok": bool(sources), "data": sources,
             "source": "public web search and fetched page excerpts" if not is_url else "public webpage excerpt",
             "as_of": fetched_at.isoformat(), "error_code": None if sources else "web_research_unavailable"}
