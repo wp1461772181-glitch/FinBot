@@ -2,9 +2,12 @@
 into the next turn as the question plus one system record of how it ended.  These tests pin the pure
 rules (which turns, which states, how many, how long), the layer_rows contract (the new key sits outside
 the layer budgets and changes no other key), and finally the stream wiring."""
+import asyncio
+
 import pytest
 
 from app import agent_context as layers
+from test_agent_chat_stream import stream_fixture  # noqa: F401  (the SSE fixture of the sibling module)
 
 
 def msg(turn, sequence, role, content="", status="complete"):
@@ -128,3 +131,46 @@ def test_a_turn_a_summary_already_covers_is_not_carried_again():
     result = layers.layer_rows(rows, segments, l1_bytes=4096, l2_bytes=4096, l3_bytes=4096)
 
     assert states(result["unfinished"]) == [("Y", "cancelled")]
+
+
+def messages_after_a_cancelled_question(stream_fixture, monkeypatch, message="再试一次"):
+    """Drive the real stream once after a stored complete turn and a cancelled one.  The stored rows are
+    what the stream would read: the new question is already stored before the context is read."""
+    import app.agent_chat_stream as stream
+    send, _, _, _, stored, _, _ = stream_fixture
+    prior = [ask("A", 1, "苹果的营收是多少"), answer("A", 2, "complete", "约 3900 亿美元 [1]"),
+             ask("B", 3, "英伟达 10-Q 的营收"), answer("B", 4, "cancelled")]
+
+    async def saved(*_args, **_kwargs):
+        turn, text = next((args[1], args[3]) for args, _ in reversed(stored) if len(args) > 3 and args[2] == "user")
+        return layers.layer_rows(prior + [ask(turn, 5, text)], [])
+    monkeypatch.setattr(stream, "conversation_context", saved)
+
+    sent = []
+    original = stream.stream_workflow
+
+    async def recording(**kwargs):
+        sent.append(list(kwargs["messages"]))
+        async for event in original(**kwargs):
+            yield event
+    monkeypatch.setattr(stream, "stream_workflow", recording)
+
+    asyncio.run(send(message))
+    return [(m["role"], m["content"]) for m in sent[0]]
+
+
+def test_a_cancelled_question_reaches_the_workflow_as_question_then_record_before_the_new_one(stream_fixture, monkeypatch):
+    contents = messages_after_a_cancelled_question(stream_fixture, monkeypatch)
+
+    before = contents.index(("user", "英伟达 10-Q 的营收"))
+    assert contents[before + 1] == ("assistant", layers.UNFINISHED_NOTES["cancelled"])
+    assert contents.index(("user", "再试一次")) > before + 1
+
+
+def test_the_switch_off_sends_the_same_messages_as_before(stream_fixture, monkeypatch):
+    monkeypatch.setenv("FINBOT_FP3_UNFINISHED_TURNS", "off")
+
+    contents = messages_after_a_cancelled_question(stream_fixture, monkeypatch)
+
+    assert ("user", "英伟达 10-Q 的营收") not in contents
+    assert ("assistant", layers.UNFINISHED_NOTES["cancelled"]) not in contents
