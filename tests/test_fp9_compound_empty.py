@@ -124,9 +124,10 @@ def capture_feedback(monkeypatch):
 
 EMPTY = lambda n, a: {'ok': True, 'data': []}
 
-# A two-search turn that finds nothing, then a draft: the case the note is for.
+# A two-search turn that finds nothing, then a draft: the case the note is for.  The two searches must differ after
+# validation (validate fills in limit=5, so a second call with limit=5 would be a replay, not a second search).
 TWO_EMPTY_THEN_DRAFT = lambda: [call('query_stock_prices', symbol='AMD'),
-                                call('query_stock_prices', symbol='AMD', limit=5),
+                                call('query_stock_prices', symbol='AMD', days=30),
                                 text('AMD 收盘价为 100 美元 [1]。')]
 
 
@@ -197,7 +198,7 @@ def test_public_search_states_and_the_scope_cap():
 
 def test_two_empty_searches_and_a_draft_get_one_note_before_the_next_decision():
     seen = []
-    ctx = AgentRuntimeContext('custom', 'test', 'dummy', classifier=classify(mode='none'),
+    ctx = AgentRuntimeContext('custom', 'test', 'dummy', classifier=classify(mode='none', load_hint=[NEWS_CATEGORY]),
                               decider=scripted(TWO_EMPTY_THEN_DRAFT() + [text('')], seen), executor=EMPTY)
     result = run('AMD 收盘价', ctx)
     assert len(note_messages(seen)) == 1
@@ -227,7 +228,8 @@ def test_a_public_search_after_the_note_with_a_usable_source_answers_normally(mo
     assert result['status'] == 'succeeded'
     assert '处理器产品线' in result['answer']
     assert refusal_seen == []                            # the refusal verdict was never asked for
-    assert len(note_messages(seen)) == 1
+    # The note is added once and then kept in the protocol, so it rides every input after the draft and no other.
+    assert [carries(m, NOTE_MARK) for m in seen] == [0, 0, 0, 1, 1]
 
 
 # 6. the note, then the model still calls no tool -> the refusal is told what was searched and that no public search ran.
@@ -236,7 +238,7 @@ def test_a_refusal_after_the_note_is_told_what_was_searched_and_that_no_public_s
     refusal, refusal_seen = refusal_model(FIXED_NOTICE)
     monkeypatch.setattr(direct, 'decision_request', refusal)
     seen = []
-    ctx = AgentRuntimeContext('custom', 'test', 'dummy', classifier=classify(mode='none'),
+    ctx = AgentRuntimeContext('custom', 'test', 'dummy', classifier=classify(mode='none', load_hint=[NEWS_CATEGORY]),
                               decider=scripted(TWO_EMPTY_THEN_DRAFT() + [text('仍然没有工具')], seen), executor=EMPTY)
     run('AMD 收盘价', ctx)
     assert len(note_messages(seen)) == 1                 # the note did not come a second time
@@ -312,7 +314,7 @@ def test_switch_off_restores_the_prior_behaviour(monkeypatch):
     refusal, refusal_seen = refusal_model(FIXED_NOTICE)
     monkeypatch.setattr(direct, 'decision_request', refusal)
     seen = []
-    ctx = AgentRuntimeContext('custom', 'test', 'dummy', classifier=classify(mode='none'),
+    ctx = AgentRuntimeContext('custom', 'test', 'dummy', classifier=classify(mode='none', load_hint=[NEWS_CATEGORY]),
                               decider=scripted(TWO_EMPTY_THEN_DRAFT() + [text('仍然没有工具')], seen), executor=EMPTY)
     result = run('AMD 收盘价', ctx)
     assert note_messages(seen) == [] and result['audit'].get('compound_empty_noted') is None

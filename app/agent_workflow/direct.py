@@ -589,6 +589,8 @@ EMPTY_CLOSE_NOTE=('系统事实：你上一步没有产出正文。本轮已取�
 SEARCH_SCOPE_CLAUSE=('facts.searched lists each source this turn queried and how it ended; facts.public_search says whether a public web search ran. '
     'In reply, state the limitation as what this turn searched and that nothing usable was found there; when public_search is not_run, failed or pages_unreadable, say that as well. '
     'Never say or imply that the information does not exist or was never published. ')
+# FP9 (D-F2, verbatim): told once, after two empty searches of the model's own and no public web search, before a refusal.
+COMPOUND_EMPTY_NOTE=('系统事实：本轮你查询的来源都没有取得可用资料：{searched}。其中没有公开网页检索。已保存的数据里查不到，不等于公开信息不存在。你可以调用 web_research 做一次有针对性的公开检索；如果判断不需要，就直接向用户说明本轮查了哪些来源、没有查什么，不要断言这个信息不存在。')
 # A sentence that says a named past or present date is still ahead.  Negated phrases are not claims.
 FUTURE_PHRASES=('尚未到来','还未到来','未到来','还没到','尚未到','还没有到','未来','将来','尚未发生','还没发生','未发生','还没有发生',
     'not yet','hasn\'t arrived','has not arrived','yet to come','in the future','has not happened','hasn\'t happened','has yet to')
@@ -3305,6 +3307,15 @@ class Turn:
                         self.audit['nudged_draft']=content[:DRAFT_COPY_LIMIT]
                         self.protocol.append({'role':'system','content':NUDGE_NOTE.format(tools='、'.join(t['function']['name'] for t in self.exposed_tools()))})
                         continue
+                    # FP9: the model's own searches came back empty twice and no public web search ran.  It is told once what was
+                    # searched and may search publicly; nothing is forced, and if it still makes no call the refusal follows as before.
+                    if flag('FINBOT_FP9_COMPOUND_EMPTY',True) and not self.audit.get('compound_empty_noted'):
+                        mine=search_scope(self.feedback[self.model_feedback_from:])
+                        if sum(1 for item in mine if item['outcome'] in {'empty','failed'})>=2 and public_search_state(self.feedback)=='not_run' and 'web_research' in {t['function']['name'] for t in self.exposed_tools()}:
+                            self.audit['compound_empty_noted']=True
+                            if content.strip():self.audit['compound_empty_draft']=content[:DRAFT_COPY_LIMIT]
+                            self.protocol.append({'role':'system','content':COMPOUND_EMPTY_NOTE.format(searched=json.dumps(mine,ensure_ascii=False,default=str))})
+                            continue
                     if self.audit.get('nudged') and self.audit.get('nudge_outcome') is None:self.audit['nudge_outcome']='failed'
                     if content.strip():self.audit['discarded_draft']=content[:DRAFT_COPY_LIMIT]
                     # Nothing was gathered, so there is nothing to substantiate: report the absence in
