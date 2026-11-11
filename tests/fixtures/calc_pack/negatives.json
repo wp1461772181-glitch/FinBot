@@ -1,0 +1,16 @@
+[
+  {"text":"Synthetic multiple: 345x.","must_not_bind":["34"],"may_bind":["345"]},
+  {"text":"Synthetic multiple: 401.21x.","must_not_bind":["401.2"],"may_bind":["401.21"]},
+  {"text":"Synthetic source says 42; a claimed span instead says 99.","must_not_bind":["99"],"may_bind":["42"]},
+  {"text":"Synthetic ordinal 1 says 10; ordinal 2 says 20. Claim 20 from ordinal 1.","must_not_bind":["20@1"],"may_bind":["10@1","20@2"]},
+  {"text":"Synthetic prior result is 12; a modified prior result claims 13.","must_not_bind":["13"],"may_bind":["12"]},
+  {"text":"Synthetic entity A in 2024 has 7; entity B in 2025 also has 7. Claim B's value as A's 2025 value.","must_not_bind":["7@A-2025"],"may_bind":["7@A-2024","7@B-2025"]},
+  {"text":"Synthetic amount 1.2T.","must_not_bind":["1"],"may_bind":["1.2"]},
+  {"text":"Synthetic spread 35bps.","must_not_bind":["3"],"may_bind":["35"]},
+  {"text":"Synthetic rate 8.5pct.","must_not_bind":["8"],"may_bind":["8.5"]},
+  {"text":"Synthetic amount 1.2w.","must_not_bind":["1"],"may_bind":["1.2"]},
+  {"text":"Synthetic period 2025Q4.","must_not_bind":["2025","4"],"may_bind":[]},
+  {"text":"Synthetic multiple 12.5x.","must_not_bind":["12"],"may_bind":["12.5"]},
+  {"text":"Synthetic spread 100bp.","must_not_bind":["10"],"may_bind":["100"]},
+  {"text":"Synthetic change 4.5pp.","must_not_bind":["4"],"may_bind":["4.5"]}
+]
