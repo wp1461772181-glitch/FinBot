@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, hashlib, json, uuid, time
+import asyncio, hashlib, json, logging, uuid, time
 from urllib.parse import urlsplit
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -22,6 +22,7 @@ HEARTBEAT_SECONDS=15
 HEARTBEAT_FRAME=": hb\n\n"
 # Strong references to the detached cancelled-turn writes, so they are not collected before they finish.
 _BACKGROUND: set=set()
+log=logging.getLogger(__name__)
 MAX_PROTOCOL_BYTES=32000
 MAX_TOOL_CALLS=5
 MAX_DECISION_STEPS=6
@@ -422,6 +423,14 @@ class _Model:
  def __init__(self,provider,model,api_key,base_url,window=None):self.provider=provider;self.model=model;self.base_url=base_url;self._key=api_key;self.window=window or layers.WINDOW_TOKENS
  def key(self):return self._key
  def __repr__(self):return f"_Model({self.provider!r}, {self.model!r})"
+async def _record_cancelled(cid,turn,owner,text_out,citation_sidecar):
+ # The three writes of a cancelled turn, in order. Each is isolated, so one failure does not skip the rest.
+ try: await append_message(cid,turn,"assistant",text_out,status="cancelled",tool_calls={"citations":citation_sidecar} if citation_sidecar else None)
+ except Exception: log.exception("cancelled turn: appending the partial answer failed (cid=%s turn=%s)",cid,turn)
+ try: await finish_conversation(cid,"cancelled")
+ except Exception: log.exception("cancelled turn: finishing the conversation failed (cid=%s)",cid)
+ try: await mark_terminal_status(owner,cid,"cancelled",text_out)
+ except Exception: log.exception("cancelled turn: marking the terminal status failed (cid=%s)",cid)
 @router.post("/stream")
 async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|None=Header(default=None)):
  if not x_chat_session or len(x_chat_session)<32 or len(x_chat_session)>256: raise HTTPException(401,"chat_session_required")
@@ -597,10 +606,9 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      yield frame("done",{"conversation_id":cid,"turn_id":turn,"status":event.get("status","complete"),"reason":event.get("reason"),"thinking_ms":thinking_ms,**v2_fields})
    if not terminal:raise HTTPException(502,"workflow_incomplete")
   except asyncio.CancelledError:
-   await asyncio.shield(append_message(cid,turn,"assistant",text_out,status="cancelled",
-       tool_calls={"citations":citation_sidecar} if citation_sidecar else None))
-   await asyncio.shield(finish_conversation(cid,"cancelled"))
-   await asyncio.shield(mark_terminal_status(owner_hash(x_chat_session),cid,"cancelled",text_out))
+   # The writes run in their own task: this one is being cancelled, and its awaits would be cancelled again (R-5 probe).
+   task=asyncio.create_task(_record_cancelled(cid,turn,owner_hash(x_chat_session),text_out,citation_sidecar))
+   _BACKGROUND.add(task); task.add_done_callback(_BACKGROUND.discard)
    raise
   except Exception as exc:
    restored=_restore_citations(citation_sidecar,x_chat_session) if citation_sidecar else []
