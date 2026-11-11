@@ -1,5 +1,6 @@
 """FP2: the earlier conversation the answering model sees follows its window, and a long answer is cut head+tail."""
 import asyncio
+import pytest
 from app.agent_workflow import direct, truncation
 from app.agent_workflow.state import AgentRuntimeContext
 from app import agent_context as layers
@@ -7,6 +8,15 @@ from app import agent_context as layers
 
 async def emit(_):
     pass
+
+
+@pytest.fixture(autouse=True)
+def _window_on(monkeypatch):
+    monkeypatch.setenv('FINBOT_FP2_PRIOR_WINDOW', 'on')
+
+
+def _turn(messages, question='它呢？', **ctx_kwargs):
+    return direct.Turn(question, _ctx(**ctx_kwargs), emit, messages, {})
 
 
 def _ctx(**kwargs):
@@ -39,3 +49,63 @@ def test_cut_head_tail_keeps_the_real_end_of_the_text_not_the_whole_text():
     head, marker, tail = cut.split('\n')
     assert head == 'H' * 485 and tail == 'T' * 485
     assert marker == '…（中间省略 19030 字）…'
+
+
+# --- group 1: the newest answer, too long for the budget, keeps its head and tail -------------------
+
+def test_a_long_newest_answer_keeps_its_head_and_tail_within_the_budget():
+    answer = '前' * 100 + '中' * 19800 + '后' * 100          # 20000 characters, 60000 bytes > the 48000 budget
+    turn = _turn([{'role': 'user', 'content': '查 AMD'}, {'role': 'assistant', 'content': answer},
+                  {'role': 'user', 'content': '它呢？'}])
+    prior = turn.prior_turns()
+    kept = [m for m in prior if m['role'] == 'assistant']
+    assert len(kept) == 1
+    content = kept[0]['content']
+    assert content.startswith('前' * 100) and content.endswith('后' * 100) and '中间省略' in content
+    assert len(content.encode()) <= 48000
+    assert any(e['site'] == 'prior_turns.newest' for e in turn.audit['truncation_events'])
+
+
+# --- group 2: a short history is the same with the window on or off -------------------------------
+
+HISTORY3 = [{'role': 'user', 'content': '查 AMD 收盘价'},
+            {'role': 'assistant', 'content': 'AMD 收盘价为 160.12 美元 [1]。'},
+            {'role': 'user', 'content': '它呢？'}]
+
+
+def test_a_short_history_comes_back_exactly_as_with_the_window_off(monkeypatch):
+    on = _turn(HISTORY3).prior_turns()
+    monkeypatch.setenv('FINBOT_FP2_PRIOR_WINDOW', 'off')
+    off = _turn(HISTORY3).prior_turns()
+    assert on == off and [m['role'] for m in on] == ['user', 'assistant']
+
+
+# --- group 4: window off pins the old behaviour: a long answer leaves the whole history out ------
+
+def test_window_off_sends_no_earlier_message_when_the_last_answer_is_too_long(monkeypatch):
+    monkeypatch.setenv('FINBOT_FP2_PRIOR_WINDOW', 'off')
+    turn = _turn([{'role': 'user', 'content': '查 AMD 收盘价'}, {'role': 'assistant', 'content': '汉' * 20000},
+                  {'role': 'user', 'content': '它呢？'}])
+    assert not any(m['role'] in {'user', 'assistant'} for m in turn.prior_turns())
+    assert 'truncation_events' not in turn.audit
+
+
+# --- group 5: the budget follows the window (the cut's byte budget is the observable) -------------
+
+@pytest.mark.parametrize('window,budget', [(128000, 48000), (16000, 16000), (1000000, 48000)])
+def test_the_budget_follows_the_model_window(monkeypatch, window, budget):
+    seen = []
+    real = truncation.cut_head_tail
+    monkeypatch.setattr(truncation, 'cut_head_tail', lambda text, b: seen.append(b) or real(text, b))
+    _turn([{'role': 'user', 'content': '查'}, {'role': 'assistant', 'content': '汉' * 30000},
+           {'role': 'user', 'content': '它呢？'}], context_window=window).prior_turns()
+    assert seen == [budget]
+
+
+def test_an_explicit_max_bytes_overrides_the_window(monkeypatch):
+    seen = []
+    real = truncation.cut_head_tail
+    monkeypatch.setattr(truncation, 'cut_head_tail', lambda text, b: seen.append(b) or real(text, b))
+    _turn([{'role': 'user', 'content': '查'}, {'role': 'assistant', 'content': '汉' * 30000},
+           {'role': 'user', 'content': '它呢？'}], context_window=128000).prior_turns(max_bytes=1000)
+    assert seen == [1000]
