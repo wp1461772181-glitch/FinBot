@@ -468,6 +468,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
  async def events():
   # The thinking time is the wait from the request to the answer being ready.
   started=time.monotonic();text_out=""; citation_sidecar=[]; terminal=False; genuine_calls=set(); tool_traces=[]
+  pump_task=getter=None
   try:
    yield frame("conversation",{"conversation_id":cid,"turn_id":turn})
    # A press on a card button sends the button's own value (the server's words for it); the history shows what
@@ -495,11 +496,34 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    legacy_result_sets=hydrate_legacy_web_sets(history_rows,owner=owner_hash(x_chat_session),conversation=cid)
    legacy_source_choices=legacy_web_source_choices(history_rows)
    profile_block=await _profile_block(x_chat_session,bot)
-   async for event in stream_workflow(question=question,messages=messages,skill_block=skill_block,active_skill=active_skill,provider=chosen.provider,model=chosen.model,
-     api_key=chosen.key(),base_url=chosen.base_url,owner_hash=owner_hash(x_chat_session),
-     conversation_id=cid,identity_credential=x_chat_session,turn_id=turn,pending_request_id=payload.pending_request_id,
-     legacy_result_sets=legacy_result_sets,legacy_source_choices=legacy_source_choices,
-     history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window):
+   queue=asyncio.Queue(maxsize=1)
+   async def pump():
+    try:
+     async for event in stream_workflow(question=question,messages=messages,skill_block=skill_block,active_skill=active_skill,provider=chosen.provider,model=chosen.model,
+       api_key=chosen.key(),base_url=chosen.base_url,owner_hash=owner_hash(x_chat_session),
+       conversation_id=cid,identity_credential=x_chat_session,turn_id=turn,pending_request_id=payload.pending_request_id,
+       legacy_result_sets=legacy_result_sets,legacy_source_choices=legacy_source_choices,
+       history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window):
+      await queue.put(("event",event))
+    except asyncio.CancelledError:
+     raise
+    except Exception as exc:          # handed back unchanged: the consumer raises this same object
+     await queue.put(("error",exc)); return
+    await queue.put(("end",None))
+   pump_task=asyncio.create_task(pump())
+   pump_task.add_done_callback(lambda t: t.cancelled() or t.exception())
+   heartbeat=HEARTBEAT_SECONDS if fp_flag("FINBOT_FP5_HEARTBEAT",True) else None
+   getter=asyncio.ensure_future(queue.get())
+   while True:
+    done,_=await asyncio.wait({getter},timeout=heartbeat)
+    if not done:
+     yield HEARTBEAT_FRAME
+     continue
+    tag,item=getter.result()
+    if tag=="end":break
+    if tag=="error":raise item
+    getter=asyncio.ensure_future(queue.get())
+    event=item
     kind=event.get("event")
     if kind=="assistant_tool_request":
      await append_message(cid,turn,"assistant","",tool_calls=event["protocol"])
