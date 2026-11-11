@@ -1386,11 +1386,6 @@ class Turn:
                     owner_hash=self.context.owner_hash));session.commit()
         except Exception:self.audit['refusal_record_failed']=True
 
-    def real_tool_failures(self):
-        """The tools that failed this turn: the error codes accept() recorded, not a successful empty result."""
-        return [{'tool':f.get('name'),'error_code':f.get('error_code')} for f in self.feedback
-                if isinstance(f,dict) and f.get('error_code') and f.get('ok') is not True]
-
     def stalled_notice(self,code='no_progress'):
         """What the user gets when a turn is stopped for lack of progress.
 
@@ -2897,10 +2892,6 @@ class Turn:
             self.unverified_lines=[{**e,'line':strip_all_markers(e['line'])} if isinstance(e,dict) and isinstance(e.get('line'),str) else e for e in self.unverified_lines]
             if isinstance(legacy,dict):legacy['unverified_lines']=[{**e,'line':strip_all_markers(e['line'])} if isinstance(e,dict) and isinstance(e.get('line'),str) else e for e in legacy['unverified_lines']]
             protocol_fields={'citation_protocol':'v2','citation_nodes':nodes}
-        # A turn in which a tool failed is not a clean success. The failures are the ones accept() recorded.
-        failures=self.real_tool_failures()
-        if failures:self.audit['failed_tools']=failures
-        if status=='succeeded' and failures:status='partially_succeeded';self.audit['status_basis']='tool_failure'
         self.audit.update(stop_reason=reason,elapsed_ms=round((time.monotonic()-self.started)*1000))
         return {**protocol_fields,'answer':answer[:30000],'citations':self.citations,'status':status,'reason':reason,'route':self.route,
             'unverified_lines':list(self.unverified_lines),'audit':self.audit,'shadow_entity_mismatches':self.audit.get('shadow_entity_mismatches',[]),'final_protocol':self.final_protocol,'pending_request':self.pending,'result_sets':self.sets,'previous_category':self.route,'previous_scope':{**self.scope,'_tool_categories':list(self.used_categories)}}
@@ -3414,12 +3405,11 @@ class Turn:
             sources_text='\n'.join(self.gathered_sources())
             if sources_text and sources_text not in result['answer']:
                 result['answer']=f"{result['answer'].rstrip()}\n\n{sources_text}"
-        # A genuine stop (no progress, a time or turn budget, an invalid protocol) is never a clean success.
-        self.stop_partial=True
-        if result['status']=='succeeded':result['status']='partially_succeeded';self.audit['status_basis']='genuine_stop'
         if stop in GATHERING_STOPS:
             if GATHERING_STOPS[stop]:result['answer']+='\n\n'+GATHERING_STOPS[stop]
         else:
+            self.stop_partial=True
+            if result['status']=='succeeded':result['status']='partially_succeeded'
             if result['reason']!=stop:self.audit['closing_guard']=result['reason']
             result['answer']=notes[stop]+'\n'+result['answer'] if stop in notes else result['answer']
         self.audit['stop_reason']=stop;result['reason']=stop

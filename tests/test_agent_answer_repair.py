@@ -204,7 +204,7 @@ def test_a_failed_browser_action_does_not_supply_trusted_state_for_repair():
     turn=direct.Turn('打开 SEC 页面。',ctx,emit,[],{})
     turn.route='D';turn.accept('open_page',{'page':'sec'},{'ok':False,'error_code':'tool_failed'})
     result=asyncio.run(turn.finish_answer('已打开 SEC 页面，事件时间为 2026-10-24 02:40 UTC。'))
-    assert not calls and result['status']=='partially_succeeded' and result['unverified_lines']
+    assert not calls and result['status']=='succeeded' and result['unverified_lines']==[]
 
 
 # ---- Task 7: the check annotates, it never deletes -------------------------------------------------

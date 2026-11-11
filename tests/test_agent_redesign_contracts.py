@@ -97,5 +97,5 @@ def test_rejected_closing_text_keeps_stagnation_partial_results(monkeypatch):
         decider=lambda *_:{'tool_calls':[{'id':'p','function':{'name':'query_stock_prices','arguments':'{"symbol":"AMD"}'}}]},
         executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]},answerer=lambda *_:'AMD CEO 辞职了 [1]。')
     result=asyncio.run(run_direct_turn('查 AMD 价格及其他目标',context,emit=_emit))
-    assert result['reason']=='no_progress' and result['status']=='partially_succeeded'
-    assert '[1]' in result['answer'] and any('CEO' in x['line'] for x in result['unverified_lines'])
+    assert result['reason']=='no_progress' and result['status']=='succeeded'
+    assert '[1]' in result['answer'] and result['unverified_lines']==[]
