@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping, Sequence
 logger = logging.getLogger(__name__)
 
 # Constants and limits from spec §1, §3.4, §7.3
+# DEFAULT_TARGET_TURNS is the experiment report point (WP0 step 7): reaching it writes one marker, judging goes on.
 DEFAULT_TARGET_TURNS = 100  # Overridden default per user request (spec default was 200)
 DEFAULT_DAILY_CALLS = 600
 MAX_SENTENCES = 12
@@ -271,6 +272,7 @@ async def _write_outcome_record(
     started_monotonic: float,
     selection: Any = None,
     judge_model_info: dict | None = None,
+    extra: dict | None = None,
 ) -> None:
     from .claim_shadow_store import append_turn
 
@@ -301,6 +303,9 @@ async def _write_outcome_record(
         "code_flags": snapshot.code_flags,
         "sentences": [],
     }
+
+    if extra:
+        record.update(extra)
 
     try:
         await asyncio.to_thread(append_turn, dir_path, record)
@@ -353,13 +358,17 @@ async def _run(snapshot: ShadowTurn) -> None:
         if os.path.exists(stop_path):
             return
 
-        if _COUNTED_TURNS >= target_turns:
-            if not _TARGET_REACHED_WRITTEN:
-                _TARGET_REACHED_WRITTEN = True
-                await _write_outcome_record(
-                    dir_path, snapshot, "target_reached", started_monotonic, selection=selection
-                )
-            return
+        # The target is the experiment's report point, not a stop: the marker is written once and judging goes on.
+        if _COUNTED_TURNS >= target_turns and not _TARGET_REACHED_WRITTEN:
+            _TARGET_REACHED_WRITTEN = True
+            await _write_outcome_record(
+                dir_path,
+                snapshot,
+                "experiment_target_reached",
+                started_monotonic,
+                selection=selection,
+                extra={"target_turns": target_turns, "counted_turns": _COUNTED_TURNS},
+            )
 
         if _CALLS_TODAY >= daily_calls:
             await _write_outcome_record(

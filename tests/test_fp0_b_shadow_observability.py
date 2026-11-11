@@ -1,8 +1,20 @@
 """FP0 slice b (WP0 steps 6, 7, 11): the judge's code flags read audit.legacy_review, the judge keeps
 judging past its report target, and the citation scores say when they came from the legacy check."""
+import asyncio
+import json
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
-from app.agent_workflow.claim_shadow import _extract_code_flags
+from app.agent_workflow.claim_judge import JudgeResult
+from app.agent_workflow.claim_shadow import (
+    _TASKS,
+    _extract_code_flags,
+    maybe_schedule,
+    reset_state,
+    set_test_judge_fn,
+    set_test_resolve_fn,
+)
 
 REJECTED = {'line': 'AMD 开盘价为 999 美元 [1]。', 'reason': 'unsupported_numeric_claim', 'numbers': ['999']}
 HINT = {'line': '公司 CEO 已辞职 [1]。', 'reason': 'event_not_in_source', 'numbers': [], 'ordinal': 1, 'snippet': 'x'}
@@ -70,3 +82,52 @@ def test_a_hint_on_a_sentence_already_listed_is_not_counted_twice():
     legacy = row['audit']['legacy_review']
     legacy['hints'] = [dict(REJECTED), dict(HINT), dict(HINT)]
     assert _extract_code_flags(row)['unverified_lines'] == 2
+
+
+# ---- WP0 step 7: the judge keeps judging past its report target ---------------------------------
+
+
+@pytest.fixture
+def shadow_env(monkeypatch, tmp_path):
+    reset_state()
+    monkeypatch.setenv("CLAIM_JUDGE_SHADOW", "on")
+    monkeypatch.setenv("CLAIM_JUDGE_SHADOW_DIR", str(tmp_path.resolve()))
+    monkeypatch.setenv("CLAIM_JUDGE_SHADOW_MODEL", "background")
+    monkeypatch.setenv("CLAIM_JUDGE_SHADOW_EXPECT_MODEL", "deepseek/deepseek-v4-flash")
+    monkeypatch.setenv("CLAIM_JUDGE_SHADOW_TARGET_TURNS", "1")
+    monkeypatch.setattr("app.agent_chat_identity.owner_credential_matches", lambda cred: True)
+    set_test_resolve_fn(AsyncMock(return_value={"provider": "openrouter", "model": "deepseek/deepseek-v4-flash",
+                                                "api_key": "fake"}))
+    yield tmp_path
+    reset_state()
+
+
+def _turn(n):
+    return {"turn_id": f"t{n}", "answer": f"公司第{n}季度营收增长 [1]。",
+            "citations": [{"ordinal": 1, "quote": "revenue rose steadily", "source_type": "official_filing"}],
+            "status": "succeeded"}
+
+
+def test_reaching_the_target_writes_one_marker_and_judging_goes_on(shadow_env):
+    async def _run():
+        judge = AsyncMock(return_value=JudgeResult(status="ok", verdict="supported"))
+        set_test_judge_fn(judge)
+        for n in range(3):
+            maybe_schedule(_turn(n), MagicMock(unattended=False), {})
+            await asyncio.gather(*list(_TASKS))
+
+        records = [json.loads(line) for path in shadow_env.glob("*.jsonl")
+                   for line in path.read_text(encoding="utf-8").splitlines()]
+        # Every turn is judged, including the ones past the target.
+        assert judge.await_count == 3
+        # The marker is written once, and it carries the target and the counted turns at that point.
+        markers = [r for r in records if r["outcome"] == "experiment_target_reached"]
+        assert len(markers) == 1
+        assert markers[0]["target_turns"] == 1 and markers[0]["counted_turns"] == 1
+        assert markers[0]["counted"] is False
+        # Counting continues past the target.
+        assert sum(1 for r in records if r["counted"] is True) == 3
+        # The target path never produces a STOP file.
+        assert not (shadow_env / "STOP").exists()
+
+    asyncio.run(_run())
