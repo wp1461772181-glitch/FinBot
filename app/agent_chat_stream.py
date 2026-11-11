@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, hashlib, json, uuid, time
+import asyncio, hashlib, json, logging, uuid, time
 from urllib.parse import urlsplit
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -17,6 +17,12 @@ from . import agent_context as layers
 from .agent_workflow.fp_flags import flag as fp_flag
 router=APIRouter(prefix="/agent-chat",tags=["agent-chat-stream"])
 LOCKS={}
+# Event-stream heartbeat: a comment frame (no event name) while a turn is quiet, so no read sits idle for long.
+HEARTBEAT_SECONDS=15
+HEARTBEAT_FRAME=": hb\n\n"
+# Strong references to the detached cancelled-turn writes, so they are not collected before they finish.
+_BACKGROUND: set=set()
+log=logging.getLogger(__name__)
 MAX_PROTOCOL_BYTES=32000
 MAX_TOOL_CALLS=5
 MAX_DECISION_STEPS=6
@@ -417,6 +423,14 @@ class _Model:
  def __init__(self,provider,model,api_key,base_url,window=None):self.provider=provider;self.model=model;self.base_url=base_url;self._key=api_key;self.window=window or layers.WINDOW_TOKENS
  def key(self):return self._key
  def __repr__(self):return f"_Model({self.provider!r}, {self.model!r})"
+async def _record_cancelled(cid,turn,owner,text_out,citation_sidecar):
+ # The three writes of a cancelled turn, in order. Each is isolated, so one failure does not skip the rest.
+ try: await append_message(cid,turn,"assistant",text_out,status="cancelled",tool_calls={"citations":citation_sidecar} if citation_sidecar else None)
+ except Exception: log.exception("cancelled turn: appending the partial answer failed (cid=%s turn=%s)",cid,turn)
+ try: await finish_conversation(cid,"cancelled")
+ except Exception: log.exception("cancelled turn: finishing the conversation failed (cid=%s)",cid)
+ try: await mark_terminal_status(owner,cid,"cancelled",text_out)
+ except Exception: log.exception("cancelled turn: marking the terminal status failed (cid=%s)",cid)
 @router.post("/stream")
 async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|None=Header(default=None)):
  if not x_chat_session or len(x_chat_session)<32 or len(x_chat_session)>256: raise HTTPException(401,"chat_session_required")
@@ -463,6 +477,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
  async def events():
   # The thinking time is the wait from the request to the answer being ready.
   started=time.monotonic();text_out=""; citation_sidecar=[]; terminal=False; genuine_calls=set(); tool_traces=[]
+  pump_task=getter=None
   try:
    yield frame("conversation",{"conversation_id":cid,"turn_id":turn})
    # A press on a card button sends the button's own value (the server's words for it); the history shows what
@@ -490,11 +505,36 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    legacy_result_sets=hydrate_legacy_web_sets(history_rows,owner=owner_hash(x_chat_session),conversation=cid)
    legacy_source_choices=legacy_web_source_choices(history_rows)
    profile_block=await _profile_block(x_chat_session,bot)
-   async for event in stream_workflow(question=question,messages=messages,skill_block=skill_block,active_skill=active_skill,provider=chosen.provider,model=chosen.model,
-     api_key=chosen.key(),base_url=chosen.base_url,owner_hash=owner_hash(x_chat_session),
-     conversation_id=cid,identity_credential=x_chat_session,turn_id=turn,pending_request_id=payload.pending_request_id,
-     legacy_result_sets=legacy_result_sets,legacy_source_choices=legacy_source_choices,
-     history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window):
+   queue=asyncio.Queue(maxsize=1)
+   async def pump():
+    try:
+     async for event in stream_workflow(question=question,messages=messages,skill_block=skill_block,active_skill=active_skill,provider=chosen.provider,model=chosen.model,
+       api_key=chosen.key(),base_url=chosen.base_url,owner_hash=owner_hash(x_chat_session),
+       conversation_id=cid,identity_credential=x_chat_session,turn_id=turn,pending_request_id=payload.pending_request_id,
+       legacy_result_sets=legacy_result_sets,legacy_source_choices=legacy_source_choices,
+       history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window):
+      await queue.put(("event",event))
+    except asyncio.CancelledError:
+     raise
+    except Exception as exc:          # handed back unchanged: the consumer raises this same object
+     await queue.put(("error",exc)); return
+    await queue.put(("end",None))
+   pump_task=asyncio.create_task(pump())
+   pump_task.add_done_callback(lambda t: t.cancelled() or t.exception())
+   heartbeat=HEARTBEAT_SECONDS if fp_flag("FINBOT_FP5_HEARTBEAT",True) else None
+   getter=asyncio.ensure_future(queue.get())
+   while True:
+    done,_=await asyncio.wait({getter,pump_task},timeout=heartbeat,return_when=asyncio.FIRST_COMPLETED)
+    if not done:
+     yield HEARTBEAT_FRAME
+     continue
+    if not getter.done(): await asyncio.sleep(0)  # a read that already holds an item completes in this tick
+    if not getter.done(): break  # the pump ended with no terminal item (cancelled while waiting to hand over): none will come
+    tag,item=getter.result()
+    if tag=="end":break
+    if tag=="error":raise item
+    getter=asyncio.ensure_future(queue.get())
+    event=item
     kind=event.get("event")
     if kind=="assistant_tool_request":
      await append_message(cid,turn,"assistant","",tool_calls=event["protocol"])
@@ -566,10 +606,9 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      yield frame("done",{"conversation_id":cid,"turn_id":turn,"status":event.get("status","complete"),"reason":event.get("reason"),"thinking_ms":thinking_ms,**v2_fields})
    if not terminal:raise HTTPException(502,"workflow_incomplete")
   except asyncio.CancelledError:
-   await asyncio.shield(append_message(cid,turn,"assistant",text_out,status="cancelled",
-       tool_calls={"citations":citation_sidecar} if citation_sidecar else None))
-   await asyncio.shield(finish_conversation(cid,"cancelled"))
-   await asyncio.shield(mark_terminal_status(owner_hash(x_chat_session),cid,"cancelled",text_out))
+   # The writes run in their own task: this one is being cancelled, and its awaits would be cancelled again (R-5 probe).
+   task=asyncio.create_task(_record_cancelled(cid,turn,owner_hash(x_chat_session),text_out,citation_sidecar))
+   _BACKGROUND.add(task); task.add_done_callback(_BACKGROUND.discard)
    raise
   except Exception as exc:
    restored=_restore_citations(citation_sidecar,x_chat_session) if citation_sidecar else []
@@ -588,6 +627,9 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
                       request_id=exc.request_id,retryable=exc.retryable)
    yield frame("error",diagnostic)
   finally:
+   # Stop the workflow with the consumer: a disconnected turn must not keep running. No await here; this task may be cancelled.
+   if pump_task is not None and not pump_task.done(): pump_task.cancel()
+   if getter is not None and not getter.done(): getter.cancel()
    release_resources()
  return _ResourceStreamingResponse(events(),media_type="text/event-stream",headers={"Cache-Control":"no-store","X-Accel-Buffering":"no"},background=BackgroundTask(release_resources),cleanup=release_resources)
 
