@@ -148,3 +148,26 @@ def cut_lines(text: str, budget: int) -> tuple[str, int, int, int]:
         kept.append(line)
         used += cost
     return '\n'.join(kept), len(text), used, len(lines) - len(kept)
+
+
+def cut_head_tail(text: str, budget_bytes: int) -> str:
+    """The head and the tail of ``text`` joined by a marker, within ``budget_bytes`` (UTF-8 bytes).
+
+    Text that already fits comes back whole.  Otherwise the middle is cut: ``keep`` characters are kept,
+    a third of the budget less a marker's worth (the head and the tail half each).  Four-byte characters
+    make that overshoot, so the budget is divided by four instead.  ``''`` means the budget cannot hold a
+    useful head and tail, and the caller treats the text as not fitting."""
+    if len(text.encode('utf-8')) <= budget_bytes:
+        return text
+    for divisor in (3, 4):
+        keep = budget_bytes // divisor - 30
+        if keep < 200:
+            return ''
+        if keep >= len(text):          # nothing to cut at this size: the marker would count a negative
+            continue
+        head = keep // 2
+        tail = keep - head
+        cut = text[:head] + '\n…（中间省略 %d 字）…\n' % (len(text) - keep) + text[len(text) - tail:]
+        if len(cut.encode('utf-8')) <= budget_bytes:
+            return cut
+    return ''

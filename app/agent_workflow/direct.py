@@ -1490,8 +1490,19 @@ class Turn:
         self.bound_history_citations=bound
         return bound
 
-    def prior_turns(self,max_bytes=16000):
-        """The conversation before this message as plain turns, newest kept first within the budget."""
+    def prior_turns(self,max_bytes=None):
+        """The conversation before this message as plain turns, newest kept first within the budget.
+
+        FP2 (``FINBOT_FP2_PRIOR_WINDOW``, on by default): the budget follows the model's window, and a newest
+        message too long for the budget keeps its head and tail (``prior_turns.newest``).  Off: the 16000-byte
+        budget, and an overflow simply ends the history."""
+        from .fp_flags import flag
+        window_on=flag('FINBOT_FP2_PRIOR_WINDOW',True)
+        if max_bytes is None:
+            if window_on:
+                window=getattr(self.context,'context_window',0) or layers.WINDOW_TOKENS
+                max_bytes=max(16000,min(48000,layers.budget_for_window(window)//4))
+            else:max_bytes=16000
         conversation=[m for m in layers.conversation_messages(self.messages) if isinstance(m,dict)]
         if conversation and conversation[-1].get('role')=='user':conversation=conversation[:-1]
         selected=[];used=0
@@ -1499,11 +1510,25 @@ class Turn:
             content=str(message.get('content') or '').strip()
             if message.get('role') not in {'user','assistant'} or not content:continue
             size=len(content.encode())
-            if used+size>max_bytes:break
+            if used+size>max_bytes:
+                if window_on and not selected:
+                    # The newest message alone is over the budget: its head and tail, when they fit at all.
+                    cut=truncation.cut_head_tail(content,max_bytes-used)
+                    if cut:
+                        selected.append({'role':message['role'],'content':cut});used+=len(cut.encode())
+                        self.note_truncation('prior_turns.newest',len(content),len(cut))
+                break
             selected.append({'role':message['role'],'content':content});used+=size
         memory=next((m for m in self.messages if isinstance(m,dict) and layers.is_memory_message(m)),None)
         catalogue=next((m for m in self.messages if isinstance(m,dict) and layers.is_catalogue_message(m)),None)
         turns=list(reversed(selected))
+        if window_on:
+            # Earlier messages left out for length are named, so the model knows the history is not whole.
+            eligible=[text for text in (str(m.get('content') or '').strip() for m in conversation if m.get('role') in {'user','assistant'}) if text]
+            dropped=len(eligible)-len(selected)
+            if dropped:
+                self.note_truncation('prior_turns.older',sum(len(text) for text in eligible),sum(len(m['content']) for m in selected),dropped_messages=dropped)
+                turns.insert(0,{'role':'system','content':'（更早的 %d 条对话消息因长度没有在这里展开；需要时用 recall_conversations 回查。）'%dropped})
         memory_text=''
         if memory:
             # Whole memory lines within the budget; what does not fit is counted in the text and the audit.
