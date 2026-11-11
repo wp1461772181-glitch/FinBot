@@ -4,6 +4,7 @@ import re
 import unicodedata
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from .semantic import _MAGNITUDE, PERIOD_TEXT, ACCESSION, SOURCE_ID, TASK_ID, figure_tokens
+from .fp_flags import flag
 # Percent and unit factors only: a power of ten converts a cited value (to 亿 or billions), it adds no figure.
 CONSTANTS=frozenset({0,1,100,1000,10**4,10**6,10**8,10**9,10**12})
 
@@ -48,13 +49,18 @@ def agrees_at_recorded_precision(recomputed, recorded):
     except (InvalidOperation,TypeError,ValueError):return False
 
 
+def _figure_text(text):
+    """A text as the figure reader reads it: NFKC, the traditional forms folded, periods, accessions and ids removed,
+    thousands commas joined.  ``source_numbers`` and the receipts' suffix check read the same text."""
+    text=unicodedata.normalize('NFKC',text).replace('萬','万').replace('億','亿')
+    text=PERIOD_TEXT.sub(' ',ACCESSION.sub(' ',SOURCE_ID.sub(' ',TASK_ID.sub(' ',text))))
+    return re.sub(r'(?<=\d),(?=\d{3}(?!\d))','',text)
+
+
 def source_numbers(text):
     """The numbers one text states, as a calculation input may bind them: in full, and (for "331,839 百万美元")
     the unit-less digits too, so a value can be computed in millions."""
-    text=unicodedata.normalize('NFKC',text).replace('萬','万').replace('億','亿')
-    text=PERIOD_TEXT.sub(' ',ACCESSION.sub(' ',SOURCE_ID.sub(' ',TASK_ID.sub(' ',text))))
-    text=re.sub(r'(?<=\d),(?=\d{3}(?!\d))','',text)
-    found=figure_tokens(text)
+    found=figure_tokens(_figure_text(text))
     return {Decimal(n)*Decimal(str(_MAGNITUDE.get(unit.lower(),1))) for n,unit in found}|{Decimal(n) for n,unit in found if unit}
 
 
@@ -90,6 +96,78 @@ def _bind_literals(tree,values):
     except _Unbound:return None
 
 
+class CalculationUnbound(ValueError):
+    """An input bound to no source.  ``receipts`` has one entry per input (every input is judged first).  ``str`` is the
+    bare code, so every ``except ValueError`` and every ``match='calculation_input_unbound'`` still holds."""
+    def __init__(self,receipts):
+        super().__init__('calculation_input_unbound')
+        self.receipts=receipts
+
+
+# The sentences a receipt carries: FP7 decision D-F2, verbatim.  %d is the citation ordinal, %s the unrecognised suffix.
+NEXT_ACTION={
+    'origin_invalid':'每个输入必须且只能有一个出处：source_ordinal（资料）或 user_stated（用户原话）；name 必须是单个小写字母且不重复。',
+    'source_not_cited':'本轮没有这个序号的引用。只能使用本轮工具结果里已经给出的 [n]。',
+    'value_not_finite':'数值必须是有限的十进制数。',
+    'value_not_in_user_words':'这个数不在用户本轮的原话里；只有用户亲自写出的数才能标 user_stated。它若来自资料，请改用 source_ordinal 指向那条资料。',
+    'bound':'',
+    'token_suffix_unrecognized':'引用 [%d] 里这个数后面紧跟着系统不认识的后缀「%s」，所以无法绑定。这是系统解析的限制，不是你的输入有误；可以改用同一资料里写法完整的数，或换一条资料。',
+    'value_in_other_source':'这个数不在引用 [%d] 里，但出现在 other_ordinals 所列引用的可核对文本里。这只是候选：请自行确认是同一指标、同一期间后，再改用那条引用的序号。',
+    'value_not_in_source':'引用 [%d] 的可核对文本里没有这个数。请先核对序号；资料里若是不同单位或不同精度的写法，按资料里的写法传入，换算写进 expression。',
+}
+
+# Reasons whose receipt also names the nearest numbers the cited source does hold.
+_CLOSEST={'token_suffix_unrecognized','value_in_other_source','value_not_in_source'}
+
+
+def _declared_origin(ordinal,stated):
+    if stated and ordinal is None:return 'user_stated'
+    if ordinal is not None and not stated:return 'source_ordinal:%s'%ordinal
+    return 'invalid'
+
+
+def _closest(value,numbers):
+    """At most three of the source's numbers, nearest the requested value by relative difference."""
+    def gap(number):return abs(number-value)/abs(value) if value else abs(number)
+    return [str(number) for number in sorted(numbers,key=lambda number:(gap(number),str(number)))[:3]]
+
+
+def _matched_token(value,numbers):
+    """The source number a value binds to, as ``matches_source`` reads it: an equal number, else one that rounds
+    to the value's own decimals (92.06999969482422 for 92.07).  ``None`` when none does."""
+    equal=sorted((number for number in numbers if number==value),key=str)
+    if equal:return str(equal[0])
+    places=-value.as_tuple().exponent
+    if places<2:return None
+    step=Decimal(1).scaleb(-places)
+    try:rounded=sorted((number for number in numbers if number.is_finite() and number.quantize(step,rounding=ROUND_HALF_UP)==value),key=str)
+    except InvalidOperation:return None
+    return str(rounded[0]) if rounded else None
+
+
+def _source_reason(requested,value,ordinal,source,citations):
+    """Why a source input did not bind, judged top to bottom as the FP7 table gives: ``(reason, detail)``."""
+    from .evidence import citation_check_text
+    suffix=re.search(r'(?<![\d.])'+re.escape(requested)+r'([A-Za-z]+)',_figure_text(citation_check_text(source)))
+    if suffix:return 'token_suffix_unrecognized',{'suffix':suffix.group(1)}
+    others=sorted(c['ordinal'] for c in citations if c['ordinal']!=ordinal and matches_source(value,source_numbers(citation_check_text(c))))
+    if others:return 'value_in_other_source',{'others':others}
+    return 'value_not_in_source',{}
+
+
+def _receipt(item,ordinal,stated,value,reason,*,numbers=(),selected=None,suffix='',others=()):
+    """One input's receipt, with the fixed keys the model and the record read."""
+    found=reason=='bound'
+    receipt={'name':item.get('name'),'requested_value':str(item.get('value')),'declared_origin':_declared_origin(ordinal,stated),
+             'found':found,'selected_token':selected if found else None,'parsed_value':None if value is None else str(value),
+             'reason':reason,'next_action':NEXT_ACTION[reason]}
+    if reason=='token_suffix_unrecognized':receipt['next_action']=NEXT_ACTION[reason]%(ordinal,suffix)
+    elif reason in ('value_in_other_source','value_not_in_source'):receipt['next_action']=NEXT_ACTION[reason]%ordinal
+    if reason in _CLOSEST:receipt['closest_in_source']=_closest(value,numbers)
+    if reason=='value_in_other_source':receipt['other_ordinals']=list(others)[:5]
+    return receipt
+
+
 def calculate(args, citations, user_text=''):
     """``user_text`` is what the person typed (``Turn.user_stated_text``); an input marked ``user_stated`` must be
     one of its figures.  ``None`` is a replay of a stored calculation: its user-stated inputs were bound when
@@ -98,23 +176,40 @@ def calculate(args, citations, user_text=''):
     expression=args['expression']
     if not isinstance(expression,str) or len(expression)>200:raise ValueError('invalid_calculation')
     indexed={c['ordinal']:c for c in citations};values={};parents=[];recorded=[]
+    # FP7: with the receipts on, every input is judged and each unbound one gets its receipt; off, the first one
+    # raises the bare code, as it always did.
+    judged=flag('FINBOT_FP7_INPUT_RECEIPTS',True);receipts=[]
     for item in args['inputs']:
         name=item['name']
         ordinal=item.get('source_ordinal');stated=bool(item.get('user_stated'))
         source=indexed.get(ordinal)
         # Exactly one origin per operand: a cited source, or the user's own words.
-        if not re.fullmatch(r'[a-z]',name) or name in values or stated==(ordinal is not None) or (not stated and not source):
-            raise ValueError('calculation_input_unbound')
+        origin_bad=not re.fullmatch(r'[a-z]',name) or name in values or stated==(ordinal is not None)
+        if origin_bad or (not stated and not source):
+            if not judged:raise ValueError('calculation_input_unbound')
+            receipts.append(_receipt(item,ordinal,stated,None,'origin_invalid' if origin_bad else 'source_not_cited'));continue
         try:value=Decimal(item['value'])
         except (InvalidOperation,TypeError):raise ValueError('invalid_calculation')
-        if not value.is_finite():raise ValueError('calculation_input_unbound')
+        if not value.is_finite():
+            if not judged:raise ValueError('calculation_input_unbound')
+            receipts.append(_receipt(item,ordinal,stated,value,'value_not_finite'));continue
+        selected=None
         if stated:
-            if user_text is not None and not matches_source(value,user_numbers(user_text)):raise ValueError('calculation_input_unbound')
+            if user_text is not None and not matches_source(value,user_numbers(user_text)):
+                if not judged:raise ValueError('calculation_input_unbound')
+                receipts.append(_receipt(item,ordinal,stated,value,'value_not_in_user_words'));continue
             recorded.append({**item,'origin':'user_stated'})
         else:
-            if not matches_source(value,source_numbers(citation_check_text(source))):raise ValueError('calculation_input_unbound')
+            numbers=source_numbers(citation_check_text(source))
+            if not matches_source(value,numbers):
+                if not judged:raise ValueError('calculation_input_unbound')
+                reason,detail=_source_reason(str(item.get('value')),value,ordinal,source,citations)
+                receipts.append(_receipt(item,ordinal,stated,value,reason,numbers=numbers,**detail));continue
             parents.append(ordinal);recorded.append(item)
+            selected=_matched_token(value,numbers) if judged else None
         values[name]=value
+        if judged:receipts.append(_receipt(item,ordinal,stated,value,'bound',selected=selected))
+    if any(not receipt['found'] for receipt in receipts):raise CalculationUnbound(receipts)
     if not values or len(values)>8:raise ValueError('invalid_calculation')
     constants=[]
     def evaluate(node,env):
