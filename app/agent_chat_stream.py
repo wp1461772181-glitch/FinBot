@@ -17,6 +17,11 @@ from . import agent_context as layers
 from .agent_workflow.fp_flags import flag as fp_flag
 router=APIRouter(prefix="/agent-chat",tags=["agent-chat-stream"])
 LOCKS={}
+# Event-stream heartbeat: a comment frame (no event name) while a turn is quiet, so no read sits idle for long.
+HEARTBEAT_SECONDS=15
+HEARTBEAT_FRAME=": hb\n\n"
+# Strong references to the detached cancelled-turn writes, so they are not collected before they finish.
+_BACKGROUND: set=set()
 MAX_PROTOCOL_BYTES=32000
 MAX_TOOL_CALLS=5
 MAX_DECISION_STEPS=6
