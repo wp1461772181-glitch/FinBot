@@ -1570,6 +1570,15 @@ class Turn:
         hint={'resolved_question':self.question,
               'referents':[r.get('text') or r.get('mention') for r in self.verified_referents if r.get('text') or r.get('mention')][:6],
               'classifier_scope':{k:self.scope.get(k) for k in ('symbol','symbols','mode','company','metrics','period','form','financial_only','latest','days_back','max_results','requested_actions') if self.scope.get(k) not in (None,[],'',False)}}
+        # FP1: the user's own words travel with the rewrite; the rewrite still decides company, metric and period.
+        from .fp_flags import flag
+        words=self.user_words().strip()
+        if flag('FINBOT_FP1_ORIGINAL_WORDS',True) and words and words!=self.question.strip() and not self.original.startswith(CONTROL_PREFIXES):
+            if len(words)>4000:
+                self.note_truncation('tool_messages.original_words',len(words),4000)
+            hint['user_original_words']=words[:4000]
+            hint['original_words_note']=('resolved_question 决定公司、指标和时间：相对时间（如「去年」「上季度」）已在其中换算成明确期间，不要按原话重新推算。'
+                'user_original_words 是用户这一轮的原话：原话里有、而 resolved_question 没有体现的要求（口径、对比对象、限定条件、输出形式、语气、对上一答的纠正或质疑），按原话执行。')
         if self.scope.get('symbol') and not self.entity_binds():
             hint['scope_entity_note']='The symbol and company above come from the previous turn or the bot setting, not from this request: use them only if the request is about them.'
         if self.tool_bias:
