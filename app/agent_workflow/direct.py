@@ -16,6 +16,7 @@ from .. import observability
 from .authorization import vetoed,vetoed_phrase,authorized,routine_ask
 from .references import Referent,validate_referents,bounded_stage,normalized,assistant_message_sources,assistant_item_catalogue
 from .trace import TurnTrace,classifier_output,decision_output,resolver_output,verify_output
+from .fp_flags import flag
 
 MAX_RETRIES=2
 # Inactivity watchdogs, not wall clocks: they only stop a turn whose model or tool has gone silent.
@@ -647,6 +648,43 @@ def tool_facts(entries):
         if entry.get('error_code'):item['error_code']=entry['error_code']
         facts.append(item)
     return facts
+
+
+def _named_entries(entries):
+    return [entry for entry in entries if isinstance(entry,dict) and entry.get('name')]
+
+
+def _scope_item(entry):
+    """One tool result as the scope sees it: the tool, and whether it came back empty, failed, or with something."""
+    if entry.get('status')=='no_matching_evidence':outcome='empty'
+    elif entry.get('ok') is not True and entry.get('error_code'):outcome='failed'
+    else:outcome='found'
+    item={'tool':entry['name'],'outcome':outcome}
+    if outcome in {'empty','failed'} and entry.get('error_code'):item['error_code']=entry['error_code']
+    for key in ('rejected','rows_returned','tool_status'):
+        if key in entry:item[key]=entry[key]
+    meta=entry.get('meta') if isinstance(entry.get('meta'),dict) else {}
+    if meta.get('applied_window_days') is not None:item['window_days']=meta['applied_window_days']
+    return item
+
+
+def search_scope(entries):
+    """Each tool that ran, in order, and how it ended.  At most 12 entries: what a refusal may quote about the search."""
+    return [_scope_item(entry) for entry in _named_entries(entries)[:12]]
+
+
+def public_search_state(entries):
+    """Whether a public web search ran, and how it ended.  The last web_research result is the one that counts.
+
+    It reads every named result rather than the 12 that search_scope lists, so a web search late in a long turn is seen."""
+    web=[_scope_item(entry) for entry in _named_entries(entries) if entry['name']=='web_research']
+    if not web:return 'not_run'
+    last=web[-1]
+    if last['outcome']=='failed':return 'failed'
+    if last['outcome']=='empty':
+        if last.get('tool_status')=='partial' or 'invalid_source_body' in (last.get('rejected') or {}):return 'pages_unreadable'
+        return 'empty'
+    return 'found'
 
 
 class Turn:
@@ -1976,7 +2014,14 @@ class Turn:
         # Failed/rejected bodies never reach the answer model, including in errors.
         if not accepted:
             fallback_hint = 'fallback_to_web_search_recommended' if name=='search_configured_news' else 'The read completed. Empty evidence is not a failed tool: do not retry this saved-data query unchanged. Use a justified public search or conclude that there is no verifiable information.'
-            self.feedback.append({'name':name,'ok':True,'data':[],'items':[],'meta':outcome.get('meta') or {'hint':fallback_hint},'status':'no_matching_evidence','error_code':reasons[0] if reasons else 'zero_evidence','hint':fallback_hint});self.no_new+=1;return
+            entry={'name':name,'ok':True,'data':[],'items':[],'meta':outcome.get('meta') or {'hint':fallback_hint},'status':'no_matching_evidence','error_code':reasons[0] if reasons else 'zero_evidence','hint':fallback_hint}
+            if flag('FINBOT_FP9_COMPOUND_EMPTY',True):
+                # FP9: every rejection reason with its count, the row count, and the tool's own status when it gave one.
+                from collections import Counter
+                entry['rejected']=dict(Counter(reasons).most_common(8))
+                entry['rows_returned']=len(rows)
+                if outcome.get('status') in ('not_found','partial'):entry['tool_status']=outcome['status']
+            self.feedback.append(entry);self.no_new+=1;return
         signature=hashlib.sha256(json.dumps([{k:r.get(k) for k in ('id','set_id','symbol','source_id','url','source_url','content_hash','excerpt','summary','close','first_close','last_close')} for r in accepted],sort_keys=True,default=str).encode()).hexdigest()
         if signature in self.evidence_signatures:self.repeated_evidence+=1
         else:self.repeated_evidence=0;self.evidence_signatures.add(signature)
