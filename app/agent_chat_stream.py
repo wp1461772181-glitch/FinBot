@@ -357,10 +357,16 @@ _FAILURE_NOTICES={
  "provider_invalid_key":"模型服务拒绝了这次请求：API key 无效。请到设置里检查后重试。",
  "provider_model_access_denied":"模型服务拒绝了这次请求：模型不可用或当前 key 无权访问。请到设置里检查后重试。",
  "provider_network_error":"连接模型服务失败，本轮没有完成。请稍后再试。",
+ "chat_context_too_large":"这一轮没有完成：对话上下文超过了当前模型能处理的长度。再发一次不会解决；可以先发送「/压缩」压缩这条对话，或开一个新对话再问。",
+ "pending_request_expired":"这张卡片已经过期，没有执行任何操作。请把你的选择直接打字发给我，或重新提出请求。",
+ "pending_request_mismatch":"这张卡片已经不是当前待处理的那一张，没有执行任何操作。请按最新的卡片操作，或重新提出请求。",
+ "task_token_cap":"这次任务的用量达到了为它设定的上限，已停止。原样重跑结果相同；可以缩小任务范围后再试。",
+ "workflow_incomplete":"这一轮在生成过程中意外中断，没有生成回答。可以再发一次。",
+ "provider_protocol_invalid":"模型服务这次返回的内容无法使用，本轮没有完成。可以再发一次；连续出现时请稍后再试。",
 }
 def _failure_notice(exc:Exception)->str:
  code=exc.detail if isinstance(exc,HTTPException) and isinstance(exc.detail,str) else ""
- return _FAILURE_NOTICES.get(code,"这一轮没有完成，没有生成回答。请再发一次。")
+ return _FAILURE_NOTICES.get(code,"这一轮没有完成，没有生成回答。可以再发一次；如果连续出现，请稍后再试或换个问法。")
 def _is_owner(credential:str|None)->bool:
  from .agent_chat_identity import owner_credential_matches
  return owner_credential_matches(credential)
