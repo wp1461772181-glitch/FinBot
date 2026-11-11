@@ -9,6 +9,7 @@ from app import agent_profile as profile
 from app.agent_chat_models import AgentBot, AgentConversation, AgentMessage, AgentProfileItem
 from app.agent_chat_store import owner_hash
 from app.agent_workflow import consent
+from app.agent_workflow import direct
 from app.agent_workflow.models import AgentConsent
 from app.database import Base, SessionLocal, engine
 
@@ -152,8 +153,9 @@ def test_stated_preference_reaches_the_first_prompt_of_a_new_conversation(owner)
 
 
 def test_remember_quotes_the_users_words_when_the_resolver_rewrote_the_question(owner):
-    """The tool loop sees only the resolver's rewrite, so the model quotes it; the server puts the user's
-    own message on the card instead of refusing, and the user's words never reach the tool loop."""
+    """The tool loop sees the resolver's rewrite as the user message, so the model quotes it; the server puts the user's
+    own message on the card instead of refusing, and the user's words reach the tool loop only as the
+    user_original_words hint field (FP1, D-F1(a))."""
     words = "以后金额都用亿美元表示"
     rewritten = "此后回答中的所有金额一律以亿美元为单位表示。"
     def resolver(_payload):
@@ -162,7 +164,10 @@ def test_remember_quotes_the_users_words_when_the_resolver_rewrote_the_question(
         if any(m.get("role") == "tool" for m in messages):
             return {"content": "已提出确认卡。"}
         assert any(m["role"] == "user" and m["content"] == rewritten for m in messages)
-        assert all(words not in str(m.get("content")) for m in messages)
+        understanding = next(m["content"] for m in messages if m["role"] == "system" and m["content"].startswith(direct.UNDERSTANDING_NOTE))
+        assert json.loads(understanding[len(direct.UNDERSTANDING_NOTE):])["user_original_words"] == words
+        assert not any(words in str(m.get("content")) for m in messages if m["role"] == "user")
+        assert not any(words in str(m.get("content")) for m in messages if m["role"] == "system" and not m["content"].startswith(direct.UNDERSTANDING_NOTE))
         return _call("remember", {"kind": "preference", "topic": "currency_unit", "text": "金额用亿美元表示", "quote": rewritten})
     context = _context("conv-rewrite", intent_recognizer=_route("remember"), decider=decider, resolver=resolver)
     first = _turn(words, context)
