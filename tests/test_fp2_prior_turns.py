@@ -1,5 +1,6 @@
 """FP2: the earlier conversation the answering model sees follows its window, and a long answer is cut head+tail."""
 import asyncio
+import re
 import pytest
 from app.agent_workflow import direct, truncation
 from app.agent_workflow.state import AgentRuntimeContext
@@ -109,3 +110,42 @@ def test_an_explicit_max_bytes_overrides_the_window(monkeypatch):
     _turn([{'role': 'user', 'content': '查'}, {'role': 'assistant', 'content': '汉' * 30000},
            {'role': 'user', 'content': '它呢？'}], context_window=128000).prior_turns(max_bytes=1000)
     assert seen == [1000]
+
+
+# --- group 3: forty rounds of medium history: the newest whole, the older ones named ---------------
+
+def _forty_rounds():
+    messages = []
+    for i in range(1, 41):
+        messages.append({'role': 'user', 'content': f'第{i}个问题：AMD 营收'})
+        messages.append({'role': 'assistant', 'content': f'第{i}个回答：' + '答' * 1000})
+    return messages
+
+
+def test_forty_rounds_keep_the_newest_whole_and_name_the_older_ones_that_were_left_out():
+    messages = _forty_rounds() + [{'role': 'user', 'content': '它呢？'}]
+    turn = _turn(messages)
+    prior = turn.prior_turns()
+    older = prior[0]
+    left = 80 - (len(prior) - 1)                       # 80 earlier messages; the note is the one system line before them
+    assert older == {'role': 'system', 'content':
+                     '（更早的 %d 条对话消息因长度没有在这里展开；需要时用 recall_conversations 回查。）' % left}
+    assert left > 0
+    turns = prior[1:]
+    assert all(m['role'] in {'user', 'assistant'} for m in turns)
+    assert turns[-1] == messages[-2] and turns[-2] == messages[-3]     # the newest answer and question, whole
+    event = next(e for e in turn.audit['truncation_events'] if e['site'] == 'prior_turns.older')
+    assert event['dropped_messages'] == left
+
+
+# --- group 7: memory and catalogue stay first, unchanged ----------------------------------------------
+
+def test_memory_and_catalogue_stay_first_and_unchanged_when_the_older_note_is_added():
+    memory = layers.MEMORY_NOTE + '\n- 用户关注 AMD'
+    catalogue = layers.CATALOGUE_NOTE + '\n[]'
+    messages = [{'role': 'user', 'content': memory}, {'role': 'user', 'content': catalogue}] + _forty_rounds() + \
+               [{'role': 'user', 'content': '它呢？'}]
+    prior = _turn(messages).prior_turns()
+    assert prior[0] == {'role': 'system', 'content': memory}
+    assert prior[1] == {'role': 'system', 'content': catalogue}
+    assert prior[2]['role'] == 'system' and prior[2]['content'].startswith('（更早的 ')

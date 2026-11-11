@@ -1522,6 +1522,13 @@ class Turn:
         memory=next((m for m in self.messages if isinstance(m,dict) and layers.is_memory_message(m)),None)
         catalogue=next((m for m in self.messages if isinstance(m,dict) and layers.is_catalogue_message(m)),None)
         turns=list(reversed(selected))
+        if window_on:
+            # Earlier messages left out for length are named, so the model knows the history is not whole.
+            eligible=[text for text in (str(m.get('content') or '').strip() for m in conversation if m.get('role') in {'user','assistant'}) if text]
+            dropped=len(eligible)-len(selected)
+            if dropped:
+                self.note_truncation('prior_turns.older',sum(len(text) for text in eligible),sum(len(m['content']) for m in selected),dropped_messages=dropped)
+                turns.insert(0,{'role':'system','content':'（更早的 %d 条对话消息因长度没有在这里展开；需要时用 recall_conversations 回查。）'%dropped})
         memory_text=''
         if memory:
             # Whole memory lines within the budget; what does not fit is counted in the text and the audit.
