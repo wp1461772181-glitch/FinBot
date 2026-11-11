@@ -1,5 +1,5 @@
 """The resolver writes the canonical question every turn, and every later stage reads it."""
-import asyncio
+import asyncio,json
 from app.agent_workflow import direct
 from app.agent_workflow.state import AgentRuntimeContext
 from app.freshness import requested_years
@@ -87,7 +87,9 @@ def test_the_tool_loop_uses_only_the_canonical_question():
     users=[m['content'] for m in messages if m['role']=='user']
     notes=[m['content'] for m in messages if m['role']=='system']
     assert users[-1]==CANONICAL and '去年微软的营收是多少？' not in users
-    assert not any('用户本轮原话' in note or '去年微软的营收是多少？' in note for note in notes)
+    assert json.loads(next(note for note in notes if note.startswith('对当前问题的理解'))[len(direct.UNDERSTANDING_NOTE):])['user_original_words']=='去年微软的营收是多少？'
+    assert not any('去年微软的营收是多少？' in note for note in notes if not note.startswith('对当前问题的理解'))
+    assert not any('用户本轮原话' in note for note in notes)
     understanding=next(note for note in notes if note.startswith('对当前问题的理解'))
     assert '以改写后的问题为准' in understanding and 'days_back' in understanding and 'max_results' in understanding
 
@@ -126,7 +128,10 @@ def test_a_selected_referent_extends_the_rewrite_not_the_users_words():
         'referents':[{'mention':'它','text':'微软（MSFT）','source':'assistant_previous'}]}
     result,messages=run('它的营业利润呢？',resolver=resolver,classifier=lambda _:{'category':'D'},history=HISTORY)
     assert result['audit']['stages']['resolver']['validator']['passed'] is True
-    assert canonical+' 微软（MSFT）' in hint(messages) and '它的营业利润呢？' not in hint(messages)
+    assert canonical+' 微软（MSFT）' in hint(messages)
+    assert json.loads(hint(messages)[len(direct.UNDERSTANDING_NOTE):])['user_original_words']=='它的营业利润呢？'
+    assert not any('它的营业利润呢？' in m['content'] for m in messages if m['role']=='user')
+    assert not any('它的营业利润呢？' in m['content'] for m in messages if m['role']=='system' and not m['content'].startswith('对当前问题的理解'))
 
 def test_a_rewrite_that_adds_an_unfounded_future_year_is_dropped():
     result,messages=run('它的营收呢？',history=[{'role':'user','content':'Micron FY2025 report'}],
