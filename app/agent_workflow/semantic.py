@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib,json,re,unicodedata
 from typing import Any
+from .fp_flags import flag
 ACCESSION=re.compile(r"\b\d{10}-\d{2}-\d{6}\b")
 SOURCE_ID=re.compile(r"\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b")
 TASK_ID=re.compile(r"\b[0-9a-fA-F]{64}\b")
@@ -176,6 +177,13 @@ _MAGNITUDE = {"万亿": 1e12, "千万": 1e7, "百万": 1e6, "亿": 1e8, "万": 1
 
 
 _FIGURE = re.compile(r"(\d+(?:\.\d+)?)\s*(万亿|千万|百万|亿|万|千|trillion|billion|million|thousand|bn|mn|b|k|m)?(?![A-Za-z])", re.I)
+_FIGURE_WHOLE = re.compile(r"(?=(\d+(?:\.\d+)?))\1\s*(万亿|千万|百万|亿|万|千|trillion|billion|million|thousand|bn|mn|b|k|m|x|×)?(?![A-Za-z])", re.I)
+
+
+def figure_tokens(text: str) -> list[tuple[str, str]]:
+    """(number, unit) pairs.  Whole tokens only when FINBOT_FP7_WHOLE_TOKEN is on: a number glued to
+    an unknown letter suffix yields nothing instead of a shortened number."""
+    return (_FIGURE_WHOLE if flag("FINBOT_FP7_WHOLE_TOKEN", True) else _FIGURE).findall(text)
 
 
 def figure_values(text: str, *, zh: bool = False) -> set[float]:
@@ -186,7 +194,7 @@ def figure_values(text: str, *, zh: bool = False) -> set[float]:
     text = re.sub(r"(?<=\d)T(?=\d{2}:)", " ", text)
     text = PERIOD_TEXT.sub(" ", ACCESSION.sub(" ", SOURCE_ID.sub(" ", TASK_ID.sub(" ", text))))
     text = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", text)
-    values = {round(float(number) * _MAGNITUDE.get(unit.lower(), 1.0), 4) for number, unit in _FIGURE.findall(text)}
+    values = {round(float(number) * _MAGNITUDE.get(unit.lower(), 1.0), 4) for number, unit in figure_tokens(text)}
     if zh:
         for run in re.findall(r"[零〇一二两三四五六七八九十]+", text):
             value = _zh_number(run)

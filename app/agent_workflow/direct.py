@@ -46,6 +46,8 @@ MAX_REPLAYED_CALLS=3
 # A refused calculation carries its own error payload, so it must not be flattened to tool_failed.
 class _CalculationRefused(Exception):
     def __init__(self,outcome):super().__init__(outcome.get('error_code'));self.outcome=outcome
+# FP7: the hint that goes with each input's receipt (verbatim, decision D-F2).
+CALCULATION_RECEIPT_HINT='有输入没有绑定到来源，逐项原因见 input_receipts。只需改正其中 found 为 false 的输入，其余保持不变；不要把数值改写成更长的小数去试。closest_in_source 与 bindable_values 都只是不完整的候选。'
 # The server-owned refusal of an out-of-scope turn, per answer language. The route decision is
 # code's; this sentence is the floor the user always gets, and the model may only add next steps.
 # The canonical limitation sentence, per answer language.  The model's own wording is added after it,
@@ -1782,6 +1784,9 @@ class Turn:
                             # numbers the cited source really holds.
                             code=str(exc) or 'invalid_calculation'
                             outcome={'ok':False,'error_code':code}
+                            if hasattr(exc,'receipts'):
+                                # FP7: one receipt per input; the candidates beside them are partial, and the hint says so.
+                                outcome.update({'input_receipts':exc.receipts,'candidates_complete':False,'hint':CALCULATION_RECEIPT_HINT})
                             if code=='calculation_input_unbound':
                                 available=bindable_values(self.citations,args)
                                 if available:outcome['bindable_values']=available
@@ -1856,6 +1861,9 @@ class Turn:
                          'hint':'这是计算来源，不能直接取回；先读取 parents 中的原始来源，再用 calculate 或 calculate_formula 重算。'}
                 self.feedback.append({'name':name,'error_code':'history_citation_derived','result':derived})
                 return
+            if outcome.get('input_receipts'):
+                # FP7: an entry with ok=False is handed to the model as the tool message, receipts and all.
+                self.feedback.append({'name':name,'ok':False,'data':[],'error_code':outcome.get('error_code'),'hint':outcome.get('hint'),'input_receipts':outcome['input_receipts'],'candidates_complete':False});return
             self.feedback.append({'name':name,'error_code':outcome.get('error_code'),'hint':outcome.get('hint')});return
         rows=outcome.get('data') if outcome.get('data') is not None else (outcome.get('items') or [])
         if not isinstance(rows,list):rows=[rows]
