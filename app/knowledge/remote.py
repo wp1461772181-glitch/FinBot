@@ -1,5 +1,5 @@
 from __future__ import annotations
-"""Retrieval runtime that talks to the Mac-side retrieval service.
+"""Retrieval runtime that talks to the remote retrieval service.
 
 Never imports torch / FlagEmbedding / pymilvus: the Muse VM only forwards the
 query (plus the access scope and time cutoff) and receives ranked chunk ids.
@@ -15,7 +15,7 @@ TOTAL_TIMEOUT=15.0
 class KnowledgeOffline(RuntimeError):
     """The remote retrieval service cannot be reached or answered in time."""
     code='knowledge_offline'
-    hint='知识库检索服务当前离线（Mac 可能在睡眠），本轮请不依赖知识库继续回答。'
+    hint='知识库检索服务当前不可用，本轮请不依赖知识库继续回答。'
 
 class RemoteKnowledgeRuntime:
     ready=True
