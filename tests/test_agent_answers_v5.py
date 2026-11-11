@@ -16,8 +16,11 @@ def test_bad_passage_does_not_erase_supported_passage(bad):
     # The unsupported passage is kept, and reported as unverified; nothing is deleted.  A marker that names no
     # source of the turn ([99]) is removed from the delivered text; the sentence around it is not.
     delivered=bad.replace('[99]','')
-    assert delivered in result['answer'] and len(result['unverified_lines'])==1 and result['unverified_lines'][0]['line'].startswith(bad.rstrip('。')[:6])
-    assert result['status']=='partially_succeeded'
+    # S0: nothing is flagged to the reader and the status is unchanged; the check's verdict is audit-only.
+    assert delivered in result['answer'] and result['unverified_lines']==[]
+    legacy=result['audit']['legacy_review']['unverified_lines']
+    assert len(legacy)==1 and legacy[0]['line'].startswith(bad.rstrip('。')[:6])
+    assert result['status']=='succeeded'
 
 def test_stock_source_does_not_require_a_stock_keyword_in_every_sentence():
     result=turn().finish('AMD 收盘价为100美元[1]。\n以上为历史记录[1]。')
@@ -32,8 +35,9 @@ def test_ordinary_uncited_fact_cannot_survive_a_supported_price_sentence():
 
 def test_bare_factual_number_is_checked_against_the_attached_source():
     result=turn().finish('AMD revenue was 999 [1].')
-    assert '999' in result['answer'] and result['reason']=='unsupported_numeric_claim'
-    assert result['unverified_lines'][0]['numbers']==['999']
+    # S0: the figure stays; the check's verdict is audit-only and changes neither reason nor visible lines.
+    assert '999' in result['answer'] and result['reason'] is None and result['unverified_lines']==[]
+    assert result['audit']['legacy_review']['unverified_lines'][0]['numbers']==['999']
 
 def test_source_bound_deterministic_calculation_exposes_formula_and_inputs():
     from app.agent_workflow.calculation import calculate

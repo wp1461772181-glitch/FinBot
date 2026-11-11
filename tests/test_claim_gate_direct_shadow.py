@@ -78,11 +78,12 @@ def test_enforce_drops_a_claim_the_resolved_span_does_not_support(monkeypatch):
     }
     answer = "Revenue was 16,182 million [1].\n" + json.dumps(claims)
     result = _turn().finish(answer)
-    assert "16,182" not in result["answer"]
-    assert "待核对" not in result["answer"]
-    gate = result["audit"]["claim_gate"]
-    assert "unsupported_numeric" in gate["drop_reasons"]
-    assert result["reason"] == "unsupported_numeric"
+    # S0: enforce is retired. The sentence stays, is recorded by the shadow gate, and the turn's reason is unchanged.
+    assert "16,182" in result["answer"]
+    assert "待核对" not in result["answer"] and "claim_gate" not in result["audit"]
+    assert result["audit"]["claim_gate_retired"] == "enforce->shadow"
+    assert "unsupported_numeric" in result["audit"]["claim_gate_shadow"]["drop_reasons"]
+    assert result["reason"] is None
 
 
 def test_enforce_only_warns_when_the_figure_is_in_another_source_of_the_turn():

@@ -68,14 +68,10 @@ def test_invalid_citation_is_flagged_not_deleted_and_stored_for_replay(stream_fi
     send,classification,_,_,stored,_,decisions=stream_fixture;classification['category']='D';decisions.append({'content':'made up [99]'})
     events=frames(asyncio.run(send()));final=next(d for e,d in events if e=='done')
     # The sentence stays; the stream and the stored message carry it as an unverified line.
-    assert final['reason']=='invalid_citation' and 'made up' in ''.join(d.get('text','') for e,d in events)
-    flagged=next(d for e,d in events if e=='unverified_lines')['items']
-    assert flagged[0]['line'].startswith('made up') and flagged[0]['reason']=='invalid_citation'
-    protocol=next(k['tool_calls'] for _,k in stored if isinstance(k.get('tool_calls'),dict) and k['tool_calls'].get('unverified_lines'))
-    assert protocol['unverified_lines']==flagged
-    async def rows(*_a,**_k):return {'messages':[{'role':'assistant','content':'made up [99]','status':'complete','turn_id':'turn','tool_calls':protocol}],'has_more':False,'next_before':None}
-    monkeypatch.setattr(stream,'owned_message_page',rows)
-    assert asyncio.run(stream.get_messages('conversation','owner'))['messages'][0]['unverified_lines']==flagged
+    # S0: the check no longer flags the sentence to the reader or stores flags; the sentence is still delivered.
+    assert final['reason'] is None and 'made up' in ''.join(d.get('text','') for e,d in events)
+    assert not any(e=='unverified_lines' for e,_ in events)
+    assert not any(isinstance(k.get('tool_calls'),dict) and k['tool_calls'].get('unverified_lines') for _,k in stored)
 
 
 def test_ask_user_card_survives_sse_and_history(stream_fixture,monkeypatch):

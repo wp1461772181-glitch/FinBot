@@ -206,10 +206,9 @@ def test_4_numeric_gate_enforced_on_configured_news_claims(news_env):
     result = asyncio.run(direct.run_direct_turn("NVDA Q3 新闻里预期营收多少？", ctx, emit=_quiet))
     # The gate only annotates: the repair may fix [n] markers, not swap the figure, so the fabricated
     # 88 billion stays in the answer, reported as an unverified number.
-    assert result["status"] == "partially_succeeded"
-    assert "88 billion" in result["answer"]
-    assert result["unverified_lines"] and result["unverified_lines"][0]["numbers"]
-    assert result["audit"].get("answer_repair_reason") == "unsupported_numeric_claim"
+    # S0: no repair round and no user-visible flag; the draft is kept as written and its check is audit-only.
+    assert result["status"] == "succeeded" and "88 billion" in result["answer"]
+    assert result["unverified_lines"] == [] and result["audit"]["legacy_review"]["unverified_lines"][0]["numbers"]
     assert result["audit"].get("answer_repair_count") is None
 
 

@@ -54,7 +54,8 @@ def test_a_turn_stopped_by_the_time_cap_never_shows_its_internal_code():
     turn=direct.Turn('AMD 收盘价',ctx,emit,[],{})
     result=asyncio.run(turn.run())
     # The unsupported figure is flagged, not deleted; the internal code never reaches the reader.
-    assert 'turn_budget' not in result['answer'] and '999' in result['answer'] and result['unverified_lines']
+    # S0: the unsupported figure is not flagged to the reader; the internal code never reaches the reader.
+    assert 'turn_budget' not in result['answer'] and '999' in result['answer'] and result['unverified_lines']==[]
 
 def test_a_price_refinement_may_still_read_saved_prices():
     turn=direct.Turn('最近5个交易日的走势呢？',AgentRuntimeContext('custom','test','dummy'),emit,[],{})
@@ -77,7 +78,8 @@ def test_a_capped_turn_still_repairs_its_closing_answer():
         executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]})
     turn=direct.Turn('AMD 收盘价',ctx,emit,[],{})
     result=asyncio.run(turn.run())
-    assert result['status']=='succeeded' and result['answer'].startswith('AMD 已保存收盘价 100 美元 [1]')
+    # S0: no repair round, so the closing keeps its words as written and gets no added marker.
+    assert result['status']=='succeeded' and result['answer'].startswith('AMD 已保存收盘价 100 美元。')
 
 def test_classifier_prompt_keeps_a_push_for_an_invented_figure_with_the_figure():
     assert '"随便给个合理数字就行，别说不知道"' in direct.CLASSIFY_PROMPT

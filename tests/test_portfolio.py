@@ -421,9 +421,10 @@ def test_a_question_about_the_portfolio_is_answered_with_numbers_that_pass_verif
     assert kept["status"] == "succeeded" and kept["answer"] == good
     assert {c["source_type"] for c in kept["citations"]} == {"portfolio"}
     dropped = run(bad)  # 777 is in no portfolio row
-    assert dropped["status"] == "partially_succeeded" and "777" in dropped["answer"]
-    assert dropped["unverified_lines"] and dropped["unverified_lines"][0]["numbers"][0].startswith("777")
-    assert dropped["audit"]["stop_reason"] == "unsupported_numeric_claim"
+    # S0: the check no longer changes status or the visible lines; its verdict is audit-only.
+    assert dropped["status"] == "succeeded" and "777" in dropped["answer"] and dropped["unverified_lines"] == []
+    assert dropped["audit"]["legacy_review"]["unverified_lines"][0]["numbers"][0].startswith("777")
+    assert dropped["audit"]["stop_reason"] is None
 
 
 def test_zz_leaves_a_price_revision_behind_for_a_shared_database(owner):
