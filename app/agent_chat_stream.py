@@ -14,6 +14,7 @@ from .agent_workflow.trace import WIRE_KEYS
 from .agent_chat_store import create_conversation,verify_conversation,append_message,owned_message_page,history,finish_conversation,owner_hash
 from .agent_chat_store import conversation_context
 from . import agent_context as layers
+from .agent_workflow.fp_flags import flag as fp_flag
 router=APIRouter(prefix="/agent-chat",tags=["agent-chat-stream"])
 LOCKS={}
 MAX_PROTOCOL_BYTES=32000
@@ -471,6 +472,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    messages.extend(layers.history_messages(context.get("half_turns",[]), omitted=len(context.get("overflow") or [])))
    for group in layers.complete_turns(history_rows):
     messages.extend(layers.project_turn_history(group))
+   messages.extend(layers.unfinished_messages(context.get("unfinished"),turn) if fp_flag("FINBOT_FP3_UNFINISHED_TURNS",True) else [])
    skill_block,active_skill,question=await _skills(x_chat_session,bot,payload.message) if not payload.pending_request_id else (None,None,payload.message)
    messages.append({"role":"user","content":question})
    memory_note=layers.summary_message(context.get("segments",[]))
