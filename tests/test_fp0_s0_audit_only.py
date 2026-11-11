@@ -207,3 +207,53 @@ def test_r2_6_v2_hand_markers_are_still_stripped(monkeypatch):
     turn.citation_protocol = 'v2'
     result = turn.finish('Revenue was 16,128 [1].')
     assert result['citation_protocol'] == 'v2' and '[1]' not in result['answer']
+
+
+# ---- ruling 1: the status rule (genuine stop and tool failure are partial, a clean turn stays succeeded) ----
+
+def test_a_normal_turn_stays_succeeded(monkeypatch):
+    monkeypatch.delenv('CLAIM_QUOTE_GATE', raising=False)
+    result = _turn().finish('Revenue was 16,128 [1].')
+    assert result['status'] == 'succeeded'
+    assert 'status_basis' not in result['audit'] and 'failed_tools' not in result['audit']
+
+
+def test_a_turn_with_a_tool_failure_is_partial(monkeypatch):
+    monkeypatch.delenv('CLAIM_QUOTE_GATE', raising=False)
+    turn = _turn(route='D', citations=[])
+    turn.accept('open_page', {'page': 'sec'}, {'ok': False, 'error_code': 'tool_failed'})
+    result = turn.finish('已打开 SEC 页面。')
+    assert result['status'] == 'partially_succeeded'
+    assert result['audit']['status_basis'] == 'tool_failure'
+    assert result['audit']['failed_tools'] == [{'tool': 'open_page', 'error_code': 'tool_failed'}]
+
+
+def test_a_successful_empty_search_is_not_a_tool_failure(monkeypatch):
+    monkeypatch.delenv('CLAIM_QUOTE_GATE', raising=False)
+    turn = _turn(route='D', citations=[])
+    turn.feedback.append({'name': 'search_knowledge', 'ok': True, 'data': [], 'error_code': 'no_matching_evidence'})
+    result = turn.finish('没有找到相关资料。')
+    assert result['status'] == 'succeeded' and 'failed_tools' not in result['audit']
+
+
+def test_a_genuine_stop_turn_is_partial():
+    from app.agent_workflow.direct import run_direct_turn
+
+    async def emit(_event):
+        return None
+
+    ctx = AgentRuntimeContext('custom', 'test', 'dummy', classifier=lambda _: 'D',
+        decider=lambda *_: {'tool_calls': [{'id': 'p', 'function': {'name': 'query_stock_prices', 'arguments': '{"symbol":"AMD"}'}}]},
+        executor=lambda *_: {'ok': True, 'data': [{'id': 'p', 'symbol': 'AMD', 'close': 100}]},
+        answerer=lambda *_: 'AMD 收盘价为 100 美元 [1]。')
+    result = asyncio.run(run_direct_turn('查 AMD 价格', ctx, emit=emit))
+    assert result['reason'] == 'no_progress' and result['status'] == 'partially_succeeded'
+    assert result['audit']['status_basis'] == 'genuine_stop'
+
+
+def test_failed_and_partial_statuses_are_never_changed(monkeypatch):
+    monkeypatch.delenv('CLAIM_QUOTE_GATE', raising=False)
+    turn = _turn(route='D', citations=[])
+    turn.accept('open_page', {'page': 'sec'}, {'ok': False, 'error_code': 'tool_failed'})
+    assert turn.finish('x', status='failed', reason='tool_failures', generated=True)['status'] == 'failed'
+    assert turn.finish('x', status='partially_succeeded', reason='tool_failures', generated=True)['status'] == 'partially_succeeded'

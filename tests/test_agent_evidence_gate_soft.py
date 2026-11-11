@@ -137,9 +137,7 @@ def test_closing_without_citation_marker_preserves_prose_and_appends_gathered_so
     assert closing_prose in result['answer']
     assert 'AAPL · AAPL 10-K · 2025-10-31 [1]' in result['answer']
     assert '没能整理出能与来源逐条核对的回答' not in result['answer']
-    # S0: the user sees no unverified lines; the missing citation is recorded in the audit only.
-    assert result['unverified_lines']==[]
-    assert any(item['reason'] == 'missing_citation' for item in result['audit']['legacy_review']['unverified_lines'])
+    assert any(item['reason'] == 'missing_citation' for item in result['unverified_lines'])
 
 
 def test_empty_closing_still_falls_back_to_unanswered_sources_list():
