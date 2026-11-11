@@ -261,6 +261,53 @@ def complete_turns(rows: list[dict]) -> list[list[dict]]:
             if g[0]["role"] == "user" and g[-1]["role"] == "assistant" and g[-1].get("status") == "complete"]
 
 
+UNFINISHED_KEEP = 3           # the newest unfinished turns a turn carries; outside the L1/L2 budgets
+UNFINISHED_NOTES = {          # the system record standing for an answer that never came; the wording is the plan's
+    'cancelled': '（系统记录：这条消息的回答被取消，没有完成。）',
+    'failed': '（系统记录：这条消息的回答失败了，没有完成。）',
+    'interrupted': '（系统记录：这条消息没有得到回答，过程中断。）',
+}
+UNFINISHED_PASSED_OVER = ('confirm:', 'authorize:', 'cancel:', 'change:', 'reply:')   # button replies, not questions
+
+
+def trailing_unfinished(rows: list[dict], upto: int = 0) -> list[dict]:
+    """The turns at the end of the stored messages that began with the user and did not end with a complete
+    answer: oldest first, at most UNFINISHED_KEEP of the newest.  The walk back from the newest turn stops at
+    the first complete turn or at a turn a summary already covers; a group that is not a question of the user
+    (an assistant-only group, a button reply, a blank question) is passed over without stopping the walk."""
+    groups: list[list[dict]] = []
+    for row in rows:
+        if not groups or groups[-1][0]["turn_id"] != row["turn_id"]:
+            groups.append([])
+        groups[-1].append(row)
+    found: list[dict] = []
+    for group in reversed(groups):
+        if group[0]["role"] == "user" and group[-1]["role"] == "assistant" and group[-1].get("status") == "complete":
+            break
+        if group[0]["sequence"] <= upto:
+            break
+        text = (group[0].get("content") or "").strip()
+        if group[0]["role"] != "user" or not text or text.startswith(UNFINISHED_PASSED_OVER):
+            continue
+        last = group[-1]
+        state = last["status"] if last["role"] == "assistant" and last.get("status") in ("cancelled", "failed") else "interrupted"
+        found.append({"turn_id": str(group[0]["turn_id"]), "content": _head(text, USER_KEEP_CHARS), "state": state})
+    return list(reversed(found[:UNFINISHED_KEEP]))
+
+
+def unfinished_messages(items: list[dict] | None, current_turn_id: str) -> list[dict]:
+    """Each earlier unfinished turn as the next turn carries it: the question, then the system record of how it
+    ended.  The current turn is left out: its own question is stored before the context is read, so it is an
+    unfinished turn of its own at that point."""
+    messages: list[dict] = []
+    for item in items or []:
+        if item["turn_id"] == current_turn_id:
+            continue
+        messages.append({"role": "user", "content": item["content"]})
+        messages.append({"role": "assistant", "content": UNFINISHED_NOTES[item["state"]]})
+    return messages
+
+
 def newest_within(groups: list[list[dict]], limit: int) -> tuple[list[list[dict]], int]:
     """The newest turns that fit ``limit`` bytes (oldest first) and what they take: the rule the
     history window has always followed, and the whole of layer 1."""
@@ -362,7 +409,9 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
                         for group in recent for row in group],
             "l1_turns": len(recent), "l1_bytes": used, "half_turns": half, "overflow": overflow,
             "segments": select_segments(segments, l3_bytes), "segments_total": len(segments), "summary_upto": upto,
-            "catalogue": catalogue, "budget": l1_bytes + l2_bytes + l3_bytes, "live_turns": live}
+            "catalogue": catalogue, "budget": l1_bytes + l2_bytes + l3_bytes, "live_turns": live,
+            # FP3: unfinished turns are carried beside the layers, not in them (no budget, no summary).
+            "unfinished": trailing_unfinished(rows, upto)}
 
 
 def _head(text: str, keep: int) -> str:
