@@ -167,8 +167,7 @@ async def run_unattended_turn(credential: str, question: str, model: dict, *, to
     citations = done.get("citations") or []
     if citations:
         protocol["citations"] = citations
-    if done.get("unverified_lines"):
-        protocol["unverified_lines"] = done["unverified_lines"]
+    # WP0 step 8: a new briefing does not store unverified lines (the check no longer produces them).
     failed = done.get("status") == "failed"
     await append_message(cid, turn, "assistant", answer, tool_calls=protocol, status="failed" if failed else "complete")
     await finish_conversation(cid, "failed" if failed else "active")

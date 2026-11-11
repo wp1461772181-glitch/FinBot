@@ -116,17 +116,18 @@ def test_a_message_telegram_accepts_goes_out_once():
     assert len(client.bodies) == 1
 
 
-def test_unverified_lines_carry_the_unverified_suffix_in_telegram():
-    """The stream's unverified_lines are flagged in the chat text; sentences that checked out are untouched."""
+def test_unverified_lines_no_longer_carry_the_unverified_suffix_in_telegram():
+    """WP0 step 8: the stream sends no unverified lines any more, so Telegram adds no 「（未核实）」 suffix; the
+    sentences are delivered as written."""
     events = [
-        ("delta", {"text": "AMD 收盘价为 100 美元 [1]。\nAMD 成交量为 999 万股 [1]。\n\n（另有 1 处表述未能与来源核对，已保留并标注“证据不足”。）"}),
+        ("delta", {"text": "AMD 收盘价为 100 美元 [1]。\nAMD 成交量为 999 万股 [1]。"}),
         ("unverified_lines", {"items": [{"line": "AMD 成交量为 999 万股 [1]。", "reason": "unsupported_numeric_claim", "numbers": ["999 万"]}]}),
     ]
     answer, _, _ = bridge.format_turn(events)
     lines = answer.split("\n")
     assert lines[0] == "AMD 收盘价为 100 美元。"
-    assert lines[1] == "AMD 成交量为 999 万股。（未核实）"
-    assert "[1]" not in answer and answer.count("（未核实）") == 1
+    assert lines[1] == "AMD 成交量为 999 万股。"
+    assert "[1]" not in answer and "（未核实）" not in answer
 
 
 def test_a_table_row_and_a_bullet_get_the_suffix_too():

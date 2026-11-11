@@ -206,3 +206,19 @@ def test_exception_after_terminal_citation_keeps_raw_manifest_not_restore_placeh
     saved=next(kwargs['tool_calls']['citations'] for _,kwargs in stored
         if kwargs.get('status')=='failed' and kwargs.get('tool_calls',{}).get('citations'))
     assert saved==original and saved[0]['source_type']=='official_filing'
+
+
+def test_the_realtime_stream_never_sends_an_unverified_frame_or_stores_one(stream_fixture, monkeypatch):
+    """WP0 step 8 regression guard: even when the workflow hands over unverified lines, the stream sends no
+    unverified_lines frame and stores none on the turn."""
+    import app.agent_chat_stream as stream
+    send,_,_,_,stored,_,_=stream_fixture
+    async def workflow(**_kwargs):
+        yield {"event":"delta","text":"AMD 收盘价为 100 美元 [1]。"}
+        yield {"event":"done","status":"succeeded","reason":None,"final_protocol":{},"audit":{},"citations":[],
+               "route":"A","trace":[],"unverified_lines":[{"line":"AMD 成交量为 999 万股 [1]。",
+                                                          "reason":"unsupported_numeric_claim","numbers":["999 万"]}]}
+    monkeypatch.setattr(stream,"stream_workflow",workflow)
+    wire=asyncio.run(send())
+    assert 'event: unverified_lines' not in wire and 'event: done' in wire
+    assert not any(isinstance(kwargs.get('tool_calls'),dict) and 'unverified_lines' in kwargs['tool_calls'] for _,kwargs in stored)
