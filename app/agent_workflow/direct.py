@@ -2563,7 +2563,10 @@ class Turn:
         if pending.get('reason') not in WRITE_CARD_REASONS:
             from .web_sources import timestamp
             expires=timestamp(pending.get('expires_at'))
-            if not expires or expires<=datetime.now(UTC):raise ValueError('pending_request_expired')
+            if not expires or expires<=datetime.now(UTC):
+                from .fp_flags import flag
+                if not (flag('FINBOT_FP4_EXPIRED_CARD_REPLY',True) and self.original.startswith('reply:')):raise ValueError('pending_request_expired')
+                self.audit['pending_request_expired_reply']=True
             # The reply: prefix is transport. The words the user chose are what every later stage reads (the reference
             # payload, the authorization words), so the press and a typed reply reach them identically.
             self.original=self.question=self.authorization_question=self.original.removeprefix('reply:');return None
