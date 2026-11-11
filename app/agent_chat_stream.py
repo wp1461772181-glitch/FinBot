@@ -515,10 +515,12 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    heartbeat=HEARTBEAT_SECONDS if fp_flag("FINBOT_FP5_HEARTBEAT",True) else None
    getter=asyncio.ensure_future(queue.get())
    while True:
-    done,_=await asyncio.wait({getter},timeout=heartbeat)
+    done,_=await asyncio.wait({getter,pump_task},timeout=heartbeat,return_when=asyncio.FIRST_COMPLETED)
     if not done:
      yield HEARTBEAT_FRAME
      continue
+    if not getter.done(): await asyncio.sleep(0)  # a read that already holds an item completes in this tick
+    if not getter.done(): break  # the pump ended with no terminal item (cancelled while waiting to hand over): none will come
     tag,item=getter.result()
     if tag=="end":break
     if tag=="error":raise item
