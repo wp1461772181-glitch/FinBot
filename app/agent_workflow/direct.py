@@ -585,6 +585,10 @@ NUDGE_NOTE=('系统事实：本轮你尚未调用任何工具，没有任何可�
     '需要事实时请调用工具取数；查不到就直说，不要凭记忆写出数字、日期或状态。')
 EMPTY_CLOSE_NOTE=('系统事实：你上一步没有产出正文。本轮已取得的证据：{sources}。'
     '请直接写给用户的回答正文，用上面证据的 [n] 引用；需要时仍可调用工具。')
+# FP9 (D-F2, verbatim): the sentence refusal_verdict's prompt carries about what the turn searched.
+SEARCH_SCOPE_CLAUSE=('facts.searched lists each source this turn queried and how it ended; facts.public_search says whether a public web search ran. '
+    'In reply, state the limitation as what this turn searched and that nothing usable was found there; when public_search is not_run, failed or pages_unreadable, say that as well. '
+    'Never say or imply that the information does not exist or was never published. ')
 # A sentence that says a named past or present date is still ahead.  Negated phrases are not claims.
 FUTURE_PHRASES=('尚未到来','还未到来','未到来','还没到','尚未到','还没有到','未来','将来','尚未发生','还没发生','未发生','还没有发生',
     'not yet','hasn\'t arrived','has not arrived','yet to come','in the future','has not happened','hasn\'t happened','has yet to')
@@ -1356,6 +1360,11 @@ class Turn:
                'tools_run_by_model':tool_facts(self.feedback[self.model_feedback_from:]),
                'tools_run_by_system':tool_facts(self.feedback[:self.model_feedback_from]),
                'dates_in_request':dates}
+        # FP9: the searches and whether a public one ran; with the switch off the prompt and the facts are the old ones.
+        compound=flag('FINBOT_FP9_COMPOUND_EMPTY',True)
+        if compound:facts['searched']=search_scope(self.feedback);facts['public_search']=public_search_state(self.feedback)
+        sentences='three' if compound else 'two'
+        scope_clause=SEARCH_SCOPE_CLAUSE if compound else ''
         messages=[{'role':'system','content':(
             f'The turn gathered no usable evidence for the user\'s request. Return ONLY JSON: '
             f'{{"useful": false, "reply": string, "reason": string, "route": string}}. '
@@ -1364,12 +1373,13 @@ class Turn:
             f'turn_state no_tool_called means the model called no tool at all; searched_empty means tools ran and found nothing; '
             f'tool_failed means a tool failed, with its error code. '
             f'reply is what the user reads: say plainly that there is no verifiable material for this '
-            f'question, in {language}, at most two sentences, and name what would make it answerable '
+            f'question, in {language}, at most {sentences} sentences, and name what would make it answerable '
             f'(a company, a period, a source, or owner confirmation for a write). '
             f'Write reply and reason from facts only: never claim a turn_state or a tool result that facts does not show, '
             f'and never say a date is in the future unless facts places that date in the future. '
             f'reason states which information is missing, for internal review, at most 200 characters. '
             f'route is one of insufficient_evidence, owner_action_required, out_of_scope. '
+            f'{scope_clause}'
             f'Never invent a fact, a number or a source.')},
             {'role':'user','content':'facts: '+json.dumps({'request':self.question,'observed':why,**facts},ensure_ascii=False,default=str)}]
         for attempt in range(2):
@@ -1397,7 +1407,19 @@ class Turn:
                 await asyncio.to_thread(self.record_question,verdict)
                 return text,verdict
             except Exception:continue
-        return '没有可核验资料，无法确认本次请求中的事实。',{'useful':False,'reply':'','reason':'verdict_unavailable','route':'insufficient_evidence'}
+        line=self.searched_line() if compound else ''
+        return '没有可核验资料，无法确认本次请求中的事实。'+('\n'+line if line else ''),{'useful':False,'reply':'','reason':'verdict_unavailable','route':'insufficient_evidence'}
+
+    def searched_line(self):
+        """What this turn searched and that nothing usable came of it, with the state of the public search.  '' when nothing was searched.
+
+        FP9: the last resort of refusal_verdict carries this line, so the absence is said with its scope."""
+        scope=search_scope(self.feedback)
+        if not scope:return ''
+        names='、'.join(dict.fromkeys(item['tool'] for item in scope))
+        public={'not_run':'本轮没有做公开网页检索。','failed':'公开网页检索没有成功。',
+                'pages_unreadable':'公开网页检索找到了页面，但正文没能读取。'}.get(public_search_state(self.feedback),'')
+        return f'本轮已查：{names}；均未取得可用资料。'+public
 
     def refusal_state(self):
         """What the model's own tool requests this turn did: none made, a call that failed, or calls that found nothing.
