@@ -3,7 +3,7 @@ import ast
 import re
 import unicodedata
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
-from .semantic import _FIGURE, _MAGNITUDE, PERIOD_TEXT, ACCESSION, SOURCE_ID, TASK_ID
+from .semantic import _MAGNITUDE, PERIOD_TEXT, ACCESSION, SOURCE_ID, TASK_ID, figure_tokens
 # Percent and unit factors only: a power of ten converts a cited value (to 亿 or billions), it adds no figure.
 CONSTANTS=frozenset({0,1,100,1000,10**4,10**6,10**8,10**9,10**12})
 
@@ -54,7 +54,7 @@ def source_numbers(text):
     text=unicodedata.normalize('NFKC',text).replace('萬','万').replace('億','亿')
     text=PERIOD_TEXT.sub(' ',ACCESSION.sub(' ',SOURCE_ID.sub(' ',TASK_ID.sub(' ',text))))
     text=re.sub(r'(?<=\d),(?=\d{3}(?!\d))','',text)
-    found=_FIGURE.findall(text)
+    found=figure_tokens(text)
     return {Decimal(n)*Decimal(str(_MAGNITUDE.get(unit.lower(),1))) for n,unit in found}|{Decimal(n) for n,unit in found if unit}
 
 
@@ -182,6 +182,6 @@ def bindable_values(citations, args):
         text=unicodedata.normalize('NFKC',citation_check_text(source)).replace('萬','万').replace('億','亿')
         text=PERIOD_TEXT.sub(' ',ACCESSION.sub(' ',SOURCE_ID.sub(' ',TASK_ID.sub(' ',text))))
         text=re.sub(r'(?<=\d),(?=\d{3}(?!\d))','',text)
-        values=[str(Decimal(n)*Decimal(str(_MAGNITUDE.get(unit.lower(),1)))) for n,unit in _FIGURE.findall(text)]
+        values=[str(Decimal(n)*Decimal(str(_MAGNITUDE.get(unit.lower(),1)))) for n,unit in figure_tokens(text)]
         if values:found[str(ordinal)]=values[:12]
     return found
