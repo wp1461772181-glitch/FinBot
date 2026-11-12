@@ -4,8 +4,6 @@ import json
 import re
 
 import httpx
-import pytest
-
 from app.agent_telegram import split_for_telegram
 from scripts import run_telegram_bridge as bridge
 
@@ -76,14 +74,17 @@ class Client:
     def __init__(self, answer="好"):
         self.posts = []
         self.requests = []
+        self.events = []
         self.answer = answer
 
     async def post(self, url, json):
         self.posts.append(dict(json))
+        self.events.append("send")
         return httpx.Response(200, json={"ok": True, "result": {"message_id": len(self.posts)}})
 
     def stream(self, method, url, **kwargs):
         self.requests.append(kwargs["json"])
+        self.events.append("request")
         client = self
 
         class Response:
@@ -134,6 +135,7 @@ def test_overlong_notice_precedes_truncated_request(monkeypatch):
     assert "parse_mode" not in client.posts[0]
     assert len(client.requests) == 1 and client.requests[0]["message"] == "问" * 4000
     assert len(client.posts) == 2
+    assert client.events == ["send", "request", "send"]
 
 
 def test_no_notice_at_limit_or_for_card_press(monkeypatch):
