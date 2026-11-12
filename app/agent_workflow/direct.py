@@ -1796,7 +1796,13 @@ class Turn:
            and args['symbol'] not in named and not contains(args['symbol'],self.original) and not contains(args['symbol'],self.question):
             # Only a read may widen: a write's target stays as strict as it was.
             policy=definitions().get(name)
-            if policy is None or policy.level!='read' or (self.entity_binds() and not self.symbol_discovered(args['symbol'])):raise ValueError('scope_not_grounded')
+            blocked=policy is None or policy.level!='read' or (self.entity_binds() and not self.symbol_discovered(args['symbol']))
+            # FP11 step 1, shadow only: count a read this gate refuses for its entity, and a read it lets through.  Behaviour is unchanged.
+            if not blocked:self.audit['entity_gate_passes']=self.audit.get('entity_gate_passes',0)+1
+            elif policy is not None and policy.level=='read':
+                blocks=self.audit.setdefault('entity_gate_blocks',[])
+                if len(blocks)<20:blocks.append({'tool':name,'asked':str(args['symbol'])[:16],'scope_symbol':str(self.scope['symbol'])[:16]})
+            if blocked:raise ValueError('scope_not_grounded')
 
     def symbol_discovered(self,symbol):
         """A symbol this turn found in data rather than in the request.  The owner's own rows always count.  Other
