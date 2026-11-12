@@ -31,6 +31,48 @@ BIND_CODE_LENGTH = 8
 BIND_CODE_EXPIRE_MINUTES = 30
 
 
+def split_for_telegram(text: str, limit: int = 3800) -> list[str]:
+    """Split at readable boundaries while keeping each Telegram message within its limit."""
+    if len(text) <= limit:
+        return [text]
+    if limit <= 8:
+        raise ValueError("limit must leave room for a code fence")
+
+    chunks = []
+    rest = text
+    while len(rest) > limit:
+        window = rest[:limit - 8]
+        floor = limit // 2
+        cut = window.rfind("\n\n")
+        if cut < floor:
+            cut = window.rfind("\n")
+        if cut < floor:
+            ends = [match.end() for match in re.finditer(r"[。！？；]|\.(?= )", window)
+                    if match.start() >= floor]
+            cut = ends[-1] if ends else -1
+        if cut < floor:
+            cut = len(window)
+            numeric = "0123456789.,% "
+            if rest[cut - 1] in numeric and rest[cut] in numeric:
+                start = cut
+                while start > 0 and cut - start < 40 and rest[start - 1] in numeric:
+                    start -= 1
+                if start > 0 and rest[start - 1] not in numeric:
+                    cut = start
+        piece = rest[:cut].rstrip()
+        if not piece:
+            cut = len(window)
+            piece = rest[:cut].rstrip() or rest[:cut]
+        rest = rest[cut:].lstrip("\n")
+        if sum(line.startswith("```") for line in piece.splitlines()) % 2:
+            piece += "\n```"
+            rest = "```\n" + rest
+        chunks.append(piece)
+    if rest:
+        chunks.append(rest)
+    return chunks
+
+
 class TelegramError(ValueError):
     """A short code the API may show; never a stored value."""
 
