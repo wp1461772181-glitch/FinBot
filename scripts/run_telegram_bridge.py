@@ -40,12 +40,16 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.agent_telegram import split_for_telegram
+from app.agent_workflow.fp_flags import flag
+
 TELEGRAM_API = "https://api.telegram.org"
 LOCAL_API = os.environ.get("TELEGRAM_BRIDGE_API_URL", "http://127.0.0.1:8000")
 LONG_POLL_TIMEOUT = 60
 OUTBOX_CHECK_INTERVAL = 30
 MESSAGE_MAX_CHARS = 4000
 ANSWER_MAX_CHARS = 3800
+OVERLONG_NOTICE = "这条消息有 {total} 字，超过单条上限 {limit} 字：只把前 {limit} 字发给了助手，末尾 {dropped} 字没有读到。需要的话，请把后面的内容另发一条。"
 # Short ids of cards already pressed, so a second tap is told the card was handled, not that it expired.
 USED_CARDS_KEPT = 256
 _USED_CARDS: dict[str, None] = {}
@@ -426,6 +430,9 @@ async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pendin
         await progress.start()
     try:
         try:
+            if not press and len(text) > MESSAGE_MAX_CHARS:
+                await _send_text(client, bot_token, bound_chat, OVERLONG_NOTICE.format(
+                    total=len(text), limit=MESSAGE_MAX_CHARS, dropped=len(text) - MESSAGE_MAX_CHARS), markdown=False)
             answer, cards, cid = await _ask_with_retry(client, credential, bot_id, text,
                                                        on_event=progress.on_event if progress else None, **press)
         except BackendUnavailable:
@@ -444,7 +451,8 @@ async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pendin
     if ticked and not keyboard:
         answer = answer.strip() + "\n\n（这一步需要在网页里选择后确认。）"
     answer = ("" if channel else f"【{bot_name}】\n") + (answer.strip() or ("完成。" if keyboard else "（这条回复没有内容。）"))
-    chunks = [answer[i:i+ANSWER_MAX_CHARS] for i in range(0, len(answer), ANSWER_MAX_CHARS)]
+    chunks = (split_for_telegram(answer, ANSWER_MAX_CHARS) if flag("FINBOT_FP12_TG_SPLIT", True)
+              else [answer[i:i+ANSWER_MAX_CHARS] for i in range(0, len(answer), ANSWER_MAX_CHARS)])
     for i, chunk in enumerate(chunks):
         kb = keyboard if i == len(chunks) - 1 else None
         sent = await _send_text(client, bot_token, bound_chat, chunk, inline_keyboard=kb)
