@@ -28,8 +28,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
+from sqlalchemy.exc import IntegrityError
 
-from .agent_chat_models import AgentBackgroundModel, AgentModelEntry
+from .agent_chat_models import AgentBackgroundModel, AgentBot, AgentModelEntry, AgentModelRole
 from .database import SessionLocal
 from .secret_box import CredentialEncryptionError, decrypt_secret, encrypt_secret
 
@@ -43,6 +44,10 @@ FORBIDDEN_ENV = {"APP_API_ACCESS_KEY", "MODEL_CREDENTIAL_KEY", "TELEGRAM_BOT_API
 MAX_ENTRIES = 40
 WINDOW_MIN, WINDOW_MAX = 4_000, 10_000_000
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Entries the code reads by their literal name.  A rename would leave that reader pointing at nothing, so renaming one
+# is refused (model_name_in_code).  ``background``: scripts/claim_shadow_report.py defaults to it, and migrate_legacy
+# names the old background model that way.  code_referenced_names() adds the judge names read at run time.
+CODE_NAMES = {"background": "scripts/claim_shadow_report.py"}
 
 
 class CatalogError(ValueError):
@@ -371,15 +376,37 @@ def _clean_key(api_key: str | None) -> str | None:
     return api_key
 
 
+def code_referenced_names() -> dict[str, str]:
+    """The catalog names the code or its config reads, each with where it is read.  The judge's pinned label is read
+    only when CLAIM_JUDGE_SHADOW_MODEL is unset (agent_workflow/claim_judge_pin.shadow_model_name), as it is here."""
+    shadow = (os.environ.get("CLAIM_JUDGE_SHADOW_MODEL") or "").strip()
+    if shadow:
+        return {**CODE_NAMES, shadow: "CLAIM_JUDGE_SHADOW_MODEL"}
+    try:
+        from .agent_workflow.claim_judge_pin import load_pin
+        pinned = str(load_pin()["judge"]["name"]).strip()
+    except Exception:  # an unreadable pin disables the shadow judge anyway
+        pinned = ""
+    return {**CODE_NAMES, pinned: "config/claim_judge_pin.json"} if pinned else dict(CODE_NAMES)
+
+
 def save_entry(name: str, *, display_name: str | None = None, provider: str | None = None, model: str | None = None,
                base_url: str | None = None, api_key: str | None = None, key_env: str | None = None,
-               is_default: bool | None = None, create: bool = False, context_window: int | None = None) -> dict:
+               is_default: bool | None = None, create: bool = False, context_window: int | None = None,
+               rename_to: str | None = None) -> dict:
     """Add (``create``) or change an owner entry.  The key comes as ``api_key`` (stored in the vault) or
-    ``key_env`` (an environment variable name); a new provider or endpoint needs one of them again."""
+    ``key_env`` (an environment variable name); a new provider or endpoint needs one of them again.
+    ``rename_to`` (an existing entry only) gives it a new name: the bots and model roles that named the old one
+    move to the new one in the same transaction, and the entry keeps its key, default flag and window."""
     if not NAME.fullmatch(name or ""):
         raise CatalogError("invalid_name")
     if any(item["name"] == name for item in _read_file()[0]):
         raise CatalogError("model_from_file")
+    new_name = None if rename_to is None or rename_to == name else rename_to
+    if new_name is not None and create:
+        raise ValueError("rename_to applies to an existing entry only")
+    if new_name is not None and not NAME.fullmatch(new_name):
+        raise CatalogError("invalid_name")
     api_key = _clean_key(api_key)
     if key_env is not None and not _env_allowed(key_env):
         raise CatalogError("invalid_key_env")
@@ -392,6 +419,8 @@ def save_entry(name: str, *, display_name: str | None = None, provider: str | No
             raise CatalogError("model_exists")
         if not create and row is None:
             raise CatalogError("model_not_found")
+        if new_name is not None:
+            _check_rename(db, name, new_name)
         if create and db.query(AgentModelEntry).count() >= MAX_ENTRIES:
             raise CatalogError("too_many_models")
         provider = provider if provider is not None else (row.provider if row else None)
@@ -425,9 +454,34 @@ def save_entry(name: str, *, display_name: str | None = None, provider: str | No
             row.is_default = True
         elif is_default is False:
             row.is_default = False
+        if new_name is not None:
+            _move_name(db, row, name, new_name)
         db.commit()
+    final = new_name or name
     listed, default = entries()
-    return public(next(item for item in listed if item["name"] == name), default)
+    return public(next(item for item in listed if item["name"] == final), default)
+
+
+def _check_rename(db, old: str, new: str) -> None:
+    """Refuse a rename that would break a name the code reads, or take a name in use.  Runs inside the caller's
+    transaction, so the database check holds against that transaction's own view of the table."""
+    if old in code_referenced_names():
+        raise CatalogError("model_name_in_code")
+    if any(item["name"] == new for item in _read_file()[0]) or db.get(AgentModelEntry, new) is not None:
+        raise CatalogError("model_exists")
+
+
+def _move_name(db, row: AgentModelEntry, old: str, new: str) -> None:
+    """Give ``row`` the name ``new`` and point every bot and model role that named ``old`` at it.  Nothing is
+    committed here: the caller's commit makes the three changes together, or none of them."""
+    row.name = new
+    try:
+        db.flush()  # the primary key moves now; a concurrent save that took ``new`` first fails here
+    except IntegrityError as exc:
+        raise CatalogError("model_exists") from exc
+    db.query(AgentBot).filter(AgentBot.model == old).update({AgentBot.model: new}, synchronize_session=False)
+    db.query(AgentModelRole).filter(AgentModelRole.model_name == old).update({AgentModelRole.model_name: new},
+                                                                             synchronize_session=False)
 
 
 def set_default(name: str) -> dict:

@@ -166,7 +166,7 @@ async def delete_bot_endpoint(bot_id: str, x_chat_session: str | None = Header(d
 # --- model catalog --------------------------------------------------------------------------------------
 
 def _catalog_error(exc: catalog.CatalogError) -> HTTPException:
-    return HTTPException(404 if str(exc) == "model_not_found" else 409 if str(exc) in {"model_in_use", "model_exists"} else 422,
+    return HTTPException(404 if str(exc) == "model_not_found" else 409 if str(exc) in {"model_in_use", "model_exists", "model_name_in_code"} else 422,
                          str(exc))
 
 
@@ -178,9 +178,11 @@ async def model_catalog_endpoint(x_chat_session: str | None = Header(default=Non
 
 
 def _save(name: str, body: ModelEntryBody, create: bool) -> dict:
+    # On an edit, ``name`` in the body is the new name (a rename); absent or equal means no rename.
     return catalog.save_entry(name, display_name=body.display_name, provider=body.provider, model=body.model,
                               base_url=body.base_url, key_env=body.key_env, is_default=body.is_default,
-                              context_window=body.context_window, api_key=body.api_key.get_secret_value() if body.api_key else None, create=create)
+                              context_window=body.context_window, api_key=body.api_key.get_secret_value() if body.api_key else None, create=create,
+                              rename_to=None if create else body.name)
 
 
 @router.post("/model-catalog")
