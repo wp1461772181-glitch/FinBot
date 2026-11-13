@@ -386,8 +386,9 @@ const DISCOVERY_ERRORS: Record<string, string> = { model_discovery_auth_required
 
 
 /** A model role (agent_model_roles): the catalog model that does one job; empty = the server default.
- *  earnings = 财报判断模型 (reads earnings releases); forecast = 预测模型 (gives the direction probabilities). */
-function RoleModelSelect({ catalog, role, label, hint }: { catalog: ModelCatalog; role: "earnings" | "forecast"; label: string; hint: string }) {
+ *  earnings = 财报判断模型 (reads earnings releases); forecast = 预测模型 (gives the direction probabilities);
+ *  judge = 审查模型 (the claim judge; unset falls back to the deployment's configured judge, not the catalog default). */
+function RoleModelSelect({ catalog, role, label, hint, unsetLabel }: { catalog: ModelCatalog; role: "earnings" | "forecast" | "judge"; label: string; hint: string; unsetLabel?: string }) {
   const { t } = useLocale();
   const [chosen, setChosen] = useState<string>(""), [busy, setBusy] = useState(false), [note, setNote] = useState("");
   useEffect(() => {
@@ -402,7 +403,7 @@ function RoleModelSelect({ catalog, role, label, hint }: { catalog: ModelCatalog
   }
   return <label className="earnings-model-select">{t(label)}
     <select disabled={busy} value={known ? chosen : ""} onChange={e => void change(e.target.value)}>
-      <option value="">{t("服务器默认模型")}{catalog.default ? ` (${catalog.default})` : ""}</option>
+      <option value="">{unsetLabel ? t(unsetLabel) : <>{t("服务器默认模型")}{catalog.default ? ` (${catalog.default})` : ""}</>}</option>
       {catalog.models.map(m => <option key={m.name} value={m.name}>{m.display_name || m.name}</option>)}
     </select>
     <small>{t(hint)}</small>{note && <small role="status">{note}</small>}
@@ -530,6 +531,7 @@ export function ModelCatalogCard() {
     {catalog && !catalog.models.length && <small>{t("目录是空的：先添加一个模型，bot 才能回答。")}</small>}
     {catalog && catalog.models.length > 0 && <RoleModelSelect catalog={catalog} role="earnings" label="财报判断模型" hint="读财报、判断涨跌用的模型；不选就用服务器默认模型。" />}
     {catalog && catalog.models.length > 0 && <RoleModelSelect catalog={catalog} role="forecast" label="预测模型" hint="给出 20 个交易日涨/平/跌概率的模型，建议选推理模型；不选就用服务器默认模型。" />}
+    {catalog && catalog.models.length > 0 && <RoleModelSelect catalog={catalog} role="judge" label="审查模型" hint="回答之后核查其中论断与依据的模型；不选就用部署时配置的审查模型。" unsetLabel="部署配置的审查模型" />}
     {status && <p role="status">{status}</p>}
     {entry && <div className="profile-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) close(); }}>
       <section ref={modal} className="profile-modal" role="dialog" aria-modal="true" aria-labelledby="catalog-entry-title">
@@ -547,7 +549,7 @@ export function ModelCatalogCard() {
           : <label>{t("环境变量名")}<input disabled={busy} value={entry.key_env} maxLength={64} onChange={e => update({ key_env: e.target.value.toUpperCase() }, true)} placeholder="DEEPSEEK_API_KEY" /></label>}
         {moved && <small className="bot-warn">{t("换了服务或接口地址，需要重新填写 key。")}</small>}
         <label>{t("目录名（bot 用它引用这个模型）")}<input disabled={busy} value={entry.name} maxLength={40} onChange={e => { setNameTouched(true); setEntry({ ...entry, name: e.target.value.toLowerCase() }); }} /></label>
-        {entry.editing && entry.name !== entry.editing.name && <small>{t("改名会同时更新用它的 bot，以及财报判断模型、预测模型的设置。")}</small>}
+        {entry.editing && entry.name !== entry.editing.name && <small>{t("改名会同时更新用它的 bot，以及财报判断模型、预测模型、审查模型的设置。")}</small>}
         <label className="bot-check"><input type="checkbox" disabled={busy} checked={entry.is_default} onChange={e => update({ is_default: e.target.checked })} />{t("设为默认模型")}</label>
         <p className="profile-note">{t("测试并保存会用当前填写的服务、Model ID 和 key 在服务器上发一次简短请求；成功后才保存，用它的 bot 下一轮生效。")}</p>
         {error && <p className="agent-chat-status is-error" role="alert">{error}</p>}

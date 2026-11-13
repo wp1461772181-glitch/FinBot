@@ -1,15 +1,17 @@
 """Which catalog model does which job (``agent_model_roles(owner_hash, role, model_name)``).
 
 ``earnings`` is the earnings-release reader (earnings_reader).  ``forecast`` is the model that gives the
-forecast's direction probabilities (forecast_model_provider).  No row, or a row naming a model that has since left the catalog, means the
-server's default model.  The table is made by ``Base.metadata.create_all`` at startup like the catalog's."""
+forecast's direction probabilities (forecast_model_provider).  ``judge`` is the claim judge (the review model,
+agent_workflow/claim_judge_pin); it has no catalog-default fallback: no row, or a row naming a model that has left
+the catalog, means the env / pinned judge.  For the other roles, no row, or a row naming a model that has since left
+the catalog, means the server's default model.  The table is made by ``Base.metadata.create_all`` at startup like the catalog's."""
 from __future__ import annotations
 
 from . import agent_model_catalog as catalog
 from .agent_chat_models import AgentModelRole
 from .database import SessionLocal
 
-ROLES = ("earnings", "forecast")
+ROLES = ("earnings", "forecast", "judge")
 
 
 class RoleError(ValueError):
@@ -65,10 +67,20 @@ def resolve(owner_hash: str | None, role: str) -> dict:
     return resolve_with_source(owner_hash, role)[0]
 
 
+def _newest_role_owner(role: str) -> str | None:
+    from sqlalchemy import select
+    with SessionLocal() as db:
+        return db.scalar(select(AgentModelRole.owner_hash).where(AgentModelRole.role == role)
+                         .order_by(AgentModelRole.updated_at.desc(), AgentModelRole.owner_hash).limit(1))
+
+
 def forecast_owner() -> str | None:
     """The owner whose role=forecast row decides the forecast model.  The forecast job belongs to no chat
     session, and this is a single-owner deployment: the newest forecast row wins, none means unset."""
-    from sqlalchemy import select
-    with SessionLocal() as db:
-        return db.scalar(select(AgentModelRole.owner_hash).where(AgentModelRole.role == "forecast")
-                         .order_by(AgentModelRole.updated_at.desc(), AgentModelRole.owner_hash).limit(1))
+    return _newest_role_owner("forecast")
+
+
+def judge_owner() -> str | None:
+    """The owner whose role=judge row decides the claim judge.  The judge runs after a turn with no owner of its
+    own, and this is a single-owner deployment: the newest judge row wins, none means unset."""
+    return _newest_role_owner("judge")
