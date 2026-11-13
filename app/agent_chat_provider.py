@@ -91,6 +91,17 @@ def reasoning_options(provider: str, effort: str | None = None) -> dict:
     return {}
 
 
+# The tiers each provider's own API distinguishes, as reasoning_options really sends them.  The browser's strength
+# list reads this for every provider but OpenRouter (agent_model_catalog._reasoning_fields), so the list and the
+# request come from one place.  Keep it in step with reasoning_options: a change there goes here too.  () means no
+# effort is sent for that provider at all; a provider not listed here gets no tier list (the browser offers every tier).
+NATIVE_EFFORTS = {
+    "zhipu": ("low", "high", "max"),           # GLM-5.3 / GLM-5.3-Flash; none, minimal, medium, xhigh fold onto these
+    "deepseek": ("none", "high", "max"),       # none turns thinking off; medium is sent as high, low as low (folded)
+    "siliconflow": (),                         # reasoning_options has no branch for it: nothing is sent
+}
+
+
 class ProviderFailure(HTTPException):
     def __init__(self, code: str, *, stage: str, provider_status: int | None = None,
                  request_id: str | None = None, retryable: bool = False):

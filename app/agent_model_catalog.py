@@ -247,6 +247,7 @@ def _index_of(payload) -> dict[str, dict]:
     rows = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         raise ValueError("no model list")
+    from .agent_chat_provider import REASONING_EFFORTS
     index: dict[str, dict] = {}
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("id"), str):
@@ -259,6 +260,11 @@ def _index_of(payload) -> dict[str, dict]:
                 info["supported_efforts"] = None
             elif isinstance(declared, list) and all(isinstance(level, str) for level in declared):
                 info["supported_efforts"] = list(declared)
+                # Kept as declared (the browser shows only tiers it knows); noted once per model per fetch, for the operator.
+                unknown = [level for level in declared if level not in REASONING_EFFORTS]
+                if unknown:
+                    logger.info("OpenRouter declares reasoning tiers this server does not know for %s: %s",
+                                row["id"], ", ".join(unknown))
         index[row["id"]] = info
     return index
 
@@ -279,9 +285,17 @@ def reasoning_index() -> dict[str, dict]:
 
 
 def _reasoning_fields(entry: dict) -> dict:
-    """supported_efforts / reasoning_supported for an OpenRouter entry whose model id is in the index; nothing otherwise."""
+    """The strength tiers an entry takes.  OpenRouter: its declaration of the model id, when the id is in the index.
+    Any other provider in agent_chat_provider.NATIVE_EFFORTS: that provider's own table (no OpenRouter answer is
+    borrowed for it).  Nothing otherwise: an unknown provider keeps the browser's fallback."""
     if entry.get("provider") != "openrouter":
-        return {}
+        from .agent_chat_provider import NATIVE_EFFORTS
+        tiers = NATIVE_EFFORTS.get(entry.get("provider"))
+        if tiers is None:
+            return {}
+        if not tiers:
+            return {"reasoning_supported": False}
+        return {"reasoning_supported": True, "supported_efforts": list(tiers)}
     info = reasoning_index().get(entry.get("model"))
     if info is None:
         return {}

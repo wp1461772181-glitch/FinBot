@@ -147,5 +147,24 @@ test("tiers: the picker reads the effective entry and passes it to the strength 
   assert.match(picker, /effectiveEntry\(catalog, shown\.model\)/);
   assert.match(picker, /effortChoices\(shown\.reasoning_effort, entry\)/);
   assert.match(picker, /noEffort\(entry\)/);
-  assert.match(picker, /choice\.unsupported && <small>[^<]*当前模型不支持/);
+  assert.match(picker, /choice\.unsupported && <small>[^<]*不在该模型的档位内/);
+});
+
+test("tiers, zhipu shape (GLM-5.3 family): exactly low, high, max; a stored medium sits above them, marked", () => {
+  const zhipu = withSupport({ reasoning_supported: true, supported_efforts: ["low", "high", "max"] });
+  assert.deepEqual(effortSupport(zhipu).levels, ["low", "high", "max"]);
+  assert.deepEqual(values(effortChoices("high", zhipu)), [null, "low", "high", "max"]);
+  const stored = effortChoices("medium", zhipu);
+  assert.deepEqual(values(stored), ["medium", null, "low", "high", "max"]);
+  assert.equal(stored[0].unsupported, true);
+});
+
+test("picking a model keeps the panel open on the new model's tiers; picking a strength closes it", () => {
+  const picker = tsx("ModelEffortPicker.tsx");
+  const choose = picker.slice(picker.indexOf("async function choose("), picker.indexOf("\n  return (\n"));
+  assert.ok(choose.length > 0, "choose() is found in the picker source");
+  // Same choice again: closes, as before.
+  assert.match(choose, /if \(\(value \?\? null\) === \(current \?\? null\)\) \{ setOpen\(false\); return; \}/);
+  // After a successful save the model choice leaves the panel open; only a strength closes it.
+  assert.match(choose, /setShown\(saved\);\s*(?:\/\/[^\n]*\s*)?if \(kind === "effort"\) setOpen\(false\);/);
 });
