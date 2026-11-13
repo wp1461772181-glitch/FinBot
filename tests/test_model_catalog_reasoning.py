@@ -1,13 +1,28 @@
-"""The catalog says which reasoning-effort tiers an OpenRouter model takes (supported_efforts / reasoning_supported).
+"""The catalog says which reasoning-effort tiers a model takes (supported_efforts / reasoning_supported).
+
+An OpenRouter entry is answered by the OpenRouter model list.  Any other provider is answered by the provider's own
+table (agent_chat_provider.NATIVE_EFFORTS, the tiers its request really distinguishes); a provider outside that table
+gets no fields, as before.
 
 The OpenRouter model list is stubbed everywhere: no test reaches the network.  The index is advisory: when it cannot
 be read, the catalog answers as before, just without those two fields.
 """
+import logging
+
 import httpx
 import pytest
 
+from app import agent_chat_provider as chat
 from app import agent_model_catalog as catalog
+from app.agent_chat_provider import REASONING_EFFORTS, reasoning_options
 from tests.test_agent_bots import H, KEY_A, owner  # noqa: F401  (fixture)
+
+# What OpenRouter declared for these ids on 2026-11-13 (effort-look report, section 1).  Must keep coming out unchanged.
+REAL_OPENROUTER = {
+    "anthropic/claude-haiku-5.5": ["max", "xhigh", "high", "medium", "low", "none"],
+    "meta/muse-ember": ["max", "xhigh", "high", "medium", "low", "minimal"],
+    "openai/gpt-6.1-terra": ["max", "xhigh", "high", "medium", "low", "none"],
+}
 
 DEEPSEEK = "deepseek/deepseek-v4.1-flash-1017"
 GLM = "z-ai/glm-5.3-flash"
@@ -59,13 +74,69 @@ def test_openrouter_entries_carry_what_their_model_takes(owner, models):
 
 
 def test_no_guessing_outside_the_entrys_own_slug(owner, models):
+    # An OpenRouter model missing from the index takes no fields.  The same slug under another provider is answered by
+    # that provider's own table, never by OpenRouter's declaration of the id (the index row for DEEPSEEK is different).
     _entry("unknown", "acme/not-in-the-list")
-    _entry("elsewhere", DEEPSEEK, provider="deepseek")  # same slug, another provider: not OpenRouter's answer
-    for name in ("unknown", "elsewhere"):
-        listed = _listed(name)
-        assert "supported_efforts" not in listed and "reasoning_supported" not in listed
+    _entry("elsewhere", DEEPSEEK, provider="deepseek")
+    unknown = _listed("unknown")
+    assert "supported_efforts" not in unknown and "reasoning_supported" not in unknown
     # The fields are additions: the rest of the entry is what it was.
-    assert _listed("unknown")["model"] == "acme/not-in-the-list" and _listed("unknown")["key_status"] == "configured"
+    assert unknown["model"] == "acme/not-in-the-list" and unknown["key_status"] == "configured"
+    elsewhere = _listed("elsewhere")
+    assert elsewhere["supported_efforts"] == ["none", "high", "max"] and elsewhere["reasoning_supported"] is True
+    assert elsewhere["supported_efforts"] != ["max", "high", "low", "none"], "OpenRouter's declaration was not borrowed"
+
+
+def test_zhipu_entries_take_the_tiers_its_api_accepts(owner, models):
+    _entry("glm", "glm-5.3-flash", provider="zhipu")
+    listed = _listed("glm")
+    assert listed["supported_efforts"] == ["low", "high", "max"] and listed["reasoning_supported"] is True
+
+
+def test_siliconflow_entries_take_no_effort_and_the_fields_say_so(owner, models):
+    # Nothing is sent for SiliconFlow (reasoning_options has no branch for it): no tier list, and no effort offered.
+    _entry("sf", "deepseek-ai/DeepSeek-V4-Flash", provider="siliconflow")
+    listed = _listed("sf")
+    assert listed["reasoning_supported"] is False and "supported_efforts" not in listed
+    assert listed["key_status"] == "configured"
+
+
+@pytest.mark.parametrize("provider,model", [("kimi", "kimi-k3"), ("qwen", "qwen3-max")])
+def test_providers_outside_the_table_keep_the_fallback(owner, models, provider, model):
+    _entry("other", model, provider=provider)
+    listed = _listed("other")
+    assert "supported_efforts" not in listed and "reasoning_supported" not in listed
+    assert listed["key_status"] == "configured"
+
+
+@pytest.mark.parametrize("model", sorted(REAL_OPENROUTER))
+def test_openrouter_entries_keep_their_declared_tiers(owner, models, model):
+    models["payload"] = {"data": [{"id": m, "reasoning": {"supported_efforts": tiers}} for m, tiers in REAL_OPENROUTER.items()]}
+    _entry("entry", model)
+    listed = _listed("entry")
+    assert listed["supported_efforts"] == REAL_OPENROUTER[model] and listed["reasoning_supported"] is True
+
+
+def test_native_table_is_what_the_request_really_sends():
+    # A tier the table declares must be one the request carries (not dropped); a provider with no tier sends no effort.
+    for provider, tiers in chat.NATIVE_EFFORTS.items():
+        assert set(tiers) <= set(REASONING_EFFORTS), provider
+        if not tiers:
+            assert reasoning_options(provider, "high") == {}, provider
+        for tier in tiers:
+            assert reasoning_options(provider, tier) != {}, f"{provider} declares {tier} but the request drops it"
+
+
+def test_a_declared_tier_the_server_does_not_know_is_logged_once_per_model(caplog):
+    # Advisory and log-only: the index keeps the list as declared, and the tier is noted once per model per build.
+    with caplog.at_level(logging.INFO, logger="app.agent_model_catalog"):
+        index = catalog._index_of({"data": [
+            {"id": "a/ultra", "reasoning": {"supported_efforts": ["high", "ultra", "turbo"]}},
+            {"id": "a/fine", "reasoning": {"supported_efforts": ["high"]}},
+        ]})
+    assert index["a/ultra"]["supported_efforts"] == ["high", "ultra", "turbo"]
+    notes = [r.getMessage() for r in caplog.records if r.name == "app.agent_model_catalog"]
+    assert len(notes) == 1 and "a/ultra" in notes[0] and "ultra" in notes[0] and "turbo" in notes[0]
 
 
 def test_endpoint_answers_with_the_fields_and_without_them(owner, client, models):
