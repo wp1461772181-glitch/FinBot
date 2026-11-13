@@ -456,6 +456,7 @@ FP6 把 2026-10-18 至 11-07 间历史上 32 个 `calculation_input_unbound` 回
 | `nudged`、`nudge_outcome`、`nudged_draft`、`discarded_draft` | 未调工具的告知及其结果；被丢弃的模型草稿（≤2000 字符） |
 | `compound_empty_noted`、`compound_empty_draft` | 复合空告知（FP9） |
 | `entity_gate_blocks`（≤20 项）、`entity_gate_passes` | 读工具实体门的影子计数（FP11 第一步） |
+| `entity_gate_widened`（≤20 项） | 开关 `FINBOT_FP11_READ_WIDEN` 打开后，被放行的读工具调用留痕（FP11 第二步，形状与 `entity_gate_blocks` 相同） |
 | `pending_request_expired_reply` | 过期澄清卡按回复处理（FP4） |
 | `write_outcome` | 写操作结果（`executed` / `refused:<code>`） |
 | `formula_replay` | 公式计算的复活重放结果 |
