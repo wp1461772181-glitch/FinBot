@@ -1457,7 +1457,7 @@
   "目录是空的：先添加一个模型，bot 才能回答。": "The catalog is empty: add a model so bots can answer.",
   "给": "Message",
   "缺 key": "Key missing",
-  "当前模型不支持": "Not supported by the current model",
+  "不在该模型的档位内": "Not one of this model's levels",
   "该模型不支持思考强度": "This model does not take a reasoning effort",
   "缺 key，去设置里补上": "key missing, add it in Settings",
   "置顶": "Pin",

@@ -49,7 +49,8 @@ export function ModelEffortPicker({ bot, onBotChanged }: { bot: Bot; onBotChange
     try {
       const saved = await updateBot(bot.id, patchFor(kind, value));
       setShown(saved);
-      setOpen(false);
+      // A model choice stays open: the strength list below is the new model's now, so the owner sees it in this visit.
+      if (kind === "effort") setOpen(false);
       onBotChanged();
     } catch (exc) {
       setError(exc instanceof Error && exc.message ? exc.message : t("保存失败，请重试。"));
@@ -87,7 +88,7 @@ export function ModelEffortPicker({ bot, onBotChanged }: { bot: Bot; onBotChange
                 className={`model-effort-option${choice.checked ? " is-current" : ""}`} disabled={busy} onClick={() => void choose("effort", choice.value)}>
                 <span className="model-effort-mark" aria-hidden="true">{choice.checked ? "✓" : ""}</span>
                 <span>{t(choice.label)}</span>
-                {choice.unsupported && <small> · {t("当前模型不支持")}</small>}
+                {choice.unsupported && <small> · {t("不在该模型的档位内")}</small>}
               </button>
             ))}
           </div>
