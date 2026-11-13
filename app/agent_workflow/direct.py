@@ -98,7 +98,8 @@ def referenced_urls(text):
     # grounding still runs separately before any operation is proposed.
     return {url.rstrip('.,;:!?，。；：！？、') for url in URL.findall(text)}
 
-from .routing import Routing, safe_parse_route
+from pydantic import ValidationError
+from .routing import ClassificationInvalid, Routing, safe_parse_route, validation_problems, validation_summary
 
 _NON_TICKER_STOPWORDS = {
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
@@ -1196,10 +1197,17 @@ class Turn:
                     from ..freshness import requested_years
                     if not requested_years(routing.period)<=requested_years(self.question):routing.period=None
                 break
-            except (ValueError,TypeError):
-                if attempt or is_injected:raise
+            except (ValueError,TypeError) as exc:
+                invalid=isinstance(exc,ValidationError)
+                if attempt or is_injected:
+                    if not invalid:raise
+                    # A schema rejection is the classification's own failure, not the provider's: keep it apart in
+                    # the reason and record which fields failed (names and input types, not the pydantic dump).
+                    self.audit['classification_error']=validation_summary(exc)
+                    raise ClassificationInvalid() from exc
                 self.audit['classification_retries']=1
-                messages.append({'role':'system','content':'The previous classification was invalid JSON/schema or added an unrequested fiscal period. Return complete valid classify_request arguments using only enum values; leave unspecified period/form null.'})
+                rejected='; '.join(f"{p['field']}: {p['reason']}" for p in validation_problems(exc))[:600] if invalid else 'it was not valid JSON/schema'
+                messages.append({'role':'system','content':f'The previous classification was rejected ({rejected}). Return complete valid classify_request arguments using only enum values. A field with no value must be the JSON null itself (not the string "null") or be omitted; days_back is required, so give an integer or JSON null. Fill period only with a fiscal period the user explicitly asked for.'})
         if mode_defaulted:
             self.audit['classify_mode_defaulted']=True
         self.classifier_named=any(getattr(routing,k) for k in ('symbol','symbols','company','company_mention'))

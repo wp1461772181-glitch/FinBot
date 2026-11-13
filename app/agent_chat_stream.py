@@ -369,6 +369,7 @@ _FAILURE_NOTICES={
  "task_token_cap":"这次任务的用量达到了为它设定的上限，已停止。原样重跑结果相同；可以缩小任务范围后再试。",
  "workflow_incomplete":"这一轮在生成过程中意外中断，没有生成回答。可以再发一次。",
  "provider_protocol_invalid":"模型服务这次返回的内容无法使用，本轮没有完成。可以再发一次；连续出现时请稍后再试。",
+ "classification_invalid":"这一轮在理解你的问题时内部处理出错，没有生成回答。可以再发一次；如果连续出现，请换个问法。",
 }
 def _failure_notice(exc:Exception)->str:
  code=exc.detail if isinstance(exc,HTTPException) and isinstance(exc.detail,str) else ""

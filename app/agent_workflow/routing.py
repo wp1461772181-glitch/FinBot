@@ -2,11 +2,28 @@
 from __future__ import annotations
 import json
 from typing import Annotated,Literal
-from pydantic import BaseModel,ConfigDict,Field,PrivateAttr,field_validator,model_validator
+from pydantic import BaseModel,ConfigDict,Field,PrivateAttr,ValidationError,field_validator,model_validator
 from ..agent_tool_catalog import CategoryName,TOOL_CATEGORIES,WriteTool,write_tool_names
 
 ROUTE_MODES=('rag','prices','financials','forecast','none')
 RouteMode=Literal['rag','prices','financials','forecast','none']
+
+# A model that means "nothing here" sometimes writes the word instead of a JSON null.  Only that spelling of
+# emptiness is read as empty; anything else still goes through the field's own validation.
+EMPTY_SPELLINGS=frozenset({'','null','none','n/a'})
+
+class ClassificationInvalid(ValueError):
+    """The classification could not be validated twice in a row; str(exc) is the failure reason."""
+    def __init__(self):super().__init__('classification_invalid')
+
+def validation_problems(exc:ValidationError)->list[dict]:
+    """Per failing field: where, what the model sent (its type only), and pydantic's short reason."""
+    return [{'field':'.'.join(str(p) for p in e.get('loc') or ()) or '(root)','input_type':type(e.get('input')).__name__,
+        'reason':str(e.get('msg') or e.get('type') or ''),'code':str(e.get('type') or '')} for e in exc.errors(include_url=False)]
+
+def validation_summary(exc:ValidationError)->str:
+    """One line for audit: field names, the type of each rejected input, the error code; never the input itself."""
+    return '; '.join(f"{p['field']}: input {p['input_type']} ({p['code']})" for p in validation_problems(exc))[:500]
 
 class Routing(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -44,6 +61,12 @@ class Routing(BaseModel):
                 copied['category']=route_val
             return copied
         return data
+
+    @field_validator('days_back','form','period','symbol',mode='before')
+    @classmethod
+    def empty_spelling_is_none(cls,value):
+        # company/company_mention are left alone: they are names, and a real name can read like an empty word.
+        return None if isinstance(value,str) and value.strip().lower() in EMPTY_SPELLINGS else value
 
     @field_validator('requested_actions',mode='before')
     @classmethod
