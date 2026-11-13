@@ -819,7 +819,7 @@ const BOT_ERRORS:Record<string,string>={invalid_name:"名字无效（1 到 40 �
   unknown_tool:"工具范围里有不存在的工具。",unknown_model:"模型目录里没有这个模型。",unknown_role:"没有这个模型用途。",invalid_avatar:"头像最多 16 个字符。",invalid_look:"头像外观不在可选范围内。",invalid_group:"分组名最多 40 字。",
   default_bot_not_hidden:"默认 bot 不能隐藏。",default_bot_undeletable:"默认 bot 不能删除。",invalid_notify_cap:"每日通知上限为 0 到 50。",too_many_bots:"bot 已达上限（30 个）。",
   bot_not_found:"bot 不存在或已删除。",unknown_template:"模板无效。",unknown_skill:"这个技能不存在。",model_exists:"已有同名模型。",model_not_found:"模型不存在。",model_in_use:"有 bot 正在用这个模型，先给它们换模型。",
-  model_from_file:"这个模型来自服务器配置文件，只能在服务器上改。",default_from_file:"默认模型由服务器配置文件指定。",invalid_provider:"模型服务无效。",invalid_model:"Model ID 无效。",
+  model_name_in_code:"这个名字被服务器的代码或配置按名引用，不能改名。",model_from_file:"这个模型来自服务器配置文件，只能在服务器上改。",default_from_file:"默认模型由服务器配置文件指定。",invalid_provider:"模型服务无效。",invalid_model:"Model ID 无效。",
   invalid_endpoint:"接口地址无效：须为 HTTPS，自定义服务必须填写。",invalid_key:"API key 格式不对。",invalid_key_env:"环境变量名须以 _API_KEY 结尾，且不能是服务器自己的密钥。",
   one_key_source:"API key 和环境变量只能填一个。",key_required:"换了服务或接口地址，需要重新填写 key。",credential_key_missing:"服务器没有配置加密密钥，无法保存 key。",
   too_many_models:"模型已达上限（40 个）。",invalid_agent_chat_request:"填写的内容无效。",

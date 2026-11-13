@@ -31,6 +31,19 @@ test("测试并保存 explains what is missing, and saves a key only when one wa
   assert.equal("api_key" in saveBody(blank({ editing: stored })), false);
 });
 
+test("a rename is checked against the names in use, and an edit may keep its own name", () => {
+  const taken = ["main", "bravo"];
+  assert.equal(entryProblem(blank({ editing: stored, name: "bravo" }), taken), "已有同名模型。");
+  assert.equal(entryProblem(blank({ editing: stored, name: "main" }), taken), "");
+  assert.equal(entryProblem(blank({ editing: stored, name: "haiku-5.5" }), taken), "");
+  assert.equal(entryProblem(blank({ editing: stored, name: "" }), taken), "名字只能用小写字母、数字和 ._-。");
+  assert.equal(entryProblem(blank({ editing: stored, name: "Haiku" }), taken), "名字只能用小写字母、数字和 ._-。");
+  // A new entry may not take a name in use either; the derived default is never in use.
+  assert.equal(entryProblem(blank({ api_key: "sk-0123456789" }), ["main"]), "已有同名模型。");
+  assert.equal(entryProblem(blank({ api_key: "sk-0123456789" }), ["other"]), "");
+  assert.equal(entryProblem(blank({ api_key: "sk-0123456789" })), "");
+});
+
 test("a catalog name is derived from what was typed and never collides", () => {
   assert.equal(catalogName("DeepSeek Chat"), "deepseek-chat");
   assert.equal(catalogName("deepseek/deepseek-v3.2:free"), "deepseek-deepseek-v3.2-free");

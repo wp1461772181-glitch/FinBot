@@ -37,11 +37,13 @@ export function saveBody(entry) {
     base_url: entry.base_url.trim() || null, ...key, ...(entry.is_default ? { is_default: true } : {}) };
 }
 
-/** Why 测试并保存 cannot run yet, as a phrase, or "" when it can. */
-export function entryProblem(entry) {
+/** Why 测试并保存 cannot run yet, as a phrase, or "" when it can.  ``taken`` are the catalog names in use: an edit may keep
+ *  its own name, but a new entry or a rename may not take another entry's. */
+export function entryProblem(entry, taken = []) {
   if (!entry) return "";
   if (!entry.model.trim()) return "请填写 Model ID。";
-  if (!entry.editing && !/^[a-z0-9][a-z0-9._-]{0,39}$/.test(entry.name)) return "名字只能用小写字母、数字和 ._-。";
+  if (!/^[a-z0-9][a-z0-9._-]{0,39}$/.test(entry.name)) return "名字只能用小写字母、数字和 ._-。";
+  if (entry.name !== entry.editing?.name && taken.includes(entry.name)) return "已有同名模型。";
   if (entry.provider === "custom" && !entry.base_url.trim()) return "自定义服务必须填写 Base URL。";
   if (!probeFor(entry)) return entryMoved(entry) ? "换了服务或接口地址，需要重新填写 key。" : "请填写 API key 或环境变量名。";
   return "";

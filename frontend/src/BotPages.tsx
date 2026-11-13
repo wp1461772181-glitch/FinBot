@@ -487,7 +487,7 @@ export function ModelCatalogCard() {
   }
   async function testAndSave() {
     if (!entry) return;
-    const problem = entryProblem(entry);
+    const problem = entryProblem(entry, taken);
     if (problem) { setError(t(problem)); return; }
     scheduler.current.cancel(); discovery.current?.abort();
     const controller = new AbortController(); testController.current = controller;
@@ -496,7 +496,8 @@ export function ModelCatalogCard() {
       await testCatalogModel(probeFor(entry)!, controller.signal);
       if (controller.signal.aborted) return;
       const body = saveBody(entry);
-      if (entry.editing) await updateCatalogModel(entry.editing.name, body); else await addCatalogModel({ ...body, name: entry.name });
+      // An edit names the entry by its stored name and sends the name it should have now: a rename when it changed.
+      if (entry.editing) await updateCatalogModel(entry.editing.name, { ...body, name: entry.name }); else await addCatalogModel({ ...body, name: entry.name });
       await load();
       setStatus(t("已测试并保存。用它的 bot 下一轮生效。"));
       setEntry(null); previous.current?.focus();
@@ -545,12 +546,13 @@ export function ModelCatalogCard() {
           ? <label>{t("API key")}<input disabled={busy} type="password" value={entry.api_key} maxLength={2048} autoComplete="new-password" onChange={e => update({ api_key: e.target.value }, true)} placeholder={entry.editing && !moved && entry.editing.key_status === "configured" ? t("不改就留空") : ""} /></label>
           : <label>{t("环境变量名")}<input disabled={busy} value={entry.key_env} maxLength={64} onChange={e => update({ key_env: e.target.value.toUpperCase() }, true)} placeholder="DEEPSEEK_API_KEY" /></label>}
         {moved && <small className="bot-warn">{t("换了服务或接口地址，需要重新填写 key。")}</small>}
-        {!entry.editing && <label>{t("目录名（bot 用它引用这个模型）")}<input disabled={busy} value={entry.name} maxLength={40} onChange={e => { setNameTouched(true); setEntry({ ...entry, name: e.target.value.toLowerCase() }); }} /></label>}
+        <label>{t("目录名（bot 用它引用这个模型）")}<input disabled={busy} value={entry.name} maxLength={40} onChange={e => { setNameTouched(true); setEntry({ ...entry, name: e.target.value.toLowerCase() }); }} /></label>
+        {entry.editing && entry.name !== entry.editing.name && <small>{t("改名会同时更新用它的 bot，以及财报判断模型、预测模型的设置。")}</small>}
         <label className="bot-check"><input type="checkbox" disabled={busy} checked={entry.is_default} onChange={e => update({ is_default: e.target.checked })} />{t("设为默认模型")}</label>
         <p className="profile-note">{t("测试并保存会用当前填写的服务、Model ID 和 key 在服务器上发一次简短请求；成功后才保存，用它的 bot 下一轮生效。")}</p>
         {error && <p className="agent-chat-status is-error" role="alert">{error}</p>}
         <button type="button" className="secondary-action" onClick={cancelTest} disabled={!testing}>{t("取消测试")}</button>
-        <button type="button" className="primary-action" disabled={busy || Boolean(entryProblem(entry))} onClick={() => void testAndSave()}>{testing ? t("正在测试…") : t("测试并保存")}</button>
+        <button type="button" className="primary-action" disabled={busy || Boolean(entryProblem(entry, taken))} onClick={() => void testAndSave()}>{testing ? t("正在测试…") : t("测试并保存")}</button>
       </section>
     </div>}
   </section>;
