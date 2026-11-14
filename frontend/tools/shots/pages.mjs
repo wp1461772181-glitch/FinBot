@@ -2,7 +2,7 @@
 //   ready:  a selector that only exists once the page shows its data (string), or an async (page) => void.
 //           After it matches, waitReady also waits until no "loading" text is left in the page.
 //   before: optional action run after ready and before the screenshot ({ width } is passed along).
-import { BOT, ROOT, JUDGMENT } from "./fixtures/ids.mjs";
+import { BOT, ROOT, JUDGMENT, HOLD_MARKER, LOGIN_CODE } from "./fixtures/ids.mjs";
 
 const LOADING = ["正在读取", "正在加载", "读取中", "加载中"];
 
@@ -12,8 +12,38 @@ async function openSide(page) {
   if (await toggle.count() && (await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
 }
 
+/** True from the width where the sidebar is drawn (the `lg` breakpoint); below it the tab bar is. */
+const hasSidebar = (width) => width >= 1024;
+
+/** Start an answer in TeslaBot's line that never ends, then go back to the default bot: TeslaBot's row shows 回答中 in the background. */
+async function holdTeslaTurn(page) {
+  await page.goto(page.url().split("#")[0] + `#/chat/${BOT.teslabot}`, { waitUntil: "load" });
+  await page.locator("#agent-draft:not([disabled])").waitFor();
+  await page.locator("#agent-draft").fill(`${HOLD_MARKER} AAPL`);
+  await page.locator("button.agent-send").click();
+  await page.locator("button.agent-stop").waitFor();
+  await page.evaluate(() => { location.hash = "#/chat"; });
+  await page.locator(".agent-thread .agent-message").first().waitFor();
+}
+/** On a phone the bot rows are in the 「更多」 drawer. */
+async function openMoreDrawer(page) {
+  await page.locator('[data-slot="mobile-tab-bar"] button[aria-haspopup="dialog"]').click();
+  await page.locator('[data-slot="drawer-content"]').waitFor();
+}
+
 export const PAGES = [
-  { name: "entry", hash: "#/login", identity: "none", ready: ".entry-choice" },
+  { name: "entry", hash: "#/login", identity: "none", ready: '[aria-labelledby="login-title"]' },
+  // The login page after a wrong code, the shell with the sidebar collapsed (1440) / the phone's 更多 drawer open (390),
+  // the four marks of a bot row, and the chat as a read-only guest.
+  { name: "login-error", hash: "#/login", identity: "none", ready: '[aria-labelledby="login-title"]',
+    before: async (page) => { await page.locator('input[type="password"]').fill("not-the-code"); await page.getByRole("button", { name: "登录", exact: true }).click(); await page.locator("#login-error").waitFor(); } },
+  { name: "shell-collapsed", hash: "#/chat", ready: ".agent-thread .agent-message",
+    before: async (page, { width }) => { if (hasSidebar(width)) { await page.locator('[data-slot="sidebar-trigger"]').click(); await page.waitForFunction(() => document.querySelector('[data-slot="sidebar"]')?.closest("[data-state]")?.getAttribute("data-state") === "collapsed"); } } },
+  { name: "shell-mobile-more", hash: "#/chat", ready: ".agent-thread .agent-message",
+    before: async (page, { width }) => { if (!hasSidebar(width)) await openMoreDrawer(page); } },
+  { name: "shell-bot-states", hash: "#/chat", ready: ".agent-thread .agent-message",
+    before: async (page, { width }) => { await holdTeslaTurn(page); if (!hasSidebar(width)) await openMoreDrawer(page); else await page.locator('[data-bot-row][data-marker="running"]').waitFor(); } },
+  { name: "guest-chat", hash: "#/chat", identity: "guest", ready: '[data-slot="guest-composer"]' },
   { name: "chat-default", hash: "#/chat", ready: ".agent-thread .agent-message" },
   // Extra views of the default line: the top of the history, and the first answer's step trace opened.
   { name: "chat-default-top", hash: "#/chat", ready: ".agent-thread .agent-message",

@@ -1,5 +1,5 @@
 // Fixture entry: buildState() makes a fresh mutable state per browser context; registerRoutes() wires the handlers.
-import { BOT, CONVERSATION, WATCHLIST } from "./ids.mjs";
+import { BOT, CONVERSATION, HOLD_MARKER, LOGIN_CODE, WATCHLIST } from "./ids.mjs";
 import { prices } from "./common.mjs";
 import { botList, BOT_TEMPLATES, MODEL_CATALOG, MODEL_ROLES } from "./bots.mjs";
 import { buildChat, conversationSummaries, CONTEXT_USAGE, streamEvents } from "./chat.mjs";
@@ -21,6 +21,13 @@ export function registerRoutes(route, reply) {
   const own = (handler) => owner(handler, reply);
   const A = "/agent-chat";
 
+  // --- login (the code is a fixture, not a real one; any other code is refused like the real server does) -----------
+  route.post(`${A}/personal-login`, async ({ body }) => {
+    if (body?.code !== LOGIN_CODE) return reply.status(401, { detail: "invalid_login" });
+    const { FAKE_CREDENTIAL } = await import("../mock-api.mjs");
+    return { credential: FAKE_CREDENTIAL };
+  });
+
   // --- bots, models, queue -----------------------------------------------------------------------------
   route.get(`${A}/bots`, own(({ state }) => ({ bots: state.bots, default_bot_id: BOT.finbot })));
   route.get(`${A}/bot-templates`, own(() => BOT_TEMPLATES));
@@ -36,6 +43,8 @@ export function registerRoutes(route, reply) {
   route.get(`${A}/conversations/:id/context`, own(() => CONTEXT_USAGE));
   route.get(`${A}/context`, own(() => CONTEXT_USAGE));
   route.post(`${A}/stream`, own(({ body, state }) => {
+    // A message containing the hold marker is never answered: that bot's line stays "answering" (the sidebar's 回答中 mark).
+    if (String(body.message).includes(HOLD_MARKER)) return new Promise(() => {});
     const bot = body.bot_id ? state.bots.find((b) => b.id === body.bot_id) : null;
     const conversationId = bot?.conversation_id ?? body.conversation_id ?? CONVERSATION.finbot;
     const events = streamEvents({ conversationId, message: body.message, botId: bot?.id });

@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router";
 import { useLineStatus } from "../AgentChatPanel";
-import { BotRailList, NewBotDialog, useBots } from "../BotPages";
-import { Shell, navGroup, type WorkspaceSection } from "../Shell";
+import { NewBotDialog, useBots } from "../BotPages";
+import { isResearchSection, navGroup, type WorkspaceSection } from "../workspace-sections.mjs";
 import { getChatMode, getResearchQueue, markBotRead, putResearchQueue, type Bot } from "../api";
 import { normalizeHash } from "../legacy-routes.mjs";
 import { pathForSection, paths, sectionOfPath, splitPath, symbolFromParams, symbolParam } from "../routes.mjs";
 import { MAX_WATCHLIST, normalizeTicker, normalizeWatchlist, selectionForWatchlist } from "../watchlist.mjs";
 import { registerWatchlistAdder, setWatchlistSnapshot } from "../watchlist-bridge.mjs";
 import { WorkspaceContext, type Workspace } from "./workspace";
+import { AppShell } from "./shell/AppShell";
+import { useRoutinesBadge } from "./shell/useRoutinesBadge";
 
 export const DEFAULT_SYMBOL = "AAPL";
 export const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"];
@@ -30,11 +32,11 @@ function symbolOfAddress(pathname: string, search: string): string | null {
 
 /**
  * The workspace around every routed page: the research queue (kept on the server for the owner), the bot list, the
- * agent's client actions, and the old shell.  It is what WorkspaceApp in App.tsx used to be, minus the page switch:
- * the router decides the page, and this only reads the address for what the chrome needs (the highlighted section,
- * the company the picker shows, the open bot).
+ * agent's client actions, and the shell (sidebar, tab bar, login dialog: app/shell).  It is what WorkspaceApp in App.tsx
+ * used to be, minus the page switch: the router decides the page, and this only reads the address for what the chrome
+ * needs (the highlighted section, the company the picker shows, the open bot).
  */
-export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest" | "personal") => void }) {
+export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest" | "personal" | null) => void }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [symbols, setSymbols] = useState<string[]>(() => { try { return normalizeWatchlist(JSON.parse(localStorage.getItem(WATCHLIST_KEY) ?? "null"), DEFAULT_SYMBOLS); } catch { return DEFAULT_SYMBOLS; } });
@@ -167,12 +169,17 @@ export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest"
   }, [symbols, navigate, addressSymbol]);
 
   const workspace: Workspace = useMemo(() => ({
-    personal, symbols, setSymbols, symbol, preferredSymbol: preferred, setPreferredSymbol, bots: botList, onModeChange, go, openCompany, removeWatchSymbol,
-  }), [personal, symbols, symbol, preferred, setPreferredSymbol, botList, onModeChange, go, openCompany, removeWatchSymbol]);
+    personal, symbols, setSymbols, symbol, preferredSymbol: preferred, setPreferredSymbol, bots: botList, go, openCompany, removeWatchSymbol,
+  }), [personal, symbols, symbol, preferred, setPreferredSymbol, botList, go, openCompany, removeWatchSymbol]);
 
-  const botRail = personal ? (close: () => void) => <BotRailList bots={botList.bots} routinesActive={activeSection === "routines"} onRoutines={() => { close(); go("routines"); }} portfolioActive={activeSection === "portfolio"} onPortfolio={() => { close(); go("portfolio"); }} forecastActive={navGroup(activeSection) === "forecast"} onForecast={() => { close(); go("forecast"); }} newsActive={activeSection === "news"} onNews={() => { close(); go("news"); }} error={botList.error} activeBotId={activeBot?.id ?? null} lineStatus={lineStatus} onOpen={bot => { close(); openBot(bot); }} onNew={() => { close(); setNewBotOpen(true); }} /> : undefined;
   const newBotDialog = newBotOpen && <NewBotDialog onClose={() => setNewBotOpen(false)} onCreated={bot => { setNewBotOpen(false); void botList.reload().then(() => openBot(bot)); }} />;
-  return <Shell activeSection={activeSection} navigate={go} symbol={symbol} symbols={symbols} onSelectStock={switchSymbol} watchInput={watchInput} setWatchInput={setWatchInput} addWatchSymbol={addWatchSymbol} watchError={watchError} setWatchError={setWatchError} onModeChange={onModeChange} botRail={botRail} overlay={newBotDialog}>
+  // The to-do number is read again whenever the bot list reloads (every action on the 任务 page and every finished answer reloads it).
+  const routinesCount = useRoutinesBadge(personal, botList.bots);
+  // The old top bar showed the company switcher on the research pages, except the forecast group (its company comes from the record).
+  const stockPicker = isResearchSection(activeSection) && navGroup(activeSection) !== "forecast";
+  return <AppShell onModeChange={onModeChange} overlay={newBotDialog}
+    nav={{ path: addressPath, personal, symbol, bots: botList.bots, botsError: botList.error, activeBotId: activeBot?.id ?? null, lineStatus, routinesCount, onNewBot: () => setNewBotOpen(true), onModeChange }}
+    research={stockPicker ? { symbol, symbols, onSelectStock: switchSymbol, watchInput, setWatchInput, addWatchSymbol, watchError, setWatchError } : null}>
     <WorkspaceContext.Provider value={workspace}><Outlet /></WorkspaceContext.Provider>
-  </Shell>;
+  </AppShell>;
 }

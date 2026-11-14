@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 import type { Bot } from "../api";
-import type { WorkspaceSection } from "../Shell";
+import type { WorkspaceSection } from "../workspace-sections.mjs";
 
 export type BotList = { bots: Bot[]; loaded: boolean; error: string; reload: () => Promise<void>; defaultBot: Bot | null };
 
@@ -17,8 +17,7 @@ export type Workspace = {
   preferredSymbol: string;
   setPreferredSymbol: (symbol: string) => void;
   bots: BotList;
-  onModeChange: (mode: "guest" | "personal") => void;
-  /** Jump to a section by its old name (what SectionTabs, the rail and the pages' buttons speak). */
+  /** Jump to a section by its old name (what the pages' own buttons speak). */
   go: (section: WorkspaceSection) => void;
   /** Open a company's page: its overview, or its forecasts. */
   openCompany: (ticker: string, view?: "overview" | "forecast") => void;

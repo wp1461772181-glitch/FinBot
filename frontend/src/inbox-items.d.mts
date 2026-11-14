@@ -1,5 +1,6 @@
 import type { AgentTask, InboxItem, InboxSource, PriceLine, TaskProposal } from "./api";
 export function waitingCount(botId: string, proposals: Pick<TaskProposal, "bot_id" | "expired">[], confirms: Pick<InboxItem, "status">[]): number;
+export function routinesBadge(proposals: Pick<TaskProposal, "expired">[], confirms: Pick<InboxItem, "status">[]): number;
 export function inboxKindLabel(kind: string): string;
 export function scheduleLabel(task: Pick<AgentTask, "schedule_kind" | "schedule_time" | "every_value" | "every_unit">): string;
 export function runsLabel(task: Pick<AgentTask, "max_runs">): string;

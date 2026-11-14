@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
-import { Navigate, createHashRouter, type RouteObject } from "react-router";
+import { Navigate, Outlet, createHashRouter, type RouteObject } from "react-router";
+import { LegacyFrame } from "../LegacyFrame";
 import { PATTERNS, SETTINGS_SECTIONS, paths } from "../routes.mjs";
 import { RouteError } from "./RouteError";
 import { SessionRoot } from "./session";
@@ -25,6 +26,9 @@ const to = (path: string) => ({ element: <Navigate to={path} replace /> });
 
 /** The catch-all: an old-form address the router met before the legacy-address bridge did, or one nobody knows, goes where the old router sent it. */
 function Fallback() { return <Navigate to={legacyTarget(window.location.hash)} replace />; }
+
+/** Every page below is still an old component: the shell puts the old-UI marker around each one (and around nothing else). */
+function LegacyPage() { return <LegacyFrame><Outlet /></LegacyFrame>; }
 
 const pages: RouteObject[] = [
   { path: PATTERNS.chat, ...page(() => import("./pages/chat"), "ChatRoute") },
@@ -70,8 +74,9 @@ const routes: RouteObject[] = [
     children: [
       { index: true, ...to(paths.chat()) },
       { path: PATTERNS.login, ...to(paths.chat()) },
-      // The error boundary sits below the layout, so a page that fails to load leaves the shell standing.
-      { ErrorBoundary: RouteError, children: pages },
+      // The error boundary sits below the layout, so a page that fails to load leaves the shell standing.  It is above the
+      // old-UI marker, so the notice it shows is new markup outside it.
+      { ErrorBoundary: RouteError, children: [{ Component: LegacyPage, children: pages }] },
     ],
   },
 ];

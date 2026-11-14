@@ -9,7 +9,7 @@ import { modelStatusLabel } from "./ModelScoresPage";
 import { MAX_WATCHLIST } from "./watchlist.mjs";
 import { appHref } from "./legacy-routes.mjs";
 import { hashHref, paths } from "./routes.mjs";
-import { WORKSPACE_SECTION_TITLE, type ResearchSection, type SupportedSymbol, type WorkspaceSection } from "./Shell";
+import { WORKSPACE_SECTION_TITLE, type ResearchSection, type SupportedSymbol, type WorkspaceSection } from "./workspace-sections.mjs";
 
 // The research overview (moved out of App.tsx; P6.1 splits it into the watchlist page and the company page): the
 // current stock's state, four counters and the watchlist grid, plus the page header and the intro the other

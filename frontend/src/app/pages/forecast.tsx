@@ -1,13 +1,10 @@
 import { useNavigate, useSearchParams } from "react-router";
-import { SectionTabs } from "../../Shell";
 import { ForecastPage } from "../../ForecastPage";
 import { isRecordId, paths } from "../../routes.mjs";
 import { ToForecastHome, useRecordParam } from "./frames";
-import { useWorkspace } from "../workspace";
 
 /** /research/forecasts/:rootId, ?version= ?revise= (and ?section=versions, which the old #revisions address resolves to). */
 export function ForecastRoute() {
-  const ws = useWorkspace();
   const navigate = useNavigate();
   const rootId = useRecordParam("rootId");
   const [params] = useSearchParams();
@@ -19,8 +16,6 @@ export function ForecastRoute() {
   const reviseSourceId = revise && isRecordId(revise) ? revise.toLowerCase() : undefined;
   const focusVersions = params.get("section") === "versions";
   const goHome = () => navigate(paths.forecasts());
-  return <main className="workspace"><SectionTabs section={focusVersions ? "revisions" : "forecast"} navigate={ws.go} />
-    <ForecastPage key={`${rootId}:${versionId ?? ""}:${reviseSourceId ?? ""}:${focusVersions}`} rootId={rootId} versionId={versionId} reviseSourceId={reviseSourceId} focusVersions={focusVersions} onHome={goHome} />
-  </main>;
+  return <main className="workspace"><ForecastPage key={`${rootId}:${versionId ?? ""}:${reviseSourceId ?? ""}:${focusVersions}`} rootId={rootId} versionId={versionId} reviseSourceId={reviseSourceId} focusVersions={focusVersions} onHome={goHome} /></main>;
 }
 

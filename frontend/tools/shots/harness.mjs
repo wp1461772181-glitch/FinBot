@@ -15,7 +15,7 @@ export async function launch() {
 }
 
 /** Runs in every document before the app: seeded Math.random, preset storage, animations off. */
-function initScript({ theme, locale, credential, seed, motion }) {
+function initScript({ theme, locale, credential, guest, seed, motion }) {
   let state = seed >>> 0;
   Math.random = () => { // mulberry32
     state = (state + 0x6D2B79F5) | 0;
@@ -30,6 +30,7 @@ function initScript({ theme, locale, credential, seed, motion }) {
       localStorage.setItem("market-evidence-agent:chat-mode:v1", "personal");
       localStorage.setItem("market-evidence-agent:personal-chat-session:v1", credential);
     }
+    if (guest && !localStorage.getItem("market-evidence-agent:chat-mode:v1")) localStorage.setItem("market-evidence-agent:chat-mode:v1", "guest");
   } catch { /* storage unavailable: the page will show its own state */ }
   const css = "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important;scroll-behavior:auto!important}";
   const inject = () => {
@@ -45,7 +46,7 @@ function initScript({ theme, locale, credential, seed, motion }) {
 
 /**
  * A fresh, deterministic browser context.
- * opts: { width, height?, theme, locale, identity: "personal"|"none", label, unmatched, seed?, motion?, fixtureState? }
+ * opts: { width, height?, theme, locale, identity: "personal"|"guest"|"none", label, unmatched, seed?, motion?, fixtureState? }
  * `motion: true` keeps real motion (no reduced-motion preference, no animation-killing style) for checks that measure it.
  * `fixtureState` replaces the default fake backend state (see fixtures/index.mjs buildState).
  */
@@ -56,7 +57,7 @@ export async function newView(browser, opts) {
     viewport: { width, height }, deviceScaleFactor: 1, locale, timezoneId: "Asia/Shanghai",
     reducedMotion: motion ? "no-preference" : "reduce", colorScheme: theme, serviceWorkers: "block", acceptDownloads: false,
   });
-  await context.addInitScript(initScript, { theme, locale, credential: identity === "personal" ? FAKE_CREDENTIAL : null, seed, motion });
+  await context.addInitScript(initScript, { theme, locale, credential: identity === "personal" ? FAKE_CREDENTIAL : null, guest: identity === "guest", seed, motion });
   await context.clock.setFixedTime(FIXED_TIME);
   const mock = await installMockApi(context, { label, unmatched, ...(fixtureState ? { fixtureState } : {}) });
   const page = await context.newPage();

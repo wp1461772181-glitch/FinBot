@@ -13,7 +13,7 @@ function BotPage({ bot, profile = false }: { bot: Bot; profile?: boolean }) {
   const selectBot = useSelectBot();
   useEffect(() => { void selectBot(bot); }, [bot]); // eslint-disable-line react-hooks/exhaustive-deps
   const changed = () => void ws.bots.reload();
-  return <AgentChatPanel bot={bot} onSettings={() => ws.go("admin")} onModeChange={ws.onModeChange} onTurnSettled={changed} onBotChanged={changed} openSide={profile}
+  return <AgentChatPanel bot={bot} onTurnSettled={changed} onBotChanged={changed} openSide={profile}
     side={<BotSide key={bot.id} bot={bot} symbol={ws.symbol} watchlist={ws.symbols} onSelectSymbol={ws.setPreferredSymbol} initialTab={profile ? "profile" : "workspace"}
       onOpenCompany={(ticker, section) => ws.openCompany(ticker, section === "forecast" ? "forecast" : "overview")} onChanged={changed} onDeleted={() => { changed(); ws.go("agent"); }} />} />;
 }
@@ -25,7 +25,7 @@ export function ChatRoute() {
   const ws = useWorkspace();
   if (ws.personal && !ws.bots.loaded) return waiting("正在读取…");
   if (ws.personal && ws.bots.defaultBot) return <BotPage bot={ws.bots.defaultBot} />;
-  return <AgentChatPanel onSettings={() => ws.go("admin")} onModeChange={ws.onModeChange} />;
+  return <AgentChatPanel />;
 }
 
 /** /chat/:botId and /chat/:botId/settings (the same page with the 档案 tab up front; P5.1 makes it a page of its own). */
@@ -49,7 +49,7 @@ export function ChatConversationRoute() {
     void selectRef.current(null).then(() => openRef.current(conversationId)).catch(() => { /* the panel reports a conversation it cannot restore */ });
   }, [conversationId, valid]);
   if (!valid) return <Navigate to={paths.chat()} replace />;
-  return <AgentChatPanel onSettings={() => ws.go("admin")} onModeChange={ws.onModeChange} />;
+  return <AgentChatPanel />;
 }
 
 /** /chat/history: the conversation panel with no bot, whose left column is the history list. */
@@ -57,5 +57,5 @@ export function ChatHistoryRoute() {
   const ws = useWorkspace();
   const selectBot = useSelectBot(), selectRef = useRef(selectBot); selectRef.current = selectBot;
   useEffect(() => { void selectRef.current(null).catch(() => { /* the panel reports it */ }); }, []);
-  return <AgentChatPanel onSettings={() => ws.go("admin")} onModeChange={ws.onModeChange} />;
+  return <AgentChatPanel />;
 }

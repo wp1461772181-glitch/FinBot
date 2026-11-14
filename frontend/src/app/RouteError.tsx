@@ -6,7 +6,7 @@ import { useLocale } from "../i18n";
  * was updated after this tab opened and the file it asks for is gone).  The shell around it stays; the reader can
  * reload.  It is deliberately plain and neutral (no alarm colour): nothing was lost, the page just did not arrive.
  * Its one button is a plain element rather than the shadcn Button: this file is in the first load, and Button brings tailwind-merge with it.
- * data-slot keeps the old-UI restore block off it: it is new markup inside the data-legacy tree.
+ * It renders above the old-UI marker (the router wraps only the pages in it), so it gets the new base styles.
  */
 export function RouteError() {
   const { t } = useLocale();

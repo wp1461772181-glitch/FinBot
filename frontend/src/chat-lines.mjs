@@ -1,4 +1,5 @@
 import { AgentChatLifecycle } from "./agentChatLifecycle.js";
+import { awaitsUser } from "./chat-clarification.mjs";
 
 const DRAFT_KEY = line => `market-evidence-agent:draft:${line}:v1`;
 const defaultStorage = () => { try { return globalThis.localStorage; } catch { return undefined; } };
@@ -38,6 +39,8 @@ export function createLineStore() {
     all: () => [...lines],
     running: () => [...lines].filter(([, s]) => s.state === "sending").map(([k]) => k),
     unseen: () => [...lines].filter(([, s]) => s.unseen).map(([k]) => k),
+    // Lines whose last message hands the turn to the user (an unanswered confirmation card or a waiting status) and that are not mid-answer.
+    waiting: () => [...lines].filter(([, s]) => s.state !== "sending" && awaitsUser(s.messages[s.messages.length - 1])).map(([k]) => k),
     markSeen(line) { get(line).unseen = false; },
   };
 }

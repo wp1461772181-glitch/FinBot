@@ -29,7 +29,7 @@ build must compare with 0 different pixels; if they do not, fix the tool, do not
 Append to `PAGES` in `pages.mjs`: `{ name, hash, ready, before?, identity? }`.
 `ready` is a selector that only exists once the page shows its data (waitReady also waits for "正在读取…" style text to go);
 `before(page, { width })` may click or scroll before the shot. Keep `name` stable when a route moves; change only `hash`.
-`identity: "none"` opens without credentials (the guest/personal entry page).
+`identity: "none"` opens without credentials (the login page); `identity: "guest"` opens as a read-only guest (mode stored, no credential).
 
 ## Adding fake data for an endpoint
 1. Find the request in `src/api.ts`; the URL is `<api base>` + path with the `/api` prefix dropped (`/agent-chat/...`, `/v2/...`).
@@ -44,3 +44,8 @@ A request that must stay unanswered goes in `INTENTIONALLY_IGNORED` in `mock-api
 
 ## Adding a smoke check
 Write one named async function in `smoke.mjs` (throw to fail, return a short detail string) and register it in `CHECKS`.
+
+## P2.2 views and fakes
+- Pages `shell-collapsed` (1440: the sidebar folded), `shell-mobile-more` (390: the 更多 drawer open), `shell-bot-states` (the four bot-row marks: 1440 shows the sidebar, 390 the drawer), `login-error` (a wrong code was sent), `guest-chat` (read-only chat). `shell-collapsed` and `shell-mobile-more` only do something at the width they are named for; run them with `--widths 1440` / `--widths 390`.
+- `shell-bot-states` makes the four states from the fixtures: NewsBot has unread, ReportBot has a pending item (the amber dot), and the page sends `[hold-the-answer]` in TeslaBot's line: the fake stream never answers a message holding that marker (`HOLD_MARKER` in `fixtures/ids.mjs`), so that row shows 回答中.
+- `POST /agent-chat/personal-login` answers a credential for `LOGIN_CODE` (an invented code) and 401 for any other.

@@ -13,29 +13,26 @@ test("sizes: rail and chat title avatars are 44px+, pickers one step larger", ()
   assert.ok(BOT_AVATAR_SIZE.createHero > 96);
   assert.ok(BOT_AVATAR_SIZE.emoji > 32);
   assert.ok(BOT_AVATAR_SIZE.mobileFloor >= 40);
+  assert.ok(BOT_AVATAR_SIZE.sidebar >= 28 && BOT_AVATAR_SIZE.sidebar <= 40, "the sidebar avatar is size S");
+  assert.ok(BOT_AVATAR_SIZE.login >= 96, "the login page's FinBot is size L");
 });
 
 test("sizes: components use the shared constants, not literals", () => {
   assert.match(tsx("AgentChatPanel.tsx"), /size=\{BOT_AVATAR_SIZE\.title\}/);
-  assert.match(tsx("BotPages.tsx"), /size=\{BOT_AVATAR_SIZE\.rail\}/);
+  assert.match(tsx("app/shell/BotRow.tsx"), /BOT_AVATAR_SIZE\.sidebar/);   // P2.2: the sidebar row (design 6.2, size S: 28-40px) replaced the rail row
   assert.match(tsx("BotPages.tsx"), /size=\{BOT_AVATAR_SIZE\.hero\}/);
   assert.match(tsx("BotPages.tsx"), /size=\{BOT_AVATAR_SIZE\.createHero\}/);
 });
 
-test("sizes: css overrides match the constants (title, rail emoji avatar)", () => {
+test("sizes: css overrides match the constants (title; the rail emoji avatar rule went with the old rail in P2.2)", () => {
   const title = css.match(/\.agent-title-row \.bot-orb \{ width: (\d+)px; height: (\d+)px; \}/);
   assert.deepEqual(title?.slice(1).map(Number), [BOT_AVATAR_SIZE.title, BOT_AVATAR_SIZE.title]);
   const titleText = css.match(/\.agent-title-row \.bot-avatar \{ width: (\d+)px/);
   assert.equal(Number(titleText?.[1]), BOT_AVATAR_SIZE.title);
-  const rail = css.match(/\.bot-rail \.bot-avatar \{ width: (\d+)px; height: (\d+)px/);
-  assert.deepEqual(rail?.slice(1).map(Number), [BOT_AVATAR_SIZE.rail, BOT_AVATAR_SIZE.rail]);
+  assert.doesNotMatch(css, /\.bot-rail/);
 });
 
-test("text yields: compact name/subtitle, ellipsis, tight padding, mobile hides secondary text", () => {
-  assert.match(css, /\.bot-row-text \{[^}]*min-width: 0[^}]*\}/);
-  assert.match(css, /\.bot-row-text strong \{[^}]*font-size: 13px[^}]*text-overflow: ellipsis/);
-  assert.match(css, /\.bot-row-text small \{[^}]*font-size: 10px[^}]*text-overflow: ellipsis/);
-  assert.match(css, /\.bot-row \{[^}]*gap: 8px[^}]*padding: 4px 6px/);
+test("text yields: the chat title row keeps its ellipsis and hides the subtitle on narrow screens (the rail row rules went with the old rail in P2.2)", () => {
   assert.match(css, /\.agent-title-row h1 \{[^}]*font-size: 16px[^}]*text-overflow: ellipsis/);
   assert.match(css, /\.agent-title-row \.bot-title \{[^}]*text-overflow: ellipsis/);
   const mobile = css.match(/@media \(max-width: 520px\) \{[^@]*\.agent-title-row \.bot-title \{ display: none; \}/);

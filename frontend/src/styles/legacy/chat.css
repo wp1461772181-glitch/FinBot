@@ -29,11 +29,6 @@
 }
 
 /* The chat route owns the viewport: no page scrollbar, no footer under the composer. */
-.app-frame:has(.agent-page) { height: 100dvh; min-height: 0; overflow: hidden; }
-.app-frame:has(.agent-page) .app-content { display: flex; flex-direction: column; height: 100dvh; min-height: 0; overflow: hidden; }
-.app-frame:has(.agent-page) .app-content > footer { display: none; }
-.app-frame:has(.agent-page) .app-content > main { flex: 1 1 auto; min-height: 0; }
-.app-frame:has(.agent-page) .app-rail { height: 100dvh; }
 
 /* --- heading ------------------------------------------------------------------------------- */
 .agent-page .agent-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 0 10px; border-bottom:1px solid var(--c-line); }
@@ -323,7 +318,6 @@
 .agent-stop:hover { background:var(--c-tint); }
 
 /* --- login panel / archive banner (shared with the admin page) ---------------------------- */
-.agent-page .personal-login-panel { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; padding: 12px 14px; border:1px solid var(--c-line-strong); border-radius: 12px; background:var(--c-surface); }
 .agent-page .chat-archive-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; border:1px solid var(--c-line); border-radius: 10px; background:var(--c-tint); font-size: 12px; }
 
 /* --- narrow screens ------------------------------------------------------------------------ */
@@ -434,21 +428,6 @@
 }
 
 /* Bots (personal agent, second edition): the sidebar list, the bot page's right tabs, the catalog card. */
-.bot-rail { display: grid; gap: 4px; min-height: 0; max-height: 46vh; overflow-y: auto; padding-bottom: 8px; border-bottom: 1px solid rgba(174, 192, 192, .18); scrollbar-width: thin; }
-.bot-rail ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.bot-rail-head { display: flex; align-items: center; justify-content: space-between; color: #829a9c; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 0 10px; }
-.bot-new { border:1px solid rgba(174, 192, 192, .35); background:transparent; color:#aec0c0; border-radius: 6px; width: 26px; height: 26px; cursor: pointer; }
-.bot-new:hover, .bot-new:focus-visible { color:#fff; border-color:#76b8ae; }
-.bot-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border:0; border-radius: 8px; background:transparent; color:#aec0c0; text-align: left; cursor: pointer; }
-.bot-row:hover, .bot-row:focus-visible, .bot-row.is-active { background:rgba(118, 184, 174, .16); color:#fff; }
-.bot-row-text { display: grid; min-width: 0; }
-.bot-row-text strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bot-row-text small { color:#829a9c; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bot-star { color:#e0b24f; }
-.bot-group { margin: 8px 10px 2px; color:#829a9c; font-size: 10px; }
-.bot-rail-error { margin: 0 10px; color: #f0b0a0; font-size: 11px; }
-.workspace-nav.is-bottom { margin-top: auto; }
-.workspace-nav.is-bottom button { padding: 6px 10px; }
 .bot-avatar { flex: 0 0 auto; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background:rgba(118, 184, 174, .22); color:inherit; font-size: 14px; }
 .agent-title-row .bot-avatar { background:var(--c-tint); color:var(--c-accent); }
 .bot-title { color:var(--c-muted); font-size: 12px; }
@@ -502,12 +481,6 @@
   .agent-layout.is-bot { grid-template-columns: minmax(0, 1fr); }
   .bot-side { border-left:0; border-top:1px solid var(--c-line); padding: 12px 0 0; max-height: none; }
 }
-
-.bot-confirm { margin-bottom: 6px; }
-.bot-unread { margin-left: auto; min-width: 18px; padding: 1px 6px; border-radius: 999px; background: #76b8ae; color: #08201e; font-size: 10px; font-weight: 700; text-align: center; }
-.bot-pending-badge { margin-left: auto; min-width: 18px; padding: 1px 6px; border-radius: 999px; background: #e0b24f; color: #2a1d00; font-size: 10px; font-weight: 700; text-align: center; }
-.bot-pending-dot { margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: #e0b24f; flex: none; }
-.bot-pending-dot + .bot-unread { margin-left: 6px; }
 .task-post-head { margin: 0; color:var(--c-muted); font-size: 12px; }
 .bot-routines { display: grid; gap: 10px; }
 .bot-routines h3, .bot-routines h4 { margin: 0; font-size: 12px; }

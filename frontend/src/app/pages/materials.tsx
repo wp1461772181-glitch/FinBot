@@ -1,5 +1,4 @@
 import { useSearchParams } from "react-router";
-import { SectionTabs } from "../../Shell";
 import { MaterialLibrary } from "../../MaterialLibrary";
 import { scanOfficialFilings } from "../../api";
 import { materialFocusFromParams, symbolFromParams } from "../../routes.mjs";
@@ -13,8 +12,7 @@ export function MaterialsPage({ symbol, focus }: { symbol: string; focus: Return
     if (!isSupportedSymbol(symbol)) throw new Error("SEC 扫描需要有效的美股代码。");
     return scanOfficialFilings(symbol);
   }
-  return <><SectionTabs section="materials" navigate={ws.go} />
-    <MaterialLibrary key={`${symbol}:${focus?.source_type ?? ""}:${focus?.source_id ?? ""}:${focus?.analysis_id ?? ""}`} symbol={symbol} focus={focus} onScan={scan} /></>;
+  return <><MaterialLibrary key={`${symbol}:${focus?.source_type ?? ""}:${focus?.source_id ?? ""}:${focus?.analysis_id ?? ""}`} symbol={symbol} focus={focus} onScan={scan} /></>;
 }
 
 /** /research/materials, ?symbol=&focus=&type=[&analysis=] */

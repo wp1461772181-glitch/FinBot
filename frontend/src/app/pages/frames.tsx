@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Navigate, useParams } from "react-router";
-import { SectionTabs, type ResearchSection } from "../../Shell";
+import type { ResearchSection } from "../../workspace-sections.mjs";
 import { WorkspacePageHeader, isSupportedSymbol } from "../../OverviewWorkspace";
 import { translatePhrase } from "../../i18n";
 import { paths, symbolParam } from "../../routes.mjs";
@@ -14,7 +14,6 @@ export function ResearchFrame({ section, children }: { section: ResearchSection;
   if (!ws.symbols.length) return <EmptyWatchlist />;
   return <main className="workspace" aria-labelledby="workspace-title">
     <WorkspacePageHeader symbol={ws.symbol} section={section} recordCount={null} supported={isSupportedSymbol(ws.symbol)} />
-    <SectionTabs section={section} navigate={ws.go} />
     {children}
   </main>;
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatPriceLines, inboxKindLabel, inboxOrder, judgmentLink, numberedSources, parsePriceLines, parseSymbols, runsLabel, scheduleLabel } from "../src/inbox-items.mjs";
+import { formatPriceLines, inboxKindLabel, inboxOrder, judgmentLink, numberedSources, parsePriceLines, parseSymbols, routinesBadge, runsLabel, scheduleLabel } from "../src/inbox-items.mjs";
 
 test("schedules read as the owner set them", () => {
   assert.equal(scheduleLabel({ schedule_kind: "weekdays", schedule_time: "08:00" }), "工作日 08:00");
@@ -45,4 +45,12 @@ test("symbols and price lines are parsed from what the owner types", () => {
   assert.deepEqual(parsePriceLines(""), []);
   assert.equal(parsePriceLines("NVDA 150"), null);
   assert.equal(formatPriceLines([{ symbol: "NVDA", above: 150, below: 120 }]), "NVDA>150, NVDA<120");
+});
+
+test("the 任务 number: live proposals plus open suggestions, every bot's, and nothing else", () => {
+  const proposals = [{ expired: false }, { expired: true }, { expired: false }];
+  const confirms = [{ status: "unread" }, { status: "read" }, { status: "done" }, { status: "dismissed" }];
+  assert.equal(routinesBadge(proposals, confirms), 4);
+  assert.equal(routinesBadge([], []), 0);
+  assert.equal(routinesBadge(null, undefined), 0, "a list that did not load counts for nothing");
 });

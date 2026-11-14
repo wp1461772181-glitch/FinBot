@@ -1,5 +1,4 @@
 import { useNavigate, useSearchParams } from "react-router";
-import { SectionTabs } from "../../Shell";
 import { ForecastHome } from "../../ForecastHome";
 import { paths, symbolFromParams } from "../../routes.mjs";
 import { useWorkspace } from "../workspace";
@@ -8,8 +7,7 @@ import { useWorkspace } from "../workspace";
 export function ForecastsPage({ symbolFilter }: { symbolFilter?: string }) {
   const ws = useWorkspace();
   const navigate = useNavigate();
-  return <main className="workspace"><SectionTabs section="forecast" navigate={ws.go} />
-    <ForecastHome queue={ws.symbols} personal={ws.personal} symbolFilter={symbolFilter} onClearSymbol={() => navigate(paths.forecasts())} />
+  return <main className="workspace"><ForecastHome queue={ws.symbols} personal={ws.personal} symbolFilter={symbolFilter} onClearSymbol={() => navigate(paths.forecasts())} />
   </main>;
 }
 

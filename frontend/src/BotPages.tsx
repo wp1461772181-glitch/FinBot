@@ -1,7 +1,6 @@
-// Bots (personal agent, second edition): the sidebar list, the new-bot dialog, the bot page's right tabs and the
+// Bots (personal agent, second edition): the bot list hook, the new-bot dialog, the bot page's right tabs and the
 // server model catalog card in settings.  A bot never holds a key: it names a catalog model, and the catalog says
 // only configured / missing.
-import { PortfolioIcon } from "./PortfolioIcon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { deleteBotTelegram, getBotTelegram, saveBotTelegramToken, startBotTelegramBind, unbindBotTelegram, type BotTelegramStatus } from "./api";
 import { addCatalogModel, createBot, deleteBot, deleteCatalogModel, discoverCatalogModels, getBotTemplates, getChatMode, getModelCatalog, getModelRoles, listBots, listSkills, setDefaultCatalogModel, setModelRole, testCatalogModel, updateBot, updateCatalogModel,
@@ -14,7 +13,7 @@ import { toggleUsual, usableSkills } from "./skill-items.mjs";
 import { toolLabel } from "./agent-tool-labels.mjs";
 import { TaskManager } from "./BotRoutines";
 import { CATALOG } from "./model-profiles.mjs";
-import { BotOrb, RailBotOrb } from "./BotOrb";
+import { BotOrb } from "./BotOrb";
 import { BOT_AVATAR_SIZE } from "./bot-sizes.mjs";
 import { BloubCustomizer } from "./BloubCustomizer";
 import { lookForSave, normalizeLook, randomLook, resolveLook, type BloubLook } from "./bloub-look.mjs";
@@ -50,7 +49,6 @@ function useBotOptions() {
   return { catalog, tools, templates, error };
 }
 
-function BotAvatar({ bot, running = false, unread = false }: { bot: Pick<Bot, "id" | "avatar" | "look" | "name">; running?: boolean; unread?: boolean }) { return <RailBotOrb avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.rail} running={running} unread={unread} />; }
 
 /** 档案's avatar: the bloub bot — shape, face and colour chosen in the customiser, kept per bot on the server — or a custom emoji / character.
  * `look` is what the user picked this session (null: not touched, the bot keeps what it has); `seed` is the bot id its hashed default comes from. */
@@ -81,52 +79,12 @@ export function RoutineIcon() {
 }
 
 /** 新闻源: a newspaper, drawn as an SVG for the same reason as the routine icon. */
-/** A small chart-with-target mark, drawn like its neighbours (stroke, 1em, currentColor). */
-export function ForecastIcon() {
-  return <svg className="forecast-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="1.8"
-    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-    <path d="M4 20V4" /><path d="M4 20h16" /><path d="M7 15l4-4 3 3 5-6" /><circle cx="19" cy="8" r="1.4" />
-  </svg>;
-}
-
 export function NewsIcon() {
   return <svg className="news-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="1.8"
     strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
     <path d="M4 5h13v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5Z" /><path d="M17 9h3v8a2 2 0 0 1-2 2h-1" />
     <path d="M7.5 9h6M7.5 12.5h6M7.5 16h4" />
   </svg>;
-}
-
-export function BotRailList({ bots, error, activeBotId, routinesActive, onRoutines, portfolioActive, onPortfolio, forecastActive, onForecast, newsActive, onNews, onOpen, onNew, lineStatus }: { lineStatus?: { running: string[]; unseen: string[] }; bots: Bot[]; error: string; activeBotId: string | null; routinesActive: boolean; onRoutines: () => void; portfolioActive: boolean; onPortfolio: () => void; forecastActive: boolean; onForecast: () => void; newsActive: boolean; onNews: () => void; onOpen: (bot: Bot) => void; onNew: () => void }) {
-  const { t } = useLocale();
-  const { top, groups } = botSections(bots);
-  const pending = bots.reduce((sum, b) => sum + (b.pending || 0), 0);
-  const row = (bot: Bot) => <li key={bot.id}><button type="button" className={`bot-row${bot.id === activeBotId ? " is-active" : ""}`} aria-current={bot.id === activeBotId ? "page" : undefined} onClick={() => onOpen(bot)}>
-    <BotAvatar bot={bot} running={Boolean(lineStatus?.running.includes(`bot:${bot.id}`))} unread={bot.unread > 0 || Boolean(lineStatus?.unseen.includes(`bot:${bot.id}`))} /><span className="bot-row-text"><strong>{bot.name}{bot.is_default && bot.avatar !== "★" && <span className="bot-star" aria-label={t("默认")}> ★</span>}</strong><small>{bot.last_message || bot.title || t("还没有消息")}</small></span>
-    {lineStatus?.running.includes(`bot:${bot.id}`) && bot.id !== activeBotId && <span className="bot-pending-dot" role="img" aria-label={t("回答中")} title={t("回答中")} />}
-    {lineStatus?.unseen.includes(`bot:${bot.id}`) && bot.id !== activeBotId && <span className="bot-unread" aria-label={t("新回答")}>{t("新回答")}</span>}
-    {bot.pending > 0 && <span className="bot-pending-dot" role="img" aria-label={t("有待你确认的建议")} title={t("有待你确认的建议")} />}
-    {bot.unread > 0 && <span className="bot-unread" aria-label={`${bot.unread} ${t("条未读")}`}>{bot.unread > 99 ? "99+" : bot.unread}</span>}
-  </button></li>;
-  return <section className="bot-rail" aria-label={t("Bot 列表")}>
-    <button type="button" className={`bot-row bot-confirm${routinesActive ? " is-active" : ""}`} aria-current={routinesActive ? "page" : undefined} onClick={onRoutines}>
-      <span className="bot-avatar" aria-hidden="true"><RoutineIcon /></span><span className="bot-row-text"><strong>{t("例行任务")}</strong></span>
-      {pending > 0 && <span className="bot-pending-badge" aria-label={`${pending} ${t("条待确认")}`}>{pending}</span>}
-    </button>
-    <button type="button" className={`bot-row bot-confirm${portfolioActive ? " is-active" : ""}`} aria-current={portfolioActive ? "page" : undefined} onClick={onPortfolio}>
-      <span className="bot-avatar" aria-hidden="true"><PortfolioIcon /></span><span className="bot-row-text"><strong>{t("持仓")}</strong></span>
-    </button>
-    <button type="button" className={`bot-row bot-confirm${forecastActive ? " is-active" : ""}`} aria-current={forecastActive ? "page" : undefined} onClick={onForecast}>
-      <span className="bot-avatar" aria-hidden="true"><ForecastIcon /></span><span className="bot-row-text"><strong>{t("预测")}</strong></span>
-    </button>
-    <button type="button" className={`bot-row bot-confirm${newsActive ? " is-active" : ""}`} aria-current={newsActive ? "page" : undefined} onClick={onNews}>
-      <span className="bot-avatar" aria-hidden="true"><NewsIcon /></span><span className="bot-row-text"><strong>{t("新闻源")}</strong></span>
-    </button>
-    <div className="bot-rail-head"><span>{t("Bot")}</span><button type="button" className="bot-new" onClick={onNew} aria-label={t("新建 bot")} title={t("新建 bot")}>＋</button></div>
-    {error && <p className="bot-rail-error" role="alert">{error}</p>}
-    <ul>{top && row(top)}</ul>
-    {groups.map(group => <div key={group.name || "_"}>{group.name && <p className="bot-group">{group.name}</p>}<ul>{group.bots.map(row)}</ul></div>)}
-  </section>;
 }
 
 type Draft = ReturnType<typeof botDraft> & { avatar?: string; look?: BloubLook | null; seed?: string; group?: string; pinned?: boolean; hidden?: boolean; daily_notify_cap?: number };

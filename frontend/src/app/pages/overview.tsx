@@ -1,6 +1,5 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { Navigate, useSearchParams } from "react-router";
-import { SectionTabs } from "../../Shell";
 import { CurrentOverviewWorkspace, Loading, WorkspacePageHeader, actionMessage, isSupportedSymbol, type FilingState } from "../../OverviewWorkspace";
 import { getFilingInventory, getV2Prices } from "../../api";
 import { companyTab, paths } from "../../routes.mjs";
@@ -41,8 +40,7 @@ function Overview() {
   if (active.kind === "loading" || active.symbol !== symbol) return <Loading symbol={symbol} />;
   return <main className="workspace" aria-labelledby="workspace-title">
     <WorkspacePageHeader symbol={symbol} section="overview" recordCount={null} supported={isSupportedSymbol(symbol)} />
-    <SectionTabs section="overview" navigate={ws.go} />
-    <CurrentOverviewWorkspace symbols={ws.symbols} personal={ws.personal} onRemove={ws.removeWatchSymbol} symbol={symbol} currentFilings={active.filings} priceHistory={active.priceHistory} priceError={active.priceError}
+        <CurrentOverviewWorkspace symbols={ws.symbols} personal={ws.personal} onRemove={ws.removeWatchSymbol} symbol={symbol} currentFilings={active.filings} priceHistory={active.priceHistory} priceError={active.priceError}
       onNavigate={ws.go} onOpenStock={ticker => ws.openCompany(ticker)} onPricesInitialized={() => setRetryKey(value => value + 1)} />
   </main>;
 }
