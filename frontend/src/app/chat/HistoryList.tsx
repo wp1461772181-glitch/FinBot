@@ -1,8 +1,9 @@
-// legacy markup, moved as-is in P3.1; restyled in P3.2–P3.4
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { getChatMode, listAgentConversations, renameAgentConversation, archiveAgentConversation, type Bot, type ConversationSummary } from "../../api";
 import { useLocale } from "../../i18n";
-import { PencilIcon, ArchiveIcon } from "./icons";
+import { Archive, Pencil, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { SkeletonRows, DelayedSkeleton } from "@/components/state/Skeleton";
 import { useChat } from "./ChatSessionProvider";
 
 function shortDate(value:string, locale:string):string {
@@ -25,20 +26,21 @@ function HistoryRow({item,current,onOpen,onRename,onArchive}:{item:ConversationS
     catch(e){setError(e instanceof Error?e.message:t("重命名失败，请重试"))}
     finally{setSaving(false)}
   }
-  if(editing)return <div className="agent-history-row is-current"><div className="agent-history-edit">
-    <input ref={input} value={value} maxLength={80} disabled={saving} aria-label={t("对话名称")} placeholder={t("对话名称（留空恢复默认）")}
+  if(editing)return <div className="rounded-md bg-accent p-2"><div className="flex flex-col gap-1">
+    <input ref={input} className="h-9 w-full rounded-sm border border-line-strong bg-surface px-2 text-body text-ink outline-none focus-visible:ring-2 focus-visible:ring-ring" value={value} maxLength={80} disabled={saving} aria-label={t("对话名称")} placeholder={t("对话名称（留空恢复默认）")}
       onChange={e=>setValue(e.target.value)} onBlur={()=>void commit()}
       onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();void commit()}else if(e.key==="Escape"){e.preventDefault();setValue(item.title);setError("");setEditing(false)}}} />
-    <small className={error?"is-error":""}>{error||t("Enter 保存，Esc 取消")}</small>
+    <small className={`text-caption ${error?"text-danger":"text-muted-foreground"}`}>{error||t("Enter 保存，Esc 取消")}</small>
   </div></div>;
-  return <div className={`agent-history-row${current?" is-current":""}`}>
-    <button type="button" className="agent-history-item" aria-current={current?"true":undefined} title={item.title} onClick={onOpen} onDoubleClick={()=>{setValue(item.title);setEditing(true)}}>
-      <span className="agent-history-title">{item.title||t("新建对话")}</span>
-      <span className="agent-history-time">{shortDate(item.updated_at,locale)}</span>
+  const rowButton="inline-flex size-8 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-background hover:text-ink focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5";
+  return <div data-testid="history-row" className={`group/row flex items-center gap-1 rounded-md ${current?"bg-accent":"hover:bg-accent/60"}`}>
+    <button type="button" className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-md px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-current={current?"true":undefined} title={item.title} onClick={onOpen} onDoubleClick={()=>{setValue(item.title);setEditing(true)}}>
+      <span className="truncate text-body text-ink">{item.title||t("新建对话")}</span>
+      <span className="text-caption text-muted-foreground">{shortDate(item.updated_at,locale)}</span>
     </button>
-    <span className="agent-history-actions">
-      <button type="button" className="agent-history-rename" aria-label={t("重命名对话")} title={t("重命名")} onClick={()=>{setValue(item.title);setEditing(true)}}><span style={{display:"inline-flex",width:14,height:14}}><PencilIcon /></span></button>
-      <button type="button" className="agent-history-archive" aria-label={t("归档对话")} title={t("归档（仅从列表移除，不删除内容）")} onClick={()=>{void onArchive()}}><span style={{display:"inline-flex",width:14,height:14}}><ArchiveIcon /></span></button>
+    <span className="flex shrink-0 pr-1 opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+      <button type="button" className={rowButton} aria-label={t("重命名对话")} title={t("重命名")} onClick={()=>{setValue(item.title);setEditing(true)}}><Pencil aria-hidden="true" /></button>
+      <button type="button" className={rowButton} aria-label={t("归档对话")} title={t("归档（仅从列表移除，不删除内容）")} onClick={()=>{void onArchive()}}><Archive aria-hidden="true" /></button>
     </span>
   </div>;
 }
@@ -63,15 +65,16 @@ export function HistoryList({ bot, historyOpen, setHistoryOpen }: { bot?: Bot | 
   }
   const currentConversation=window.sessionStorage.getItem("market-evidence-agent:chat-conversation:v1");
   return <>
-      {!bot&&<>{historyOpen&&<div className="agent-history-scrim" aria-hidden="true" onClick={()=>setHistoryOpen(false)}/>}
-      <aside className={`agent-history${historyOpen?" is-open":""}`} aria-label={t("历史对话")}>
-        <button className="primary-action" type="button" onClick={()=>{c.clear();setHistoryOpen(false)}}>＋ {t("新建对话")}</button>
-        <h2>{t("历史对话")}</h2>
-        {historyLoading&&<p role="status">{t("正在读取…")}</p>}
-        {historyError&&<p role="alert">{historyError} <button className="secondary-action" onClick={()=>void refreshHistory()}>{t("重试")}</button></p>}
-        {!historyLoading&&!historyError&&!history.length&&<p>{t("还没有保存的对话")}</p>}
+      {!bot&&<>{historyOpen&&<div className="fixed inset-0 z-overlay bg-black/30 lg:hidden" aria-hidden="true" onClick={()=>setHistoryOpen(false)}/>}
+      <aside data-testid="history-list" data-open={historyOpen} aria-label={t("历史对话")}
+        className="z-overlay flex min-h-0 flex-col gap-1 overflow-y-auto border-r border-line bg-background p-3 max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:w-72 max-lg:shadow-modal max-lg:data-[open=false]:hidden lg:static lg:z-auto">
+        <Button type="button" variant="outline" className="justify-start" onClick={()=>{c.clear();setHistoryOpen(false)}}><Plus aria-hidden="true" />{t("新建对话")}</Button>
+        <h2 className="px-2 pb-1 pt-3 text-caption font-medium text-muted-foreground">{t("历史对话")}</h2>
+        {historyLoading&&!history.length&&<DelayedSkeleton active><SkeletonRows rows={4} /></DelayedSkeleton>}
+        {historyError&&<p role="alert" className="flex items-center gap-2 px-2 text-small text-danger">{historyError} <Button type="button" variant="ghost" size="sm" onClick={()=>void refreshHistory()}>{t("重试")}</Button></p>}
+        {!historyLoading&&!historyError&&!history.length&&<p className="px-2 text-small text-muted-foreground">{t("还没有保存的对话")}</p>}
         {history.map(item=><HistoryRow key={item.id} item={item} current={Boolean(c.messages.length)&&item.id===currentConversation} onOpen={()=>void openHistory(item)} onRename={title=>renameHistory(item,title)} onArchive={()=>archiveHistory(item)} />)}
-        {historyHasMore&&<button className="secondary-action" onClick={()=>void loadMoreHistory()}>{t("加载更多")}</button>}
+        {historyHasMore&&<Button type="button" variant="ghost" size="sm" onClick={()=>void loadMoreHistory()}>{t("加载更多")}</Button>}
       </aside></>}
   </>;
 }

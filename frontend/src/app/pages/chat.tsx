@@ -1,5 +1,6 @@
 import { lazy, useEffect, useRef } from "react";
 import { Navigate, useParams } from "react-router";
+import { DelayedSkeleton, SkeletonMessages } from "@/components/state/Skeleton";
 import { ChatPage } from "../chat/ChatPage";
 import { useOpenConversation, useSelectBot } from "../chat/ChatSessionProvider";
 import { translatePhrase } from "../../i18n";
@@ -22,12 +23,14 @@ function BotPage({ bot, profile = false }: { bot: Bot; profile?: boolean }) {
       onOpenCompany={(ticker, section) => ws.openCompany(ticker, section === "forecast" ? "forecast" : "overview")} onChanged={changed} onDeleted={() => { changed(); ws.go("agent"); }} /></OptionalChunk>} />;
 }
 
-const waiting = (text: string) => <main className="workspace"><p role="status">{translatePhrase(text)}</p></main>;
+/** The bot list is still on its way: the thread's own skeleton (after 400ms); a bot that is not there says so. */
+const loading = <main className="mx-auto w-full max-w-[760px] flex-1 p-6"><DelayedSkeleton><SkeletonMessages /></DelayedSkeleton></main>;
+const missing = (text: string) => <main className="mx-auto w-full max-w-[760px] flex-1 p-6"><p role="status" className="text-body text-muted-foreground">{translatePhrase(text)}</p></main>;
 
 /** /chat: the default bot's line (owner), or the plain conversation (guest). */
 export function ChatRoute() {
   const ws = useWorkspace();
-  if (ws.personal && !ws.bots.loaded) return waiting("正在读取…");
+  if (ws.personal && !ws.bots.loaded) return loading;
   if (ws.personal && ws.bots.defaultBot) return <BotPage bot={ws.bots.defaultBot} />;
   return <ChatPage />;
 }
@@ -38,7 +41,7 @@ export function ChatBotRoute({ profile = false }: { profile?: boolean }) {
   const botId = (useParams().botId ?? "").toLowerCase();
   const bot = ws.personal ? ws.bots.bots.find(b => b.id === botId) ?? null : null;
   if (bot) return <BotPage key={bot.id} bot={bot} profile={profile} />;
-  return waiting(ws.bots.loaded ? "bot 不存在或已删除。" : "正在读取…");
+  return ws.bots.loaded ? missing("bot 不存在或已删除。") : loading;
 }
 
 /** A conversation outside any bot's line (the memory page, a run record, recall_conversations link to it): read and continued as before. */

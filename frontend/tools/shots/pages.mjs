@@ -2,13 +2,14 @@
 //   ready:  a selector that only exists once the page shows its data (string), or an async (page) => void.
 //           After it matches, waitReady also waits until no "loading" text is left in the page.
 //   before: optional action run after ready and before the screenshot ({ width } is passed along).
-import { BOT, ROOT, JUDGMENT, HOLD_MARKER, LOGIN_CODE } from "./fixtures/ids.mjs";
+import { BOT, CONVERSATION, ROOT, JUDGMENT, HAND_MARKER, HOLD_MARKER, LOGIN_CODE } from "./fixtures/ids.mjs";
+import { handFed } from "./fake-sse.mjs";
 
 const LOADING = ["正在读取", "正在加载", "读取中", "加载中"];
 
 /** Open the chat page's side panel when it is collapsed (narrow screens start closed). */
 async function openSide(page) {
-  const toggle = page.locator("button.side-toggle");
+  const toggle = page.locator("[data-testid=side-toggle]");
   if (await toggle.count() && (await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
 }
 
@@ -20,15 +21,34 @@ async function holdTeslaTurn(page) {
   await page.goto(page.url().split("#")[0] + `#/chat/${BOT.teslabot}`, { waitUntil: "load" });
   await page.locator("#agent-draft:not([disabled])").waitFor();
   await page.locator("#agent-draft").fill(`${HOLD_MARKER} AAPL`);
-  await page.locator("button.agent-send").click();
-  await page.locator("button.agent-stop").waitFor();
+  await page.locator("[data-testid=send]").click();
+  await page.locator("[data-testid=stop]").waitFor();
   await page.evaluate(() => { location.hash = "#/chat"; });
-  await page.locator(".agent-thread .agent-message").first().waitFor();
+  await page.locator("[data-testid=message]").first().waitFor();
 }
 /** On a phone the bot rows are in the 「更多」 drawer. */
 async function openMoreDrawer(page) {
   await page.locator('[data-slot="mobile-tab-bar"] button[aria-haspopup="dialog"]').click();
   await page.locator('[data-slot="drawer-content"]').waitFor();
+}
+
+/** A paragraph of a long streamed answer (Chinese, a few lines at the thread's width, with one bold phrase so the typesetting shows). */
+export const streamParagraph = (n) => `第 ${n} 段：这是流式输出中途到达的文字，用来撑出足够的高度，检查视口跟随和「回到底部」。其中 **关键数字 ${100 + n} 亿美元** 用粗体标出，其余是普通叙述，没有来源，也不会触发任何核查标注。\n\n`;
+
+/**
+ * Send a hand-fed message in the open line and leave its answer half way: `paragraphs` paragraphs arrived, the stream is still open, and
+ * the stop button is where send was.  Returns the hand (push more / close / aborted, see fake-sse.mjs).
+ */
+export async function streamHalfway(page, { paragraphs = 2, botId = BOT.finbot, conversationId = CONVERSATION.finbot } = {}) {
+  const hand = await handFed(page);
+  await page.locator("#agent-draft:not([disabled])").waitFor();
+  await page.locator("#agent-draft").fill(`${HAND_MARKER} 流式中`);
+  await page.locator("[data-testid=send]").click();
+  await hand.opened(0);
+  await hand.push(0, "conversation", { conversation_id: conversationId, turn_id: "t9000000-0000-4000-8000-0000000000e1", bot_id: botId });
+  for (let i = 1; i <= paragraphs; i += 1) await hand.push(0, "delta", { text: streamParagraph(i) });
+  await page.locator("[data-testid=stop]").waitFor();
+  return hand;
 }
 
 export const PAGES = [
@@ -37,22 +57,41 @@ export const PAGES = [
   // the four marks of a bot row, and the chat as a read-only guest.
   { name: "login-error", hash: "#/login", identity: "none", ready: '[aria-labelledby="login-title"]',
     before: async (page) => { await page.locator('input[type="password"]').fill("not-the-code"); await page.getByRole("button", { name: "登录", exact: true }).click(); await page.locator("#login-error").waitFor(); } },
-  { name: "shell-collapsed", hash: "#/chat", ready: ".agent-thread .agent-message",
+  { name: "shell-collapsed", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page, { width }) => { if (hasSidebar(width)) { await page.locator('[data-slot="sidebar-trigger"]').click(); await page.waitForFunction(() => document.querySelector('[data-slot="sidebar"]')?.closest("[data-state]")?.getAttribute("data-state") === "collapsed"); } } },
-  { name: "shell-mobile-more", hash: "#/chat", ready: ".agent-thread .agent-message",
+  { name: "shell-mobile-more", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page, { width }) => { if (!hasSidebar(width)) await openMoreDrawer(page); } },
-  { name: "shell-bot-states", hash: "#/chat", ready: ".agent-thread .agent-message",
+  { name: "shell-bot-states", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page, { width }) => { await holdTeslaTurn(page); if (!hasSidebar(width)) await openMoreDrawer(page); else await page.locator('[data-bot-row][data-marker="running"]').waitFor(); } },
   { name: "guest-chat", hash: "#/chat", identity: "guest", ready: '[data-slot="guest-composer"]' },
-  { name: "chat-default", hash: "#/chat", ready: ".agent-thread .agent-message" },
+  { name: "chat-default", hash: "#/chat", ready: "[data-testid=message]" },
   // Extra views of the default line: the top of the history, and the first answer's step trace opened.
-  { name: "chat-default-top", hash: "#/chat", ready: ".agent-thread .agent-message",
-    before: async (page) => { await page.evaluate(() => { document.querySelector(".agent-transcript").scrollTop = 0; }); } },
-  { name: "chat-default-thinking", hash: "#/chat", ready: ".agent-thread .agent-message",
+  { name: "chat-default-top", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { await page.evaluate(() => { document.querySelector("[data-testid=transcript]").scrollTop = 0; }); } },
+  { name: "chat-default-thinking", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page) => { const toggle = page.locator(".thinking-toggle[aria-expanded]").first(); await toggle.click(); await page.locator(".turn-flow .flow-node").first().waitFor(); await toggle.scrollIntoViewIfNeeded(); } },
-  { name: "chat-bot", hash: `#/chat/${BOT.applebot}`, ready: ".agent-thread .agent-message", before: openSide },
-  { name: "chat-bot-profile", hash: `#/chat/${BOT.applebot}`, ready: ".agent-thread .agent-message",
+  { name: "chat-bot", hash: `#/chat/${BOT.applebot}`, ready: "[data-testid=message]", before: openSide },
+  { name: "chat-bot-profile", hash: `#/chat/${BOT.applebot}`, ready: "[data-testid=message]",
     before: async (page) => { await openSide(page); await page.locator("#bot-side").getByRole("tab", { name: "档案" }).click(); } },
+  // P3.2: the chat's own states.  An answer half way (the stop button in the send position), the same long answer with the reader scrolled up
+  // (回到底部 on screen), the "/" command menu, the model badge's panel, and the empty composer with its placeholder.
+  { name: "chat-streaming", hash: "#/chat", ready: "[data-testid=message]", before: async (page) => { await streamHalfway(page, { paragraphs: 2 }); } },
+  { name: "chat-scrolled-up", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => {
+      await streamHalfway(page, { paragraphs: 9 });
+      await page.evaluate(() => { const el = document.querySelector("[data-testid=transcript]"); el.scrollTop = Math.round((el.scrollHeight - el.clientHeight) * 0.35); });
+      await page.locator("[data-testid=jump-bottom]").waitFor();
+    } },
+  { name: "chat-slash-menu", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { await page.locator("#agent-draft").fill("/"); await page.locator("[data-testid=slash-menu] [role=option]").first().waitFor(); } },
+  { name: "chat-model-picker", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { await page.locator("[data-testid=model-badge]").click(); await page.locator('[data-slot=pop-panel] [role=radio]').first().waitFor(); } },
+  // TeslaBot has not spoken yet in the fixtures: its line is empty, the composer is all there is to look at (the empty state's own design is P3.4).
+  { name: "chat-empty-composer", hash: `#/chat/${BOT.teslabot}`, ready: "[data-testid=welcome]", before: async (page) => { await page.locator("#agent-draft").focus(); } },
+  // The conversation page with no bot (#/chat/history): the history list on the left (a drawer below lg, opened by the header's history button), the plain thread.
+  { name: "chat-history", hash: "#/chat/history", ready: (page) => page.waitForSelector("[data-testid=history-row]", { state: "attached", timeout: 15000 }) },
+  { name: "chat-history-open", hash: "#/chat/history", ready: (page) => page.waitForSelector("[data-testid=history-row]", { state: "attached", timeout: 15000 }),
+    before: async (page, { width }) => { if (width < 1024) { await page.locator("[data-testid=history-toggle]").click(); await page.locator("[data-testid=history-list]").waitFor({ state: "visible" }); } } },
   { name: "overview", hash: "#/research/c/AAPL", ready: ".overview-workspace .watch-grid, .overview-workspace" },
   { name: "forecast-home", hash: "#/research/forecasts", ready: ".forecast-home" },
   { name: "forecast-detail", hash: `#/research/forecasts/${ROOT.aapl}`, ready: ".research-brief" },
@@ -86,12 +125,12 @@ export const PAGES = [
   { name: "dev-kit-states-confirm", hash: "#/dev/kit/states", ready: "[data-kit-states]", keepLoadingText: true,
     before: async (page) => { await page.locator('[data-kit="confirm-hold"]').click(); await page.locator('[data-slot="alert-dialog-content"]').waitFor(); } },
   // The command palette: opened with the shortcut, with "TS" typed (TSLA from the watch list, then the offer to add TS) and with nothing typed.
-  { name: "command-menu", hash: "#/chat", ready: ".agent-thread .agent-message",
+  { name: "command-menu", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page) => { await page.keyboard.press("Control+k"); await page.locator('[data-slot="command-menu"] input').fill("TS"); await page.locator('[data-slot="command-item"]').first().waitFor(); } },
-  { name: "command-menu-all", hash: "#/chat", ready: ".agent-thread .agent-message",
+  { name: "command-menu-all", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page) => { await page.keyboard.press("Control+k"); await page.locator('[data-slot="command-item"]').first().waitFor(); await page.locator('[data-slot="command-menu"] [cmdk-group-heading]', { hasText: "最近对话" }).waitFor(); } },
   // The backend unreachable: every API request fails, then a page that needs the API opens: the banner is at the top of the page.
-  { name: "offline", hash: "#/chat", ready: ".agent-thread .agent-message",
+  { name: "offline", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page, { mock }) => { mock.control.down = true; await page.evaluate(() => { location.hash = "#/portfolio"; }); await page.locator('[data-slot="offline-banner"]').waitFor(); } },
   { name: "dev-kit-menu", hash: "#/dev/kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); } },

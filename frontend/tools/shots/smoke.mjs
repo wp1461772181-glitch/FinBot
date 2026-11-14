@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, waitReady } from "./pages.mjs";
+import { PAGES, streamHalfway, streamParagraph, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, CONVERSATION, HAND_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, olderTurns } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -61,9 +61,9 @@ async function sendMessageStreams(ctx) {
   try {
     const { page } = view;
     await page.locator("#agent-draft").fill(SMOKE_TEXT);
-    await page.locator("button.agent-send").click();
-    await page.locator(".agent-message.is-user", { hasText: SMOKE_TEXT }).waitFor({ timeout: 10000 });
-    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=send]").click();
+    await page.locator("[data-testid=message][data-role=user]", { hasText: SMOKE_TEXT }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     await page.locator("#agent-draft").fill("再问一句");
     assert((await page.locator("#agent-draft").inputValue()) === "再问一句", "composer did not accept input after the turn");
@@ -76,8 +76,8 @@ async function switchBotAndBack(ctx) {
   try {
     const { page } = view;
     await page.locator("#agent-draft").fill(SMOKE_TEXT);
-    await page.locator("button.agent-send").click();
-    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=send]").click();
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     const before = await page.evaluate(() => location.hash);
     await pressBotRow(page, "NewsBot");
@@ -85,7 +85,7 @@ async function switchBotAndBack(ctx) {
     await page.locator("h1", { hasText: "NewsBot" }).waitFor({ timeout: 10000 });
     await pressBotRow(page, "FinBot");
     await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
-    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
     return `${before || "(empty)"} -> #/chat/<NewsBot> -> back; earlier answer still present`;
   } finally { await view.close(); }
 }
@@ -483,11 +483,11 @@ async function openAt(ctx, label, hash, { lastSymbol = "AAPL", width = 1440, rea
 async function legacyRedirects(ctx) {
   const material = HEX_ID;
   const cases = [
-    ["", "#/chat", ".agent-thread .agent-message"],
-    ["#agent", "#/chat", ".agent-thread .agent-message"],
-    ["#chat", "#/chat", ".agent-thread .agent-message"],
-    [`#agent/${CONVERSATION.older}`, `#/chat/c/${CONVERSATION.older}`, ".agent-thread .agent-message"],
-    [`#bot/${BOT.applebot}`, `#/chat/${BOT.applebot}`, ".agent-thread .agent-message"],
+    ["", "#/chat", "[data-testid=message]"],
+    ["#agent", "#/chat", "[data-testid=message]"],
+    ["#chat", "#/chat", "[data-testid=message]"],
+    [`#agent/${CONVERSATION.older}`, `#/chat/c/${CONVERSATION.older}`, "[data-testid=message]"],
+    [`#bot/${BOT.applebot}`, `#/chat/${BOT.applebot}`, "[data-testid=message]"],
     ["#overview", "#/research/c/AAPL", ".overview-workspace"],
     ["#company", "#/research/c/AAPL", ".overview-workspace"],
     ["#forecast", "#/research/forecasts", ".forecast-home"],
@@ -514,8 +514,8 @@ async function legacyRedirects(ctx) {
     ["#me", "#/assistant/bots", "main.personal-page h1"],
     ["#admin", "#/settings/models", ".agent-admin h2"],
     ["#settings", "#/settings/models", ".agent-admin h2"],
-    ["#nonsense", "#/chat", ".agent-thread .agent-message"],
-    ["#/no/such/page", "#/chat", ".agent-thread .agent-message"],
+    ["#nonsense", "#/chat", "[data-testid=message]"],
+    ["#/no/such/page", "#/chat", "[data-testid=message]"],
   ];
   const bad = [];
   for (const [from, to, ready] of cases) {
@@ -530,7 +530,7 @@ async function legacyRedirects(ctx) {
     await view.close();
   }
   // The same jump while the app runs (a link in an old answer, a bookmark): replaced, not pushed, so back skips the old form.
-  const runtime = await openAt(ctx, "legacy at runtime", "#/chat", { ready: ".agent-thread .agent-message" });
+  const runtime = await openAt(ctx, "legacy at runtime", "#/chat", { ready: "[data-testid=message]" });
   try {
     await settle(runtime.page);
     for (const [from, to] of [["#forecast", "#/research/forecasts"], [`#materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`], [`#evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`, `#/research/evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`]]) {
@@ -549,7 +549,7 @@ async function legacyRedirects(ctx) {
 
 /** chat -> research -> a company -> one of its forecasts -> portfolio, then back four times: every press lands on the previous address. */
 async function backButtonChain(ctx) {
-  const view = await openAt(ctx, "back chain", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openAt(ctx, "back chain", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     const trail = [await hashOf(page)];
@@ -559,7 +559,7 @@ async function backButtonChain(ctx) {
     await step(() => page.locator(".overview-focus-actions .primary-action").click(), ".research-brief");
     await step(() => pressNavItem(page, "持仓"), ".pf-positions");
     assert(trail.join(" ") === `#/chat #/research #/research/c/AAPL #/research/forecasts/${ROOT.aapl} #/portfolio`, `unexpected trail ${trail.join(" ")}`);
-    const ready = [".research-brief", ".overview-workspace", ".overview-workspace", ".agent-thread .agent-message"];
+    const ready = [".research-brief", ".overview-workspace", ".overview-workspace", "[data-testid=message]"];
     for (let i = trail.length - 2; i >= 0; i -= 1) {
       await page.goBack();
       await waitHash(page, trail[i]);
@@ -595,7 +595,7 @@ async function deepLinkReload(ctx) {
 
 /** The agent's open_page / select_stock / queue events, as the chat page's answers raise them. */
 async function clientActions(ctx) {
-  const view = await openAt(ctx, "client actions", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openAt(ctx, "client actions", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     const expected = [
@@ -628,20 +628,20 @@ async function clientActions(ctx) {
 
 /** Send in a bot's line, leave for another page at once, come back: the session is above the router outlet, so the answer is there. */
 async function backgroundTurnSurvivesNavigation(ctx) {
-  const view = await openAt(ctx, "background turn", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openAt(ctx, "background turn", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     await settle(page);
     const text = "导航途中的提问 AAPL";
     await page.locator("#agent-draft").fill(text);
-    await page.locator("button.agent-send").click();
+    await page.locator("[data-testid=send]").click();
     await pressNavItem(page, "持仓");
     await waitHash(page, "#/portfolio");
     await waitReady(page, { ready: ".pf-positions" });
     await pressBotRow(page, "FinBot");
     await waitHash(page, "#/chat");
-    await page.locator(".agent-message.is-user", { hasText: text }).waitFor({ timeout: 10000 });
-    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).last().waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=user]", { hasText: text }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).last().waitFor({ timeout: 10000 });
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     return "question sent, left for #/portfolio at once, back: the question and the streamed answer are in the line";
   } finally { await view.close(); }
@@ -650,7 +650,7 @@ async function backgroundTurnSurvivesNavigation(ctx) {
 
 /** A link in a past answer is a plain anchor with an old-form href: clicking it lands on the new route, and back returns to the chat. */
 async function answerLinks(ctx) {
-  const view = await openAt(ctx, "answer links", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openAt(ctx, "answer links", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     const links = [
@@ -673,7 +673,7 @@ async function answerLinks(ctx) {
 
 /** A page whose chunk cannot be fetched (offline, or removed by a new deploy) shows the load-failure notice inside the shell, and reload recovers. */
 async function chunkLoadFailure(ctx) {
-  const view = await openAt(ctx, "chunk failure", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openAt(ctx, "chunk failure", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     await settle(page);
@@ -771,7 +771,7 @@ async function sidebarCollapsePersists(ctx) {
 /** The 任务 number is the live proposals plus the open write suggestions, and the 任务 page lists exactly that many waiting cards. */
 async function routinesBadgeMatches(ctx) {
   const expected = PROPOSALS.filter((p) => !p.expired).length + INBOX.filter((i) => i.section === "confirm" && i.status !== "done" && i.status !== "dismissed").length;
-  const view = await openShell(ctx, "routines badge", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openShell(ctx, "routines badge", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     const badge = page.locator('[data-slot="sidebar"] a[href="#/routines"]').locator("xpath=..").locator("[data-count]");
@@ -803,7 +803,7 @@ async function routinesBadgeMatches(ctx) {
 /** Mode switch and sign-out exist once, in the account menu; the chat header, settings and the other pages have neither. */
 async function modeSwitchSingleEntry(ctx) {
   const names = /切换模式|切换到访客只读|登出|登录个人/;
-  const view = await openShell(ctx, "mode switch", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openShell(ctx, "mode switch", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     await settle(page);
@@ -868,9 +868,9 @@ async function loginFlow(ctx) {
     await page.locator('input[type="password"]').fill(LOGIN_CODE);
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await waitHash(page, "#/chat");
-    await waitReady(page, { ready: ".agent-thread .agent-message" });
+    await waitReady(page, { ready: "[data-testid=message]" });
   } finally { await first.close(); }
-  const again = await openShell(ctx, "login while signed in", "#/login", { ready: ".agent-thread .agent-message" });
+  const again = await openShell(ctx, "login while signed in", "#/login", { ready: "[data-testid=message]" });
   try { await waitHash(again.page, "#/chat"); } finally { await again.close(); }
   const guest = await openShell(ctx, "login read-only", "#/login", { identity: "none" });
   try {
@@ -889,7 +889,7 @@ async function guestReadonly(ctx) {
     const { page } = view;
     const notice = await page.locator('[data-slot="guest-composer"]').innerText();
     assert(notice.includes("登录后可以对话") && (await page.locator('[data-slot="guest-composer"] button', { hasText: "登录" }).count()) === 1, `unexpected notice: ${notice}`);
-    assert((await page.locator("#agent-draft").count()) === 0 && (await page.locator("button.agent-send").count()) === 0, "a guest still has an input box and a send button");
+    assert((await page.locator("#agent-draft").count()) === 0 && (await page.locator("[data-testid=send]").count()) === 0, "a guest still has an input box and a send button");
     assert((await page.getByText("继续访客聊天").count()) === 0, "the dead 继续访客聊天 path is still around");
     assert((await page.locator("[data-bot-row]").count()) === 0, "a guest sees bots");
     assert((await page.locator('[data-slot="sidebar"] a[href="#/portfolio"], [data-slot="sidebar"] a[href="#/routines"]').count()) === 0, "a guest's sidebar lists 持仓 / 任务");
@@ -964,7 +964,7 @@ async function keyboardNav(ctx) {
 
 /** The phone: five items in the bar (each 44+ px), no sidebar in the page, and 更多 holds the bots, 助手, 设置, the account and the theme switch. */
 async function mobileBarAndMore(ctx) {
-  const view = await openShell(ctx, "mobile bar", "#/chat", { width: 390, ready: ".agent-thread .agent-message" });
+  const view = await openShell(ctx, "mobile bar", "#/chat", { width: 390, ready: "[data-testid=message]" });
   try {
     const { page } = view;
     await settle(page);
@@ -1028,7 +1028,7 @@ async function legacyRestoreInShell(ctx) {
 
 /** The four marks of a bot row are told apart: ring (answering), amber dot (waiting), number (unread), nothing. */
 async function botRowMarks(ctx) {
-  const view = await openShell(ctx, "bot marks", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openShell(ctx, "bot marks", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     await settle(page);
@@ -1036,8 +1036,8 @@ async function botRowMarks(ctx) {
     await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, BOT.teslabot);
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     await page.locator("#agent-draft").fill("[hold-the-answer] AAPL");
-    await page.locator("button.agent-send").click();
-    await page.locator("button.agent-stop").waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=send]").click();
+    await page.locator("[data-testid=stop]").waitFor({ timeout: 10000 });
     await page.evaluate(() => { location.hash = "#/chat"; });
     await page.locator('[data-bot-row][data-marker="running"]').waitFor({ timeout: 10000 });
     const row = (name) => page.locator("[data-bot-row]", { hasText: name });
@@ -1259,7 +1259,7 @@ async function commandMenuEnglish(ctx) {
   try {
     const { page } = view;
     await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
-    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=message]").first().waitFor({ timeout: 15000 });
     await page.keyboard.press("Control+k");
     const palette = page.locator('[data-slot="command-menu"]');
     await palette.waitFor();
@@ -1319,7 +1319,7 @@ async function commandMenuMobile(ctx) {
   try {
     const { page } = view;
     await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
-    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=message]").first().waitFor({ timeout: 15000 });
     await page.locator('[data-slot="mobile-tab-bar"] button[aria-haspopup="dialog"]').click();
     await page.locator('[data-slot="drawer-content"]').waitFor();
     await page.locator('[data-slot="palette-entry"]').click();
@@ -1492,7 +1492,7 @@ async function skeletonDelay(ctx) {
     assert(await page.locator('[data-slot="page-pending"]').count() === 0, "a skeleton covered the page before 400ms");
     await page.waitForTimeout(450);
     assert(await page.locator('[data-slot="page-pending"] [data-variant="table"]').count() === 1, "no table skeleton after 700ms of waiting for the portfolio page");
-    assert(await page.locator(".agent-thread").count() === 1, "the page on screen was unmounted while waiting");
+    assert(await page.locator("[data-testid=thread]").count() === 1, "the page on screen was unmounted while waiting");
     release();
     await page.locator(".pf-positions").waitFor({ timeout: 10000 });
     assert(await page.locator('[data-slot="page-pending"]').count() === 0, "the skeleton stayed after the page arrived");
@@ -1548,7 +1548,7 @@ async function taskBar(ctx) {
     assert((await row.first().innerText()).includes("扫描 SEC") && (await row.first().innerText()).includes("读取申报列表"), `row: ${await row.first().innerText()}`);
     // leave for a page inside the shell: the bar is still there, in the dock
     await page.evaluate(() => { location.hash = "#/chat"; });
-    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=message]").first().waitFor({ timeout: 15000 });
     const dock = page.locator('[data-slot="task-dock"] [data-slot="task-row"]');
     await dock.first().waitFor({ timeout: 3000 });
     const first = await dock.first().locator("[data-elapsed]").innerText();
@@ -1626,20 +1626,20 @@ async function chatCancel(ctx) {
     const { page } = view;
     const hand = await handFed(page);
     await page.locator("#agent-draft").fill(`${HAND_MARKER} 取消测试`);
-    await page.locator("button.agent-send").click();
+    await page.locator("[data-testid=send]").click();
     await hand.opened(0);
     await hand.push(0, "conversation", { ...turnEvent("c1"), conversation_id: CONVERSATION.finbot, bot_id: BOT.finbot });
     await hand.push(0, "delta", { text: "已经生成的前半句，" });
-    await page.locator(".agent-message.is-assistant", { hasText: "已经生成的前半句" }).waitFor({ timeout: 10000 });
-    await page.locator("button.agent-stop").click();
-    await page.locator(".agent-chat-status", { hasText: "已取消" }).waitFor({ timeout: 10000 });
-    await page.locator(".agent-message.is-assistant", { hasText: "本轮已取消" }).waitFor({ timeout: 10000 });
-    assert((await page.locator(".agent-message.is-assistant", { hasText: "已经生成的前半句" }).count()) === 1, "the text generated before the cancel is gone");
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "已经生成的前半句" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=stop]").click();
+    await page.locator("[data-testid=chat-status]", { hasText: "已取消" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "本轮已取消" }).waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=message][data-role=assistant]", { hasText: "已经生成的前半句" }).count()) === 1, "the text generated before the cancel is gone");
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     await page.locator("#agent-draft").fill("取消之后还能再输入");
     assert((await page.locator("#agent-draft").inputValue()) === "取消之后还能再输入", "composer did not accept input after the cancel");
     assert(await hand.aborted(0), "the request was not aborted");
-    assert((await page.locator("button.agent-stop").count()) === 0, "the cancel button is still there");
+    assert((await page.locator("[data-testid=stop]").count()) === 0, "the cancel button is still there");
     return "partial text kept, 已取消 status and the message's own note shown, request aborted, composer usable";
   } finally { await view.close(); }
 }
@@ -1653,16 +1653,16 @@ async function chatBackgroundLine(ctx) {
     await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     await page.locator("#agent-draft").fill(`${HAND_MARKER} 后台线`);
-    await page.locator("button.agent-send").click();
+    await page.locator("[data-testid=send]").click();
     const body = await hand.opened(0);
     assert(body.bot_id === BOT.teslabot, `the turn went out for ${body.bot_id}`);
     await hand.push(0, "conversation", turnEvent("d1"));
     await hand.push(0, "delta", { text: "后台里的前半句，" });
-    await page.locator(".agent-message.is-assistant", { hasText: "后台里的前半句" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "后台里的前半句" }).waitFor({ timeout: 10000 });
     await pressBotRow(page, "AppleBot");
     await page.locator("h1", { hasText: "AppleBot" }).waitFor({ timeout: 10000 });
     await page.locator('[data-bot-row][data-marker="running"]', { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
-    assert((await page.locator(".agent-message.is-assistant", { hasText: "后台里的前半句" }).count()) === 0, "TeslaBot's answer is showing in AppleBot's line");
+    assert((await page.locator("[data-testid=message][data-role=assistant]", { hasText: "后台里的前半句" }).count()) === 0, "TeslaBot's answer is showing in AppleBot's line");
     // The stream ends while the user is looking at AppleBot.
     await hand.push(0, "delta", { text: "后半句也到了。" });
     await hand.push(0, "done", { status: "complete", turn_id: turnEvent("d1").turn_id, thinking_ms: 500, citations: [], citation_protocol: null });
@@ -1672,7 +1672,7 @@ async function chatBackgroundLine(ctx) {
     assert((await row(page, "AppleBot").getAttribute("data-marker")) === "none", "AppleBot's row changed");
     await pressBotRow(page, "TeslaBot");
     await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
-    await page.locator(".agent-message.is-assistant", { hasText: "后台里的前半句，后半句也到了。" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "后台里的前半句，后半句也到了。" }).waitFor({ timeout: 10000 });
     await page.locator('[data-bot-row][data-marker="none"]', { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
     return "TeslaBot ring while answering in the background, number 1 once finished, the whole answer on return, mark gone";
   } finally { await view.close(); }
@@ -1687,20 +1687,20 @@ async function chatClarification(ctx) {
     await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     await page.locator("#agent-draft").fill(`${ASK_MARKER} 查一下结果`);
-    await page.locator("button.agent-send").click();
+    await page.locator("[data-testid=send]").click();
     const card = page.locator(".agent-clarification-card");
     await card.waitFor({ timeout: 10000 });
     assert((await card.locator("button", { hasText: "第二条结果" }).isEnabled()), "the card's options are not enabled");
     assert(!(await card.evaluate((el) => el.classList.contains("is-write"))), "a plain question is drawn as a write card");
     await card.locator("button", { hasText: "第二条结果" }).click();
-    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
     assert(bodies.length === 2, `expected two stream requests, saw ${bodies.length}`);
     const next = bodies[1];
     assert(next.message === "pick-second-result", `the next turn said ${JSON.stringify(next.message)}`);
     assert(next.pending_request_id === CLARIFY_REQUEST_ID, `pending_request_id was ${next.pending_request_id}`);
     assert(next.display_message === "第二条结果", `display_message was ${JSON.stringify(next.display_message)}`);
     assert(next.bot_id === BOT.teslabot, "the answer went out without the bot id");
-    await page.locator(".agent-message.is-user", { hasText: "第二条结果" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=user]", { hasText: "第二条结果" }).waitFor({ timeout: 10000 });
     assert(await page.locator(".agent-clarification-card").evaluate((el) => el.classList.contains("is-locked")), "the answered card is not locked");
     return "card ends the turn, the pick goes out as the next turn with its request id, the card locks";
   } finally { await view.close(); }
@@ -1715,7 +1715,7 @@ async function chatWriteConfirm(ctx) {
     const card = page.locator(".agent-clarification-card.is-write");
     await card.waitFor({ timeout: 10000 });
     await card.locator("button", { hasText: "确认执行" }).click();
-    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
     assert(bodies.length === 1, `expected one stream request, saw ${bodies.length}`);
     confirmed = bodies[0];
     assert(confirmed.pending_request_id === WRITE_REQUEST_ID && confirmed.message === "confirm:fetch_analyze", `confirm request: ${JSON.stringify(confirmed)}`);
@@ -1728,7 +1728,7 @@ async function chatWriteConfirm(ctx) {
     const card = page.locator(".agent-clarification-card.is-write");
     await card.waitFor({ timeout: 10000 });
     await card.locator("button", { hasText: "先不要" }).click();
-    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
     // 「先不要」 is not silent: it goes to the server as the turn `cancel` for the pending request (that is what cancels it) -- never as a confirmation.
     assert(!bodies.some((b) => String(b.message).startsWith("confirm:")), "declining sent a confirmation");
     assert(bodies.length === 1 && bodies[0].message === "cancel" && bodies[0].pending_request_id === WRITE_REQUEST_ID, `decline request: ${JSON.stringify(bodies)}`);
@@ -1748,19 +1748,19 @@ async function chatReadonlyArchive(ctx) {
     // A bot's line is a server conversation and ends the archive view when opened; the archive is read on the plain conversation page (no bot).
     await page.evaluate(() => { location.hash = "#/chat/history"; });
     await waitHash(page, "#/chat/history");
-    const banner = page.locator(".agent-main-column .chat-archive-banner");
+    const banner = page.locator("[data-testid=archive-banner]");
     await banner.waitFor({ timeout: 10000 });
     assert((await banner.innerText()).includes("本地归档只读查看"), "the banner does not say it is a read-only archive");
-    await page.locator(".agent-message.is-assistant", { hasText: "归档里的回答" }).waitFor({ timeout: 10000 });
-    assert(await page.locator("#agent-draft").isDisabled(), "the composer takes input in a read-only archive");
-    assert(await page.locator("button.agent-send").isDisabled(), "the send button is enabled in a read-only archive");
-    const back = banner.locator("button", { hasText: "返回当前对话" });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "归档里的回答" }).waitFor({ timeout: 10000 });
+    // P3.2 (design 4.2, 只读归档): the input area is replaced by 返回当前对话; there is no box to type in and nothing to send with.
+    assert((await page.locator("#agent-draft").count()) === 0 && (await page.locator("[data-testid=send]").count()) === 0, "the composer still takes input in a read-only archive");
+    const back = page.locator("[data-testid=return-live]");
     assert(await back.isEnabled(), "返回当前对话 is not usable");
     await back.click();
-    await page.locator(".agent-main-column .chat-archive-banner").waitFor({ state: "detached", timeout: 10000 });
+    await page.locator("[data-testid=archive-banner]").waitFor({ state: "detached", timeout: 10000 });
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
-    assert((await page.locator(".agent-message.is-assistant", { hasText: "归档里的回答" }).count()) === 0, "the archive's messages are still showing after the return");
-    return "banner + read-only composer while viewing an imported archive; 返回当前对话 restores the live line";
+    assert((await page.locator("[data-testid=message][data-role=assistant]", { hasText: "归档里的回答" }).count()) === 0, "the archive's messages are still showing after the return");
+    return "banner + 返回当前对话 in place of the composer while viewing an imported archive; it restores the live line";
   } finally { await view.close(); }
 }
 
@@ -1774,8 +1774,8 @@ async function chatExternalSync(ctx) {
     view.mock.state.chat.conversations.get(CONVERSATION.finbot).push(
       { role: "user", content: "来自 Telegram 的问题", turn_id: turn },
       { role: "assistant", status: "complete", turn_id: turn, content: "外部消息的回答：已记入对话线。" });
-    await page.locator(".agent-message.is-assistant", { hasText: "外部消息的回答" }).waitFor({ timeout: 15000 });
-    await page.locator(".agent-message.is-user", { hasText: "来自 Telegram 的问题" }).waitFor({ timeout: 5000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "外部消息的回答" }).waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=message][data-role=user]", { hasText: "来自 Telegram 的问题" }).waitFor({ timeout: 5000 });
     assert((await page.locator("#agent-draft").inputValue()) === "写到一半的草稿", "the draft changed when the external turn arrived");
     return "the outside turn appeared without any action; the draft is untouched";
   } finally { await view.close(); }
@@ -1787,8 +1787,8 @@ async function chatCompact(ctx) {
     const { page } = view;
     const posts = watchPosts(page, /\/agent-chat\/conversations\/[^/]+\/compact$/);
     await page.locator("#agent-draft").fill("/compact 只留估值部分");
-    await page.locator("button.agent-send").click();
-    await page.locator(".agent-compaction summary", { hasText: "已压缩 2 轮" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=send]").click();
+    await page.locator("[data-testid=compaction]", { hasText: "已压缩 2 轮" }).waitFor({ timeout: 10000 });
     assert(posts.length === 1, `expected one compact request, saw ${posts.length}`);
     assert(posts[0].focus === "只留估值部分" && posts[0].bot_id === BOT.finbot, `compact request: ${JSON.stringify(posts[0])}`);
     assert((await page.locator("#agent-draft").inputValue()) === "", "the command text stayed in the composer");
@@ -1804,25 +1804,25 @@ async function chatLoadEarlier(ctx) {
   try {
     const { page } = view;
     await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
-    await waitReady(page, { ready: ".agent-thread .agent-message" });
+    await waitReady(page, { ready: "[data-testid=message]" });
     await settle(page);
-    await page.locator(".agent-earlier button", { hasText: "加载更早消息" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=load-earlier]", { hasText: "加载更早消息" }).waitFor({ timeout: 10000 });
     const text = "AAPL 最近一个季度的服务收入怎么样？";
     const offset = (scrollToTop) => page.evaluate(([needle, top]) => {
-      const transcript = document.querySelector(".agent-transcript");
+      const transcript = document.querySelector("[data-testid=transcript]");
       if (top) transcript.scrollTop = 0;     // the scroll handler asks for the earlier turns; the answer comes later, so this reads the "before"
-      const el = [...document.querySelectorAll(".agent-message.is-user")].find((node) => node.textContent.includes(needle));
+      const el = [...document.querySelectorAll("[data-testid=message][data-role=user]")].find((node) => node.textContent.includes(needle));
       return el.getBoundingClientRect().top - transcript.getBoundingClientRect().top;
     }, [text, scrollToTop]);
-    const scrollable = await page.evaluate(() => { const el = document.querySelector(".agent-transcript"); return el.scrollHeight - el.clientHeight; });
+    const scrollable = await page.evaluate(() => { const el = document.querySelector("[data-testid=transcript]"); return el.scrollHeight - el.clientHeight; });
     assert(scrollable > 200, `the thread barely scrolls (${scrollable}px): the check cannot tell a jump from none`);
     const before = await offset(true);
-    await page.locator(".agent-message.is-user", { hasText: "更早的问题 1" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=user]", { hasText: "更早的问题 1" }).waitFor({ timeout: 10000 });
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r)))));
     const after = await offset(false);
     assert(Math.abs(after - before) <= 2, `the line the reader was looking at moved from ${Math.round(before)}px to ${Math.round(after)}px`);
-    assert((await page.locator(".agent-message.is-user", { hasText: "更早的问题 6" }).count()) === 1, "not every earlier turn arrived");
-    assert((await page.locator(".agent-earlier").count()) === 0, "the 加载更早消息 button is still there once nothing is left");
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "更早的问题 6" }).count()) === 1, "not every earlier turn arrived");
+    assert((await page.locator("[data-testid=load-earlier]").count()) === 0, "the 加载更早消息 button is still there once nothing is left");
     return `scrolled to the top -> 6 earlier turns above; the line being read stayed at ${Math.round(before)}px (after: ${Math.round(after)}px)`;
   } finally { await view.close(); }
 }
@@ -1862,7 +1862,7 @@ async function optionalChunkFailure(ctx) {
     let blocked = 0;
     await page.route(/\/assets\/BotSidePanel-[^/]*\.js/, (route) => { blocked += 1; return route.abort(); });
     await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
-    await waitReady(page, { ready: ".agent-thread .agent-message" });
+    await waitReady(page, { ready: "[data-testid=message]" });
     await settle(page);
     assert(blocked >= 1, "the bot page never asked for the side panel chunk (is it still loaded eagerly?)");
     assert((await page.locator("#agent-draft").count()) === 1, "the composer is gone: the failed chunk took the chat page down");
@@ -1874,6 +1874,374 @@ async function optionalChunkFailure(ctx) {
     assert((await page.locator("#agent-draft").count()) === 1 && (await page.locator('[data-slot="route-error"]').count()) === 0, "pressing 新建 bot with the chunk blocked broke the page");
     await page.locator("#agent-draft").fill("页面还活着");
     return `chunk blocked ${blocked}x: the thread and composer stay, no rail, no dialog, no route error`;
+  } finally { await view.close(); }
+}
+
+// --- P3.2: messages and the composer ------------------------------------------------------------------------------------
+const frames = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+const transcriptBox = (page) => page.evaluate(() => { const el = document.querySelector("[data-testid=transcript]"); return { top: el.scrollTop, gap: el.scrollHeight - el.scrollTop - el.clientHeight, room: el.scrollHeight - el.clientHeight }; });
+
+/** Acceptance 1: Enter that belongs to an input method never sends; after the composition ends it does. */
+async function composerIme(ctx) {
+  const view = await openChat(ctx, "composer-ime");
+  try {
+    const { page } = view;
+    const posts = watchPosts(page, STREAM_PATH);
+    const box = page.locator("#agent-draft");
+    await box.fill("你好");
+    await box.focus();
+    // 1. between compositionstart and compositionend a plain Enter is the input method's.
+    await box.dispatchEvent("compositionstart");
+    await page.keyboard.press("Enter");
+    await frames(page);
+    assert(posts.length === 0, "Enter during a composition sent the message");
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "你好" }).count()) === 0, "the composing text turned into a message");
+    // 2. the key event that carries isComposing / keyCode 229 (what a browser sends for the Enter that confirms a candidate).
+    await box.dispatchEvent("compositionend");
+    await box.evaluate((el) => { for (const init of [{ isComposing: true, keyCode: 229 }, { isComposing: false, keyCode: 229 }]) el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init })); });
+    await frames(page);
+    assert(posts.length === 0, "an Enter flagged isComposing / keyCode 229 sent the message");
+    // 3. after compositionend a plain Enter sends.
+    await box.fill("你好");
+    await box.press("Enter");
+    await page.locator("[data-testid=message][data-role=user]", { hasText: "你好" }).waitFor({ timeout: 10000 });
+    assert(posts.length === 1, `expected one request after the composition ended, saw ${posts.length}`);
+    // Shift+Enter never sends.
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await box.fill("第一行");
+    await box.press("Shift+Enter");
+    await frames(page);
+    assert(posts.length === 1, "Shift+Enter sent the message");
+    return "no request during compositionstart..end or for isComposing / keyCode 229; one request for the Enter after compositionend; Shift+Enter breaks the line";
+  } finally { await view.close(); }
+}
+
+/** The "/" menu: arrows move, Esc closes, Enter picks; an input method's keys do none of these. */
+async function composerSlashMenu(ctx) {
+  const view = await openChat(ctx, "composer-slash-menu");
+  try {
+    const { page } = view;
+    const box = page.locator("#agent-draft");
+    await box.fill("/");
+    const menu = page.locator("[data-testid=slash-menu]");
+    await menu.waitFor({ timeout: 10000 });
+    const options = menu.locator("[role=option]");
+    const listed = await options.count();
+    assert(listed >= 2, "the menu lists fewer than two skills");
+    const selected = () => options.evaluateAll((items) => items.findIndex((item) => item.getAttribute("aria-selected") === "true"));
+    assert((await selected()) === 0, "the first skill is not selected");
+    await box.press("ArrowDown");
+    assert((await selected()) === 1, "ArrowDown did not move the selection");
+    await box.press("ArrowUp");
+    assert((await selected()) === 0, "ArrowUp did not move it back");
+    // Keys that belong to an input method.  Synthetic key events are used so the browser adds no newline of its own (a real composition's Enter inserts none).
+    await box.dispatchEvent("compositionstart");
+    await box.evaluate((el) => { for (const key of ["ArrowDown", "Enter", "Tab", "Escape"]) el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+    await frames(page);
+    assert((await menu.count()) === 1 && (await box.inputValue()) === "/", "keys during a composition acted on the menu or the draft");
+    assert((await selected()) === 0, "ArrowDown during a composition moved the selection");
+    await box.evaluate((el) => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, keyCode: 229, bubbles: true, cancelable: true })));
+    assert((await menu.count()) === 1 && (await box.inputValue()) === "/", "an Enter flagged isComposing picked a skill");
+    await box.dispatchEvent("compositionend");
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached", timeout: 5000 });
+    await box.fill("");
+    await box.fill("/");
+    await menu.waitFor({ timeout: 10000 });
+    await box.press("Enter");
+    const value = await box.inputValue();
+    assert(/^\/\S+ $/.test(value), `Enter did not pick the selected skill (draft: ${JSON.stringify(value)})`);
+    return `menu lists ${listed} skills; arrows, Esc and Enter work; keys during a composition do nothing`;
+  } finally { await view.close(); }
+}
+
+/** Acceptance 2: a streaming answer is followed; one scroll up lets go and shows 回到底部; the button, or scrolling back, resumes. */
+async function chatFollowAndJump(ctx) {
+  const view = await openChat(ctx, "chat-follow-and-jump");
+  try {
+    const { page } = view;
+    const hand = await streamHalfway(page, { paragraphs: 6 });
+    await frames(page);
+    let at = await transcriptBox(page);
+    assert(at.room > 300, `the answer does not overflow the thread (${at.room}px): the check cannot tell following from not following`);
+    assert(at.gap <= 2, `a streaming answer is not followed (${Math.round(at.gap)}px from the bottom)`);
+    assert((await page.locator("[data-testid=jump-bottom]").count()) === 0, "回到底部 shows while following");
+    await hand.push(0, "delta", { text: streamParagraph(7) }); await frames(page);
+    at = await transcriptBox(page);
+    assert(at.gap <= 2, `the new paragraph was not followed (${Math.round(at.gap)}px)`);
+    // One scroll up: the page stops following and offers the way back.
+    await page.evaluate(() => { document.querySelector("[data-testid=transcript]").scrollTop = 200; });
+    await page.locator("[data-testid=jump-bottom]").waitFor({ timeout: 5000 });
+    const held = await transcriptBox(page);
+    await hand.push(0, "delta", { text: streamParagraph(8) }); await frames(page);
+    const later = await transcriptBox(page);
+    assert(later.room > held.room, "the answer did not grow while scrolled up");
+    assert(Math.abs(later.top - held.top) <= 2, `the page kept following after the reader scrolled up (${held.top} -> ${later.top})`);
+    // The button: back to the bottom, button gone, following again.
+    await page.locator("[data-testid=jump-bottom]").click(); await frames(page);
+    at = await transcriptBox(page);
+    assert(at.gap <= 2, `回到底部 did not reach the bottom (${Math.round(at.gap)}px)`);
+    assert((await page.locator("[data-testid=jump-bottom]").count()) === 0, "回到底部 stays after it was used");
+    await hand.push(0, "delta", { text: streamParagraph(9) }); await frames(page);
+    assert((await transcriptBox(page)).gap <= 2, "following did not resume after 回到底部");
+    // Scrolling back down by hand restores it as well.
+    await page.evaluate(() => { document.querySelector("[data-testid=transcript]").scrollTop = 0; });
+    await page.locator("[data-testid=jump-bottom]").waitFor({ timeout: 5000 });
+    await page.evaluate(() => { const el = document.querySelector("[data-testid=transcript]"); el.scrollTop = el.scrollHeight; });
+    await page.locator("[data-testid=jump-bottom]").waitFor({ state: "detached", timeout: 5000 });
+    await hand.push(0, "delta", { text: streamParagraph(10) }); await frames(page);
+    assert((await transcriptBox(page)).gap <= 2, "following did not resume after scrolling back to the bottom");
+    // Not in the way: at the bottom the last message ends above the composer with room to spare.
+    const clearance = await page.evaluate(() => { const last = [...document.querySelectorAll("[data-testid=message]")].at(-1); const t = document.querySelector("[data-testid=transcript]"); return t.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom; });
+    assert(clearance >= 48, `the last message ends only ${Math.round(clearance)}px above the bottom of the thread`);
+    return `followed ${Math.round(at.room)}px of growth; scroll up -> button, no follow; button and manual return resume it; ${Math.round(clearance)}px clear under the last line`;
+  } finally { await view.close(); }
+}
+
+/** Acceptance 3: a half-typed message stays with its line when the bot (or the page) changes. */
+async function draftSurvivesSwitch(ctx) {
+  const view = await openChat(ctx, "draft-survives-switch");
+  try {
+    const { page } = view;
+    const box = page.locator("#agent-draft");
+    await box.fill("写到一半的话，还没发");
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "", `TeslaBot's box opened with the other line's draft: ${JSON.stringify(await box.inputValue())}`);
+    await box.fill("TeslaBot 线上的草稿");
+    await pressBotRow(page, "FinBot");
+    await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "写到一半的话，还没发", `FinBot's draft is gone after the switch back: ${JSON.stringify(await box.inputValue())}`);
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "TeslaBot 线上的草稿", "TeslaBot's own draft is gone");
+    // Another page and back (the session provider sits above the routed page).
+    await pressNavItem(page, "持仓");
+    await page.waitForFunction(() => location.hash.startsWith("#/portfolio"), null, { timeout: 10000 });
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "TeslaBot 线上的草稿", "the draft is gone after a visit to another page");
+    // A reload: drafts are kept in localStorage per line (chat-lines.mjs), so they survive it, exactly as before this package.
+    await page.reload({ waitUntil: "load" });
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "TeslaBot 线上的草稿", `the draft did not survive a reload: ${JSON.stringify(await box.inputValue())}`);
+    await pressBotRow(page, "FinBot");
+    await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "写到一半的话，还没发", "the other line's draft did not survive the reload");
+    return "A -> B -> A keeps both drafts; a visit to another page and a reload keep them (stored per line in localStorage, as before)";
+  } finally { await view.close(); }
+}
+
+/** The send position becomes the stop button while an answer runs; pressing it is the old 取消请求. */
+async function stopButton(ctx) {
+  const view = await openChat(ctx, "stop-button");
+  try {
+    const { page } = view;
+    const send = page.locator("[data-testid=send]");
+    const idle = await send.boundingBox();
+    assert(idle, "no send button");
+    const hand = await streamHalfway(page, { paragraphs: 1 });
+    const stop = page.locator("[data-testid=stop]");
+    const running = await stop.boundingBox();
+    assert(running && Math.abs(running.x - idle.x) <= 1 && Math.abs(running.y - idle.y) <= 1 && Math.abs(running.width - idle.width) <= 1, `the stop button is not where send was (${JSON.stringify(idle)} -> ${JSON.stringify(running)})`);
+    assert((await send.count()) === 0, "send and stop show at the same time");
+    assert((await page.getByRole("button", { name: "取消请求" }).count()) === 0, "the old 取消请求 button is still there");
+    assert(/停止|Stop/.test(await stop.getAttribute("aria-label") ?? ""), "the stop button has no name");
+    await stop.click();
+    await page.locator("[data-testid=chat-status]", { hasText: "已取消" }).waitFor({ timeout: 10000 });
+    assert(await hand.aborted(0), "pressing stop did not abort the request");
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "本轮已取消" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=send]").waitFor({ timeout: 10000 });
+    const back = await send.boundingBox();
+    assert(back && Math.abs(back.x - idle.x) <= 1 && Math.abs(back.y - idle.y) <= 1, "send did not come back to its place");
+    assert((await page.locator("[data-testid=stop]").count()) === 0, "stop is still showing after the cancel");
+    return "send -> stop in the same box; stop aborts the request, 已取消 status, partial text kept; send is back in place";
+  } finally { await view.close(); }
+}
+
+/** Copy: the result is a toast, and the thread gets no extra line of text. */
+async function copyToast(ctx) {
+  const view = await openChat(ctx, "copy-toast");
+  try {
+    const { page, context } = view;
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
+    const thread = page.locator("[data-testid=thread]");
+    const before = await thread.innerText();
+    const answer = page.locator("[data-testid=message][data-role=assistant]").first();
+    await answer.hover();
+    await answer.getByRole("button", { name: "复制回答" }).click();
+    await page.locator("[data-sonner-toast]", { hasText: "已复制" }).waitFor({ timeout: 5000 });
+    assert((await thread.innerText()) === before, "the thread's text changed when the answer was copied");
+    assert((await page.locator("[data-testid=thread] [role=status]").count()) === 0, "a status line was put into the thread");
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    assert(copied.includes("288 亿美元"), `the clipboard does not hold the answer (${JSON.stringify(copied.slice(0, 40))})`);
+    const question = page.locator("[data-testid=message][data-role=user]").first();
+    await question.hover();
+    await question.getByRole("button", { name: "复制问题" }).click();
+    await page.waitForFunction(() => navigator.clipboard.readText().then((value) => value.includes("服务收入")), null, { timeout: 5000 });
+    return "toast 已复制 at the corner, thread text unchanged, clipboard holds the answer; 复制问题 copies the question";
+  } finally { await view.close(); }
+}
+
+/** The Markdown renderer is a chunk of its own: prefetched at launch, a skeleton while late, plain text with 重试 when it fails. */
+const RENDERER = /\/assets\/markdown-renderer-[^/]+\.js$/;
+async function markdownChunk(ctx) {
+  const notes = [];
+  // (a) Normal: the chunk is asked for at launch, before the history request; the first message is typeset when it appears, never raw.
+  {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "markdown-chunk-normal", unmatched });
+    try {
+      const { page } = view;
+      const order = [];
+      page.on("request", (request) => { const u = new URL(request.url()); if (RENDERER.test(u.pathname)) order.push("renderer"); else if (/\/assets\/chat-[^/]+\.js$/.test(u.pathname)) order.push("chat-code"); else if (/\/agent-chat\/conversations\/[^/]+\/messages/.test(u.pathname) || /\/agent-chat\/restore/.test(u.pathname) || /\/agent-chat\/conversations\/[^/]+$/.test(u.pathname)) order.push("history"); });
+      await view.context.addInitScript(() => {
+        window.__md = { plain: false, raw: false, skeleton: false, ready: false };
+        const look = () => {
+          if (document.querySelector("[data-testid=message-body][data-md=plain]")) window.__md.plain = true;
+          if (document.querySelector("[data-testid=markdown-skeleton]")) window.__md.skeleton = true;
+          if (document.querySelector("[data-testid=message-body][data-md=ready]")) window.__md.ready = true;
+          if ((document.querySelector("[data-testid=thread]")?.textContent ?? "").includes("**")) window.__md.raw = true;
+        };
+        new MutationObserver(look).observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+      });
+      await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+      await page.locator("[data-testid=message-body][data-md=ready]").first().waitFor({ timeout: 15000 });
+      const seen = await page.evaluate(() => window.__md);
+      assert(order.includes("renderer"), `the renderer chunk was never requested (${order.join(",")})`);
+      assert(!order.includes("history") || order.indexOf("renderer") < order.indexOf("history"), `the history was asked for before the renderer (${order.join(" > ")})`);
+      assert(!seen.plain && !seen.raw, `a message showed as plain text or raw Markdown on the way (${JSON.stringify(seen)})`);
+      assert((await page.locator("[data-testid=markdown-skeleton]").count()) === 0, "a skeleton is still showing");
+      assert((await page.locator("[data-testid=message-body] strong").count()) > 0, "the bold phrase of the first answer is not typeset");
+      notes.push(`normal: requested ${order.filter((x) => x !== "chat-code").join(" > ")}; skeleton ${seen.skeleton ? "seen briefly" : "never needed"}; never plain or raw`);
+    } finally { await view.close(); }
+  }
+  // (a2) Launch-time prefetch, shown by holding the chat page's own code back 1.5 s: the renderer is asked for in that wait (main.tsx starts it),
+  //      not after the page has mounted and found it needs it.
+  {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "markdown-chunk-launch", unmatched });
+    try {
+      const { page } = view;
+      const at = {};
+      page.on("request", (request) => { const p2 = new URL(request.url()).pathname; if (RENDERER.test(p2)) at.renderer ??= Date.now(); });
+      await page.route(/\/assets\/chat-[^/]+\.js$/, async (route) => { at.chat ??= Date.now(); await new Promise((resolve) => setTimeout(resolve, 1500)); await route.continue(); });
+      await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+      await page.locator("[data-testid=message-body][data-md=ready]").first().waitFor({ timeout: 20000 });
+      assert(at.chat && at.renderer, `a chunk was never requested (${JSON.stringify(at)})`);
+      const gap = at.renderer - at.chat;
+      assert(gap < 1000, `the renderer was asked for ${gap}ms after the chat page's code: it waits for the page instead of starting at launch`);
+      notes.push(`launch: renderer asked for ${gap}ms after the chat page's code while that was held back 1.5 s`);
+    } finally { await view.close(); }
+  }
+  // (b) The chunk 2 seconds late: skeletons stand in for the text meanwhile, never the raw Markdown; then one swap.
+  {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "markdown-chunk-late", unmatched });
+    try {
+      const { page } = view;
+      await page.route(RENDERER, async (route) => { await new Promise((resolve) => setTimeout(resolve, 2000)); await route.continue(); });
+      const t0 = Date.now();
+      await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+      await page.locator("[data-testid=markdown-skeleton]").first().waitFor({ timeout: 15000 });
+      const early = Date.now() - t0;
+      const thread = await page.locator("[data-testid=thread]").innerText();
+      assert(!thread.includes("**") && !thread.includes("](#citation"), "raw Markdown shows while the renderer is late");
+      assert((await page.locator("[data-testid=message-body]").count()) === 0, "a message body is on screen before the renderer arrived");
+      assert((await page.locator("#agent-draft").count()) === 1 && (await page.locator("[data-testid=message][data-role=user]").count()) > 0, "the page around the skeleton is not usable");
+      await page.locator("[data-testid=message-body][data-md=ready]").first().waitFor({ timeout: 15000 });
+      const total = Date.now() - t0;
+      assert(total >= 1900, `the swap came after ${total}ms: the chunk was not held back`);
+      assert((await page.locator("[data-testid=markdown-skeleton]").count()) === 0, "a skeleton is left after the swap");
+      notes.push(`late (2 s): skeleton at ${early}ms, typeset text at ${total}ms, no raw text between`);
+    } finally { await view.close(); }
+  }
+  // (c) The chunk cannot be fetched: plain text with its line breaks, a quiet note and 重试; the page stays; 重试 recovers.
+  {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "markdown-chunk-failed", unmatched });
+    try {
+      const { page } = view;
+      await page.route(RENDERER, (route) => route.abort());
+      await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+      await page.locator("[data-testid=message-body][data-md=plain]").first().waitFor({ timeout: 15000 });
+      const failed = page.locator("[data-testid=markdown-failed]");
+      await failed.first().waitFor({ timeout: 5000 });
+      assert((await page.locator("#agent-draft").count()) === 1 && (await page.locator('[data-slot="route-error"]').count()) === 0, "the failed chunk took the page down");
+      const white = await page.locator("[data-testid=message-body][data-md=plain]").first().evaluate((el) => getComputedStyle(el).whiteSpace);
+      assert(white === "pre-wrap", `the plain text does not keep its line breaks (white-space: ${white})`);
+      assert(!/color:\s*(?:red|rgb\(2[0-9]{2}, ?[0-9]{1,2}, ?[0-9]{1,2}\))/.test(await failed.first().evaluate((el) => el.outerHTML)), "the note is not neutral");
+      await page.unroute(RENDERER);
+      await failed.first().getByRole("button", { name: "重试" }).click();
+      await page.locator("[data-testid=message-body][data-md=ready]").first().waitFor({ timeout: 15000 });
+      assert((await page.locator("[data-testid=markdown-failed]").count()) === 0 && (await page.locator("[data-testid=message-body][data-md=plain]").count()) === 0, "the plain text or the note is left after 重试");
+      notes.push("failed: plain text (pre-wrap) + note + 重试, page intact; 重试 typesets it");
+    } finally { await view.close(); }
+  }
+  return notes.join(" | ");
+}
+
+/** The question rail (new markup, same logic): markers on the thread's left edge, a preview card beside the pointer, a bookmark that is kept, a click that scrolls. */
+async function chatQuestionRail(ctx) {
+  const view = await openChat(ctx, "chat-question-rail");
+  try {
+    const { page } = view;
+    const rail = page.locator("[data-testid=question-rail]");
+    await rail.waitFor({ timeout: 10000 });
+    const markers = rail.locator("button[data-rail-index]");
+    const count = await markers.count();
+    assert(count >= 4, `the rail has ${count} markers`);
+    const railBox = await rail.boundingBox(), threadBox = await page.locator("[data-testid=thread]").boundingBox();
+    assert(railBox && threadBox && railBox.x + railBox.width <= threadBox.x + 1, "the rail is not on the thread's left edge");
+    assert(threadBox.width <= 761 && threadBox.width >= 600, `the thread is ${Math.round(threadBox.width)}px wide (max 760)`);
+    await markers.first().hover();
+    const card = page.locator("[data-testid=turn-preview]");
+    await card.waitFor({ timeout: 5000 });
+    const star = card.getByRole("button", { name: /收藏这一轮/ });
+    await star.click();
+    await card.getByRole("button", { name: "取消收藏" }).waitFor({ timeout: 5000 });
+    await page.reload({ waitUntil: "load" });
+    await page.locator("[data-testid=message]").first().waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=question-rail] button[data-bookmarked]").first().waitFor({ timeout: 10000 });
+    // A click scrolls that question to the top of the thread.
+    await page.evaluate(() => { const el = document.querySelector("[data-testid=transcript]"); el.scrollTop = el.scrollHeight; });
+    await frames(page);
+    await page.locator("[data-testid=question-rail] button[data-rail-index='0']").click();
+    await page.waitForFunction(() => { const t = document.querySelector("[data-testid=transcript]").getBoundingClientRect().top; const q = document.getElementById("chat-message-0")?.getBoundingClientRect().top ?? 1e9; return Math.abs(q - t) < 40; }, null, { timeout: 5000 });
+    return `${count} markers left of a ${Math.round(threadBox.width)}px thread; preview card, bookmark kept over a reload, click scrolls to the question`;
+  } finally { await view.close(); }
+}
+
+/** Keyboard: the composer's panels (model badge, context ring) and the header's ⓘ open from the keyboard, Esc closes them and hands focus back. */
+async function chatPopoverKeyboard(ctx) {
+  const view = await openChat(ctx, "chat-popover-keyboard");
+  try {
+    const { page } = view;
+    const panels = [["model-badge", "模型与推理强度"], ["context-meter", "上下文用量"], ["about-chat", "关于这条对话"]];
+    for (const [id, label] of panels) {
+      const trigger = page.locator(`[data-testid=${id}]`);
+      await trigger.waitFor({ timeout: 10000 });
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      const panel = page.locator(`[data-slot=pop-panel][aria-label="${label}"]`);
+      await panel.waitFor({ timeout: 5000 });
+      assert(await panel.evaluate((el) => el.contains(document.activeElement)), `${id}: focus did not move into the panel`);
+      await page.keyboard.press("Escape");
+      await panel.waitFor({ state: "detached", timeout: 5000 });
+      assert(await trigger.evaluate((el) => el === document.activeElement), `${id}: focus did not return to the button after Esc`);
+    }
+    // A press outside closes the model panel too.
+    await page.locator("[data-testid=model-badge]").click();
+    await page.locator("[data-slot=pop-panel]").waitFor({ timeout: 5000 });
+    await page.locator("[data-testid=chat-header] h1").click();
+    await page.locator("[data-slot=pop-panel]").waitFor({ state: "detached", timeout: 5000 });
+    // Reach the model choice by keyboard alone: Tab from the badge into the radio list and choose with Space.
+    await page.locator("[data-testid=model-badge]").focus();
+    await page.keyboard.press("Enter");
+    await page.locator("[data-slot=pop-panel] [role=radio]").first().waitFor({ timeout: 10000 });
+    await page.keyboard.press("Tab");
+    assert(await page.evaluate(() => document.activeElement?.getAttribute("role") === "radio"), "Tab from the panel did not land on a choice");
+    await page.keyboard.press("Escape");
+    return "model badge, context ring and ⓘ: Enter opens with focus inside, Esc closes and returns focus, a press outside closes; the choices are Tab-reachable";
   } finally { await view.close(); }
 }
 
@@ -1932,6 +2300,15 @@ const CHECKS = [
   ["state-components-in-legacy: ErrorBar, EmptyState, StatefulButton look the same inside a data-legacy island", stateComponentsInLegacy],
   ["task-bar: stage and elapsed time, follows the reader to another page, the end is a toast", taskBar],
   ["states-sample: the nine states at #/dev/kit/states work", statesSamplePage],
+  ["composer-ime: Enter during an input-method composition never sends; after compositionend it does", composerIme],
+  ["composer-slash-menu: arrows, Esc and Enter drive the / menu; an input method's keys do not", composerSlashMenu],
+  ["chat-follow-and-jump: a streaming answer is followed; scrolling up stops it and shows 回到底部; the button and a manual return resume it", chatFollowAndJump],
+  ["draft-survives-switch: a half-typed message stays with its line across a bot switch, another page and a reload", draftSurvivesSwitch],
+  ["stop-button: the send position becomes stop while an answer runs and stop is the old cancel", stopButton],
+  ["copy-toast: copying shows a toast and adds no text to the thread", copyToast],
+  ["chat-popover-keyboard: the composer panels and the header ⓘ open from the keyboard, Esc closes and returns focus", chatPopoverKeyboard],
+  ["chat-question-rail: markers on the left edge, preview card, bookmark kept, click scrolls", chatQuestionRail],
+  ["markdown-chunk: the renderer is prefetched at launch; a skeleton while it is late; plain text and 重试 when it fails", markdownChunk],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

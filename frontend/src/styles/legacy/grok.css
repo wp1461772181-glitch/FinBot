@@ -17,39 +17,14 @@ body { -webkit-font-smoothing: antialiased; }
 .bot-avatar { background:var(--me-surface-2); color:var(--me-ink); border:1px solid var(--me-line); font-size: 13px; }
 
 /* --- page heading: a thin bar, no rule ----------------------------------------------------------- */
-.agent-page { padding-top: 8px; gap: 6px; background:var(--me-bg); }
-.agent-page .agent-page-heading { border-bottom:0; padding: 4px 0 6px; }
-.agent-page .agent-page-heading h1 { font-size: 16px; font-weight: 600; }
-.agent-title-row .bot-avatar { width: 48px; height: 48px; background:var(--me-surface-2); color:var(--me-ink); }
-.agent-header-actions .secondary-action, .side-toggle { border:1px solid var(--me-line); background:transparent; color:var(--me-muted); border-radius: 999px; min-height: 32px; padding: 0 12px; }
-.agent-header-actions .secondary-action:hover, .side-toggle:hover { color:var(--me-ink); background:var(--me-surface-2); }
-.side-toggle.is-open { color:var(--me-ink); background:var(--me-surface-2); }
-.agent-capability { background:transparent; border:0; color:var(--me-faint); font-size: 12px; max-width: 768px; margin: 0 auto; width: 100%; }
+.agent-header-actions .secondary-action { border:1px solid var(--me-line); background:transparent; color:var(--me-muted); border-radius: 999px; min-height: 32px; padding: 0 12px; }
+.agent-header-actions .secondary-action:hover { color:var(--me-ink); background:var(--me-surface-2); }
 
 /* --- thread: one centred column, assistant as plain text, user as a soft pill -------------------- */
-.agent-thread { max-width: 768px; gap: 26px; }
-.agent-message.is-assistant .markdown-body { font-size: 15px; line-height: 1.7; color:var(--me-ink); }
-.agent-message.is-user { padding: 0; background:transparent; border-radius: 0; max-width: min(80%, 620px); }
-.agent-user-bubble { background:var(--c-user); border-radius: 22px; padding: 10px 16px; }
-.agent-message.is-user p { font-size: 15px; line-height: 1.6; }
-.agent-welcome h2 { font-size: 28px; font-weight: 600; letter-spacing: -.01em; }
-.agent-welcome button { border:1px solid var(--me-line); background:transparent; border-radius: 999px; color:var(--me-muted); }
-.agent-welcome button:hover { color:var(--me-ink); background:var(--me-surface-2); }
-.agent-action-button { border-radius: 8px; color:var(--me-faint); }
-.agent-action-button:hover { color:var(--me-ink); background:var(--me-surface-2); }
 .citation-drawer { border-color:var(--me-line); border-radius: 12px; background:transparent; }
 .tool-badge { border-radius: 999px; background: var(--me-surface-2); border-color: var(--me-line); color: var(--me-muted); }
 
 /* --- composer: a pill with a thin inset ring and a round inverted send button --------------------- */
-.agent-composer { max-width: 768px; border:0; border-radius: 28px; background:var(--me-surface-2); box-shadow:inset 0 0 0 1px var(--me-line); margin-bottom: 4px; }
-.agent-composer:focus-within { border:0; box-shadow:inset 0 0 0 1px var(--me-line-strong), 0 0 0 4px color-mix(in srgb, var(--me-ink) 4%, transparent); }
-.agent-composer textarea { font-size: 15px; padding: 15px 22px 4px; border-radius: 28px 28px 0 0; }
-.agent-composer-bottom { padding: 4px 10px 10px 22px; }
-.agent-send { background:var(--me-invert); color:var(--me-invert-ink); }
-.agent-send:hover:not(:disabled) { background:var(--me-invert); opacity: .86; transform: none; }
-.agent-send:disabled { background:var(--me-line-strong); color:var(--me-faint); }
-.agent-stop { border-radius: 999px; }
-.skill-picker { background:var(--me-surface); border-color:var(--me-line); border-radius: 14px; box-shadow:0 12px 32px rgba(0, 0, 0, .28); }
 
 /* --- right rail (工作区 / 档案) ------------------------------------------------------------------ */
 .bot-side { border-left:1px solid var(--me-line); padding-left: 16px; }
@@ -75,14 +50,9 @@ body { -webkit-font-smoothing: antialiased; }
 /* --- FinBot bot faces: 4 silhouettes × 4 eye colours (BotOrb.tsx) ---------------------------------- */
 .bot-orb { flex: 0 0 auto; display: inline-block; line-height: 0; }
 .bot-orb svg { width: 100%; height: 100%; display: block; overflow: visible; }
-.agent-title-row .bot-orb { width: 48px; height: 48px; }
 .bot-orb-hero { display: grid; justify-items: center; gap: 6px; margin: 4px 0 14px; }
 .bot-orb-hero small { color: var(--me-muted); font-size: 12px; }
 /* Text yields to the avatar: tighter rows, smaller secondary text, ellipsis everywhere. */
-.agent-title-row { gap: 8px; }
-.agent-title-row h1 { font-size: 16px; line-height: 1.2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: anywhere; }
-.agent-title-row .bot-title { font-size: 11px; min-width: 0; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 520px) { .agent-title-row .bot-title { display: none; } }
 .avatar-picker { display: grid; gap: 8px; }
 /* Customise panel (bloub's Customizer/BotTile, restyled with this app's tokens; works in both themes). */
 .bloub-hero { display: grid; place-items: center; padding: 10px 0 4px; }

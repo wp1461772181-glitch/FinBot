@@ -24,18 +24,17 @@ test("sizes: components use the shared constants, not literals", () => {
   assert.match(tsx("BotSidePanel.tsx"), /size=\{BOT_AVATAR_SIZE\.createHero\}/);
 });
 
-test("sizes: css overrides match the constants (title; the rail emoji avatar rule went with the old rail in P2.2)", () => {
-  const title = css.match(/\.agent-title-row \.bot-orb \{ width: (\d+)px; height: (\d+)px; \}/);
-  assert.deepEqual(title?.slice(1).map(Number), [BOT_AVATAR_SIZE.title, BOT_AVATAR_SIZE.title]);
-  const titleText = css.match(/\.agent-title-row \.bot-avatar \{ width: (\d+)px/);
-  assert.equal(Number(titleText?.[1]), BOT_AVATAR_SIZE.title);
+test("sizes: the chat title avatar is sized by the constant for a bot orb and for an emoji box (P3.2: the .agent-title-row rules left the old sheet with the old header)", () => {
+  const header = tsx("app/chat/ChatHeader.tsx");
+  assert.match(header, /"--avatar": `\$\{BOT_AVATAR_SIZE\.title\}px`/);
+  assert.match(header, /\[&_\.bot-avatar\]:h-\[var\(--avatar\)\] \[&_\.bot-avatar\]:w-\[var\(--avatar\)\]/);
+  assert.doesNotMatch(css, /\.agent-title-row/);
   assert.doesNotMatch(css, /\.bot-rail/);
 });
 
-test("text yields: the chat title row keeps its ellipsis and hides the subtitle on narrow screens (the rail row rules went with the old rail in P2.2)", () => {
-  assert.match(css, /\.agent-title-row h1 \{[^}]*font-size: 16px[^}]*text-overflow: ellipsis/);
-  assert.match(css, /\.agent-title-row \.bot-title \{[^}]*text-overflow: ellipsis/);
-  const mobile = css.match(/@media \(max-width: 520px\) \{[^@]*\.agent-title-row \.bot-title \{ display: none; \}/);
-  assert.ok(mobile, "narrow screens hide the title subtitle before shrinking the avatar");
-  assert.doesNotMatch(css, /@media[^{]*\{[^@]*\.agent-title-row \.bot-orb \{ width: (?:[0-3]\d)px/);
+test("text yields: the chat title keeps its ellipsis and hides the subtitle on narrow screens before the avatar shrinks", () => {
+  const header = tsx("app/chat/ChatHeader.tsx");
+  assert.match(header, /<h1 id="chat-title" className="truncate /);
+  assert.match(header, /data-testid="chat-subtitle" className="truncate [^"]*max-sm:hidden"/);
+  assert.match(header, /className="flex shrink-0 \[&_\.bot-avatar\]/, "the avatar box never shrinks");
 });

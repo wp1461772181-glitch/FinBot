@@ -2116,5 +2116,21 @@
   "持仓和可用资金会按剩下的记录重新计算。": "Positions and available cash are recalculated from the remaining records.",
   "解除 Telegram 绑定？": "Unbind Telegram?",
   "解除绑定后，Telegram 消息不再被处理。": "After unbinding, Telegram messages are no longer handled.",
-  "解除绑定": "Unbind"
+  "解除绑定": "Unbind",
+  "关于这条对话": "About this conversation",
+  "bot 设置": "Bot settings",
+  "本地归档只读查看": "Viewing a local archive (read-only)",
+  "回到底部": "Back to bottom",
+  "复用已核实来源": "Reused verified sources",
+  "等待选择后继续": "Waiting for your choice to continue",
+  "任务运行中，可稍后查询状态": "The task is running; check its status later",
+  "部分来源可用；缺项已标出": "Some sources were available; gaps are marked",
+  "归档是只读的，不能在这里发消息。": "This archive is read-only; you can't send messages here.",
+  "停止": "Stop",
+  "快速切换模型与推理强度": "Switch model and reasoning effort",
+  "模型与推理强度": "Model and reasoning effort",
+  "正在读取模型目录…": "Reading the model catalog…",
+  "推理强度": "Reasoning effort",
+  "排版组件没有加载成功，先显示原文。": "The text formatter didn't load, so the plain text is shown.",
+  "复制失败；请选中回答后手动复制。": "Copy failed; select the answer and copy it by hand."
 }

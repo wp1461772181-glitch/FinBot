@@ -1,75 +1,106 @@
-// legacy markup, moved as-is in P3.1; restyled in P3.2–P3.4
-import { Fragment, useEffect, useRef, useState, type RefObject } from "react";
-import { isTaskPostHead } from "../../task-posts.mjs";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { ArrowDown, ArrowUpRight, ChevronRight, LoaderCircle } from "lucide-react";
+import { SkeletonMessages, DelayedSkeleton } from "@/components/state/Skeleton";
 import { chatTurnPreviews } from "../../chat-thread.mjs";
-import { QuestionRail } from "../../QuestionRail";
-import { useLocale } from "../../i18n";
+import { bottomScrollTop, isFollowing, keepPositionAfterPrepend, showJumpToBottom } from "../../chat-scroll.mjs";
 import { noticesAfter } from "../../context-usage.mjs";
-import { isActiveClarification } from "../../chat-clarification.mjs";
-import { toolLabel } from "../../agent-tool-labels.mjs";
-import { ThinkingPanel } from "../../ThinkingPanel";
-import { CopyIcon, CheckIcon, ThumbUpIcon, ThumbDownIcon } from "./icons";
-import { ClarificationCard } from "./ClarificationCard";
-import { MessageBody, CitationDrawer, useCitations } from "./Citations";
+import type { Bot } from "../../api";
+import { useLocale } from "../../i18n";
+import { useCitations } from "./Citations";
 import { useChat } from "./ChatSessionProvider";
+import { useMarkdown } from "./markdown-loader";
+import { Message } from "./Message";
+import { QuestionRail } from "./QuestionRail";
+import { useCopy } from "./use-copy";
 
-function toolResultSummary(value:unknown):string {
-  if (!value || typeof value!=="object") return "";
-  const result=value as {data?:unknown;job_status?:unknown;status?:unknown;error_code?:unknown};
-  if (typeof result.job_status==="string") return `任务 ${result.job_status.slice(0,32)}`;
-  if (Array.isArray(result.data)) return `${result.data.length} 条结果`;
-  if (typeof result.error_code==="string") return result.error_code.slice(0,48);
-  return "";
+const STARTERS = ["查看 AAPL 最近行情", "AAPL 已保存的最新财报有哪些", "可信度星级是什么"];
+
+/** 「已压缩 N 轮」: a divider in the thread; it opens to the summary. */
+function CompactionDivider({ turns, focus, summary }: { turns: number; focus?: string; summary?: string }) {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(false);
+  return <div data-testid="compaction" className="flex flex-col gap-2">
+    <button type="button" aria-expanded={open} onClick={() => setOpen(x => !x)} className="group/divider flex w-full items-center gap-3 rounded-sm text-caption text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <span className="h-px flex-1 bg-line" aria-hidden="true" />
+      <span className="inline-flex items-center gap-1 hover:text-ink"><ChevronRight className={`size-3.5 transition-transform duration-1 ${open ? "rotate-90" : ""}`} aria-hidden="true" />{t("已压缩")} {turns} {t("轮")}{focus ? ` · ${focus}` : ""}</span>
+      <span className="h-px flex-1 bg-line" aria-hidden="true" />
+    </button>
+    {open && <pre className="whitespace-pre-wrap break-words rounded-md bg-sunken p-3 font-sans text-small text-ink-2">{summary || t("（摘要为空）")}</pre>}
+  </div>;
 }
 
-export function Thread({ draftBox }: { draftBox: RefObject<HTMLTextAreaElement | null> }) {
-  const { t } = useLocale(), c = useChat(), transcriptRef = useRef<HTMLElement>(null);
-  const turnPreviews=chatTurnPreviews(c.messages);
-  const railTurns=turnPreviews.map(turn=>({...turn,turnId:c.messages[turn.userIndex]?.turn_id}));
-  const followTranscript=useRef(true);
-  useEffect(()=>{const el=transcriptRef.current;if(!el)return;const update=()=>{followTranscript.current=el.scrollHeight-el.scrollTop-el.clientHeight<90};el.addEventListener("scroll",update,{passive:true});return()=>el.removeEventListener("scroll",update)},[]);
-  const [copied,setCopied]=useState<number|null>(null),[copyStatus,setCopyStatus]=useState(""),[,setFeedbackTick]=useState(0);
-  const { citationDetails, openCitationTurn, setOpenCitationTurn, openCitationAt, showCitation } = useCitations();
-  const [activeTurn,setActiveTurn]=useState(0);
-  useEffect(()=>{const el=transcriptRef.current;if(!el)return;const update=()=>{const top=el.getBoundingClientRect().top;const turns=el.querySelectorAll<HTMLElement>(".agent-message.is-user");let active=0;turns.forEach((item,i)=>{if(item.getBoundingClientRect().top<=top+100)active=i});setActiveTurn(active)};el.addEventListener("scroll",update,{passive:true});update();return()=>el.removeEventListener("scroll",update)},[c.messages]);
-  async function loadEarlierAtTop(){
-    const el=transcriptRef.current; if(!el||!c.historyHasMore||c.loadingEarlier||c.archiveView)return;
-    const height=el.scrollHeight, top=el.scrollTop;
-    await c.loadEarlier();
-    requestAnimationFrame(()=>{if(el)el.scrollTop=el.scrollHeight-height+top;});
-  }
-  async function copyAnswer(text:string,index:number){setCopied(null);setCopyStatus(t("正在复制…"));let timer:number|undefined;try{const clipboard=navigator.clipboard?.writeText(text);if(!clipboard)throw Error("clipboard_unavailable");await Promise.race([clipboard,new Promise<never>((_,reject)=>{timer=window.setTimeout(()=>reject(Error("clipboard_timeout")),1800)})]);setCopied(index);setCopyStatus(t("已复制"));}catch{setCopied(-index-1);setCopyStatus(t("复制失败；请选中回答后手动复制。"));const article=document.getElementById(`chat-message-${index}`);const range=document.createRange();if(article){range.selectNodeContents(article.querySelector(".markdown-body")??article);window.getSelection()?.removeAllRanges();window.getSelection()?.addRange(range);}}finally{if(timer)window.clearTimeout(timer);window.setTimeout(()=>{setCopied(null);setCopyStatus("")},3500)}}
-  function feedbackOf(turnId:string):string{try{return localStorage.getItem(`market-evidence-agent:feedback:${turnId}`)??""}catch{return ""}}
-  function giveFeedback(turnId:string,value:"up"|"down"){const key=`market-evidence-agent:feedback:${turnId}`;try{if(localStorage.getItem(key)===value)localStorage.removeItem(key);else localStorage.setItem(key,value)}catch{}setFeedbackTick(x=>x+1)}
+export function Thread({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObject<HTMLTextAreaElement | null> }) {
+  const { t } = useLocale(), c = useChat(), copy = useCopy();
+  const transcriptRef = useRef<HTMLElement>(null);
+  const turnPreviews = chatTurnPreviews(c.messages);
+  const railTurns = turnPreviews.map(turn => ({ ...turn, turnId: c.messages[turn.userIndex]?.turn_id }));
+  const citations = useCitations();
+  const [, setFeedbackTick] = useState(0);
+  const { phase: markdownPhase } = useMarkdown();
+
+  // Following: the newest line stays in view while the reader is at the bottom; one scroll up lets go and offers 回到底部.
+  const following = useRef(true);
+  const [away, setAway] = useState(false);
+  const [activeTurn, setActiveTurn] = useState(0);
+  const pinToBottom = useCallback(() => {
+    const el = transcriptRef.current; if (!el) return;
+    el.scrollTop = bottomScrollTop(el);
+  }, []);
   useEffect(() => {
-    const transcript = transcriptRef.current;
-    if (transcript&&followTranscript.current) transcript.scrollTop = transcript.scrollHeight;
-  }, [c.messages, c.state]);
-  const lastIndex=c.messages.length-1;
-  return (
-        <section ref={transcriptRef} className="agent-transcript" aria-live="polite" onScroll={e=>{if(e.currentTarget.scrollTop<32)void loadEarlierAtTop();}}>
-          {!c.archiveView&&c.historyHasMore&&<div className="agent-earlier"><button type="button" className="secondary-action" onClick={()=>void loadEarlierAtTop()} disabled={c.loadingEarlier}>{c.loadingEarlier?t("正在加载更早消息…"):t("加载更早消息")}</button></div>}
-          {c.restoring&&<p role="status">{t("正在恢复对话…")}</p>}
-          {copyStatus&&<p className="copy-status" role="status">{copyStatus}</p>}
-          {c.messages.length === 0 ? <div className="agent-welcome"><h2>{t("从一个问题开始")}</h2><p>{t(c.verified ? "连接已就绪，可以输入问题或选择下方建议。" : "登录个人聊天后才能对话：模型由服务器模型目录提供。")}</p><div>{["查看 AAPL 最近行情", "AAPL 已保存的最新财报有哪些", "可信度星级是什么"].map(x => <button type="button" key={x} onClick={() => c.setDraft(t(x))}>{t(x)} <span aria-hidden="true">↗</span></button>)}</div></div> :
-          <div className="agent-thread-grid">
-            <QuestionRail turns={railTurns} activeTurn={activeTurn} transcriptRef={transcriptRef} conversationId={c.conversationId} />
-            <div className="agent-thread">{c.messages.map((m, i) => <Fragment key={i}><article data-turn-index={m.role==="user"?turnPreviews.findIndex(turn=>turn.userIndex===i):undefined} id={`chat-message-${i}`} className={`agent-message is-${m.role}${m.role==="user"&&isTaskPostHead(m.content)?" is-task-post":""}${i===lastIndex?" is-last":""}`}>
-              {m.role === "assistant"&&<ThinkingPanel trace={m.trace} thinkingMs={m.thinking_ms} startedAt={m.started_at} running={i === lastIndex && c.state === "sending"} />}
-              {m.role !== "user"&&<div className="agent-tool-badges">{m.reused_sources&&<span className="tool-badge status-complete">{t("复用已核实来源")}</span>}{!m.trace?.length&&m.tool_trace?.map((tool,j)=><span key={`${tool.name}-${j}`} className={`tool-badge status-${tool.status}`}>{t(toolLabel(tool.name))} · {t(tool.status === "complete" ? (tool.card ? "执行完成" : "已完成") : tool.status === "not_found" ? "没有匹配记录" : tool.status === "failed" ? "查询失败" : tool.status === "cancelled" ? "已取消" : tool.status === "submitted" ? "已提交" : "执行中")}{toolResultSummary(tool.result)&&` · ${toolResultSummary(tool.result)}`}</span>)}</div>}
-              <MessageBody m={m} i={i} copied={copied} copyAnswer={copyAnswer} draftBox={draftBox} openCitationAt={openCitationAt} setOpenCitationTurn={setOpenCitationTurn} showCitation={showCitation} />
-              {m.role==="assistant"&&m.clarification&&<ClarificationCard clarification={m.clarification} active={isActiveClarification(c.messages,i,Boolean(c.archiveView))&&!c.restoring&&c.verified&&c.state!=="sending"&&c.state!=="testing"} onChoose={value=>c.choose(value,m.clarification!.request_id)} onChooseMany={values=>c.chooseOptions(values,m.clarification!.request_id)} onReply={value=>c.replyToCard(value,m.clarification!.request_id)} />}
-              {m.role === "assistant" && m.status && m.status !== "complete" && m.status !== "succeeded" && <small>{t(m.status === "cancelled" ? "本轮已取消，未生成完整回答。" : m.status === "waiting_for_input" ? "等待选择后继续" : m.status === "running" ? "任务运行中，可稍后查询状态" : m.status === "partially_succeeded" ? "部分来源可用；缺项已标出" : "本轮失败；已保留已生成内容。")}</small>}
-              {m.role === "assistant"&&m.content&&<>
-                <div className="agent-answer-actions">
-                  <button type="button" className="agent-action-button" aria-label={copied===i?t("已复制"):copied===-i-1?t("复制失败"):t("复制回答")} title={t("复制回答")} onClick={()=>void copyAnswer(m.content,i)}>{copied===i?<CheckIcon />:<CopyIcon />}</button>
-                  {m.turn_id&&(["up","down"] as const).map(value=>{const saved=feedbackOf(m.turn_id!);return <button type="button" key={value} className="agent-action-button" aria-pressed={saved===value} aria-label={value==="up"?t("有帮助"):t("没有帮助")} title={value==="up"?t("有帮助"):t("没有帮助")} onClick={()=>giveFeedback(m.turn_id!,value)}>{value==="up"?<ThumbUpIcon />:<ThumbDownIcon />}</button>})}
-                  {copied===i&&<span className="agent-action-note" role="status">{t("已复制")}</span>}
-                </div>
-                <CitationDrawer m={m} i={i} openCitationTurn={openCitationTurn} citationDetails={citationDetails} showCitation={showCitation} />
-              </>}
-            </article>{m.role==="assistant"&&noticesAfter(c.notices,m.turn_id).map(notice=><details className="agent-compaction" key={`compaction-${notice.id}`}><summary>{t("已压缩")} {notice.turns} {t("轮")}{notice.focus?` · ${notice.focus}`:""}</summary><pre>{notice.summary||t("（摘要为空）")}</pre></details>)}</Fragment>)}</div>
-          </div>}
-        </section>
-  );
+    const el = transcriptRef.current; if (!el) return;
+    const update = () => { following.current = isFollowing(el); setAway(showJumpToBottom(el)); };
+    el.addEventListener("scroll", update, { passive: true });
+    return () => el.removeEventListener("scroll", update);
+  }, []);
+  // Which question the reader is on (the rail's focus).
+  useEffect(() => {
+    const el = transcriptRef.current; if (!el) return;
+    const update = () => {
+      const top = el.getBoundingClientRect().top;
+      let active = 0;
+      el.querySelectorAll<HTMLElement>("[data-testid=message][data-role=user]").forEach((item, i) => { if (item.getBoundingClientRect().top <= top + 100) active = i; });
+      setActiveTurn(active);
+    };
+    el.addEventListener("scroll", update, { passive: true }); update();
+    return () => el.removeEventListener("scroll", update);
+  }, [c.messages]);
+  // New text, a state change, or the renderer arriving (the skeleton becomes the typeset text, a different height): keep the bottom in view.
+  useLayoutEffect(() => { if (following.current) pinToBottom(); }, [c.messages, c.state, c.restoring, markdownPhase, pinToBottom]);
+  const jumpToBottom = () => { following.current = true; setAway(false); pinToBottom(); };
+
+  async function loadEarlierAtTop() {
+    const el = transcriptRef.current; if (!el || !c.historyHasMore || c.loadingEarlier || c.archiveView) return;
+    const before = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
+    await c.loadEarlier();
+    requestAnimationFrame(() => { if (el) el.scrollTop = keepPositionAfterPrepend(before, el.scrollHeight); });
+  }
+
+  const lastIndex = c.messages.length - 1;
+  return <div className="relative flex min-h-0 flex-1 flex-col">
+    <section ref={transcriptRef} data-testid="transcript" aria-live="polite" aria-label={t("对话")} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 lg:px-6"
+      onScroll={e => { if (e.currentTarget.scrollTop < 32) void loadEarlierAtTop(); }}>
+      {!c.archiveView && c.historyHasMore && <div className="flex justify-center pt-4">
+        <button type="button" data-testid="load-earlier" disabled={c.loadingEarlier} onClick={() => void loadEarlierAtTop()} className="inline-flex h-8 items-center gap-1.5 rounded-sm px-3 text-caption text-muted-foreground outline-none hover:bg-accent hover:text-ink focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70">
+          {c.loadingEarlier && <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />}{c.loadingEarlier ? t("正在加载更早消息…") : t("加载更早消息")}
+        </button>
+      </div>}
+      {c.restoring && c.messages.length === 0 && <DelayedSkeleton active><div className="mx-auto w-full max-w-[760px] py-6"><SkeletonMessages /></div></DelayedSkeleton>}
+      {c.messages.length === 0 ? (c.restoring ? null : <div data-testid="welcome" className="mx-auto flex w-full max-w-[760px] flex-col gap-3 py-10">
+        <h2 className="text-title-m text-ink">{t("从一个问题开始")}</h2>
+        <p className="text-body text-muted-foreground">{t(c.verified ? "连接已就绪，可以输入问题或选择下方建议。" : "登录个人聊天后才能对话：模型由服务器模型目录提供。")}</p>
+        <div className="flex flex-wrap gap-2">{STARTERS.map(x => <button type="button" key={x} onClick={() => c.setDraft(t(x))} className="inline-flex h-9 items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3 text-small text-ink-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">{t(x)}<ArrowUpRight className="size-3.5" aria-hidden="true" /></button>)}</div>
+      </div>) : c.messages.length > 0 &&
+        <div className="mx-auto grid w-full grid-cols-1 pb-20 pt-6 lg:max-w-[880px] lg:grid-cols-[minmax(0,1fr)_minmax(0,760px)_minmax(0,1fr)]">
+          <QuestionRail turns={railTurns} activeTurn={activeTurn} transcriptRef={transcriptRef} conversationId={c.conversationId} />
+          <div data-testid="thread" className="flex min-w-0 flex-col gap-7 lg:col-start-2 lg:row-start-1">{c.messages.map((m, i) => <Fragment key={i}>
+            <Message m={m} i={i} last={i === lastIndex} bot={bot} streaming={i === lastIndex && c.state === "sending"} copy={copy} draftBox={draftBox} citations={citations}
+              turnIndex={m.role === "user" ? turnPreviews.findIndex(turn => turn.userIndex === i) : undefined} onFeedback={() => setFeedbackTick(x => x + 1)} />
+            {m.role === "assistant" && noticesAfter(c.notices, m.turn_id).map(notice => <CompactionDivider key={`compaction-${notice.id}`} turns={notice.turns} focus={notice.focus} summary={notice.summary} />)}
+          </Fragment>)}</div>
+        </div>}
+    </section>
+    {away && <button type="button" data-testid="jump-bottom" onClick={jumpToBottom} className="absolute bottom-3 left-1/2 z-sticky inline-flex h-9 -translate-x-1/2 items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3.5 text-small text-ink shadow-pop outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
+      <ArrowDown className="size-4" aria-hidden="true" />{t("回到底部")}
+    </button>}
+  </div>;
 }

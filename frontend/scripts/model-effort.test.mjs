@@ -4,7 +4,6 @@ import test from "node:test";
 import { EFFORT_LEVELS, badgeText, effectiveEntry, effortChoices, effortLabel, effortSupport, modelChoices, noEffort, patchFor } from "../src/model-effort.mjs";
 
 const tsx = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
-const css = readFileSync(new URL("../src/styles/legacy/chat.css", import.meta.url), "utf8");
 const catalog = {
   default: "alpha",
   models: [
@@ -67,13 +66,13 @@ test("badge: 模型 · name · strength label, and the default words when unset"
 });
 
 test("picker is wired to the chat badge: updateBot with the changed field only, a visible error, no false success", () => {
-  const picker = tsx("ModelEffortPicker.tsx");
+  const picker = tsx("app/chat/ModelEffortPicker.tsx");
   assert.match(picker, /updateBot\(bot\.id, patchFor\(/);
   assert.match(picker, /role="alert"/);
   assert.match(picker, /catch/);
-  assert.match(tsx("app/chat/ChatPage.tsx"), /<ModelEffortPicker/);   // P3.1: the chat page left AgentChatPanel.tsx
+  assert.match(tsx("app/chat/Composer.tsx"), /<ModelEffortPicker/);   // P3.2: the badge sits in the composer's tool row
   assert.match(tsx("app/pages/chat.tsx"), /onBotChanged=\{changed\}/);   // P2.1: BotPage moved from App.tsx
-  assert.match(css, /\.model-effort-pop\s*\{/);
+  assert.match(picker, /<PopPanel open=\{open\}/);   // P3.2: the panel is a dropdown above the badge (a sheet on a phone), not the old .model-effort-pop rule
 });
 
 // --- strength tiers follow the model the badge shows (OpenRouter's reasoning block, via /model-catalog) ---
@@ -143,11 +142,11 @@ test("tiers, stored value the model takes: no duplicate row, ordinary tick", () 
 });
 
 test("tiers: the picker reads the effective entry and passes it to the strength list", () => {
-  const picker = tsx("ModelEffortPicker.tsx");
+  const picker = tsx("app/chat/ModelEffortPicker.tsx");
   assert.match(picker, /effectiveEntry\(catalog, shown\.model\)/);
   assert.match(picker, /effortChoices\(shown\.reasoning_effort, entry\)/);
   assert.match(picker, /noEffort\(entry\)/);
-  assert.match(picker, /choice\.unsupported && <small>[^<]*不在该模型的档位内/);
+  assert.match(picker, /choice\.unsupported && <small[^>]*>\{t\("不在该模型的档位内"\)\}/);
 });
 
 test("tiers, zhipu shape (GLM-5.3 family): exactly low, high, max; a stored medium sits above them, marked", () => {
@@ -160,7 +159,7 @@ test("tiers, zhipu shape (GLM-5.3 family): exactly low, high, max; a stored medi
 });
 
 test("picking a model keeps the panel open on the new model's tiers; picking a strength closes it", () => {
-  const picker = tsx("ModelEffortPicker.tsx");
+  const picker = tsx("app/chat/ModelEffortPicker.tsx");
   const choose = picker.slice(picker.indexOf("async function choose("), picker.indexOf("\n  return (\n"));
   assert.ok(choose.length > 0, "choose() is found in the picker source");
   // Same choice again: closes, as before.

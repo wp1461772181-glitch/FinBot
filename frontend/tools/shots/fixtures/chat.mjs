@@ -20,7 +20,8 @@ const TRACE = [
 ];
 
 const finbotMessages = [
-  { role: "user", content: "AAPL 最近一个季度的服务收入怎么样？" },
+  // The first question carries its turn id (the server sends it on both lines of a turn): the question rail can bookmark it.
+  { role: "user", content: "AAPL 最近一个季度的服务收入怎么样？", turn_id: "t0000000-0000-4000-8000-000000000001" },
   { role: "assistant", status: "complete", turn_id: "t0000000-0000-4000-8000-000000000001", thinking_ms: 5100, trace: TRACE, started_at: T0,
     content: "根据已保存的最新 10-Q，Apple 服务收入本季为 **288 亿美元**，同比增长 14% [1]。服务毛利率约 75%，与上一季度基本持平 [2]。\n\n需要注意：服务收入的增速高于硬件，但管理层在电话会上提示汇率会带来小幅拖累 [2]。",
     citations: [
