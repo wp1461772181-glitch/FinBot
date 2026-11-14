@@ -4,6 +4,7 @@
 // the last dot lets go of the orbit and falls, the rest go red.  Three forms: "orbit-dots" (one orbit), "twin-dots" (two orbits, the dots
 // alternating between them), "trio" (three fixed dots, bigger, that do not turn).
 import { TAU, arc, closingArc, cycle, dot, endBeat, flash, lerp, normalize, polar, visibility } from "./shared.mjs";
+import { handoffAura } from "./handoff.mjs";
 
 export const TURN_PERIOD = 3.2;
 const ORBIT = 1.3, BASE = 3;
@@ -11,6 +12,8 @@ const CAP = { "orbit-dots": 6, "twin-dots": 6, trio: 3 };
 const PARTIAL_GAP = (36 * Math.PI) / 180;
 
 export function orbitDots(input, form = "orbit-dots") {
+  const entrance = handoffAura("dots", input, over => orbitDots({ ...input, ...over }, form)); // enter / leave (handoff.mjs); null for every other phase
+  if (entrance) return entrance;
   const f = CAP[form] ? form : "orbit-dots";
   const s = normalize(input, { cap: CAP[f], capM: 3 });
   if (!s.tier) return [];

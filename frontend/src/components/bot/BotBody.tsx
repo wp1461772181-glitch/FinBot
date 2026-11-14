@@ -28,10 +28,16 @@ export type BloubState = StateId;
 /** Interaction wiring for the one full-featured avatar: the director picks the pose each frame, `pointer` (written by the owner, a
  * plain mutable object, no re-render) feeds the gaze, `units` is how many tool calls brought something back (for the aura), and `wake`
  * (set by the body) restarts a stopped loop after an event was sent to the director. */
+export interface WornLook { shape: string; color: string }
 export interface LiveHandle {
   director: Director; pointer: { x: number; y: number; at: number } | null; units?: number; wake?: () => void;
+  /** The look the owner wants worn (the bot standing there) and the one the body wears.  When they differ and the director says the new persona is in
+   * (the swap of a handoff), `drive` moves the body over: silhouette (the engine's own morph) and colour (240 ms); `onWear` tells the owner. */
+  look?: { want: WornLook; worn: WornLook; onWear?: (look: WornLook) => void };
   /** What happens each frame with the director's view (live-drive.ts, set by BotPresence: it is not part of the first-screen code). */
   drive?: (env: DriveEnv, handle: LiveHandle, view: DirectorView, dt: number) => void;
+  /** Set by the body: keep running for this many seconds even when a dialog covers the page (a handoff that starts with a choice in the phone's drawer plays under it and goes on when it closes). */
+  ignoreCover?: (seconds: number) => void;
 }
 
 const nowSec = () => performance.now() / 1000;
@@ -144,7 +150,8 @@ export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shap
       paintNow();
     }
   }, [state, still, live, expression, gazeKind]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (liveRef.current && intro.current.on) return; engine.current!.setShape(radii, clock.current); if (still !== undefined) paintNow(); }, [radii, still]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A still frame shows the new silhouette whole (time -10: the morph is long over at `still`): a bot that becomes another one under reduced motion changes at once.
+  useEffect(() => { if (liveRef.current && intro.current.on) return; engine.current!.setShape(radii, still !== undefined ? still - 10 : clock.current); if (still !== undefined) paintNow(); }, [radii, still]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!running.current) paintNow(); }, [hex, color, paper]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -168,9 +175,15 @@ export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shap
       }
       sync();
     };
+    let coverIgnoredUntil = 0;
+    const ignoreCover = (seconds: number) => {
+      coverIgnoredUntil = performance.now() + seconds * 1000;
+      if (covered) { window.clearInterval(coverTimer); coverTimer = 0; covered = false; sync(); }
+    };
+    if (liveRef.current) liveRef.current.ignoreCover = ignoreCover;
     const isCovered = () => Boolean(svg.closest('[data-slot="bot-avatar"]')?.parentElement?.closest('[inert], [data-aria-hidden="true"]'));
     const watchCover = () => {
-      if (coverTimer || !isCovered()) return;
+      if (coverTimer || performance.now() < coverIgnoredUntil || !isCovered()) return;
       covered = true; sync();
       coverTimer = window.setInterval(() => { if (isCovered()) return; window.clearInterval(coverTimer); coverTimer = 0; covered = false; sync(); }, 500);
     };
@@ -247,6 +260,6 @@ export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shap
   }
 
   return <svg ref={svgRef} data-slot="bot-body" className={`bloub-avatar ${className ?? ""}`.trim()} width={size} height={size}
-    viewBox={`${-VIEW} ${-VIEW} ${VIEW * 2} ${VIEW * 2}`} aria-hidden="true" focusable="false" style={{ overflow: "visible" }}
+    viewBox={`${-VIEW} ${-VIEW} ${VIEW * 2} ${VIEW * 2}`} aria-hidden="true" focusable="false" style={{ overflow: "visible" }} data-shape={shape} data-color={color}
     {...(live ? {} : { "data-dim": dim ? "true" : undefined })} />;
 }

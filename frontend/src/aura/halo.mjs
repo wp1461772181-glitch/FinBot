@@ -4,6 +4,7 @@
 // whole, its brightness breathing once every 2.5 s.  Close: the last gaps shut and the whole ring settles from 1.04 times its size to 1, then
 // fades.  Partial: it shuts but for one gap at the top.  Break: one segment never closes, and the whole ring goes darker.
 import { TAU, arc, closingArc, endBeat, ease, lerp, normalize, visibility } from "./shared.mjs";
+import { handoffAura } from "./handoff.mjs";
 
 export const TURN_PERIOD = 4.8; // seconds a lap
 const GAP_OPEN = 0.28, GAP_SHUT = 0.04, GAP_JOINT = 0.03, SEAM = 0.3;
@@ -20,6 +21,8 @@ function segments(out, s, count, gap, off, r, litTo, tone, opacity, extra = () =
 }
 
 export function halo(input) {
+  const entrance = handoffAura("halo", input, over => halo({ ...input, ...over })); // enter / leave (handoff.mjs); null for every other phase
+  if (entrance) return entrance;
   const s = normalize(input, { cap: 5, capM: 4 });
   if (!s.tier) return [];
   const { R, n, phase } = s, out = [], beat = endBeat(s);

@@ -34,6 +34,14 @@ export function arcPath(cx: number, cy: number, r: number, a0: number, a1: numbe
 /** The colour of a primitive: the bot's own (tone 0, 1, 2 differ in opacity only), the page ink, or one of the two semantic colours. */
 const colorOf = (tone: AuraPrim["tone"], ink: string) => (typeof tone === "number" ? ink : tone === "ink" ? INK : tone === "amber" ? AMBER : DANGER);
 
+/** Take every node of an aura out of `host` (another aura takes its place: nothing of the old one may stay behind, not even hidden). */
+export function clearAura(host: SVGGElement) {
+  hosts.get(host)?.nodes.clear();
+  host.replaceChildren();
+  for (const name of ["data-aura-phase", "data-aura-units", "data-aura-form", "data-aura-nodes"]) host.removeAttribute(name);
+  (host as unknown as Cached)._a = {};
+}
+
 /**
  * Show `prims` in `host`.  What the checks read is written on the group: data-aura-phase, data-aura-units (nodes of units that came back),
  * data-aura-form (closed / gap / broken / none) and data-aura-nodes (nodes showing), and on each unit's node data-aura-unit.

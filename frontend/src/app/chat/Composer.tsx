@@ -16,6 +16,8 @@ import { ContextMeter } from "./ContextMeter";
 import { ModelEffortPicker } from "./ModelEffortPicker";
 import { useChat } from "./ChatSessionProvider";
 import { focusWaitingCard } from "./approval-focus";
+import { inputBlocked, landHandoff, takeFocus } from "./handoff-intent";
+import { HANDOFF } from "../../handoff.mjs";
 
 /** The input box grows with what is typed, up to this share of the viewport height, then scrolls inside. */
 const MAX_HEIGHT_SHARE = 0.4;
@@ -30,6 +32,24 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
     box.style.height = "auto";
     box.style.height = `${Math.min(box.scrollHeight, Math.round(window.innerHeight * MAX_HEIGHT_SHARE))}px`;
   }, [c.draft, draftBox]);
+  // This line is mounted: typing is accepted again (into this line: until now the composer of the line that was left refused it, see handoff-intent.ts).
+  // The page is mounted before the session has moved to this bot's line (a layout effect of the page does that, before the first paint): only on the
+  // line that belongs to the bot does the box count as landed.  After a switch made with the pointer the box takes the focus in that same beat;
+  // after a choice in the phone's drawer once the avatar's exit is over (the drawer is still handing the focus back); a keyboard switch leaves the
+  // focus on the sidebar row.  The box can be typed in while the line's history is still on its way (design 6.7: content does not wait): only sending
+  // is held back (the send button and Enter), and a draft belongs to its line, not to the history.
+  const lineReady = !bot || c.bot?.id === bot.id;
+  useLayoutEffect(() => {
+    if (!lineReady) return;
+    landHandoff(bot?.id ?? null);
+    const intent = takeFocus(bot?.id ?? null);
+    if (!intent) return;
+    // (a line with a turn running has a disabled box: nothing to focus until the turn is over, and then it is the reader's to click)
+    const focus = () => { const box = draftBox.current; if (box && !box.disabled && document.activeElement !== box) box.focus({ preventScroll: true }); };
+    if (intent.source !== "drawer") { focus(); return; }
+    const timer = window.setTimeout(focus, Math.max(0, (intent.at + HANDOFF.SWAP) * 1000 - performance.now()));
+    return () => window.clearTimeout(timer);
+  }, [lineReady]); // eslint-disable-line react-hooks/exhaustive-deps
   // The "/" menu: a draft like "/财" (no space yet) lists the bot's matching enabled skills, its usual ones first.
   const [skillList, setSkillList] = useState<Skill[] | null>(null), [pickIndex, setPickIndex] = useState(0), [pickClosed, setPickClosed] = useState(false);
   const slashActive = Boolean(bot) && mode === "personal" && c.draft.startsWith("/") && !/\s/.test(c.draft);
@@ -45,7 +65,7 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
     if (action === "menu-next" || action === "menu-previous") setPickIndex(i => (i + (action === "menu-next" ? 1 : -1) + slashItems.length) % slashItems.length);
     else if (action === "menu-pick") pickSkill(slashItems[current]);
     else if (action === "menu-close") setPickClosed(true);
-    else if (c.draft.trim()) form.current?.requestSubmit();
+    else if (c.draft.trim() && !c.restoring) form.current?.requestSubmit();
   }
   const sending = c.state === "sending" || c.state === "testing";
   // A history restore that drags on can be cancelled too; a quick one never flashes the stop button.
@@ -75,7 +95,7 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
       <Hand aria-hidden="true" className="size-4 shrink-0 text-action" /><span className="min-w-0 flex-1 truncate">{waitingName} {t("在等你确认上面的卡片")}</span><ChevronUp aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
     </button>}
     {c.status && c.state !== "sending" && c.state !== "error" && <p data-testid="chat-status" role="status" className="mb-2 px-1 text-small text-muted-foreground">{c.status}</p>}
-    <form ref={form} data-testid="composer" onSubmit={c.send} className="relative rounded-lg border border-line-strong bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.04)] focus-within:border-ink-2">
+    <form ref={form} data-testid="composer" onSubmit={event => { if (c.restoring) event.preventDefault(); else void c.send(event); }} className="relative rounded-lg border border-line-strong bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.04)] focus-within:border-ink-2">
       <label htmlFor="agent-draft" className="sr-only">{t("输入消息")}</label>
       {slashItems.length > 0 && <ul id="skill-picker" data-testid="slash-menu" role="listbox" aria-label={t("技能")} className="absolute inset-x-0 bottom-full z-overlay mb-2 max-h-64 overflow-y-auto rounded-md border border-line bg-surface p-1 shadow-pop">
         {slashItems.map((skill, i) => <li key={skill.id} id={`skill-option-${i}`} role="option" aria-selected={i === current} onMouseDown={e => { e.preventDefault(); pickSkill(skill); }}
@@ -83,9 +103,9 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
       </ul>}
       <textarea id="agent-draft" ref={draftBox} data-testid="draft"
         {...(slashItems.length > 0 ? { role: "combobox", "aria-expanded": true, "aria-controls": "skill-picker", "aria-activedescendant": `skill-option-${current}` } : {})}
-        rows={1} value={c.draft} onChange={(e: ChangeEvent<HTMLTextAreaElement>) => c.setDraft(e.target.value)} onKeyDown={onKeyDown}
+        rows={1} value={c.draft} onChange={(e: ChangeEvent<HTMLTextAreaElement>) => { if (!inputBlocked()) c.setDraft(e.target.value); }} onKeyDown={onKeyDown}
         onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
-        maxLength={4000} disabled={c.restoring || sending} placeholder={placeholder}
+        maxLength={4000} disabled={sending} placeholder={placeholder}
         className="block max-h-[40dvh] min-h-[44px] w-full resize-none overflow-y-auto bg-transparent px-4 pb-1 pt-3 text-chat text-ink outline-none placeholder:text-faint disabled:opacity-60" />
       <div className="flex items-center justify-between gap-2 px-2 pb-2">
         <div className="flex min-w-0 items-center">

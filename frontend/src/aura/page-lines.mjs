@@ -6,6 +6,7 @@
 // one thick line, a beat, fade.  Partial: that line has a gap.  Break: one line is cut in the middle (data missing).
 // Three forms (only the shape of a unit changes): "page-lines", "margin-ticks" (short stubs), "underline" (equal, thin lines).
 import { clamp, dot, endBeat, ease, lerp, line, normalize, path, rect, visibility } from "./shared.mjs";
+import { handoffAura } from "./handoff.mjs";
 
 const X0 = 1.15, MARK_X = 1.02, PAGE = 4;
 const ROWS = [-0.45, -0.15, 0.15, 0.45], ROWS_M = [-0.3, 0, 0.3];
@@ -26,6 +27,8 @@ function partialTick(x, y, size, p) {
 }
 
 export function pageLines(input, form = "page-lines") {
+  const entrance = handoffAura("page", input, over => pageLines({ ...input, ...over }, form)); // enter / leave (handoff.mjs); null for every other phase
+  if (entrance) return entrance;
   const f = FORMS[form] ? form : "page-lines";
   const s = normalize(input, { cap: 12, capM: 3 });
   if (!s.tier) return [];

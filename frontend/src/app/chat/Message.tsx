@@ -1,4 +1,4 @@
-import { Suspense, lazy, useMemo, useRef, useState, type RefObject } from "react";
+import { Suspense, lazy, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { Check, Copy, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Skeleton } from "@/components/state/Skeleton";
 import { ErrorBar } from "@/components/state/ErrorBar";
@@ -36,13 +36,15 @@ type Props = {
   turnIndex?: number; onFeedback: () => void;
   /** How the turn that ended on this message ended, when this tab watched it end (the closing line sweeps then); absent for everything else. */
   ended?: TurnEnd | null;
+  /** The handoff (design 6.7): this message fades in this many seconds after the line was mounted (one of the last three of the line that has just been switched to). */
+  entry?: number;
 };
 
 /** One message of the thread: the owner's bubble, a routine task's head, or the bot's answer (head, process, text, card, foot). */
-export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex, onFeedback, ended = null }: Props) {
+export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex, onFeedback, ended = null, entry }: Props) {
   const { t } = useLocale(), c = useChat(), panel = usePanel();
   const [tapped, setTapped] = useState(false);
-  const common = { id: `chat-message-${i}`, "data-testid": "message", "data-role": m.role, "data-turn-index": turnIndex, "data-last": last || undefined } as const;
+  const common = { id: `chat-message-${i}`, "data-testid": "message", "data-role": m.role, "data-turn-index": turnIndex, "data-last": last || undefined, ...(entry === undefined ? {} : { "data-entry": "", style: { "--entry-delay": `${entry}s` } as CSSProperties }) } as const;
 
   if (m.role === "user" && isTaskPostHead(m.content)) {
     return <article {...common} data-kind="task-post" className="min-w-0 rounded-md"><TaskPostHead content={m.content} /></article>;

@@ -17,14 +17,23 @@
 // Time constants (T.*) are the same for every bot: the skeleton of design 6.2 (done <= 1.4 s, failed <= 2.0 s, dwell 0.6 s). The
 // persona's tempo is NOT applied here; the renderer multiplies the clock it feeds the engine (and this file scales the face rotation).
 //
-// Priority, high to low:  work (turn lifecycle, its stingers, waiting-for-you)  >  offline  >  notify (unread)  >
-// listening  >  reaction (hover / click)  >  life (sleep after a long idle)  >  idle.  Reactions never interrupt work.
+// A4 adds the handoff (design 6.7): the same director, the same body, becomes another bot.  `send({ type: "handoff", persona, at, quiet, unread })`
+// resets what belonged to the line that is left (its turn, its stinger, its unread...), keeps the old persona for the exit (view.handoff.phase
+// "leave", the old aura leaves), swaps to the new persona at SWAP, plays the swirl and the entrance (view.handoff "swap" / "enter" / "settle") and
+// goes back to the new bot's rest at SWIRL_END.  `quiet` (the new bot is already working): no swirl, no entrance, the work pose at once.  A switch
+// asked for while one is under way goes straight to the last target (the one in between is never shown: `carry` keeps the body's pose
+// continuous).  Reduced motion: the persona is swapped at once and nothing plays.  `persona` swaps the persona silently (a late volatility).
+//
+// Priority, high to low:  work (turn lifecycle)  >  handoff (swirl)  >  its stingers, waiting-for-you  >  offline  >  glance at the unread
+// divider  >  notify (unread)  >  listening  >  reaction (hover / click)  >  life (sleep after a long idle)  >  idle.  Reactions never interrupt work.
 
 import { CALM, MOOD_MORPH, moodAt, MOODS_BY_ARCHETYPE } from "./bloub-mood.mjs";
 import { awaitsUser } from "./chat-clarification.mjs";
 import { turnSignal } from "./turn-signals.mjs";
 import { T } from "./bloub-timing.mjs";
 import { toolGaze } from "./aura/gaze.mjs";
+import { handoffBody } from "./aura/handoff.mjs";
+import { HANDOFF } from "./handoff.mjs";
 
 export { T };
 
@@ -64,10 +73,12 @@ const PASSIVE = new Set(["unread", "offline", "hold", "waiting-clear"]);
 const PHASE_ALIAS = { thinking: "waiting" };
 
 export function createDirector({ now = 0, reducedMotion = false, persona = NEUTRAL } = {}) {
-  const who = { ...NEUTRAL, ...persona };
-  const table = bodyTable(who);
-  const moods = MOODS_BY_ARCHETYPE[who.archetype] ?? MOODS_BY_ARCHETYPE.lead;
+  let who = { ...NEUTRAL, ...persona };
+  let table = bodyTable(who);
+  let moods = MOODS_BY_ARCHETYPE[who.archetype] ?? MOODS_BY_ARCHETYPE.lead;
+  const setPersona = next => { who = { ...NEUTRAL, ...next }; table = bodyTable(who); moods = MOODS_BY_ARCHETYPE[who.archetype] ?? MOODS_BY_ARCHETYPE.lead; };
   const m = {
+    hand: null, glance: null,
     reduced: reducedMotion, lastActivity: now,
     turn: null, stinger: null, ended: null, last: null, unread: false, offline: false, listening: null,
     hover: { on: false, since: 0, used: false }, click: null, clicks: 0,
@@ -84,16 +95,35 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
     return { nudging, settled };
   }
 
+  /** Where the handoff is at `t` (null when none is under way): swaps the persona when its time has come and ends it when it is over. */
+  function advance(t) {
+    const h = m.hand;
+    if (!h) return null;
+    const age = t - h.t0;
+    if (!h.to && age > HANDOFF.NEVER) { m.hand = null; return null; } // asked for, and nothing came (the page did not change): it stays what it was
+    if (!h.swapped && age >= HANDOFF.SWAP && h.to) { setPersona(h.to); h.swapped = true; }
+    const end = h.quiet ? HANDOFF.ENTER_AT : HANDOFF.SWIRL_END;
+    if (age >= end) {
+      if (h.unread && !h.quiet && !m.reduced) m.glance = { until: h.t0 + HANDOFF.SWIRL_END + HANDOFF.GLANCE };
+      m.hand = null;
+      return null;
+    }
+    if (!h.to) return { age, phase: "leave" }; // who comes is not known yet: the old aura has left, the body waits in its exit pose
+    return { age, phase: age < HANDOFF.SWAP ? "leave" : age < HANDOFF.ENTER_AT ? "swap" : age < HANDOFF.ENTER_AT + HANDOFF.ENTER && !h.quiet ? "enter" : "settle" };
+  }
+
   function desired(t) {
     if (m.turn) {
       const attending = !m.reduced && !m.turn.quiet && t < m.turn.since + T.ATTENTION;
       return { state: attending ? table.attention : table[m.turn.phase], layer: "work", pose: attending ? "attention" : m.turn.phase };
     }
+    if (m.hand && m.hand.swapped && !m.hand.quiet && t - m.hand.t0 < HANDOFF.SWIRL_END) return { state: "swirl", layer: "handoff", pose: "handoff" };
     if (m.stinger && t < m.stinger.until) return { state: m.stinger.state, layer: "work", pose: "stinger" };
     if (m.ended?.outcome === "waiting" && !m.offline) {
       return { state: holdAt(t).nudging ? table.attention : table.hold, layer: "work", pose: "hold" };
     }
     if (m.offline) return { state: table.idle, layer: "idle", pose: "offline" };
+    if (m.glance && t < m.glance.until && !m.reduced) return { state: table.idle, layer: "idle", pose: "glance" };
     if (m.unread) return { state: table.notify, layer: "notify", pose: "notify" };
     if (m.listening !== null) return { state: table.listen, layer: "idle", pose: "listen" };
     if (!m.reduced) {
@@ -106,6 +136,7 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
 
   return {
     send(event, t) {
+      advance(t);
       if (!PASSIVE.has(event.type) && !(event.type === "phase" && event.phase === "idle")) m.lastActivity = t;
       switch (event.type) {
         case "turn-start":
@@ -149,11 +180,35 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
           break;
         }
         case "arrive": if (!m.reduced) m.introUntil = t + T.INTRO; break;
+        // The click that asks for a switch is heard before the new line exists: the old aura leaves at once; the persona arrives with `handoff`.
+        case "handoff-begin": if (!m.reduced && !m.hand) m.hand = { t0: Number.isFinite(event.at) ? Math.min(event.at, t) : t, fromAura: who.auraVariant, carry: null, to: null, swapped: false, quiet: false, unread: false }; break;
+        case "persona": if (m.hand && !m.hand.swapped) m.hand.to = event.persona; else setPersona(event.persona); break;
+        case "handoff": {
+          const to = { ...NEUTRAL, ...event.persona }, at = Number.isFinite(event.at) ? Math.min(event.at, t) : t;
+          // what belonged to the line that was left goes; the new line's own state arrives with the events that follow
+          m.turn = null; m.stinger = null; m.ended = null; m.last = null; m.listening = null; m.click = null; m.glance = null;
+          m.unread = false; m.offline = false; m.hover = { on: false, since: 0, used: false };
+          if (m.reduced) { setPersona(to); m.hand = null; break; }
+          const h = m.hand, quiet = Boolean(event.quiet), unread = Boolean(event.unread);
+          if (h && !h.swapped) {
+            // still in the exit: the one in between is never shown.  Who comes is known only now (the exit began at the click, before the page
+            // changed): when that is late, the rest of the handoff still plays whole, from the swap on.
+            if (!h.to && t - h.t0 > HANDOFF.SWAP) h.t0 = t - HANDOFF.SWAP;
+            Object.assign(h, { to, quiet, unread });
+          }
+          else if (h) { // the one in between is on screen: leave it at once for the last target, from the pose it is in
+            const age = t - h.t0, carry = handoffBody({ from: h.fromAura, to: who.auraVariant, age, quiet: h.quiet, carry: h.carry });
+            m.hand = { t0: t - HANDOFF.SWAP, fromAura: who.auraVariant, carry, to, swapped: false, quiet, unread };
+          } else m.hand = { t0: at, fromAura: who.auraVariant, carry: null, to, swapped: false, quiet, unread };
+          advance(t);
+          break;
+        }
         default: break; // "activity": only the lastActivity touch above
       }
     },
     /** Resolve what to show at `now`. Reads must use a non-decreasing clock. */
     read(t) {
+      advance(t);
       const want = desired(t);
       // Morph floor: a state just entered is kept for DWELL, whatever outranks it.
       // (Not under reduced motion: nothing morphs there, so there is nothing to protect, and a still frame must show the pose of the moment.)
@@ -170,6 +225,7 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
     switch (pose) {
       case "listen": case "verify": return "below";
       case "tool": return toolGaze(who.auraVariant);
+      case "glance": return "below"; // toward the divider above the new messages
       case "hold": case "offline": return "front";
       case "idle": return who.restGaze;
       default: return "front"; // a body that owns its own gaze (orbit, wink, alert...): the engine ignores it there
@@ -177,6 +233,7 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
   }
 
   function view(state, layer, pose, t, dwelling, want) {
+    const hand = advance(t) ?? null;
     const idle = state === table.idle;
     const phase = MOOD_PHASE[pose];
     // The face layer rides on work poses (and the listening pose); every other base is calm.
@@ -196,7 +253,8 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
     return {
       state, layer, pose, follow: !m.reduced && idle && gaze === "follow", intro: idle && t < m.introUntil, expression, moodMorph: MOOD_MORPH, ended,
       still, gaze, tilt: idle && pose === "idle" && gaze === "ahead-right" ? 6 : 0, // a lean is a posture, not motion: reduced-motion still frames keep it
-      waitingForUser: pose === "hold",
+      waitingForUser: (pose === "hold" || (pose === "handoff" && m.ended?.outcome === "waiting")) && !(m.hand && !m.hand.swapped), // not on the body that is still leaving
+      handoff: hand && { phase: hand.phase, age: hand.age, t: hand.phase === "enter" ? hand.age - HANDOFF.ENTER_AT : hand.age, from: m.hand.fromAura, to: m.hand.to ? who.auraVariant : null, quiet: m.hand.quiet, carry: m.hand.carry },
       outcome: m.last?.outcome ?? null, outcomeAge: m.last ? Math.max(0, t - m.last.since) : null,
       nod: ended === "partial" ? Math.min(1, Math.max(0, (t - m.ended.since) / T.PARTIAL)) : null,
       dim: offline, frozen: Boolean(resting),
@@ -205,11 +263,13 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
   }
 }
 
-/** First visit to a bot's chat in this page session plays the arrival; later visits don't. Reduced motion never consumes it. */
-export function shouldArrive(seen, botId, reducedMotion) {
+/** First visit to a bot's chat in this page session plays the arrival; later visits don't. Reduced motion never consumes it.
+ * `switching`: the avatar was already standing there for another bot (a handoff replaces the arrival, so the two never play together): the bot is
+ * marked as met and nothing plays. */
+export function shouldArrive(seen, botId, reducedMotion, switching = false) {
   if (!botId || reducedMotion || seen.has(botId)) return false;
   seen.add(botId);
-  return true;
+  return !switching; // switching to a bot in the page session counts as having met it: the handoff plays instead of the arrival
 }
 
 /** Where the running turn is, read off the streaming transcript: waiting / tool / verify / answer (null when no turn runs).

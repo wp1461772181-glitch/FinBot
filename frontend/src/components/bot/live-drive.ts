@@ -10,8 +10,11 @@ import { auraFor } from "../../aura/index.mjs";
 import { sweepAngle, sweepLook } from "../../aura/gaze.mjs";
 import { bodyMotion } from "../../aura/motion.mjs";
 import { createTracker, type Tracker } from "../../aura/track.mjs";
-import type { LiveHandle } from "./BotBody";
-import { drawAura } from "./aura-paint";
+import { handoffBody } from "../../aura/handoff.mjs";
+import { HANDOFF } from "../../handoff.mjs";
+import { COLOR_BY_ID, SHAPE_BY_ID, mixHex } from "../../bloub/skins";
+import type { LiveHandle, WornLook } from "./BotBody";
+import { clearAura, drawAura } from "./aura-paint";
 import { VIEW, type Painter, type PaintStyle } from "./bot-painter";
 
 const nowSec = () => performance.now() / 1000;
@@ -37,6 +40,49 @@ const CALM = "neutre";
 /** One aura tracker per live avatar (it remembers when the state began and when each unit came back). */
 const trackers = new WeakMap<LiveHandle, Tracker>();
 
+/** What an avatar remembers between frames about its change of look: the silhouette being morphed (so a redirect starts from where the picture is,
+ * the engine's own morph would start from the target it was heading for), the colour being mixed, the aura variant that is drawn. */
+interface Wardrobe { morph: { from: number[] | null; to: number[] | null; at: number } | null; tween: Tween | null; shown: string | null; aura: string | null }
+interface Tween { from: string; to: string; toInk: string; fromPale: boolean; toPale: boolean; at: number }
+const wardrobes = new WeakMap<LiveHandle, Wardrobe>();
+const PALE = new Set(["creme", "gris"]);
+const INK_VAR = "var(--me-ink, #0a0a0c)";
+const SHAPE_MORPH = 0.45; // BotEngine.SHAPE_MORPH
+const hexOf = (color: string) => COLOR_BY_ID.get(color)?.hex ?? "#0a0a0c";
+const radiiOf = (shape: string) => SHAPE_BY_ID.get(shape)?.radii ?? null;
+
+/** Put on the wanted look: the silhouette goes to the engine (from the shape the picture is showing), the colour starts its 240 ms mix. */
+function wear(env: DriveEnv, h: LiveHandle, wardrobe: Wardrobe, c: number) {
+  const look = h.look!, from: WornLook = look.worn, to: WornLook = look.want;
+  if (to.shape !== from.shape) {
+    const m = wardrobe.morph, next = radiiOf(to.shape);
+    let start = radiiOf(from.shape);
+    // a redirect in the middle of a morph: the engine would start again from the shape it was heading for, so give it the one on screen first
+    if (m?.from && m.to && c - m.at < SHAPE_MORPH) {
+      const k = easeOutQuint((c - m.at) / SHAPE_MORPH);
+      start = m.from.map((r, i) => r + ((m.to![i] ?? r) - r) * k);
+      env.eng.setShape(start, c);
+    }
+    if (!env.intro.current.on) env.eng.setShape(next, c); // during the arrival turn the circle is imposed; BotBody puts the silhouette back when it lands
+    wardrobe.morph = { from: start, to: next, at: c };
+  }
+  if (to.color !== from.color) {
+    wardrobe.tween = { from: wardrobe.shown ?? hexOf(from.color), to: hexOf(to.color), toInk: to.color === "encre" ? INK_VAR : hexOf(to.color), fromPale: PALE.has(from.color), toPale: PALE.has(to.color), at: nowSec() };
+  }
+  look.worn = to;
+  look.onWear?.(to);
+}
+
+/** The colour of the body this frame: the mix while a change of colour is under way (design 6.7: 240 ms), written into the style the painter reads. */
+function tint(env: DriveEnv, wardrobe: Wardrobe) {
+  const tw = wardrobe.tween;
+  if (!tw) return;
+  const k = Math.min(1, (nowSec() - tw.at) / HANDOFF.COLOR);
+  if (k >= 1) { env.style.hex = tw.to; env.style.ink = tw.toInk; env.style.pale = tw.toPale; wardrobe.shown = tw.to; wardrobe.tween = null; return; }
+  const mixed = mixHex(tw.from, tw.to, k);
+  env.style.hex = mixed; env.style.ink = mixed; env.style.pale = k < 0.5 ? tw.fromPale : tw.toPale; wardrobe.shown = mixed;
+}
+
 /** Per-frame interaction of the live avatar: the director's pose, then the gaze (arrival turn > the pointer > the pose's own look > released),
  * then the motion of the whole picture (lean, nod) and the extras (amber dot, half-grey, aura and the body's own aura motions). Gaze only drives baseFace states (idle):
  * everywhere else the pose's own gaze IS the animation (orbit, wink...). */
@@ -47,6 +93,12 @@ export function drive(env: DriveEnv, h: LiveHandle, view: DirectorView, dt: numb
   let tracker = trackers.get(h);
   if (!tracker) trackers.set(h, tracker = createTracker());
   const input = tracker.step({ clock: c, now: nowSec(), view, units: h.units ?? 0 });
+  let wardrobe = wardrobes.get(h);
+  if (!wardrobe) wardrobes.set(h, wardrobe = { morph: null, tween: null, shown: null, aura: null });
+  // The new look goes on when the director's persona has swapped (the exit of the old aura is over), not at the click.
+  const look = h.look;
+  if (look && view.handoff?.phase !== "leave" && (look.want.shape !== look.worn.shape || look.want.color !== look.worn.color)) wear(env, h, wardrobe, c);
+  tint(env, wardrobe);
   if (view.state !== eng.state) eng.setState(view.state as StateId, c);
   env.setMood(view.state === "orbit" ? view.expression : CALM, view.moodMorph);
   env.setFace(view.state === "idle" ? view.expression : CALM);
@@ -84,10 +136,19 @@ export function drive(env: DriveEnv, h: LiveHandle, view: DirectorView, dt: numb
   // What the checks read (no secrets): the engine clock, the director's pose and state, the gaze, the tempo.
   svg.setAttribute("data-clock", c.toFixed(3)); svg.setAttribute("data-pose", view.pose); svg.setAttribute("data-state", view.state);
   svg.setAttribute("data-gaze", view.gaze); svg.setAttribute("data-tempo", String(view.tempo));
+  svg.setAttribute("data-handoff", view.handoff?.phase ?? "");
   if (full) {
+    // another aura takes the place of this one (a handoff, a late persona): nothing of the old one stays on the page, not even hidden
+    if (wardrobe.aura !== view.aura) { if (wardrobe.aura !== null) clearAura(p.auraHost); wardrobe.aura = view.aura; p.auraHost.setAttribute("data-aura-variant", view.aura); }
     drawAura(p.auraHost, auraFor(view.aura)({ ...input, R: RAYON, tier: env.tier }), env.style, input.phase);
-    // the body's own movements that belong to the aura (TeslaBot's dart / brake / lean, AppleBot's settle): a transform, the engine is not touched
-    const body = bodyMotion({ variant: view.aura, phase: input.phase, real: input.t / view.tempo, ages: input.ages });
-    p.move(body.dx * RAYON, body.tilt, body.scale);
+    const hand = view.handoff;
+    if (hand) { // a handoff: the old body half leaves, the new one arrives (design 6.5, 6.7): the pose is one continuous curve over the whole time
+      const b = handoffBody({ from: hand.from, to: hand.to, age: hand.age, quiet: hand.quiet, carry: hand.carry });
+      p.move(b.dx * RAYON, b.tilt, b.scale, b.dy * RAYON, b.sx, b.alpha);
+    } else {
+      // the body's own movements that belong to the aura (TeslaBot's dart / brake / lean, AppleBot's settle): a transform, the engine is not touched
+      const body = bodyMotion({ variant: view.aura, phase: input.phase, real: input.t / view.tempo, ages: input.ages });
+      p.move(body.dx * RAYON, body.tilt, body.scale);
+    }
   }
 }

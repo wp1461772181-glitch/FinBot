@@ -14,6 +14,10 @@ const CANCEL_SECONDS = 0.32;
 
 /** The aura's phase for a director view.  `still`: reduced motion (no clock: the end shapes use STILL_FINISH_SECONDS). */
 export function auraPhaseOf(view, { still = false } = {}) {
+  // The handoff (design 6.7): the old aura leaves (and stays gone while the swirl takes the body over), then the new one comes in.
+  const hand = still ? null : view.handoff;
+  if (hand && (hand.phase === "leave" || hand.phase === "swap")) return "leave";
+  if (hand && hand.phase === "enter" && view.pose === "handoff") return "enter";
   let phase;
   switch (view.pose) {
     case "attention": case "waiting": phase = "think"; break;
@@ -61,8 +65,9 @@ export function createTracker() {
       }
       if (phase === "verify") verified = true;
       shown = live;
+      const handoff = phase === "enter" || phase === "leave";
       return {
-        phase, t: Math.max(0, clock - since), units: live, settled, verified, easing: view.easing, tempo: view.tempo, outcome: view.outcome,
+        phase, t: handoff ? Math.max(0, view.handoff?.t ?? 0) * view.tempo : Math.max(0, clock - since), units: live, settled, verified, easing: view.easing, tempo: view.tempo, outcome: view.outcome,
         waiting: view.waitingForUser, ages: bornAt.map(at => now - at), born, turn: turnStart === null ? undefined : clock - turnStart
       };
     },

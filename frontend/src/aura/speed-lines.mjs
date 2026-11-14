@@ -4,6 +4,7 @@
 // steadily.  Close: the lines draw back in and the trail joins into one line under the body, then fades.  Break: the lines turn dashed and
 // droop 12 degrees (so do the trail's segments), the red holds for two seconds.
 import { cycle, dot, endBeat, ease, flash, lerp, line, normalize, rowShare, visibility } from "./shared.mjs";
+import { handoffAura } from "./handoff.mjs";
 
 const SPEEDS = [0.4, 0.8, 0.55]; // lengths of the three lines, in R
 const ROWS = [-0.3, 0, 0.3];
@@ -17,6 +18,8 @@ export const FLOW_SPEED = 1.4; // R per second the dashes flow
 const EXTENT = { idle: 0.5, listen: 0.5, think: 0, tool: 1, verify: 0.6, answer: 0.6, hold: 0, cancel: 0, unread: 0, sleep: 0, offline: 0 };
 
 export function speedLines(input) {
+  const entrance = handoffAura("speed", input, over => speedLines({ ...input, ...over })); // enter / leave (handoff.mjs); null for every other phase
+  if (entrance) return entrance;
   const s = normalize(input, { cap: 5, capM: 3 });
   if (!s.tier) return [];
   const { R, n, phase } = s, out = [], beat = endBeat(s);

@@ -5,6 +5,7 @@ import { getChatMode } from "../api/base";
 import { chatSessionKey } from "../chat-session.mjs";
 import { paths } from "../routes.mjs";
 import { WorkspaceLayout } from "./WorkspaceLayout";
+import { PresenceHost } from "@/components/bot/presence-dock";
 
 const LoginPage = lazy(() => import("./LoginPage"));
 
@@ -26,5 +27,5 @@ export function SessionRoot() {
   // First visit: the bare address (the router has already turned an empty hash into /chat) lands on #/login.
   if (!mode && (pathname === "/" || pathname === paths.chat())) return <Navigate to={paths.login()} replace />;
   if (!mode || (mode === "guest" && pathname === paths.login())) return <Suspense fallback={null}><LoginPage onMode={setMode} /></Suspense>;
-  return <AgentChatProviderRoot key={chatSessionKey(mode, localStorage.getItem(mode === "personal" ? "market-evidence-agent:personal-chat-session:v1" : "market-evidence-agent:chat-session:v1"))}><WorkspaceLayout key={mode} onModeChange={setMode} /></AgentChatProviderRoot>;
+  return <AgentChatProviderRoot key={chatSessionKey(mode, localStorage.getItem(mode === "personal" ? "market-evidence-agent:personal-chat-session:v1" : "market-evidence-agent:chat-session:v1"))}><WorkspaceLayout key={mode} onModeChange={setMode} /><PresenceHost /></AgentChatProviderRoot>;
 }

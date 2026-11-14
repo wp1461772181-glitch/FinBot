@@ -7,6 +7,7 @@
 // twice.  Sleep: the arcs keep watch, a slow blink the renderer does with CSS (this only marks them).
 // Three forms (only the unit changes): "ticker" (bars of different lengths), "morse" (dashes and dots), "beacon" (round dots on a shallow curve).
 import { arc, clamp, dot, endBeat, ease, lerp, line, normalize, rowShare, visibility } from "./shared.mjs";
+import { handoffAura } from "./handoff.mjs";
 
 const SLOTS_L = 5, SLOTS_M = 3;
 const PITCH = 0.46, Y = 1.35;
@@ -20,6 +21,8 @@ const ARC_DIM = 0.55;
 const quant = v => Math.ceil(v * 4 - 1e-9) / 4;
 
 export function ticker(input, form = "ticker") {
+  const entrance = handoffAura("ticker", input, over => ticker({ ...input, ...over }, form)); // enter / leave (handoff.mjs); null for every other phase
+  if (entrance) return entrance;
   const f = LENGTHS[form] ? form : "ticker";
   const s = normalize(input, { cap: SLOTS_L, capM: SLOTS_M });
   if (!s.tier) return [];

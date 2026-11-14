@@ -5,6 +5,8 @@ import { BotAvatar, type AvatarStatus } from "@/components/bot/BotAvatar";
 import { BOT_AVATAR_SIZE } from "../../bot-sizes.mjs";
 import { botMarker, countLabel } from "../../bot-marker.mjs";
 import { useLocale } from "../../i18n";
+import { beginHandoff } from "../chat/handoff-intent";
+import { sourceOfClick } from "../../handoff.mjs";
 import { paths } from "../../routes.mjs";
 
 /**
@@ -25,7 +27,7 @@ export function BotRow({ bot, active, running, waiting, unseen, onNavigate }: { 
   const avatarStatus: AvatarStatus = marker.kind === "running" ? "answering" : marker.kind === "waiting" ? "waiting" : marker.kind === "unread" ? "unread" : "idle";
   return <SidebarMenuItem>
     <SidebarMenuButton asChild isActive={active} tooltip={label} className="h-10 gap-3 group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!">
-      <Link to={bot.is_default ? paths.chat() : paths.chat(bot.id)} data-bot-row="" data-marker={marker.kind} aria-label={label} aria-current={active ? "page" : undefined} onClick={onNavigate}>
+      <Link to={bot.is_default ? paths.chat() : paths.chat(bot.id)} data-bot-row="" data-marker={marker.kind} aria-label={label} aria-current={active ? "page" : undefined} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && event.button === 0) beginHandoff({ to: bot.id, source: sourceOfClick(event.detail) }); onNavigate?.(); }}>
         <span className="relative grid shrink-0 place-items-center" style={{ width: BOT_AVATAR_SIZE.sidebar, height: BOT_AVATAR_SIZE.sidebar }}>
           <BotAvatar followRow status={avatarStatus} avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.sidebar - 4} />
           {collapsed && marker.count > 0 && <span aria-hidden="true" className="absolute -right-1 -bottom-1 grid min-w-4 place-items-center rounded-full bg-brand px-1 text-caption leading-4 text-primary-foreground ring-2 ring-sidebar">{countLabel(marker.count)}</span>}

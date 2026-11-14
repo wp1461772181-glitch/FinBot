@@ -3,11 +3,14 @@
 // was.  Check: the marks flash in turn.  Close: the quarters stretch until the ring is one whole circle.  Partial: a gap stays at the top.
 // Break: one quarter is missing and the ring goes red.
 import { TAU, arc, cycle, dot, endBeat, flash, lerp, line, normalize, polar, visibility } from "./shared.mjs";
+import { handoffAura } from "./handoff.mjs";
 
 export const SCAN_PERIOD = 2.4;
 const RING = 1.3, GAP = 0.5, SEAM = (36 * Math.PI) / 180, QUARTER = Math.PI / 2;
 
 export function reticle(input) {
+  const entrance = handoffAura("reticle", input, over => reticle({ ...input, ...over })); // enter / leave (handoff.mjs); null for every other phase
+  if (entrance) return entrance;
   const s = normalize(input, { cap: 8, capM: 4 });
   if (!s.tier) return [];
   const { R, n, phase } = s, out = [], beat = endBeat(s);

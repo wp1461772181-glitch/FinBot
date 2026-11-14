@@ -5,7 +5,7 @@ import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
 import { PAGES, clickSend, fillDraft, endWithCard, endWithError, firstAnswer, handTurn, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
-import { ASK_MARKER, BOT, CONVERSATION, HAND_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
+import { ASK_MARKER, BOT, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
@@ -3032,6 +3032,8 @@ async function mobileBotSwitcher(ctx) {
     await rows.filter({ hasText: "TeslaBot" }).click();
     await page.waitForFunction((id) => location.hash === `#/chat/${id}`, BOT.teslabot, { timeout: 5000 });
     await drawer.waitFor({ state: "detached", timeout: 5000 });
+    // (the drawer is gone at once under reduced motion, the new line takes a moment more: wait for the header to name the new bot)
+    await page.locator("h1", { hasText: "TeslaBot" }).first().waitFor({ timeout: 5000 }).catch(() => {});
     assert((await page.locator("h1").first().innerText()).includes("TeslaBot"), "the header still names the old bot");
     await trigger.click(); await drawer.waitFor();
     await drawer.getByRole("button", { name: "新建 bot" }).click();
@@ -3762,6 +3764,367 @@ async function avatarStatusEverywhere(ctx) {
   return `the sidebar, the 更多 drawer and the bot switcher draw the same mark for each bot (${summary.join(", ")}); the ring turns at ${sidebar.TeslaBot.ringPeriod} for TeslaBot (tempo ${tempoOf("TeslaBot")})`;
 }
 
+// --- A4: the handoff (switching bot: the same body becomes another one; the content does not wait for it) ----------------------------------------
+/** A chat page with real motion (or with the system's reduced-motion preference on, the page's own CSS still running), the live avatar and the handoff chunk (handoff-entry) arrived. */
+async function openHandoffChat(ctx, label, { width = 1440, reduced = false } = {}) {
+  const view = await newView(ctx.browser, { width, theme: "light", label, unmatched, motion: true });
+  if (reduced) await view.page.emulateMedia({ reducedMotion: "reduce" });
+  await view.page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+  await waitReady(view.page, PAGES.find((p) => p.name === "chat-default"));
+  await settle(view.page);
+  await view.page.locator(reduced ? "[data-testid=chat-header] svg[data-slot=bot-body]" : "[data-testid=chat-header] svg[data-slot=bot-body][data-state]").waitFor({ timeout: 15000 });
+  await view.page.waitForTimeout(900);
+  return view;
+}
+/** Installs `window.__ho`: a recorder that writes one row per animation frame (the header avatar's attributes, how many M / L bodies the page holds, the aura nodes' keys). */
+async function installHandoffProbe(page) {
+  await page.evaluate(() => {
+    const ho = window.__ho = { frames: [], running: false, last: 0, t0: 0, node: null, callbacks: [], lastScript: 0 };
+    // What is still arriving: the end of the last resource (a lazy chunk of the page, a history, the right panel's data) fetched; and how long each animation-frame callback of the PAGE takes
+    // (the avatar's loop is one of them; the probe's own is not counted).
+    new PerformanceObserver((list) => { for (const e of list.getEntries()) ho.lastScript = Math.max(ho.lastScript, e.responseEnd); }).observe({ type: "resource", buffered: false });
+    const nativeRaf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) => nativeRaf((stamp) => { const start = performance.now(); callback(stamp); if (ho.running) ho.callbacks.push([start - ho.t0, performance.now() - start]); });
+    ho.raf = nativeRaf;
+    const header = () => document.querySelector("[data-testid=chat-header] svg[data-slot=bot-body]");
+    const frame = () => {
+      if (!ho.running) return;
+      const now = performance.now(), svg = header(), aura = svg?.querySelector("[data-slot=bot-aura]"), box = document.getElementById("agent-draft");
+      ho.frames.push({
+        t: now - ho.t0, gap: ho.last ? now - ho.last : 0, state: svg?.dataset.state, pose: svg?.dataset.pose, ho: svg?.dataset.handoff, shape: svg?.dataset.shape, color: svg?.dataset.color,
+        gaze: svg?.dataset.gaze, waiting: svg?.dataset.waiting, aura: aura?.dataset.auraVariant, auraPhase: aura?.dataset.auraPhase,
+        keys: [...(svg?.querySelectorAll("[data-aura-key]") ?? [])].map((node) => node.dataset.auraKey), hosts: svg?.querySelectorAll("[data-slot=bot-aura]").length ?? 0,
+        bodies: document.querySelectorAll("svg[data-slot=bot-body][data-tier=M], svg[data-slot=bot-body][data-tier=L]").length, same: svg === ho.node,
+        focus: Boolean(box) && document.activeElement === box, ph: box?.placeholder ?? "", h1: document.querySelector("h1")?.textContent ?? "",
+        msgs: document.querySelectorAll("[data-testid=message]").length, plain: document.querySelectorAll("[data-testid=message-body][data-md=plain], [data-testid=markdown-skeleton]").length,
+        scriptAt: ho.lastScript - ho.t0
+      });
+      ho.last = now;
+      ho.raf(frame);
+    };
+    ho.start = () => { ho.frames = []; ho.t0 = performance.now(); ho.last = 0; ho.node = header(); ho.running = true; ho.callbacks = []; ho.raf(frame); };
+    ho.stop = () => { ho.running = false; return ho.frames; };
+    ho.cb = () => ho.callbacks;
+  });
+}
+const startProbe = (page) => page.evaluate(() => window.__ho.start());
+const stopProbe = (page) => page.evaluate(() => window.__ho.stop());
+/** Keys only some variants draw (to tell whose aura a node is). */
+const KEYS_OF = { ticks: /^(slot-|ring|sweep|closed)/, "speed-lines": /^(flow-|trail-|merged|gap-end)/, ticker: /^(arc-|bar-|chk-|merged|gap-end)/, halo: /^(seg-|ring|closed)/, "page-lines": /^(ground-|line-|mark-|check-|reading|merged)/ };
+
+async function handoffInputReady300(ctx) {
+  const view = await openHandoffChat(ctx, "handoff-input-ready-300");
+  try {
+    const { page } = view;
+    await page.evaluate(() => {
+      window.__m = { t0: 0, t1: 0, name: "", ok: false };
+      document.addEventListener("click", (event) => { if (event.target.closest("[data-bot-row]")) { window.__m.t0 = performance.now(); window.__m.t1 = 0; window.__m.ok = false; } }, true);
+      document.addEventListener("focusin", (event) => {
+        const box = event.target;
+        if (box?.id === "agent-draft" && window.__m.t0 && !window.__m.t1 && box.placeholder.includes(window.__m.name)) { window.__m.t1 = performance.now(); window.__m.ok = !box.disabled && !box.readOnly; }
+      }, true);
+    });
+    const run = async (names) => {
+      const times = [];
+      for (const name of names) {
+        await page.evaluate((n) => { window.__m.name = n; window.__m.t1 = 0; window.__m.t0 = 0; }, name);
+        await pressBotRow(page, name);
+        await page.waitForFunction(() => window.__m.t1 > 0, null, { timeout: 8000 });
+        const m = await page.evaluate(() => ({ ms: window.__m.t1 - window.__m.t0, ok: window.__m.ok }));
+        assert(m.ok, `${name}: the box took the focus but was not writable (disabled or read-only)`);
+        // and what is typed goes into THIS line
+        await page.keyboard.type("ab");
+        assert((await page.locator("#agent-draft").inputValue()).endsWith("ab"), `${name}: typing right after the focus landed did not reach the box`);
+        await page.locator("#agent-draft").fill("");
+        times.push(Math.round(m.ms));
+        await page.waitForTimeout(500);
+      }
+      return times;
+    };
+    const names = ["NewsBot", "FinBot", "ReportBot", "FinBot", "AppleBot"];
+    const normal = await run(names);
+    const cdp = await view.context.newCDPSession(page);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+    const slow = await run(["FinBot", "TeslaBot", "FinBot", "NewsBot", "FinBot"]);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+    const worst = Math.max(...normal);
+    assert(worst <= 300, `click to a focused, writable box took ${normal.join(", ")} ms: the slowest is over 300 ms`);
+    return `click -> focused and writable box: ${normal.join(" / ")} ms (max ${worst}, limit 300); with the CPU slowed 4x: ${slow.join(" / ")} ms (max ${Math.max(...slow)}, reported only)`;
+  } finally { await view.close(); }
+}
+
+async function handoffSinglePresence(ctx) {
+  const view = await openHandoffChat(ctx, "handoff-single-presence");
+  try {
+    const { page } = view;
+    await installHandoffProbe(page);
+    await startProbe(page);
+    await pressBotRow(page, "NewsBot");
+    await page.locator("h1", { hasText: "NewsBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(1700);
+    await pressBotRow(page, "ReportBot");
+    await page.locator("h1", { hasText: "ReportBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(1700);
+    const frames = await stopProbe(page);
+    const bad = frames.filter((f) => f.bodies !== 1);
+    assert(!bad.length, `${bad.length} of ${frames.length} frames held ${bad[0]?.bodies} M / L bodies in the page`);
+    const rebuilt = frames.filter((f) => !f.same);
+    assert(!rebuilt.length, `the header avatar's svg was not the same node in ${rebuilt.length} of ${frames.length} frames (first at ${Math.round(rebuilt[0]?.t)} ms)`);
+    const shapes = new Set(frames.map((f) => f.shape));
+    assert(shapes.size >= 3, `the same body should have worn three shapes, saw ${[...shapes].join(", ")}`);
+    return `${frames.length} frames over two switches: always exactly 1 M / L body, the very same svg node, shapes ${[...shapes].join(" -> ")}`;
+  } finally { await view.close(); }
+}
+
+async function handoffRapidThree(ctx) {
+  const view = await openHandoffChat(ctx, "handoff-rapid-three");
+  try {
+    const { page } = view;
+    await installHandoffProbe(page);
+    await startProbe(page);
+    // three different bots within 160 ms (what a fast hand or a script does): the last one wins everywhere
+    const lastClick = await page.evaluate(async () => {
+      const rows = (name) => [...document.querySelectorAll("[data-bot-row]")].find((row) => row.textContent.includes(name));
+      let at = 0;
+      for (const name of ["TeslaBot", "NewsBot", "ReportBot"]) { rows(name).click(); at = performance.now() - window.__ho.t0; await new Promise((resolve) => setTimeout(resolve, 80)); }
+      return at;
+    });
+    await page.locator("h1", { hasText: "ReportBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(3200);
+    const frames = await stopProbe(page);
+    const last = await page.evaluate(() => {
+      const svg = document.querySelector("[data-testid=chat-header] svg[data-slot=bot-body]"), host = svg.querySelector("[data-slot=bot-aura]");
+      return { h1: document.querySelector("h1").textContent, ph: document.getElementById("agent-draft").placeholder, shape: svg.dataset.shape, color: svg.dataset.color, aura: host.dataset.auraVariant, keys: [...svg.querySelectorAll("[data-aura-key]")].map((n) => n.dataset.auraKey), hosts: svg.querySelectorAll("[data-slot=bot-aura]").length, hash: location.hash, pageColor: document.querySelector("[data-slot=chat-page]").dataset.botColor, bodies: document.querySelectorAll("svg[data-slot=bot-body][data-tier=M], svg[data-slot=bot-body][data-tier=L]").length };
+    });
+    assert(last.h1 === "ReportBot" && last.ph.includes("ReportBot") && last.hash.endsWith(BOT.reportbot), `the line is not the last bot's: ${JSON.stringify({ h1: last.h1, ph: last.ph, hash: last.hash })}`);
+    assert(last.shape === "capsule" && last.color === "violet" && last.pageColor === "violet", `the body or the page did not end in ReportBot's look: ${last.shape} / ${last.color} / ${last.pageColor}`);
+    assert(last.aura === "page-lines" && last.hosts === 1 && last.bodies === 1, `aura family ${last.aura} (hosts ${last.hosts}, bodies ${last.bodies})`);
+    const foreign = last.keys.filter((key) => !KEYS_OF["page-lines"].test(key));
+    assert(!foreign.length, `aura nodes of another bot are still in the DOM: ${foreign.join(", ")}`);
+    // no frame of the whole run showed the aura nodes of a bot that is not the one standing there (the one in between is never drawn)
+    const seen = frames.filter((f) => f.auraPhase && f.aura && f.keys.some((key) => !KEYS_OF[f.aura]?.test(key)));
+    assert(!seen.length, `${seen.length} frames held aura nodes that do not belong to the aura family ${seen[0]?.aura}: ${seen[0]?.keys.join(", ")}`);
+    // Frames.  Switching bot mounts a chat page (header, thread, panels), and the history of a line that was not open yet arrives and is typeset (the markdown
+    // renderer and the card are chunks of their own): all that costs more than 50 ms a frame on a slow machine whatever the avatar does, so it is
+    // reported, not gated (the same clicks on the build before this package: 58-97 ms frames).  What is gated is what the avatar and the handoff add, once the line
+    // has settled by what can be seen: the last bot's messages are in the page, none of them is still plain text or a skeleton, and nothing (chunk, history,
+    // the right panel's data) has arrived for 500 ms (what arrives is rendered within that: the page's own content, which the avatar has no part in).  From that frame on, no frame is longer than 50 ms; and no animation-frame callback of the page (the avatar's loop) takes more than 20 ms.
+    const settledIdx = frames.findIndex((f) => f.h1 === "ReportBot" && f.msgs > 0 && f.plain === 0 && f.t - f.scriptAt > 500 && f.t > lastClick + 300);
+    assert(settledIdx >= 0, "the last line never settled (messages, typeset, nothing still arriving)");
+    const tail = frames.slice(settledIdx);
+    const long = tail.filter((f) => f.gap > 50);
+    assert(tail.length > 40, `too few frames after the line settled to judge (${tail.length}, settled at ${Math.round(frames[settledIdx].t)} ms)`);
+    assert(!long.length, `${long.length} frames longer than 50 ms after the line had settled (at ${Math.round(frames[settledIdx].t)} ms), the longest ${Math.round(Math.max(...long.map((f) => f.gap)))} ms`);
+    // The avatar's loop reads the page's geometry (where its pointer is, whether a dialog covers it): while the pages are still mounting that read has to lay the
+    // page out first, which is the page's cost and lands in whichever callback asks (26 ms seen once on this machine).  Judged from the settled frame on.
+    const callbacks = (await page.evaluate(() => window.__ho.cb())).filter(([at]) => at >= frames[settledIdx].t);
+    const slowest = Math.max(0, ...callbacks.map(([, ms]) => ms));
+    assert(callbacks.length > 60 && slowest <= 20, `the page's animation-frame callbacks (the avatar's loop) took up to ${slowest.toFixed(1)} ms after the line had settled (${callbacks.length} callbacks)`);
+    const mounting = frames.slice(0, settledIdx).filter((f) => f.gap > 50);
+    return `3 clicks in 160 ms: line, name, placeholder, silhouette, colour and aura family (${last.aura}) are the last bot's; ${last.keys.length} aura nodes, all page-lines'; the line settled at ${Math.round(frames[settledIdx].t)} ms; after it ${tail.length} frames, the longest gap ${Math.round(Math.max(...tail.map((f) => f.gap)))} ms (limit 50); the avatar's frame callbacks took at most ${slowest.toFixed(1)} ms after that (limit 20, ${callbacks.length} callbacks); before it (pages mounting, history arriving): ${mounting.length} frames over 50 ms, the longest ${Math.round(Math.max(0, ...mounting.map((f) => f.gap)))} ms (reported)`;
+  } finally { await view.close(); }
+}
+
+async function handoffIntoWorking(ctx) {
+  const view = await openHandoffChat(ctx, "handoff-into-working");
+  try {
+    const { page } = view;
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await fillDraft(page, `${HOLD_MARKER} AAPL`, { botName: "TeslaBot" });
+    await clickSend(page);
+    await page.locator("[data-testid=stop]").waitFor();
+    await pressBotRow(page, "FinBot");
+    await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(1800);
+    await installHandoffProbe(page);
+    await startProbe(page);
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(1800);
+    const frames = await stopProbe(page);
+    assert(!frames.some((f) => f.state === "swirl"), "the swirl played although the bot was already working");
+    assert(!frames.some((f) => f.ho === "enter"), "the entrance played although the bot was already working");
+    assert(frames.some((f) => f.ho === "leave"), "the old aura did not leave");
+    const end = frames.at(-1);
+    assert(["waiting", "tool", "answer", "verify", "attention"].includes(end.pose) && end.aura === "speed-lines", `it did not land in TeslaBot's working state: pose ${end.pose}, aura ${end.aura}`);
+    const settledAt = frames.find((f) => f.aura === "speed-lines" && ["waiting", "tool", "answer", "verify", "attention"].includes(f.pose));
+    return `landed in TeslaBot's own working pose (${end.pose}, ${end.state}) at ${Math.round(settledAt.t)} ms; no swirl, no entrance, the old aura left first`;
+  } finally { await view.close(); }
+}
+
+async function handoffIntoWaiting(ctx) {
+  const view = await openHandoffChat(ctx, "handoff-into-waiting");
+  try {
+    const { page } = view;
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await fillDraft(page, `${ASK_MARKER} 哪一个`, { botName: "TeslaBot" });
+    await clickSend(page);
+    await page.locator('[data-slot="approval-card"][data-state="active"]').waitFor({ timeout: 15000 });
+    await pressBotRow(page, "NewsBot");
+    await page.locator("h1", { hasText: "NewsBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(1800);
+    await installHandoffProbe(page);
+    await startProbe(page);
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(2200);
+    const frames = await stopProbe(page);
+    const dotAt = frames.find((f) => f.waiting === "true" && f.aura === "speed-lines");
+    assert(dotAt, "the amber dot never came up");
+    assert(frames.some((f) => f.state === "swirl"), "the handoff did not play around the dot");
+    const end = frames.at(-1);
+    assert(end.pose === "hold" && end.waiting === "true", `it did not settle waiting for you: pose ${end.pose}, waiting ${end.waiting}`);
+    const inView = await page.evaluate(() => {
+      const card = document.querySelector('[data-slot="approval-card"][data-state="active"]'), box = document.querySelector("[data-testid=transcript]").getBoundingClientRect(), r = card.getBoundingClientRect();
+      return { top: r.top - box.top, bottom: box.bottom - r.bottom, inside: r.top >= box.top - 1 && r.bottom <= box.bottom + 1, onCard: Boolean(card.contains(document.activeElement)) };
+    });
+    assert(inView.inside, `the line did not open at the card (its top is ${Math.round(inView.top)} px, bottom ${Math.round(inView.bottom)} px from the thread's edges)`);
+    assert(!inView.onCard, "the focus was taken into the card");
+    return `the amber dot is up from ${Math.round(dotAt.t)} ms (the swirl plays around it), the pose settles as hold; the card is in view, the focus is not on it`;
+  } finally { await view.close(); }
+}
+
+async function handoffIntoUnread(ctx) {
+  const view = await openHandoffChat(ctx, "handoff-into-unread");
+  try {
+    const { page } = view;
+    await installHandoffProbe(page);
+    await startProbe(page);
+    await pressBotRow(page, "NewsBot");
+    await page.locator("h1", { hasText: "NewsBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(3000);
+    const frames = await stopProbe(page);
+    const glance = frames.filter((f) => f.pose === "glance");
+    assert(glance.length > 10, "the eyes never went to the divider");
+    assert(glance.every((f) => f.gaze === "below"), "the glance was not toward the divider (gaze below)");
+    const length = glance.at(-1).t - glance[0].t;
+    assert(length > 650 && length < 1100, `the glance lasted ${Math.round(length)} ms, not about 800`);
+    const swirlEnd = Math.max(...frames.filter((f) => f.state === "swirl").map((f) => f.t));
+    assert(glance[0].t >= swirlEnd - 40, "the glance began before the handoff was over");
+    const after = frames.at(-1);
+    assert(after.pose !== "glance", "it kept looking");
+    return `after the handoff (swirl until ${Math.round(swirlEnd)} ms) the eyes went to the divider for ${Math.round(length)} ms, then back (pose ${after.pose})`;
+  } finally { await view.close(); }
+}
+
+async function handoffReduced(ctx) {
+  const view = await openHandoffChat(ctx, "handoff-reduced", { reduced: true });
+  try {
+    const { page } = view;
+    await installHandoffProbe(page);
+    await startProbe(page);
+    await pressBotRow(page, "NewsBot");
+    await page.locator("h1", { hasText: "NewsBot" }).waitFor({ timeout: 10000 });
+    const early = await page.evaluate(() => { const t = document.querySelector("[data-testid=transcript]"), cs = getComputedStyle(t); return { entry: t.dataset.entry, name: cs.animationName, duration: cs.animationDuration }; });
+    await page.waitForTimeout(1600);
+    const frames = await stopProbe(page);
+    assert(!frames.some((f) => f.state === "swirl" || f.ho), "a swirl or a handoff phase was drawn under reduced motion");
+    const first = frames.find((f) => f.shape === "nuage");
+    assert(first && frames.filter((f) => f.shape && f.shape !== "nuage" && f.t > first.t).length === 0, "the silhouette was not NewsBot's from the first frame on");
+    assert(frames.every((f) => f.keys.length === 0 || !f.keys.some((key) => /^(flow-|trail-)/.test(key))), "TeslaBot's aura stayed");
+    assert(early.entry === "crossfade" && early.name === "handoff-fade-in" && early.duration === "0.15s", `the thread did not cross-fade in 150 ms: ${JSON.stringify(early)}`);
+    // What is DRAWN, not the attribute: the silhouette of the still frame is each bot's own, also on the way back (a still frame is the state, not a blend)
+    const drawn = () => page.evaluate(() => { const box = document.querySelector("[data-testid=chat-header] svg[data-slot=bot-body] mask path[fill='#fff']").getBBox(); return `${Math.round(box.width)}x${Math.round(box.height)}`; });
+    const news = await drawn();
+    await pressBotRow(page, "FinBot");
+    await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(500);
+    const fin = await drawn();
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(500);
+    const tesla = await drawn();
+    assert(new Set([news, fin, tesla]).size === 3 && fin === "200x200", `the drawn silhouettes should be three different ones (and FinBot's a circle): NewsBot ${news}, FinBot ${fin}, TeslaBot ${tesla}`);
+    const noRise = await page.evaluate(() => [...document.querySelectorAll("[data-testid=message][data-entry]")].length);
+    assert(noRise === 0, "messages were staggered under reduced motion");
+    return `no swirl, no phases, silhouette NewsBot's at once (${first ? Math.round(first.t) : "?"} ms); the line cross-fades in over ${early.duration}; drawn silhouettes NewsBot ${news} / FinBot ${fin} / TeslaBot ${tesla}`;
+  } finally { await view.close(); }
+}
+
+async function handoffMobileDirection(ctx) {
+  const view = await openHandoffChat(ctx, "handoff-mobile-direction", { width: 390 });
+  try {
+    const { page } = view;
+    const choose = async (name) => {
+      await page.locator("[data-testid=bot-switcher]").click();
+      await page.locator("[data-testid=bot-switcher-drawer]").waitFor();
+      await page.locator("[data-bot-switch-row]", { hasText: name }).first().click();
+      await page.locator("h1", { hasText: name }).waitFor({ timeout: 10000 });
+      const got = await page.evaluate(() => { const t = document.querySelector("[data-testid=transcript]"); return { entry: t.dataset.entry, dir: t.style.getPropertyValue("--handoff-dir"), name: getComputedStyle(t).animationName }; });
+      await page.waitForTimeout(700);
+      return got;
+    };
+    const forward = await choose("ReportBot");     // further down the list than FinBot: the new line comes in from the right
+    const back = await choose("FinBot");          // and back: from the left
+    assert(forward.entry === "slide" && back.entry === "slide", `the phone's line did not slide: ${JSON.stringify({ forward, back })}`);
+    assert(Number(forward.dir) === 1 && Number(back.dir) === -1, `the directions are ${forward.dir} and ${back.dir}, expected 1 then -1`);
+    assert(forward.name === "handoff-slide", `the slide animation is ${forward.name}`);
+    const focus = await page.evaluate(() => document.activeElement?.id);
+    assert(focus === "agent-draft", `a drawer choice should leave the focus in the box, it is on ${focus}`);
+    return `to a later bot: slide ${forward.dir}; back: slide ${back.dir}; ${forward.name}; focus in the box after the drawer choice`;
+  } finally { await view.close(); }
+}
+
+async function handoffKeyboardFocus(ctx) {
+  const view = await openHandoffChat(ctx, "handoff-keyboard-focus");
+  try {
+    const { page } = view;
+    const row = page.locator("[data-bot-row]", { hasText: "NewsBot" }).first();
+    await row.focus();
+    await page.keyboard.press("Enter");
+    await page.locator("h1", { hasText: "NewsBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(900);
+    const keyboard = await page.evaluate(() => ({ onRow: Boolean(document.activeElement?.closest("[data-bot-row]")), name: document.activeElement?.textContent?.trim().slice(0, 12), box: document.activeElement?.id === "agent-draft" }));
+    assert(keyboard.onRow && !keyboard.box, `a keyboard switch took the focus away from the row: ${JSON.stringify(keyboard)}`);
+    // the pointer moves it
+    await page.locator("[data-bot-row]", { hasText: "FinBot" }).first().click();
+    await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(900);
+    const pointer = await page.evaluate(() => document.activeElement?.id === "agent-draft");
+    assert(pointer, "a pointer switch should leave the focus in the box");
+    // the box of the new line is writable at once for the keyboard walker too
+    await page.locator("[data-bot-row]", { hasText: "ReportBot" }).first().focus();
+    await page.keyboard.press("Enter");
+    await page.locator("h1", { hasText: "ReportBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([readonly])").waitFor();
+    return "Enter on a sidebar row: the focus stays on the row (the box is writable); a pointer click: the focus lands in the box";
+  } finally { await view.close(); }
+}
+
+async function handoffNoStrayDraft(ctx) {
+  const view = await openHandoffChat(ctx, "handoff-no-stray-draft");
+  try {
+    const { page } = view;
+    await page.locator("#agent-draft").fill("FinBot 自己的草稿");
+    // In ONE task: press the row of another bot, then write into the box that is still on screen (what a slow machine or a script does).
+    const gap = await page.evaluate(() => {
+      const row = [...document.querySelectorAll("[data-bot-row]")].find((r) => r.textContent.includes("NewsBot")), box = document.getElementById("agent-draft");
+      row.click();
+      const state = { readOnly: box.readOnly, mark: box.dataset.handoff };
+      const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+      set.call(box, "STRAY-TEXT"); box.dispatchEvent(new Event("input", { bubbles: true }));
+      return state;
+    });
+    assert(gap.readOnly && gap.mark === "pending", `the box of the old line was not made unwritable at the click: ${JSON.stringify(gap)}`);
+    await page.locator("h1", { hasText: "NewsBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft[placeholder*=NewsBot]").waitFor();
+    assert(!(await page.locator("#agent-draft").inputValue()).includes("STRAY"), "the stray text appeared in the new line's box");
+    await page.waitForTimeout(500);
+    await page.locator("[data-bot-row]", { hasText: "FinBot" }).first().click();
+    await page.locator("#agent-draft[placeholder*=FinBot]").waitFor();
+    const old = await page.locator("#agent-draft").inputValue();
+    assert(old === "FinBot 自己的草稿", `the old line's draft is now ${JSON.stringify(old)}`);
+    const stored = await page.evaluate(() => Object.entries(localStorage).filter(([key]) => key.includes("draft")).map(([, value]) => value).join("|"));
+    assert(!stored.includes("STRAY"), "the stray text was saved as a draft");
+    // and a minute later typing is accepted again, into the line that is on screen
+    await page.locator("#agent-draft").fill("可以写了");
+    assert((await page.locator("#agent-draft").inputValue()) === "可以写了", "the box stayed locked");
+    return "a write in the same task as the click: the old box was already read-only; the text is in neither line's draft; typing works again at once";
+  } finally { await view.close(); }
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -3873,6 +4236,16 @@ const CHECKS = [
   ["signature-css-only: waiting and streaming add no frame loop beyond the present avatar's; the trace is CSS animations", signatureCssOnly],
   ["signature-reduced: under reduced motion the trace, caret, sweep and status ring are still", signatureReduced],
   ["avatar-status-everywhere: the sidebar, the 更多 drawer and the bot switcher draw the same ring, dot and size for a bot", avatarStatusEverywhere],
+  ["handoff-input-ready-300: after a click on another bot the box is focused and writable within 300 ms (the slowest of five; and with the CPU slowed 4x, reported)", handoffInputReady300],
+  ["handoff-single-presence: through two switches the page holds exactly one M / L body, and it is the same svg node", handoffSinglePresence],
+  ["handoff-rapid-three: three bots clicked within 160 ms: everything ends on the last, no aura of the others is left in the DOM, no long frame while only the avatar moves", handoffRapidThree],
+  ["handoff-into-working: switching to a bot that is answering: no swirl, no entrance, its working pose at once", handoffIntoWorking],
+  ["handoff-into-waiting: switching to a bot that waits for you: the amber dot, the line open at the card, the focus not on it", handoffIntoWaiting],
+  ["handoff-into-unread: after the handoff the eyes glance at the divider for about 0.8 s", handoffIntoUnread],
+  ["handoff-reduced: reduced motion: no swirl and no phases, the new silhouette at once, the thread cross-fades in 150 ms", handoffReduced],
+  ["handoff-mobile-direction: at 390 the line slides in from the side of the bot's place in the list; the box has the focus", handoffMobileDirection],
+  ["handoff-keyboard-focus: Enter on a sidebar row leaves the focus on the row; a pointer click puts it in the box", handoffKeyboardFocus],
+  ["handoff-no-stray-draft: text written in the same task as the click never reaches the old line's draft", handoffNoStrayDraft],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

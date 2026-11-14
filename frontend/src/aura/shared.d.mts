@@ -1,4 +1,4 @@
-export type AuraPhase = "idle" | "listen" | "think" | "tool" | "verify" | "answer" | "hold" | "done" | "partial" | "error" | "cancel" | "unread" | "sleep" | "offline";
+export type AuraPhase = "idle" | "listen" | "think" | "tool" | "verify" | "answer" | "hold" | "done" | "partial" | "error" | "cancel" | "unread" | "sleep" | "offline" | "enter" | "leave";
 export type AuraTone = 0 | 1 | 2 | "ink" | "amber" | "danger";
 export type AuraEasing = "smooth" | "spring" | "step";
 /** The finished shape of a turn: a closed ring / line, a ring with a gap, a broken one. */

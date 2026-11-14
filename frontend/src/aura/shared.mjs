@@ -16,7 +16,7 @@
 import { TONE_LEVELS } from "./tones.mjs";
 
 export const TAU = Math.PI * 2;
-export const PHASES = ["idle", "listen", "think", "tool", "verify", "answer", "hold", "done", "partial", "error", "cancel", "unread", "sleep", "offline"];
+export const PHASES = ["idle", "listen", "think", "tool", "verify", "answer", "hold", "done", "partial", "error", "cancel", "unread", "sleep", "offline", "enter", "leave"];
 export const TONES = [0, 1, 2, "ink", "amber", "danger"];
 /** Entering a state takes at most this long (design 6.2). */
 export const TRANSITION = 0.32;
@@ -84,7 +84,7 @@ export function normalize(input, { cap, capM = Math.min(cap, 4) }) {
 }
 
 /** How visible each state's aura is (the end phases fade by their own beat).  idle: "almost invisible". */
-const VISIBLE = { idle: 0.5, listen: 0.5, think: 0, tool: 1, verify: 1, answer: 0.9, hold: 1, done: 1, partial: 1, error: 1, cancel: 0, unread: 0, sleep: 0, offline: 0 };
+const VISIBLE = { idle: 0.5, listen: 0.5, think: 0, tool: 1, verify: 1, answer: 0.9, hold: 1, done: 1, partial: 1, error: 1, cancel: 0, unread: 0, sleep: 0, offline: 0, enter: 0.5, leave: 0 };
 /** 0..1: the aura's overall visibility, eased from what the previous state left (`settled`) over the transition. */
 export function visibility(s) {
   const now = VISIBLE[s.phase] ?? 0;

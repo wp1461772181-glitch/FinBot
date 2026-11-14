@@ -5,6 +5,8 @@ import { BotAvatar, type AvatarStatus } from "@/components/bot/BotAvatar";
 import { isWaiting, botMarker, countLabel } from "../../bot-marker.mjs";
 import { useLocale } from "../../i18n";
 import { paths } from "../../routes.mjs";
+import { beginHandoff } from "../chat/handoff-intent";
+import { handoffDirection } from "../../handoff.mjs";
 
 const rowClass = "flex min-h-11 items-center gap-3 rounded-sm px-4 text-body text-ink outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring aria-[current=page]:bg-accent aria-[current=page]:font-medium";
 
@@ -27,7 +29,7 @@ export function BotSwitchList({ bots, activeBotId, lineStatus, onNavigate, onNew
       const marker = botMarker({ running: lineStatus.running.includes(`bot:${bot.id}`), waiting: isWaiting(bot, lineStatus.waiting), unread: (bot.unread > 0 ? bot.unread : 0) + (lineStatus.unseen.includes(`bot:${bot.id}`) ? 1 : 0), active: bot.id === activeBotId });
       const status: AvatarStatus = marker.kind === "running" ? "answering" : marker.kind === "waiting" ? "waiting" : marker.kind === "unread" ? "unread" : "idle";
       return <li key={bot.id}>
-        <Link to={bot.is_default ? paths.chat() : paths.chat(bot.id)} onClick={onNavigate} aria-current={bot.id === activeBotId ? "page" : undefined} data-bot-switch-row={bot.id} className={rowClass}>
+        <Link to={bot.is_default ? paths.chat() : paths.chat(bot.id)} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && event.button === 0) beginHandoff({ to: bot.id, source: "drawer", dir: handoffDirection(bots.map(b => b.id), activeBotId, bot.id) }); onNavigate(); }} aria-current={bot.id === activeBotId ? "page" : undefined} data-bot-switch-row={bot.id} className={rowClass}>
           <span className="grid shrink-0 place-items-center"><BotAvatar status={status} avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={28} /></span>
           <span className="min-w-0 flex-1 truncate">{bot.name}</span>
           {marker.word === "running" && <span className="text-caption text-muted-foreground">{t("回答中")}</span>}

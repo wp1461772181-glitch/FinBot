@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef } from "react";
+import { Suspense, lazy, useEffect, useLayoutEffect, useRef } from "react";
 import { Navigate, useParams } from "react-router";
 import { DelayedSkeleton, SkeletonCard, SkeletonMessages } from "@/components/state/Skeleton";
 import { ChatPage } from "../chat/ChatPage";
@@ -20,7 +20,9 @@ const paneFallback = <DelayedSkeleton><SkeletonCard /></DelayedSkeleton>;
 function BotPage({ bot, profile = false }: { bot: Bot; profile?: boolean }) {
   const ws = useWorkspace();
   const selectBot = useSelectBot();
-  useEffect(() => { void selectBot(bot); }, [bot]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A layout effect: the line this page shows is in place before the first paint (the page is mounted anew for each bot, and until the session has
+  // moved to this bot's line it still holds the one before it).
+  useLayoutEffect(() => { void selectBot(bot); }, [bot]); // eslint-disable-line react-hooks/exhaustive-deps
   const changed = () => void ws.bots.reload();
   return <ChatPage bot={bot} onTurnSettled={changed} onBotChanged={changed} openProfile={profile}
     workspace={(wide) => <OptionalChunk><Suspense fallback={paneFallback}><BotWorkspacePane key={bot.id} bot={bot} symbol={ws.symbol} watchlist={ws.symbols} onSelectSymbol={ws.setPreferredSymbol} wide={wide}

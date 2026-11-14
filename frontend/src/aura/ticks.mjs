@@ -5,6 +5,7 @@
 // Three forms of the same grammar (only the shape and the layout of a unit change): "ticks" (twelve radial ticks), "gauge" (ten short arcs
 // along three quarters of a circle) and "pips" (twelve dots).  Tier M has fewer slots and none of the finer motion.
 import { TAU, arc, closingArc, cycle, dot, endBeat, flash, lerp, line, normalize, polar, visibility } from "./shared.mjs";
+import { handoffAura } from "./handoff.mjs";
 
 export const SWEEP_PERIOD = 1.6;
 /** Slots of each form by tier; a unit takes one slot (never more units than slots). */
@@ -16,6 +17,8 @@ const slotAngle = (form, k, slots) => (form === "gauge" ? -0.75 * Math.PI + (k *
 const breaks = (form, slots) => (form === "gauge" ? [0, slots - 1] : [slots / 2 - 1, slots / 2, slots / 2 + 1]);
 
 export function ticks(input, form = "ticks") {
+  const entrance = handoffAura("dial", input, over => ticks({ ...input, ...over }, form)); // enter / leave (handoff.mjs); null for every other phase
+  if (entrance) return entrance;
   const f = SLOTS[form] ? form : "ticks";
   const tier = input?.tier === "M" ? "M" : "L";
   const slots = SLOTS[f][tier];

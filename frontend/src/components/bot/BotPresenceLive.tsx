@@ -10,7 +10,9 @@ import { parseAvatar } from "../../orb.mjs";
 import { awaiting, isOffline, turnSignal } from "../../turn-signals.mjs";
 import { useBackendDown } from "../state/connectivity-store";
 import { BotAvatar } from "./BotAvatar";
-import { BotBody, type BloubState, type LiveHandle } from "./BotBody";
+import { BotBody, type BloubState, type LiveHandle, type WornLook } from "./BotBody";
+import { currentIntent, subscribeIntent } from "../../app/chat/handoff-intent";
+import { HANDOFF } from "../../handoff.mjs";
 import { drive } from "./live-drive";
 import { usePersona } from "./use-persona";
 import { RAYON } from "../../bloub/repere";
@@ -55,9 +57,21 @@ export default function BotPresenceLive({ avatar, look: stored, name, seed, arri
   const persona = usePersona(bot ?? { name: "FinBot" });
   const reduced = useReducedMotion();
   const backendDown = useBackendDown().down;
-  const director = useMemo(() => createDirector({ now: nowSec(), reducedMotion: reduced, persona }), [reduced, persona]);
-  const live = useMemo<LiveHandle>(() => ({ director, pointer: null, units: 0, drive }), [director]);
-  const [still, setStill] = useState<DirectorView | null>(null); // reduced motion: the director's view behind the static frame
+  // One director for as long as the avatar stands here, whichever bot it shows: a switch is the director's `handoff` event, not a new director.
+  const director = useMemo(() => createDirector({ now: nowSec(), reducedMotion: reduced, persona }), [reduced]); // eslint-disable-line react-hooks/exhaustive-deps
+  const target = resolveLook(seed || name, avatar, stored, name);
+  const [worn, setWorn] = useState<WornLook>({ shape: target.shape, color: target.color });
+  const wornRef = useRef(worn); wornRef.current = worn;
+  // `look.want` is the bot's own look; the body puts it on when the director says the new persona is in (live-drive.ts), and tells us through `onWear`.
+  const live = useMemo<LiveHandle>(() => ({ director, pointer: null, units: 0, drive, look: { want: wornRef.current, worn: wornRef.current } }), [director]);
+  live.look!.want = { shape: target.shape, color: target.color }; live.look!.onWear = setWorn;
+  // The look the owner wants changed without a handoff (the colour or shape picked in the bot's settings): a resting body is made to take it.
+  useEffect(() => { live.wake?.(); }, [target.shape, target.color]); // eslint-disable-line react-hooks/exhaustive-deps
+  const botKey = bot?.id ?? seed ?? name;
+  const prevKey = useRef(botKey), prevPersona = useRef(persona);
+  // Reduced motion: the director's view behind the static frame, with the bot it was read for (the first render for a bot that has just taken the
+  // place has no view yet, like a body mounted for the first time: it never wears the one the bot before it had).
+  const [stillRead, setStill] = useState<{ view: DirectorView; key: string } | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const root = useRef<HTMLSpanElement>(null);
   const prevState = useRef(chatState);
@@ -69,13 +83,38 @@ export default function BotPresenceLive({ avatar, look: stored, name, seed, arri
   /** Every event goes through here: the director learns it, and a stopped loop (asleep, offline, settled) starts again to show it. */
   const send = (event: Parameters<typeof director.send>[0]) => { director.send(event, nowSec()); live.wake?.(); };
   // Reduced motion: the frame is the pose of the moment (the director has no timed beats then), re-read after every event.
-  const refreshStill = () => { if (reduced) setStill(director.read(nowSec())); };
+  const refreshStill = () => { if (reduced) setStill({ view: director.read(nowSec()), key: botKey }); };
 
   // The chat page carries the bot's tempo for the parts of the page that use it (design 6.4: `--bot-tempo`); its colour is written there already.
-  useEffect(() => { root.current?.closest<HTMLElement>("[data-slot=chat-page]")?.style.setProperty("--bot-tempo", String(persona.tempo)); }, [persona.tempo]);
+  useEffect(() => { root.current?.closest<HTMLElement>("[data-slot=chat-page]")?.style.setProperty("--bot-tempo", String(persona.tempo)); }, [persona.tempo, botKey]);
 
   // Arrival: once per bot per page session (never under reduced motion).
   useEffect(() => { if (shouldArrive(arrived, arrivalKey || seed || name, reduced)) send({ type: "arrive" }); }, [director]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The bot standing here changed (design 6.7): the same body becomes the other bot.  The line it now shows is the baseline (the switch itself is
+  // neither the end nor the start of a turn); a bot that is answering is joined quietly (no swirl, no entrance), one with unread messages gets
+  // a glance at the divider afterwards.  The click that asked for it carries the time the clock of the handoff starts from.  The arrival (a turn
+  // of the eyes) is for the first bot of a page and the big avatar of an empty line; here the bot only counts as met.
+  useEffect(() => {
+    if (prevKey.current !== botKey) {
+      prevKey.current = botKey;
+      shouldArrive(arrived, arrivalKey || botKey, reduced, true);
+      prevState.current = chatState;
+      send({ type: "handoff", persona, at: currentIntent(botKey)?.at ?? nowSec(), quiet: chatState === "sending", unread });
+      if (chatState === "sending") send({ type: "turn-start", quiet: true });
+      refreshStill();
+    } else if (prevPersona.current !== persona) { send({ type: "persona", persona }); refreshStill(); }
+    prevPersona.current = persona;
+  }, [botKey, persona]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The click that asks for another bot is heard here before the page has changed: the old aura starts its exit at once (the persona arrives with the
+  // `handoff` event above, when the new line is there).
+  useEffect(() => subscribeIntent(() => {
+    const intent = currentIntent();
+    if (!intent || intent.to === String(botKey).toLowerCase()) return;
+    live.ignoreCover?.(HANDOFF.SWIRL_END + 0.5); // a choice in the phone's drawer: the avatar behind it goes on (it is what the reader sees when the drawer is gone)
+    send({ type: "handoff-begin", at: intent.at });
+  }), [director, botKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Turn lifecycle. Mounting onto a running turn (switching back to a bot that is still answering) skips the "noticed you" beat.
   useEffect(() => {
@@ -110,7 +149,7 @@ export default function BotPresenceLive({ avatar, look: stored, name, seed, arri
     return () => window.clearTimeout(timer);
   }, [waitingSince.expiresAt, waitingSince.waiting, director]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { send({ type: "unread", value: unread }); refreshStill(); }, [unread, director]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { send({ type: "unread", value: unread }); refreshStill(); }, [unread, director, botKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The composer's focus (listening).
   useEffect(() => {
@@ -148,7 +187,10 @@ export default function BotPresenceLive({ avatar, look: stored, name, seed, arri
   }, [director, live, reduced]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (parsed.kind === "text") return <BotAvatar avatar={avatar} look={stored} name={name} seed={seed} size={size} className={className} />;
-  const look = resolveLook(seed || name, avatar, stored, name);
+  // Reduced motion has no handoff: the still frame wears the bot's look at once, on a body of its own for each bot (`key` below): a still frame is a bot's
+  // state seen from the start, never a blend from the one the previous bot was in.
+  const look = reduced ? target : worn;
+  const still = stillRead?.key === botKey ? stillRead.view : null;
   const hoverable = (e: ReactPointerEvent) => e.pointerType !== "touch";
   // Reduced motion: the aura is the static shape of the state (units still count), drawn into the still frame; TeslaBot's lean-back is a posture, so it stays.
   const tier = tierOf(size);
@@ -158,13 +200,13 @@ export default function BotPresenceLive({ avatar, look: stored, name, seed, arri
     drawAura(host, auraFor(still.aura)({ ...input, R: RAYON, tier }), paint, input.phase);
   } : undefined;
   const stillTilt = (still?.tilt ?? 0) + (withAura ? bodyMotion({ variant: still.aura, phase: auraPhaseOf(still, { still: true }), reduced: true }).tilt : 0);
-  return <span ref={root} data-slot="bot-avatar" data-bot-color={look.color} data-archetype={persona.archetype} className={`bot-orb bot-orb-live ${className}`.trim()} aria-hidden="true"
+  return <span ref={root} data-slot="bot-avatar" data-bot-color={look.color} data-pose={reduced ? still?.pose ?? "idle" : undefined} data-face={reduced ? still?.still : undefined} data-archetype={persona.archetype} className={`bot-orb bot-orb-live ${className}`.trim()} aria-hidden="true"
     style={{ width: size, height: size, "--bot-tempo": persona.tempo } as CSSProperties}
     onPointerEnter={e => { if (hoverable(e)) send({ type: "hover", value: true }); }}
     onPointerLeave={e => { if (hoverable(e)) send({ type: "hover", value: false }); }}
     onClick={() => { send({ type: "click" }); ack.current?.(); }}>
     {reduced
-      ? <BotBody size={size} shape={look.shape} color={look.color} state={(still?.state ?? "idle") as BloubState} frozenAt={0} expression={still?.still} waiting={still?.waitingForUser} dim={still?.dim} gazeKind={still?.gaze} tilt={stillTilt} auraStill={auraStill} />
+      ? <BotBody key={botKey} size={size} shape={look.shape} color={look.color} state={(still?.state ?? "idle") as BloubState} frozenAt={0} expression={still?.still} waiting={still?.waitingForUser} dim={still?.dim} gazeKind={still?.gaze} tilt={stillTilt} auraStill={auraStill} />
       : <BotBody size={size} shape={look.shape} color={look.color} live={live} />}
   </span>;
 }

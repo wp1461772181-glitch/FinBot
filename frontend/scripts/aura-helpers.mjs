@@ -16,4 +16,4 @@ export const centre = p => {
 };
 /** Every variant of every archetype, flat: [archetype, variant]. */
 export const VARIANTS = Object.entries(AURA_VARIANTS).flatMap(([arch, list]) => list.map(variant => [arch, variant]));
-export const PHASES = ["idle", "listen", "think", "tool", "verify", "answer", "hold", "done", "partial", "error", "cancel", "unread", "sleep", "offline"];
+export const PHASES = ["idle", "listen", "think", "tool", "verify", "answer", "hold", "done", "partial", "error", "cancel", "unread", "sleep", "offline", "enter", "leave"];

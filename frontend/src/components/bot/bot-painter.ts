@@ -65,8 +65,9 @@ export interface Painter {
   auraHost: SVGGElement;
   /** The body's posture (not its aura): lean in degrees and a vertical offset in viewBox units. */
   place(tilt: number, dy: number): void;
-  /** The body alone (not its aura): a step aside in viewBox units, a lean in degrees, a scale about the centre (the aura's own body motions). */
-  move(dx: number, tilt: number, scale: number): void;
+  /** The body alone (not its aura): a step aside in viewBox units, a lean in degrees, a scale about the centre (the aura's own body motions).
+   * The handoff adds a step up / down (`dy`), a squash across the body about its left edge (`sx`, the page turning) and the body's opacity (`alpha`). */
+  move(dx: number, tilt: number, scale: number, dy?: number, sx?: number, alpha?: number): void;
 }
 
 export function createPainter(svg: SVGSVGElement, uid: string): Painter {
@@ -168,6 +169,10 @@ export function createPainter(svg: SVGSVGElement, uid: string): Painter {
     setWaiting(on) { show(waitingRing, on); show(waitingDot, on); put(svg, "data-waiting", on ? "true" : "false"); },
     auraHost: auraGroup,
     place(tilt, dy) { put(lean, "transform", tilt || dy ? `translate(0 ${dy.toFixed(2)}) rotate(${tilt.toFixed(2)})` : ""); },
-    move(dx, tilt, scale) { put(figure, "transform", dx || tilt || scale !== 1 ? `translate(${dx.toFixed(2)} 0) rotate(${tilt.toFixed(2)}) scale(${scale.toFixed(3)})` : ""); }
+    move(dx, tilt, scale, dy = 0, sx = 1, alpha = 1) {
+      const flat = sx === 1 ? "" : ` translate(${-RAYON} 0) scale(${sx.toFixed(3)} 1) translate(${RAYON} 0)`;
+      put(figure, "transform", dx || dy || tilt || scale !== 1 || flat ? `translate(${dx.toFixed(2)} ${dy.toFixed(2)}) rotate(${tilt.toFixed(2)}) scale(${scale.toFixed(3)})${flat}` : "");
+      put(figure, "opacity", alpha.toFixed(3));
+    }
   };
 }
