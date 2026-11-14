@@ -97,3 +97,34 @@ export function streamEvents({ conversationId, message, botId }) {
     { event: "done", data: { status: "complete", turn_id: turnId, thinking_ms: 900, citations: [], citation_protocol: null } },
   ];
 }
+
+/** The answer to a message holding ASK_MARKER: a short lead-in and a card the user must answer, the turn ending as waiting_for_input. */
+export const CLARIFY_REQUEST_ID = "d0000000-0000-4000-8000-0000000000b2";
+export function clarificationEvents({ conversationId, botId }) {
+  const turnId = "t9000000-0000-4000-8000-000000000002";
+  const lead = "这个问题有两种读法，请选一个。";
+  const card = { request_id: CLARIFY_REQUEST_ID, reason: "reference_item_unavailable", question: "你指的是哪一条结果？",
+    choices: [{ label: "第一条结果", value: "pick-first-result" }, { label: "第二条结果", value: "pick-second-result" }] };
+  return [
+    { event: "conversation", data: { conversation_id: conversationId, turn_id: turnId, bot_id: botId ?? null } },
+    { event: "delta", data: { text: lead } },
+    { event: "clarification", data: card },
+    { event: "done", data: { status: "waiting_for_input", turn_id: turnId, thinking_ms: 400, citations: [], citation_protocol: null } },
+  ];
+}
+
+/** What a manual compression leaves behind: one 「已压缩 N 轮」 notice after the given turn (served with the conversation's messages). */
+export function compactionNotice(afterTurnId, focus) {
+  return { id: 1, after_turn_id: afterTurnId, turns: 2, summary: "两轮对话的摘要：先问服务收入，再比较两版预测。", focus: focus || null, created_at: minutesAgo(1) };
+}
+
+/** Older turns for the load-earlier check: a check puts them in state.chat.older[conversationId] = { messages, cursor }. */
+export function olderTurns(count = 6) {
+  const out = [];
+  for (let i = 1; i <= count; i += 1) {
+    const turn = `t8000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+    out.push({ role: "user", content: `更早的问题 ${i}：请说明第 ${i} 项风险因素。`, turn_id: turn });
+    out.push({ role: "assistant", status: "complete", turn_id: turn, content: `更早的回答 ${i}：${"这一项风险因素在财报里有详细说明，要点是需求、成本与汇率三方面的变化，需要结合原文判断。".repeat(3)}` });
+  }
+  return out;
+}

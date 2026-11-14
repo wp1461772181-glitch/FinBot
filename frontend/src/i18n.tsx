@@ -1,12 +1,29 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import zhPhrases from "./locales/zh-CN.json";
-import enMessages from "./locales/en-US.json";
+import type zhPhrases from "./locales/zh-CN.json";
 
 export type Locale = "zh-CN" | "en-US";
 export type PhraseKey = typeof zhPhrases[number];
 
 const STORAGE_KEY = "market-evidence-agent:locale:v1";
-const typedEnglishMessages: Record<PhraseKey, string> = enMessages;
+type EnglishCatalog = Record<PhraseKey, string>;
+
+// The English catalog is a chunk of its own: a session in Chinese never downloads it.  translatePhrase stays synchronous, so
+// until the chunk is in (a first switch to English, or a failed download) a phrase shows as its key, which is the Chinese text.
+let englishCatalog: EnglishCatalog | null = null;
+let englishLoading: Promise<void> | null = null;
+
+export function loadEnglishCatalog(): Promise<void> {
+  englishLoading ??= import("./locales/en-US.json").then((module) => {
+    const catalog: EnglishCatalog = module.default;
+    englishCatalog = catalog;
+  }, (error: unknown) => { englishLoading = null; throw error; });
+  return englishLoading;
+}
+
+/** Called before the first render: a reader whose saved language is English gets the catalog first, so no Chinese flashes by. */
+export function preloadSavedLocale(): Promise<void> {
+  return readSavedLocale() === "en-US" ? loadEnglishCatalog().catch(() => undefined) : Promise.resolve();
+}
 
 type LocaleContextValue = {
   locale: Locale;
@@ -18,15 +35,24 @@ const LocaleContext = createContext<LocaleContextValue | null>(null);
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(readSavedLocale);
+  // Bumped when the English catalog arrives, so `t` changes identity and every reader of it draws again.
+  const [catalogReady, setCatalogReady] = useState(englishCatalog !== null);
 
   const setLocale = useCallback((nextLocale: Locale) => {
     setLocaleState(nextLocale);
     try { window.localStorage.setItem(STORAGE_KEY, nextLocale); } catch { /* Locale still applies for this session. */ }
   }, []);
 
+  useEffect(() => {
+    if (locale !== "en-US" || englishCatalog) return;
+    let live = true;
+    loadEnglishCatalog().then(() => { if (live) setCatalogReady(true); }, () => { /* offline: the phrases stay as their keys */ });
+    return () => { live = false; };
+  }, [locale]);
+
   const t = useCallback((text: string) => {
     return translatePhrase(text, locale);
-  }, [locale]);
+  }, [locale, catalogReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { document.documentElement.lang = locale; }, [locale]);
   const value = useMemo(() => ({ locale, setLocale, t }), [locale, setLocale, t]);
@@ -66,7 +92,7 @@ export function formatNumber(value: number, locale: Locale, options: Intl.Number
 
 export function translatePhrase(text: string, locale: Locale = getLocalePreference()): string {
   if (locale === "zh-CN") return text;
-  return typedEnglishMessages[text as PhraseKey] ?? text;
+  return englishCatalog?.[text as PhraseKey] ?? text;
 }
 
 function readSavedLocale(): Locale {

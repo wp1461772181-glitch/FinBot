@@ -5,10 +5,13 @@ import { startServer } from "./server.mjs";
 import { launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
 import { PAGES, waitReady } from "./pages.mjs";
-import { BOT, CONVERSATION, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
+import { ASK_MARKER, BOT, CONVERSATION, HAND_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
+import { CLARIFY_REQUEST_ID, olderTurns } from "./fixtures/chat.mjs";
+import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
 import { MATERIALS } from "./fixtures/materials.mjs";
 import { buildState } from "./fixtures/index.mjs";
+import fs from "node:fs";
 import path from "node:path";
 import { findCollisions } from "./collisions.mjs";
 
@@ -1601,9 +1604,292 @@ async function statesSamplePage(ctx) {
   } finally { await view.close(); }
 }
 
+
+// --- P3.1: the nine chat checks of design 7.3 (the P3 packages each run them again; `--only chat-` runs just these) -------
+const WRITE_REQUEST_ID = "d0000000-0000-4000-8000-0000000000a1"; // the write-confirmation card that ends FinBot's history (fixtures/chat.mjs)
+/** The JSON bodies of the requests the page sends to `re` (a path pattern), in order; collected while the check runs. */
+function watchPosts(page, re) {
+  const bodies = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !re.test(new URL(request.url()).pathname)) return;
+    try { bodies.push(JSON.parse(request.postData() ?? "{}")); } catch { bodies.push({}); }
+  });
+  return bodies;
+}
+const STREAM_PATH = /\/agent-chat\/stream$/;
+const row = (page, name) => page.locator("[data-bot-row]", { hasText: name }).first();
+const turnEvent = (id) => ({ conversation_id: CONVERSATION.teslabot, turn_id: `t9000000-0000-4000-8000-0000000000${id}`, bot_id: BOT.teslabot });
+
+async function chatCancel(ctx) {
+  const view = await openChat(ctx, "chat-cancel");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await page.locator("#agent-draft").fill(`${HAND_MARKER} 取消测试`);
+    await page.locator("button.agent-send").click();
+    await hand.opened(0);
+    await hand.push(0, "conversation", { ...turnEvent("c1"), conversation_id: CONVERSATION.finbot, bot_id: BOT.finbot });
+    await hand.push(0, "delta", { text: "已经生成的前半句，" });
+    await page.locator(".agent-message.is-assistant", { hasText: "已经生成的前半句" }).waitFor({ timeout: 10000 });
+    await page.locator("button.agent-stop").click();
+    await page.locator(".agent-chat-status", { hasText: "已取消" }).waitFor({ timeout: 10000 });
+    await page.locator(".agent-message.is-assistant", { hasText: "本轮已取消" }).waitFor({ timeout: 10000 });
+    assert((await page.locator(".agent-message.is-assistant", { hasText: "已经生成的前半句" }).count()) === 1, "the text generated before the cancel is gone");
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill("取消之后还能再输入");
+    assert((await page.locator("#agent-draft").inputValue()) === "取消之后还能再输入", "composer did not accept input after the cancel");
+    assert(await hand.aborted(0), "the request was not aborted");
+    assert((await page.locator("button.agent-stop").count()) === 0, "the cancel button is still there");
+    return "partial text kept, 已取消 status and the message's own note shown, request aborted, composer usable";
+  } finally { await view.close(); }
+}
+
+async function chatBackgroundLine(ctx) {
+  const view = await openChat(ctx, "chat-background-line");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill(`${HAND_MARKER} 后台线`);
+    await page.locator("button.agent-send").click();
+    const body = await hand.opened(0);
+    assert(body.bot_id === BOT.teslabot, `the turn went out for ${body.bot_id}`);
+    await hand.push(0, "conversation", turnEvent("d1"));
+    await hand.push(0, "delta", { text: "后台里的前半句，" });
+    await page.locator(".agent-message.is-assistant", { hasText: "后台里的前半句" }).waitFor({ timeout: 10000 });
+    await pressBotRow(page, "AppleBot");
+    await page.locator("h1", { hasText: "AppleBot" }).waitFor({ timeout: 10000 });
+    await page.locator('[data-bot-row][data-marker="running"]', { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    assert((await page.locator(".agent-message.is-assistant", { hasText: "后台里的前半句" }).count()) === 0, "TeslaBot's answer is showing in AppleBot's line");
+    // The stream ends while the user is looking at AppleBot.
+    await hand.push(0, "delta", { text: "后半句也到了。" });
+    await hand.push(0, "done", { status: "complete", turn_id: turnEvent("d1").turn_id, thinking_ms: 500, citations: [], citation_protocol: null });
+    await hand.close(0);
+    await page.locator('[data-bot-row][data-marker="unread"]', { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    assert((await row(page, "TeslaBot").locator("[data-count]").innerText()).trim() === "1", "the new-answer mark is not the number 1");
+    assert((await row(page, "AppleBot").getAttribute("data-marker")) === "none", "AppleBot's row changed");
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator(".agent-message.is-assistant", { hasText: "后台里的前半句，后半句也到了。" }).waitFor({ timeout: 10000 });
+    await page.locator('[data-bot-row][data-marker="none"]', { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    return "TeslaBot ring while answering in the background, number 1 once finished, the whole answer on return, mark gone";
+  } finally { await view.close(); }
+}
+
+async function chatClarification(ctx) {
+  const view = await openChat(ctx, "chat-clarification");
+  try {
+    const { page } = view;
+    const bodies = watchPosts(page, STREAM_PATH);
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill(`${ASK_MARKER} 查一下结果`);
+    await page.locator("button.agent-send").click();
+    const card = page.locator(".agent-clarification-card");
+    await card.waitFor({ timeout: 10000 });
+    assert((await card.locator("button", { hasText: "第二条结果" }).isEnabled()), "the card's options are not enabled");
+    assert(!(await card.evaluate((el) => el.classList.contains("is-write"))), "a plain question is drawn as a write card");
+    await card.locator("button", { hasText: "第二条结果" }).click();
+    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    assert(bodies.length === 2, `expected two stream requests, saw ${bodies.length}`);
+    const next = bodies[1];
+    assert(next.message === "pick-second-result", `the next turn said ${JSON.stringify(next.message)}`);
+    assert(next.pending_request_id === CLARIFY_REQUEST_ID, `pending_request_id was ${next.pending_request_id}`);
+    assert(next.display_message === "第二条结果", `display_message was ${JSON.stringify(next.display_message)}`);
+    assert(next.bot_id === BOT.teslabot, "the answer went out without the bot id");
+    await page.locator(".agent-message.is-user", { hasText: "第二条结果" }).waitFor({ timeout: 10000 });
+    assert(await page.locator(".agent-clarification-card").evaluate((el) => el.classList.contains("is-locked")), "the answered card is not locked");
+    return "card ends the turn, the pick goes out as the next turn with its request id, the card locks";
+  } finally { await view.close(); }
+}
+
+async function chatWriteConfirm(ctx) {
+  const confirmView = await openChat(ctx, "chat-write-confirm");
+  let confirmed;
+  try {
+    const { page } = confirmView;
+    const bodies = watchPosts(page, STREAM_PATH);
+    const card = page.locator(".agent-clarification-card.is-write");
+    await card.waitFor({ timeout: 10000 });
+    await card.locator("button", { hasText: "确认执行" }).click();
+    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    assert(bodies.length === 1, `expected one stream request, saw ${bodies.length}`);
+    confirmed = bodies[0];
+    assert(confirmed.pending_request_id === WRITE_REQUEST_ID && confirmed.message === "confirm:fetch_analyze", `confirm request: ${JSON.stringify(confirmed)}`);
+    assert(confirmed.bot_id === BOT.finbot, "the confirmation went out without the bot id");
+  } finally { await confirmView.close(); }
+  const declineView = await openChat(ctx, "chat-write-decline");
+  try {
+    const { page } = declineView;
+    const bodies = watchPosts(page, STREAM_PATH);
+    const card = page.locator(".agent-clarification-card.is-write");
+    await card.waitFor({ timeout: 10000 });
+    await card.locator("button", { hasText: "先不要" }).click();
+    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    // 「先不要」 is not silent: it goes to the server as the turn `cancel` for the pending request (that is what cancels it) -- never as a confirmation.
+    assert(!bodies.some((b) => String(b.message).startsWith("confirm:")), "declining sent a confirmation");
+    assert(bodies.length === 1 && bodies[0].message === "cancel" && bodies[0].pending_request_id === WRITE_REQUEST_ID, `decline request: ${JSON.stringify(bodies)}`);
+  } finally { await declineView.close(); }
+  return `确认执行 -> {message:"${confirmed.message}", pending_request_id}; 先不要 -> {message:"cancel", pending_request_id}, no confirm:* request`;
+}
+
+async function chatReadonlyArchive(ctx) {
+  const view = await openShell(ctx, "chat-readonly-archive", "#/settings/data", { ready: ".chat-archive-settings" });
+  try {
+    const { page } = view;
+    const stamp = "2026-11-12T08:00:00.000Z";
+    const archive = { marker: "market-evidence-agent-chat-archive", version: 1, created_at: stamp, updated_at: stamp,
+      conversations: [{ id: "archived-1", created_at: stamp, updated_at: stamp, messages: [{ role: "user", content: "归档里的问题" }, { role: "assistant", content: "归档里的回答", status: "complete" }] }] };
+    await page.locator('.chat-archive-settings input[type="file"]').setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) });
+    await page.locator(".chat-archive-settings [role=status]", { hasText: "归档已打开" }).waitFor({ timeout: 10000 });
+    // A bot's line is a server conversation and ends the archive view when opened; the archive is read on the plain conversation page (no bot).
+    await page.evaluate(() => { location.hash = "#/chat/history"; });
+    await waitHash(page, "#/chat/history");
+    const banner = page.locator(".agent-main-column .chat-archive-banner");
+    await banner.waitFor({ timeout: 10000 });
+    assert((await banner.innerText()).includes("本地归档只读查看"), "the banner does not say it is a read-only archive");
+    await page.locator(".agent-message.is-assistant", { hasText: "归档里的回答" }).waitFor({ timeout: 10000 });
+    assert(await page.locator("#agent-draft").isDisabled(), "the composer takes input in a read-only archive");
+    assert(await page.locator("button.agent-send").isDisabled(), "the send button is enabled in a read-only archive");
+    const back = banner.locator("button", { hasText: "返回当前对话" });
+    assert(await back.isEnabled(), "返回当前对话 is not usable");
+    await back.click();
+    await page.locator(".agent-main-column .chat-archive-banner").waitFor({ state: "detached", timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    assert((await page.locator(".agent-message.is-assistant", { hasText: "归档里的回答" }).count()) === 0, "the archive's messages are still showing after the return");
+    return "banner + read-only composer while viewing an imported archive; 返回当前对话 restores the live line";
+  } finally { await view.close(); }
+}
+
+async function chatExternalSync(ctx) {
+  const view = await openChat(ctx, "chat-external-sync");
+  try {
+    const { page } = view;
+    await page.locator("#agent-draft").fill("写到一半的草稿");
+    // A turn written from outside this tab (Telegram, a routine): the next poll (4 s) pulls it in by itself.
+    const turn = "t7000000-0000-4000-8000-000000000001";
+    view.mock.state.chat.conversations.get(CONVERSATION.finbot).push(
+      { role: "user", content: "来自 Telegram 的问题", turn_id: turn },
+      { role: "assistant", status: "complete", turn_id: turn, content: "外部消息的回答：已记入对话线。" });
+    await page.locator(".agent-message.is-assistant", { hasText: "外部消息的回答" }).waitFor({ timeout: 15000 });
+    await page.locator(".agent-message.is-user", { hasText: "来自 Telegram 的问题" }).waitFor({ timeout: 5000 });
+    assert((await page.locator("#agent-draft").inputValue()) === "写到一半的草稿", "the draft changed when the external turn arrived");
+    return "the outside turn appeared without any action; the draft is untouched";
+  } finally { await view.close(); }
+}
+
+async function chatCompact(ctx) {
+  const view = await openChat(ctx, "chat-compact");
+  try {
+    const { page } = view;
+    const posts = watchPosts(page, /\/agent-chat\/conversations\/[^/]+\/compact$/);
+    await page.locator("#agent-draft").fill("/compact 只留估值部分");
+    await page.locator("button.agent-send").click();
+    await page.locator(".agent-compaction summary", { hasText: "已压缩 2 轮" }).waitFor({ timeout: 10000 });
+    assert(posts.length === 1, `expected one compact request, saw ${posts.length}`);
+    assert(posts[0].focus === "只留估值部分" && posts[0].bot_id === BOT.finbot, `compact request: ${JSON.stringify(posts[0])}`);
+    assert((await page.locator("#agent-draft").inputValue()) === "", "the command text stayed in the composer");
+    assert(view.mock.requests.some((r) => r.method === "POST" && /\/compact$/.test(r.path) && r.path.includes(CONVERSATION.finbot)), "the compact request did not name the open conversation");
+    return `POST .../compact {focus, bot_id} once; 「已压缩 2 轮」 line in the thread; the command is cleared`;
+  } finally { await view.close(); }
+}
+
+async function chatLoadEarlier(ctx) {
+  const fixtureState = buildState();
+  fixtureState.chat.older = { [CONVERSATION.finbot]: { messages: olderTurns(6), cursor: 6 } };
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "chat-load-earlier", unmatched, fixtureState });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, { ready: ".agent-thread .agent-message" });
+    await settle(page);
+    await page.locator(".agent-earlier button", { hasText: "加载更早消息" }).waitFor({ timeout: 10000 });
+    const text = "AAPL 最近一个季度的服务收入怎么样？";
+    const offset = (scrollToTop) => page.evaluate(([needle, top]) => {
+      const transcript = document.querySelector(".agent-transcript");
+      if (top) transcript.scrollTop = 0;     // the scroll handler asks for the earlier turns; the answer comes later, so this reads the "before"
+      const el = [...document.querySelectorAll(".agent-message.is-user")].find((node) => node.textContent.includes(needle));
+      return el.getBoundingClientRect().top - transcript.getBoundingClientRect().top;
+    }, [text, scrollToTop]);
+    const scrollable = await page.evaluate(() => { const el = document.querySelector(".agent-transcript"); return el.scrollHeight - el.clientHeight; });
+    assert(scrollable > 200, `the thread barely scrolls (${scrollable}px): the check cannot tell a jump from none`);
+    const before = await offset(true);
+    await page.locator(".agent-message.is-user", { hasText: "更早的问题 1" }).waitFor({ timeout: 10000 });
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r)))));
+    const after = await offset(false);
+    assert(Math.abs(after - before) <= 2, `the line the reader was looking at moved from ${Math.round(before)}px to ${Math.round(after)}px`);
+    assert((await page.locator(".agent-message.is-user", { hasText: "更早的问题 6" }).count()) === 1, "not every earlier turn arrived");
+    assert((await page.locator(".agent-earlier").count()) === 0, "the 加载更早消息 button is still there once nothing is left");
+    return `scrolled to the top -> 6 earlier turns above; the line being read stayed at ${Math.round(before)}px (after: ${Math.round(after)}px)`;
+  } finally { await view.close(); }
+}
+
+// --- P3.1: the English catalog is a chunk of its own ----------------------------------------------------------------------
+async function localeCatalogLoadsOnDemand(ctx) {
+  const english = JSON.parse(fs.readFileSync(path.resolve(flags.dist, "..", "src", "locales", "en-US.json"), "utf8"));
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "locale-lazy", unmatched });
+  try {
+    const { page } = view;
+    const catalogRequests = [];
+    page.on("request", (request) => { if (/\/assets\/en-US-[^/]+\.js$/.test(new URL(request.url()).pathname)) catalogRequests.push(request.url()); });
+    await page.goto(`${ctx.server.url}#/settings/models`, { waitUntil: "load" });
+    await page.locator("select#locale").waitFor({ timeout: 10000 });
+    await settle(page);
+    assert(catalogRequests.length === 0, `a Chinese session fetched the English catalog: ${catalogRequests[0]}`);
+    const title = page.locator("#agent-admin-title");
+    assert((await title.innerText()) === "模型连接设置", "the settings title is not Chinese at the start");
+    await page.locator("select#locale").selectOption("en-US");
+    await page.waitForFunction((text) => document.querySelector("#agent-admin-title")?.textContent === text, english["模型连接设置"], { timeout: 10000 });
+    assert(catalogRequests.length === 1, `switching to English fetched the catalog ${catalogRequests.length} times`);
+    // A reload with English saved: the first draw is already English (the catalog is awaited before the first render).
+    await page.reload({ waitUntil: "load" });
+    await page.waitForFunction((text) => document.querySelector("#agent-admin-title")?.textContent === text, english["模型连接设置"], { timeout: 10000 });
+    assert(catalogRequests.length === 2, `the English reload fetched the catalog ${catalogRequests.length - 1} more times`);
+    await page.locator("select#locale").selectOption("zh-CN");
+    await page.waitForFunction(() => document.querySelector("#agent-admin-title")?.textContent === "模型连接设置", null, { timeout: 10000 });
+    return `Chinese session: no request for the English chunk; switch: one request, title "${english["模型连接设置"]}"; reload in English: the title is English; back to 中文 works`;
+  } finally { await view.close(); }
+}
+
+// --- P3.1: the bot's right rail and the new-bot dialog load on demand; a chunk that cannot be fetched must not take the page down ---
+async function optionalChunkFailure(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "optional-chunk", unmatched });
+  try {
+    const { page } = view;
+    let blocked = 0;
+    await page.route(/\/assets\/BotSidePanel-[^/]*\.js/, (route) => { blocked += 1; return route.abort(); });
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, { ready: ".agent-thread .agent-message" });
+    await settle(page);
+    assert(blocked >= 1, "the bot page never asked for the side panel chunk (is it still loaded eagerly?)");
+    assert((await page.locator("#agent-draft").count()) === 1, "the composer is gone: the failed chunk took the chat page down");
+    assert((await page.locator('[data-slot="route-error"]').count()) === 0, "a failed optional chunk fell through to the route error");
+    assert((await page.locator("#bot-side").count()) === 0, "the right rail is drawn although its chunk was blocked");
+    await page.locator('[data-slot="sidebar"] button', { hasText: "新建 bot" }).first().click();
+    await page.waitForTimeout(800);
+    assert((await page.locator('[role="dialog"]').count()) === 0, "the new-bot dialog is drawn although its chunk was blocked");
+    assert((await page.locator("#agent-draft").count()) === 1 && (await page.locator('[data-slot="route-error"]').count()) === 0, "pressing 新建 bot with the chunk blocked broke the page");
+    await page.locator("#agent-draft").fill("页面还活着");
+    return `chunk blocked ${blocked}x: the thread and composer stay, no rail, no dialog, no route error`;
+  } finally { await view.close(); }
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
-  ["send a message: user line, streamed answer, composer reusable", sendMessageStreams],
+  ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
+  ["chat-cancel: cancel before the stream ends: 已取消 shown, the generated text kept, composer usable", chatCancel],
+  ["chat-background-line: the stream of the bot left behind finishes in the background; the row marks it; the whole answer on return", chatBackgroundLine],
+  ["chat-clarification: a turn ending in a card; the pick goes out as the next turn with its request id", chatClarification],
+  ["chat-write-confirm: 确认执行 sends the request id; 先不要 sends no confirmation", chatWriteConfirm],
+  ["chat-readonly-archive: an opened archive shows its banner, a read-only composer and a working 返回当前对话", chatReadonlyArchive],
+  ["chat-external-sync: a turn written from outside appears by itself, the draft stays", chatExternalSync],
+  ["chat-compact: /compact sends the compress request and the thread shows 已压缩 N 轮", chatCompact],
+  ["locale-catalog-on-demand: a Chinese session never fetches the English catalog; switching or starting in English fetches it once and the page is English", localeCatalogLoadsOnDemand],
+  ["optional-chunk-failure: a blocked side-panel chunk leaves the chat page working without the rail and the new-bot dialog", optionalChunkFailure],
+  ["chat-load-earlier: scrolling to the top loads the earlier turns and the line being read does not move", chatLoadEarlier],
   ["switch to another bot and back: URL changes, earlier answer kept", switchBotAndBack],
   ["browser back returns to the previous address", backButtonReturns],
   ["theme toggle flips data-theme on <html>", themeToggles],

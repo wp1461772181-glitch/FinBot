@@ -71,7 +71,7 @@ test("picker is wired to the chat badge: updateBot with the changed field only, 
   assert.match(picker, /updateBot\(bot\.id, patchFor\(/);
   assert.match(picker, /role="alert"/);
   assert.match(picker, /catch/);
-  assert.match(tsx("AgentChatPanel.tsx"), /<ModelEffortPicker/);
+  assert.match(tsx("app/chat/ChatPage.tsx"), /<ModelEffortPicker/);   // P3.1: the chat page left AgentChatPanel.tsx
   assert.match(tsx("app/pages/chat.tsx"), /onBotChanged=\{changed\}/);   // P2.1: BotPage moved from App.tsx
   assert.match(css, /\.model-effort-pop\s*\{/);
 });

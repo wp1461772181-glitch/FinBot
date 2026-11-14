@@ -1,8 +1,8 @@
 // Fixture entry: buildState() makes a fresh mutable state per browser context; registerRoutes() wires the handlers.
-import { BOT, CONVERSATION, HOLD_MARKER, LOGIN_CODE, WATCHLIST } from "./ids.mjs";
+import { ASK_MARKER, BOT, CONVERSATION, HOLD_MARKER, LOGIN_CODE, WATCHLIST } from "./ids.mjs";
 import { prices } from "./common.mjs";
 import { botList, BOT_TEMPLATES, MODEL_CATALOG, MODEL_ROLES } from "./bots.mjs";
-import { buildChat, conversationSummaries, CONTEXT_USAGE, streamEvents } from "./chat.mjs";
+import { buildChat, clarificationEvents, compactionNotice, conversationSummaries, CONTEXT_USAGE, streamEvents } from "./chat.mjs";
 import { filingInventory } from "./filings.mjs";
 import { MATERIALS, materialList, analysisVersion, materialOriginal, ANALYSIS_SETTINGS } from "./materials.mjs";
 import { forecastList, forecastRoots, timeline, versionDetail, evaluations, MONITOR, workspace, job, revisionCandidates, JUDGMENTS } from "./forecasts.mjs";
@@ -39,7 +39,19 @@ export function registerRoutes(route, reply) {
 
   // --- conversations -----------------------------------------------------------------------------------
   route.get(`${A}/conversations`, own(({ state }) => ({ conversations: conversationSummaries(state), has_more: false })));
-  route.get(`${A}/conversations/:id/messages`, own(({ params, state }) => ({ messages: state.chat.conversations.get(params.id) ?? [], has_more: false, next_before: null, compactions: [] })));
+  // state.chat.older[id] = { messages, cursor } (a check sets it) makes the newest page say "there are earlier turns" until they are asked for with ?before=.
+  route.get(`${A}/conversations/:id/messages`, own(({ params, query, state }) => {
+    const compactions = state.chat.compactions?.[params.id] ?? [];
+    const older = state.chat.older?.[params.id];
+    if (older && query.get("before") !== null) return { messages: older.messages, has_more: false, next_before: null, compactions };
+    return { messages: state.chat.conversations.get(params.id) ?? [], has_more: Boolean(older), next_before: older ? older.cursor : null, compactions };
+  }));
+  route.post(`${A}/conversations/:id/compact`, own(({ params, body, state }) => {
+    const turns = state.chat.conversations.get(params.id) ?? [];
+    const after = turns.filter((m) => m.role === "assistant" && m.turn_id)[1]?.turn_id ?? turns.find((m) => m.turn_id)?.turn_id ?? "t0000000-0000-4000-8000-000000000001";
+    state.chat.compactions = { ...(state.chat.compactions ?? {}), [params.id]: [compactionNotice(after, body?.focus)] };
+    return { compacted: 2, message: "已压缩 2 轮。" };
+  }));
   route.get(`${A}/conversations/:id/context`, own(() => CONTEXT_USAGE));
   route.get(`${A}/context`, own(() => CONTEXT_USAGE));
   route.post(`${A}/stream`, own(({ body, state }) => {
@@ -47,9 +59,15 @@ export function registerRoutes(route, reply) {
     if (String(body.message).includes(HOLD_MARKER)) return new Promise(() => {});
     const bot = body.bot_id ? state.bots.find((b) => b.id === body.bot_id) : null;
     const conversationId = bot?.conversation_id ?? body.conversation_id ?? CONVERSATION.finbot;
-    const events = streamEvents({ conversationId, message: body.message, botId: bot?.id });
+    const asking = String(body.message).includes(ASK_MARKER);
+    const events = asking ? clarificationEvents({ conversationId, botId: bot?.id }) : streamEvents({ conversationId, message: body.message, botId: bot?.id });
     const list = state.chat.conversations.get(conversationId) ?? [];
     state.chat.conversations.set(conversationId, list);
+    if (asking) {
+      list.push({ role: "user", content: body.display_message || body.message }, { role: "assistant", status: "waiting_for_input", turn_id: events[0].data.turn_id,
+        content: events[1].data.text, clarification: events[2].data });
+      return reply.sse(events);
+    }
     const text = events.filter((e) => e.event === "delta").map((e) => e.data.text).join("");
     list.push({ role: "user", content: body.display_message || body.message }, { role: "assistant", status: "complete", turn_id: events[0].data.turn_id, content: text, thinking_ms: 900 });
     return reply.sse(events);

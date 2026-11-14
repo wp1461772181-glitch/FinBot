@@ -25,3 +25,7 @@ export const WATCHLIST = ["AAPL", "TSLA", "NVDA", "AMD", "MSFT", "GOOGL", "AMZN"
 // The login code the fake server accepts (an invented one) and the marker that makes the fake stream hang.
 export const LOGIN_CODE = "shots-fixture-login-code";
 export const HOLD_MARKER = "[hold-the-answer]";
+// P3.1: a message holding ASK_MARKER is answered with a clarification card (the turn waits for the user's pick);
+// a message holding HAND_MARKER never reaches the fake API: smoke.mjs feeds that stream by hand (fake-sse.mjs).
+export const ASK_MARKER = "[ask-which]";
+export const HAND_MARKER = "[hand-fed]";

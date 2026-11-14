@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router";
-import { useLineStatus } from "../AgentChatPanel";
-import { NewBotDialog, useBots } from "../BotPages";
+import { useLineStatus } from "./chat/ChatSessionProvider";
+import { useBots } from "../BotPages";
+import { OptionalChunk } from "../OptionalChunk";
 import { isResearchSection, navGroup, type WorkspaceSection } from "../workspace-sections.mjs";
 import { getChatMode, getResearchQueue, markBotRead, putResearchQueue, type Bot } from "../api";
 import { normalizeHash } from "../legacy-routes.mjs";
@@ -12,6 +13,9 @@ import type { PaletteData } from "@/components/command/CommandMenu";
 import { WorkspaceContext, type Workspace } from "./workspace";
 import { AppShell } from "./shell/AppShell";
 import { useRoutinesBadge } from "./shell/useRoutinesBadge";
+
+// The new-bot dialog is only needed when 新建 is pressed: its own chunk, fetched on demand.
+const NewBotDialog = lazy(() => import("../BotSidePanel").then((module) => ({ default: module.NewBotDialog })));
 
 export const DEFAULT_SYMBOL = "AAPL";
 export const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"];
@@ -173,7 +177,7 @@ export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest"
     personal, symbols, setSymbols, symbol, preferredSymbol: preferred, setPreferredSymbol, bots: botList, go, openCompany, removeWatchSymbol,
   }), [personal, symbols, symbol, preferred, setPreferredSymbol, botList, go, openCompany, removeWatchSymbol]);
 
-  const newBotDialog = newBotOpen && <NewBotDialog onClose={() => setNewBotOpen(false)} onCreated={bot => { setNewBotOpen(false); void botList.reload().then(() => openBot(bot)); }} />;
+  const newBotDialog = newBotOpen && <OptionalChunk><NewBotDialog onClose={() => setNewBotOpen(false)} onCreated={bot => { setNewBotOpen(false); void botList.reload().then(() => openBot(bot)); }} /></OptionalChunk>;
   // The to-do number is read again whenever the bot list reloads (every action on the 任务 page and every finished answer reloads it).
   const routinesCount = useRoutinesBadge(personal, botList.bots);
   // The old top bar showed the company switcher on the research pages, except the forecast group (its company comes from the record).

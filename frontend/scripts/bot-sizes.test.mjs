@@ -18,10 +18,10 @@ test("sizes: rail and chat title avatars are 44px+, pickers one step larger", ()
 });
 
 test("sizes: components use the shared constants, not literals", () => {
-  assert.match(tsx("AgentChatPanel.tsx"), /size=\{BOT_AVATAR_SIZE\.title\}/);
+  assert.match(tsx("app/chat/ChatHeader.tsx"), /size=\{BOT_AVATAR_SIZE\.title\}/);   // P3.1: moved out of AgentChatPanel.tsx
   assert.match(tsx("app/shell/BotRow.tsx"), /BOT_AVATAR_SIZE\.sidebar/);   // P2.2: the sidebar row (design 6.2, size S: 28-40px) replaced the rail row
-  assert.match(tsx("BotPages.tsx"), /size=\{BOT_AVATAR_SIZE\.hero\}/);
-  assert.match(tsx("BotPages.tsx"), /size=\{BOT_AVATAR_SIZE\.createHero\}/);
+  assert.match(tsx("BotSidePanel.tsx"), /size=\{BOT_AVATAR_SIZE\.hero\}/);   // P3.1: BotPages.tsx was split; the profile form is in BotSidePanel.tsx
+  assert.match(tsx("BotSidePanel.tsx"), /size=\{BOT_AVATAR_SIZE\.createHero\}/);
 });
 
 test("sizes: css overrides match the constants (title; the rail emoji avatar rule went with the old rail in P2.2)", () => {

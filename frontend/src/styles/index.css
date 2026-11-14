@@ -13,6 +13,26 @@
 @source "../components";
 @source "../app";
 @source "../dev";
+/* P3.1 moved the old chat page and settings page (legacy markup, class names of the old sheets) into src/app/.  Their words
+   (`ordinal`, `table` ...) must not become utilities either, so these files are listed out of the scan one by one.  A package
+   that restyles a file with utility classes deletes that file's line here and the "legacy markup" header from the file. */
+@source not "../app/chat/ChatHeader.tsx";
+@source not "../app/chat/ChatPage.tsx";
+@source not "../app/chat/ChatSessionProvider.tsx";
+@source not "../app/chat/Citations.tsx";
+@source not "../app/chat/ClarificationCard.tsx";
+@source not "../app/chat/Composer.tsx";
+@source not "../app/chat/HistoryList.tsx";
+@source not "../app/chat/TaskPostHead.tsx";
+@source not "../app/chat/Thread.tsx";
+@source not "../app/chat/icons.tsx";
+@source not "../app/settings/AppearanceCard.tsx";
+@source not "../app/settings/ChatArchiveSettings.tsx";
+@source not "../app/settings/MaterialAnalysisDefaultCard.tsx";
+@source not "../app/settings/ModelCatalogCard.tsx";
+@source not "../app/settings/PushoverCard.tsx";
+@source not "../app/settings/SettingsPage.tsx";
+@source not "../app/settings/TelegramBindCard.tsx";
 @import "tw-animate-css";
 
 @import "./fonts.css";
