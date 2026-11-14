@@ -15,7 +15,7 @@ test("the shell carries no theme or language select (P2.2: no top bar any more; 
 });
 
 test("the settings page owns the appearance and language sections, with the same persistence", () => {
-  const settings = read("AgentChatPanel.tsx");
+  const settings = [read("app/settings/AppearanceCard.tsx"), read("app/settings/SettingsPage.tsx")].join("\n");   // P3.1: AgentChatPanel.tsx was split into these
   assert.match(settings, /id="theme"/);
   assert.match(settings, /id="locale"/);
   assert.match(settings, /saveTheme\(/);

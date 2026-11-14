@@ -1,4 +1,4 @@
-import { friendlyError } from "../../AgentChatPanel";
+import { friendlyError } from "../../app/chat/friendly-error";
 
 /**
  * The reason an ErrorBar gives: the existing `friendlyError` mapping for the backend's error codes and messages, and one plain

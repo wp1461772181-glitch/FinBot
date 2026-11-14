@@ -9,6 +9,8 @@ export type NotifyOptions = {
   description?: string;
   /** 撤销: the toast carries the button; pressing it runs `onClick` and closes the toast. */
   undo?: { label: string; onClick: () => void };
+  /** A button that takes the reader somewhere (查看): like 撤销, it keeps the toast long enough to be reached.  The toast closes when it is pressed. */
+  action?: { label: string; onClick: () => void };
   /** Replace a toast made earlier with the same id (a repeated save does not stack). */
   id?: string | number;
   duration?: number;
@@ -18,8 +20,9 @@ export type NotifyOptions = {
 const load = () => { needToaster(); return import("./toast-impl").then(async (impl) => { await impl.toasterReady; return impl.toast; }); };
 
 function build(options: NotifyOptions = {}) {
-  const { undo, duration, ...rest } = options;
-  return { ...rest, duration: duration ?? (undo ? TOAST_UNDO_MS : TOAST_MS), ...(undo ? { action: { label: undo.label, onClick: undo.onClick } } : {}) };
+  const { undo, action, duration, ...rest } = options;
+  const button = undo ?? action;
+  return { ...rest, duration: duration ?? (button ? TOAST_UNDO_MS : TOAST_MS), ...(button ? { action: { label: button.label, onClick: button.onClick } } : {}) };
 }
 
 /**

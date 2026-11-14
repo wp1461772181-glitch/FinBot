@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { personalChatLogin, setChatMode } from "../api";
-import { friendlyError } from "../AgentChatPanel";
+import { friendlyError } from "./chat/friendly-error";
 import { BrandLogo } from "../BotOrb";
 import { BOT_AVATAR_SIZE } from "../bot-sizes.mjs";
 import { useLocale } from "../i18n";

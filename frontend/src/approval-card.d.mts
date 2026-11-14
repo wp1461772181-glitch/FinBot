@@ -1,0 +1,14 @@
+export const APPROVAL_TTL_MS: number;
+export type ApprovalChoice = { label: string; value: string };
+type CardLike = { reason?: string; choices?: ApprovalChoice[]; options?: unknown[]; select?: { min: number; max: number }; display?: { title?: string; targets?: Record<string, unknown>[] } } | null | undefined;
+export function approvalKind(card: CardLike): "revision" | "write" | "question";
+export function isWriteCard(card: CardLike): boolean;
+export function isConfirmCard(card: CardLike): boolean;
+export function arrangeChoices(card: CardLike): { layout: "confirm" | "list"; primary: ApprovalChoice | null; secondary: ApprovalChoice | null; more: ApprovalChoice[]; list: ApprovalChoice[] };
+export function remainingMs(freshAt: number, now: number): number;
+export function formatRemaining(ms: number): string;
+export function pickState(card: CardLike, pickedCount: number): { min: number; max: number; picked: number; missing: number; noCandidates: boolean };
+export type TargetRow = { key: string; label: string; known: boolean; value: string };
+export function targetRows(display: { targets?: Record<string, unknown>[] } | null | undefined): TargetRow[][];
+export function answerSummary(card: CardLike, reply: unknown): { outcome: "confirmed" | "cancelled" | "answered" | "skipped"; detail: string };
+export function isExpired(freshAt: number, now: number): boolean;

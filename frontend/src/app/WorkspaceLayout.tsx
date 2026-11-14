@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router";
-import { useLineStatus } from "../AgentChatPanel";
-import { NewBotDialog, useBots } from "../BotPages";
+import { useLineStatus } from "./chat/ChatSessionProvider";
+import { notify } from "@/components/state/notify";
+import { botIdOfLine, newlyListed } from "../chat-states.mjs";
+import { translatePhrase } from "../i18n";
+import { useBots } from "../BotPages";
+import { OptionalChunk } from "../OptionalChunk";
 import { isResearchSection, navGroup, type WorkspaceSection } from "../workspace-sections.mjs";
 import { getChatMode, getResearchQueue, markBotRead, putResearchQueue, type Bot } from "../api";
 import { normalizeHash } from "../legacy-routes.mjs";
@@ -12,6 +16,9 @@ import type { PaletteData } from "@/components/command/CommandMenu";
 import { WorkspaceContext, type Workspace } from "./workspace";
 import { AppShell } from "./shell/AppShell";
 import { useRoutinesBadge } from "./shell/useRoutinesBadge";
+
+// The new-bot dialog is only needed when 新建 is pressed: its own chunk, fetched on demand.
+const NewBotDialog = lazy(() => import("../BotSidePanel").then((module) => ({ default: module.NewBotDialog })));
 
 export const DEFAULT_SYMBOL = "AAPL";
 export const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"];
@@ -143,6 +150,15 @@ export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest"
   const openedBotId = activeBot?.id ?? null, reloadBots = botList.reload;
   useEffect(() => { if (openedBotId) void markBotRead(openedBotId).then(() => reloadBots()).catch(() => { /* the badge stays until the next refresh */ }); }, [openedBotId, reloadBots]);
   const openBot = useCallback((bot: Bot) => navigate(bot.is_default ? paths.chat() : paths.chat(bot.id)), [navigate]);
+  // A background answer finished while the reader was in another line or page: a toast that takes them there.  One per bot (its id replaces the last), so a run of answers does not pile up.
+  const unseenLines = lineStatus.unseen, seenBefore = useRef<string[]>([]);
+  useEffect(() => {
+    const fresh = newlyListed(seenBefore.current, unseenLines); seenBefore.current = unseenLines;
+    for (const key of fresh) {
+      const bot = botList.bots.find(item => item.id === botIdOfLine(key));
+      if (bot) notify.info(`${bot.name} ${translatePhrase("回答好了")}`, { id: `background-done:${bot.id}`, action: { label: translatePhrase("查看"), onClick: () => openBot(bot) } });
+    }
+  }, [unseenLines.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openCompany = useCallback((ticker: string, view: "overview" | "forecast" = "overview") => {
     const clean = normalizeTicker(ticker);
@@ -170,10 +186,10 @@ export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest"
   }, [symbols, navigate, addressSymbol]);
 
   const workspace: Workspace = useMemo(() => ({
-    personal, symbols, setSymbols, symbol, preferredSymbol: preferred, setPreferredSymbol, bots: botList, go, openCompany, removeWatchSymbol,
+    personal, symbols, setSymbols, symbol, preferredSymbol: preferred, setPreferredSymbol, bots: botList, go, openCompany, removeWatchSymbol, openNewBot: () => setNewBotOpen(true),
   }), [personal, symbols, symbol, preferred, setPreferredSymbol, botList, go, openCompany, removeWatchSymbol]);
 
-  const newBotDialog = newBotOpen && <NewBotDialog onClose={() => setNewBotOpen(false)} onCreated={bot => { setNewBotOpen(false); void botList.reload().then(() => openBot(bot)); }} />;
+  const newBotDialog = newBotOpen && <OptionalChunk><NewBotDialog onClose={() => setNewBotOpen(false)} onCreated={bot => { setNewBotOpen(false); void botList.reload().then(() => openBot(bot)); }} /></OptionalChunk>;
   // The to-do number is read again whenever the bot list reloads (every action on the 任务 page and every finished answer reloads it).
   const routinesCount = useRoutinesBadge(personal, botList.bots);
   // The old top bar showed the company switcher on the research pages, except the forecast group (its company comes from the record).

@@ -74,11 +74,6 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
    background is a light colour), so those surfaces are pointed at the dark tokens here. */
 :root[data-theme="dark"] .action-notice.error,
 :root[data-theme="dark"] .action-notice.success,
-:root[data-theme="dark"] .agent-action-button[aria-pressed="true"],
-:root[data-theme="dark"] .agent-clarification-card.is-write,
-:root[data-theme="dark"] .agent-clarification-reply input,
-:root[data-theme="dark"] .agent-connection.is-ready,
-:root[data-theme="dark"] .agent-history-edit input,
 :root[data-theme="dark"] .agent-settings-card,
 :root[data-theme="dark"] .agent-settings-card input,
 :root[data-theme="dark"] .agent-settings-card select,
@@ -132,12 +127,6 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 :root[data-theme="dark"] .evidence-processing-counts>div,
 :root[data-theme="dark"] .evidence-processing-list article,
 :root[data-theme="dark"] .evidence-version-controls select,
-:root[data-theme="dark"] .flow-node.status-cancelled .flow-dot,
-:root[data-theme="dark"] .flow-node.status-done .flow-dot,
-:root[data-theme="dark"] .flow-node.status-failed .flow-dot,
-:root[data-theme="dark"] .flow-node.status-running .flow-card,
-:root[data-theme="dark"] .flow-node.status-running .flow-dot,
-:root[data-theme="dark"] .flow-node.status-warn .flow-dot,
 :root[data-theme="dark"] .knowledge-chunk,
 :root[data-theme="dark"] .knowledge-drawer,
 :root[data-theme="dark"] .knowledge-error,
@@ -148,7 +137,6 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 :root[data-theme="dark"] .language-form select,
 :root[data-theme="dark"] .legacy-empty-archive,
 :root[data-theme="dark"] .legacy-forecast-records,
-:root[data-theme="dark"] .markdown-body a.citation-ref,
 :root[data-theme="dark"] .material-citation,
 :root[data-theme="dark"] .material-error,
 :root[data-theme="dark"] .material-filterbar,
@@ -178,11 +166,6 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 :root[data-theme="dark"] .status-queued,
 :root[data-theme="dark"] .status-running,
 :root[data-theme="dark"] .status-succeeded,
-:root[data-theme="dark"] .tool-badge.status-cancelled,
-:root[data-theme="dark"] .tool-badge.status-complete,
-:root[data-theme="dark"] .tool-badge.status-failed,
-:root[data-theme="dark"] .tool-badge.status-not_found,
-:root[data-theme="dark"] .tool-badge.status-running,
 :root[data-theme="dark"] .universe-card,
 :root[data-theme="dark"] .universe-card.is-current,
 :root[data-theme="dark"] .v2-card,
@@ -243,7 +226,3 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 .skill-tool-list { display: grid; gap: 4px; border:1px solid var(--me-line); border-radius: 8px; padding: 8px 10px; }
 .skill-editor, .skill-import { margin: 12px 0; }
 .skill-editor textarea, .skill-import textarea { font: inherit; width: 100%; box-sizing: border-box; }
-.skill-picker { position: absolute; left: 0; right: 0; bottom: 100%; z-index: 5; margin: 0 0 4px; padding: 4px; list-style: none; background:var(--c-surface, var(--surface)); border:1px solid var(--c-line-strong, #ccc); border-radius: 8px; max-height: 260px; overflow: auto; }
-.skill-picker li { display: grid; gap: 2px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-.skill-picker li[aria-selected="true"], .skill-picker li:hover { background:var(--c-hover, rgba(127,127,127,.15)); }
-.skill-picker small { color:var(--c-muted, #666); }

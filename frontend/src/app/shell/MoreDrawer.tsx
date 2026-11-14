@@ -1,16 +1,16 @@
 import { Link } from "react-router";
-import { Eye, History, KeyRound, LogOut, Plus, Search } from "lucide-react";
+import { Eye, KeyRound, LogOut, Search } from "lucide-react";
 import { openCommandMenu } from "@/components/command/command-events";
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import type { Bot } from "../../api";
 import { botSections } from "../../bot-items.mjs";
-import { isWaiting, botMarker, countLabel } from "../../bot-marker.mjs";
 import { useLocale } from "../../i18n";
 import { paths } from "../../routes.mjs";
 import { activeItem, areaItems, areaPath } from "../../shell-nav.mjs";
 import { ThemeToggle, useAccountActions } from "./account";
 import { openLoginDialog } from "./login-events";
 import type { ShellNavProps } from "./AppSidebar";
+import { BotSwitchList } from "./BotSwitchList";
 
 const sectionTitle = "px-4 pt-3 pb-1 text-caption font-medium text-muted-foreground";
 const rowClass = "flex min-h-11 items-center gap-3 rounded-sm px-4 text-body text-ink outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring aria-[current=page]:bg-accent aria-[current=page]:font-medium";
@@ -43,21 +43,7 @@ export default function MoreDrawer({ open, onOpenChange, props }: { open: boolea
         </div>
         {props.personal && <>
           <p className={sectionTitle}>{t("切换 bot")}</p>
-          <ul className="flex flex-col">
-            {botLinks.map(bot => {
-              const marker = botMarker({ running: props.lineStatus.running.includes(`bot:${bot.id}`), waiting: isWaiting(bot, props.lineStatus.waiting), unread: (bot.unread > 0 ? bot.unread : 0) + (props.lineStatus.unseen.includes(`bot:${bot.id}`) ? 1 : 0), active: bot.id === props.activeBotId });
-              return <li key={bot.id}>
-                <Link to={bot.is_default ? paths.chat() : paths.chat(bot.id)} onClick={close} aria-current={bot.id === props.activeBotId ? "page" : undefined} className={rowClass}>
-                  <span className="min-w-0 flex-1 truncate">{bot.name}</span>
-                  {marker.word === "running" && <span className="text-caption text-muted-foreground">{t("回答中")}</span>}
-                  {marker.word === "waiting" && <span className="text-caption font-medium text-action">{t("等你")}</span>}
-                  {marker.count > 0 && <span className="min-w-5 rounded-full bg-brand px-1.5 text-center text-caption leading-5 font-medium text-primary-foreground">{countLabel(marker.count)}</span>}
-                </Link>
-              </li>;
-            })}
-            <li><Link to={paths.chatHistory()} onClick={close} className={rowClass}><History aria-hidden="true" className="size-4 text-muted-foreground" />{t("历史对话")}</Link></li>
-            <li><button type="button" onClick={() => { close(); props.onNewBot(); }} className={`${rowClass} w-full text-left`}><Plus aria-hidden="true" className="size-4 text-muted-foreground" />{t("新建 bot")}</button></li>
-          </ul>
+          <BotSwitchList bots={botLinks} activeBotId={props.activeBotId} lineStatus={props.lineStatus} onNavigate={close} onNewBot={props.onNewBot} />
         </>}
         <p className={sectionTitle}>{t("助手")}</p>
         <ul className="flex flex-col">

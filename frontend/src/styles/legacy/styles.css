@@ -1558,8 +1558,6 @@ body{background:var(--canvas);color:var(--ink)}
 
 .agent-settings-card input:focus-visible,.agent-settings-card select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
-.agent-settings-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-
 .agent-settings-card>small{color:var(--muted);font-size:10px;line-height:1.5}
 
 .rail-admin-link:focus-visible{outline:2px solid var(--accent);outline-offset:3px}

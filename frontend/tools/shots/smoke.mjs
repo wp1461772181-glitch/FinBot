@@ -2,15 +2,20 @@
 // One named function per check, registered in CHECKS.  Later phases append checks here.
 import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
-import { launch, newView, settle } from "./harness.mjs";
+import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, waitReady } from "./pages.mjs";
-import { BOT, CONVERSATION, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
+import { PAGES, clickSend, endWithCard, endWithError, firstAnswer, handTurn, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
+import { ASK_MARKER, BOT, CONVERSATION, HAND_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
+import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
+import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
 import { MATERIALS } from "./fixtures/materials.mjs";
 import { buildState } from "./fixtures/index.mjs";
+import fs from "node:fs";
 import path from "node:path";
 import { findCollisions } from "./collisions.mjs";
+import { normalizePublicMarks, publicMarkQuoteText } from "../../src/chat-public-marks.mjs";
+import { followUpQuestion } from "../../src/chat-unverified.mjs";
 
 const { flags } = parseArgs(process.argv.slice(2), { booleans: ["strict"] });
 if (!flags.dist) { console.error("usage: node smoke.mjs --dist <build dir> [--strict]"); process.exit(2); }
@@ -58,9 +63,9 @@ async function sendMessageStreams(ctx) {
   try {
     const { page } = view;
     await page.locator("#agent-draft").fill(SMOKE_TEXT);
-    await page.locator("button.agent-send").click();
-    await page.locator(".agent-message.is-user", { hasText: SMOKE_TEXT }).waitFor({ timeout: 10000 });
-    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=send]").click();
+    await page.locator("[data-testid=message][data-role=user]", { hasText: SMOKE_TEXT }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     await page.locator("#agent-draft").fill("再问一句");
     assert((await page.locator("#agent-draft").inputValue()) === "再问一句", "composer did not accept input after the turn");
@@ -73,8 +78,8 @@ async function switchBotAndBack(ctx) {
   try {
     const { page } = view;
     await page.locator("#agent-draft").fill(SMOKE_TEXT);
-    await page.locator("button.agent-send").click();
-    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=send]").click();
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     const before = await page.evaluate(() => location.hash);
     await pressBotRow(page, "NewsBot");
@@ -82,7 +87,7 @@ async function switchBotAndBack(ctx) {
     await page.locator("h1", { hasText: "NewsBot" }).waitFor({ timeout: 10000 });
     await pressBotRow(page, "FinBot");
     await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
-    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
     return `${before || "(empty)"} -> #/chat/<NewsBot> -> back; earlier answer still present`;
   } finally { await view.close(); }
 }
@@ -117,15 +122,17 @@ async function themeToggles(ctx) {
   } finally { await view.close(); }
 }
 
+/** P3.3: the process bar opens the right panel's 过程 tab, which lists the round's steps (the old thinking panel's graph). */
 async function thinkingPanelExpands(ctx) {
   const view = await openChat(ctx, "thinking-panel");
   try {
     const { page } = view;
-    const toggle = page.locator(".thinking-toggle[aria-expanded]").first();
-    await toggle.waitFor({ timeout: 10000 });
-    await toggle.click();
-    await page.locator(".turn-flow .flow-node").first().waitFor({ timeout: 5000 });
-    return `${await page.locator(".turn-flow .flow-node").count()} trace nodes shown`;
+    const bar = firstAnswer(page).locator("[data-testid=turn-steps]");
+    await bar.waitFor({ timeout: 10000 });
+    await bar.click();
+    await page.locator("[data-testid=timeline-step]").first().waitFor({ timeout: 5000 });
+    assert((await page.locator("[data-testid=tab-process]").getAttribute("aria-selected")) === "true", "the 过程 tab is not the selected one");
+    return `${await page.locator("[data-testid=timeline-step]").count()} steps shown in the 过程 tab`;
   } finally { await view.close(); }
 }
 
@@ -480,11 +487,11 @@ async function openAt(ctx, label, hash, { lastSymbol = "AAPL", width = 1440, rea
 async function legacyRedirects(ctx) {
   const material = HEX_ID;
   const cases = [
-    ["", "#/chat", ".agent-thread .agent-message"],
-    ["#agent", "#/chat", ".agent-thread .agent-message"],
-    ["#chat", "#/chat", ".agent-thread .agent-message"],
-    [`#agent/${CONVERSATION.older}`, `#/chat/c/${CONVERSATION.older}`, ".agent-thread .agent-message"],
-    [`#bot/${BOT.applebot}`, `#/chat/${BOT.applebot}`, ".agent-thread .agent-message"],
+    ["", "#/chat", "[data-testid=message]"],
+    ["#agent", "#/chat", "[data-testid=message]"],
+    ["#chat", "#/chat", "[data-testid=message]"],
+    [`#agent/${CONVERSATION.older}`, `#/chat/c/${CONVERSATION.older}`, "[data-testid=message]"],
+    [`#bot/${BOT.applebot}`, `#/chat/${BOT.applebot}`, "[data-testid=message]"],
     ["#overview", "#/research/c/AAPL", ".overview-workspace"],
     ["#company", "#/research/c/AAPL", ".overview-workspace"],
     ["#forecast", "#/research/forecasts", ".forecast-home"],
@@ -511,8 +518,8 @@ async function legacyRedirects(ctx) {
     ["#me", "#/assistant/bots", "main.personal-page h1"],
     ["#admin", "#/settings/models", ".agent-admin h2"],
     ["#settings", "#/settings/models", ".agent-admin h2"],
-    ["#nonsense", "#/chat", ".agent-thread .agent-message"],
-    ["#/no/such/page", "#/chat", ".agent-thread .agent-message"],
+    ["#nonsense", "#/chat", "[data-testid=message]"],
+    ["#/no/such/page", "#/chat", "[data-testid=message]"],
   ];
   const bad = [];
   for (const [from, to, ready] of cases) {
@@ -527,7 +534,7 @@ async function legacyRedirects(ctx) {
     await view.close();
   }
   // The same jump while the app runs (a link in an old answer, a bookmark): replaced, not pushed, so back skips the old form.
-  const runtime = await openAt(ctx, "legacy at runtime", "#/chat", { ready: ".agent-thread .agent-message" });
+  const runtime = await openAt(ctx, "legacy at runtime", "#/chat", { ready: "[data-testid=message]" });
   try {
     await settle(runtime.page);
     for (const [from, to] of [["#forecast", "#/research/forecasts"], [`#materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`], [`#evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`, `#/research/evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`]]) {
@@ -546,7 +553,7 @@ async function legacyRedirects(ctx) {
 
 /** chat -> research -> a company -> one of its forecasts -> portfolio, then back four times: every press lands on the previous address. */
 async function backButtonChain(ctx) {
-  const view = await openAt(ctx, "back chain", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openAt(ctx, "back chain", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     const trail = [await hashOf(page)];
@@ -556,7 +563,7 @@ async function backButtonChain(ctx) {
     await step(() => page.locator(".overview-focus-actions .primary-action").click(), ".research-brief");
     await step(() => pressNavItem(page, "持仓"), ".pf-positions");
     assert(trail.join(" ") === `#/chat #/research #/research/c/AAPL #/research/forecasts/${ROOT.aapl} #/portfolio`, `unexpected trail ${trail.join(" ")}`);
-    const ready = [".research-brief", ".overview-workspace", ".overview-workspace", ".agent-thread .agent-message"];
+    const ready = [".research-brief", ".overview-workspace", ".overview-workspace", "[data-testid=message]"];
     for (let i = trail.length - 2; i >= 0; i -= 1) {
       await page.goBack();
       await waitHash(page, trail[i]);
@@ -592,7 +599,7 @@ async function deepLinkReload(ctx) {
 
 /** The agent's open_page / select_stock / queue events, as the chat page's answers raise them. */
 async function clientActions(ctx) {
-  const view = await openAt(ctx, "client actions", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openAt(ctx, "client actions", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     const expected = [
@@ -625,20 +632,20 @@ async function clientActions(ctx) {
 
 /** Send in a bot's line, leave for another page at once, come back: the session is above the router outlet, so the answer is there. */
 async function backgroundTurnSurvivesNavigation(ctx) {
-  const view = await openAt(ctx, "background turn", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openAt(ctx, "background turn", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     await settle(page);
     const text = "导航途中的提问 AAPL";
     await page.locator("#agent-draft").fill(text);
-    await page.locator("button.agent-send").click();
+    await page.locator("[data-testid=send]").click();
     await pressNavItem(page, "持仓");
     await waitHash(page, "#/portfolio");
     await waitReady(page, { ready: ".pf-positions" });
     await pressBotRow(page, "FinBot");
     await waitHash(page, "#/chat");
-    await page.locator(".agent-message.is-user", { hasText: text }).waitFor({ timeout: 10000 });
-    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).last().waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=user]", { hasText: text }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).last().waitFor({ timeout: 10000 });
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     return "question sent, left for #/portfolio at once, back: the question and the streamed answer are in the line";
   } finally { await view.close(); }
@@ -647,7 +654,7 @@ async function backgroundTurnSurvivesNavigation(ctx) {
 
 /** A link in a past answer is a plain anchor with an old-form href: clicking it lands on the new route, and back returns to the chat. */
 async function answerLinks(ctx) {
-  const view = await openAt(ctx, "answer links", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openAt(ctx, "answer links", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     const links = [
@@ -670,7 +677,7 @@ async function answerLinks(ctx) {
 
 /** A page whose chunk cannot be fetched (offline, or removed by a new deploy) shows the load-failure notice inside the shell, and reload recovers. */
 async function chunkLoadFailure(ctx) {
-  const view = await openAt(ctx, "chunk failure", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openAt(ctx, "chunk failure", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     await settle(page);
@@ -768,7 +775,7 @@ async function sidebarCollapsePersists(ctx) {
 /** The 任务 number is the live proposals plus the open write suggestions, and the 任务 page lists exactly that many waiting cards. */
 async function routinesBadgeMatches(ctx) {
   const expected = PROPOSALS.filter((p) => !p.expired).length + INBOX.filter((i) => i.section === "confirm" && i.status !== "done" && i.status !== "dismissed").length;
-  const view = await openShell(ctx, "routines badge", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openShell(ctx, "routines badge", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     const badge = page.locator('[data-slot="sidebar"] a[href="#/routines"]').locator("xpath=..").locator("[data-count]");
@@ -800,7 +807,7 @@ async function routinesBadgeMatches(ctx) {
 /** Mode switch and sign-out exist once, in the account menu; the chat header, settings and the other pages have neither. */
 async function modeSwitchSingleEntry(ctx) {
   const names = /切换模式|切换到访客只读|登出|登录个人/;
-  const view = await openShell(ctx, "mode switch", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openShell(ctx, "mode switch", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     await settle(page);
@@ -865,9 +872,9 @@ async function loginFlow(ctx) {
     await page.locator('input[type="password"]').fill(LOGIN_CODE);
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await waitHash(page, "#/chat");
-    await waitReady(page, { ready: ".agent-thread .agent-message" });
+    await waitReady(page, { ready: "[data-testid=message]" });
   } finally { await first.close(); }
-  const again = await openShell(ctx, "login while signed in", "#/login", { ready: ".agent-thread .agent-message" });
+  const again = await openShell(ctx, "login while signed in", "#/login", { ready: "[data-testid=message]" });
   try { await waitHash(again.page, "#/chat"); } finally { await again.close(); }
   const guest = await openShell(ctx, "login read-only", "#/login", { identity: "none" });
   try {
@@ -886,7 +893,7 @@ async function guestReadonly(ctx) {
     const { page } = view;
     const notice = await page.locator('[data-slot="guest-composer"]').innerText();
     assert(notice.includes("登录后可以对话") && (await page.locator('[data-slot="guest-composer"] button', { hasText: "登录" }).count()) === 1, `unexpected notice: ${notice}`);
-    assert((await page.locator("#agent-draft").count()) === 0 && (await page.locator("button.agent-send").count()) === 0, "a guest still has an input box and a send button");
+    assert((await page.locator("#agent-draft").count()) === 0 && (await page.locator("[data-testid=send]").count()) === 0, "a guest still has an input box and a send button");
     assert((await page.getByText("继续访客聊天").count()) === 0, "the dead 继续访客聊天 path is still around");
     assert((await page.locator("[data-bot-row]").count()) === 0, "a guest sees bots");
     assert((await page.locator('[data-slot="sidebar"] a[href="#/portfolio"], [data-slot="sidebar"] a[href="#/routines"]').count()) === 0, "a guest's sidebar lists 持仓 / 任务");
@@ -961,7 +968,7 @@ async function keyboardNav(ctx) {
 
 /** The phone: five items in the bar (each 44+ px), no sidebar in the page, and 更多 holds the bots, 助手, 设置, the account and the theme switch. */
 async function mobileBarAndMore(ctx) {
-  const view = await openShell(ctx, "mobile bar", "#/chat", { width: 390, ready: ".agent-thread .agent-message" });
+  const view = await openShell(ctx, "mobile bar", "#/chat", { width: 390, ready: "[data-testid=message]" });
   try {
     const { page } = view;
     await settle(page);
@@ -1025,7 +1032,7 @@ async function legacyRestoreInShell(ctx) {
 
 /** The four marks of a bot row are told apart: ring (answering), amber dot (waiting), number (unread), nothing. */
 async function botRowMarks(ctx) {
-  const view = await openShell(ctx, "bot marks", "#/chat", { ready: ".agent-thread .agent-message" });
+  const view = await openShell(ctx, "bot marks", "#/chat", { ready: "[data-testid=message]" });
   try {
     const { page } = view;
     await settle(page);
@@ -1033,8 +1040,8 @@ async function botRowMarks(ctx) {
     await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, BOT.teslabot);
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     await page.locator("#agent-draft").fill("[hold-the-answer] AAPL");
-    await page.locator("button.agent-send").click();
-    await page.locator("button.agent-stop").waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=send]").click();
+    await page.locator("[data-testid=stop]").waitFor({ timeout: 10000 });
     await page.evaluate(() => { location.hash = "#/chat"; });
     await page.locator('[data-bot-row][data-marker="running"]').waitFor({ timeout: 10000 });
     const row = (name) => page.locator("[data-bot-row]", { hasText: name });
@@ -1256,7 +1263,7 @@ async function commandMenuEnglish(ctx) {
   try {
     const { page } = view;
     await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
-    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=message]").first().waitFor({ timeout: 15000 });
     await page.keyboard.press("Control+k");
     const palette = page.locator('[data-slot="command-menu"]');
     await palette.waitFor();
@@ -1316,7 +1323,7 @@ async function commandMenuMobile(ctx) {
   try {
     const { page } = view;
     await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
-    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=message]").first().waitFor({ timeout: 15000 });
     await page.locator('[data-slot="mobile-tab-bar"] button[aria-haspopup="dialog"]').click();
     await page.locator('[data-slot="drawer-content"]').waitFor();
     await page.locator('[data-slot="palette-entry"]').click();
@@ -1489,7 +1496,7 @@ async function skeletonDelay(ctx) {
     assert(await page.locator('[data-slot="page-pending"]').count() === 0, "a skeleton covered the page before 400ms");
     await page.waitForTimeout(450);
     assert(await page.locator('[data-slot="page-pending"] [data-variant="table"]').count() === 1, "no table skeleton after 700ms of waiting for the portfolio page");
-    assert(await page.locator(".agent-thread").count() === 1, "the page on screen was unmounted while waiting");
+    assert(await page.locator("[data-testid=thread]").count() === 1, "the page on screen was unmounted while waiting");
     release();
     await page.locator(".pf-positions").waitFor({ timeout: 10000 });
     assert(await page.locator('[data-slot="page-pending"]').count() === 0, "the skeleton stayed after the page arrived");
@@ -1545,7 +1552,7 @@ async function taskBar(ctx) {
     assert((await row.first().innerText()).includes("扫描 SEC") && (await row.first().innerText()).includes("读取申报列表"), `row: ${await row.first().innerText()}`);
     // leave for a page inside the shell: the bar is still there, in the dock
     await page.evaluate(() => { location.hash = "#/chat"; });
-    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=message]").first().waitFor({ timeout: 15000 });
     const dock = page.locator('[data-slot="task-dock"] [data-slot="task-row"]');
     await dock.first().waitFor({ timeout: 3000 });
     const first = await dock.first().locator("[data-elapsed]").innerText();
@@ -1601,9 +1608,1535 @@ async function statesSamplePage(ctx) {
   } finally { await view.close(); }
 }
 
+
+// --- P3.1: the nine chat checks of design 7.3 (the P3 packages each run them again; `--only chat-` runs just these) -------
+const WRITE_REQUEST_ID = "d0000000-0000-4000-8000-0000000000a1"; // the write-confirmation card that ends FinBot's history (fixtures/chat.mjs)
+/** The JSON bodies of the requests the page sends to `re` (a path pattern), in order; collected while the check runs. */
+function watchPosts(page, re) {
+  const bodies = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !re.test(new URL(request.url()).pathname)) return;
+    try { bodies.push(JSON.parse(request.postData() ?? "{}")); } catch { bodies.push({}); }
+  });
+  return bodies;
+}
+const STREAM_PATH = /\/agent-chat\/stream$/;
+const row = (page, name) => page.locator("[data-bot-row]", { hasText: name }).first();
+const turnEvent = (id) => ({ conversation_id: CONVERSATION.teslabot, turn_id: `t9000000-0000-4000-8000-0000000000${id}`, bot_id: BOT.teslabot });
+
+async function chatCancel(ctx) {
+  const view = await openChat(ctx, "chat-cancel");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await page.locator("#agent-draft").fill(`${HAND_MARKER} 取消测试`);
+    await page.locator("[data-testid=send]").click();
+    await hand.opened(0);
+    await hand.push(0, "conversation", { ...turnEvent("c1"), conversation_id: CONVERSATION.finbot, bot_id: BOT.finbot });
+    await hand.push(0, "delta", { text: "已经生成的前半句，" });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "已经生成的前半句" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=stop]").click();
+    // P3.4: the old status line (兼任进度与报错) is gone; the stop is a grey 「已停止」 line on the message itself.
+    await page.locator("[data-testid=message][data-role=assistant] [data-testid=stopped-note]", { hasText: "已停止" }).waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=chat-status]").count()) === 0, "the composer's status line is back");
+    assert((await page.locator("[data-testid=message][data-role=assistant]", { hasText: "已经生成的前半句" }).count()) === 1, "the text generated before the cancel is gone");
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill("取消之后还能再输入");
+    assert((await page.locator("#agent-draft").inputValue()) === "取消之后还能再输入", "composer did not accept input after the cancel");
+    assert(await hand.aborted(0), "the request was not aborted");
+    assert((await page.locator("[data-testid=stop]").count()) === 0, "the cancel button is still there");
+    return "partial text kept, 已停止 shown on the message, no status line, request aborted, composer usable";
+  } finally { await view.close(); }
+}
+
+async function chatBackgroundLine(ctx) {
+  const view = await openChat(ctx, "chat-background-line");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill(`${HAND_MARKER} 后台线`);
+    await page.locator("[data-testid=send]").click();
+    const body = await hand.opened(0);
+    assert(body.bot_id === BOT.teslabot, `the turn went out for ${body.bot_id}`);
+    await hand.push(0, "conversation", turnEvent("d1"));
+    await hand.push(0, "delta", { text: "后台里的前半句，" });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "后台里的前半句" }).waitFor({ timeout: 10000 });
+    await pressBotRow(page, "AppleBot");
+    await page.locator("h1", { hasText: "AppleBot" }).waitFor({ timeout: 10000 });
+    await page.locator('[data-bot-row][data-marker="running"]', { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=message][data-role=assistant]", { hasText: "后台里的前半句" }).count()) === 0, "TeslaBot's answer is showing in AppleBot's line");
+    // The stream ends while the user is looking at AppleBot.
+    await hand.push(0, "delta", { text: "后半句也到了。" });
+    await hand.push(0, "done", { status: "complete", turn_id: turnEvent("d1").turn_id, thinking_ms: 500, citations: [], citation_protocol: null });
+    await hand.close(0);
+    await page.locator('[data-bot-row][data-marker="unread"]', { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    assert((await row(page, "TeslaBot").locator("[data-count]").innerText()).trim() === "1", "the new-answer mark is not the number 1");
+    assert((await row(page, "AppleBot").getAttribute("data-marker")) === "none", "AppleBot's row changed");
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "后台里的前半句，后半句也到了。" }).waitFor({ timeout: 10000 });
+    await page.locator('[data-bot-row][data-marker="none"]', { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    return "TeslaBot ring while answering in the background, number 1 once finished, the whole answer on return, mark gone";
+  } finally { await view.close(); }
+}
+
+async function chatClarification(ctx) {
+  const view = await openChat(ctx, "chat-clarification");
+  try {
+    const { page } = view;
+    const bodies = watchPosts(page, STREAM_PATH);
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill(`${ASK_MARKER} 查一下结果`);
+    await page.locator("[data-testid=send]").click();
+    const card = page.locator("[data-slot=approval-card][data-state=active]");
+    await card.waitFor({ timeout: 10000 });
+    assert((await card.locator("button", { hasText: "第二条结果" }).isEnabled()), "the card's options are not enabled");
+    assert((await card.getAttribute("data-kind")) === "question", "a plain question is drawn as a write card");
+    await card.locator("button", { hasText: "第二条结果" }).click();
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    assert(bodies.length === 2, `expected two stream requests, saw ${bodies.length}`);
+    const next = bodies[1];
+    assert(next.message === "pick-second-result", `the next turn said ${JSON.stringify(next.message)}`);
+    assert(next.pending_request_id === CLARIFY_REQUEST_ID, `pending_request_id was ${next.pending_request_id}`);
+    assert(next.display_message === "第二条结果", `display_message was ${JSON.stringify(next.display_message)}`);
+    assert(next.bot_id === BOT.teslabot, "the answer went out without the bot id");
+    await page.locator("[data-testid=message][data-role=user]", { hasText: "第二条结果" }).waitFor({ timeout: 10000 });
+    const folded = page.locator("[data-slot=approval-card][data-state=answered]");
+    assert((await folded.count()) === 1 && (await page.locator("[data-slot=approval-card][data-state=active]").count()) === 0, "the answered card did not fold to its line");
+    assert(/已回答.*第二条结果/.test(await folded.innerText()), `the folded card says ${JSON.stringify(await folded.innerText())}`);
+    return "card ends the turn, the pick goes out as the next turn with its request id, the card folds to one line";
+  } finally { await view.close(); }
+}
+
+async function chatWriteConfirm(ctx) {
+  const confirmView = await openChat(ctx, "chat-write-confirm");
+  let confirmed;
+  try {
+    const { page } = confirmView;
+    const bodies = watchPosts(page, STREAM_PATH);
+    const card = page.locator("[data-slot=approval-card][data-state=active][data-kind=write]");
+    await card.waitFor({ timeout: 10000 });
+    await card.locator("button", { hasText: "确认执行" }).click();
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    assert(bodies.length === 1, `expected one stream request, saw ${bodies.length}`);
+    confirmed = bodies[0];
+    assert(confirmed.pending_request_id === WRITE_REQUEST_ID && confirmed.message === "confirm:fetch_analyze", `confirm request: ${JSON.stringify(confirmed)}`);
+    assert(confirmed.bot_id === BOT.finbot, "the confirmation went out without the bot id");
+  } finally { await confirmView.close(); }
+  const declineView = await openChat(ctx, "chat-write-decline");
+  try {
+    const { page } = declineView;
+    const bodies = watchPosts(page, STREAM_PATH);
+    const card = page.locator("[data-slot=approval-card][data-state=active][data-kind=write]");
+    await card.waitFor({ timeout: 10000 });
+    await card.locator("button", { hasText: "先不要" }).click();
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+    // 「先不要」 is not silent: it goes to the server as the turn `cancel` for the pending request (that is what cancels it) -- never as a confirmation.
+    assert(!bodies.some((b) => String(b.message).startsWith("confirm:")), "declining sent a confirmation");
+    assert(bodies.length === 1 && bodies[0].message === "cancel" && bodies[0].pending_request_id === WRITE_REQUEST_ID, `decline request: ${JSON.stringify(bodies)}`);
+  } finally { await declineView.close(); }
+  return `确认执行 -> {message:"${confirmed.message}", pending_request_id}; 先不要 -> {message:"cancel", pending_request_id}, no confirm:* request`;
+}
+
+async function chatReadonlyArchive(ctx) {
+  const view = await openShell(ctx, "chat-readonly-archive", "#/settings/data", { ready: ".chat-archive-settings" });
+  try {
+    const { page } = view;
+    const stamp = "2026-11-12T08:00:00.000Z";
+    const archive = { marker: "market-evidence-agent-chat-archive", version: 1, created_at: stamp, updated_at: stamp,
+      conversations: [{ id: "archived-1", created_at: stamp, updated_at: stamp, messages: [{ role: "user", content: "归档里的问题" }, { role: "assistant", content: "归档里的回答", status: "complete" }] }] };
+    await page.locator('.chat-archive-settings input[type="file"]').setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) });
+    await page.locator(".chat-archive-settings [role=status]", { hasText: "归档已打开" }).waitFor({ timeout: 10000 });
+    // A bot's line is a server conversation and ends the archive view when opened; the archive is read on the plain conversation page (no bot).
+    await page.evaluate(() => { location.hash = "#/chat/history"; });
+    await waitHash(page, "#/chat/history");
+    const banner = page.locator("[data-testid=archive-banner]");
+    await banner.waitFor({ timeout: 10000 });
+    assert((await banner.innerText()).includes("本地归档只读查看"), "the banner does not say it is a read-only archive");
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "归档里的回答" }).waitFor({ timeout: 10000 });
+    // P3.2 (design 4.2, 只读归档): the input area is replaced by 返回当前对话; there is no box to type in and nothing to send with.
+    assert((await page.locator("#agent-draft").count()) === 0 && (await page.locator("[data-testid=send]").count()) === 0, "the composer still takes input in a read-only archive");
+    const back = page.locator("[data-testid=return-live]");
+    assert(await back.isEnabled(), "返回当前对话 is not usable");
+    await back.click();
+    await page.locator("[data-testid=archive-banner]").waitFor({ state: "detached", timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=message][data-role=assistant]", { hasText: "归档里的回答" }).count()) === 0, "the archive's messages are still showing after the return");
+    return "banner + 返回当前对话 in place of the composer while viewing an imported archive; it restores the live line";
+  } finally { await view.close(); }
+}
+
+async function chatExternalSync(ctx) {
+  const view = await openChat(ctx, "chat-external-sync");
+  try {
+    const { page } = view;
+    await page.locator("#agent-draft").fill("写到一半的草稿");
+    // A turn written from outside this tab (Telegram, a routine): the next poll (4 s) pulls it in by itself.
+    const turn = "t7000000-0000-4000-8000-000000000001";
+    view.mock.state.chat.conversations.get(CONVERSATION.finbot).push(
+      { role: "user", content: "来自 Telegram 的问题", turn_id: turn },
+      { role: "assistant", status: "complete", turn_id: turn, content: "外部消息的回答：已记入对话线。" });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "外部消息的回答" }).waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=message][data-role=user]", { hasText: "来自 Telegram 的问题" }).waitFor({ timeout: 5000 });
+    assert((await page.locator("#agent-draft").inputValue()) === "写到一半的草稿", "the draft changed when the external turn arrived");
+    return "the outside turn appeared without any action; the draft is untouched";
+  } finally { await view.close(); }
+}
+
+async function chatCompact(ctx) {
+  const view = await openChat(ctx, "chat-compact");
+  try {
+    const { page } = view;
+    const posts = watchPosts(page, /\/agent-chat\/conversations\/[^/]+\/compact$/);
+    await page.locator("#agent-draft").fill("/compact 只留估值部分");
+    await page.locator("[data-testid=send]").click();
+    await page.locator("[data-testid=compaction]", { hasText: "已压缩 2 轮" }).waitFor({ timeout: 10000 });
+    assert(posts.length === 1, `expected one compact request, saw ${posts.length}`);
+    assert(posts[0].focus === "只留估值部分" && posts[0].bot_id === BOT.finbot, `compact request: ${JSON.stringify(posts[0])}`);
+    assert((await page.locator("#agent-draft").inputValue()) === "", "the command text stayed in the composer");
+    assert(view.mock.requests.some((r) => r.method === "POST" && /\/compact$/.test(r.path) && r.path.includes(CONVERSATION.finbot)), "the compact request did not name the open conversation");
+    return `POST .../compact {focus, bot_id} once; 「已压缩 2 轮」 line in the thread; the command is cleared`;
+  } finally { await view.close(); }
+}
+
+async function chatLoadEarlier(ctx) {
+  const fixtureState = buildState();
+  fixtureState.chat.older = { [CONVERSATION.finbot]: { messages: olderTurns(6), cursor: 6 } };
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "chat-load-earlier", unmatched, fixtureState });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, { ready: "[data-testid=message]" });
+    await settle(page);
+    await page.locator("[data-testid=load-earlier]", { hasText: "加载更早消息" }).waitFor({ timeout: 10000 });
+    const text = "AAPL 最近一个季度的服务收入怎么样？";
+    const offset = (scrollToTop) => page.evaluate(([needle, top]) => {
+      const transcript = document.querySelector("[data-testid=transcript]");
+      if (top) transcript.scrollTop = 0;     // the scroll handler asks for the earlier turns; the answer comes later, so this reads the "before"
+      const el = [...document.querySelectorAll("[data-testid=message][data-role=user]")].find((node) => node.textContent.includes(needle));
+      return el.getBoundingClientRect().top - transcript.getBoundingClientRect().top;
+    }, [text, scrollToTop]);
+    const scrollable = await page.evaluate(() => { const el = document.querySelector("[data-testid=transcript]"); return el.scrollHeight - el.clientHeight; });
+    assert(scrollable > 200, `the thread barely scrolls (${scrollable}px): the check cannot tell a jump from none`);
+    const before = await offset(true);
+    await page.locator("[data-testid=message][data-role=user]", { hasText: "更早的问题 1" }).waitFor({ timeout: 10000 });
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r)))));
+    const after = await offset(false);
+    assert(Math.abs(after - before) <= 2, `the line the reader was looking at moved from ${Math.round(before)}px to ${Math.round(after)}px`);
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "更早的问题 6" }).count()) === 1, "not every earlier turn arrived");
+    assert((await page.locator("[data-testid=load-earlier]").count()) === 0, "the 加载更早消息 button is still there once nothing is left");
+    return `scrolled to the top -> 6 earlier turns above; the line being read stayed at ${Math.round(before)}px (after: ${Math.round(after)}px)`;
+  } finally { await view.close(); }
+}
+
+// --- P3.1: the English catalog is a chunk of its own ----------------------------------------------------------------------
+async function localeCatalogLoadsOnDemand(ctx) {
+  const english = JSON.parse(fs.readFileSync(path.resolve(flags.dist, "..", "src", "locales", "en-US.json"), "utf8"));
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "locale-lazy", unmatched });
+  try {
+    const { page } = view;
+    const catalogRequests = [];
+    page.on("request", (request) => { if (/\/assets\/en-US-[^/]+\.js$/.test(new URL(request.url()).pathname)) catalogRequests.push(request.url()); });
+    await page.goto(`${ctx.server.url}#/settings/models`, { waitUntil: "load" });
+    await page.locator("select#locale").waitFor({ timeout: 10000 });
+    await settle(page);
+    assert(catalogRequests.length === 0, `a Chinese session fetched the English catalog: ${catalogRequests[0]}`);
+    const title = page.locator("#agent-admin-title");
+    assert((await title.innerText()) === "模型连接设置", "the settings title is not Chinese at the start");
+    await page.locator("select#locale").selectOption("en-US");
+    await page.waitForFunction((text) => document.querySelector("#agent-admin-title")?.textContent === text, english["模型连接设置"], { timeout: 10000 });
+    assert(catalogRequests.length === 1, `switching to English fetched the catalog ${catalogRequests.length} times`);
+    // A reload with English saved: the first draw is already English (the catalog is awaited before the first render).
+    await page.reload({ waitUntil: "load" });
+    await page.waitForFunction((text) => document.querySelector("#agent-admin-title")?.textContent === text, english["模型连接设置"], { timeout: 10000 });
+    assert(catalogRequests.length === 2, `the English reload fetched the catalog ${catalogRequests.length - 1} more times`);
+    await page.locator("select#locale").selectOption("zh-CN");
+    await page.waitForFunction(() => document.querySelector("#agent-admin-title")?.textContent === "模型连接设置", null, { timeout: 10000 });
+    return `Chinese session: no request for the English chunk; switch: one request, title "${english["模型连接设置"]}"; reload in English: the title is English; back to 中文 works`;
+  } finally { await view.close(); }
+}
+
+// --- P3.1: the bot's right rail and the new-bot dialog load on demand; a chunk that cannot be fetched must not take the page down ---
+async function optionalChunkFailure(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "optional-chunk", unmatched });
+  try {
+    const { page } = view;
+    let blocked = 0;
+    await page.route(/\/assets\/BotSidePanel-[^/]*\.js/, (route) => { blocked += 1; return route.abort(); });
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, { ready: "[data-testid=message]" });
+    await settle(page);
+    assert(blocked >= 1, "the bot page never asked for the side panel chunk (is it still loaded eagerly?)");
+    assert((await page.locator("#agent-draft").count()) === 1, "the composer is gone: the failed chunk took the chat page down");
+    assert((await page.locator('[data-slot="route-error"]').count()) === 0, "a failed optional chunk fell through to the route error");
+    assert((await page.locator("[data-testid=context-panel]").count()) === 1, "the right panel itself (来源 / 过程) is gone with the workspace chunk");
+    assert((await page.locator(".bot-workspace").count()) === 0, "the workspace cards are drawn although their chunk was blocked");
+    await page.locator('[data-slot="sidebar"] button', { hasText: "新建 bot" }).first().click();
+    await page.waitForTimeout(800);
+    assert((await page.locator('[role="dialog"]').count()) === 0, "the new-bot dialog is drawn although its chunk was blocked");
+    assert((await page.locator("#agent-draft").count()) === 1 && (await page.locator('[data-slot="route-error"]').count()) === 0, "pressing 新建 bot with the chunk blocked broke the page");
+    await page.locator("#agent-draft").fill("页面还活着");
+    return `chunk blocked ${blocked}x: the thread and composer stay, no rail, no dialog, no route error`;
+  } finally { await view.close(); }
+}
+
+// --- P3.2: messages and the composer ------------------------------------------------------------------------------------
+const frames = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+const transcriptBox = (page) => page.evaluate(() => { const el = document.querySelector("[data-testid=transcript]"); return { top: el.scrollTop, gap: el.scrollHeight - el.scrollTop - el.clientHeight, room: el.scrollHeight - el.clientHeight }; });
+
+/** Acceptance 1: Enter that belongs to an input method never sends; after the composition ends it does. */
+async function composerIme(ctx) {
+  const view = await openChat(ctx, "composer-ime");
+  try {
+    const { page } = view;
+    const posts = watchPosts(page, STREAM_PATH);
+    const box = page.locator("#agent-draft");
+    await box.fill("你好");
+    await box.focus();
+    // 1. between compositionstart and compositionend a plain Enter is the input method's.
+    await box.dispatchEvent("compositionstart");
+    await page.keyboard.press("Enter");
+    await frames(page);
+    assert(posts.length === 0, "Enter during a composition sent the message");
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "你好" }).count()) === 0, "the composing text turned into a message");
+    // 2. the key event that carries isComposing / keyCode 229 (what a browser sends for the Enter that confirms a candidate).
+    await box.dispatchEvent("compositionend");
+    await box.evaluate((el) => { for (const init of [{ isComposing: true, keyCode: 229 }, { isComposing: false, keyCode: 229 }]) el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init })); });
+    await frames(page);
+    assert(posts.length === 0, "an Enter flagged isComposing / keyCode 229 sent the message");
+    // 3. after compositionend a plain Enter sends.
+    await box.fill("你好");
+    await box.press("Enter");
+    await page.locator("[data-testid=message][data-role=user]", { hasText: "你好" }).waitFor({ timeout: 10000 });
+    assert(posts.length === 1, `expected one request after the composition ended, saw ${posts.length}`);
+    // Shift+Enter never sends.
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await box.fill("第一行");
+    await box.press("Shift+Enter");
+    await frames(page);
+    assert(posts.length === 1, "Shift+Enter sent the message");
+    return "no request during compositionstart..end or for isComposing / keyCode 229; one request for the Enter after compositionend; Shift+Enter breaks the line";
+  } finally { await view.close(); }
+}
+
+/** The "/" menu: arrows move, Esc closes, Enter picks; an input method's keys do none of these. */
+async function composerSlashMenu(ctx) {
+  const view = await openChat(ctx, "composer-slash-menu");
+  try {
+    const { page } = view;
+    const box = page.locator("#agent-draft");
+    await box.fill("/");
+    const menu = page.locator("[data-testid=slash-menu]");
+    await menu.waitFor({ timeout: 10000 });
+    const options = menu.locator("[role=option]");
+    const listed = await options.count();
+    assert(listed >= 2, "the menu lists fewer than two skills");
+    const selected = () => options.evaluateAll((items) => items.findIndex((item) => item.getAttribute("aria-selected") === "true"));
+    assert((await selected()) === 0, "the first skill is not selected");
+    await box.press("ArrowDown");
+    assert((await selected()) === 1, "ArrowDown did not move the selection");
+    await box.press("ArrowUp");
+    assert((await selected()) === 0, "ArrowUp did not move it back");
+    // Keys that belong to an input method.  Synthetic key events are used so the browser adds no newline of its own (a real composition's Enter inserts none).
+    await box.dispatchEvent("compositionstart");
+    await box.evaluate((el) => { for (const key of ["ArrowDown", "Enter", "Tab", "Escape"]) el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+    await frames(page);
+    assert((await menu.count()) === 1 && (await box.inputValue()) === "/", "keys during a composition acted on the menu or the draft");
+    assert((await selected()) === 0, "ArrowDown during a composition moved the selection");
+    await box.evaluate((el) => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, keyCode: 229, bubbles: true, cancelable: true })));
+    assert((await menu.count()) === 1 && (await box.inputValue()) === "/", "an Enter flagged isComposing picked a skill");
+    await box.dispatchEvent("compositionend");
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached", timeout: 5000 });
+    await box.fill("");
+    await box.fill("/");
+    await menu.waitFor({ timeout: 10000 });
+    await box.press("Enter");
+    const value = await box.inputValue();
+    assert(/^\/\S+ $/.test(value), `Enter did not pick the selected skill (draft: ${JSON.stringify(value)})`);
+    return `menu lists ${listed} skills; arrows, Esc and Enter work; keys during a composition do nothing`;
+  } finally { await view.close(); }
+}
+
+/** Acceptance 2: a streaming answer is followed; one scroll up lets go and shows 回到底部; the button, or scrolling back, resumes. */
+async function chatFollowAndJump(ctx) {
+  const view = await openChat(ctx, "chat-follow-and-jump");
+  try {
+    const { page } = view;
+    const hand = await streamHalfway(page, { paragraphs: 6 });
+    await frames(page);
+    let at = await transcriptBox(page);
+    assert(at.room > 300, `the answer does not overflow the thread (${at.room}px): the check cannot tell following from not following`);
+    assert(at.gap <= 2, `a streaming answer is not followed (${Math.round(at.gap)}px from the bottom)`);
+    assert((await page.locator("[data-testid=jump-bottom]").count()) === 0, "回到底部 shows while following");
+    await hand.push(0, "delta", { text: streamParagraph(7) }); await frames(page);
+    at = await transcriptBox(page);
+    assert(at.gap <= 2, `the new paragraph was not followed (${Math.round(at.gap)}px)`);
+    // One scroll up: the page stops following and offers the way back.
+    await page.evaluate(() => { document.querySelector("[data-testid=transcript]").scrollTop = 200; });
+    await page.locator("[data-testid=jump-bottom]").waitFor({ timeout: 5000 });
+    const held = await transcriptBox(page);
+    await hand.push(0, "delta", { text: streamParagraph(8) }); await frames(page);
+    const later = await transcriptBox(page);
+    assert(later.room > held.room, "the answer did not grow while scrolled up");
+    assert(Math.abs(later.top - held.top) <= 2, `the page kept following after the reader scrolled up (${held.top} -> ${later.top})`);
+    // The button: back to the bottom, button gone, following again.
+    await page.locator("[data-testid=jump-bottom]").click(); await frames(page);
+    at = await transcriptBox(page);
+    assert(at.gap <= 2, `回到底部 did not reach the bottom (${Math.round(at.gap)}px)`);
+    assert((await page.locator("[data-testid=jump-bottom]").count()) === 0, "回到底部 stays after it was used");
+    await hand.push(0, "delta", { text: streamParagraph(9) }); await frames(page);
+    assert((await transcriptBox(page)).gap <= 2, "following did not resume after 回到底部");
+    // Scrolling back down by hand restores it as well.
+    await page.evaluate(() => { document.querySelector("[data-testid=transcript]").scrollTop = 0; });
+    await page.locator("[data-testid=jump-bottom]").waitFor({ timeout: 5000 });
+    await page.evaluate(() => { const el = document.querySelector("[data-testid=transcript]"); el.scrollTop = el.scrollHeight; });
+    await page.locator("[data-testid=jump-bottom]").waitFor({ state: "detached", timeout: 5000 });
+    await hand.push(0, "delta", { text: streamParagraph(10) }); await frames(page);
+    assert((await transcriptBox(page)).gap <= 2, "following did not resume after scrolling back to the bottom");
+    // Not in the way: at the bottom the last message ends above the composer with room to spare.
+    const clearance = await page.evaluate(() => { const last = [...document.querySelectorAll("[data-testid=message]")].at(-1); const t = document.querySelector("[data-testid=transcript]"); return t.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom; });
+    assert(clearance >= 48, `the last message ends only ${Math.round(clearance)}px above the bottom of the thread`);
+    return `followed ${Math.round(at.room)}px of growth; scroll up -> button, no follow; button and manual return resume it; ${Math.round(clearance)}px clear under the last line`;
+  } finally { await view.close(); }
+}
+
+/** Acceptance 3: a half-typed message stays with its line when the bot (or the page) changes. */
+async function draftSurvivesSwitch(ctx) {
+  const view = await openChat(ctx, "draft-survives-switch");
+  try {
+    const { page } = view;
+    const box = page.locator("#agent-draft");
+    await box.fill("写到一半的话，还没发");
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "", `TeslaBot's box opened with the other line's draft: ${JSON.stringify(await box.inputValue())}`);
+    await box.fill("TeslaBot 线上的草稿");
+    await pressBotRow(page, "FinBot");
+    await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "写到一半的话，还没发", `FinBot's draft is gone after the switch back: ${JSON.stringify(await box.inputValue())}`);
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "TeslaBot 线上的草稿", "TeslaBot's own draft is gone");
+    // Another page and back (the session provider sits above the routed page).
+    await pressNavItem(page, "持仓");
+    await page.waitForFunction(() => location.hash.startsWith("#/portfolio"), null, { timeout: 10000 });
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "TeslaBot 线上的草稿", "the draft is gone after a visit to another page");
+    // A reload: drafts are kept in localStorage per line (chat-lines.mjs), so they survive it, exactly as before this package.
+    await page.reload({ waitUntil: "load" });
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "TeslaBot 线上的草稿", `the draft did not survive a reload: ${JSON.stringify(await box.inputValue())}`);
+    await pressBotRow(page, "FinBot");
+    await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
+    assert((await box.inputValue()) === "写到一半的话，还没发", "the other line's draft did not survive the reload");
+    return "A -> B -> A keeps both drafts; a visit to another page and a reload keep them (stored per line in localStorage, as before)";
+  } finally { await view.close(); }
+}
+
+/** The send position becomes the stop button while an answer runs; pressing it is the old 取消请求. */
+async function stopButton(ctx) {
+  const view = await openChat(ctx, "stop-button");
+  try {
+    const { page } = view;
+    const send = page.locator("[data-testid=send]");
+    const idle = await send.boundingBox();
+    assert(idle, "no send button");
+    const hand = await streamHalfway(page, { paragraphs: 1 });
+    const stop = page.locator("[data-testid=stop]");
+    const running = await stop.boundingBox();
+    assert(running && Math.abs(running.x - idle.x) <= 1 && Math.abs(running.y - idle.y) <= 1 && Math.abs(running.width - idle.width) <= 1, `the stop button is not where send was (${JSON.stringify(idle)} -> ${JSON.stringify(running)})`);
+    assert((await send.count()) === 0, "send and stop show at the same time");
+    assert((await page.getByRole("button", { name: "取消请求" }).count()) === 0, "the old 取消请求 button is still there");
+    assert(/停止|Stop/.test(await stop.getAttribute("aria-label") ?? ""), "the stop button has no name");
+    await stop.click();
+    await page.locator("[data-testid=stopped-note]", { hasText: "已停止" }).waitFor({ timeout: 10000 });
+    assert(await hand.aborted(0), "pressing stop did not abort the request");
+    await page.locator("[data-testid=send]").waitFor({ timeout: 10000 });
+    const back = await send.boundingBox();
+    assert(back && Math.abs(back.x - idle.x) <= 1 && Math.abs(back.y - idle.y) <= 1, "send did not come back to its place");
+    assert((await page.locator("[data-testid=stop]").count()) === 0, "stop is still showing after the cancel");
+    return "send -> stop in the same box; stop aborts the request, 已停止 on the message, partial text kept; send is back in place";
+  } finally { await view.close(); }
+}
+
+/** Copy: the result is a toast, and the thread gets no extra line of text. */
+async function copyToast(ctx) {
+  const view = await openChat(ctx, "copy-toast");
+  try {
+    const { page, context } = view;
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
+    const thread = page.locator("[data-testid=thread]");
+    const before = await thread.innerText();
+    const answer = page.locator("[data-testid=message][data-role=assistant]").first();
+    await answer.hover();
+    await answer.getByRole("button", { name: "复制回答" }).click();
+    await page.locator("[data-sonner-toast]", { hasText: "已复制" }).waitFor({ timeout: 5000 });
+    assert((await thread.innerText()) === before, "the thread's text changed when the answer was copied");
+    assert((await page.locator("[data-testid=thread] [role=status]").count()) === 0, "a status line was put into the thread");
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    assert(copied.includes("288 亿美元"), `the clipboard does not hold the answer (${JSON.stringify(copied.slice(0, 40))})`);
+    const question = page.locator("[data-testid=message][data-role=user]").first();
+    await question.hover();
+    await question.getByRole("button", { name: "复制问题" }).click();
+    await page.waitForFunction(() => navigator.clipboard.readText().then((value) => value.includes("服务收入")), null, { timeout: 5000 });
+    return "toast 已复制 at the corner, thread text unchanged, clipboard holds the answer; 复制问题 copies the question";
+  } finally { await view.close(); }
+}
+
+/** The Markdown renderer is a chunk of its own: prefetched at launch, a skeleton while late, plain text with 重试 when it fails. */
+const RENDERER = /\/assets\/markdown-renderer-[^/]+\.js$/;
+async function markdownChunk(ctx) {
+  const notes = [];
+  // (a) Normal: the chunk is asked for at launch, before the history request; the first message is typeset when it appears, never raw.
+  {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "markdown-chunk-normal", unmatched });
+    try {
+      const { page } = view;
+      const order = [];
+      page.on("request", (request) => { const u = new URL(request.url()); if (RENDERER.test(u.pathname)) order.push("renderer"); else if (/\/assets\/chat-[^/]+\.js$/.test(u.pathname)) order.push("chat-code"); else if (/\/agent-chat\/conversations\/[^/]+\/messages/.test(u.pathname) || /\/agent-chat\/restore/.test(u.pathname) || /\/agent-chat\/conversations\/[^/]+$/.test(u.pathname)) order.push("history"); });
+      await view.context.addInitScript(() => {
+        window.__md = { plain: false, raw: false, skeleton: false, ready: false };
+        const look = () => {
+          if (document.querySelector("[data-testid=message-body][data-md=plain]")) window.__md.plain = true;
+          if (document.querySelector("[data-testid=markdown-skeleton]")) window.__md.skeleton = true;
+          if (document.querySelector("[data-testid=message-body][data-md=ready]")) window.__md.ready = true;
+          if ((document.querySelector("[data-testid=thread]")?.textContent ?? "").includes("**")) window.__md.raw = true;
+        };
+        new MutationObserver(look).observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+      });
+      await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+      await page.locator("[data-testid=message-body][data-md=ready]").first().waitFor({ timeout: 15000 });
+      const seen = await page.evaluate(() => window.__md);
+      assert(order.includes("renderer"), `the renderer chunk was never requested (${order.join(",")})`);
+      assert(!order.includes("history") || order.indexOf("renderer") < order.indexOf("history"), `the history was asked for before the renderer (${order.join(" > ")})`);
+      assert(!seen.plain && !seen.raw, `a message showed as plain text or raw Markdown on the way (${JSON.stringify(seen)})`);
+      assert((await page.locator("[data-testid=markdown-skeleton]").count()) === 0, "a skeleton is still showing");
+      assert((await page.locator("[data-testid=message-body] strong").count()) > 0, "the bold phrase of the first answer is not typeset");
+      notes.push(`normal: requested ${order.filter((x) => x !== "chat-code").join(" > ")}; skeleton ${seen.skeleton ? "seen briefly" : "never needed"}; never plain or raw`);
+    } finally { await view.close(); }
+  }
+  // (a2) Launch-time prefetch, shown by holding the chat page's own code back 1.5 s: the renderer is asked for in that wait (main.tsx starts it),
+  //      not after the page has mounted and found it needs it.
+  {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "markdown-chunk-launch", unmatched });
+    try {
+      const { page } = view;
+      const at = {};
+      page.on("request", (request) => { const p2 = new URL(request.url()).pathname; if (RENDERER.test(p2)) at.renderer ??= Date.now(); });
+      await page.route(/\/assets\/chat-[^/]+\.js$/, async (route) => { at.chat ??= Date.now(); await new Promise((resolve) => setTimeout(resolve, 1500)); await route.continue(); });
+      await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+      await page.locator("[data-testid=message-body][data-md=ready]").first().waitFor({ timeout: 20000 });
+      assert(at.chat && at.renderer, `a chunk was never requested (${JSON.stringify(at)})`);
+      const gap = at.renderer - at.chat;
+      assert(gap < 1000, `the renderer was asked for ${gap}ms after the chat page's code: it waits for the page instead of starting at launch`);
+      notes.push(`launch: renderer asked for ${gap}ms after the chat page's code while that was held back 1.5 s`);
+    } finally { await view.close(); }
+  }
+  // (b) The chunk 2 seconds late: skeletons stand in for the text meanwhile, never the raw Markdown; then one swap.
+  {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "markdown-chunk-late", unmatched });
+    try {
+      const { page } = view;
+      await page.route(RENDERER, async (route) => { await new Promise((resolve) => setTimeout(resolve, 2000)); await route.continue(); });
+      const t0 = Date.now();
+      await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+      await page.locator("[data-testid=markdown-skeleton]").first().waitFor({ timeout: 15000 });
+      const early = Date.now() - t0;
+      const thread = await page.locator("[data-testid=thread]").innerText();
+      assert(!thread.includes("**") && !thread.includes("](#citation"), "raw Markdown shows while the renderer is late");
+      assert((await page.locator("[data-testid=message-body]").count()) === 0, "a message body is on screen before the renderer arrived");
+      assert((await page.locator("#agent-draft").count()) === 1 && (await page.locator("[data-testid=message][data-role=user]").count()) > 0, "the page around the skeleton is not usable");
+      await page.locator("[data-testid=message-body][data-md=ready]").first().waitFor({ timeout: 15000 });
+      const total = Date.now() - t0;
+      assert(total >= 1900, `the swap came after ${total}ms: the chunk was not held back`);
+      assert((await page.locator("[data-testid=markdown-skeleton]").count()) === 0, "a skeleton is left after the swap");
+      notes.push(`late (2 s): skeleton at ${early}ms, typeset text at ${total}ms, no raw text between`);
+    } finally { await view.close(); }
+  }
+  // (c) The chunk cannot be fetched: plain text with its line breaks, a quiet note and 重试; the page stays; 重试 recovers.
+  {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "markdown-chunk-failed", unmatched });
+    try {
+      const { page } = view;
+      await page.route(RENDERER, (route) => route.abort());
+      await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+      await page.locator("[data-testid=message-body][data-md=plain]").first().waitFor({ timeout: 15000 });
+      const failed = page.locator("[data-testid=markdown-failed]");
+      await failed.first().waitFor({ timeout: 5000 });
+      assert((await page.locator("#agent-draft").count()) === 1 && (await page.locator('[data-slot="route-error"]').count()) === 0, "the failed chunk took the page down");
+      const white = await page.locator("[data-testid=message-body][data-md=plain]").first().evaluate((el) => getComputedStyle(el).whiteSpace);
+      assert(white === "pre-wrap", `the plain text does not keep its line breaks (white-space: ${white})`);
+      assert(!/color:\s*(?:red|rgb\(2[0-9]{2}, ?[0-9]{1,2}, ?[0-9]{1,2}\))/.test(await failed.first().evaluate((el) => el.outerHTML)), "the note is not neutral");
+      await page.unroute(RENDERER);
+      await failed.first().getByRole("button", { name: "重试" }).click();
+      await page.locator("[data-testid=message-body][data-md=ready]").first().waitFor({ timeout: 15000 });
+      assert((await page.locator("[data-testid=markdown-failed]").count()) === 0 && (await page.locator("[data-testid=message-body][data-md=plain]").count()) === 0, "the plain text or the note is left after 重试");
+      notes.push("failed: plain text (pre-wrap) + note + 重试, page intact; 重试 typesets it");
+    } finally { await view.close(); }
+  }
+  return notes.join(" | ");
+}
+
+/** The question rail (new markup, same logic): markers on the thread's left edge, a preview card beside the pointer, a bookmark that is kept, a click that scrolls. */
+async function chatQuestionRail(ctx) {
+  const view = await openChat(ctx, "chat-question-rail");
+  try {
+    const { page } = view;
+    const rail = page.locator("[data-testid=question-rail]");
+    await rail.waitFor({ timeout: 10000 });
+    const markers = rail.locator("button[data-rail-index]");
+    const count = await markers.count();
+    assert(count >= 4, `the rail has ${count} markers`);
+    const railBox = await rail.boundingBox(), threadBox = await page.locator("[data-testid=thread]").boundingBox();
+    assert(railBox && threadBox && railBox.x + railBox.width <= threadBox.x + 1, "the rail is not on the thread's left edge");
+    assert(threadBox.width <= 761 && threadBox.width >= 600, `the thread is ${Math.round(threadBox.width)}px wide (max 760)`);
+    await markers.first().hover();
+    const card = page.locator("[data-testid=turn-preview]");
+    await card.waitFor({ timeout: 5000 });
+    const star = card.getByRole("button", { name: /收藏这一轮/ });
+    await star.click();
+    await card.getByRole("button", { name: "取消收藏" }).waitFor({ timeout: 5000 });
+    await page.reload({ waitUntil: "load" });
+    await page.locator("[data-testid=message]").first().waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=question-rail] button[data-bookmarked]").first().waitFor({ timeout: 10000 });
+    // A click scrolls that question to the top of the thread.
+    await page.evaluate(() => { const el = document.querySelector("[data-testid=transcript]"); el.scrollTop = el.scrollHeight; });
+    await frames(page);
+    await page.locator("[data-testid=question-rail] button[data-rail-index='0']").click();
+    await page.waitForFunction(() => { const t = document.querySelector("[data-testid=transcript]").getBoundingClientRect().top; const q = document.getElementById("chat-message-0")?.getBoundingClientRect().top ?? 1e9; return Math.abs(q - t) < 40; }, null, { timeout: 5000 });
+    return `${count} markers left of a ${Math.round(threadBox.width)}px thread; preview card, bookmark kept over a reload, click scrolls to the question`;
+  } finally { await view.close(); }
+}
+
+/** Keyboard: the composer's panels (model badge, context ring) and the header's ⓘ open from the keyboard, Esc closes them and hands focus back. */
+async function chatPopoverKeyboard(ctx) {
+  const view = await openChat(ctx, "chat-popover-keyboard");
+  try {
+    const { page } = view;
+    const panels = [["model-badge", "模型与推理强度"], ["context-meter", "上下文用量"], ["about-chat", "关于这条对话"]];
+    for (const [id, label] of panels) {
+      const trigger = page.locator(`[data-testid=${id}]`);
+      await trigger.waitFor({ timeout: 10000 });
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      const panel = page.locator(`[data-slot=pop-panel][aria-label="${label}"]`);
+      await panel.waitFor({ timeout: 5000 });
+      assert(await panel.evaluate((el) => el.contains(document.activeElement)), `${id}: focus did not move into the panel`);
+      await page.keyboard.press("Escape");
+      await panel.waitFor({ state: "detached", timeout: 5000 });
+      assert(await trigger.evaluate((el) => el === document.activeElement), `${id}: focus did not return to the button after Esc`);
+    }
+    // A press outside closes the model panel too.
+    await page.locator("[data-testid=model-badge]").click();
+    await page.locator("[data-slot=pop-panel]").waitFor({ timeout: 5000 });
+    await page.locator("[data-testid=chat-header] h1").click();
+    await page.locator("[data-slot=pop-panel]").waitFor({ state: "detached", timeout: 5000 });
+    // Reach the model choice by keyboard alone: Tab from the badge into the radio list and choose with Space.
+    await page.locator("[data-testid=model-badge]").focus();
+    await page.keyboard.press("Enter");
+    await page.locator("[data-slot=pop-panel] [role=radio]").first().waitFor({ timeout: 10000 });
+    await page.keyboard.press("Tab");
+    assert(await page.evaluate(() => document.activeElement?.getAttribute("role") === "radio"), "Tab from the panel did not land on a choice");
+    await page.keyboard.press("Escape");
+    return "model badge, context ring and ⓘ: Enter opens with focus inside, Esc closes and returns focus, a press outside closes; the choices are Tab-reachable";
+  } finally { await view.close(); }
+}
+
+// --- P3.3: process and sources ---------------------------------------------------------------------------------------
+const panelBox = (page) => page.locator("[data-testid=context-panel]").boundingBox();
+const inView = (page, selector, within) => page.evaluate(([sel, box]) => {
+  const el = document.querySelector(sel), host = document.querySelector(box); if (!el || !host) return false;
+  const r = el.getBoundingClientRect(), h = host.getBoundingClientRect();
+  return r.top >= h.top - 1 && r.bottom <= h.bottom + 1;
+}, [selector, within]);
+
+/** Acceptance 1: a click on [2] opens the right panel on 来源, scrolls to the second card and marks it; a folded panel unfolds first. */
+async function citationJump(ctx) {
+  const view = await openChat(ctx, "citation-jump");
+  try {
+    const { page } = view;
+    await page.locator("[data-testid=panel-close]").click();
+    await page.locator("[data-testid=context-panel]").waitFor({ state: "detached", timeout: 5000 });
+    const chip = firstAnswer(page).locator("[data-testid=citation-chip][data-ordinal='2']").first();
+    await chip.scrollIntoViewIfNeeded();
+    await chip.click();
+    await page.locator("[data-testid=context-panel]").waitFor({ timeout: 5000 });
+    assert((await page.locator("[data-testid=tab-sources]").getAttribute("aria-selected")) === "true", "the 来源 tab is not selected after a click on [2]");
+    const card = page.locator("[data-slot=source-card][data-ordinal='2']");
+    await card.waitFor({ timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector("[data-slot=source-card][data-ordinal='2']")?.hasAttribute("data-highlight"), null, { timeout: 5000 });
+    assert(await inView(page, "[data-slot=source-card][data-ordinal='2']", "[data-testid=sources-pane]"), "the second card is not inside the 来源 tab's viewport");
+    assert((await page.locator("[data-slot=source-card][data-highlight]").count()) === 1, "more than one card is marked");
+    // The mark is a ring that can be seen (the page's own reduced-motion state: a still ring).
+    const ring = await page.locator("[data-slot=source-card][data-highlight]").evaluate((el) => { const cs = getComputedStyle(el); return { style: cs.outlineStyle, width: cs.outlineWidth, colour: cs.outlineColor }; });
+    assert(ring.style === "solid" && ring.width === "2px" && !/rgba\(0, 0, 0, 0\)|transparent/.test(ring.colour), `the marked card's ring is ${JSON.stringify(ring)}`);
+    // The mark is one-shot: it goes away by itself.
+    await page.waitForFunction(() => !document.querySelector("[data-slot=source-card][data-highlight]"), null, { timeout: 5000 });
+    return "folded panel unfolds, 来源 selected, card 2 scrolled into view and marked once";
+  } finally { await view.close(); }
+}
+
+/** Acceptance 2: a turn that is running grows its bar chip by chip, and a finished turn folds to 「已思考 N 秒 · M 步」. */
+async function stepsLive(ctx) {
+  const view = await openChat(ctx, "steps-live");
+  try {
+    const { page } = view;
+    const hand = await streamSteps(page);
+    const bar = page.locator("[data-testid=turn-steps]").last();
+    const chips = bar.locator("[data-slot=step-chip]");
+    assert((await chips.count()) === 5, `${await chips.count()} chips after five steps`);
+    assert((await bar.locator("[data-slot=step-chip][data-state=running]").count()) === 1, "not exactly one step is turning");
+    const text = await bar.innerText();
+    assert(text.includes("(3)") && text.includes("(12)"), `the finished tools do not show their hit counts: ${JSON.stringify(text)}`);
+    assert((await bar.locator("[data-slot=thinking-slot]").count()) === 1, "the first cell (thinking slot) is missing");
+    assert((await bar.getAttribute("data-state")) === "running", "the bar is not in its running state");
+    // The running tool comes back with nothing, then a check step starts: the bar grows.
+    await hand.push(0, "trace", traceEvent("r6", "tool", { name: "query_latest_forecast", after: ["r3"], start_ms: 1650, ms: 800, output: { ok: true, count: 0 } }));
+    await hand.push(0, "trace", traceEvent("r7", "verify", { after: ["r4", "r5", "r6"], start_ms: 2500, ms: null, status: "running" }));
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-testid=turn-steps]")].pop()?.querySelectorAll("[data-slot=step-chip]").length >= 6, null, { timeout: 5000 });
+    assert((await chips.count()) === 6, `${await chips.count()} chips after the sixth step`);
+    assert((await bar.innerText()).includes("无匹配"), "a tool that found nothing does not say 无匹配");
+    await hand.push(0, "trace", traceEvent("r7", "verify", { after: ["r4", "r5", "r6"], start_ms: 2500, ms: 600, output: { citations: 0, issues: [] } }));
+    await hand.push(0, "delta", { text: "过程条测试的回答。" });
+    await hand.push(0, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000f1", thinking_ms: 12400, citations: [], citation_protocol: null });
+    await hand.close(0);
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-testid=turn-steps]")].pop()?.getAttribute("data-state") === "summary", null, { timeout: 8000 });
+    const summary = (await bar.innerText()).replace(/\s+/g, " ").trim();
+    assert(/已思考 12 秒 · 6 步/.test(summary), `the folded bar says ${JSON.stringify(summary)}`);
+    assert((await bar.locator("[data-slot=step-chip]").count()) === 0, "the chips are still there after the turn ended");
+    return `5 chips (1 turning, counts 3 and 12), 6 after the next event with 无匹配, folded to ${JSON.stringify(summary)}`;
+  } finally { await view.close(); }
+}
+
+/** The process bar opens 过程 on its own round: a second round's bar changes the round the panel shows. */
+async function stepsOpenProcess(ctx) {
+  const view = await openChat(ctx, "steps-open-process");
+  try {
+    const { page } = view;
+    await page.locator("[data-testid=panel-close]").click();
+    await page.locator("[data-testid=context-panel]").waitFor({ state: "detached", timeout: 5000 });
+    const answers = page.locator("[data-testid=message][data-role=assistant]");
+    await answers.first().locator("[data-testid=turn-steps]").click();
+    await page.locator("[data-testid=timeline-step]").first().waitFor({ timeout: 5000 });
+    assert((await page.locator("[data-testid=tab-process]").getAttribute("aria-selected")) === "true", "过程 is not the selected tab");
+    const first = await page.locator("[data-testid=panel-round]").innerText();
+    assert(first.includes("AAPL 最近一个季"), `the panel names ${JSON.stringify(first)} for the first round`);
+    const stepsOfFirst = await page.locator("[data-testid=timeline-step]").count();
+    assert(stepsOfFirst === 9, `${stepsOfFirst} steps for the first round (its trace has 9 nodes)`);
+    const second = answers.nth(1).locator("[data-testid=turn-steps]");
+    await second.scrollIntoViewIfNeeded();
+    await second.click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=panel-round]")?.textContent?.includes("把 AAPL 的两版预测"), null, { timeout: 5000 });
+    assert((await page.locator("[data-testid=timeline-step]").count()) === 6, "the second round's steps are not what the panel lists");
+    assert(/部分来源可用/.test(await answers.nth(1).locator("[data-testid=turn-steps]").innerText()), "a partially_succeeded turn's bar does not say 部分来源可用");
+    return `folded panel unfolds on 过程; round 1: ${stepsOfFirst} steps; the second bar switches the round (6 steps) and says 部分来源可用`;
+  } finally { await view.close(); }
+}
+
+/** The computed colours that mean danger or action, resolved the way the page resolves them. */
+async function warningColours(page) {
+  return page.evaluate(() => {
+    const out = new Set();
+    for (const name of ["--danger", "--action", "--action-soft"]) {
+      const probe = document.createElement("span"); probe.style.color = `var(${name})`; probe.style.backgroundColor = `var(${name})`; document.body.appendChild(probe);
+      const cs = getComputedStyle(probe); out.add(cs.color); out.add(cs.backgroundColor); probe.remove();
+    }
+    return [...out];
+  });
+}
+async function colourReport(handle, banned) {
+  return handle.evaluate((root, list) => {
+    const bad = [];
+    for (const el of [root, ...root.querySelectorAll("*")]) {
+      const cs = getComputedStyle(el);
+      for (const prop of ["color", "backgroundColor", "borderTopColor", "borderLeftColor", "outlineColor", "textDecorationColor"]) if (list.includes(cs[prop])) bad.push(`${el.tagName}.${prop}=${cs[prop]}`);
+      if (el.tagName === "svg") bad.push("an icon");
+    }
+    return bad;
+  }, banned);
+}
+
+/** Acceptance 4: the public mark's card says exactly what the existing functions compute for the same message, and the mark carries no danger or action colour, no icon, in both themes. */
+async function publicMarkVerbatim(ctx) {
+  const message = buildState().chat.conversations.get(CONVERSATION.finbot).find((m) => Array.isArray(m.public_marks) && m.public_marks.length);
+  const [view0] = normalizePublicMarks(message.public_marks);
+  const expected = { template: view0.label, quote: publicMarkQuoteText(view0, (text) => text), cite: `查看来源 [${view0.evidence.ordinal}]` };
+  const done = [];
+  for (const theme of ["light", "dark"]) {
+    const view = await newView(ctx.browser, { width: 1440, theme, label: `public-mark-${theme}`, unmatched });
+    try {
+      const { page } = view;
+      await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+      await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+      const mark = page.locator("[data-testid=public-mark]").first();
+      await mark.scrollIntoViewIfNeeded();
+      assert((await mark.innerText()) === "◦", `the mark reads ${JSON.stringify(await mark.innerText())}`);
+      const banned = await warningColours(page);
+      // At rest (before the pointer is on it), then open: hover and open states have their own colours.
+      const rest = await colourReport(await mark.elementHandle(), banned);
+      assert(rest.length === 0, `${theme}: the mark at rest uses a danger / action colour or an icon: ${rest.join(", ")}`);
+      await mark.hover();
+      const card = page.locator("[data-testid=public-mark-card]");
+      await card.waitFor({ timeout: 5000 });
+      const got = { template: await card.locator("[data-slot=public-mark-template]").textContent(), quote: await card.locator("[data-slot=public-mark-quote]").textContent(), cite: await card.locator("[data-slot=public-mark-cite]").textContent() };
+      for (const key of Object.keys(expected)) assert(got[key] === expected[key], `${theme}: card ${key} is ${JSON.stringify(got[key])}, the existing functions give ${JSON.stringify(expected[key])}`);
+      assert((await card.textContent()) === expected.template + expected.quote + expected.cite, `${theme}: the card's whole text differs from the three computed texts joined`);
+      assert((await card.locator("> *").count()) === 3, `${theme}: the card has ${await card.locator("> *").count()} children (template, quote, cite)`);
+      for (const [name, handle] of [["mark (open)", await mark.elementHandle()], ["card", await card.elementHandle()]]) {
+        const bad = await colourReport(handle, banned);
+        assert(bad.length === 0, `${theme}: the ${name} uses a danger / action colour or an icon: ${bad.join(", ")}`);
+      }
+      // The sentence stays as written: not struck through, not faded.
+      const sentence = await mark.evaluate((el) => { const p = el.closest("li, p"); const cs = getComputedStyle(p); return { line: cs.textDecorationLine, opacity: cs.opacity }; });
+      assert(sentence.line === "none" && sentence.opacity === "1", `${theme}: the marked sentence is ${JSON.stringify(sentence)}`);
+      await page.keyboard.press("Escape");
+      await card.waitFor({ state: "detached", timeout: 5000 });
+      done.push(theme);
+    } finally { await view.close(); }
+  }
+  return `${done.join(" + ")}: card = template + quote + 查看来源 [1] word for word (${JSON.stringify(expected.cite)}), no danger / action colour, no icon, sentence untouched`;
+}
+
+/** The old-style line mark (a message from before the public marks) is the same neutral footnote, and 追问依据 still puts its question in the box. */
+async function legacyLineMark(ctx) {
+  const view = await openChat(ctx, "legacy-line-mark");
+  try {
+    const { page } = view;
+    const mark = page.locator("[data-testid=line-mark]").first();
+    await mark.scrollIntoViewIfNeeded();
+    await mark.click();
+    const card = page.locator("[data-testid=line-mark-card]");
+    await card.waitFor({ timeout: 5000 });
+    const text = await card.locator("[data-slot=line-mark-text]").textContent();
+    assert(text === "证据不足：引用的来源里找不到这个说法", `the card says ${JSON.stringify(text)}`);
+    const bad = await colourReport(await card.elementHandle(), await warningColours(page));
+    assert(bad.length === 0, `the old line mark's card uses a danger / action colour or an icon: ${bad.join(", ")}`);
+    await card.locator("[data-slot=line-mark-ask]").click();
+    const draft = await page.locator("#agent-draft").inputValue();
+    assert(draft === followUpQuestion("3. 两版的看涨概率几乎没变，可以认为新材料没有改变上行逻辑。"), `追问依据 put ${JSON.stringify(draft)} in the box`);
+    assert((await page.evaluate(() => document.activeElement?.id)) === "agent-draft", "the focus is not in the input box after 追问依据");
+    return `neutral ◦, card text "${text}", 追问依据 fills the box and focuses it`;
+  } finally { await view.close(); }
+}
+
+/** Acceptance 3: an answer from before the step graph shows only its time (or nothing, or the old tool badges as chips): the three cases the old panel and badges had. */
+async function oldMessageNoSteps(ctx) {
+  const view = await openChat(ctx, "old-message-no-steps");
+  try {
+    const { page } = view;
+    // Nothing at all: the routine result has no time, no trace, no tools.
+    const routine = page.locator("[data-testid=message][data-role=assistant]", { hasText: "盘前关注列表里有 3 条" });
+    await routine.waitFor({ timeout: 10000 });
+    assert((await routine.locator("[data-testid=turn-steps]").count()) === 0, "an answer with no step data shows a process bar");
+    // Only its time (AppleBot's answer): a line, not a button, no chips.
+    await page.goto(`${ctx.server.url}#/chat/${BOT.applebot}`, { waitUntil: "load" });
+    const time = page.locator("[data-testid=turn-steps][data-state=time]");
+    await time.waitFor({ timeout: 10000 });
+    assert((await time.evaluate((el) => el.tagName)) === "DIV", "the time-only bar is a button");
+    assert(/^已思考 2\.8 秒$/.test((await time.innerText()).trim()), `the time-only bar says ${JSON.stringify(await time.innerText())}`);
+    assert((await time.locator("[data-slot=step-chip]").count()) === 0, "the time-only bar has chips");
+    // The tool list only (NewsBot's answer): the old tool badge as a chip.
+    await page.goto(`${ctx.server.url}#/chat/${BOT.newsbot}`, { waitUntil: "load" });
+    const tools = page.locator("[data-testid=turn-steps][data-state=tools] [data-slot=step-chip]");
+    await tools.first().waitFor({ timeout: 10000 });
+    const chip = (await tools.first().innerText()).trim();
+    assert(chip === "搜索已配置新闻源 · 已完成 · 6 条结果", `the tool chip reads ${JSON.stringify(chip)}`);
+    // The panel's 过程 tab says there are no steps for such a round.
+    await page.locator("[data-testid=tab-process]").click();
+    await page.locator("[data-testid=process-empty]").waitFor({ timeout: 5000 });
+    return `no data: no bar; time only: "已思考 2.8 秒" (not a button); tool list only: ${JSON.stringify(chip)}; 过程 tab: no step record`;
+  } finally { await view.close(); }
+}
+
+/** Drag the panel's edge wider; the width survives a reload; folding survives a reload; the arrow keys resize too. */
+async function panelResizePersists(ctx) {
+  const view = await openChat(ctx, "panel-resize-persists");
+  try {
+    const { page } = view;
+    const before = (await panelBox(page)).width;
+    const handle = page.locator("[data-testid=panel-resize]");
+    const box = await handle.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 - 120, box.y + 200, { steps: 6 });
+    await page.mouse.up();
+    const wide = (await panelBox(page)).width;
+    assert(Math.abs(wide - (before + 120)) <= 2, `dragging 120px left took the panel from ${before} to ${wide}`);
+    await page.reload({ waitUntil: "load" });
+    await page.locator("[data-testid=context-panel]").waitFor({ timeout: 10000 });
+    const kept = (await panelBox(page)).width;
+    assert(Math.abs(kept - wide) <= 2, `the width was ${wide} before the reload and ${kept} after`);
+    await page.locator("[data-testid=panel-resize]").focus();
+    await page.keyboard.press("ArrowLeft");
+    const keyed = (await panelBox(page)).width;
+    assert(Math.abs(keyed - (kept + 16)) <= 2, `ArrowLeft took the panel from ${kept} to ${keyed}`);
+    await page.locator("[data-testid=panel-close]").click();
+    await page.reload({ waitUntil: "load" });
+    await page.locator("[data-testid=message]").first().waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=context-panel]").count()) === 0, "the folded panel is open again after a reload");
+    await page.locator("[data-testid=side-toggle]").click();
+    await page.locator("[data-testid=context-panel]").waitFor({ timeout: 5000 });
+    const reopened = (await panelBox(page)).width;
+    assert(Math.abs(reopened - keyed) <= 2, `the width after unfolding is ${reopened}, not the kept ${keyed}`);
+    return `${before} -> ${wide} by drag, kept over a reload (${kept}), +16 by ArrowLeft (${keyed}); folded stays folded over a reload and unfolds at ${reopened}`;
+  } finally { await view.close(); }
+}
+
+/** Keyboard: Tab reaches a citation chip, its hover card opens on focus, Enter takes the focus into the source card, Esc returns it to the chip. */
+async function sourcesKeyboard(ctx) {
+  const view = await openChat(ctx, "sources-keyboard");
+  try {
+    const { page } = view;
+    const answer = firstAnswer(page);
+    await answer.locator("[data-testid=turn-steps]").focus();
+    let reached = null;
+    for (let i = 0; i < 8 && !reached; i += 1) {
+      await page.keyboard.press("Tab");
+      reached = await page.evaluate(() => { const el = document.activeElement; return el?.getAttribute("data-testid") === "citation-chip" ? el.getAttribute("data-ordinal") : null; });
+    }
+    assert(reached === "1", `Tab did not reach the first citation chip (got ${reached})`);
+    await page.locator("[data-slot=hover-card-content]").waitFor({ timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector("[data-slot=hover-card-content]")?.textContent?.includes("Services net sales"), null, { timeout: 5000 });
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.activeElement?.closest("[data-slot=source-card]")?.getAttribute("data-ordinal") === "1", null, { timeout: 5000 });
+    assert((await page.locator("[data-slot=source-card][data-ordinal='1']").getAttribute("data-highlight")) !== null, "the card Enter went to is not marked");
+    await page.keyboard.press("Escape");
+    const back = await page.evaluate(() => ({ id: document.activeElement?.getAttribute("data-testid"), ordinal: document.activeElement?.getAttribute("data-ordinal") }));
+    assert(back.id === "citation-chip" && back.ordinal === "1", `Esc left the focus on ${JSON.stringify(back)}, not on the chip`);
+    return "Tab reaches [1], the hover card shows its excerpt on focus, Enter moves the focus into the card (marked), Esc returns it to [1]";
+  } finally { await view.close(); }
+}
+
+/** Every field of the old drawer has a place on the card; a withdrawn source is an error bar with 重试; each chunk is asked for once. */
+async function sourceCardFields(ctx) {
+  const state = buildState();
+  const messages = state.chat.conversations.get(CONVERSATION.finbot);
+  const answer = messages.find((m) => m.role === "assistant" && m.citations?.length === 2 && m.trace);
+  answer.citations.push(
+    { ordinal: 3, chunk_id: null, document_id: null, title: "Apple 披露欧盟 App Store 政策调整", section: "", source_url: "https://news.example.test/apple-eu", observed_at: "2026-11-12T01:30:00Z", published_at: "2026-11-11", quote: "Apple said the new terms take effect in the EU on Monday.", source_type: "web_news", truncated: true },
+    { ordinal: 4, chunk_id: "k0000000-0000-4000-8000-00000000000f", document_id: null, title: "已撤回的材料", section: "", source_url: null, observed_at: null, published_at: null, quote: "", source_type: "saved_filing", truncated: false },
+  );
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "source-card-fields", unmatched, fixtureState: state });
+  try {
+    const { page } = view;
+    const asked = [];
+    page.on("request", (request) => { if (/\/knowledge\/citations\//.test(request.url())) asked.push(request.url().split("/").pop()); });
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    const chip = firstAnswer(page).locator("[data-testid=sources-chip]");
+    assert(/来源 4/.test((await chip.innerText()).trim()), `the footer chip says ${JSON.stringify(await chip.innerText())}`);
+    await chip.scrollIntoViewIfNeeded();
+    await chip.click();
+    await page.locator("[data-slot=source-card]").nth(3).waitFor({ timeout: 5000 });
+    const card = (n) => page.locator(`[data-slot=source-card][data-ordinal='${n}']`);
+    // 1: a saved filing: type, dates, the excerpt read through the chunk, the link to the original.
+    await card(1).locator("[data-slot=source-quote]").waitFor({ timeout: 5000 });
+    const c1 = await card(1).innerText();
+    assert(c1.includes("已保存申报") && c1.includes("观察 2026-") && c1.includes("Services gross margin percentage was 75.0%"), `card 1 reads ${JSON.stringify(c1)}`);
+    assert((await card(1).locator("[data-slot=source-card-open]").getAttribute("href")).startsWith("https://www.sec.gov/"), "card 1 has no link to the original");
+    assert((await card(1).locator("[data-slot=source-quote]").evaluate((el) => getComputedStyle(el).fontFamily)).toLowerCase().includes("serif"), "the excerpt is not in the quote face");
+    // 2: derived content: marked 派生, version line, original quotes.
+    await card(2).locator("[data-slot=source-card-derived]").waitFor({ timeout: 5000 });
+    const c2 = await card(2).innerText();
+    assert(c2.includes("派生") && c2.includes("v2 · analysis-v2 · muse-ember") && c2.includes("原文引文：") && c2.includes("gross margin was 75.0%"), `card 2 reads ${JSON.stringify(c2)}`);
+    assert((await card(2).locator("[data-slot=source-card-open]").count()) === 0, "card 2 has no original to open but shows the link");
+    // 3: a web page: published and fetched dates, the truncated note, its own quote, no chunk request.
+    const c3 = await card(3).innerText();
+    assert(c3.includes("新闻网页") && c3.includes("发布 2026-11-11") && c3.includes("抓取 2026-11-12") && c3.includes("保存内容可能不完整") && c3.includes("the new terms take effect"), `card 3 reads ${JSON.stringify(c3)}`);
+    assert((await card(3).locator("[data-slot=source-card-open]").getAttribute("target")) === "_blank", "the original does not open in a new tab");
+    // 4: a withdrawn source: an error bar with 重试.
+    await card(4).locator("[data-testid=excerpt-error]").waitFor({ timeout: 5000 });
+    assert((await card(4).innerText()).includes("来源已撤回或不可访问") && (await card(4).getByRole("button", { name: "重试" }).count()) === 1, "the withdrawn source does not say so with a 重试 button");
+    assert((await card(4).innerText()).includes("观察时间未知"), "the unknown observed time is not said");
+    const distinct = new Set(asked);
+    assert(asked.length === distinct.size, `a chunk was asked for twice: ${asked.join(", ")}`);
+    return `4 cards: type, dates, serif excerpt, 派生 + version + original quotes, link, web dates + 保存内容可能不完整, withdrawn = error bar + 重试; ${asked.length} chunk requests, none repeated`;
+  } finally { await view.close(); }
+}
+
+/** Design 3.4: the bot's workspace cards (add, move, resize, pin a stock, delete, reset) work in the panel's 工作区 tab as they did in the old rail, and the layout is kept per bot. */
+async function workspaceCardsInPanel(ctx) {
+  const view = await openChat(ctx, "workspace-cards-in-panel");
+  try {
+    const { page } = view;
+    const pane = page.locator("[data-testid=workspace-pane]");
+    assert((await page.locator("[data-testid=tab-workspace]").getAttribute("aria-selected")) === "true", "the panel does not open on 工作区 by default");
+    await pane.locator("section.ws-card").first().waitFor({ timeout: 10000 });
+    const titles = () => pane.locator("section.ws-card").evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
+    const first = await titles();
+    assert(first.length === 6, `${first.length} cards by default`);
+    await pane.getByRole("button", { name: /编辑卡片/ }).click();
+    // Move the first card down, make the second a large one, pin the third to NVDA.
+    await pane.getByRole("button", { name: "下移" }).first().click();
+    const moved = await titles();
+    assert(moved[0] === first[1] && moved[1] === first[0], `the first card did not move down: ${moved.join(" / ")}`);
+    await pane.locator("select[aria-label=大小]").nth(1).selectOption("l");
+    await pane.locator("input[aria-label=固定股票]").first().fill("NVDA");
+    await pane.locator("input[aria-label=固定股票]").first().blur();
+    // Delete the last card, then add it back from the list of missing ones.
+    await pane.getByRole("button", { name: "删除" }).last().click();
+    assert((await titles()).length === 5, "the last card was not deleted");
+    await pane.locator("select[aria-label=添加卡片]").selectOption({ index: 1 });
+    assert((await titles()).length === 6, "the added card is not in the list");
+    await pane.getByRole("button", { name: "完成" }).click();
+    const stored = await page.evaluate((id) => JSON.parse(localStorage.getItem(`market-evidence-agent:workspace:${id}:v1`)), BOT.finbot);
+    assert(stored[1].size === "l" && stored.some((item) => item.symbol === "NVDA"), `the stored layout is ${JSON.stringify(stored)}`);
+    // The layout is kept per bot over a reload; 恢复默认 puts the six back.
+    await page.reload({ waitUntil: "load" });
+    await pane.locator("section.ws-card").first().waitFor({ timeout: 10000 });
+    const kept = await titles();
+    assert(kept.join() === (await titles()).join() && kept[0] === first[1], `the layout is not kept over a reload: ${kept.join(" / ")}`);
+    await pane.getByRole("button", { name: /编辑卡片/ }).click();
+    await pane.getByRole("button", { name: "恢复默认" }).click();
+    assert((await titles()).join() === first.join(), "恢复默认 did not bring the default order back");
+    return "six default cards; move down, size L, pin NVDA, delete, add back; stored per bot, kept over a reload; 恢复默认 restores the order";
+  } finally { await view.close(); }
+}
+
+/** Between 「sent」 and the first event there is no message yet: the line shows the bot's head and the bar's first cell; the first event replaces it with the real message. */
+async function stepsPending(ctx) {
+  const view = await openChat(ctx, "steps-pending");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill(`${HAND_MARKER} 等首个字`);
+    await page.locator("[data-testid=send]").click();
+    await hand.opened(0);
+    const pending = page.locator("[data-testid=pending-answer]");
+    await pending.waitFor({ timeout: 5000 });
+    const slot = pending.locator("[data-slot=thinking-slot]");
+    assert((await slot.count()) === 1, "the waiting line has no first cell");
+    assert(/思考中\s+0\.0 秒/.test((await slot.innerText()).trim()), `the first cell says ${JSON.stringify(await slot.innerText())}`);
+    assert((await pending.locator("button").count()) === 0, "the bar before the first event is a button (there is no round to open yet)");
+    assert((await page.locator("[data-testid=message][data-role=assistant]").filter({ has: page.locator("[data-testid=turn-steps][data-state=running]") }).count()) === 0, "a real message exists before the first event");
+    await hand.push(0, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: "t9000000-0000-4000-8000-0000000000f2", bot_id: BOT.finbot });
+    await pending.waitFor({ state: "detached", timeout: 5000 });
+    await page.locator("[data-testid=message][data-role=assistant] [data-testid=turn-steps][data-state=running]").last().waitFor({ timeout: 5000 });
+    await hand.push(0, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000f2", thinking_ms: 800, citations: [], citation_protocol: null });
+    await hand.close(0);
+    return "the waiting line shows the bot's head and 「思考中 0.0 秒」 (not a button), and the first event replaces it with the real message and its running bar";
+  } finally { await view.close(); }
+}
+
+
+// --- P3.4: the confirmation card, the state rows, the phone's drawers --------------------------------------------------------------
+/** A fresh view of a chat address at any width (openChat is 1440 and the default line only). */
+async function openChatAt(ctx, label, { width = 1440, hash = "#/chat", theme = "light", ready = "[data-testid=message]", fixtureState } = {}) {
+  const view = await newView(ctx.browser, { width, theme, label, unmatched, ...(fixtureState ? { fixtureState } : {}) });
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  await view.page.waitForSelector(ready, { state: "visible", timeout: 15000 });
+  await settle(view.page);
+  return view;
+}
+const APPROVAL = "[data-slot=approval-card]";
+const ACTIVE_CARD = "[data-slot=approval-card][data-state=active]";
+const BASELINE = JSON.parse(fs.readFileSync(new URL("./fixtures/approval-bodies-baseline.json", import.meta.url), "utf8"));
+/** Raw bodies of the stream requests, as the browser sent them (a string each), to compare byte for byte. */
+function watchRaw(page) {
+  const raw = [];
+  page.on("request", (request) => { if (request.method() === "POST" && STREAM_PATH.test(new URL(request.url()).pathname)) raw.push(request.postData()); });
+  return raw;
+}
+/** In TeslaBot's line: send the ASK marker and wait for its card. */
+async function askInTesla(ctx, label) {
+  const view = await openChatAt(ctx, label, { hash: `#/chat/${BOT.teslabot}`, ready: "[data-testid=welcome]" });
+  const { page } = view;
+  const raw = watchRaw(page);
+  await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+  await page.locator("#agent-draft").fill(`${ASK_MARKER} 查一下结果`);
+  await clickSend(page);
+  await page.locator(ACTIVE_CARD).waitFor({ timeout: 10000 });
+  return { view, raw };
+}
+const answered = (page) => page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+
+/**
+ * The five things a card can send are byte for byte what the old card sent: the bodies were recorded from the old card on the unchanged build
+ * (fixtures/approval-bodies-baseline.json) and the new card must produce the same strings.
+ */
+async function approvalRequestBody(ctx) {
+  const got = {};
+  { const view = await openChatAt(ctx, "approval-body-confirm"); try { const raw = watchRaw(view.page); await view.page.locator(`${ACTIVE_CARD} button`, { hasText: "确认执行" }).click(); await answered(view.page); got.confirm = raw.slice(); } finally { await view.close(); } }
+  { const view = await openChatAt(ctx, "approval-body-cancel"); try { const raw = watchRaw(view.page); await view.page.locator(`${ACTIVE_CARD} button`, { hasText: "先不要" }).click(); await answered(view.page); got.cancel = raw.slice(); } finally { await view.close(); } }
+  { const { view, raw } = await askInTesla(ctx, "approval-body-option"); try { await view.page.locator(`${ACTIVE_CARD} button`, { hasText: "第二条结果" }).click(); await answered(view.page); got.option = raw.slice(1); } finally { await view.close(); } }
+  { const { view, raw } = await askInTesla(ctx, "approval-body-reply"); try { const form = view.page.locator(`${ACTIVE_CARD} form`); await form.locator("input").fill("两个都看看"); await form.getByRole("button", { name: "发送" }).click(); await answered(view.page); got.reply = raw.slice(1); } finally { await view.close(); } }
+  { const view = await openChatAt(ctx, "approval-body-revision"); try {
+      const { page } = view; const raw = watchRaw(page);
+      const hand = await handTurn(page, { text: "修订", lead: "可以用下面这些新材料修订预测，请勾选。", turnId: "t9000000-0000-4000-8000-0000000000e9" });
+      await endWithCard(hand, 0, revisionCard(), "t9000000-0000-4000-8000-0000000000e9");
+      const card = page.locator(ACTIVE_CARD); await card.waitFor();
+      await card.locator("input[type=checkbox]").nth(2).check(); await card.locator("input[type=checkbox]").nth(0).check();
+      const before = raw.length; await card.locator("button", { hasText: "用所选材料修订" }).click(); await answered(page); got.revision = raw.slice(before);
+    } finally { await view.close(); } }
+  for (const key of ["confirm", "cancel", "option", "reply", "revision"]) {
+    assert(got[key]?.length === 1, `${key}: expected one request, saw ${got[key]?.length}`);
+    // The one thing that may differ is the id of the card the check pushed itself (the baseline's revision card used another request id of the same shape).
+    assert(got[key][0] === BASELINE[key][0], `${key} request changed:\n  now      ${got[key][0]}\n  baseline ${BASELINE[key][0]}`);
+  }
+  return "confirm, cancel, option, typed reply and ticked materials: five request bodies identical to the old card's, byte for byte";
+}
+
+/** Acceptance 2: the revision card does not tick anything for the reader, holds its button until the minimum is ticked and says why; with no candidate it says so. */
+async function revisionCardMinSelect(ctx) {
+  const view = await openChatAt(ctx, "revision-min-select");
+  try {
+    const { page } = view;
+    const hand = await handTurn(page, { text: "修订", lead: "可以用下面这些新材料修订预测，请勾选。" });
+    await endWithCard(hand, 0, revisionCard());
+    const card = page.locator(ACTIVE_CARD); await card.waitFor({ timeout: 10000 });
+    const boxes = card.locator("input[type=checkbox]"), main = card.locator("[data-approval-primary]");
+    assert((await boxes.count()) === 3, "the card does not list its three materials");
+    assert((await card.locator("input[type=checkbox]:checked").count()) === 0, "a material is ticked before the reader ticked it");
+    assert(await main.isDisabled(), "the main button is usable with nothing ticked");
+    const reason = card.locator("[data-slot=approval-reason]");
+    assert(/至少勾选 2 份材料/.test(await reason.innerText()), `the reason says ${JSON.stringify(await reason.innerText().catch(() => null))}`);
+    assert((await main.getAttribute("aria-describedby")) === (await reason.getAttribute("id")), "the reason is not tied to the disabled button");
+    assert(!(await card.innerText()).match(/全选|推荐|自动选/), "the card offers to choose for the reader");
+    await boxes.nth(0).check();
+    assert(await main.isDisabled(), "the main button is usable with one of two ticked");
+    await boxes.nth(2).check();
+    assert(await main.isEnabled(), "the main button stays disabled with two ticked");
+    assert((await reason.count()) === 0, "the reason is still shown with enough ticked");
+    await boxes.nth(2).uncheck();
+    assert(await main.isDisabled(), "the main button did not go back to disabled");
+    // The card with nothing to tick.
+    const none = await openChatAt(ctx, "revision-none");
+    try {
+      const h = await handTurn(none.page, { text: "修订", lead: "这版预测没有可用于修订的新材料。" });
+      await endWithCard(h, 0, revisionCard({ candidates: false }));
+      const c = none.page.locator(ACTIVE_CARD); await c.waitFor({ timeout: 10000 });
+      assert((await c.innerText()).includes("没有可用于修订的新材料"), "the card with no candidate does not say so");
+      assert((await c.locator("input[type=checkbox]").count()) === 0, "a card with no candidate lists something to tick");
+      assert(await c.locator("[data-approval-primary]").isDisabled(), "the confirm button is usable with nothing to send");
+      assert(await c.locator("button", { hasText: "先不要" }).isEnabled(), "the reader cannot decline a card with no candidate");
+    } finally { await none.close(); }
+    return "nothing pre-ticked, no select-all; the button waits for 2 ticks and says why; goes back to disabled when un-ticked; no-candidate card says so";
+  } finally { await view.close(); }
+}
+
+/** A card made in this session counts ten minutes down against the clock and falls to 已过期 at zero; a card from the history shows only the static note. */
+async function approvalCountdown(ctx) {
+  const old = await openChatAt(ctx, "approval-countdown-history");
+  try {
+    const card = old.page.locator(ACTIVE_CARD); await card.waitFor();
+    assert((await card.locator("[data-slot=approval-timer]").count()) === 0, "a card read back from the server shows a countdown");
+    assert((await card.locator("[data-slot=approval-note]").innerText()).includes("确认有效期为十分钟"), "the history card has no static note");
+  } finally { await old.close(); }
+  const view = await openChatAt(ctx, "approval-countdown");
+  try {
+    const { page } = view;
+    const hand = await handTurn(page, { text: "确认", lead: "我可以抓取 AAPL 最新 10-Q 并生成分析，请确认。" });
+    await endWithCard(hand, 0, freshWriteCard());
+    const timer = page.locator("[data-slot=approval-timer]"); await timer.waitFor({ timeout: 10000 });
+    assert((await timer.innerText()) === "10:00", `the timer starts at ${await timer.innerText()}`);
+    assert(/mono/.test(await timer.evaluate((el) => getComputedStyle(el).fontFamily + " " + el.className)) || /mono/i.test(await timer.evaluate((el) => getComputedStyle(el).fontFamily)), "the timer is not set in the mono face");
+    await page.clock.setFixedTime(new Date(FIXED_TIME.getTime() + 61_000));
+    await page.waitForFunction(() => document.querySelector("[data-slot=approval-timer]")?.textContent === "08:59", null, { timeout: 5000 });
+    await page.clock.setFixedTime(new Date(FIXED_TIME.getTime() + 599_000));
+    await page.waitForFunction(() => document.querySelector("[data-slot=approval-timer]")?.textContent === "00:01", null, { timeout: 5000 });
+    await page.clock.setFixedTime(new Date(FIXED_TIME.getTime() + 601_000));
+    const gone = page.locator(`${APPROVAL}[data-state=expired]`); await gone.waitFor({ timeout: 5000 });
+    assert((await gone.innerText()).includes("已过期") && (await gone.innerText()).includes("在对话里再说一次"), `the expired card says ${JSON.stringify(await gone.innerText())}`);
+    assert((await gone.locator("button").count()) === 0 && (await page.locator("[data-slot=approval-timer]").count()) === 0, "the expired card still has buttons or a timer");
+    assert((await gone.boundingBox()).height < 56, "the expired card is still a block");
+    return "history card: static 确认有效期为十分钟, no timer; this session's card: 10:00 → 08:59 → 00:01 against the clock, then one 已过期 line without buttons";
+  } finally { await view.close(); }
+}
+
+/** Once answered, the card is one line: 已确认 · title, or 已取消; a line typed in the box instead leaves 未确认. */
+async function approvalCollapses(ctx) {
+  const yes = await openChatAt(ctx, "approval-collapse-yes");
+  try {
+    const full = await yes.page.locator(ACTIVE_CARD).boundingBox();
+    await yes.page.locator(`${ACTIVE_CARD} button`, { hasText: "确认执行" }).click(); await answered(yes.page);
+    const line = yes.page.locator(`${APPROVAL}[data-state=answered]`);
+    const text = await line.innerText();
+    assert(/已确认 · 抓取并分析 NVDA 10-Q/.test(text), `the folded card says ${JSON.stringify(text)}`);
+    const box = await line.boundingBox();
+    assert(box.height < 56 && full.height > 150 && (await line.locator("button").count()) === 0, `the card did not fold (${full.height}px → ${box.height}px)`);
+  } finally { await yes.close(); }
+  const no = await openChatAt(ctx, "approval-collapse-no");
+  try {
+    await no.page.locator(`${ACTIVE_CARD} button`, { hasText: "先不要" }).click(); await answered(no.page);
+    assert(/已取消/.test(await no.page.locator(`${APPROVAL}[data-state=answered]`).innerText()), "declined card does not say 已取消");
+  } finally { await no.close(); }
+  const typed = await openChatAt(ctx, "approval-collapse-typed");
+  try {
+    // The reader ignores the buttons and types: an ordinary message goes out (no pending_request_id: the composer was never tied to the card), and the card is not confirmed.
+    const bodies = watchPosts(typed.page, STREAM_PATH);
+    await typed.page.locator("#agent-draft").fill("先看看 AAPL 的行情"); await clickSend(typed.page); await answered(typed.page);
+    assert(bodies.length === 1 && bodies[0].pending_request_id === undefined && !String(bodies[0].message).startsWith("confirm:"), `a typed line went out as ${JSON.stringify(bodies)}`);
+    assert(/未确认 · 抓取并分析 NVDA 10-Q/.test(await typed.page.locator(`${APPROVAL}[data-state=answered]`).innerText()), "a card passed over does not say 未确认");
+  } finally { await typed.close(); }
+  return "确认执行 → 已确认 · 抓取并分析 NVDA 10-Q, 先不要 → 已取消, a typed line → 未确认; each one line, no buttons";
+}
+
+/** S9: the amber strip above the input; it takes the reader to the card and puts the focus on its main action; the input stays usable. */
+async function waitingStrip(ctx) {
+  const view = await openChatAt(ctx, "waiting-strip");
+  try {
+    const { page } = view;
+    const strip = page.locator("[data-testid=waiting-strip]"); await strip.waitFor({ timeout: 10000 });
+    assert((await strip.innerText()).includes("FinBot 在等你确认上面的卡片"), `the strip says ${JSON.stringify(await strip.innerText())}`);
+    assert(/在等你确认/.test(await page.locator("[role=status].sr-only").first().innerText()), "no screen-reader announcement of who is waiting");
+    assert(await page.locator("#agent-draft").isEnabled(), "the input is not usable while the bot waits");
+    assert(!(await page.evaluate(() => Boolean(document.activeElement?.closest("[data-slot=approval-card]")))), "the card took the focus when it appeared");
+    await page.evaluate(() => { document.querySelector("[data-testid=transcript]").scrollTop = 0; });
+    assert(!(await inView(page, ACTIVE_CARD, "[data-testid=transcript]")), "the card is already in view; the scroll check proves nothing");
+    await strip.click();
+    await page.waitForFunction(() => document.activeElement?.hasAttribute("data-approval-primary"), null, { timeout: 5000 });
+    assert(await inView(page, ACTIVE_CARD, "[data-testid=transcript]"), "the strip did not scroll to the card");
+    assert((await page.evaluate(() => document.activeElement?.textContent)) === "确认执行", "the focus is not on the main action");
+    // Answered: the strip is gone.
+    await page.keyboard.press("Enter");
+    await answered(page);
+    assert((await page.locator("[data-testid=waiting-strip]").count()) === 0, "the strip stays after the card was answered");
+    return "strip above the input; click scrolls the card into view and focuses 确认执行 (Enter then confirms); the box stays enabled; the strip leaves with the card";
+  } finally { await view.close(); }
+}
+
+/** The card's own keyboard: it does not take focus; Tab enters it; arrows move between the materials; Enter on a tick does the main action. */
+async function approvalKeyboard(ctx) {
+  const view = await openChatAt(ctx, "approval-keyboard");
+  try {
+    const { page } = view;
+    const raw = watchRaw(page);
+    const hand = await handTurn(page, { text: "修订", lead: "请勾选。" });
+    await endWithCard(hand, 0, revisionCard());
+    const card = page.locator(ACTIVE_CARD); await card.waitFor({ timeout: 10000 });
+    assert(!(await page.evaluate(() => Boolean(document.activeElement?.closest("[data-slot=approval-card]")))), "the card took the focus when it appeared");
+    const boxes = card.locator("input[type=checkbox]");
+    await boxes.nth(0).focus();
+    await page.keyboard.press("Space");
+    await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown");
+    assert((await page.evaluate(() => document.activeElement?.closest("label")?.textContent ?? "")).includes("服务业务监管新规"), "the arrow keys did not move through the materials");
+    await page.keyboard.press("Space");
+    await page.keyboard.press("ArrowUp"); await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown");
+    assert((await page.evaluate(() => document.activeElement?.closest("label")?.textContent ?? "")).includes("AAPL 10-Q"), "the arrows do not wrap");
+    const n = raw.length;
+    await page.keyboard.press("Enter");
+    await answered(page);
+    assert(raw.length === n + 1 && JSON.parse(raw[n]).message === "confirm:revise_forecast:1.3", `Enter on a tick sent ${raw[n]}`);
+    return "no focus grab; arrows move and wrap through the ticks, Space ticks, Enter sends the ticked materials (confirm:revise_forecast:1.3)";
+  } finally { await view.close(); }
+}
+
+/** 重试 puts the last question out again, as the same request, and the failed turn is replaced; 去设置 only when a setting is the way out. */
+async function retryResendsLast(ctx) {
+  const view = await openChatAt(ctx, "retry-resends-last");
+  try {
+    const { page } = view;
+    const hand = await handTurn(page, { text: "重试用的问题", lead: "写了一半的回答，" });
+    await endWithError(hand, 0, "provider_timeout");
+    const bar = page.locator("[data-testid=turn-error]"); await bar.waitFor({ timeout: 10000 });
+    assert((await bar.innerText()).includes("请求超时"), `the error bar says ${JSON.stringify(await bar.innerText())}`);
+    assert((await bar.locator("a", { hasText: "去设置" }).count()) === 0, "去设置 is offered for a timeout");
+    assert((await page.locator("[data-testid=message][data-role=assistant]", { hasText: "写了一半的回答" }).count()) === 1, "the text generated before the failure is gone");
+    assert((await page.locator("[data-testid=chat-status]").count()) === 0, "the old status line carries the error");
+    const first = (await hand.opened(0)).message;
+    await bar.getByRole("button", { name: "重试" }).click();
+    const second = await hand.opened(1);
+    assert(second.message === first && first.includes("重试用的问题"), `retry sent ${JSON.stringify(second.message)}, the question was ${JSON.stringify(first)}`);
+    assert(second.bot_id === BOT.finbot, "the retry lost the bot id");
+    await hand.push(1, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: "t9000000-0000-4000-8000-0000000000d3", bot_id: BOT.finbot });
+    await hand.push(1, "delta", { text: "重试之后的完整回答。" });
+    await hand.push(1, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000d3", thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(1);
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "重试之后的完整回答" }).waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=user-bubble]", { hasText: "重试用的问题" }).count()) === 1, "the question shows twice after the retry");
+    assert((await page.locator("[data-testid=turn-error]").count()) === 0 && (await page.locator("[data-testid=message]", { hasText: "写了一半的回答" }).count()) === 0, "the failed turn is still in the thread");
+    return "the failed turn keeps its text and shows why under it; 重试 sends the same message again, replaces the failed turn, one question in the thread";
+  } finally { await view.close(); }
+  // A card's answer that failed is retried as the same answer: same message, request id and label.
+}
+
+async function retryCardAnswerAndSettings(ctx) {
+  const { view, raw } = await askInTesla(ctx, "retry-card-answer");
+  try {
+    const { page } = view;
+    view.mock.control.down = true;
+    await page.locator(`${ACTIVE_CARD} button`, { hasText: "第二条结果" }).click();
+    const bar = page.locator("[data-testid=turn-error]"); await bar.waitFor({ timeout: 15000 });
+    assert((await bar.innerText()).includes("连不上后端"), `an unreachable backend says ${JSON.stringify(await bar.innerText())}`);
+    view.mock.control.down = false;
+    await bar.getByRole("button", { name: "重试" }).click();
+    await answered(page);
+    // Three requests in all: the question, the answer that never arrived, and the retry, which is the answer again, byte for byte (request id and label included).
+    assert(raw.length === 3, `${raw.length} stream requests, expected 3 (the question, the failed answer, the retry)`);
+    assert(raw[1] === BASELINE.option[0] && raw[2] === BASELINE.option[0], `the failed answer / the retry were\n  ${raw[1]}\n  ${raw[2]}\nthe answer is\n  ${BASELINE.option[0]}`);
+  } finally { await view.close(); }
+  const settings = await openChatAt(ctx, "retry-settings");
+  try {
+    const { page } = settings;
+    const hand = await handTurn(page, { text: "缺 key" });
+    await endWithError(hand, 0, "model_key_missing");
+    const link = page.locator("[data-testid=turn-error] a", { hasText: "去设置" }); await link.waitFor({ timeout: 10000 });
+    assert(/#\/settings\/models$/.test(await link.getAttribute("href")), `去设置 goes to ${await link.getAttribute("href")}`);
+    assert((await page.locator("[data-testid=turn-error]").getByRole("button", { name: "重试" }).count()) === 1, "no 重试 beside 去设置");
+  } finally { await settings.close(); }
+  return "an unreachable backend → the plain sentence + 重试; 重试 resends the card's answer with the same request id and label; a missing key adds 去设置 → settings/models";
+}
+
+/** The starter questions fill the box and send nothing; each kind of bot gets its own. */
+async function starterFillsComposer(ctx) {
+  const view = await openChatAt(ctx, "starter-fills", { hash: `#/chat/${BOT.teslabot}`, ready: "[data-testid=welcome]" });
+  try {
+    const { page } = view;
+    const bodies = watchPosts(page, STREAM_PATH);
+    const starters = page.locator("[data-testid=starter]");
+    assert((await starters.count()) === 3, `${await starters.count()} starter questions`);
+    assert(!(await page.locator("[data-testid=welcome]").innerText()).match(/AAPL|TSLA/), "a company-less bot is offered a specific company");
+    const text = (await starters.nth(1).innerText()).trim();
+    await starters.nth(1).click();
+    assert((await page.locator("#agent-draft").inputValue()) === text, `the box holds ${JSON.stringify(await page.locator("#agent-draft").inputValue())}, the starter said ${JSON.stringify(text)}`);
+    assert(await page.evaluate(() => document.activeElement?.id === "agent-draft"), "the focus did not go to the box");
+    await page.waitForTimeout(600);
+    assert(bodies.length === 0 && (await page.locator("[data-testid=message]").count()) === 0 && (await page.locator("[data-testid=welcome]").count()) === 1, "a starter question was sent");
+  } finally { await view.close(); }
+  // Company, news and earnings bots (their lines emptied first).
+  const state = buildState();
+  for (const id of [BOT.applebot, BOT.newsbot, BOT.reportbot]) state.chat.conversations.set(CONVERSATION[Object.keys(BOT).find((k) => BOT[k] === id)], []);
+  const kinds = [[BOT.applebot, /AAPL/, "AAPL"], [BOT.newsbot, /要闻/, "news"], [BOT.reportbot, /财报/, "earnings"]];
+  for (const [id, pattern, name] of kinds) {
+    const v = await openChatAt(ctx, `starter-${name}`, { hash: `#/chat/${id}`, ready: "[data-testid=welcome]", fixtureState: state });
+    try { const body = await v.page.locator("[data-testid=welcome]").innerText(); assert(pattern.test(body), `${name}: the starters are ${JSON.stringify(body)}`); if (name === "AAPL") assert((await v.page.locator("[data-testid=welcome-companies]").innerText()).includes("AAPL"), "no company chip for a bot that watches AAPL"); }
+    finally { await v.close(); }
+  }
+  return "3 starters fill the box, focus it and send nothing; TeslaBot (no company) gets company-free ones; AppleBot AAPL ones + chip; NewsBot news, ReportBot earnings";
+}
+
+/** A background answer finishing raises one toast for its bot, and 查看 goes to that line; a second one does not stack. */
+async function backgroundDoneToast(ctx) {
+  const view = await openChatAt(ctx, "background-done-toast");
+  try {
+    const { page } = view;
+    const toasts = () => page.locator("[data-sonner-toast]", { hasText: "TeslaBot 回答好了" });
+    await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, BOT.teslabot);
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor();
+    const finish = async (index, turn) => {
+      const hand = await handTurn(page, { text: `后台 ${index}`, lead: "后台的回答", botId: BOT.teslabot, conversationId: CONVERSATION.teslabot, turnId: turn, index });
+      await page.evaluate(() => { location.hash = "#/chat"; });
+      await page.locator("[data-testid=message]").first().waitFor();
+      if (index === 0) assert((await toasts().count()) === 0, "the toast is up before the answer is done");
+      await hand.push(index, "done", { status: "complete", turn_id: turn, thinking_ms: 700, citations: [], citation_protocol: null }); await hand.close(index);
+      await toasts().first().waitFor({ timeout: 10000 });
+    };
+    await finish(0, "t9000000-0000-4000-8000-0000000000d4");
+    assert((await toasts().first().getByRole("button", { name: "查看" }).count()) === 1, "the toast has no 查看");
+    await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, BOT.teslabot);
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor();
+    await finish(1, "t9000000-0000-4000-8000-0000000000d5");
+    await page.waitForTimeout(500);
+    assert((await toasts().count()) === 1, `${await toasts().count()} toasts for one bot after two answers`);
+    await toasts().first().getByRole("button", { name: "查看" }).click();
+    await page.waitForFunction((id) => location.hash === `#/chat/${id}`, BOT.teslabot, { timeout: 5000 });
+    return "TeslaBot finishing in the background raises 「TeslaBot 回答好了」 with 查看; a second answer replaces it (one toast); 查看 opens TeslaBot's line";
+  } finally { await view.close(); }
+}
+
+/** A turn that came in from outside this tab has a divider above it: the routine's name and time, or just 外部消息 (nothing else is marked by the server). */
+async function externalMessageDivider(ctx) {
+  const view = await openChatAt(ctx, "external-divider");
+  try {
+    const { page } = view;
+    assert((await page.locator("[data-testid=external-divider]").count()) === 0, "a divider above history that was not written from outside");
+    const list = view.mock.state.chat.conversations.get(CONVERSATION.finbot);
+    list.push({ role: "user", content: "【例行任务结果】「收盘复盘」2026-11-13 16:10", turn_id: "t7000000-0000-4000-8000-000000000001" },
+      { role: "assistant", status: "complete", turn_id: "t7000000-0000-4000-8000-000000000001", content: "今天收盘后的复盘。" },
+      { role: "user", content: "TSLA 的交付数据出来了吗？", turn_id: "t7000000-0000-4000-8000-000000000002" },
+      { role: "assistant", status: "complete", turn_id: "t7000000-0000-4000-8000-000000000002", content: "还没有。" });
+    await page.locator("[data-testid=external-divider]").nth(1).waitFor({ timeout: 20000 });
+    const dividers = page.locator("[data-testid=external-divider]");
+    assert((await dividers.count()) === 2, `${await dividers.count()} dividers for two outside turns`);
+    assert((await dividers.nth(0).innerText()).replace(/\s+/g, " ") === "例行任务「收盘复盘」 · 2026-11-13 16:10", `the routine divider says ${JSON.stringify(await dividers.nth(0).innerText())}`);
+    assert((await dividers.nth(1).innerText()).trim() === "外部消息", `the other says ${JSON.stringify(await dividers.nth(1).innerText())}`);
+    // Each sits directly above its turn's first line.
+    const order = await page.evaluate(() => [...document.querySelectorAll("[data-testid=thread] > *")].map((el) => el.getAttribute("data-testid")).slice(-6));
+    assert(order.join(",") === "external-divider,message,message,external-divider,message,message", `the thread ends ${order.join(",")}`);
+    return "history has no divider; the polled-in turns get 「例行任务「收盘复盘」 · 时间」 and 「外部消息」 right above their first line";
+  } finally { await view.close(); }
+}
+
+/** Phone: the right panel is a bottom drawer; a chip or the process bar opens it on the right tab and place; between lg and xl it is still the column over the thread. */
+async function mobilePanelDrawer(ctx) {
+  const view = await openChatAt(ctx, "mobile-panel-drawer", { width: 390 });
+  try {
+    const { page } = view;
+    assert((await page.locator("aside[data-testid=context-panel]").count()) === 0, "the column panel is drawn on a phone");
+    await firstAnswer(page).locator("[data-testid=citation-chip][data-ordinal='2']").first().scrollIntoViewIfNeeded();
+    await firstAnswer(page).locator("[data-testid=citation-chip][data-ordinal='2']").first().click();
+    const drawer = page.locator("[data-slot=drawer-content][data-testid=context-panel]"); await drawer.waitFor({ timeout: 8000 });
+    assert((await drawer.getAttribute("data-vaul-drawer-direction")) === "bottom", "the panel is not a bottom drawer");
+    const box = await drawer.boundingBox();
+    assert(Math.abs(box.y + box.height - 844) <= 2 && box.y > 60 && box.width >= 388, `the drawer sits at ${JSON.stringify(box)}`);
+    assert((await page.locator("[data-testid=tab-sources]").getAttribute("aria-selected")) === "true", "来源 is not the open tab");
+    await page.waitForFunction(() => document.querySelector("[data-slot=source-card][data-ordinal='2']")?.hasAttribute("data-highlight"), null, { timeout: 5000 });
+    assert(await inView(page, "[data-slot=source-card][data-ordinal='2']", "[data-testid=sources-pane]"), "card 2 is not in the drawer's viewport");
+    const tabs = await drawer.locator("[role=tab]").allInnerTexts();
+    assert(["来源", "过程", "工作区"].every((name) => tabs.some((text) => text.includes(name))), `tabs: ${tabs.join(" | ")}`);
+    await page.keyboard.press("Escape");
+    await drawer.waitFor({ state: "detached", timeout: 5000 });
+    // The process bar opens the same drawer on 过程 and the round.
+    await firstAnswer(page).locator("[data-testid=turn-steps]").click();
+    await drawer.waitFor({ timeout: 8000 });
+    await page.locator("[data-testid=timeline-step]").first().waitFor({ timeout: 8000 });
+    assert((await page.locator("[data-testid=tab-process]").getAttribute("aria-selected")) === "true", "过程 is not the open tab");
+    await page.keyboard.press("Escape"); await drawer.waitFor({ state: "detached", timeout: 5000 });
+    // The header's own switch opens it too.
+    await page.locator("[data-testid=side-toggle]").click(); await drawer.waitFor({ timeout: 8000 });
+    await page.keyboard.press("Escape"); await drawer.waitFor({ state: "detached", timeout: 5000 });
+    // 1100 wide (lg to xl): still the column over the thread, no drawer.
+    const mid = await openChatAt(ctx, "panel-1100", { width: 1100 });
+    try { await mid.page.locator("[data-testid=side-toggle]").click(); await mid.page.locator("aside[data-testid=context-panel]").waitFor({ timeout: 5000 }); assert((await mid.page.locator("[data-slot=drawer-content]").count()) === 0, "a drawer at 1100"); } finally { await mid.close(); }
+    return "390: no column; chip → bottom drawer on 来源 with card 2 marked in view; process bar → 过程; header switch opens it; Esc closes; 1100: still the column";
+  } finally { await view.close(); }
+}
+
+/** Phone: 「头像 + 名 + ▾」 opens the bot switcher, which lists the same rows as 更多. */
+async function mobileBotSwitcher(ctx) {
+  const state = buildState();
+  state.bots.find((b) => b.id === BOT.reportbot).hidden = true;
+  const view = await openChatAt(ctx, "mobile-bot-switcher", { width: 390, fixtureState: state });
+  try {
+    const { page } = view;
+    const trigger = page.locator("[data-testid=bot-switcher]");
+    const box = await trigger.boundingBox();
+    assert(box.height >= 44, `the trigger is ${box.height}px high`);
+    assert((await trigger.innerText()).includes("FinBot") && (await trigger.locator("svg").count()) >= 1, "the trigger is not 名 + ▾");
+    await trigger.click();
+    const drawer = page.locator("[data-testid=bot-switcher-drawer]"); await drawer.waitFor({ timeout: 8000 });
+    const rows = drawer.locator("[data-bot-switch-row]");
+    const names = (await rows.allInnerTexts()).map((t) => t.split("\n")[0].trim());
+    assert(names.join(",") === "FinBot,AppleBot,NewsBot,TeslaBot", `the bots listed: ${names.join(",")} (ReportBot is hidden)`);
+    const text = await drawer.innerText();
+    assert(text.includes("2") && /历史对话/.test(text) && /新建 bot/.test(text), "the list lacks the unread number, 历史对话 or 新建 bot");
+    for (const handle of await rows.elementHandles()) assert((await handle.boundingBox()).height >= 44, "a row is under 44px");
+    const list = (await drawer.locator("[data-slot=bot-switch-list]").innerText()).replace(/\s+/g, " ");
+    await page.keyboard.press("Escape"); await drawer.waitFor({ state: "detached", timeout: 5000 });
+    // The 更多 drawer lists the same rows (one component).
+    await page.locator('[data-slot="mobile-tab-bar"] button[aria-haspopup="dialog"]').click();
+    const more = page.locator('[data-slot="drawer-content"] [data-slot=bot-switch-list]'); await more.waitFor({ timeout: 8000 });
+    assert((await more.innerText()).replace(/\s+/g, " ") === list, "更多 lists other rows than the switcher");
+    await page.keyboard.press("Escape"); await page.locator('[data-slot="drawer-content"]').waitFor({ state: "detached", timeout: 5000 });
+    // Choosing a bot goes to its line and closes the drawer; 新建 bot opens the dialog.
+    await trigger.click(); await drawer.waitFor();
+    await rows.filter({ hasText: "TeslaBot" }).click();
+    await page.waitForFunction((id) => location.hash === `#/chat/${id}`, BOT.teslabot, { timeout: 5000 });
+    await drawer.waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.locator("h1").first().innerText()).includes("TeslaBot"), "the header still names the old bot");
+    await trigger.click(); await drawer.waitFor();
+    await drawer.getByRole("button", { name: "新建 bot" }).click();
+    await page.locator('[role=dialog]').first().waitFor({ timeout: 8000 });
+    return "header 名 ▾ (≥44px) → drawer of the unhidden bots with the sidebar's marks + 历史对话 + 新建 bot; the same list as 更多; a row goes to its line; 新建 bot opens the dialog";
+  } finally { await view.close(); }
+}
+
+/** Phone: 「目录」 lists this line's questions; a row jumps, the bookmark is kept (and is the desktop rail's bookmark). */
+async function mobileOutline(ctx) {
+  const view = await openChatAt(ctx, "mobile-outline", { width: 390 });
+  try {
+    const { page } = view;
+    assert((await page.locator("[data-testid=question-rail]").isVisible()) === false, "the rail is drawn on a phone");
+    const button = page.locator("[data-testid=outline-button]");
+    assert((await button.boundingBox()).height >= 44, "the 目录 button is under 44px");
+    await button.click();
+    const drawer = page.locator("[data-testid=outline-drawer]"); await drawer.waitFor({ timeout: 8000 });
+    const rows = drawer.locator("[data-testid=outline-row]");
+    assert((await rows.count()) === 4, `${await rows.count()} questions listed, the line has 4`);
+    // The second question has no turn id in the fixtures (not saved yet): it cannot be bookmarked, as on the desktop rail.
+    assert(await rows.nth(1).locator("[data-testid=outline-bookmark]").isDisabled(), "a question that is not saved can be bookmarked");
+    await rows.nth(0).locator("[data-testid=outline-bookmark]").click();
+    assert((await rows.nth(0).locator("[data-testid=outline-bookmark]").getAttribute("aria-pressed")) === "true", "the bookmark did not take");
+    await rows.nth(3).locator("[data-testid=outline-jump]").click();
+    await drawer.waitFor({ state: "detached", timeout: 5000 });
+    await button.click(); await drawer.waitFor();
+    await rows.nth(0).locator("[data-testid=outline-jump]").click();
+    await drawer.waitFor({ state: "detached", timeout: 5000 });
+    await page.waitForFunction(() => { const t = document.querySelector("[data-testid=transcript]").getBoundingClientRect().top, m = document.getElementById("chat-message-0").getBoundingClientRect().top; return Math.abs(m - t) < 40; }, null, { timeout: 5000 });
+    await button.click(); await drawer.waitFor();
+    assert((await rows.nth(0).locator("[data-testid=outline-bookmark]").getAttribute("aria-pressed")) === "true", "the bookmark did not survive reopening");
+    // The same bookmark is the desktop rail's.
+    const desk = await openChatAt(ctx, "outline-desktop");
+    try { assert(!(await desk.page.locator("[data-testid=outline-button]").isVisible()), "目录 is drawn on a desktop"); } finally { await desk.close(); }
+    return "目录 (≥44px) lists the 4 questions; rows jump to their question (last, then first); a saved question is bookmarked and stays so, an unsaved one cannot be; no 目录 on a desktop";
+  } finally { await view.close(); }
+}
+
+/** Phone: every control of the line is at least 44 x 44, and nothing makes the page wider than 390. */
+async function mobileTouchTargets(ctx) {
+  const view = await openChatAt(ctx, "mobile-touch-targets", { width: 390 });
+  try {
+    const { page } = view;
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert(wide <= 0, `the page is ${wide}px wider than the window`);
+    const small = await page.evaluate(() => {
+      const scopes = ["[data-testid=chat-header]", "[data-testid=composer]", "[data-testid=message-foot]", "[data-testid=sources-chip]", "[data-testid=waiting-strip]", "[data-slot=approval-card]"];
+      const bad = [];
+      for (const scope of scopes) for (const root of document.querySelectorAll(scope)) {
+        const hits = root.matches("button, a, input, [role=button]") ? [root] : [];
+        for (const el of [...hits, ...root.querySelectorAll("button, a[href], input, [role=button]")]) {
+          const r = el.getBoundingClientRect(); const style = getComputedStyle(el);
+          if (!r.width || !r.height || style.visibility === "hidden" || style.display === "none") continue;
+          if (el.closest("[data-slot=approval-details]") && el.tagName === "A") continue; // a link in the card's text
+          if (r.width < 43.5 || r.height < 43.5) bad.push(`${scope} ${el.getAttribute("aria-label") || el.textContent?.trim().slice(0, 12) || el.tagName}: ${Math.round(r.width)}x${Math.round(r.height)}`);
+        }
+      }
+      return bad;
+    });
+    assert(small.length === 0, `controls under 44x44: ${small.join("; ")}`);
+    return "no horizontal overflow at 390; header, composer, foot, chips, strip and card controls all ≥ 44x44";
+  } finally { await view.close(); }
+}
+
+/** The on-screen keyboard that covers the page (iOS) lifts the composer: a stand-in visualViewport shrinks and the box rises above it. */
+async function mobileKeyboardInset(ctx) {
+  const view = await newView(ctx.browser, { width: 390, theme: "light", label: "mobile-keyboard", unmatched });
+  try {
+    const { page } = view;
+    await view.context.addInitScript(() => {
+      const target = new EventTarget();
+      const stub = Object.assign(target, { height: window.innerHeight, offsetTop: 0, offsetLeft: 0, width: window.innerWidth, scale: 1, pageTop: 0, pageLeft: 0 });
+      Object.defineProperty(window, "visualViewport", { value: stub, configurable: true });
+      window.__setKeyboard = (px) => { stub.height = window.innerHeight - px; stub.dispatchEvent(new Event("resize")); };
+    });
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await page.waitForSelector("[data-testid=message]", { timeout: 15000 });
+    await settle(page);
+    const bottom = () => page.locator("[data-testid=composer]").evaluate((el) => Math.round(el.getBoundingClientRect().bottom));
+    const rest = await bottom();
+    await page.evaluate(() => window.__setKeyboard(300));
+    await page.waitForFunction((r) => document.querySelector("[data-testid=composer]").getBoundingClientRect().bottom < r - 100, rest, { timeout: 5000 });
+    const lifted = await bottom();
+    assert(lifted <= 844 - 300 + 2, `with a 300px keyboard the composer's bottom is at ${lifted}px (the keyboard starts at 544)`);
+    await page.evaluate(() => window.__setKeyboard(0));
+    await page.waitForFunction((r) => Math.abs(document.querySelector("[data-testid=composer]").getBoundingClientRect().bottom - r) <= 1, rest, { timeout: 5000 });
+    return `a 300px keyboard lifts the composer from ${rest}px to ${lifted}px (clear of the keys at 544); it comes back down; Chrome / Firefox Android resize the layout instead (viewport interactive-widget)`;
+  } finally { await view.close(); }
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
-  ["send a message: user line, streamed answer, composer reusable", sendMessageStreams],
+  ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
+  ["chat-cancel: cancel before the stream ends: 已停止 shown, the generated text kept, composer usable", chatCancel],
+  ["chat-background-line: the stream of the bot left behind finishes in the background; the row marks it; the whole answer on return", chatBackgroundLine],
+  ["chat-clarification: a turn ending in a card; the pick goes out as the next turn with its request id", chatClarification],
+  ["chat-write-confirm: 确认执行 sends the request id; 先不要 sends no confirmation", chatWriteConfirm],
+  ["chat-readonly-archive: an opened archive shows its banner, a read-only composer and a working 返回当前对话", chatReadonlyArchive],
+  ["chat-external-sync: a turn written from outside appears by itself, the draft stays", chatExternalSync],
+  ["chat-compact: /compact sends the compress request and the thread shows 已压缩 N 轮", chatCompact],
+  ["locale-catalog-on-demand: a Chinese session never fetches the English catalog; switching or starting in English fetches it once and the page is English", localeCatalogLoadsOnDemand],
+  ["optional-chunk-failure: a blocked workspace chunk leaves the chat page and the right panel working without the cards and the new-bot dialog", optionalChunkFailure],
+  ["chat-load-earlier: scrolling to the top loads the earlier turns and the line being read does not move", chatLoadEarlier],
   ["switch to another bot and back: URL changes, earlier answer kept", switchBotAndBack],
   ["browser back returns to the previous address", backButtonReturns],
   ["theme toggle flips data-theme on <html>", themeToggles],
@@ -1646,6 +3179,42 @@ const CHECKS = [
   ["state-components-in-legacy: ErrorBar, EmptyState, StatefulButton look the same inside a data-legacy island", stateComponentsInLegacy],
   ["task-bar: stage and elapsed time, follows the reader to another page, the end is a toast", taskBar],
   ["states-sample: the nine states at #/dev/kit/states work", statesSamplePage],
+  ["composer-ime: Enter during an input-method composition never sends; after compositionend it does", composerIme],
+  ["composer-slash-menu: arrows, Esc and Enter drive the / menu; an input method's keys do not", composerSlashMenu],
+  ["chat-follow-and-jump: a streaming answer is followed; scrolling up stops it and shows 回到底部; the button and a manual return resume it", chatFollowAndJump],
+  ["draft-survives-switch: a half-typed message stays with its line across a bot switch, another page and a reload", draftSurvivesSwitch],
+  ["stop-button: the send position becomes stop while an answer runs and stop is the old cancel", stopButton],
+  ["copy-toast: copying shows a toast and adds no text to the thread", copyToast],
+  ["chat-popover-keyboard: the composer panels and the header ⓘ open from the keyboard, Esc closes and returns focus", chatPopoverKeyboard],
+  ["chat-question-rail: markers on the left edge, preview card, bookmark kept, click scrolls", chatQuestionRail],
+  ["markdown-chunk: the renderer is prefetched at launch; a skeleton while it is late; plain text and 重试 when it fails", markdownChunk],
+  ["citation-jump: a click on [2] opens the panel on 来源, scrolls to card 2 and marks it once", citationJump],
+  ["steps-live: the process bar grows with the events of a running turn and folds to 已思考 N 秒 · M 步", stepsLive],
+  ["steps-pending: before the first event the line shows the bar's first cell; the first event replaces it with the real message", stepsPending],
+  ["steps-open-process: the process bar opens 过程 on its own round; another round's bar switches it", stepsOpenProcess],
+  ["public-mark-verbatim: the card's text equals the existing functions' text for the message; no danger / action colour, no icon", publicMarkVerbatim],
+  ["legacy-line-mark: the old unverified-line note is the same neutral ◦ with its old words; 追问依据 works", legacyLineMark],
+  ["old-message-no-steps: no step data shows nothing, only a time, or the old tool badges as chips", oldMessageNoSteps],
+  ["panel-resize-persists: dragging the panel's edge changes its width, which (and folding) survives a reload", panelResizePersists],
+  ["sources-keyboard: Tab reaches a chip, Enter takes the focus into its source card, Esc returns it", sourcesKeyboard],
+  ["source-card-fields: every field of the old drawer has a place on the card; a withdrawn source is an error bar with 重试", sourceCardFields],
+  ["approval-request-body: confirm, cancel, option, typed reply and ticked materials send the same five bodies as the old card, byte for byte", approvalRequestBody],
+  ["revision-card-min-select: nothing pre-ticked; the button waits for the minimum and says why; no candidate says so", revisionCardMinSelect],
+  ["approval-countdown: a card made in this session counts ten minutes down and falls to 已过期; a history card shows the static note", approvalCountdown],
+  ["approval-collapses: an answered card is one line (已确认 · title / 已取消 / 未确认)", approvalCollapses],
+  ["approval-keyboard: no focus grab; arrows move through the materials; Enter does the main action", approvalKeyboard],
+  ["waiting-strip: the amber strip scrolls to the card and focuses its main action; the box stays usable", waitingStrip],
+  ["retry-resends-last: 重试 sends the last question again as the same request and replaces the failed turn", retryResendsLast],
+  ["retry-card-answer: a card's failed answer is retried with its request id; 去设置 only for a missing key", retryCardAnswerAndSettings],
+  ["starter-fills-composer: a starter question fills the box and sends nothing; each kind of bot gets its own", starterFillsComposer],
+  ["background-done-toast: a background answer raises one toast per bot with 查看", backgroundDoneToast],
+  ["external-message-divider: turns written from outside get 「例行任务…」 or 「外部消息」 above them", externalMessageDivider],
+  ["mobile-panel-drawer: at 390 the panel is a bottom drawer opened on the right tab and place", mobilePanelDrawer],
+  ["mobile-bot-switcher: 名 ▾ opens the unhidden bots with their marks, the same list as 更多", mobileBotSwitcher],
+  ["mobile-outline: 目录 lists the questions, jumps and keeps bookmarks", mobileOutline],
+  ["mobile-touch-targets: the line's controls are ≥ 44x44 and the page does not scroll sideways at 390", mobileTouchTargets],
+  ["mobile-keyboard-inset: a keyboard over the page lifts the composer above it", mobileKeyboardInset],
+  ["workspace-cards-in-panel: add, move, resize, pin, delete and reset the workspace cards in the panel's 工作区 tab; the layout is kept per bot", workspaceCardsInPanel],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

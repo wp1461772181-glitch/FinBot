@@ -1,0 +1,14 @@
+/* The 来源 tab's one motion: the card a citation chip points at gets a ring that fades out once.  The card is a component of its own
+   (components/SourceCard.tsx), so the rule is keyed on its data-slot and works wherever the card is used.  With reduced motion the
+   ring stays still while the card is marked, and goes with the mark. */
+@layer components {
+  @keyframes source-ring { from { outline-color: var(--accent); } to { outline-color: transparent; } }
+  [data-slot="source-card"][data-highlight] {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    animation: source-ring 1.6s var(--curve-out) both;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-slot="source-card"][data-highlight] { animation: none; }
+  }
+}

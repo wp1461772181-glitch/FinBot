@@ -1,6 +1,6 @@
 import { Suspense, lazy, useState } from "react";
 import { Navigate, useLocation } from "react-router";
-import { AgentChatProviderRoot } from "../AgentChatPanel";
+import { AgentChatProviderRoot } from "./chat/ChatSessionProvider";
 import { getChatMode } from "../api";
 import { chatSessionKey } from "../chat-session.mjs";
 import { paths } from "../routes.mjs";

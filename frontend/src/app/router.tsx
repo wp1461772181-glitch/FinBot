@@ -29,7 +29,7 @@ const to = (path: string) => ({ element: <Navigate to={path} replace /> });
 /** The catch-all: an old-form address the router met before the legacy-address bridge did, or one nobody knows, goes where the old router sent it. */
 function Fallback() { return <Navigate to={legacyTarget(window.location.hash)} replace />; }
 
-/** Every page below is still an old component: the shell puts the old-UI marker around each one (and around nothing else). */
+/** Every page in `pages` below is still an old component: the shell puts the old-UI marker around each one (and around nothing else). */
 function LegacyPage() { return <LegacyFrame><Outlet /></LegacyFrame>; }
 
 /** What stands in for the app until the first page's code has arrived (the shell is not mounted yet). */
@@ -37,12 +37,16 @@ function FirstLoad() {
   return <DelayedSkeleton><PageSkeleton kind={skeletonKind(window.location.hash.replace(/^#/, "") || "/chat")} /></DelayedSkeleton>;
 }
 
-const pages: RouteObject[] = [
+/** The chat pages are new markup (P3.2): no old-UI marker around them.  The old parts they still hold (process bar, confirmation card, citation drawer, the right panel) carry their own. */
+const chatPages: RouteObject[] = [
   { path: PATTERNS.chat, ...page(() => import("./pages/chat"), "ChatRoute") },
   { path: PATTERNS.chatHistory, ...page(() => import("./pages/chat"), "ChatHistoryRoute") },
   { path: PATTERNS.chatConversation, ...page(() => import("./pages/chat"), "ChatConversationRoute") },
   { path: PATTERNS.chatBotSettings, ...page(() => import("./pages/chat"), "ChatBotRoute", { profile: true }) },
   { path: PATTERNS.chatBot, ...page(() => import("./pages/chat"), "ChatBotRoute") },
+];
+
+const pages: RouteObject[] = [
   { path: PATTERNS.research, ...page(() => import("./pages/overview"), "ResearchRoute") },
   { path: PATTERNS.companyLatest, ...page(() => import("./pages/latest"), "LatestRoute") },
   { path: PATTERNS.company, ...page(() => import("./pages/overview"), "CompanyRoute") },
@@ -84,7 +88,7 @@ const routes: RouteObject[] = [
       { path: PATTERNS.login, ...to(paths.chat()) },
       // The error boundary sits below the layout, so a page that fails to load leaves the shell standing.  It is above the
       // old-UI marker, so the notice it shows is new markup outside it.
-      { ErrorBoundary: RouteError, children: [{ Component: LegacyPage, children: pages }] },
+      { ErrorBoundary: RouteError, children: [...chatPages, { Component: LegacyPage, children: pages }] },
     ],
   },
 ];

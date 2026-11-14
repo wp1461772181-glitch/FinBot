@@ -71,7 +71,8 @@ export async function installMockApi(context, { label, unmatched, fixtureState =
   const seen = [];
   // Switches a check can flip while the page runs: `down` makes every API request fail the way an unreachable server does
   // (the browser raises a network error); `down502` answers with a proxy's HTML gateway error instead.
-  const control = { down: false, down502: false };
+  // `hold`: a function (method, path, query) => boolean; a request it accepts is never answered (a page that is still waiting for it: the history skeleton, the earlier-turns spinner).
+  const control = { down: false, down502: false, hold: null };
 
   await context.route(() => true, async (pending) => {
     const request = pending.request();
@@ -83,6 +84,7 @@ export async function installMockApi(context, { label, unmatched, fixtureState =
     }
     const method = request.method().toUpperCase();
     if (control.down) return pending.abort("connectionrefused");
+    if (control.hold && control.hold(method, url.pathname.replace(/\/+$/, "") || "/", url.searchParams)) return new Promise(() => {});
     if (control.down502) return pending.fulfill({ status: 502, headers: { ...CORS, "Content-Type": "text/html" }, body: "<html><body>502 Bad Gateway</body></html>" });
     if (method === "OPTIONS") return pending.fulfill({ status: 204, headers: CORS });
     const path = url.pathname.replace(/\/+$/, "") || "/";

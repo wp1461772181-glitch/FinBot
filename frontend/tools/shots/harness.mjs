@@ -89,7 +89,7 @@ export async function settle(page, { pinTranscript = true } = {}) {
       selects.forEach((el, i) => { el.style.display = shown[i]; });
       await frame();
     }
-    if (pin) { document.querySelectorAll(".agent-transcript").forEach((el) => { el.scrollTop = el.scrollHeight; }); await frame(); }
+    if (pin) { document.querySelectorAll("[data-testid=transcript]").forEach((el) => { el.scrollTop = el.scrollHeight; }); await frame(); }
   }, pinTranscript);
 }
 

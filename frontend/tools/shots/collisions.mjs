@@ -98,6 +98,11 @@ export function findCollisions({ distDir, srcDir }) {
   for (const f of fs.readdirSync(legacyDir).filter((x) => x.endsWith(".css"))) for (const n of selectorClasses(fs.readFileSync(path.join(legacyDir, f), "utf8"))) legacy.add(n);
   const oldTsx = fs.readdirSync(srcDir).filter((f) => f.endsWith(".tsx"));
   for (const f of oldTsx) for (const n of classNameTokens(fs.readFileSync(path.join(srcDir, f), "utf8"))) legacy.add(n);
+  // P3.1: old markup that moved under src/app/ keeps the header line `legacy markup, moved as-is in P3.1`; its class names are old names too.
+  const moved = [];
+  const walk = (dir) => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { const full = path.join(dir, entry.name); if (entry.isDirectory()) walk(full); else if (entry.name.endsWith(".tsx") && /^\/\/ legacy markup, moved as-is in P3\.1/.test(fs.readFileSync(full, "utf8"))) moved.push(full); } };
+  walk(path.join(srcDir, "app"));
+  for (const f of moved) for (const n of classNameTokens(fs.readFileSync(f, "utf8"))) legacy.add(n);
   const both = [...utilities].filter((n) => legacy.has(n)).sort();
-  return { utilities, legacy, oldTsx: oldTsx.length, collisions: both.filter((n) => !ALLOWED.has(n)), allowed: both.filter((n) => ALLOWED.has(n)) };
+  return { utilities, legacy, oldTsx: oldTsx.length + moved.length, collisions: both.filter((n) => !ALLOWED.has(n)), allowed: both.filter((n) => ALLOWED.has(n)) };
 }
