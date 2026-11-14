@@ -69,6 +69,9 @@ export async function installMockApi(context, { label, unmatched, fixtureState =
   const route = createRouter();
   registerRoutes(route, reply);
   const seen = [];
+  // Switches a check can flip while the page runs: `down` makes every API request fail the way an unreachable server does
+  // (the browser raises a network error); `down502` answers with a proxy's HTML gateway error instead.
+  const control = { down: false, down502: false };
 
   await context.route(() => true, async (pending) => {
     const request = pending.request();
@@ -79,6 +82,8 @@ export async function installMockApi(context, { label, unmatched, fixtureState =
       return pending.abort("blockedbyclient");
     }
     const method = request.method().toUpperCase();
+    if (control.down) return pending.abort("connectionrefused");
+    if (control.down502) return pending.fulfill({ status: 502, headers: { ...CORS, "Content-Type": "text/html" }, body: "<html><body>502 Bad Gateway</body></html>" });
     if (method === "OPTIONS") return pending.fulfill({ status: 204, headers: CORS });
     const path = url.pathname.replace(/\/+$/, "") || "/";
     seen.push({ method, path, query: url.search });
@@ -104,7 +109,7 @@ export async function installMockApi(context, { label, unmatched, fixtureState =
       return pending.fulfill({ status: 500, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ detail: "shots: fixture handler failed" }) });
     }
   });
-  return { state: fixtureState, requests: seen };
+  return { state: fixtureState, requests: seen, control };
 }
 
 /** One line per distinct unmatched request: "page METHOD /path". */

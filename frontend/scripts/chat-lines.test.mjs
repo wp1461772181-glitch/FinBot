@@ -55,3 +55,14 @@ test("存储报错不影响使用", () => {
   assert.doesNotThrow(() => saveDraft("bot:a", "x", broken));
   assert.doesNotThrow(() => saveDraft("bot:a", "", broken));
 });
+
+test("waiting(): a line whose last message hands the turn to the user, not one that is answering", () => {
+  const store = createLineStore(), A = "bot:a", B = "bot:b", C = "bot:c", D = "bot:d";
+  store.update(A, { messages: [{ role: "user", content: "q" }, { role: "assistant", content: "", status: "waiting_for_input", clarification: { request_id: "r1" } }] });
+  store.update(B, { messages: [{ role: "user", content: "q" }, { role: "assistant", content: "done", status: "succeeded" }] });
+  store.update(C, { messages: [{ role: "assistant", content: "", status: "waiting_for_input" }], state: "sending" });
+  store.update(D, { messages: [{ role: "assistant", content: "pick one", clarification: { request_id: "r2" } }, { role: "user", content: "later question" }] });
+  assert.deepEqual(store.waiting(), [A], "only the line that ends on an open card, and only while it is not mid-answer");
+  store.update(A, { messages: [...store.get(A).messages, { role: "user", content: "my reply" }] });
+  assert.deepEqual(store.waiting(), [], "an answered card no longer waits");
+});

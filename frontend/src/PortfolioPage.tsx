@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { addPortfolioTransaction, deletePortfolioTransaction, getEarningsJudgments, getPortfolio, getV2Forecasts, putPortfolioCash, putPortfolioPlan, type EarningsJudgment, type PortfolioPosition, type PortfolioSummary, type V2ForecastListRow } from "./api";
 import { translatePhrase, useLocale } from "./i18n";
+import { appHref } from "./legacy-routes.mjs";
 import { ENTRY_KINDS, KIND_LABELS, blankEntry, entryBody, entryDetail, formatMoney, formatPercent, formatPrice, formatShares, parseAmount, planBody, planChanged, planForm, pnlTone, researchRecord, warningLabels, type PortfolioEntryForm, type PortfolioPlanForm } from "./portfolio-items.mjs";
 import { Parts } from "./ForecastShared";
 import { NOT_RECORDED } from "./forecast-model.mjs";
+import { confirm } from "@/components/state/confirm";
 
 // The 持仓 page (personal finance assistant, Task 6): positions with average cost (primary) and diluted cost, floating and
 // today's P&L, weight, 可用资金 (the owner's money for adding positions, not a company's free cash flow), the owner's own
@@ -71,7 +73,7 @@ export function PortfolioPage() {
     await act(() => putPortfolioPlan(position.symbol, built.body), "计划已保存。");
   }
   async function remove(id: string) {
-    if (!window.confirm(t("删除这一笔记录？持仓和可用资金会按剩下的记录重新计算。"))) return;
+    if (!(await confirm({ title: t("删除这一笔记录？"), description: t("持仓和可用资金会按剩下的记录重新计算。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     await act(() => deletePortfolioTransaction(id), "已删除。");
   }
 
@@ -178,25 +180,18 @@ function ResearchRecordLine({ symbol, forecasts, judgments }: { symbol: string; 
   return <div className="pf-research" aria-label={t("研究记录")}>
     <small className="ws-muted">{t("研究记录")}</small>
     {forecast && <p>
-      <a href={forecast.hash}><Parts parts={forecast.titleParts} /></a>
+      <a href={appHref(forecast.hash)}><Parts parts={forecast.titleParts} /></a>
       {forecast.percent
         ? ` · ${t("下跌")} ${forecast.percent.bearish}% · ${t("持平")} ${forecast.percent.neutral}% · ${t("上涨")} ${forecast.percent.bullish}%`
         : ""}
       {` · ${t("目标日")} ${forecast.targetDate ?? t(NOT_RECORDED)} · ${t("决策模型")} ${forecast.model ?? t(NOT_RECORDED)}`}
     </p>}
     {judgment && <p>
-      <a href={judgment.hash}>{t(judgment.typeLabel)}</a>
+      <a href={appHref(judgment.hash)}>{t(judgment.typeLabel)}</a>
       {` · ${t(judgment.direction)}${judgment.confidence ? ` · ${t(judgment.confidence)}` : ""} · ${t(judgment.result)}`}
       {judgment.afterHours && <> · <Parts parts={judgment.afterHours.parts} /></>}
       {!judgment.delivered && ` · ${t("未发送")}`}
     </p>}
     {forecast?.percent && <small className="ws-muted">{t("概率未经校准，属实验性信息。仅供参考，买不买由你决定。")}</small>}
   </div>;
-}
-
-export function PortfolioIcon() {
-  return <svg className="portfolio-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="1.8"
-    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-    <path d="M4 20V10M10 20V5M16 20v-7M22 20H2" />
-  </svg>;
 }

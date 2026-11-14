@@ -19,8 +19,6 @@
 }
 
 body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font); }
-.topbar { background:color-mix(in srgb, var(--me-surface) 92%, transparent); }
-.app-rail { background: linear-gradient(165deg, var(--me-rail), var(--me-rail-2) 76%); color: var(--me-rail-ink); }
 
 /* Figures read in a monospaced face with aligned digits. */
 .num, code, kbd, pre, samp,
@@ -68,30 +66,8 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 .memory-search { display: flex; gap: 8px; }
 .memory-search input { flex: 1; font: inherit; padding: 6px 10px; border:1px solid var(--me-line); border-radius: 8px; background:var(--me-surface); color:var(--me-ink); }
 .memory-archived summary { cursor: pointer; color:var(--me-muted); font-size: 13px; }
-.mobile-tabbar { display: none; }
-.more-sheet-backdrop { position: fixed; inset: 0 0 calc(62px + env(safe-area-inset-bottom)) 0; z-index: 19; display: flex; align-items: flex-end; background:rgba(16, 16, 16, .45); }
-.more-sheet-backdrop > * { width: 100%; }
-.more-sheet { width: 100%; box-sizing: border-box; display: grid; gap: 2px; padding: 8px 8px 10px; background:var(--me-surface); color:var(--me-ink); border-top:1px solid var(--me-line); border-radius: 16px 16px 0 0; box-shadow:0 -12px 32px rgba(0, 0, 0, .2); }
-.more-sheet button { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border:0; background:transparent; color:var(--me-ink); border-radius: 10px; padding: 10px 12px; font: inherit; cursor: pointer; }
-.more-sheet button span:first-child { width: 1.25em; text-align: center; color:var(--me-muted); }
-.more-sheet button strong { display: block; font-size: 14px; font-weight: 600; }
-.more-sheet button small { display: block; color:var(--me-muted); font-size: 11px; margin-top: 2px; }
-.more-sheet button.active, .more-sheet button[aria-current="page"] { background:var(--me-accent-soft); color:var(--me-accent); }
-.more-sheet button.active span:first-child, .more-sheet button.active small { color:var(--me-accent); }
 @media (max-width: 760px) {
-  .mobile-tabbar { display: grid; grid-template-columns: repeat(3, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
-    background:var(--me-surface); border-top:1px solid var(--me-line); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); }
-  .mobile-tabbar button { border:0; background:transparent; color:var(--me-muted); display: grid; justify-items: center; gap: 2px; font-size: 11px; padding: 4px 0; }
-  .mobile-tabbar button span { font-size: 17px; line-height: 1; }
-  .mobile-tabbar button[aria-current="page"], .mobile-tabbar button.is-active { color:var(--me-accent); font-weight: 600; }
-  .mobile-tabbar .mobile-more { min-width: 0; }
-  .mobile-tabbar .mobile-more > button { width: 100%; }
-  .app-content { padding-bottom: calc(62px + env(safe-area-inset-bottom)); }
-  .nav-menu-trigger { display: none; }
   .theme-form { display: none; }
-  .mobile-tabbar .more-sheet button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; text-align: left; color:var(--me-ink); font-size: 14px; font-weight: 400; padding: 10px 12px; }
-  .mobile-tabbar .more-sheet button span { font-size: inherit; line-height: 1.3; }
-  .mobile-tabbar .more-sheet button.active, .mobile-tabbar .more-sheet button[aria-current="page"] { color:var(--me-accent); font-weight: 600; background:var(--me-accent-soft); }
 }
 
 /* Dark mode: the older sheets paint some surfaces light directly (generated from every rule whose
@@ -137,8 +113,6 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 :root[data-theme="dark"] .chat-archive-settings,
 :root[data-theme="dark"] .chat-archive-tools,
 :root[data-theme="dark"] .empty-watchlist,
-:root[data-theme="dark"] .entry-choice,
-:root[data-theme="dark"] .entry-choice input,
 :root[data-theme="dark"] .evidence-card-top>span,
 :root[data-theme="dark"] .evidence-empty-state,
 :root[data-theme="dark"] .evidence-event-group,
@@ -190,19 +164,11 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 :root[data-theme="dark"] .material-status,
 :root[data-theme="dark"] .media-dialog-close,
 :root[data-theme="dark"] .meter,
-:root[data-theme="dark"] .nav-menu-trigger,
-:root[data-theme="dark"] .nav-menu-trigger:hover,
-:root[data-theme="dark"] .owner-auth-dialog,
-:root[data-theme="dark"] .owner-auth-dialog input,
-:root[data-theme="dark"] .personal-login-panel,
-:root[data-theme="dark"] .personal-login-panel input,
 :root[data-theme="dark"] .profile-card,
 :root[data-theme="dark"] .profile-card.is-active,
 :root[data-theme="dark"] .profile-modal,
 :root[data-theme="dark"] .quality-insufficient,
 :root[data-theme="dark"] .quality-limited,
-:root[data-theme="dark"] .rail-nav-close,
-:root[data-theme="dark"] .rail-nav-close:hover,
 :root[data-theme="dark"] .replay-meter,
 :root[data-theme="dark"] .research-brief,
 :root[data-theme="dark"] .review-decisions button.selected.reject,
@@ -212,13 +178,11 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 :root[data-theme="dark"] .status-queued,
 :root[data-theme="dark"] .status-running,
 :root[data-theme="dark"] .status-succeeded,
-:root[data-theme="dark"] .symbol-form select,
 :root[data-theme="dark"] .tool-badge.status-cancelled,
 :root[data-theme="dark"] .tool-badge.status-complete,
 :root[data-theme="dark"] .tool-badge.status-failed,
 :root[data-theme="dark"] .tool-badge.status-not_found,
 :root[data-theme="dark"] .tool-badge.status-running,
-:root[data-theme="dark"] .topbar,
 :root[data-theme="dark"] .universe-card,
 :root[data-theme="dark"] .universe-card.is-current,
 :root[data-theme="dark"] .v2-card,
@@ -249,9 +213,6 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 :root[data-theme="dark"] .v2-source-list article,
 :root[data-theme="dark"] .v2-status-grid article,
 :root[data-theme="dark"] .v2-workflow-note,
-:root[data-theme="dark"] .watchlist-add [role=alert],
-:root[data-theme="dark"] .watchlist-add button,
-:root[data-theme="dark"] .watchlist-add input,
 :root[data-theme="dark"] .workspace .filing-row,
 :root[data-theme="dark"] .workspace .revision-note,
 :root[data-theme="dark"] .workspace-intro,

@@ -22,3 +22,6 @@ export const VERSION = {
 };
 export const JUDGMENT = { aapl: "e0000000-0000-4000-8000-000000000001", nvda: "e0000000-0000-4000-8000-000000000002" };
 export const WATCHLIST = ["AAPL", "TSLA", "NVDA", "AMD", "MSFT", "GOOGL", "AMZN"];
+// The login code the fake server accepts (an invented one) and the marker that makes the fake stream hang.
+export const LOGIN_CODE = "shots-fixture-login-code";
+export const HOLD_MARKER = "[hold-the-answer]";

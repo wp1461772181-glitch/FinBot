@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { Tx, useLocale } from "./i18n";
 import { ApiError, createV2ManualRevisionJob, getV2Evaluations, getV2ForecastVersion, getV2Job, getV2Prices, getV2RevisionCandidates, getV2Timeline } from "./api";
 import type { V2RevisionCandidates } from "./api";
 import type { PriceHistory, V2EvaluationResponse, V2ForecastJob, V2ForecastRoot, V2ForecastRoots, V2Timeline, V2VersionDetail } from "./types";
 import { hasDecisionProbabilities } from "./forecast-model.mjs";
-import { forecastHash } from "./forecast-routes.mjs";
+import { hashHref, paths } from "./routes.mjs";
 import { ForecastVersionHeader } from "./ForecastVersionHeader";
 import { ForecastSummary } from "./ForecastSummary";
 import { ForecastPriceContextChart } from "./ForecastPriceChart";
@@ -18,14 +19,8 @@ import type { ResourceState } from "./ForecastShared";
 
 type Details = ResourceState<{ current: V2VersionDetail; parent: V2VersionDetail | null }>;
 
-function openMaterialAnalysis(material: { symbol: string; source_type: string; source_id: string; analysis_id: string }) {
-  try {
-    window.sessionStorage.setItem("market-evidence-agent:material-analysis-focus", JSON.stringify({
-      symbol: material.symbol, source_type: material.source_type, source_id: material.source_id, analysis_id: material.analysis_id,
-    }));
-  } catch { /* Deep link still opens the catalog if browser storage is unavailable. */ }
-  window.location.hash = "materials";
-}
+// 查看完整分析: the library opens on the cited material and its analysis (the address carries them).
+const materialAnalysisPath = (material: { symbol: string; source_type: string; source_id: string; analysis_id: string }) => paths.materials({ symbol: material.symbol, focus: material.source_id, type: material.source_type, analysis: material.analysis_id });
 
 /** A fixed target date counts as expired once it is before today (UTC); the server still decides what may be revised. */
 function expiredFromTarget(target: unknown): boolean | null {
@@ -40,6 +35,7 @@ function expiredFromTarget(target: unknown): boolean | null {
  */
 export function ForecastPage({ rootId, versionId, reviseSourceId, focusVersions = false, onHome }: { rootId: string; versionId?: string; reviseSourceId?: string; focusVersions?: boolean; onHome: () => void }) {
   const { t } = useLocale();
+  const navigate = useNavigate();
   const reviseApplied = useRef(false);
   const [timeline, setTimeline] = useState<ResourceState<V2Timeline>>({ kind: "loading" });
   const [notFound, setNotFound] = useState(false);
@@ -185,7 +181,7 @@ export function ForecastPage({ rootId, versionId, reviseSourceId, focusVersions 
   function selectVersion(id: string) {
     setSelectedVersionId(id);
     // Keeps the address shareable without a navigation of its own.
-    try { window.history.replaceState(null, "", forecastHash(rootId, id)); } catch { /* the page still works without it */ }
+    try { window.history.replaceState(window.history.state, "", hashHref(paths.forecast(rootId, { version: id }))); } catch { /* the page still works without it */ }
   }
 
   if (notFound) {
@@ -240,7 +236,7 @@ export function ForecastPage({ rootId, versionId, reviseSourceId, focusVersions 
         modelStatus={details.data.current.model_status}
         modelManifest={details.data.current.model_manifest}
         evidenceManifest={details.data.current.evidence_version_manifest}
-        onOpenAnalysis={openMaterialAnalysis}
+        onOpenAnalysis={(material) => navigate(materialAnalysisPath(material))}
       />}
       <div id="forecast-versions">
         <RevisionComparison timeline={timeline} detail={details} />

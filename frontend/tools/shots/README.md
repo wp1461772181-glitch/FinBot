@@ -10,15 +10,17 @@ Normally run it through `fe-check.sh` (it builds with `VITE_API_BASE_URL=https:/
 npm ci                                  # playwright-core 1.65.0, pngjs, pixelmatch (uses the browser already in ~/.cache/ms-playwright)
 node run.mjs --dist ../../dist --out out/a [--pages a,b] [--widths 390,1440] [--themes light,dark] [--locale zh-CN] [--strict]
 node compare.mjs out/a out/b [--out out/diff] [--max-diff-pixels 0]
-node smoke.mjs --dist ../../dist [--strict]
+node smoke.mjs --dist ../../dist [--strict] [--only <text in a check name>]
 ```
 
 - `run.mjs` writes `<page>.<theme>.<width>.png` plus `report.json` (per-shot `console.error` / `pageerror`, and the list of
   API requests no fixture answered). `--strict` fails when that list is not empty.
 - `compare.mjs` compares same-named PNGs; a size change or a missing file counts as a difference. Exit code 1 on any.
-- `smoke.mjs` prints PASS / FAIL per check; any FAIL exits 1.
+- `smoke.mjs` prints PASS / FAIL per check; any FAIL exits 1. `--only <text>` runs just the checks whose name contains it.
+- `utility-legacy-collisions` (smoke, no browser, reads `<dist>/assets/*.css` and `<dist>/../src`): fails when a class the built `utilities` layer defines is also an old class name (`src/styles/legacy/*.css`, `className` strings of the old `.tsx` in the `src/` root). Tailwind scans `src/app`, `src/components`, `src/dev`, and a word in a comment there (`table`, `contents`…) becomes a utility that beats the `legacy` layer. Fix by rewording or moving the code; `ALLOWED` in `collisions.mjs` takes an entry only with a reason.
 
 ## Determinism
+`settle()` forces one layout of every native `<select>` after the fonts are ready (a select lays its text out once, and a web font that lands later leaves it 1px off, depending on when the page mounted it).
 Fixed system time (2026-11-13 10:00 Beijing), seeded `Math.random`, reduced motion, all CSS animation/transition/caret off,
 fonts and network idle awaited, the chat transcript pinned to its bottom, single-threaded software raster. Two runs of one
 build must compare with 0 different pixels; if they do not, fix the tool, do not raise the threshold.
@@ -27,7 +29,7 @@ build must compare with 0 different pixels; if they do not, fix the tool, do not
 Append to `PAGES` in `pages.mjs`: `{ name, hash, ready, before?, identity? }`.
 `ready` is a selector that only exists once the page shows its data (waitReady also waits for "正在读取…" style text to go);
 `before(page, { width })` may click or scroll before the shot. Keep `name` stable when a route moves; change only `hash`.
-`identity: "none"` opens without credentials (the guest/personal entry page).
+`identity: "none"` opens without credentials (the login page); `identity: "guest"` opens as a read-only guest (mode stored, no credential).
 
 ## Adding fake data for an endpoint
 1. Find the request in `src/api.ts`; the URL is `<api base>` + path with the `/api` prefix dropped (`/agent-chat/...`, `/v2/...`).
@@ -42,3 +44,8 @@ A request that must stay unanswered goes in `INTENTIONALLY_IGNORED` in `mock-api
 
 ## Adding a smoke check
 Write one named async function in `smoke.mjs` (throw to fail, return a short detail string) and register it in `CHECKS`.
+
+## P2.2 views and fakes
+- Pages `shell-collapsed` (1440: the sidebar folded), `shell-mobile-more` (390: the 更多 drawer open), `shell-bot-states` (the four bot-row marks: 1440 shows the sidebar, 390 the drawer), `login-error` (a wrong code was sent), `guest-chat` (read-only chat). `shell-collapsed` and `shell-mobile-more` only do something at the width they are named for; run them with `--widths 1440` / `--widths 390`.
+- `shell-bot-states` makes the four states from the fixtures: NewsBot has unread, ReportBot has a pending item (the amber dot), and the page sends `[hold-the-answer]` in TeslaBot's line: the fake stream never answers a message holding that marker (`HOLD_MARKER` in `fixtures/ids.mjs`), so that row shows 回答中.
+- `POST /agent-chat/personal-login` answers a credential for `LOGIN_CODE` (an invented code) and 401 for any other.

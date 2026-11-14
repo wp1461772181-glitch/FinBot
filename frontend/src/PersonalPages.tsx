@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router";
 import { useOpenConversation } from "./AgentChatPanel";
 import { confirmInboxItem, confirmProfileItem, createProfileItem, deleteNewsSource, deleteProfileItem, dryRunNewsSource, getChatMode, getNewsSourcesConfig, listBots, listInbox, listProfileItems, listRecall, listTaskProposals, mintInboxCard, repairNewsSource, saveNewsPushSettings, setInboxStatus, setNewsSourceEnabled, updateProfileItem, upsertNewsSource, type Bot, type InboxItem, type NewsDryRunResult, type NewsSource, type NewsSourceInput, type ProfileBot, type ProfileItem, type RecallItem, type TaskProposal } from "./api";
 import { NewsIcon, RoutineIcon } from "./BotPages";
 import { TaskManager } from "./BotRoutines";
 import { useLocale } from "./i18n";
-export { SkillsPage } from "./SkillsPage";
+import { hashHref, paths } from "./routes.mjs";
 import { inboxOrder } from "./inbox-items.mjs";
 import { layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers, recallGroups, recallKindLabel } from "./memory-items.mjs";
+import { confirm } from "@/components/state/confirm";
 
 // Pages of the personal agent (the skills page lives in SkillsPage.tsx).  The 例行任务 page (#routines; #briefs, its
 // old 待你确认 address, still opens it) holds every bot's routines, the routine cards a bot proposed that wait for the
@@ -100,7 +102,7 @@ export function RoutinesPage({ bots, onNavigate, onChanged }: { bots: Bot[]; onN
           <button type="button" className="secondary-action" disabled={busy === item.id || item.confirmation_state === "skipped"} onClick={() => void inlineConfirm(item, "skip")}>跳过</button>
           <button type="button" className="secondary-action" disabled={busy === item.id} onClick={() => void inlineConfirm(item, "later")}>稍后</button>
           <button type="button" className="secondary-action" disabled={busy === item.id} onClick={() => void mintCard(item)}>{t("生成确认卡")}</button>
-          {item.conversation_id && <a className="secondary-action" href={`#agent/${item.conversation_id}`}>{t("打开对话")}</a>}
+          {item.conversation_id && <a className="secondary-action" href={hashHref(paths.chatConversation(item.conversation_id))}>{t("打开对话")}</a>}
           <button type="button" className="secondary-action" disabled={busy === item.id} onClick={() => void dismiss(item.id)}>{t("忽略")}</button>
         </div>
       </li>)}</ul>
@@ -247,8 +249,8 @@ function NewsSourcesPanel({
     }
   });
 
-  const removeSource = (src: NewsSource) => {
-    if (!window.confirm(`确定删除新闻源「${src.name || src.id}」？`)) return;
+  const removeSource = async (src: NewsSource) => {
+    if (!(await confirm({ title: `${t("删除新闻源")}「${src.name || src.id}」？`, description: t("删除后不再从这个源读取新闻，不能恢复。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     void runSourceAction(src.id, async () => {
       await deleteNewsSource(src.id);
       loadSources();
@@ -409,8 +411,8 @@ function ProfilePanel() {
     catch (e) { setError(e instanceof Error ? e.message : "操作失败，请重试。"); }
     finally { setBusy(null); }
   }
-  function remove(id: string) {
-    if (!window.confirm(t("删除这条后，之后的对话不再按它回答。确定删除？"))) return;
+  async function remove(id: string) {
+    if (!(await confirm({ title: t("删除这条记忆？"), description: t("之后的对话不再按它回答。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     void run(id, () => deleteProfileItem(id));
   }
   function save() {
@@ -481,6 +483,7 @@ function ProfilePanel() {
 
 function RecallPanel({ onNavigate }: { onNavigate: Go }) {
   const { t } = useLocale();
+  const navigate = useNavigate();
   const openConversation = useOpenConversation();
   const [query, setQuery] = useState(""), [submitted, setSubmitted] = useState(""), [items, setItems] = useState<RecallItem[] | null>(null), [error, setError] = useState("");
   const [bots, setBots] = useState<Bot[]>([]), [botFilter, setBotFilter] = useState("");
@@ -493,7 +496,7 @@ function RecallPanel({ onNavigate }: { onNavigate: Go }) {
   async function open(item: RecallItem) {
     // Another bot's line is that bot's page; the default bot's and older conversations open as before.
     const bot = bots.find(b => b.id === item.bot_id);
-    if (bot && !bot.is_default) { window.location.hash = `bot/${bot.id}`; return; }
+    if (bot && !bot.is_default) { navigate(paths.chat(bot.id)); return; }
     await openConversation(item.conversation_id); onNavigate("agent");
   }
   return <section className="personal-card memory-panel">

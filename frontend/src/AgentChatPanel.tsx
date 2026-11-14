@@ -31,7 +31,10 @@ import { toolLabel } from "./agent-tool-labels.mjs";
 import { ThinkingPanel } from "./ThinkingPanel";
 import { cancelRunning, upsertNode, type FlowNode } from "./turn-flow.mjs";
 import { addToWatchlist, queueAddTicker, watchlistSnapshot } from "./watchlist-bridge.mjs";
+import { GuestComposerNotice } from "./components/GuestComposerNotice";
+import { paths } from "./routes.mjs";
 import { createArchive, createSerializedWriter, isPickerCancelled, mergeConversation, serializeArchive, validateArchive, writeAtomically, type ArchiveConversation, type ChatArchive } from "./chat-archive.mjs";
+import { confirm } from "@/components/state/confirm";
 
 type State = "idle" | "testing" | "ready" | "sending" | "restoring" | "error";
 // What a confirmation card may show, in words.  The card used to print the raw field names of the
@@ -53,7 +56,7 @@ function toolResultSummary(value:unknown):string {
   return "";
 }
 type FileHandle = { name: string; getFile: () => Promise<File>; createWritable: () => Promise<{ write: (value: string) => Promise<void>; close: () => Promise<void> }> };
-type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void>; lineStatus: { running: string[]; unseen: string[] }; freshExternal: boolean; ackExternal: () => void; notices: CompactionNotice[]; compactNow: (focus:string)=>Promise<void> };
+type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void>; lineStatus: { running: string[]; unseen: string[]; waiting: string[] }; freshExternal: boolean; ackExternal: () => void; notices: CompactionNotice[]; compactNow: (focus:string)=>Promise<void> };
 const Context = createContext<ChatSession | null>(null);
 const WRITE_CARDS = new Set(["write_confirmation", "confirm_write", "choose_write_action", "choose_revision_sources"]);
 function Icon({ children }: { children: ReactNode }) {
@@ -341,7 +344,7 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
     else if(switched)clearLine(true);
   }
   const visibleMessages=archiveView?archiveView.messages as AgentChatMessage[]:messages;
-  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,lineStatus:{running:lines.current.running(),unseen:lines.current.unseen()},archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot , freshExternal, ackExternal: () => setFreshExternal(false), notices, compactNow }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,lineStatus:{running:lines.current.running(),unseen:lines.current.unseen(),waiting:lines.current.waiting()},archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot , freshExternal, ackExternal: () => setFreshExternal(false), notices, compactNow }}>{children}</Context.Provider>;
 }
 function readLocalConversationId(){try{const key=`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,existing=window.localStorage.getItem(key);if(existing&&/^[\w-]{1,80}$/.test(existing))return existing;const id=crypto.randomUUID();window.localStorage.setItem(key,id);return id;}catch{return crypto.randomUUID();}}
 type CitationItem = NonNullable<AgentChatMessage["citations"]>[number];
@@ -372,7 +375,7 @@ export function useLineStatus() { return useChat().lineStatus; }
 
 const SIDE_OPEN_KEY="market-evidence-agent:bot-side-open:v1";
 function PanelIcon(){return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg>}
-export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled,onBotChanged }: { onSettings: () => void; onModeChange:(mode:"guest"|"personal")=>void; bot?: Bot | null; side?: ReactNode; onTurnSettled?: () => void; onBotChanged?: () => void }) {
+export function AgentChatPanel({ bot,side,onTurnSettled,onBotChanged,openSide }: { bot?: Bot | null; side?: ReactNode; onTurnSettled?: () => void; onBotChanged?: () => void; openSide?: boolean }) {
   const { t } = useLocale(), c = useChat(), transcriptRef = useRef<HTMLElement>(null);
   // A finished turn changes the bot's last line (and gives a new bot its conversation): tell the list.
   const wasSending=useRef(false);
@@ -381,16 +384,15 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled,
   const railTurns=turnPreviews.map(turn=>({...turn,turnId:c.messages[turn.userIndex]?.turn_id}));
   const followTranscript=useRef(true);
   useEffect(()=>{const el=transcriptRef.current;if(!el)return;const update=()=>{followTranscript.current=el.scrollHeight-el.scrollTop-el.clientHeight<90};el.addEventListener("scroll",update,{passive:true});return()=>el.removeEventListener("scroll",update)},[]);
-  const [history,setHistory]=useState<ConversationSummary[]>([]),[historyHasMore,setHistoryHasMore]=useState(false),[historyError,setHistoryError]=useState(""),[historyLoading,setHistoryLoading]=useState(false),[mode,setMode]=useState(getChatMode());
+  const [history,setHistory]=useState<ConversationSummary[]>([]),[historyHasMore,setHistoryHasMore]=useState(false),[historyError,setHistoryError]=useState(""),[historyLoading,setHistoryLoading]=useState(false),mode=getChatMode();
   const [copied,setCopied]=useState<number|null>(null),[copyStatus,setCopyStatus]=useState(""),[,setFeedbackTick]=useState(0),[citationDetails,setCitationDetails]=useState<Record<string,KnowledgeCitationDetail>>({});
   const [openCitationTurn,setOpenCitationTurn]=useState<number|null>(null);
   const [historyOpen,setHistoryOpen]=useState(false);
   // A bot's right rail (工作区 / 档案) folds away so the thread can use the full width; the choice is kept.
-  const [sideOpen,setSideOpen]=useState(()=>{try{return localStorage.getItem(SIDE_OPEN_KEY)!=="0"}catch{return true}});
+  const [sideOpen,setSideOpen]=useState(()=>{if(openSide)return true;try{return localStorage.getItem(SIDE_OPEN_KEY)!=="0"}catch{return true}});
   const toggleSide=()=>setSideOpen(open=>{const next=!open;try{localStorage.setItem(SIDE_OPEN_KEY,next?"1":"0")}catch{/* optional preference */}return next});
   // On a narrow screen the history drawer covers the header toggle, so Esc and a tap outside close it.
   useEffect(()=>{if(!historyOpen)return;const onKey=(e:KeyboardEvent)=>{if(e.key==="Escape")setHistoryOpen(false)};window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey)},[historyOpen]);
-  const [loginOpen,setLoginOpen]=useState(false),[loginCode,setLoginCode]=useState(""),[loginError,setLoginError]=useState("");
   const [activeTurn,setActiveTurn]=useState(0);
   const composerForm=useRef<HTMLFormElement>(null),draftBox=useRef<HTMLTextAreaElement>(null);
   useEffect(()=>{const el=transcriptRef.current;if(!el)return;const update=()=>{const top=el.getBoundingClientRect().top;const turns=el.querySelectorAll<HTMLElement>(".agent-message.is-user");let active=0;turns.forEach((item,i)=>{if(item.getBoundingClientRect().top<=top+100)active=i});setActiveTurn(active)};el.addEventListener("scroll",update,{passive:true});update();return()=>el.removeEventListener("scroll",update)},[c.messages]);
@@ -417,8 +419,6 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled,
     // 归档的是当前打开的对话时，像"新建对话"一样清空，避免继续往已归档的对话里写
     if(item.id===currentConversation)c.clear();
   }
-  function switchMode(){if(mode==="personal"){setChatMode("guest");setMode("guest");onModeChange("guest");window.location.hash="#agent"}else{setLoginOpen(true);setLoginError("")}}
-  async function submitPersonalLogin(){try{const credential=await personalChatLogin(loginCode);setChatMode("personal",credential);setLoginCode("");setMode("personal");onModeChange("personal");setLoginOpen(false)}catch{setLoginError(t("个人登录失败，请稍后重试。"))}}
   async function copyAnswer(text:string,index:number){setCopied(null);setCopyStatus(t("正在复制…"));let timer:number|undefined;try{const clipboard=navigator.clipboard?.writeText(text);if(!clipboard)throw Error("clipboard_unavailable");await Promise.race([clipboard,new Promise<never>((_,reject)=>{timer=window.setTimeout(()=>reject(Error("clipboard_timeout")),1800)})]);setCopied(index);setCopyStatus(t("已复制"));}catch{setCopied(-index-1);setCopyStatus(t("复制失败；请选中回答后手动复制。"));const article=document.getElementById(`chat-message-${index}`);const range=document.createRange();if(article){range.selectNodeContents(article.querySelector(".markdown-body")??article);window.getSelection()?.removeAllRanges();window.getSelection()?.addRange(range);}}finally{if(timer)window.clearTimeout(timer);window.setTimeout(()=>{setCopied(null);setCopyStatus("")},3500)}}
   // The same action as a citation link in the answer (see the `a` renderer): open the drawer and the source.
   function openCitationAt(turn:number, citation:CitationItem){setOpenCitationTurn(turn);if(["web","web_news","official_filing","saved_filing","saved_ai_analysis","reported_figure"].includes(citation.source_type)&&citation.source_url){window.open(citation.source_url,"_blank","noopener,noreferrer");return}if(citation.chunk_id)void showCitation(citation.chunk_id,citation.source_type==="unavailable")}
@@ -455,9 +455,8 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled,
     <header className="workspace-heading agent-page-heading">
       {bot?<div className="agent-title-row"><LiveBotOrb key={bot.id} avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.title} chatState={c.state} messages={c.messages} unread={bot.unread>0||c.freshExternal} onAcknowledge={c.ackExternal} /><h1 id="agent-chat-title">{bot.name}</h1>{bot.title&&<small className="bot-title">{bot.title}</small>}</div>
         :<div className="agent-title-row"><button type="button" className="mobile-history-toggle secondary-action" aria-expanded={historyOpen} onClick={()=>setHistoryOpen(x=>!x)}>{t("历史对话")}</button><h1 id="agent-chat-title">模型对话</h1></div>}
-      <div className="agent-header-actions">{side&&<button type="button" className={`side-toggle${sideOpen?" is-open":""}`} aria-expanded={sideOpen} aria-controls="bot-side" aria-label={sideOpen?t("收起工作区"):t("打开工作区")} title={sideOpen?t("收起工作区"):t("打开工作区")} onClick={toggleSide}><PanelIcon /><span>{t("工作区")}</span></button>}<span>{mode==="personal"?t("个人模式"):t("访客模式")}</span><button className="secondary-action" onClick={switchMode} type="button">{t("切换模式")}</button><button className="secondary-action" onClick={onSettings} type="button">{t("设置")}</button></div>
+      <div className="agent-header-actions">{side&&<button type="button" className={`side-toggle${sideOpen?" is-open":""}`} aria-expanded={sideOpen} aria-controls="bot-side" aria-label={sideOpen?t("收起工作区"):t("打开工作区")} title={sideOpen?t("收起工作区"):t("打开工作区")} onClick={toggleSide}><PanelIcon /><span>{t("工作区")}</span></button>}</div>
     </header>
-    {loginOpen&&<div className="personal-login-panel"><label>{t("个人聊天登录码")}<input type="password" value={loginCode} onChange={e=>setLoginCode(e.target.value)} autoComplete="current-password" maxLength={256}/></label><button className="primary-action" onClick={()=>void submitPersonalLogin()} disabled={!loginCode}>{t("登录个人聊天")}</button><button className="secondary-action" onClick={()=>setLoginOpen(false)}>{t("取消")}</button>{loginError&&<p role="alert">{loginError}</p>}</div>}
     <div className={`agent-layout${bot?" is-bot":""}${side&&!sideOpen?" is-side-closed":""}`}>
       {!bot&&<>{historyOpen&&<div className="agent-history-scrim" aria-hidden="true" onClick={()=>setHistoryOpen(false)}/>}
       <aside className={`agent-history${historyOpen?" is-open":""}`} aria-label={t("历史对话")}>
@@ -497,7 +496,7 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled,
           </div>}
         </section>
         {c.status && <p className={`agent-chat-status ${c.state === "error" ? "is-error" : ""}`} role={c.state === "error" ? "alert" : "status"}>{c.status}</p>}
-        <form ref={composerForm} className="agent-composer" onSubmit={c.send}>
+        {!c.verified ? <GuestComposerNotice /> : <form ref={composerForm} className="agent-composer" onSubmit={c.send}>
           <label htmlFor="agent-draft">{t("输入消息")}</label>
           {slashItems.length>0&&<ul className="skill-picker" id="skill-picker" role="listbox" aria-label={t("技能")}>{slashItems.map((skill,i)=><li key={skill.id} id={`skill-option-${i}`} role="option" aria-selected={i===Math.min(pickIndex,slashItems.length-1)} onMouseDown={e=>{e.preventDefault();pickSkill(skill)}}><strong>/{skill.name}</strong><small>{skill.description}</small></li>)}</ul>}
           <textarea id="agent-draft" ref={draftBox} {...(slashItems.length>0?{role:"combobox","aria-expanded":true,"aria-controls":"skill-picker","aria-activedescendant":`skill-option-${Math.min(pickIndex,slashItems.length-1)}`}:{})} rows={1} value={c.draft} onChange={e => c.setDraft(e.target.value)} onKeyDown={onComposerKey} maxLength={4000} disabled={Boolean(c.archiveView)||c.restoring||!c.verified || c.state === "sending" || c.state === "testing"} placeholder={bot?`${t("给")} ${bot.name} ${t("发消息…")}`:t(c.verified?"给 Agent 发消息…":"登录个人聊天后才能对话")} />
@@ -510,7 +509,7 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled,
               <button className="agent-send" type="submit" aria-label={c.state === "sending" ? t("等待回复…") : t("发送")} title={t("发送")} disabled={sendDisabled}><SendIcon /></button>
             </div>
           </div>
-        </form>
+        </form>}
       </div>
       {side}
     </div>
@@ -651,7 +650,7 @@ function TelegramBindCard() {
     }
   }
   async function doUnbind() {
-    if (!window.confirm(t("解除绑定后，Telegram 消息不再被处理。确定解除？"))) return;
+    if (!(await confirm({ title: t("解除 Telegram 绑定？"), description: t("解除绑定后，Telegram 消息不再被处理。"), confirmLabel: t("解除绑定"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     setBusy(true);
     setStatus("");
     try {
@@ -727,7 +726,7 @@ function PushoverCard() {
   </section>;
 }
 
-function friendlyError(message: string, t: (text: string) => string): string {
+export function friendlyError(message: string, t: (text: string) => string): string {
   const code = message.replaceAll('"', ""); const labels: Record<string, string> = { model_not_configured:"模型目录是空的：先在设置里添加一个模型。", model_key_missing:"服务器上没有找到这个 key：检查环境变量名，或重新填写 key。", model_not_found:"模型不存在。", model_discovery_invalid_key:"API key 长度应为 8 到 2048 个字符。", model_discovery_auth_required:"请填写此服务商的 API key 后重试。", model_discovery_access_denied:"当前 API key 无权读取模型列表。", model_discovery_rate_limited:"模型目录请求被限流，请稍后重试。", model_discovery_timeout:"获取模型列表超时，请检查服务状态。", model_discovery_redirect_rejected:"服务端点拒绝了目录重定向请求。", model_discovery_response_too_large:"服务商模型目录超过 8 MB 安全上限。", model_discovery_unavailable:"暂时无法读取服务商模型列表。", model_discovery_network_error:"获取模型列表时网络连接失败。", model_discovery_incompatible_response:"服务商返回的模型目录格式不兼容。", model_discovery_capacity_reached:"当前目录请求较多，请稍后重试。", provider_invalid_key: "API key 无效，请检查后重新测试。", provider_model_access_denied: "模型不可用或当前 key 无权访问。", provider_rate_or_quota_error: "额度不足或请求被限流，请稍后检查账户。", provider_timeout: "请求超时，请检查服务状态后重试。", provider_redirect_rejected: "服务端点拒绝了重定向请求。", provider_response_too_large: "服务响应超过 1 MB 安全上限。", provider_error: "模型服务暂不可用，请稍后重试。", provider_network_error: "网络连接失败，请稍后重试。", provider_incompatible_response: "服务返回格式不兼容。", provider_empty_or_invalid_answer: "服务未返回有效回答。", provider_model_unavailable_or_invalid_request: "模型不可用或请求参数不受支持。", chat_capacity_reached: "当前对话请求较多，请稍后重试。" };
   return t(labels[code] ?? message);
 }

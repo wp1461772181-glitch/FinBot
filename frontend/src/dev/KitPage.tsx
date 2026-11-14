@@ -1,6 +1,6 @@
-// Developer-only sample page (#dev-kit): every shadcn component we ship, in one place, so the screenshot and smoke
-// tools can check that the old global selectors do not leak into them.  Never reachable from the UI; the entry in
-// App.tsx only loads this file when import.meta.env.DEV or VITE_DEV_KIT=1.  Copy is English on purpose (no i18n).
+// Developer-only sample page (#/dev/kit): every shadcn component we ship, in one place, so the screenshot and smoke
+// tools can check that the old global selectors do not leak into them.  Never reachable from the UI; the route in
+// app/router.tsx only loads this file when import.meta.env.DEV or VITE_DEV_KIT=1.  Copy is English on purpose (no i18n).
 import { useState } from "react";
 import { Bell, Check, ChevronDown, Download, ExternalLink, Info, Plus, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { hashHref, paths } from "../routes.mjs";
 import { MaterialsBlock, PaletteBlock, TypeBlock, UpDownBlock } from "./TokenKit";
 
 const VARIANTS = ["default", "secondary", "outline", "ghost", "destructive", "link"] as const;
@@ -34,7 +35,7 @@ function BareTags() {
       <p>Paragraph</p>
       <ul><li>Item</li></ul>
       <button type="button">Button</button>
-      <a href="#dev-kit/probe">Link</a>
+      <a href={hashHref(paths.devKit({ probe: true }))}>Link</a>
       <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><rect width="8" height="8" /></svg>
     </>
   );
@@ -55,7 +56,8 @@ function ScopeProbes() {
   );
 }
 
-export default function KitPage() {
+// `probe` adds the scope probes the smoke checks read (/dev/kit/probe; kept off /dev/kit so its screenshots stay put).
+export default function KitPage({ probe = false }: { probe?: boolean }) {
   const [checked, setChecked] = useState(true);
   const [menuFlag, setMenuFlag] = useState(true);
 
@@ -149,7 +151,7 @@ export default function KitPage() {
         <MaterialsBlock />
         <UpDownBlock />
 
-        {window.location.hash === "#dev-kit/probe" && <ScopeProbes />}
+        {probe && <ScopeProbes />}
       </main>
     </TooltipProvider>
   );

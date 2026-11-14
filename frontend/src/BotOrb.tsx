@@ -38,7 +38,7 @@ export function BotOrb({ avatar, look: stored, name, seed, size = 28, running = 
   </span>;
 }
 
-/** A sidebar row's avatar: while the pointer is over the row (`.bot-row`) the eyes follow it. Listeners exist only during
+/** A sidebar row's avatar: while the pointer is over the row (`[data-bot-row]`, the sidebar's bot row) the eyes follow it. Listeners exist only during
  * the hover and are removed on leave / unmount; touch and reduced motion keep the plain idle avatar. */
 export function RailBotOrb(props: Parameters<typeof BotOrb>[0]) {
   const anchor = useRef<HTMLSpanElement>(null);
@@ -46,7 +46,7 @@ export function RailBotOrb(props: Parameters<typeof BotOrb>[0]) {
   const [active, setActive] = useState(false);
   const followable = parseAvatar(props.avatar, props.name).kind !== "text";
   useEffect(() => {
-    const host = anchor.current?.closest(".bot-row");
+    const host = anchor.current?.closest("[data-bot-row]");
     if (!followable || !host) return;
     return bindRowGaze(host, { handle, setActive, now: () => performance.now() / 1000, reduced: () => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) });
   }, [followable, handle]);

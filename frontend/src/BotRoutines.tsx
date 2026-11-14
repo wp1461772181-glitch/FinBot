@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { createAgentTask, deleteAgentTask, listAgentTasks, listSkills, listTaskRuns, updateAgentTask, type Bot, type Skill, type AgentTask, type AgentTaskInput, type TaskRun } from "./api";
 import { translatePhrase, useLocale } from "./i18n";
+import { hashHref, paths } from "./routes.mjs";
 import { usableSkills } from "./skill-items.mjs";
 import { formatPriceLines, parsePriceLines, parseSymbols, runsLabel, scheduleLabel } from "./inbox-items.mjs";
+import { confirm } from "@/components/state/confirm";
 
 // A bot's routines (personal agent, second edition): its scheduled tasks and its last 20 runs.  A brief task's
 // result is posted into the bot's line; whether it notifies the owner is written in the bot's or the task's instruction.
@@ -82,7 +84,7 @@ export function TaskManager({ botId, bots = [], onChanged }: { botId?: string; b
   }
   const toggleTask = (task: AgentTask) => act(task.id, async () => { await updateAgentTask(task.id, { enabled: !task.enabled }); loadTasks(); onChanged?.(); });
   async function removeTask(task: AgentTask) {
-    if (!window.confirm(t("删除这个任务？已生成的简报会保留。"))) return;
+    if (!(await confirm({ title: t("删除这个任务？"), description: t("已生成的简报会保留，这个任务之后不再运行。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     await act(task.id, async () => { await deleteAgentTask(task.id); loadTasks(); loadRuns(); onChanged?.(); });
   }
 
@@ -166,7 +168,7 @@ export function TaskManager({ botId, bots = [], onChanged }: { botId?: string; b
     {runs === null && !error ? <p>{t("正在加载…")}</p> : (runs ?? []).length === 0 ? <p className="fine-print">{t("还没有运行记录。")}</p> :
       <ul className="memory-list">{(runs ?? []).map(run => <li key={run.id}>
         <div className="memory-line"><strong>{run.task_name}</strong><span className="num fine-print">{run.created_at ? new Date(run.created_at).toLocaleString() : ""}</span></div>
-        <p className="fine-print">{run.status_label}{run.posted > 0 ? ` · ${t("已贴进对话")}` : ""}{run.conversation_id && <> · <a href={`#agent/${run.conversation_id}`}>{t("打开过程")}</a></>}</p>
+        <p className="fine-print">{run.status_label}{run.posted > 0 ? ` · ${t("已贴进对话")}` : ""}{run.conversation_id && <> · <a href={hashHref(paths.chatConversation(run.conversation_id))}>{t("打开过程")}</a></>}</p>
       </li>)}</ul>}
   </section>;
 }

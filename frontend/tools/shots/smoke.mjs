@@ -1,12 +1,16 @@
-// Smoke entry: node smoke.mjs --dist <build dir> [--strict]
+// Smoke entry: node smoke.mjs --dist <build dir> [--strict] [--only <text in a check's name>]
 // One named function per check, registered in CHECKS.  Later phases append checks here.
 import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
 import { PAGES, waitReady } from "./pages.mjs";
-import { BOT } from "./fixtures/ids.mjs";
+import { BOT, CONVERSATION, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
+import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
+import { MATERIALS } from "./fixtures/materials.mjs";
 import { buildState } from "./fixtures/index.mjs";
+import path from "node:path";
+import { findCollisions } from "./collisions.mjs";
 
 const { flags } = parseArgs(process.argv.slice(2), { booleans: ["strict"] });
 if (!flags.dist) { console.error("usage: node smoke.mjs --dist <build dir> [--strict]"); process.exit(2); }
@@ -18,16 +22,18 @@ const FAKE_ANSWER = "冒烟测试的假回答";
 /** Open a fresh view at the default chat page (1440 wide, light) and wait for its history. */
 async function openChat(ctx, label) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label, unmatched });
-  await view.page.goto(`${ctx.server.url}#agent`, { waitUntil: "load" });
+  await view.page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
   await waitReady(view.page, PAGES.find((p) => p.name === "chat-default"));
   await settle(view.page);
   return view;
 }
-/** Open the navigation drawer and press a bot's row. */
+/** Press a bot's row in the sidebar (P2.2: the sidebar is always drawn at 1440; the old drawer and its toggle are gone). */
 async function pressBotRow(page, name) {
-  const open = await page.locator(".bot-rail").first().isVisible().catch(() => false);
-  if (!open) await page.locator("button.nav-menu-trigger").click();
-  await page.locator(".bot-rail .bot-row", { hasText: name }).first().click();
+  await page.locator("[data-bot-row]", { hasText: name }).first().click();
+}
+/** Press one of the sidebar's page entries (持仓, 任务, 研究 ...). */
+async function pressNavItem(page, name) {
+  await page.locator('[data-slot="sidebar"] a', { hasText: name }).first().click();
 }
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
@@ -72,12 +78,12 @@ async function switchBotAndBack(ctx) {
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     const before = await page.evaluate(() => location.hash);
     await pressBotRow(page, "NewsBot");
-    await page.waitForFunction((id) => location.hash === `#bot/${id}`, BOT.newsbot, { timeout: 10000 });
+    await page.waitForFunction((id) => location.hash === `#/chat/${id}`, BOT.newsbot, { timeout: 10000 });
     await page.locator("h1", { hasText: "NewsBot" }).waitFor({ timeout: 10000 });
     await pressBotRow(page, "FinBot");
     await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
     await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
-    return `${before || "(empty)"} -> #bot/<NewsBot> -> back; earlier answer still present`;
+    return `${before || "(empty)"} -> #/chat/<NewsBot> -> back; earlier answer still present`;
   } finally { await view.close(); }
 }
 
@@ -87,7 +93,7 @@ async function backButtonReturns(ctx) {
     const { page } = view;
     const start = await page.evaluate(() => location.hash);
     await pressBotRow(page, "NewsBot");
-    await page.waitForFunction((id) => location.hash === `#bot/${id}`, BOT.newsbot, { timeout: 10000 });
+    await page.waitForFunction((id) => location.hash === `#/chat/${id}`, BOT.newsbot, { timeout: 10000 });
     await page.goBack();
     await page.waitForFunction((hash) => location.hash === hash, start, { timeout: 10000 });
     await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
@@ -99,7 +105,7 @@ async function themeToggles(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "theme-toggle", unmatched });
   try {
     const { page } = view;
-    await page.goto(`${ctx.server.url}#admin`, { waitUntil: "load" });
+    await page.goto(`${ctx.server.url}#/settings/appearance`, { waitUntil: "load" });
     await page.locator("select#theme").waitFor({ timeout: 10000 });
     const theme = () => page.evaluate(() => document.documentElement.dataset.theme);
     assert((await theme()) === "light", `expected light at start, got ${await theme()}`);
@@ -128,7 +134,7 @@ const SELECTOR_MATCH_ALLOWED = new Set([
   "*", // box-sizing: border-box, the same value preflight sets
 ]);
 
-/** The shadcn parts on #dev-kit must look the same with the whole `legacy` layer deleted from the page. */
+/** The shadcn parts on #/dev/kit must look the same with the whole `legacy` layer deleted from the page. */
 async function kitNotPolluted(ctx) {
   const states = [
     ["closed", async () => {}],
@@ -146,7 +152,7 @@ async function kitNotPolluted(ctx) {
       const view = await newView(ctx.browser, { width: 1440, theme, label: `kit-${state}`, unmatched });
       try {
         const { page } = view;
-        await page.goto(`${ctx.server.url}#dev-kit`, { waitUntil: "load" });
+        await page.goto(`${ctx.server.url}#/dev/kit`, { waitUntil: "load" });
         await waitReady(page, PAGES.find((p) => p.name === "dev-kit"));
         await settle(page);
         await open(page);
@@ -222,7 +228,7 @@ async function kitKeyboard(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "kit-keyboard", unmatched });
   try {
     const { page } = view;
-    await page.goto(`${ctx.server.url}#dev-kit`, { waitUntil: "load" });
+    await page.goto(`${ctx.server.url}#/dev/kit`, { waitUntil: "load" });
     await waitReady(page, PAGES.find((p) => p.name === "dev-kit"));
     await settle(page);
     const focusedKit = () => page.evaluate(() => document.activeElement?.getAttribute("data-kit"));
@@ -244,7 +250,7 @@ async function kitKeyboard(ctx) {
 }
 
 /**
- * Where the old-browser-default restore applies.  #dev-kit/probe has the same bare tags twice:
+ * Where the old-browser-default restore applies.  #/dev/kit/probe has the same bare tags twice:
  *  - "outside": no data-legacy above them -> plain preflight (margins 0, no list markers, bare button, inherited link colour ...);
  *  - "island": a data-legacy subtree inside a data-slot container (the P2 shell case) -> browser defaults, as the old pages had.
  */
@@ -252,7 +258,7 @@ async function legacyScope(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "kit-scope", unmatched });
   try {
     const { page } = view;
-    await page.goto(`${ctx.server.url}#dev-kit/probe`, { waitUntil: "load" });
+    await page.goto(`${ctx.server.url}#/dev/kit/probe`, { waitUntil: "load" });
     await page.locator('[data-probe="island"]').waitFor({ timeout: 10000 });
     await settle(page, { pinTranscript: false });
     const read = (which) => page.evaluate((name) => {
@@ -313,19 +319,15 @@ async function idleAvatarsNoRaf(ctx) {
     await page.goto(`${ctx.server.url}#portfolio`, { waitUntil: "load" });
     await waitReady(page, PAGES.find((p) => p.name === "portfolio"));
     await settle(page);
-    const open = await page.locator(".bot-rail").first().isVisible().catch(() => false);
-    if (!open) await page.locator("button.nav-menu-trigger").click();
-    await page.locator(".bot-rail .bot-row").first().waitFor({ state: "visible", timeout: 10000 });
-    // The drawer slides in (real motion is on in this view): hover only once the row is on screen.
-    await page.waitForFunction(() => { const r = document.querySelector(".bot-rail .bot-row")?.getBoundingClientRect(); return Boolean(r) && r.left >= 0 && r.right <= window.innerWidth; }, null, { timeout: 10000 });
-    assert((await page.locator(".bot-rail .bloub-avatar").count()) >= 5, "expected at least 5 bloub avatars in the rail");
+    await page.locator("[data-bot-row]").first().waitFor({ state: "visible", timeout: 10000 });
+    assert((await page.locator("[data-bot-row] .bloub-avatar").count()) >= 5, "expected at least 5 bloub avatars in the sidebar");
     const rafOver = async (ms) => { const before = await page.evaluate(() => window.__rafCalls); await page.waitForTimeout(ms); return (await page.evaluate(() => window.__rafCalls)) - before; };
     const bad = [], seen = {};
     await page.mouse.move(1100, 500);
     await page.waitForTimeout(1000);
     seen.still = await rafOver(3000);
     if (seen.still > 5) bad.push(`still page: ${seen.still} requestAnimationFrame calls in 3 s (limit 5)`);
-    const row = page.locator(".bot-rail .bot-row:has(.bloub-avatar)").nth(1); // a bot row (the rail also has plain navigation rows)
+    const row = page.locator("[data-bot-row]:has(.bloub-avatar)").nth(1);
     await row.hover();
     const box = await row.boundingBox();
     await page.mouse.move(box.x + box.width * 0.4, box.y + box.height / 2); await page.waitForTimeout(150);
@@ -340,7 +342,8 @@ async function idleAvatarsNoRaf(ctx) {
     if (seen.after > 5) bad.push(`after leaving the row and 2 s of settling: ${seen.after} calls in 2 s (limit 5)`);
     if (bad.length) throw new Error(bad.join("\n"));
 
-    // An unread bot (notify) keeps its animation: the unmodified fixture has NewsBot unread.
+    // P2.2 (design 6.2, size S): an unread bot does not run frames either.  Its mark is the number badge, drawn in CSS: the
+    // avatar stays a still frame.  (Before, an unread bot kept the engine's notify animation: that was the P2.1 check here.)
     const unread = await newView(ctx.browser, { width: 1440, theme: "light", label: "unread-avatar", unmatched, motion: true });
     try {
       await unread.context.addInitScript(() => {
@@ -351,13 +354,15 @@ async function idleAvatarsNoRaf(ctx) {
       await unread.page.goto(`${ctx.server.url}#portfolio`, { waitUntil: "load" });
       await waitReady(unread.page, PAGES.find((p) => p.name === "portfolio"));
       await settle(unread.page);
-      await unread.page.waitForTimeout(500);
+      await unread.page.mouse.move(1100, 500);
+      await unread.page.waitForTimeout(1500);
+      assert((await unread.page.locator('[data-bot-row][data-marker="unread"] [data-count]').count()) >= 1, "the fixture's unread bot shows its number");
       const before = await unread.page.evaluate(() => window.__rafCalls);
-      await unread.page.waitForTimeout(1000);
+      await unread.page.waitForTimeout(2000);
       seen.notify = (await unread.page.evaluate(() => window.__rafCalls)) - before;
     } finally { await unread.close(); }
-    assert(seen.notify >= 20, `an unread bot should keep animating, got ${seen.notify} calls in 1 s`);
-    return `still ${seen.still}/3 s, hover ${seen.hover}/1 s, leaving ${seen.release}/0.5 s then settled ${seen.after}/2 s; unread bot ${seen.notify}/1 s`;
+    assert(seen.notify <= 5, `an unread bot's avatar must not run a frame loop, got ${seen.notify} calls in 2 s`);
+    return `still ${seen.still}/3 s, hover ${seen.hover}/1 s, leaving ${seen.release}/0.5 s then settled ${seen.after}/2 s; unread bot ${seen.notify}/2 s`;
   } finally { await view.close(); }
 }
 
@@ -368,7 +373,7 @@ async function updownSwitchesMarketOnly(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "updown-kit", unmatched });
   try {
     const { page } = view;
-    await page.goto(`${ctx.server.url}#dev-kit`, { waitUntil: "load" });
+    await page.goto(`${ctx.server.url}#/dev/kit`, { waitUntil: "load" });
     await page.locator('[data-kit="updown-toggle"]').waitFor({ timeout: 10000 });
     await settle(page, { pinTranscript: false });
     // Probe the old sheets too: throw-away elements carrying the old classes, read the same way.
@@ -429,7 +434,7 @@ async function updownSettingPersists(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "updown-setting", unmatched });
   try {
     const { page } = view;
-    await page.goto(`${ctx.server.url}#admin`, { waitUntil: "load" });
+    await page.goto(`${ctx.server.url}#/settings/appearance`, { waitUntil: "load" });
     await page.locator("#updown").waitFor({ timeout: 10000 });
     const attr = () => page.evaluate(() => document.documentElement.dataset.updown);
     assert((await attr()) === "green-up", `expected green-up at start, got ${await attr()}`);
@@ -451,25 +456,1204 @@ async function updownSettingPersists(ctx) {
 }
 
 /** name -> check.  Add new checks by writing a function above and registering it here. */
-export const CHECKS = [
+export // --- P2.1: routes ------------------------------------------------------------------------------------------
+const UUID_RE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const FILING = MATERIALS.find((m) => m.symbol === "AAPL" && m.source_type === "official_filing");
+// The address readers only accept hex ids for ?revise= and ?focus= (as the old code did); the fixtures' material ids are not hex, so link addresses use this one.
+const HEX_ID = "6f1c2d3e-0000-4000-8000-0000000000aa";
+const SELECTED_SYMBOL_KEY = "market-evidence-agent:selected-symbol:v1";
+const hashOf = (page) => page.evaluate(() => location.hash);
+const waitHash = (page, hash, timeout = 10000) => page.waitForFunction((h) => location.hash === h, hash, { timeout });
+const dispatchAction = (page, detail) => page.evaluate((d) => window.dispatchEvent(new CustomEvent("market-evidence-agent:client-action", { detail: { id: "a0000000-0000-4000-8000-000000000001", ...d } })), detail);
+
+/** A fresh view; `lastSymbol` seeds the stored "last stock" preference the old-address table reads. */
+async function openAt(ctx, label, hash, { lastSymbol = "AAPL", width = 1440, ready, identity } = {}) {
+  const view = await newView(ctx.browser, { width, theme: "light", label, unmatched, ...(identity ? { identity } : {}) });
+  if (lastSymbol) await view.context.addInitScript(([key, value]) => { try { localStorage.setItem(key, value); } catch { /* storage unavailable */ } }, [SELECTED_SYMBOL_KEY, lastSymbol]);
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  if (ready) await waitReady(view.page, { ready });
+  return view;
+}
+
+
+/** One old address per kind of the design's table (3.3), opened as a fresh page load: it lands on the new address and the page is ready. */
+async function legacyRedirects(ctx) {
+  const material = HEX_ID;
+  const cases = [
+    ["", "#/chat", ".agent-thread .agent-message"],
+    ["#agent", "#/chat", ".agent-thread .agent-message"],
+    ["#chat", "#/chat", ".agent-thread .agent-message"],
+    [`#agent/${CONVERSATION.older}`, `#/chat/c/${CONVERSATION.older}`, ".agent-thread .agent-message"],
+    [`#bot/${BOT.applebot}`, `#/chat/${BOT.applebot}`, ".agent-thread .agent-message"],
+    ["#overview", "#/research/c/AAPL", ".overview-workspace"],
+    ["#company", "#/research/c/AAPL", ".overview-workspace"],
+    ["#forecast", "#/research/forecasts", ".forecast-home"],
+    ["#forecast?symbol=TSLA", "#/research/forecasts?symbol=TSLA", ".forecast-home"],
+    [`#forecast/${ROOT.aapl}`, `#/research/forecasts/${ROOT.aapl}`, ".research-brief"],
+    [`#forecast/${ROOT.aapl}?version=${VERSION.aapl2}`, `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl2}`, ".research-brief"],
+    [`#forecast/${ROOT.aapl}?revise=${material}`, `#/research/forecasts/${ROOT.aapl}?revise=${material}`, ".research-brief"],
+    [`#forecast/judgment/${JUDGMENT.aapl}`, `#/research/judgments/${JUDGMENT.aapl}`, ".judgment-page h2"],
+    ["#forecast/monitor", "#/research/monitor", "main.workspace .v2-desk h2"],
+    ["#revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`, ".research-brief"],
+    ["#evaluation", "#/research/scores", "main.workspace h2"],
+    ["#replay", "#/research/replay", ".historical-replay-workspace"],
+    ["#materials", "#/research/materials", ".material-library-panel h2"],
+    ["#library", "#/research/materials", ".material-library-panel h2"],
+    [`#materials?symbol=AAPL&focus=${material}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${material}&type=official_filing`, "!.material-library-panel"],
+    ["#evidence", "#/research/evidence?symbol=AAPL", ".evidence-center"],
+    [`#evidence/${VERSION.aapl3}`, `#/research/evidence/${VERSION.aapl3}`, ".evidence-center"],
+    ["#routines", "#/routines", "main.personal-page h1"],
+    ["#briefs", "#/routines", "main.personal-page h1"],
+    ["#portfolio", "#/portfolio", ".pf-positions"],
+    ["#news", "#/assistant/news", "main.personal-page h1"],
+    ["#skills", "#/assistant/skills", ".skill-group"],
+    ["#memory", "#/assistant/memory", "main.personal-page h1"],
+    ["#me", "#/assistant/bots", "main.personal-page h1"],
+    ["#admin", "#/settings/models", ".agent-admin h2"],
+    ["#settings", "#/settings/models", ".agent-admin h2"],
+    ["#nonsense", "#/chat", ".agent-thread .agent-message"],
+    ["#/no/such/page", "#/chat", ".agent-thread .agent-message"],
+  ];
+  const bad = [];
+  for (const [from, to, ready] of cases) {
+    const view = await openAt(ctx, `legacy ${from || "(empty)"}`, from);
+    try {
+      await waitHash(view.page, to, 8000);
+      // "!selector": only wait for the element (a focus the fixtures cannot resolve leaves the library's lookup text up).
+      if (ready.startsWith("!")) await view.page.waitForSelector(ready.slice(1), { state: "visible", timeout: 15000 });
+      else await waitReady(view.page, { ready });
+      if (view.problems.pageErrors.length) bad.push(`${from || "(empty)"}: uncaught exception ${view.problems.pageErrors[0].split("\n")[0]}`);
+    } catch (error) { bad.push(`${from || "(empty)"} -> expected ${to}, at ${await hashOf(view.page).catch(() => "?")}: ${String(error.message).split("\n")[0]}`); }
+    await view.close();
+  }
+  // The same jump while the app runs (a link in an old answer, a bookmark): replaced, not pushed, so back skips the old form.
+  const runtime = await openAt(ctx, "legacy at runtime", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    await settle(runtime.page);
+    for (const [from, to] of [["#forecast", "#/research/forecasts"], [`#materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`], [`#evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`, `#/research/evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`]]) {
+      await runtime.page.evaluate(() => { location.hash = "#/chat"; });
+      await waitHash(runtime.page, "#/chat");
+      await runtime.page.evaluate((h) => { location.hash = h; }, from);
+      await waitHash(runtime.page, to);
+      await runtime.page.goBack();
+      await waitHash(runtime.page, "#/chat");
+    }
+  } catch (error) { bad.push(`at runtime: ${String(error.message).split("\n")[0]}`); }
+  await runtime.close();
+  assert(!bad.length, bad.join("\n      "));
+  return `${cases.length} old addresses at load + 3 at runtime`;
+}
+
+/** chat -> research -> a company -> one of its forecasts -> portfolio, then back four times: every press lands on the previous address. */
+async function backButtonChain(ctx) {
+  const view = await openAt(ctx, "back chain", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    const trail = [await hashOf(page)];
+    const step = async (act, ready) => { await act(); await page.waitForFunction((last) => location.hash !== last, trail.at(-1), { timeout: 10000 }); await waitReady(page, { ready }); trail.push(await hashOf(page)); };
+    await step(() => page.evaluate(() => { location.hash = "#/research"; }), ".overview-workspace");
+    await step(() => page.locator(".universe-card", { hasText: "AAPL" }).locator("button.universe-open").click(), ".overview-workspace");
+    await step(() => page.locator(".overview-focus-actions .primary-action").click(), ".research-brief");
+    await step(() => pressNavItem(page, "持仓"), ".pf-positions");
+    assert(trail.join(" ") === `#/chat #/research #/research/c/AAPL #/research/forecasts/${ROOT.aapl} #/portfolio`, `unexpected trail ${trail.join(" ")}`);
+    const ready = [".research-brief", ".overview-workspace", ".overview-workspace", ".agent-thread .agent-message"];
+    for (let i = trail.length - 2; i >= 0; i -= 1) {
+      await page.goBack();
+      await waitHash(page, trail[i]);
+      await waitReady(page, { ready: ready[trail.length - 2 - i] });
+    }
+    return trail.join(" <- ");
+  } finally { await view.close(); }
+}
+
+/** The company is in the address: open one, reload, still that company (also with a tab, and on a page that has no company of its own). */
+async function deepLinkReload(ctx) {
+  const view = await openAt(ctx, "deep link", "#/research/c/TSLA", { lastSymbol: null, ready: ".overview-workspace" });
+  try {
+    const { page } = view;
+    const company = () => page.locator('[data-slot="research-bar"] [role="combobox"]').first().innerText();
+    assert((await company()) === "TSLA", `expected TSLA, got ${await company()}`);
+    await page.reload({ waitUntil: "load" });
+    await waitReady(page, { ready: ".overview-workspace" });
+    assert((await hashOf(page)) === "#/research/c/TSLA" && (await company()) === "TSLA", `after reload: ${await hashOf(page)} / ${await company()}`);
+    await page.evaluate(() => { location.hash = "#/research/c/NVDA?tab=materials"; });
+    await waitReady(page, { ready: ".material-library-panel h2" });
+    await page.reload({ waitUntil: "load" });
+    await waitReady(page, { ready: ".material-library-panel h2" });
+    assert((await hashOf(page)) === "#/research/c/NVDA?tab=materials", `tab lost on reload: ${await hashOf(page)}`);
+    assert((await page.locator(".material-library-panel").innerText()).includes("NVDA") || (await company()) === "NVDA", "the library is not about NVDA");
+    // The picker switches the company on the same kind of page, through the address.
+    await page.locator('[data-slot="research-bar"] [role="combobox"]').click();
+    await page.getByRole("option", { name: "AMD" }).click();
+    await waitHash(page, "#/research/c/AMD?tab=materials");
+    return "TSLA overview and NVDA materials survive a reload; the picker moves the address";
+  } finally { await view.close(); }
+}
+
+/** The agent's open_page / select_stock / queue events, as the chat page's answers raise them. */
+async function clientActions(ctx) {
+  const view = await openAt(ctx, "client actions", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    const expected = [
+      ["overview", "#/research/c/AAPL"], ["predictions", "#/research/forecasts"], ["materials", "#/research/materials"], ["sec", "#/research/evidence?symbol=AAPL"],
+      ["revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`], ["evaluation", "#/research/scores"], ["knowledge", "#/settings/models"], ["agent", "#/chat"],
+    ];
+    for (const [pageName, hash] of expected) {
+      await dispatchAction(page, { action: "open_page", page: pageName });
+      await waitHash(page, hash);
+    }
+    await dispatchAction(page, { action: "open_page", page: "overview" });
+    await waitHash(page, "#/research/c/AAPL");
+    await waitReady(page, { ready: ".overview-workspace" });
+    await dispatchAction(page, { action: "select_stock", symbol: "TSLA" });
+    await waitHash(page, "#/research/c/TSLA");
+    await dispatchAction(page, { action: "open_page", page: "materials" });
+    await waitHash(page, "#/research/materials");
+    await dispatchAction(page, { action: "select_stock", symbol: "NVDA" });
+    await waitHash(page, "#/research/materials?symbol=NVDA");
+    await dispatchAction(page, { action: "open_page", page: "overview" });
+    await waitHash(page, "#/research/c/NVDA");
+    await waitReady(page, { ready: ".overview-workspace" });
+    await dispatchAction(page, { action: "queue_add", symbol: "NFLX" });
+    await page.locator(".universe-card", { hasText: "NFLX" }).waitFor({ timeout: 5000 });
+    await dispatchAction(page, { action: "queue_remove", symbol: "NFLX" });
+    await page.locator(".universe-card", { hasText: "NFLX" }).waitFor({ state: "detached", timeout: 5000 });
+    return "open_page x9, select_stock x2, queue_add / queue_remove";
+  } finally { await view.close(); }
+}
+
+/** Send in a bot's line, leave for another page at once, come back: the session is above the router outlet, so the answer is there. */
+async function backgroundTurnSurvivesNavigation(ctx) {
+  const view = await openAt(ctx, "background turn", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    await settle(page);
+    const text = "导航途中的提问 AAPL";
+    await page.locator("#agent-draft").fill(text);
+    await page.locator("button.agent-send").click();
+    await pressNavItem(page, "持仓");
+    await waitHash(page, "#/portfolio");
+    await waitReady(page, { ready: ".pf-positions" });
+    await pressBotRow(page, "FinBot");
+    await waitHash(page, "#/chat");
+    await page.locator(".agent-message.is-user", { hasText: text }).waitFor({ timeout: 10000 });
+    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).last().waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    return "question sent, left for #/portfolio at once, back: the question and the streamed answer are in the line";
+  } finally { await view.close(); }
+}
+
+
+/** A link in a past answer is a plain anchor with an old-form href: clicking it lands on the new route, and back returns to the chat. */
+async function answerLinks(ctx) {
+  const view = await openAt(ctx, "answer links", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    const links = [
+      [`#materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`],
+      [`#forecast/${ROOT.aapl}?version=${VERSION.aapl2}`, `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl2}`],
+      [`#agent/${CONVERSATION.older}`, `#/chat/c/${CONVERSATION.older}`],
+      [`#evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`, `#/research/evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`],
+    ];
+    for (const [href, to] of links) {
+      await page.evaluate((h) => { const a = document.createElement("a"); a.id = "probe-link"; a.href = h; a.textContent = "link"; a.style.cssText = "position:fixed;top:0;left:0;z-index:99999;background:#fff"; document.body.appendChild(a); }, href);
+      await page.locator("#probe-link").click();
+      await waitHash(page, to);
+      await page.evaluate(() => document.getElementById("probe-link")?.remove());
+      await page.goBack();
+      await waitHash(page, "#/chat");
+    }
+    return `${links.length} old-form anchors clicked, each opens the new route and back returns to #/chat`;
+  } finally { await view.close(); }
+}
+
+/** A page whose chunk cannot be fetched (offline, or removed by a new deploy) shows the load-failure notice inside the shell, and reload recovers. */
+async function chunkLoadFailure(ctx) {
+  const view = await openAt(ctx, "chunk failure", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    await settle(page);
+    let blocked = true;
+    await view.context.route(/\/assets\/forecast-[^/]*\.js$/, (route) => (blocked ? route.abort() : route.continue()));
+    await page.evaluate((id) => { location.hash = `#/research/forecasts/${id}`; }, ROOT.aapl);
+    await page.locator('[data-slot="route-error"]').waitFor({ timeout: 10000 });
+    const text = await page.locator('[data-slot="route-error"]').innerText();
+    assert(text.includes("页面加载失败") && text.includes("重新加载"), `unexpected notice: ${text}`);
+    assert(await page.locator('[data-slot="sidebar"]').count() > 0, "the shell is gone");
+    blocked = false;
+    await page.locator('[data-slot="route-error"] button').click();
+    await page.waitForLoadState("load");
+    await waitReady(page, { ready: ".research-brief" });
+    return "forecast chunk aborted: notice with reload inside the shell; after reload the forecast opens";
+  } finally { await view.close(); }
+}
+
+/**
+ * No class the built `utilities` layer defines may also be a class the old UI uses (see collisions.mjs): Tailwind turns
+ * words in src/app, src/components and src/dev (comments included) into utility rules, and that layer beats `legacy`.
+ * Reads the build output and the sources next to it (<dist>/../src); no browser.
+ */
+async function utilityLegacyCollisions() {
+  const result = findCollisions({ distDir: path.resolve(flags.dist), srcDir: path.resolve(flags.dist, "..", "src") });
+  assert(!result.collisions.length, `utility classes that also name old classes: ${result.collisions.join(", ")}.  Find the word in src/app, src/components or src/dev (comments and strings count) and reword it, or move the code out of the scanned folders; allow it in collisions.mjs only with a reason.`);
+  return `${result.utilities.size} utility classes vs ${result.legacy.size} old class names (${result.oldTsx} old tsx files + legacy css): none shared${result.allowed.length ? ` except the allowed ${result.allowed.join(", ")}` : ""}`;
+}
+
+// --- P2.2: the shell -----------------------------------------------------------------------------------------------
+const SIDEBAR_KEY = "market-evidence-agent:sidebar-open:v1";
+const MODE_KEY = "market-evidence-agent:chat-mode:v1";
+/** A view at `hash`, as the personal owner (default), a guest or nobody. */
+async function openShell(ctx, label, hash, { width = 1440, identity = "personal", theme = "light", ready } = {}) {
+  const view = await newView(ctx.browser, { width, theme, label, unmatched, identity });
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  if (ready) await waitReady(view.page, { ready });
+  return view;
+}
+const sidebarState = (page) => page.evaluate(() => document.querySelector('[data-slot="sidebar"]')?.getAttribute("data-state") ?? null);
+const sidebarWidth = (page) => page.evaluate(() => Math.round(document.querySelector('[data-slot="sidebar-container"]')?.getBoundingClientRect().width ?? -1));
+
+/** Every page, at 390 wide: nothing makes the document wider than the window. */
+async function noHorizontalScroll390(ctx) {
+  const bad = [];
+  for (const def of PAGES) {
+    const view = await newView(ctx.browser, { width: 390, theme: "light", identity: def.identity ?? "personal", label: `h-scroll ${def.name}`, unmatched });
+    try {
+      await view.page.goto(`${ctx.server.url}${def.hash ?? ""}`, { waitUntil: "load" });
+      await waitReady(view.page, def);
+      await settle(view.page);
+      const sizes = await view.page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth, body: document.body.scrollWidth }));
+      if (sizes.scroll > sizes.inner) {
+        const wide = await view.page.evaluate(() => [...document.querySelectorAll("body *")].filter((el) => el.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 3).map((el) => `${el.tagName.toLowerCase()}.${String(el.className).split(" ")[0]}`));
+        bad.push(`${def.name}: scrollWidth ${sizes.scroll} > ${sizes.inner} (${wide.join(", ")})`);
+      }
+    } catch (error) { bad.push(`${def.name}: ${String(error.message).split("\n")[0]}`); }
+    await view.close();
+  }
+  assert(!bad.length, bad.join("\n      "));
+  return `${PAGES.length} pages, none wider than 390`;
+}
+
+/** The collapse button folds the sidebar to 56px; a reload keeps the choice, in either direction. */
+async function sidebarCollapsePersists(ctx) {
+  const view = await openShell(ctx, "sidebar collapse", "#/portfolio", { ready: ".pf-positions" });
+  try {
+    const { page } = view;
+    await settle(page);
+    assert((await sidebarState(page)) === "expanded" && (await sidebarWidth(page)) === 260, `expected 260px expanded at start, got ${await sidebarState(page)} / ${await sidebarWidth(page)}`);
+    await page.locator('[data-slot="sidebar-trigger"]').click();
+    await page.waitForFunction(() => document.querySelector('[data-slot="sidebar"]')?.getAttribute("data-state") === "collapsed");
+    assert((await page.evaluate((key) => localStorage.getItem(key), SIDEBAR_KEY)) === "0", "the choice is not stored");
+    await page.reload({ waitUntil: "load" });
+    await waitReady(page, { ready: ".pf-positions" });
+    await settle(page);
+    assert((await sidebarState(page)) === "collapsed" && (await sidebarWidth(page)) === 56, `after a reload: ${await sidebarState(page)} / ${await sidebarWidth(page)}`);
+    // Collapsed, a group with sub-pages is one icon whose menu lists them (the expanded sidebar lists them inline).
+    await page.locator('[data-slot="sidebar"] button[aria-label="研究"]').click();
+    const menu = page.getByRole("menu");
+    await menu.waitFor({ timeout: 10000 });
+    const listed = await menu.getByRole("menuitem").allInnerTexts();
+    assert(["自选", "预测", "材料库", "证据", "模型成绩", "历史回放"].every((name) => listed.includes(name)), `the collapsed 研究 menu lists: ${listed.join(", ")}`);
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached", timeout: 5000 });
+    await page.locator('[data-slot="sidebar-trigger"]').click();
+    await page.waitForFunction(() => document.querySelector('[data-slot="sidebar"]')?.getAttribute("data-state") === "expanded");
+    await page.reload({ waitUntil: "load" });
+    await waitReady(page, { ready: ".pf-positions" });
+    assert((await sidebarState(page)) === "expanded", "expanding was not kept either");
+    return "260px -> 56px, reload, still 56px; collapsed 研究 icon opens its menu; back to 260px, reload, still 260px";
+  } finally { await view.close(); }
+}
+
+/** The 任务 number is the live proposals plus the open write suggestions, and the 任务 page lists exactly that many waiting cards. */
+async function routinesBadgeMatches(ctx) {
+  const expected = PROPOSALS.filter((p) => !p.expired).length + INBOX.filter((i) => i.section === "confirm" && i.status !== "done" && i.status !== "dismissed").length;
+  const view = await openShell(ctx, "routines badge", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    const badge = page.locator('[data-slot="sidebar"] a[href="#/routines"]').locator("xpath=..").locator("[data-count]");
+    await badge.waitFor({ timeout: 10000 });
+    const shown = Number((await badge.innerText()).trim());
+    assert(shown === expected, `sidebar shows ${shown}, the fixtures hold ${expected}`);
+    // No bot row repeats a task number: ReportBot has a pending item and no unread count.
+    const reportRow = page.locator("[data-bot-row]", { hasText: "ReportBot" });
+    assert((await reportRow.locator("[data-count]").count()) === 0, "a bot row prints a number for its pending task items");
+    // The page: live proposals + suggestions waiting.
+    await pressNavItem(page, "任务");
+    await waitHash(page, "#/routines");
+    await waitReady(page, { ready: "main.personal-page h1" });
+    await page.locator("#routine-confirms-title").waitFor({ timeout: 10000 });
+    const proposals = await page.locator("#routine-proposals-title").locator("xpath=..").locator("li").filter({ hasNotText: "已过期" }).count();
+    const confirms = await page.locator("#routine-confirms-title").locator("xpath=..").locator("ul.memory-list > li").count();
+    assert(proposals + confirms === shown, `the page lists ${proposals} proposals + ${confirms} suggestions, the badge says ${shown}`);
+    // The phone's bar carries the same number.
+    const phone = await openShell(ctx, "routines badge phone", "#/portfolio", { width: 390, ready: ".pf-positions" });
+    try {
+      const phoneBadge = phone.page.locator('[data-slot="mobile-tab-bar"] a[href="#/routines"] [data-count]');
+      await phoneBadge.waitFor({ timeout: 10000 });
+      assert(Number((await phoneBadge.innerText()).trim()) === shown, "the tab bar's 任务 number differs from the sidebar's");
+    } finally { await phone.close(); }
+    return `badge ${shown} = ${proposals} proposals + ${confirms} suggestions on the page; same on the phone's bar; no number on the bot rows`;
+  } finally { await view.close(); }
+}
+
+/** Mode switch and sign-out exist once, in the account menu; the chat header, settings and the other pages have neither. */
+async function modeSwitchSingleEntry(ctx) {
+  const names = /切换模式|切换到访客只读|登出|登录个人/;
+  const view = await openShell(ctx, "mode switch", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    await settle(page);
+    const count = (role) => page.getByRole(role, { name: names }).count();
+    assert((await count("button")) + (await count("menuitem")) + (await count("link")) === 0, "a mode / sign-out control is on the page before the menu is open");
+    assert((await page.getByText("个人模式", { exact: true }).count()) === 1, "the mode label should appear once (the account menu)");
+    assert((await page.getByRole("button", { name: "切换模式" }).count()) === 0 && (await page.getByRole("button", { name: "设置", exact: true }).count()) === 0, "the chat header still has 切换模式 / 设置");
+    const trigger = page.locator('[data-slot="sidebar-footer"] button[aria-haspopup="menu"]');
+    assert((await trigger.count()) === 1, "expected exactly one account menu trigger");
+    await trigger.click();
+    await page.getByRole("menuitem", { name: "切换到访客只读" }).waitFor();
+    assert((await page.getByRole("menuitem", { name: "登出" }).count()) === 1 && (await page.getByRole("menuitem", { name: "登录个人" }).count()) === 0, "personal menu: expected 切换到访客只读 + 登出 only");
+    for (const hash of ["#/settings/models", "#/research", "#/assistant/memory"]) {
+      await page.keyboard.press("Escape");
+      await page.evaluate((h) => { location.hash = h; }, hash);
+      await page.waitForFunction((h) => location.hash === h, hash);
+      await settle(page, { pinTranscript: false });
+      assert((await page.getByRole("button", { name: /切换模式/ }).count()) === 0, `${hash} has a 切换模式 button`);
+    }
+    // Switch to guest through the menu, then the menu offers the login instead.
+    await trigger.click();
+    await page.getByRole("menuitem", { name: "切换到访客只读" }).click();
+    await page.locator('[data-slot="guest-composer"]').waitFor({ timeout: 10000 });
+    assert((await page.evaluate((key) => localStorage.getItem(key), MODE_KEY)) === "guest", "mode is not guest");
+    await trigger.click();
+    await page.getByRole("menuitem", { name: "登录个人" }).waitFor();
+    assert((await page.getByRole("menuitem", { name: "切换到访客只读" }).count()) === 0, "guest menu still offers the switch to guest");
+    // Sign out: back to the login page, no mode stored.
+    await page.getByRole("menuitem", { name: "登出" }).click();
+    await page.locator('[aria-labelledby="login-title"]').waitFor({ timeout: 10000 });
+    assert((await page.evaluate((key) => localStorage.getItem(key), MODE_KEY)) === null, "the chosen mode survives a sign-out");
+    return "one trigger; personal menu = 切换到访客只读 + 登出; guest menu = 登录个人 + 登出; none on chat / settings / research / memory; sign-out reaches the login page";
+  } finally { await view.close(); }
+}
+
+/** First visit: the login page at #/login; a wrong code reads its error under the field; the right one lands on the page asked for, or on the chat. */
+async function loginFlow(ctx) {
+  const deep = await openShell(ctx, "login deep link", "#/research/forecasts", { identity: "none" });
+  try {
+    const { page } = deep;
+    await page.locator('[aria-labelledby="login-title"]').waitFor({ timeout: 10000 });
+    assert((await hashOf(page)) === "#/research/forecasts", `a deep link must stay, got ${await hashOf(page)}`);
+    const field = page.locator('input[type="password"]');
+    await field.fill("not-the-code");
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    const error = page.locator("#login-error");
+    await error.waitFor({ timeout: 10000 });
+    const below = await page.evaluate(() => { const input = document.querySelector('input[type="password"]').getBoundingClientRect(), err = document.getElementById("login-error").getBoundingClientRect(); return err.top >= input.bottom - 1; });
+    assert(below, "the error is not under the field");
+    assert((await field.getAttribute("aria-invalid")) === "true", "the field is not marked invalid");
+    await field.fill(LOGIN_CODE);
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    await waitReady(page, { ready: ".forecast-home" });
+    assert((await hashOf(page)) === "#/research/forecasts", `login lost the page: ${await hashOf(page)}`);
+    assert((await page.locator('[data-slot="sidebar"] [data-bot-row]').count()) >= 5, "the shell shows no bots after the login");
+  } finally { await deep.close(); }
+  const first = await openShell(ctx, "login first open", "", { identity: "none" });
+  try {
+    const { page } = first;
+    await page.locator('[aria-labelledby="login-title"]').waitFor({ timeout: 10000 });
+    await waitHash(page, "#/login");
+    await page.locator('input[type="password"]').fill(LOGIN_CODE);
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    await waitHash(page, "#/chat");
+    await waitReady(page, { ready: ".agent-thread .agent-message" });
+  } finally { await first.close(); }
+  const again = await openShell(ctx, "login while signed in", "#/login", { ready: ".agent-thread .agent-message" });
+  try { await waitHash(again.page, "#/chat"); } finally { await again.close(); }
+  const guest = await openShell(ctx, "login read-only", "#/login", { identity: "none" });
+  try {
+    await guest.page.locator('[aria-labelledby="login-title"]').waitFor({ timeout: 10000 });
+    await guest.page.getByRole("button", { name: "只读浏览" }).click();
+    await waitHash(guest.page, "#/chat");
+    await guest.page.locator('[data-slot="guest-composer"]').waitFor({ timeout: 10000 });
+  } finally { await guest.close(); }
+  return "deep link kept through a wrong code (error under the field) and the right one; bare address -> #/login -> #/chat; signed in at #/login -> #/chat; 只读浏览 -> #/chat as a guest";
+}
+
+/** Browsing read-only: research pages open, the chat's input area is the sign-in notice, the owner's pages say 需要登录, the sidebar offers no bots. */
+async function guestReadonly(ctx) {
+  const view = await openShell(ctx, "guest", "#/chat", { identity: "guest", ready: '[data-slot="guest-composer"]' });
+  try {
+    const { page } = view;
+    const notice = await page.locator('[data-slot="guest-composer"]').innerText();
+    assert(notice.includes("登录后可以对话") && (await page.locator('[data-slot="guest-composer"] button', { hasText: "登录" }).count()) === 1, `unexpected notice: ${notice}`);
+    assert((await page.locator("#agent-draft").count()) === 0 && (await page.locator("button.agent-send").count()) === 0, "a guest still has an input box and a send button");
+    assert((await page.getByText("继续访客聊天").count()) === 0, "the dead 继续访客聊天 path is still around");
+    assert((await page.locator("[data-bot-row]").count()) === 0, "a guest sees bots");
+    assert((await page.locator('[data-slot="sidebar"] a[href="#/portfolio"], [data-slot="sidebar"] a[href="#/routines"]').count()) === 0, "a guest's sidebar lists 持仓 / 任务");
+    await page.locator('[data-slot="guest-composer"] button', { hasText: "登录" }).click();
+    await page.getByRole("dialog").waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "detached", timeout: 5000 });
+    // What a guest can read: the research pages.
+    for (const [hash, ready] of [["#/research/forecasts", ".forecast-home"], ["#/research/materials", ".material-library-panel h2"], ["#/research/replay", ".historical-replay-workspace"], ["#/settings/appearance", "select#theme"]]) {
+      await page.evaluate((h) => { location.hash = h; }, hash);
+      await waitReady(page, { ready });
+    }
+    // What the owner alone can use: one plain notice and a way in.
+    for (const hash of ["#/portfolio", "#/routines", "#/assistant/memory", "#/assistant/news", `#/chat/${BOT.applebot}`]) {
+      await page.evaluate((h) => { location.hash = h; }, hash);
+      await page.locator('[data-slot="need-login"]').waitFor({ timeout: 10000 });
+      const text = await page.locator('[data-slot="need-login"]').innerText();
+      assert(text.includes("需要登录") && (await page.locator('[data-slot="need-login"] button', { hasText: "登录" }).count()) === 1, `${hash}: unexpected notice ${text}`);
+      assert((await page.locator('[role="alert"]').count()) === 0, `${hash}: an error bar is showing`);
+    }
+    return "chat input = 登录后可以对话 + 登录; 4 read-only pages open; 5 owner pages show 需要登录 + 登录; no bots, no 持仓 / 任务 entries";
+  } finally { await view.close(); }
+}
+
+/** Keyboard only: Tab reaches every sidebar entry and Enter follows it; the login dialog closes on Esc and gives focus back. */
+async function keyboardNav(ctx) {
+  const view = await openShell(ctx, "keyboard nav", "#/research", { ready: ".overview-workspace" });
+  try {
+    const { page } = view;
+    await settle(page);
+    const expected = await page.locator('[data-slot="sidebar"] a[href]').evaluateAll((els) => els.map((el) => el.getAttribute("href")));
+    assert(expected.length >= 15, `expected 15+ sidebar links, found ${expected.length}`);
+    await page.locator('[data-slot="sidebar"] a[href]').first().focus();
+    const seen = new Set();
+    for (let i = 0; i < 80 && seen.size < expected.length; i += 1) {
+      const href = await page.evaluate(() => { const el = document.activeElement; return el?.closest('[data-slot="sidebar"]') && el.getAttribute("href"); });
+      if (href) seen.add(href);
+      await page.keyboard.press("Tab");
+    }
+    const missed = expected.filter((href) => !seen.has(href));
+    assert(!missed.length, `Tab never reached: ${missed.join(", ")}`);
+    // Focus is visible on a sidebar link.
+    await page.locator('[data-slot="sidebar"] a[href="#/portfolio"]').focus();
+    const ring = await page.evaluate(() => getComputedStyle(document.activeElement).boxShadow);
+    assert(ring && ring !== "none", `no visible focus ring on a sidebar link (box-shadow ${ring})`);
+    // Enter follows a link; a bot row too.
+    await page.keyboard.press("Enter");
+    await waitHash(page, "#/portfolio");
+    await page.locator("[data-bot-row]", { hasText: "NewsBot" }).focus();
+    await page.keyboard.press("Enter");
+    await waitHash(page, `#/chat/${BOT.newsbot}`);
+    // The login dialog: opens on the refused-write event, Esc closes it, focus is back on the control that had it.
+    const anchor = page.locator('[data-slot="sidebar"] a[href="#/routines"]');
+    await anchor.focus();
+    await page.evaluate(() => window.dispatchEvent(new Event("owner-auth-required")));
+    await page.getByRole("dialog").waitFor({ timeout: 5000 });
+    assert((await page.evaluate(() => document.activeElement?.getAttribute("type"))) === "password", "focus did not go into the dialog's field");
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "detached", timeout: 5000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("href") === "#/routines", null, { timeout: 3000 });
+    // The account menu opens from the keyboard and Esc gives focus back to its button.
+    const account = page.locator('[data-slot="sidebar-footer"] button[aria-haspopup="menu"]');
+    await account.focus();
+    await page.keyboard.press("Enter");
+    await page.getByRole("menu").waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "detached", timeout: 5000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-haspopup") === "menu", null, { timeout: 3000 });
+    return `${expected.length} sidebar links all reached by Tab, focus ring visible, Enter navigates (page + bot row); dialog and menu close on Esc and return focus`;
+  } finally { await view.close(); }
+}
+
+/** The phone: five items in the bar (each 44+ px), no sidebar in the page, and 更多 holds the bots, 助手, 设置, the account and the theme switch. */
+async function mobileBarAndMore(ctx) {
+  const view = await openShell(ctx, "mobile bar", "#/chat", { width: 390, ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    await settle(page);
+    assert((await page.locator('[data-slot="sidebar"]').count()) === 0, "the sidebar is in the page on a phone");
+    const items = await page.locator('[data-slot="mobile-tab-bar"] > a, [data-slot="mobile-tab-bar"] > button').evaluateAll((els) => els.map((el) => ({ name: el.innerText.trim().split("\n").pop(), w: el.getBoundingClientRect().width, h: el.getBoundingClientRect().height, current: el.getAttribute("aria-current") })));
+    assert(items.map((i) => i.name).join("|") === "对话|研究|持仓|任务|更多", `bar items: ${items.map((i) => i.name).join("|")}`);
+    for (const item of items) assert(item.w >= 44 && item.h >= 44, `${item.name}: ${Math.round(item.w)}x${Math.round(item.h)} is under 44x44`);
+    assert(items[0].current === "page", "the current tab is not marked");
+    const bottom = await page.evaluate(() => { const bar = document.querySelector('[data-slot="mobile-tab-bar"]').getBoundingClientRect(); return { gap: window.innerHeight - bar.bottom, padding: getComputedStyle(document.querySelector('[data-slot="mobile-tab-bar"]')).paddingBottom }; });
+    assert(Math.abs(bottom.gap) <= 1, `the bar is not at the bottom edge (gap ${bottom.gap})`);
+    await page.locator('[data-slot="mobile-tab-bar"] button', { hasText: "更多" }).click();
+    const drawer = page.locator('[data-slot="drawer-content"]');
+    await drawer.waitFor({ timeout: 10000 });
+    const text = await drawer.innerText();
+    const wanted = ["FinBot", "AppleBot", "NewsBot", "ReportBot", "TeslaBot", "历史对话", "新建 bot", "全部 bot", "技能", "记忆", "新闻源", "知识库", "模型", "通知", "外观", "数据", "账户", "切换到访客只读", "登出"];
+    const missing = wanted.filter((word) => !text.includes(word));
+    assert(!missing.length, `更多 lacks: ${missing.join(", ")}`);
+    assert((await drawer.getByRole("button", { name: /切换到(深色|浅色)/ }).count()) === 1, "no light / dark switch in 更多");
+    // Another bot is reachable from the phone: through the drawer.
+    await drawer.getByRole("link", { name: "NewsBot" }).click();
+    await waitHash(page, `#/chat/${BOT.newsbot}`);
+    await page.locator('[data-slot="drawer-content"]').waitFor({ state: "detached", timeout: 5000 });
+    return `5 bar items >= 44x44 at the bottom edge; 更多 lists ${wanted.length} entries incl. the bots; NewsBot opened from it`;
+  } finally { await view.close(); }
+}
+
+/** The old-UI restore still works inside the new shell: bare tags on three old pages keep the browser's margins; the sidebar's tags do not. */
+async function legacyRestoreInShell(ctx) {
+  const view = await openShell(ctx, "restore in shell", "#/settings/models", { ready: ".agent-admin h2" });
+  try {
+    const { page } = view;
+    const bad = [];
+    for (const [hash, ready] of [["#/settings/models", ".agent-admin h2"], ["#/assistant/skills", ".skill-group"], ["#/assistant/memory", "main.personal-page h1"]]) {
+      await page.evaluate((h) => { location.hash = h; }, hash);
+      await waitReady(page, { ready });
+      await settle(page, { pinTranscript: false });
+      const read = await page.evaluate(() => {
+        // A tag of an old page, not inside a shadcn part that sits within the marker (those keep preflight by design).
+        const inPage = (tag) => [...document.querySelectorAll(`[data-legacy] ${tag}`)].find((el) => { const slot = el.closest("[data-slot]"); return !slot || !el.closest("[data-legacy]").contains(slot); });
+        const margin = (el) => (el ? parseFloat(getComputedStyle(el).marginBottom) : null);
+        return { h2: margin(inPage("h2")), p: margin(inPage("p")), marker: Boolean(document.querySelector("[data-legacy]")), insideSidebar: Boolean(document.querySelector('[data-slot="sidebar"]')?.closest("[data-legacy]")) };
+      });
+      if (!read.marker) bad.push(`${hash}: no data-legacy marker`);
+      if (read.insideSidebar) bad.push(`${hash}: the sidebar is inside the old-UI marker`);
+      if (!(read.h2 > 0) && !(read.p > 0)) bad.push(`${hash}: bare <h2>/<p> margins are ${read.h2}/${read.p}; the browser default should be back`);
+    }
+    const sidebar = await page.evaluate(() => {
+      const root = document.querySelector('[data-slot="sidebar"]');
+      const ul = root.querySelector("ul"), a = root.querySelector("a"), button = root.querySelector('[data-slot="sidebar-trigger"]'), p = root.querySelector("p");
+      const cs = (el) => (el ? getComputedStyle(el) : null);
+      return { listStyle: cs(ul).listStyleType, padLeft: cs(ul).paddingLeft, marginTop: cs(ul).marginTop, underline: cs(a).textDecorationLine, linkColour: cs(a).color, parentColour: cs(a.parentElement).color, border: cs(button).borderTopWidth, pMargin: p ? cs(p).marginBottom : "0px" };
+    });
+    if (sidebar.listStyle !== "none" || sidebar.padLeft !== "0px" || sidebar.marginTop !== "0px") bad.push(`sidebar <ul> is restored: ${JSON.stringify(sidebar)}`);
+    if (sidebar.underline !== "none") bad.push(`sidebar <a> underlined`);
+    if (sidebar.border !== "0px") bad.push(`sidebar <button> has a browser border`);
+    if (sidebar.pMargin !== "0px") bad.push(`sidebar <p> has a margin`);
+    assert(!bad.length, bad.join("\n      "));
+    return "3 old pages: browser margins back on bare <h2>/<p>; the sidebar's <ul>/<a>/<button>/<p> are plain preflight";
+  } finally { await view.close(); }
+}
+
+/** The four marks of a bot row are told apart: ring (answering), amber dot (waiting), number (unread), nothing. */
+async function botRowMarks(ctx) {
+  const view = await openShell(ctx, "bot marks", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    await settle(page);
+    // The fixture: NewsBot has 2 unread, ReportBot waits on an item; hold an answer in TeslaBot's line for the fourth.
+    await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, BOT.teslabot);
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill("[hold-the-answer] AAPL");
+    await page.locator("button.agent-send").click();
+    await page.locator("button.agent-stop").waitFor({ timeout: 10000 });
+    await page.evaluate(() => { location.hash = "#/chat"; });
+    await page.locator('[data-bot-row][data-marker="running"]').waitFor({ timeout: 10000 });
+    const row = (name) => page.locator("[data-bot-row]", { hasText: name });
+    const kinds = {};
+    for (const name of ["TeslaBot", "ReportBot", "NewsBot", "AppleBot"]) kinds[name] = await row(name).getAttribute("data-marker");
+    assert(JSON.stringify(kinds) === JSON.stringify({ TeslaBot: "running", ReportBot: "waiting", NewsBot: "unread", AppleBot: "none" }), `marks: ${JSON.stringify(kinds)}`);
+    assert((await row("TeslaBot").locator("[data-ring]").count()) === 1 && (await row("TeslaBot").locator("[data-dot]").count()) === 0, "answering: one ring, no dot");
+    assert((await row("ReportBot").locator("[data-dot]").count()) === 1 && (await row("ReportBot").locator("[data-ring]").count()) === 0 && (await row("ReportBot").locator("[data-count]").count()) === 0, "waiting: one dot, no ring, no number");
+    assert((await row("NewsBot").locator("[data-count]").innerText()).trim() === "2" && (await row("NewsBot").locator("[data-dot], [data-ring]").count()) === 0, "unread: the number only");
+    assert((await row("AppleBot").locator("[data-dot], [data-ring], [data-count]").count()) === 0, "quiet: no mark");
+    const dot = await row("ReportBot").locator("[data-dot]").evaluate((el) => getComputedStyle(el).backgroundColor);
+    const action = await page.evaluate(() => { const probe = document.createElement("i"); probe.style.color = "var(--action)"; document.body.appendChild(probe); const colour = getComputedStyle(probe).color; probe.remove(); return colour; });
+    assert(dot === action, `the waiting dot is ${dot}, the action colour is ${action}`);
+    return "TeslaBot = ring, ReportBot = amber dot, NewsBot = number 2, AppleBot = none; the dot is the action colour";
+  } finally { await view.close(); }
+}
+
+// --- P2.3: states, confirmations, the command palette -----------------------------------------------------------------
+const count = (view, method, re) => view.mock.requests.filter((r) => r.method === method && re.test(r.path)).length;
+/** Press and hold the element under `locator` for `ms` (a real hold: pointer down, wait, pointer up). */
+async function holdPointer(page, locator, ms = 1250) {
+  const box = await locator.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down(); await page.waitForTimeout(ms); await page.mouse.up();
+}
+const dialogOf = (page) => page.locator('[data-slot="alert-dialog-content"]');
+const focusIsMarked = (page) => page.evaluate(() => document.activeElement?.hasAttribute("data-probe-trigger") ?? false);
+
+/**
+ * Every place that used to call window.confirm (nine) now asks in the app.  The browser's confirm is stubbed to count calls and
+ * to say yes if it were ever reached.  Per place: pressing the trigger opens the in-app dialog and sends nothing; Esc closes it,
+ * nothing is sent and focus is back on the trigger; the dialog's own 取消 sends nothing; holding the confirm button sends exactly
+ * one request.  (A real hold: the view keeps motion on.)
+ */
+async function noWindowConfirm(ctx) {
+  const PF = /\/portfolio\/transactions\/[^/]+$/;
+  const sites = [
+    { name: "portfolio record", hash: "#/portfolio", ready: ".pf-positions", trigger: (p) => p.locator(".pf-ledger li button", { hasText: "删除" }).first(), method: "DELETE", re: PF },
+    { name: "skill", hash: "#/assistant/skills", ready: ".skill-group", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/skills\/[^/]+$/ },
+    { name: "memory item", hash: "#/assistant/memory", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/profile\/[^/]+$/ },
+    { name: "news source", hash: "#/assistant/news", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/news-sources\/[^/]+$/ },
+    { name: "routine task", hash: "#/routines", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/tasks\/[^/]+$/ },
+    { name: "bot", hash: `#/chat/${BOT.applebot}/settings`, ready: ".bot-profile", trigger: (p) => p.getByRole("button", { name: "删除这个 bot" }), method: "DELETE", re: /\/bots\/[^/]+$/ },
+    { name: "bot Telegram token", hash: `#/chat/${BOT.applebot}/settings`, ready: ".bot-profile", trigger: (p) => p.getByRole("button", { name: "换 token / 删除" }), method: "DELETE", re: /\/bots\/[^/]+\/telegram$/ },
+    { name: "catalog model", hash: "#/settings/models", ready: ".agent-admin h2", trigger: (p) => p.locator(".catalog-actions button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/model-catalog\/[^/]+$/ },
+    { name: "Telegram unbind", hash: "#/settings/notifications", ready: ".agent-admin h2", trigger: (p) => p.getByRole("button", { name: "解除绑定" }), method: "POST", re: /\/telegram\/unbind$/ },
+  ];
+  const report = [];
+  for (const site of sites) {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: `confirm: ${site.name}`, unmatched, motion: true });
+    try {
+      const { page } = view;
+      await page.addInitScript(() => { window.__confirmCalls = 0; window.confirm = () => { window.__confirmCalls += 1; return true; }; });
+      await page.goto(`${ctx.server.url}${site.hash}`, { waitUntil: "load" });
+      await waitReady(page, { ready: site.ready });
+      await page.evaluate(() => { window.__confirmCalls = 0; window.confirm = () => { window.__confirmCalls += 1; return true; }; });
+      const trigger = site.trigger(page);
+      await trigger.waitFor({ timeout: 10000 });
+      await trigger.evaluate((el) => el.setAttribute("data-probe-trigger", ""));
+      // 1. open, then Esc
+      await trigger.click();
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      assert((await dialogOf(page).locator('[data-slot="alert-dialog-title"]').innerText()).trim().length > 0, `${site.name}: the dialog has no title`);
+      assert((await dialogOf(page).locator('[data-slot="alert-dialog-description"]').innerText()).trim().length > 0, `${site.name}: the dialog says nothing about what follows`);
+      assert(await dialogOf(page).locator('[data-slot="hold-button"]').count() === 1, `${site.name}: not a press-and-hold confirmation`);
+      assert(count(view, site.method, site.re) === 0, `${site.name}: a request went out before the answer`);
+      await page.keyboard.press("Escape");
+      await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+      await page.waitForFunction(() => document.activeElement?.hasAttribute("data-probe-trigger"), null, { timeout: 3000 });
+      assert(count(view, site.method, site.re) === 0, `${site.name}: Esc did not cancel`);
+      // 2. open, 取消
+      await trigger.click();
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      await dialogOf(page).getByRole("button", { name: "取消" }).click();
+      await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+      await page.waitForFunction(() => document.activeElement?.hasAttribute("data-probe-trigger"), null, { timeout: 3000 });
+      assert(count(view, site.method, site.re) === 0, `${site.name}: 取消 did not cancel`);
+      // 3. open, a short press does nothing, a full hold confirms
+      await trigger.click();
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'), 300);
+      assert(await dialogOf(page).count() === 1 && count(view, site.method, site.re) === 0, `${site.name}: a short press confirmed`);
+      await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'));
+      await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+      const deadline = Date.now() + 5000;
+      while (count(view, site.method, site.re) < 1 && Date.now() < deadline) await page.waitForTimeout(100);
+      assert(count(view, site.method, site.re) === 1, `${site.name}: expected exactly one ${site.method} after the hold, saw ${count(view, site.method, site.re)}`);
+      const calls = await page.evaluate(() => window.__confirmCalls);
+      assert(calls === 0, `${site.name}: window.confirm was called ${calls} time(s)`);
+      report.push(site.name);
+    } catch (error) { throw new Error(`${site.name}: ${String(error.message).split("\n")[0]}`); }
+    finally { await view.close(); }
+  }
+  return `${report.length} places: in-app dialog, Esc / 取消 send nothing and return focus, a full hold sends one request, window.confirm never called`;
+}
+
+/** The confirmation from the keyboard (and with reduced motion): focus starts on 取消, Esc cancels, holding Space or Enter confirms, press-twice works with no hold at all. */
+async function confirmDialogKeyboard(ctx) {
+  const open = async (motion) => {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "confirm keyboard", unmatched, motion });
+    await view.page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await view.page.locator("[data-kit-states]").waitFor();
+    return view;
+  };
+  let view = await open(true);
+  try {
+    const { page } = view;
+    const result = () => page.locator('[data-kit="confirm-result"]').innerText();
+    // Plain confirm: Enter on the trigger opens it; focus starts on 取消; Tab reaches 归档; Esc answers no and gives focus back.
+    await page.locator('[data-kit="confirm-plain"]').focus(); await page.keyboard.press("Enter");
+    await dialogOf(page).waitFor();
+    assert((await page.evaluate(() => document.activeElement?.textContent?.trim())) === "取消", "focus did not start on 取消");
+    await page.keyboard.press("Tab");
+    assert((await page.evaluate(() => document.activeElement?.textContent?.trim())) === "归档", "Tab did not reach the confirm button");
+    await page.keyboard.press("Escape"); await dialogOf(page).waitFor({ state: "detached" });
+    assert((await result()).includes("cancelled"), `Esc: ${await result()}`);
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-kit") === "confirm-plain", null, { timeout: 3000 }).catch(() => { throw new Error("focus did not return to the trigger"); });
+    await page.keyboard.press("Enter"); await dialogOf(page).waitFor();
+    await page.keyboard.press("Tab"); await page.keyboard.press("Enter");
+    await dialogOf(page).waitFor({ state: "detached" });
+    assert((await result()).includes("confirmed"), `Enter on the confirm button: ${await result()}`);
+    // Hold: holding Space for a full second confirms; a short press does not; Enter works the same.
+    for (const key of ["Space", "Enter"]) {
+      await page.locator('[data-kit="confirm-hold"]').focus(); await page.keyboard.press("Enter");
+      await dialogOf(page).waitFor();
+      await page.keyboard.press("Tab");
+      assert(await page.evaluate(() => document.activeElement?.getAttribute("data-slot")) === "hold-button", "Tab did not reach the hold button");
+      await page.keyboard.down(key); await page.waitForTimeout(250); await page.keyboard.up(key);
+      assert(await dialogOf(page).count() === 1, `a short ${key} press confirmed`);
+      await page.keyboard.down(key); await page.waitForTimeout(1250); await page.keyboard.up(key);
+      await dialogOf(page).waitFor({ state: "detached", timeout: 3000 });
+      assert((await result()).includes("confirmed"), `hold ${key}: ${await result()}`);
+      await page.waitForFunction(() => document.activeElement?.getAttribute("data-kit") === "confirm-hold", null, { timeout: 3000 }).catch(() => { throw new Error(`hold ${key}: focus did not return`); });
+      await page.locator('[data-kit="confirm-plain"]').click(); await dialogOf(page).waitFor(); await page.keyboard.press("Escape"); await dialogOf(page).waitFor({ state: "detached" });
+    }
+  } finally { await view.close(); }
+  // Reduced motion (the harness default): no fill to watch, so press twice; a click with no press before it (assistive technology) is the same.
+  view = await open(false);
+  try {
+    const { page } = view;
+    const result = () => page.locator('[data-kit="confirm-result"]').innerText();
+    await page.locator('[data-kit="confirm-hold"]').click(); await dialogOf(page).waitFor();
+    const hold = dialogOf(page).locator('[data-slot="hold-button"]');
+    await hold.focus(); await page.keyboard.press("Space");
+    assert(await dialogOf(page).count() === 1 && (await hold.innerText()).includes("再点一次"), "the first press should only arm the button");
+    await page.keyboard.press("Space");
+    await dialogOf(page).waitFor({ state: "detached" });
+    assert((await result()).includes("confirmed"), `press twice: ${await result()}`);
+    await page.locator('[data-kit="confirm-hold"]').click(); await dialogOf(page).waitFor();
+    await hold.dispatchEvent("click"); await hold.dispatchEvent("click");
+    await dialogOf(page).waitFor({ state: "detached" });
+    assert((await result()).includes("confirmed"), `two bare clicks: ${await result()}`);
+  } finally { await view.close(); }
+  return "focus starts on 取消, Esc cancels and returns focus; holding Space or Enter ~1s confirms (a short press does not); reduced motion and bare clicks: press twice";
+}
+
+/** The shortcut and the palette: company, bot (hidden too), page and recent chat each lead where they say; Esc closes and returns focus. */
+async function commandMenuNavigates(ctx) {
+  const state = buildState();
+  state.bots.find((b) => b.id === BOT.applebot).hidden = true;
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "command menu", unmatched, fixtureState: state });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    await settle(page);
+    const palette = page.locator('[data-slot="command-menu"]');
+    const input = palette.locator("input");
+    const open = async (how = "shortcut") => {
+      if (how === "shortcut") await page.keyboard.press("Control+k");
+      else await page.locator('[data-slot="sidebar"] button[aria-label="命令面板"]').click();
+      await palette.waitFor({ timeout: 5000 });
+      assert(await page.evaluate(() => document.activeElement?.tagName === "INPUT"), "focus did not go to the search field");
+    };
+    const rows = () => palette.locator('[data-slot="command-item"]');
+    // A code on the watch list: Enter on the first row opens it.
+    await open(); await input.fill("TS"); await rows().first().waitFor();
+    assert((await rows().first().innerText()).includes("TSLA"), `first row for "TS": ${await rows().first().innerText()}`);
+    assert((await rows().nth(1).innerText()).includes("加入自选并打开"), "second row for TS should offer to add TS");
+    await page.keyboard.press("Enter"); await waitHash(page, "#/research/c/TSLA"); await palette.waitFor({ state: "detached" });
+    // A bot, a hidden one: found by name, marked 已隐藏, opens its line.
+    await open(); await input.fill("AppleBot"); await rows().first().waitFor();
+    const apple = await rows().first().innerText();
+    assert(apple.includes("AppleBot") && apple.includes("已隐藏"), `hidden bot row: ${apple}`);
+    await page.keyboard.press("Enter"); await waitHash(page, `#/chat/${BOT.applebot}`);
+    // A page by its name, with the area it belongs to.
+    await open(); await input.fill("持仓"); await rows().first().waitFor();
+    assert((await rows().first().innerText()).includes("持仓"), "page row");
+    await page.keyboard.press("Enter"); await waitHash(page, "#/portfolio");
+    await open(); await input.fill("证据");
+    const evidenceRow = await rows().first().innerText();
+    assert(evidenceRow.includes("证据") && evidenceRow.includes("研究"), `evidence row names its area: ${evidenceRow}`);
+    await page.keyboard.press("Enter"); await page.waitForFunction(() => location.hash.startsWith("#/research/evidence"), null, { timeout: 5000 });
+    // A recent conversation (the existing history list), opened by its title.
+    await open("button");
+    await palette.locator('[cmdk-group-heading]', { hasText: "最近对话" }).waitFor({ timeout: 5000 });
+    const titles = await palette.locator('[data-kind="recent"]').allInnerTexts();
+    assert(titles.length >= 2, `recent conversations: ${titles.join(" | ")}`);
+    await input.fill(titles[1].slice(0, 4)); await rows().first().waitFor();
+    await page.keyboard.press("Enter"); await page.waitForFunction(() => /^#\/chat\/c\//.test(location.hash), null, { timeout: 5000 });
+    // Esc closes it and gives focus back to what had it (by the shortcut and by the sidebar button).
+    const anchor = page.locator('[data-slot="sidebar"] a[href="#/routines"]');
+    await anchor.focus(); await open(); await page.keyboard.press("Escape"); await palette.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("href") === "#/routines", null, { timeout: 3000 });
+    await open("button"); await page.keyboard.press("Escape"); await palette.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "命令面板", null, { timeout: 3000 });
+    // The shortcut also closes it.
+    await open(); await page.keyboard.press("Control+k"); await palette.waitFor({ state: "detached" });
+    // The dialog is labelled for a screen reader.
+    await open(); assert((await page.getByRole("dialog", { name: "命令面板" }).count()) === 1, "the palette has no dialog title");
+    await page.keyboard.press("Escape");
+    return "TS -> TSLA (+ offer to add TS); hidden AppleBot (已隐藏) opens its line; 持仓 and 证据 open their pages; a recent chat opens; Esc and the shortcut close it, focus returns";
+  } finally { await view.close(); }
+}
+
+/** In the English interface the palette's page names, group names and the offer are English. */
+async function commandMenuEnglish(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", locale: "en-US", label: "command menu en", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    await page.keyboard.press("Control+k");
+    const palette = page.locator('[data-slot="command-menu"]');
+    await palette.waitFor();
+    await palette.locator('[cmdk-group-heading]', { hasText: "Recent chats" }).waitFor({ timeout: 5000 });
+    const heads = await palette.locator("[cmdk-group-heading]").allInnerTexts();
+    assert(heads.join(",") === "Company,bot,Pages,Recent chats", `group names: ${heads.join(",")}`);
+    const input = palette.locator("input");
+    await input.fill("portfolio");
+    assert((await palette.locator('[data-slot="command-item"]').first().innerText()).toLowerCase().includes("portfolio"), "English page name should match");
+    await input.fill("appearance"); await page.keyboard.press("Enter");
+    await page.waitForFunction(() => location.hash === "#/settings/appearance", null, { timeout: 5000 });
+    await page.keyboard.press("Control+k"); await palette.waitFor();
+    await input.fill("NFLX");
+    assert((await palette.locator('[data-slot="command-item"]').first().innerText()).includes("Add to watchlist and open"), "English offer");
+    const text = await palette.innerText();
+    assert(!/[一-鿿]/.test(text), `Chinese left in the English palette: ${text.match(/[一-鿿]+/)?.[0]}`);
+    return "groups Company / bot / Pages / Recent chats; page names and the add offer in English; no Chinese in the palette";
+  } finally { await view.close(); }
+}
+
+/** A valid code that is not on the watch list: the palette offers 加入自选并打开; doing it opens the company and the fake API receives the queue update. */
+async function commandMenuAddWatch(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "command menu add", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    await settle(page);
+    await page.keyboard.press("Control+k");
+    const palette = page.locator('[data-slot="command-menu"]');
+    await palette.locator("input").fill("nflx");
+    const first = palette.locator('[data-slot="command-item"]').first();
+    await first.waitFor();
+    const text = await first.innerText();
+    assert(text.includes("加入自选并打开") && text.includes("NFLX"), `offer: ${text}`);
+    assert(!view.mock.state.queue.includes("NFLX"), "NFLX should not be on the list yet");
+    const before = count(view, "PUT", /research-queue$/);
+    await page.keyboard.press("Enter");
+    await waitHash(page, "#/research/c/NFLX");
+    const deadline = Date.now() + 5000;
+    while (!view.mock.state.queue.includes("NFLX") && Date.now() < deadline) await page.waitForTimeout(100);
+    assert(view.mock.state.queue.includes("NFLX"), `the fake API never received the update; queue: ${view.mock.state.queue.join(",")}`);
+    assert(count(view, "PUT", /research-queue$/) > before, "no PUT /research-queue");
+    // Typing something that is not a code offers nothing; a code already on the list is not offered again.
+    await page.keyboard.press("Control+k");
+    await palette.locator("input").fill("not a code!");
+    assert(await palette.locator('[data-kind="add"]').count() === 0, "an offer for text that is not a code");
+    await palette.locator("input").fill("NFLX");
+    assert(await palette.locator('[data-kind="add"]').count() === 0 && (await palette.locator('[data-slot="command-item"]').first().innerText()).includes("NFLX"), "NFLX is on the list now: it is listed, not offered");
+    return "nflx -> 加入自选并打开 NFLX -> #/research/c/NFLX, PUT /research-queue carries NFLX";
+  } finally { await view.close(); }
+}
+
+/** Phone: the way in is the search box at the top of 更多; it opens the palette, and closing it puts focus back on 更多. */
+async function commandMenuMobile(ctx) {
+  const view = await newView(ctx.browser, { width: 390, theme: "light", label: "command menu mobile", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    await page.locator('[data-slot="mobile-tab-bar"] button[aria-haspopup="dialog"]').click();
+    await page.locator('[data-slot="drawer-content"]').waitFor();
+    await page.locator('[data-slot="palette-entry"]').click();
+    const palette = page.locator('[data-slot="command-menu"]');
+    await palette.waitFor();
+    await palette.locator("input").fill("TSLA");
+    await palette.locator('[data-slot="command-item"]').first().waitFor();
+    const box = await palette.boundingBox();
+    assert(box && box.x >= 0 && box.x + box.width <= 390, `the palette is wider than the phone: ${JSON.stringify(box)}`);
+    await page.keyboard.press("Escape"); await palette.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.hasAttribute("data-more-trigger"), null, { timeout: 3000 });
+    return "更多 -> search box -> palette fits 390px; Esc returns focus to 更多";
+  } finally { await view.close(); }
+}
+
+/** Toasts: bottom right, gone after about two seconds, above a dialog, 撤销 reachable and usable by keyboard. */
+async function toastAutoDismiss(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "toast", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    const toast = page.locator("[data-sonner-toast]");
+    const t0 = Date.now();
+    await page.locator('[data-kit="toast-success"]').click();
+    await toast.first().waitFor({ timeout: 5000 });
+    const box = await toast.first().boundingBox();
+    const vp = page.viewportSize();
+    assert(box.x > vp.width / 2 && box.y > vp.height / 2, `toast is not bottom right: ${JSON.stringify(box)}`);
+    assert((await toast.first().innerText()).includes("已保存"), "toast text");
+    await toast.first().waitFor({ state: "detached", timeout: 6000 });
+    const lived = Date.now() - t0;
+    assert(lived >= 1500 && lived <= 4500, `a plain toast lived ${lived}ms (design: about 2s)`);
+    // Undo toast: lives longer than a plain one, the button works by keyboard.
+    await page.locator('[data-kit="toast-undo"]').click();
+    await toast.first().waitFor();
+    assert((await toast.first().innerText()).includes("撤销"), "the undo toast has no 撤销");
+    await page.waitForTimeout(2600);
+    assert(await toast.count() === 1, "an undo toast should outlast the 2s of a plain one");
+    await page.keyboard.press("Alt+t");
+    const focusedInToaster = await page.evaluate(() => !!document.activeElement?.closest("[data-sonner-toaster]"));
+    assert(focusedInToaster, "Alt+T did not move focus into the toaster");
+    for (let i = 0; i < 4; i += 1) { const label = await page.evaluate(() => document.activeElement?.textContent?.trim()); if (label === "撤销") break; await page.keyboard.press("Tab"); }
+    assert((await page.evaluate(() => document.activeElement?.textContent?.trim())) === "撤销", "Tab never reached 撤销 inside the toaster");
+    await page.keyboard.press("Enter");
+    await page.locator("[data-sonner-toast]", { hasText: "已撤销" }).waitFor({ timeout: 4000 });
+    // z-order: --z-toast is above --z-dialog
+    const layers = await page.evaluate(() => { const v = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(); const t = document.querySelector("[data-sonner-toaster]"); return { dialog: v("--z-dialog"), toast: v("--z-toast"), applied: t ? getComputedStyle(t).zIndex : null }; });
+    assert(Number(layers.toast) > Number(layers.dialog) && layers.applied === layers.toast, `layers: ${JSON.stringify(layers)}`);
+    return `plain toast bottom right, gone after ${lived}ms; undo toast outlasts it and 撤销 works with Alt+T, Tab, Enter; z ${layers.toast} over dialog ${layers.dialog}`;
+  } finally { await view.close(); }
+}
+
+/** A toast raised while the login dialog is open is on top of it (the click goes to the toast's own button, not the dialog's backdrop). */
+async function toastAboveDialog(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "toast over dialog", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    await page.locator('[data-kit="toast-pinned"]').click();
+    await page.locator("[data-sonner-toast]").waitFor();
+    await page.locator('[data-kit="login-open"]').click();
+    await page.getByRole("dialog").waitFor();
+    const top = await page.evaluate(() => { const toast = document.querySelector("[data-sonner-toast]").getBoundingClientRect(); const hit = document.elementFromPoint(toast.x + toast.width / 2, toast.y + toast.height / 2); return !!hit?.closest("[data-sonner-toast]"); });
+    assert(top, "the toast is covered by the dialog layer");
+    return "toast stays visible and hit-testable above the open login dialog";
+  } finally { await view.close(); }
+}
+
+/** The unreachable backend: failed requests light one banner; 重试 with the backend back puts it out; ordinary error answers do not light it. */
+async function offlineBanner(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "offline", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    await settle(page);
+    const banner = page.locator('[data-slot="offline-banner"]');
+    assert(await banner.count() === 0, "the banner is showing while the backend answers");
+    view.mock.control.down = true;
+    await page.evaluate(() => { location.hash = "#/portfolio"; });
+    await banner.first().waitFor({ timeout: 8000 });
+    assert(await banner.count() === 1, `${await banner.count()} banners (one expected)`);
+    const text = await banner.innerText();
+    assert(text.includes("连不上后端") && text.includes("重试"), `banner text: ${text}`);
+    assert(await page.locator('[data-slot="offline-banner"][role="alert"]').count() === 1, "the banner is not announced");
+    const top = await banner.evaluate((el) => el.getBoundingClientRect().top);
+    assert(top <= 1, `the banner is not at the top of the page (top ${top})`);
+    // still down: 重试 replays a failed read, fails, the banner stays
+    await banner.getByRole("button", { name: "重试" }).click();
+    await page.waitForTimeout(600);
+    assert(await banner.count() === 1, "the banner went out while the backend was still down");
+    // back: 重试 -> gone
+    view.mock.control.down = false;
+    await banner.getByRole("button", { name: "重试" }).click();
+    await banner.waitFor({ state: "detached", timeout: 8000 });
+    // A gateway answer from a proxy lights it as well; the application's own errors do not.
+    view.mock.control.down502 = true;
+    await page.evaluate(() => { location.hash = "#/routines"; });
+    await banner.first().waitFor({ timeout: 8000 });
+    view.mock.control.down502 = false;
+    await banner.getByRole("button", { name: "重试" }).click();
+    await banner.waitFor({ state: "detached", timeout: 8000 });
+    return "down -> one banner at the top (role=alert, 重试); still down: stays; back + 重试: gone; a proxy 502 lights it too";
+  } finally { await view.close(); }
+}
+
+/** An application error is not "offline": a guest's 403s and unanswered fixtures never light the banner. */
+async function offlineBannerQuiet(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", identity: "guest", label: "offline quiet", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await page.locator('[data-slot="guest-composer"]').waitFor({ timeout: 15000 });
+    await settle(page);
+    assert(await page.locator('[data-slot="offline-banner"]').count() === 0, "the banner lit for 4xx answers");
+    return "403 answers to a guest leave the banner out";
+  } finally { await view.close(); }
+}
+
+/** The 400ms rule: a quick load shows no skeleton, a slow one shows it after the delay; with reduced motion the blocks do not pulse; a lazy page's code arriving late is covered by a skeleton of its shape. */
+async function skeletonDelay(ctx) {
+  let view = await newView(ctx.browser, { width: 1440, theme: "light", label: "skeleton delay", unmatched, motion: true });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    const stage = page.locator('[data-kit="skeleton-stage"] [data-slot="skeleton-frame"]');
+    // quick: sample the stage for 700ms, the skeleton must never appear
+    await page.locator('[data-kit="skeleton-fast"]').click();
+    let seen = false;
+    for (let i = 0; i < 14; i += 1) { if (await stage.count()) seen = true; await page.waitForTimeout(50); }
+    assert(!seen, "a 200ms load showed a skeleton");
+    // slow: nothing at 250ms, there by 700ms, gone after the load ends
+    await page.locator('[data-kit="skeleton-slow"]').click();
+    await page.waitForTimeout(250);
+    assert(await stage.count() === 0, "the skeleton showed before 400ms");
+    await page.waitForTimeout(450);
+    assert(await stage.count() === 1, "the skeleton had not shown by 700ms of a slow load");
+    const pulse = await page.locator('[data-kit="skeleton-stage"] [data-slot="skeleton"]').first().evaluate((el) => getComputedStyle(el).animationName);
+    assert(pulse === "pulse", `with motion allowed the blocks should pulse (animation-name ${pulse})`);
+    await page.waitForTimeout(1300);
+    assert(await stage.count() === 0, "the skeleton stayed after the load ended");
+    // every shape is there and says 正在读取 once per frame to a screen reader
+    const shapes = await page.locator('[data-kit="skeleton-shapes"] [data-slot="skeleton-frame"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-variant")));
+    assert(["rows", "card", "table", "messages"].every((v) => shapes.includes(v)), `shapes: ${shapes.join(",")}`);
+  } finally { await view.close(); }
+  // Reduced motion: no pulse at all.  (This view's own no-motion style is not injected so the page's CSS decides.)
+  view = await newView(ctx.browser, { width: 1440, theme: "light", label: "skeleton reduced", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    const name = await page.locator('[data-kit="skeleton-shapes"] [data-slot="skeleton"]').first().evaluate((el) => getComputedStyle(el).animationName);
+    assert(name === "none", `reduced motion: the skeleton should not animate (animation-name ${name})`);
+  } finally { await view.close(); }
+  // Route level: the next page's chunk is held back; before 400ms nothing covers the page, after it a skeleton does, and it leaves when the page arrives.
+  view = await newView(ctx.browser, { width: 1440, theme: "light", label: "route skeleton", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    await settle(page);
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    await view.context.route(/\/assets\/portfolio-[^/]*\.js$/, async (route) => { await gate; await route.continue(); });
+    await page.evaluate(() => { location.hash = "#/portfolio"; });
+    await page.waitForTimeout(250);
+    assert(await page.locator('[data-slot="page-pending"]').count() === 0, "a skeleton covered the page before 400ms");
+    await page.waitForTimeout(450);
+    assert(await page.locator('[data-slot="page-pending"] [data-variant="table"]').count() === 1, "no table skeleton after 700ms of waiting for the portfolio page");
+    assert(await page.locator(".agent-thread").count() === 1, "the page on screen was unmounted while waiting");
+    release();
+    await page.locator(".pf-positions").waitFor({ timeout: 10000 });
+    assert(await page.locator('[data-slot="page-pending"]').count() === 0, "the skeleton stayed after the page arrived");
+    // an ordinary (fast) navigation never shows one
+    let flashed = false;
+    await page.evaluate(() => { window.__pendingSeen = false; new MutationObserver(() => { if (document.querySelector('[data-slot="page-pending"]')) window.__pendingSeen = true; }).observe(document.body, { childList: true, subtree: true }); });
+    await page.evaluate(() => { location.hash = "#/routines"; });
+    await page.locator("main.personal-page h1").waitFor({ timeout: 10000 });
+    flashed = await page.evaluate(() => window.__pendingSeen);
+    assert(!flashed, "a quick page change flashed a skeleton");
+  } finally { await view.close(); }
+  return "200ms: never; 1.5s: after 400ms, gone at the end; blocks pulse only with motion allowed; a held-back page chunk is covered after 400ms by a table skeleton and a quick change shows none";
+}
+
+/** The three components that end up inside old pages look the same inside a data-legacy island as outside it (they carry data-slot, so the restore block leaves them alone). */
+async function stateComponentsInLegacy(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "states in legacy", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator('[data-probe="state-island"]').waitFor();
+    await settle(page, { pinTranscript: false });
+    const props = ["display", "marginTop", "marginBottom", "marginLeft", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textTransform", "color", "backgroundColor", "borderTopWidth", "borderTopStyle", "borderTopColor", "borderRadius", "listStyleType", "textDecorationLine", "cursor", "width", "height", "textAlign"];
+    const read = (probe) => page.evaluate(([name, list]) => {
+      const root = document.querySelector(`[data-probe="${name}"]`);
+      const pick = (el) => { const cs = getComputedStyle(el); return Object.fromEntries(list.map((prop) => [prop, cs[prop]])); };
+      const out = {};
+      const parts = { errorBar: '[data-slot="error-bar"]', errorText: '[data-slot="error-bar"] p', errorButton: '[data-slot="error-bar"] button', errorIcon: '[data-slot="error-bar"] svg', empty: '[data-slot="empty-state"]', emptyTitle: '[data-slot="empty-state"] h3', emptyButton: '[data-slot="empty-state"] button', stateful: '[data-slot="button"]' };
+      for (const [key, selector] of Object.entries(parts)) { const el = root.querySelector(selector); out[key] = el ? pick(el) : null; }
+      return out;
+    }, [probe, props]);
+    const outside = await read("state-outside"), inside = await read("state-island");
+    const bad = [];
+    for (const key of Object.keys(outside)) {
+      if (!outside[key] || !inside[key]) { bad.push(`${key}: missing in ${outside[key] ? "the island" : "the outside copy"}`); continue; }
+      for (const prop of props) if (outside[key][prop] !== inside[key][prop]) bad.push(`${key}.${prop}: outside ${outside[key][prop]} / inside the legacy island ${inside[key][prop]}`);
+    }
+    assert(!bad.length, bad.join("\n"));
+    return `ErrorBar, EmptyState and StatefulButton: ${Object.keys(outside).length} parts x ${props.length} properties identical inside data-legacy and outside`;
+  } finally { await view.close(); }
+}
+
+/** The long-task bar: stage and elapsed time, survives leaving the page, the end is a toast. */
+async function taskBar(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "task bar", unmatched, motion: true });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    await page.locator('[data-kit="task-start"]').click();
+    const row = page.locator('[data-slot="task-bar"] [data-slot="task-row"]');
+    await row.first().waitFor({ timeout: 3000 });
+    assert((await row.first().innerText()).includes("扫描 SEC") && (await row.first().innerText()).includes("读取申报列表"), `row: ${await row.first().innerText()}`);
+    // leave for a page inside the shell: the bar is still there, in the dock
+    await page.evaluate(() => { location.hash = "#/chat"; });
+    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    const dock = page.locator('[data-slot="task-dock"] [data-slot="task-row"]');
+    await dock.first().waitFor({ timeout: 3000 });
+    const first = await dock.first().locator("[data-elapsed]").innerText();
+    await page.waitForTimeout(2300);
+    const later = await dock.first().locator("[data-elapsed]").innerText();
+    assert(first !== later, `elapsed time did not move (${first} -> ${later})`);
+    assert((await dock.first().innerText()).includes("解析正文"), `the stage did not change: ${await dock.first().innerText()}`);
+    // the end: a toast, and the bar is gone
+    await page.locator("[data-sonner-toast]", { hasText: "SEC 扫描完成" }).waitFor({ timeout: 8000 });
+    assert(await page.locator('[data-slot="task-dock"]').count() === 0, "the dock stayed after the task ended");
+    return `0:0x -> later ${later}; stage 读取申报列表 -> 解析正文; left for #/chat and the bar followed; the end came as a toast`;
+  } finally { await view.close(); }
+}
+
+/** The sample page of the states answers: stateful button phases, the error bar's retry, the empty state's action, keyboard focus rings. */
+async function statesSamplePage(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "states sample", unmatched, motion: true });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    const rows = await page.locator("[data-kit-state]").evaluateAll((els) => els.map((el) => el.getAttribute("data-kit-state")));
+    assert(rows.join(",") === "1,2,3,4,5,6,7,8,9", `rows: ${rows.join(",")}`);
+    const ok = page.locator('[data-kit="stateful-ok"]');
+    await ok.click();
+    assert((await ok.getAttribute("data-phase")) === "loading" && (await ok.getAttribute("aria-busy")) === "true", "not loading after the click");
+    const width = await ok.evaluate((el) => el.getBoundingClientRect().width);
+    await page.waitForFunction(() => document.querySelector('[data-kit="stateful-ok"]').getAttribute("data-phase") === "success", null, { timeout: 4000 });
+    assert(Math.abs((await ok.evaluate((el) => el.getBoundingClientRect().width)) - width) < 0.5, "the button changed width between phases");
+    await page.waitForFunction(() => document.querySelector('[data-kit="stateful-ok"]').getAttribute("data-phase") === "idle", null, { timeout: 4000 });
+    const fail = page.locator('[data-kit="stateful-fail"]');
+    await fail.click();
+    await page.waitForFunction(() => document.querySelector('[data-kit="stateful-fail"]').getAttribute("data-phase") === "error", null, { timeout: 4000 });
+    const colours = await page.evaluate(() => { const css = (name) => { const probe = document.createElement("i"); probe.style.backgroundColor = `var(${name})`; document.body.appendChild(probe); const c = getComputedStyle(probe).backgroundColor; probe.remove(); return c; };
+      const chip = (phase) => { const el = document.querySelector(`[data-phase-static="${phase}"] span.rounded-full`); return el && getComputedStyle(el).backgroundColor; };
+      return { success: [chip("success"), css("--success")], error: [chip("error"), css("--danger")], up: css("--up"), down: css("--down") }; });
+    assert(colours.success[0] === colours.success[1] && colours.error[0] === colours.error[1], `phase colours are not the success / danger tokens: ${JSON.stringify(colours)}`);
+    await page.locator('[data-kit-state="3"] [data-slot="error-bar"] button').first().click();
+    assert((await page.locator('[data-kit="error-tries"]').innerText()).includes("1"), "retry did not call back");
+    assert(await page.locator('[data-kit-state="3"] [role="alert"]').count() === 2, "error bars are not role=alert");
+    const link = page.locator('[data-kit-state="3"] [data-slot="error-bar"] a').first();
+    assert((await link.innerText()).includes("去设置") && (await link.getAttribute("href")) === "#/settings/models", "去设置 link");
+    await page.locator('[data-kit-state="2"] button').click();
+    assert((await page.locator('[data-kit="empty-acted"]').count()) === 1, "the empty state's action did nothing");
+    // focus is visible on the sample's controls
+    for (const sel of ['[data-kit="stateful-ok"]', '[data-kit-state="3"] [data-slot="error-bar"] button', '[data-kit-state="2"] button']) {
+      await page.keyboard.press("Shift");   // the last input was the keyboard: :focus-visible applies
+      await page.locator(sel).first().focus();
+      const ring = await page.evaluate(() => { const cs = getComputedStyle(document.activeElement); return `${cs.boxShadow} ${cs.outlineStyle}`; });
+      assert(!/^none none$/.test(ring.trim()) && ring.trim() !== "none none", `no visible focus on ${sel}: ${ring}`);
+    }
+    return "nine rows; stateful button loading -> success / error without a width change (success / danger tokens); error bar retry + 去设置; empty action; focus rings";
+  } finally { await view.close(); }
+}
+
+const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["send a message: user line, streamed answer, composer reusable", sendMessageStreams],
   ["switch to another bot and back: URL changes, earlier answer kept", switchBotAndBack],
   ["browser back returns to the previous address", backButtonReturns],
   ["theme toggle flips data-theme on <html>", themeToggles],
+  ["legacy-redirects: old #addresses land on their new route (load and runtime), pages ready", legacyRedirects],
+  ["back-button-chain: chat > research > company > forecast > portfolio, four backs", backButtonChain],
+  ["deep-link-reload: the company in the address survives a reload; the picker moves the address", deepLinkReload],
+  ["client-actions: open_page, select_stock, queue events move the address", clientActions],
+  ["utility-legacy-collisions: no utility class defined by the build is also an old class name", utilityLegacyCollisions],
+  ["answer-links: old-form anchors in past answers open the new routes; back returns", answerLinks],
+  ["chunk-load-failure: a page that fails to load shows the notice inside the shell; reload recovers", chunkLoadFailure],
+  ["background-turn-survives-navigation: a turn sent before leaving is in the line on return", backgroundTurnSurvivesNavigation],
   ["thinking panel expands to the turn trace", thinkingPanelExpands],
-  ["#dev-kit: shadcn parts are identical with the legacy layer removed", kitNotPolluted],
-  ["#dev-kit: dialog, menu and select work from the keyboard and return focus", kitKeyboard],
-  ["#dev-kit/probe: restore applies only inside data-legacy, preflight everywhere else", legacyScope],
-  ["#dev-kit: the up/down switch swaps market colours only (new and old styles); success and error stay", updownSwitchesMarketOnly],
+  ["#/dev/kit: shadcn parts are identical with the legacy layer removed", kitNotPolluted],
+  ["#/dev/kit: dialog, menu and select work from the keyboard and return focus", kitKeyboard],
+  ["#/dev/kit/probe: restore applies only inside data-legacy, preflight everywhere else", legacyScope],
+  ["#/dev/kit: the up/down switch swaps market colours only (new and old styles); success and error stay", updownSwitchesMarketOnly],
   ["settings page: the up/down choice changes <html data-updown> and survives a reload", updownSettingPersists],
-  ["idle-avatars-no-raf: idle sidebar avatars run no frame loop; hover starts it, leaving stops it", idleAvatarsNoRaf],
+  ["idle-avatars-no-raf: sidebar avatars (idle or unread) run no frame loop; hover starts it, leaving stops it", idleAvatarsNoRaf],
+  ["no-horizontal-scroll-390: every page fits a 390px window", noHorizontalScroll390],
+  ["sidebar-collapse-persists: collapse to 56px, reload, still collapsed (and back)", sidebarCollapsePersists],
+  ["routines-badge-matches: the 任务 number = live proposals + open suggestions = what the 任务 page lists", routinesBadgeMatches],
+  ["mode-switch-single-entry: mode switch and sign-out only in the account menu", modeSwitchSingleEntry],
+  ["login-flow: wrong code shows its error under the field, right code returns to the page; first visit, signed-in visit, 只读浏览", loginFlow],
+  ["guest-readonly: read-only chat input is the sign-in notice; owner pages say 需要登录; no bots", guestReadonly],
+  ["keyboard-nav: Tab reaches every sidebar entry, Enter navigates, dialog and menu close on Esc and return focus", keyboardNav],
+  ["mobile-bar-and-more: five 44px items, no sidebar, 更多 lists the bots, 助手, 设置, account, theme", mobileBarAndMore],
+  ["legacy-restore-in-shell: old pages keep browser margins inside the new shell; the sidebar's tags are preflight", legacyRestoreInShell],
+  ["bot-row-marks: answering / waiting / unread / quiet rows are told apart", botRowMarks],
+  ["no-window-confirm: the nine former window.confirm places ask in the app; Esc / 取消 send nothing, a full hold sends one request", noWindowConfirm],
+  ["confirm-dialog-keyboard: focus starts on 取消, Esc cancels, holding Space or Enter confirms, reduced motion and bare clicks press twice", confirmDialogKeyboard],
+  ["command-menu-navigates: shortcut, company / hidden bot / page / recent chat each open; Esc closes and returns focus", commandMenuNavigates],
+  ["command-menu-english: group names, page names and the add offer are English in the English interface", commandMenuEnglish],
+  ["command-menu-add-watch: a valid code off the list offers 加入自选并打开 and the fake API receives the queue update", commandMenuAddWatch],
+  ["command-menu-mobile: 更多 has the search entry; the palette fits 390px and focus returns to 更多", commandMenuMobile],
+  ["toast-auto-dismiss: bottom right, about 2s, undo outlasts it and works by keyboard, above dialogs", toastAutoDismiss],
+  ["toast-above-dialog: a toast stays on top of an open dialog", toastAboveDialog],
+  ["offline-banner: failed requests light one banner at the top; 重试 with the backend back puts it out", offlineBanner],
+  ["offline-banner-quiet: application errors (a guest's 403s) never light the banner", offlineBannerQuiet],
+  ["skeleton-delay: no skeleton for a quick load, one after 400ms for a slow one, none pulsing under reduced motion, route-level cover", skeletonDelay],
+  ["state-components-in-legacy: ErrorBar, EmptyState, StatefulButton look the same inside a data-legacy island", stateComponentsInLegacy],
+  ["task-bar: stage and elapsed time, follows the reader to another page, the end is a toast", taskBar],
+  ["states-sample: the nine states at #/dev/kit/states work", statesSamplePage],
 ];
 
+const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;
+if (!selected.length) { console.error(`--only ${flags.only}: no check has that in its name`); process.exit(2); }
 const server = await startServer(flags.dist);
 const browser = await launch();
 let failed = 0;
-for (const [name, check] of CHECKS) {
+for (const [name, check] of selected) {
   try { const detail = await check({ browser, server }); console.log(`PASS  ${name}${detail ? `  (${detail})` : ""}`); }
   catch (error) { failed += 1; console.log(`FAIL  ${name}\n      ${String(error?.message ?? error).split("\n").join("\n      ")}`); }
 }
@@ -478,5 +1662,5 @@ await browser.close(); await server.close();
 const missing = summarizeUnmatched(unmatched);
 if (missing.length) { console.log(`\nunmatched API requests (${missing.length}):`); for (const item of missing) console.log(`  ${item.request}   <- ${item.pages.join(", ")}`); }
 else console.log("\nunmatched API requests: none");
-console.log(`\n${CHECKS.length - failed} passed, ${failed} failed`);
+console.log(`\n${selected.length - failed} passed, ${failed} failed`);
 process.exit(failed || (flags.strict && missing.length) ? 1 : 0);

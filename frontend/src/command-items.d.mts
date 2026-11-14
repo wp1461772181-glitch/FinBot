@@ -1,0 +1,23 @@
+export type PaletteRow = {
+  id: string;
+  kind: "company" | "bot" | "page" | "recent" | "add";
+  label: string;
+  path: string;
+  keywords?: string[];
+  note?: string;
+  area?: string;
+  symbol?: string;
+  hidden?: boolean;
+};
+export type PaletteGroup = { id: "company" | "bot" | "page" | "recent"; rows: PaletteRow[] };
+export const GROUP_ORDER: string[];
+export const RECENT_LIMIT: number;
+export function companyNames(symbol: string): string[];
+export function matchRank(query: string, text: string): number;
+export function bestRank(query: string, texts: string[]): number;
+export function pageItems(options: { personal: boolean; symbol?: string; t?: (text: string) => string }): PaletteRow[];
+export function botItems(bots: Array<{ id: string; name: string; title?: string; hidden?: boolean; is_default?: boolean }>, options?: { t?: (text: string) => string }): PaletteRow[];
+export function companyItems(symbols: string[], options?: { locale?: string }): PaletteRow[];
+export function recentItems(conversations: Array<{ id: string; title?: string }>, options?: { t?: (text: string) => string }): PaletteRow[];
+export function addCandidate(query: string, symbols: string[]): PaletteRow | null;
+export function arrange(query: string, sources: { companies?: PaletteRow[]; bots?: PaletteRow[]; pages?: PaletteRow[]; recents?: PaletteRow[]; symbols?: string[] }): PaletteGroup[];

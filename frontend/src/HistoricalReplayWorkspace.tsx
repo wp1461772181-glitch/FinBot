@@ -2,6 +2,8 @@ import { Tx, formatDate as formatLocalizedDate, getLocalePreference, translatePh
 import { hasDecisionProbabilities } from "./forecast-model.mjs";
 import { ResearchBriefView } from "./ResearchBriefView";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useNavigate } from "react-router";
+import { paths } from "./routes.mjs";
 import { ApiError, createV2HistoricalReplayJob, getV2Evaluations, getV2ForecastVersion, getV2Job } from "./api";
 import type { ResearchMaterialReference, V2EvaluationResponse, V2EvaluationVersion, V2ForecastJob, V2VersionDetail } from "./types";
 
@@ -135,6 +137,7 @@ export function HistoricalReplayWorkspace({ initialSymbol, symbols }: { initialS
 }
 
 function ReplayDetail({ result }: { result: ReplayResult }) {
+  const navigate = useNavigate();
   const { t } = useLocale();
   const { version, evaluation } = result;
   const probabilities = version.decision_probabilities ?? version.joint_probabilities ?? version.baseline_probabilities;
@@ -152,21 +155,9 @@ function ReplayDetail({ result }: { result: ReplayResult }) {
       modelStatus={version.model_status}
       modelManifest={version.model_manifest}
       evidenceManifest={version.evidence_version_manifest}
-      onOpenAnalysis={openReplayMaterial}
+      onOpenAnalysis={(source: ResearchMaterialReference) => navigate(paths.materials({ symbol: source.symbol, focus: source.source_id, type: source.source_type, analysis: source.analysis_id }))}
     />}
   </section>;
-}
-
-function openReplayMaterial(source: ResearchMaterialReference) {
-  try {
-    window.sessionStorage.setItem("market-evidence-agent:material-analysis-focus", JSON.stringify({
-      symbol: source.symbol,
-      source_type: source.source_type,
-      source_id: source.source_id,
-      analysis_id: source.analysis_id,
-    }));
-  } catch { /* The material library can still be opened without the focus hint. */ }
-  window.location.hash = "materials";
 }
 
 function defaultReplayDate() {

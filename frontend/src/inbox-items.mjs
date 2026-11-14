@@ -69,3 +69,10 @@ export function waitingCount(botId, proposals, confirms) {
   return proposals.filter((p) => p.bot_id === botId && !p.expired).length
     + confirms.filter((i) => i.status !== "done" && i.status !== "dismissed").length;
 }
+
+/** The one to-do number of the whole app (the 任务 entry of the sidebar and the tab bar): routine proposals still alive plus
+ *  the writes unattended runs suggested that are not done or dismissed.  Every bot's, so it is `waitingCount` without the bot filter. */
+export function routinesBadge(proposals, confirms) {
+  return (Array.isArray(proposals) ? proposals : []).filter((p) => !p.expired).length
+    + (Array.isArray(confirms) ? confirms : []).filter((i) => i.status !== "done" && i.status !== "dismissed").length;
+}

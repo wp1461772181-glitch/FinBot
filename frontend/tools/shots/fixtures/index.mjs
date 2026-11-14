@@ -1,5 +1,5 @@
 // Fixture entry: buildState() makes a fresh mutable state per browser context; registerRoutes() wires the handlers.
-import { BOT, CONVERSATION, WATCHLIST } from "./ids.mjs";
+import { BOT, CONVERSATION, HOLD_MARKER, LOGIN_CODE, WATCHLIST } from "./ids.mjs";
 import { prices } from "./common.mjs";
 import { botList, BOT_TEMPLATES, MODEL_CATALOG, MODEL_ROLES } from "./bots.mjs";
 import { buildChat, conversationSummaries, CONTEXT_USAGE, streamEvents } from "./chat.mjs";
@@ -21,6 +21,13 @@ export function registerRoutes(route, reply) {
   const own = (handler) => owner(handler, reply);
   const A = "/agent-chat";
 
+  // --- login (the code is a fixture, not a real one; any other code is refused like the real server does) -----------
+  route.post(`${A}/personal-login`, async ({ body }) => {
+    if (body?.code !== LOGIN_CODE) return reply.status(401, { detail: "invalid_login" });
+    const { FAKE_CREDENTIAL } = await import("../mock-api.mjs");
+    return { credential: FAKE_CREDENTIAL };
+  });
+
   // --- bots, models, queue -----------------------------------------------------------------------------
   route.get(`${A}/bots`, own(({ state }) => ({ bots: state.bots, default_bot_id: BOT.finbot })));
   route.get(`${A}/bot-templates`, own(() => BOT_TEMPLATES));
@@ -36,6 +43,8 @@ export function registerRoutes(route, reply) {
   route.get(`${A}/conversations/:id/context`, own(() => CONTEXT_USAGE));
   route.get(`${A}/context`, own(() => CONTEXT_USAGE));
   route.post(`${A}/stream`, own(({ body, state }) => {
+    // A message containing the hold marker is never answered: that bot's line stays "answering" (the sidebar's 回答中 mark).
+    if (String(body.message).includes(HOLD_MARKER)) return new Promise(() => {});
     const bot = body.bot_id ? state.bots.find((b) => b.id === body.bot_id) : null;
     const conversationId = bot?.conversation_id ?? body.conversation_id ?? CONVERSATION.finbot;
     const events = streamEvents({ conversationId, message: body.message, botId: bot?.id });
@@ -81,6 +90,17 @@ export function registerRoutes(route, reply) {
   route.get(`${A}/tasks/runs`, own(({ query }) => ({ runs: RUNS.filter((r) => !query.get("bot_id") || TASKS.find((t) => t.id === r.task_id)?.bot_id === query.get("bot_id")) })));
   route.get(`${A}/tasks/proposals`, own(() => ({ proposals: PROPOSALS })));
   route.get(`${A}/inbox`, own(({ state, query }) => ({ items: state.inbox.filter((i) => (!query.get("section") || i.section === query.get("section")) && (!query.get("bot_id") || i.bot_id === query.get("bot_id"))) })));
+
+  // --- the writes the in-app confirmations guard (P2.3): the deletes and the unbind.  Each answers ok; the portfolio one also drops the row. ---
+  route.delete(`${A}/portfolio/transactions/:id`, own(({ params, state }) => { state.portfolio.transactions = state.portfolio.transactions.filter((t) => t.id !== params.id); return { ok: true, status: "deleted" }; }));
+  route.delete(`${A}/skills/:id`, own(() => ({ ok: true })));
+  route.delete(`${A}/profile/:id`, own(() => ({ ok: true })));
+  route.delete(`${A}/news-sources/:id`, own(() => ({ ok: true })));
+  route.delete(`${A}/tasks/:id`, own(() => ({ ok: true })));
+  route.delete(`${A}/bots/:id`, own(() => ({ ok: true })));
+  route.delete(`${A}/bots/:id/telegram`, own(() => ({ ...BOT_TELEGRAM, configured: false, has_token: false, bound: false, shared: true })));
+  route.delete(`${A}/model-catalog/:name`, own(() => ({ ok: true })));
+  route.post(`${A}/telegram/unbind`, own(() => ({ ...TELEGRAM, bound: false, chat_id: null })));
 
   // --- assistant: news sources, skills, memory, settings cards -----------------------------------------
   route.get(`${A}/news-sources`, own(() => NEWS));

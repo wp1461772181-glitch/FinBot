@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { copySkill, deleteSkill, exportSkill, importSkill, listSkills, previewSkillImport, setSkillEnabled, createSkill, updateSkill, type Skill, type SkillImportPreview, type SkillTool } from "./api";
 import { toolLabel } from "./agent-tool-labels.mjs";
 import { translatePhrase, useLocale } from "./i18n";
-import { skillFromHash, skillGroups } from "./skill-items.mjs";
+import { useNavigate } from "react-router";
+import { skillGroups } from "./skill-items.mjs";
+import { paths } from "./routes.mjs";
+import { confirm } from "@/components/state/confirm";
 
 // The 技能 page: recipes (steps + allowed tools), never code.  Cards grouped into drafts, built-ins and the owner's own;
 // an editor for new / edited / drafted skills; Markdown import (preview first) and export.  Owner-only /agent-chat API.
@@ -22,20 +25,21 @@ function ToolChips({ names }: { names: string[] }) {
   return <ul className="skill-tools" aria-label={t("允许用的工具")}>{names.map(n => <li key={n} className="personal-badge">{t(toolLabel(n))}</li>)}</ul>;
 }
 
-export function SkillsPage() {
+// `skillId` is the skill an address (/assistant/skills/<id>, which a draft links to) asks to open.
+export function SkillsPage({ skillId = null }: { skillId?: string | null }) {
   const { t } = useLocale();
+  const navigate = useNavigate();
+  const hashId = skillId;
   const [skills, setSkills] = useState<Skill[] | null>(null), [tools, setTools] = useState<SkillTool[]>([]);
   const [error, setError] = useState(""), [status, setStatus] = useState(""), [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null), [editorError, setEditorError] = useState("");
   const [importOpen, setImportOpen] = useState(false), [markdown, setMarkdown] = useState(""), [preview, setPreview] = useState<SkillImportPreview | null>(null), [importError, setImportError] = useState("");
-  const [hashId, setHashId] = useState(() => skillFromHash(window.location.hash));
   const fileInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback((signal?: AbortSignal) => listSkills(signal).then(data => { setSkills(data.skills); setTools(data.tools); setError(""); })
     .catch(e => { if (!signal?.aborted) setError(message(e, "技能暂时无法读取。")); }), []);
   useEffect(() => { const ctrl = new AbortController(); void load(ctrl.signal); return () => ctrl.abort(); }, [load]);
-  useEffect(() => { const read = () => setHashId(skillFromHash(window.location.hash)); window.addEventListener("hashchange", read); return () => window.removeEventListener("hashchange", read); }, []);
-  // A #skills/<id> link (drafts link here) opens that skill's editor once the list is in.
+  // A /assistant/skills/<id> link (drafts link here) opens that skill's editor once the list is in.
   useEffect(() => {
     if (!hashId || !skills) return;
     const target = skills.find(s => s.id === hashId);
@@ -44,7 +48,7 @@ export function SkillsPage() {
   }, [hashId, skills]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const groups = skillGroups(skills ?? []);
-  function closeEditor() { setEditor(null); setEditorError(""); if (skillFromHash(window.location.hash)) window.location.hash = "skills"; }
+  function closeEditor() { setEditor(null); setEditorError(""); if (skillId) navigate(paths.assistant("skills")); }
   function openEditor(next: Editor) { setEditor(next); setEditorError(""); setImportOpen(false); }
 
   async function act(id: string, work: () => Promise<unknown>, done?: string) {
@@ -52,7 +56,7 @@ export function SkillsPage() {
     try { await work(); await load(); if (done) setStatus(t(done)); } catch (e) { setError(message(e, "操作失败，请重试。")); } finally { setBusy(null); }
   }
   async function remove(skill: Skill) {
-    if (!window.confirm(`${t("删除")} ${skill.name}？`)) return;
+    if (!(await confirm({ title: `${t("删除")} ${skill.name}？`, description: t("删除后这个技能不能恢复。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     await act(skill.id, () => deleteSkill(skill.id), "已删除。");
   }
   async function download(skill: Skill) {

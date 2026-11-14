@@ -1,4 +1,5 @@
 import { useLocale } from "./i18n";
+import { appHref } from "./legacy-routes.mjs";
 import { NOT_RECORDED } from "./forecast-model.mjs";
 import type { JudgmentRowModel } from "./forecast-home.mjs";
 import { Parts, formatTime } from "./ForecastShared";
@@ -10,7 +11,7 @@ import { Parts, formatTime } from "./ForecastShared";
 export function JudgmentRow({ model, mark, withForecastNote }: { model: JudgmentRowModel; mark: string | null; withForecastNote: boolean }) {
   const { t } = useLocale();
   return <li className="forecast-row judgment-row">
-    <a className="forecast-row-link" href={model.hash}>
+    <a className="forecast-row-link" href={appHref(model.hash)}>
       <span className="forecast-row-head">
         <strong>{model.symbol}</strong>
         {mark && <span className="tag">{t(mark)}</span>}

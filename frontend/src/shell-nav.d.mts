@@ -1,0 +1,13 @@
+import type { WorkspaceSection } from "./workspace-sections.mjs";
+export type Area = "chat" | "research" | "portfolio" | "routines" | "assistant" | "settings";
+export type NavSubItem = { id: string; label: string; owner?: boolean; sections?: WorkspaceSection[] };
+export const AREAS: Area[];
+export const RESEARCH_ITEMS: NavSubItem[];
+export const ASSISTANT_ITEMS: NavSubItem[];
+export const SETTINGS_ITEMS: NavSubItem[];
+export const GUEST_ASSISTANT_ITEMS: NavSubItem[];
+export function areaPath(area: Area, symbol?: string | null, itemId?: string | null): string;
+export function areaItems(area: Area, options?: { personal?: boolean }): NavSubItem[];
+export function activeArea(path: string): Area;
+export function activeItem(path: string): string | null;
+export function needsLogin(path: string): boolean;
