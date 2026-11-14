@@ -7,7 +7,7 @@
 //   B   token text/background pairs below WCAG contrast (4.5 body, 3 secondary).
 import { readFileSync } from "node:fs";
 
-export const SHEETS = ["styles.css", "chat.css", "theme.css", "grok.css"];
+export const SHEETS = ["styles/legacy/styles.css", "styles/legacy/chat.css", "styles/legacy/theme.css", "styles/legacy/grok.css"];
 
 /** Flat rule list: {selectors, decls, media}.  Good enough for our hand-written and minified sheets. */
 export function parseCss(text) {

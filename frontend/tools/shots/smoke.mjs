@@ -122,6 +122,125 @@ async function thinkingPanelExpands(ctx) {
   } finally { await view.close(); }
 }
 
+/** Legacy selectors that may match shadcn parts because the match is known to change nothing.  Keep this list short and justified. */
+const SELECTOR_MATCH_ALLOWED = new Set([
+  "*", // box-sizing: border-box, the same value preflight sets
+]);
+
+/** The shadcn parts on #dev-kit must look the same with the whole `legacy` layer deleted from the page. */
+async function kitNotPolluted(ctx) {
+  const states = [
+    ["closed", async () => {}],
+    ["dialog open", async (page) => { await page.locator('[data-kit="dialog-trigger"]').click(); await page.locator('[data-slot="dialog-content"]').waitFor(); }],
+    ["menu open", async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); }],
+    ["select open", async (page) => { await page.locator('[data-kit="select-trigger"]').click(); await page.locator('[data-slot="select-content"]').waitFor(); }],
+    ["tooltip open", async (page) => { await page.locator('[data-kit="tooltip-trigger"]').focus(); await page.locator('[data-slot="tooltip-content"]').first().waitFor(); }],
+  ];
+  const problems = [];
+  let parts = 0, props = 0;
+  const inheritedSeen = new Map();
+  const matched = new Map();
+  for (const theme of ["light", "dark"]) {
+    for (const [state, open] of states) {
+      const view = await newView(ctx.browser, { width: 1440, theme, label: `kit-${state}`, unmatched });
+      try {
+        const { page } = view;
+        await page.goto(`${ctx.server.url}#dev-kit`, { waitUntil: "load" });
+        await waitReady(page, PAGES.find((p) => p.name === "dev-kit"));
+        await settle(page);
+        await open(page);
+        await settle(page, { pinTranscript: false });
+        const result = await page.evaluate(() => {
+          // Custom properties are definitions, not styling; every value a component really uses shows up in a normal property.
+          const snapshot = (elements) => elements.map((el) => { const cs = getComputedStyle(el); const o = {}; for (const name of cs) if (!name.startsWith("--")) o[name] = cs.getPropertyValue(name); return o; });
+          const parts = [...document.querySelectorAll("[data-slot], [data-slot] *")];
+          const parents = parts.map((el) => el.parentElement);
+          const slotOf = (el) => el.getAttribute("data-slot") ?? `${el.tagName.toLowerCase()} in ${el.closest("[data-slot]").getAttribute("data-slot")}`;
+          const label = (el, i) => `${slotOf(el)}#${i}`;
+          const roots = [document.body, document.documentElement];
+          const before = snapshot(parts), parentsBefore = snapshot(parents), rootsBefore = snapshot(roots);
+          // Selector scan: every style rule inside the legacy layer whose selector matches a shadcn part.  This also catches
+          // a rule that sets the same value the part would inherit anyway, which the computed-style comparison cannot see.
+          const matches = {};
+          const scan = (rules) => {
+            for (const rule of rules) {
+              if (rule.cssRules && !(rule instanceof CSSStyleRule)) { scan(rule.cssRules); continue; }
+              if (!(rule instanceof CSSStyleRule) || rule.style.length === 0) continue;
+              const hit = new Set();
+              try { parts.forEach((el) => { if (el.matches(rule.selectorText)) hit.add(slotOf(el)); }); } catch { /* pseudo-element or unsupported selector */ }
+              if (hit.size) matches[`${rule.selectorText} { ${[...rule.style].filter((n) => !n.startsWith("--")).join(", ") || "(custom properties only)"} }`] = [...hit].join(",");
+            }
+          };
+          for (const sheet of document.styleSheets) for (const rule of sheet.cssRules) if (rule instanceof CSSLayerBlockRule && rule.name === "legacy") scan(rule.cssRules);
+          let removed = 0;
+          for (const sheet of document.styleSheets) {
+            for (let i = sheet.cssRules.length - 1; i >= 0; i--) {
+              const rule = sheet.cssRules[i];
+              if (rule instanceof CSSLayerBlockRule && rule.name === "legacy") { sheet.deleteRule(i); removed += 1; }
+            }
+          }
+          const after = snapshot(parts), parentsAfter = snapshot(parents), rootsAfter = snapshot(roots);
+          // A difference is a leak unless the part merely inherits it: same value as its parent both before and after
+          // (text defaults the old sheets set on <html>/<body>, e.g. font-family).  Those are listed, not failed.
+          const diffs = [], inherited = {};
+          parts.forEach((el, i) => {
+            for (const name of Object.keys(before[i])) {
+              if (before[i][name] === after[i][name]) continue;
+              // Resolved currentColor (stroke, outline-color ...): a copy of `color`, which is checked on its own line.
+              if (name !== "color" && before[i][name] === before[i].color && after[i][name] === after[i].color) continue;
+              if (before[i][name] === parentsBefore[i][name] && after[i][name] === parentsAfter[i][name]) { inherited[name] = (inherited[name] ?? 0) + 1; continue; }
+              diffs.push(`${label(el, i)} ${name}: ${before[i][name]} -> ${after[i][name]}`);
+            }
+          });
+          const control = roots.map((_, i) => Object.keys(rootsBefore[i]).filter((name) => rootsBefore[i][name] !== rootsAfter[i][name]).length).reduce((a, b) => a + b, 0);
+          return { removed, matches, count: parts.length, slots: [...new Set(parts.map((el) => el.getAttribute("data-slot")).filter(Boolean))], diffs, inherited, control, nprops: Object.keys(before[0] ?? {}).length };
+        });
+        assert(result.removed >= 1, `${theme}/${state}: no @layer legacy block found to remove`);
+        assert(result.control > 0, `${theme}/${state}: removing the legacy layer changed nothing on <body>/<html>, so the check proves nothing`);
+        assert(result.count > 0, `${theme}/${state}: no [data-slot] elements on the page`);
+        parts += result.count; props += result.count * result.nprops;
+        for (const slot of ["button", "input", "checkbox", "switch", "select-trigger"]) assert(result.slots.includes(slot), `${theme}/${state}: missing shadcn part ${slot}`);
+        if (state === "dialog open") assert(result.slots.includes("dialog-content"), "dialog content missing");
+        if (state === "menu open") assert(result.slots.includes("dropdown-menu-content"), "menu content missing");
+        if (state === "select open") assert(result.slots.includes("select-content"), "select content missing");
+        if (state === "tooltip open") assert(result.slots.includes("tooltip-content"), "tooltip content missing");
+        for (const [name, n] of Object.entries(result.inherited)) inheritedSeen.set(name, (inheritedSeen.get(name) ?? 0) + n);
+        for (const line of result.diffs) problems.push(`[${theme}/${state}] ${line}`);
+        for (const [rule, slots] of Object.entries(result.matches)) if (!SELECTOR_MATCH_ALLOWED.has(rule.replace(/\{.*$/, "").trim())) matched.set(rule, slots);
+      } finally { await view.close(); }
+    }
+  }
+  if (matched.size) { for (const [rule, slots] of matched) problems.push(`legacy rule matches a shadcn part: ${rule}   <- ${slots}`); }
+  if (problems.length) { for (const line of problems.slice(0, Number(process.env.SMOKE_DIFF_LINES ?? 60))) console.log(`      ${line}`); throw new Error(`${problems.length} computed-style differences with the legacy layer removed`); }
+  const inheritedNote = [...inheritedSeen.keys()].sort().join(", ");
+  return `${parts} part snapshots (light+dark, 5 states), ${props} property values compared, ${SELECTOR_MATCH_ALLOWED.size} allowlisted selector(s); only inherited from <html>/<body>, not leaks: ${inheritedNote || "none"}`;
+}
+
+/** Keyboard only: the dev-kit overlays open from the keyboard, Esc closes them and focus returns to the trigger. */
+async function kitKeyboard(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "kit-keyboard", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#dev-kit`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "dev-kit"));
+    await settle(page);
+    const focusedKit = () => page.evaluate(() => document.activeElement?.getAttribute("data-kit"));
+    const cases = [["dialog-trigger", "dialog-content", "Enter"], ["menu-trigger", "dropdown-menu-content", "Enter"], ["select-trigger", "select-content", "Space"]];
+    for (const [trigger, content, key] of cases) {
+      await page.locator(`[data-kit="${trigger}"]`).focus();
+      assert((await focusedKit()) === trigger, `${trigger}: could not take focus`);
+      const ring = await page.evaluate(() => getComputedStyle(document.activeElement).boxShadow);
+      assert(ring && ring !== "none", `${trigger}: no visible focus ring on keyboard focus (box-shadow: ${ring})`);
+      await page.keyboard.press(key);
+      await page.locator(`[data-slot="${content}"]`).waitFor({ timeout: 5000 });
+      await page.keyboard.press("Escape");
+      await page.locator(`[data-slot="${content}"]`).waitFor({ state: "detached", timeout: 5000 });
+      assert((await focusedKit()) === trigger, `${trigger}: focus did not return to the trigger after Esc (now ${await focusedKit()})`);
+    }
+    return "dialog, menu, select: keyboard open, Esc close, focus returns to trigger, focus ring visible";
+  } finally { await view.close(); }
+}
+
 /** name -> check.  Add new checks by writing a function above and registering it here. */
 export const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
@@ -130,6 +249,8 @@ export const CHECKS = [
   ["browser back returns to the previous address", backButtonReturns],
   ["theme toggle flips data-theme on <html>", themeToggles],
   ["thinking panel expands to the turn trace", thinkingPanelExpands],
+  ["#dev-kit: shadcn parts are identical with the legacy layer removed", kitNotPolluted],
+  ["#dev-kit: dialog, menu and select work from the keyboard and return focus", kitKeyboard],
 ];
 
 const server = await startServer(flags.dist);

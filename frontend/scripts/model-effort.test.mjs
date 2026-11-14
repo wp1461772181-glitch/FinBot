@@ -4,7 +4,7 @@ import test from "node:test";
 import { EFFORT_LEVELS, badgeText, effectiveEntry, effortChoices, effortLabel, effortSupport, modelChoices, noEffort, patchFor } from "../src/model-effort.mjs";
 
 const tsx = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
-const css = readFileSync(new URL("../src/chat.css", import.meta.url), "utf8");
+const css = readFileSync(new URL("../src/styles/legacy/chat.css", import.meta.url), "utf8");
 const catalog = {
   default: "alpha",
   models: [

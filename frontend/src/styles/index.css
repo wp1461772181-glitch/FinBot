@@ -1,0 +1,29 @@
+/* The single style entry (main.tsx imports only this file).
+   Layer order, lowest to highest priority.  `legacy` sits above Tailwind's reset (`base`) so the old pages keep
+   their look, and below `components` / `utilities` so new components always win over the old global selectors.
+   Declared first so it wins over the order Tailwind's own `@layer` statement would set. */
+@layer theme, base, legacy, components, utilities;
+
+/* Tailwind only scans the new code.  Automatic detection would also read the old pages' source (and any stale
+   dist/), and every English word there that happens to be a utility name (`running`, `table`, `block` ...) would
+   become a utility class in the layer above `legacy` and hijack old elements with the same class.
+   New source folders (pages, shell ...) must be listed here when they are created. */
+@import "tailwindcss" source(none);
+@source "../components";
+@source "../dev";
+@import "tw-animate-css";
+
+@import "./fonts.css";
+@import "./tokens.css";
+@import "./theme.css";
+@import "./bots.css";
+
+/* Old sheets, in the order main.tsx used to import them. */
+@import "./legacy/restore.css" layer(legacy);
+@import "./legacy/styles.css" layer(legacy);
+@import "./legacy/chat.css" layer(legacy);
+@import "./legacy/theme.css" layer(legacy);
+@import "./legacy/grok.css" layer(legacy);
+
+/* Dark mode follows the data-theme attribute theme.mjs writes on <html>; no second mechanism. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));

@@ -1,0 +1,93 @@
+/* Browser-default restore block (first rule set of the legacy layer).
+
+   Tailwind's preflight (layer `base`) zeroes things the old pages never wrote down and so got from the browser:
+   margins and padding, borders, heading sizes, link colour, list markers, form-control looks, <svg> display ...
+   Everything below puts the browser value back with `revert`, so an old page renders exactly as it did without
+   preflight.  Preflight itself stays in, because the shadcn components rely on it.
+
+   Rules to keep it safe:
+   - Every selector sits inside :where(), so it has zero specificity and any rule in the old sheets (which come
+     after this file) still wins, exactly as the browser default would have lost to them.
+   - Anything that is, or sits inside, a shadcn part (an element with data-slot) is excluded: those components
+     must keep the preflight reset, plain <span>/<svg> internals included.  The #dev-kit smoke check fails if
+     this block or any other legacy rule reaches them.
+     P2 note: an old page mounted inside a data-slot container (e.g. the shadcn sidebar inset) falls under this
+     exclusion too, so the shell must wrap old pages in a marker and the exclusion must skip that marker.
+   - Drop each rule when the last old page that needs it is gone (P9 deletes the whole file). */
+
+/* Box model: old pages with a bare <h1>, <p>, <ul>, <button>, <input>, <fieldset>, <figure> ... (nearly all pages). */
+:where(*:not([data-slot], [data-slot] *)),
+:where(*:not([data-slot], [data-slot] *))::before,
+:where(*:not([data-slot], [data-slot] *))::after,
+:where(*:not([data-slot], [data-slot] *))::file-selector-button {
+  margin: revert;
+  padding: revert;
+  border: revert;
+}
+
+/* Page-level text defaults: preflight sets line-height 1.5 on <html>, which every old page inherited as `normal`. */
+:where(html) {
+  line-height: normal;
+  tab-size: 8;
+  -webkit-text-size-adjust: auto;
+  -webkit-tap-highlight-color: revert;
+}
+
+/* Headings without their own size / weight (overview cards, research brief, settings sections). */
+:where(:is(h1, h2, h3, h4, h5, h6):not([data-slot], [data-slot] *)) {
+  font-size: revert;
+  font-weight: revert;
+}
+
+/* Links without their own colour / underline (inline citation links, text buttons rendered as <a>). */
+:where(:is(a):not([data-slot], [data-slot] *)) {
+  color: revert;
+  text-decoration: revert;
+}
+
+/* <small> inside cards and rows. */
+:where(:is(small):not([data-slot], [data-slot] *)) {
+  font-size: revert;
+}
+
+/* Lists: ordered citation lists, markdown lists, setting lists. */
+:where(:is(ol, ul, menu):not([data-slot], [data-slot] *)) {
+  list-style: revert;
+}
+
+/* Inline images and SVG icons: preflight makes them block-level and middle-aligned; the old pages sit them inline. */
+:where(:is(img, svg, video, canvas, audio, iframe, embed, object):not([data-slot], [data-slot] *)) {
+  display: revert;
+  vertical-align: revert;
+}
+:where(:is(img, video):not([data-slot], [data-slot] *)) {
+  max-width: revert;
+  height: revert;
+}
+
+/* Form controls the old sheets do not fully restyle (selects, textareas, plain buttons, checkboxes, options). */
+:where(:is(button, input, select, optgroup, textarea):not([data-slot], [data-slot] *)),
+:where(:is(button, input, select, optgroup, textarea):not([data-slot], [data-slot] *))::file-selector-button {
+  font: revert;
+  letter-spacing: revert;
+  color: revert;
+  border-radius: revert;
+  background-color: revert;
+  opacity: revert;
+}
+:where(:is(button, input:where([type="button"], [type="reset"], [type="submit"])):not([data-slot], [data-slot] *)) {
+  appearance: revert;
+}
+:where(:is(textarea):not([data-slot], [data-slot] *)) {
+  resize: revert;
+}
+:where(:is(option):not([data-slot], [data-slot] *)) {
+  font: revert;
+  letter-spacing: revert;
+  color: revert;
+  background-color: revert;
+}
+:where(:is(input, textarea):not([data-slot], [data-slot] *))::placeholder {
+  color: revert;
+  opacity: revert;
+}

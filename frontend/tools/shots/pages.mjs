@@ -38,6 +38,13 @@ export const PAGES = [
   { name: "skills", hash: "#skills", ready: ".skill-group" },
   { name: "memory", hash: "#memory", ready: "main.personal-page h1" },
   { name: "settings", hash: "#admin", ready: ".agent-admin h2" },
+  // Developer sample page of the shadcn components (only in builds with VITE_DEV_KIT=1; fe-check.sh shots/smoke set it).
+  // The first shows everything closed; the other two open the Dialog and the DropdownMenu.
+  { name: "dev-kit", hash: "#dev-kit", ready: "[data-kit-page]" },
+  { name: "dev-kit-dialog", hash: "#dev-kit", ready: "[data-kit-page]",
+    before: async (page) => { await page.locator('[data-kit="dialog-trigger"]').click(); await page.locator('[data-slot="dialog-content"]').waitFor(); } },
+  { name: "dev-kit-menu", hash: "#dev-kit", ready: "[data-kit-page]",
+    before: async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); } },
 ];
 
 /** Wait for a page's ready condition, then for any loading text to disappear. */
