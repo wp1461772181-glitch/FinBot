@@ -1,1 +1,17 @@
 /* Per-bot tokens (--bot-hue, --bot-hue-soft, --bot-tempo), set on the chat container.  Empty on purpose: P1.2 / P4 fill it. */
+
+/* Idle small avatars (sidebar rows, lists, cards) are a still frame; the only life they have is this breath.
+ * BloubAvatar adds the class while the avatar rests with no frame loop and removes it when the loop takes over.
+ * Transform only (no layout, no paint), 4 s period, about 3% amplitude; each instance gets its own animation-delay.
+ * Plain class on purpose: Tailwind does not scan src/ root files, and nothing here belongs in a legacy layer. */
+@keyframes bot-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+}
+.bot-breathe {
+  transform-origin: 50% 50%;
+  animation: bot-breathe 4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bot-breathe { animation: none; }
+}

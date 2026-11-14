@@ -15,7 +15,7 @@ export async function launch() {
 }
 
 /** Runs in every document before the app: seeded Math.random, preset storage, animations off. */
-function initScript({ theme, locale, credential, seed }) {
+function initScript({ theme, locale, credential, seed, motion }) {
   let state = seed >>> 0;
   Math.random = () => { // mulberry32
     state = (state + 0x6D2B79F5) | 0;
@@ -37,6 +37,7 @@ function initScript({ theme, locale, credential, seed }) {
     const style = document.createElement("style"); style.id = "shots-no-motion"; style.textContent = css;
     (document.head ?? document.documentElement).appendChild(style);
   };
+  if (motion) return; // a view that measures real animation keeps the page's own CSS motion
   if (document.documentElement) inject();
   else new MutationObserver((_, observer) => { if (document.documentElement) { inject(); observer.disconnect(); } }).observe(document, { childList: true });
   document.addEventListener("DOMContentLoaded", inject);
@@ -44,18 +45,20 @@ function initScript({ theme, locale, credential, seed }) {
 
 /**
  * A fresh, deterministic browser context.
- * opts: { width, height?, theme, locale, identity: "personal"|"none", label, unmatched, seed? }
+ * opts: { width, height?, theme, locale, identity: "personal"|"none", label, unmatched, seed?, motion?, fixtureState? }
+ * `motion: true` keeps real motion (no reduced-motion preference, no animation-killing style) for checks that measure it.
+ * `fixtureState` replaces the default fake backend state (see fixtures/index.mjs buildState).
  */
 export async function newView(browser, opts) {
-  const { width, theme = "light", locale = "zh-CN", identity = "personal", label, unmatched, seed = 20261113 } = opts;
+  const { width, theme = "light", locale = "zh-CN", identity = "personal", label, unmatched, seed = 20261113, motion = false, fixtureState } = opts;
   const height = opts.height ?? HEIGHTS[width] ?? 900;
   const context = await browser.newContext({
     viewport: { width, height }, deviceScaleFactor: 1, locale, timezoneId: "Asia/Shanghai",
-    reducedMotion: "reduce", colorScheme: theme, serviceWorkers: "block", acceptDownloads: false,
+    reducedMotion: motion ? "no-preference" : "reduce", colorScheme: theme, serviceWorkers: "block", acceptDownloads: false,
   });
-  await context.addInitScript(initScript, { theme, locale, credential: identity === "personal" ? FAKE_CREDENTIAL : null, seed });
+  await context.addInitScript(initScript, { theme, locale, credential: identity === "personal" ? FAKE_CREDENTIAL : null, seed, motion });
   await context.clock.setFixedTime(FIXED_TIME);
-  const mock = await installMockApi(context, { label, unmatched });
+  const mock = await installMockApi(context, { label, unmatched, ...(fixtureState ? { fixtureState } : {}) });
   const page = await context.newPage();
   const problems = { console: [], pageErrors: [] };
   page.on("console", (message) => { if (message.type() === "error") problems.console.push({ text: message.text().slice(0, 300), url: message.location()?.url ?? "" }); });

@@ -6,6 +6,7 @@ import { launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
 import { PAGES, waitReady } from "./pages.mjs";
 import { BOT } from "./fixtures/ids.mjs";
+import { buildState } from "./fixtures/index.mjs";
 
 const { flags } = parseArgs(process.argv.slice(2), { booleans: ["strict"] });
 if (!flags.dist) { console.error("usage: node smoke.mjs --dist <build dir> [--strict]"); process.exit(2); }
@@ -292,6 +293,74 @@ async function legacyScope(ctx) {
   } finally { await view.close(); }
 }
 
+/**
+ * Idle sidebar avatars must not drive a frame loop.  A real-motion view (no reduced-motion preference) opens the
+ * portfolio page, which has no live avatar; every bot is idle (unread cleared in the fixture), the pointer rests
+ * away from the rail.  window.requestAnimationFrame is wrapped to count calls: still -> ~0, hovering a row -> the
+ * loop runs, leaving it (after the gaze has settled) -> ~0 again.  Before the fix a still page costs ~60 calls/s.
+ */
+async function idleAvatarsNoRaf(ctx) {
+  const state = buildState();
+  for (const bot of state.bots) { bot.unread = 0; bot.pending = 0; }
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "idle-avatars", unmatched, motion: true, fixtureState: state });
+  try {
+    const { page } = view;
+    await view.context.addInitScript(() => {
+      window.__rafCalls = 0;
+      const raw = window.requestAnimationFrame.bind(window);
+      window.requestAnimationFrame = (callback) => { window.__rafCalls += 1; return raw(callback); };
+    });
+    await page.goto(`${ctx.server.url}#portfolio`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "portfolio"));
+    await settle(page);
+    const open = await page.locator(".bot-rail").first().isVisible().catch(() => false);
+    if (!open) await page.locator("button.nav-menu-trigger").click();
+    await page.locator(".bot-rail .bot-row").first().waitFor({ state: "visible", timeout: 10000 });
+    // The drawer slides in (real motion is on in this view): hover only once the row is on screen.
+    await page.waitForFunction(() => { const r = document.querySelector(".bot-rail .bot-row")?.getBoundingClientRect(); return Boolean(r) && r.left >= 0 && r.right <= window.innerWidth; }, null, { timeout: 10000 });
+    assert((await page.locator(".bot-rail .bloub-avatar").count()) >= 5, "expected at least 5 bloub avatars in the rail");
+    const rafOver = async (ms) => { const before = await page.evaluate(() => window.__rafCalls); await page.waitForTimeout(ms); return (await page.evaluate(() => window.__rafCalls)) - before; };
+    const bad = [], seen = {};
+    await page.mouse.move(1100, 500);
+    await page.waitForTimeout(1000);
+    seen.still = await rafOver(3000);
+    if (seen.still > 5) bad.push(`still page: ${seen.still} requestAnimationFrame calls in 3 s (limit 5)`);
+    const row = page.locator(".bot-rail .bot-row:has(.bloub-avatar)").nth(1); // a bot row (the rail also has plain navigation rows)
+    await row.hover();
+    const box = await row.boundingBox();
+    await page.mouse.move(box.x + box.width * 0.4, box.y + box.height / 2); await page.waitForTimeout(150);
+    await page.mouse.move(box.x + box.width * 0.5, box.y + box.height / 2 + 2);
+    seen.hover = await rafOver(1000);
+    if (seen.hover < 20) bad.push(`hovering a bot row: only ${seen.hover} calls in 1 s, the eye-follow loop is not running`);
+    await page.mouse.move(1100, 500);
+    seen.release = await rafOver(500); // the eyes ease back from the pointer: the loop must not stop the instant the pointer leaves
+    if (seen.release < 10) bad.push(`right after leaving the row: only ${seen.release} calls in 0.5 s, the gaze release was cut short`);
+    await page.waitForTimeout(1500);
+    seen.after = await rafOver(2000);
+    if (seen.after > 5) bad.push(`after leaving the row and 2 s of settling: ${seen.after} calls in 2 s (limit 5)`);
+    if (bad.length) throw new Error(bad.join("\n"));
+
+    // An unread bot (notify) keeps its animation: the unmodified fixture has NewsBot unread.
+    const unread = await newView(ctx.browser, { width: 1440, theme: "light", label: "unread-avatar", unmatched, motion: true });
+    try {
+      await unread.context.addInitScript(() => {
+        window.__rafCalls = 0;
+        const raw = window.requestAnimationFrame.bind(window);
+        window.requestAnimationFrame = (callback) => { window.__rafCalls += 1; return raw(callback); };
+      });
+      await unread.page.goto(`${ctx.server.url}#portfolio`, { waitUntil: "load" });
+      await waitReady(unread.page, PAGES.find((p) => p.name === "portfolio"));
+      await settle(unread.page);
+      await unread.page.waitForTimeout(500);
+      const before = await unread.page.evaluate(() => window.__rafCalls);
+      await unread.page.waitForTimeout(1000);
+      seen.notify = (await unread.page.evaluate(() => window.__rafCalls)) - before;
+    } finally { await unread.close(); }
+    assert(seen.notify >= 20, `an unread bot should keep animating, got ${seen.notify} calls in 1 s`);
+    return `still ${seen.still}/3 s, hover ${seen.hover}/1 s, leaving ${seen.release}/0.5 s then settled ${seen.after}/2 s; unread bot ${seen.notify}/1 s`;
+  } finally { await view.close(); }
+}
+
 /** name -> check.  Add new checks by writing a function above and registering it here. */
 export const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
@@ -303,6 +372,7 @@ export const CHECKS = [
   ["#dev-kit: shadcn parts are identical with the legacy layer removed", kitNotPolluted],
   ["#dev-kit: dialog, menu and select work from the keyboard and return focus", kitKeyboard],
   ["#dev-kit/probe: restore applies only inside data-legacy, preflight everywhere else", legacyScope],
+  ["idle-avatars-no-raf: idle sidebar avatars run no frame loop; hover starts it, leaving stops it", idleAvatarsNoRaf],
 ];
 
 const server = await startServer(flags.dist);

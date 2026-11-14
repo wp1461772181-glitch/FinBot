@@ -203,3 +203,116 @@ test("a quiet turn start (remounting onto a running turn) skips the attention be
   d.send({ type: "phase", phase: "answer" }, 5);
   assert.equal(d.read(5.1).state, "thinking");
 });
+
+// --- A0: waiting for you and partial success are not a success -------------------------------------------------
+const CARD = { request_id: "0b9f7f64-6b1f-4a40-9a55-0d2f4d3b7a10", reason: "write_confirmation", choices: [{ label: "确认", value: "confirm:1" }] };
+const lastOf = (status, extra = {}) => [{ role: "user", content: "q" }, { role: "assistant", content: "a", status, ...extra }];
+/** Run a whole turn that ends with `outcome` at t = 10 and report every state it shows afterwards. */
+function statesAfter(outcome) {
+  const d = createDirector({ now: 0 });
+  d.send({ type: "turn-start" }, 0);
+  d.send({ type: "phase", phase: "answer" }, 3);
+  d.send({ type: "turn-end", outcome }, 10);
+  const seen = [];
+  for (let t = 10; t <= 20; t += 0.05) seen.push(d.read(t));
+  return seen;
+}
+
+test("turnTransition: waiting statuses and an unanswered card end a turn as 'waiting'", () => {
+  for (const status of ["waiting_for_input", "waiting_for_user"]) {
+    assert.deepEqual(turnTransition("sending", "ready", lastOf(status)), { type: "turn-end", outcome: "waiting" }, status);
+  }
+  assert.deepEqual(turnTransition("sending", "ready", lastOf("waiting_for_input", { clarification: CARD })), { type: "turn-end", outcome: "waiting" });
+  // a card on a message whose status is not a waiting one still needs an answer
+  assert.deepEqual(turnTransition("sending", "ready", lastOf("complete", { clarification: CARD })), { type: "turn-end", outcome: "waiting" });
+  assert.deepEqual(turnTransition("sending", "ready", lastOf(undefined, { clarification: CARD })), { type: "turn-end", outcome: "waiting" });
+});
+
+test("turnTransition: partially_succeeded is 'partial'; succeeded / complete stay 'done'", () => {
+  assert.deepEqual(turnTransition("sending", "ready", lastOf("partially_succeeded")), { type: "turn-end", outcome: "partial" });
+  for (const status of ["succeeded", "complete", undefined]) {
+    assert.deepEqual(turnTransition("sending", "ready", lastOf(status)), { type: "turn-end", outcome: "done" }, String(status));
+  }
+});
+
+test("turnTransition precedence: error > cancel > waiting > partial > done", () => {
+  assert.equal(turnTransition("sending", "ready", lastOf("failed", { clarification: CARD })).outcome, "error"); // failed beats a card
+  assert.equal(turnTransition("sending", "error", lastOf("waiting_for_input", { clarification: CARD })).outcome, "error"); // chat error beats everything
+  assert.equal(turnTransition("sending", "ready", lastOf("cancelled", { clarification: CARD })).outcome, "cancel"); // cancelled beats a card
+  assert.equal(turnTransition("sending", "ready", lastOf("cancelled")).outcome, "cancel");
+  assert.equal(turnTransition("sending", "ready", lastOf("partially_succeeded", { clarification: CARD })).outcome, "waiting"); // waiting beats partial
+  assert.equal(turnTransition("sending", "ready", [{ role: "user" }]).outcome, "cancel");
+});
+
+test("a turn that ends waiting never winks, at any moment afterwards", () => {
+  const seen = statesAfter("waiting");
+  assert.ok(seen.every(v => v.state !== "wink"), "no wink");
+  assert.equal(seen.at(-1).state, "idle");
+  assert.equal(seen.at(-1).layer, "idle");
+});
+
+test("end to end through turnTransition: waiting_for_input / waiting_for_user / an unanswered card never produce a wink", () => {
+  const cases = [lastOf("waiting_for_input"), lastOf("waiting_for_user"), lastOf("complete", { clarification: CARD })];
+  for (const messages of cases) {
+    const d = createDirector({ now: 0 });
+    d.send(turnTransition("ready", "sending", []), 0);
+    d.send({ type: "phase", phase: "answer" }, 3);
+    const end = turnTransition("sending", "ready", messages);
+    assert.equal(end.outcome, "waiting");
+    d.send(end, 10);
+    for (let t = 10; t <= 20; t += 0.05) assert.notEqual(d.read(t).state, "wink", `t=${t}`);
+    assert.equal(d.read(11).ended, "waiting");
+  }
+});
+
+test("a turn that ends partially_succeeded never winks and is readable as ended 'partial' for T.PARTIAL", () => {
+  const d = createDirector({ now: 0 });
+  d.send({ type: "turn-start" }, 0);
+  d.send({ type: "turn-end", outcome: turnTransition("sending", "ready", lastOf("partially_succeeded")).outcome }, 10);
+  for (let t = 10; t <= 20; t += 0.05) assert.notEqual(d.read(t).state, "wink", `t=${t}`);
+  assert.equal(d.read(10.1).ended, "partial");
+  assert.equal(d.read(10 + T.PARTIAL - 0.05).ended, "partial");
+  assert.equal(d.read(10 + T.PARTIAL + 0.05).ended, null);
+});
+
+test("waiting and partial fall back to the next priority: unread shows notify, otherwise idle", () => {
+  for (const outcome of ["waiting", "partial"]) {
+    const d = createDirector({ now: 0 });
+    d.send({ type: "unread", value: true }, 1);
+    d.send({ type: "turn-start" }, 2);
+    d.send({ type: "turn-end", outcome }, 8);
+    assert.equal(d.read(8 + T.DWELL + 0.05).state, "notify", outcome);
+    d.send({ type: "unread", value: false }, 9);
+    assert.equal(d.read(9 + T.DWELL + 0.05).state, "idle", outcome);
+  }
+});
+
+test("'ended: waiting' lasts until the next turn starts; other outcomes leave ended null", () => {
+  const d = createDirector({ now: 0 });
+  d.send({ type: "turn-start" }, 0);
+  d.send({ type: "turn-end", outcome: "waiting" }, 5);
+  assert.equal(d.read(6).ended, "waiting");
+  assert.equal(d.read(500).ended, "waiting");
+  d.send({ type: "turn-start" }, 501);
+  assert.equal(d.read(501.1).ended, null);
+  for (const outcome of ["done", "error", "cancel"]) {
+    const e = createDirector({ now: 0 });
+    e.send({ type: "turn-start" }, 0);
+    e.send({ type: "turn-end", outcome }, 5);
+    assert.equal(e.read(5.1).ended, null, outcome);
+  }
+});
+
+test("regression: succeeded / complete still wink for T.SUCCESS, then idle", () => {
+  for (const status of ["succeeded", "complete"]) {
+    const d = createDirector({ now: 0 });
+    d.send(turnTransition("ready", "sending", []), 0);
+    const end = turnTransition("sending", "ready", lastOf(status));
+    assert.equal(end.outcome, "done");
+    d.send(end, 10);
+    assert.equal(d.read(10.7).state, "wink");
+    assert.equal(d.read(10 + T.SUCCESS - 0.05).state, "wink");
+    assert.equal(d.read(10 + T.SUCCESS + 0.01).state, "idle");
+    assert.equal(d.read(10.7).ended, null);
+  }
+});
