@@ -235,9 +235,60 @@ async function kitKeyboard(ctx) {
       await page.locator(`[data-slot="${content}"]`).waitFor({ timeout: 5000 });
       await page.keyboard.press("Escape");
       await page.locator(`[data-slot="${content}"]`).waitFor({ state: "detached", timeout: 5000 });
+      await page.waitForFunction((name) => document.activeElement?.getAttribute("data-kit") === name, trigger, { timeout: 3000 }).catch(() => {});
       assert((await focusedKit()) === trigger, `${trigger}: focus did not return to the trigger after Esc (now ${await focusedKit()})`);
     }
     return "dialog, menu, select: keyboard open, Esc close, focus returns to trigger, focus ring visible";
+  } finally { await view.close(); }
+}
+
+/**
+ * Where the old-browser-default restore applies.  #dev-kit/probe has the same bare tags twice:
+ *  - "outside": no data-legacy above them -> plain preflight (margins 0, no list markers, bare button, inherited link colour ...);
+ *  - "island": a data-legacy subtree inside a data-slot container (the P2 shell case) -> browser defaults, as the old pages had.
+ */
+async function legacyScope(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "kit-scope", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#dev-kit/probe`, { waitUntil: "load" });
+    await page.locator('[data-probe="island"]').waitFor({ timeout: 10000 });
+    await settle(page, { pinTranscript: false });
+    const read = (which) => page.evaluate((name) => {
+      const root = document.querySelector(`[data-probe="${name}"]`);
+      const get = (tag) => { const el = root.querySelector(tag); const cs = getComputedStyle(el); const parent = getComputedStyle(el.parentElement); return { cs, parent }; };
+      const out = {};
+      let x = get("h2"); out.h2 = { marginBottom: x.cs.marginBottom, fontSize: x.cs.fontSize, parentFontSize: x.parent.fontSize, fontWeight: x.cs.fontWeight, parentFontWeight: x.parent.fontWeight };
+      x = get("p"); out.p = { marginBottom: x.cs.marginBottom };
+      x = get("ul"); out.ul = { listStyleType: x.cs.listStyleType, paddingLeft: x.cs.paddingLeft, marginTop: x.cs.marginTop };
+      x = get("button"); out.button = { borderTopWidth: x.cs.borderTopWidth, backgroundColor: x.cs.backgroundColor, cursor: x.cs.cursor, paddingTop: x.cs.paddingTop };
+      x = get("a"); out.a = { color: x.cs.color, parentColor: x.parent.color, textDecorationLine: x.cs.textDecorationLine };
+      x = get("svg"); out.svg = { display: x.cs.display };
+      return out;
+    }, which);
+    const bad = [];
+    const expect = (label, ok, got) => { if (!ok) bad.push(`${label}  (got ${JSON.stringify(got)})`); };
+    const o = await read("outside"), i = await read("island");
+    expect("outside <h2> margin-bottom is 0", o.h2.marginBottom === "0px", o.h2.marginBottom);
+    expect("outside <h2> inherits font-size", o.h2.fontSize === o.h2.parentFontSize, [o.h2.fontSize, o.h2.parentFontSize]);
+    expect("outside <h2> inherits font-weight", o.h2.fontWeight === o.h2.parentFontWeight, [o.h2.fontWeight, o.h2.parentFontWeight]);
+    expect("outside <p> margin-bottom is 0", o.p.marginBottom === "0px", o.p.marginBottom);
+    expect("outside <ul> has no list marker", o.ul.listStyleType === "none", o.ul.listStyleType);
+    expect("outside <ul> has no padding or margin", o.ul.paddingLeft === "0px" && o.ul.marginTop === "0px", o.ul);
+    expect("outside <button> has no border, no padding and a transparent background", o.button.borderTopWidth === "0px" && o.button.paddingTop === "0px" && o.button.backgroundColor === "rgba(0, 0, 0, 0)", o.button);
+    expect("outside <button> does not get the old cursor:pointer", o.button.cursor !== "pointer", o.button.cursor);
+    expect("outside <a> inherits colour and has no underline", o.a.color === o.a.parentColor && o.a.textDecorationLine === "none", o.a);
+    expect("outside <svg> is display:block", o.svg.display === "block", o.svg.display);
+    expect("island <h2> has the browser margin", parseFloat(i.h2.marginBottom) > 0, i.h2.marginBottom);
+    expect("island <h2> is larger than its parent and heavier (the old sheet sets weight 500, the browser 700)", parseFloat(i.h2.fontSize) > parseFloat(i.h2.parentFontSize) && Number(i.h2.fontWeight) > Number(i.h2.parentFontWeight), i.h2);
+    expect("island <p> has the browser margin", parseFloat(i.p.marginBottom) > 0, i.p.marginBottom);
+    expect("island <ul> has bullets and indent", i.ul.listStyleType === "disc" && parseFloat(i.ul.paddingLeft) > 0, i.ul);
+    expect("island <button> has the browser border and background", parseFloat(i.button.borderTopWidth) > 0 && i.button.backgroundColor !== "rgba(0, 0, 0, 0)", i.button);
+    expect("island <button> has the old cursor:pointer", i.button.cursor === "pointer", i.button.cursor);
+    expect("island <a> is the browser link blue and underlined", i.a.color === "rgb(0, 0, 238)" && i.a.textDecorationLine === "underline", i.a);
+    expect("island <svg> is inline", i.svg.display === "inline", i.svg.display);
+    if (bad.length) throw new Error(bad.join("\n"));
+    return "outside the marker: plain preflight; marker inside a data-slot container: browser defaults restored";
   } finally { await view.close(); }
 }
 
@@ -251,6 +302,7 @@ export const CHECKS = [
   ["thinking panel expands to the turn trace", thinkingPanelExpands],
   ["#dev-kit: shadcn parts are identical with the legacy layer removed", kitNotPolluted],
   ["#dev-kit: dialog, menu and select work from the keyboard and return focus", kitKeyboard],
+  ["#dev-kit/probe: restore applies only inside data-legacy, preflight everywhere else", legacyScope],
 ];
 
 const server = await startServer(flags.dist);

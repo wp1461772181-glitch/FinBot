@@ -25,6 +25,35 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+// Bare tags with no class: the smoke check reads their computed style to see which reset they get.
+function BareTags() {
+  return (
+    <>
+      <h2>Heading</h2>
+      <p>Paragraph</p>
+      <ul><li>Item</li></ul>
+      <button type="button">Button</button>
+      <a href="#dev-kit/probe">Link</a>
+      <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><rect width="8" height="8" /></svg>
+    </>
+  );
+}
+
+// Scope probes, shown only on #dev-kit/probe.  "outside": no data-legacy above, so plain preflight must apply.
+// "island": a data-legacy subtree inside a shadcn-style container (what the P2 shell does), so the old
+// browser-default restore must apply even though a data-slot element sits above it.
+function ScopeProbes() {
+  return (
+    <section className="space-y-3" data-kit-section="Scope probes">
+      <h2 className="text-sm font-semibold text-muted-foreground">Scope probes</h2>
+      <div data-probe="outside" className="flex flex-col items-start gap-2 text-sm"><BareTags /></div>
+      <div data-slot="probe-container">
+        <div data-legacy="" data-probe="island"><BareTags /></div>
+      </div>
+    </section>
+  );
+}
+
 export default function KitPage() {
   const [checked, setChecked] = useState(true);
   const [menuFlag, setMenuFlag] = useState(true);
@@ -113,6 +142,8 @@ export default function KitPage() {
         <Section title="Icons (lucide-react)">
           {ICONS.map((Icon, index) => <Icon key={index} className="size-5" aria-hidden />)}
         </Section>
+
+        {window.location.hash === "#dev-kit/probe" && <ScopeProbes />}
       </main>
     </TooltipProvider>
   );

@@ -7,9 +7,11 @@
 /* Tailwind only scans the new code.  Automatic detection would also read the old pages' source (and any stale
    dist/), and every English word there that happens to be a utility name (`running`, `table`, `block` ...) would
    become a utility class in the layer above `legacy` and hijack old elements with the same class.
-   New source folders (pages, shell ...) must be listed here when they are created. */
+   Convention: new code lives only in src/components/ (shadcn parts), src/app/ (shell, pages, hooks) and src/dev/;
+   old files stay in the src/ root until they are redone.  A new top-level source folder needs a line here. */
 @import "tailwindcss" source(none);
 @source "../components";
+@source "../app";
 @source "../dev";
 @import "tw-animate-css";
 
