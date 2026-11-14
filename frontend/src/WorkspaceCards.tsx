@@ -10,6 +10,8 @@ import type { V2ModelStatus } from "./types";
 import { judgmentLink, waitingCount } from "./inbox-items.mjs";
 import { formatMoney, formatPercent, pnlTone } from "./portfolio-items.mjs";
 import { materialHref } from "./material-focus.mjs";
+import { appHref } from "./legacy-routes.mjs";
+import { hashHref, paths } from "./routes.mjs";
 
 type Load<T> = { kind: "loading" } | { kind: "ready"; value: T } | { kind: "error" };
 const cache = new Map<string, { at: number; value: unknown }>();
@@ -78,7 +80,7 @@ function ForecastCard({ symbol }: { symbol: string }) {
       <p><strong>{t("决策模型")}</strong> {v.model ?? t(NOT_RECORDED)} · {t("目标日")} {v.targetDate ?? t(NOT_RECORDED)}</p>
       {v.probabilities ? <ProbabilityStrip probabilities={v.probabilities} label={t("三类概率")} compact /> : <p className="ws-muted">{modelStatusText(v.modelStatus as V2ModelStatus)}</p>}
       <small className="ws-muted">{t("最新版本")} v{v.versionNo} · {t("决策日")} {day(v.decisionAt)}</small>
-      <a className="text-button" href={v.hash}>{t("打开这份预测")} →</a></>}</Body>
+      <a className="text-button" href={appHref(v.hash)}>{t("打开这份预测")} →</a></>}</Body>
     <small className="ws-muted ws-fine">{t("模型意见，未经校准，仅供参考。")}</small>
   </>;
 }
@@ -89,9 +91,9 @@ function MaterialsCard({ symbol }: { symbol: string }) {
   const fresh = (value: string | null) => Boolean(value && Date.now() - new Date(value).valueOf() < 24 * 3600 * 1000);
   return <>
     <Body state={state} empty={v => !v.items.length}>{v => <ul className="ws-list">{v.items.map(item =>
-      <li key={`${item.source_type}:${item.source_id}`}><a href={materialHref(symbol, item)}>{item.title}</a>
+      <li key={`${item.source_type}:${item.source_id}`}><a href={appHref(materialHref(symbol, item))}>{item.title}</a>
         {fresh(item.observed_at) && <span className="ws-new">{t("新")}</span>}<small className="ws-muted"> {day(item.published_at)}</small></li>)}</ul>}</Body>
-    <a className="text-button" href={`#materials?symbol=${encodeURIComponent(symbol)}`}>{t("打开资料库")} →</a>
+    <a className="text-button" href={hashHref(paths.materials({ symbol }))}>{t("打开资料库")} →</a>
   </>;
 }
 
@@ -101,7 +103,7 @@ function FilingsCard({ symbol }: { symbol: string }) {
   return <>
     <Body state={state} empty={v => !v.filings.length}>{v => <ul className="ws-list">{[...v.filings].sort((a, b) => b.filed_at.localeCompare(a.filed_at)).slice(0, 5).map(f =>
       <li key={f.accession_number}><a href={f.source_url} target="_blank" rel="noreferrer">{f.form}</a><small className="ws-muted"> {day(f.filed_at)}</small></li>)}</ul>}</Body>
-    <a className="text-button" href={`#materials?symbol=${encodeURIComponent(symbol)}`}>{t("去资料库扫描新申报")} →</a>
+    <a className="text-button" href={hashHref(paths.materials({ symbol }))}>{t("去资料库扫描新申报")} →</a>
   </>;
 }
 
@@ -114,11 +116,11 @@ function RoutinesCard({ bot }: { bot: Bot }) {
       waiting: waitingCount(bot.id, proposals, confirms) })));
   return <>
     <Body state={state} empty={v => !v.tasks.length && !v.waiting}>{v => <>
-      {v.waiting > 0 && <p><a href="#routines">{v.waiting} {t("项等你确认")} →</a></p>}
+      {v.waiting > 0 && <p><a href={hashHref(paths.routines())}>{v.waiting} {t("项等你确认")} →</a></p>}
       <ul className="ws-list">{v.tasks.slice(0, 5).map(task =>
         <li key={task.id}><span>{task.name}{task.enabled ? "" : ` · ${t("已停用")}`}</span>
           <small className="ws-muted"> {t("下次")} {day(task.next_run_at)}{task.last_status_label ? ` · ${t("上次")} ${t(task.last_status_label)}` : ""}</small></li>)}</ul></>}</Body>
-    <a className="text-button" href="#routines">{t("管理例行任务")} →</a>
+    <a className="text-button" href={hashHref(paths.routines())}>{t("管理例行任务")} →</a>
   </>;
 }
 
@@ -138,7 +140,7 @@ function PortfolioCard() {
       <ul className="ws-list">{[...v.positions].sort((a, b) => Number(b.weight_pct ?? 0) - Number(a.weight_pct ?? 0)).slice(0, 5).map(p =>
         <li key={p.symbol}><span>{p.symbol}</span><small className="ws-muted"> {t("仓位占比")} {formatPercent(p.weight_pct)} · <span className={`pf-${pnlTone(p.floating_pnl)}`}>{formatMoney(p.floating_pnl, { signed: true })}</span></small></li>)}</ul>
       {v.price_date && <small className="ws-muted">{t("行情数据日期")} {v.price_date}</small>}</>}</Body>
-    <a className="text-button" href="#portfolio">{t("管理持仓")} →</a>
+    <a className="text-button" href={hashHref(paths.portfolio())}>{t("管理持仓")} →</a>
   </>;
 }
 

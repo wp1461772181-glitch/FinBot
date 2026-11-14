@@ -1,4 +1,5 @@
 import { useLocale } from "./i18n";
+import { appHref } from "./legacy-routes.mjs";
 import { NOT_RECORDED } from "./forecast-model.mjs";
 import { attentionLabel } from "./forecast-home.mjs";
 import type { AttentionTier, FormalRowModel } from "./forecast-home.mjs";
@@ -13,7 +14,7 @@ export function FormalForecastRow({ model, tier, withJudgmentNote }: { model: Fo
   const { t } = useLocale();
   const why = attentionLabel(tier);
   return <li className={`forecast-row formal-row${tier !== 5 ? ` is-tier-${tier}` : ""}`}>
-    <a className="forecast-row-link" href={model.hash}>
+    <a className="forecast-row-link" href={appHref(model.hash)}>
       <span className="forecast-row-head">
         <strong>{model.symbol}</strong>
         {model.mark && <span className="tag">{t(model.mark)}</span>}

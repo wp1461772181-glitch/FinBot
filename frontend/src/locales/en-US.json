@@ -2044,5 +2044,8 @@
   "引用的 8-K 申报仅保存了部分文件（仅附件 99.1 或仅主表），该细节无法在库内核对": "The cited 8-K filing stored only part of the submission (only Exhibit 99.1 or only the primary form), so this detail cannot be verified against the stored text",
   "涨跌配色": "Up/down colours",
   "绿涨红跌": "Green up, red down",
-  "红涨绿跌": "Red up, green down"
+  "红涨绿跌": "Red up, green down",
+  "页面加载失败": "This page failed to load",
+  "网络中断，或站点刚刚更新过。重新加载后再试。": "The network dropped, or the site was just updated. Reload and try again.",
+  "重新加载": "Reload"
 }

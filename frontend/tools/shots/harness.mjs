@@ -77,6 +77,17 @@ export async function settle(page, { pinTranscript = true } = {}) {
     await document.fonts?.ready;
     const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     await frame();
+    // A native <select> lays its inner text out once, when it is created; if the web font lands after that, Chrome
+    // does not lay the text out again and it sits 1px off, depending on load timing.  Force one layout now that the
+    // fonts are ready, so the picture no longer depends on when the page mounted the control.
+    const selects = [...document.querySelectorAll("select")];
+    if (selects.length) {
+      const shown = selects.map((el) => el.style.display);
+      selects.forEach((el) => { el.style.display = "none"; });
+      void document.body.offsetHeight;
+      selects.forEach((el, i) => { el.style.display = shown[i]; });
+      await frame();
+    }
     if (pin) { document.querySelectorAll(".agent-transcript").forEach((el) => { el.scrollTop = el.scrollHeight; }); await frame(); }
   }, pinTranscript);
 }

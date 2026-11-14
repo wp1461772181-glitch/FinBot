@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Tx, translatePhrase, useLocale } from "./i18n";
+import { hashHref, paths } from "./routes.mjs";
 import { createV2ForecastJob, getEarningsJudgments, getModelRoles, getPortfolio, getV2Forecasts, getV2Job, getV2MonitorStatus } from "./api";
 import type { EarningsJudgment, V2ForecastList, V2JobAlert } from "./api";
 import type { V2ForecastJob, V2MonitorStatus } from "./types";
@@ -124,7 +125,7 @@ export function ForecastHome({ queue, personal, symbolFilter, onClearSymbol }: {
       </div>}
     </header>
 
-    {problem && <p className="v2-notice" role="status">{t("监控状态：")}{problem} · <a href="#forecast/monitor">{t("查看监控状态")}</a></p>}
+    {problem && <p className="v2-notice" role="status">{t("监控状态：")}{problem} · <a href={hashHref(paths.monitor())}>{t("查看监控状态")}</a></p>}
     {activeJob && <JobStatus job={activeJob} />}
     {actionError && <p className="v2-notice error" role="alert">{actionError}</p>}
     {alerts.length > 0 && <ul className="forecast-alerts" aria-label={t("预测任务提示")}>
@@ -163,7 +164,7 @@ export function ForecastHome({ queue, personal, symbolFilter, onClearSymbol }: {
     </section>}
 
     <footer className="forecast-home-links">
-      <a href="#evaluation">{<Tx text={"模型成绩"} />}</a> · <a href="#replay">{<Tx text={"历史回放"} />}</a> · <a href="#forecast/monitor">{<Tx text={"监控状态"} />}</a>
+      <a href={hashHref(paths.scores())}>{<Tx text={"模型成绩"} />}</a> · <a href={hashHref(paths.replay())}>{<Tx text={"历史回放"} />}</a> · <a href={hashHref(paths.monitor())}>{<Tx text={"监控状态"} />}</a>
     </footer>
   </section>;
 }

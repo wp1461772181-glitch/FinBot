@@ -3,13 +3,15 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { waitingCount } from "../src/inbox-items.mjs";
 import { CARDS, cleanLayout } from "../src/workspace-cards.mjs";
+import { legacyHashToPath } from "../src/legacy-routes.mjs";
 
 // The 例行任务 hub (2026-10-28, Levi: 「待你确认」没有图标，改成例行任务).  No component renderer here, so the wiring
-// is checked in the source the build compiles.
+// is checked in the source the build compiles.  (P2.1: the shell moved to Shell.tsx, the rail wiring to app/WorkspaceLayout.tsx,
+// the page switch to app/router.tsx, and #briefs' alias to legacy-routes.mjs; the assertions say the same things.)
 const src = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
 test("the rail row, the mobile tab and the page are 例行任务 with a drawn icon, not 待你确认", () => {
-  const rail = src("BotPages.tsx"), app = src("App.tsx"), page = src("PersonalPages.tsx");
+  const rail = src("BotPages.tsx"), app = src("Shell.tsx"), page = src("PersonalPages.tsx");
   assert.match(rail, /<RoutineIcon \/><\/span><span className="bot-row-text"><strong>\{t\("例行任务"\)\}/);
   assert.match(rail, /export function RoutineIcon\(\)[\s\S]*?<svg/);
   assert.match(app, /\{ id: "routines", label: t\("例行任务"\), icon: <RoutineIcon \/>/);
@@ -19,7 +21,8 @@ test("the rail row, the mobile tab and the page are 例行任务 with a drawn ic
 });
 
 test("#briefs still opens the page, which lists every routine, the proposals and the run suggestions", () => {
-  assert.match(src("App.tsx"), /briefs: "routines"/);
+  assert.match(src("legacy-routes.mjs"), /case "briefs":/);
+  assert.equal(legacyHashToPath("#briefs"), "/routines");
   const page = src("PersonalPages.tsx");
   assert.match(page, /listTaskProposals\(signal\)/);
   assert.match(page, /<TaskManager bots=\{bots\}/);          // every bot's routines: no botId
@@ -42,11 +45,12 @@ test("the card counts this bot's live proposals and open suggestions", () => {
 });
 
 test("新闻源 is a rail row right under 例行任务, opens its own page, and the 例行任务 page no longer carries it", () => {
-  const rail = src("BotPages.tsx"), app = src("App.tsx"), page = src("PersonalPages.tsx");
+  const rail = src("BotPages.tsx"), app = src("Shell.tsx"), layout = src("app/WorkspaceLayout.tsx"), router = src("app/router.tsx"), page = src("PersonalPages.tsx");
   assert.match(rail, /onClick=\{onRoutines\}[\s\S]*?onClick=\{onNews\}[\s\S]*?<strong>\{t\("新闻源"\)\}<\/strong>/);
-  assert.match(app, /newsActive=\{activeSection === "news"\} onNews=\{\(\) => \{ close\(\); navigate\("news"\); \}\}/);
-  assert.match(app, /if \(activeSection === "news"\) return <Shell \{\.\.\.shellProps\}><NewsSourcesPage \/><\/Shell>;/);
-  assert.match(app, /"routines", "news", "skills"/);
+  assert.match(layout, /newsActive=\{activeSection === "news"\} onNews=\{\(\) => \{ close\(\); go\("news"\); \}\}/);
+  assert.match(router, /path: PATTERNS\.assistantNews, \.\.\.page\(\(\) => import\("\.\/pages\/personal"\), "NewsRoute"\)/);
+  assert.match(src("app/pages/personal.tsx"), /export function NewsRoute\(\) \{ return <NewsSourcesPage \/>; \}/);
+  assert.equal(legacyHashToPath("#news"), "/assistant/news");   // was: "news" in App.tsx's list of known hash sections
   const routines = page.slice(page.indexOf("export function RoutinesPage"), page.indexOf("const HEALTH_LABELS"));
   assert.doesNotMatch(routines, /NewsSourcesPanel|getNewsSourcesConfig/);
   const newsPage = page.slice(page.indexOf("export function NewsSourcesPage"), page.indexOf("const KIND_LABELS"));

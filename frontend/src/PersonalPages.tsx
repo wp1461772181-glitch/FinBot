@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router";
 import { useOpenConversation } from "./AgentChatPanel";
 import { confirmInboxItem, confirmProfileItem, createProfileItem, deleteNewsSource, deleteProfileItem, dryRunNewsSource, getChatMode, getNewsSourcesConfig, listBots, listInbox, listProfileItems, listRecall, listTaskProposals, mintInboxCard, repairNewsSource, saveNewsPushSettings, setInboxStatus, setNewsSourceEnabled, updateProfileItem, upsertNewsSource, type Bot, type InboxItem, type NewsDryRunResult, type NewsSource, type NewsSourceInput, type ProfileBot, type ProfileItem, type RecallItem, type TaskProposal } from "./api";
 import { NewsIcon, RoutineIcon } from "./BotPages";
 import { TaskManager } from "./BotRoutines";
 import { useLocale } from "./i18n";
-export { SkillsPage } from "./SkillsPage";
+import { hashHref, paths } from "./routes.mjs";
 import { inboxOrder } from "./inbox-items.mjs";
 import { layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers, recallGroups, recallKindLabel } from "./memory-items.mjs";
 
@@ -100,7 +101,7 @@ export function RoutinesPage({ bots, onNavigate, onChanged }: { bots: Bot[]; onN
           <button type="button" className="secondary-action" disabled={busy === item.id || item.confirmation_state === "skipped"} onClick={() => void inlineConfirm(item, "skip")}>跳过</button>
           <button type="button" className="secondary-action" disabled={busy === item.id} onClick={() => void inlineConfirm(item, "later")}>稍后</button>
           <button type="button" className="secondary-action" disabled={busy === item.id} onClick={() => void mintCard(item)}>{t("生成确认卡")}</button>
-          {item.conversation_id && <a className="secondary-action" href={`#agent/${item.conversation_id}`}>{t("打开对话")}</a>}
+          {item.conversation_id && <a className="secondary-action" href={hashHref(paths.chatConversation(item.conversation_id))}>{t("打开对话")}</a>}
           <button type="button" className="secondary-action" disabled={busy === item.id} onClick={() => void dismiss(item.id)}>{t("忽略")}</button>
         </div>
       </li>)}</ul>
@@ -481,6 +482,7 @@ function ProfilePanel() {
 
 function RecallPanel({ onNavigate }: { onNavigate: Go }) {
   const { t } = useLocale();
+  const navigate = useNavigate();
   const openConversation = useOpenConversation();
   const [query, setQuery] = useState(""), [submitted, setSubmitted] = useState(""), [items, setItems] = useState<RecallItem[] | null>(null), [error, setError] = useState("");
   const [bots, setBots] = useState<Bot[]>([]), [botFilter, setBotFilter] = useState("");
@@ -493,7 +495,7 @@ function RecallPanel({ onNavigate }: { onNavigate: Go }) {
   async function open(item: RecallItem) {
     // Another bot's line is that bot's page; the default bot's and older conversations open as before.
     const bot = bots.find(b => b.id === item.bot_id);
-    if (bot && !bot.is_default) { window.location.hash = `bot/${bot.id}`; return; }
+    if (bot && !bot.is_default) { navigate(paths.chat(bot.id)); return; }
     await openConversation(item.conversation_id); onNavigate("agent");
   }
   return <section className="personal-card memory-panel">

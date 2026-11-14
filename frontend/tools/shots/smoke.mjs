@@ -1,12 +1,15 @@
-// Smoke entry: node smoke.mjs --dist <build dir> [--strict]
+// Smoke entry: node smoke.mjs --dist <build dir> [--strict] [--only <text in a check's name>]
 // One named function per check, registered in CHECKS.  Later phases append checks here.
 import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
 import { PAGES, waitReady } from "./pages.mjs";
-import { BOT } from "./fixtures/ids.mjs";
+import { BOT, CONVERSATION, JUDGMENT, ROOT, VERSION } from "./fixtures/ids.mjs";
+import { MATERIALS } from "./fixtures/materials.mjs";
 import { buildState } from "./fixtures/index.mjs";
+import path from "node:path";
+import { findCollisions } from "./collisions.mjs";
 
 const { flags } = parseArgs(process.argv.slice(2), { booleans: ["strict"] });
 if (!flags.dist) { console.error("usage: node smoke.mjs --dist <build dir> [--strict]"); process.exit(2); }
@@ -18,7 +21,7 @@ const FAKE_ANSWER = "冒烟测试的假回答";
 /** Open a fresh view at the default chat page (1440 wide, light) and wait for its history. */
 async function openChat(ctx, label) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label, unmatched });
-  await view.page.goto(`${ctx.server.url}#agent`, { waitUntil: "load" });
+  await view.page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
   await waitReady(view.page, PAGES.find((p) => p.name === "chat-default"));
   await settle(view.page);
   return view;
@@ -72,12 +75,12 @@ async function switchBotAndBack(ctx) {
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     const before = await page.evaluate(() => location.hash);
     await pressBotRow(page, "NewsBot");
-    await page.waitForFunction((id) => location.hash === `#bot/${id}`, BOT.newsbot, { timeout: 10000 });
+    await page.waitForFunction((id) => location.hash === `#/chat/${id}`, BOT.newsbot, { timeout: 10000 });
     await page.locator("h1", { hasText: "NewsBot" }).waitFor({ timeout: 10000 });
     await pressBotRow(page, "FinBot");
     await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
     await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
-    return `${before || "(empty)"} -> #bot/<NewsBot> -> back; earlier answer still present`;
+    return `${before || "(empty)"} -> #/chat/<NewsBot> -> back; earlier answer still present`;
   } finally { await view.close(); }
 }
 
@@ -87,7 +90,7 @@ async function backButtonReturns(ctx) {
     const { page } = view;
     const start = await page.evaluate(() => location.hash);
     await pressBotRow(page, "NewsBot");
-    await page.waitForFunction((id) => location.hash === `#bot/${id}`, BOT.newsbot, { timeout: 10000 });
+    await page.waitForFunction((id) => location.hash === `#/chat/${id}`, BOT.newsbot, { timeout: 10000 });
     await page.goBack();
     await page.waitForFunction((hash) => location.hash === hash, start, { timeout: 10000 });
     await page.locator("h1", { hasText: "FinBot" }).waitFor({ timeout: 10000 });
@@ -99,7 +102,7 @@ async function themeToggles(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "theme-toggle", unmatched });
   try {
     const { page } = view;
-    await page.goto(`${ctx.server.url}#admin`, { waitUntil: "load" });
+    await page.goto(`${ctx.server.url}#/settings/appearance`, { waitUntil: "load" });
     await page.locator("select#theme").waitFor({ timeout: 10000 });
     const theme = () => page.evaluate(() => document.documentElement.dataset.theme);
     assert((await theme()) === "light", `expected light at start, got ${await theme()}`);
@@ -128,7 +131,7 @@ const SELECTOR_MATCH_ALLOWED = new Set([
   "*", // box-sizing: border-box, the same value preflight sets
 ]);
 
-/** The shadcn parts on #dev-kit must look the same with the whole `legacy` layer deleted from the page. */
+/** The shadcn parts on #/dev/kit must look the same with the whole `legacy` layer deleted from the page. */
 async function kitNotPolluted(ctx) {
   const states = [
     ["closed", async () => {}],
@@ -146,7 +149,7 @@ async function kitNotPolluted(ctx) {
       const view = await newView(ctx.browser, { width: 1440, theme, label: `kit-${state}`, unmatched });
       try {
         const { page } = view;
-        await page.goto(`${ctx.server.url}#dev-kit`, { waitUntil: "load" });
+        await page.goto(`${ctx.server.url}#/dev/kit`, { waitUntil: "load" });
         await waitReady(page, PAGES.find((p) => p.name === "dev-kit"));
         await settle(page);
         await open(page);
@@ -222,7 +225,7 @@ async function kitKeyboard(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "kit-keyboard", unmatched });
   try {
     const { page } = view;
-    await page.goto(`${ctx.server.url}#dev-kit`, { waitUntil: "load" });
+    await page.goto(`${ctx.server.url}#/dev/kit`, { waitUntil: "load" });
     await waitReady(page, PAGES.find((p) => p.name === "dev-kit"));
     await settle(page);
     const focusedKit = () => page.evaluate(() => document.activeElement?.getAttribute("data-kit"));
@@ -244,7 +247,7 @@ async function kitKeyboard(ctx) {
 }
 
 /**
- * Where the old-browser-default restore applies.  #dev-kit/probe has the same bare tags twice:
+ * Where the old-browser-default restore applies.  #/dev/kit/probe has the same bare tags twice:
  *  - "outside": no data-legacy above them -> plain preflight (margins 0, no list markers, bare button, inherited link colour ...);
  *  - "island": a data-legacy subtree inside a data-slot container (the P2 shell case) -> browser defaults, as the old pages had.
  */
@@ -252,7 +255,7 @@ async function legacyScope(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "kit-scope", unmatched });
   try {
     const { page } = view;
-    await page.goto(`${ctx.server.url}#dev-kit/probe`, { waitUntil: "load" });
+    await page.goto(`${ctx.server.url}#/dev/kit/probe`, { waitUntil: "load" });
     await page.locator('[data-probe="island"]').waitFor({ timeout: 10000 });
     await settle(page, { pinTranscript: false });
     const read = (which) => page.evaluate((name) => {
@@ -368,7 +371,7 @@ async function updownSwitchesMarketOnly(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "updown-kit", unmatched });
   try {
     const { page } = view;
-    await page.goto(`${ctx.server.url}#dev-kit`, { waitUntil: "load" });
+    await page.goto(`${ctx.server.url}#/dev/kit`, { waitUntil: "load" });
     await page.locator('[data-kit="updown-toggle"]').waitFor({ timeout: 10000 });
     await settle(page, { pinTranscript: false });
     // Probe the old sheets too: throw-away elements carrying the old classes, read the same way.
@@ -429,7 +432,7 @@ async function updownSettingPersists(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "updown-setting", unmatched });
   try {
     const { page } = view;
-    await page.goto(`${ctx.server.url}#admin`, { waitUntil: "load" });
+    await page.goto(`${ctx.server.url}#/settings/appearance`, { waitUntil: "load" });
     await page.locator("#updown").waitFor({ timeout: 10000 });
     const attr = () => page.evaluate(() => document.documentElement.dataset.updown);
     assert((await attr()) === "green-up", `expected green-up at start, got ${await attr()}`);
@@ -451,25 +454,282 @@ async function updownSettingPersists(ctx) {
 }
 
 /** name -> check.  Add new checks by writing a function above and registering it here. */
-export const CHECKS = [
+export // --- P2.1: routes ------------------------------------------------------------------------------------------
+const UUID_RE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const FILING = MATERIALS.find((m) => m.symbol === "AAPL" && m.source_type === "official_filing");
+// The address readers only accept hex ids for ?revise= and ?focus= (as the old code did); the fixtures' material ids are not hex, so link addresses use this one.
+const HEX_ID = "6f1c2d3e-0000-4000-8000-0000000000aa";
+const SELECTED_SYMBOL_KEY = "market-evidence-agent:selected-symbol:v1";
+const hashOf = (page) => page.evaluate(() => location.hash);
+const waitHash = (page, hash, timeout = 10000) => page.waitForFunction((h) => location.hash === h, hash, { timeout });
+const dispatchAction = (page, detail) => page.evaluate((d) => window.dispatchEvent(new CustomEvent("market-evidence-agent:client-action", { detail: { id: "a0000000-0000-4000-8000-000000000001", ...d } })), detail);
+
+/** A fresh view; `lastSymbol` seeds the stored "last stock" preference the old-address table reads. */
+async function openAt(ctx, label, hash, { lastSymbol = "AAPL", width = 1440, ready, identity } = {}) {
+  const view = await newView(ctx.browser, { width, theme: "light", label, unmatched, ...(identity ? { identity } : {}) });
+  if (lastSymbol) await view.context.addInitScript(([key, value]) => { try { localStorage.setItem(key, value); } catch { /* storage unavailable */ } }, [SELECTED_SYMBOL_KEY, lastSymbol]);
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  if (ready) await waitReady(view.page, { ready });
+  return view;
+}
+async function pressRailRow(page, name) {
+  const open = await page.locator(".bot-rail").first().isVisible().catch(() => false);
+  if (!open) await page.locator("button.nav-menu-trigger").click();
+  await page.locator(".bot-rail .bot-row", { hasText: name }).first().click();
+}
+
+/** One old address per kind of the design's table (3.3), opened as a fresh page load: it lands on the new address and the page is ready. */
+async function legacyRedirects(ctx) {
+  const material = HEX_ID;
+  const cases = [
+    ["", "#/chat", ".agent-thread .agent-message"],
+    ["#agent", "#/chat", ".agent-thread .agent-message"],
+    ["#chat", "#/chat", ".agent-thread .agent-message"],
+    [`#agent/${CONVERSATION.older}`, `#/chat/c/${CONVERSATION.older}`, ".agent-thread .agent-message"],
+    [`#bot/${BOT.applebot}`, `#/chat/${BOT.applebot}`, ".agent-thread .agent-message"],
+    ["#overview", "#/research/c/AAPL", ".overview-workspace"],
+    ["#company", "#/research/c/AAPL", ".overview-workspace"],
+    ["#forecast", "#/research/forecasts", ".forecast-home"],
+    ["#forecast?symbol=TSLA", "#/research/forecasts?symbol=TSLA", ".forecast-home"],
+    [`#forecast/${ROOT.aapl}`, `#/research/forecasts/${ROOT.aapl}`, ".research-brief"],
+    [`#forecast/${ROOT.aapl}?version=${VERSION.aapl2}`, `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl2}`, ".research-brief"],
+    [`#forecast/${ROOT.aapl}?revise=${material}`, `#/research/forecasts/${ROOT.aapl}?revise=${material}`, ".research-brief"],
+    [`#forecast/judgment/${JUDGMENT.aapl}`, `#/research/judgments/${JUDGMENT.aapl}`, ".judgment-page h2"],
+    ["#forecast/monitor", "#/research/monitor", "main.workspace .v2-desk h2"],
+    ["#revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`, ".research-brief"],
+    ["#evaluation", "#/research/scores", "main.workspace h2"],
+    ["#replay", "#/research/replay", ".historical-replay-workspace"],
+    ["#materials", "#/research/materials", ".material-library-panel h2"],
+    ["#library", "#/research/materials", ".material-library-panel h2"],
+    [`#materials?symbol=AAPL&focus=${material}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${material}&type=official_filing`, "!.material-library-panel"],
+    ["#evidence", "#/research/evidence?symbol=AAPL", ".evidence-center"],
+    [`#evidence/${VERSION.aapl3}`, `#/research/evidence/${VERSION.aapl3}`, ".evidence-center"],
+    ["#routines", "#/routines", "main.personal-page h1"],
+    ["#briefs", "#/routines", "main.personal-page h1"],
+    ["#portfolio", "#/portfolio", ".pf-positions"],
+    ["#news", "#/assistant/news", "main.personal-page h1"],
+    ["#skills", "#/assistant/skills", ".skill-group"],
+    ["#memory", "#/assistant/memory", "main.personal-page h1"],
+    ["#me", "#/assistant/bots", "main.personal-page h1"],
+    ["#admin", "#/settings/models", ".agent-admin h2"],
+    ["#settings", "#/settings/models", ".agent-admin h2"],
+    ["#nonsense", "#/chat", ".agent-thread .agent-message"],
+    ["#/no/such/page", "#/chat", ".agent-thread .agent-message"],
+  ];
+  const bad = [];
+  for (const [from, to, ready] of cases) {
+    const view = await openAt(ctx, `legacy ${from || "(empty)"}`, from);
+    try {
+      await waitHash(view.page, to, 8000);
+      // "!selector": only wait for the element (a focus the fixtures cannot resolve leaves the library's lookup text up).
+      if (ready.startsWith("!")) await view.page.waitForSelector(ready.slice(1), { state: "visible", timeout: 15000 });
+      else await waitReady(view.page, { ready });
+      if (view.problems.pageErrors.length) bad.push(`${from || "(empty)"}: uncaught exception ${view.problems.pageErrors[0].split("\n")[0]}`);
+    } catch (error) { bad.push(`${from || "(empty)"} -> expected ${to}, at ${await hashOf(view.page).catch(() => "?")}: ${String(error.message).split("\n")[0]}`); }
+    await view.close();
+  }
+  // The same jump while the app runs (a link in an old answer, a bookmark): replaced, not pushed, so back skips the old form.
+  const runtime = await openAt(ctx, "legacy at runtime", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    await settle(runtime.page);
+    for (const [from, to] of [["#forecast", "#/research/forecasts"], [`#materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`], [`#evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`, `#/research/evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`]]) {
+      await runtime.page.evaluate(() => { location.hash = "#/chat"; });
+      await waitHash(runtime.page, "#/chat");
+      await runtime.page.evaluate((h) => { location.hash = h; }, from);
+      await waitHash(runtime.page, to);
+      await runtime.page.goBack();
+      await waitHash(runtime.page, "#/chat");
+    }
+  } catch (error) { bad.push(`at runtime: ${String(error.message).split("\n")[0]}`); }
+  await runtime.close();
+  assert(!bad.length, bad.join("\n      "));
+  return `${cases.length} old addresses at load + 3 at runtime`;
+}
+
+/** chat -> research -> a company -> one of its forecasts -> portfolio, then back four times: every press lands on the previous address. */
+async function backButtonChain(ctx) {
+  const view = await openAt(ctx, "back chain", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    const trail = [await hashOf(page)];
+    const step = async (act, ready) => { await act(); await page.waitForFunction((last) => location.hash !== last, trail.at(-1), { timeout: 10000 }); await waitReady(page, { ready }); trail.push(await hashOf(page)); };
+    await step(() => page.evaluate(() => { location.hash = "#/research"; }), ".overview-workspace");
+    await step(() => page.locator(".universe-card", { hasText: "AAPL" }).locator("button.universe-open").click(), ".overview-workspace");
+    await step(() => page.locator(".overview-focus-actions .primary-action").click(), ".research-brief");
+    await step(() => pressRailRow(page, "持仓"), ".pf-positions");
+    assert(trail.join(" ") === `#/chat #/research #/research/c/AAPL #/research/forecasts/${ROOT.aapl} #/portfolio`, `unexpected trail ${trail.join(" ")}`);
+    const ready = [".research-brief", ".overview-workspace", ".overview-workspace", ".agent-thread .agent-message"];
+    for (let i = trail.length - 2; i >= 0; i -= 1) {
+      await page.goBack();
+      await waitHash(page, trail[i]);
+      await waitReady(page, { ready: ready[trail.length - 2 - i] });
+    }
+    return trail.join(" <- ");
+  } finally { await view.close(); }
+}
+
+/** The company is in the address: open one, reload, still that company (also with a tab, and on a page that has no company of its own). */
+async function deepLinkReload(ctx) {
+  const view = await openAt(ctx, "deep link", "#/research/c/TSLA", { lastSymbol: null, ready: ".overview-workspace" });
+  try {
+    const { page } = view;
+    const company = () => page.locator(".topbar-path strong").first().innerText();
+    assert((await company()) === "TSLA", `expected TSLA, got ${await company()}`);
+    await page.reload({ waitUntil: "load" });
+    await waitReady(page, { ready: ".overview-workspace" });
+    assert((await hashOf(page)) === "#/research/c/TSLA" && (await company()) === "TSLA", `after reload: ${await hashOf(page)} / ${await company()}`);
+    await page.evaluate(() => { location.hash = "#/research/c/NVDA?tab=materials"; });
+    await waitReady(page, { ready: ".material-library-panel h2" });
+    await page.reload({ waitUntil: "load" });
+    await waitReady(page, { ready: ".material-library-panel h2" });
+    assert((await hashOf(page)) === "#/research/c/NVDA?tab=materials", `tab lost on reload: ${await hashOf(page)}`);
+    assert((await page.locator(".material-library-panel").innerText()).includes("NVDA") || (await company()) === "NVDA", "the library is not about NVDA");
+    // The picker switches the company on the same kind of page, through the address.
+    await page.locator("#symbol").selectOption("AMD");
+    await waitHash(page, "#/research/c/AMD?tab=materials");
+    return "TSLA overview and NVDA materials survive a reload; the picker moves the address";
+  } finally { await view.close(); }
+}
+
+/** The agent's open_page / select_stock / queue events, as the chat page's answers raise them. */
+async function clientActions(ctx) {
+  const view = await openAt(ctx, "client actions", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    const expected = [
+      ["overview", "#/research/c/AAPL"], ["predictions", "#/research/forecasts"], ["materials", "#/research/materials"], ["sec", "#/research/evidence?symbol=AAPL"],
+      ["revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`], ["evaluation", "#/research/scores"], ["knowledge", "#/settings/models"], ["agent", "#/chat"],
+    ];
+    for (const [pageName, hash] of expected) {
+      await dispatchAction(page, { action: "open_page", page: pageName });
+      await waitHash(page, hash);
+    }
+    await dispatchAction(page, { action: "open_page", page: "overview" });
+    await waitHash(page, "#/research/c/AAPL");
+    await waitReady(page, { ready: ".overview-workspace" });
+    await dispatchAction(page, { action: "select_stock", symbol: "TSLA" });
+    await waitHash(page, "#/research/c/TSLA");
+    await dispatchAction(page, { action: "open_page", page: "materials" });
+    await waitHash(page, "#/research/materials");
+    await dispatchAction(page, { action: "select_stock", symbol: "NVDA" });
+    await waitHash(page, "#/research/materials?symbol=NVDA");
+    await dispatchAction(page, { action: "open_page", page: "overview" });
+    await waitHash(page, "#/research/c/NVDA");
+    await waitReady(page, { ready: ".overview-workspace" });
+    await dispatchAction(page, { action: "queue_add", symbol: "NFLX" });
+    await page.locator(".universe-card", { hasText: "NFLX" }).waitFor({ timeout: 5000 });
+    await dispatchAction(page, { action: "queue_remove", symbol: "NFLX" });
+    await page.locator(".universe-card", { hasText: "NFLX" }).waitFor({ state: "detached", timeout: 5000 });
+    return "open_page x9, select_stock x2, queue_add / queue_remove";
+  } finally { await view.close(); }
+}
+
+/** Send in a bot's line, leave for another page at once, come back: the session is above the router outlet, so the answer is there. */
+async function backgroundTurnSurvivesNavigation(ctx) {
+  const view = await openAt(ctx, "background turn", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    await settle(page);
+    const text = "导航途中的提问 AAPL";
+    await page.locator("#agent-draft").fill(text);
+    await page.locator("button.agent-send").click();
+    await pressRailRow(page, "持仓");
+    await waitHash(page, "#/portfolio");
+    await waitReady(page, { ready: ".pf-positions" });
+    await pressRailRow(page, "FinBot");
+    await waitHash(page, "#/chat");
+    await page.locator(".agent-message.is-user", { hasText: text }).waitFor({ timeout: 10000 });
+    await page.locator(".agent-message.is-assistant", { hasText: FAKE_ANSWER }).last().waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    return "question sent, left for #/portfolio at once, back: the question and the streamed answer are in the line";
+  } finally { await view.close(); }
+}
+
+
+/** A link in a past answer is a plain anchor with an old-form href: clicking it lands on the new route, and back returns to the chat. */
+async function answerLinks(ctx) {
+  const view = await openAt(ctx, "answer links", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    const links = [
+      [`#materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${HEX_ID}&type=official_filing`],
+      [`#forecast/${ROOT.aapl}?version=${VERSION.aapl2}`, `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl2}`],
+      [`#agent/${CONVERSATION.older}`, `#/chat/c/${CONVERSATION.older}`],
+      [`#evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`, `#/research/evidence/${VERSION.aapl3}/official_filing/${FILING.source_id}`],
+    ];
+    for (const [href, to] of links) {
+      await page.evaluate((h) => { const a = document.createElement("a"); a.id = "probe-link"; a.href = h; a.textContent = "link"; a.style.cssText = "position:fixed;top:0;left:0;z-index:99999;background:#fff"; document.body.appendChild(a); }, href);
+      await page.locator("#probe-link").click();
+      await waitHash(page, to);
+      await page.evaluate(() => document.getElementById("probe-link")?.remove());
+      await page.goBack();
+      await waitHash(page, "#/chat");
+    }
+    return `${links.length} old-form anchors clicked, each opens the new route and back returns to #/chat`;
+  } finally { await view.close(); }
+}
+
+/** A page whose chunk cannot be fetched (offline, or removed by a new deploy) shows the load-failure notice inside the shell, and reload recovers. */
+async function chunkLoadFailure(ctx) {
+  const view = await openAt(ctx, "chunk failure", "#/chat", { ready: ".agent-thread .agent-message" });
+  try {
+    const { page } = view;
+    await settle(page);
+    let blocked = true;
+    await view.context.route(/\/assets\/forecast-[^/]*\.js$/, (route) => (blocked ? route.abort() : route.continue()));
+    await page.evaluate((id) => { location.hash = `#/research/forecasts/${id}`; }, ROOT.aapl);
+    await page.locator('[data-slot="route-error"]').waitFor({ timeout: 10000 });
+    const text = await page.locator('[data-slot="route-error"]').innerText();
+    assert(text.includes("页面加载失败") && text.includes("重新加载"), `unexpected notice: ${text}`);
+    assert(await page.locator(".app-rail").count() > 0, "the shell is gone");
+    blocked = false;
+    await page.locator('[data-slot="route-error"] button').click();
+    await page.waitForLoadState("load");
+    await waitReady(page, { ready: ".research-brief" });
+    return "forecast chunk aborted: notice with reload inside the shell; after reload the forecast opens";
+  } finally { await view.close(); }
+}
+
+/**
+ * No class the built `utilities` layer defines may also be a class the old UI uses (see collisions.mjs): Tailwind turns
+ * words in src/app, src/components and src/dev (comments included) into utility rules, and that layer beats `legacy`.
+ * Reads the build output and the sources next to it (<dist>/../src); no browser.
+ */
+async function utilityLegacyCollisions() {
+  const result = findCollisions({ distDir: path.resolve(flags.dist), srcDir: path.resolve(flags.dist, "..", "src") });
+  assert(!result.collisions.length, `utility classes that also name old classes: ${result.collisions.join(", ")}.  Find the word in src/app, src/components or src/dev (comments and strings count) and reword it, or move the code out of the scanned folders; allow it in collisions.mjs only with a reason.`);
+  return `${result.utilities.size} utility classes vs ${result.legacy.size} old class names (${result.oldTsx} old tsx files + legacy css): none shared${result.allowed.length ? ` except the allowed ${result.allowed.join(", ")}` : ""}`;
+}
+
+const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["send a message: user line, streamed answer, composer reusable", sendMessageStreams],
   ["switch to another bot and back: URL changes, earlier answer kept", switchBotAndBack],
   ["browser back returns to the previous address", backButtonReturns],
   ["theme toggle flips data-theme on <html>", themeToggles],
+  ["legacy-redirects: old #addresses land on their new route (load and runtime), pages ready", legacyRedirects],
+  ["back-button-chain: chat > research > company > forecast > portfolio, four backs", backButtonChain],
+  ["deep-link-reload: the company in the address survives a reload; the picker moves the address", deepLinkReload],
+  ["client-actions: open_page, select_stock, queue events move the address", clientActions],
+  ["utility-legacy-collisions: no utility class defined by the build is also an old class name", utilityLegacyCollisions],
+  ["answer-links: old-form anchors in past answers open the new routes; back returns", answerLinks],
+  ["chunk-load-failure: a page that fails to load shows the notice inside the shell; reload recovers", chunkLoadFailure],
+  ["background-turn-survives-navigation: a turn sent before leaving is in the line on return", backgroundTurnSurvivesNavigation],
   ["thinking panel expands to the turn trace", thinkingPanelExpands],
-  ["#dev-kit: shadcn parts are identical with the legacy layer removed", kitNotPolluted],
-  ["#dev-kit: dialog, menu and select work from the keyboard and return focus", kitKeyboard],
-  ["#dev-kit/probe: restore applies only inside data-legacy, preflight everywhere else", legacyScope],
-  ["#dev-kit: the up/down switch swaps market colours only (new and old styles); success and error stay", updownSwitchesMarketOnly],
+  ["#/dev/kit: shadcn parts are identical with the legacy layer removed", kitNotPolluted],
+  ["#/dev/kit: dialog, menu and select work from the keyboard and return focus", kitKeyboard],
+  ["#/dev/kit/probe: restore applies only inside data-legacy, preflight everywhere else", legacyScope],
+  ["#/dev/kit: the up/down switch swaps market colours only (new and old styles); success and error stay", updownSwitchesMarketOnly],
   ["settings page: the up/down choice changes <html data-updown> and survives a reload", updownSettingPersists],
   ["idle-avatars-no-raf: idle sidebar avatars run no frame loop; hover starts it, leaving stops it", idleAvatarsNoRaf],
 ];
 
+const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;
+if (!selected.length) { console.error(`--only ${flags.only}: no check has that in its name`); process.exit(2); }
 const server = await startServer(flags.dist);
 const browser = await launch();
 let failed = 0;
-for (const [name, check] of CHECKS) {
+for (const [name, check] of selected) {
   try { const detail = await check({ browser, server }); console.log(`PASS  ${name}${detail ? `  (${detail})` : ""}`); }
   catch (error) { failed += 1; console.log(`FAIL  ${name}\n      ${String(error?.message ?? error).split("\n").join("\n      ")}`); }
 }
@@ -478,5 +738,5 @@ await browser.close(); await server.close();
 const missing = summarizeUnmatched(unmatched);
 if (missing.length) { console.log(`\nunmatched API requests (${missing.length}):`); for (const item of missing) console.log(`  ${item.request}   <- ${item.pages.join(", ")}`); }
 else console.log("\nunmatched API requests: none");
-console.log(`\n${CHECKS.length - failed} passed, ${failed} failed`);
+console.log(`\n${selected.length - failed} passed, ${failed} failed`);
 process.exit(failed || (flags.strict && missing.length) ? 1 : 0);

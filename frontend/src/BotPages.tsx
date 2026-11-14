@@ -1,7 +1,7 @@
 // Bots (personal agent, second edition): the sidebar list, the new-bot dialog, the bot page's right tabs and the
 // server model catalog card in settings.  A bot never holds a key: it names a catalog model, and the catalog says
 // only configured / missing.
-import { PortfolioIcon } from "./PortfolioPage";
+import { PortfolioIcon } from "./PortfolioIcon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { deleteBotTelegram, getBotTelegram, saveBotTelegramToken, startBotTelegramBind, unbindBotTelegram, type BotTelegramStatus } from "./api";
 import { addCatalogModel, createBot, deleteBot, deleteCatalogModel, discoverCatalogModels, getBotTemplates, getChatMode, getModelCatalog, getModelRoles, listBots, listSkills, setDefaultCatalogModel, setModelRole, testCatalogModel, updateBot, updateCatalogModel,
@@ -351,9 +351,9 @@ const NEXT_WIDTH: Record<SideWidth, SideWidth> = { narrow: "half", half: "full",
 /** The bot's right rail.  Its current stock is its own (workspace-cards.botSymbol) and is also written back to the
  * page's stock, so 公司 / 资料库 open on the same one.  An agent select_stock changes the page's stock, which the
  * rail adopts while it is open. */
-export function BotSide({ bot, symbol, watchlist = [], onSelectSymbol, onOpenCompany, onChanged, onDeleted }: { bot: Bot; symbol: string; watchlist?: string[]; onSelectSymbol?: (symbol: string) => void; onOpenCompany: OpenCompany; onChanged: (bot: Bot) => void; onDeleted: () => void }) {
+export function BotSide({ bot, symbol, watchlist = [], onSelectSymbol, onOpenCompany, onChanged, onDeleted, initialTab = "workspace" }: { initialTab?: "workspace" | "profile"; bot: Bot; symbol: string; watchlist?: string[]; onSelectSymbol?: (symbol: string) => void; onOpenCompany: OpenCompany; onChanged: (bot: Bot) => void; onDeleted: () => void }) {
   const { t } = useLocale();
-  const [tab, setTab] = useState<"workspace" | "profile">("workspace");
+  const [tab, setTab] = useState<"workspace" | "profile">(initialTab);
   const [current, setCurrent] = useState(() => botSymbol(bot, symbol));
   const [width, setWidth] = useState<SideWidth>("narrow");
   const aside = useRef<HTMLElement>(null), seenGlobal = useRef(symbol);

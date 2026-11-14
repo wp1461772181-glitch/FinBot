@@ -5,7 +5,7 @@ import type { EarningsJudgment, V2ForecastListRow } from "./api";
 import type { V2ForecastJob } from "./types";
 import { NOT_RECORDED } from "./forecast-model.mjs";
 import { judgmentRowModel, promotionRequest, promotionState } from "./forecast-home.mjs";
-import { reviseHash } from "./forecast-routes.mjs";
+import { hashHref, paths } from "./routes.mjs";
 import { Parts, formatTime } from "./ForecastShared";
 import type { ResourceState } from "./ForecastShared";
 import { JobStatus, errorMessage, isActiveJob, saveJob } from "./ForecastJob";
@@ -127,10 +127,10 @@ export function EarningsJudgmentPage({ judgmentId, onHome }: { judgmentId: strin
       {promotion.state === "create" && <button className="primary-action" type="button" onClick={() => void promote(judgment)} disabled={isActiveJob(activeJob)}>
         {isActiveJob(activeJob) ? t("任务处理中…") : t("基于这份财报创建正式预测")}
       </button>}
-      {promotion.state === "revise" && openForecast && judgment.filing_source_id && <a className="secondary-action" href={reviseHash(openForecast.id, judgment.filing_source_id)}>{t("用这份财报修订")}</a>}
+      {promotion.state === "revise" && openForecast && judgment.filing_source_id && <a className="secondary-action" href={hashHref(paths.forecast(openForecast.id, { revise: judgment.filing_source_id }))}>{t("用这份财报修订")}</a>}
       {promotion.state === "unavailable" && promotion.reason && <p role="status">
         {t(PROMOTION_REASON[promotion.reason])}
-        {promotion.reason === "filing_not_in_library" && <> · <a href={`#materials?symbol=${encodeURIComponent(judgment.symbol)}`}>{t("打开资料库")}</a></>}
+        {promotion.reason === "filing_not_in_library" && <> · <a href={hashHref(paths.materials({ symbol: judgment.symbol }))}>{t("打开资料库")}</a></>}
       </p>}
       {promotion.state !== "unavailable" && <small className="v2-limit">{t("新预测只从这份财报的原文出发，不带这条判断的方向和理由。")}</small>}
       {activeJob && <JobStatus job={activeJob} />}
@@ -138,7 +138,7 @@ export function EarningsJudgmentPage({ judgmentId, onHome }: { judgmentId: strin
     </section>
 
     {openForecast && <p className="v2-limit">
-      {t("两者问题不同：财报判断看首个交易日，正式预测看 20 个交易日。")} <a href={`#forecast/${openForecast.id}`}>{t("查看这家公司的正式预测")}</a>
+      {t("两者问题不同：财报判断看首个交易日，正式预测看 20 个交易日。")} <a href={hashHref(paths.forecast(openForecast.id))}>{t("查看这家公司的正式预测")}</a>
     </p>}
   </section>;
 }

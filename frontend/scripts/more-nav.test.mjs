@@ -4,10 +4,11 @@ import test from "node:test";
 
 // 「更多」 folds 公司、预测、资料库、技能、记忆、设置 into one control.  No component renderer here, so the
 // wiring is checked in the source the build compiles.  例行任务 stays a bot-rail row and a mobile tab.
+// (P2.1: the shell moved from App.tsx to Shell.tsx, the rail wiring to app/WorkspaceLayout.tsx; the assertions are the same.)
 const src = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
 test("the six secondary labels live in 更多, and the rail lists one More control", () => {
-  const app = src("App.tsx");
+  const app = src("Shell.tsx");
   const more = app.slice(app.indexOf("const moreItems"), app.indexOf("const mobileTabs"));
   for (const label of ["公司", "预测", "资料库", "技能", "记忆", "设置"]) {
     assert.match(more, new RegExp(`label: t\\("${label}"\\)`));
@@ -23,18 +24,18 @@ test("the six secondary labels live in 更多, and the rail lists one More contr
 });
 
 test("例行任务 stays primary chrome: a rail row and a mobile tab, not a More item", () => {
-  const app = src("App.tsx"), rail = src("BotPages.tsx");
+  const app = src("Shell.tsx"), rail = src("BotPages.tsx");
   assert.match(app, /\{ id: "routines", label: t\("例行任务"\), icon: <RoutineIcon \/>/);
   assert.match(rail, /<strong>\{t\("例行任务"\)\}<\/strong>/);
   assert.match(app, /例行任务 is not one of them/);
 });
 
 test("预测 is a bot-rail row on the owner's desktop rail, and stays in 更多 on the mobile tab bar and for guests", () => {
-  const app = src("App.tsx"), rail = src("BotPages.tsx");
+  const app = src("Shell.tsx"), layout = src("app/WorkspaceLayout.tsx"), rail = src("BotPages.tsx");
   // The rail's 更多 drops 预测 only when the rail has the row (botRail is the owner's rail); the sheet keeps all six.
   assert.match(app, /const railMoreItems = botRail \? moreItems\.filter\(item => item\.id !== "forecast"\) : moreItems;/);
   assert.match(app, /<MoreMenu items=\{moreItems\}[^>]*placement="sheet"/);
-  assert.match(app, /forecastActive=\{navGroup\(activeSection\) === "forecast"\} onForecast=\{\(\) => \{ close\(\); navigate\("forecast"\); \}\}/);
+  assert.match(layout, /forecastActive=\{navGroup\(activeSection\) === "forecast"\} onForecast=\{\(\) => \{ close\(\); go\("forecast"\); \}\}/);
   assert.match(rail, /onClick=\{onForecast\}[\s\S]*<ForecastIcon \/>[\s\S]*<strong>\{t\("预测"\)\}<\/strong>/);
   // The three mobile tabs are unchanged.
   const tabs = app.slice(app.indexOf("const mobileTabs"), app.indexOf("const research ="));
@@ -42,7 +43,7 @@ test("预测 is a bot-rail row on the owner's desktop rail, and stays in 更多 
 });
 
 test("the forecast group has no stock picker: the company comes from the record", () => {
-  const app = src("App.tsx");
+  const app = src("Shell.tsx");
   assert.match(app, /const stockPicker = research && navGroup\(activeSection\) !== "forecast";/);
   assert.match(app, /\{stockPicker && <div className="symbol-form">/);
   assert.match(app, /\{stockPicker && <form className="watchlist-add"/);

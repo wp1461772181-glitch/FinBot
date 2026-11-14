@@ -1,30 +1,18 @@
 import { Tx, formatDateTime, getLocalePreference, translatePhrase, useLocale } from "./i18n";
 import { useAiContentLocalization, withLocalizedFields } from "./useAiContentLocalization";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
+import { useNavigate } from "react-router";
 import { ApiError, getUploadedEvidence, getV2ForecastRoots, getV2ForecastVersion, getV2Timeline, uploadEvidence } from "./api";
+import { hashHref, paths } from "./routes.mjs";
 import type { ResearchBrief, ResearchEvidencePointer, ResearchMaterialReference, UploadedEvidence, V2ForecastRoots, V2Timeline, V2VersionDetail } from "./types";
 
 type LoadState<T> = { kind: "loading" } | { kind: "ready"; data: T } | { kind: "error"; message: string };
-type EvidenceRoute = { versionId: string; sourceType: ResearchMaterialReference["source_type"]; sourceId: string };
+export type EvidenceRoute = { versionId: string; sourceType: ResearchMaterialReference["source_type"]; sourceId: string };
 type EventGroup = { key: ResearchEvidencePointer["section"] | "background" | "conflicts" | "unknowns" | "changes"; label: string; tone: string; rows: Array<{ text: string; citations: ResearchEvidencePointer[] }> };
 type UploadAction = { kind: "idle" } | { kind: "running" } | { kind: "success"; message: string } | { kind: "error"; message: string };
 
-const BASE_HASH = "evidence";
-
 function errorMessage(error: unknown, fallback: string) {
   return translatePhrase(error instanceof ApiError ? error.message : fallback);
-}
-
-function readEvidenceRoute(): EvidenceRoute | null {
-  const [section, versionId, sourceType, ...sourceParts] = window.location.hash.replace(/^#/, "").split("/");
-  if (section !== BASE_HASH || !versionId || (sourceType !== "official_filing" && sourceType !== "uploaded_media") || sourceParts.length === 0) return null;
-  try {
-    return { versionId: decodeURIComponent(versionId), sourceType, sourceId: decodeURIComponent(sourceParts.join("/")) };
-  } catch { return null; }
-}
-
-function detailHash(versionId: string, source: ResearchMaterialReference) {
-  return `${BASE_HASH}/${encodeURIComponent(versionId)}/${source.source_type}/${encodeURIComponent(source.source_id)}`;
 }
 
 function formatTime(value: string | null | undefined) {
@@ -65,27 +53,20 @@ function sourceTypeLabel(sourceType: ResearchMaterialReference["source_type"], l
   return locale === "en-US" ? sourceType === "official_filing" ? "SEC filing" : "Uploaded media" : sourceType === "official_filing" ? "SEC 官方文件" : "上传媒体材料";
 }
 
-export function EvidenceCenter({ symbol, supported, onOpenForecast }: { symbol: string; supported: boolean; onOpenForecast: () => void }) {
+// The address decides which version and material are open (`route`) and whether the upload dialog is up (`uploadOpen`).
+export function EvidenceCenter({ symbol, supported, onOpenForecast, route, uploadOpen }: { symbol: string; supported: boolean; onOpenForecast: () => void; route: EvidenceRoute | null; uploadOpen: boolean }) {
   const { locale, t } = useLocale();
+  const navigate = useNavigate();
   const [roots, setRoots] = useState<LoadState<V2ForecastRoots>>({ kind: "loading" });
   const [selectedRootId, setSelectedRootId] = useState("");
   const [timeline, setTimeline] = useState<LoadState<V2Timeline> | null>(null);
-  const [selectedVersionId, setSelectedVersionId] = useState(() => readEvidenceRoute()?.versionId ?? "");
+  const [selectedVersionId, setSelectedVersionId] = useState(() => route?.versionId ?? "");
   const [version, setVersion] = useState<LoadState<V2VersionDetail> | null>(null);
-  const [route, setRoute] = useState<EvidenceRoute | null>(() => readEvidenceRoute());
-  const [uploadOpen, setUploadOpen] = useState(() => window.location.hash.replace(/^#/, "") === `${BASE_HASH}/upload`);
   const [uploaded, setUploaded] = useState<LoadState<UploadedEvidence[]>>({ kind: "loading" });
 
-  useEffect(() => {
-    const handleHashChange = () => {
-      const next = readEvidenceRoute();
-      setRoute(next);
-      setUploadOpen(window.location.hash.replace(/^#/, "") === `${BASE_HASH}/upload`);
-      if (next?.versionId) setSelectedVersionId(next.versionId);
-    };
-    window.addEventListener("hashchange", handleHashChange);
-    return () => window.removeEventListener("hashchange", handleHashChange);
-  }, []);
+  // Back and forward move between versions through the address.
+  const routeVersionId = route?.versionId;
+  useEffect(() => { if (routeVersionId) setSelectedVersionId(routeVersionId); }, [routeVersionId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -96,7 +77,7 @@ export function EvidenceCenter({ symbol, supported, onOpenForecast }: { symbol: 
     getV2ForecastRoots(symbol, controller.signal).then((data) => {
       if (controller.signal.aborted) return;
       setRoots({ kind: "ready", data });
-      if (!readEvidenceRoute()?.versionId) setSelectedRootId(data.roots[0]?.id ?? "");
+      if (!routeVersionId) setSelectedRootId(data.roots[0]?.id ?? "");
     }).catch((error: unknown) => {
       if (!controller.signal.aborted) setRoots({ kind: "error", message: errorMessage(error, "暂时无法读取预测版本。") });
     });
@@ -152,8 +133,7 @@ export function EvidenceCenter({ symbol, supported, onOpenForecast }: { symbol: 
     : null, [route, selectedVersion, sources]);
   const selectedTimeline = timeline?.kind === "ready" ? timeline.data.versions : [];
   function selectRoot(rootId: string) {
-    window.location.hash = BASE_HASH;
-    setRoute(null);
+    navigate(paths.evidenceIndex({ symbol }));
     setTimeline({ kind: "loading" });
     setVersion(null);
     setSelectedVersionId("");
@@ -161,32 +141,20 @@ export function EvidenceCenter({ symbol, supported, onOpenForecast }: { symbol: 
   }
 
   function selectVersion(versionId: string) {
-    window.location.hash = BASE_HASH;
-    setRoute(null);
+    navigate(paths.evidenceIndex({ symbol }));
     setVersion({ kind: "loading" });
     setSelectedVersionId(versionId);
   }
 
   function openMaterial(source: ResearchMaterialReference) {
-    if (selectedVersion) window.location.hash = detailHash(selectedVersion.id, source);
+    if (selectedVersion) navigate(paths.evidence(selectedVersion.id, source.source_type, source.source_id));
   }
 
   function openFullAnalysis(source: ResearchMaterialReference) {
-    try {
-      window.sessionStorage.setItem("market-evidence-agent:material-analysis-focus", JSON.stringify({
-        symbol: source.symbol,
-        source_type: source.source_type,
-        source_id: source.source_id,
-        analysis_id: source.analysis_id,
-      }));
-    } catch { /* Browser storage is optional; the material catalogue remains available. */ }
-    window.location.hash = "materials";
+    navigate(paths.materials({ symbol: source.symbol, focus: source.source_id, type: source.source_type, analysis: source.analysis_id }));
   }
 
-  const closeUploadDialog = useCallback(() => {
-    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${BASE_HASH}`);
-    setUploadOpen(false);
-  }, []);
+  const closeUploadDialog = useCallback(() => navigate(paths.evidenceIndex({ symbol }), { replace: true }), [navigate, symbol]);
 
   async function handleUpload(input: Parameters<typeof uploadEvidence>[1]) {
     const item = await uploadEvidence(symbol, input);
@@ -196,7 +164,7 @@ export function EvidenceCenter({ symbol, supported, onOpenForecast }: { symbol: 
   return <section className="workspace-stack evidence-center" aria-labelledby="evidence-center-title">
     <header className="workspace-intro evidence-center-intro">
       <div><p className="eyebrow">{<Tx text={"预测版本 · 材料事件 · 原文引用"} />}</p><h2 id="evidence-center-title">{t(route ? "事件与判断" : "本次预测引用的证据")}</h2><p>{<Tx text={"按预测版本查看简报实际引用的材料及其事件判断。候选冻结材料只有被简报引用后才会出现在这里。"} />}</p></div>
-      <a className="primary-action" href={`#${BASE_HASH}/upload`} aria-haspopup="dialog" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}>{<Tx text={"上传媒体材料"} />}</a>
+      <a className="primary-action" href={hashHref(paths.evidenceIndex({ symbol, upload: true }))} aria-haspopup="dialog" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}>{<Tx text={"上传媒体材料"} />}</a>
     </header>
 
     <section className="evidence-version-controls" aria-label={t("选择要查看的预测版本")}>
@@ -224,10 +192,10 @@ export function EvidenceCenter({ symbol, supported, onOpenForecast }: { symbol: 
     {selectedVersion && localization.kind === "error" && <p className="localization-status" role="status">{t("English translation is temporarily unavailable; showing the saved original.")}</p>}
 
     {selectedVersion && route && <>
-      <a className="evidence-back-link" href={`#${BASE_HASH}`}>{<Tx text={"← 返回证据列表"} />}</a>
+      <a className="evidence-back-link" href={hashHref(paths.evidenceIndex({ symbol }))}>{<Tx text={"← 返回证据列表"} />}</a>
       {sourceByRoute
         ? <MaterialEvidenceDetail version={selectedVersion} brief={brief} source={sourceByRoute} onOpenAnalysis={() => openFullAnalysis(sourceByRoute)} />
-        : <div className="evidence-empty-state"><h3>{<Tx text={"该版本没有引用这份材料"} />}</h3><p>{<Tx text={"证据页只展示研究简报实际引用的材料。可以返回列表选择其他材料。"} />}</p><a className="secondary-action" href={`#${BASE_HASH}`}>{<Tx text={"返回列表"} />}</a></div>}
+        : <div className="evidence-empty-state"><h3>{<Tx text={"该版本没有引用这份材料"} />}</h3><p>{<Tx text={"证据页只展示研究简报实际引用的材料。可以返回列表选择其他材料。"} />}</p><a className="secondary-action" href={hashHref(paths.evidenceIndex({ symbol }))}>{<Tx text={"返回列表"} />}</a></div>}
     </>}
 
     {selectedVersion && !route && <>

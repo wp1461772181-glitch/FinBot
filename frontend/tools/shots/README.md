@@ -10,15 +10,17 @@ Normally run it through `fe-check.sh` (it builds with `VITE_API_BASE_URL=https:/
 npm ci                                  # playwright-core 1.65.0, pngjs, pixelmatch (uses the browser already in ~/.cache/ms-playwright)
 node run.mjs --dist ../../dist --out out/a [--pages a,b] [--widths 390,1440] [--themes light,dark] [--locale zh-CN] [--strict]
 node compare.mjs out/a out/b [--out out/diff] [--max-diff-pixels 0]
-node smoke.mjs --dist ../../dist [--strict]
+node smoke.mjs --dist ../../dist [--strict] [--only <text in a check name>]
 ```
 
 - `run.mjs` writes `<page>.<theme>.<width>.png` plus `report.json` (per-shot `console.error` / `pageerror`, and the list of
   API requests no fixture answered). `--strict` fails when that list is not empty.
 - `compare.mjs` compares same-named PNGs; a size change or a missing file counts as a difference. Exit code 1 on any.
-- `smoke.mjs` prints PASS / FAIL per check; any FAIL exits 1.
+- `smoke.mjs` prints PASS / FAIL per check; any FAIL exits 1. `--only <text>` runs just the checks whose name contains it.
+- `utility-legacy-collisions` (smoke, no browser, reads `<dist>/assets/*.css` and `<dist>/../src`): fails when a class the built `utilities` layer defines is also an old class name (`src/styles/legacy/*.css`, `className` strings of the old `.tsx` in the `src/` root). Tailwind scans `src/app`, `src/components`, `src/dev`, and a word in a comment there (`table`, `contents`…) becomes a utility that beats the `legacy` layer. Fix by rewording or moving the code; `ALLOWED` in `collisions.mjs` takes an entry only with a reason.
 
 ## Determinism
+`settle()` forces one layout of every native `<select>` after the fonts are ready (a select lays its text out once, and a web font that lands later leaves it 1px off, depending on when the page mounted it).
 Fixed system time (2026-11-13 10:00 Beijing), seeded `Math.random`, reduced motion, all CSS animation/transition/caret off,
 fonts and network idle awaited, the chat transcript pinned to its bottom, single-threaded software raster. Two runs of one
 build must compare with 0 different pixels; if they do not, fix the tool, do not raise the threshold.

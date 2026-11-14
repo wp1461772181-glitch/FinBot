@@ -6,7 +6,7 @@ const read = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), 
 const topbar = (source) => source.slice(source.indexOf('<header className="topbar">'), source.indexOf("</header>", source.indexOf('<header className="topbar">')));
 
 test("the topbar no longer carries the theme and language selects", () => {
-  const bar = topbar(read("App.tsx"));
+  const bar = topbar(read("Shell.tsx"));   // P2.1: the shell moved from App.tsx
   assert.ok(bar.includes("toolbar-controls"), "topbar still present");
   assert.doesNotMatch(bar, /id="theme"/);
   assert.doesNotMatch(bar, /id="locale"/);

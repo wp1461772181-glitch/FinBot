@@ -3,18 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, getMaterialLibrary } from "./api";
 import { MaterialAnalysisDetail } from "./MaterialAnalysisDetail";
 import type { FilingScanResult, MaterialAnalysisStatus, MaterialItem, MaterialSourceType } from "./types";
-import { MATERIAL_FOCUS_KEY, librarySymbol, usableFocus, type UsableFocus } from "./material-focus.mjs";
+import { librarySymbol, usableFocus, type UsableFocus } from "./material-focus.mjs";
 
 type MaterialFocus = UsableFocus;
-
-// A focus comes from a brief's citation (with its analysis) or a save reply's link (#materials?focus=, none yet).
-function takeMaterialFocus(symbol: string): MaterialFocus | null {
-  try {
-    const raw = window.sessionStorage.getItem(MATERIAL_FOCUS_KEY);
-    window.sessionStorage.removeItem(MATERIAL_FOCUS_KEY);
-    return raw ? usableFocus(JSON.parse(raw), symbol) : null;
-  } catch { return null; }
-}
 
 const STATUS_LABEL: Record<MaterialAnalysisStatus, string> = {
   not_started: "待分析", queued: "排队中", running: "分析中", succeeded: "已分析", failed: "最近失败", blocked_data: "缺少正文",
@@ -30,7 +21,8 @@ function statusLabel(item: MaterialItem): string {
     : STATUS_LABEL.blocked_data;
 }
 
-export function MaterialLibrary({ symbol, onScan }: { symbol: string; onScan: () => Promise<FilingScanResult> }) {
+// A focus comes from the address (?focus=&type=, plus &analysis= from a brief's citation): the page that mounts the library hands it in.
+export function MaterialLibrary({ symbol, focus, onScan }: { symbol: string; focus: unknown; onScan: () => Promise<FilingScanResult> }) {
   const { t } = useLocale();
   const [sourceType, setSourceType] = useState<MaterialSourceType | "all">("all");
   const [analysisStatus, setAnalysisStatus] = useState("all");
@@ -39,7 +31,7 @@ export function MaterialLibrary({ symbol, onScan }: { symbol: string; onScan: ()
   const listSymbol = librarySymbol(scope, symbol);
   const [offset, setOffset] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [materialFocus, setMaterialFocus] = useState<MaterialFocus | null>(() => takeMaterialFocus(symbol));
+  const [materialFocus, setMaterialFocus] = useState<MaterialFocus | null>(() => usableFocus(focus, symbol));
   const [focusAnalysisId, setFocusAnalysisId] = useState<string | null>(null);
   const [focusMessage, setFocusMessage] = useState<string | null>(null);
   const [scanState, setScanState] = useState<{ kind: "idle" } | { kind: "running" } | { kind: "success"; message: string } | { kind: "error"; message: string }>({ kind: "idle" });

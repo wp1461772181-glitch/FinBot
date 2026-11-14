@@ -31,6 +31,8 @@ import { toolLabel } from "./agent-tool-labels.mjs";
 import { ThinkingPanel } from "./ThinkingPanel";
 import { cancelRunning, upsertNode, type FlowNode } from "./turn-flow.mjs";
 import { addToWatchlist, queueAddTicker, watchlistSnapshot } from "./watchlist-bridge.mjs";
+import { useNavigate } from "react-router";
+import { paths } from "./routes.mjs";
 import { createArchive, createSerializedWriter, isPickerCancelled, mergeConversation, serializeArchive, validateArchive, writeAtomically, type ArchiveConversation, type ChatArchive } from "./chat-archive.mjs";
 
 type State = "idle" | "testing" | "ready" | "sending" | "restoring" | "error";
@@ -372,8 +374,8 @@ export function useLineStatus() { return useChat().lineStatus; }
 
 const SIDE_OPEN_KEY="market-evidence-agent:bot-side-open:v1";
 function PanelIcon(){return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg>}
-export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled,onBotChanged }: { onSettings: () => void; onModeChange:(mode:"guest"|"personal")=>void; bot?: Bot | null; side?: ReactNode; onTurnSettled?: () => void; onBotChanged?: () => void }) {
-  const { t } = useLocale(), c = useChat(), transcriptRef = useRef<HTMLElement>(null);
+export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled,onBotChanged,openSide }: { onSettings: () => void; onModeChange:(mode:"guest"|"personal")=>void; bot?: Bot | null; side?: ReactNode; onTurnSettled?: () => void; onBotChanged?: () => void; openSide?: boolean }) {
+  const { t } = useLocale(), c = useChat(), transcriptRef = useRef<HTMLElement>(null), navigate = useNavigate();
   // A finished turn changes the bot's last line (and gives a new bot its conversation): tell the list.
   const wasSending=useRef(false);
   useEffect(()=>{if(c.state==="sending"){wasSending.current=true;return;}if(wasSending.current){wasSending.current=false;onTurnSettled?.();}},[c.state]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -386,7 +388,7 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled,
   const [openCitationTurn,setOpenCitationTurn]=useState<number|null>(null);
   const [historyOpen,setHistoryOpen]=useState(false);
   // A bot's right rail (工作区 / 档案) folds away so the thread can use the full width; the choice is kept.
-  const [sideOpen,setSideOpen]=useState(()=>{try{return localStorage.getItem(SIDE_OPEN_KEY)!=="0"}catch{return true}});
+  const [sideOpen,setSideOpen]=useState(()=>{if(openSide)return true;try{return localStorage.getItem(SIDE_OPEN_KEY)!=="0"}catch{return true}});
   const toggleSide=()=>setSideOpen(open=>{const next=!open;try{localStorage.setItem(SIDE_OPEN_KEY,next?"1":"0")}catch{/* optional preference */}return next});
   // On a narrow screen the history drawer covers the header toggle, so Esc and a tap outside close it.
   useEffect(()=>{if(!historyOpen)return;const onKey=(e:KeyboardEvent)=>{if(e.key==="Escape")setHistoryOpen(false)};window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey)},[historyOpen]);
@@ -417,7 +419,7 @@ export function AgentChatPanel({ onSettings,onModeChange,bot,side,onTurnSettled,
     // 归档的是当前打开的对话时，像"新建对话"一样清空，避免继续往已归档的对话里写
     if(item.id===currentConversation)c.clear();
   }
-  function switchMode(){if(mode==="personal"){setChatMode("guest");setMode("guest");onModeChange("guest");window.location.hash="#agent"}else{setLoginOpen(true);setLoginError("")}}
+  function switchMode(){if(mode==="personal"){setChatMode("guest");setMode("guest");onModeChange("guest");navigate(paths.chat())}else{setLoginOpen(true);setLoginError("")}}
   async function submitPersonalLogin(){try{const credential=await personalChatLogin(loginCode);setChatMode("personal",credential);setLoginCode("");setMode("personal");onModeChange("personal");setLoginOpen(false)}catch{setLoginError(t("个人登录失败，请稍后重试。"))}}
   async function copyAnswer(text:string,index:number){setCopied(null);setCopyStatus(t("正在复制…"));let timer:number|undefined;try{const clipboard=navigator.clipboard?.writeText(text);if(!clipboard)throw Error("clipboard_unavailable");await Promise.race([clipboard,new Promise<never>((_,reject)=>{timer=window.setTimeout(()=>reject(Error("clipboard_timeout")),1800)})]);setCopied(index);setCopyStatus(t("已复制"));}catch{setCopied(-index-1);setCopyStatus(t("复制失败；请选中回答后手动复制。"));const article=document.getElementById(`chat-message-${index}`);const range=document.createRange();if(article){range.selectNodeContents(article.querySelector(".markdown-body")??article);window.getSelection()?.removeAllRanges();window.getSelection()?.addRange(range);}}finally{if(timer)window.clearTimeout(timer);window.setTimeout(()=>{setCopied(null);setCopyStatus("")},3500)}}
   // The same action as a citation link in the answer (see the `a` renderer): open the drawer and the source.
