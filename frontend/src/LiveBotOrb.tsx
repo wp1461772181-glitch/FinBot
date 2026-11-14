@@ -27,8 +27,8 @@ function useReducedMotion() {
 
 type Msg = { role?: string; content?: string; status?: string; tool_trace?: ReadonlyArray<{ status?: string }> };
 
-export function LiveBotOrb({ avatar, look: stored, name, seed, size = 30, chatState, messages, unread = false, onAcknowledge, className = "" }: {
-  avatar: string | null | undefined; look?: unknown; name: string; seed?: string; size?: number;
+export function LiveBotOrb({ avatar, look: stored, name, seed, arrivalKey, size = 30, chatState, messages, unread = false, onAcknowledge, className = "" }: {
+  avatar: string | null | undefined; look?: unknown; name: string; seed?: string; arrivalKey?: string; size?: number;
   chatState: string; messages: ReadonlyArray<Msg>; unread?: boolean; onAcknowledge?: () => void; className?: string;
 }) {
   const parsed = parseAvatar(avatar, name);
@@ -46,7 +46,7 @@ export function LiveBotOrb({ avatar, look: stored, name, seed, size = 30, chatSt
   };
 
   // Arrival: once per bot per page session (never under reduced motion).
-  useEffect(() => { if (shouldArrive(arrived, seed || name, reduced)) director.send({ type: "arrive" }, nowSec()); }, [director]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (shouldArrive(arrived, arrivalKey || seed || name, reduced)) director.send({ type: "arrive" }, nowSec()); }, [director]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Turn lifecycle. Mounting onto a running turn (switching back to a bot that is still answering) skips the "noticed you" beat.
   useEffect(() => {

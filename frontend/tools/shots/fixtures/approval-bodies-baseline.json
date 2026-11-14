@@ -1,0 +1,19 @@
+{
+  "confirm": [
+    "{\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"message\":\"confirm:fetch_analyze\",\"conversation_id\":null,\"pending_request_id\":\"d0000000-0000-4000-8000-0000000000a1\",\"display_message\":\"确认执行\"}"
+  ],
+  "cancel": [
+    "{\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"message\":\"cancel\",\"conversation_id\":null,\"pending_request_id\":\"d0000000-0000-4000-8000-0000000000a1\",\"display_message\":\"先不要\"}"
+  ],
+  "option": [
+    "{\"bot_id\":\"b0000000-0000-4000-8000-000000000005\",\"message\":\"pick-second-result\",\"conversation_id\":null,\"pending_request_id\":\"d0000000-0000-4000-8000-0000000000b2\",\"display_message\":\"第二条结果\"}"
+  ],
+  "reply": [
+    "{\"bot_id\":\"b0000000-0000-4000-8000-000000000005\",\"message\":\"两个都看看\",\"conversation_id\":null,\"pending_request_id\":\"d0000000-0000-4000-8000-0000000000b2\"}"
+  ],
+  "revisionDisabledAtStart": true,
+  "revisionEnabledAfterTwo": true,
+  "revision": [
+    "{\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"message\":\"confirm:revise_forecast:1.3\",\"conversation_id\":null,\"pending_request_id\":\"d0000000-0000-4000-8000-0000000000c3\",\"display_message\":\"用所选的 2 份材料修订\"}"
+  ]
+}

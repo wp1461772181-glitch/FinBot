@@ -23,7 +23,7 @@ function HistoryRow({item,current,onOpen,onRename,onArchive}:{item:ConversationS
     if(next===item.title.trim()){setEditing(false);setError("");return}
     setSaving(true);setError("");
     try{await onRename(next);setEditing(false)}
-    catch(e){setError(e instanceof Error?e.message:t("重命名失败，请重试"))}
+    catch(e){setError(e instanceof Error?t(e.message):t("重命名失败，请重试"))}
     finally{setSaving(false)}
   }
   if(editing)return <div className="rounded-md bg-accent p-2"><div className="flex flex-col gap-1">
@@ -48,9 +48,9 @@ function HistoryRow({item,current,onOpen,onRename,onArchive}:{item:ConversationS
 export function HistoryList({ bot, historyOpen, setHistoryOpen }: { bot?: Bot | null; historyOpen: boolean; setHistoryOpen: Dispatch<SetStateAction<boolean>> }) {
   const { t } = useLocale(), c = useChat();
   const [history,setHistory]=useState<ConversationSummary[]>([]),[historyHasMore,setHistoryHasMore]=useState(false),[historyError,setHistoryError]=useState(""),[historyLoading,setHistoryLoading]=useState(false),mode=getChatMode();
-  async function refreshHistory(){setHistoryLoading(true);setHistoryError("");try{const result=await listAgentConversations();setHistory(result.conversations);setHistoryHasMore(result.hasMore)}catch(e){setHistoryError(e instanceof Error?e.message:t("历史对话暂时无法加载。"))}finally{setHistoryLoading(false)}}
+  async function refreshHistory(){setHistoryLoading(true);setHistoryError("");try{const result=await listAgentConversations();setHistory(result.conversations);setHistoryHasMore(result.hasMore)}catch(e){setHistoryError(e instanceof Error?t(e.message):t("历史对话暂时无法加载。"))}finally{setHistoryLoading(false)}}
   useEffect(()=>{void refreshHistory()},[c.state,mode]);
-  async function loadMoreHistory(){try{const result=await listAgentConversations(history.length);setHistory(items=>[...items,...result.conversations]);setHistoryHasMore(result.hasMore)}catch(e){setHistoryError(e instanceof Error?e.message:t("历史对话暂时无法加载。"))}}
+  async function loadMoreHistory(){try{const result=await listAgentConversations(history.length);setHistory(items=>[...items,...result.conversations]);setHistoryHasMore(result.hasMore)}catch(e){setHistoryError(e instanceof Error?t(e.message):t("历史对话暂时无法加载。"))}}
   async function openHistory(item:ConversationSummary){await c.openConversation(item.id,item.created_at);setHistoryOpen(false)}
   async function renameHistory(item:ConversationSummary,title:string){
     const saved=await renameAgentConversation(item.id,title);
@@ -58,7 +58,7 @@ export function HistoryList({ bot, historyOpen, setHistoryOpen }: { bot?: Bot | 
     else setHistory(items=>items.map(entry=>entry.id===item.id?{...entry,title:saved,custom_title:true}:entry));
   }
   async function archiveHistory(item:ConversationSummary){
-    try{await archiveAgentConversation(item.id,true)}catch(e){setHistoryError(e instanceof Error?e.message:t("归档失败，请重试"));return}
+    try{await archiveAgentConversation(item.id,true)}catch(e){setHistoryError(e instanceof Error?t(e.message):t("归档失败，请重试"));return}
     setHistory(rows=>rows.filter(row=>row.id!==item.id));
     // 归档的是当前打开的对话时，像"新建对话"一样清空，避免继续往已归档的对话里写
     if(item.id===currentConversation)c.clear();

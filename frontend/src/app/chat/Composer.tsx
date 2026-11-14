@@ -1,14 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
-import { ArrowUp, Square } from "lucide-react";
+import { ArrowUp, ChevronUp, Hand, Square } from "lucide-react";
 import { useDelayedFlag } from "@/components/state/Skeleton";
 import { GuestComposerNotice } from "@/components/GuestComposerNotice";
 import { listSkills, getChatMode, type Skill, type Bot } from "../../api";
 import { composerKeyAction } from "../../composer-keys.mjs";
+import { isActiveClarification } from "../../chat-clarification.mjs";
 import { slashMatches } from "../../skill-items.mjs";
 import { useLocale } from "../../i18n";
 import { ContextMeter } from "./ContextMeter";
 import { ModelEffortPicker } from "./ModelEffortPicker";
 import { useChat } from "./ChatSessionProvider";
+import { focusWaitingCard } from "./approval-focus";
 
 /** The input box grows with what is typed, up to this share of the viewport height, then scrolls inside. */
 const MAX_HEIGHT_SHARE = 0.4;
@@ -44,6 +46,9 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
   // A history restore that drags on can be cancelled too; a quick one never flashes the stop button.
   const slowRestore = useDelayedFlag(c.restoring, 1200);
   const stoppable = sending || slowRestore;
+  // The bot is waiting on a card in the thread (S9): a strip above the input says so and takes the reader to it.  The input stays usable: a typed line goes out as an ordinary message.
+  const waitingCard = !c.archiveView && !c.restoring && c.verified && !sending && isActiveClarification(c.messages, c.messages.length - 1, false);
+  const waitingName = bot?.name ?? t("模型");
   const sendDisabled = Boolean(c.archiveView) || c.restoring || !c.verified || !c.draft.trim() || sending;
   const fine = typeof window !== "undefined" && window.matchMedia?.("(pointer: fine) and (min-width: 640px)").matches;
   const placeholder = bot ? `${t("给")} ${bot.name} ${t("发消息…")}${fine ? ` · ${t("Enter 发送，Shift+Enter 换行")}` : ""}` : t(c.verified ? "给 Agent 发消息…" : "登录个人聊天后才能对话");
@@ -56,7 +61,11 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
     </div>
   </div>;
   return <div className="mx-auto w-full max-w-[760px] px-4 pb-[max(1rem,env(safe-area-inset-bottom))] lg:px-6">
-    {c.status && c.state !== "sending" && <p data-testid="chat-status" role={c.state === "error" ? "alert" : "status"} className={`mb-2 px-1 text-small ${c.state === "error" ? "text-danger" : "text-muted-foreground"}`}>{c.status}</p>}
+    <div role="status" aria-live="polite" className="sr-only">{waitingCard ? `${waitingName} ${t("在等你确认")}` : ""}</div>
+    {waitingCard && <button type="button" data-testid="waiting-strip" onClick={() => void focusWaitingCard()} className="material-action mb-2 flex min-h-11 w-full items-center gap-2 px-3 text-left text-small text-ink outline-none hover:brightness-95 focus-visible:ring-2 focus-visible:ring-ring sm:min-h-9">
+      <Hand aria-hidden="true" className="size-4 shrink-0 text-action" /><span className="min-w-0 flex-1 truncate">{waitingName} {t("在等你确认上面的卡片")}</span><ChevronUp aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+    </button>}
+    {c.status && c.state !== "sending" && c.state !== "error" && <p data-testid="chat-status" role="status" className="mb-2 px-1 text-small text-muted-foreground">{c.status}</p>}
     <form ref={form} data-testid="composer" onSubmit={c.send} className="relative rounded-lg border border-line-strong bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.04)] focus-within:border-ink-2">
       <label htmlFor="agent-draft" className="sr-only">{t("输入消息")}</label>
       {slashItems.length > 0 && <ul id="skill-picker" data-testid="slash-menu" role="listbox" aria-label={t("技能")} className="absolute inset-x-0 bottom-full z-overlay mb-2 max-h-64 overflow-y-auto rounded-md border border-line bg-surface p-1 shadow-pop">
@@ -85,4 +94,4 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
 }
 
 // The send / stop button: ink on paper.  Its focus ring is the bot's signature colour (design 2.3; one of the three places it shows).
-const sendButton = "inline-flex size-9 items-center justify-center rounded-full bg-ink text-background outline-none transition-opacity duration-1 hover:opacity-85 focus-visible:ring-2 focus-visible:ring-bot focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-30";
+const sendButton = "inline-flex size-9 max-lg:size-11 items-center justify-center rounded-full bg-ink text-background outline-none transition-opacity duration-1 hover:opacity-85 focus-visible:ring-2 focus-visible:ring-bot focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-30";

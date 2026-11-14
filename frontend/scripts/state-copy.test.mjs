@@ -24,8 +24,7 @@ const CONFIRM_SITES = ["BotRoutines.tsx", "BotSidePanel.tsx", "app/settings/Mode
 // P3.1 moved the old chat page and settings page (legacy markup, copy untouched) into src/app/.  Their copy has gaps in the
 // English catalog that were always there (they were in the old-pages group this test never read), so the moved files stay out
 // of this scan, exactly as they were.  Each P3.2-P3.4 / P8.2 package takes its files off this list when it restyles them.
-const LEGACY_MOVED = new Set(["ChatSessionProvider", "ClarificationCard"].map((name) => `app/chat/${name}.tsx`)
-  .concat(["AppearanceCard", "ChatArchiveSettings", "MaterialAnalysisDefaultCard", "ModelCatalogCard", "PushoverCard", "SettingsPage", "TelegramBindCard"].map((name) => `app/settings/${name}.tsx`)));
+const LEGACY_MOVED = new Set(["AppearanceCard", "ChatArchiveSettings", "MaterialAnalysisDefaultCard", "ModelCatalogCard", "PushoverCard", "SettingsPage", "TelegramBindCard"].map((name) => `app/settings/${name}.tsx`));
 
 test("every t(\"…\") literal in the state components, the palette and the shell is in the English catalog", async () => {
   const scanned = [...await files(path.join(root, "components/state")), ...await files(path.join(root, "components/command")), ...await files(path.join(root, "app"))]

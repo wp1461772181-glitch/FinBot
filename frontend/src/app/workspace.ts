@@ -22,6 +22,8 @@ export type Workspace = {
   /** Open a company's page: its overview, or its forecasts. */
   openCompany: (ticker: string, view?: "overview" | "forecast") => void;
   removeWatchSymbol: (ticker: string) => void;
+  /** Open the new-bot dialog (the sidebar's 新建 bot; the phone's bot switcher has the same entry). */
+  openNewBot: () => void;
 };
 
 export const WorkspaceContext = createContext<Workspace | null>(null);

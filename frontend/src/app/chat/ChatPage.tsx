@@ -10,6 +10,8 @@ import { Composer } from "./Composer";
 import { ContextPanel } from "./ContextPanel";
 import { PanelProvider } from "./panel-context";
 import { useChat } from "./ChatSessionProvider";
+import { useKeyboardInset } from "./use-keyboard-inset";
+import { usePhone } from "./use-media";
 
 /**
  * The chat page (design 4.2): the header, then the history list (no bot) | the thread with its composer | the right panel.
@@ -34,7 +36,9 @@ function ChatPageBody({ bot, workspace, profile, onTurnSettled, onBotChanged }: 
   useEffect(() => { if (!historyOpen) return; const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setHistoryOpen(false); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [historyOpen]);
   const draftBox = useRef<HTMLTextAreaElement>(null);
   const color = bot ? resolveLook(bot.id, bot.avatar, bot.look).color : undefined;
-  return <main data-slot="chat-page" data-testid="chat-page" data-bot-color={color} aria-labelledby="chat-title" className="agent-page flex min-h-0 flex-1 flex-col bg-background">
+  // A phone's on-screen keyboard that covers the page (iOS) lifts the composer by as much as it covers; where the browser resizes the layout instead, this is 0.
+  const keyboard = useKeyboardInset(usePhone());
+  return <main data-slot="chat-page" data-testid="chat-page" data-bot-color={color} aria-labelledby="chat-title" style={keyboard ? { paddingBottom: keyboard } : undefined} className="agent-page flex min-h-0 flex-1 flex-col bg-background">
     <ChatHeader bot={bot} historyOpen={historyOpen} setHistoryOpen={setHistoryOpen} />
     <div data-testid="chat-body" className="relative flex min-h-0 flex-1">
       <div className={`grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] gap-0 ${bot ? "" : "lg:grid-cols-[264px_minmax(0,1fr)]"}`}>

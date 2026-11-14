@@ -2,11 +2,11 @@
 // One named function per check, registered in CHECKS.  Later phases append checks here.
 import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
-import { launch, newView, settle } from "./harness.mjs";
+import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, firstAnswer, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, clickSend, endWithCard, endWithError, firstAnswer, handTurn, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, CONVERSATION, HAND_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
-import { CLARIFY_REQUEST_ID, olderTurns } from "./fixtures/chat.mjs";
+import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
 import { MATERIALS } from "./fixtures/materials.mjs";
@@ -1636,15 +1636,16 @@ async function chatCancel(ctx) {
     await hand.push(0, "delta", { text: "已经生成的前半句，" });
     await page.locator("[data-testid=message][data-role=assistant]", { hasText: "已经生成的前半句" }).waitFor({ timeout: 10000 });
     await page.locator("[data-testid=stop]").click();
-    await page.locator("[data-testid=chat-status]", { hasText: "已取消" }).waitFor({ timeout: 10000 });
-    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "本轮已取消" }).waitFor({ timeout: 10000 });
+    // P3.4: the old status line (兼任进度与报错) is gone; the stop is a grey 「已停止」 line on the message itself.
+    await page.locator("[data-testid=message][data-role=assistant] [data-testid=stopped-note]", { hasText: "已停止" }).waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=chat-status]").count()) === 0, "the composer's status line is back");
     assert((await page.locator("[data-testid=message][data-role=assistant]", { hasText: "已经生成的前半句" }).count()) === 1, "the text generated before the cancel is gone");
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     await page.locator("#agent-draft").fill("取消之后还能再输入");
     assert((await page.locator("#agent-draft").inputValue()) === "取消之后还能再输入", "composer did not accept input after the cancel");
     assert(await hand.aborted(0), "the request was not aborted");
     assert((await page.locator("[data-testid=stop]").count()) === 0, "the cancel button is still there");
-    return "partial text kept, 已取消 status and the message's own note shown, request aborted, composer usable";
+    return "partial text kept, 已停止 shown on the message, no status line, request aborted, composer usable";
   } finally { await view.close(); }
 }
 
@@ -1692,10 +1693,10 @@ async function chatClarification(ctx) {
     await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
     await page.locator("#agent-draft").fill(`${ASK_MARKER} 查一下结果`);
     await page.locator("[data-testid=send]").click();
-    const card = page.locator(".agent-clarification-card");
+    const card = page.locator("[data-slot=approval-card][data-state=active]");
     await card.waitFor({ timeout: 10000 });
     assert((await card.locator("button", { hasText: "第二条结果" }).isEnabled()), "the card's options are not enabled");
-    assert(!(await card.evaluate((el) => el.classList.contains("is-write"))), "a plain question is drawn as a write card");
+    assert((await card.getAttribute("data-kind")) === "question", "a plain question is drawn as a write card");
     await card.locator("button", { hasText: "第二条结果" }).click();
     await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
     assert(bodies.length === 2, `expected two stream requests, saw ${bodies.length}`);
@@ -1705,8 +1706,10 @@ async function chatClarification(ctx) {
     assert(next.display_message === "第二条结果", `display_message was ${JSON.stringify(next.display_message)}`);
     assert(next.bot_id === BOT.teslabot, "the answer went out without the bot id");
     await page.locator("[data-testid=message][data-role=user]", { hasText: "第二条结果" }).waitFor({ timeout: 10000 });
-    assert(await page.locator(".agent-clarification-card").evaluate((el) => el.classList.contains("is-locked")), "the answered card is not locked");
-    return "card ends the turn, the pick goes out as the next turn with its request id, the card locks";
+    const folded = page.locator("[data-slot=approval-card][data-state=answered]");
+    assert((await folded.count()) === 1 && (await page.locator("[data-slot=approval-card][data-state=active]").count()) === 0, "the answered card did not fold to its line");
+    assert(/已回答.*第二条结果/.test(await folded.innerText()), `the folded card says ${JSON.stringify(await folded.innerText())}`);
+    return "card ends the turn, the pick goes out as the next turn with its request id, the card folds to one line";
   } finally { await view.close(); }
 }
 
@@ -1716,7 +1719,7 @@ async function chatWriteConfirm(ctx) {
   try {
     const { page } = confirmView;
     const bodies = watchPosts(page, STREAM_PATH);
-    const card = page.locator(".agent-clarification-card.is-write");
+    const card = page.locator("[data-slot=approval-card][data-state=active][data-kind=write]");
     await card.waitFor({ timeout: 10000 });
     await card.locator("button", { hasText: "确认执行" }).click();
     await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
@@ -1729,7 +1732,7 @@ async function chatWriteConfirm(ctx) {
   try {
     const { page } = declineView;
     const bodies = watchPosts(page, STREAM_PATH);
-    const card = page.locator(".agent-clarification-card.is-write");
+    const card = page.locator("[data-slot=approval-card][data-state=active][data-kind=write]");
     await card.waitFor({ timeout: 10000 });
     await card.locator("button", { hasText: "先不要" }).click();
     await page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
@@ -2056,14 +2059,13 @@ async function stopButton(ctx) {
     assert((await page.getByRole("button", { name: "取消请求" }).count()) === 0, "the old 取消请求 button is still there");
     assert(/停止|Stop/.test(await stop.getAttribute("aria-label") ?? ""), "the stop button has no name");
     await stop.click();
-    await page.locator("[data-testid=chat-status]", { hasText: "已取消" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=stopped-note]", { hasText: "已停止" }).waitFor({ timeout: 10000 });
     assert(await hand.aborted(0), "pressing stop did not abort the request");
-    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "本轮已取消" }).waitFor({ timeout: 10000 });
     await page.locator("[data-testid=send]").waitFor({ timeout: 10000 });
     const back = await send.boundingBox();
     assert(back && Math.abs(back.x - idle.x) <= 1 && Math.abs(back.y - idle.y) <= 1, "send did not come back to its place");
     assert((await page.locator("[data-testid=stop]").count()) === 0, "stop is still showing after the cancel");
-    return "send -> stop in the same box; stop aborts the request, 已取消 status, partial text kept; send is back in place";
+    return "send -> stop in the same box; stop aborts the request, 已停止 on the message, partial text kept; send is back in place";
   } finally { await view.close(); }
 }
 
@@ -2627,10 +2629,505 @@ async function stepsPending(ctx) {
   } finally { await view.close(); }
 }
 
+
+// --- P3.4: the confirmation card, the state rows, the phone's drawers --------------------------------------------------------------
+/** A fresh view of a chat address at any width (openChat is 1440 and the default line only). */
+async function openChatAt(ctx, label, { width = 1440, hash = "#/chat", theme = "light", ready = "[data-testid=message]", fixtureState } = {}) {
+  const view = await newView(ctx.browser, { width, theme, label, unmatched, ...(fixtureState ? { fixtureState } : {}) });
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  await view.page.waitForSelector(ready, { state: "visible", timeout: 15000 });
+  await settle(view.page);
+  return view;
+}
+const APPROVAL = "[data-slot=approval-card]";
+const ACTIVE_CARD = "[data-slot=approval-card][data-state=active]";
+const BASELINE = JSON.parse(fs.readFileSync(new URL("./fixtures/approval-bodies-baseline.json", import.meta.url), "utf8"));
+/** Raw bodies of the stream requests, as the browser sent them (a string each), to compare byte for byte. */
+function watchRaw(page) {
+  const raw = [];
+  page.on("request", (request) => { if (request.method() === "POST" && STREAM_PATH.test(new URL(request.url()).pathname)) raw.push(request.postData()); });
+  return raw;
+}
+/** In TeslaBot's line: send the ASK marker and wait for its card. */
+async function askInTesla(ctx, label) {
+  const view = await openChatAt(ctx, label, { hash: `#/chat/${BOT.teslabot}`, ready: "[data-testid=welcome]" });
+  const { page } = view;
+  const raw = watchRaw(page);
+  await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+  await page.locator("#agent-draft").fill(`${ASK_MARKER} 查一下结果`);
+  await clickSend(page);
+  await page.locator(ACTIVE_CARD).waitFor({ timeout: 10000 });
+  return { view, raw };
+}
+const answered = (page) => page.locator("[data-testid=message][data-role=assistant]", { hasText: FAKE_ANSWER }).waitFor({ timeout: 10000 });
+
+/**
+ * The five things a card can send are byte for byte what the old card sent: the bodies were recorded from the old card on the unchanged build
+ * (fixtures/approval-bodies-baseline.json) and the new card must produce the same strings.
+ */
+async function approvalRequestBody(ctx) {
+  const got = {};
+  { const view = await openChatAt(ctx, "approval-body-confirm"); try { const raw = watchRaw(view.page); await view.page.locator(`${ACTIVE_CARD} button`, { hasText: "确认执行" }).click(); await answered(view.page); got.confirm = raw.slice(); } finally { await view.close(); } }
+  { const view = await openChatAt(ctx, "approval-body-cancel"); try { const raw = watchRaw(view.page); await view.page.locator(`${ACTIVE_CARD} button`, { hasText: "先不要" }).click(); await answered(view.page); got.cancel = raw.slice(); } finally { await view.close(); } }
+  { const { view, raw } = await askInTesla(ctx, "approval-body-option"); try { await view.page.locator(`${ACTIVE_CARD} button`, { hasText: "第二条结果" }).click(); await answered(view.page); got.option = raw.slice(1); } finally { await view.close(); } }
+  { const { view, raw } = await askInTesla(ctx, "approval-body-reply"); try { const form = view.page.locator(`${ACTIVE_CARD} form`); await form.locator("input").fill("两个都看看"); await form.getByRole("button", { name: "发送" }).click(); await answered(view.page); got.reply = raw.slice(1); } finally { await view.close(); } }
+  { const view = await openChatAt(ctx, "approval-body-revision"); try {
+      const { page } = view; const raw = watchRaw(page);
+      const hand = await handTurn(page, { text: "修订", lead: "可以用下面这些新材料修订预测，请勾选。", turnId: "t9000000-0000-4000-8000-0000000000e9" });
+      await endWithCard(hand, 0, revisionCard(), "t9000000-0000-4000-8000-0000000000e9");
+      const card = page.locator(ACTIVE_CARD); await card.waitFor();
+      await card.locator("input[type=checkbox]").nth(2).check(); await card.locator("input[type=checkbox]").nth(0).check();
+      const before = raw.length; await card.locator("button", { hasText: "用所选材料修订" }).click(); await answered(page); got.revision = raw.slice(before);
+    } finally { await view.close(); } }
+  for (const key of ["confirm", "cancel", "option", "reply", "revision"]) {
+    assert(got[key]?.length === 1, `${key}: expected one request, saw ${got[key]?.length}`);
+    // The one thing that may differ is the id of the card the check pushed itself (the baseline's revision card used another request id of the same shape).
+    assert(got[key][0] === BASELINE[key][0], `${key} request changed:\n  now      ${got[key][0]}\n  baseline ${BASELINE[key][0]}`);
+  }
+  return "confirm, cancel, option, typed reply and ticked materials: five request bodies identical to the old card's, byte for byte";
+}
+
+/** Acceptance 2: the revision card does not tick anything for the reader, holds its button until the minimum is ticked and says why; with no candidate it says so. */
+async function revisionCardMinSelect(ctx) {
+  const view = await openChatAt(ctx, "revision-min-select");
+  try {
+    const { page } = view;
+    const hand = await handTurn(page, { text: "修订", lead: "可以用下面这些新材料修订预测，请勾选。" });
+    await endWithCard(hand, 0, revisionCard());
+    const card = page.locator(ACTIVE_CARD); await card.waitFor({ timeout: 10000 });
+    const boxes = card.locator("input[type=checkbox]"), main = card.locator("[data-approval-primary]");
+    assert((await boxes.count()) === 3, "the card does not list its three materials");
+    assert((await card.locator("input[type=checkbox]:checked").count()) === 0, "a material is ticked before the reader ticked it");
+    assert(await main.isDisabled(), "the main button is usable with nothing ticked");
+    const reason = card.locator("[data-slot=approval-reason]");
+    assert(/至少勾选 2 份材料/.test(await reason.innerText()), `the reason says ${JSON.stringify(await reason.innerText().catch(() => null))}`);
+    assert((await main.getAttribute("aria-describedby")) === (await reason.getAttribute("id")), "the reason is not tied to the disabled button");
+    assert(!(await card.innerText()).match(/全选|推荐|自动选/), "the card offers to choose for the reader");
+    await boxes.nth(0).check();
+    assert(await main.isDisabled(), "the main button is usable with one of two ticked");
+    await boxes.nth(2).check();
+    assert(await main.isEnabled(), "the main button stays disabled with two ticked");
+    assert((await reason.count()) === 0, "the reason is still shown with enough ticked");
+    await boxes.nth(2).uncheck();
+    assert(await main.isDisabled(), "the main button did not go back to disabled");
+    // The card with nothing to tick.
+    const none = await openChatAt(ctx, "revision-none");
+    try {
+      const h = await handTurn(none.page, { text: "修订", lead: "这版预测没有可用于修订的新材料。" });
+      await endWithCard(h, 0, revisionCard({ candidates: false }));
+      const c = none.page.locator(ACTIVE_CARD); await c.waitFor({ timeout: 10000 });
+      assert((await c.innerText()).includes("没有可用于修订的新材料"), "the card with no candidate does not say so");
+      assert((await c.locator("input[type=checkbox]").count()) === 0, "a card with no candidate lists something to tick");
+      assert(await c.locator("[data-approval-primary]").isDisabled(), "the confirm button is usable with nothing to send");
+      assert(await c.locator("button", { hasText: "先不要" }).isEnabled(), "the reader cannot decline a card with no candidate");
+    } finally { await none.close(); }
+    return "nothing pre-ticked, no select-all; the button waits for 2 ticks and says why; goes back to disabled when un-ticked; no-candidate card says so";
+  } finally { await view.close(); }
+}
+
+/** A card made in this session counts ten minutes down against the clock and falls to 已过期 at zero; a card from the history shows only the static note. */
+async function approvalCountdown(ctx) {
+  const old = await openChatAt(ctx, "approval-countdown-history");
+  try {
+    const card = old.page.locator(ACTIVE_CARD); await card.waitFor();
+    assert((await card.locator("[data-slot=approval-timer]").count()) === 0, "a card read back from the server shows a countdown");
+    assert((await card.locator("[data-slot=approval-note]").innerText()).includes("确认有效期为十分钟"), "the history card has no static note");
+  } finally { await old.close(); }
+  const view = await openChatAt(ctx, "approval-countdown");
+  try {
+    const { page } = view;
+    const hand = await handTurn(page, { text: "确认", lead: "我可以抓取 AAPL 最新 10-Q 并生成分析，请确认。" });
+    await endWithCard(hand, 0, freshWriteCard());
+    const timer = page.locator("[data-slot=approval-timer]"); await timer.waitFor({ timeout: 10000 });
+    assert((await timer.innerText()) === "10:00", `the timer starts at ${await timer.innerText()}`);
+    assert(/mono/.test(await timer.evaluate((el) => getComputedStyle(el).fontFamily + " " + el.className)) || /mono/i.test(await timer.evaluate((el) => getComputedStyle(el).fontFamily)), "the timer is not set in the mono face");
+    await page.clock.setFixedTime(new Date(FIXED_TIME.getTime() + 61_000));
+    await page.waitForFunction(() => document.querySelector("[data-slot=approval-timer]")?.textContent === "08:59", null, { timeout: 5000 });
+    await page.clock.setFixedTime(new Date(FIXED_TIME.getTime() + 599_000));
+    await page.waitForFunction(() => document.querySelector("[data-slot=approval-timer]")?.textContent === "00:01", null, { timeout: 5000 });
+    await page.clock.setFixedTime(new Date(FIXED_TIME.getTime() + 601_000));
+    const gone = page.locator(`${APPROVAL}[data-state=expired]`); await gone.waitFor({ timeout: 5000 });
+    assert((await gone.innerText()).includes("已过期") && (await gone.innerText()).includes("在对话里再说一次"), `the expired card says ${JSON.stringify(await gone.innerText())}`);
+    assert((await gone.locator("button").count()) === 0 && (await page.locator("[data-slot=approval-timer]").count()) === 0, "the expired card still has buttons or a timer");
+    assert((await gone.boundingBox()).height < 56, "the expired card is still a block");
+    return "history card: static 确认有效期为十分钟, no timer; this session's card: 10:00 → 08:59 → 00:01 against the clock, then one 已过期 line without buttons";
+  } finally { await view.close(); }
+}
+
+/** Once answered, the card is one line: 已确认 · title, or 已取消; a line typed in the box instead leaves 未确认. */
+async function approvalCollapses(ctx) {
+  const yes = await openChatAt(ctx, "approval-collapse-yes");
+  try {
+    const full = await yes.page.locator(ACTIVE_CARD).boundingBox();
+    await yes.page.locator(`${ACTIVE_CARD} button`, { hasText: "确认执行" }).click(); await answered(yes.page);
+    const line = yes.page.locator(`${APPROVAL}[data-state=answered]`);
+    const text = await line.innerText();
+    assert(/已确认 · 抓取并分析 NVDA 10-Q/.test(text), `the folded card says ${JSON.stringify(text)}`);
+    const box = await line.boundingBox();
+    assert(box.height < 56 && full.height > 150 && (await line.locator("button").count()) === 0, `the card did not fold (${full.height}px → ${box.height}px)`);
+  } finally { await yes.close(); }
+  const no = await openChatAt(ctx, "approval-collapse-no");
+  try {
+    await no.page.locator(`${ACTIVE_CARD} button`, { hasText: "先不要" }).click(); await answered(no.page);
+    assert(/已取消/.test(await no.page.locator(`${APPROVAL}[data-state=answered]`).innerText()), "declined card does not say 已取消");
+  } finally { await no.close(); }
+  const typed = await openChatAt(ctx, "approval-collapse-typed");
+  try {
+    // The reader ignores the buttons and types: an ordinary message goes out (no pending_request_id: the composer was never tied to the card), and the card is not confirmed.
+    const bodies = watchPosts(typed.page, STREAM_PATH);
+    await typed.page.locator("#agent-draft").fill("先看看 AAPL 的行情"); await clickSend(typed.page); await answered(typed.page);
+    assert(bodies.length === 1 && bodies[0].pending_request_id === undefined && !String(bodies[0].message).startsWith("confirm:"), `a typed line went out as ${JSON.stringify(bodies)}`);
+    assert(/未确认 · 抓取并分析 NVDA 10-Q/.test(await typed.page.locator(`${APPROVAL}[data-state=answered]`).innerText()), "a card passed over does not say 未确认");
+  } finally { await typed.close(); }
+  return "确认执行 → 已确认 · 抓取并分析 NVDA 10-Q, 先不要 → 已取消, a typed line → 未确认; each one line, no buttons";
+}
+
+/** S9: the amber strip above the input; it takes the reader to the card and puts the focus on its main action; the input stays usable. */
+async function waitingStrip(ctx) {
+  const view = await openChatAt(ctx, "waiting-strip");
+  try {
+    const { page } = view;
+    const strip = page.locator("[data-testid=waiting-strip]"); await strip.waitFor({ timeout: 10000 });
+    assert((await strip.innerText()).includes("FinBot 在等你确认上面的卡片"), `the strip says ${JSON.stringify(await strip.innerText())}`);
+    assert(/在等你确认/.test(await page.locator("[role=status].sr-only").first().innerText()), "no screen-reader announcement of who is waiting");
+    assert(await page.locator("#agent-draft").isEnabled(), "the input is not usable while the bot waits");
+    assert(!(await page.evaluate(() => Boolean(document.activeElement?.closest("[data-slot=approval-card]")))), "the card took the focus when it appeared");
+    await page.evaluate(() => { document.querySelector("[data-testid=transcript]").scrollTop = 0; });
+    assert(!(await inView(page, ACTIVE_CARD, "[data-testid=transcript]")), "the card is already in view; the scroll check proves nothing");
+    await strip.click();
+    await page.waitForFunction(() => document.activeElement?.hasAttribute("data-approval-primary"), null, { timeout: 5000 });
+    assert(await inView(page, ACTIVE_CARD, "[data-testid=transcript]"), "the strip did not scroll to the card");
+    assert((await page.evaluate(() => document.activeElement?.textContent)) === "确认执行", "the focus is not on the main action");
+    // Answered: the strip is gone.
+    await page.keyboard.press("Enter");
+    await answered(page);
+    assert((await page.locator("[data-testid=waiting-strip]").count()) === 0, "the strip stays after the card was answered");
+    return "strip above the input; click scrolls the card into view and focuses 确认执行 (Enter then confirms); the box stays enabled; the strip leaves with the card";
+  } finally { await view.close(); }
+}
+
+/** The card's own keyboard: it does not take focus; Tab enters it; arrows move between the materials; Enter on a tick does the main action. */
+async function approvalKeyboard(ctx) {
+  const view = await openChatAt(ctx, "approval-keyboard");
+  try {
+    const { page } = view;
+    const raw = watchRaw(page);
+    const hand = await handTurn(page, { text: "修订", lead: "请勾选。" });
+    await endWithCard(hand, 0, revisionCard());
+    const card = page.locator(ACTIVE_CARD); await card.waitFor({ timeout: 10000 });
+    assert(!(await page.evaluate(() => Boolean(document.activeElement?.closest("[data-slot=approval-card]")))), "the card took the focus when it appeared");
+    const boxes = card.locator("input[type=checkbox]");
+    await boxes.nth(0).focus();
+    await page.keyboard.press("Space");
+    await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown");
+    assert((await page.evaluate(() => document.activeElement?.closest("label")?.textContent ?? "")).includes("服务业务监管新规"), "the arrow keys did not move through the materials");
+    await page.keyboard.press("Space");
+    await page.keyboard.press("ArrowUp"); await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown");
+    assert((await page.evaluate(() => document.activeElement?.closest("label")?.textContent ?? "")).includes("AAPL 10-Q"), "the arrows do not wrap");
+    const n = raw.length;
+    await page.keyboard.press("Enter");
+    await answered(page);
+    assert(raw.length === n + 1 && JSON.parse(raw[n]).message === "confirm:revise_forecast:1.3", `Enter on a tick sent ${raw[n]}`);
+    return "no focus grab; arrows move and wrap through the ticks, Space ticks, Enter sends the ticked materials (confirm:revise_forecast:1.3)";
+  } finally { await view.close(); }
+}
+
+/** 重试 puts the last question out again, as the same request, and the failed turn is replaced; 去设置 only when a setting is the way out. */
+async function retryResendsLast(ctx) {
+  const view = await openChatAt(ctx, "retry-resends-last");
+  try {
+    const { page } = view;
+    const hand = await handTurn(page, { text: "重试用的问题", lead: "写了一半的回答，" });
+    await endWithError(hand, 0, "provider_timeout");
+    const bar = page.locator("[data-testid=turn-error]"); await bar.waitFor({ timeout: 10000 });
+    assert((await bar.innerText()).includes("请求超时"), `the error bar says ${JSON.stringify(await bar.innerText())}`);
+    assert((await bar.locator("a", { hasText: "去设置" }).count()) === 0, "去设置 is offered for a timeout");
+    assert((await page.locator("[data-testid=message][data-role=assistant]", { hasText: "写了一半的回答" }).count()) === 1, "the text generated before the failure is gone");
+    assert((await page.locator("[data-testid=chat-status]").count()) === 0, "the old status line carries the error");
+    const first = (await hand.opened(0)).message;
+    await bar.getByRole("button", { name: "重试" }).click();
+    const second = await hand.opened(1);
+    assert(second.message === first && first.includes("重试用的问题"), `retry sent ${JSON.stringify(second.message)}, the question was ${JSON.stringify(first)}`);
+    assert(second.bot_id === BOT.finbot, "the retry lost the bot id");
+    await hand.push(1, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: "t9000000-0000-4000-8000-0000000000d3", bot_id: BOT.finbot });
+    await hand.push(1, "delta", { text: "重试之后的完整回答。" });
+    await hand.push(1, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000d3", thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(1);
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "重试之后的完整回答" }).waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=user-bubble]", { hasText: "重试用的问题" }).count()) === 1, "the question shows twice after the retry");
+    assert((await page.locator("[data-testid=turn-error]").count()) === 0 && (await page.locator("[data-testid=message]", { hasText: "写了一半的回答" }).count()) === 0, "the failed turn is still in the thread");
+    return "the failed turn keeps its text and shows why under it; 重试 sends the same message again, replaces the failed turn, one question in the thread";
+  } finally { await view.close(); }
+  // A card's answer that failed is retried as the same answer: same message, request id and label.
+}
+
+async function retryCardAnswerAndSettings(ctx) {
+  const { view, raw } = await askInTesla(ctx, "retry-card-answer");
+  try {
+    const { page } = view;
+    view.mock.control.down = true;
+    await page.locator(`${ACTIVE_CARD} button`, { hasText: "第二条结果" }).click();
+    const bar = page.locator("[data-testid=turn-error]"); await bar.waitFor({ timeout: 15000 });
+    assert((await bar.innerText()).includes("连不上后端"), `an unreachable backend says ${JSON.stringify(await bar.innerText())}`);
+    view.mock.control.down = false;
+    await bar.getByRole("button", { name: "重试" }).click();
+    await answered(page);
+    // Three requests in all: the question, the answer that never arrived, and the retry, which is the answer again, byte for byte (request id and label included).
+    assert(raw.length === 3, `${raw.length} stream requests, expected 3 (the question, the failed answer, the retry)`);
+    assert(raw[1] === BASELINE.option[0] && raw[2] === BASELINE.option[0], `the failed answer / the retry were\n  ${raw[1]}\n  ${raw[2]}\nthe answer is\n  ${BASELINE.option[0]}`);
+  } finally { await view.close(); }
+  const settings = await openChatAt(ctx, "retry-settings");
+  try {
+    const { page } = settings;
+    const hand = await handTurn(page, { text: "缺 key" });
+    await endWithError(hand, 0, "model_key_missing");
+    const link = page.locator("[data-testid=turn-error] a", { hasText: "去设置" }); await link.waitFor({ timeout: 10000 });
+    assert(/#\/settings\/models$/.test(await link.getAttribute("href")), `去设置 goes to ${await link.getAttribute("href")}`);
+    assert((await page.locator("[data-testid=turn-error]").getByRole("button", { name: "重试" }).count()) === 1, "no 重试 beside 去设置");
+  } finally { await settings.close(); }
+  return "an unreachable backend → the plain sentence + 重试; 重试 resends the card's answer with the same request id and label; a missing key adds 去设置 → settings/models";
+}
+
+/** The starter questions fill the box and send nothing; each kind of bot gets its own. */
+async function starterFillsComposer(ctx) {
+  const view = await openChatAt(ctx, "starter-fills", { hash: `#/chat/${BOT.teslabot}`, ready: "[data-testid=welcome]" });
+  try {
+    const { page } = view;
+    const bodies = watchPosts(page, STREAM_PATH);
+    const starters = page.locator("[data-testid=starter]");
+    assert((await starters.count()) === 3, `${await starters.count()} starter questions`);
+    assert(!(await page.locator("[data-testid=welcome]").innerText()).match(/AAPL|TSLA/), "a company-less bot is offered a specific company");
+    const text = (await starters.nth(1).innerText()).trim();
+    await starters.nth(1).click();
+    assert((await page.locator("#agent-draft").inputValue()) === text, `the box holds ${JSON.stringify(await page.locator("#agent-draft").inputValue())}, the starter said ${JSON.stringify(text)}`);
+    assert(await page.evaluate(() => document.activeElement?.id === "agent-draft"), "the focus did not go to the box");
+    await page.waitForTimeout(600);
+    assert(bodies.length === 0 && (await page.locator("[data-testid=message]").count()) === 0 && (await page.locator("[data-testid=welcome]").count()) === 1, "a starter question was sent");
+  } finally { await view.close(); }
+  // Company, news and earnings bots (their lines emptied first).
+  const state = buildState();
+  for (const id of [BOT.applebot, BOT.newsbot, BOT.reportbot]) state.chat.conversations.set(CONVERSATION[Object.keys(BOT).find((k) => BOT[k] === id)], []);
+  const kinds = [[BOT.applebot, /AAPL/, "AAPL"], [BOT.newsbot, /要闻/, "news"], [BOT.reportbot, /财报/, "earnings"]];
+  for (const [id, pattern, name] of kinds) {
+    const v = await openChatAt(ctx, `starter-${name}`, { hash: `#/chat/${id}`, ready: "[data-testid=welcome]", fixtureState: state });
+    try { const body = await v.page.locator("[data-testid=welcome]").innerText(); assert(pattern.test(body), `${name}: the starters are ${JSON.stringify(body)}`); if (name === "AAPL") assert((await v.page.locator("[data-testid=welcome-companies]").innerText()).includes("AAPL"), "no company chip for a bot that watches AAPL"); }
+    finally { await v.close(); }
+  }
+  return "3 starters fill the box, focus it and send nothing; TeslaBot (no company) gets company-free ones; AppleBot AAPL ones + chip; NewsBot news, ReportBot earnings";
+}
+
+/** A background answer finishing raises one toast for its bot, and 查看 goes to that line; a second one does not stack. */
+async function backgroundDoneToast(ctx) {
+  const view = await openChatAt(ctx, "background-done-toast");
+  try {
+    const { page } = view;
+    const toasts = () => page.locator("[data-sonner-toast]", { hasText: "TeslaBot 回答好了" });
+    await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, BOT.teslabot);
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor();
+    const finish = async (index, turn) => {
+      const hand = await handTurn(page, { text: `后台 ${index}`, lead: "后台的回答", botId: BOT.teslabot, conversationId: CONVERSATION.teslabot, turnId: turn, index });
+      await page.evaluate(() => { location.hash = "#/chat"; });
+      await page.locator("[data-testid=message]").first().waitFor();
+      if (index === 0) assert((await toasts().count()) === 0, "the toast is up before the answer is done");
+      await hand.push(index, "done", { status: "complete", turn_id: turn, thinking_ms: 700, citations: [], citation_protocol: null }); await hand.close(index);
+      await toasts().first().waitFor({ timeout: 10000 });
+    };
+    await finish(0, "t9000000-0000-4000-8000-0000000000d4");
+    assert((await toasts().first().getByRole("button", { name: "查看" }).count()) === 1, "the toast has no 查看");
+    await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, BOT.teslabot);
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor();
+    await finish(1, "t9000000-0000-4000-8000-0000000000d5");
+    await page.waitForTimeout(500);
+    assert((await toasts().count()) === 1, `${await toasts().count()} toasts for one bot after two answers`);
+    await toasts().first().getByRole("button", { name: "查看" }).click();
+    await page.waitForFunction((id) => location.hash === `#/chat/${id}`, BOT.teslabot, { timeout: 5000 });
+    return "TeslaBot finishing in the background raises 「TeslaBot 回答好了」 with 查看; a second answer replaces it (one toast); 查看 opens TeslaBot's line";
+  } finally { await view.close(); }
+}
+
+/** A turn that came in from outside this tab has a divider above it: the routine's name and time, or just 外部消息 (nothing else is marked by the server). */
+async function externalMessageDivider(ctx) {
+  const view = await openChatAt(ctx, "external-divider");
+  try {
+    const { page } = view;
+    assert((await page.locator("[data-testid=external-divider]").count()) === 0, "a divider above history that was not written from outside");
+    const list = view.mock.state.chat.conversations.get(CONVERSATION.finbot);
+    list.push({ role: "user", content: "【例行任务结果】「收盘复盘」2026-11-13 16:10", turn_id: "t7000000-0000-4000-8000-000000000001" },
+      { role: "assistant", status: "complete", turn_id: "t7000000-0000-4000-8000-000000000001", content: "今天收盘后的复盘。" },
+      { role: "user", content: "TSLA 的交付数据出来了吗？", turn_id: "t7000000-0000-4000-8000-000000000002" },
+      { role: "assistant", status: "complete", turn_id: "t7000000-0000-4000-8000-000000000002", content: "还没有。" });
+    await page.locator("[data-testid=external-divider]").nth(1).waitFor({ timeout: 20000 });
+    const dividers = page.locator("[data-testid=external-divider]");
+    assert((await dividers.count()) === 2, `${await dividers.count()} dividers for two outside turns`);
+    assert((await dividers.nth(0).innerText()).replace(/\s+/g, " ") === "例行任务「收盘复盘」 · 2026-11-13 16:10", `the routine divider says ${JSON.stringify(await dividers.nth(0).innerText())}`);
+    assert((await dividers.nth(1).innerText()).trim() === "外部消息", `the other says ${JSON.stringify(await dividers.nth(1).innerText())}`);
+    // Each sits directly above its turn's first line.
+    const order = await page.evaluate(() => [...document.querySelectorAll("[data-testid=thread] > *")].map((el) => el.getAttribute("data-testid")).slice(-6));
+    assert(order.join(",") === "external-divider,message,message,external-divider,message,message", `the thread ends ${order.join(",")}`);
+    return "history has no divider; the polled-in turns get 「例行任务「收盘复盘」 · 时间」 and 「外部消息」 right above their first line";
+  } finally { await view.close(); }
+}
+
+/** Phone: the right panel is a bottom drawer; a chip or the process bar opens it on the right tab and place; between lg and xl it is still the column over the thread. */
+async function mobilePanelDrawer(ctx) {
+  const view = await openChatAt(ctx, "mobile-panel-drawer", { width: 390 });
+  try {
+    const { page } = view;
+    assert((await page.locator("aside[data-testid=context-panel]").count()) === 0, "the column panel is drawn on a phone");
+    await firstAnswer(page).locator("[data-testid=citation-chip][data-ordinal='2']").first().scrollIntoViewIfNeeded();
+    await firstAnswer(page).locator("[data-testid=citation-chip][data-ordinal='2']").first().click();
+    const drawer = page.locator("[data-slot=drawer-content][data-testid=context-panel]"); await drawer.waitFor({ timeout: 8000 });
+    assert((await drawer.getAttribute("data-vaul-drawer-direction")) === "bottom", "the panel is not a bottom drawer");
+    const box = await drawer.boundingBox();
+    assert(Math.abs(box.y + box.height - 844) <= 2 && box.y > 60 && box.width >= 388, `the drawer sits at ${JSON.stringify(box)}`);
+    assert((await page.locator("[data-testid=tab-sources]").getAttribute("aria-selected")) === "true", "来源 is not the open tab");
+    await page.waitForFunction(() => document.querySelector("[data-slot=source-card][data-ordinal='2']")?.hasAttribute("data-highlight"), null, { timeout: 5000 });
+    assert(await inView(page, "[data-slot=source-card][data-ordinal='2']", "[data-testid=sources-pane]"), "card 2 is not in the drawer's viewport");
+    const tabs = await drawer.locator("[role=tab]").allInnerTexts();
+    assert(["来源", "过程", "工作区"].every((name) => tabs.some((text) => text.includes(name))), `tabs: ${tabs.join(" | ")}`);
+    await page.keyboard.press("Escape");
+    await drawer.waitFor({ state: "detached", timeout: 5000 });
+    // The process bar opens the same drawer on 过程 and the round.
+    await firstAnswer(page).locator("[data-testid=turn-steps]").click();
+    await drawer.waitFor({ timeout: 8000 });
+    await page.locator("[data-testid=timeline-step]").first().waitFor({ timeout: 8000 });
+    assert((await page.locator("[data-testid=tab-process]").getAttribute("aria-selected")) === "true", "过程 is not the open tab");
+    await page.keyboard.press("Escape"); await drawer.waitFor({ state: "detached", timeout: 5000 });
+    // The header's own switch opens it too.
+    await page.locator("[data-testid=side-toggle]").click(); await drawer.waitFor({ timeout: 8000 });
+    await page.keyboard.press("Escape"); await drawer.waitFor({ state: "detached", timeout: 5000 });
+    // 1100 wide (lg to xl): still the column over the thread, no drawer.
+    const mid = await openChatAt(ctx, "panel-1100", { width: 1100 });
+    try { await mid.page.locator("[data-testid=side-toggle]").click(); await mid.page.locator("aside[data-testid=context-panel]").waitFor({ timeout: 5000 }); assert((await mid.page.locator("[data-slot=drawer-content]").count()) === 0, "a drawer at 1100"); } finally { await mid.close(); }
+    return "390: no column; chip → bottom drawer on 来源 with card 2 marked in view; process bar → 过程; header switch opens it; Esc closes; 1100: still the column";
+  } finally { await view.close(); }
+}
+
+/** Phone: 「头像 + 名 + ▾」 opens the bot switcher, which lists the same rows as 更多. */
+async function mobileBotSwitcher(ctx) {
+  const state = buildState();
+  state.bots.find((b) => b.id === BOT.reportbot).hidden = true;
+  const view = await openChatAt(ctx, "mobile-bot-switcher", { width: 390, fixtureState: state });
+  try {
+    const { page } = view;
+    const trigger = page.locator("[data-testid=bot-switcher]");
+    const box = await trigger.boundingBox();
+    assert(box.height >= 44, `the trigger is ${box.height}px high`);
+    assert((await trigger.innerText()).includes("FinBot") && (await trigger.locator("svg").count()) >= 1, "the trigger is not 名 + ▾");
+    await trigger.click();
+    const drawer = page.locator("[data-testid=bot-switcher-drawer]"); await drawer.waitFor({ timeout: 8000 });
+    const rows = drawer.locator("[data-bot-switch-row]");
+    const names = (await rows.allInnerTexts()).map((t) => t.split("\n")[0].trim());
+    assert(names.join(",") === "FinBot,AppleBot,NewsBot,TeslaBot", `the bots listed: ${names.join(",")} (ReportBot is hidden)`);
+    const text = await drawer.innerText();
+    assert(text.includes("2") && /历史对话/.test(text) && /新建 bot/.test(text), "the list lacks the unread number, 历史对话 or 新建 bot");
+    for (const handle of await rows.elementHandles()) assert((await handle.boundingBox()).height >= 44, "a row is under 44px");
+    const list = (await drawer.locator("[data-slot=bot-switch-list]").innerText()).replace(/\s+/g, " ");
+    await page.keyboard.press("Escape"); await drawer.waitFor({ state: "detached", timeout: 5000 });
+    // The 更多 drawer lists the same rows (one component).
+    await page.locator('[data-slot="mobile-tab-bar"] button[aria-haspopup="dialog"]').click();
+    const more = page.locator('[data-slot="drawer-content"] [data-slot=bot-switch-list]'); await more.waitFor({ timeout: 8000 });
+    assert((await more.innerText()).replace(/\s+/g, " ") === list, "更多 lists other rows than the switcher");
+    await page.keyboard.press("Escape"); await page.locator('[data-slot="drawer-content"]').waitFor({ state: "detached", timeout: 5000 });
+    // Choosing a bot goes to its line and closes the drawer; 新建 bot opens the dialog.
+    await trigger.click(); await drawer.waitFor();
+    await rows.filter({ hasText: "TeslaBot" }).click();
+    await page.waitForFunction((id) => location.hash === `#/chat/${id}`, BOT.teslabot, { timeout: 5000 });
+    await drawer.waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.locator("h1").first().innerText()).includes("TeslaBot"), "the header still names the old bot");
+    await trigger.click(); await drawer.waitFor();
+    await drawer.getByRole("button", { name: "新建 bot" }).click();
+    await page.locator('[role=dialog]').first().waitFor({ timeout: 8000 });
+    return "header 名 ▾ (≥44px) → drawer of the unhidden bots with the sidebar's marks + 历史对话 + 新建 bot; the same list as 更多; a row goes to its line; 新建 bot opens the dialog";
+  } finally { await view.close(); }
+}
+
+/** Phone: 「目录」 lists this line's questions; a row jumps, the bookmark is kept (and is the desktop rail's bookmark). */
+async function mobileOutline(ctx) {
+  const view = await openChatAt(ctx, "mobile-outline", { width: 390 });
+  try {
+    const { page } = view;
+    assert((await page.locator("[data-testid=question-rail]").isVisible()) === false, "the rail is drawn on a phone");
+    const button = page.locator("[data-testid=outline-button]");
+    assert((await button.boundingBox()).height >= 44, "the 目录 button is under 44px");
+    await button.click();
+    const drawer = page.locator("[data-testid=outline-drawer]"); await drawer.waitFor({ timeout: 8000 });
+    const rows = drawer.locator("[data-testid=outline-row]");
+    assert((await rows.count()) === 4, `${await rows.count()} questions listed, the line has 4`);
+    // The second question has no turn id in the fixtures (not saved yet): it cannot be bookmarked, as on the desktop rail.
+    assert(await rows.nth(1).locator("[data-testid=outline-bookmark]").isDisabled(), "a question that is not saved can be bookmarked");
+    await rows.nth(0).locator("[data-testid=outline-bookmark]").click();
+    assert((await rows.nth(0).locator("[data-testid=outline-bookmark]").getAttribute("aria-pressed")) === "true", "the bookmark did not take");
+    await rows.nth(3).locator("[data-testid=outline-jump]").click();
+    await drawer.waitFor({ state: "detached", timeout: 5000 });
+    await button.click(); await drawer.waitFor();
+    await rows.nth(0).locator("[data-testid=outline-jump]").click();
+    await drawer.waitFor({ state: "detached", timeout: 5000 });
+    await page.waitForFunction(() => { const t = document.querySelector("[data-testid=transcript]").getBoundingClientRect().top, m = document.getElementById("chat-message-0").getBoundingClientRect().top; return Math.abs(m - t) < 40; }, null, { timeout: 5000 });
+    await button.click(); await drawer.waitFor();
+    assert((await rows.nth(0).locator("[data-testid=outline-bookmark]").getAttribute("aria-pressed")) === "true", "the bookmark did not survive reopening");
+    // The same bookmark is the desktop rail's.
+    const desk = await openChatAt(ctx, "outline-desktop");
+    try { assert(!(await desk.page.locator("[data-testid=outline-button]").isVisible()), "目录 is drawn on a desktop"); } finally { await desk.close(); }
+    return "目录 (≥44px) lists the 4 questions; rows jump to their question (last, then first); a saved question is bookmarked and stays so, an unsaved one cannot be; no 目录 on a desktop";
+  } finally { await view.close(); }
+}
+
+/** Phone: every control of the line is at least 44 x 44, and nothing makes the page wider than 390. */
+async function mobileTouchTargets(ctx) {
+  const view = await openChatAt(ctx, "mobile-touch-targets", { width: 390 });
+  try {
+    const { page } = view;
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert(wide <= 0, `the page is ${wide}px wider than the window`);
+    const small = await page.evaluate(() => {
+      const scopes = ["[data-testid=chat-header]", "[data-testid=composer]", "[data-testid=message-foot]", "[data-testid=sources-chip]", "[data-testid=waiting-strip]", "[data-slot=approval-card]"];
+      const bad = [];
+      for (const scope of scopes) for (const root of document.querySelectorAll(scope)) {
+        const hits = root.matches("button, a, input, [role=button]") ? [root] : [];
+        for (const el of [...hits, ...root.querySelectorAll("button, a[href], input, [role=button]")]) {
+          const r = el.getBoundingClientRect(); const style = getComputedStyle(el);
+          if (!r.width || !r.height || style.visibility === "hidden" || style.display === "none") continue;
+          if (el.closest("[data-slot=approval-details]") && el.tagName === "A") continue; // a link in the card's text
+          if (r.width < 43.5 || r.height < 43.5) bad.push(`${scope} ${el.getAttribute("aria-label") || el.textContent?.trim().slice(0, 12) || el.tagName}: ${Math.round(r.width)}x${Math.round(r.height)}`);
+        }
+      }
+      return bad;
+    });
+    assert(small.length === 0, `controls under 44x44: ${small.join("; ")}`);
+    return "no horizontal overflow at 390; header, composer, foot, chips, strip and card controls all ≥ 44x44";
+  } finally { await view.close(); }
+}
+
+/** The on-screen keyboard that covers the page (iOS) lifts the composer: a stand-in visualViewport shrinks and the box rises above it. */
+async function mobileKeyboardInset(ctx) {
+  const view = await newView(ctx.browser, { width: 390, theme: "light", label: "mobile-keyboard", unmatched });
+  try {
+    const { page } = view;
+    await view.context.addInitScript(() => {
+      const target = new EventTarget();
+      const stub = Object.assign(target, { height: window.innerHeight, offsetTop: 0, offsetLeft: 0, width: window.innerWidth, scale: 1, pageTop: 0, pageLeft: 0 });
+      Object.defineProperty(window, "visualViewport", { value: stub, configurable: true });
+      window.__setKeyboard = (px) => { stub.height = window.innerHeight - px; stub.dispatchEvent(new Event("resize")); };
+    });
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await page.waitForSelector("[data-testid=message]", { timeout: 15000 });
+    await settle(page);
+    const bottom = () => page.locator("[data-testid=composer]").evaluate((el) => Math.round(el.getBoundingClientRect().bottom));
+    const rest = await bottom();
+    await page.evaluate(() => window.__setKeyboard(300));
+    await page.waitForFunction((r) => document.querySelector("[data-testid=composer]").getBoundingClientRect().bottom < r - 100, rest, { timeout: 5000 });
+    const lifted = await bottom();
+    assert(lifted <= 844 - 300 + 2, `with a 300px keyboard the composer's bottom is at ${lifted}px (the keyboard starts at 544)`);
+    await page.evaluate(() => window.__setKeyboard(0));
+    await page.waitForFunction((r) => Math.abs(document.querySelector("[data-testid=composer]").getBoundingClientRect().bottom - r) <= 1, rest, { timeout: 5000 });
+    return `a 300px keyboard lifts the composer from ${rest}px to ${lifted}px (clear of the keys at 544); it comes back down; Chrome / Firefox Android resize the layout instead (viewport interactive-widget)`;
+  } finally { await view.close(); }
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
-  ["chat-cancel: cancel before the stream ends: 已取消 shown, the generated text kept, composer usable", chatCancel],
+  ["chat-cancel: cancel before the stream ends: 已停止 shown, the generated text kept, composer usable", chatCancel],
   ["chat-background-line: the stream of the bot left behind finishes in the background; the row marks it; the whole answer on return", chatBackgroundLine],
   ["chat-clarification: a turn ending in a card; the pick goes out as the next turn with its request id", chatClarification],
   ["chat-write-confirm: 确认执行 sends the request id; 先不要 sends no confirmation", chatWriteConfirm],
@@ -2701,6 +3198,22 @@ const CHECKS = [
   ["panel-resize-persists: dragging the panel's edge changes its width, which (and folding) survives a reload", panelResizePersists],
   ["sources-keyboard: Tab reaches a chip, Enter takes the focus into its source card, Esc returns it", sourcesKeyboard],
   ["source-card-fields: every field of the old drawer has a place on the card; a withdrawn source is an error bar with 重试", sourceCardFields],
+  ["approval-request-body: confirm, cancel, option, typed reply and ticked materials send the same five bodies as the old card, byte for byte", approvalRequestBody],
+  ["revision-card-min-select: nothing pre-ticked; the button waits for the minimum and says why; no candidate says so", revisionCardMinSelect],
+  ["approval-countdown: a card made in this session counts ten minutes down and falls to 已过期; a history card shows the static note", approvalCountdown],
+  ["approval-collapses: an answered card is one line (已确认 · title / 已取消 / 未确认)", approvalCollapses],
+  ["approval-keyboard: no focus grab; arrows move through the materials; Enter does the main action", approvalKeyboard],
+  ["waiting-strip: the amber strip scrolls to the card and focuses its main action; the box stays usable", waitingStrip],
+  ["retry-resends-last: 重试 sends the last question again as the same request and replaces the failed turn", retryResendsLast],
+  ["retry-card-answer: a card's failed answer is retried with its request id; 去设置 only for a missing key", retryCardAnswerAndSettings],
+  ["starter-fills-composer: a starter question fills the box and sends nothing; each kind of bot gets its own", starterFillsComposer],
+  ["background-done-toast: a background answer raises one toast per bot with 查看", backgroundDoneToast],
+  ["external-message-divider: turns written from outside get 「例行任务…」 or 「外部消息」 above them", externalMessageDivider],
+  ["mobile-panel-drawer: at 390 the panel is a bottom drawer opened on the right tab and place", mobilePanelDrawer],
+  ["mobile-bot-switcher: 名 ▾ opens the unhidden bots with their marks, the same list as 更多", mobileBotSwitcher],
+  ["mobile-outline: 目录 lists the questions, jumps and keeps bookmarks", mobileOutline],
+  ["mobile-touch-targets: the line's controls are ≥ 44x44 and the page does not scroll sideways at 390", mobileTouchTargets],
+  ["mobile-keyboard-inset: a keyboard over the page lifts the composer above it", mobileKeyboardInset],
   ["workspace-cards-in-panel: add, move, resize, pin, delete and reset the workspace cards in the panel's 工作区 tab; the layout is kept per bot", workspaceCardsInPanel],
 ];
 

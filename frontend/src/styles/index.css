@@ -16,8 +16,6 @@
 /* P3.1 moved the old chat page and settings page (legacy markup, class names of the old sheets) into src/app/.  Their words
    (`ordinal`, `table` ...) must not become utilities either, so these files are listed out of the scan one by one.  A package
    that restyles a file with utility classes deletes that file's line here and the "legacy markup" header from the file. */
-@source not "../app/chat/ChatSessionProvider.tsx";
-@source not "../app/chat/ClarificationCard.tsx";
 @source not "../app/settings/AppearanceCard.tsx";
 @source not "../app/settings/ChatArchiveSettings.tsx";
 @source not "../app/settings/MaterialAnalysisDefaultCard.tsx";

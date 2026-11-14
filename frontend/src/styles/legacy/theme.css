@@ -74,8 +74,6 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
    background is a light colour), so those surfaces are pointed at the dark tokens here. */
 :root[data-theme="dark"] .action-notice.error,
 :root[data-theme="dark"] .action-notice.success,
-:root[data-theme="dark"] .agent-clarification-card.is-write,
-:root[data-theme="dark"] .agent-clarification-reply input,
 :root[data-theme="dark"] .agent-settings-card,
 :root[data-theme="dark"] .agent-settings-card input,
 :root[data-theme="dark"] .agent-settings-card select,

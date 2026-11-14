@@ -36,7 +36,7 @@ export function ContextMeter({ conversationId, botId, refreshKey, onCompact }: {
   const note = "text-caption text-muted-foreground";
   return <span className="relative inline-flex" data-testid="context-meter-host">
     <button type="button" data-testid="context-meter" aria-expanded={open} aria-haspopup="dialog" title={t("上下文用量")} onClick={() => setOpen(value => !value)}
-      className={`inline-flex h-8 items-center gap-1.5 rounded-full px-2 text-caption outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${TONE_TEXT[tone] ?? TONE_TEXT.ok}`}>
+      className={`inline-flex h-8 items-center gap-1.5 rounded-full px-2 max-lg:h-11 text-caption outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${TONE_TEXT[tone] ?? TONE_TEXT.ok}`}>
       <svg viewBox="0 0 18 18" className="size-4" aria-hidden="true">
         <circle cx="9" cy="9" r="7" fill="none" strokeWidth="2.5" className="stroke-line" />
         <circle cx="9" cy="9" r="7" fill="none" strokeWidth="2.5" strokeLinecap="round" stroke="currentColor" strokeDasharray={`${(RING * used).toFixed(1)} ${RING.toFixed(1)}`} transform="rotate(-90 9 9)" />

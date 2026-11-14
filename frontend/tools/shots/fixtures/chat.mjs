@@ -153,3 +153,26 @@ export const CITATION_DETAILS = {
   "k0000000-0000-4000-8000-000000000002": { title: "AAPL 财报电话会纪要", section: "Q&A", coverage: "complete", start_offset: 0, end_offset: 300, observed_at: daysAgo(3), source_url: null, derived: true, analysis_version: "analysis-v2", version_no: 2, model: "muse-ember", classification: "call",
     excerpt: "Services gross margin was 75.0%, and we expect a modest foreign-exchange headwind next quarter.", original_quotes: ["gross margin was 75.0%", "a modest foreign-exchange headwind"] },
 };
+
+// P3.4: cards a check pushes down a hand-fed stream (fake-sse.mjs).  Ids are invented.
+export const REVISION_REQUEST_ID = "d0000000-0000-4000-8000-0000000000c3";
+export const FRESH_WRITE_REQUEST_ID = "d0000000-0000-4000-8000-0000000000c4";
+
+/** A revision card: three materials to tick, at least two.  `candidates: false` is the card with nothing to tick (the server found no new material). */
+export function revisionCard({ candidates = true } = {}) {
+  const base = { request_id: REVISION_REQUEST_ID, reason: "choose_revision_sources", question: "选择用于修订 AAPL 预测的材料",
+    choices: [{ label: "用所选材料修订", value: "confirm:revise_forecast" }, { label: "先不要", value: "cancel:revise_forecast" }] };
+  if (!candidates) return base;
+  return { ...base, select: { min: 2, max: 3 }, options: [
+    { value: "1", label: "AAPL 10-Q（2026 财年第四季度）", detail: "SEC 申报 · 2026-10-30" },
+    { value: "2", label: "AAPL 电话会纪要", detail: "已保存的 AI 分析 · 2026-10-31" },
+    { value: "3", label: "新闻：服务业务监管新规", detail: "新闻网页 · 2026-11-02" },
+  ] };
+}
+
+/** A write confirmation that arrives in this session (so it has a countdown). */
+export function freshWriteCard() {
+  return { request_id: FRESH_WRITE_REQUEST_ID, reason: "write_confirmation", question: "要抓取并分析 AAPL 最新 10-Q 吗？",
+    display: { title: "抓取并分析 AAPL 10-Q", agent_suggestion: true, targets: [{ symbol: "AAPL", form: "10-Q" }] },
+    choices: [{ label: "确认执行", value: "confirm:fetch_analyze" }, { label: "先不要", value: "cancel" }] };
+}

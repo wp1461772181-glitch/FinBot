@@ -58,7 +58,7 @@ export function ModelEffortPicker({ bot, onBotChanged }: { bot: Bot; onBotChange
     <span className="relative inline-flex min-w-0" data-testid="model-badge-host">
       <button type="button" data-testid="model-badge" aria-haspopup="dialog" aria-expanded={open}
         title={t("快速切换模型与推理强度")} disabled={busy} onClick={() => void toggle()}
-        className="inline-flex h-8 max-w-full min-w-0 items-center gap-1 rounded-sm px-2 text-caption text-muted-foreground outline-none hover:bg-accent hover:text-ink focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60">
+        className="inline-flex h-8 max-lg:h-11 max-w-full min-w-0 items-center gap-1 rounded-sm px-2 text-caption text-muted-foreground outline-none hover:bg-accent hover:text-ink focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60">
         <span className="truncate">{badgeText(shown, t)}</span><ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
       </button>
       <PopPanel open={open} onClose={() => setOpen(false)} label={t("模型与推理强度")}>
