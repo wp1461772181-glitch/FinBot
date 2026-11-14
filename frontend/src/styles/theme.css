@@ -1,122 +1,248 @@
-/* Layer 3: shadcn component mapping.
-   shadcn's neutral palette lives under a --ui- prefix on purpose.  The old sheets already own unprefixed
-   --accent, --muted, --ink, --line, --surface on :root, with other meanings (brand blue, secondary text).
-   Tailwind colour names keep shadcn's convention (bg-accent, text-muted-foreground, border-border), so
-   components added by the CLI need no edits; only the variable behind them is prefixed.  No unprefixed
-   shadcn variable is defined here.  P1.2 repoints these at the design tokens. */
-:root {
-  --radius: 0.625rem;
-  --ui-background: oklch(1 0 0);
-  --ui-foreground: oklch(0.145 0 0);
-  --ui-card: oklch(1 0 0);
-  --ui-card-foreground: oklch(0.145 0 0);
-  --ui-popover: oklch(1 0 0);
-  --ui-popover-foreground: oklch(0.145 0 0);
-  --ui-primary: oklch(0.205 0 0);
-  --ui-primary-foreground: oklch(0.985 0 0);
-  --ui-secondary: oklch(0.97 0 0);
-  --ui-secondary-foreground: oklch(0.205 0 0);
-  --ui-muted: oklch(0.97 0 0);
-  --ui-muted-foreground: oklch(0.556 0 0);
-  --ui-accent: oklch(0.97 0 0);
-  --ui-accent-foreground: oklch(0.205 0 0);
-  --ui-destructive: oklch(0.577 0.245 27.325);
-  --ui-border: oklch(0.922 0 0);
-  --ui-input: oklch(0.922 0 0);
-  --ui-ring: oklch(0.708 0 0);
-  --ui-chart-1: oklch(0.646 0.222 41.116);
-  --ui-chart-2: oklch(0.6 0.118 184.704);
-  --ui-chart-3: oklch(0.398 0.07 227.392);
-  --ui-chart-4: oklch(0.828 0.189 84.429);
-  --ui-chart-5: oklch(0.769 0.188 70.08);
-  --ui-sidebar: oklch(0.985 0 0);
-  --ui-sidebar-foreground: oklch(0.145 0 0);
-  --ui-sidebar-primary: oklch(0.205 0 0);
-  --ui-sidebar-primary-foreground: oklch(0.985 0 0);
-  --ui-sidebar-accent: oklch(0.97 0 0);
-  --ui-sidebar-accent-foreground: oklch(0.205 0 0);
-  --ui-sidebar-border: oklch(0.922 0 0);
-  --ui-sidebar-ring: oklch(0.708 0 0);
-}
+/* Layer 3: the semantic tokens (tokens.css) handed to Tailwind and shadcn, plus the three materials.
+   Everything here is a pointer.  No colour is written in this file.
 
-[data-theme="dark"] {
-  --ui-background: oklch(0.145 0 0);
-  --ui-foreground: oklch(0.985 0 0);
-  --ui-card: oklch(0.205 0 0);
-  --ui-card-foreground: oklch(0.985 0 0);
-  --ui-popover: oklch(0.205 0 0);
-  --ui-popover-foreground: oklch(0.985 0 0);
-  --ui-primary: oklch(0.922 0 0);
-  --ui-primary-foreground: oklch(0.205 0 0);
-  --ui-secondary: oklch(0.269 0 0);
-  --ui-secondary-foreground: oklch(0.985 0 0);
-  --ui-muted: oklch(0.269 0 0);
-  --ui-muted-foreground: oklch(0.708 0 0);
-  --ui-accent: oklch(0.269 0 0);
-  --ui-accent-foreground: oklch(0.985 0 0);
-  --ui-destructive: oklch(0.704 0.191 22.216);
-  --ui-border: oklch(1 0 0 / 10%);
-  --ui-input: oklch(1 0 0 / 15%);
-  --ui-ring: oklch(0.556 0 0);
-  --ui-chart-1: oklch(0.488 0.243 264.376);
-  --ui-chart-2: oklch(0.696 0.17 162.48);
-  --ui-chart-3: oklch(0.769 0.188 70.08);
-  --ui-chart-4: oklch(0.627 0.265 303.9);
-  --ui-chart-5: oklch(0.645 0.246 16.439);
-  --ui-sidebar: oklch(0.205 0 0);
-  --ui-sidebar-foreground: oklch(0.985 0 0);
-  --ui-sidebar-primary: oklch(0.488 0.243 264.376);
-  --ui-sidebar-primary-foreground: oklch(0.985 0 0);
-  --ui-sidebar-accent: oklch(0.269 0 0);
-  --ui-sidebar-accent-foreground: oklch(0.985 0 0);
-  --ui-sidebar-border: oklch(1 0 0 / 10%);
-  --ui-sidebar-ring: oklch(0.556 0 0);
-}
+   Two sets of colour names, because shadcn's vocabulary and the design's do not line up:
+   - shadcn's own names (background, card, primary, muted, accent, destructive, border, input, ring, sidebar-*,
+     chart-*) so components added by the CLI work untouched.  NB shadcn's `accent` is a neutral hover fill and its
+     `muted` is a quiet fill; the design's brand blue is `brand` and its quiet text is `muted-foreground`.
+   - the product's names: surface, sunken, ink, ink-2, faint, line, line-strong, brand, opinion, action, up,
+     down, success, danger, bot.
+   shadcn's own unprefixed variables (--background, --foreground, --card, --primary, --secondary, --destructive,
+   --border, --input, --ring, --chart-N, --sidebar-*) are not defined anywhere; only the --color-* utility
+   variables below exist, and they point at tokens.css.  Two names are shared with shadcn's list but carry the
+   design's meaning: --muted is quiet text and --accent is the brand blue (tokens.css, as the design names them). */
 
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --color-background: var(--ui-background);
-  --color-foreground: var(--ui-foreground);
-  --color-card: var(--ui-card);
-  --color-card-foreground: var(--ui-card-foreground);
-  --color-popover: var(--ui-popover);
-  --color-popover-foreground: var(--ui-popover-foreground);
-  --color-primary: var(--ui-primary);
-  --color-primary-foreground: var(--ui-primary-foreground);
-  --color-secondary: var(--ui-secondary);
-  --color-secondary-foreground: var(--ui-secondary-foreground);
-  --color-muted: var(--ui-muted);
-  --color-muted-foreground: var(--ui-muted-foreground);
-  --color-accent: var(--ui-accent);
-  --color-accent-foreground: var(--ui-accent-foreground);
-  --color-destructive: var(--ui-destructive);
-  --color-border: var(--ui-border);
-  --color-input: var(--ui-input);
-  --color-ring: var(--ui-ring);
-  --color-chart-1: var(--ui-chart-1);
-  --color-chart-2: var(--ui-chart-2);
-  --color-chart-3: var(--ui-chart-3);
-  --color-chart-4: var(--ui-chart-4);
-  --color-chart-5: var(--ui-chart-5);
-  --color-sidebar: var(--ui-sidebar);
-  --color-sidebar-foreground: var(--ui-sidebar-foreground);
-  --color-sidebar-primary: var(--ui-sidebar-primary);
-  --color-sidebar-primary-foreground: var(--ui-sidebar-primary-foreground);
-  --color-sidebar-accent: var(--ui-sidebar-accent);
-  --color-sidebar-accent-foreground: var(--ui-sidebar-accent-foreground);
-  --color-sidebar-border: var(--ui-sidebar-border);
-  --color-sidebar-ring: var(--ui-sidebar-ring);
+  /* -- shadcn convention names -- */
+  --color-background: var(--bg);
+  --color-foreground: var(--ink);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--ink);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--ink);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--on-accent);
+  --color-secondary: var(--sunken);
+  --color-secondary-foreground: var(--ink);
+  --color-muted: var(--sunken);
+  --color-muted-foreground: var(--muted);
+  --color-accent: var(--hover);
+  --color-accent-foreground: var(--ink);
+  --color-destructive: var(--danger);
+  --color-border: var(--line);
+  --color-input: var(--line-strong);
+  --color-ring: var(--accent);
+  --color-chart-1: var(--series-1);
+  --color-chart-2: var(--series-2);
+  --color-chart-3: var(--series-3);
+  --color-chart-4: var(--series-4);
+  --color-chart-5: var(--series-5);
+  --color-sidebar: var(--bg);
+  --color-sidebar-foreground: var(--ink);
+  --color-sidebar-primary: var(--accent);
+  --color-sidebar-primary-foreground: var(--on-accent);
+  --color-sidebar-accent: var(--hover);
+  --color-sidebar-accent-foreground: var(--ink);
+  --color-sidebar-border: var(--line);
+  --color-sidebar-ring: var(--accent);
+
+  /* -- the product's own names -- */
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-brand: var(--accent);
+  --color-brand-soft: var(--accent-soft);
+  --color-opinion: var(--opinion);
+  --color-opinion-soft: var(--opinion-soft);
+  --color-action: var(--action);
+  --color-action-soft: var(--action-soft);
+  --color-up: var(--up);
+  --color-down: var(--down);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  /* The current bot's signature colour (bots.css); only avatar, the 2px line on top of its thread, send-button ring. */
+  --color-bot: var(--bot-hue);
+  --color-bot-soft: var(--bot-hue-soft);
+
+  /* -- type: the eight steps (size, line-height, weight); font stacks are tokens.css's --font-* read directly -- */
+  --text-caption: var(--fs-caption);
+  --text-caption--line-height: var(--lh-caption);
+  --text-caption--font-weight: var(--fw-caption);
+  --text-small: var(--fs-small);
+  --text-small--line-height: var(--lh-small);
+  --text-small--font-weight: var(--fw-small);
+  --text-body: var(--fs-body);
+  --text-body--line-height: var(--lh-body);
+  --text-body--font-weight: var(--fw-body);
+  --text-chat: var(--fs-chat);
+  --text-chat--line-height: var(--lh-chat);
+  --text-chat--font-weight: var(--fw-chat);
+  --text-title-s: var(--fs-title-s);
+  --text-title-s--line-height: var(--lh-title-s);
+  --text-title-s--font-weight: var(--fw-title-s);
+  --text-title-m: var(--fs-title-m);
+  --text-title-m--line-height: var(--lh-title-m);
+  --text-title-m--font-weight: var(--fw-title-m);
+  --text-title-l: var(--fs-title-l);
+  --text-title-l--line-height: var(--lh-title-l);
+  --text-title-l--font-weight: var(--fw-title-l);
+  --text-display: var(--fs-display);
+  --text-display--line-height: var(--lh-display);
+  --text-display--font-weight: var(--fw-display);
+
+  /* -- shape and depth -- */
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-lg);
+  --shadow-pop: var(--elev-pop);
+  --shadow-modal: var(--elev-modal);
+  /* shadcn parts still say shadow-xs / -md / -lg: flat controls, floating things on the two real tiers. */
+  --shadow-xs: 0 0 #0000;
+  --shadow-sm: 0 0 #0000;
+  --shadow-md: var(--elev-pop);
+  --shadow-lg: var(--elev-modal);
+
+  /* -- layers (z-content, z-sticky, z-sidebar, z-overlay, z-dialog, z-toast) -- */
+  --z-index-content: var(--z-content);
+  --z-index-sticky: var(--z-sticky);
+  --z-index-sidebar: var(--z-sidebar);
+  --z-index-overlay: var(--z-overlay);
+  --z-index-dialog: var(--z-dialog);
+  --z-index-toast: var(--z-toast);
+
+  /* -- motion (duration-1 .. duration-4, ease-standard / ease-out / ease-in) -- */
+  --transition-duration-1: var(--dur-1);
+  --transition-duration-2: var(--dur-2);
+  --transition-duration-3: var(--dur-3);
+  --transition-duration-4: var(--dur-4);
+  --ease-standard: var(--curve-standard);
+  --ease-out: var(--curve-out);
+  --ease-in: var(--curve-in);
 }
 
-/* shadcn's own base layer sets `* { border-color; outline-color }` and a body background.  Applied to every
-   element that would restyle the old pages' focus rings and borders, so it is scoped to shadcn parts only
-   (every shadcn root and sub-part carries data-slot).  The body background is left to the old sheets. */
+/* Verbatim quotes.  font-sans and font-mono need no entry here (Tailwind's built-in utilities read --font-sans and
+   --font-mono, which tokens.css overrides); font-quote is ours, so its utility is written out. */
+@utility font-quote {
+  font-family: var(--font-quote);
+}
+
+/* Breakpoints: the design's three, plus md (shadcn parts use md:).  The rest of Tailwind's defaults are dropped. */
+@theme {
+  --breakpoint-*: initial;
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+}
+
+/* ---- Global base ----------------------------------------------------------------------------------------------
+   Page typography comes from the tokens.  The old pages inherit the same colour and typeface; their line-height and
+   size are put back on the data-legacy root (restore.css), so only the new areas get 14/22.
+   shadcn's own `* { border-color; outline-color }` rule is scoped to its parts (below), not global. */
 @layer base {
+  body {
+    background-color: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
+    font-weight: var(--fw-body);
+  }
+
+  ::selection {
+    background-color: color-mix(in srgb, var(--accent) 24%, transparent);
+    color: inherit;
+  }
+
+  /* One focus ring everywhere: accent, 2px, offset 2px.  Parts that draw their own ring (shadcn) override it. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   [data-slot],
   [data-slot] * {
     @apply border-border outline-ring/50;
   }
+}
+
+/* ---- Three materials (design 2.2) -------------------------------------------------------------------------------
+   The only implementation of fact / opinion / action.  A container is exactly one of them; an opinion card that
+   quotes a fact holds a nested .material-fact block.  Composition (padding, gap, width) stays with the caller. */
+
+/* Fact: sunken, colourless, a thin rule on the left, digits that line up.  Source number sits top right. */
+@utility material-fact {
+  position: relative;
+  background-color: var(--sunken);
+  color: var(--ink);
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  font-variant-numeric: tabular-nums;
+  & :is(.num, [data-num]) {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+@utility material-fact-source {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* Opinion: the model's judgement.  A surface card with a 1px opinion outline; the label says whose words these are. */
+@utility material-opinion {
+  background-color: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--opinion);
+  border-radius: var(--r-md);
+}
+@utility material-opinion-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  background-color: var(--opinion-soft);
+  color: var(--opinion);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-weight: var(--fw-caption);
+}
+@utility material-opinion-footnote {
+  color: var(--muted);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+/* Action: a write that waits for the user's nod. */
+@utility material-action {
+  background-color: var(--action-soft);
+  color: var(--ink);
+  border: 1px solid var(--action);
+  border-radius: var(--r-md);
+}
+@utility material-action-label {
+  color: var(--action);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-weight: var(--fw-caption);
+}
+@utility material-action-timer {
+  color: var(--action);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-variant-numeric: tabular-nums;
 }

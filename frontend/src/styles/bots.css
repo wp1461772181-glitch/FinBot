@@ -1,4 +1,44 @@
-/* Per-bot tokens (--bot-hue, --bot-hue-soft, --bot-tempo), set on the chat container.  Empty on purpose: P1.2 / P4 fill it. */
+/* Per-bot tokens.  --bot-hue is the bot's signature colour, --bot-hue-soft a tint of it for backgrounds,
+   --bot-tempo a multiplier for animation speed (1 = the base rhythm).  The defaults are ink and 1.
+   Whoever owns a bot's container writes data-bot-color="<id>" on it (P3 / A1); this file only defines the 12
+   colours of src/bloub/skins.ts as hues.  Per the design the hue shows in three places only: the avatar, the 2px
+   line on top of the bot's thread, and the send button's focus ring.
+
+   Light values are the skins.ts hex, darkened (same hue, lower OKLCH lightness) where the hex is under 3:1
+   against the three light backgrounds (bg, surface, sunken), because a hue that is used as an outline must
+   reach 3:1 there; dark values are lightened the same way where needed.  encre follows the page ink in dark. */
+:root {
+  --bot-hue: var(--ink);
+  --bot-hue-soft: var(--sunken);
+  --bot-tempo: 1;
+}
+
+[data-bot-color="encre"] { --bot-hue: #0a0a0c; --bot-hue-soft: #ececec; }
+[data-bot-color="brun"] { --bot-hue: #8b5e3c; --bot-hue-soft: #efe8e4; }
+[data-bot-color="rouge"] { --bot-hue: #e8483f; --bot-hue-soft: #fce5e4; }
+[data-bot-color="orange"] { --bot-hue: #d36f00; --bot-hue-soft: #f9ebdb; }
+[data-bot-color="ambre"] { --bot-hue: #b87e00; --bot-hue-soft: #f5eddb; }
+[data-bot-color="vert"] { --bot-hue: #009d60; --bot-hue-soft: #dbf1e9; }
+[data-bot-color="turquoise"] { --bot-hue: #009c7f; --bot-hue-soft: #dbf1ed; }
+[data-bot-color="bleu"] { --bot-hue: #328be7; --bot-hue-soft: #e2effc; }
+[data-bot-color="violet"] { --bot-hue: #8b5cf6; --bot-hue-soft: #efe8fe; }
+[data-bot-color="rose"] { --bot-hue: #e152b0; --bot-hue-soft: #fbe7f4; }
+[data-bot-color="gris"] { --bot-hue: #898989; --bot-hue-soft: #eeeeee; }
+[data-bot-color="creme"] { --bot-hue: #8b8a84; --bot-hue-soft: #efefee; }
+
+:root[data-theme="dark"] [data-bot-color="encre"] { --bot-hue: #ecebe6; --bot-hue-soft: #2d2d2b; }
+:root[data-theme="dark"] [data-bot-color="brun"] { --bot-hue: #906240; --bot-hue-soft: #2f271f; }
+:root[data-theme="dark"] [data-bot-color="rouge"] { --bot-hue: #e8483f; --bot-hue-soft: #3f221f; }
+:root[data-theme="dark"] [data-bot-color="orange"] { --bot-hue: #f08a24; --bot-hue-soft: #412e1a; }
+:root[data-theme="dark"] [data-bot-color="ambre"] { --bot-hue: #f0b429; --bot-hue-soft: #41361b; }
+:root[data-theme="dark"] [data-bot-color="vert"] { --bot-hue: #3ecf8e; --bot-hue-soft: #203b2d; }
+:root[data-theme="dark"] [data-bot-color="turquoise"] { --bot-hue: #2fbfa0; --bot-hue-soft: #1e3830; }
+:root[data-theme="dark"] [data-bot-color="bleu"] { --bot-hue: #3b93f0; --bot-hue-soft: #20303f; }
+:root[data-theme="dark"] [data-bot-color="violet"] { --bot-hue: #8b5cf6; --bot-hue-soft: #2e2640; }
+:root[data-theme="dark"] [data-bot-color="rose"] { --bot-hue: #e152b0; --bot-hue-soft: #3e2433; }
+:root[data-theme="dark"] [data-bot-color="gris"] { --bot-hue: #a3a3a3; --bot-hue-soft: #333331; }
+:root[data-theme="dark"] [data-bot-color="creme"] { --bot-hue: #f1efe9; --bot-hue-soft: #41403e; }
+
 
 /* Idle small avatars (sidebar rows, lists, cards) are a still frame; the only life they have is this breath.
  * BloubAvatar adds the class while the avatar rests with no frame loop and removes it when the loop takes over.

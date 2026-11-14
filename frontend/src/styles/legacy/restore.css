@@ -18,9 +18,18 @@
    The #dev-kit smoke checks fail if legacy rules reach shadcn parts, or if preflight is missing outside the subtree.
 
    Page-level exceptions: an ancestor of the marker cannot be scoped by it, so the `html` group below and the old
-   sheets' own html / body / :root rules stay global.  Consequence for new code: line-height is `normal` on the
-   page (preflight would give 1.5), and body supplies font-family, colour and font-smoothing, until P1.2 / P9.
+   sheets' own html / body / :root rules stay global.  Since P1.2 the page's body gets the design's typography
+   (14px / 22px, --font-sans, --ink: theme.css, layer `base`), so the data-legacy root puts the old inherited
+   size and line-height back (first rule below): old pages keep their layout, new areas get the design's text.
    Drop each rule when the last old page that needs it is gone (P9 deletes the whole file). */
+
+/* The old pages inherited the browser's 16px and `normal` line-height from <body>; the new body sets 14px / 22px.
+   The marker is display:contents, so these are inherited by everything inside it.  Zero specificity: any old rule
+   that sets its own size or line-height still wins, as before. */
+:where([data-legacy]) {
+  font-size: medium;
+  line-height: normal;
+}
 
 /* Box model: old pages with a bare <h1>, <p>, <ul>, <button>, <input>, <fieldset>, <figure> ... (nearly all pages). */
 :where([data-legacy] *:not([data-legacy] [data-slot], [data-legacy] [data-slot] *)),

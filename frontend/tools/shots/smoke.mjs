@@ -361,6 +361,95 @@ async function idleAvatarsNoRaf(ctx) {
   } finally { await view.close(); }
 }
 
+/** Colour of an element, as the browser resolves it for `prop`. */
+const colorOf = (page, selector, prop = "color") => page.evaluate(([sel, name]) => getComputedStyle(document.querySelector(sel))[name], [selector, prop]);
+
+async function updownSwitchesMarketOnly(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "updown-kit", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#dev-kit`, { waitUntil: "load" });
+    await page.locator('[data-kit="updown-toggle"]').waitFor({ timeout: 10000 });
+    await settle(page, { pinTranscript: false });
+    // Probe the old sheets too: throw-away elements carrying the old classes, read the same way.
+    const legacyProbe = () => page.evaluate(() => {
+      const make = (html) => { const host = document.createElement("div"); host.setAttribute("data-legacy", ""); host.setAttribute("data-smoke-probe", ""); host.innerHTML = html; document.body.appendChild(host); return host; };
+      const host = make('<span class="delta-up">+1</span><span class="delta-down">-1</span><p class="inventory-error">x</p><div class="action-notice error">x</div><div class="meter"><i class="bearish" style="display:block;width:4px;height:4px"></i></div>');
+      const q = (sel) => host.querySelector(sel);
+      const out = {
+        legacyUp: getComputedStyle(q(".delta-up")).color, legacyDown: getComputedStyle(q(".delta-down")).color,
+        legacyError: getComputedStyle(q(".inventory-error")).color, legacyNotice: getComputedStyle(q(".action-notice.error")).borderTopColor,
+        legacyBearish: getComputedStyle(q(".meter .bearish")).backgroundColor,
+      };
+      host.remove();
+      return out;
+    });
+    const read = async () => ({
+      attr: await page.evaluate(() => document.documentElement.dataset.updown),
+      up: await colorOf(page, '[data-kit-delta="up"]'), down: await colorOf(page, '[data-kit-delta="down"]'),
+      success: await colorOf(page, '[data-kit-status="success"]'), danger: await colorOf(page, '[data-kit-status="error"]'),
+      barUp: await colorOf(page, '[data-segment="up"]', "backgroundColor"), barDown: await colorOf(page, '[data-segment="down"]', "backgroundColor"),
+      ...(await legacyProbe()),
+    });
+    const before = await read();
+    assert(before.attr === "green-up", `default data-updown should be green-up, got ${before.attr}`);
+    assert(before.up !== before.down, "up and down must differ");
+    assert(before.success === before.up && before.danger === before.down, "by default success is the up colour and danger the down colour");
+    assert(before.legacyUp === before.up && before.legacyDown === before.down, `old .delta-up / .delta-down follow --up / --down: ${JSON.stringify(before)}`);
+    assert(before.legacyError === before.danger && before.legacyNotice === before.danger, "old error rules use the danger colour");
+    assert(before.legacyBearish === before.down, "the old probability bar's bearish segment is the down colour");
+    await page.locator('[data-kit="updown-toggle"]').click();
+    await page.waitForFunction(() => document.documentElement.dataset.updown === "red-up", null, { timeout: 5000 });
+    const after = await read();
+    const bad = [];
+    const expect = (label, ok, got) => { if (!ok) bad.push(`${label}  (got ${JSON.stringify(got)})`); };
+    expect("up number takes the old down colour", after.up === before.down, [after.up, before.down]);
+    expect("down number takes the old up colour", after.down === before.up, [after.down, before.up]);
+    expect("probability bar segments swap", after.barUp === before.barDown && after.barDown === before.barUp, [after.barUp, after.barDown]);
+    expect("success message keeps its colour", after.success === before.success, [after.success, before.success]);
+    expect("error message keeps its colour", after.danger === before.danger, [after.danger, before.danger]);
+    expect("old .delta-up / .delta-down swap with the market", after.legacyUp === before.legacyDown && after.legacyDown === before.legacyUp, after);
+    expect("old error rules keep their colour", after.legacyError === before.legacyError && after.legacyNotice === before.legacyNotice, after);
+    expect("old bearish segment follows the down token", after.legacyBearish === after.down, [after.legacyBearish, after.down]);
+    // Dark mode swaps the same way (the highest-specificity rule is the dark + red-up one).
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+    const dark = await read();
+    expect("dark red-up: up is red, down is green (not the light values)", dark.up !== after.up && dark.up !== dark.down, [dark.up, after.up]);
+    await page.locator('[data-kit="updown-toggle"]').click();
+    await page.waitForFunction(() => document.documentElement.dataset.updown === "green-up", null, { timeout: 5000 });
+    const darkBack = await read();
+    expect("dark green-up: the swap is its mirror image", darkBack.up === dark.down && darkBack.down === dark.up, [darkBack.up, dark.down]);
+    expect("dark: success / error colours still fixed", darkBack.success === dark.success && darkBack.danger === dark.danger, [darkBack.success, dark.success]);
+    if (bad.length) throw new Error(bad.join("\n"));
+    return `up ${before.up} <-> ${before.down}; success ${before.success} and error ${before.danger} stay put; old sheets follow`;
+  } finally { await view.close(); }
+}
+
+async function updownSettingPersists(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "updown-setting", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#admin`, { waitUntil: "load" });
+    await page.locator("#updown").waitFor({ timeout: 10000 });
+    const attr = () => page.evaluate(() => document.documentElement.dataset.updown);
+    assert((await attr()) === "green-up", `expected green-up at start, got ${await attr()}`);
+    // Focus the trigger and open it from the keyboard (Enter), then pick the second item.
+    await page.locator("#updown").focus();
+    await page.keyboard.press("Enter");
+    await page.getByRole("option", { name: "红涨绿跌" }).waitFor({ timeout: 5000 });
+    await page.getByRole("option", { name: "红涨绿跌" }).click();
+    await page.waitForFunction(() => document.documentElement.dataset.updown === "red-up", null, { timeout: 5000 });
+    const stored = await page.evaluate(() => localStorage.getItem("market-evidence-agent:updown:v1"));
+    assert(stored === "red-up", `localStorage should hold red-up, got ${stored}`);
+    await page.reload({ waitUntil: "load" });
+    await page.locator("#updown").waitFor({ timeout: 10000 });
+    assert((await attr()) === "red-up", `after reload expected red-up, got ${await attr()}`);
+    const shown = (await page.locator("#updown").innerText()).trim();
+    assert(shown === "红涨绿跌", `the control should show the stored choice, got "${shown}"`);
+    return "pick red-up -> data-updown=red-up, saved, still red-up after reload, control shows it";
+  } finally { await view.close(); }
+}
+
 /** name -> check.  Add new checks by writing a function above and registering it here. */
 export const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
@@ -372,6 +461,8 @@ export const CHECKS = [
   ["#dev-kit: shadcn parts are identical with the legacy layer removed", kitNotPolluted],
   ["#dev-kit: dialog, menu and select work from the keyboard and return focus", kitKeyboard],
   ["#dev-kit/probe: restore applies only inside data-legacy, preflight everywhere else", legacyScope],
+  ["#dev-kit: the up/down switch swaps market colours only (new and old styles); success and error stay", updownSwitchesMarketOnly],
+  ["settings page: the up/down choice changes <html data-updown> and survives a reload", updownSettingPersists],
   ["idle-avatars-no-raf: idle sidebar avatars run no frame loop; hover starts it, leaving stops it", idleAvatarsNoRaf],
 ];
 

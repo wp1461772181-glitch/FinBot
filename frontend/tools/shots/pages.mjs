@@ -43,6 +43,9 @@ export const PAGES = [
   { name: "dev-kit", hash: "#dev-kit", ready: "[data-kit-page]" },
   { name: "dev-kit-dialog", hash: "#dev-kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="dialog-trigger"]').click(); await page.locator('[data-slot="dialog-content"]').waitFor(); } },
+  // The same page with the market colours switched to red up (clicks the page's own toggle).
+  { name: "dev-kit-red-up", hash: "#dev-kit", ready: "[data-kit-page]",
+    before: async (page) => { await page.locator('[data-kit="updown-toggle"]').click(); await page.waitForFunction(() => document.documentElement.dataset.updown === "red-up"); } },
   { name: "dev-kit-menu", hash: "#dev-kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); } },
 ];

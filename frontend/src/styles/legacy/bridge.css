@@ -1,0 +1,64 @@
+/* The one place the old variable names get their values (last file of the legacy layer).
+
+   The old sheets read colours through two families of names: the --me-* set (defined in theme.css and again in
+   grok.css, light and dark) and the oldest names (--paper, --teal, --rust ...).  Both families now point at the
+   semantic tokens of tokens.css, so the old pages follow the "paper and ink" palette, the dark theme and the
+   typefaces without a single selector being touched.  There is no dark block here: the tokens switch themselves
+   under <html data-theme="dark">.  The old sheets no longer define any of these names (that would be a second
+   place holding values).
+
+   Names the tokens already own with the same meaning are not repeated: --ink, --muted, --line, --surface,
+   --accent, --accent-soft.  tokens.css is unlayered, so it wins over this layer anyway.
+
+   Market direction and status are separate: --me-up / --me-down follow the up/down switch, --rust (the old name of
+   "error red") points at --danger and does not.  See the audit table in the P1.2 delivery for each use. */
+:root {
+  --me-bg: var(--bg);
+  --me-surface: var(--surface);
+  --me-surface-2: var(--sunken);
+  --me-ink: var(--ink);
+  --me-muted: var(--muted);
+  --me-faint: var(--faint);
+  --me-line: var(--line);
+  --me-line-strong: var(--line-strong);
+  --me-accent: var(--accent);
+  /* No token for a darker accent: mix toward ink (a little darker in light, a little lighter in dark). */
+  --me-accent-hover: color-mix(in srgb, var(--accent) 82%, var(--ink));
+  --me-accent-soft: var(--accent-soft);
+  --me-up: var(--up);
+  --me-down: var(--down);
+  --me-warn: var(--action);
+
+  /* The shell rail sits on the page colour, separated by its own border; hover and the active row use the neutral hover fill. */
+  --me-rail: var(--bg);
+  --me-rail-2: var(--bg);
+  --me-rail-ink: var(--ink);
+  --me-rail-muted: var(--muted);
+  --me-rail-hover: var(--hover);
+  /* The inverted pill and the send button: ink with page-coloured text. */
+  --me-invert: var(--ink);
+  --me-invert-ink: var(--bg);
+  /* The hero banner: a surface that stays dark in both themes. */
+  --me-hero: var(--deep);
+  --me-hero-ink: var(--on-deep);
+  --me-hero-muted: var(--on-deep-2);
+
+  --me-font: var(--font-sans);
+  --me-mono: var(--font-mono);
+
+  /* The oldest names, kept so no selector has to change. */
+  --paper: var(--me-bg);
+  --canvas: var(--me-bg);
+  --edge: var(--me-line);
+  --teal: var(--me-accent);
+  --pale-teal: var(--me-accent-soft);
+  --rust: var(--danger);
+  --warning: var(--me-warn);
+  /* --navy is the dark surface the old sheets write white text on, in both themes. */
+  --navy: var(--me-hero);
+  --navy-2: var(--me-hero);
+  --sans: var(--me-font);
+  /* The old pages have no "verbatim quote" meaning: the old serif alias stays sans on purpose. */
+  --serif: var(--me-font);
+  --mono: var(--me-mono);
+}

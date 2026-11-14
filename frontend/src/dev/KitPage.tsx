@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { MaterialsBlock, PaletteBlock, TypeBlock, UpDownBlock } from "./TokenKit";
 
 const VARIANTS = ["default", "secondary", "outline", "ghost", "destructive", "link"] as const;
 const SIZES = ["xs", "sm", "default", "lg"] as const;
@@ -142,6 +143,11 @@ export default function KitPage() {
         <Section title="Icons (lucide-react)">
           {ICONS.map((Icon, index) => <Icon key={index} className="size-5" aria-hidden />)}
         </Section>
+
+        <PaletteBlock />
+        <TypeBlock />
+        <MaterialsBlock />
+        <UpDownBlock />
 
         {window.location.hash === "#dev-kit/probe" && <ScopeProbes />}
       </main>

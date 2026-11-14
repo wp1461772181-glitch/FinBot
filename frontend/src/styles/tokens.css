@@ -1,1 +1,193 @@
-/* Design tokens, layers 1 (raw palette) and 2 (semantic, light and dark).  Empty on purpose: P1.2 fills it. */
+/* Design tokens, "paper and ink" (design 2.2-2.6).
+   Layer 1: raw palette, no meaning attached.  Layer 2: semantic tokens, light and dark under the same names.
+   Pages and components only read layer 2 (and layer 3 in theme.css, which hands them to Tailwind and shadcn).
+
+   These rules are deliberately NOT inside a cascade layer: an unlayered declaration beats every layer, so the
+   old sheets (layer `legacy`) can never override a token by accident.  Dark mode keys off <html data-theme="dark">
+   (theme.mjs); the up/down switch keys off <html data-updown="red-up"> (updown.mjs). */
+
+/* ---- Layer 1: raw palette ------------------------------------------------------------------------------------
+   One warm-neutral ramp (0 = white ... 950 = near black) and five hue ramps.  Only the stops layer 2 uses. */
+:root {
+  --stone-0: #ffffff;
+  --stone-50: #f7f6f3;
+  --stone-100: #f0efeb;
+  --stone-150: #ecebe6;
+  --stone-200: #e4e2dc;
+  --stone-300: #cfccc4;
+  --stone-350: #c9c7c0;
+  --stone-450: #a09d94;
+  --stone-500: #8d897f;
+  --stone-550: #7d7a72;
+  --stone-600: #6b6860;
+  --stone-700: #45433d;
+  --stone-750: #3b3a36;
+  --stone-800: #2b2a27;
+  --stone-850: #222220;
+  --stone-900: #1c1b18;
+  --stone-925: #1a1a18;
+  --stone-950: #121211;
+
+  --blue-50: #e8eefc;
+  --blue-300: #8fb2ff;
+  --blue-600: #1f4fd8;
+  --blue-900: #18233d;
+
+  --violet-50: #f1ecfb;
+  --violet-300: #b9a5f3;
+  --violet-600: #6741b8;
+  --violet-900: #231d33;
+
+  --amber-50: #fdf1dc;
+  --amber-300: #e6a550;
+  --amber-700: #9a4a06;
+  --amber-900: #2e2413;
+
+  --green-300: #56c98a;
+  --green-600: #157a3c;
+
+  --red-300: #f0796b;
+  --red-600: #bf3327;
+}
+
+/* ---- Layer 2: semantic tokens, light ("paper") ---------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+
+  --bg: var(--stone-50);               /* page */
+  --surface: var(--stone-0);           /* cards, panels */
+  --sunken: var(--stone-100);          /* fact layer, inputs, code */
+  --ink: var(--stone-900);             /* body text */
+  --ink-2: var(--stone-700);           /* secondary text */
+  --muted: var(--stone-600);           /* captions, meta */
+  --faint: var(--stone-500);           /* placeholders, decoration, disabled; never required reading */
+  --line: var(--stone-200);            /* dividers */
+  --line-strong: var(--stone-300);     /* control outlines */
+
+  --accent: var(--blue-600);           /* links, focus ring, primary button */
+  --accent-soft: var(--blue-50);       /* selection, user bubble */
+  --on-accent: var(--stone-0);         /* text on a primary button */
+  --opinion: var(--violet-600);        /* model opinion: outline and label */
+  --opinion-soft: var(--violet-50);
+  --action: var(--amber-700);          /* write action waiting for the user */
+  --action-soft: var(--amber-50);
+
+  --hover: var(--sunken);              /* neutral hover fill */
+
+  /* Market direction only: numbers with an arrow and a sign, candles, the up/down segments of a probability bar.
+     `data-updown="red-up"` swaps the two (below). */
+  --up: var(--green-600);
+  --down: var(--red-600);
+  /* Status, never swapped: a success message stays green and an error stays red whichever way the market is read. */
+  --success: var(--green-600);
+  --danger: var(--red-600);
+
+  /* A surface that stays dark in both themes (the old hero banner, --navy) and the text written on it. */
+  --deep: var(--stone-900);
+  --on-deep: var(--stone-50);
+  --on-deep-2: var(--stone-350);
+
+  /* Chart series: five hues at one lightness and chroma, so no series shouts over another. */
+  --series-1: oklch(0.58 0.15 258);
+  --series-2: oklch(0.58 0.15 190);
+  --series-3: oklch(0.58 0.15 75);
+  --series-4: oklch(0.58 0.15 305);
+  --series-5: oklch(0.58 0.15 10);
+}
+
+/* ---- Layer 2: dark ("ink") ------------------------------------------------------------------------------------ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: var(--stone-950);
+  --surface: var(--stone-925);
+  --sunken: var(--stone-850);
+  --ink: var(--stone-150);
+  --ink-2: var(--stone-350);
+  --muted: var(--stone-450);
+  --faint: var(--stone-550);
+  --line: var(--stone-800);
+  --line-strong: var(--stone-750);
+
+  --accent: var(--blue-300);
+  --accent-soft: var(--blue-900);
+  --on-accent: var(--stone-950);
+  --opinion: var(--violet-300);
+  --opinion-soft: var(--violet-900);
+  --action: var(--amber-300);
+  --action-soft: var(--amber-900);
+
+  --up: var(--green-300);
+  --down: var(--red-300);
+  --success: var(--green-300);
+  --danger: var(--red-300);
+
+  --deep: var(--stone-850);
+  --on-deep: var(--stone-150);
+  --on-deep-2: var(--stone-450);
+
+  --series-1: oklch(0.76 0.13 258);
+  --series-2: oklch(0.76 0.13 190);
+  --series-3: oklch(0.76 0.13 75);
+  --series-4: oklch(0.76 0.13 305);
+  --series-5: oklch(0.76 0.13 10);
+}
+
+/* ---- Up / down switch (design D2) ------------------------------------------------------------------------------
+   Only --up and --down trade places.  --success and --danger do not move.  The dark + red-up rule has the highest
+   specificity of the four, so it wins in dark mode whatever the order. */
+:root[data-updown="red-up"] {
+  --up: var(--red-600);
+  --down: var(--green-600);
+}
+:root[data-theme="dark"][data-updown="red-up"] {
+  --up: var(--red-300);
+  --down: var(--green-300);
+}
+
+/* ---- Type, shape, depth, motion (not themed) ----------------------------------------------------------------- */
+:root {
+  /* Latin and digits come from the self-hosted variable fonts (fonts.css); Chinese falls back to system fonts. */
+  --font-sans: "Inter Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* Names that match Tailwind's own theme variables (font-sans, font-mono) are used as is: the utilities read them.
+     Verbatim quotes only.  Point this at var(--font-sans) to switch the serif off (design R10). */
+  --font-quote: "Source Serif 4 Variable", "Songti SC", "STSong", "Noto Serif SC", serif;
+
+  /* Type scale, eight steps: size (--fs-), line-height (--lh-), weight (--fw-).  Nothing below 12px.
+     Digits in tables and figures use --font-mono or font-variant-numeric: tabular-nums. */
+  --fs-caption: 12px;  --lh-caption: 16px;  --fw-caption: 500;
+  --fs-small: 13px;  --lh-small: 20px;  --fw-small: 400;
+  --fs-body: 14px;  --lh-body: 22px;  --fw-body: 400;
+  --fs-chat: 15px;  --lh-chat: 26px;  --fw-chat: 400;
+  --fs-title-s: 16px;  --lh-title-s: 24px;  --fw-title-s: 600;
+  --fs-title-m: 20px;  --lh-title-m: 28px;  --fw-title-m: 600;
+  --fs-title-l: 24px;  --lh-title-l: 32px;  --fw-title-l: 600;
+  --fs-display: 30px;  --lh-display: 36px;  --fw-display: 600;
+
+  --r-sm: 6px;       /* badges, inputs, buttons */
+  --r-md: 10px;      /* cards */
+  --r-lg: 16px;      /* dialogs, drawers, the composer */
+
+  /* Cards use a 1px line, not a shadow.  Only floating things get one (elevation: pop, modal). */
+  --elev-pop: 0 4px 16px rgb(28 27 24 / 0.1), 0 1px 3px rgb(28 27 24 / 0.08);
+  --elev-modal: 0 16px 48px rgb(28 27 24 / 0.2), 0 2px 8px rgb(28 27 24 / 0.1);
+
+  /* Layers. */
+  --z-content: 0;
+  --z-sticky: 10;
+  --z-sidebar: 20;
+  --z-overlay: 40;
+  --z-dialog: 50;
+  --z-toast: 60;
+
+  /* Motion: durations and easing curves.  (Named --curve-*, not --ease-*, so they do not collide with Tailwind's own
+     theme variable names; theme.css maps them to the ease-* utilities.) */
+  --dur-1: 120ms;         /* hover, press, colour */
+  --dur-2: 200ms;         /* expand, tab slider, fade */
+  --dur-3: 320ms;         /* drawer, dialog, panel */
+  --dur-4: 480ms;         /* bot hand-over, the upper limit */
+  --curve-standard: cubic-bezier(0.2, 0, 0, 1);
+  --curve-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --curve-in: cubic-bezier(0.4, 0, 1, 1);
+}

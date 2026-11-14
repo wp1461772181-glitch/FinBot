@@ -1,13 +1,20 @@
-// Contrast guard for the two themes (UX batch 2, P0).  Pure Node: it parses the four sheets in load
-// order, resolves the theme tokens for light and dark, and reports
+// Contrast guard for the two themes (UX batch 2, P0; extended in P1.2).  Pure Node: it parses tokens.css and the
+// four old sheets (plus bridge.css) in load order, resolves the theme tokens through their var() chains for light
+// and dark (and for the red-up market colours), and reports
 //   A1  a rule that paints a hard-coded light background while its text follows the theme (a token that
 //       turns light in dark mode, or no colour at all), unless dark mode repoints that selector (theme.css);
 //   A2  a rule that writes hard-coded light text over a token background that is light in light mode;
 //   A3  text painted with a token that is light in light mode, with no dark token background;
-//   B   token text/background pairs below WCAG contrast (4.5 body, 3 secondary).
+//   B   token text/background pairs below WCAG contrast (4.5 body, 3 secondary);
+//   D   the design's colour table (2.3): every text token against bg / surface / sunken, the soft-fill pairs, and the
+//       same again with up/down swapped (data-updown="red-up"); every bot hue against the three backgrounds (3:1).
+// `node scripts/theme-contrast.mjs` prints the computed numbers next to the design's.
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
-export const SHEETS = ["styles/legacy/styles.css", "styles/legacy/chat.css", "styles/legacy/theme.css", "styles/legacy/grok.css"];
+// Load order: the tokens, the old sheets, then the bridge that points the old names at the tokens.
+export const SHEETS = ["styles/tokens.css", "styles/legacy/styles.css", "styles/legacy/chat.css", "styles/legacy/theme.css", "styles/legacy/grok.css", "styles/legacy/bridge.css"];
+export const BOT_SHEET = "styles/bots.css";
 
 /** Flat rule list: {selectors, decls, media}.  Good enough for our hand-written and minified sheets. */
 export function parseCss(text) {
@@ -115,18 +122,33 @@ function firstVar(value) {
 }
 
 // --- tokens ----------------------------------------------------------------------------------------
-/** Token maps for light and dark, from `:root` and `:root[data-theme=dark]` rules in load order. */
+// The four token sets the cascade can produce on <html>.  `:root[data-updown=red-up]` and the dark one share their
+// specificity with `:root[data-theme=dark]`, so (as in the browser) the dark + red-up rule is what decides there.
+const SELECTORS = {
+  light: ":root",
+  dark: ":root[data-theme=dark]",
+  lightRedUp: ":root[data-updown=red-up]",
+  darkRedUp: ":root[data-theme=dark][data-updown=red-up]",
+};
+
+/** Token maps for light, dark, and both with the market colours swapped, from the `:root…` rules in load order. */
 export function themeTokens(rules) {
-  const light = {}, darkOnly = {};
+  const sets = { light: {}, dark: {}, lightRedUp: {}, darkRedUp: {} };
   for (const rule of rules) {
     if (rule.media) continue;
     for (const sel of rule.selectors) {
-      const target = sel === ":root" ? light : sel === ":root[data-theme=dark]" ? darkOnly : null;
-      if (!target) continue;
-      for (const [k, v] of Object.entries(rule.decls)) if (k.startsWith("--")) target[k] = v;
+      const key = Object.keys(SELECTORS).find((k) => SELECTORS[k] === sel);
+      if (!key) continue;
+      for (const [k, v] of Object.entries(rule.decls)) if (k.startsWith("--")) sets[key][k] = v;
     }
   }
-  return { light, dark: { ...light, ...darkOnly } };
+  const dark = { ...sets.light, ...sets.dark };
+  return {
+    light: sets.light,
+    dark,
+    lightRedUp: { ...sets.light, ...sets.lightRedUp },
+    darkRedUp: { ...dark, ...sets.lightRedUp, ...sets.darkRedUp },
+  };
 }
 
 export function resolveToken(tokens, name, depth = 0) {
@@ -208,4 +230,98 @@ export function checkPairs(rules, pairs = PAIRS) {
 
 export function loadRules(dir, extra = "") {
   return parseCss(SHEETS.map((name) => readFileSync(new URL(name, dir), "utf8")).join("\n") + "\n" + extra);
+}
+
+// --- design table (design 2.3) ------------------------------------------------------------------------------------
+export const SETS = ["light", "dark", "lightRedUp", "darkRedUp"];
+const BACKGROUNDS = ["--bg", "--surface", "--sunken"];
+
+// Text tokens against the three backgrounds: [token, minimum ratio, the design's number for light, for dark].
+export const DESIGN_TEXT = [
+  ["--ink", 4.5, 14.97, 13.35], ["--ink-2", 4.5, 8.6, 9.42], ["--muted", 4.5, 4.84, 5.88],
+  ["--faint", 3, 3.03, 3.72],
+  ["--accent", 4.5, 5.76, 7.57], ["--opinion", 4.5, 6.03, 7.39], ["--action", 4.5, 5.44, 7.48],
+  ["--up", 4.5, 4.7, 7.68], ["--down", 4.5, 4.91, 5.81],
+  // Status colours default to the same values as up / down and must clear the same bar; they never swap.
+  ["--success", 4.5, 4.7, 7.68], ["--danger", 4.5, 4.91, 5.81],
+];
+// Text on its own soft fill: [text, fill, minimum, the design's light, the design's dark].
+export const DESIGN_ON_FILL = [
+  ["--accent", "--accent-soft", 4.5, 5.7, 7.41], ["--opinion", "--opinion-soft", 4.5, 5.99, 7.52], ["--action", "--action-soft", 4.5, 5.6, 7.16],
+  ["--on-accent", "--accent", 4.5, null, null],
+  ["--ink", "--accent-soft", 4.5, null, null],
+  ["--on-deep", "--deep", 4.5, null, null], ["--on-deep-2", "--deep", 3, null, null],
+];
+
+const ratioOf = (tokens, fg, bg) => {
+  const a = resolveToken(tokens, fg), b = resolveToken(tokens, bg);
+  return a && b ? contrast(a, b) : null;
+};
+
+/** Computed numbers for the design table: per set, the minimum over the three backgrounds. */
+export function designNumbers(rules) {
+  const all = themeTokens(rules);
+  const rows = [];
+  for (const set of SETS) {
+    for (const [fg, min] of DESIGN_TEXT) {
+      const ratios = BACKGROUNDS.map((bg) => ratioOf(all[set], fg, bg));
+      rows.push({ set, pair: `${fg} on bg/surface/sunken`, fg, min, ratio: ratios.some((r) => r == null) ? null : Math.min(...ratios) });
+    }
+    for (const [fg, fill, min] of DESIGN_ON_FILL) rows.push({ set, pair: `${fg} on ${fill}`, fg, min, ratio: ratioOf(all[set], fg, fill) });
+  }
+  return rows;
+}
+
+export function checkDesign(rules) {
+  const failures = [];
+  for (const row of designNumbers(rules)) {
+    if (row.ratio == null) failures.push({ check: "D", set: row.set, pair: row.pair, ratio: "unresolved" });
+    else if (row.ratio < row.min) failures.push({ check: "D", set: row.set, pair: row.pair, ratio: Number(row.ratio.toFixed(2)), min: row.min });
+  }
+  return failures;
+}
+
+/** Bot hues (bots.css): outline colours, so 3:1 against the three backgrounds of their theme. */
+export function botHues(css) {
+  const light = {}, dark = {};
+  for (const rule of parseCss(css)) for (const sel of rule.selectors) {
+    const hue = rule.decls["--bot-hue"];
+    const m = sel.match(/^(:root\[data-theme=dark\] )?\[data-bot-color=([a-z]+)\]$/);
+    if (m && hue) (m[1] ? dark : light)[m[2]] = hue;
+  }
+  return { light, dark };
+}
+
+export function checkBots(css, rules) {
+  const tokens = themeTokens(rules);
+  const hues = botHues(css);
+  const failures = [];
+  for (const theme of ["light", "dark"]) for (const [id, hue] of Object.entries(hues[theme])) {
+    const c = parseColor(hue);
+    for (const bg of BACKGROUNDS) {
+      const ratio = c && resolveToken(tokens[theme], bg) ? contrast(c, resolveToken(tokens[theme], bg)) : null;
+      if (ratio == null || ratio < 3) failures.push({ check: "D", theme, pair: `bot ${id} (${hue}) on ${bg}`, ratio: ratio == null ? "unresolved" : Number(ratio.toFixed(2)), min: 3 });
+    }
+  }
+  return failures;
+}
+
+export function loadBotCss(dir) {
+  return readFileSync(new URL(BOT_SHEET, dir), "utf8");
+}
+
+// `node scripts/theme-contrast.mjs`: the design's numbers next to the computed ones.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const rules = loadRules(new URL("../src/", import.meta.url));
+  const f = (n) => (n == null ? "  -  " : n.toFixed(2).padStart(5));
+  for (const set of SETS) {
+    console.log(`\n== ${set} ==`);
+    console.log("pair".padEnd(44), "min".padStart(4), "computed".padStart(9), "design".padStart(7));
+    for (const row of designNumbers(rules)) {
+      if (row.set !== set) continue;
+      const design = DESIGN_TEXT.find(([fg]) => fg === row.fg && row.pair.endsWith("sunken"))?.[set.startsWith("dark") ? 3 : 2]
+        ?? DESIGN_ON_FILL.find(([fg, fill]) => row.pair === `${fg} on ${fill}`)?.[set.startsWith("dark") ? 4 : 3];
+      console.log(row.pair.padEnd(44), String(row.min).padStart(4), f(row.ratio).padStart(9), f(set.endsWith("RedUp") ? null : design ?? null).padStart(7));
+    }
+  }
 }

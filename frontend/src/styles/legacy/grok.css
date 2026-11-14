@@ -3,57 +3,9 @@
      - assistant-ui's Grok example (MIT): https://github.com/assistant-ui/assistant-ui/blob/main/apps/docs/components/pages/examples/grok.tsx
        (#141414 page, #212121 composer, #2a2a2a ring, pill composer, round inverted send button)
      - LobeChat (agents listed in the sidebar, thread in the middle): https://github.com/lobehub/lobe-chat
-   It retunes theme.css's tokens, then restyles the shell rail, the bot list, the thread, the bubbles, the
-   composer and the right rail.  Our IA (bots / 工作区 / 档案, 公司, 预测, 资料库) and Chinese copy are unchanged. */
-
-:root {
-  --me-bg: #fdfdfd;
-  --me-surface: #ffffff;
-  --me-surface-2: #f4f4f4;
-  --me-ink: #0d0d0d;
-  --me-muted: #5f5f5f;
-  --me-faint: #9a9a9a;
-  --me-line: #e5e5e5;
-  --me-line-strong: #d4d4d4;
-  --me-accent: #2563eb;
-  --me-accent-hover: #1d4ed8;
-  --me-accent-soft: #eef2ff;
-  --me-rail: #f7f7f7;
-  --me-rail-2: #f7f7f7;
-  --me-rail-ink: #0d0d0d;
-  --me-rail-muted: #6b6b6b;
-  --me-rail-hover: #ececec;
-  --me-invert: #0d0d0d;
-  --me-invert-ink: #ffffff;
-  --me-hero: #15181d;
-  --me-hero-ink: #f5f7f9;
-  --me-hero-muted: #b3bcc7;
-  --me-font: "Inter", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-
-:root[data-theme="dark"] {
-  --me-bg: #141414;
-  --me-surface: #1a1a1a;
-  --me-surface-2: #212121;
-  --me-ink: #f5f5f5;
-  --me-muted: #a3a3a3;
-  --me-faint: #6b6b6b;
-  --me-line: #2a2a2a;
-  --me-line-strong: #3a3a3a;
-  --me-accent: #7ab0ff;
-  --me-accent-hover: #a3c8ff;
-  --me-accent-soft: #1f2a3a;
-  --me-rail: #0f0f0f;
-  --me-rail-2: #0f0f0f;
-  --me-rail-ink: #ececec;
-  --me-rail-muted: #8a8a8a;
-  --me-rail-hover: #1f1f1f;
-  --me-invert: #f5f5f5;
-  --me-invert-ink: #0d0d0d;
-  --me-hero: #1f2226;
-  --me-hero-ink: #f5f5f5;
-  --me-hero-muted: #b0b6be;
-}
+   It used to retune theme.css's tokens; those values now live in bridge.css, and this sheet restyles the shell
+   rail, the bot list, the thread, the bubbles, the composer and the right rail.  Our IA (bots / 工作区 / 档案, 公司,
+   预测, 资料库) and Chinese copy are unchanged. */
 
 /* The chat surfaces: user bubbles are a neutral fill, not a tinted accent. */
 .agent-page { --c-user: var(--me-surface-2); --c-surface: var(--me-bg); }
@@ -85,75 +37,75 @@ body { -webkit-font-smoothing: antialiased; }
 /* --- bot list ---------------------------------------------------------------------------------- */
 .bot-rail { border-bottom: 1px solid var(--me-line); flex: 1 1 auto; max-height: none; align-content: start; }
 .bot-rail-head, .bot-group { color: var(--me-rail-muted); }
-.bot-new { border-color: var(--me-line-strong); color: var(--me-rail-muted); border-radius: 8px; }
-.bot-new:hover, .bot-new:focus-visible { color: var(--me-rail-ink); border-color: var(--me-rail-muted); }
-.bot-row { color: var(--me-rail-ink); border-radius: 10px; padding: 7px 8px; }
-.bot-row:hover, .bot-row:focus-visible { background: var(--me-rail-hover); color: var(--me-rail-ink); }
-.bot-row.is-active { background: var(--me-rail-hover); color: var(--me-rail-ink); font-weight: 600; }
+.bot-new { border-color:var(--me-line-strong); color:var(--me-rail-muted); border-radius: 8px; }
+.bot-new:hover, .bot-new:focus-visible { color:var(--me-rail-ink); border-color:var(--me-rail-muted); }
+.bot-row { color:var(--me-rail-ink); border-radius: 10px; padding: 7px 8px; }
+.bot-row:hover, .bot-row:focus-visible { background:var(--me-rail-hover); color:var(--me-rail-ink); }
+.bot-row.is-active { background:var(--me-rail-hover); color:var(--me-rail-ink); font-weight: 600; }
 .bot-row-text strong { font-weight: inherit; }
-.bot-row-text small { color: var(--me-rail-muted); font-size: 11px; font-weight: 400; }
-.bot-avatar { background: var(--me-surface-2); color: var(--me-ink); border: 1px solid var(--me-line); font-size: 13px; }
+.bot-row-text small { color:var(--me-rail-muted); font-size: 11px; font-weight: 400; }
+.bot-avatar { background:var(--me-surface-2); color:var(--me-ink); border:1px solid var(--me-line); font-size: 13px; }
 .bot-unread { background: var(--me-invert); color: var(--me-invert-ink); }
 
 /* --- page heading: a thin bar, no rule ----------------------------------------------------------- */
-.agent-page { padding-top: 8px; gap: 6px; background: var(--me-bg); }
-.agent-page .agent-page-heading { border-bottom: 0; padding: 4px 0 6px; }
+.agent-page { padding-top: 8px; gap: 6px; background:var(--me-bg); }
+.agent-page .agent-page-heading { border-bottom:0; padding: 4px 0 6px; }
 .agent-page .agent-page-heading h1 { font-size: 16px; font-weight: 600; }
-.agent-title-row .bot-avatar { width: 48px; height: 48px; background: var(--me-surface-2); color: var(--me-ink); }
-.agent-header-actions .secondary-action, .side-toggle { border: 1px solid var(--me-line); background: transparent; color: var(--me-muted); border-radius: 999px; min-height: 32px; padding: 0 12px; }
-.agent-header-actions .secondary-action:hover, .side-toggle:hover { color: var(--me-ink); background: var(--me-surface-2); }
-.side-toggle.is-open { color: var(--me-ink); background: var(--me-surface-2); }
-.agent-capability { background: transparent; border: 0; color: var(--me-faint); font-size: 12px; max-width: 768px; margin: 0 auto; width: 100%; }
+.agent-title-row .bot-avatar { width: 48px; height: 48px; background:var(--me-surface-2); color:var(--me-ink); }
+.agent-header-actions .secondary-action, .side-toggle { border:1px solid var(--me-line); background:transparent; color:var(--me-muted); border-radius: 999px; min-height: 32px; padding: 0 12px; }
+.agent-header-actions .secondary-action:hover, .side-toggle:hover { color:var(--me-ink); background:var(--me-surface-2); }
+.side-toggle.is-open { color:var(--me-ink); background:var(--me-surface-2); }
+.agent-capability { background:transparent; border:0; color:var(--me-faint); font-size: 12px; max-width: 768px; margin: 0 auto; width: 100%; }
 
 /* --- thread: one centred column, assistant as plain text, user as a soft pill -------------------- */
 .agent-thread { max-width: 768px; gap: 26px; }
-.agent-message.is-assistant .markdown-body { font-size: 15px; line-height: 1.7; color: var(--me-ink); }
-.agent-message.is-user { padding: 0; background: transparent; border-radius: 0; max-width: min(80%, 620px); }
-.agent-user-bubble { background: var(--c-user); border-radius: 22px; padding: 10px 16px; }
+.agent-message.is-assistant .markdown-body { font-size: 15px; line-height: 1.7; color:var(--me-ink); }
+.agent-message.is-user { padding: 0; background:transparent; border-radius: 0; max-width: min(80%, 620px); }
+.agent-user-bubble { background:var(--c-user); border-radius: 22px; padding: 10px 16px; }
 .agent-message.is-user p { font-size: 15px; line-height: 1.6; }
 .agent-welcome h2 { font-size: 28px; font-weight: 600; letter-spacing: -.01em; }
-.agent-welcome button { border: 1px solid var(--me-line); background: transparent; border-radius: 999px; color: var(--me-muted); }
-.agent-welcome button:hover { color: var(--me-ink); background: var(--me-surface-2); }
-.agent-action-button { border-radius: 8px; color: var(--me-faint); }
-.agent-action-button:hover { color: var(--me-ink); background: var(--me-surface-2); }
-.citation-drawer { border-color: var(--me-line); border-radius: 12px; background: transparent; }
+.agent-welcome button { border:1px solid var(--me-line); background:transparent; border-radius: 999px; color:var(--me-muted); }
+.agent-welcome button:hover { color:var(--me-ink); background:var(--me-surface-2); }
+.agent-action-button { border-radius: 8px; color:var(--me-faint); }
+.agent-action-button:hover { color:var(--me-ink); background:var(--me-surface-2); }
+.citation-drawer { border-color:var(--me-line); border-radius: 12px; background:transparent; }
 .tool-badge { border-radius: 999px; background: var(--me-surface-2); border-color: var(--me-line); color: var(--me-muted); }
 
 /* --- composer: a pill with a thin inset ring and a round inverted send button --------------------- */
-.agent-composer { max-width: 768px; border: 0; border-radius: 28px; background: var(--me-surface-2); box-shadow: inset 0 0 0 1px var(--me-line); margin-bottom: 4px; }
-.agent-composer:focus-within { border: 0; box-shadow: inset 0 0 0 1px var(--me-line-strong), 0 0 0 4px color-mix(in srgb, var(--me-ink) 4%, transparent); }
+.agent-composer { max-width: 768px; border:0; border-radius: 28px; background:var(--me-surface-2); box-shadow:inset 0 0 0 1px var(--me-line); margin-bottom: 4px; }
+.agent-composer:focus-within { border:0; box-shadow:inset 0 0 0 1px var(--me-line-strong), 0 0 0 4px color-mix(in srgb, var(--me-ink) 4%, transparent); }
 .agent-composer textarea { font-size: 15px; padding: 15px 22px 4px; border-radius: 28px 28px 0 0; }
 .agent-composer-bottom { padding: 4px 10px 10px 22px; }
-.agent-send { background: var(--me-invert); color: var(--me-invert-ink); }
-.agent-send:hover:not(:disabled) { background: var(--me-invert); opacity: .86; transform: none; }
-.agent-send:disabled { background: var(--me-line-strong); color: var(--me-faint); }
+.agent-send { background:var(--me-invert); color:var(--me-invert-ink); }
+.agent-send:hover:not(:disabled) { background:var(--me-invert); opacity: .86; transform: none; }
+.agent-send:disabled { background:var(--me-line-strong); color:var(--me-faint); }
 .agent-stop { border-radius: 999px; }
-.skill-picker { background: var(--me-surface); border-color: var(--me-line); border-radius: 14px; box-shadow: 0 12px 32px rgba(0, 0, 0, .28); }
+.skill-picker { background:var(--me-surface); border-color:var(--me-line); border-radius: 14px; box-shadow:0 12px 32px rgba(0, 0, 0, .28); }
 
 /* --- right rail (工作区 / 档案) ------------------------------------------------------------------ */
-.bot-side { border-left: 1px solid var(--me-line); padding-left: 16px; }
-.bot-side .section-tabs { border-bottom: 0; gap: 4px; padding: 0; margin: 0; }
-.bot-side .section-tabs button { border: 0; border-radius: 999px; padding: 6px 14px; color: var(--me-muted); }
-.bot-side .section-tabs button[aria-selected="true"] { background: var(--me-surface-2); color: var(--me-ink); border: 0; }
-.bot-focus-item { border-color: var(--me-line); background: var(--me-surface); border-radius: 12px; }
-.bot-form input, .bot-form select, .bot-form textarea, .bot-create input { background: var(--me-surface-2); border: 1px solid var(--me-line); color: var(--me-ink); border-radius: 10px; }
+.bot-side { border-left:1px solid var(--me-line); padding-left: 16px; }
+.bot-side .section-tabs { border-bottom:0; gap: 4px; padding: 0; margin: 0; }
+.bot-side .section-tabs button { border:0; border-radius: 999px; padding: 6px 14px; color:var(--me-muted); }
+.bot-side .section-tabs button[aria-selected="true"] { background:var(--me-surface-2); color:var(--me-ink); border:0; }
+.bot-focus-item { border-color:var(--me-line); background:var(--me-surface); border-radius: 12px; }
+.bot-form input, .bot-form select, .bot-form textarea, .bot-create input { background:var(--me-surface-2); border:1px solid var(--me-line); color:var(--me-ink); border-radius: 10px; }
 
 /* --- buttons: primary is the inverted pill everywhere (--navy is the dark hero surface, which a
    primary button painted with it would vanish into on the dark page) ------------------------------- */
-.primary-action { background: var(--me-invert); color: var(--me-invert-ink); border: 0; border-radius: 999px; box-shadow: none; }
-.primary-action:hover:not(:disabled) { background: var(--me-invert); opacity: .86; transform: none; }
+.primary-action { background:var(--me-invert); color:var(--me-invert-ink); border:0; border-radius: 999px; box-shadow:none; }
+.primary-action:hover:not(:disabled) { background:var(--me-invert); opacity: .86; transform: none; }
 .primary-action:disabled { opacity: .45; }
 .secondary-action { border-radius: 999px; }
-.entry-choice { background: var(--me-surface); border-color: var(--me-line); border-radius: 20px; box-shadow: none; }
-.entry-choice h1 { font: 600 28px/1.25 var(--me-font); color: var(--me-ink); }
-.entry-choice p, .entry-choice label { color: var(--me-muted); }
-.bot-dialog { background: var(--me-surface); color: var(--me-ink); border: 1px solid var(--me-line); border-radius: 20px; }
-.bot-chip[aria-pressed="true"] { border-color: var(--me-ink); background: var(--me-surface-2); }
+.entry-choice { background:var(--me-surface); border-color:var(--me-line); border-radius: 20px; box-shadow:none; }
+.entry-choice h1 { font: 600 28px/1.25 var(--me-font); color:var(--me-ink); }
+.entry-choice p, .entry-choice label { color:var(--me-muted); }
+.bot-dialog { background:var(--me-surface); color:var(--me-ink); border:1px solid var(--me-line); border-radius: 20px; }
+.bot-chip[aria-pressed="true"] { border-color:var(--me-ink); background:var(--me-surface-2); }
 
 /* The research pages share the surfaces, so they sit on the same neutral background. */
-.topbar { border-bottom: 1px solid var(--me-line); }
-.section-tabs button[aria-current="page"] { color: var(--me-ink); border-bottom-color: var(--me-ink); }
-.section-tabs.is-secondary button[aria-current="page"] { background: var(--me-surface-2); border-color: var(--me-line-strong); }
+.topbar { border-bottom:1px solid var(--me-line); }
+.section-tabs button[aria-current="page"] { color:var(--me-ink); border-bottom-color:var(--me-ink); }
+.section-tabs.is-secondary button[aria-current="page"] { background:var(--me-surface-2); border-color:var(--me-line-strong); }
 
 /* --- FinBot bot faces: 4 silhouettes × 4 eye colours (BotOrb.tsx) ---------------------------------- */
 .bot-orb { flex: 0 0 auto; display: inline-block; line-height: 0; }
@@ -197,38 +149,38 @@ body { -webkit-font-smoothing: antialiased; }
 .agent-layout.is-bot[data-side-width="full"] { grid-template-columns: minmax(0, 1fr); }
 .agent-layout.is-bot[data-side-width="full"] > :not(.bot-side) { display: none; }
 .bot-side .section-tabs { align-items: center; }
-.ws-expand { margin-left: auto; border: 1px solid var(--me-line) !important; border-radius: 999px !important; padding: 2px 10px !important; color: var(--me-muted); background: transparent; }
+.ws-expand { margin-left: auto; border:1px solid var(--me-line) !important; border-radius: 999px !important; padding: 2px 10px !important; color:var(--me-muted); background:transparent; }
 .bot-workspace { display: grid; gap: 10px; padding-top: 10px; }
 .ws-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.ws-symbol { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--me-muted); }
-.ws-symbol select, .ws-symbol-input, .ws-edit-bar select, .ws-card-controls select, .ws-pin { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--me-line); border-radius: 8px; background: var(--me-surface-2); color: var(--me-ink); }
+.ws-symbol { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color:var(--me-muted); }
+.ws-symbol select, .ws-symbol-input, .ws-edit-bar select, .ws-card-controls select, .ws-pin { font: inherit; font-size: 13px; padding: 4px 8px; border:1px solid var(--me-line); border-radius: 8px; background:var(--me-surface-2); color:var(--me-ink); }
 .ws-symbol-input { width: 7.5em; }
 .ws-pin { width: 6em; }
 .ws-edit-bar { display: flex; gap: 8px; align-items: center; }
 .ws-grid { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); }
 .bot-workspace.is-wide .ws-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .bot-workspace.is-wide .ws-card.size-l { grid-column: 1 / -1; }
-.ws-card { border: 1px solid var(--me-line); border-radius: 12px; padding: 10px 12px; background: var(--me-surface); color: var(--me-ink); display: grid; gap: 6px; align-content: start; min-width: 0; }
+.ws-card { border:1px solid var(--me-line); border-radius: 12px; padding: 10px 12px; background:var(--me-surface); color:var(--me-ink); display: grid; gap: 6px; align-content: start; min-width: 0; }
 .ws-card header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .ws-card h4 { margin: 0; font-size: 13px; font-weight: 600; }
 .ws-card-controls { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.ws-muted { color: var(--me-muted); font-size: 12px; margin: 0; }
+.ws-muted { color:var(--me-muted); font-size: 12px; margin: 0; }
 .ws-fine { font-size: 11px; }
 .ws-price { margin: 0; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .ws-price strong { font-size: 20px; }
-.ws-spark { width: 100%; height: 48px; color: var(--me-accent); }
+.ws-spark { width: 100%; height: 48px; color:var(--me-accent); }
 .bot-workspace.is-wide .ws-spark { height: 120px; }
 .ws-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
 .ws-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; min-width: 0; }
-.ws-list a { color: var(--me-ink); text-decoration: none; overflow-wrap: anywhere; }
+.ws-list a { color:var(--me-ink); text-decoration: none; overflow-wrap: anywhere; }
 .ws-list a:hover { text-decoration: underline; }
 .ws-actions { margin-left: auto; display: inline-flex; gap: 6px; }
-.ws-new { font-size: 10px; color: var(--me-accent); background: var(--me-accent-soft); border-radius: 999px; padding: 0 6px; }
+.ws-new { font-size: 10px; color:var(--me-accent); background:var(--me-accent-soft); border-radius: 999px; padding: 0 6px; }
 .ws-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 @media (max-width: 760px) { .agent-layout.is-bot[data-side-width] { grid-template-columns: minmax(0, 1fr); } .agent-layout.is-bot[data-side-width="full"] > :not(.bot-side) { display: block; } }
 
 /* --- a bot's own Telegram (UX batch 2, P4) -------------------------------------------------------- */
-.bot-telegram { border-top: 1px solid var(--me-line); padding-top: 12px; margin-top: 12px; display: grid; gap: 8px; }
+.bot-telegram { border-top:1px solid var(--me-line); padding-top: 12px; margin-top: 12px; display: grid; gap: 8px; }
 .bot-telegram h3 { margin: 0; font-size: 14px; }
 .bot-telegram p { margin: 0; }
 .bot-telegram-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -240,12 +192,12 @@ body { -webkit-font-smoothing: antialiased; }
 .pf-stat { display: grid; gap: 4px; align-content: start; }
 .pf-stat strong { font-size: 20px; font-variant-numeric: tabular-nums; }
 .pf-inline { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.pf-inline input, .pf-entry input, .pf-entry select, .pf-plan input, .pf-plan textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--me-line); border-radius: 8px; background: var(--me-surface-2); color: var(--me-ink); min-width: 0; }
+.pf-inline input, .pf-entry input, .pf-entry select, .pf-plan input, .pf-plan textarea { font: inherit; padding: 6px 8px; border:1px solid var(--me-line); border-radius: 8px; background:var(--me-surface-2); color:var(--me-ink); min-width: 0; }
 .pf-inline input { width: 9em; }
 .pf-positions { display: grid; gap: 12px; }
 .pf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 16px; margin: 0; }
 .pf-grid div { display: grid; gap: 2px; min-width: 0; }
-.pf-grid dt { font-size: 12px; color: var(--me-muted); }
+.pf-grid dt { font-size: 12px; color:var(--me-muted); }
 .pf-grid dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .pf-prices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .pf-entry, .pf-plan { display: grid; gap: 8px; }

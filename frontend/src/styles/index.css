@@ -26,6 +26,7 @@
 @import "./legacy/chat.css" layer(legacy);
 @import "./legacy/theme.css" layer(legacy);
 @import "./legacy/grok.css" layer(legacy);
+@import "./legacy/bridge.css" layer(legacy);
 
 /* Dark mode follows the data-theme attribute theme.mjs writes on <html>; no second mechanism. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));

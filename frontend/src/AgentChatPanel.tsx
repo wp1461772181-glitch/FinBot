@@ -2,7 +2,7 @@ import { BotOrb } from "./BotOrb";
 import { LiveBotOrb } from "./LiveBotOrb";
 import { BOT_AVATAR_SIZE } from "./bot-sizes.mjs";
 import { dispatchAgentAction } from "./agent-client-actions.mjs";
-import { Fragment, createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { Fragment, Suspense, createContext, lazy, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { listSkills, type Skill, agentChatStream, restoreAgentChat, compactConversation, clearAgentConversation, getChatMode, setChatMode, listAgentConversations, renameAgentConversation, archiveAgentConversation, selectAgentConversation, personalChatLogin, getKnowledgeCitation, getMaterialAnalysisSettings, saveMaterialAnalysisSettings, resetMaterialAnalysisSettings, getModelCatalog, getTelegramBind, getPushover, savePushover, clearPushover, type PushoverStatus, saveTelegramToken, startTelegramBind, unbindTelegram, type CatalogModel, type Bot, type TelegramBindStatus, type KnowledgeCitationDetail, type ConversationSummary, type AgentChatMessage, type AgentChatEvent, type MaterialAnalysisSettings } from "./api";
 import { isTaskPostHead, parseTaskPostHead } from "./task-posts.mjs";
 import { chatTurnPreviews } from "./chat-thread.mjs";
@@ -17,6 +17,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Tx, useLocale } from "./i18n";
 import { applyTheme, saveTheme, storedTheme, type ThemeChoice } from "./theme.mjs";
+// Radix Select is heavy (about 40 kB gzip); the settings page loads it on demand instead of the main bundle carrying it.
+const UpdownSelect = lazy(() => import("@/components/UpdownSelect").then((module) => ({ default: module.UpdownSelect })));
 import { chatContext } from "./agentChatLifecycle.js";
 import { createLineStore, lineKey, loadDraft, saveDraft } from "./chat-lines.mjs";
 import { planTailSync, pollDelay } from "./chat-sync.mjs";
@@ -539,6 +541,7 @@ function AppearanceCard(){
    <select id="theme" value={theme} onChange={event=>{const choice=saveTheme(event.target.value as ThemeChoice);setTheme(choice);applyTheme(choice);}}>
     <option value="light">{t("浅色")}</option><option value="dark">{t("深色")}</option><option value="system">{t("跟随系统")}</option>
    </select></label>
+  <Suspense fallback={<div aria-hidden="true" style={{minHeight:68}}/>}><UpdownSelect/></Suspense>
   <h2>{t("语言")}</h2>
   <label htmlFor="locale">{t("语言")}
    <select id="locale" value={locale} onChange={event=>setLocale(event.target.value as "zh-CN"|"en-US")}>

@@ -4,8 +4,10 @@ import { App } from "./App";
 import { LocaleProvider } from "./i18n";
 import "./styles/index.css";
 import { applyTheme, storedTheme } from "./theme.mjs";
+import { applyUpdown, storedUpdown } from "./updown.mjs";
 
 applyTheme(storedTheme());
+applyUpdown(storedUpdown());
 window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => applyTheme(storedTheme()));
 
 createRoot(document.getElementById("root")!).render(
