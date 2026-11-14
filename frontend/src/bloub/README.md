@@ -6,7 +6,7 @@
 - 来源：https://github.com/jeremy-prt/bloub
 - 锁定提交：`b4bb3c1b5f93c7b87a2e8d620f667c4093d97749`（main）
 - 许可：MIT，Copyright (c) 2026 Jérémy Perret，见同目录 `LICENSE`
-- 未带入：该项目的 Vue 组件与 `*.test.ts`（vitest）。React 侧的渲染见 `../BloubAvatar.tsx`
+- 未带入：该项目的 Vue 组件与 `*.test.ts`（vitest）。React 侧的渲染见 `../components/bot/BotBody.tsx`
 - 升级时整体覆盖本目录的 `*.ts`，不要手改这些文件
 
 第三方声明汇总见仓库根目录 `THIRD_PARTY_NOTICES.md`。

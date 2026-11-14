@@ -143,3 +143,25 @@ test("the customiser has no expression picker", async () => {
   const source = await readFile(new URL("../src/BloubCustomizer.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /expression|EXPRESSION|BLOUB_EXPRESSIONS/i);
 });
+
+// A1: the look of a bot resolves in four steps — stored, a preset bot's recommended look, an explicit old face pick, the id hash.
+const TESLA_ID = "c20935c6-c9f9-417c-a900-0afd5dcb5566";
+test("resolveLook, four levels in order (A1)", () => {
+  const stored = { shape: "nuage", color: "gris" };
+  // 1. a stored look beats everything, even for a preset bot
+  assert.deepEqual(resolveLook(TESLA_ID, "bot:kline-focus", stored, "TeslaBot"), stored);
+  // 2. a preset bot with nothing stored takes the recommended look (TeslaBot: capsule / rouge) and not the old face pick or the hash
+  assert.deepEqual(resolveLook(TESLA_ID, "bot:kline-focus", null, "TeslaBot"), { shape: "capsule", color: "rouge" });
+  assert.deepEqual(resolveLook(TESLA_ID, "bot:kline-focus", undefined, "whatever name"), { shape: "capsule", color: "rouge" }, "by id");
+  assert.deepEqual(resolveLook("not-the-id", "bot:kline-focus", null, " tesla bot "), { shape: "capsule", color: "rouge" }, "by name");
+  // a broken stored value falls through to level 2
+  assert.deepEqual(resolveLook(TESLA_ID, "", { shape: "star" }, "TeslaBot"), { shape: "capsule", color: "rouge" });
+  // 3. any other bot: the explicit old face pick, 4. else the hash (unchanged)
+  assert.deepEqual(resolveLook("id-1", "bot:square-focus", null, "My bot"), faceLook("square", "focus"));
+  assert.deepEqual(resolveLook("id-1", "bot:kline-idle", null, "My bot"), defaultLook("id-1"));
+  // no name passed (older call sites): a preset bot is still hit by id
+  assert.deepEqual(resolveLook(TESLA_ID, "bot:kline-focus", null), { shape: "capsule", color: "rouge" });
+  // the four bots that already carry a stored look keep it (colours: NewsBot gris, AppleBot orange, ReportBot violet, FinBot encre)
+  assert.deepEqual(resolveLook("ca3c9be3-97ea-4ce0-a624-ae6bfeb723e9", "bot:square-idle", { shape: "nuage", color: "gris" }, "NewsBot"), { shape: "nuage", color: "gris" });
+  assert.deepEqual(resolveLook("3694c439-f29e-49dd-9875-51b6c8a4f7fd", "bot:bull-bull", { shape: "hexagone", color: "orange" }, "AppleBot"), { shape: "hexagone", color: "orange" });
+});

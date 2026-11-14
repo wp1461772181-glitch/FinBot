@@ -9,7 +9,7 @@ export declare function hashString(value: string): number;
 export declare function defaultLook(id: string | null | undefined): BloubLook;
 export declare function normalizeLook(raw: unknown): BloubLook | null;
 export declare function sameLook(a: BloubLook | null | undefined, b: BloubLook | null | undefined): boolean;
-export declare function resolveLook(id: string | null | undefined, avatar: string | null | undefined, stored?: unknown): BloubLook;
+export declare function resolveLook(id: string | null | undefined, avatar: string | null | undefined, stored?: unknown, name?: string | null): BloubLook;
 export declare function bloubLook(id: string | null | undefined, avatar: string | null | undefined): { shape: string; color: string };
 export declare function pickLook(look: BloubLook, field: "shape" | "color" | string, id: string): BloubLook;
 export declare function lookForSave(picked: BloubLook | null | undefined, stored?: unknown): BloubLook | undefined;

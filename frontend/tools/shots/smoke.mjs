@@ -3124,6 +3124,188 @@ async function mobileKeyboardInset(ctx) {
   } finally { await view.close(); }
 }
 
+
+// --- A1: the bots' personalities and the avatar's way of running ---------------------------------------------------------------------
+
+/** A fresh chat view with real motion (no reduced-motion preference, no animation-killing style). */
+async function openChatMotion(ctx, label, hash = "#/chat") {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label, unmatched, motion: true });
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  await waitReady(view.page, PAGES.find((p) => p.name === "chat-default"));
+  await settle(view.page);
+  return view;
+}
+
+/** Count React commits (through the DevTools hook, which React 19 reports to in production too) and animation frames from before the app starts. */
+async function installFrameAndCommitCounters(context) {
+  await context.addInitScript(() => {
+    window.__commits = 0; window.__rafCalls = 0;
+    const raw = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) => { window.__rafCalls += 1; return raw(callback); };
+    window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      supportsFiber: true, isDisabled: false, renderers: new Map(),
+      inject(renderer) { this.renderers.set(1, renderer); return 1; },
+      onCommitFiberRoot() { window.__commits += 1; }, onPostCommitFiberRoot() {}, onCommitFiberUnmount() {}, checkDCE() {},
+    };
+  });
+}
+
+async function avatarNoReactFrames(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "avatar-no-react-frames", unmatched, motion: true });
+  try {
+    const { page } = view;
+    await installFrameAndCommitCounters(view.context);
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    await settle(page);
+    const header = page.locator('[data-testid=chat-header] svg[data-slot=bot-body]');
+    await header.waitFor({ timeout: 10000 });
+    await page.waitForTimeout(1500); // the arrival turn and the first requests are over
+    const clock = async () => Number(await header.getAttribute("data-clock"));
+    const before = await page.evaluate(() => ({ commits: window.__commits, frames: window.__rafCalls })), c0 = await clock();
+    await page.waitForTimeout(3000);
+    const after = await page.evaluate(() => ({ commits: window.__commits, frames: window.__rafCalls })), c1 = await clock();
+    const commits = after.commits - before.commits, frames = after.frames - before.frames;
+    assert(c1 - c0 > 1.5, `the header avatar did not run for 3 s (its clock moved ${(c1 - c0).toFixed(2)} s): this check would prove nothing`);
+    assert(frames >= 100, `only ${frames} animation frames in 3 s`);
+    assert(commits <= 8, `React committed ${commits} times in 3 s while ${frames} frames ran: the avatar is rendered through React per frame`);
+    return `${commits} React commits in 3 s, ${frames} frames, avatar clock +${(c1 - c0).toFixed(1)} s`;
+  } finally { await view.close(); }
+}
+
+async function avatarWaitingPose(ctx) {
+  const view = await openChatMotion(ctx, "avatar-waiting-pose");
+  try {
+    const { page } = view;
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill(`${ASK_MARKER} 查一下结果`);
+    await page.locator("[data-testid=send]").click();
+    await page.locator("[data-slot=approval-card][data-state=active]").waitFor({ timeout: 10000 });
+    const body = page.locator('[data-testid=chat-header] svg[data-slot=bot-body]');
+    await page.waitForFunction(() => document.querySelector('[data-testid=chat-header] svg[data-slot=bot-body]')?.getAttribute("data-waiting") === "true", null, { timeout: 5000 });
+    const dot = page.locator('[data-testid=chat-header] [data-slot=waiting-dot]');
+    assert(await dot.evaluate((node) => getComputedStyle(node).display !== "none"), "the amber dot is not drawn");
+    const fill = await dot.evaluate((node) => getComputedStyle(node).fill);
+    // Sample the state ten seconds long: never a wink; the pose stays "hold"; the dot never goes out (no blinking); at most three nudges.
+    const states = []; let dotGone = 0;
+    for (let i = 0; i < 100; i += 1) {
+      states.push(await body.getAttribute("data-state"));
+      if ((await body.getAttribute("data-waiting")) !== "true") dotGone += 1;
+      await page.waitForTimeout(100);
+    }
+    assert(!states.includes("wink"), `the avatar winked while waiting for you (${[...new Set(states)].join(", ")})`);
+    assert(dotGone === 0, `the amber dot went out ${dotGone} times in 10 s`);
+    const pose = await body.getAttribute("data-pose");
+    assert(pose === "hold", `the pose is ${pose}, not hold`);
+    let nudges = 0; states.forEach((state, i) => { if (state === "wide" && states[i - 1] !== "wide") nudges += 1; });
+    assert(nudges >= 1 && nudges <= 3, `${nudges} nudges in 10 s (one is due at 6 s, three at most ever)`);
+    return `10 s: states ${[...new Set(states)].join(" / ")}, dot always up (${fill}), ${nudges} nudge`;
+  } finally { await view.close(); }
+}
+
+/** The sample page of the five bots, with real motion. */
+async function openBotsPage(ctx, label) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label, unmatched, motion: true });
+  await view.page.goto(`${ctx.server.url}#/dev/kit/bots`, { waitUntil: "load" });
+  await view.page.locator("[data-testid=bots-page] svg[data-slot=bot-body]").nth(4).waitFor({ timeout: 15000 });
+  await view.page.waitForTimeout(800);
+  return view;
+}
+const BOT_NAMES = ["FinBot", "TeslaBot", "NewsBot", "AppleBot", "ReportBot"];
+const botSvg = (page, name) => page.locator(`[data-testid="bot-sample-${name}"] svg[data-slot=bot-body]`);
+
+async function avatarTempoDiffers(ctx) {
+  const view = await openBotsPage(ctx, "avatar-tempo-differs");
+  try {
+    const { page } = view;
+    // One snapshot of all five clocks in the same instant, twice, 3 s apart.
+    const read = () => page.evaluate((names) => names.map((name) => { const svg = document.querySelector(`[data-testid="bot-sample-${name}"] svg[data-slot=bot-body]`); return { clock: Number(svg.getAttribute("data-clock")), tempo: Number(svg.getAttribute("data-tempo")) }; }), BOT_NAMES);
+    const a = await read(); await page.waitForTimeout(3000); const b = await read();
+    const moved = b.map((x, i) => x.clock - a[i].clock), base = moved[0];
+    assert(base > 1.5, `the clocks did not run (FinBot +${base.toFixed(2)} s in 3 s)`);
+    const expected = { FinBot: 1, TeslaBot: 1.25, NewsBot: 1.1, AppleBot: 0.9, ReportBot: 0.8 };
+    const bad = [];
+    BOT_NAMES.forEach((name, i) => {
+      const ratio = moved[i] / base;
+      if (Math.abs(a[i].tempo - expected[name]) > 1e-9) bad.push(`${name} tempo attribute ${a[i].tempo}, expected ${expected[name]}`);
+      if (Math.abs(ratio - expected[name]) > 0.04) bad.push(`${name} clock ratio ${ratio.toFixed(3)}, expected ${expected[name]}`);
+    });
+    assert(!bad.length, bad.join("; "));
+    assert(new Set(a.map((x) => x.tempo)).size === 5, "the five tempos are not five different numbers");
+    return BOT_NAMES.map((name, i) => `${name} ${(moved[i] / base).toFixed(2)}x`).join(", ");
+  } finally { await view.close(); }
+}
+
+/** hue / saturation (0-1) of a computed "rgb(r, g, b)" colour. */
+const HSL = `(css) => { const m = css.match(/[\\d.]+/g).map(Number); const [r, g, b] = [m[0] / 255, m[1] / 255, m[2] / 255]; const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min; const l = (max + min) / 2; const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1)); let h = 0; if (d) { if (max === r) h = ((g - b) / d) % 6; else if (max === g) h = (b - r) / d + 2; else h = (r - g) / d + 4; h *= 60; if (h < 0) h += 360; } return { h, s, l }; }`;
+
+async function avatarRingHue(ctx) {
+  const view = await openBotsPage(ctx, "avatar-ring-hue");
+  try {
+    const { page } = view;
+    await page.locator("[data-scenario=thinking]").click();
+    await page.waitForTimeout(1600); // past the attention beat and the orbit's own morph
+    const found = await page.evaluate(({ names, hsl }) => {
+      const toHsl = eval(hsl);
+      return names.map((name) => {
+        const svg = document.querySelector(`[data-testid="bot-sample-${name}"] svg[data-slot=bot-body]`);
+        const body = getComputedStyle(svg.querySelector("[mask] rect")).fill;
+        const arcs = [...svg.querySelectorAll("path[stroke^='url(#']")].filter((path) => path.getAttribute("display") !== "none" && Number(path.getAttribute("opacity")) > 0.05);
+        const stops = [...new Set(arcs.flatMap((path) => { const id = path.getAttribute("stroke").slice(5, -1); return [...svg.querySelectorAll(`[id="${id}"] stop`)].map((stop) => getComputedStyle(stop).stopColor); }))];
+        return { name, state: svg.getAttribute("data-state"), body: toHsl(body), bodyCss: body, arcs: arcs.length, stops: stops.map((css) => ({ css, ...toHsl(css) })) };
+      });
+    }, { names: BOT_NAMES, hsl: HSL });
+    const bad = [], hues = [];
+    for (const bot of found) {
+      if (bot.state !== "orbit") { bad.push(`${bot.name} is in ${bot.state}, not the thinking ring`); continue; }
+      if (bot.arcs < 1 || !bot.stops.length) { bad.push(`${bot.name}: no ring drawn (${bot.arcs} arcs)`); continue; }
+      const colourful = bot.body.s > 0.2;
+      for (const stop of bot.stops) {
+        if (colourful) {
+          const diff = Math.min(Math.abs(stop.h - bot.body.h), 360 - Math.abs(stop.h - bot.body.h));
+          if (diff > 10) bad.push(`${bot.name}: ring colour ${stop.css} (hue ${stop.h.toFixed(0)}) is not the body's hue ${bot.body.h.toFixed(0)}`);
+        } else if (stop.s > 0.2) bad.push(`${bot.name}: an ink / grey bot with a coloured ring ${stop.css}`);
+      }
+      hues.push(`${bot.name} ${colourful ? `${bot.body.h.toFixed(0)}°` : "neutral"}`);
+    }
+    assert(!bad.length, bad.join("; "));
+    const colourful = found.filter((bot) => bot.body.s > 0.2).map((bot) => Math.round(bot.body.h));
+    assert(new Set(colourful).size === colourful.length && colourful.length >= 3, `the coloured bots do not have three different hues (${colourful})`);
+    return hues.join(", ");
+  } finally { await view.close(); }
+}
+
+async function avatarRestGaze(ctx) {
+  const view = await openBotsPage(ctx, "avatar-rest-gaze");
+  try {
+    const { page } = view;
+    const gazes = await page.evaluate((names) => names.map((name) => document.querySelector(`[data-testid="bot-sample-${name}"] svg[data-slot=bot-body]`).getAttribute("data-gaze")), BOT_NAMES);
+    assert(JSON.stringify(gazes) === JSON.stringify(["follow", "ahead-right", "scan", "front", "down"]), `the resting gazes are ${gazes}`);
+    // The eyes really move with the gaze: compare each bot with itself, resting and with a tool running (everybody then looks to the side).
+    const eyes = () => page.evaluate((names) => names.map((name) => {
+      const svg = document.querySelector(`[data-testid="bot-sample-${name}"] svg[data-slot=bot-body]`);
+      const centres = [...svg.querySelectorAll("mask g path")].filter((node) => node.getAttribute("display") !== "none").map((node) => node.getAttribute("transform").match(/matrix\(([^)]*)\)/)[1].split(",").map(Number));
+      return { x: centres.reduce((sum, m) => sum + m[4], 0) / (centres.length || 1), y: centres.reduce((sum, m) => sum + m[5], 0) / (centres.length || 1), n: centres.length };
+    }), BOT_NAMES);
+    await page.waitForTimeout(1500);
+    const rest = await eyes();
+    await page.locator("[data-scenario=tool]").click();
+    await page.waitForTimeout(2000);
+    const tool = await eyes();
+    const toolGaze = await page.evaluate((names) => names.map((name) => document.querySelector(`[data-testid="bot-sample-${name}"] svg[data-slot=bot-body]`).getAttribute("data-gaze")), BOT_NAMES);
+    assert(toolGaze.every((g) => g === "side"), `with a tool running the gazes are ${toolGaze}, not all side`);
+    const bad = [];
+    const apple = BOT_NAMES.indexOf("AppleBot"), report = BOT_NAMES.indexOf("ReportBot");
+    if (!(rest[apple].n === 2 && tool[apple].n === 2)) bad.push("AppleBot's eyes are not both drawn");
+    else if (tool[apple].x - rest[apple].x < 2) bad.push(`AppleBot (resting: front) did not look to the side: x ${rest[apple].x.toFixed(1)} -> ${tool[apple].x.toFixed(1)}`);
+    if (rest[report].y - tool[report].y < 2) bad.push(`ReportBot (resting: down) did not lift its eyes: y ${rest[report].y.toFixed(1)} -> ${tool[report].y.toFixed(1)}`);
+    assert(!bad.length, bad.join("; "));
+    return `resting gazes ${gazes.join(" / ")}; tool: all side; AppleBot eyes +${(tool[apple].x - rest[apple].x).toFixed(1)} x, ReportBot eyes ${(tool[report].y - rest[report].y).toFixed(1)} y`;
+  } finally { await view.close(); }
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -3215,6 +3397,11 @@ const CHECKS = [
   ["mobile-touch-targets: the line's controls are ≥ 44x44 and the page does not scroll sideways at 390", mobileTouchTargets],
   ["mobile-keyboard-inset: a keyboard over the page lifts the composer above it", mobileKeyboardInset],
   ["workspace-cards-in-panel: add, move, resize, pin, delete and reset the workspace cards in the panel's 工作区 tab; the layout is kept per bot", workspaceCardsInPanel],
+  ["avatar-no-react-frames: the header avatar runs frames for 3 s with next to no React commits", avatarNoReactFrames],
+  ["avatar-waiting-pose: a turn that ends in a card leaves the avatar waiting: amber dot up, never a wink, one nudge in 10 s", avatarWaitingPose],
+  ["avatar-tempo-differs: the five bots' engine clocks advance in the ratio of their tempos", avatarTempoDiffers],
+  ["avatar-ring-hue: the thinking ring is the bot's own hue (ink and grey bots: no colour), never a rainbow", avatarRingHue],
+  ["avatar-rest-gaze: five different resting gazes; the eyes follow the pose's gaze (a tool running looks to the side)", avatarRestGaze],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

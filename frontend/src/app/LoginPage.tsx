@@ -4,10 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { personalChatLogin, setChatMode } from "../api";
 import { friendlyError } from "./chat/friendly-error";
-import { BrandLogo } from "../BotOrb";
+import { BrandLogo } from "@/components/bot/BrandLogo";
 import { BOT_AVATAR_SIZE } from "../bot-sizes.mjs";
 import { useLocale } from "../i18n";
-import { LiveBotOrb } from "../LiveBotOrb";
+import { BotPresence } from "@/components/bot/BotPresence";
 import { DEFAULT_AVATAR } from "../orb.mjs";
 import { paths } from "../routes.mjs";
 
@@ -47,7 +47,7 @@ export default function LoginPage({ onMode }: { onMode: (mode: "guest" | "person
   return <main className="grid min-h-dvh place-items-center bg-background p-4">
     <section aria-labelledby="login-title" className="relative flex w-full max-w-sm flex-col items-center gap-5 rounded-md border border-line bg-surface px-6 py-8">
       <span aria-hidden="true" className="absolute top-4 left-4 origin-top-left scale-75"><BrandLogo /></span>
-      <LiveBotOrb avatar={DEFAULT_AVATAR} look={FINBOT_LOOK} name="FinBot" seed="FinBot" size={BOT_AVATAR_SIZE.login} chatState="idle" messages={[]} />
+      <BotPresence avatar={DEFAULT_AVATAR} look={FINBOT_LOOK} name="FinBot" seed="FinBot" size={BOT_AVATAR_SIZE.login} chatState="idle" messages={[]} />
       <div className="text-center">
         <h1 id="login-title" className="text-title-m text-ink">FinBot</h1>
         <p className="text-small text-muted-foreground">{t("理财助手")}</p>

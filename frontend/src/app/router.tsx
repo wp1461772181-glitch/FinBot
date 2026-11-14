@@ -77,6 +77,7 @@ const routes: RouteObject[] = [
     { path: PATTERNS.devKit, ...page(() => import("../dev/KitPage"), "default") },
     { path: PATTERNS.devKitProbe, ...page(() => import("../dev/KitPage"), "default", { probe: true }) },
     { path: PATTERNS.devKitStates, ...page(() => import("../dev/StatesPage"), "default") },
+    { path: PATTERNS.devKitBots, ...page(() => import("../dev/BotsPage"), "default") },
   ] : []),
   {
     path: "/",

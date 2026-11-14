@@ -5,6 +5,9 @@ import { GuestComposerNotice } from "@/components/GuestComposerNotice";
 import { listSkills, getChatMode, type Skill, type Bot } from "../../api";
 import { composerKeyAction } from "../../composer-keys.mjs";
 import { isActiveClarification } from "../../chat-clarification.mjs";
+import { toolLabel } from "../../agent-tool-labels.mjs";
+import { announcement, isOffline, runningTool, turnSignal } from "../../turn-signals.mjs";
+import { useBackendDown } from "@/components/state/connectivity-store";
 import { slashMatches } from "../../skill-items.mjs";
 import { useLocale } from "../../i18n";
 import { ContextMeter } from "./ContextMeter";
@@ -49,6 +52,10 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
   // The bot is waiting on a card in the thread (S9): a strip above the input says so and takes the reader to it.  The input stays usable: a typed line goes out as an ordinary message.
   const waitingCard = !c.archiveView && !c.restoring && c.verified && !sending && isActiveClarification(c.messages, c.messages.length - 1, false);
   const waitingName = bot?.name ?? t("模型");
+  // The one status line for screen readers (design 6.9): what the bot is doing, said when the phase changes; the avatar itself is hidden from them.
+  const backendDown = useBackendDown().down;
+  const said = announcement({ phase: turnSignal({ chatState: c.state, messages: c.messages }).phase, waiting: waitingCard, offline: isOffline({ backendDown, chatState: c.state, messages: c.messages }), tool: runningTool(c.messages) });
+  const saying = said ? `${waitingName} ${t(said.phrase)}${said.detail ? `：${t(toolLabel(said.detail))}` : ""}` : "";
   const sendDisabled = Boolean(c.archiveView) || c.restoring || !c.verified || !c.draft.trim() || sending;
   const fine = typeof window !== "undefined" && window.matchMedia?.("(pointer: fine) and (min-width: 640px)").matches;
   const placeholder = bot ? `${t("给")} ${bot.name} ${t("发消息…")}${fine ? ` · ${t("Enter 发送，Shift+Enter 换行")}` : ""}` : t(c.verified ? "给 Agent 发消息…" : "登录个人聊天后才能对话");
@@ -61,7 +68,7 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
     </div>
   </div>;
   return <div className="mx-auto w-full max-w-[760px] px-4 pb-[max(1rem,env(safe-area-inset-bottom))] lg:px-6">
-    <div role="status" aria-live="polite" className="sr-only">{waitingCard ? `${waitingName} ${t("在等你确认")}` : ""}</div>
+    <div role="status" aria-live="polite" data-testid="bot-status" className="sr-only">{saying}</div>
     {waitingCard && <button type="button" data-testid="waiting-strip" onClick={() => void focusWaitingCard()} className="material-action mb-2 flex min-h-11 w-full items-center gap-2 px-3 text-left text-small text-ink outline-none hover:brightness-95 focus-visible:ring-2 focus-visible:ring-ring sm:min-h-9">
       <Hand aria-hidden="true" className="size-4 shrink-0 text-action" /><span className="min-w-0 flex-1 truncate">{waitingName} {t("在等你确认上面的卡片")}</span><ChevronUp aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
     </button>}

@@ -35,7 +35,7 @@ function ChatPageBody({ bot, workspace, profile, onTurnSettled, onBotChanged }: 
   // The history drawer (narrow screens, no bot) closes with Esc.
   useEffect(() => { if (!historyOpen) return; const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setHistoryOpen(false); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [historyOpen]);
   const draftBox = useRef<HTMLTextAreaElement>(null);
-  const color = bot ? resolveLook(bot.id, bot.avatar, bot.look).color : undefined;
+  const color = bot ? resolveLook(bot.id, bot.avatar, bot.look, bot.name).color : undefined;
   // A phone's on-screen keyboard that covers the page (iOS) lifts the composer by as much as it covers; where the browser resizes the layout instead, this is 0.
   const keyboard = useKeyboardInset(usePhone());
   return <main data-slot="chat-page" data-testid="chat-page" data-bot-color={color} aria-labelledby="chat-title" style={keyboard ? { paddingBottom: keyboard } : undefined} className="agent-page flex min-h-0 flex-1 flex-col bg-background">

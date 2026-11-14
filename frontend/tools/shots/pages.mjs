@@ -335,6 +335,10 @@ export const PAGES = [
   // The backend unreachable: every API request fails, then a page that needs the API opens: the banner is at the top of the page.
   { name: "offline", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page, { mock }) => { mock.control.down = true; await page.evaluate(() => { location.hash = "#/portfolio"; }); await page.locator('[data-slot="offline-banner"]').waitFor(); } },
+  // A1: the five bots on the sample page, all in the same state; reduced-motion still frames (the face, the look, the badges of the pose).
+  ...["idle", "listening", "thinking", "tool", "verify", "answer", "waiting", "done", "partial", "failed", "offline", "sleep"].map((state) => (
+    { name: `dev-kit-bots-${state}`, hash: "#/dev/kit/bots", ready: "[data-testid=bots-page]",
+      before: async (page) => { await page.locator(`[data-scenario=${state}]`).click(); } })),
   { name: "dev-kit-menu", hash: "#/dev/kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); } },
 ];

@@ -2,7 +2,7 @@ import { Link } from "react-router";
 import type { CSSProperties } from "react";
 import { SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 import type { Bot } from "../../api";
-import { RailBotOrb } from "../../BotOrb";
+import { BotAvatar } from "@/components/bot/BotAvatar";
 import { BOT_AVATAR_SIZE } from "../../bot-sizes.mjs";
 import { botMarker, countLabel } from "../../bot-marker.mjs";
 import { resolveLook } from "../../bloub-look.mjs";
@@ -11,8 +11,8 @@ import { useLocale } from "../../i18n";
 import { paths } from "../../routes.mjs";
 
 /** The bot's signature colour as a CSS colour; the ink-black and cream bodies take theme colours so the ring shows on both themes. */
-function ringColor(bot: Pick<Bot, "id" | "avatar" | "look">): string {
-  const colour = resolveLook(bot.id, bot.avatar, bot.look).color;
+function ringColor(bot: Pick<Bot, "id" | "name" | "avatar" | "look">): string {
+  const colour = resolveLook(bot.id, bot.avatar, bot.look, bot.name).color;
   if (colour === "encre") return "var(--ink)";
   if (colour === "creme") return "var(--muted)";
   return COLOR_BY_ID.get(colour)?.hex ?? "var(--ink)";
@@ -38,7 +38,7 @@ export function BotRow({ bot, active, running, waiting, unseen, onNavigate }: { 
       <Link to={bot.is_default ? paths.chat() : paths.chat(bot.id)} data-bot-row="" data-marker={marker.kind} aria-label={label} aria-current={active ? "page" : undefined} onClick={onNavigate}>
         <span className="relative grid shrink-0 place-items-center" style={{ width: BOT_AVATAR_SIZE.sidebar, height: BOT_AVATAR_SIZE.sidebar, "--ring-colour": colour } as CSSProperties}>
           {marker.ring && <span data-ring="" aria-hidden="true" className="pointer-events-none absolute -inset-0.5 rounded-full border-2 border-transparent border-t-[color:var(--ring-colour)] motion-safe:animate-spin motion-reduce:border-[color:var(--ring-colour)]" />}
-          <RailBotOrb avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.sidebar - 4} />
+          <BotAvatar followRow avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.sidebar - 4} />
           {marker.dot && <span data-dot="" aria-hidden="true" className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-action ring-2 ring-sidebar" />}
           {collapsed && marker.count > 0 && <span aria-hidden="true" className="absolute -right-1 -bottom-1 grid min-w-4 place-items-center rounded-full bg-brand px-1 text-caption leading-4 text-primary-foreground ring-2 ring-sidebar">{countLabel(marker.count)}</span>}
         </span>

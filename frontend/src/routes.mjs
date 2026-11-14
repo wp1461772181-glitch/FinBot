@@ -52,6 +52,7 @@ export const PATTERNS = {
   devKit: "/dev/kit",
   devKitProbe: "/dev/kit/probe",
   devKitStates: "/dev/kit/states",
+  devKitBots: "/dev/kit/bots",
 };
 
 const seg = (value) => encodeURIComponent(String(value));
@@ -98,7 +99,7 @@ export const paths = {
   assistant: (section = "bots") => `/assistant/${ASSISTANT_SECTIONS.includes(section) ? section : "bots"}`,
   skill: (skillId) => `/assistant/skills/${seg(skillId)}`,
   settings: (section = "models") => `/settings/${SETTINGS_SECTIONS.includes(section) ? section : "models"}`,
-  devKit: ({ probe, states } = {}) => (probe ? "/dev/kit/probe" : states ? "/dev/kit/states" : "/dev/kit"),
+  devKit: ({ probe, states, bots } = {}) => (probe ? "/dev/kit/probe" : states ? "/dev/kit/states" : bots ? "/dev/kit/bots" : "/dev/kit"),
 };
 
 /** "#/research/…" for a path: the form an <a href> or the location bar holds. */

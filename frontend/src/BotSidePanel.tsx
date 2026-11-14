@@ -7,7 +7,7 @@ import { botDraft, botModelLabel, newBotFields, focusText, keyStatusLabel, parse
 import { toggleUsual, usableSkills } from "./skill-items.mjs";
 import { toolLabel } from "./agent-tool-labels.mjs";
 import { TaskManager } from "./BotRoutines";
-import { BotOrb } from "./BotOrb";
+import { BotAvatar } from "./components/bot/BotAvatar";
 import { BOT_AVATAR_SIZE } from "./bot-sizes.mjs";
 import { BloubCustomizer } from "./BloubCustomizer";
 import { lookForSave, normalizeLook, randomLook, resolveLook, type BloubLook } from "./bloub-look.mjs";
@@ -36,16 +36,16 @@ function useBotOptions() {
 function AvatarPicker({ value, look, seed, name, onChange, disabled }: { value: string; look: BloubLook | null; seed: string; name: string; onChange: (patch: { avatar?: string; look?: BloubLook | null }) => void; disabled: boolean }) {
   const { t } = useLocale();
   const isOrb = parseAvatar(value, name).kind === "bot";
-  const shown = look ?? resolveLook(seed, value, null);
+  const shown = look ?? resolveLook(seed, value, null, name);
   return <div className="avatar-picker"><span>{t("头像")}</span>
     <div className="avatar-picker-modes">
       <label className="bot-check"><input type="radio" checked={isOrb} disabled={disabled} onChange={() => onChange({ avatar: DEFAULT_AVATAR })} />{t("机器人")}</label>
       <label className="bot-check"><input type="radio" checked={!isOrb} disabled={disabled} onChange={() => onChange({ avatar: "" })} />{t("自定义 emoji")}</label>
     </div>
     {isOrb ? <>
-      <div className="bloub-hero"><BotOrb avatar={value} look={shown} name={name || "·"} seed={seed} size={BOT_AVATAR_SIZE.hero} /></div>
+      <div className="bloub-hero"><BotAvatar avatar={value} look={shown} name={name || "·"} seed={seed} size={BOT_AVATAR_SIZE.hero} /></div>
       <BloubCustomizer look={shown} disabled={disabled} onChange={next => onChange({ look: next })} />
-    </> : <><BotOrb avatar={value} name={name || "·"} size={BOT_AVATAR_SIZE.emoji} />
+    </> : <><BotAvatar avatar={value} name={name || "·"} size={BOT_AVATAR_SIZE.emoji} />
       <input value={value} maxLength={16} disabled={disabled} onChange={e => onChange({ avatar: e.target.value })} placeholder="📈" aria-label={t("头像")} /></>}
   </div>;
 }
@@ -129,7 +129,7 @@ export function NewBotDialog({ onClose, onCreated }: { onClose: () => void; onCr
       <button className="profile-close" onClick={onClose} aria-label={t("关闭")} disabled={busy}>×</button>
       <h2 id="new-bot-title">{t("新建 bot")}</h2>
       <form className="bot-create" onSubmit={e => void save(e)}>
-        <div className="bot-orb-hero"><BotOrb avatar={DEFAULT_AVATAR} look={look} name={name || "FinBot"} size={BOT_AVATAR_SIZE.createHero} /><small>{name || t("新 bot")}</small></div>
+        <div className="bot-orb-hero"><BotAvatar avatar={DEFAULT_AVATAR} look={look} name={name || "FinBot"} size={BOT_AVATAR_SIZE.createHero} /><small>{name || t("新 bot")}</small></div>
         <BloubCustomizer look={look} onChange={setLook} disabled={busy} />
         <label>{t("名字")}<input ref={nameBox} value={name} maxLength={40} disabled={busy} onChange={e => setName(e.target.value)} placeholder={picked?.name || t("例如：读财报")} /></label>
         {templates.length > 0 && <fieldset className="bot-template-chips" disabled={busy}><legend>{t("模板（可选）")}</legend>

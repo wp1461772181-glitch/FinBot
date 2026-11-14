@@ -8,7 +8,7 @@
 //            fading to calm, the gaze easing back from the pointer). The loop keeps running until that is over, then stops.
 import { ENGAGE_TIME } from "./bloub-gaze.mjs";
 import { MOOD_MORPH } from "./bloub-mood.mjs";
-import { T } from "./bloub-director.mjs";
+import { T } from "./bloub-timing.mjs";
 
 /** Seconds of frames to keep after the last busy moment: the longest of the gaze release (ENGAGE_TIME 1.1), the work
  * face fading out (MOOD_MORPH 0.8), a body-shape morph (0.45) and the longest engine state morph (orbit, 0.6 = T.DWELL),

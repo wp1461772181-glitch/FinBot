@@ -2226,5 +2226,10 @@
   "检索词扩展不可用，继续原查询…": "Search-term expansion is unavailable; continuing with the original query…",
   "正在复用已核实来源…": "Reusing verified sources…",
   "未连接归档文件": "No archive file is connected",
-  "归档文件超过 5 MB 限制": "The archive file is over the 5 MB limit"
+  "归档文件超过 5 MB 限制": "The archive file is over the 5 MB limit",
+  "正在思考": "is thinking",
+  "正在调用工具": "is calling a tool",
+  "正在核对证据": "is checking the evidence",
+  "正在作答": "is answering",
+  "连接不上服务器": "cannot reach the server"
 }

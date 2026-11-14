@@ -4,7 +4,8 @@ import { Skeleton } from "@/components/state/Skeleton";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { OptionalChunk } from "../../OptionalChunk";
 import { failureNeedsSettings } from "../../chat-states.mjs";
-import { BotOrb } from "../../BotOrb";
+import { BotAvatar } from "@/components/bot/BotAvatar";
+import { BOT_AVATAR_SIZE } from "../../bot-sizes.mjs";
 import { isActiveClarification } from "../../chat-clarification.mjs";
 import { isTaskPostHead } from "../../task-posts.mjs";
 import { roundSources, turnKey } from "../../panel-model.mjs";
@@ -59,7 +60,7 @@ export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex,
   return <article {...common} data-tapped={tapped || undefined} onClick={() => setTapped(x => !x)} className="group/msg flex min-w-0 flex-col gap-2 rounded-md">
     {/* 1. head: small avatar, bot name, time */}
     <header className="flex items-center gap-2 text-caption text-muted-foreground">
-      {bot ? <BotOrb avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={24} /> : null}
+      {bot ? <BotAvatar avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.message} /> : null}
       <span className="font-medium text-ink-2">{name}</span>
       {time && <time className="tabular-nums">{time}</time>}
     </header>
@@ -113,7 +114,7 @@ export function PendingAnswer({ bot, status }: { bot?: Bot | null; status: strin
   const m = useMemo<AgentChatMessage>(() => ({ role: "assistant", content: "", started_at: sentAt.current }), []);
   return <div data-testid="pending-answer" className="flex min-w-0 flex-col gap-2">
     <header className="flex items-center gap-2 text-caption text-muted-foreground">
-      {bot ? <BotOrb avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={24} /> : null}
+      {bot ? <BotAvatar avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.message} /> : null}
       <span className="font-medium text-ink-2">{bot?.name ?? t("模型")}</span>
     </header>
     <TurnSteps m={m} i={-1} running status={status} />

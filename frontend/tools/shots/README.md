@@ -4,7 +4,7 @@ Drives the **built** frontend in headless Chromium with a fake API. It is its ow
 `package.json` or `node_modules`, and nothing here ships in the build.
 
 Normally run it through `fe-check.sh` (it builds with `VITE_API_BASE_URL=https://api.example.test` and
-`VITE_BASE_PATH=/FinBot/` first). By hand, from this directory:
+`VITE_BASE_PATH=/` first (the root path, as on finbotai.me)). By hand, from this directory:
 
 ```
 npm ci                                  # playwright-core 1.65.0, pngjs, pixelmatch (uses the browser already in ~/.cache/ms-playwright)
@@ -70,3 +70,8 @@ Write one named async function in `smoke.mjs` (throw to fail, return a short det
 - `pages.mjs` exports `streamSteps(page)` (the hand-fed half-way turn above) and `traceEvent(id, kind, fields)` (a trace event as the server sends it).
 - Fake data: `GET /knowledge/citations/:id` answers `CITATION_DETAILS` (chunk `k…01` a saved filing, `k…02` a derived AI analysis; any other id is a withdrawn source, 404). The default line's first answer has three tool results (3 hits, none, a failure); its second answer ended `partially_succeeded`; its third point carries an old-style unverified-line mark; AppleBot's answer has only `thinking_ms`; NewsBot's has only a `tool_trace`.
 - `public-mark-verbatim` imports `chat-public-marks.mjs` from `../../src` and computes the card's three texts for the fixture message; the page must show them word for word. It resolves `--danger`, `--action`, `--action-soft` and fails if the mark or its card (any descendant) uses one of those colours or holds an icon, in light and dark.
+
+## A1 avatar checks (`--only avatar` runs them with `idle-avatars-no-raf`)
+- `#/dev/kit/bots` (needs the dev kit build, `fe-check.sh` makes one): the five bots at size L with a row of buttons that puts all of them in one state (`data-scenario="<name>"`). Each avatar's `svg[data-slot=bot-body]` carries what the checks read: `data-clock` (engine clock, seconds), `data-tempo`, `data-state`, `data-pose`, `data-gaze`, `data-waiting`, `data-dim`. The sample page sets `unlimited` on its avatars (a real page runs one M / L avatar at a time; see `components/bot/bot-loop.ts`).
+- `avatar-no-react-frames` counts React commits through a fake `__REACT_DEVTOOLS_GLOBAL_HOOK__` and `requestAnimationFrame` calls for 3 s on the chat page; `avatar-tempo-differs` compares the five clocks' advance with their tempos; `avatar-ring-hue` reads the thinking ring's gradient stops (computed `stop-color`) against the body's own hue; `avatar-rest-gaze` reads the gazes and the eyes' positions; `avatar-waiting-pose` ends a turn with a card in TeslaBot's line and samples the header avatar for 10 s.
+- Pages `dev-kit-bots-<state>` (12): reduced-motion still frames of the five bots in each state.

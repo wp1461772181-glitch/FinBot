@@ -5,7 +5,7 @@ import { PopPanel } from "@/components/PopPanel";
 import { OptionalChunk } from "../../OptionalChunk";
 import { chatTurnPreviews } from "../../chat-thread.mjs";
 import { railShouldShow } from "../../question-rail.mjs";
-import { LiveBotOrb } from "../../LiveBotOrb";
+import { BotPresence } from "@/components/bot/BotPresence";
 import { BOT_AVATAR_SIZE } from "../../bot-sizes.mjs";
 import { paths } from "../../routes.mjs";
 import { type Bot } from "../../api";
@@ -49,7 +49,7 @@ export function ChatHeader({ bot, historyOpen, setHistoryOpen }: { bot?: Bot | n
       {bot ? <>
         {/* The avatar keeps its size (BOT_AVATAR_SIZE.title, 44px or more) on every width: the text gives way first. An emoji avatar is a text box, sized here. */}
         {(() => {
-          const avatar = <span className="flex shrink-0 [&_.bot-avatar]:h-[var(--avatar)] [&_.bot-avatar]:w-[var(--avatar)]" style={{ "--avatar": `${BOT_AVATAR_SIZE.title}px` } as CSSProperties}><LiveBotOrb key={bot.id} avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.title} chatState={c.state} messages={c.messages} unread={bot.unread > 0 || c.freshExternal} onAcknowledge={c.ackExternal} /></span>;
+          const avatar = <span className="flex shrink-0 [&_.bot-avatar]:h-[var(--avatar)] [&_.bot-avatar]:w-[var(--avatar)]" style={{ "--avatar": `${BOT_AVATAR_SIZE.title}px` } as CSSProperties}><BotPresence key={bot.id} avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.title} chatState={c.state} messages={c.messages} draft={c.draft} bot={bot} unread={bot.unread > 0 || c.freshExternal} onAcknowledge={c.ackExternal} /></span>;
           // On a phone the avatar and the name are one button: 「在场头像 + bot 名 + ▾」, which opens the bot switcher.
           if (phone && c.verified) return <h1 id="chat-title" className="min-w-0 flex-1 text-title-s text-ink">
             <button type="button" data-testid="bot-switcher" aria-haspopup="dialog" aria-expanded={switcher} title={t("切换 bot")} onClick={() => { setSwitcherUsed(true); setSwitcher(true); }}
