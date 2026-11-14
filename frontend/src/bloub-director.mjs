@@ -5,10 +5,16 @@
 // The view also carries `expression`: CALM on every idle/notify/reaction/sleep base, the work-phase sequence (bloub-mood)
 // while the body is in a work state. The face is a layer on top of the state, never a replacement for it.
 //
+// A turn can end five ways (see turnTransition): done / error / cancel / waiting / partial. Only done and error play a
+// stinger. "waiting" (the ball is in the user's court) and "partial" (partially_succeeded) are NOT a success: no wink, the
+// body drops straight to what the next priority shows. They are recorded and exposed as `view.ended` so the next package can
+// give them their own pose (amber dot, nod); this file draws nothing for them.
+//
 // Priority, high to low:  work (turn lifecycle + its stingers)  >  notify (unread)  >  reaction (hover / click)  >
 // life (sleep after a long idle)  >  idle.  Reactions never interrupt work; work pre-empts a reaction in progress.
 
 import { CALM, MOOD_MORPH, moodAt } from "./bloub-mood.mjs";
+import { awaitsUser } from "./chat-clarification.mjs";
 
 /** Durations in seconds. DWELL is the engine's longest state morph (orbit, 0.6): the engine keeps ONE previous state,
  * so leaving a state sooner than that makes the fade jump instead of blend (bloub's MIN_BLOCK rule). */
@@ -20,7 +26,8 @@ export const T = {
   CLICK: 2.4,       // burst / comet are cut under 2.4 s (bloub minDuration)
   SLEEP_AFTER: 60,  // no interaction for this long -> sleep
   DWELL: 0.6,
-  INTRO: 1.8        // arrival gaze turn (1.5) + a settle beat, same shape as bloub's INTRO montage
+  INTRO: 1.8,       // arrival gaze turn (1.5) + a settle beat, same shape as bloub's INTRO montage
+  PARTIAL: 0.6      // how long `ended: "partial"` stays readable (design 6.3: a nod, then back to idle)
 };
 
 /** Event -> engine state. Ids are bloub's StateId. */
@@ -33,7 +40,7 @@ export const S = {
 export function createDirector({ now = 0, reducedMotion = false } = {}) {
   const m = {
     reduced: reducedMotion, lastActivity: now,
-    turn: null, stinger: null, unread: false,
+    turn: null, stinger: null, ended: null, unread: false,
     hover: { on: false, since: 0, used: false }, click: null, clicks: 0,
     introUntil: -Infinity,
     held: { state: S.idle, layer: "idle", changedAt: -Infinity }
@@ -60,7 +67,7 @@ export function createDirector({ now = 0, reducedMotion = false } = {}) {
       switch (event.type) {
         case "turn-start":
           m.turn = { phase: "waiting", since: t, phaseSince: t, quiet: Boolean(event.quiet) };
-          m.stinger = null; m.click = null;
+          m.stinger = null; m.click = null; m.ended = null;
           break;
         case "phase":
           if (m.turn && S[event.phase] && m.turn.phase !== event.phase) { m.turn.phase = event.phase; m.turn.phaseSince = t; }
@@ -68,6 +75,9 @@ export function createDirector({ now = 0, reducedMotion = false } = {}) {
         case "turn-end": {
           const was = m.turn; m.turn = null;
           if (!was) break;
+          // "waiting" stays readable until the next turn starts (it ends when you answer); "partial" is a short beat.
+          m.ended = event.outcome === "waiting" ? { outcome: "waiting", until: Infinity }
+            : event.outcome === "partial" ? { outcome: "partial", until: t + T.PARTIAL } : null;
           if (event.outcome === "done") m.stinger = { state: S.success, until: t + T.SUCCESS };
           else if (event.outcome === "error") m.stinger = { state: S.error, until: t + T.ERROR };
           else m.stinger = null;
@@ -103,7 +113,8 @@ export function createDirector({ now = 0, reducedMotion = false } = {}) {
     // The face layer rides on the work body only (orbit / thinking); every other base is calm.
     const working = !m.reduced && m.turn && layer === "work" && (state === S.waiting || state === S.answer);
     const expression = working ? moodAt(m.turn.phase, t - m.turn.phaseSince) : CALM;
-    return { state, layer, follow: !m.reduced && idle, intro: idle && t < m.introUntil, expression, moodMorph: MOOD_MORPH };
+    const ended = m.ended && t < m.ended.until ? m.ended.outcome : null;
+    return { state, layer, follow: !m.reduced && idle, intro: idle && t < m.introUntil, expression, moodMorph: MOOD_MORPH, ended };
   }
 }
 
@@ -125,14 +136,18 @@ export function turnPhase(chatState, messages) {
   return tools.length ? "tool" : "waiting";
 }
 
-/** Chat state change -> director event (or null). The outcome of a finished turn is read off its last message. */
+/** Chat state change -> director event (or null). The outcome of a finished turn is read off its last message.
+ * Precedence: error (state error or a failed message) > cancel > waiting (waiting status or an unanswered card) >
+ * partial (partially_succeeded) > done. */
 export function turnTransition(prev, next, messages) {
   if (prev !== "sending" && next === "sending") return { type: "turn-start" };
   if (prev === "sending" && next !== "sending") {
     if (next === "error") return { type: "turn-end", outcome: "error" };
     const last = messages?.[messages.length - 1];
+    if (last?.role === "assistant" && last.status === "failed") return { type: "turn-end", outcome: "error" };
     if (!last || last.role !== "assistant" || last.status === "cancelled") return { type: "turn-end", outcome: "cancel" };
-    return { type: "turn-end", outcome: last.status === "failed" ? "error" : "done" };
+    if (awaitsUser(last)) return { type: "turn-end", outcome: "waiting" };
+    return { type: "turn-end", outcome: last.status === "partially_succeeded" ? "partial" : "done" };
   }
   return null;
 }

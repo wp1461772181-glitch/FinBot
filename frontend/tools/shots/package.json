@@ -1,0 +1,17 @@
+{
+  "name": "finbot-shots",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Screenshot, pixel-compare and smoke tooling that drives the built frontend with fixture data (no backend).",
+  "type": "module",
+  "scripts": {
+    "shots": "node run.mjs",
+    "compare": "node compare.mjs",
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.65.0",
+    "pixelmatch": "^7.0.0",
+    "pngjs": "^7.0.0"
+  }
+}

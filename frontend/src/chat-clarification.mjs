@@ -64,7 +64,14 @@ export function manualClarification(clarification, input) {
 
 export function clarificationTitle(clarification) { return clarification?.display?.agent_suggestion===true?'Agent 建议：请决定是否批准':titles[clarification?.reason]??'请补充信息'; }
 
+export const WAITING_STATUSES=['waiting_for_input','waiting_for_user'];
+
 export function isActiveClarification(messages,index,readOnly) {
   const message=messages[index];
-  return !readOnly && index===messages.length-1 && message?.role==='assistant' && ['waiting_for_input','waiting_for_user'].includes(message?.status) && Boolean(message.clarification);
+  return !readOnly && index===messages.length-1 && message?.role==='assistant' && WAITING_STATUSES.includes(message?.status) && Boolean(message.clarification);
+}
+
+/** An assistant message that ends a turn with the ball in the user's court: a waiting status, or a card to answer. */
+export function awaitsUser(message) {
+  return message?.role==='assistant' && (WAITING_STATUSES.includes(message.status) || Boolean(message.clarification));
 }

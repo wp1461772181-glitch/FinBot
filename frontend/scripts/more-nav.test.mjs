@@ -49,9 +49,9 @@ test("the forecast group has no stock picker: the company comes from the record"
 });
 
 test("the pinned bot rail is 288px, a modest step up from 240px", () => {
-  const css = src("styles.css");
+  const css = src("styles/legacy/styles.css");
   assert.match(css, /\.app-frame\.is-nav-pinned\{grid-template-columns:288px minmax\(0,1fr\)!important\}/);
   assert.match(css, /\.app-frame\.is-nav-pinned \.app-rail\{[^}]*width:288px/);
   assert.doesNotMatch(css, /240px|276px/);
-  assert.match(src("theme.css"), /grid-template-columns: repeat\(3, 1fr\)/);
+  assert.match(src("styles/legacy/theme.css"), /grid-template-columns: repeat\(3, 1fr\)/);
 });

@@ -1,0 +1,109 @@
+/* Browser-default restore block (first rule set of the legacy layer).
+
+   Tailwind's preflight (layer `base`) zeroes things the old pages never wrote down and so got from the browser:
+   margins and padding, borders, heading sizes, link colour, list markers, form-control looks, <svg> display ...
+   Everything below puts the browser value back with `revert`, so an old page renders exactly as it did without
+   preflight.  Preflight itself stays in, because the shadcn components and all new markup rely on it.
+
+   Scope: the old UI is marked with a `data-legacy` attribute on its root, and these rules apply only below it.
+   - Anything outside a `data-legacy` subtree gets plain preflight (no restore), whether or not it is in a shadcn part.
+   - Inside a `data-legacy` subtree, a shadcn part (an element with data-slot, and everything in it) is excluded:
+     it keeps preflight.  Only data-slot elements that are themselves inside the subtree count, so an old page
+     mounted in a shadcn container (the P2 shell) is restored as usual, and a shadcn part embedded in an old
+     page is left alone.  Old pages need no other marker: the shell wraps each one in <div data-legacy>.
+   - Every selector sits inside :where(), so it has zero specificity and any rule in the old sheets (which come
+     after this file) still wins, exactly as the browser default would have lost to them.
+   The same scope suffix is on the ten element rules of styles.css and three of theme.css that used to reach
+   shadcn parts (button, input, h1-h3, p, .sr-only, the dark input/select/textarea rule).
+   The #dev-kit smoke checks fail if legacy rules reach shadcn parts, or if preflight is missing outside the subtree.
+
+   Page-level exceptions: an ancestor of the marker cannot be scoped by it, so the `html` group below and the old
+   sheets' own html / body / :root rules stay global.  Since P1.2 the page's body gets the design's typography
+   (14px / 22px, --font-sans, --ink: theme.css, layer `base`), so the data-legacy root puts the old inherited
+   size and line-height back (first rule below): old pages keep their layout, new areas get the design's text.
+   Drop each rule when the last old page that needs it is gone (P9 deletes the whole file). */
+
+/* The old pages inherited the browser's 16px and `normal` line-height from <body>; the new body sets 14px / 22px.
+   The marker is display:contents, so these are inherited by everything inside it.  Zero specificity: any old rule
+   that sets its own size or line-height still wins, as before. */
+:where([data-legacy]) {
+  font-size: medium;
+  line-height: normal;
+}
+
+/* Box model: old pages with a bare <h1>, <p>, <ul>, <button>, <input>, <fieldset>, <figure> ... (nearly all pages). */
+:where([data-legacy] *:not([data-legacy] [data-slot], [data-legacy] [data-slot] *)),
+:where([data-legacy] *:not([data-legacy] [data-slot], [data-legacy] [data-slot] *))::before,
+:where([data-legacy] *:not([data-legacy] [data-slot], [data-legacy] [data-slot] *))::after,
+:where([data-legacy] *:not([data-legacy] [data-slot], [data-legacy] [data-slot] *))::file-selector-button {
+  margin: revert;
+  padding: revert;
+  border: revert;
+}
+
+/* Page-level text defaults (global, see above): preflight sets line-height 1.5 on <html>, which every old page inherited as `normal`. */
+:where(html) {
+  line-height: normal;
+  tab-size: 8;
+  -webkit-text-size-adjust: auto;
+  -webkit-tap-highlight-color: revert;
+}
+
+/* Headings without their own size / weight (overview cards, research brief, settings sections). */
+:where([data-legacy] :is(h1, h2, h3, h4, h5, h6):not([data-legacy] [data-slot], [data-legacy] [data-slot] *)) {
+  font-size: revert;
+  font-weight: revert;
+}
+
+/* Links without their own colour / underline (inline citation links, text buttons rendered as <a>). */
+:where([data-legacy] :is(a):not([data-legacy] [data-slot], [data-legacy] [data-slot] *)) {
+  color: revert;
+  text-decoration: revert;
+}
+
+/* <small> inside cards and rows. */
+:where([data-legacy] :is(small):not([data-legacy] [data-slot], [data-legacy] [data-slot] *)) {
+  font-size: revert;
+}
+
+/* Lists: ordered citation lists, markdown lists, setting lists. */
+:where([data-legacy] :is(ol, ul, menu):not([data-legacy] [data-slot], [data-legacy] [data-slot] *)) {
+  list-style: revert;
+}
+
+/* Inline images and SVG icons: preflight makes them block-level and middle-aligned; the old pages sit them inline. */
+:where([data-legacy] :is(img, svg, video, canvas, audio, iframe, embed, object):not([data-legacy] [data-slot], [data-legacy] [data-slot] *)) {
+  display: revert;
+  vertical-align: revert;
+}
+:where([data-legacy] :is(img, video):not([data-legacy] [data-slot], [data-legacy] [data-slot] *)) {
+  max-width: revert;
+  height: revert;
+}
+
+/* Form controls the old sheets do not fully restyle (selects, textareas, plain buttons, checkboxes, options). */
+:where([data-legacy] :is(button, input, select, optgroup, textarea):not([data-legacy] [data-slot], [data-legacy] [data-slot] *)),
+:where([data-legacy] :is(button, input, select, optgroup, textarea):not([data-legacy] [data-slot], [data-legacy] [data-slot] *))::file-selector-button {
+  font: revert;
+  letter-spacing: revert;
+  color: revert;
+  border-radius: revert;
+  background-color: revert;
+  opacity: revert;
+}
+:where([data-legacy] :is(button, input:where([type="button"], [type="reset"], [type="submit"])):not([data-legacy] [data-slot], [data-legacy] [data-slot] *)) {
+  appearance: revert;
+}
+:where([data-legacy] :is(textarea):not([data-legacy] [data-slot], [data-legacy] [data-slot] *)) {
+  resize: revert;
+}
+:where([data-legacy] :is(option):not([data-legacy] [data-slot], [data-legacy] [data-slot] *)) {
+  font: revert;
+  letter-spacing: revert;
+  color: revert;
+  background-color: revert;
+}
+:where([data-legacy] :is(input, textarea):not([data-legacy] [data-slot], [data-legacy] [data-slot] *))::placeholder {
+  color: revert;
+  opacity: revert;
+}

@@ -3,7 +3,7 @@ import { BotRailList, BotSide, NewBotDialog, RoutineIcon, useBots } from "./BotP
 import { BrandLogo } from "./BotOrb";
 import { botFromHash } from "./bot-items.mjs";
 import { Tx, formatDateTime as formatLocalizedDateTime, getLocalePreference, translatePhrase, useLocale } from "./i18n";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError, markBotRead, type Bot, type EarningsJudgment, type V2ForecastList, getEarningsJudgments, getFilingInventory, getMaterialLibrary, getV2ForecastRoots, getV2Forecasts, getV2MonitorStatus, getV2Prices, initializeMarketData, scanOfficialFilings } from "./api";
 import { forecastBySymbol, judgmentLane, type JudgmentLane } from "./forecast-home.mjs";
 import { researchRecord } from "./portfolio-items.mjs";
@@ -63,8 +63,25 @@ const WORKSPACE_SECTION_TITLE: Record<ResearchSection, string> = {
   overview: "研究总览", forecast: "预测", evidence: "证据中心", materials: "材料库", revisions: "预测修订", evaluation: "模型成绩", replay: "历史回放",
 };
 
+// Developer sample page (#dev-kit).  The flag is a build-time constant, so a production build without VITE_DEV_KIT
+// drops the dynamic import and the page's code never reaches dist.
+const DEV_KIT_ENABLED = import.meta.env.DEV || import.meta.env.VITE_DEV_KIT === "1";
+const DevKitPage = DEV_KIT_ENABLED ? lazy(() => import("./dev/KitPage")) : null;
+
+// "#dev-kit/probe" opens the same page plus the scope probes the smoke checks use (kept off "#dev-kit" so its screenshots stay put).
+const isDevKitHash = (hash: string) => hash === "#dev-kit" || hash === "#dev-kit/probe";
+
 export function App() {
-  return <AppEntry />;
+  const [devKit, setDevKit] = useState(() => isDevKitHash(window.location.hash));
+  useEffect(() => {
+    if (!DevKitPage) return;
+    const read = () => setDevKit(isDevKitHash(window.location.hash));
+    window.addEventListener("hashchange", read);
+    return () => window.removeEventListener("hashchange", read);
+  }, []);
+  if (DevKitPage && devKit) return <Suspense fallback={null}><DevKitPage /></Suspense>;
+  // data-legacy marks the old UI for the restore block in styles/legacy/restore.css; display:contents keeps layout as it was.
+  return <div data-legacy="" style={{ display: "contents" }}><AppEntry /></div>;
 }
 
 function AppEntry(){

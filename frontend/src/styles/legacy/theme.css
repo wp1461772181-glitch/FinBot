@@ -1,73 +1,8 @@
-/* Personal-agent visual layer: cool gray with one signal blue.  Loaded after styles.css and chat.css.
-   The older sheets already read their colours from variables; this sheet points those variables at one
-   token set, and dark mode swaps the token set only, so both themes share every variable name.
-   Fonts are named, not downloaded: Noto Sans SC and IBM Plex Mono apply when installed, otherwise the
-   system fonts below take over (no runtime CDN). */
-
-:root {
-  --me-bg: #f4f6f8;
-  --me-surface: #ffffff;
-  --me-surface-2: #eef1f4;
-  --me-ink: #16202a;
-  --me-muted: #5d6977;
-  --me-faint: #8a95a3;
-  --me-line: #dde2e8;
-  --me-line-strong: #c6cdd6;
-  --me-accent: #1f6feb;
-  --me-accent-hover: #1858c4;
-  --me-accent-soft: #e3edfd;
-  --me-up: #17804a;
-  --me-down: #c7372f;
-  --me-warn: #b2611c;
-  --me-rail: #121a23;
-  --me-rail-2: #1b2531;
-  --me-rail-ink: #e6ebf1;
-  --me-font: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --me-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
-  color-scheme: light;
-
-  /* The older sheets' names, pointed at the tokens. */
-  --paper: var(--me-bg);
-  --canvas: var(--me-bg);
-  --surface: var(--me-surface);
-  --ink: var(--me-ink);
-  --muted: var(--me-muted);
-  --line: var(--me-line);
-  --edge: var(--me-line);
-  --teal: var(--me-accent);
-  --pale-teal: var(--me-accent-soft);
-  --accent: var(--me-accent);
-  --accent-soft: var(--me-accent-soft);
-  --rust: var(--me-down);
-  --warning: var(--me-warn);
-  /* --navy is the dark brand surface the older sheets write white text on, in both themes (not the rail,
-     which is light in the light skin). */
-  --navy: var(--me-hero);
-  --navy-2: var(--me-hero);
-  --sans: var(--me-font);
-  --serif: var(--me-font);
-  --mono: var(--me-mono);
-}
-
-:root[data-theme="dark"] {
-  --me-bg: #0e1319;
-  --me-surface: #161d26;
-  --me-surface-2: #1c2530;
-  --me-ink: #e4e9ef;
-  --me-muted: #9ba7b4;
-  --me-faint: #6e7a88;
-  --me-line: #27313d;
-  --me-line-strong: #344150;
-  --me-accent: #4f8fff;
-  --me-accent-hover: #74a7ff;
-  --me-accent-soft: #182a45;
-  --me-up: #3fbf7f;
-  --me-down: #f26a61;
-  --me-warn: #e09550;
-  --me-rail: #0a0e13;
-  --me-rail-2: #121922;
-  color-scheme: dark;
-}
+/* Personal-agent visual layer.  Loaded after styles.css and chat.css.
+   The older sheets read their colours from variables.  The values of those variables (the --me-* set and the
+   older names --paper, --teal, --rust ...) used to be written here and in grok.css; they now live in one place,
+   bridge.css, which points every one of them at the semantic tokens in tokens.css.  Nothing in this file defines
+   a colour token any more.  Fonts come from the same tokens (--font-sans / --font-mono). */
 
 .agent-page {
   --c-ink: var(--me-ink);
@@ -83,8 +18,8 @@
   --c-warn: var(--me-warn);
 }
 
-body { background: var(--me-bg); color: var(--me-ink); font-family: var(--me-font); }
-.topbar { background: color-mix(in srgb, var(--me-surface) 92%, transparent); }
+body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font); }
+.topbar { background:color-mix(in srgb, var(--me-surface) 92%, transparent); }
 .app-rail { background: linear-gradient(165deg, var(--me-rail), var(--me-rail-2) 76%); color: var(--me-rail-ink); }
 
 /* Figures read in a monospaced face with aligned digits. */
@@ -95,68 +30,68 @@ body { background: var(--me-bg); color: var(--me-ink); font-family: var(--me-fon
 }
 
 /* Up/down: colour plus the arrow and sign written by formatDelta. */
-.delta-up { color: var(--me-up); }
-.delta-down { color: var(--me-down); }
-.delta-flat { color: var(--me-muted); }
+.delta-up { color:var(--me-up); }
+.delta-down { color:var(--me-down); }
+.delta-flat { color:var(--me-muted); }
 .candle.is-up line { stroke: var(--me-up); }
 .candle.is-up rect, .legend-up { fill: var(--me-up); background: var(--me-up); }
 .candle.is-down line { stroke: var(--me-down); }
 .candle.is-down rect, .legend-down { fill: var(--me-down); background: var(--me-down); }
 
 /* Personal-agent pages: tabs inside 公司 and 资料库, placeholders, the mobile tab bar. */
-.section-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 clamp(20px,4vw,56px); padding: 12px 0 0; border-bottom: 1px solid var(--me-line); }
-.section-tabs.is-secondary { border-bottom: 0; padding-top: 8px; }
-.section-tabs button { border: 0; background: transparent; color: var(--me-muted); padding: 8px 12px; border-bottom: 2px solid transparent; font-size: 13px; }
-.section-tabs.is-secondary button { border: 1px solid var(--me-line); border-radius: 999px; padding: 4px 12px; font-size: 12px; }
-.section-tabs button[aria-current="page"] { color: var(--me-accent); border-bottom-color: var(--me-accent); font-weight: 600; }
-.section-tabs.is-secondary button[aria-current="page"] { background: var(--me-accent-soft); border-color: var(--me-accent); }
+.section-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 clamp(20px,4vw,56px); padding: 12px 0 0; border-bottom:1px solid var(--me-line); }
+.section-tabs.is-secondary { border-bottom:0; padding-top: 8px; }
+.section-tabs button { border:0; background:transparent; color:var(--me-muted); padding: 8px 12px; border-bottom:2px solid transparent; font-size: 13px; }
+.section-tabs.is-secondary button { border:1px solid var(--me-line); border-radius: 999px; padding: 4px 12px; font-size: 12px; }
+.section-tabs button[aria-current="page"] { color:var(--me-accent); border-bottom-color:var(--me-accent); font-weight: 600; }
+.section-tabs.is-secondary button[aria-current="page"] { background:var(--me-accent-soft); border-color:var(--me-accent); }
 .personal-page { padding: 28px clamp(20px,4vw,56px) 40px; display: grid; gap: 18px; max-width: 980px; }
 .personal-page h1 { font-size: 26px; font-weight: 600; margin: 0; }
-.personal-card { background: var(--me-surface); border: 1px solid var(--me-line); border-radius: 12px; padding: 18px 20px; }
+.personal-card { background:var(--me-surface); border:1px solid var(--me-line); border-radius: 12px; padding: 18px 20px; }
 .personal-card h2 { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
-.personal-card p { color: var(--me-muted); margin: 0; line-height: 1.6; }
+.personal-card p { color:var(--me-muted); margin: 0; line-height: 1.6; }
 .personal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .personal-badge { display: inline-block; font-size: 11px; color: var(--me-accent); background: var(--me-accent-soft); border-radius: 999px; padding: 2px 8px; margin-bottom: 8px; }
 .personal-links { display: grid; gap: 8px; }
-.personal-links button { text-align: left; background: var(--me-surface); border: 1px solid var(--me-line); border-radius: 10px; padding: 14px 16px; color: var(--me-ink); }
-.personal-links button small { display: block; color: var(--me-muted); margin-top: 2px; }
+.personal-links button { text-align: left; background:var(--me-surface); border:1px solid var(--me-line); border-radius: 10px; padding: 14px 16px; color:var(--me-ink); }
+.personal-links button small { display: block; color:var(--me-muted); margin-top: 2px; }
 .theme-form select { font: inherit; }
 .memory-tabs { margin: 0; }
 .memory-panel { display: grid; gap: 12px; }
 .memory-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.memory-list li { border-top: 1px solid var(--me-line); padding-top: 10px; display: grid; gap: 6px; }
+.memory-list li { border-top:1px solid var(--me-line); padding-top: 10px; display: grid; gap: 6px; }
 .memory-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 .memory-line .personal-badge { margin-bottom: 0; }
 .personal-badge.origin-inferred { color: var(--me-muted); background: transparent; border: 1px dashed var(--me-line); }
-.memory-quote { margin: 0; padding-left: 10px; border-left: 2px solid var(--me-line); color: var(--me-muted); font-size: 13px; }
+.memory-quote { margin: 0; padding-left: 10px; border-left:2px solid var(--me-line); color:var(--me-muted); font-size: 13px; }
 .memory-actions { display: flex; gap: 8px; }
 .memory-search { display: flex; gap: 8px; }
-.memory-search input { flex: 1; font: inherit; padding: 6px 10px; border: 1px solid var(--me-line); border-radius: 8px; background: var(--me-surface); color: var(--me-ink); }
-.memory-archived summary { cursor: pointer; color: var(--me-muted); font-size: 13px; }
+.memory-search input { flex: 1; font: inherit; padding: 6px 10px; border:1px solid var(--me-line); border-radius: 8px; background:var(--me-surface); color:var(--me-ink); }
+.memory-archived summary { cursor: pointer; color:var(--me-muted); font-size: 13px; }
 .mobile-tabbar { display: none; }
-.more-sheet-backdrop { position: fixed; inset: 0 0 calc(62px + env(safe-area-inset-bottom)) 0; z-index: 19; display: flex; align-items: flex-end; background: rgba(16, 16, 16, .45); }
+.more-sheet-backdrop { position: fixed; inset: 0 0 calc(62px + env(safe-area-inset-bottom)) 0; z-index: 19; display: flex; align-items: flex-end; background:rgba(16, 16, 16, .45); }
 .more-sheet-backdrop > * { width: 100%; }
-.more-sheet { width: 100%; box-sizing: border-box; display: grid; gap: 2px; padding: 8px 8px 10px; background: var(--me-surface); color: var(--me-ink); border-top: 1px solid var(--me-line); border-radius: 16px 16px 0 0; box-shadow: 0 -12px 32px rgba(0, 0, 0, .2); }
-.more-sheet button { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; background: transparent; color: var(--me-ink); border-radius: 10px; padding: 10px 12px; font: inherit; cursor: pointer; }
-.more-sheet button span:first-child { width: 1.25em; text-align: center; color: var(--me-muted); }
+.more-sheet { width: 100%; box-sizing: border-box; display: grid; gap: 2px; padding: 8px 8px 10px; background:var(--me-surface); color:var(--me-ink); border-top:1px solid var(--me-line); border-radius: 16px 16px 0 0; box-shadow:0 -12px 32px rgba(0, 0, 0, .2); }
+.more-sheet button { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border:0; background:transparent; color:var(--me-ink); border-radius: 10px; padding: 10px 12px; font: inherit; cursor: pointer; }
+.more-sheet button span:first-child { width: 1.25em; text-align: center; color:var(--me-muted); }
 .more-sheet button strong { display: block; font-size: 14px; font-weight: 600; }
-.more-sheet button small { display: block; color: var(--me-muted); font-size: 11px; margin-top: 2px; }
-.more-sheet button.active, .more-sheet button[aria-current="page"] { background: var(--me-accent-soft); color: var(--me-accent); }
-.more-sheet button.active span:first-child, .more-sheet button.active small { color: var(--me-accent); }
+.more-sheet button small { display: block; color:var(--me-muted); font-size: 11px; margin-top: 2px; }
+.more-sheet button.active, .more-sheet button[aria-current="page"] { background:var(--me-accent-soft); color:var(--me-accent); }
+.more-sheet button.active span:first-child, .more-sheet button.active small { color:var(--me-accent); }
 @media (max-width: 760px) {
   .mobile-tabbar { display: grid; grid-template-columns: repeat(3, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
-    background: var(--me-surface); border-top: 1px solid var(--me-line); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); }
-  .mobile-tabbar button { border: 0; background: transparent; color: var(--me-muted); display: grid; justify-items: center; gap: 2px; font-size: 11px; padding: 4px 0; }
+    background:var(--me-surface); border-top:1px solid var(--me-line); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); }
+  .mobile-tabbar button { border:0; background:transparent; color:var(--me-muted); display: grid; justify-items: center; gap: 2px; font-size: 11px; padding: 4px 0; }
   .mobile-tabbar button span { font-size: 17px; line-height: 1; }
-  .mobile-tabbar button[aria-current="page"], .mobile-tabbar button.is-active { color: var(--me-accent); font-weight: 600; }
+  .mobile-tabbar button[aria-current="page"], .mobile-tabbar button.is-active { color:var(--me-accent); font-weight: 600; }
   .mobile-tabbar .mobile-more { min-width: 0; }
   .mobile-tabbar .mobile-more > button { width: 100%; }
   .app-content { padding-bottom: calc(62px + env(safe-area-inset-bottom)); }
   .nav-menu-trigger { display: none; }
   .theme-form { display: none; }
-  .mobile-tabbar .more-sheet button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; text-align: left; color: var(--me-ink); font-size: 14px; font-weight: 400; padding: 10px 12px; }
+  .mobile-tabbar .more-sheet button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; text-align: left; color:var(--me-ink); font-size: 14px; font-weight: 400; padding: 10px 12px; }
   .mobile-tabbar .more-sheet button span { font-size: inherit; line-height: 1.3; }
-  .mobile-tabbar .more-sheet button.active, .mobile-tabbar .more-sheet button[aria-current="page"] { color: var(--me-accent); font-weight: 600; background: var(--me-accent-soft); }
+  .mobile-tabbar .more-sheet button.active, .mobile-tabbar .more-sheet button[aria-current="page"] { color:var(--me-accent); font-weight: 600; background:var(--me-accent-soft); }
 }
 
 /* Dark mode: the older sheets paint some surfaces light directly (generated from every rule whose
@@ -324,30 +259,30 @@ body { background: var(--me-bg); color: var(--me-ink); font-family: var(--me-fon
   background: var(--me-surface);
   color: var(--me-ink);
 }
-:root[data-theme="dark"] input, :root[data-theme="dark"] select, :root[data-theme="dark"] textarea { background: var(--me-surface-2); color: var(--me-ink); border-color: var(--me-line-strong); }
+:root[data-theme="dark"] input:where([data-legacy] *:not([data-legacy] [data-slot], [data-legacy] [data-slot] *)), :root[data-theme="dark"] select:where([data-legacy] *:not([data-legacy] [data-slot], [data-legacy] [data-slot] *)), :root[data-theme="dark"] textarea:where([data-legacy] *:not([data-legacy] [data-slot], [data-legacy] [data-slot] *)) { background: var(--me-surface-2); color: var(--me-ink); border-color: var(--me-line-strong); }
 
 .brief-sources { margin: 4px 0 0; padding-left: 0; list-style: none; display: grid; gap: 2px; font-size: 13px; }
-.brief-sources a { color: inherit; text-decoration: underline; }
+.brief-sources a { color:inherit; text-decoration: underline; }
 .task-form { display: grid; gap: 10px; }
 .task-form label { display: grid; gap: 4px; }
 .task-form-row { display: flex; gap: 10px; flex-wrap: wrap; }
 /* Memory layers (stage B): 全局 / each bot. */
 .memory-layer + .memory-layer { margin-top: 14px; }
-.memory-layer-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--me-ink); }
-.memory-scope { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--me-muted); }
-.memory-scope select, .memory-search select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--me-line); border-radius: 8px; background: var(--me-surface); color: var(--me-ink); max-width: 12em; }
-.memory-edit { flex: 1; min-width: 0; font: inherit; padding: 4px 8px; border: 1px solid var(--me-line); border-radius: 8px; background: var(--me-surface); color: var(--me-ink); }
-.memory-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 14px; padding: 10px; border: 1px dashed var(--me-line); border-radius: 10px; }
+.memory-layer-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; color:var(--me-ink); }
+.memory-scope { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color:var(--me-muted); }
+.memory-scope select, .memory-search select { font: inherit; font-size: 13px; padding: 4px 8px; border:1px solid var(--me-line); border-radius: 8px; background:var(--me-surface); color:var(--me-ink); max-width: 12em; }
+.memory-edit { flex: 1; min-width: 0; font: inherit; padding: 4px 8px; border:1px solid var(--me-line); border-radius: 8px; background:var(--me-surface); color:var(--me-ink); }
+.memory-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 14px; padding: 10px; border:1px dashed var(--me-line); border-radius: 10px; }
 .memory-add .memory-edit { flex: 1 1 16em; padding: 6px 10px; }
 .skill-card { display: grid; gap: 8px; align-content: start; }
 .skill-card .memory-line h2 { margin: 0; }
 .skill-group { display: grid; gap: 8px; margin-top: 18px; }
 .skill-group > h2 { font-size: 14px; margin: 0; }
 .skill-tools { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0; padding: 0; }
-.skill-tool-list { display: grid; gap: 4px; border: 1px solid var(--me-line); border-radius: 8px; padding: 8px 10px; }
+.skill-tool-list { display: grid; gap: 4px; border:1px solid var(--me-line); border-radius: 8px; padding: 8px 10px; }
 .skill-editor, .skill-import { margin: 12px 0; }
 .skill-editor textarea, .skill-import textarea { font: inherit; width: 100%; box-sizing: border-box; }
-.skill-picker { position: absolute; left: 0; right: 0; bottom: 100%; z-index: 5; margin: 0 0 4px; padding: 4px; list-style: none; background: var(--c-surface, #fff); border: 1px solid var(--c-line-strong, #ccc); border-radius: 8px; max-height: 260px; overflow: auto; }
+.skill-picker { position: absolute; left: 0; right: 0; bottom: 100%; z-index: 5; margin: 0 0 4px; padding: 4px; list-style: none; background:var(--c-surface, var(--surface)); border:1px solid var(--c-line-strong, #ccc); border-radius: 8px; max-height: 260px; overflow: auto; }
 .skill-picker li { display: grid; gap: 2px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-.skill-picker li[aria-selected="true"], .skill-picker li:hover { background: var(--c-hover, rgba(127,127,127,.15)); }
-.skill-picker small { color: var(--c-muted, #666); }
+.skill-picker li[aria-selected="true"], .skill-picker li:hover { background:var(--c-hover, rgba(127,127,127,.15)); }
+.skill-picker small { color:var(--c-muted, #666); }

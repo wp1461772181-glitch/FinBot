@@ -1,9 +1,13 @@
 // Bot avatar: the bloub engine (src/bloub, vendored, MIT — see THIRD_PARTY_NOTICES.md) rendered as SVG from React.
 // The engine is clockless: `sample(t)` is a pure function, so this component only owns a clock and draws what it returns.
-// All live avatars share one requestAnimationFrame loop; `frozenAt` draws a single still frame with no loop at all.
+// All running avatars share one requestAnimationFrame loop; `frozenAt` draws a single still frame with no loop at all.
+// A small (non-live) avatar joins that loop only while something moves its picture (bloub-frames.needsFrames): answering,
+// unread, a hovered row, or the engine still settling after one of those. Idle and untouched, it is a still frame with a
+// CSS breath (`.bot-breathe`, styles/bots.css) and costs no frames and no React renders.
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { NOTIF_BLUE } from "./bloub/decor";
 import { BotEngine, type BotFrame } from "./bloub/engine";
+import { liveliness } from "./bloub/face";
 import { DEMI_VIEWBOX, RAYON } from "./bloub/repere";
 import { EXPRESSION_BY_ID } from "./bloub/expressions";
 import { COLOR_BY_ID, DEFAULT_COLOR, DEFAULT_SHAPE, SHAPE_BY_ID, mixHex } from "./bloub/skins";
@@ -11,6 +15,7 @@ import type { StateId } from "./bloub/states";
 import type { Director } from "./bloub-director.mjs";
 import { CALM, MOOD_MORPH, moodAt } from "./bloub-mood.mjs";
 import { rowAim, type RowGazeHandle } from "./row-gaze.mjs";
+import { frameDemand, needsFrames } from "./bloub-frames.mjs";
 import { ENGAGE_TIME, aimFromPointer, easeOutQuint, followLook, pointerFresh, tourLook } from "./bloub-gaze.mjs";
 
 export type BloubState = StateId;
@@ -22,6 +27,7 @@ const nowSec = () => performance.now() / 1000;
 /** Eyes lag a frame behind a freshly set script otherwise (127 px jump in bloub); see BloubBot.vue SCRIPT_MORPH. */
 const SCRIPT_MORPH = 1 / 60;
 
+let breathSeq = 0;
 type Tick = (dt: number) => void;
 const subscribers = new Set<Tick>();
 let raf = 0, lastMs = 0;
@@ -70,8 +76,15 @@ export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, 
   const [frame, setFrame] = useState<BotFrame>(() => engine.current!.sample(still ?? 0));
   const svgRef = useRef<SVGSVGElement | null>(null);
   const gaze = useRef({ aiming: false, since: 0 });
+  // Non-live avatars only: the frame loop's on/off switch (set by the loop effect), the clock time they were last busy,
+  // and whether they are resting as a still frame (drives the CSS breath).
+  const loop = useRef<{ wake: () => void } | null>(null);
+  const quietSince = useRef(-Infinity);
+  const [parked, setParked] = useState(() => !live && still === undefined && !needsFrames({ state, hovered: Boolean(rowGaze) }));
   const intro = useRef({ on: false, since: 0 });
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  // Resting avatars breathe out of step with each other: a fixed negative delay per instance (golden-ratio spacing), within the 4 s period of `.bot-breathe`.
+  const breathDelay = useMemo(() => `-${((breathSeq++ * 1.618) % 4).toFixed(2)}s`, []);
   const maskId = `bloub-mask-${uid}`;
 
   // Prop changes go to the engine with the current clock so it morphs instead of jumping.
@@ -79,13 +92,29 @@ export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, 
   useEffect(() => { if (liveRef.current && intro.current.on) return; engine.current!.setShape(radii, clock.current); if (still !== undefined) setFrame(engine.current!.sample(still)); }, [radii, still]);
   useEffect(() => {
     if (still !== undefined) return;
-    return subscribe(dt => {
+    let off: (() => void) | null = null;
+    const tick: Tick = dt => {
       clock.current += dt;
-      if (liveRef.current) drive(liveRef.current);
-      else { rowMood(); if (rowGazeRef.current || gaze.current.aiming) steerRow(rowGazeRef.current?.pointer ?? null); } // nothing else runs for a row nobody hovers
+      if (liveRef.current) { drive(liveRef.current); setFrame(engine.current!.sample(clock.current)); return; }
+      rowMood(); if (rowGazeRef.current || gaze.current.aiming) steerRow(rowGazeRef.current?.pointer ?? null); // nothing else runs for a row nobody hovers
       setFrame(engine.current!.sample(clock.current));
-    });
-  }, [still]); // eslint-disable-line react-hooks/exhaustive-deps
+      // Back to a still frame once nothing moves the picture and the engine has settled (eyes open: never rest mid-blink).
+      const input = { state: stateRef.current, hovered: Boolean(rowGazeRef.current), aiming: gaze.current.aiming };
+      if (frameDemand(input)) quietSince.current = clock.current;
+      else if (!needsFrames({ ...input, quietFor: clock.current - quietSince.current }) && liveliness(clock.current, { wander: 0, float: false }).lid >= 1) { off?.(); off = null; setParked(true); }
+    };
+    const wake = () => { if (off) return; off = subscribe(tick); setParked(false); };
+    loop.current = { wake };
+    if (liveRef.current || needsFrames({ state: stateRef.current, hovered: Boolean(rowGazeRef.current) })) wake();
+    return () => { off?.(); off = null; loop.current = null; };
+  }, [Boolean(live), still]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Something changed that a resting avatar must animate (a state, a hover, a new silhouette): get frames for a while.
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) { mounted.current = true; return; }
+    quietSince.current = clock.current;
+    loop.current?.wake();
+  }, [state, Boolean(rowGaze), radii]);
 
   // The work face: same sequence as the main avatar's (bloub-mood). A row only knows "running", so it plays the waiting sequence.
   function setMood(id: string, morph = MOOD_MORPH) {
@@ -147,7 +176,7 @@ export function BloubAvatar({ state = "idle", size = 40, color = DEFAULT_COLOR, 
       ? <path key={key} d={d.d} style={{ fill }} opacity={d.opacity} transform={`translate(${d.x} ${d.y}) rotate(${d.rot ?? 0}) scale(${RAYON})`} />
       : <circle key={key} cx={d.x} cy={d.y} r={d.r} style={{ fill }} opacity={d.opacity} />;
   };
-  return <svg ref={svgRef} className={`bloub-avatar ${className ?? ""}`.trim()} width={size} height={size} viewBox={`${-view} ${-view} ${view * 2} ${view * 2}`} aria-hidden="true" focusable="false" style={{ overflow: "visible" }}>
+  return <svg ref={svgRef} className={`bloub-avatar${parked ? " bot-breathe" : ""} ${className ?? ""}`.trim()} width={size} height={size} viewBox={`${-view} ${-view} ${view * 2} ${view * 2}`} aria-hidden="true" focusable="false" style={parked ? { overflow: "visible", animationDelay: breathDelay } : { overflow: "visible" }}>
     <defs>
       <mask id={maskId} maskUnits="userSpaceOnUse" x={-DEMI_VIEWBOX} y={-DEMI_VIEWBOX} width={DEMI_VIEWBOX * 2} height={DEMI_VIEWBOX * 2}>
         <path d={frame.bodyPath} fill="#fff" />
