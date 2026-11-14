@@ -7,11 +7,11 @@ import { PERSONA_PRESETS, presetFor, presetLook } from "./bot-persona-presets.mj
 export const ARCHETYPES = ["lead", "tracker", "sentinel", "reader", "generalist"];
 export const EASINGS = ["smooth", "spring", "step"];
 export const REST_GAZES = ["follow", "ahead-right", "scan", "down", "front"];
-/** Aura families (3 variants each; A2 draws them, A1 only needs the names).  Tracker's three are fixed by 6.4/6.5. */
+/** Aura families (3 variants each, drawn by src/aura: see aura/index.mjs for the variant -> file table).  Tracker's three are fixed by 6.4/6.5. */
 export const AURA_VARIANTS = {
   lead: ["ticks", "gauge", "pips"],
   tracker: ["speed-lines", "halo", "reticle"],
-  sentinel: ["bulletin", "morse", "beacon"],
+  sentinel: ["ticker", "morse", "beacon"],
   reader: ["page-lines", "margin-ticks", "underline"],
   generalist: ["orbit-dots", "twin-dots", "trio"]
 };

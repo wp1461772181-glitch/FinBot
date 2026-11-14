@@ -14,21 +14,25 @@ export interface DirectorView { state: string; layer: "work" | "notify" | "react
   follow: boolean; intro: boolean; expression: string; moodMorph: number;
   /** The face a still frame of this pose wears (reduced motion; `expression` stays calm there). */
   still: string;
-  /** Where the eyes go: follow (the pointer) / ahead-right / scan / down / front are a persona's rest gazes; side (a tool runs) and below (listening, verifying) are work gazes. */
-  gaze: "follow" | "ahead-right" | "scan" | "down" | "front" | "side" | "below";
+  /** Where the eyes go: follow (the pointer) / ahead-right / scan / down / front are a persona's rest gazes; side / side-left / below / sweep (a tool runs: toward where the aura is) and below (listening, verifying) are work gazes. */
+  gaze: "follow" | "ahead-right" | "scan" | "down" | "front" | "side" | "side-left" | "sweep" | "below";
   /** Degrees the whole body leans (the tracker's forward lean while resting). */
   tilt: number;
   /** The last turn ended waiting for you ("waiting": until the next turn starts or `waiting-clear`) or partially succeeded ("partial": for T.PARTIAL seconds); otherwise null. */
   ended: "waiting" | "partial" | null;
   /** The amber dot is up (the waiting-for-you pose). */
   waitingForUser: boolean;
+  /** How the last turn ended (null until a turn has ended, and again once the next one starts) and the real seconds since: the aura plays its own end beat from these. */
+  outcome: TurnOutcome | null; outcomeAge: number | null;
   /** Progress 0..1 of the partial nod (the body drops 4% and comes back), null when there is none. */
   nod: number | null;
   /** Offline: half the colour is taken out of the (frozen) idle frame. */
   dim: boolean;
   /** Nothing moves any more (asleep for T.SLEEP_FREEZE, offline, a settled waiting-for-you): draw this frame and stop the loop until something is sent. */
   frozen: boolean;
-  tempo: number; easing: "smooth" | "spring" | "step"; archetype: string }
+  tempo: number; easing: "smooth" | "spring" | "step"; archetype: string;
+  /** The persona's aura variant (src/aura/index.mjs). */
+  aura: string }
 export interface Director { send(event: DirectorEvent, now: number): void; read(now: number): DirectorView }
 export interface DirectorPersona { archetype: string; tempo: number; easing: "smooth" | "spring" | "step"; restGaze: string; auraVariant: string }
 /** The state table of one personality (the default `S` plus that archetype's click reactions). */

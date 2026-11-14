@@ -338,7 +338,15 @@ export const PAGES = [
   // A1: the five bots on the sample page, all in the same state; reduced-motion still frames (the face, the look, the badges of the pose).
   ...["idle", "listening", "thinking", "tool", "verify", "answer", "waiting", "done", "partial", "failed", "offline", "sleep"].map((state) => (
     { name: `dev-kit-bots-${state}`, hash: "#/dev/kit/bots", ready: "[data-testid=bots-page]",
-      before: async (page) => { await page.locator(`[data-scenario=${state}]`).click(); } })),
+      before: async (page) => { await page.locator(`[data-scenario=${state === "tool" ? "tool3" : state}]`).click(); } })),
+  // A2: the aura of each of the five bots in the still frames of reduced motion (what the shots run with), one bot's card per picture, light and dark:
+  // tool x3, check, done, partial, failed, waiting for you.  Tier M: two examples.
+  ...["FinBot", "TeslaBot", "NewsBot", "AppleBot", "ReportBot"].flatMap((bot) => ["tool3", "verify", "done", "partial", "failed", "waiting"].map((scenario) => (
+    { name: `dev-kit-aura-${bot.toLowerCase()}-${scenario}`, hash: "#/dev/kit/bots", ready: "[data-testid=bots-page]", element: `[data-testid=bot-sample-${bot}]`,
+      before: async (page) => { await page.locator(`[data-scenario=${scenario}]`).click(); } }))),
+  ...[["TeslaBot", "tool3"], ["ReportBot", "verify"]].map(([bot, scenario]) => (
+    { name: `dev-kit-aura-m-${bot.toLowerCase()}-${scenario}`, hash: "#/dev/kit/bots", ready: "[data-testid=bots-page]", element: `[data-testid=bot-sample-m-${bot}]`,
+      before: async (page) => { await page.locator(`[data-scenario=${scenario}]`).click(); } })),
   { name: "dev-kit-menu", hash: "#/dev/kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); } },
 ];

@@ -24,6 +24,7 @@ import { CALM, MOOD_MORPH, moodAt, MOODS_BY_ARCHETYPE } from "./bloub-mood.mjs";
 import { awaitsUser } from "./chat-clarification.mjs";
 import { turnSignal } from "./turn-signals.mjs";
 import { T } from "./bloub-timing.mjs";
+import { toolGaze } from "./aura/gaze.mjs";
 
 export { T };
 
@@ -68,7 +69,7 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
   const moods = MOODS_BY_ARCHETYPE[who.archetype] ?? MOODS_BY_ARCHETYPE.lead;
   const m = {
     reduced: reducedMotion, lastActivity: now,
-    turn: null, stinger: null, ended: null, unread: false, offline: false, listening: null,
+    turn: null, stinger: null, ended: null, last: null, unread: false, offline: false, listening: null,
     hover: { on: false, since: 0, used: false }, click: null, clicks: 0,
     introUntil: -Infinity,
     held: { state: table.idle, layer: "idle", pose: "idle", changedAt: -Infinity }
@@ -109,7 +110,7 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
       switch (event.type) {
         case "turn-start":
           m.turn = { phase: "waiting", since: t, phaseSince: t, quiet: Boolean(event.quiet) };
-          m.stinger = null; m.click = null; m.ended = null; m.listening = null;
+          m.stinger = null; m.click = null; m.ended = null; m.listening = null; m.last = null;
           break;
         case "phase": {
           const phase = PHASE_ALIAS[event.phase] ?? event.phase;
@@ -122,6 +123,7 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
         case "turn-end": {
           const was = m.turn; m.turn = null;
           if (!was) break;
+          m.last = { outcome: event.outcome, since: t }; // the aura keeps its own end beat (aura/track.mjs), longer than the nod and not cut by reduced motion
           // "waiting" stays until you answer (the next turn) or the card runs out (`waiting-clear`); "partial" is a short beat.
           m.ended = event.outcome === "waiting" ? { outcome: "waiting", since: t, until: Infinity }
             : event.outcome === "partial" ? { outcome: "partial", since: t, until: t + T.PARTIAL } : null;
@@ -167,7 +169,7 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
   function gazeOf(pose) {
     switch (pose) {
       case "listen": case "verify": return "below";
-      case "tool": return "side";
+      case "tool": return toolGaze(who.auraVariant);
       case "hold": case "offline": return "front";
       case "idle": return who.restGaze;
       default: return "front"; // a body that owns its own gaze (orbit, wink, alert...): the engine ignores it there
@@ -195,9 +197,10 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
       state, layer, pose, follow: !m.reduced && idle && gaze === "follow", intro: idle && t < m.introUntil, expression, moodMorph: MOOD_MORPH, ended,
       still, gaze, tilt: idle && pose === "idle" && gaze === "ahead-right" ? 6 : 0, // a lean is a posture, not motion: reduced-motion still frames keep it
       waitingForUser: pose === "hold",
+      outcome: m.last?.outcome ?? null, outcomeAge: m.last ? Math.max(0, t - m.last.since) : null,
       nod: ended === "partial" ? Math.min(1, Math.max(0, (t - m.ended.since) / T.PARTIAL)) : null,
       dim: offline, frozen: Boolean(resting),
-      tempo: who.tempo, easing: who.easing, archetype: who.archetype
+      tempo: who.tempo, easing: who.easing, archetype: who.archetype, aura: who.auraVariant
     };
   }
 }

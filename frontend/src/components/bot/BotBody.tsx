@@ -21,7 +21,7 @@ import { ENGAGE_TIME, easeOutQuint, followLook, restLook } from "../../bloub-gaz
 import { FULL_TIERS, tierOf } from "../../bot-sizes.mjs";
 import { claimFullLoop, subscribe, type Tick } from "./bot-loop";
 import type { DriveEnv } from "./live-drive";
-import { VIEW, createPainter, type AuraFn, type Painter, type PaintStyle } from "./bot-painter";
+import { VIEW, createPainter, type Painter, type PaintStyle } from "./bot-painter";
 
 export type BloubState = StateId;
 
@@ -55,8 +55,9 @@ export interface BotBodyProps {
   /** Seconds into the state. Set: one still frame, no animation loop (tiny icons, reduced motion). */
   frozenAt?: number;
   paper?: string; className?: string;
-  /** The aura slot (A2 draws into it); nothing is drawn while it is absent. */
-  aura?: AuraFn;
+  /** The aura of a still frame (reduced motion, the sample page): called with the group the aura draws into whenever the frame is painted.
+   * A live avatar's aura is drawn per frame by `live.drive` instead. */
+  auraStill?: (host: SVGGElement, style: PaintStyle) => void;
   /** The face of a still frame (a work pose in reduced motion); calm when absent. */
   expression?: string;
   /** Still frames: the amber dot of waiting-for-you, and the half-grey of offline. */
@@ -69,7 +70,7 @@ export interface BotBodyProps {
   unlimited?: boolean;
 }
 
-export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shape = DEFAULT_SHAPE, frozenAt, paper = "#f9f9f9", className, live, rowGaze, aura, expression, waiting = false, dim = false, tempo = 1, gazeKind, tilt = 0, unlimited = false }: BotBodyProps) {
+export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shape = DEFAULT_SHAPE, frozenAt, paper = "#f9f9f9", className, live, rowGaze, auraStill, expression, waiting = false, dim = false, tempo = 1, gazeKind, tilt = 0, unlimited = false }: BotBodyProps) {
   const tier = tierOf(size);
   const full = FULL_TIERS.includes(tier) && !unlimited;
   const still = frozenAt ?? (tier === "XS" || reducedMotion() ? 0 : undefined);
@@ -77,7 +78,7 @@ export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shap
   const rowGazeRef = useRef(rowGaze); rowGazeRef.current = rowGaze;
   const stateRef = useRef(state); stateRef.current = state;
   const tempoRef = useRef(tempo); tempoRef.current = tempo;
-  const auraRef = useRef(aura); auraRef.current = aura;
+  const auraStillRef = useRef(auraStill); auraStillRef.current = auraStill;
   const radii = useMemo(() => SHAPE_BY_ID.get(shape)?.radii ?? null, [shape]);
   const radiiRef = useRef<number[] | null>(null); radiiRef.current = radii;
   const hex = COLOR_BY_ID.get(color)?.hex ?? "#0a0a0c";
@@ -106,6 +107,7 @@ export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shap
   const paintNow = () => {
     const eng = engine.current!;
     painter.current?.paint(eng.sample(still !== undefined ? still + stillAfter(stateRef.current) : clock.current), styleRef.current);
+    if (painter.current) auraStillRef.current?.(painter.current.auraHost, styleRef.current);
   };
   const markParked = (on: boolean) => {
     parked.current = on;
@@ -127,6 +129,8 @@ export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shap
 
   // Static extras follow their props (a live avatar sets these per frame instead).
   useLayoutEffect(() => { if (liveRef.current) return; painter.current?.setWaiting(waiting); painter.current?.place(tilt, 0); }, [waiting, live, tilt]);
+  // A still frame's aura follows the owner (it changes with every state the owner shows).
+  useLayoutEffect(() => { if (painter.current && auraStill) auraStill(painter.current.auraHost, styleRef.current); });
 
   // Prop changes go to the engine with the current clock so it morphs instead of jumping.
   useEffect(() => {
@@ -177,7 +181,7 @@ export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shap
       if (h) {
         const view = h.director.read(nowSec());
         clock.current += dt * view.tempo;
-        h.drive?.({ eng: engine.current!, painter: painter.current!, svg, clock: clock.current, color, size: sizeRef.current.size, tier: sizeRef.current.tier, radii: radiiRef, gaze, intro, motion, aura: auraRef, setMood, setFace }, h, view, dt);
+        h.drive?.({ eng: engine.current!, painter: painter.current!, svg, clock: clock.current, style: styleRef.current, size: sizeRef.current.size, tier: sizeRef.current.tier, radii: radiiRef, gaze, intro, motion, setMood, setFace }, h, view, dt);
         painter.current?.paint(engine.current!.sample(clock.current), styleRef.current);
         if (view.frozen) setWant(false); // this frame is the still one: stop until the owner sends something
         return;

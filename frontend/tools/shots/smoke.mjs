@@ -3291,18 +3291,174 @@ async function avatarRestGaze(ctx) {
     }), BOT_NAMES);
     await page.waitForTimeout(1500);
     const rest = await eyes();
-    await page.locator("[data-scenario=tool]").click();
+    await page.locator("[data-scenario=tool3]").click();
     await page.waitForTimeout(2000);
     const tool = await eyes();
     const toolGaze = await page.evaluate((names) => names.map((name) => document.querySelector(`[data-testid="bot-sample-${name}"] svg[data-slot=bot-body]`).getAttribute("data-gaze")), BOT_NAMES);
-    assert(toolGaze.every((g) => g === "side"), `with a tool running the gazes are ${toolGaze}, not all side`);
+    // A2: with a tool running every bot looks toward its own aura: speed lines left, page lines right, the ticker below, the dial / halo after the moving point
+    assert(JSON.stringify(toolGaze) === JSON.stringify(["sweep", "side-left", "below", "sweep", "side"]), `with a tool running the gazes are ${toolGaze}`);
     const bad = [];
-    const apple = BOT_NAMES.indexOf("AppleBot"), report = BOT_NAMES.indexOf("ReportBot");
-    if (!(rest[apple].n === 2 && tool[apple].n === 2)) bad.push("AppleBot's eyes are not both drawn");
-    else if (tool[apple].x - rest[apple].x < 2) bad.push(`AppleBot (resting: front) did not look to the side: x ${rest[apple].x.toFixed(1)} -> ${tool[apple].x.toFixed(1)}`);
+    const tesla = BOT_NAMES.indexOf("TeslaBot"), report = BOT_NAMES.indexOf("ReportBot");
+    if (!(rest[tesla].n === 2 && tool[tesla].n === 2)) bad.push("TeslaBot's eyes are not both drawn");
+    else if (rest[tesla].x - tool[tesla].x < 4) bad.push(`TeslaBot (resting: ahead-right) did not look left, to its speed lines: x ${rest[tesla].x.toFixed(1)} -> ${tool[tesla].x.toFixed(1)}`);
     if (rest[report].y - tool[report].y < 2) bad.push(`ReportBot (resting: down) did not lift its eyes: y ${rest[report].y.toFixed(1)} -> ${tool[report].y.toFixed(1)}`);
     assert(!bad.length, bad.join("; "));
-    return `resting gazes ${gazes.join(" / ")}; tool: all side; AppleBot eyes +${(tool[apple].x - rest[apple].x).toFixed(1)} x, ReportBot eyes ${(tool[report].y - rest[report].y).toFixed(1)} y`;
+    return `resting gazes ${gazes.join(" / ")}; tool: ${toolGaze.join(" / ")}; TeslaBot eyes ${(tool[tesla].x - rest[tesla].x).toFixed(1)} x (left), ReportBot eyes ${(tool[report].y - rest[report].y).toFixed(1)} y`;
+  } finally { await view.close(); }
+}
+
+// --- A2: the aura (the avatar's companion: units that follow the evidence, a closing shape, a broken one) -----------------------------------
+
+const HEADER_AURA = '[data-testid=chat-header] [data-slot=bot-aura]';
+const TOOL_OK = { ok: true, data: [{ price: 1 }] }, TOOL_EMPTY = { ok: true, data: [] };
+
+/** A hand-fed turn of TeslaBot on the real chat page, with a recorder in the page that sees every distinct unit count, form, phase and colour the aura takes. */
+async function auraTurn(ctx, label, run) {
+  const view = await openChatMotion(ctx, label);
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await pressBotRow(page, "TeslaBot");
+    await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator(HEADER_AURA).waitFor({ state: "attached", timeout: 10000 });
+    await page.evaluate((sel) => {
+      const seen = window.__aura = { units: [], forms: new Set(), phases: new Set(), colors: new Set(), nodes: [] };
+      const loop = () => {
+        const host = document.querySelector(sel);
+        if (host) {
+          const units = Number(host.getAttribute("data-aura-units") ?? 0);
+          if (seen.units[seen.units.length - 1] !== units) seen.units.push(units);
+          seen.forms.add(host.getAttribute("data-aura-form")); seen.phases.add(host.getAttribute("data-aura-phase"));
+          for (const node of host.children) if (node.getAttribute("display") !== "none") { seen.colors.add(node.style.fill); seen.colors.add(node.style.stroke); }
+        }
+        requestAnimationFrame(loop);
+      };
+      loop();
+    }, HEADER_AURA);
+    await page.locator("#agent-draft").fill(`${HAND_MARKER} 光环测试`);
+    await page.locator("[data-testid=send]").click();
+    await hand.opened(0);
+    await hand.push(0, "conversation", turnEvent("a1"));
+    return await run({ page, hand });
+  } finally { await view.close(); }
+}
+const auraAttr = (page, name) => page.locator(HEADER_AURA).getAttribute(name);
+const waitUnits = (page, n) => page.waitForFunction(([sel, want]) => document.querySelector(sel)?.getAttribute("data-aura-units") === String(want), [HEADER_AURA, n], { timeout: 5000 });
+const toolCall = async (hand, id, result) => { await hand.push(0, "tool_start", { call_id: id, name: "get_quote", arguments: {} }); await new Promise((r) => setTimeout(r, 250)); await hand.push(0, "tool_result", { call_id: id, result }); };
+
+async function auraUnitsFollowResults(ctx) {
+  return auraTurn(ctx, "aura-units-follow-results", async ({ page, hand }) => {
+    // the director keeps the first state it enters for 0.6 s: the aura is drawn from the tool pose on
+    await page.waitForTimeout(900);
+    const counts = [];
+    await toolCall(hand, "c1", TOOL_OK); await waitUnits(page, 1); counts.push(await auraAttr(page, "data-aura-units"));
+    await toolCall(hand, "c2", TOOL_OK); await waitUnits(page, 2); counts.push(await auraAttr(page, "data-aura-units"));
+    await toolCall(hand, "c3", TOOL_EMPTY); await page.waitForTimeout(700); counts.push(await auraAttr(page, "data-aura-units"));
+    await toolCall(hand, "c4", TOOL_OK); await waitUnits(page, 3); counts.push(await auraAttr(page, "data-aura-units"));
+    assert(counts.join(",") === "1,2,2,3", `unit nodes after each call: ${counts} (want 1,2,2,3: an empty result adds none)`);
+    const nodes = await page.locator(`${HEADER_AURA} [data-aura-unit]`).count();
+    assert(nodes === 3, `${nodes} unit nodes in the svg`);
+    await hand.push(0, "done", { status: "complete", turn_id: turnEvent("a1").turn_id, thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(0);
+    return `4 calls (one empty): unit nodes ${counts.join(" -> ")}`;
+  });
+}
+
+/** After the answer: the shape the turn ends in (read from the aura's own marks; recorded every frame, the beats are short), then back to rest. */
+async function auraEnding(ctx, label, finish, want, phase) {
+  return auraTurn(ctx, label, async ({ page, hand }) => {
+    await page.waitForTimeout(900);
+    await toolCall(hand, "c1", TOOL_OK); await toolCall(hand, "c2", TOOL_OK); await toolCall(hand, "c3", TOOL_OK); await waitUnits(page, 3);
+    await hand.push(0, "delta", { text: "结论。" });
+    await finish(hand);
+    await page.waitForFunction(([sel, form]) => window.__aura.forms.has(form), [HEADER_AURA, want], { timeout: 5000 });
+    const seen = await page.evaluate(() => ({ forms: [...window.__aura.forms], phases: [...window.__aura.phases] }));
+    assert(seen.phases.includes(phase), `phases seen: ${seen.phases}; no ${phase}`);
+    if (phase === "error") { // the failure holds (about two seconds), then the aura returns to rest
+      await page.waitForTimeout(900);
+      assert((await auraAttr(page, "data-aura-form")) === "broken", "the broken shape did not hold");
+    }
+    await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("data-aura-phase") === "idle" && document.querySelector(sel)?.getAttribute("data-aura-units") === "0", HEADER_AURA, { timeout: 6000 });
+    return `${seen.phases.join(" > ")}; forms seen: ${seen.forms.filter((f) => f !== "none").join(", ")}; back to rest`;
+  });
+}
+const doneEvent = (status) => (hand) => hand.push(0, "done", { status, turn_id: turnEvent("a1").turn_id, thinking_ms: 500, citations: [], citation_protocol: null }).then(() => hand.close(0));
+const auraClosesOnDone = (ctx) => auraEnding(ctx, "aura-closes-on-done", doneEvent("complete"), "closed", "done");
+const auraGapOnPartial = (ctx) => auraEnding(ctx, "aura-gap-on-partial", doneEvent("partially_succeeded"), "gap", "partial");
+const auraBreaksOnError = (ctx) => auraEnding(ctx, "aura-breaks-on-error", (hand) => hand.push(0, "error", { code: "chat_failed" }), "broken", "error");
+
+/** Every colour the aura shows is the bot's own, the page ink, or amber / red (design 6.2): never a second hue.  The five bots, every state. */
+async function auraSingleHue(ctx) {
+  const view = await openBotsPage(ctx, "aura-single-hue");
+  try {
+    const { page } = view;
+    const found = new Map();
+    const sample = async () => {
+      const rows = await page.evaluate((names) => names.flatMap((name) => {
+        const svg = document.querySelector(`[data-testid="bot-sample-${name}"] svg[data-slot=bot-body]`);
+        const body = svg.querySelector("[mask] rect").style.fill;
+        const host = svg.querySelector("[data-slot=bot-aura]");
+        return [...host.children].filter((n) => n.getAttribute("display") !== "none").map((n) => ({ name, body, fill: n.style.fill, stroke: n.style.stroke }));
+      }), BOT_NAMES);
+      for (const row of rows) for (const colour of [row.fill, row.stroke]) if (colour && colour !== "none") found.set(`${row.name}|${colour}`, row.body);
+    };
+    // the scripted turns of the sample page end 4.2 s after the click (done / partial / failed): sample past the end beat
+    for (const scenario of ["tool5", "verify", "answer", "waiting", "done", "partial", "failed", "idle"]) {
+      await page.locator(`[data-scenario=${scenario}]`).click();
+      const frames = ["done", "partial", "failed"].includes(scenario) ? 40 : 16;
+      for (let i = 0; i < frames; i += 1) { await sample(); await page.waitForTimeout(180); }
+    }
+    const allowed = ["var(--me-ink, #0a0a0c)", "var(--action, #9a4a06)", "var(--danger, #c4281c)"];
+    const bad = [...found].filter(([key, body]) => { const colour = key.split("|")[1]; return colour !== body && !allowed.includes(colour); }).map(([key]) => key);
+    assert(!bad.length, `colours that are neither the bot's own, the ink, amber nor red: ${bad.join("; ")}`);
+    const kinds = new Set([...found.keys()].map((key) => key.split("|")[1]));
+    const seen = [...found.keys()].map((key) => key.split("|")[1]);
+    assert(seen.includes("var(--danger, #c4281c)") && seen.includes("var(--action, #9a4a06)") === false, "the failed turn never showed red, or amber appeared in an aura (the amber dot is the body's, not the aura's)");
+    assert(found.size >= 6, "almost no aura was seen at all");
+    return `${found.size} (bot, colour) pairs over 8 states, all the bot's own / ink / amber / red (${[...kinds].length} distinct colours)`;
+  } finally { await view.close(); }
+}
+
+async function auraNoneOnSmall(ctx) {
+  const view = await openChatMotion(ctx, "aura-none-on-small");
+  try {
+    const { page } = view;
+    await page.locator("[data-testid=message][data-role=assistant]").first().waitFor({ timeout: 10000 });
+    const report = await page.evaluate(() => [...document.querySelectorAll("svg[data-slot=bot-body]")].map((svg) => ({
+      tier: svg.getAttribute("data-tier"), inHeader: Boolean(svg.closest("[data-testid=chat-header]")), nodes: svg.querySelector("[data-slot=bot-aura]")?.children.length ?? -1
+    })));
+    const small = report.filter((row) => row.tier === "S" || row.tier === "XS");
+    assert(small.length >= 4, `only ${small.length} small avatars on the page`);
+    const bad = small.filter((row) => row.nodes !== 0);
+    assert(!bad.length, `${bad.length} small avatars (${bad.map((row) => row.tier)}) carry aura nodes`);
+    const tiers = [...new Set(small.map((row) => row.tier))];
+    return `${small.length} avatars of tier ${tiers.join(" / ")}: no aura node; the header's own (tier ${report.find((row) => row.inHeader)?.tier}) has ${report.find((row) => row.inHeader)?.nodes} resting nodes`;
+  } finally { await view.close(); }
+}
+
+/** Reduced motion: the aura is a static shape: two frames apart the primitives are identical, and units still count. */
+async function auraReducedStatic(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "aura-reduced-static", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/bots`, { waitUntil: "load" });
+    await page.locator("[data-testid=bots-page] svg[data-slot=bot-body]").nth(4).waitFor({ timeout: 15000 });
+    assert(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches), "the view is not in reduced motion");
+    const html = () => page.evaluate((names) => names.map((name) => document.querySelector(`[data-testid="bot-sample-${name}"] [data-slot=bot-aura]`).outerHTML), BOT_NAMES);
+    const counts = [];
+    for (const scenario of ["tool1", "tool3", "tool5", "verify", "waiting", "done", "failed"]) {
+      await page.locator(`[data-scenario=${scenario}]`).click();
+      await page.waitForTimeout(150);
+      const first = await html();
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      await page.waitForTimeout(500);
+      const second = await html();
+      assert(JSON.stringify(first) === JSON.stringify(second), `${scenario}: the aura changed between two frames in reduced motion`);
+      if (scenario.startsWith("tool")) counts.push(await page.evaluate((names) => names.map((name) => document.querySelector(`[data-testid="bot-sample-${name}"] [data-slot=bot-aura]`).getAttribute("data-aura-units")).join("/"), BOT_NAMES));
+    }
+    // five units: ReportBot's page holds four, the fifth turns the page: one mark on the new page
+    assert(counts[0] === "1/1/1/1/1" && counts[1] === "3/3/3/3/3" && counts[2] === "5/5/5/5/1", `units after tool x1 / x3 / x5: ${counts}`);
+    return `7 states x 5 bots: identical frames; units after tool x1 / x3 / x5 = ${counts.join("  ")}`;
   } finally { await view.close(); }
 }
 
@@ -3401,7 +3557,14 @@ const CHECKS = [
   ["avatar-waiting-pose: a turn that ends in a card leaves the avatar waiting: amber dot up, never a wink, one nudge in 10 s", avatarWaitingPose],
   ["avatar-tempo-differs: the five bots' engine clocks advance in the ratio of their tempos", avatarTempoDiffers],
   ["avatar-ring-hue: the thinking ring is the bot's own hue (ink and grey bots: no colour), never a rainbow", avatarRingHue],
-  ["avatar-rest-gaze: five different resting gazes; the eyes follow the pose's gaze (a tool running looks to the side)", avatarRestGaze],
+  ["aura-units-follow-results: a real turn of tool results (one empty): the header avatar's unit nodes go 1, 2, 2, 3", auraUnitsFollowResults],
+  ["aura-closes-on-done: a finished turn ends in the closed shape, then the aura rests", auraClosesOnDone],
+  ["aura-gap-on-partial: a partly finished turn closes with a gap", auraGapOnPartial],
+  ["aura-breaks-on-error: a failed turn leaves the broken shape for about two seconds", auraBreaksOnError],
+  ["aura-single-hue: the aura of the five bots only ever shows the bot's own colour, the ink, amber or red", auraSingleHue],
+  ["aura-none-on-small: sidebar avatars (S) and message heads (XS) have no aura nodes", auraNoneOnSmall],
+  ["aura-reduced-static: reduced motion: the aura is a static shape, units still count", auraReducedStatic],
+  ["avatar-rest-gaze: five different resting gazes; the eyes follow the pose's gaze (a tool running looks toward its aura)", avatarRestGaze],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

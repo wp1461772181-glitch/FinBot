@@ -71,6 +71,8 @@ export function restLook(kind, t = 0) {
   switch (kind) {
     case "ahead-right": return hold(12, PITCH - 1);
     case "side": return hold(14, PITCH - 2);
+    case "side-left": return hold(-14, PITCH - 2);
+    case "sweep": return hold(0, PITCH + 5); // a moving point is followed (aura/gaze.mjs); this is where a still frame looks
     case "below": return LOOK_BELOW;
     case "front": return LOOK_FRONT;
     case "scan": {

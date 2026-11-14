@@ -36,7 +36,9 @@ for (const page of pages) {
         await waitReady(view.page, page);
         await settle(view.page);
         if (page.before) { await page.before(view.page, { width, mock: view.mock }); await settle(view.page, { pinTranscript: false }); }
-        await view.page.screenshot({ path: path.join(flags.out, file), fullPage: true, animations: "disabled", caret: "hide" });
+        // A page may name one element to photograph (the sample cards of the bots: one picture per bot) instead of the whole page.
+        if (page.element) await view.page.locator(page.element).screenshot({ path: path.join(flags.out, file), animations: "disabled", caret: "hide" });
+        else await view.page.screenshot({ path: path.join(flags.out, file), fullPage: true, animations: "disabled", caret: "hide" });
       } catch (error) {
         entry.ok = false; entry.error = String(error?.message ?? error).split("\n")[0]; failures += 1;
         await view.page.screenshot({ path: path.join(flags.out, file.replace(/\.png$/, ".FAILED.png")), fullPage: true }).catch(() => {});

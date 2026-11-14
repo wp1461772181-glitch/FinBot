@@ -420,13 +420,13 @@ test("listening: the composer has text and no turn runs -> idle body, looking do
   assert.equal(u.read(2.1).state, "notify");
 });
 
-test("work poses (6.3): waiting = orbit; tool = idle body looking to the side; verify = idle body looking down; answer = thinking", () => {
+test("work poses (6.3): waiting = orbit; tool = idle body looking toward its aura; verify = idle body looking down; answer = thinking", () => {
   const d = running(createDirector({ now: 0 }));
   const at = (phase, t) => { d.send({ type: "phase", phase }, t); return d.read(t + 0.7); };
   const waiting = d.read(0.7);
   assert.deepEqual([waiting.state, waiting.layer], ["orbit", "work"]);
   const tool = at("tool", 2);
-  assert.deepEqual([tool.state, tool.layer, tool.gaze, tool.follow, tool.expression], ["idle", "work", "side", false, MOODS_BY_ARCHETYPE.lead.tool[0]]);
+  assert.deepEqual([tool.state, tool.layer, tool.gaze, tool.follow, tool.expression], ["idle", "work", "sweep", false, MOODS_BY_ARCHETYPE.lead.tool[0]]); // the dial turns: the eyes follow its point (A2; was "side")
   const verify = at("verify", 5);
   assert.deepEqual([verify.state, verify.layer, verify.gaze, verify.follow, verify.expression], ["idle", "work", "below", false, "mefiant"]);
   assert.notEqual(tool.state, waiting.state, "waiting and tool are no longer the same body (A3)");
@@ -597,4 +597,31 @@ test("reduced motion: no beats. A finished turn never winks, a failed one keeps 
   assert.equal(m.read(1.3).state, "orbit", "the dwell floor holds the old body for a moment");
   assert.equal(m.read(1.3 + T.DWELL).state, "alert");
   assert.equal(m.read(1.2 + T.ERROR + 0.7).state, "idle");
+});
+
+// ---- A2: the aura's side of the director --------------------------------------------------------------------------------------------------
+test("the tool gaze goes to where the aura is (A2): speed lines left, page lines right, the ticker below, the rest follow the moving point", () => {
+  const gazeOf = variant => {
+    const d = createDirector({ now: 0, persona: { archetype: "tracker", auraVariant: variant } });
+    d.send({ type: "turn-start", quiet: true }, 0); d.send({ type: "phase", phase: "tool" }, 0.1);
+    return d.read(1).gaze;
+  };
+  assert.equal(gazeOf("speed-lines"), "side-left");
+  assert.equal(gazeOf("page-lines"), "side");
+  assert.equal(gazeOf("ticker"), "below");
+  for (const variant of ["ticks", "halo", "reticle", "orbit-dots"]) assert.equal(gazeOf(variant), "sweep", variant);
+});
+
+test("the view says how the last turn ended and how long ago, until the next turn starts (A2: the aura plays its own end beat)", () => {
+  const d = createDirector({ now: 0 });
+  assert.deepEqual([d.read(0.1).outcome, d.read(0.1).outcomeAge], [null, null]);
+  d.send({ type: "turn-start" }, 1); assert.equal(d.read(1.1).outcome, null);
+  d.send({ type: "turn-end", outcome: "partial" }, 4);
+  const v = d.read(5); // the nod (0.6 s) is long over, the outcome is still known
+  assert.equal(v.outcome, "partial"); assert.ok(Math.abs(v.outcomeAge - 1) < 1e-9); assert.equal(v.pose, "idle");
+  d.send({ type: "turn-start" }, 9); assert.equal(d.read(9.1).outcome, null);
+  d.send({ type: "turn-end", outcome: "error" }, 12); assert.equal(d.read(12.1).outcome, "error");
+  const r = createDirector({ now: 0, reducedMotion: true });
+  r.send({ type: "turn-start" }, 1); r.send({ type: "turn-end", outcome: "done" }, 2);
+  assert.equal(r.read(30).outcome, "done", "reduced motion keeps it too: the still frame decides how long to show the closed shape");
 });

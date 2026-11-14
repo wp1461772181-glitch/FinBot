@@ -58,3 +58,14 @@
 
 /* Offline: the bot is a frozen idle frame with half its colour taken out (design 6.3). A static filter: nothing animates. */
 .bloub-avatar[data-dim="true"] { filter: grayscale(0.5); }
+
+/* The sentinel's watch while it sleeps (A2): the signal arcs blink slowly, once in 8 s.  The aura marks them (data `anim: slow-blink`); this is the
+ * whole animation, opacity only, no per-frame work.  Decorative, so it is off with reduced motion (design 6.9). */
+@keyframes aura-watch {
+  0%, 82%, 100% { opacity: 0.12; }
+  90% { opacity: 0.85; }
+}
+.aura-slow-blink { animation: aura-watch 8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .aura-slow-blink { animation: none; }
+}

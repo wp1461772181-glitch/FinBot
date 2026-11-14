@@ -7,7 +7,7 @@ export function aimFromPointer(pointer: { x: number; y: number } | null | undefi
 export function followLook(aim: Aim, engage?: number): Look;
 export function pointerFresh(lastMoveAt: number | null | undefined, now: number): boolean;
 export function tourLook(t: number): Look;
-export type GazeKind = "follow" | "ahead-right" | "scan" | "down" | "front" | "side" | "below";
+export type GazeKind = "follow" | "ahead-right" | "scan" | "down" | "front" | "side" | "side-left" | "sweep" | "below";
 export const SCAN_PERIOD: number, GLANCE_PERIOD: number;
 export const LOOK_BELOW: Look, LOOK_FRONT: Look;
 /** The look a gaze kind asks for at engine-clock `t`; null = the pointer decides ("follow"). */

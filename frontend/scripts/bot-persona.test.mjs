@@ -32,7 +32,7 @@ test("rules (6.4), first hit wins: default > news_monitor > earnings_reader > co
 test("the five existing bots are pinned (D6): each gets its whole preset, source preset", () => {
   const expect = {
     finbot: ["lead", 1, "smooth", "follow", "ticks"], tesla: ["tracker", 1.25, "spring", "ahead-right", "speed-lines"],
-    news: ["sentinel", 1.1, "step", "scan", "bulletin"], apple: ["tracker", 0.9, "smooth", "front", "halo"], report: ["reader", 0.8, "smooth", "down", "page-lines"]
+    news: ["sentinel", 1.1, "step", "scan", "ticker"], apple: ["tracker", 0.9, "smooth", "front", "halo"], report: ["reader", 0.8, "smooth", "down", "page-lines"]
   };
   for (const [key, [archetype, tempo, easing, restGaze, auraVariant]] of Object.entries(expect)) {
     assert.deepEqual(derivePersona(BOTS[key]), { archetype, tempo, easing, restGaze, auraVariant, source: "preset" }, key);

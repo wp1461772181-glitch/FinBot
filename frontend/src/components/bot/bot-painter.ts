@@ -4,19 +4,14 @@ import type { BotFrame } from "../../bloub/engine";
 import { NOTIF_BLUE } from "../../bloub/decor";
 import { DEMI_VIEWBOX, RAYON } from "../../bloub/repere";
 import { mixHex } from "../../bloub/skins";
+import { TONE_LEVELS } from "../../aura/tones.mjs";
 
 const NS = "http://www.w3.org/2000/svg";
 /** Half the visible viewBox: the body is cropped to it, rings may spill past it. */
 export const VIEW = 120;
 
-/** What the aura slot gets (A2 fills it): time on the avatar's clock, the pose, how many tool calls brought something back, the size. */
-export interface AuraContext { t: number; pose: string; units: number; size: number; tier: string; color: string }
-/** One shape of an aura. `tag` is any svg shape; `attrs` are set as given. */
-export interface AuraPrimitive { tag: "circle" | "path" | "line" | "rect" | "ellipse"; attrs: Record<string, string | number> }
-export type AuraFn = (ctx: AuraContext) => ReadonlyArray<AuraPrimitive> | null | undefined;
-
-/** The three opacity steps the thinking rings take on the bot's own colour (start, middle, end of each ring's gradient). */
-export const RING_LEVELS = [0.34, 0.66, 1] as const;
+/** The three opacity steps the thinking rings take on the bot's own colour (start, middle, end of each ring's gradient); the aura's tones 0, 1, 2 are the same three. */
+export const RING_LEVELS = TONE_LEVELS;
 
 export interface PaintStyle {
   /** The colour's own hex (skins.ts). */
@@ -66,9 +61,12 @@ export interface Painter {
   paint(frame: BotFrame, style: PaintStyle): void;
   /** The amber dot of "waiting for you". Constant: never blinks. */
   setWaiting(on: boolean): void;
-  setAura(prims: ReadonlyArray<AuraPrimitive> | null | undefined): void;
-  /** Whole-picture placement: lean in degrees and a vertical offset in viewBox units. */
+  /** The group the aura draws into (aura-paint.ts, loaded with the live avatar: nothing of the aura is in this file). */
+  auraHost: SVGGElement;
+  /** The body's posture (not its aura): lean in degrees and a vertical offset in viewBox units. */
   place(tilt: number, dy: number): void;
+  /** The body alone (not its aura): a step aside in viewBox units, a lean in degrees, a scale about the centre (the aura's own body motions). */
+  move(dx: number, tilt: number, scale: number): void;
 }
 
 export function createPainter(svg: SVGSVGElement, uid: string): Painter {
@@ -82,7 +80,9 @@ export function createPainter(svg: SVGSVGElement, uid: string): Painter {
   const gradients = make("g");
   defs.append(mask, gradients);
 
-  const root = make("g", { "data-slot": "bot-motion" });
+  const root = make("g");
+  const lean = make("g", { "data-slot": "bot-motion" }); // the body's posture: the lean and the nod (the aura keeps level, the amber dot stays where it is)
+  const figure = make("g"); // the body and its rings: what an aura may move without moving itself
   const arcsBack = make("g", { fill: "none", "stroke-linecap": "round" });
   const dotsBehind = make("g");
   const bodyGroup = make("g");
@@ -103,13 +103,14 @@ export function createPainter(svg: SVGSVGElement, uid: string): Painter {
   waitingRing.style.fill = "var(--me-surface, #f9f9f9)";
   const waitingDot = make("circle", { cx: RAYON * 0.72, cy: RAYON * 0.72, r: RAYON * 0.17, display: "none", "data-slot": "waiting-dot" });
   waitingDot.style.fill = "var(--action, #9a4a06)";
-  root.append(arcsBack, dotsBehind, bodyGroup, dotsFront, notif, arcsFront, auraGroup, waitingRing, waitingDot);
+  figure.append(arcsBack, dotsBehind, bodyGroup, dotsFront, notif, arcsFront);
+  lean.appendChild(figure);
+  root.append(lean, auraGroup, waitingRing, waitingDot);
   svg.replaceChildren(defs, root);
 
   const eyePool = new Pool(maskEyes);
   const behindPool = new Pool(dotsBehind), frontPool = new Pool(dotsFront);
   const backArcs = new Pool(arcsBack), frontArcs = new Pool(arcsFront);
-  const auraPool = new Pool(auraGroup);
   const gradientNodes: { grad: SVGLinearGradientElement; stops: SVGStopElement[] }[] = [];
   const gradient = (i: number) => {
     if (!gradientNodes[i]) {
@@ -165,11 +166,8 @@ export function createPainter(svg: SVGSVGElement, uid: string): Painter {
       backArcs.trim(frame.arcs.length); frontArcs.trim(frame.arcs.length);
     },
     setWaiting(on) { show(waitingRing, on); show(waitingDot, on); put(svg, "data-waiting", on ? "true" : "false"); },
-    setAura(prims) {
-      if (!prims || prims.length === 0) { auraPool.trim(0); return; }
-      prims.forEach((prim, i) => { const node = auraPool.at(i, prim.tag); for (const [name, value] of Object.entries(prim.attrs)) put(node, name, value); });
-      auraPool.trim(prims.length);
-    },
-    place(tilt, dy) { put(root, "transform", tilt || dy ? `translate(0 ${dy.toFixed(2)}) rotate(${tilt.toFixed(2)})` : ""); }
+    auraHost: auraGroup,
+    place(tilt, dy) { put(lean, "transform", tilt || dy ? `translate(0 ${dy.toFixed(2)}) rotate(${tilt.toFixed(2)})` : ""); },
+    move(dx, tilt, scale) { put(figure, "transform", dx || tilt || scale !== 1 ? `translate(${dx.toFixed(2)} 0) rotate(${tilt.toFixed(2)}) scale(${scale.toFixed(3)})` : ""); }
   };
 }

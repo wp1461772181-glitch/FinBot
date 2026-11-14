@@ -13,7 +13,12 @@ import { BotAvatar } from "./BotAvatar";
 import { BotBody, type BloubState, type LiveHandle } from "./BotBody";
 import { drive } from "./live-drive";
 import { usePersona } from "./use-persona";
-import type { AuraFn } from "./bot-painter";
+import { RAYON } from "../../bloub/repere";
+import { auraFor } from "../../aura/index.mjs";
+import { bodyMotion } from "../../aura/motion.mjs";
+import { STILL_FINISH_SECONDS, auraPhaseOf, stillInput } from "../../aura/track.mjs";
+import { tierOf } from "../../bot-sizes.mjs";
+import { drawAura } from "./aura-paint";
 export type { BotPresenceProps };
 
 /** Bots whose arrival already played in this page session (module scope: survives remounts, resets on reload). */
@@ -43,10 +48,9 @@ interface BotPresenceProps {
   draft?: string;
   /** The bot's record, for its personality (the five existing bots are pinned, any other is derived from it). Absent: the default bot's. */
   bot?: PersonaBot | null;
-  aura?: AuraFn;
 }
 
-export default function BotPresenceLive({ avatar, look: stored, name, seed, arrivalKey, size = 30, chatState, messages, unread = false, onAcknowledge, className = "", draft = "", bot, aura }: BotPresenceProps) {
+export default function BotPresenceLive({ avatar, look: stored, name, seed, arrivalKey, size = 30, chatState, messages, unread = false, onAcknowledge, className = "", draft = "", bot }: BotPresenceProps) {
   const parsed = parseAvatar(avatar, name);
   const persona = usePersona(bot ?? { name: "FinBot" });
   const reduced = useReducedMotion();
@@ -58,6 +62,9 @@ export default function BotPresenceLive({ avatar, look: stored, name, seed, arri
   const root = useRef<HTMLSpanElement>(null);
   const prevState = useRef(chatState);
   const ack = useRef(onAcknowledge); ack.current = onAcknowledge;
+  const checked = useRef(false); // reduced motion: did this turn go through a check (its marks stay in the still aura)
+  const finishTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(finishTimer.current), []);
 
   /** Every event goes through here: the director learns it, and a stopped loop (asleep, offline, settled) starts again to show it. */
   const send = (event: Parameters<typeof director.send>[0]) => { director.send(event, nowSec()); live.wake?.(); };
@@ -82,6 +89,13 @@ export default function BotPresenceLive({ avatar, look: stored, name, seed, arri
     const event = turnTransition(prevState.current, chatState, messages);
     prevState.current = chatState;
     if (event) send(event);
+    if (event?.type === "turn-start") checked.current = false;
+    if (turn.phase === "verify") checked.current = true;
+    // Reduced motion has no clock: a finished turn shows its closed shape for two seconds (with the check badge), then the frame is read again.
+    if (reduced && event?.type === "turn-end" && (event.outcome === "done" || event.outcome === "partial")) {
+      window.clearTimeout(finishTimer.current);
+      finishTimer.current = window.setTimeout(refreshStill, STILL_FINISH_SECONDS * 1000 + 50);
+    }
     live.units = turn.units;
     send({ type: "offline", value: offline });
     send({ type: "phase", phase: turn.phase });
@@ -136,13 +150,21 @@ export default function BotPresenceLive({ avatar, look: stored, name, seed, arri
   if (parsed.kind === "text") return <BotAvatar avatar={avatar} look={stored} name={name} seed={seed} size={size} className={className} />;
   const look = resolveLook(seed || name, avatar, stored, name);
   const hoverable = (e: ReactPointerEvent) => e.pointerType !== "touch";
+  // Reduced motion: the aura is the static shape of the state (units still count), drawn into the still frame; TeslaBot's lean-back is a posture, so it stays.
+  const tier = tierOf(size);
+  const withAura = reduced && still && (tier === "M" || tier === "L");
+  const auraStill = withAura ? (host: SVGGElement, paint: { ink: string }) => {
+    const input = stillInput(still, turn.units, checked.current);
+    drawAura(host, auraFor(still.aura)({ ...input, R: RAYON, tier }), paint, input.phase);
+  } : undefined;
+  const stillTilt = (still?.tilt ?? 0) + (withAura ? bodyMotion({ variant: still.aura, phase: auraPhaseOf(still, { still: true }), reduced: true }).tilt : 0);
   return <span ref={root} data-slot="bot-avatar" data-bot-color={look.color} data-archetype={persona.archetype} className={`bot-orb bot-orb-live ${className}`.trim()} aria-hidden="true"
     style={{ width: size, height: size, "--bot-tempo": persona.tempo } as CSSProperties}
     onPointerEnter={e => { if (hoverable(e)) send({ type: "hover", value: true }); }}
     onPointerLeave={e => { if (hoverable(e)) send({ type: "hover", value: false }); }}
     onClick={() => { send({ type: "click" }); ack.current?.(); }}>
     {reduced
-      ? <BotBody size={size} shape={look.shape} color={look.color} state={(still?.state ?? "idle") as BloubState} frozenAt={0} expression={still?.still} waiting={still?.waitingForUser} dim={still?.dim} gazeKind={still?.gaze} tilt={still?.tilt} />
-      : <BotBody size={size} shape={look.shape} color={look.color} live={live} aura={aura} />}
+      ? <BotBody size={size} shape={look.shape} color={look.color} state={(still?.state ?? "idle") as BloubState} frozenAt={0} expression={still?.still} waiting={still?.waitingForUser} dim={still?.dim} gazeKind={still?.gaze} tilt={stillTilt} auraStill={auraStill} />
+      : <BotBody size={size} shape={look.shape} color={look.color} live={live} />}
   </span>;
 }

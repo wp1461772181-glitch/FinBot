@@ -8,7 +8,7 @@
 export const PERSONA_PRESETS = [
   { id: "ecc4d493-1e26-435d-99e9-cb5699ab7cc6", name: "FinBot", archetype: "lead", tempo: 1, easing: "smooth", restGaze: "follow", auraVariant: "ticks", look: { shape: "cercle", color: "encre" } },
   { id: "c20935c6-c9f9-417c-a900-0afd5dcb5566", name: "TeslaBot", archetype: "tracker", tempo: 1.25, easing: "spring", restGaze: "ahead-right", auraVariant: "speed-lines", look: { shape: "capsule", color: "rouge" } },
-  { id: "ca3c9be3-97ea-4ce0-a624-ae6bfeb723e9", name: "NewsBot", archetype: "sentinel", tempo: 1.1, easing: "step", restGaze: "scan", auraVariant: "bulletin", look: { shape: "triangle", color: "orange" } },
+  { id: "ca3c9be3-97ea-4ce0-a624-ae6bfeb723e9", name: "NewsBot", archetype: "sentinel", tempo: 1.1, easing: "step", restGaze: "scan", auraVariant: "ticker", look: { shape: "triangle", color: "orange" } },
   { id: "3694c439-f29e-49dd-9875-51b6c8a4f7fd", name: "AppleBot", archetype: "tracker", tempo: 0.9, easing: "smooth", restGaze: "front", auraVariant: "halo", look: { shape: "squircle", color: "creme" } },
   { id: "67441a6d-b24a-4efc-a57c-bb9391313ece", name: "ReportBot", archetype: "reader", tempo: 0.8, easing: "smooth", restGaze: "down", auraVariant: "page-lines", look: { shape: "hexagone", color: "bleu" } }
 ];
