@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronRight, Circle, LoaderCircle, X } from "lucide-react";
-import type { AgentChatMessage } from "../../api";
+import type { AgentChatMessage } from "../../api/conversations";
 import { useLocale } from "../../i18n";
 import { barModel, legacyToolChips, type StepChip } from "../../process-steps.mjs";
 import { turnKey } from "../../panel-model.mjs";

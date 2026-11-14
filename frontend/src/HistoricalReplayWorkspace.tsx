@@ -4,7 +4,8 @@ import { ResearchBriefView } from "./ResearchBriefView";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { paths } from "./routes.mjs";
-import { ApiError, createV2HistoricalReplayJob, getV2Evaluations, getV2ForecastVersion, getV2Job } from "./api";
+import { ApiError } from "./api/base";
+import { createV2HistoricalReplayJob, getV2Evaluations, getV2ForecastVersion, getV2Job } from "./api/forecast-v2";
 import type { ResearchMaterialReference, V2EvaluationResponse, V2EvaluationVersion, V2ForecastJob, V2VersionDetail } from "./types";
 
 type ReplayResult = { version: V2VersionDetail; evaluation: V2EvaluationVersion | null };

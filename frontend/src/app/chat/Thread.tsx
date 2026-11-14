@@ -6,7 +6,7 @@ import { bottomScrollTop, isFollowing, keepPositionAfterPrepend, showJumpToBotto
 import { noticesAfter } from "../../context-usage.mjs";
 import { externalSource, firstOfTurns } from "../../chat-states.mjs";
 import { OptionalChunk } from "../../OptionalChunk";
-import type { Bot } from "../../api";
+import type { Bot } from "../../api/bots";
 import { useLocale } from "../../i18n";
 import { useChat } from "./ChatSessionProvider";
 import { useMarkdown } from "./markdown-loader";

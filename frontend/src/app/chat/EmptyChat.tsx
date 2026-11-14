@@ -2,7 +2,7 @@ import { ArrowUpRight } from "lucide-react";
 import { BotPresence } from "@/components/bot/BotPresence";
 import { BOT_AVATAR_SIZE } from "../../bot-sizes.mjs";
 import { starterQuestions } from "../../starter-questions.mjs";
-import type { Bot } from "../../api";
+import type { Bot } from "../../api/bots";
 import { useLocale } from "../../i18n";
 
 const starterClass = "inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3.5 py-1.5 text-left text-small text-ink-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sm:min-h-9";

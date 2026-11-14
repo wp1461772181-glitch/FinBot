@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { Bot } from "../api";
+import type { Bot } from "../api/bots";
 import type { WorkspaceSection } from "../workspace-sections.mjs";
 
 export type BotList = { bots: Bot[]; loaded: boolean; error: string; reload: () => Promise<void>; defaultBot: Bot | null };

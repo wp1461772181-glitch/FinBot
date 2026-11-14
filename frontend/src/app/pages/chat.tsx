@@ -6,7 +6,7 @@ import { useOpenConversation, useSelectBot } from "../chat/ChatSessionProvider";
 import { translatePhrase } from "../../i18n";
 import { OptionalChunk } from "../../OptionalChunk";
 import { isRecordId, paths } from "../../routes.mjs";
-import type { Bot } from "../../api";
+import type { Bot } from "../../api/bots";
 import { useWorkspace } from "../workspace";
 
 // The bot's workspace cards and profile form (the 工作区 and 档案 tabs of the right panel) are only needed once a bot page is open: their own chunk, fetched on demand.

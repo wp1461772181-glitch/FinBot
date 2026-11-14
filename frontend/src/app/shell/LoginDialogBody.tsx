@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent, type MutableRefObject } from "reac
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { personalChatLogin, setChatMode } from "../../api";
+import { personalChatLogin } from "../../api/conversations";
+import { setChatMode } from "../../api/base";
 import { completePersonalLogin } from "../../chat-mode-switch.mjs";
 import { useLocale } from "../../i18n";
 import type { ModeChange } from "./account";

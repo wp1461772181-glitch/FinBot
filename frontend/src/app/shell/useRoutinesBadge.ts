@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listInbox, listTaskProposals } from "../../api";
+import { listInbox, listTaskProposals } from "../../api/inbox";
 import { routinesBadge } from "../../inbox-items.mjs";
 
 /**

@@ -1,6 +1,6 @@
 // legacy markup, moved as-is in P3.1; restyled in P3.2–P3.4
 import { useState } from "react";
-import { getChatMode } from "../../api";
+import { getChatMode } from "../../api/base";
 import { useLocale } from "../../i18n";
 import { KnowledgeAdminPage } from "../../KnowledgeAdminPage";
 import { AppearanceCard } from "./AppearanceCard";

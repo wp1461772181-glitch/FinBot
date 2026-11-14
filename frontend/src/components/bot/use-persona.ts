@@ -2,7 +2,7 @@
 // this browser. A tracker bot with a company and no stored volatility looks the price history up ONCE (the same call the workspace price
 // card makes); if that gives nothing it falls back to the id hash and does not try again.
 import { useEffect, useMemo, useState } from "react";
-import { getV2Prices } from "../../api";
+import { getV2Prices } from "../../api/prices";
 import { annualizedVolatility, archetypeOf, derivePersona, presetFor, readOverrides, readVolatility, trackedSymbol, writeVolatility, type Persona, type PersonaBot } from "../../bot-persona.mjs";
 
 /** Bot + symbol pairs already asked this page session: no retry, no second request while the first is out. */

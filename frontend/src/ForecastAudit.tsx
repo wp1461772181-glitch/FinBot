@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocale } from "./i18n";
-import { getV2Job } from "./api";
+import { getV2Job } from "./api/forecast-v2";
 import type { V2ForecastJob, V2VersionDetail } from "./types";
 import { NOT_RECORDED, recordedModel } from "./forecast-model.mjs";
 import { EvidenceDetail } from "./ForecastTimeline";

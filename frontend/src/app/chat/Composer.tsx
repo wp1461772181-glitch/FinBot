@@ -2,7 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type Ke
 import { ArrowUp, ChevronUp, Hand, Square } from "lucide-react";
 import { useDelayedFlag } from "@/components/state/Skeleton";
 import { GuestComposerNotice } from "@/components/GuestComposerNotice";
-import { listSkills, getChatMode, type Skill, type Bot } from "../../api";
+import { listSkills, type Skill } from "../../api/skills-core";
+import { getChatMode } from "../../api/base";
+import { type Bot } from "../../api/bots";
 import { composerKeyAction } from "../../composer-keys.mjs";
 import { isActiveClarification } from "../../chat-clarification.mjs";
 import { toolLabel } from "../../agent-tool-labels.mjs";

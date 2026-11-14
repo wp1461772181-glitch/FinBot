@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocale } from "./i18n";
-import { getV2MonitorStatus } from "./api";
+import { getV2MonitorStatus } from "./api/forecast-v2";
 import type { V2MonitorStatus } from "./types";
 import { MonitorCard, MonitorDetail } from "./ForecastMonitor";
 import { errorMessage } from "./ForecastJob";

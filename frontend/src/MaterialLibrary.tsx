@@ -1,6 +1,7 @@
 import { Tx, formatDate as formatLocalizedDate, getLocalePreference, translatePhrase, useLocale } from "./i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, getMaterialLibrary } from "./api";
+import { ApiError } from "./api/base";
+import { getMaterialLibrary } from "./api/material-library";
 import { MaterialAnalysisDetail } from "./MaterialAnalysisDetail";
 import type { FilingScanResult, MaterialAnalysisStatus, MaterialItem, MaterialSourceType } from "./types";
 import { librarySymbol, usableFocus, type UsableFocus } from "./material-focus.mjs";

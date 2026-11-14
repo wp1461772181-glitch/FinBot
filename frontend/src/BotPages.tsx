@@ -2,7 +2,7 @@
 // BotSidePanel.tsx and the server model catalog card to app/settings/ModelCatalogCard.tsx in P3.1, so the sidebar loads only this file.
 // A bot never holds a key: it names a catalog model, and the catalog says only configured / missing.
 import { useCallback, useEffect, useState } from "react";
-import { listBots, type Bot } from "./api";
+import { listBots, type Bot } from "./api/bots";
 import { message } from "./bot-message";
 
 /** The owner's bots, read once and again after each change.  Guests have none. */

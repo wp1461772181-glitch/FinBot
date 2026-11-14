@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { localizeForecastBrief, localizeMaterialAnalysis } from "./api";
+import { localizeForecastBrief, localizeMaterialAnalysis } from "./api/material-library";
 import { useLocale } from "./i18n";
 import type { LocalizationResult } from "./types";
 

@@ -4,7 +4,7 @@ import { SkeletonCard } from "@/components/state/Skeleton";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LegacyFrame } from "../../LegacyFrame";
-import type { AgentChatMessage } from "../../api";
+import type { AgentChatMessage } from "../../api/conversations";
 import { useLocale } from "../../i18n";
 import { PANEL_KEY_STEP, PANEL_MAX, PANEL_MIN, clampPanelWidth, roundQuestion, roundSources, type PanelTab } from "../../panel-model.mjs";
 import { useChat } from "./ChatSessionProvider";

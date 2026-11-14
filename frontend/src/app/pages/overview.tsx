@@ -1,7 +1,8 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { Navigate, useSearchParams } from "react-router";
 import { CurrentOverviewWorkspace, Loading, WorkspacePageHeader, actionMessage, isSupportedSymbol, type FilingState } from "../../OverviewWorkspace";
-import { getFilingInventory, getV2Prices } from "../../api";
+import { getFilingInventory } from "../../api/market-data";
+import { getV2Prices } from "../../api/prices";
 import { companyTab, paths } from "../../routes.mjs";
 import type { PriceHistory } from "../../types";
 import { EmptyWatchlist, useCompanyParam } from "./frames";

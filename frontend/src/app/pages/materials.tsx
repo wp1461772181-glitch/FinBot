@@ -1,6 +1,6 @@
 import { useSearchParams } from "react-router";
 import { MaterialLibrary } from "../../MaterialLibrary";
-import { scanOfficialFilings } from "../../api";
+import { scanOfficialFilings } from "../../api/market-data";
 import { materialFocusFromParams, symbolFromParams } from "../../routes.mjs";
 import { isSupportedSymbol } from "../../OverviewWorkspace";
 import { useWorkspace } from "../workspace";

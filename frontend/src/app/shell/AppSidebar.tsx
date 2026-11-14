@@ -3,7 +3,7 @@ import { Suspense, lazy, useEffect, useRef, useState, type ComponentType } from 
 import { CalendarClock, ChartLine, ChevronRight, ChevronsUpDown, Command, History, MessageSquare, Plus, Search, Settings, Sparkles, UserRound, Wallet } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupAction, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuAction, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem, SidebarRail, SidebarSeparator, SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
-import type { Bot } from "../../api";
+import type { Bot } from "../../api/bots";
 import { botSections } from "../../bot-items.mjs";
 import { isWaiting } from "../../bot-marker.mjs";
 import { useLocale } from "../../i18n";

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
-import { getKnowledgeCitation, type KnowledgeCitationDetail } from "../../api";
+import { getKnowledgeCitation, type KnowledgeCitationDetail } from "../../api/citation";
 
 // The excerpt of a citation held in the knowledge store is fetched once (the same request the old drawer made on click) and shared by
 // everything that shows it: the hover preview on a chip and the card in the 来源 tab.

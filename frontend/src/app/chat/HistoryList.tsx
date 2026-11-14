@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { getChatMode, listAgentConversations, renameAgentConversation, archiveAgentConversation, type Bot, type ConversationSummary } from "../../api";
+import { getChatMode } from "../../api/base";
+import { listAgentConversations, renameAgentConversation, archiveAgentConversation, type ConversationSummary } from "../../api/conversations";
+import { type Bot } from "../../api/bots";
 import { useLocale } from "../../i18n";
 import { Archive, Pencil, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";

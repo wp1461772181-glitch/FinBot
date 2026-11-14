@@ -1,6 +1,8 @@
 // legacy markup, moved as-is in P3.1; restyled in P3.2–P3.4
 import { useEffect, useState } from "react";
-import { getChatMode, getMaterialAnalysisSettings, saveMaterialAnalysisSettings, resetMaterialAnalysisSettings, getModelCatalog, type CatalogModel, type MaterialAnalysisSettings } from "../../api";
+import { getChatMode } from "../../api/base";
+import { getMaterialAnalysisSettings, saveMaterialAnalysisSettings, resetMaterialAnalysisSettings, type MaterialAnalysisSettings } from "../../api/material-library";
+import { getModelCatalog, type CatalogModel } from "../../api/bots";
 import { useLocale } from "../../i18n";
 
 export function MaterialAnalysisDefaultCard() {

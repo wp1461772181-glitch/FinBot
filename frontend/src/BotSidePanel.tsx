@@ -1,7 +1,10 @@
 // The bot's right rail (工作区 / 档案) and the new-bot dialog; split from BotPages.tsx in P3.1 so the sidebar's chunk does not carry them.
 // Legacy markup, moved as-is; restyled in P5.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { deleteBotTelegram, getBotTelegram, saveBotTelegramToken, startBotTelegramBind, unbindBotTelegram, type BotTelegramStatus, createBot, deleteBot, getBotTemplates, getModelCatalog, listSkills, updateBot, type Skill, type Bot, type BotFields, type BotTemplate, type BotTool, type ModelCatalog } from "./api";
+import { deleteBotTelegram, getBotTelegram, saveBotTelegramToken, startBotTelegramBind, unbindBotTelegram, type BotTelegramStatus } from "./api/integrations";
+import { createBot, deleteBot, getBotTemplates } from "./api/bots-admin";
+import { getModelCatalog, updateBot, type Bot, type BotFields, type BotTemplate, type BotTool, type ModelCatalog } from "./api/bots";
+import { listSkills, type Skill } from "./api/skills-core";
 import { useLocale } from "./i18n";
 import { botDraft, botModelLabel, newBotFields, focusText, keyStatusLabel, parseFocusSymbols, toggleTool, toolEnabled } from "./bot-items.mjs";
 import { toggleUsual, usableSkills } from "./skill-items.mjs";

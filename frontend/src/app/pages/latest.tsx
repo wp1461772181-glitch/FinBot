@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
-import { getV2ForecastRoots } from "../../api";
+import { getV2ForecastRoots } from "../../api/forecast-v2";
 import { translatePhrase } from "../../i18n";
 import { paths } from "../../routes.mjs";
 import { useCompanyParam } from "./frames";

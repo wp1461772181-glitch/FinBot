@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { ApiError, getV2Evaluations } from "./api";
+import { ApiError } from "./api/base";
+import { getV2Evaluations } from "./api/forecast-v2";
 import { BASELINE_NAME, scoreCard } from "./forecast-model.mjs";
 import { Tx, translatePhrase, useLocale } from "./i18n";
 import type { V2EvaluationResponse, V2ModelEvaluationCohort } from "./types";

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Tx, useLocale } from "./i18n";
-import { ApiError, createV2ManualRevisionJob, getV2Evaluations, getV2ForecastVersion, getV2Job, getV2Prices, getV2RevisionCandidates, getV2Timeline } from "./api";
-import type { V2RevisionCandidates } from "./api";
+import { ApiError } from "./api/base";
+import { createV2ManualRevisionJob, getV2Evaluations, getV2ForecastVersion, getV2Job, getV2RevisionCandidates, getV2Timeline } from "./api/forecast-v2";
+import { getV2Prices } from "./api/prices";
+import type { V2RevisionCandidates } from "./api/forecast-v2";
 import type { PriceHistory, V2EvaluationResponse, V2ForecastJob, V2ForecastRoot, V2ForecastRoots, V2Timeline, V2VersionDetail } from "./types";
 import { hasDecisionProbabilities } from "./forecast-model.mjs";
 import { hashHref, paths } from "./routes.mjs";

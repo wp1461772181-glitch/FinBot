@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { createAgentTask, deleteAgentTask, listAgentTasks, listSkills, listTaskRuns, updateAgentTask, type Bot, type Skill, type AgentTask, type AgentTaskInput, type TaskRun } from "./api";
+import { createAgentTask, deleteAgentTask, listAgentTasks, listTaskRuns, updateAgentTask, type AgentTask, type AgentTaskInput, type TaskRun } from "./api/tasks";
+import { listSkills, type Skill } from "./api/skills-core";
+import { type Bot } from "./api/bots";
 import { translatePhrase, useLocale } from "./i18n";
 import { hashHref, paths } from "./routes.mjs";
 import { usableSkills } from "./skill-items.mjs";

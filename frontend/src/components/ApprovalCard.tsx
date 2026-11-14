@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { Check, Clock, Ellipsis, Hand, Minus, Reply, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import type { AgentChatMessage } from "../api";
+import type { AgentChatMessage } from "../api/conversations";
 import { answerSummary, approvalKind, arrangeChoices, formatRemaining, isConfirmCard, isExpired, isWriteCard, pickState, remainingMs, targetRows, type ApprovalChoice } from "../approval-card.mjs";
 import { clarificationTitle } from "../chat-clarification.mjs";
 import { useLocale } from "../i18n";

@@ -1,5 +1,5 @@
 import { Tx, translatePhrase, useLocale } from "./i18n";
-import { ApiError } from "./api";
+import { ApiError } from "./api/base";
 import type { V2ForecastJob } from "./types";
 import { jobFailurePhrase } from "./forecast-model.mjs";
 import { formatTime } from "./ForecastShared";

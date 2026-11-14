@@ -8,7 +8,7 @@ import { railShouldShow } from "../../question-rail.mjs";
 import { BotPresence } from "@/components/bot/BotPresence";
 import { BOT_AVATAR_SIZE } from "../../bot-sizes.mjs";
 import { paths } from "../../routes.mjs";
-import { type Bot } from "../../api";
+import { type Bot } from "../../api/bots";
 import { useLocale } from "../../i18n";
 import { useChat } from "./ChatSessionProvider";
 import { usePanel } from "./panel-context";
