@@ -5,6 +5,7 @@ import { translatePhrase, useLocale } from "./i18n";
 import { useNavigate } from "react-router";
 import { skillGroups } from "./skill-items.mjs";
 import { paths } from "./routes.mjs";
+import { confirm } from "@/components/state/confirm";
 
 // The 技能 page: recipes (steps + allowed tools), never code.  Cards grouped into drafts, built-ins and the owner's own;
 // an editor for new / edited / drafted skills; Markdown import (preview first) and export.  Owner-only /agent-chat API.
@@ -55,7 +56,7 @@ export function SkillsPage({ skillId = null }: { skillId?: string | null }) {
     try { await work(); await load(); if (done) setStatus(t(done)); } catch (e) { setError(message(e, "操作失败，请重试。")); } finally { setBusy(null); }
   }
   async function remove(skill: Skill) {
-    if (!window.confirm(`${t("删除")} ${skill.name}？`)) return;
+    if (!(await confirm({ title: `${t("删除")} ${skill.name}？`, description: t("删除后这个技能不能恢复。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     await act(skill.id, () => deleteSkill(skill.id), "已删除。");
   }
   async function download(skill: Skill) {

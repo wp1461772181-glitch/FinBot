@@ -76,6 +76,23 @@ export const PAGES = [
   // The same page with the market colours switched to red up (clicks the page's own toggle).
   { name: "dev-kit-red-up", hash: "#/dev/kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="updown-toggle"]').click(); await page.waitForFunction(() => document.documentElement.dataset.updown === "red-up"); } },
+  // P2.3: the nine states at #/dev/kit/states (its own address so the pages above stay pixel-identical): everything expanded,
+  // the banner lit and a pinned toast with 撤销 on screen; and the same page with the press-and-hold confirmation open.
+  { name: "dev-kit-states", hash: "#/dev/kit/states", ready: "[data-kit-states]", keepLoadingText: true,
+    before: async (page) => {
+      await page.locator('[data-kit="offline-on"]').click(); await page.locator('[data-slot="offline-banner"]').waitFor();
+      await page.locator('[data-kit="toast-pinned"]').click(); await page.locator("[data-sonner-toast]").waitFor();
+    } },
+  { name: "dev-kit-states-confirm", hash: "#/dev/kit/states", ready: "[data-kit-states]", keepLoadingText: true,
+    before: async (page) => { await page.locator('[data-kit="confirm-hold"]').click(); await page.locator('[data-slot="alert-dialog-content"]').waitFor(); } },
+  // The command palette: opened with the shortcut, with "TS" typed (TSLA from the watch list, then the offer to add TS) and with nothing typed.
+  { name: "command-menu", hash: "#/chat", ready: ".agent-thread .agent-message",
+    before: async (page) => { await page.keyboard.press("Control+k"); await page.locator('[data-slot="command-menu"] input').fill("TS"); await page.locator('[data-slot="command-item"]').first().waitFor(); } },
+  { name: "command-menu-all", hash: "#/chat", ready: ".agent-thread .agent-message",
+    before: async (page) => { await page.keyboard.press("Control+k"); await page.locator('[data-slot="command-item"]').first().waitFor(); await page.locator('[data-slot="command-menu"] [cmdk-group-heading]', { hasText: "最近对话" }).waitFor(); } },
+  // The backend unreachable: every API request fails, then a page that needs the API opens: the banner is at the top of the page.
+  { name: "offline", hash: "#/chat", ready: ".agent-thread .agent-message",
+    before: async (page, { mock }) => { mock.control.down = true; await page.evaluate(() => { location.hash = "#/portfolio"; }); await page.locator('[data-slot="offline-banner"]').waitFor(); } },
   { name: "dev-kit-menu", hash: "#/dev/kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); } },
 ];
@@ -84,5 +101,7 @@ export const PAGES = [
 export async function waitReady(page, def, timeout = 15000) {
   if (typeof def.ready === "function") await def.ready(page);
   else await page.waitForSelector(def.ready, { state: "visible", timeout });
+  // The states sample page shows skeletons on purpose (their screen-reader text says 正在读取): it opts out of the wait.
+  if (def.keepLoadingText) return;
   await page.waitForFunction((phrases) => !phrases.some((p) => (document.body.innerText || "").includes(p)), LOADING, { timeout });
 }

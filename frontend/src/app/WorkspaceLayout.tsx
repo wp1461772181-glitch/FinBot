@@ -8,6 +8,7 @@ import { normalizeHash } from "../legacy-routes.mjs";
 import { pathForSection, paths, sectionOfPath, splitPath, symbolFromParams, symbolParam } from "../routes.mjs";
 import { MAX_WATCHLIST, normalizeTicker, normalizeWatchlist, selectionForWatchlist } from "../watchlist.mjs";
 import { registerWatchlistAdder, setWatchlistSnapshot } from "../watchlist-bridge.mjs";
+import type { PaletteData } from "@/components/command/CommandMenu";
 import { WorkspaceContext, type Workspace } from "./workspace";
 import { AppShell } from "./shell/AppShell";
 import { useRoutinesBadge } from "./shell/useRoutinesBadge";
@@ -177,7 +178,9 @@ export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest"
   const routinesCount = useRoutinesBadge(personal, botList.bots);
   // The old top bar showed the company switcher on the research pages, except the forecast group (its company comes from the record).
   const stockPicker = isResearchSection(activeSection) && navGroup(activeSection) !== "forecast";
-  return <AppShell onModeChange={onModeChange} overlay={newBotDialog}
+  // What the command palette lists: the same watch list, bot list and company switch the sidebar and the research bar use.
+  const palette: PaletteData = { personal, symbol, symbols, bots: botList.bots, onSelectCompany: switchSymbol, onAddCompany: openCompany };
+  return <AppShell onModeChange={onModeChange} overlay={newBotDialog} palette={palette}
     nav={{ path: addressPath, personal, symbol, bots: botList.bots, botsError: botList.error, activeBotId: activeBot?.id ?? null, lineStatus, routinesCount, onNewBot: () => setNewBotOpen(true), onModeChange }}
     research={stockPicker ? { symbol, symbols, onSelectStock: switchSymbol, watchInput, setWatchInput, addWatchSymbol, watchError, setWatchError } : null}>
     <WorkspaceContext.Provider value={workspace}><Outlet /></WorkspaceContext.Provider>

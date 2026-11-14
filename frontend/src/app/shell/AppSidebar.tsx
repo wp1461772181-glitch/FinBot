@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { Suspense, lazy, useEffect, useRef, useState, type ComponentType } from "react";
-import { CalendarClock, ChartLine, ChevronRight, ChevronsUpDown, Command, History, MessageSquare, Plus, Settings, Sparkles, UserRound, Wallet } from "lucide-react";
+import { CalendarClock, ChartLine, ChevronRight, ChevronsUpDown, Command, History, MessageSquare, Plus, Search, Settings, Sparkles, UserRound, Wallet } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupAction, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuAction, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem, SidebarRail, SidebarSeparator, SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
 import type { Bot } from "../../api";
@@ -9,6 +9,7 @@ import { isWaiting } from "../../bot-marker.mjs";
 import { useLocale } from "../../i18n";
 import { paths } from "../../routes.mjs";
 import { activeArea, activeItem, areaItems, areaPath, type Area } from "../../shell-nav.mjs";
+import { openCommandMenu } from "@/components/command/command-events";
 import { ThemeToggle, type ModeChange } from "./account";
 import { BotRow } from "./BotRow";
 
@@ -141,12 +142,18 @@ function AccountMenu({ props }: { props: ShellNavProps }) {
   return <Suspense fallback={standIn}><AccountMenuLazy personal={props.personal} onModeChange={props.onModeChange} defaultOpen={wanted} focusOnMount={hadFocus.current || wanted} /></Suspense>;
 }
 
-/** The Cmd-K button at the top of the sidebar.  The command palette is a later package (P2.3): until then the button only says so. */
-function PaletteStub() {
+/** The platform's name for the palette shortcut: Cmd-K on a Mac, Ctrl K elsewhere (read once; the sidebar is only drawn on a desktop). */
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+/** The button at the top of the sidebar that opens the command palette (design 4.1).  On the icon bar it shrinks to the icon. */
+function PaletteButton() {
   const { t } = useLocale();
-  const hint = `${t("命令面板")} · ${t("即将可用")}`;
-  return <button type="button" aria-disabled="true" aria-label={hint} title={hint} className="inline-flex h-8 items-center gap-1 rounded-sm border border-line px-2 text-caption text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:hidden">
-    <Command aria-hidden="true" className="size-3" /><span aria-hidden="true">K</span>
+  const label = t("命令面板");
+  return <button type="button" aria-label={label} aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title={`${label} (${isMac ? "Cmd+K" : "Ctrl+K"})`}
+    onClick={(event) => openCommandMenu(event.currentTarget)}
+    className="inline-flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-caption text-muted-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+    <Search aria-hidden="true" className="size-3.5" />
+    <span aria-hidden="true" className="inline-flex items-center gap-0.5 group-data-[collapsible=icon]:hidden">{isMac ? <Command className="size-3" /> : "Ctrl"}<span>K</span></span>
   </button>;
 }
 
@@ -156,7 +163,7 @@ export function AppSidebar({ props }: { props: ShellNavProps }) {
   return <Sidebar collapsible="icon" role="navigation" aria-label={t("主要导航")}>
     <SidebarHeader className="flex-row items-center gap-1 group-data-[collapsible=icon]:flex-col">
       <Link to={paths.chat()} aria-label={`FinBot · ${t("对话")}`} className="min-w-0 flex-1 truncate rounded-sm px-2 text-title-s font-semibold text-sidebar-foreground outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:hidden">FinBot</Link>
-      <PaletteStub />
+      <PaletteButton />
       <SidebarTrigger label={t("展开或收起导航")} />
     </SidebarHeader>
     <SidebarContent>

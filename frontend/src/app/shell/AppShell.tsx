@@ -1,5 +1,14 @@
 import { Suspense, lazy, type ComponentProps, type ReactNode } from "react";
+import { useNavigation } from "react-router";
 import { SidebarInset, SidebarProvider, useSidebar } from "@/components/ui/sidebar";
+import { CommandMenuHost } from "@/components/command/CommandMenuHost";
+import type { PaletteData } from "@/components/command/CommandMenu";
+import { ConfirmHost } from "@/components/state/ConfirmHost";
+import { NotifyHost } from "@/components/state/NotifyHost";
+import { OfflineBanner } from "@/components/state/OfflineBanner";
+import { PageSkeleton, useDelayedFlag } from "@/components/state/Skeleton";
+import { TaskDock } from "@/components/state/TaskDock";
+import { skeletonKind } from "../../skeleton-kind.mjs";
 import { activeArea, needsLogin } from "../../shell-nav.mjs";
 import type { ModeChange } from "./account";
 import { AppSidebar, type ShellNavProps } from "./AppSidebar";
@@ -11,6 +20,18 @@ import { NeedLogin } from "./NeedLogin";
 const ResearchBar = lazy(() => import("./ResearchBar"));
 export type ResearchBarProps = ComponentProps<typeof ResearchBar>;
 
+/**
+ * While the next page's code loads, the page that is on screen stays; after 400ms a skeleton of the next page's shape covers it
+ * (design 4.0), so a quick change never flashes one.  An overlay, not a swap: the page underneath is not unmounted.
+ */
+function PendingPage() {
+  const navigation = useNavigation();
+  const target = navigation.state === "loading" ? navigation.location : null;
+  const shown = useDelayedFlag(Boolean(target));
+  if (!shown || !target) return null;
+  return <div data-slot="page-pending" className="absolute inset-0 z-sticky overflow-hidden bg-background"><PageSkeleton kind={skeletonKind(target.pathname + target.search)} /></div>;
+}
+
 /** The main column.  The chat fills the screen height (its transcript scrolls inside it); every other page flows and is held to a readable width. */
 function Main({ nav, research, children }: { nav: ShellNavProps; research: ResearchBarProps | null; children: ReactNode }) {
   const { isMobile } = useSidebar();
@@ -20,10 +41,13 @@ function Main({ nav, research, children }: { nav: ShellNavProps; research: Resea
   const bar = "3.5rem + env(safe-area-inset-bottom, 0px)";
   return <SidebarInset data-area={chat ? "chat" : undefined} className="min-w-0"
     style={chat ? { height: isMobile ? `calc(100dvh - (${bar}))` : "100dvh", overflow: "hidden" } : isMobile ? { paddingBottom: `calc(${bar})` } : undefined}>
+    <OfflineBanner />
     {research && !guarded && <Suspense fallback={null}><ResearchBar {...research} /></Suspense>}
     {guarded ? <NeedLogin /> : chat
       ? <div className="flex min-h-0 flex-1 flex-col [&>main]:min-h-0 [&>main]:flex-1">{children}</div>
       : <div className="mx-auto w-full max-w-[1280px] flex-1">{children}</div>}
+    <TaskDock bottom={isMobile ? `calc(${bar})` : "0px"} />
+    <PendingPage />
   </SidebarInset>;
 }
 
@@ -38,12 +62,15 @@ function MobileBar({ nav }: { nav: ShellNavProps }) {
  * login dialog, and the page in the main column.  No top bar and no footer: each page's own title row is its top.
  * The pages inside are still the old ones; the router wraps each in its own `data-legacy` marker.
  */
-export function AppShell({ nav, research, overlay, onModeChange, children }: { nav: ShellNavProps; research: ResearchBarProps | null; overlay?: ReactNode; onModeChange: ModeChange; children: ReactNode }) {
+export function AppShell({ nav, research, palette, overlay, onModeChange, children }: { nav: ShellNavProps; research: ResearchBarProps | null; palette: PaletteData; overlay?: ReactNode; onModeChange: ModeChange; children: ReactNode }) {
   return <SidebarProvider>
     <AppSidebar props={nav} />
     <Main nav={nav} research={research}>{children}</Main>
     <MobileBar nav={nav} />
     <LoginDialog onModeChange={onModeChange} />
+    <ConfirmHost />
+    <NotifyHost />
+    <CommandMenuHost data={palette} />
     {overlay}
   </SidebarProvider>;
 }

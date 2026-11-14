@@ -43,7 +43,7 @@ export function MobileTabBar({ props }: { props: ShellNavProps }) {
           <span>{label}</span>
         </Link>;
       })}
-      <button ref={moreButton} type="button" aria-haspopup="dialog" aria-expanded={moreOpen} aria-current={more && !moreOpen ? "page" : undefined} className={item} onClick={() => { setMoreLoaded(true); setMoreOpen(true); }}>
+      <button ref={moreButton} data-more-trigger="" type="button" aria-haspopup="dialog" aria-expanded={moreOpen} aria-current={more && !moreOpen ? "page" : undefined} className={item} onClick={() => { setMoreLoaded(true); setMoreOpen(true); }}>
         <Ellipsis aria-hidden="true" className="size-5" /><span>{t("更多")}</span>
       </button>
     </nav>

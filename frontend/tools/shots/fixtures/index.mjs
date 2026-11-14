@@ -91,6 +91,17 @@ export function registerRoutes(route, reply) {
   route.get(`${A}/tasks/proposals`, own(() => ({ proposals: PROPOSALS })));
   route.get(`${A}/inbox`, own(({ state, query }) => ({ items: state.inbox.filter((i) => (!query.get("section") || i.section === query.get("section")) && (!query.get("bot_id") || i.bot_id === query.get("bot_id"))) })));
 
+  // --- the writes the in-app confirmations guard (P2.3): the deletes and the unbind.  Each answers ok; the portfolio one also drops the row. ---
+  route.delete(`${A}/portfolio/transactions/:id`, own(({ params, state }) => { state.portfolio.transactions = state.portfolio.transactions.filter((t) => t.id !== params.id); return { ok: true, status: "deleted" }; }));
+  route.delete(`${A}/skills/:id`, own(() => ({ ok: true })));
+  route.delete(`${A}/profile/:id`, own(() => ({ ok: true })));
+  route.delete(`${A}/news-sources/:id`, own(() => ({ ok: true })));
+  route.delete(`${A}/tasks/:id`, own(() => ({ ok: true })));
+  route.delete(`${A}/bots/:id`, own(() => ({ ok: true })));
+  route.delete(`${A}/bots/:id/telegram`, own(() => ({ ...BOT_TELEGRAM, configured: false, has_token: false, bound: false, shared: true })));
+  route.delete(`${A}/model-catalog/:name`, own(() => ({ ok: true })));
+  route.post(`${A}/telegram/unbind`, own(() => ({ ...TELEGRAM, bound: false, chat_id: null })));
+
   // --- assistant: news sources, skills, memory, settings cards -----------------------------------------
   route.get(`${A}/news-sources`, own(() => NEWS));
   route.get(`${A}/skills`, own(() => SKILLS));

@@ -1,5 +1,6 @@
 import { Link } from "react-router";
-import { Eye, History, KeyRound, LogOut, Plus } from "lucide-react";
+import { Eye, History, KeyRound, LogOut, Plus, Search } from "lucide-react";
+import { openCommandMenu } from "@/components/command/command-events";
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import type { Bot } from "../../api";
 import { botSections } from "../../bot-items.mjs";
@@ -34,6 +35,12 @@ export default function MoreDrawer({ open, onOpenChange, props }: { open: boolea
         <DrawerDescription id="more-drawer-description" className="sr-only">{t("切换 bot、助手与设置页面、账户")}</DrawerDescription>
       </DrawerHeader>
       <div className="overflow-y-auto pb-[max(1rem,env(safe-area-inset-bottom))]">
+        {/* The phone's way into the command palette (design 4.1); focus comes back to 「更多」 when the palette closes. */}
+        <div className="px-4 pt-2">
+          <button type="button" data-slot="palette-entry" onClick={() => { close(); openCommandMenu(null); }} className="flex min-h-11 w-full items-center gap-2 rounded-md border border-line bg-sunken px-3 text-body text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <Search aria-hidden="true" className="size-4" />{t("搜索公司、bot、页面")}
+          </button>
+        </div>
         {props.personal && <>
           <p className={sectionTitle}>{t("切换 bot")}</p>
           <ul className="flex flex-col">

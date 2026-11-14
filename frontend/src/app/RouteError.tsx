@@ -1,11 +1,12 @@
 import { isRouteErrorResponse, useRouteError } from "react-router";
+import { ErrorBar } from "@/components/state/ErrorBar";
 import { useLocale } from "../i18n";
 
 /**
  * What stands in a page's place when it cannot be shown: most often a chunk that did not load (offline, or the site
  * was updated after this tab opened and the file it asks for is gone).  The shell around it stays; the reader can
- * reload.  It is deliberately plain and neutral (no alarm colour): nothing was lost, the page just did not arrive.
- * Its one button is a plain element rather than the shadcn Button: this file is in the first load, and Button brings tailwind-merge with it.
+ * reload.  It is the same error bar every block uses (design 4.0, 局部错误), neutral and without an alarm colour: nothing
+ * was lost, the page just did not arrive.  重试 reloads the page.
  * It renders above the old-UI marker (the router wraps only the pages in it), so it gets the new base styles.
  */
 export function RouteError() {
@@ -13,11 +14,9 @@ export function RouteError() {
   const error = useRouteError();
   const detail = isRouteErrorResponse(error) ? `${error.status} ${error.statusText}` : error instanceof Error ? error.message : "";
   return (
-    <div data-slot="route-error" role="alert" className="mx-auto flex max-w-md flex-col items-start gap-3 p-8">
-      <h2 className="text-lg font-semibold text-ink">{t("页面加载失败")}</h2>
-      <p className="text-muted-foreground">{t("网络中断，或站点刚刚更新过。重新加载后再试。")}</p>
-      {detail && <p className="text-caption font-mono text-faint break-all">{detail}</p>}
-      <button type="button" className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" onClick={() => window.location.reload()}>{t("重新加载")}</button>
+    <div data-slot="route-error" className="mx-auto flex max-w-xl flex-col gap-2 p-6">
+      <ErrorBar message={`${t("页面加载失败")}：${t("网络中断，或站点刚刚更新过。重新加载后再试。")}`} onRetry={() => window.location.reload()} />
+      {detail && <p className="px-1 font-mono text-caption break-all text-faint">{detail}</p>}
     </div>
   );
 }

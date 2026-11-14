@@ -34,6 +34,7 @@ import { addToWatchlist, queueAddTicker, watchlistSnapshot } from "./watchlist-b
 import { GuestComposerNotice } from "./components/GuestComposerNotice";
 import { paths } from "./routes.mjs";
 import { createArchive, createSerializedWriter, isPickerCancelled, mergeConversation, serializeArchive, validateArchive, writeAtomically, type ArchiveConversation, type ChatArchive } from "./chat-archive.mjs";
+import { confirm } from "@/components/state/confirm";
 
 type State = "idle" | "testing" | "ready" | "sending" | "restoring" | "error";
 // What a confirmation card may show, in words.  The card used to print the raw field names of the
@@ -649,7 +650,7 @@ function TelegramBindCard() {
     }
   }
   async function doUnbind() {
-    if (!window.confirm(t("解除绑定后，Telegram 消息不再被处理。确定解除？"))) return;
+    if (!(await confirm({ title: t("解除 Telegram 绑定？"), description: t("解除绑定后，Telegram 消息不再被处理。"), confirmLabel: t("解除绑定"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     setBusy(true);
     setStatus("");
     try {

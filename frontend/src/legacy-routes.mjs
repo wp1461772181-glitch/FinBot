@@ -136,7 +136,7 @@ export function legacyHashToPath(hash, options = {}) {
       case "settings":
         return paths.settings("models");
       case "dev-kit":
-        return rest[0] === "probe" ? paths.devKit({ probe: true }) : paths.devKit();
+        return rest[0] === "probe" ? paths.devKit({ probe: true }) : rest[0] === "states" ? paths.devKit({ states: true }) : paths.devKit();
       default:
         return null;
     }

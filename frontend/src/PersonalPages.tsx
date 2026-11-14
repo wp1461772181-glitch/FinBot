@@ -8,6 +8,7 @@ import { useLocale } from "./i18n";
 import { hashHref, paths } from "./routes.mjs";
 import { inboxOrder } from "./inbox-items.mjs";
 import { layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers, recallGroups, recallKindLabel } from "./memory-items.mjs";
+import { confirm } from "@/components/state/confirm";
 
 // Pages of the personal agent (the skills page lives in SkillsPage.tsx).  The 例行任务 page (#routines; #briefs, its
 // old 待你确认 address, still opens it) holds every bot's routines, the routine cards a bot proposed that wait for the
@@ -248,8 +249,8 @@ function NewsSourcesPanel({
     }
   });
 
-  const removeSource = (src: NewsSource) => {
-    if (!window.confirm(`确定删除新闻源「${src.name || src.id}」？`)) return;
+  const removeSource = async (src: NewsSource) => {
+    if (!(await confirm({ title: `${t("删除新闻源")}「${src.name || src.id}」？`, description: t("删除后不再从这个源读取新闻，不能恢复。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     void runSourceAction(src.id, async () => {
       await deleteNewsSource(src.id);
       loadSources();
@@ -410,8 +411,8 @@ function ProfilePanel() {
     catch (e) { setError(e instanceof Error ? e.message : "操作失败，请重试。"); }
     finally { setBusy(null); }
   }
-  function remove(id: string) {
-    if (!window.confirm(t("删除这条后，之后的对话不再按它回答。确定删除？"))) return;
+  async function remove(id: string) {
+    if (!(await confirm({ title: t("删除这条记忆？"), description: t("之后的对话不再按它回答。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     void run(id, () => deleteProfileItem(id));
   }
   function save() {

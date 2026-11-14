@@ -1,6 +1,8 @@
 import type { ComponentType } from "react";
 import { Navigate, Outlet, createHashRouter, type RouteObject } from "react-router";
+import { DelayedSkeleton, PageSkeleton } from "@/components/state/Skeleton";
 import { LegacyFrame } from "../LegacyFrame";
+import { skeletonKind } from "../skeleton-kind.mjs";
 import { PATTERNS, SETTINGS_SECTIONS, paths } from "../routes.mjs";
 import { RouteError } from "./RouteError";
 import { SessionRoot } from "./session";
@@ -29,6 +31,11 @@ function Fallback() { return <Navigate to={legacyTarget(window.location.hash)} r
 
 /** Every page below is still an old component: the shell puts the old-UI marker around each one (and around nothing else). */
 function LegacyPage() { return <LegacyFrame><Outlet /></LegacyFrame>; }
+
+/** What stands in for the app until the first page's code has arrived (the shell is not mounted yet). */
+function FirstLoad() {
+  return <DelayedSkeleton><PageSkeleton kind={skeletonKind(window.location.hash.replace(/^#/, "") || "/chat")} /></DelayedSkeleton>;
+}
 
 const pages: RouteObject[] = [
   { path: PATTERNS.chat, ...page(() => import("./pages/chat"), "ChatRoute") },
@@ -65,12 +72,13 @@ const routes: RouteObject[] = [
   ...(DEV_KIT_ENABLED ? [
     { path: PATTERNS.devKit, ...page(() => import("../dev/KitPage"), "default") },
     { path: PATTERNS.devKitProbe, ...page(() => import("../dev/KitPage"), "default", { probe: true }) },
+    { path: PATTERNS.devKitStates, ...page(() => import("../dev/StatesPage"), "default") },
   ] : []),
   {
     path: "/",
     Component: SessionRoot,
-    // Nothing to show while the first page's chunk loads.
-    HydrateFallback: () => null,
+    // While the first page's chunk loads: after 400ms, a skeleton of the shape the address's page will have (a quick load shows nothing).
+    HydrateFallback: FirstLoad,
     children: [
       { index: true, ...to(paths.chat()) },
       { path: PATTERNS.login, ...to(paths.chat()) },

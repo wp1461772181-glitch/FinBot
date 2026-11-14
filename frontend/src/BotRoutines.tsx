@@ -4,6 +4,7 @@ import { translatePhrase, useLocale } from "./i18n";
 import { hashHref, paths } from "./routes.mjs";
 import { usableSkills } from "./skill-items.mjs";
 import { formatPriceLines, parsePriceLines, parseSymbols, runsLabel, scheduleLabel } from "./inbox-items.mjs";
+import { confirm } from "@/components/state/confirm";
 
 // A bot's routines (personal agent, second edition): its scheduled tasks and its last 20 runs.  A brief task's
 // result is posted into the bot's line; whether it notifies the owner is written in the bot's or the task's instruction.
@@ -83,7 +84,7 @@ export function TaskManager({ botId, bots = [], onChanged }: { botId?: string; b
   }
   const toggleTask = (task: AgentTask) => act(task.id, async () => { await updateAgentTask(task.id, { enabled: !task.enabled }); loadTasks(); onChanged?.(); });
   async function removeTask(task: AgentTask) {
-    if (!window.confirm(t("删除这个任务？已生成的简报会保留。"))) return;
+    if (!(await confirm({ title: t("删除这个任务？"), description: t("已生成的简报会保留，这个任务之后不再运行。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     await act(task.id, async () => { await deleteAgentTask(task.id); loadTasks(); loadRuns(); onChanged?.(); });
   }
 

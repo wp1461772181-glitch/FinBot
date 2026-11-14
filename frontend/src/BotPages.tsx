@@ -20,6 +20,7 @@ import { lookForSave, normalizeLook, randomLook, resolveLook, type BloubLook } f
 import { DEFAULT_AVATAR, parseAvatar } from "./orb.mjs";
 import { WorkspaceCard } from "./WorkspaceCards";
 import { CARDS, addCard, botSymbol, loadLayout, moveCard, pinCardSymbol, removeCard, resetLayout, resizeCard, saveLayout, storeBotSymbol, symbolChoices, type CardId, type LayoutItem } from "./workspace-cards.mjs";
+import { confirm } from "@/components/state/confirm";
 
 const message = (error: unknown, fallback: string) => translatePhrase(error instanceof Error ? error.message : fallback);
 
@@ -210,7 +211,7 @@ function BotProfileTab({ bot, onChanged, onDeleted }: { bot: Bot; onChanged: (bo
     catch (err) { setStatus(message(err, t("保存失败，请重试。"))); } finally { setBusy(false); }
   }
   async function remove() {
-    if (!window.confirm(`${t("删除")} ${bot.name}？${t("它的设置会删掉，这条线的对话归档保留；其他 bot 不受影响。")}`)) return;
+    if (!(await confirm({ title: `${t("删除")} ${bot.name}？`, description: t("它的设置会删掉，这条线的对话归档保留；其他 bot 不受影响。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     setBusy(true); setStatus("");
     try { await deleteBot(bot.id); onDeleted(); } catch (err) { setStatus(message(err, t("删除失败，请重试。"))); setBusy(false); }
   }
@@ -257,7 +258,7 @@ function BotTelegram({ bot }: { bot: Bot }) {
       {bind && !state.bound && <small className="fine-print">{t("绑定码 30 分钟内有效。发送后最多 30 秒，这里会变成「已绑定 · 运行中」。")}</small>}
       <div className="bot-telegram-row">
         {state.bound && <button type="button" className="secondary-action" disabled={busy} onClick={() => void act(() => unbindBotTelegram(bot.id))}>{t("解绑")}</button>}
-        <button type="button" className="secondary-action" disabled={busy} onClick={() => { if (window.confirm(t("删除这个 bot 的 Telegram token？之后它的消息走共用 bot。也请到 BotFather 撤销这个 token。"))) void act(() => deleteBotTelegram(bot.id)); }}>{t("换 token / 删除")}</button>
+        <button type="button" className="secondary-action" disabled={busy} onClick={async () => { if (await confirm({ title: t("删除这个 bot 的 Telegram token？"), description: t("之后它的消息走共用 bot。也请到 BotFather 撤销这个 token。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true })) void act(() => deleteBotTelegram(bot.id)); }}>{t("换 token / 删除")}</button>
       </div>
     </>}
     {note && <p role="alert">{note}</p>}
@@ -481,7 +482,7 @@ export function ModelCatalogCard() {
       {m.origin === "server" && <span className="catalog-actions">
         <button type="button" className="text-button" disabled={busy} onClick={() => open({ name: m.name, display_name: m.display_name, provider: m.provider, model: m.model, base_url: m.base_url ?? "", key_mode: m.key_source, api_key: "", key_env: m.key_env ?? "", is_default: m.is_default, editing: m })}>{t("编辑")}</button>
         {!m.is_default && <button type="button" className="text-button" disabled={busy} onClick={() => void run(() => setDefaultCatalogModel(m.name), "已设为默认模型。")}>{t("设为默认")}</button>}
-        <button type="button" className="text-button" disabled={busy} onClick={() => { if (window.confirm(`${t("删除模型")} ${m.display_name || m.name}？`)) void run(() => deleteCatalogModel(m.name), "已删除。"); }}>{t("删除")}</button>
+        <button type="button" className="text-button" disabled={busy} onClick={async () => { if (await confirm({ title: `${t("删除模型")} ${m.display_name || m.name}？`, description: t("删除后这个模型会从模型目录里移除，不能恢复。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true })) void run(() => deleteCatalogModel(m.name), "已删除。"); }}>{t("删除")}</button>
       </span>}
     </div>)}
       <button type="button" disabled={busy} className="profile-card profile-add" onClick={() => open(blankEntry(taken))}><strong>{t("＋ 添加模型")}</strong><small>{t("添加一个已兼容的服务配置")}</small></button>

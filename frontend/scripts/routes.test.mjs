@@ -55,6 +55,7 @@ test("paths: one generator per address of the route map", () => {
   assert.equal(paths.settings("nope"), "/settings/models");
   assert.equal(paths.devKit(), "/dev/kit");
   assert.equal(paths.devKit({ probe: true }), "/dev/kit/probe");
+  assert.equal(paths.devKit({ states: true }), "/dev/kit/states");
 });
 
 test("paths escape what must not reach the address raw", () => {
@@ -72,7 +73,7 @@ test("every generated path matches a pattern of the route map", () => {
     paths.company("AAPL"), paths.companyLatest("AAPL"), paths.forecasts(), paths.forecast(ID), paths.judgment(ID), paths.evidenceIndex(), paths.evidence("v"),
     paths.evidence("v", "official_filing", "s"), paths.materials(), paths.scores(), paths.replay(), paths.monitor(), paths.portfolio(), paths.routines(),
     paths.assistant("bots"), paths.assistant("skills"), paths.skill("x"), paths.assistant("memory"), paths.assistant("news"), paths.assistant("knowledge"),
-    paths.settings("data"), paths.devKit(), paths.devKit({ probe: true }),
+    paths.settings("data"), paths.devKit(), paths.devKit({ probe: true }), paths.devKit({ states: true }),
   ];
   const patterns = Object.values(PATTERNS);
   for (const sample of samples) assert.ok(patterns.some((pattern) => matches(pattern, sample)), sample);

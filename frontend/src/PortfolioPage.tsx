@@ -5,6 +5,7 @@ import { appHref } from "./legacy-routes.mjs";
 import { ENTRY_KINDS, KIND_LABELS, blankEntry, entryBody, entryDetail, formatMoney, formatPercent, formatPrice, formatShares, parseAmount, planBody, planChanged, planForm, pnlTone, researchRecord, warningLabels, type PortfolioEntryForm, type PortfolioPlanForm } from "./portfolio-items.mjs";
 import { Parts } from "./ForecastShared";
 import { NOT_RECORDED } from "./forecast-model.mjs";
+import { confirm } from "@/components/state/confirm";
 
 // The 持仓 page (personal finance assistant, Task 6): positions with average cost (primary) and diluted cost, floating and
 // today's P&L, weight, 可用资金 (the owner's money for adding positions, not a company's free cash flow), the owner's own
@@ -72,7 +73,7 @@ export function PortfolioPage() {
     await act(() => putPortfolioPlan(position.symbol, built.body), "计划已保存。");
   }
   async function remove(id: string) {
-    if (!window.confirm(t("删除这一笔记录？持仓和可用资金会按剩下的记录重新计算。"))) return;
+    if (!(await confirm({ title: t("删除这一笔记录？"), description: t("持仓和可用资金会按剩下的记录重新计算。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true }))) return;
     await act(() => deletePortfolioTransaction(id), "已删除。");
   }
 

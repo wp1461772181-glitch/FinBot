@@ -1052,6 +1052,555 @@ async function botRowMarks(ctx) {
   } finally { await view.close(); }
 }
 
+// --- P2.3: states, confirmations, the command palette -----------------------------------------------------------------
+const count = (view, method, re) => view.mock.requests.filter((r) => r.method === method && re.test(r.path)).length;
+/** Press and hold the element under `locator` for `ms` (a real hold: pointer down, wait, pointer up). */
+async function holdPointer(page, locator, ms = 1250) {
+  const box = await locator.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down(); await page.waitForTimeout(ms); await page.mouse.up();
+}
+const dialogOf = (page) => page.locator('[data-slot="alert-dialog-content"]');
+const focusIsMarked = (page) => page.evaluate(() => document.activeElement?.hasAttribute("data-probe-trigger") ?? false);
+
+/**
+ * Every place that used to call window.confirm (nine) now asks in the app.  The browser's confirm is stubbed to count calls and
+ * to say yes if it were ever reached.  Per place: pressing the trigger opens the in-app dialog and sends nothing; Esc closes it,
+ * nothing is sent and focus is back on the trigger; the dialog's own 取消 sends nothing; holding the confirm button sends exactly
+ * one request.  (A real hold: the view keeps motion on.)
+ */
+async function noWindowConfirm(ctx) {
+  const PF = /\/portfolio\/transactions\/[^/]+$/;
+  const sites = [
+    { name: "portfolio record", hash: "#/portfolio", ready: ".pf-positions", trigger: (p) => p.locator(".pf-ledger li button", { hasText: "删除" }).first(), method: "DELETE", re: PF },
+    { name: "skill", hash: "#/assistant/skills", ready: ".skill-group", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/skills\/[^/]+$/ },
+    { name: "memory item", hash: "#/assistant/memory", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/profile\/[^/]+$/ },
+    { name: "news source", hash: "#/assistant/news", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/news-sources\/[^/]+$/ },
+    { name: "routine task", hash: "#/routines", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/tasks\/[^/]+$/ },
+    { name: "bot", hash: `#/chat/${BOT.applebot}/settings`, ready: ".bot-profile", trigger: (p) => p.getByRole("button", { name: "删除这个 bot" }), method: "DELETE", re: /\/bots\/[^/]+$/ },
+    { name: "bot Telegram token", hash: `#/chat/${BOT.applebot}/settings`, ready: ".bot-profile", trigger: (p) => p.getByRole("button", { name: "换 token / 删除" }), method: "DELETE", re: /\/bots\/[^/]+\/telegram$/ },
+    { name: "catalog model", hash: "#/settings/models", ready: ".agent-admin h2", trigger: (p) => p.locator(".catalog-actions button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/model-catalog\/[^/]+$/ },
+    { name: "Telegram unbind", hash: "#/settings/notifications", ready: ".agent-admin h2", trigger: (p) => p.getByRole("button", { name: "解除绑定" }), method: "POST", re: /\/telegram\/unbind$/ },
+  ];
+  const report = [];
+  for (const site of sites) {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: `confirm: ${site.name}`, unmatched, motion: true });
+    try {
+      const { page } = view;
+      await page.addInitScript(() => { window.__confirmCalls = 0; window.confirm = () => { window.__confirmCalls += 1; return true; }; });
+      await page.goto(`${ctx.server.url}${site.hash}`, { waitUntil: "load" });
+      await waitReady(page, { ready: site.ready });
+      await page.evaluate(() => { window.__confirmCalls = 0; window.confirm = () => { window.__confirmCalls += 1; return true; }; });
+      const trigger = site.trigger(page);
+      await trigger.waitFor({ timeout: 10000 });
+      await trigger.evaluate((el) => el.setAttribute("data-probe-trigger", ""));
+      // 1. open, then Esc
+      await trigger.click();
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      assert((await dialogOf(page).locator('[data-slot="alert-dialog-title"]').innerText()).trim().length > 0, `${site.name}: the dialog has no title`);
+      assert((await dialogOf(page).locator('[data-slot="alert-dialog-description"]').innerText()).trim().length > 0, `${site.name}: the dialog says nothing about what follows`);
+      assert(await dialogOf(page).locator('[data-slot="hold-button"]').count() === 1, `${site.name}: not a press-and-hold confirmation`);
+      assert(count(view, site.method, site.re) === 0, `${site.name}: a request went out before the answer`);
+      await page.keyboard.press("Escape");
+      await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+      await page.waitForFunction(() => document.activeElement?.hasAttribute("data-probe-trigger"), null, { timeout: 3000 });
+      assert(count(view, site.method, site.re) === 0, `${site.name}: Esc did not cancel`);
+      // 2. open, 取消
+      await trigger.click();
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      await dialogOf(page).getByRole("button", { name: "取消" }).click();
+      await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+      await page.waitForFunction(() => document.activeElement?.hasAttribute("data-probe-trigger"), null, { timeout: 3000 });
+      assert(count(view, site.method, site.re) === 0, `${site.name}: 取消 did not cancel`);
+      // 3. open, a short press does nothing, a full hold confirms
+      await trigger.click();
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'), 300);
+      assert(await dialogOf(page).count() === 1 && count(view, site.method, site.re) === 0, `${site.name}: a short press confirmed`);
+      await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'));
+      await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+      const deadline = Date.now() + 5000;
+      while (count(view, site.method, site.re) < 1 && Date.now() < deadline) await page.waitForTimeout(100);
+      assert(count(view, site.method, site.re) === 1, `${site.name}: expected exactly one ${site.method} after the hold, saw ${count(view, site.method, site.re)}`);
+      const calls = await page.evaluate(() => window.__confirmCalls);
+      assert(calls === 0, `${site.name}: window.confirm was called ${calls} time(s)`);
+      report.push(site.name);
+    } catch (error) { throw new Error(`${site.name}: ${String(error.message).split("\n")[0]}`); }
+    finally { await view.close(); }
+  }
+  return `${report.length} places: in-app dialog, Esc / 取消 send nothing and return focus, a full hold sends one request, window.confirm never called`;
+}
+
+/** The confirmation from the keyboard (and with reduced motion): focus starts on 取消, Esc cancels, holding Space or Enter confirms, press-twice works with no hold at all. */
+async function confirmDialogKeyboard(ctx) {
+  const open = async (motion) => {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "confirm keyboard", unmatched, motion });
+    await view.page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await view.page.locator("[data-kit-states]").waitFor();
+    return view;
+  };
+  let view = await open(true);
+  try {
+    const { page } = view;
+    const result = () => page.locator('[data-kit="confirm-result"]').innerText();
+    // Plain confirm: Enter on the trigger opens it; focus starts on 取消; Tab reaches 归档; Esc answers no and gives focus back.
+    await page.locator('[data-kit="confirm-plain"]').focus(); await page.keyboard.press("Enter");
+    await dialogOf(page).waitFor();
+    assert((await page.evaluate(() => document.activeElement?.textContent?.trim())) === "取消", "focus did not start on 取消");
+    await page.keyboard.press("Tab");
+    assert((await page.evaluate(() => document.activeElement?.textContent?.trim())) === "归档", "Tab did not reach the confirm button");
+    await page.keyboard.press("Escape"); await dialogOf(page).waitFor({ state: "detached" });
+    assert((await result()).includes("cancelled"), `Esc: ${await result()}`);
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-kit") === "confirm-plain", null, { timeout: 3000 }).catch(() => { throw new Error("focus did not return to the trigger"); });
+    await page.keyboard.press("Enter"); await dialogOf(page).waitFor();
+    await page.keyboard.press("Tab"); await page.keyboard.press("Enter");
+    await dialogOf(page).waitFor({ state: "detached" });
+    assert((await result()).includes("confirmed"), `Enter on the confirm button: ${await result()}`);
+    // Hold: holding Space for a full second confirms; a short press does not; Enter works the same.
+    for (const key of ["Space", "Enter"]) {
+      await page.locator('[data-kit="confirm-hold"]').focus(); await page.keyboard.press("Enter");
+      await dialogOf(page).waitFor();
+      await page.keyboard.press("Tab");
+      assert(await page.evaluate(() => document.activeElement?.getAttribute("data-slot")) === "hold-button", "Tab did not reach the hold button");
+      await page.keyboard.down(key); await page.waitForTimeout(250); await page.keyboard.up(key);
+      assert(await dialogOf(page).count() === 1, `a short ${key} press confirmed`);
+      await page.keyboard.down(key); await page.waitForTimeout(1250); await page.keyboard.up(key);
+      await dialogOf(page).waitFor({ state: "detached", timeout: 3000 });
+      assert((await result()).includes("confirmed"), `hold ${key}: ${await result()}`);
+      await page.waitForFunction(() => document.activeElement?.getAttribute("data-kit") === "confirm-hold", null, { timeout: 3000 }).catch(() => { throw new Error(`hold ${key}: focus did not return`); });
+      await page.locator('[data-kit="confirm-plain"]').click(); await dialogOf(page).waitFor(); await page.keyboard.press("Escape"); await dialogOf(page).waitFor({ state: "detached" });
+    }
+  } finally { await view.close(); }
+  // Reduced motion (the harness default): no fill to watch, so press twice; a click with no press before it (assistive technology) is the same.
+  view = await open(false);
+  try {
+    const { page } = view;
+    const result = () => page.locator('[data-kit="confirm-result"]').innerText();
+    await page.locator('[data-kit="confirm-hold"]').click(); await dialogOf(page).waitFor();
+    const hold = dialogOf(page).locator('[data-slot="hold-button"]');
+    await hold.focus(); await page.keyboard.press("Space");
+    assert(await dialogOf(page).count() === 1 && (await hold.innerText()).includes("再点一次"), "the first press should only arm the button");
+    await page.keyboard.press("Space");
+    await dialogOf(page).waitFor({ state: "detached" });
+    assert((await result()).includes("confirmed"), `press twice: ${await result()}`);
+    await page.locator('[data-kit="confirm-hold"]').click(); await dialogOf(page).waitFor();
+    await hold.dispatchEvent("click"); await hold.dispatchEvent("click");
+    await dialogOf(page).waitFor({ state: "detached" });
+    assert((await result()).includes("confirmed"), `two bare clicks: ${await result()}`);
+  } finally { await view.close(); }
+  return "focus starts on 取消, Esc cancels and returns focus; holding Space or Enter ~1s confirms (a short press does not); reduced motion and bare clicks: press twice";
+}
+
+/** The shortcut and the palette: company, bot (hidden too), page and recent chat each lead where they say; Esc closes and returns focus. */
+async function commandMenuNavigates(ctx) {
+  const state = buildState();
+  state.bots.find((b) => b.id === BOT.applebot).hidden = true;
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "command menu", unmatched, fixtureState: state });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    await settle(page);
+    const palette = page.locator('[data-slot="command-menu"]');
+    const input = palette.locator("input");
+    const open = async (how = "shortcut") => {
+      if (how === "shortcut") await page.keyboard.press("Control+k");
+      else await page.locator('[data-slot="sidebar"] button[aria-label="命令面板"]').click();
+      await palette.waitFor({ timeout: 5000 });
+      assert(await page.evaluate(() => document.activeElement?.tagName === "INPUT"), "focus did not go to the search field");
+    };
+    const rows = () => palette.locator('[data-slot="command-item"]');
+    // A code on the watch list: Enter on the first row opens it.
+    await open(); await input.fill("TS"); await rows().first().waitFor();
+    assert((await rows().first().innerText()).includes("TSLA"), `first row for "TS": ${await rows().first().innerText()}`);
+    assert((await rows().nth(1).innerText()).includes("加入自选并打开"), "second row for TS should offer to add TS");
+    await page.keyboard.press("Enter"); await waitHash(page, "#/research/c/TSLA"); await palette.waitFor({ state: "detached" });
+    // A bot, a hidden one: found by name, marked 已隐藏, opens its line.
+    await open(); await input.fill("AppleBot"); await rows().first().waitFor();
+    const apple = await rows().first().innerText();
+    assert(apple.includes("AppleBot") && apple.includes("已隐藏"), `hidden bot row: ${apple}`);
+    await page.keyboard.press("Enter"); await waitHash(page, `#/chat/${BOT.applebot}`);
+    // A page by its name, with the area it belongs to.
+    await open(); await input.fill("持仓"); await rows().first().waitFor();
+    assert((await rows().first().innerText()).includes("持仓"), "page row");
+    await page.keyboard.press("Enter"); await waitHash(page, "#/portfolio");
+    await open(); await input.fill("证据");
+    const evidenceRow = await rows().first().innerText();
+    assert(evidenceRow.includes("证据") && evidenceRow.includes("研究"), `evidence row names its area: ${evidenceRow}`);
+    await page.keyboard.press("Enter"); await page.waitForFunction(() => location.hash.startsWith("#/research/evidence"), null, { timeout: 5000 });
+    // A recent conversation (the existing history list), opened by its title.
+    await open("button");
+    await palette.locator('[cmdk-group-heading]', { hasText: "最近对话" }).waitFor({ timeout: 5000 });
+    const titles = await palette.locator('[data-kind="recent"]').allInnerTexts();
+    assert(titles.length >= 2, `recent conversations: ${titles.join(" | ")}`);
+    await input.fill(titles[1].slice(0, 4)); await rows().first().waitFor();
+    await page.keyboard.press("Enter"); await page.waitForFunction(() => /^#\/chat\/c\//.test(location.hash), null, { timeout: 5000 });
+    // Esc closes it and gives focus back to what had it (by the shortcut and by the sidebar button).
+    const anchor = page.locator('[data-slot="sidebar"] a[href="#/routines"]');
+    await anchor.focus(); await open(); await page.keyboard.press("Escape"); await palette.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("href") === "#/routines", null, { timeout: 3000 });
+    await open("button"); await page.keyboard.press("Escape"); await palette.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "命令面板", null, { timeout: 3000 });
+    // The shortcut also closes it.
+    await open(); await page.keyboard.press("Control+k"); await palette.waitFor({ state: "detached" });
+    // The dialog is labelled for a screen reader.
+    await open(); assert((await page.getByRole("dialog", { name: "命令面板" }).count()) === 1, "the palette has no dialog title");
+    await page.keyboard.press("Escape");
+    return "TS -> TSLA (+ offer to add TS); hidden AppleBot (已隐藏) opens its line; 持仓 and 证据 open their pages; a recent chat opens; Esc and the shortcut close it, focus returns";
+  } finally { await view.close(); }
+}
+
+/** In the English interface the palette's page names, group names and the offer are English. */
+async function commandMenuEnglish(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", locale: "en-US", label: "command menu en", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    await page.keyboard.press("Control+k");
+    const palette = page.locator('[data-slot="command-menu"]');
+    await palette.waitFor();
+    await palette.locator('[cmdk-group-heading]', { hasText: "Recent chats" }).waitFor({ timeout: 5000 });
+    const heads = await palette.locator("[cmdk-group-heading]").allInnerTexts();
+    assert(heads.join(",") === "Company,bot,Pages,Recent chats", `group names: ${heads.join(",")}`);
+    const input = palette.locator("input");
+    await input.fill("portfolio");
+    assert((await palette.locator('[data-slot="command-item"]').first().innerText()).toLowerCase().includes("portfolio"), "English page name should match");
+    await input.fill("appearance"); await page.keyboard.press("Enter");
+    await page.waitForFunction(() => location.hash === "#/settings/appearance", null, { timeout: 5000 });
+    await page.keyboard.press("Control+k"); await palette.waitFor();
+    await input.fill("NFLX");
+    assert((await palette.locator('[data-slot="command-item"]').first().innerText()).includes("Add to watchlist and open"), "English offer");
+    const text = await palette.innerText();
+    assert(!/[一-鿿]/.test(text), `Chinese left in the English palette: ${text.match(/[一-鿿]+/)?.[0]}`);
+    return "groups Company / bot / Pages / Recent chats; page names and the add offer in English; no Chinese in the palette";
+  } finally { await view.close(); }
+}
+
+/** A valid code that is not on the watch list: the palette offers 加入自选并打开; doing it opens the company and the fake API receives the queue update. */
+async function commandMenuAddWatch(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "command menu add", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    await settle(page);
+    await page.keyboard.press("Control+k");
+    const palette = page.locator('[data-slot="command-menu"]');
+    await palette.locator("input").fill("nflx");
+    const first = palette.locator('[data-slot="command-item"]').first();
+    await first.waitFor();
+    const text = await first.innerText();
+    assert(text.includes("加入自选并打开") && text.includes("NFLX"), `offer: ${text}`);
+    assert(!view.mock.state.queue.includes("NFLX"), "NFLX should not be on the list yet");
+    const before = count(view, "PUT", /research-queue$/);
+    await page.keyboard.press("Enter");
+    await waitHash(page, "#/research/c/NFLX");
+    const deadline = Date.now() + 5000;
+    while (!view.mock.state.queue.includes("NFLX") && Date.now() < deadline) await page.waitForTimeout(100);
+    assert(view.mock.state.queue.includes("NFLX"), `the fake API never received the update; queue: ${view.mock.state.queue.join(",")}`);
+    assert(count(view, "PUT", /research-queue$/) > before, "no PUT /research-queue");
+    // Typing something that is not a code offers nothing; a code already on the list is not offered again.
+    await page.keyboard.press("Control+k");
+    await palette.locator("input").fill("not a code!");
+    assert(await palette.locator('[data-kind="add"]').count() === 0, "an offer for text that is not a code");
+    await palette.locator("input").fill("NFLX");
+    assert(await palette.locator('[data-kind="add"]').count() === 0 && (await palette.locator('[data-slot="command-item"]').first().innerText()).includes("NFLX"), "NFLX is on the list now: it is listed, not offered");
+    return "nflx -> 加入自选并打开 NFLX -> #/research/c/NFLX, PUT /research-queue carries NFLX";
+  } finally { await view.close(); }
+}
+
+/** Phone: the way in is the search box at the top of 更多; it opens the palette, and closing it puts focus back on 更多. */
+async function commandMenuMobile(ctx) {
+  const view = await newView(ctx.browser, { width: 390, theme: "light", label: "command menu mobile", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    await page.locator('[data-slot="mobile-tab-bar"] button[aria-haspopup="dialog"]').click();
+    await page.locator('[data-slot="drawer-content"]').waitFor();
+    await page.locator('[data-slot="palette-entry"]').click();
+    const palette = page.locator('[data-slot="command-menu"]');
+    await palette.waitFor();
+    await palette.locator("input").fill("TSLA");
+    await palette.locator('[data-slot="command-item"]').first().waitFor();
+    const box = await palette.boundingBox();
+    assert(box && box.x >= 0 && box.x + box.width <= 390, `the palette is wider than the phone: ${JSON.stringify(box)}`);
+    await page.keyboard.press("Escape"); await palette.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.hasAttribute("data-more-trigger"), null, { timeout: 3000 });
+    return "更多 -> search box -> palette fits 390px; Esc returns focus to 更多";
+  } finally { await view.close(); }
+}
+
+/** Toasts: bottom right, gone after about two seconds, above a dialog, 撤销 reachable and usable by keyboard. */
+async function toastAutoDismiss(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "toast", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    const toast = page.locator("[data-sonner-toast]");
+    const t0 = Date.now();
+    await page.locator('[data-kit="toast-success"]').click();
+    await toast.first().waitFor({ timeout: 5000 });
+    const box = await toast.first().boundingBox();
+    const vp = page.viewportSize();
+    assert(box.x > vp.width / 2 && box.y > vp.height / 2, `toast is not bottom right: ${JSON.stringify(box)}`);
+    assert((await toast.first().innerText()).includes("已保存"), "toast text");
+    await toast.first().waitFor({ state: "detached", timeout: 6000 });
+    const lived = Date.now() - t0;
+    assert(lived >= 1500 && lived <= 4500, `a plain toast lived ${lived}ms (design: about 2s)`);
+    // Undo toast: lives longer than a plain one, the button works by keyboard.
+    await page.locator('[data-kit="toast-undo"]').click();
+    await toast.first().waitFor();
+    assert((await toast.first().innerText()).includes("撤销"), "the undo toast has no 撤销");
+    await page.waitForTimeout(2600);
+    assert(await toast.count() === 1, "an undo toast should outlast the 2s of a plain one");
+    await page.keyboard.press("Alt+t");
+    const focusedInToaster = await page.evaluate(() => !!document.activeElement?.closest("[data-sonner-toaster]"));
+    assert(focusedInToaster, "Alt+T did not move focus into the toaster");
+    for (let i = 0; i < 4; i += 1) { const label = await page.evaluate(() => document.activeElement?.textContent?.trim()); if (label === "撤销") break; await page.keyboard.press("Tab"); }
+    assert((await page.evaluate(() => document.activeElement?.textContent?.trim())) === "撤销", "Tab never reached 撤销 inside the toaster");
+    await page.keyboard.press("Enter");
+    await page.locator("[data-sonner-toast]", { hasText: "已撤销" }).waitFor({ timeout: 4000 });
+    // z-order: --z-toast is above --z-dialog
+    const layers = await page.evaluate(() => { const v = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(); const t = document.querySelector("[data-sonner-toaster]"); return { dialog: v("--z-dialog"), toast: v("--z-toast"), applied: t ? getComputedStyle(t).zIndex : null }; });
+    assert(Number(layers.toast) > Number(layers.dialog) && layers.applied === layers.toast, `layers: ${JSON.stringify(layers)}`);
+    return `plain toast bottom right, gone after ${lived}ms; undo toast outlasts it and 撤销 works with Alt+T, Tab, Enter; z ${layers.toast} over dialog ${layers.dialog}`;
+  } finally { await view.close(); }
+}
+
+/** A toast raised while the login dialog is open is on top of it (the click goes to the toast's own button, not the dialog's backdrop). */
+async function toastAboveDialog(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "toast over dialog", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    await page.locator('[data-kit="toast-pinned"]').click();
+    await page.locator("[data-sonner-toast]").waitFor();
+    await page.locator('[data-kit="login-open"]').click();
+    await page.getByRole("dialog").waitFor();
+    const top = await page.evaluate(() => { const toast = document.querySelector("[data-sonner-toast]").getBoundingClientRect(); const hit = document.elementFromPoint(toast.x + toast.width / 2, toast.y + toast.height / 2); return !!hit?.closest("[data-sonner-toast]"); });
+    assert(top, "the toast is covered by the dialog layer");
+    return "toast stays visible and hit-testable above the open login dialog";
+  } finally { await view.close(); }
+}
+
+/** The unreachable backend: failed requests light one banner; 重试 with the backend back puts it out; ordinary error answers do not light it. */
+async function offlineBanner(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "offline", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    await settle(page);
+    const banner = page.locator('[data-slot="offline-banner"]');
+    assert(await banner.count() === 0, "the banner is showing while the backend answers");
+    view.mock.control.down = true;
+    await page.evaluate(() => { location.hash = "#/portfolio"; });
+    await banner.first().waitFor({ timeout: 8000 });
+    assert(await banner.count() === 1, `${await banner.count()} banners (one expected)`);
+    const text = await banner.innerText();
+    assert(text.includes("连不上后端") && text.includes("重试"), `banner text: ${text}`);
+    assert(await page.locator('[data-slot="offline-banner"][role="alert"]').count() === 1, "the banner is not announced");
+    const top = await banner.evaluate((el) => el.getBoundingClientRect().top);
+    assert(top <= 1, `the banner is not at the top of the page (top ${top})`);
+    // still down: 重试 replays a failed read, fails, the banner stays
+    await banner.getByRole("button", { name: "重试" }).click();
+    await page.waitForTimeout(600);
+    assert(await banner.count() === 1, "the banner went out while the backend was still down");
+    // back: 重试 -> gone
+    view.mock.control.down = false;
+    await banner.getByRole("button", { name: "重试" }).click();
+    await banner.waitFor({ state: "detached", timeout: 8000 });
+    // A gateway answer from a proxy lights it as well; the application's own errors do not.
+    view.mock.control.down502 = true;
+    await page.evaluate(() => { location.hash = "#/routines"; });
+    await banner.first().waitFor({ timeout: 8000 });
+    view.mock.control.down502 = false;
+    await banner.getByRole("button", { name: "重试" }).click();
+    await banner.waitFor({ state: "detached", timeout: 8000 });
+    return "down -> one banner at the top (role=alert, 重试); still down: stays; back + 重试: gone; a proxy 502 lights it too";
+  } finally { await view.close(); }
+}
+
+/** An application error is not "offline": a guest's 403s and unanswered fixtures never light the banner. */
+async function offlineBannerQuiet(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", identity: "guest", label: "offline quiet", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await page.locator('[data-slot="guest-composer"]').waitFor({ timeout: 15000 });
+    await settle(page);
+    assert(await page.locator('[data-slot="offline-banner"]').count() === 0, "the banner lit for 4xx answers");
+    return "403 answers to a guest leave the banner out";
+  } finally { await view.close(); }
+}
+
+/** The 400ms rule: a quick load shows no skeleton, a slow one shows it after the delay; with reduced motion the blocks do not pulse; a lazy page's code arriving late is covered by a skeleton of its shape. */
+async function skeletonDelay(ctx) {
+  let view = await newView(ctx.browser, { width: 1440, theme: "light", label: "skeleton delay", unmatched, motion: true });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    const stage = page.locator('[data-kit="skeleton-stage"] [data-slot="skeleton-frame"]');
+    // quick: sample the stage for 700ms, the skeleton must never appear
+    await page.locator('[data-kit="skeleton-fast"]').click();
+    let seen = false;
+    for (let i = 0; i < 14; i += 1) { if (await stage.count()) seen = true; await page.waitForTimeout(50); }
+    assert(!seen, "a 200ms load showed a skeleton");
+    // slow: nothing at 250ms, there by 700ms, gone after the load ends
+    await page.locator('[data-kit="skeleton-slow"]').click();
+    await page.waitForTimeout(250);
+    assert(await stage.count() === 0, "the skeleton showed before 400ms");
+    await page.waitForTimeout(450);
+    assert(await stage.count() === 1, "the skeleton had not shown by 700ms of a slow load");
+    const pulse = await page.locator('[data-kit="skeleton-stage"] [data-slot="skeleton"]').first().evaluate((el) => getComputedStyle(el).animationName);
+    assert(pulse === "pulse", `with motion allowed the blocks should pulse (animation-name ${pulse})`);
+    await page.waitForTimeout(1300);
+    assert(await stage.count() === 0, "the skeleton stayed after the load ended");
+    // every shape is there and says 正在读取 once per frame to a screen reader
+    const shapes = await page.locator('[data-kit="skeleton-shapes"] [data-slot="skeleton-frame"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-variant")));
+    assert(["rows", "card", "table", "messages"].every((v) => shapes.includes(v)), `shapes: ${shapes.join(",")}`);
+  } finally { await view.close(); }
+  // Reduced motion: no pulse at all.  (This view's own no-motion style is not injected so the page's CSS decides.)
+  view = await newView(ctx.browser, { width: 1440, theme: "light", label: "skeleton reduced", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    const name = await page.locator('[data-kit="skeleton-shapes"] [data-slot="skeleton"]').first().evaluate((el) => getComputedStyle(el).animationName);
+    assert(name === "none", `reduced motion: the skeleton should not animate (animation-name ${name})`);
+  } finally { await view.close(); }
+  // Route level: the next page's chunk is held back; before 400ms nothing covers the page, after it a skeleton does, and it leaves when the page arrives.
+  view = await newView(ctx.browser, { width: 1440, theme: "light", label: "route skeleton", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    await settle(page);
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    await view.context.route(/\/assets\/portfolio-[^/]*\.js$/, async (route) => { await gate; await route.continue(); });
+    await page.evaluate(() => { location.hash = "#/portfolio"; });
+    await page.waitForTimeout(250);
+    assert(await page.locator('[data-slot="page-pending"]').count() === 0, "a skeleton covered the page before 400ms");
+    await page.waitForTimeout(450);
+    assert(await page.locator('[data-slot="page-pending"] [data-variant="table"]').count() === 1, "no table skeleton after 700ms of waiting for the portfolio page");
+    assert(await page.locator(".agent-thread").count() === 1, "the page on screen was unmounted while waiting");
+    release();
+    await page.locator(".pf-positions").waitFor({ timeout: 10000 });
+    assert(await page.locator('[data-slot="page-pending"]').count() === 0, "the skeleton stayed after the page arrived");
+    // an ordinary (fast) navigation never shows one
+    let flashed = false;
+    await page.evaluate(() => { window.__pendingSeen = false; new MutationObserver(() => { if (document.querySelector('[data-slot="page-pending"]')) window.__pendingSeen = true; }).observe(document.body, { childList: true, subtree: true }); });
+    await page.evaluate(() => { location.hash = "#/routines"; });
+    await page.locator("main.personal-page h1").waitFor({ timeout: 10000 });
+    flashed = await page.evaluate(() => window.__pendingSeen);
+    assert(!flashed, "a quick page change flashed a skeleton");
+  } finally { await view.close(); }
+  return "200ms: never; 1.5s: after 400ms, gone at the end; blocks pulse only with motion allowed; a held-back page chunk is covered after 400ms by a table skeleton and a quick change shows none";
+}
+
+/** The three components that end up inside old pages look the same inside a data-legacy island as outside it (they carry data-slot, so the restore block leaves them alone). */
+async function stateComponentsInLegacy(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "states in legacy", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator('[data-probe="state-island"]').waitFor();
+    await settle(page, { pinTranscript: false });
+    const props = ["display", "marginTop", "marginBottom", "marginLeft", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textTransform", "color", "backgroundColor", "borderTopWidth", "borderTopStyle", "borderTopColor", "borderRadius", "listStyleType", "textDecorationLine", "cursor", "width", "height", "textAlign"];
+    const read = (probe) => page.evaluate(([name, list]) => {
+      const root = document.querySelector(`[data-probe="${name}"]`);
+      const pick = (el) => { const cs = getComputedStyle(el); return Object.fromEntries(list.map((prop) => [prop, cs[prop]])); };
+      const out = {};
+      const parts = { errorBar: '[data-slot="error-bar"]', errorText: '[data-slot="error-bar"] p', errorButton: '[data-slot="error-bar"] button', errorIcon: '[data-slot="error-bar"] svg', empty: '[data-slot="empty-state"]', emptyTitle: '[data-slot="empty-state"] h3', emptyButton: '[data-slot="empty-state"] button', stateful: '[data-slot="button"]' };
+      for (const [key, selector] of Object.entries(parts)) { const el = root.querySelector(selector); out[key] = el ? pick(el) : null; }
+      return out;
+    }, [probe, props]);
+    const outside = await read("state-outside"), inside = await read("state-island");
+    const bad = [];
+    for (const key of Object.keys(outside)) {
+      if (!outside[key] || !inside[key]) { bad.push(`${key}: missing in ${outside[key] ? "the island" : "the outside copy"}`); continue; }
+      for (const prop of props) if (outside[key][prop] !== inside[key][prop]) bad.push(`${key}.${prop}: outside ${outside[key][prop]} / inside the legacy island ${inside[key][prop]}`);
+    }
+    assert(!bad.length, bad.join("\n"));
+    return `ErrorBar, EmptyState and StatefulButton: ${Object.keys(outside).length} parts x ${props.length} properties identical inside data-legacy and outside`;
+  } finally { await view.close(); }
+}
+
+/** The long-task bar: stage and elapsed time, survives leaving the page, the end is a toast. */
+async function taskBar(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "task bar", unmatched, motion: true });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    await page.locator('[data-kit="task-start"]').click();
+    const row = page.locator('[data-slot="task-bar"] [data-slot="task-row"]');
+    await row.first().waitFor({ timeout: 3000 });
+    assert((await row.first().innerText()).includes("扫描 SEC") && (await row.first().innerText()).includes("读取申报列表"), `row: ${await row.first().innerText()}`);
+    // leave for a page inside the shell: the bar is still there, in the dock
+    await page.evaluate(() => { location.hash = "#/chat"; });
+    await page.locator(".agent-thread .agent-message").first().waitFor({ timeout: 15000 });
+    const dock = page.locator('[data-slot="task-dock"] [data-slot="task-row"]');
+    await dock.first().waitFor({ timeout: 3000 });
+    const first = await dock.first().locator("[data-elapsed]").innerText();
+    await page.waitForTimeout(2300);
+    const later = await dock.first().locator("[data-elapsed]").innerText();
+    assert(first !== later, `elapsed time did not move (${first} -> ${later})`);
+    assert((await dock.first().innerText()).includes("解析正文"), `the stage did not change: ${await dock.first().innerText()}`);
+    // the end: a toast, and the bar is gone
+    await page.locator("[data-sonner-toast]", { hasText: "SEC 扫描完成" }).waitFor({ timeout: 8000 });
+    assert(await page.locator('[data-slot="task-dock"]').count() === 0, "the dock stayed after the task ended");
+    return `0:0x -> later ${later}; stage 读取申报列表 -> 解析正文; left for #/chat and the bar followed; the end came as a toast`;
+  } finally { await view.close(); }
+}
+
+/** The sample page of the states answers: stateful button phases, the error bar's retry, the empty state's action, keyboard focus rings. */
+async function statesSamplePage(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "states sample", unmatched, motion: true });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
+    await page.locator("[data-kit-states]").waitFor();
+    const rows = await page.locator("[data-kit-state]").evaluateAll((els) => els.map((el) => el.getAttribute("data-kit-state")));
+    assert(rows.join(",") === "1,2,3,4,5,6,7,8,9", `rows: ${rows.join(",")}`);
+    const ok = page.locator('[data-kit="stateful-ok"]');
+    await ok.click();
+    assert((await ok.getAttribute("data-phase")) === "loading" && (await ok.getAttribute("aria-busy")) === "true", "not loading after the click");
+    const width = await ok.evaluate((el) => el.getBoundingClientRect().width);
+    await page.waitForFunction(() => document.querySelector('[data-kit="stateful-ok"]').getAttribute("data-phase") === "success", null, { timeout: 4000 });
+    assert(Math.abs((await ok.evaluate((el) => el.getBoundingClientRect().width)) - width) < 0.5, "the button changed width between phases");
+    await page.waitForFunction(() => document.querySelector('[data-kit="stateful-ok"]').getAttribute("data-phase") === "idle", null, { timeout: 4000 });
+    const fail = page.locator('[data-kit="stateful-fail"]');
+    await fail.click();
+    await page.waitForFunction(() => document.querySelector('[data-kit="stateful-fail"]').getAttribute("data-phase") === "error", null, { timeout: 4000 });
+    const colours = await page.evaluate(() => { const css = (name) => { const probe = document.createElement("i"); probe.style.backgroundColor = `var(${name})`; document.body.appendChild(probe); const c = getComputedStyle(probe).backgroundColor; probe.remove(); return c; };
+      const chip = (phase) => { const el = document.querySelector(`[data-phase-static="${phase}"] span.rounded-full`); return el && getComputedStyle(el).backgroundColor; };
+      return { success: [chip("success"), css("--success")], error: [chip("error"), css("--danger")], up: css("--up"), down: css("--down") }; });
+    assert(colours.success[0] === colours.success[1] && colours.error[0] === colours.error[1], `phase colours are not the success / danger tokens: ${JSON.stringify(colours)}`);
+    await page.locator('[data-kit-state="3"] [data-slot="error-bar"] button').first().click();
+    assert((await page.locator('[data-kit="error-tries"]').innerText()).includes("1"), "retry did not call back");
+    assert(await page.locator('[data-kit-state="3"] [role="alert"]').count() === 2, "error bars are not role=alert");
+    const link = page.locator('[data-kit-state="3"] [data-slot="error-bar"] a').first();
+    assert((await link.innerText()).includes("去设置") && (await link.getAttribute("href")) === "#/settings/models", "去设置 link");
+    await page.locator('[data-kit-state="2"] button').click();
+    assert((await page.locator('[data-kit="empty-acted"]').count()) === 1, "the empty state's action did nothing");
+    // focus is visible on the sample's controls
+    for (const sel of ['[data-kit="stateful-ok"]', '[data-kit-state="3"] [data-slot="error-bar"] button', '[data-kit-state="2"] button']) {
+      await page.keyboard.press("Shift");   // the last input was the keyboard: :focus-visible applies
+      await page.locator(sel).first().focus();
+      const ring = await page.evaluate(() => { const cs = getComputedStyle(document.activeElement); return `${cs.boxShadow} ${cs.outlineStyle}`; });
+      assert(!/^none none$/.test(ring.trim()) && ring.trim() !== "none none", `no visible focus on ${sel}: ${ring}`);
+    }
+    return "nine rows; stateful button loading -> success / error without a width change (success / danger tokens); error bar retry + 去设置; empty action; focus rings";
+  } finally { await view.close(); }
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -1083,6 +1632,20 @@ const CHECKS = [
   ["mobile-bar-and-more: five 44px items, no sidebar, 更多 lists the bots, 助手, 设置, account, theme", mobileBarAndMore],
   ["legacy-restore-in-shell: old pages keep browser margins inside the new shell; the sidebar's tags are preflight", legacyRestoreInShell],
   ["bot-row-marks: answering / waiting / unread / quiet rows are told apart", botRowMarks],
+  ["no-window-confirm: the nine former window.confirm places ask in the app; Esc / 取消 send nothing, a full hold sends one request", noWindowConfirm],
+  ["confirm-dialog-keyboard: focus starts on 取消, Esc cancels, holding Space or Enter confirms, reduced motion and bare clicks press twice", confirmDialogKeyboard],
+  ["command-menu-navigates: shortcut, company / hidden bot / page / recent chat each open; Esc closes and returns focus", commandMenuNavigates],
+  ["command-menu-english: group names, page names and the add offer are English in the English interface", commandMenuEnglish],
+  ["command-menu-add-watch: a valid code off the list offers 加入自选并打开 and the fake API receives the queue update", commandMenuAddWatch],
+  ["command-menu-mobile: 更多 has the search entry; the palette fits 390px and focus returns to 更多", commandMenuMobile],
+  ["toast-auto-dismiss: bottom right, about 2s, undo outlasts it and works by keyboard, above dialogs", toastAutoDismiss],
+  ["toast-above-dialog: a toast stays on top of an open dialog", toastAboveDialog],
+  ["offline-banner: failed requests light one banner at the top; 重试 with the backend back puts it out", offlineBanner],
+  ["offline-banner-quiet: application errors (a guest's 403s) never light the banner", offlineBannerQuiet],
+  ["skeleton-delay: no skeleton for a quick load, one after 400ms for a slow one, none pulsing under reduced motion, route-level cover", skeletonDelay],
+  ["state-components-in-legacy: ErrorBar, EmptyState, StatefulButton look the same inside a data-legacy island", stateComponentsInLegacy],
+  ["task-bar: stage and elapsed time, follows the reader to another page, the end is a toast", taskBar],
+  ["states-sample: the nine states at #/dev/kit/states work", statesSamplePage],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

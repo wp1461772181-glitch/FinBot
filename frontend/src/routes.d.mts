@@ -12,7 +12,7 @@ export const ROUTINE_TABS: readonly RoutineTab[];
 export const SETTINGS_SECTIONS: readonly SettingsSection[];
 export const ASSISTANT_SECTIONS: readonly AssistantSection[];
 export const SOURCE_TYPES: readonly SourceType[];
-export const PATTERNS: Record<"login" | "chat" | "chatBot" | "chatBotSettings" | "chatConversation" | "chatHistory" | "research" | "company" | "companyLatest" | "forecasts" | "forecast" | "judgment" | "evidenceIndex" | "evidence" | "evidenceSource" | "materials" | "scores" | "replay" | "monitor" | "portfolio" | "routines" | "assistantBots" | "assistantSkills" | "assistantSkill" | "assistantMemory" | "assistantNews" | "assistantKnowledge" | "settings" | "devKit" | "devKitProbe", string>;
+export const PATTERNS: Record<"login" | "chat" | "chatBot" | "chatBotSettings" | "chatConversation" | "chatHistory" | "research" | "company" | "companyLatest" | "forecasts" | "forecast" | "judgment" | "evidenceIndex" | "evidence" | "evidenceSource" | "materials" | "scores" | "replay" | "monitor" | "portfolio" | "routines" | "assistantBots" | "assistantSkills" | "assistantSkill" | "assistantMemory" | "assistantNews" | "assistantKnowledge" | "settings" | "devKit" | "devKitProbe" | "devKitStates", string>;
 
 export const paths: {
   login(): string;
@@ -37,7 +37,7 @@ export const paths: {
   assistant(section?: AssistantSection): string;
   skill(skillId: string): string;
   settings(section?: SettingsSection): string;
-  devKit(options?: { probe?: boolean }): string;
+  devKit(options?: { probe?: boolean; states?: boolean }): string;
 };
 
 export function symbolParam(value: unknown): string;
