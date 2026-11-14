@@ -6,10 +6,9 @@ import { bottomScrollTop, isFollowing, keepPositionAfterPrepend, showJumpToBotto
 import { noticesAfter } from "../../context-usage.mjs";
 import type { Bot } from "../../api";
 import { useLocale } from "../../i18n";
-import { useCitations } from "./Citations";
 import { useChat } from "./ChatSessionProvider";
 import { useMarkdown } from "./markdown-loader";
-import { Message } from "./Message";
+import { Message, PendingAnswer } from "./Message";
 import { QuestionRail } from "./QuestionRail";
 import { useCopy } from "./use-copy";
 
@@ -34,7 +33,6 @@ export function Thread({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObjec
   const transcriptRef = useRef<HTMLElement>(null);
   const turnPreviews = chatTurnPreviews(c.messages);
   const railTurns = turnPreviews.map(turn => ({ ...turn, turnId: c.messages[turn.userIndex]?.turn_id }));
-  const citations = useCitations();
   const [, setFeedbackTick] = useState(0);
   const { phase: markdownPhase } = useMarkdown();
 
@@ -90,13 +88,15 @@ export function Thread({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObjec
         <p className="text-body text-muted-foreground">{t(c.verified ? "连接已就绪，可以输入问题或选择下方建议。" : "登录个人聊天后才能对话：模型由服务器模型目录提供。")}</p>
         <div className="flex flex-wrap gap-2">{STARTERS.map(x => <button type="button" key={x} onClick={() => c.setDraft(t(x))} className="inline-flex h-9 items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3 text-small text-ink-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">{t(x)}<ArrowUpRight className="size-3.5" aria-hidden="true" /></button>)}</div>
       </div>) : c.messages.length > 0 &&
-        <div className="mx-auto grid w-full grid-cols-1 pb-20 pt-6 lg:max-w-[880px] lg:grid-cols-[minmax(0,1fr)_minmax(0,760px)_minmax(0,1fr)]">
+        <div className="mx-auto grid w-full grid-cols-1 pb-20 pt-6 lg:max-w-[880px] lg:grid-cols-[minmax(3rem,1fr)_minmax(0,760px)_minmax(0,1fr)]">
           <QuestionRail turns={railTurns} activeTurn={activeTurn} transcriptRef={transcriptRef} conversationId={c.conversationId} />
           <div data-testid="thread" className="flex min-w-0 flex-col gap-7 lg:col-start-2 lg:row-start-1">{c.messages.map((m, i) => <Fragment key={i}>
-            <Message m={m} i={i} last={i === lastIndex} bot={bot} streaming={i === lastIndex && c.state === "sending"} copy={copy} draftBox={draftBox} citations={citations}
+            <Message m={m} i={i} last={i === lastIndex} bot={bot} streaming={i === lastIndex && c.state === "sending"} copy={copy} draftBox={draftBox}
               turnIndex={m.role === "user" ? turnPreviews.findIndex(turn => turn.userIndex === i) : undefined} onFeedback={() => setFeedbackTick(x => x + 1)} />
             {m.role === "assistant" && noticesAfter(c.notices, m.turn_id).map(notice => <CompactionDivider key={`compaction-${notice.id}`} turns={notice.turns} focus={notice.focus} summary={notice.summary} />)}
-          </Fragment>)}</div>
+          </Fragment>)}
+            {c.state === "sending" && c.messages.at(-1)?.role === "user" && <PendingAnswer bot={bot} status={c.status} />}
+          </div>
         </div>}
     </section>
     {away && <button type="button" data-testid="jump-bottom" onClick={jumpToBottom} className="absolute bottom-3 left-1/2 z-sticky inline-flex h-9 -translate-x-1/2 items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3.5 text-small text-ink shadow-pop outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">

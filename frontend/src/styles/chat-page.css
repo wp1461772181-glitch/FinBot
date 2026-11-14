@@ -33,7 +33,7 @@
   .chat-prose code { padding: 1px 5px; border-radius: var(--r-sm); background: var(--sunken); font-family: var(--font-mono); font-size: 13px; }
   .chat-prose pre { margin: 0 0 0.9em; padding: 12px 14px; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--sunken); font-size: 13px; line-height: 20px; }
   .chat-prose pre code { padding: 0; border-radius: 0; background: transparent; font-size: inherit; }
-  /* A table scrolls sideways inside its wrapper (the wrapper component lives in Citations.tsx); it never widens the thread. */
+  /* A table scrolls sideways inside its wrapper (the wrapper component lives in AnswerBody.tsx); it never widens the thread. */
   .chat-prose .markdown-table-wrap { max-width: 100%; margin: 0 0 0.9em; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
   .chat-prose table { width: 100%; border-collapse: collapse; font-size: var(--fs-small); line-height: var(--lh-small); }
   .chat-prose th, .chat-prose td { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
@@ -53,7 +53,14 @@
   }
   [data-testid="message"][data-flash] { animation: chat-turn-flash 0.9s var(--curve-out); }
 
+  /* The process bar's first cell (the dots of a turn that is thinking): three dots in the bot's signature colour, one after the other. */
+  @keyframes steps-dot { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+  .steps-dots > i { display: block; width: 4px; height: 4px; border-radius: 9999px; background: var(--bot-hue); animation: steps-dot 1.2s ease-in-out infinite; }
+  .steps-dots > i:nth-child(2) { animation-delay: 0.2s; }
+  .steps-dots > i:nth-child(3) { animation-delay: 0.4s; }
+
   @media (prefers-reduced-motion: reduce) {
+    .steps-dots > i { animation: none; opacity: 0.7; }
     .chat-prose[data-streaming] > * { animation: none; }
     [data-testid="message"][data-flash] { animation: none; }
   }

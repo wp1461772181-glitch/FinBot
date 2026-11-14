@@ -12,11 +12,24 @@ const node = (id, kind, fields = {}) => ({ id, kind, name: null, step: null, sta
 const TRACE = [
   node("n1", "input", { ms: 20, output: { question: "AAPL 最近一个季度的服务收入怎么样？" } }),
   node("n2", "classify", { after: ["n1"], start_ms: 30, ms: 900, output: { category: "A", company: "Apple", symbol: "AAPL", metrics: ["服务收入"], period: "最近一个季度" } }),
-  node("n3", "decide", { after: ["n2"], start_ms: 950, step: 1, ms: 1100, output: { calls: ["get_saved_filings"] } }),
-  node("n4", "tool", { name: "get_saved_filings", after: ["n3"], start_ms: 2050, ms: 1400, output: { ok: true, count: 3 } }),
+  node("n3", "decide", { after: ["n2"], start_ms: 950, step: 1, ms: 1100, output: { calls: ["query_sec_filings", "query_stock_prices", "query_latest_forecast"] } }),
+  // Three tool results: hits (3), nothing found (count 0), and a failure with its code.
+  node("n4", "tool", { name: "query_sec_filings", after: ["n3"], start_ms: 2050, ms: 1400, output: { ok: true, count: 3 } }),
+  node("n4b", "tool", { name: "query_stock_prices", after: ["n3"], start_ms: 2050, ms: 900, output: { ok: true, count: 0 } }),
+  node("n4c", "tool", { name: "query_latest_forecast", after: ["n3"], start_ms: 2050, ms: 1800, status: "failed", output: { ok: false, error_code: "tool_timeout" } }),
   node("n5", "decide", { after: ["n4"], start_ms: 3500, step: 2, ms: 800, output: { calls: [] } }),
   node("n6", "verify", { after: ["n5"], start_ms: 4300, ms: 700, output: { citations: 2, issues: [] } }),
   node("n7", "output", { after: ["n6"], start_ms: 5000, ms: 10, output: { status: "succeeded", citations: 2 } }),
+];
+
+// The second answer: a turn that ended partially_succeeded (one source was missing), its steps kept.
+const PARTIAL_TRACE = [
+  node("p1", "input", { ms: 20, output: { question: "把 AAPL 的两版预测放在一起比较一下" } }),
+  node("p2", "decide", { after: ["p1"], start_ms: 30, step: 1, ms: 900, output: { calls: ["query_latest_forecast", "query_stock_prices"] } }),
+  node("p3", "tool", { name: "query_latest_forecast", after: ["p2"], start_ms: 940, ms: 1200, output: { ok: true, count: 2 } }),
+  node("p4", "tool", { name: "query_stock_prices", after: ["p2"], start_ms: 940, ms: 1500, output: { ok: true, count: 30 } }),
+  node("p5", "verify", { after: ["p3", "p4"], start_ms: 2500, ms: 600, status: "warn", output: { citations: 1, issues: ["missing_citation"] } }),
+  node("p6", "output", { after: ["p5"], start_ms: 3100, ms: 10, output: { status: "partially_succeeded", citations: 1 } }),
 ];
 
 const finbotMessages = [
@@ -30,10 +43,12 @@ const finbotMessages = [
       cite(2, { title: "AAPL 财报电话会纪要", section: "Q&A", source_type: "saved_ai_analysis", quote: "Services gross margin was 75.0%, and we expect a modest foreign-exchange headwind next quarter." }),
     ] },
   { role: "user", content: "把 AAPL 的两版预测放在一起比较一下，列成表，再给我三条要点。" },
-  { role: "assistant", status: "complete", turn_id: "t0000000-0000-4000-8000-000000000002",
-    tool_trace: [{ name: "get_forecast", status: "complete", result: { count: 2 } }, { name: "get_market_data", status: "complete", result: { count: 30 } }],
+  { role: "assistant", status: "partially_succeeded", turn_id: "t0000000-0000-4000-8000-000000000002", thinking_ms: 7300, trace: PARTIAL_TRACE, started_at: T0 + 60000,
+    tool_trace: [{ name: "query_latest_forecast", status: "complete", result: { count: 2 } }, { name: "query_stock_prices", status: "complete", result: { count: 30 } }],
     content: "下面是 AAPL 同一目标日的前两版预测：\n\n| 版本 | 看跌 | 中性 | 看涨 | 触发 |\n|---|---|---|---|---|\n| 第 1 版 | 24% | 38% | 38% | 首次生成 |\n| 第 2 版 | 20% | 41% | 39% | 新增 10-Q |\n\n要点：\n\n1. 第 2 版把看跌概率下调了 4 个百分点，主要依据是服务收入超出预期 [1]。\n2. 中性概率上升，说明模型认为短期方向并不明朗。\n3. 两版的看涨概率几乎没变，可以认为新材料没有改变上行逻辑。\n\n以上是模型意见，买不买由你决定。",
     citations: [cite(1, { title: "AAPL 10-Q（2026 财年第四季度）", section: "Item 2. 管理层讨论", quote: "Services net sales were $28.8 billion, an increase of 14%." })],
+    // An old-style line mark (from before the public marks): the third point carries it, with the 追问依据 button in its card.
+    unverified_lines: [{ line: "3. 两版的看涨概率几乎没变，可以认为新材料没有改变上行逻辑。", reason: "unsupported_claim", numbers: [] }],
     public_marks: [{ id: "pm-1", marker: "neutral", template: "来源 [1] 中同一指标的数值与此句不同",
       hover: { answer_sentence: "第 2 版把看跌概率下调了 4 个百分点，主要依据是服务收入超出预期", name_span: "服务收入", evidence: { ordinal: 1, quote: "Services net sales were $28.8 billion, an increase of 14%.", completeness: "excerpt" } } }] },
   { role: "user", content: "【例行任务结果】「盘前新闻速览」2026-11-13 08:30" },
@@ -51,12 +66,13 @@ const short = (userText, assistantText, extra = {}) => [{ role: "user", content:
 
 const applebotMessages = short("AAPL 本季服务收入和毛利率怎么样？",
   "AAPL 本季服务收入同比增长 14%，毛利率约 75%，与上季持平 [1]。\n\n如果想看对预测的影响，可以打开 AAPL 的正式预测。",
-  { citations: [cite(1, { title: "AAPL 10-Q（2026 财年第四季度）", section: "Item 2. 管理层讨论", quote: "Services net sales were $28.8 billion, an increase of 14%." })] });
+  { thinking_ms: 2800, citations: [cite(1, { title: "AAPL 10-Q（2026 财年第四季度）", section: "Item 2. 管理层讨论", quote: "Services net sales were $28.8 billion, an increase of 14%." })] });
 
 const MESSAGES = {
   [CONVERSATION.finbot]: finbotMessages,
   [CONVERSATION.applebot]: applebotMessages,
-  [CONVERSATION.newsbot]: short("今天有什么值得关注的新闻？", "【例行任务结果】已发布盘前新闻速览，共 6 条，详见例行任务运行记录。"),
+  // An answer from before the step graph that kept only its tool list: the process bar shows it as chips, as the old badges did.
+  [CONVERSATION.newsbot]: short("今天有什么值得关注的新闻？", "【例行任务结果】已发布盘前新闻速览，共 6 条，详见例行任务运行记录。", { tool_trace: [{ name: "search_configured_news", status: "complete", result: { data: [1, 2, 3, 4, 5, 6] } }] }),
   [CONVERSATION.reportbot]: short("读一下 NVDA 最新 10-Q 的风险因素", "我想把 NVDA 最新 10-Q 加入材料库并分析，请确认。"),
   [CONVERSATION.teslabot]: [],
   [CONVERSATION.older]: short("什么是可信度星级？", "可信度星级是你给一份材料打的 1 到 5 星，用来表达你对来源的信任程度，不是事实核查结论。"),
@@ -129,3 +145,11 @@ export function olderTurns(count = 6) {
   }
   return out;
 }
+
+/** What the knowledge API says of a citation's chunk (GET /knowledge/citations/:id).  k…01 is a saved filing, k…02 a derived AI analysis, k…0f a withdrawn source (404). */
+export const CITATION_DETAILS = {
+  "k0000000-0000-4000-8000-000000000001": { title: "AAPL 10-Q（2026 财年第四季度）", section: "Item 2. 管理层讨论", coverage: "complete", start_offset: 1200, end_offset: 1420, observed_at: daysAgo(3), source_url: "https://www.sec.gov/Archives/edgar/data/0000000/000000000026000001/aapl-20260930.htm",
+    excerpt: "Services net sales were $28.8 billion, an increase of 14% compared with the same quarter of the prior year. Services gross margin percentage was 75.0%." },
+  "k0000000-0000-4000-8000-000000000002": { title: "AAPL 财报电话会纪要", section: "Q&A", coverage: "complete", start_offset: 0, end_offset: 300, observed_at: daysAgo(3), source_url: null, derived: true, analysis_version: "analysis-v2", version_no: 2, model: "muse-ember", classification: "call",
+    excerpt: "Services gross margin was 75.0%, and we expect a modest foreign-exchange headwind next quarter.", original_quotes: ["gross margin was 75.0%", "a modest foreign-exchange headwind"] },
+};

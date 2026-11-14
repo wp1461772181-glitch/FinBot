@@ -1,4 +1,3 @@
-import type { Components } from "react-markdown";
 import { Skeleton } from "@/components/state/Skeleton";
 import { useLocale } from "../../i18n";
 import { useMarkdown } from "./markdown-loader";
@@ -16,10 +15,10 @@ export function MessageBodySkeleton() {
  * An answer's text.  Renderer not in yet: the skeleton, never the raw Markdown.  Renderer in: the typeset text, with no
  * delay of its own.  Chunk failed: the text as it is (line breaks kept) and a quiet note with 重试; the page around is untouched.
  */
-export function MarkdownBody({ plain, text, components, streaming }: { plain: string; text: string; components: Components; streaming: boolean }) {
+export function MarkdownBody({ plain, text, streaming }: { plain: string; text: string; streaming: boolean }) {
   const { t } = useLocale();
   const { phase, Renderer, retry } = useMarkdown();
-  if (Renderer) return <div data-testid="message-body" data-md="ready" data-streaming={streaming || undefined} className="markdown-body chat-prose"><Renderer text={text} components={components} /></div>;
+  if (Renderer) return <div data-testid="message-body" data-md="ready" data-streaming={streaming || undefined} className="markdown-body chat-prose"><Renderer text={text} /></div>;
   if (phase === "failed") return <>
     <div data-testid="message-body" data-md="plain" className="chat-prose whitespace-pre-wrap break-words">{plain}</div>
     <p data-testid="markdown-failed" className="mt-1 flex items-center gap-2 text-caption text-muted-foreground">

@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { Link } from "react-router";
 import { History, Info, PanelRight, Settings } from "lucide-react";
 import { PopPanel } from "@/components/PopPanel";
@@ -8,6 +8,7 @@ import { paths } from "../../routes.mjs";
 import { type Bot } from "../../api";
 import { useLocale } from "../../i18n";
 import { useChat } from "./ChatSessionProvider";
+import { usePanel } from "./panel-context";
 
 const iconButton = "inline-flex size-9 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-ink focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-[18px]";
 
@@ -27,8 +28,8 @@ function AboutThisChat() {
  * The header holds only what belongs to this line: the bot standing there, its name, title and the companies it watches, the way to its
  * settings, and the panel switch.  The mode switch and the global settings live in the sidebar's account menu.
  */
-export function ChatHeader({ bot, side, sideOpen, toggleSide, historyOpen, setHistoryOpen }: { bot?: Bot | null; side?: ReactNode; sideOpen: boolean; toggleSide: () => void; historyOpen: boolean; setHistoryOpen: Dispatch<SetStateAction<boolean>> }) {
-  const { t } = useLocale(), c = useChat();
+export function ChatHeader({ bot, historyOpen, setHistoryOpen }: { bot?: Bot | null; historyOpen: boolean; setHistoryOpen: Dispatch<SetStateAction<boolean>> }) {
+  const { t } = useLocale(), c = useChat(), panel = usePanel();
   const companies = bot?.focus?.companies?.map(company => company.symbol).filter(Boolean) ?? [];
   const subtitle = [bot?.title, companies.join(" · ")].filter(Boolean).join(" · ");
   return (
@@ -47,7 +48,7 @@ export function ChatHeader({ bot, side, sideOpen, toggleSide, historyOpen, setHi
       <div className="flex shrink-0 items-center gap-1">
         <AboutThisChat />
         {bot && <Link to={paths.chatSettings(bot.id)} data-testid="bot-settings" className={iconButton} aria-label={t("bot 设置")} title={t("bot 设置")}><Settings aria-hidden="true" /></Link>}
-        {side && <button type="button" data-testid="side-toggle" className={`${iconButton} w-auto gap-1.5 px-2.5 text-small aria-expanded:bg-accent aria-expanded:text-ink`} aria-expanded={sideOpen} aria-controls="bot-side" aria-label={sideOpen ? t("收起工作区") : t("打开工作区")} title={sideOpen ? t("收起工作区") : t("打开工作区")} onClick={toggleSide}><PanelRight aria-hidden="true" /><span className="max-sm:sr-only">{t("工作区")}</span></button>}
+        <button type="button" data-testid="side-toggle" className={`${iconButton} w-auto gap-1.5 px-2.5 text-small aria-expanded:bg-accent aria-expanded:text-ink`} aria-expanded={panel.open} aria-controls="chat-panel" aria-label={panel.open ? t("收起右侧面板") : t("打开右侧面板")} title={panel.open ? t("收起右侧面板") : t("打开右侧面板")} onClick={panel.toggle}><PanelRight aria-hidden="true" /><span className="max-sm:sr-only">{t("面板")}</span></button>
       </div>
     </header>
   );

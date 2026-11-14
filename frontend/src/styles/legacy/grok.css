@@ -21,16 +21,10 @@ body { -webkit-font-smoothing: antialiased; }
 .agent-header-actions .secondary-action:hover { color:var(--me-ink); background:var(--me-surface-2); }
 
 /* --- thread: one centred column, assistant as plain text, user as a soft pill -------------------- */
-.citation-drawer { border-color:var(--me-line); border-radius: 12px; background:transparent; }
-.tool-badge { border-radius: 999px; background: var(--me-surface-2); border-color: var(--me-line); color: var(--me-muted); }
 
 /* --- composer: a pill with a thin inset ring and a round inverted send button --------------------- */
 
 /* --- right rail (工作区 / 档案) ------------------------------------------------------------------ */
-.bot-side { border-left:1px solid var(--me-line); padding-left: 16px; }
-.bot-side .section-tabs { border-bottom:0; gap: 4px; padding: 0; margin: 0; }
-.bot-side .section-tabs button { border:0; border-radius: 999px; padding: 6px 14px; color:var(--me-muted); }
-.bot-side .section-tabs button[aria-selected="true"] { background:var(--me-surface-2); color:var(--me-ink); border:0; }
 .bot-focus-item { border-color:var(--me-line); background:var(--me-surface); border-radius: 12px; }
 .bot-form input, .bot-form select, .bot-form textarea, .bot-create input { background:var(--me-surface-2); border:1px solid var(--me-line); color:var(--me-ink); border-radius: 10px; }
 
@@ -75,11 +69,6 @@ body { -webkit-font-smoothing: antialiased; }
 .avatar-picker-modes { display: flex; gap: 12px; font-size: 13px; }
 
 /* --- bot workspace (UX batch 2, P3): stock picker, data cards, ⤢ widths ------------------------ */
-.agent-layout.is-bot[data-side-width="half"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.agent-layout.is-bot[data-side-width="full"] { grid-template-columns: minmax(0, 1fr); }
-.agent-layout.is-bot[data-side-width="full"] > :not(.bot-side) { display: none; }
-.bot-side .section-tabs { align-items: center; }
-.ws-expand { margin-left: auto; border:1px solid var(--me-line) !important; border-radius: 999px !important; padding: 2px 10px !important; color:var(--me-muted); background:transparent; }
 .bot-workspace { display: grid; gap: 10px; padding-top: 10px; }
 .ws-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ws-symbol { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color:var(--me-muted); }
@@ -107,7 +96,6 @@ body { -webkit-font-smoothing: antialiased; }
 .ws-actions { margin-left: auto; display: inline-flex; gap: 6px; }
 .ws-new { font-size: 10px; color:var(--me-accent); background:var(--me-accent-soft); border-radius: 999px; padding: 0 6px; }
 .ws-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-@media (max-width: 760px) { .agent-layout.is-bot[data-side-width] { grid-template-columns: minmax(0, 1fr); } .agent-layout.is-bot[data-side-width="full"] > :not(.bot-side) { display: block; } }
 
 /* --- a bot's own Telegram (UX batch 2, P4) -------------------------------------------------------- */
 .bot-telegram { border-top:1px solid var(--me-line); padding-top: 12px; margin-top: 12px; display: grid; gap: 8px; }

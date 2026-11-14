@@ -267,37 +267,24 @@ function BotWorkspaceTab({ bot, symbol, watchlist, wide, onPickSymbol, onOpenCom
   </div>;
 }
 
-type SideWidth = "narrow" | "half" | "full";
-const NEXT_WIDTH: Record<SideWidth, SideWidth> = { narrow: "half", half: "full", full: "narrow" };
-
-/** The bot's right rail.  Its current stock is its own (workspace-cards.botSymbol) and is also written back to the
- * page's stock, so 公司 / 资料库 open on the same one.  An agent select_stock changes the page's stock, which the
- * rail adopts while it is open. */
-export function BotSide({ bot, symbol, watchlist = [], onSelectSymbol, onOpenCompany, onChanged, onDeleted, initialTab = "workspace" }: { initialTab?: "workspace" | "profile"; bot: Bot; symbol: string; watchlist?: string[]; onSelectSymbol?: (symbol: string) => void; onOpenCompany: OpenCompany; onChanged: (bot: Bot) => void; onDeleted: () => void }) {
-  const { t } = useLocale();
-  const [tab, setTab] = useState<"workspace" | "profile">(initialTab);
+/**
+ * The two panes of the chat page's right panel that are this file's: 工作区 (the bot's data cards) and 档案 (its profile form).  The panel
+ * itself (tabs, width, 来源 and 过程) is app/chat/ContextPanel.tsx; these are the legacy panes it holds, moved as they were.  The current stock
+ * is kept per bot and follows the page's stock, as the old right rail kept it.
+ */
+export function BotWorkspacePane({ bot, symbol, watchlist = [], onSelectSymbol, onOpenCompany, wide }: { bot: Bot; symbol: string; watchlist?: string[]; onSelectSymbol?: (symbol: string) => void; onOpenCompany: OpenCompany; wide: boolean }) {
   const [current, setCurrent] = useState(() => botSymbol(bot, symbol));
-  const [width, setWidth] = useState<SideWidth>("narrow");
-  const aside = useRef<HTMLElement>(null), seenGlobal = useRef(symbol);
+  const seenGlobal = useRef(symbol);
   useEffect(() => { if (current !== symbol) onSelectSymbol?.(current); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (symbol === seenGlobal.current) return;
     seenGlobal.current = symbol;
     if (symbol !== current) { setCurrent(symbol); storeBotSymbol(bot.id, symbol); }
   }, [symbol]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const layoutBox = aside.current?.closest(".agent-layout") as HTMLElement | null;
-    if (!layoutBox) return;
-    layoutBox.dataset.sideWidth = width;
-    return () => { delete layoutBox.dataset.sideWidth; };
-  }, [width]);
   const pick = (next: string) => { const clean = storeBotSymbol(bot.id, next); if (!clean) return; setCurrent(clean); seenGlobal.current = clean; onSelectSymbol?.(clean); };
-  return <aside ref={aside} id="bot-side" className="bot-side" aria-label={`${bot.name} · ${t("工作区")}`}>
-    <div className="section-tabs" role="tablist">
-      <button type="button" role="tab" aria-selected={tab === "workspace"} aria-current={tab === "workspace" ? "page" : undefined} onClick={() => setTab("workspace")}>{t("工作区")}</button>
-      <button type="button" role="tab" aria-selected={tab === "profile"} aria-current={tab === "profile" ? "page" : undefined} onClick={() => setTab("profile")}>{t("档案")}</button>
-      {tab === "workspace" && <button type="button" className="ws-expand" onClick={() => setWidth(NEXT_WIDTH[width])} aria-label={t("展开工作区")} title={width === "narrow" ? t("展开到一半") : width === "half" ? t("全宽") : t("收窄")}>{width === "full" ? "⤡" : "⤢"}</button>}
-    </div>
-    {tab === "workspace" ? <BotWorkspaceTab bot={bot} symbol={current} watchlist={watchlist} wide={width !== "narrow"} onPickSymbol={pick} onOpenCompany={onOpenCompany} /> : <BotProfileTab key={bot.id} bot={bot} onChanged={onChanged} onDeleted={onDeleted} />}
-  </aside>;
+  return <BotWorkspaceTab bot={bot} symbol={current} watchlist={watchlist} wide={wide} onPickSymbol={pick} onOpenCompany={onOpenCompany} />;
+}
+
+export function BotProfilePane({ bot, onChanged, onDeleted }: { bot: Bot; onChanged: (bot: Bot) => void; onDeleted: () => void }) {
+  return <BotProfileTab key={bot.id} bot={bot} onChanged={onChanged} onDeleted={onDeleted} />;
 }

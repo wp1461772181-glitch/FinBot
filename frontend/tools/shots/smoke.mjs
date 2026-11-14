@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, streamHalfway, streamParagraph, waitReady } from "./pages.mjs";
+import { PAGES, firstAnswer, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, CONVERSATION, HAND_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, olderTurns } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -14,6 +14,8 @@ import { buildState } from "./fixtures/index.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { findCollisions } from "./collisions.mjs";
+import { normalizePublicMarks, publicMarkQuoteText } from "../../src/chat-public-marks.mjs";
+import { followUpQuestion } from "../../src/chat-unverified.mjs";
 
 const { flags } = parseArgs(process.argv.slice(2), { booleans: ["strict"] });
 if (!flags.dist) { console.error("usage: node smoke.mjs --dist <build dir> [--strict]"); process.exit(2); }
@@ -120,15 +122,17 @@ async function themeToggles(ctx) {
   } finally { await view.close(); }
 }
 
+/** P3.3: the process bar opens the right panel's 过程 tab, which lists the round's steps (the old thinking panel's graph). */
 async function thinkingPanelExpands(ctx) {
   const view = await openChat(ctx, "thinking-panel");
   try {
     const { page } = view;
-    const toggle = page.locator(".thinking-toggle[aria-expanded]").first();
-    await toggle.waitFor({ timeout: 10000 });
-    await toggle.click();
-    await page.locator(".turn-flow .flow-node").first().waitFor({ timeout: 5000 });
-    return `${await page.locator(".turn-flow .flow-node").count()} trace nodes shown`;
+    const bar = firstAnswer(page).locator("[data-testid=turn-steps]");
+    await bar.waitFor({ timeout: 10000 });
+    await bar.click();
+    await page.locator("[data-testid=timeline-step]").first().waitFor({ timeout: 5000 });
+    assert((await page.locator("[data-testid=tab-process]").getAttribute("aria-selected")) === "true", "the 过程 tab is not the selected one");
+    return `${await page.locator("[data-testid=timeline-step]").count()} steps shown in the 过程 tab`;
   } finally { await view.close(); }
 }
 
@@ -1867,7 +1871,8 @@ async function optionalChunkFailure(ctx) {
     assert(blocked >= 1, "the bot page never asked for the side panel chunk (is it still loaded eagerly?)");
     assert((await page.locator("#agent-draft").count()) === 1, "the composer is gone: the failed chunk took the chat page down");
     assert((await page.locator('[data-slot="route-error"]').count()) === 0, "a failed optional chunk fell through to the route error");
-    assert((await page.locator("#bot-side").count()) === 0, "the right rail is drawn although its chunk was blocked");
+    assert((await page.locator("[data-testid=context-panel]").count()) === 1, "the right panel itself (来源 / 过程) is gone with the workspace chunk");
+    assert((await page.locator(".bot-workspace").count()) === 0, "the workspace cards are drawn although their chunk was blocked");
     await page.locator('[data-slot="sidebar"] button', { hasText: "新建 bot" }).first().click();
     await page.waitForTimeout(800);
     assert((await page.locator('[role="dialog"]').count()) === 0, "the new-bot dialog is drawn although its chunk was blocked");
@@ -2245,6 +2250,383 @@ async function chatPopoverKeyboard(ctx) {
   } finally { await view.close(); }
 }
 
+// --- P3.3: process and sources ---------------------------------------------------------------------------------------
+const panelBox = (page) => page.locator("[data-testid=context-panel]").boundingBox();
+const inView = (page, selector, within) => page.evaluate(([sel, box]) => {
+  const el = document.querySelector(sel), host = document.querySelector(box); if (!el || !host) return false;
+  const r = el.getBoundingClientRect(), h = host.getBoundingClientRect();
+  return r.top >= h.top - 1 && r.bottom <= h.bottom + 1;
+}, [selector, within]);
+
+/** Acceptance 1: a click on [2] opens the right panel on 来源, scrolls to the second card and marks it; a folded panel unfolds first. */
+async function citationJump(ctx) {
+  const view = await openChat(ctx, "citation-jump");
+  try {
+    const { page } = view;
+    await page.locator("[data-testid=panel-close]").click();
+    await page.locator("[data-testid=context-panel]").waitFor({ state: "detached", timeout: 5000 });
+    const chip = firstAnswer(page).locator("[data-testid=citation-chip][data-ordinal='2']").first();
+    await chip.scrollIntoViewIfNeeded();
+    await chip.click();
+    await page.locator("[data-testid=context-panel]").waitFor({ timeout: 5000 });
+    assert((await page.locator("[data-testid=tab-sources]").getAttribute("aria-selected")) === "true", "the 来源 tab is not selected after a click on [2]");
+    const card = page.locator("[data-slot=source-card][data-ordinal='2']");
+    await card.waitFor({ timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector("[data-slot=source-card][data-ordinal='2']")?.hasAttribute("data-highlight"), null, { timeout: 5000 });
+    assert(await inView(page, "[data-slot=source-card][data-ordinal='2']", "[data-testid=sources-pane]"), "the second card is not inside the 来源 tab's viewport");
+    assert((await page.locator("[data-slot=source-card][data-highlight]").count()) === 1, "more than one card is marked");
+    // The mark is a ring that can be seen (the page's own reduced-motion state: a still ring).
+    const ring = await page.locator("[data-slot=source-card][data-highlight]").evaluate((el) => { const cs = getComputedStyle(el); return { style: cs.outlineStyle, width: cs.outlineWidth, colour: cs.outlineColor }; });
+    assert(ring.style === "solid" && ring.width === "2px" && !/rgba\(0, 0, 0, 0\)|transparent/.test(ring.colour), `the marked card's ring is ${JSON.stringify(ring)}`);
+    // The mark is one-shot: it goes away by itself.
+    await page.waitForFunction(() => !document.querySelector("[data-slot=source-card][data-highlight]"), null, { timeout: 5000 });
+    return "folded panel unfolds, 来源 selected, card 2 scrolled into view and marked once";
+  } finally { await view.close(); }
+}
+
+/** Acceptance 2: a turn that is running grows its bar chip by chip, and a finished turn folds to 「已思考 N 秒 · M 步」. */
+async function stepsLive(ctx) {
+  const view = await openChat(ctx, "steps-live");
+  try {
+    const { page } = view;
+    const hand = await streamSteps(page);
+    const bar = page.locator("[data-testid=turn-steps]").last();
+    const chips = bar.locator("[data-slot=step-chip]");
+    assert((await chips.count()) === 5, `${await chips.count()} chips after five steps`);
+    assert((await bar.locator("[data-slot=step-chip][data-state=running]").count()) === 1, "not exactly one step is turning");
+    const text = await bar.innerText();
+    assert(text.includes("(3)") && text.includes("(12)"), `the finished tools do not show their hit counts: ${JSON.stringify(text)}`);
+    assert((await bar.locator("[data-slot=thinking-slot]").count()) === 1, "the first cell (thinking slot) is missing");
+    assert((await bar.getAttribute("data-state")) === "running", "the bar is not in its running state");
+    // The running tool comes back with nothing, then a check step starts: the bar grows.
+    await hand.push(0, "trace", traceEvent("r6", "tool", { name: "query_latest_forecast", after: ["r3"], start_ms: 1650, ms: 800, output: { ok: true, count: 0 } }));
+    await hand.push(0, "trace", traceEvent("r7", "verify", { after: ["r4", "r5", "r6"], start_ms: 2500, ms: null, status: "running" }));
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-testid=turn-steps]")].pop()?.querySelectorAll("[data-slot=step-chip]").length >= 6, null, { timeout: 5000 });
+    assert((await chips.count()) === 6, `${await chips.count()} chips after the sixth step`);
+    assert((await bar.innerText()).includes("无匹配"), "a tool that found nothing does not say 无匹配");
+    await hand.push(0, "trace", traceEvent("r7", "verify", { after: ["r4", "r5", "r6"], start_ms: 2500, ms: 600, output: { citations: 0, issues: [] } }));
+    await hand.push(0, "delta", { text: "过程条测试的回答。" });
+    await hand.push(0, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000f1", thinking_ms: 12400, citations: [], citation_protocol: null });
+    await hand.close(0);
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-testid=turn-steps]")].pop()?.getAttribute("data-state") === "summary", null, { timeout: 8000 });
+    const summary = (await bar.innerText()).replace(/\s+/g, " ").trim();
+    assert(/已思考 12 秒 · 6 步/.test(summary), `the folded bar says ${JSON.stringify(summary)}`);
+    assert((await bar.locator("[data-slot=step-chip]").count()) === 0, "the chips are still there after the turn ended");
+    return `5 chips (1 turning, counts 3 and 12), 6 after the next event with 无匹配, folded to ${JSON.stringify(summary)}`;
+  } finally { await view.close(); }
+}
+
+/** The process bar opens 过程 on its own round: a second round's bar changes the round the panel shows. */
+async function stepsOpenProcess(ctx) {
+  const view = await openChat(ctx, "steps-open-process");
+  try {
+    const { page } = view;
+    await page.locator("[data-testid=panel-close]").click();
+    await page.locator("[data-testid=context-panel]").waitFor({ state: "detached", timeout: 5000 });
+    const answers = page.locator("[data-testid=message][data-role=assistant]");
+    await answers.first().locator("[data-testid=turn-steps]").click();
+    await page.locator("[data-testid=timeline-step]").first().waitFor({ timeout: 5000 });
+    assert((await page.locator("[data-testid=tab-process]").getAttribute("aria-selected")) === "true", "过程 is not the selected tab");
+    const first = await page.locator("[data-testid=panel-round]").innerText();
+    assert(first.includes("AAPL 最近一个季"), `the panel names ${JSON.stringify(first)} for the first round`);
+    const stepsOfFirst = await page.locator("[data-testid=timeline-step]").count();
+    assert(stepsOfFirst === 9, `${stepsOfFirst} steps for the first round (its trace has 9 nodes)`);
+    const second = answers.nth(1).locator("[data-testid=turn-steps]");
+    await second.scrollIntoViewIfNeeded();
+    await second.click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=panel-round]")?.textContent?.includes("把 AAPL 的两版预测"), null, { timeout: 5000 });
+    assert((await page.locator("[data-testid=timeline-step]").count()) === 6, "the second round's steps are not what the panel lists");
+    assert(/部分来源可用/.test(await answers.nth(1).locator("[data-testid=turn-steps]").innerText()), "a partially_succeeded turn's bar does not say 部分来源可用");
+    return `folded panel unfolds on 过程; round 1: ${stepsOfFirst} steps; the second bar switches the round (6 steps) and says 部分来源可用`;
+  } finally { await view.close(); }
+}
+
+/** The computed colours that mean danger or action, resolved the way the page resolves them. */
+async function warningColours(page) {
+  return page.evaluate(() => {
+    const out = new Set();
+    for (const name of ["--danger", "--action", "--action-soft"]) {
+      const probe = document.createElement("span"); probe.style.color = `var(${name})`; probe.style.backgroundColor = `var(${name})`; document.body.appendChild(probe);
+      const cs = getComputedStyle(probe); out.add(cs.color); out.add(cs.backgroundColor); probe.remove();
+    }
+    return [...out];
+  });
+}
+async function colourReport(handle, banned) {
+  return handle.evaluate((root, list) => {
+    const bad = [];
+    for (const el of [root, ...root.querySelectorAll("*")]) {
+      const cs = getComputedStyle(el);
+      for (const prop of ["color", "backgroundColor", "borderTopColor", "borderLeftColor", "outlineColor", "textDecorationColor"]) if (list.includes(cs[prop])) bad.push(`${el.tagName}.${prop}=${cs[prop]}`);
+      if (el.tagName === "svg") bad.push("an icon");
+    }
+    return bad;
+  }, banned);
+}
+
+/** Acceptance 4: the public mark's card says exactly what the existing functions compute for the same message, and the mark carries no danger or action colour, no icon, in both themes. */
+async function publicMarkVerbatim(ctx) {
+  const message = buildState().chat.conversations.get(CONVERSATION.finbot).find((m) => Array.isArray(m.public_marks) && m.public_marks.length);
+  const [view0] = normalizePublicMarks(message.public_marks);
+  const expected = { template: view0.label, quote: publicMarkQuoteText(view0, (text) => text), cite: `查看来源 [${view0.evidence.ordinal}]` };
+  const done = [];
+  for (const theme of ["light", "dark"]) {
+    const view = await newView(ctx.browser, { width: 1440, theme, label: `public-mark-${theme}`, unmatched });
+    try {
+      const { page } = view;
+      await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+      await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+      const mark = page.locator("[data-testid=public-mark]").first();
+      await mark.scrollIntoViewIfNeeded();
+      assert((await mark.innerText()) === "◦", `the mark reads ${JSON.stringify(await mark.innerText())}`);
+      const banned = await warningColours(page);
+      // At rest (before the pointer is on it), then open: hover and open states have their own colours.
+      const rest = await colourReport(await mark.elementHandle(), banned);
+      assert(rest.length === 0, `${theme}: the mark at rest uses a danger / action colour or an icon: ${rest.join(", ")}`);
+      await mark.hover();
+      const card = page.locator("[data-testid=public-mark-card]");
+      await card.waitFor({ timeout: 5000 });
+      const got = { template: await card.locator("[data-slot=public-mark-template]").textContent(), quote: await card.locator("[data-slot=public-mark-quote]").textContent(), cite: await card.locator("[data-slot=public-mark-cite]").textContent() };
+      for (const key of Object.keys(expected)) assert(got[key] === expected[key], `${theme}: card ${key} is ${JSON.stringify(got[key])}, the existing functions give ${JSON.stringify(expected[key])}`);
+      assert((await card.textContent()) === expected.template + expected.quote + expected.cite, `${theme}: the card's whole text differs from the three computed texts joined`);
+      assert((await card.locator("> *").count()) === 3, `${theme}: the card has ${await card.locator("> *").count()} children (template, quote, cite)`);
+      for (const [name, handle] of [["mark (open)", await mark.elementHandle()], ["card", await card.elementHandle()]]) {
+        const bad = await colourReport(handle, banned);
+        assert(bad.length === 0, `${theme}: the ${name} uses a danger / action colour or an icon: ${bad.join(", ")}`);
+      }
+      // The sentence stays as written: not struck through, not faded.
+      const sentence = await mark.evaluate((el) => { const p = el.closest("li, p"); const cs = getComputedStyle(p); return { line: cs.textDecorationLine, opacity: cs.opacity }; });
+      assert(sentence.line === "none" && sentence.opacity === "1", `${theme}: the marked sentence is ${JSON.stringify(sentence)}`);
+      await page.keyboard.press("Escape");
+      await card.waitFor({ state: "detached", timeout: 5000 });
+      done.push(theme);
+    } finally { await view.close(); }
+  }
+  return `${done.join(" + ")}: card = template + quote + 查看来源 [1] word for word (${JSON.stringify(expected.cite)}), no danger / action colour, no icon, sentence untouched`;
+}
+
+/** The old-style line mark (a message from before the public marks) is the same neutral footnote, and 追问依据 still puts its question in the box. */
+async function legacyLineMark(ctx) {
+  const view = await openChat(ctx, "legacy-line-mark");
+  try {
+    const { page } = view;
+    const mark = page.locator("[data-testid=line-mark]").first();
+    await mark.scrollIntoViewIfNeeded();
+    await mark.click();
+    const card = page.locator("[data-testid=line-mark-card]");
+    await card.waitFor({ timeout: 5000 });
+    const text = await card.locator("[data-slot=line-mark-text]").textContent();
+    assert(text === "证据不足：引用的来源里找不到这个说法", `the card says ${JSON.stringify(text)}`);
+    const bad = await colourReport(await card.elementHandle(), await warningColours(page));
+    assert(bad.length === 0, `the old line mark's card uses a danger / action colour or an icon: ${bad.join(", ")}`);
+    await card.locator("[data-slot=line-mark-ask]").click();
+    const draft = await page.locator("#agent-draft").inputValue();
+    assert(draft === followUpQuestion("3. 两版的看涨概率几乎没变，可以认为新材料没有改变上行逻辑。"), `追问依据 put ${JSON.stringify(draft)} in the box`);
+    assert((await page.evaluate(() => document.activeElement?.id)) === "agent-draft", "the focus is not in the input box after 追问依据");
+    return `neutral ◦, card text "${text}", 追问依据 fills the box and focuses it`;
+  } finally { await view.close(); }
+}
+
+/** Acceptance 3: an answer from before the step graph shows only its time (or nothing, or the old tool badges as chips): the three cases the old panel and badges had. */
+async function oldMessageNoSteps(ctx) {
+  const view = await openChat(ctx, "old-message-no-steps");
+  try {
+    const { page } = view;
+    // Nothing at all: the routine result has no time, no trace, no tools.
+    const routine = page.locator("[data-testid=message][data-role=assistant]", { hasText: "盘前关注列表里有 3 条" });
+    await routine.waitFor({ timeout: 10000 });
+    assert((await routine.locator("[data-testid=turn-steps]").count()) === 0, "an answer with no step data shows a process bar");
+    // Only its time (AppleBot's answer): a line, not a button, no chips.
+    await page.goto(`${ctx.server.url}#/chat/${BOT.applebot}`, { waitUntil: "load" });
+    const time = page.locator("[data-testid=turn-steps][data-state=time]");
+    await time.waitFor({ timeout: 10000 });
+    assert((await time.evaluate((el) => el.tagName)) === "DIV", "the time-only bar is a button");
+    assert(/^已思考 2\.8 秒$/.test((await time.innerText()).trim()), `the time-only bar says ${JSON.stringify(await time.innerText())}`);
+    assert((await time.locator("[data-slot=step-chip]").count()) === 0, "the time-only bar has chips");
+    // The tool list only (NewsBot's answer): the old tool badge as a chip.
+    await page.goto(`${ctx.server.url}#/chat/${BOT.newsbot}`, { waitUntil: "load" });
+    const tools = page.locator("[data-testid=turn-steps][data-state=tools] [data-slot=step-chip]");
+    await tools.first().waitFor({ timeout: 10000 });
+    const chip = (await tools.first().innerText()).trim();
+    assert(chip === "搜索已配置新闻源 · 已完成 · 6 条结果", `the tool chip reads ${JSON.stringify(chip)}`);
+    // The panel's 过程 tab says there are no steps for such a round.
+    await page.locator("[data-testid=tab-process]").click();
+    await page.locator("[data-testid=process-empty]").waitFor({ timeout: 5000 });
+    return `no data: no bar; time only: "已思考 2.8 秒" (not a button); tool list only: ${JSON.stringify(chip)}; 过程 tab: no step record`;
+  } finally { await view.close(); }
+}
+
+/** Drag the panel's edge wider; the width survives a reload; folding survives a reload; the arrow keys resize too. */
+async function panelResizePersists(ctx) {
+  const view = await openChat(ctx, "panel-resize-persists");
+  try {
+    const { page } = view;
+    const before = (await panelBox(page)).width;
+    const handle = page.locator("[data-testid=panel-resize]");
+    const box = await handle.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 - 120, box.y + 200, { steps: 6 });
+    await page.mouse.up();
+    const wide = (await panelBox(page)).width;
+    assert(Math.abs(wide - (before + 120)) <= 2, `dragging 120px left took the panel from ${before} to ${wide}`);
+    await page.reload({ waitUntil: "load" });
+    await page.locator("[data-testid=context-panel]").waitFor({ timeout: 10000 });
+    const kept = (await panelBox(page)).width;
+    assert(Math.abs(kept - wide) <= 2, `the width was ${wide} before the reload and ${kept} after`);
+    await page.locator("[data-testid=panel-resize]").focus();
+    await page.keyboard.press("ArrowLeft");
+    const keyed = (await panelBox(page)).width;
+    assert(Math.abs(keyed - (kept + 16)) <= 2, `ArrowLeft took the panel from ${kept} to ${keyed}`);
+    await page.locator("[data-testid=panel-close]").click();
+    await page.reload({ waitUntil: "load" });
+    await page.locator("[data-testid=message]").first().waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=context-panel]").count()) === 0, "the folded panel is open again after a reload");
+    await page.locator("[data-testid=side-toggle]").click();
+    await page.locator("[data-testid=context-panel]").waitFor({ timeout: 5000 });
+    const reopened = (await panelBox(page)).width;
+    assert(Math.abs(reopened - keyed) <= 2, `the width after unfolding is ${reopened}, not the kept ${keyed}`);
+    return `${before} -> ${wide} by drag, kept over a reload (${kept}), +16 by ArrowLeft (${keyed}); folded stays folded over a reload and unfolds at ${reopened}`;
+  } finally { await view.close(); }
+}
+
+/** Keyboard: Tab reaches a citation chip, its hover card opens on focus, Enter takes the focus into the source card, Esc returns it to the chip. */
+async function sourcesKeyboard(ctx) {
+  const view = await openChat(ctx, "sources-keyboard");
+  try {
+    const { page } = view;
+    const answer = firstAnswer(page);
+    await answer.locator("[data-testid=turn-steps]").focus();
+    let reached = null;
+    for (let i = 0; i < 8 && !reached; i += 1) {
+      await page.keyboard.press("Tab");
+      reached = await page.evaluate(() => { const el = document.activeElement; return el?.getAttribute("data-testid") === "citation-chip" ? el.getAttribute("data-ordinal") : null; });
+    }
+    assert(reached === "1", `Tab did not reach the first citation chip (got ${reached})`);
+    await page.locator("[data-slot=hover-card-content]").waitFor({ timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector("[data-slot=hover-card-content]")?.textContent?.includes("Services net sales"), null, { timeout: 5000 });
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.activeElement?.closest("[data-slot=source-card]")?.getAttribute("data-ordinal") === "1", null, { timeout: 5000 });
+    assert((await page.locator("[data-slot=source-card][data-ordinal='1']").getAttribute("data-highlight")) !== null, "the card Enter went to is not marked");
+    await page.keyboard.press("Escape");
+    const back = await page.evaluate(() => ({ id: document.activeElement?.getAttribute("data-testid"), ordinal: document.activeElement?.getAttribute("data-ordinal") }));
+    assert(back.id === "citation-chip" && back.ordinal === "1", `Esc left the focus on ${JSON.stringify(back)}, not on the chip`);
+    return "Tab reaches [1], the hover card shows its excerpt on focus, Enter moves the focus into the card (marked), Esc returns it to [1]";
+  } finally { await view.close(); }
+}
+
+/** Every field of the old drawer has a place on the card; a withdrawn source is an error bar with 重试; each chunk is asked for once. */
+async function sourceCardFields(ctx) {
+  const state = buildState();
+  const messages = state.chat.conversations.get(CONVERSATION.finbot);
+  const answer = messages.find((m) => m.role === "assistant" && m.citations?.length === 2 && m.trace);
+  answer.citations.push(
+    { ordinal: 3, chunk_id: null, document_id: null, title: "Apple 披露欧盟 App Store 政策调整", section: "", source_url: "https://news.example.test/apple-eu", observed_at: "2026-11-12T01:30:00Z", published_at: "2026-11-11", quote: "Apple said the new terms take effect in the EU on Monday.", source_type: "web_news", truncated: true },
+    { ordinal: 4, chunk_id: "k0000000-0000-4000-8000-00000000000f", document_id: null, title: "已撤回的材料", section: "", source_url: null, observed_at: null, published_at: null, quote: "", source_type: "saved_filing", truncated: false },
+  );
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "source-card-fields", unmatched, fixtureState: state });
+  try {
+    const { page } = view;
+    const asked = [];
+    page.on("request", (request) => { if (/\/knowledge\/citations\//.test(request.url())) asked.push(request.url().split("/").pop()); });
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    const chip = firstAnswer(page).locator("[data-testid=sources-chip]");
+    assert(/来源 4/.test((await chip.innerText()).trim()), `the footer chip says ${JSON.stringify(await chip.innerText())}`);
+    await chip.scrollIntoViewIfNeeded();
+    await chip.click();
+    await page.locator("[data-slot=source-card]").nth(3).waitFor({ timeout: 5000 });
+    const card = (n) => page.locator(`[data-slot=source-card][data-ordinal='${n}']`);
+    // 1: a saved filing: type, dates, the excerpt read through the chunk, the link to the original.
+    await card(1).locator("[data-slot=source-quote]").waitFor({ timeout: 5000 });
+    const c1 = await card(1).innerText();
+    assert(c1.includes("已保存申报") && c1.includes("观察 2026-") && c1.includes("Services gross margin percentage was 75.0%"), `card 1 reads ${JSON.stringify(c1)}`);
+    assert((await card(1).locator("[data-slot=source-card-open]").getAttribute("href")).startsWith("https://www.sec.gov/"), "card 1 has no link to the original");
+    assert((await card(1).locator("[data-slot=source-quote]").evaluate((el) => getComputedStyle(el).fontFamily)).toLowerCase().includes("serif"), "the excerpt is not in the quote face");
+    // 2: derived content: marked 派生, version line, original quotes.
+    await card(2).locator("[data-slot=source-card-derived]").waitFor({ timeout: 5000 });
+    const c2 = await card(2).innerText();
+    assert(c2.includes("派生") && c2.includes("v2 · analysis-v2 · muse-ember") && c2.includes("原文引文：") && c2.includes("gross margin was 75.0%"), `card 2 reads ${JSON.stringify(c2)}`);
+    assert((await card(2).locator("[data-slot=source-card-open]").count()) === 0, "card 2 has no original to open but shows the link");
+    // 3: a web page: published and fetched dates, the truncated note, its own quote, no chunk request.
+    const c3 = await card(3).innerText();
+    assert(c3.includes("新闻网页") && c3.includes("发布 2026-11-11") && c3.includes("抓取 2026-11-12") && c3.includes("保存内容可能不完整") && c3.includes("the new terms take effect"), `card 3 reads ${JSON.stringify(c3)}`);
+    assert((await card(3).locator("[data-slot=source-card-open]").getAttribute("target")) === "_blank", "the original does not open in a new tab");
+    // 4: a withdrawn source: an error bar with 重试.
+    await card(4).locator("[data-testid=excerpt-error]").waitFor({ timeout: 5000 });
+    assert((await card(4).innerText()).includes("来源已撤回或不可访问") && (await card(4).getByRole("button", { name: "重试" }).count()) === 1, "the withdrawn source does not say so with a 重试 button");
+    assert((await card(4).innerText()).includes("观察时间未知"), "the unknown observed time is not said");
+    const distinct = new Set(asked);
+    assert(asked.length === distinct.size, `a chunk was asked for twice: ${asked.join(", ")}`);
+    return `4 cards: type, dates, serif excerpt, 派生 + version + original quotes, link, web dates + 保存内容可能不完整, withdrawn = error bar + 重试; ${asked.length} chunk requests, none repeated`;
+  } finally { await view.close(); }
+}
+
+/** Design 3.4: the bot's workspace cards (add, move, resize, pin a stock, delete, reset) work in the panel's 工作区 tab as they did in the old rail, and the layout is kept per bot. */
+async function workspaceCardsInPanel(ctx) {
+  const view = await openChat(ctx, "workspace-cards-in-panel");
+  try {
+    const { page } = view;
+    const pane = page.locator("[data-testid=workspace-pane]");
+    assert((await page.locator("[data-testid=tab-workspace]").getAttribute("aria-selected")) === "true", "the panel does not open on 工作区 by default");
+    await pane.locator("section.ws-card").first().waitFor({ timeout: 10000 });
+    const titles = () => pane.locator("section.ws-card").evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
+    const first = await titles();
+    assert(first.length === 6, `${first.length} cards by default`);
+    await pane.getByRole("button", { name: /编辑卡片/ }).click();
+    // Move the first card down, make the second a large one, pin the third to NVDA.
+    await pane.getByRole("button", { name: "下移" }).first().click();
+    const moved = await titles();
+    assert(moved[0] === first[1] && moved[1] === first[0], `the first card did not move down: ${moved.join(" / ")}`);
+    await pane.locator("select[aria-label=大小]").nth(1).selectOption("l");
+    await pane.locator("input[aria-label=固定股票]").first().fill("NVDA");
+    await pane.locator("input[aria-label=固定股票]").first().blur();
+    // Delete the last card, then add it back from the list of missing ones.
+    await pane.getByRole("button", { name: "删除" }).last().click();
+    assert((await titles()).length === 5, "the last card was not deleted");
+    await pane.locator("select[aria-label=添加卡片]").selectOption({ index: 1 });
+    assert((await titles()).length === 6, "the added card is not in the list");
+    await pane.getByRole("button", { name: "完成" }).click();
+    const stored = await page.evaluate((id) => JSON.parse(localStorage.getItem(`market-evidence-agent:workspace:${id}:v1`)), BOT.finbot);
+    assert(stored[1].size === "l" && stored.some((item) => item.symbol === "NVDA"), `the stored layout is ${JSON.stringify(stored)}`);
+    // The layout is kept per bot over a reload; 恢复默认 puts the six back.
+    await page.reload({ waitUntil: "load" });
+    await pane.locator("section.ws-card").first().waitFor({ timeout: 10000 });
+    const kept = await titles();
+    assert(kept.join() === (await titles()).join() && kept[0] === first[1], `the layout is not kept over a reload: ${kept.join(" / ")}`);
+    await pane.getByRole("button", { name: /编辑卡片/ }).click();
+    await pane.getByRole("button", { name: "恢复默认" }).click();
+    assert((await titles()).join() === first.join(), "恢复默认 did not bring the default order back");
+    return "six default cards; move down, size L, pin NVDA, delete, add back; stored per bot, kept over a reload; 恢复默认 restores the order";
+  } finally { await view.close(); }
+}
+
+/** Between 「sent」 and the first event there is no message yet: the line shows the bot's head and the bar's first cell; the first event replaces it with the real message. */
+async function stepsPending(ctx) {
+  const view = await openChat(ctx, "steps-pending");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill(`${HAND_MARKER} 等首个字`);
+    await page.locator("[data-testid=send]").click();
+    await hand.opened(0);
+    const pending = page.locator("[data-testid=pending-answer]");
+    await pending.waitFor({ timeout: 5000 });
+    const slot = pending.locator("[data-slot=thinking-slot]");
+    assert((await slot.count()) === 1, "the waiting line has no first cell");
+    assert(/思考中\s+0\.0 秒/.test((await slot.innerText()).trim()), `the first cell says ${JSON.stringify(await slot.innerText())}`);
+    assert((await pending.locator("button").count()) === 0, "the bar before the first event is a button (there is no round to open yet)");
+    assert((await page.locator("[data-testid=message][data-role=assistant]").filter({ has: page.locator("[data-testid=turn-steps][data-state=running]") }).count()) === 0, "a real message exists before the first event");
+    await hand.push(0, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: "t9000000-0000-4000-8000-0000000000f2", bot_id: BOT.finbot });
+    await pending.waitFor({ state: "detached", timeout: 5000 });
+    await page.locator("[data-testid=message][data-role=assistant] [data-testid=turn-steps][data-state=running]").last().waitFor({ timeout: 5000 });
+    await hand.push(0, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000f2", thinking_ms: 800, citations: [], citation_protocol: null });
+    await hand.close(0);
+    return "the waiting line shows the bot's head and 「思考中 0.0 秒」 (not a button), and the first event replaces it with the real message and its running bar";
+  } finally { await view.close(); }
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -2256,7 +2638,7 @@ const CHECKS = [
   ["chat-external-sync: a turn written from outside appears by itself, the draft stays", chatExternalSync],
   ["chat-compact: /compact sends the compress request and the thread shows 已压缩 N 轮", chatCompact],
   ["locale-catalog-on-demand: a Chinese session never fetches the English catalog; switching or starting in English fetches it once and the page is English", localeCatalogLoadsOnDemand],
-  ["optional-chunk-failure: a blocked side-panel chunk leaves the chat page working without the rail and the new-bot dialog", optionalChunkFailure],
+  ["optional-chunk-failure: a blocked workspace chunk leaves the chat page and the right panel working without the cards and the new-bot dialog", optionalChunkFailure],
   ["chat-load-earlier: scrolling to the top loads the earlier turns and the line being read does not move", chatLoadEarlier],
   ["switch to another bot and back: URL changes, earlier answer kept", switchBotAndBack],
   ["browser back returns to the previous address", backButtonReturns],
@@ -2309,6 +2691,17 @@ const CHECKS = [
   ["chat-popover-keyboard: the composer panels and the header ⓘ open from the keyboard, Esc closes and returns focus", chatPopoverKeyboard],
   ["chat-question-rail: markers on the left edge, preview card, bookmark kept, click scrolls", chatQuestionRail],
   ["markdown-chunk: the renderer is prefetched at launch; a skeleton while it is late; plain text and 重试 when it fails", markdownChunk],
+  ["citation-jump: a click on [2] opens the panel on 来源, scrolls to card 2 and marks it once", citationJump],
+  ["steps-live: the process bar grows with the events of a running turn and folds to 已思考 N 秒 · M 步", stepsLive],
+  ["steps-pending: before the first event the line shows the bar's first cell; the first event replaces it with the real message", stepsPending],
+  ["steps-open-process: the process bar opens 过程 on its own round; another round's bar switches it", stepsOpenProcess],
+  ["public-mark-verbatim: the card's text equals the existing functions' text for the message; no danger / action colour, no icon", publicMarkVerbatim],
+  ["legacy-line-mark: the old unverified-line note is the same neutral ◦ with its old words; 追问依据 works", legacyLineMark],
+  ["old-message-no-steps: no step data shows nothing, only a time, or the old tool badges as chips", oldMessageNoSteps],
+  ["panel-resize-persists: dragging the panel's edge changes its width, which (and folding) survives a reload", panelResizePersists],
+  ["sources-keyboard: Tab reaches a chip, Enter takes the focus into its source card, Esc returns it", sourcesKeyboard],
+  ["source-card-fields: every field of the old drawer has a place on the card; a withdrawn source is an error bar with 重试", sourceCardFields],
+  ["workspace-cards-in-panel: add, move, resize, pin, delete and reset the workspace cards in the panel's 工作区 tab; the layout is kept per bot", workspaceCardsInPanel],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

@@ -56,7 +56,7 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
     </div>
   </div>;
   return <div className="mx-auto w-full max-w-[760px] px-4 pb-[max(1rem,env(safe-area-inset-bottom))] lg:px-6">
-    {c.status && <p data-testid="chat-status" role={c.state === "error" ? "alert" : "status"} className={`mb-2 px-1 text-small ${c.state === "error" ? "text-danger" : "text-muted-foreground"}`}>{c.status}</p>}
+    {c.status && c.state !== "sending" && <p data-testid="chat-status" role={c.state === "error" ? "alert" : "status"} className={`mb-2 px-1 text-small ${c.state === "error" ? "text-danger" : "text-muted-foreground"}`}>{c.status}</p>}
     <form ref={form} data-testid="composer" onSubmit={c.send} className="relative rounded-lg border border-line-strong bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.04)] focus-within:border-ink-2">
       <label htmlFor="agent-draft" className="sr-only">{t("输入消息")}</label>
       {slashItems.length > 0 && <ul id="skill-picker" data-testid="slash-menu" role="listbox" aria-label={t("技能")} className="absolute inset-x-0 bottom-full z-overlay mb-2 max-h-64 overflow-y-auto rounded-md border border-line bg-surface p-1 shadow-pop">

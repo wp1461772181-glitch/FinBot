@@ -1,12 +1,11 @@
 import { useEffect, useSyncExternalStore, type ComponentType } from "react";
-import type { Components } from "react-markdown";
 
 // The Markdown renderer is a chunk of its own (markdown-renderer.tsx), fetched in parallel with the first screen: main.tsx
 // starts it at launch when the address is the chat, and anything that needs it asks again (the same promise).  Messages show a
 // skeleton until it is in and swap to the typeset text in one step; once it is in, rendering is synchronous.  A failed fetch
 // leaves the plain text and a retry (see MarkdownBody).
 
-export type MarkdownRenderer = ComponentType<{ text: string; components: Components }>;
+export type MarkdownRenderer = ComponentType<{ text: string }>;
 type Phase = "idle" | "loading" | "ready" | "failed";
 type Snapshot = { phase: Phase; Renderer: MarkdownRenderer | null };
 

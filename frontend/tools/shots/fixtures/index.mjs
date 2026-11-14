@@ -2,7 +2,7 @@
 import { ASK_MARKER, BOT, CONVERSATION, HOLD_MARKER, LOGIN_CODE, WATCHLIST } from "./ids.mjs";
 import { prices } from "./common.mjs";
 import { botList, BOT_TEMPLATES, MODEL_CATALOG, MODEL_ROLES } from "./bots.mjs";
-import { buildChat, clarificationEvents, compactionNotice, conversationSummaries, CONTEXT_USAGE, streamEvents } from "./chat.mjs";
+import { buildChat, CITATION_DETAILS, clarificationEvents, compactionNotice, conversationSummaries, CONTEXT_USAGE, streamEvents } from "./chat.mjs";
 import { filingInventory } from "./filings.mjs";
 import { MATERIALS, materialList, analysisVersion, materialOriginal, ANALYSIS_SETTINGS } from "./materials.mjs";
 import { forecastList, forecastRoots, timeline, versionDetail, evaluations, MONITOR, workspace, job, revisionCandidates, JUDGMENTS } from "./forecasts.mjs";
@@ -72,6 +72,9 @@ export function registerRoutes(route, reply) {
     list.push({ role: "user", content: body.display_message || body.message }, { role: "assistant", status: "complete", turn_id: events[0].data.turn_id, content: text, thinking_ms: 900 });
     return reply.sse(events);
   }));
+
+  // A citation's chunk (the 来源 tab and the hover card read it).  An id with no entry is a withdrawn source.
+  route.get("/knowledge/citations/:id", own(({ params }) => CITATION_DETAILS[params.id] ?? reply.status(404, { detail: "citation_not_found" })));
 
   // --- market data -------------------------------------------------------------------------------------
   route.get("/v2/stocks/:symbol/prices", ({ params }) => prices(params.symbol));

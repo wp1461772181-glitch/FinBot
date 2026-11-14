@@ -13,6 +13,12 @@ async function openSide(page) {
   if (await toggle.count() && (await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
 }
 
+/** Click the first answer's process bar: the panel opens on 过程 with that round's steps. */
+async function openProcess(page) {
+  await page.locator("[data-testid=message][data-role=assistant]").first().locator("[data-testid=turn-steps]").click();
+  await page.locator("[data-testid=timeline-step]").first().waitFor();
+}
+
 /** True from the width where the sidebar is drawn (the `lg` breakpoint); below it the tab bar is. */
 const hasSidebar = (width) => width >= 1024;
 
@@ -51,6 +57,33 @@ export async function streamHalfway(page, { paragraphs = 2, botId = BOT.finbot, 
   return hand;
 }
 
+/** A trace event as the server sends it (turn-flow.mjs reads these); `fields` set status, ms, output ... */
+export const traceEvent = (id, kind, fields = {}) => ({ id, kind, name: null, step: null, status: "done", after: [], start_ms: 0, ms: 300, output: null, ...fields });
+
+/**
+ * Send a hand-fed message and leave its turn in the middle of its steps (no text yet): the question, the intent, one decision, two tools
+ * that came back (3 and 12 hits) and a third still running.  The stream stays open; returns the hand and the events pushed so far.
+ */
+export async function streamSteps(page, { botId = BOT.finbot, conversationId = CONVERSATION.finbot } = {}) {
+  const hand = await handFed(page);
+  await page.locator("#agent-draft:not([disabled])").waitFor();
+  await page.locator("#agent-draft").fill(`${HAND_MARKER} 过程条`);
+  await page.locator("[data-testid=send]").click();
+  await hand.opened(0);
+  await hand.push(0, "conversation", { conversation_id: conversationId, turn_id: "t9000000-0000-4000-8000-0000000000f1", bot_id: botId });
+  await hand.push(0, "trace", traceEvent("r1", "input", { ms: 10, output: { question: "过程条" } }));
+  await hand.push(0, "trace", traceEvent("r2", "classify", { after: ["r1"], start_ms: 20, ms: 700, output: { category: "A", company: "Apple", symbol: "AAPL" } }));
+  await hand.push(0, "trace", traceEvent("r3", "decide", { after: ["r2"], step: 1, start_ms: 730, ms: 900, output: { calls: ["query_sec_filings", "query_stock_prices", "query_latest_forecast"] } }));
+  await hand.push(0, "trace", traceEvent("r4", "tool", { name: "query_sec_filings", after: ["r3"], start_ms: 1650, ms: 1200, output: { ok: true, count: 3 } }));
+  await hand.push(0, "trace", traceEvent("r5", "tool", { name: "query_stock_prices", after: ["r3"], start_ms: 1650, ms: 1500, output: { ok: true, count: 12 } }));
+  await hand.push(0, "trace", traceEvent("r6", "tool", { name: "query_latest_forecast", after: ["r3"], start_ms: 1650, ms: null, status: "running" }));
+  await page.locator("[data-testid=turn-steps][data-state=running] [data-slot=step-chip]").nth(4).waitFor();
+  return hand;
+}
+
+/** The reading of a round's first answer: its message node. */
+export const firstAnswer = (page) => page.locator("[data-testid=message][data-role=assistant]").first();
+
 export const PAGES = [
   { name: "entry", hash: "#/login", identity: "none", ready: '[aria-labelledby="login-title"]' },
   // The login page after a wrong code, the shell with the sidebar collapsed (1440) / the phone's 更多 drawer open (390),
@@ -68,11 +101,29 @@ export const PAGES = [
   // Extra views of the default line: the top of the history, and the first answer's step trace opened.
   { name: "chat-default-top", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page) => { await page.evaluate(() => { document.querySelector("[data-testid=transcript]").scrollTop = 0; }); } },
+  // The first answer's process bar opened: the right panel on 过程 with the round's timeline (P3.3).
   { name: "chat-default-thinking", hash: "#/chat", ready: "[data-testid=message]",
-    before: async (page) => { const toggle = page.locator(".thinking-toggle[aria-expanded]").first(); await toggle.click(); await page.locator(".turn-flow .flow-node").first().waitFor(); await toggle.scrollIntoViewIfNeeded(); } },
+    before: async (page) => { await openProcess(page); } },
   { name: "chat-bot", hash: `#/chat/${BOT.applebot}`, ready: "[data-testid=message]", before: openSide },
   { name: "chat-bot-profile", hash: `#/chat/${BOT.applebot}`, ready: "[data-testid=message]",
-    before: async (page) => { await openSide(page); await page.locator("#bot-side").getByRole("tab", { name: "档案" }).click(); } },
+    before: async (page) => { await openSide(page); await page.locator("#chat-panel").getByRole("tab", { name: "档案" }).click(); await page.locator("[data-testid=profile-pane] .bot-profile").waitFor(); } },
+  // P3.3: the evidence's home.  A citation chip clicked (the 来源 tab on the second source), the 过程 tab with one step's raw data opened, the process bar
+  // of a turn still running (one step turning, two done with their hit counts), a public mark's card open, an answer from before the step graph, the
+  // panel folded away.
+  { name: "chat-sources", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { await firstAnswer(page).locator("[data-testid=citation-chip][data-ordinal='2']").first().click(); await page.locator("[data-slot=source-card][data-highlight]").waitFor(); await page.locator("[data-testid=excerpt-loading]").waitFor({ state: "detached" });
+      // The mark lasts under two seconds and the picture is taken after the page settles: keep it on, and take the pointer off the chip (its hover card).
+      await page.evaluate(() => { const el = document.querySelector("[data-slot=source-card][data-ordinal='2']"); const keep = () => { if (!el.hasAttribute("data-highlight")) el.setAttribute("data-highlight", ""); }; keep(); new MutationObserver(keep).observe(el, { attributes: true, attributeFilter: ["data-highlight"] }); });
+      await page.mouse.move(1, 1); } },
+  { name: "chat-process", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { await openProcess(page); await page.locator("[data-testid=timeline-step][data-kind=tool] [data-testid=raw-toggle]").first().click(); await page.locator("[data-testid=json-viewer]").first().waitFor(); } },
+  { name: "chat-steps-running", hash: "#/chat", ready: "[data-testid=message]", before: async (page) => { await streamSteps(page); } },
+  { name: "chat-public-mark", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { const mark = page.locator("[data-testid=public-mark]").first(); await mark.scrollIntoViewIfNeeded(); await mark.click(); await page.locator("[data-testid=public-mark-card]").waitFor(); } },
+  { name: "chat-old-message", hash: `#/chat/${BOT.applebot}`, ready: "[data-testid=message][data-role=assistant]",
+    before: async (page) => { await page.locator("[data-testid=turn-steps][data-state=time]").waitFor(); } },
+  { name: "chat-panel-collapsed", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page, { width }) => { if (width >= 1280) await page.locator("[data-testid=panel-close]").click(); await page.locator("[data-testid=context-panel]").waitFor({ state: "detached" }); } },
   // P3.2: the chat's own states.  An answer half way (the stop button in the send position), the same long answer with the reader scrolled up
   // (回到底部 on screen), the "/" command menu, the model badge's panel, and the empty composer with its placeholder.
   { name: "chat-streaming", hash: "#/chat", ready: "[data-testid=message]", before: async (page) => { await streamHalfway(page, { paragraphs: 2 }); } },
