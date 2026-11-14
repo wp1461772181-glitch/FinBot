@@ -29,13 +29,14 @@ function Chip({ chip }: { chip: StepChip }) {
 }
 
 /**
- * The first cell of a running bar: three dots, what the turn is doing, the seconds since it started.  It is the place A3 puts the bot's own
- * trace of thinking; the rest of the bar does not depend on what is in it.
+ * The first cell of a running bar: the bot's own trace of thinking (24 x 16px, three small shapes whose form and motion belong to the
+ * persona; styles/bots-signature.css picks them by data-archetype on the chat page), what the turn is doing, the seconds since it started.
+ * The rest of the bar does not depend on what is in it.
  */
 function ThinkingSlot({ text, seconds }: { text: string; seconds: string }) {
   const { t } = useLocale();
   return <span data-slot="thinking-slot" className="inline-flex items-center gap-1.5 pr-1 text-caption text-muted-foreground">
-    <span aria-hidden="true" className="steps-dots inline-flex items-center gap-0.5"><i /><i /><i /></span>
+    <span aria-hidden="true" data-slot="think-trace" className="think-trace"><i /><i /><i /></span>
     <span>{text}</span>
     <span className="tabular-nums">{seconds} {t("秒")}</span>
   </span>;

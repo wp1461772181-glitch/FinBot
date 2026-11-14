@@ -30,6 +30,7 @@
 @import "./theme.css";
 @import "./bots.css";
 @import "./chat-page.css";
+@import "./bots-signature.css";
 @import "./sources.css";
 
 /* Old sheets, in the order main.tsx used to import them. */

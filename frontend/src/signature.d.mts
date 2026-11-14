@@ -1,0 +1,12 @@
+export type Trace = "candles" | "streaks" | "steps" | "arc" | "lines" | "drift" | "orbit";
+export type Cursor = "bar" | "slant" | "underline" | "hairline" | "bar-block";
+export declare const TRACES: readonly Trace[];
+export declare const CURSORS: readonly Cursor[];
+export declare function signatureOf(persona: { archetype?: string; auraVariant?: string } | null | undefined): { trace: Trace; cursor: Cursor };
+export declare const TRACE_PERIOD_S: number;
+export declare const CARET_PERIOD_S: number;
+export declare function periodFor(baseSeconds: number, tempo: unknown): number;
+export type TurnEnd = "done" | "partial" | "error" | "cancel" | "waiting";
+export declare function turnEndOutcome(prevState: string | undefined, nextState: string | undefined, messages: ReadonlyArray<{ role?: string; status?: string; clarification?: unknown }> | undefined): TurnEnd | null;
+export type DoneLine = "plain" | "done" | "partial" | "failed";
+export declare function doneLineState(message: { role?: string; status?: string; content?: string } | null | undefined, options?: { streaming?: boolean; ended?: TurnEnd | null }): DoneLine | null;

@@ -6,6 +6,7 @@
 // the evidence film of the four beats is built from it (tools/shots/aura-film.mjs).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import SignatureRow from "./SignatureRow";
 import { BotBody, type LiveHandle } from "@/components/bot/BotBody";
 import { drawAura } from "@/components/bot/aura-paint";
 import { drive } from "@/components/bot/live-drive";
@@ -212,5 +213,6 @@ export default function BotsPage() {
         </figure>;
       })}
     </section>
+    <SignatureRow />
   </main>;
 }

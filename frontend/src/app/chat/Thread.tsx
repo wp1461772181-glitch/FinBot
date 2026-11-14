@@ -13,6 +13,7 @@ import { useMarkdown } from "./markdown-loader";
 import { Message, PendingAnswer } from "./Message";
 import { QuestionRail } from "./QuestionRail";
 import { useCopy } from "./use-copy";
+import { useSettledTurn } from "./settled-turn";
 
 // The empty line (the bot, its companies, three starter questions) is only needed on a line that has not spoken yet: a chunk of its own.
 const EmptyChat = lazy(() => import("./EmptyChat"));
@@ -48,6 +49,7 @@ export function Thread({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObjec
   const railTurns = turnPreviews.map(turn => ({ ...turn, turnId: c.messages[turn.userIndex]?.turn_id }));
   const [, setFeedbackTick] = useState(0);
   const { phase: markdownPhase } = useMarkdown();
+  const settled = useSettledTurn(c.state, c.messages);
 
   // Following: the newest line stays in view while the reader is at the bottom; one scroll up lets go and offers 回到底部.
   const following = useRef(true);
@@ -103,7 +105,8 @@ export function Thread({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObjec
           <div data-testid="thread" className="flex min-w-0 flex-col gap-7 lg:col-start-2 lg:row-start-1">{c.messages.map((m, i) => <Fragment key={i}>
             {externalStarts.has(i) && <ExternalDivider content={m.role === "user" ? m.content : ""} />}
             <Message m={m} i={i} last={i === lastIndex} bot={bot} streaming={i === lastIndex && c.state === "sending"} copy={copy} draftBox={draftBox}
-              turnIndex={m.role === "user" ? turnPreviews.findIndex(turn => turn.userIndex === i) : undefined} onFeedback={() => setFeedbackTick(x => x + 1)} />
+              turnIndex={m.role === "user" ? turnPreviews.findIndex(turn => turn.userIndex === i) : undefined} onFeedback={() => setFeedbackTick(x => x + 1)}
+              ended={settled?.index === i ? settled.outcome : null} />
             {m.role === "assistant" && noticesAfter(c.notices, m.turn_id).map(notice => <CompactionDivider key={`compaction-${notice.id}`} turns={notice.turns} focus={notice.focus} summary={notice.summary} />)}
           </Fragment>)}
             {c.state === "sending" && c.messages.at(-1)?.role === "user" && <PendingAnswer bot={bot} status={c.status} />}

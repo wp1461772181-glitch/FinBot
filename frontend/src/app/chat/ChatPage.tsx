@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { type Bot } from "../../api";
+import { lazy, useEffect, useRef, useState, type ReactNode } from "react";
+import { type Bot } from "../../api/bots";
 import { resolveLook } from "../../bloub-look.mjs";
 import { useLocale } from "../../i18n";
 import { Button } from "@/components/ui/button";
+import { OptionalChunk } from "../../OptionalChunk";
 import { HistoryList } from "./HistoryList";
 import { ChatHeader } from "./ChatHeader";
 import { Thread } from "./Thread";
@@ -12,6 +13,9 @@ import { PanelProvider } from "./panel-context";
 import { useChat } from "./ChatSessionProvider";
 import { useKeyboardInset } from "./use-keyboard-inset";
 import { usePhone } from "./use-media";
+
+// The persona's part of the line's look (trace of thinking, caret, closing line): data attributes written onto the page by a chunk of its own.
+const PersonaAttrs = lazy(() => import("@/components/bot/PersonaAttrs"));
 
 /**
  * The chat page (design 4.2): the header, then the history list (no bot) | the thread with its composer | the right panel.
@@ -38,7 +42,8 @@ function ChatPageBody({ bot, workspace, profile, onTurnSettled, onBotChanged }: 
   const color = bot ? resolveLook(bot.id, bot.avatar, bot.look, bot.name).color : undefined;
   // A phone's on-screen keyboard that covers the page (iOS) lifts the composer by as much as it covers; where the browser resizes the layout instead, this is 0.
   const keyboard = useKeyboardInset(usePhone());
-  return <main data-slot="chat-page" data-testid="chat-page" data-bot-color={color} aria-labelledby="chat-title" style={keyboard ? { paddingBottom: keyboard } : undefined} className="agent-page flex min-h-0 flex-1 flex-col bg-background">
+  return <main data-slot="chat-page" data-testid="chat-page" data-bot-color={color} data-trace="orbit" data-caret="bar" aria-labelledby="chat-title" style={keyboard ? { paddingBottom: keyboard } : undefined} className="agent-page flex min-h-0 flex-1 flex-col bg-background">
+    {bot && <OptionalChunk><PersonaAttrs bot={bot} /></OptionalChunk>}
     <ChatHeader bot={bot} historyOpen={historyOpen} setHistoryOpen={setHistoryOpen} />
     <div data-testid="chat-body" className="relative flex min-h-0 flex-1">
       <div className={`grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] gap-0 ${bot ? "" : "lg:grid-cols-[264px_minmax(0,1fr)]"}`}>

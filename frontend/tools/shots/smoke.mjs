@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, clickSend, endWithCard, endWithError, firstAnswer, handTurn, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, clickSend, fillDraft, endWithCard, endWithError, firstAnswer, handTurn, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, CONVERSATION, HAND_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -16,6 +16,8 @@ import path from "node:path";
 import { findCollisions } from "./collisions.mjs";
 import { normalizePublicMarks, publicMarkQuoteText } from "../../src/chat-public-marks.mjs";
 import { followUpQuestion } from "../../src/chat-unverified.mjs";
+import { PERSONA_PRESETS } from "../../src/bot-persona-presets.mjs";
+import { CARET_PERIOD_S, TRACE_PERIOD_S, periodFor } from "../../src/signature.mjs";
 
 const { flags } = parseArgs(process.argv.slice(2), { booleans: ["strict"] });
 if (!flags.dist) { console.error("usage: node smoke.mjs --dist <build dir> [--strict]"); process.exit(2); }
@@ -1038,8 +1040,7 @@ async function botRowMarks(ctx) {
     await settle(page);
     // The fixture: NewsBot has 2 unread, ReportBot waits on an item; hold an answer in TeslaBot's line for the fourth.
     await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, BOT.teslabot);
-    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
-    await page.locator("#agent-draft").fill("[hold-the-answer] AAPL");
+    await fillDraft(page, "[hold-the-answer] AAPL", { botName: "TeslaBot" });
     await page.locator("[data-testid=send]").click();
     await page.locator("[data-testid=stop]").waitFor({ timeout: 10000 });
     await page.evaluate(() => { location.hash = "#/chat"; });
@@ -1656,8 +1657,7 @@ async function chatBackgroundLine(ctx) {
     const hand = await handFed(page);
     await pressBotRow(page, "TeslaBot");
     await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
-    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
-    await page.locator("#agent-draft").fill(`${HAND_MARKER} 后台线`);
+    await fillDraft(page, `${HAND_MARKER} 后台线`, { botName: "TeslaBot" });
     await page.locator("[data-testid=send]").click();
     const body = await hand.opened(0);
     assert(body.bot_id === BOT.teslabot, `the turn went out for ${body.bot_id}`);
@@ -1690,8 +1690,7 @@ async function chatClarification(ctx) {
     const bodies = watchPosts(page, STREAM_PATH);
     await pressBotRow(page, "TeslaBot");
     await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
-    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
-    await page.locator("#agent-draft").fill(`${ASK_MARKER} 查一下结果`);
+    await fillDraft(page, `${ASK_MARKER} 查一下结果`, { botName: "TeslaBot" });
     await page.locator("[data-testid=send]").click();
     const card = page.locator("[data-slot=approval-card][data-state=active]");
     await card.waitFor({ timeout: 10000 });
@@ -3179,8 +3178,7 @@ async function avatarWaitingPose(ctx) {
     const { page } = view;
     await pressBotRow(page, "TeslaBot");
     await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
-    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
-    await page.locator("#agent-draft").fill(`${ASK_MARKER} 查一下结果`);
+    await fillDraft(page, `${ASK_MARKER} 查一下结果`, { botName: "TeslaBot" });
     await page.locator("[data-testid=send]").click();
     await page.locator("[data-slot=approval-card][data-state=active]").waitFor({ timeout: 10000 });
     const body = page.locator('[data-testid=chat-header] svg[data-slot=bot-body]');
@@ -3462,6 +3460,308 @@ async function auraReducedStatic(ctx) {
   } finally { await view.close(); }
 }
 
+
+// --- A3: the line's signature (trace of thinking, caret, closing line) and the status mark of a bot in a list ----------------------------------------
+const SIGNATURE_BOTS = [
+  { name: "FinBot", id: BOT.finbot, conversation: CONVERSATION.finbot, trace: "candles", animation: "trace-candle", caret: { width: "2px", animation: "chat-caret" } },
+  { name: "TeslaBot", id: BOT.teslabot, conversation: CONVERSATION.teslabot, trace: "streaks", animation: "trace-streak", caret: { width: "3px", animation: "chat-caret", skew: true } },
+  { name: "NewsBot", id: BOT.newsbot, conversation: CONVERSATION.newsbot, trace: "steps", animation: "trace-step", caret: { height: "2px", animation: "chat-caret" } },
+  { name: "AppleBot", id: BOT.applebot, conversation: CONVERSATION.applebot, trace: "arc", animation: "trace-arc", caret: { width: "1px", animation: "caret-fade" } },
+  { name: "ReportBot", id: BOT.reportbot, conversation: CONVERSATION.reportbot, trace: "lines", animation: "trace-fill", caret: { width: "9px", animation: "chat-caret", gradient: true } },
+];
+const tempoOf = (name) => PERSONA_PRESETS.find((p) => p.name === name).tempo;
+const turnIdOf = (n) => `t9000000-0000-4000-8000-00000000a3${String(n).padStart(2, "0")}`;
+
+/** A bot's line, real CSS motion (or the system's reduced-motion setting when `reduced`), after the page has told the line who is answering (data-archetype). */
+async function openSignatureLine(ctx, label, bot, { reduced = false, width = 1440, theme = "light", rafCounter = false } = {}) {
+  const view = await newView(ctx.browser, { width, theme, label, unmatched, motion: true });
+  if (reduced) await view.page.emulateMedia({ reducedMotion: "reduce" });
+  if (rafCounter) await view.context.addInitScript(() => { window.__raf = 0; const raw = window.requestAnimationFrame.bind(window); window.requestAnimationFrame = (callback) => { window.__raf += 1; return raw(callback); }; });
+  await view.page.goto(`${ctx.server.url}#/chat/${bot.id}`, { waitUntil: "load" });
+  await view.page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 30000 });
+  await view.page.waitForFunction(() => Boolean(document.querySelector("[data-slot=chat-page]")?.dataset.archetype), null, { timeout: 30000 });
+  await settle(view.page);
+  return view;
+}
+/** The running turn's trace of thinking as the browser computes it (the reader's lines animate on a pseudo-element, the others on the three <i>). */
+const readTrace = (page) => page.evaluate(() => {
+  const slot = document.querySelector("[data-slot=think-trace]"), first = slot.querySelector("i"), pageEl = document.querySelector("[data-slot=chat-page]");
+  const own = getComputedStyle(first), after = getComputedStyle(first, "::after");
+  const live = own.animationName !== "none" ? own : after;
+  const box = slot.getBoundingClientRect();
+  return { trace: pageEl.dataset.trace, archetype: pageEl.dataset.archetype, variant: pageEl.dataset.auraVariant, name: live.animationName, duration: live.animationDuration, count: live.animationIterationCount,
+    width: box.width, height: box.height, tempo: getComputedStyle(pageEl).getPropertyValue("--bot-tempo").trim(), kids: slot.children.length };
+});
+const seconds = (text) => Number.parseFloat(String(text).split(",")[0]);
+
+async function signatureByArchetype(ctx) {
+  const seen = [];
+  for (const bot of SIGNATURE_BOTS) {
+    const view = await openSignatureLine(ctx, `signature-${bot.name}`, bot);
+    try {
+      const { page } = view;
+      await handTurn(page, { text: "等首字", botId: bot.id, conversationId: bot.conversation, turnId: turnIdOf(1) });
+      await page.locator("[data-slot=think-trace]").first().waitFor({ timeout: 10000 });
+      const info = await readTrace(page);
+      assert(info.trace === bot.trace && info.name === bot.animation, `${bot.name}: trace ${info.trace} / animation ${info.name}, expected ${bot.trace} / ${bot.animation} (archetype ${info.archetype}, variant ${info.variant})`);
+      assert(Math.round(info.width) === 24 && Math.round(info.height) === 16, `${bot.name}: the trace is ${info.width} x ${info.height}, not 24 x 16`);
+      assert(info.kids === 3, `${bot.name}: the trace has ${info.kids} shapes`);
+      assert(info.count === "infinite", `${bot.name}: the trace loops ${info.count}`);
+      seen.push(`${bot.name}=${info.name}`);
+    } finally { await view.close(); }
+  }
+  assert(new Set(seen.map((x) => x.split("=")[1])).size === 5, `five bots, ${new Set(seen.map((x) => x.split("=")[1])).size} different animations: ${seen.join(", ")}`);
+  return `the first cell of the waiting bar animates differently for each bot, from the page's own data (${seen.join(", ")}); 24 x 16, three shapes, looping`;
+}
+
+async function signatureTempo(ctx) {
+  const rows = [];
+  for (const bot of SIGNATURE_BOTS) {
+    const view = await openSignatureLine(ctx, `signature-tempo-${bot.name}`, bot);
+    try {
+      const { page } = view;
+      await handTurn(page, { text: "节奏", botId: bot.id, conversationId: bot.conversation, turnId: turnIdOf(2) });
+      await page.locator("[data-slot=think-trace]").first().waitFor({ timeout: 10000 });
+      const info = await readTrace(page), tempo = tempoOf(bot.name);
+      const expected = periodFor(TRACE_PERIOD_S, tempo) * (bot.trace === "arc" ? 2 : 1); // the calm tracker's arc breathes at twice the loop
+      assert(Math.abs(Number(info.tempo) - tempo) < 1e-9, `${bot.name}: --bot-tempo ${info.tempo}, the persona says ${tempo}`);
+      assert(Math.abs(seconds(info.duration) - expected) < 0.006, `${bot.name}: period ${info.duration}, expected ${expected.toFixed(3)} s (= ${TRACE_PERIOD_S} / ${tempo}${bot.trace === "arc" ? " x 2" : ""})`);
+      rows.push(`${bot.name} ${tempo} -> ${seconds(info.duration).toFixed(3)} s`);
+    } finally { await view.close(); }
+  }
+  const fastest = Math.min(...rows.map((r) => Number(r.split("-> ")[1].split(" ")[0]))), slowest = Math.max(...rows.map((r) => Number(r.split("-> ")[1].split(" ")[0])));
+  assert(fastest < slowest, "every bot has the same period");
+  return `period = ${TRACE_PERIOD_S} s / tempo: ${rows.join(", ")}`;
+}
+
+async function cursorOnlyWhileStreaming(ctx) {
+  const seen = [];
+  for (const bot of SIGNATURE_BOTS) {
+    const view = await openSignatureLine(ctx, `cursor-${bot.name}`, bot);
+    try {
+      const { page } = view;
+      const before = await page.evaluate(() => document.querySelectorAll(".chat-prose[data-streaming]").length);
+      assert(before === 0, `${bot.name}: a caret before any turn`);
+      const hand = await streamHalfway(page, { paragraphs: 1, botId: bot.id, conversationId: bot.conversation });
+      await page.locator(".chat-prose[data-streaming][data-md=ready], [data-testid=message-body][data-md=ready][data-streaming]").first().waitFor({ timeout: 15000 });
+      const caret = await page.evaluate(() => {
+        const block = document.querySelector("[data-testid=message-body][data-streaming] > :last-child"), s = getComputedStyle(block, "::after");
+        const pageEl = document.querySelector("[data-slot=chat-page]");
+        return { content: s.content, display: s.display, width: s.width, height: s.height, transform: s.transform, animation: s.animationName, period: s.animationDuration, image: s.backgroundImage, shape: pageEl.dataset.caret, tempo: pageEl.style.getPropertyValue("--bot-tempo") };
+      });
+      assert(caret.content === '""' && caret.display === "inline-block", `${bot.name}: no caret while streaming (${JSON.stringify(caret)})`);
+      assert(caret.animation === bot.caret.animation, `${bot.name}: caret animation ${caret.animation}, expected ${bot.caret.animation}`);
+      if (bot.caret.width) assert(caret.width === bot.caret.width, `${bot.name}: caret width ${caret.width}, expected ${bot.caret.width}`);
+      if (bot.caret.height) assert(caret.height === bot.caret.height, `${bot.name}: caret height ${caret.height}, expected ${bot.caret.height}`);
+      if (bot.caret.skew) assert(caret.transform !== "none", `${bot.name}: the slanted caret is not slanted`);
+      if (bot.caret.gradient) assert(/linear-gradient/.test(caret.image), `${bot.name}: the reader's caret has no block at its end (${caret.image})`);
+      const expectedPeriod = periodFor(bot.caret.animation === "caret-fade" ? 1.6 : CARET_PERIOD_S, tempoOf(bot.name));
+      assert(Math.abs(seconds(caret.period) - expectedPeriod) < 0.006, `${bot.name}: blink period ${caret.period}, expected ${expectedPeriod.toFixed(3)} s`);
+      // The turn ends: the caret is gone with the streaming mark.
+      await hand.push(0, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000e1", thinking_ms: 800, citations: [], citation_protocol: null });
+      await hand.close(0);
+      await page.waitForFunction(() => document.querySelectorAll("[data-streaming]").length === 0, null, { timeout: 10000 });
+      const after = await page.evaluate(() => { const block = document.querySelector("[data-testid=message-body]:last-of-type > :last-child") ?? document.querySelector("[data-testid=message][data-last] [data-testid=message-body] > :last-child"); return block ? getComputedStyle(block, "::after").content : "(no block)"; });
+      assert(after === "none" || after === "normal", `${bot.name}: after the turn the last block still has a ::after (${after})`);
+      seen.push(`${bot.name} ${bot.caret.animation}`);
+    } finally { await view.close(); }
+  }
+  return `a caret of its own shape and period while streaming, none before and none after (${seen.join(", ")})`;
+}
+
+async function doneLineOnce(ctx) {
+  const bot = SIGNATURE_BOTS[3]; // AppleBot: a line with history, so a fresh turn lands among messages that were already there
+  const view = await openSignatureLine(ctx, "done-line-once", bot);
+  try {
+    const { page } = view;
+    const lines = () => page.evaluate(() => [...document.querySelectorAll("[data-testid=done-line]")].map((el) => {
+      const sweep = el.querySelector(".done-sweep"), s = sweep ? getComputedStyle(sweep) : null;
+      return { state: el.dataset.state, sweep: Boolean(sweep), name: s?.animationName ?? "none", duration: s?.animationDuration ?? "", count: s?.animationIterationCount ?? "", reach: s?.getPropertyValue("--done-reach").trim() ?? "", color: getComputedStyle(el).backgroundColor, height: el.getBoundingClientRect().height };
+    }));
+    const history = await lines();
+    assert(history.length >= 1, "the history shows no closing line");
+    assert(history.every((l) => !l.sweep && l.name === "none" && l.state === "plain" && l.height === 1), `history lines are not plain hairlines: ${JSON.stringify(history)}`);
+    // A turn that ends done: its line sweeps once, with the bot's colour.
+    const hand = await handTurn(page, { text: "完成", lead: "完成的回答。", botId: bot.id, conversationId: bot.conversation, turnId: turnIdOf(3) });
+    await hand.push(0, "done", { status: "complete", turn_id: turnIdOf(3), thinking_ms: 800, citations: [], citation_protocol: null });
+    await hand.close(0);
+    const fresh = page.locator("[data-testid=done-line][data-state=done]");
+    await fresh.waitFor({ timeout: 10000 });
+    const mid = (await lines()).at(-1);
+    assert(mid.sweep && mid.name === "done-sweep, done-fade" && mid.count === "1, 1", `the fresh line's animation: ${JSON.stringify(mid)}`);
+    assert(mid.duration === "0.32s, 0.16s", `the sweep lasts ${mid.duration}, expected 0.32s then a 0.16s fade`);
+    assert(mid.height === 1, `the line is ${mid.height}px high at rest (the 2px stroke is drawn over it)`);
+    const first = await page.evaluate(() => document.querySelector("[data-testid=done-line][data-state=done] .done-sweep").getAnimations().map((a) => ({ name: a.animationName, start: a.startTime })));
+    await page.waitForTimeout(900);
+    const settled = await page.evaluate(() => { const sweep = document.querySelector("[data-testid=done-line][data-state=done] .done-sweep"); return { states: sweep.getAnimations().map((a) => a.playState), opacity: getComputedStyle(sweep).opacity, starts: sweep.getAnimations().map((a) => a.startTime) }; });
+    assert(settled.states.every((state) => state === "finished") && settled.opacity === "0", `after the sweep: ${JSON.stringify(settled)}`);
+    assert(JSON.stringify(settled.starts) === JSON.stringify(first.map((a) => a.start)), "the sweep was started again");
+    // Something else re-renders the thread: the sweep is not played again.
+    await page.locator("#agent-draft").fill("再问一句"); await page.waitForTimeout(300);
+    const again = await page.evaluate(() => document.querySelector("[data-testid=done-line][data-state=done] .done-sweep").getAnimations().map((a) => a.startTime));
+    assert(JSON.stringify(again) === JSON.stringify(settled.starts), "typing in the composer replayed the sweep");
+    // The earlier lines never moved.
+    const now = await lines();
+    assert(now.slice(0, history.length).every((l) => !l.sweep), "a history line grew a sweep");
+    // Partial: the stroke stops at three quarters.
+    await page.locator("#agent-draft").fill("");
+    const second = await handTurn(page, { text: "部分", lead: "部分来源的回答。", botId: bot.id, conversationId: bot.conversation, turnId: turnIdOf(4), index: 1 });
+    await second.push(1, "done", { status: "partially_succeeded", turn_id: turnIdOf(4), thinking_ms: 700, citations: [], citation_protocol: null });
+    await second.close(1);
+    await page.locator("[data-testid=done-line][data-state=partial]").waitFor({ timeout: 10000 });
+    const partial = (await lines()).at(-1);
+    assert(Number(partial.reach) === 0.75 && partial.sweep, `the partial line: ${JSON.stringify(partial)}`);
+    // Failure: the line is red and does not move, and there is no sweep to hide.
+    const third = await handTurn(page, { text: "失败", lead: "写到一半，", botId: bot.id, conversationId: bot.conversation, turnId: turnIdOf(5), index: 2 });
+    await endWithError(third, 2, "provider_timeout");
+    await page.locator("[data-testid=done-line][data-state=failed]").waitFor({ timeout: 10000 });
+    const failed = (await lines()).at(-1);
+    const danger = await page.evaluate(() => { const probe = document.createElement("i"); probe.style.color = "var(--danger)"; document.body.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; });
+    const toBackground = await page.evaluate((c) => { const probe = document.createElement("i"); probe.style.backgroundColor = c; document.body.append(probe); const color = getComputedStyle(probe).backgroundColor; probe.remove(); return color; }, danger);
+    assert(!failed.sweep && failed.name === "none" && failed.color === toBackground, `the failed line: ${JSON.stringify(failed)}, danger is ${danger}`);
+    const moving = await page.evaluate(() => document.querySelector("[data-testid=done-line][data-state=failed]").getAnimations({ subtree: true }).length);
+    assert(moving === 0, `the failed line has ${moving} animations`);
+    return "history lines are plain 1px hairlines; a fresh done turn sweeps 320ms (+160ms fade) once and not again; partial reaches 0.75; failed is danger, 1px and still";
+  } finally { await view.close(); }
+}
+
+async function doneLineNoneForStopAndWaiting(ctx) {
+  const bot = SIGNATURE_BOTS[3];
+  const view = await openSignatureLine(ctx, "done-line-stop-wait", bot);
+  try {
+    const { page } = view;
+    const counted = () => page.locator("[data-testid=message][data-role=assistant]").last().locator("[data-testid=done-line]").count();
+    // Stopped: no closing line under it.
+    await handTurn(page, { text: "取消", lead: "写到一半，", botId: bot.id, conversationId: bot.conversation, turnId: turnIdOf(6) });
+    await page.locator("[data-testid=stop]").click();
+    await page.locator("[data-testid=stopped-note]").waitFor({ timeout: 10000 });
+    assert((await counted()) === 0, "a stopped turn has a closing line");
+    // Waiting for you: the card ends the turn; no sweep, no line.
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill(`${ASK_MARKER} 查一下`);
+    await page.locator("[data-testid=send]").click();
+    await page.locator("[data-slot=approval-card][data-state=active]").waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=done-line] .done-sweep").count()) === 0, "a turn that waits for you drew a sweep");
+    assert((await counted()) === 0, "the message that holds the card has a closing line");
+    return "a stopped turn and one that waits for you have no closing line and no sweep";
+  } finally { await view.close(); }
+}
+
+async function signatureCssOnly(ctx) {
+  const bot = SIGNATURE_BOTS[0];
+  const view = await openSignatureLine(ctx, "signature-css-only", bot, { rafCounter: true });
+  try {
+    const { page } = view;
+    const rate = async (ms) => { const a = await page.evaluate(() => window.__raf); await page.waitForTimeout(ms); return Math.round(((await page.evaluate(() => window.__raf)) - a) / (ms / 1000)); };
+    await page.mouse.move(700, 300);
+    const idle = await rate(3000);
+    const hand = await handTurn(page, { text: "无额外循环", botId: bot.id, conversationId: bot.conversation, turnId: turnIdOf(7) });
+    await page.locator("[data-slot=think-trace]").first().waitFor({ timeout: 10000 });
+    const waiting = await rate(3000);
+    for (let i = 1; i <= 2; i += 1) await hand.push(0, "delta", { text: streamParagraph(i) });
+    await page.locator("[data-testid=message-body][data-streaming]").first().waitFor({ timeout: 10000 });
+    const streaming = await rate(3000);
+    const jsDriven = await page.evaluate(() => [...document.querySelectorAll("[data-slot=think-trace] i, .done-sweep")].filter((el) => el.getAnimations().length === 0).length);
+    // The evidence that these are CSS animations (the browser's own, on the compositor), not a script writing styles: every animation of the trace is a CSSAnimation.
+    const kinds = await page.evaluate(() => [...document.querySelectorAll("[data-slot=think-trace]")].flatMap((el) => el.getAnimations({ subtree: true })).map((a) => a.constructor.name));
+    assert(kinds.length >= 3 && kinds.every((k) => k === "CSSAnimation"), `the trace's animations are ${kinds.join(",")}`);
+    const cap = Math.max(idle, 60) * 1.15 + 3;
+    assert(waiting <= cap && streaming <= cap, `rAF calls per second: idle ${idle}, waiting ${waiting}, streaming ${streaming} (limit ${cap.toFixed(0)}): something besides the present avatar runs a frame loop`);
+    assert(jsDriven === 0, "a trace shape has no CSS animation");
+    return `requestAnimationFrame calls/s: idle ${idle}, waiting for the first word ${waiting}, streaming ${streaming} (the present avatar's own loop; the trace, caret and line add none); every trace animation is a CSSAnimation`;
+  } finally { await view.close(); }
+}
+
+async function signatureReduced(ctx) {
+  const rows = [];
+  for (const bot of [SIGNATURE_BOTS[0], SIGNATURE_BOTS[2], SIGNATURE_BOTS[3], SIGNATURE_BOTS[4]]) {
+    const view = await openSignatureLine(ctx, `signature-reduced-${bot.name}`, bot, { reduced: true });
+    try {
+      const { page } = view;
+      assert(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches), "the view is not under reduced motion");
+      const hand = await handTurn(page, { text: "减少动效", botId: bot.id, conversationId: bot.conversation, turnId: turnIdOf(8) });
+      await page.locator("[data-slot=think-trace]").first().waitFor({ timeout: 10000 });
+      const trace = await readTrace(page);
+      assert(trace.name === "none", `${bot.name}: the trace animates under reduced motion (${trace.name})`);
+      const still = await page.evaluate(() => { const shapes = [...document.querySelectorAll("[data-slot=think-trace] i")]; const box = (el) => el.getBoundingClientRect(); return shapes.filter((el) => getComputedStyle(el).display !== "none").map((el) => ({ w: box(el).width, h: box(el).height })); });
+      assert(still.length >= 1 && still.every((shape) => shape.w > 0 && shape.h > 0), `${bot.name}: the still trace shows nothing (${JSON.stringify(still)})`);
+      await hand.push(0, "delta", { text: streamParagraph(1) });
+      await page.locator("[data-testid=message-body][data-streaming]").first().waitFor({ timeout: 10000 });
+      const caret = await page.evaluate(() => { const s = getComputedStyle(document.querySelector("[data-testid=message-body][data-streaming] > :last-child"), "::after"); return { name: s.animationName, width: s.width, height: s.height, transform: s.transform, opacity: s.opacity, content: s.content }; });
+      assert(caret.content === '""' && caret.name === "none" && caret.transform === "none" && Number.parseFloat(caret.width) > 6, `${bot.name}: the caret under reduced motion is not a still block: ${JSON.stringify(caret)}`);
+      await hand.push(0, "done", { status: "complete", turn_id: turnIdOf(8), thinking_ms: 500, citations: [], citation_protocol: null });
+      await hand.close(0);
+      await page.locator("[data-testid=done-line][data-state=done]").waitFor({ timeout: 10000 });
+      const line = await page.evaluate(() => { const el = document.querySelector("[data-testid=done-line][data-state=done]"), sweep = el.querySelector(".done-sweep"), s = getComputedStyle(sweep); return { name: s.animationName, opacity: s.opacity, height: el.getBoundingClientRect().height }; });
+      assert(line.name === "none" && line.opacity === "0" && line.height === 1, `${bot.name}: the closing line under reduced motion: ${JSON.stringify(line)}`);
+      rows.push(bot.name);
+    } finally { await view.close(); }
+  }
+  // The status ring is a whole ring, not a turning one.
+  const row = await openSignatureLine(ctx, "signature-reduced-ring", SIGNATURE_BOTS[0], { reduced: true });
+  try {
+    await PAGES.find((p) => p.name === "shell-bot-states").before(row.page, { width: 1440 });
+    const ring = await row.page.evaluate(() => { const el = document.querySelector('[data-bot-row][data-marker="running"] [data-ring]'), s = getComputedStyle(el); return { name: s.animationName, top: s.borderTopColor, left: s.borderLeftColor }; });
+    assert(ring.name === "none" && ring.top === ring.left && ring.top !== "rgba(0, 0, 0, 0)", `the status ring under reduced motion: ${JSON.stringify(ring)}`);
+  } finally { await row.close(); }
+  return `under the system's reduced-motion setting (${rows.join(", ")}): the trace, the caret and the sweep have animation-name none; the trace is three still shapes, the caret a solid block, the line a hairline, the status ring a whole ring`;
+}
+
+/** What a bot's avatar frame in a list shows, by bot name. */
+const readStatuses = (page, scope, rowSelector) => page.evaluate(([scopeSel, rowSel]) => {
+  const out = {};
+  for (const row of document.querySelectorAll(`${scopeSel} ${rowSel}`)) {
+    const frame = row.querySelector("[data-slot=bot-status]");
+    if (!frame) continue;
+    const name = row.innerText.split("\n")[0].trim() || row.getAttribute("aria-label") || "?";
+    const ring = frame.querySelector("[data-ring]"), dot = frame.querySelector("[data-dot]");
+    out[name] = { status: frame.dataset.status, size: Math.round(frame.getBoundingClientRect().width), ring: Boolean(ring), ringColour: ring ? getComputedStyle(ring).borderTopColor : "", ringAnimation: ring ? getComputedStyle(ring).animationName : "", ringPeriod: ring ? getComputedStyle(ring).animationDuration : "", dot: Boolean(dot), dotColour: dot ? getComputedStyle(dot).backgroundColor : "" };
+  }
+  return out;
+}, [scope, rowSelector]);
+
+async function avatarStatusEverywhere(ctx) {
+  const stateOf = () => PAGES.find((p) => p.name === "shell-bot-states");
+  // Desktop: the sidebar.  (The brief also names a 「全部 bot 页」 and the palette's bot rows: neither draws bot avatars today, so there is nothing to compare there.)
+  const desk = await newView(ctx.browser, { width: 1440, theme: "light", label: "avatar-status-desktop", unmatched, motion: true });
+  let sidebar, drawerList, switcherList;
+  try {
+    await desk.page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(desk.page, PAGES.find((p) => p.name === "chat-default"));
+    await stateOf().before(desk.page, { width: 1440, mock: desk.mock });
+    await settle(desk.page);
+    sidebar = await readStatuses(desk.page, '[data-slot="sidebar"]', "[data-bot-row]");
+  } finally { await desk.close(); }
+  const phone = await newView(ctx.browser, { width: 390, theme: "light", label: "avatar-status-phone", unmatched, motion: true });
+  try {
+    await phone.page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(phone.page, PAGES.find((p) => p.name === "chat-default"));
+    await stateOf().before(phone.page, { width: 390, mock: phone.mock });   // holds TeslaBot's turn and opens the 更多 drawer
+    drawerList = await readStatuses(phone.page, '[data-slot="drawer-content"] [data-slot=bot-switch-list]', "[data-bot-switch-row]");
+    await phone.page.keyboard.press("Escape"); await phone.page.locator('[data-slot="drawer-content"]').waitFor({ state: "detached", timeout: 5000 });
+    await phone.page.locator("[data-testid=bot-switcher]").click();
+    await phone.page.locator("[data-testid=bot-switcher-drawer]").waitFor({ timeout: 8000 });
+    switcherList = await readStatuses(phone.page, "[data-testid=bot-switcher-drawer]", "[data-bot-switch-row]");
+  } finally { await phone.close(); }
+  const names = Object.keys(sidebar);
+  assert(names.length >= 4, `the sidebar shows ${names.length} bot avatars with a status frame`);
+  const summary = [];
+  for (const name of names) {
+    for (const [label, list] of [["更多 drawer", drawerList], ["bot switcher", switcherList]]) {
+      assert(list[name], `${name} is not in the ${label}`);
+      const a = sidebar[name], b = list[name];
+      for (const key of ["status", "ring", "ringColour", "ringAnimation", "ringPeriod", "dot", "dotColour"]) assert(a[key] === b[key], `${name}: ${key} is ${JSON.stringify(a[key])} in the sidebar and ${JSON.stringify(b[key])} in the ${label}`);
+    }
+    summary.push(`${name} ${sidebar[name].status}`);
+  }
+  assert(sidebar.TeslaBot.status === "answering" && sidebar.TeslaBot.ring && !sidebar.TeslaBot.dot && sidebar.TeslaBot.ringAnimation === "bot-status-spin", `TeslaBot's mark: ${JSON.stringify(sidebar.TeslaBot)}`);
+  assert(sidebar.ReportBot.status === "waiting" && sidebar.ReportBot.dot && !sidebar.ReportBot.ring, `ReportBot's mark: ${JSON.stringify(sidebar.ReportBot)}`);
+  assert(sidebar.NewsBot.status === "unread" && !sidebar.NewsBot.ring && !sidebar.NewsBot.dot, `NewsBot's mark (unread draws nothing on the avatar): ${JSON.stringify(sidebar.NewsBot)}`);
+  assert(sidebar.TeslaBot.size === 32, `the frame is ${sidebar.TeslaBot.size}px (the row's 32)`);
+  assert(Math.abs(seconds(sidebar.TeslaBot.ringPeriod) - periodFor(1.2, tempoOf("TeslaBot"))) < 0.006 || sidebar.TeslaBot.ringPeriod === "1.2s", `TeslaBot's ring period ${sidebar.TeslaBot.ringPeriod}`);
+  return `the sidebar, the 更多 drawer and the bot switcher draw the same mark for each bot (${summary.join(", ")}); the ring turns at ${sidebar.TeslaBot.ringPeriod} for TeslaBot (tempo ${tempoOf("TeslaBot")})`;
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -3565,6 +3865,14 @@ const CHECKS = [
   ["aura-none-on-small: sidebar avatars (S) and message heads (XS) have no aura nodes", auraNoneOnSmall],
   ["aura-reduced-static: reduced motion: the aura is a static shape, units still count", auraReducedStatic],
   ["avatar-rest-gaze: five different resting gazes; the eyes follow the pose's gaze (a tool running looks toward its aura)", avatarRestGaze],
+  ["signature-by-archetype: the waiting bar's first cell animates differently for each of the five bots, as their archetype says", signatureByArchetype],
+  ["signature-tempo: the trace's period is 1.2 s / the bot's tempo (the calm arc twice that), for each of the five bots", signatureTempo],
+  ["cursor-only-while-streaming: each bot's caret (shape, period) exists while its answer streams, and not before or after", cursorOnlyWhileStreaming],
+  ["done-line-once: a fresh done turn sweeps once, history never, partial stops short, failed is red and still", doneLineOnce],
+  ["done-line-none: a stopped turn and a turn that waits for you have no closing line", doneLineNoneForStopAndWaiting],
+  ["signature-css-only: waiting and streaming add no frame loop beyond the present avatar's; the trace is CSS animations", signatureCssOnly],
+  ["signature-reduced: under reduced motion the trace, caret, sweep and status ring are still", signatureReduced],
+  ["avatar-status-everywhere: the sidebar, the 更多 drawer and the bot switcher draw the same ring, dot and size for a bot", avatarStatusEverywhere],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

@@ -1,6 +1,7 @@
 import { Suspense, lazy, type ComponentProps, type ReactNode } from "react";
 import { useNavigation } from "react-router";
 import { SidebarInset, SidebarProvider, useSidebar } from "@/components/ui/sidebar";
+import { AvatarTempoProvider } from "@/components/bot/avatar-tempo";
 import { CommandMenuHost } from "@/components/command/CommandMenuHost";
 import type { PaletteData } from "@/components/command/CommandMenu";
 import { ConfirmHost } from "@/components/state/ConfirmHost";
@@ -63,7 +64,7 @@ function MobileBar({ nav }: { nav: ShellNavProps }) {
  * The pages inside are still the old ones; the router wraps each in its own `data-legacy` marker.
  */
 export function AppShell({ nav, research, palette, overlay, onModeChange, children }: { nav: ShellNavProps; research: ResearchBarProps | null; palette: PaletteData; overlay?: ReactNode; onModeChange: ModeChange; children: ReactNode }) {
-  return <SidebarProvider>
+  return <AvatarTempoProvider bots={nav.bots}><SidebarProvider>
     <AppSidebar props={nav} />
     <Main nav={nav} research={research}>{children}</Main>
     <MobileBar nav={nav} />
@@ -72,5 +73,5 @@ export function AppShell({ nav, research, palette, overlay, onModeChange, childr
     <NotifyHost />
     <CommandMenuHost data={palette} />
     {overlay}
-  </SidebarProvider>;
+  </SidebarProvider></AvatarTempoProvider>;
 }

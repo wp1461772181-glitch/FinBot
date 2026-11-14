@@ -33,11 +33,24 @@ export async function clickSend(page) {
   await page.locator("[data-testid=send]").click({ timeout: 20000 });
 }
 
+/**
+ * Type into the open line's composer, once it is THAT line's composer.  A hash change does not reload the page: right after switching to another
+ * bot the old line's composer is still on screen (enabled, with the old draft) until the new line mounts, and text typed in that gap lands in the
+ * old line's draft; the new line's composer then comes up empty and its send button stays disabled.  So when `botName` is given, wait for the
+ * composer whose placeholder names that bot (「给 <bot> 发消息…」), type, and check the box holds what was typed before anyone presses send.
+ */
+export async function fillDraft(page, text, { botName } = {}) {
+  if (botName) await page.locator(`#agent-draft[placeholder*="${botName}"]`).waitFor({ state: "visible", timeout: 30000 });
+  await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 30000 });
+  await page.locator("#agent-draft").fill(text);
+  await page.waitForFunction((value) => document.querySelector("#agent-draft")?.value === value, text, { timeout: 10000 });
+}
+
 /** Start an answer in TeslaBot's line that never ends, then go back to the default bot: TeslaBot's row shows 回答中 in the background. */
 async function holdTeslaTurn(page) {
   await page.goto(page.url().split("#")[0] + `#/chat/${BOT.teslabot}`, { waitUntil: "load" });
-  await page.locator("#agent-draft:not([disabled])").waitFor();
-  await page.locator("#agent-draft").fill(`${HOLD_MARKER} AAPL`);
+  await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 30000 });
+  await fillDraft(page, `${HOLD_MARKER} AAPL`, { botName: "TeslaBot" });
   await clickSend(page);
   await page.locator("[data-testid=stop]").waitFor();
   await page.evaluate(() => { location.hash = "#/chat"; });
@@ -127,14 +140,25 @@ export async function openArchiveView(page) {
   const archive = { marker: "market-evidence-agent-chat-archive", version: 1, created_at: stamp, updated_at: stamp,
     conversations: [{ id: "archived-1", created_at: stamp, updated_at: stamp, messages: [{ role: "user", content: "归档里的问题" }, { role: "assistant", content: "归档里的回答", status: "complete" }] }] };
   await page.locator('.chat-archive-settings input[type="file"]').setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) });
-  await page.locator(".chat-archive-settings [role=status]").waitFor({ timeout: 10000 });
+  await page.locator(".chat-archive-settings [role=status]").waitFor({ timeout: 30000 });
   await page.evaluate(() => { location.hash = "#/chat/history"; });
-  await page.locator("[data-testid=archive-banner]").waitFor({ timeout: 10000 });
-  await page.locator("[data-testid=message][data-role=assistant]").waitFor({ timeout: 10000 });
+  await page.locator("[data-testid=archive-banner]").waitFor({ timeout: 30000 });
+  await page.locator("[data-testid=message][data-role=assistant]").waitFor({ timeout: 30000 });
 }
 
 /** The reading of a round's first answer: its message node. */
 export const firstAnswer = (page) => page.locator("[data-testid=message][data-role=assistant]").first();
+
+/** The five bots' lines, for the pages that show the line's signature. */
+const SIGNATURE_LINES = [
+  { key: "finbot", bot: BOT.finbot, conversation: CONVERSATION.finbot }, { key: "teslabot", bot: BOT.teslabot, conversation: CONVERSATION.teslabot },
+  { key: "newsbot", bot: BOT.newsbot, conversation: CONVERSATION.newsbot }, { key: "applebot", bot: BOT.applebot, conversation: CONVERSATION.applebot },
+  { key: "reportbot", bot: BOT.reportbot, conversation: CONVERSATION.reportbot },
+];
+/** The line carries who is answering (data-archetype, written by a chunk of its own) once the persona has been read: wait for it, so the picture does not depend on the race. */
+async function personaReady(page) {
+  await page.waitForFunction(() => Boolean(document.querySelector("[data-slot=chat-page]")?.dataset.archetype), null, { timeout: 30000 });
+}
 
 export const PAGES = [
   { name: "entry", hash: "#/login", identity: "none", ready: '[aria-labelledby="login-title"]' },
@@ -243,14 +267,16 @@ export const PAGES = [
     before: async (page) => { await handTurn(page, { text: "取消", lead: "已经生成的前半句，" }); await page.locator("[data-testid=stop]").click(); await page.locator("[data-testid=stopped-note]").waitFor(); } },
   // 后台回答完成: TeslaBot answers in the background while the reader is in the default line; the toast says so.
   { name: "chat-state-background-done", hash: "#/chat", ready: "[data-testid=message]",
-    before: async (page) => {
+    before: async (page, { width }) => {
       await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, BOT.teslabot);
       await page.locator("h1", { hasText: "TeslaBot" }).waitFor();
       const hand = await handTurn(page, { text: "后台", lead: "后台的回答", botId: BOT.teslabot, conversationId: CONVERSATION.teslabot, turnId: "t9000000-0000-4000-8000-0000000000d2" });
       await page.evaluate(() => { location.hash = "#/chat"; });
       await page.locator("[data-testid=message]").first().waitFor();
       await hand.push(0, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000d2", thinking_ms: 900, citations: [], citation_protocol: null }); await hand.close(0);
-      await page.locator("[data-sonner-toast]").waitFor({ timeout: 10000 });
+      // The turn is over for the app once TeslaBot's row says it has something unread (the finished background answer); the toast follows from the same event.
+      if (hasSidebar(width)) await page.locator("[data-bot-row][data-marker=unread]", { hasText: "TeslaBot" }).waitFor({ timeout: 30000 }); // a phone has no sidebar rows
+      await page.locator("[data-sonner-toast]").waitFor({ timeout: 30000 });
     } },
   // 外部来的新消息: a routine's result and a message from elsewhere arrive while the line is open: each has its divider.
   { name: "chat-state-external-message", hash: "#/chat", ready: "[data-testid=message]",
@@ -347,12 +373,24 @@ export const PAGES = [
   ...[["TeslaBot", "tool3"], ["ReportBot", "verify"]].map(([bot, scenario]) => (
     { name: `dev-kit-aura-m-${bot.toLowerCase()}-${scenario}`, hash: "#/dev/kit/bots", ready: "[data-testid=bots-page]", element: `[data-testid=bot-sample-m-${bot}]`,
       before: async (page) => { await page.locator(`[data-scenario=${scenario}]`).click(); } })),
+  // A3: the line's signature.  The sample page's row (the trace of thinking, the caret, the closing line; reduced-motion still poses, what shots run with), and the real
+  // chat page in each of the five bots' lines: waiting for the first word (the trace), an answer half way (the caret), and a turn that failed (the red line).
+  { name: "dev-kit-signature", hash: "#/dev/kit/bots", ready: "[data-testid=signature-row]", element: "[data-testid=signature-row]" },
+  ...SIGNATURE_LINES.flatMap(({ key, bot, conversation }) => [
+    { name: `chat-sig-wait-${key}`, hash: `#/chat/${bot}`, ready: "#agent-draft:not([disabled])",
+      before: async (page) => { await personaReady(page); await handTurn(page, { text: "等首字", botId: bot, conversationId: conversation }); await page.locator("[data-slot=think-trace]").first().waitFor(); } },
+    { name: `chat-sig-stream-${key}`, hash: `#/chat/${bot}`, ready: "#agent-draft:not([disabled])",
+      before: async (page) => { await personaReady(page); await streamHalfway(page, { paragraphs: 1, botId: bot, conversationId: conversation }); await page.locator("[data-testid=message-body][data-streaming]").first().waitFor(); } },
+  ]),
+  ...SIGNATURE_LINES.filter(({ key }) => key === "finbot" || key === "reportbot").map(({ key, bot, conversation }) => (
+    { name: `chat-sig-failed-${key}`, hash: `#/chat/${bot}`, ready: "#agent-draft:not([disabled])",
+      before: async (page) => { await personaReady(page); const hand = await handTurn(page, { text: "失败", lead: "已经生成的前半句，", botId: bot, conversationId: conversation }); await endWithError(hand, 0, "provider_timeout"); await page.locator("[data-testid=done-line][data-state=failed]").waitFor(); } })),
   { name: "dev-kit-menu", hash: "#/dev/kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); } },
 ];
 
 /** Wait for a page's ready condition, then for any loading text to disappear. */
-export async function waitReady(page, def, timeout = 15000) {
+export async function waitReady(page, def, timeout = 30000) {
   if (typeof def.ready === "function") await def.ready(page);
   else await page.waitForSelector(def.ready, { state: "visible", timeout });
   // The states sample page shows skeletons on purpose (their screen-reader text says 正在读取): it opts out of the wait.

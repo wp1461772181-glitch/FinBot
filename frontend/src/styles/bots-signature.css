@@ -1,0 +1,151 @@
+/* A3 · The bot's signature on the chat line, and the status mark of a bot in a list (design 6.2 layer 4, 6.6).
+   Everything here is CSS: `@keyframes` that move `transform` and `opacity` and nothing else, no frame loop, no script.
+   The page decides which shape a bot gets: the chat page carries data-trace / data-caret (from signature.mjs, written with
+   data-archetype / data-aura-variant / --bot-tempo by components/bot/PersonaAttrs) and this file reads only those.  No bot name is
+   written here.  Colour is the bot's signature hue (--bot-hue, from bots.css) and its tone steps (the same three steps as
+   aura/tones.mjs: 0.34, 0.66, 1); failure is the danger token; nothing else.
+
+   Period rule: a loop's period is its base DIVIDED by the bot's tempo (--bot-tempo, 0.8 to 1.25), so the quick bot's loop is shorter.
+   Base: 1.2 s for the trace, 1 s for the caret, 1.2 s for the status ring.
+
+   Reduced motion (the system setting; A5 adds the app's own 关闭 level at the one place marked ANIMATED below): every shape here has
+   a still pose that is the base style, and the animations are only switched on inside `prefers-reduced-motion: no-preference`.  The trace is
+   three still shapes, the caret a solid block that does not blink, the closing line a plain hairline, the status ring a whole ring.
+   No loop in this file blinks faster than 3 times a second at the top tempo (the sentinel's steps are the fastest: 3 x 1.25 / 1.2 = 3.1 a second
+   at 1.25, 2.75 at its own 1.1). */
+@layer components {
+  /* ================= 1. The trace of thinking (the process bar's first cell) ================= */
+  .think-trace {
+    --tp: calc(1.2s / var(--bot-tempo, 1));
+    position: relative; display: inline-block; flex: none; overflow: hidden;
+    width: 24px; height: 16px; color: var(--bot-hue);
+  }
+  .think-trace > i { position: absolute; display: block; background: currentColor; }
+  .think-trace > i:nth-child(1) { --k: 0; opacity: 0.34; }
+  .think-trace > i:nth-child(2) { --k: 1; opacity: 0.66; }
+  .think-trace > i:nth-child(3) { --k: 2; opacity: 1; }
+
+  /* -- three small candles that rise one after another (the lead) -- */
+  [data-trace="candles"] .think-trace > i {
+    bottom: 1px; width: 6px; height: 14px; border-radius: 0; transform-origin: 50% 100%;
+    background: linear-gradient(currentColor, currentColor) 50% 0 / 1px 100% no-repeat, linear-gradient(currentColor, currentColor) 50% 70% / 4px 55% no-repeat;
+  }
+  [data-trace="candles"] .think-trace > i:nth-child(1) { left: 1px; transform: scaleY(0.5); }
+  [data-trace="candles"] .think-trace > i:nth-child(2) { left: 9px; transform: scaleY(0.75); }
+  [data-trace="candles"] .think-trace > i:nth-child(3) { left: 17px; transform: scaleY(1); }
+
+  /* -- three short lines that sweep left (the quick tracker) / drift left evenly (the standard tracker) -- */
+  [data-trace="streaks"] .think-trace > i, [data-trace="drift"] .think-trace > i { height: 2px; border-radius: 1px; }
+  [data-trace="streaks"] .think-trace > i:nth-child(1), [data-trace="drift"] .think-trace > i:nth-child(1) { top: 3px; left: 9px; width: 12px; }
+  [data-trace="streaks"] .think-trace > i:nth-child(2), [data-trace="drift"] .think-trace > i:nth-child(2) { top: 7px; left: 4px; width: 9px; }
+  [data-trace="streaks"] .think-trace > i:nth-child(3), [data-trace="drift"] .think-trace > i:nth-child(3) { top: 11px; left: 8px; width: 14px; }
+
+  /* -- three dashes that step left (the sentinel): the still pose is the three of them in a row -- */
+  [data-trace="steps"] .think-trace > i { top: 7px; left: 17px; width: 6px; height: 2px; border-radius: 1px; }
+  [data-trace="steps"] .think-trace > i:nth-child(1) { transform: translateX(-16px); }
+  [data-trace="steps"] .think-trace > i:nth-child(2) { transform: translateX(-8px); }
+
+  /* -- one arc that slowly widens and narrows (the calm tracker) -- */
+  [data-trace="arc"] .think-trace > i:nth-child(1) {
+    left: 2px; top: 4px; width: 20px; height: 10px; background: none; opacity: 0.85; transform: scaleX(0.75); transform-origin: 50% 100%;
+    border: 2px solid transparent; border-top-color: currentColor; border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  }
+  [data-trace="arc"] .think-trace > i:nth-child(n + 2) { display: none; }
+
+  /* -- three lines that fill one after another (the reader): a faint track and the fill on it -- */
+  [data-trace="lines"] .think-trace > i { left: 2px; width: 20px; height: 2px; background: color-mix(in srgb, currentColor 26%, transparent); opacity: 1; }
+  [data-trace="lines"] .think-trace > i:nth-child(1) { top: 2px; }
+  [data-trace="lines"] .think-trace > i:nth-child(2) { top: 7px; }
+  [data-trace="lines"] .think-trace > i:nth-child(3) { top: 12px; }
+  [data-trace="lines"] .think-trace > i::after { content: ""; position: absolute; inset: 0; background: currentColor; transform-origin: 0 50%; }
+  [data-trace="lines"] .think-trace > i:nth-child(1)::after { transform: scaleX(1); }
+  [data-trace="lines"] .think-trace > i:nth-child(2)::after { transform: scaleX(0.66); }
+  [data-trace="lines"] .think-trace > i:nth-child(3)::after { transform: scaleX(0.34); }
+
+  /* -- three dots that go round (the generalist; also what a page has until it knows its bot: ChatPage starts on data-trace="orbit") -- */
+  [data-trace="orbit"] .think-trace > i { left: 10.5px; top: 6.5px; width: 3px; height: 3px; border-radius: 9999px; }
+  [data-trace="orbit"] .think-trace > i:nth-child(1) { --a: 0deg; transform: rotate(0deg) translateX(5px); }
+  [data-trace="orbit"] .think-trace > i:nth-child(2) { --a: 120deg; transform: rotate(120deg) translateX(5px); }
+  [data-trace="orbit"] .think-trace > i:nth-child(3) { --a: 240deg; transform: rotate(240deg) translateX(5px); }
+
+  @keyframes trace-candle { 0%, 100% { transform: scaleY(0.3); opacity: 0.34; } 45% { transform: scaleY(1); opacity: 1; } }
+  @keyframes trace-streak { 0% { transform: translateX(12px); opacity: 0; } 22% { opacity: 1; } 100% { transform: translateX(-26px); opacity: 0; } }
+  @keyframes trace-drift { 0% { transform: translateX(14px); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translateX(-26px); opacity: 0; } }
+  @keyframes trace-step { 0% { transform: translateX(0); } 33.34% { transform: translateX(-8px); } 66.67% { transform: translateX(-16px); } 100% { transform: translateX(0); } }
+  @keyframes trace-arc { 0%, 100% { transform: scaleX(0.45); opacity: 0.5; } 50% { transform: scaleX(1); opacity: 1; } }
+  @keyframes trace-fill { 0% { transform: scaleX(0); opacity: 1; } 40% { transform: scaleX(1); opacity: 1; } 85% { transform: scaleX(1); opacity: 1; } 100% { transform: scaleX(1); opacity: 0; } }
+  @keyframes trace-orbit { from { transform: rotate(var(--a)) translateX(5px); } to { transform: rotate(calc(var(--a) + 360deg)) translateX(5px); } }
+
+  /* ================= 2. The caret at the end of an answer that is still being written ================= */
+  /* It rides on the last block's ::after, so no markup is added to the text; a list or a table carries it on its last item.  The shape
+     comes from properties the page sets (data-caret, below); the still caret (reduced motion, and before anything is set) is the plain bar. */
+  @keyframes chat-caret { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+  @keyframes caret-fade { 0%, 100% { opacity: 0.12; } 50% { opacity: 1; } }
+  .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
+  .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after {
+    content: ""; display: inline-block; box-sizing: content-box;
+    width: var(--caret-w, 2px); height: var(--caret-h, 1em); margin-left: var(--caret-ml, 2px); vertical-align: var(--caret-va, text-bottom);
+    background: var(--caret-bg, var(--bot-hue)); transform: var(--caret-tf, none);
+  }
+  [data-caret="slant"] { --caret-w: 3px; --caret-tf: skewX(-16deg); }
+  [data-caret="underline"] { --caret-w: 0.6em; --caret-h: 2px; --caret-va: baseline; --caret-tf: translateY(2px); }
+  [data-caret="hairline"] { --caret-w: 1px; --caret-h: 1.1em; --caret-ml: 3px; }
+  [data-caret="bar-block"] {
+    --caret-w: 9px; --caret-ml: 3px;
+    --caret-bg: linear-gradient(var(--bot-hue), var(--bot-hue)) 0 0 / 2px 100% no-repeat, linear-gradient(var(--bot-hue), var(--bot-hue)) 100% 100% / 4px 4px no-repeat;
+  }
+
+  /* ================= 3. The closing line under a finished answer ================= */
+  .done-line { position: relative; height: 1px; background: var(--line); }
+  .done-line[data-state="failed"] { background: var(--danger); }
+  .done-sweep { position: absolute; left: 0; top: 0; width: 100%; height: 2px; background: var(--bot-hue); transform-origin: 0 50%; transform: scaleX(0); opacity: 0; pointer-events: none; }
+  .done-line[data-state="partial"] > .done-sweep { --done-reach: 0.75; }
+  @keyframes done-sweep { from { transform: scaleX(0); opacity: 1; } to { transform: scaleX(var(--done-reach, 1)); opacity: 1; } }
+  @keyframes done-fade { from { opacity: 1; } to { opacity: 0; } }
+
+  /* ================= 4. The status mark of a bot in a list (BotAvatar `status`) ================= */
+  .bot-status { position: relative; display: inline-grid; flex: none; place-items: center; }
+  .bot-status-ring { position: absolute; inset: -2px; border: 2px solid transparent; border-top-color: var(--ring-colour); border-radius: 9999px; pointer-events: none; }
+  .bot-status-dot { position: absolute; top: -2px; right: -2px; width: 10px; height: 10px; border-radius: 9999px; background: var(--action); box-shadow: 0 0 0 2px var(--avatar-knockout, var(--bg)); pointer-events: none; }
+  @keyframes bot-status-spin { to { transform: rotate(1turn); } }
+
+  /* ================= ANIMATED: the one place the loops are switched on ================= */
+  @media (prefers-reduced-motion: no-preference) {
+    .think-trace > i { animation-duration: var(--tp); animation-iteration-count: infinite; animation-fill-mode: both; }
+    [data-trace="candles"] .think-trace > i { animation-name: trace-candle; animation-timing-function: ease-in-out; animation-delay: calc(var(--tp) * 0.16 * var(--k)); }
+    [data-trace="streaks"] .think-trace > i { animation-name: trace-streak; animation-timing-function: cubic-bezier(0.2, 0.7, 0.3, 1); animation-delay: calc(var(--tp) * -0.33 * var(--k)); }
+    [data-trace="drift"] .think-trace > i { animation-name: trace-drift; animation-timing-function: linear; animation-delay: calc(var(--tp) * -0.33 * var(--k)); }
+    [data-trace="steps"] .think-trace > i:nth-child(n) { opacity: 1; animation-name: trace-step; animation-timing-function: steps(1, end); animation-delay: calc(var(--tp) * -0.3334 * var(--k)); }
+    [data-trace="arc"] .think-trace > i:nth-child(1) { animation-name: trace-arc; animation-timing-function: ease-in-out; animation-duration: calc(var(--tp) * 2); }
+    [data-trace="lines"] .think-trace > i::after { animation: trace-fill var(--tp) ease-out infinite both; animation-delay: calc(var(--tp) * 0.2 * var(--k)); }
+    [data-trace="orbit"] .think-trace > i { animation-name: trace-orbit; animation-timing-function: linear; animation-delay: calc(var(--tp) * -0.3333 * var(--k)); }
+
+    .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
+    .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after { animation: chat-caret calc(1s / var(--bot-tempo, 1)) steps(1) infinite; }
+    [data-caret="hairline"] .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
+    [data-caret="hairline"] .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after { animation: caret-fade calc(1.6s / var(--bot-tempo, 1)) ease-in-out infinite; }
+
+    .done-sweep { animation: done-sweep 320ms var(--curve-out) both, done-fade 160ms linear 320ms both; }
+    .bot-status-ring { animation: bot-status-spin calc(1.2s / var(--bot-tempo, 1)) linear infinite; }
+  }
+
+  /* Reduced motion: the still poses above stand; the caret is a block that does not blink, the status ring a whole ring. */
+  @media (prefers-reduced-motion: reduce) {
+    .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
+    .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after {
+      width: 0.55em; height: 1em; margin-left: 2px; vertical-align: text-bottom; background: var(--bot-hue); opacity: 0.55; transform: none; animation: none;
+    }
+    .bot-status-ring { border-color: var(--ring-colour); }
+  }
+
+  /* The app's own switch for the same thing: anything under data-motion="reduce" (the sample page's container today; the root, once A5's
+     关闭 level writes it) gets the same still poses whatever the system says. */
+  [data-motion="reduce"] .think-trace > i, [data-motion="reduce"] .think-trace > i::after, [data-motion="reduce"] .done-sweep, [data-motion="reduce"] .bot-status-ring,
+  [data-motion="reduce"] .chat-prose[data-streaming] > :last-child::after, [data-motion="reduce"] .chat-prose[data-streaming] > li:last-child::after,
+  [data-motion="reduce"] .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after { animation: none !important; }
+  [data-motion="reduce"] .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
+  [data-motion="reduce"] .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after {
+    width: 0.55em; height: 1em; margin-left: 2px; vertical-align: text-bottom; background: var(--bot-hue); opacity: 0.55; transform: none;
+  }
+  [data-motion="reduce"] .bot-status-ring { border-color: var(--ring-colour); }
+}
