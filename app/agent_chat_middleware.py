@@ -79,6 +79,10 @@ def create_agent_chat_access_middleware(public_mode: bool, access_key: str, owne
         # of the credential sent (a guest's included), so it is not an owner-only write.
         public_chat_rename = (request.method == "PATCH" and bool(
             re.fullmatch(r"/agent-chat/conversations/[0-9a-fA-F-]{36}", request.url.path)))
+        # Stopping a turn is the caller's own business the same way: the handler checks the credential against the
+        # conversation's owner (a guest's own included), so a guest's stop button reaches it.
+        public_chat_cancel = (request.method == "POST" and bool(
+            re.fullmatch(r"/agent-chat/conversations/[0-9a-fA-F-]{36}/cancel", request.url.path)))
         if request.method == "GET" and request.url.path.startswith("/agent-chat/conversations/") and request.url.path.endswith(("/messages", "/context")):
             chat_session = request.headers.get("X-Chat-Session", "")
             if not 32 <= len(chat_session) <= 256:
@@ -92,7 +96,7 @@ def create_agent_chat_access_middleware(public_mode: bool, access_key: str, owne
             if public_chat or public_read or request.url.path == "/agent-chat/local-model-profiles":
                 response.headers["Cache-Control"] = "no-store"
             return response
-        if public_chat or public_chat_list or public_chat_rename or public_read:
+        if public_chat or public_chat_list or public_chat_rename or public_chat_cancel or public_read:
             response = await call_next(request)
             response.headers["Cache-Control"] = "no-store"
             return response

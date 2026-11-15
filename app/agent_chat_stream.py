@@ -22,6 +22,10 @@ HEARTBEAT_SECONDS=15
 HEARTBEAT_FRAME=": hb\n\n"
 # Strong references to the detached cancelled-turn writes, so they are not collected before they finish.
 _BACKGROUND: set=set()
+# FP13: a turn sent with detach=true runs as a task that outlives its response; TURNS holds the running ones by conversation.
+TURNS={}
+DETACH_FRAME=": detached\n\n"
+_END=object()
 log=logging.getLogger(__name__)
 MAX_PROTOCOL_BYTES=32000
 MAX_TOOL_CALLS=5
@@ -294,6 +298,8 @@ class StreamRequest(BaseModel):
  # The owner's turn outside a bot (an older conversation): a catalog entry's name, "" for the catalog's default.
  # Like a bot's turn, no key comes from the browser (UX batch 3: the browser model profiles are gone).
  catalog_model:str|None=Field(default=None,max_length=40)
+ # FP13: asks for the turn to keep running if this connection drops; the server flag decides whether that is honoured.
+ detach:bool=False
  @field_validator("base_url")
  @classmethod
  def valid_endpoint(cls,value):
@@ -632,6 +638,32 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    if pump_task is not None and not pump_task.done(): pump_task.cancel()
    if getter is not None and not getter.done(): getter.cancel()
    release_resources()
+ if payload.detach and fp_flag("FINBOT_FP13_DETACHED_TURNS",False):
+  # The turn is driven by its own task, so dropping the response does not stop it. Its settle callback does the cleanup
+  # (it runs whether or not the task ever started); the response only relays what the turn produces.
+  outbox=asyncio.Queue(); watching={"on":True}
+  async def drive():
+   async for chunk in events():
+    if watching["on"]:outbox.put_nowait(chunk)
+  def settle(done_task):
+   if (TURNS.get(cid) or {}).get("turn_id")==turn:TURNS.pop(cid,None)
+   release_resources()
+   outbox.put_nowait(_END)
+   if not done_task.cancelled() and done_task.exception() is not None:log.warning("detached turn %s ended with %r",turn,done_task.exception())
+  task=asyncio.create_task(drive())
+  _BACKGROUND.add(task); task.add_done_callback(_BACKGROUND.discard); task.add_done_callback(settle)
+  TURNS[cid]={"turn_id":turn,"task":task}
+  async def relay():
+   try:
+    yield DETACH_FRAME
+    while True:
+     item=await outbox.get()
+     if item is _END:return
+     yield item
+   finally:
+    if watching["on"] and not task.done():log.info("turn %s continues without a subscriber",turn)
+    watching["on"]=False
+  return StreamingResponse(relay(),media_type="text/event-stream",headers={"Cache-Control":"no-store","X-Accel-Buffering":"no"})
  return _ResourceStreamingResponse(events(),media_type="text/event-stream",headers={"Cache-Control":"no-store","X-Accel-Buffering":"no"},background=BackgroundTask(release_resources),cleanup=release_resources)
 
 def _context_report(context: dict | None, window: int | None = None) -> dict:
@@ -779,6 +811,21 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
  for item in messages:
   if item.get("role")=="assistant" and marks_by_turn.get(str(item.get("turn_id"))):item["public_marks"]=marks_by_turn[str(item["turn_id"])]
  return {"messages":messages,"has_more":page["has_more"],"next_before":page["next_before"],"compactions":page.get("compactions",[])}
+
+
+class CancelBody(BaseModel):
+ turn_id:str|None=Field(default=None,max_length=36)
+@router.post("/conversations/{conversation_id}/cancel")
+async def cancel_turn_endpoint(conversation_id:str,body:CancelBody,x_chat_session:str|None=Header(default=None)):
+ """Stop the running turn on purpose (the stop button). A dropped connection does not come here.
+ Not gated by the FP13 flag: with the flag off nothing is registered in TURNS, so the answer is no_running_turn."""
+ if not x_chat_session or len(x_chat_session)<32 or len(x_chat_session)>256:raise HTTPException(401,"chat_session_required")
+ if not await verify_conversation(conversation_id,x_chat_session):raise HTTPException(404,"conversation_not_found")
+ entry=TURNS.get(conversation_id)
+ if entry is None or entry["task"].done():return {"cancelled":False,"reason":"no_running_turn"}
+ if body.turn_id and body.turn_id!=entry["turn_id"]:return {"cancelled":False,"reason":"turn_mismatch"}
+ entry["task"].cancel()
+ return {"cancelled":True,"turn_id":entry["turn_id"]}
 
 
 class CompactBody(BaseModel):

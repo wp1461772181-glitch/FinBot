@@ -66,3 +66,26 @@ def test_public_chat_is_no_store_and_body_limited_without_access_key():
         assert invalid.headers["cache-control"] == "no-store"
     finally:
         agent_chat_api.PinnedPublicTransport = old
+
+
+def test_public_guest_may_post_cancel_but_not_other_writes(monkeypatch, tmp_path):
+    import base64, hashlib, json
+    from app import agent_chat_identity
+    salt=b's'*32; code='fixture-code'
+    path=tmp_path/'login.json'
+    path.write_text(json.dumps({'salt':base64.b64encode(salt).decode(),'hash':base64.b64encode(hashlib.pbkdf2_hmac('sha256',code.encode(),salt,100000)).decode(),'iterations':100000,'chat_credential':'o'*72}))
+    monkeypatch.setenv('PERSONAL_CHAT_LOGIN_PATH',str(path))
+    app=FastAPI()
+    app.include_router(agent_chat_identity.router)
+    conversation='11111111-1111-4111-8111-111111111111'
+    @app.post('/agent-chat/conversations/{conversation_id}/cancel')
+    async def cancel(conversation_id:str): return {'reached':conversation_id}
+    @app.post('/write')
+    async def write(): return {'ok':True}
+    app.middleware('http')(create_agent_chat_access_middleware(True, '', owner_configured=lambda: True))
+    guest='g'*72
+    with TestClient(app) as client:
+        reached=client.post(f'/agent-chat/conversations/{conversation}/cancel',headers={'X-Chat-Session':guest},json={})
+        other=client.post('/write',headers={'X-Chat-Session':guest})
+    assert reached.status_code==200 and reached.json()=={'reached':conversation}
+    assert other.status_code==401
