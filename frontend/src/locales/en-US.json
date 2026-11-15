@@ -2358,5 +2358,20 @@
   "联网类": "Web tools",
   "写入类 · 需确认": "Write tools · need confirmation",
   "对话与通知": "Chat and notifications",
-  "等待绑定": "Waiting for the binding"
+  "等待绑定": "Waiting for the binding",
+  "命令": "Commands",
+  "已在侧栏隐藏": "Hidden from the sidebar",
+  "已取消隐藏": "Shown in the sidebar again",
+  "撤销": "Undo",
+  "还没有 bot": "No bots yet",
+  "默认 bot 会在第一次对话时自动出现；也可以现在新建一个。": "The default bot appears with your first conversation. You can also create one now.",
+  "刚刚": "Just now",
+  "目录默认": "Catalog default",
+  "最近活动": "Last active",
+  "还没有对话": "No conversation yet",
+  "取消隐藏": "Unhide",
+  "起个名字就能创建；模板、形状和颜色都可以之后再改。": "A name is all it takes; the template, shape and colour can be changed later.",
+  "形状与颜色": "Shape and colour",
+  "换一个": "Try another",
+  "模板暂时读不到，只填名字也能创建。": "Templates cannot be read right now; a name alone still creates the bot."
 }

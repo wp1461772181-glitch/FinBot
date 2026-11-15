@@ -2,11 +2,34 @@
 //   ready:  a selector that only exists once the page shows its data (string), or an async (page) => void.
 //           After it matches, waitReady also waits until no "loading" text is left in the page.
 //   before: optional action run after ready and before the screenshot ({ width } is passed along).
+//   view:   options for the browser view ({ fixtureState, motionLevel, reducedMotion ... }), or a function that makes them (a fresh fake backend per picture).
+//   mask:   selectors painted over in the picture (a flat grey box): what moves for real under the page's own motion, so that two runs of the page are the same pixels.
+//   widths: the widths the page is photographed at when the run asks for them (default: all of them).
 import { BOT, CONVERSATION, ROOT, JUDGMENT, HAND_MARKER, HOLD_MARKER, LOGIN_CODE } from "./fixtures/ids.mjs";
 import { freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
+import { buildState } from "./fixtures/index.mjs";
 
 const LOADING = ["正在读取", "正在加载", "读取中", "加载中"];
+
+/** The fake backend's state with TeslaBot hidden from the sidebar (the 全部 bot page lists it last, marked). */
+export function stateWithHiddenBot() {
+  const state = buildState();
+  state.bots.find((b) => b.id === BOT.teslabot).hidden = true;
+  return state;
+}
+
+/**
+ * Open the new-bot dialog the way the width has it: the sidebar's 新建 bot from the desktop's width, the 更多 drawer's from a phone's.  Returns once the dialog is up
+ * and its preview is the live body of the personality (a still frame stands in until that chunk arrives).
+ */
+export async function openNewBotDialog(page, width) {
+  if (width >= 1024) await page.locator('[data-slot="sidebar"] button', { hasText: "新建 bot" }).first().click();
+  else { await openMoreDrawer(page); await page.locator('[data-slot="drawer-content"]').getByRole("button", { name: "新建 bot" }).click(); }
+  await page.locator("[data-testid=new-bot-dialog]").waitFor({ timeout: 15000 });
+  await page.locator("[data-testid=new-bot-templates] [data-template]").first().waitFor({ timeout: 15000 });
+  await page.locator("[data-testid=new-bot-preview] [data-slot=bot-avatar][data-archetype]").waitFor({ timeout: 15000 });
+}
 
 /** Open the chat page's side panel when it is collapsed (narrow screens start closed). */
 async function openSide(page) {
@@ -57,7 +80,7 @@ async function holdTeslaTurn(page) {
   await page.locator("[data-testid=message]").first().waitFor();
 }
 /** On a phone the bot rows are in the 「更多」 drawer. */
-async function openMoreDrawer(page) {
+export async function openMoreDrawer(page) {
   const more = page.locator('[data-slot="mobile-tab-bar"] button[aria-haspopup="dialog"]');
   await more.waitFor({ state: "visible", timeout: 20000 });
   await more.click({ timeout: 20000 });
@@ -415,7 +438,9 @@ export const PAGES = [
     { name: `bot-settings-rehearsal-${state}`, hash: settingsAt(BOT.teslabot, "look"), ready: "[data-testid=bot-settings-page]", element: "[data-slot=rehearsal]",
       before: async (page) => { await openStudio(page); await page.locator(`[data-slot=rehearsal] [data-scenario=${state}]`).click(); await page.locator(`[data-slot=rehearsal][data-scenario=${state}]`).waitFor(); } })),
   { name: "settings-appearance-motion", hash: "#/settings/appearance", ready: "[data-slot=motion-level]" },
-  { name: "motion-lite", hash: "#/chat", ready: "[data-testid=message]", view: { reducedMotion: "no-preference", motionLevel: "lite" },
+  // (the header's body runs frames for real here: it is the thing "lite" changes, and two runs never stop it at the same moment, so it is painted over; what lite does to the avatar is
+  // measured by the smoke checks motion-levels-persist and motion-lite-half-rate)
+  { name: "motion-lite", hash: "#/chat", ready: "[data-testid=message]", view: { reducedMotion: "no-preference", motionLevel: "lite" }, mask: ["[data-slot=bot-avatar].bot-orb-live"],
     before: async (page) => { await page.waitForFunction(() => document.documentElement.dataset.motion === "lite"); } },
   { name: "motion-off", hash: "#/chat", ready: "[data-testid=message]", view: { reducedMotion: "no-preference", motionLevel: "off" },
     before: async (page) => { await page.waitForFunction(() => document.documentElement.dataset.motion === "off"); } },
@@ -443,6 +468,32 @@ export const PAGES = [
   ...SIGNATURE_LINES.filter(({ key }) => key === "finbot" || key === "reportbot").map(({ key, bot, conversation }) => (
     { name: `chat-sig-failed-${key}`, hash: `#/chat/${bot}`, ready: "#agent-draft:not([disabled])",
       before: async (page) => { await personaReady(page); const hand = await handTurn(page, { text: "失败", lead: "已经生成的前半句，", botId: bot, conversationId: conversation }); await endWithError(hand, 0, "provider_timeout"); await page.locator("[data-testid=done-line][data-state=failed]").waitFor(); } })),
+  // P5.2: the new-bot dialog (a dialog at 1440, a full-screen drawer at 390: `widths` says where a page is photographed) and the 全部 bot page.  The shots' random numbers are
+  // seeded, so the look the dialog starts from is the same every time.
+  { name: "new-bot", hash: "#/chat", ready: "[data-testid=message]", widths: [1440], before: async (page, { width }) => { await openNewBotDialog(page, width); } },
+  { name: "new-bot-template", hash: "#/chat", ready: "[data-testid=message]", widths: [1440],
+    before: async (page, { width }) => {
+      await openNewBotDialog(page, width);
+      await page.locator("[data-template=news_monitor]").click();
+      await page.locator("[data-testid=new-bot-preview][data-archetype=sentinel]").waitFor();
+      await page.locator("[data-testid=new-bot-preview] [data-slot=bot-avatar][data-archetype=sentinel]").waitFor();
+    } },
+  { name: "new-bot-error", hash: "#/chat", ready: "[data-testid=message]", widths: [1440],
+    before: async (page, { width }) => {
+      await openNewBotDialog(page, width);
+      await page.locator("#new-bot-name").fill("AppleBot");
+      await page.locator("[data-testid=new-bot-create]").click();
+      await page.locator("[data-testid=new-bot-name-error]").waitFor();
+    } },
+  { name: "new-bot-mobile", hash: "#/chat", ready: "[data-testid=message]", widths: [390],
+    before: async (page, { width }) => {
+      await openNewBotDialog(page, width);
+      await page.locator("#new-bot-name").fill("读财报二号");
+      await page.locator("[data-template=earnings_reader]").click();
+      await page.locator("[data-testid=new-bot-preview] [data-slot=bot-avatar][data-archetype=reader]").waitFor();
+    } },
+  { name: "all-bots", hash: "#/assistant/bots", ready: "[data-testid=bot-card]", widths: [1440], view: () => ({ fixtureState: stateWithHiddenBot() }) },
+  { name: "all-bots-mobile", hash: "#/assistant/bots", ready: "[data-testid=bot-card]", widths: [390], view: () => ({ fixtureState: stateWithHiddenBot() }) },
   { name: "dev-kit-menu", hash: "#/dev/kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); } },
 ];

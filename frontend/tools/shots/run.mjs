@@ -26,10 +26,11 @@ let failures = 0;
 
 for (const page of pages) {
   for (const theme of themes) {
-    for (const width of widths) {
+    // A page may name the widths it is photographed at (the new-bot dialog and the drawer it becomes are two pictures of two widths).
+    for (const width of page.widths ? widths.filter((w) => page.widths.includes(w)) : widths) {
       const label = page.name;
       const file = `${page.name}.${theme}.${width}.png`;
-      const view = await newView(browser, { width, theme, locale, identity: page.identity ?? "personal", label, unmatched, ...(page.view ?? {}) });
+      const view = await newView(browser, { width, theme, locale, identity: page.identity ?? "personal", label, unmatched, ...(typeof page.view === "function" ? page.view() : page.view ?? {}) });
       const entry = { file, page: page.name, theme, width, ok: true, consoleErrors: [], pageErrors: [] };
       try {
         await view.page.goto(`${server.url}${page.hash ?? ""}`, { waitUntil: "load" });
@@ -38,7 +39,9 @@ for (const page of pages) {
         if (page.before) { await page.before(view.page, { width, mock: view.mock }); await settle(view.page, { pinTranscript: false }); }
         // A page may name one element to photograph (the sample cards of the bots: one picture per bot) instead of the whole page.
         if (page.element) await view.page.locator(page.element).screenshot({ path: path.join(flags.out, file), animations: "disabled", caret: "hide" });
-        else await view.page.screenshot({ path: path.join(flags.out, file), fullPage: true, animations: "disabled", caret: "hide" });
+        else await view.page.screenshot({ path: path.join(flags.out, file), fullPage: true, animations: "disabled", caret: "hide",
+          // A page may name what is painted over (a flat grey box) because it moves for real and no two runs can agree on it: a body that runs frames under real motion.
+          ...(page.mask ? { mask: page.mask.map((selector) => view.page.locator(selector)), maskColor: "#8a8a8a" } : {}) });
       } catch (error) {
         entry.ok = false; entry.error = String(error?.message ?? error).split("\n")[0]; failures += 1;
         await view.page.screenshot({ path: path.join(flags.out, file.replace(/\.png$/, ".FAILED.png")), fullPage: true }).catch(() => {});

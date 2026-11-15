@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { addCandidate, arrange, botItems, companyItems, matchRank, pageItems, recentItems } from "../src/command-items.mjs";
+import { actionItems, addCandidate, arrange, botItems, companyItems, matchRank, pageItems, recentItems } from "../src/command-items.mjs";
 import { PATTERNS } from "../src/routes.mjs";
 
 const english = JSON.parse(await readFile(new URL("../src/locales/en-US.json", import.meta.url), "utf8"));
@@ -113,4 +113,15 @@ test("the group with the best match comes first, so the selected row is the best
   const groups = arrange("portfolio", sources(true, en, "en-US"));
   assert.equal(groups[0].id === "page" || groups[0].id === "recent", true);
   assert.deepEqual(arrange("zzzz-nothing", { ...sources(), symbols: [] }).map((g) => g.id), [], "nothing matches, nothing listed");
+});
+
+test("the 新建 bot command (P5.2): the owner has it, a guest does not; it is its own group after the bots, found by its words in either language, and has no address", () => {
+  assert.deepEqual(actionItems({ personal: false }), []);
+  const [row] = actionItems({ personal: true });
+  assert.equal(row.id, "action:new-bot"); assert.equal(row.kind, "action"); assert.equal(row.path, "");
+  const withAction = (t = (x) => x) => ({ ...sources(true, t), actions: actionItems({ personal: true, t }) });
+  assert.deepEqual(arrange("", withAction()).map((group) => group.id), ["company", "bot", "action", "page", "recent"]);
+  for (const query of ["新建", "新建 bot", "new bot", "create"]) assert.equal(find(arrange(query, withAction()), "action:new-bot")?.label, "新建 bot", query);
+  assert.equal(find(arrange("新建 bot", withAction()), "action:new-bot") !== undefined && arrange("新建 bot", withAction())[0].id, "action", "typing its name puts it first");
+  assert.equal(actionItems({ personal: true, t: en })[0].label, "New bot");
 });

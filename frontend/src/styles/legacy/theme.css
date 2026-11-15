@@ -50,9 +50,6 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 .personal-card p { color:var(--me-muted); margin: 0; line-height: 1.6; }
 .personal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .personal-badge { display: inline-block; font-size: 11px; color: var(--me-accent); background: var(--me-accent-soft); border-radius: 999px; padding: 2px 8px; margin-bottom: 8px; }
-.personal-links { display: grid; gap: 8px; }
-.personal-links button { text-align: left; background:var(--me-surface); border:1px solid var(--me-line); border-radius: 10px; padding: 14px 16px; color:var(--me-ink); }
-.personal-links button small { display: block; color:var(--me-muted); margin-top: 2px; }
 .theme-form select { font: inherit; }
 .memory-tabs { margin: 0; }
 .memory-panel { display: grid; gap: 12px; }

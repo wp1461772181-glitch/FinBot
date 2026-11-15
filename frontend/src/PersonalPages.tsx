@@ -527,19 +527,3 @@ function RecallPanel({ onNavigate }: { onNavigate: Go }) {
       </div>)}
   </section>;
 }
-
-export function MePage({ onNavigate }: { onNavigate: Go }) {
-  const { t } = useLocale();
-  const links: Array<{ id: Parameters<Go>[0]; label: string; hint: string }> = [
-    { id: "memory", label: "记忆", hint: "画像和往事" },
-    { id: "skills", label: "技能", hint: "做事的步骤" },
-    { id: "materials", label: "资料库", hint: "证据与材料" },
-    { id: "admin", label: "设置", hint: "模型与账户" },
-  ];
-  return <main className="personal-page" aria-labelledby="me-title">
-    <h1 id="me-title">{t("我")}</h1>
-    <nav className="personal-links" aria-label={t("我")}>
-      {links.map(link => <button key={link.id} type="button" onClick={() => onNavigate(link.id)}>{t(link.label)}<small>{t(link.hint)}</small></button>)}
-    </nav>
-  </main>;
-}

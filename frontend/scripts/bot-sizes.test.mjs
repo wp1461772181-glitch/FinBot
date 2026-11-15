@@ -38,7 +38,8 @@ test("sizes: components use the shared constants, not literals", () => {
   assert.match(tsx("app/shell/BotRow.tsx"), /BOT_AVATAR_SIZE\.sidebar/);   // P2.2: the sidebar row (design 6.2, size S: 28-40px) replaced the rail row
   // P5.1: the profile form is the settings page; its only large avatar is the rehearsal's preview, so the form itself has no hero any more (the emoji box keeps its constant)
   assert.match(tsx("app/bot-settings/LookSection.tsx"), /size=\{BOT_AVATAR_SIZE\.emoji\}/);
-  assert.match(tsx("BotSidePanel.tsx"), /size=\{BOT_AVATAR_SIZE\.createHero\}/);
+  // P5.2: the new-bot dialog moved to app/new-bot; its preview is the dialog's createHero size, and the phone's full-screen drawer takes the hero size
+  assert.match(tsx("app/new-bot/NewBotDialog.tsx"), /size=\{wide \? BOT_AVATAR_SIZE\.createHero : BOT_AVATAR_SIZE\.hero\}/);
 });
 
 test("sizes: the chat title avatar is sized by the constant for a bot orb and for an emoji box (P3.2: the .agent-title-row rules left the old sheet with the old header)", () => {

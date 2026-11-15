@@ -51,7 +51,7 @@ export function TelegramPanel({ bot }: { bot: Bot }) {
       </div>}
       {bind && !state.bound && <p data-testid="telegram-waiting" role="status" className="text-small text-muted-foreground">{t("绑定码 30 分钟内有效。发送后最多 30 秒，这里会变成「已绑定 · 运行中」。")}</p>}
       <div className="flex flex-wrap items-center gap-2">
-        {state.bound && <Button type="button" variant="outline" disabled={busy} onClick={() => void act(() => unbindBotTelegram(bot.id)).catch(() => {})}>{t("解绑")}</Button>}
+        {state.bound && <Button type="button" variant="outline" disabled={busy} onClick={() => void act(async () => { await unbindBotTelegram(bot.id); setBind(null); }).catch(() => {})}>{t("解绑")}</Button>}
         <Button type="button" variant="outline" disabled={busy} onClick={async () => { if (await confirm({ title: t("删除这个 bot 的 Telegram token？"), description: t("之后它的消息走共用 bot。也请到 BotFather 撤销这个 token。"), confirmLabel: t("删除"), cancelLabel: t("取消"), tone: "danger", hold: true })) void act(() => deleteBotTelegram(bot.id)).then(() => setBind(null)).catch(() => {}); }}>{t("换 token / 删除")}</Button>
       </div>
     </>}

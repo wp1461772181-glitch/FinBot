@@ -94,7 +94,6 @@
 
 .bot-tool { display: flex; align-items: center; gap: 6px; color:var(--c-ink); font-size: 12px; }
 .bot-tool small { color:var(--c-warn); }
-.bot-dialog { width: min(640px, 100%); }
 .bot-templates { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
 
 .catalog-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
@@ -112,11 +111,5 @@
 
 /* Fix 4: the bot page's 工作区 toggle in the header. */
 
-/* Fix 5: the one-step new-bot dialog. */
-.bot-dialog.is-compact { width: min(440px, calc(100vw - 32px)); }
-.bot-create { display: grid; gap: 14px; }
-.bot-create label { display: grid; gap: 6px; font-size: 13px; }
-.bot-template-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border:0; }
-.bot-template-chips legend { width: 100%; margin-bottom: 6px; font-size: 13px; }
 .bot-chip { min-height: 30px; padding: 0 12px; border:1px solid var(--c-line); border-radius: 999px; background:transparent; color:inherit; font: inherit; font-size: 12px; cursor: pointer; }
 .bot-chip[aria-pressed="true"] { border-color:var(--c-accent, #7aa2ff); background:var(--c-accent-soft, rgba(122, 162, 255, .16)); }

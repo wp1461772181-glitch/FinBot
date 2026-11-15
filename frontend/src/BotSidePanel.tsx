@@ -1,62 +1,10 @@
-// The bot's workspace pane (the right panel's 工作区 tab) and the new-bot dialog; split from BotPages.tsx in P3.1 so the sidebar's chunk does not carry them.
-// The profile form that used to be here is the bot settings page now (app/bot-settings, P5.1).  Old markup, moved as-is; the new-bot dialog is restyled in P5.2.
+// The bot's workspace pane (the right panel's 工作区 tab); split from BotPages.tsx in P3.1 so the sidebar's chunk does not carry it.
+// The profile form that used to be here is the bot settings page now (app/bot-settings, P5.1), and the new-bot dialog is app/new-bot (P5.2).  Old markup, moved as-is.
 import { useEffect, useRef, useState } from "react";
-import { createBot, getBotTemplates } from "./api/bots-admin";
-import type { Bot, BotTemplate, BotTool } from "./api/bots";
+import type { Bot } from "./api/bots";
 import { useLocale } from "./i18n";
-import { newBotFields } from "./bot-form-items.mjs";
-import { BotAvatar } from "./components/bot/BotAvatar";
-import { BOT_AVATAR_SIZE } from "./bot-sizes.mjs";
-import { BloubCustomizer } from "./BloubCustomizer";
-import { randomLook, type BloubLook } from "./bloub-look.mjs";
-import { DEFAULT_AVATAR } from "./orb.mjs";
 import { WorkspaceCard } from "./WorkspaceCards";
 import { CARDS, addCard, botSymbol, loadLayout, moveCard, pinCardSymbol, removeCard, resetLayout, resizeCard, saveLayout, storeBotSymbol, symbolChoices, type CardId, type LayoutItem } from "./workspace-cards.mjs";
-import { message } from "./bot-message";
-
-/** New bot: one step.  A name is all it needs; a template is an optional shortcut that only pre-fills what was
- * left blank.  Focus, model, tools, skills and the daily cap are set later on the bot's settings page. */
-export function NewBotDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (bot: Bot) => void }) {
-  const { t } = useLocale();
-  const [templates, setTemplates] = useState<BotTemplate[]>([]), [tools, setTools] = useState<BotTool[]>([]);
-  const [name, setName] = useState(""), [picked, setPicked] = useState<BotTemplate | null>(null);
-  // A new bot starts from a random shape and colour of the catalog (shown, and stored on create): the customiser changes any of it.
-  const [look, setLook] = useState<BloubLook>(() => randomLook());
-  const [busy, setBusy] = useState(false), [status, setStatus] = useState("");
-  const dialog = useRef<HTMLElement>(null), nameBox = useRef<HTMLInputElement>(null);
-  useEffect(() => { nameBox.current?.focus(); const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", key); return () => document.removeEventListener("keydown", key); }, [onClose]);
-  useEffect(() => {
-    const controller = new AbortController();
-    // Templates are only a shortcut: when they cannot be read, a name still creates the bot.
-    getBotTemplates(controller.signal).then(v => { setTemplates(v.templates.filter(x => x.id !== "blank")); setTools(v.tools); }).catch(() => { /* create works without them */ });
-    return () => controller.abort();
-  }, []);
-  const fields = { ...newBotFields(name, picked, tools), avatar: DEFAULT_AVATAR, look };
-  async function save(event?: React.FormEvent) {
-    event?.preventDefault();
-    if (!fields.name || busy) return;
-    setBusy(true); setStatus("");
-    try { onCreated(await createBot(fields)); } catch (err) { setStatus(message(err, t("创建失败，请重试。"))); } finally { setBusy(false); }
-  }
-  return <div className="profile-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-    <section ref={dialog} className="profile-modal bot-dialog is-compact" role="dialog" aria-modal="true" aria-labelledby="new-bot-title">
-      <button className="profile-close" onClick={onClose} aria-label={t("关闭")} disabled={busy}>×</button>
-      <h2 id="new-bot-title">{t("新建 bot")}</h2>
-      <form className="bot-create" onSubmit={e => void save(e)}>
-        <div className="bot-orb-hero"><BotAvatar avatar={DEFAULT_AVATAR} look={look} name={name || "FinBot"} size={BOT_AVATAR_SIZE.createHero} /><small>{name || t("新 bot")}</small></div>
-        <BloubCustomizer look={look} onChange={setLook} disabled={busy} />
-        <label>{t("名字")}<input ref={nameBox} value={name} maxLength={40} disabled={busy} onChange={e => setName(e.target.value)} placeholder={picked?.name || t("例如：读财报")} /></label>
-        {templates.length > 0 && <fieldset className="bot-template-chips" disabled={busy}><legend>{t("模板（可选）")}</legend>
-          {templates.map(tpl => <button key={tpl.id} type="button" className="bot-chip" aria-pressed={picked?.id === tpl.id} title={tpl.description ? t(tpl.description) : undefined} onClick={() => setPicked(picked?.id === tpl.id ? null : tpl)}>{t(tpl.label)}</button>)}
-        </fieldset>}
-        <p className="fine-print">{picked ? t("模板只预填空着的头衔、说明和工具范围。") : ""}{t("关注公司、模型、工具、技能和通知上限，创建后都在 bot 设置里改。")}</p>
-        {status && <p className="agent-chat-status is-error" role="alert">{status}</p>}
-        <div className="chat-archive-tools"><button type="button" className="secondary-action" disabled={busy} onClick={onClose}>{t("取消")}</button>
-          <button type="submit" className="primary-action" disabled={busy || !fields.name}>{busy ? t("正在保存…") : t("创建")}</button></div>
-      </form>
-    </section>
-  </div>;
-}
 
 type OpenCompany = (ticker: string, section?: "overview" | "forecast") => void;
 

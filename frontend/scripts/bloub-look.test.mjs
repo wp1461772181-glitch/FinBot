@@ -127,8 +127,8 @@ test("randomLook covers the catalog, has no expression, and only ever returns va
   assert.ok(normalizeLook(randomLook(() => 0.999999)) && normalizeLook(randomLook(() => 0)));
 });
 
-test("the customiser labels every catalog id, and every label has an English phrase", async () => {
-  const source = await readFile(new URL("../src/BloubCustomizer.tsx", import.meta.url), "utf8");
+test("the look picker labels every catalog id, and every label has an English phrase", async () => {
+  const source = await readFile(new URL("../src/components/bot/LookPicker.tsx", import.meta.url), "utf8");
   const english = JSON.parse(await readFile(new URL("../src/locales/en-US.json", import.meta.url), "utf8"));
   const table = name => Object.fromEntries([...source.match(new RegExp(`${name}: Record<string, string> = \\{([^}]*)\\}`))[1].matchAll(/(\w+): "([^"]+)"/g)].map(m => [m[1], m[2]]));
   for (const [name, ids] of [["SHAPE_LABELS", BLOUB_SHAPES], ["COLOR_LABELS", BLOUB_COLORS]]) {
@@ -139,8 +139,8 @@ test("the customiser labels every catalog id, and every label has an English phr
   for (const heading of ["形状", "颜色"]) assert.ok(english[heading]);
 });
 
-test("the customiser has no expression picker", async () => {
-  const source = await readFile(new URL("../src/BloubCustomizer.tsx", import.meta.url), "utf8");
+test("the look picker has no expression picker", async () => {
+  const source = await readFile(new URL("../src/components/bot/LookPicker.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /expression|EXPRESSION|BLOUB_EXPRESSIONS/i);
 });
 
