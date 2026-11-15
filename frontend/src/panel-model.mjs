@@ -2,7 +2,7 @@
 // Pure functions only; the component keeps the state and reads the storage.
 import { citationsToShow } from "./chat-citations.mjs";
 
-export const PANEL_TABS = ["sources", "process", "workspace", "profile"];
+export const PANEL_TABS = ["sources", "process", "workspace"];
 export const PANEL_MIN = 300;
 export const PANEL_MAX = 720;
 export const PANEL_DEFAULT = 360;
@@ -10,15 +10,15 @@ export const PANEL_DEFAULT = 360;
 export const THREAD_MIN = 420;
 export const PANEL_KEY_STEP = 16;
 
-/** The tabs a page can show: a bot's page has the workspace and the profile, a conversation with no bot has only sources and process. */
-export function availableTabs({ hasWorkspace, hasProfile } = {}) {
-  return PANEL_TABS.filter((tab) => (tab === "workspace" ? Boolean(hasWorkspace) : tab === "profile" ? Boolean(hasProfile) : true));
+/** The tabs a page can show: a bot's page has the workspace (its profile is the settings page), a conversation with no bot has only sources and process. */
+export function availableTabs({ hasWorkspace } = {}) {
+  return PANEL_TABS.filter((tab) => (tab === "workspace" ? Boolean(hasWorkspace) : true));
 }
 
 /** The tab to show first: the stored one when this page has it, else 工作区 on a bot's page and 来源 elsewhere. */
 export function initialTab(stored, available) {
   const tabs = Array.isArray(available) && available.length ? available : availableTabs();
-  if (typeof stored === "string" && tabs.includes(stored) && stored !== "profile") return stored;
+  if (typeof stored === "string" && tabs.includes(stored)) return stored;
   return tabs.includes("workspace") ? "workspace" : "sources";
 }
 

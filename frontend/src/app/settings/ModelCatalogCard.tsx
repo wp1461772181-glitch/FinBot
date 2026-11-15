@@ -6,7 +6,7 @@ import { getModelCatalog, type ModelCatalog } from "../../api/bots";
 import { catalogName, entryMoved, entryProblem, probeFor, saveBody, siblingsToInert, type CatalogEntryDraft } from "../../catalog-form.mjs";
 import { createModelDiscoveryScheduler } from "../../model-discovery.mjs";
 import { useLocale } from "../../i18n";
-import { keyStatusLabel } from "../../bot-items.mjs";
+import { keyStatusLabel } from "../../bot-form-items.mjs";
 import { CATALOG } from "../../model-profiles.mjs";
 import { confirm } from "@/components/state/confirm";
 import { message } from "../../bot-message";

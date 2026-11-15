@@ -1,6 +1,6 @@
 export type PaletteRow = {
   id: string;
-  kind: "company" | "bot" | "page" | "recent" | "add";
+  kind: "company" | "bot" | "action" | "page" | "recent" | "add";
   label: string;
   path: string;
   keywords?: string[];
@@ -17,7 +17,8 @@ export function matchRank(query: string, text: string): number;
 export function bestRank(query: string, texts: string[]): number;
 export function pageItems(options: { personal: boolean; symbol?: string; t?: (text: string) => string }): PaletteRow[];
 export function botItems(bots: Array<{ id: string; name: string; title?: string; hidden?: boolean; is_default?: boolean }>, options?: { t?: (text: string) => string }): PaletteRow[];
+export function actionItems(options?: { personal?: boolean; t?: (text: string) => string }): PaletteRow[];
 export function companyItems(symbols: string[], options?: { locale?: string }): PaletteRow[];
 export function recentItems(conversations: Array<{ id: string; title?: string }>, options?: { t?: (text: string) => string }): PaletteRow[];
 export function addCandidate(query: string, symbols: string[]): PaletteRow | null;
-export function arrange(query: string, sources: { companies?: PaletteRow[]; bots?: PaletteRow[]; pages?: PaletteRow[]; recents?: PaletteRow[]; symbols?: string[] }): PaletteGroup[];
+export function arrange(query: string, sources: { companies?: PaletteRow[]; bots?: PaletteRow[]; actions?: PaletteRow[]; pages?: PaletteRow[]; recents?: PaletteRow[]; symbols?: string[] }): PaletteGroup[];

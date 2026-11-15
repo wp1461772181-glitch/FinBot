@@ -35,8 +35,8 @@ export const BOT_TEMPLATES = {
   ],
   tools: [
     { name: "get_market_data", level: "read", owner_only: false }, { name: "search_news", level: "read", owner_only: false },
-    { name: "read_filing", level: "read", owner_only: false }, { name: "create_forecast", level: "write", owner_only: true },
-    { name: "query_portfolio", level: "read", owner_only: true }, { name: "save_material", level: "write", owner_only: true },
+    { name: "read_filing", level: "read", owner_only: false }, { name: "create_forecast", level: "costly", owner_only: true },
+    { name: "query_portfolio", level: "read", owner_only: true }, { name: "save_material", level: "reversible", owner_only: true },
   ],
   always_on: ["get_market_data"],
 };

@@ -9,25 +9,23 @@ import { isRecordId, paths } from "../../routes.mjs";
 import type { Bot } from "../../api/bots";
 import { useWorkspace } from "../workspace";
 
-// The bot's workspace cards and profile form (the 工作区 and 档案 tabs of the right panel) are only needed once a bot page is open: their own chunk, fetched on demand.
+// The bot's workspace cards (the 工作区 tab of the right panel) are only needed once a bot page is open: their own chunk, fetched on demand.
 const BotWorkspacePane = lazy(() => import("../../BotSidePanel").then((module) => ({ default: module.BotWorkspacePane })));
-const BotProfilePane = lazy(() => import("../../BotSidePanel").then((module) => ({ default: module.BotProfilePane })));
 
 /** What stands in a panel tab while its chunk comes: nothing for the first 400ms, then a card's shape. */
 const paneFallback = <DelayedSkeleton><SkeletonCard /></DelayedSkeleton>;
 
-/** A bot's page: its one line in the middle, the right panel beside it (来源 / 过程 / 工作区 / 档案).  Its turns go out with only its id. */
-function BotPage({ bot, profile = false }: { bot: Bot; profile?: boolean }) {
+/** A bot's page: its one line in the middle, the right panel beside it (来源 / 过程 / 工作区).  Its turns go out with only its id. */
+function BotPage({ bot }: { bot: Bot }) {
   const ws = useWorkspace();
   const selectBot = useSelectBot();
   // A layout effect: the line this page shows is in place before the first paint (the page is mounted anew for each bot, and until the session has
   // moved to this bot's line it still holds the one before it).
   useLayoutEffect(() => { void selectBot(bot); }, [bot]); // eslint-disable-line react-hooks/exhaustive-deps
   const changed = () => void ws.bots.reload();
-  return <ChatPage bot={bot} onTurnSettled={changed} onBotChanged={changed} openProfile={profile}
+  return <ChatPage bot={bot} onTurnSettled={changed} onBotChanged={changed}
     workspace={(wide) => <OptionalChunk><Suspense fallback={paneFallback}><BotWorkspacePane key={bot.id} bot={bot} symbol={ws.symbol} watchlist={ws.symbols} onSelectSymbol={ws.setPreferredSymbol} wide={wide}
-      onOpenCompany={(ticker, section) => ws.openCompany(ticker, section === "forecast" ? "forecast" : "overview")} /></Suspense></OptionalChunk>}
-    profile={<OptionalChunk><Suspense fallback={paneFallback}><BotProfilePane key={bot.id} bot={bot} others={ws.bots.bots} onChanged={changed} onDeleted={() => { changed(); ws.go("agent"); }} /></Suspense></OptionalChunk>} />;
+      onOpenCompany={(ticker, section) => ws.openCompany(ticker, section === "forecast" ? "forecast" : "overview")} /></Suspense></OptionalChunk>} />;
 }
 
 /** The bot list is still on its way: the thread's own skeleton (after 400ms); a bot that is not there says so. */
@@ -42,12 +40,12 @@ export function ChatRoute() {
   return <ChatPage />;
 }
 
-/** /chat/:botId and /chat/:botId/settings (the same page with the 档案 tab up front; P5.1 makes it a page of its own). */
-export function ChatBotRoute({ profile = false }: { profile?: boolean }) {
+/** /chat/:botId: a bot's line (its settings are the page of pages/bot-settings.tsx). */
+export function ChatBotRoute() {
   const ws = useWorkspace();
   const botId = (useParams().botId ?? "").toLowerCase();
   const bot = ws.personal ? ws.bots.bots.find(b => b.id === botId) ?? null : null;
-  if (bot) return <BotPage key={bot.id} bot={bot} profile={profile} />;
+  if (bot) return <BotPage key={bot.id} bot={bot} />;
   return ws.bots.loaded ? missing("bot 不存在或已删除。") : loading;
 }
 

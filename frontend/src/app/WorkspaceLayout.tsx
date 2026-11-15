@@ -16,12 +16,13 @@ import { pathForSection, paths, sectionOfPath, splitPath, symbolFromParams, symb
 import { MAX_WATCHLIST, normalizeTicker, normalizeWatchlist, selectionForWatchlist } from "../watchlist.mjs";
 import { registerWatchlistAdder, setWatchlistSnapshot } from "../watchlist-bridge.mjs";
 import type { PaletteData } from "@/components/command/CommandMenu";
+import { NEW_BOT_EVENT } from "./new-bot/events";
 import { WorkspaceContext, type Workspace } from "./workspace";
 import { AppShell } from "./shell/AppShell";
 import { useRoutinesBadge } from "./shell/useRoutinesBadge";
 
-// The new-bot dialog is only needed when 新建 is pressed: its own chunk, fetched on demand.
-const NewBotDialog = lazy(() => import("../BotSidePanel").then((module) => ({ default: module.NewBotDialog })));
+// The new-bot dialog is only needed when 新建 is pressed (or the palette's command, or the 全部 bot page's button): its own chunk, fetched on demand.
+const NewBotDialog = lazy(() => import("./new-bot/NewBotDialog"));
 
 export const DEFAULT_SYMBOL = "AAPL";
 export const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"];
@@ -55,6 +56,8 @@ export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest"
   const [watchInput, setWatchInput] = useState("");
   const [watchError, setWatchError] = useState("");
   const [newBotOpen, setNewBotOpen] = useState(false);
+  // The command palette (a chunk of its own) opens the dialog by this event; the sidebar, the phone's lists and the 全部 bot page ask through the callbacks below.
+  useEffect(() => { const open = () => setNewBotOpen(true); window.addEventListener(NEW_BOT_EVENT, open); return () => window.removeEventListener(NEW_BOT_EVENT, open); }, []);
   const addressPath = location.pathname + location.search;
   const activeSection = sectionOfPath(addressPath) as WorkspaceSection;
   const addressSymbol = symbolOfAddress(location.pathname, location.search);

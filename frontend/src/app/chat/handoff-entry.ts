@@ -30,10 +30,11 @@ export function revealWaitingCard(): Promise<boolean> {
 }
 
 // A switch by address (the back button, a link in an answer, the command palette): there is no click to hear, but the hash change comes before the
-// new line renders, which is nearly as early.  (Heard from the moment this chunk has arrived, shortly after the first paint.)
+// new line renders, which is nearly as early.  (Heard from the moment this chunk has arrived, shortly after the first paint.)  A bot's settings page
+// (#/chat/<id>/settings) is a page of its own since P5.1, not a line: going there is no switch, so the address must end at the id.
 if (typeof window !== "undefined") {
   window.addEventListener("hashchange", () => {
-    const match = /^#\/chat\/([^/]+)(?:\/settings)?$/.exec(window.location.hash);
+    const match = /^#\/chat\/([^/]+)$/.exec(window.location.hash);
     const id = match?.[1] ? decodeURIComponent(match[1]) : null;
     if (id && id !== "history" && id !== "c") beginHandoff({ to: id, source: "route" });
   });

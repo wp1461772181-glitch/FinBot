@@ -2,11 +2,34 @@
 //   ready:  a selector that only exists once the page shows its data (string), or an async (page) => void.
 //           After it matches, waitReady also waits until no "loading" text is left in the page.
 //   before: optional action run after ready and before the screenshot ({ width } is passed along).
+//   view:   options for the browser view ({ fixtureState, motionLevel, reducedMotion ... }), or a function that makes them (a fresh fake backend per picture).
+//   mask:   selectors painted over in the picture (a flat grey box): what moves for real under the page's own motion, so that two runs of the page are the same pixels.
+//   widths: the widths the page is photographed at when the run asks for them (default: all of them).
 import { BOT, CONVERSATION, ROOT, JUDGMENT, HAND_MARKER, HOLD_MARKER, LOGIN_CODE } from "./fixtures/ids.mjs";
 import { freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
+import { buildState } from "./fixtures/index.mjs";
 
 const LOADING = ["正在读取", "正在加载", "读取中", "加载中"];
+
+/** The fake backend's state with TeslaBot hidden from the sidebar (the 全部 bot page lists it last, marked). */
+export function stateWithHiddenBot() {
+  const state = buildState();
+  state.bots.find((b) => b.id === BOT.teslabot).hidden = true;
+  return state;
+}
+
+/**
+ * Open the new-bot dialog the way the width has it: the sidebar's 新建 bot from the desktop's width, the 更多 drawer's from a phone's.  Returns once the dialog is up
+ * and its preview is the live body of the personality (a still frame stands in until that chunk arrives).
+ */
+export async function openNewBotDialog(page, width) {
+  if (width >= 1024) await page.locator('[data-slot="sidebar"] button', { hasText: "新建 bot" }).first().click();
+  else { await openMoreDrawer(page); await page.locator('[data-slot="drawer-content"]').getByRole("button", { name: "新建 bot" }).click(); }
+  await page.locator("[data-testid=new-bot-dialog]").waitFor({ timeout: 15000 });
+  await page.locator("[data-testid=new-bot-templates] [data-template]").first().waitFor({ timeout: 15000 });
+  await page.locator("[data-testid=new-bot-preview] [data-slot=bot-avatar][data-archetype]").waitFor({ timeout: 15000 });
+}
 
 /** Open the chat page's side panel when it is collapsed (narrow screens start closed). */
 async function openSide(page) {
@@ -57,7 +80,7 @@ async function holdTeslaTurn(page) {
   await page.locator("[data-testid=message]").first().waitFor();
 }
 /** On a phone the bot rows are in the 「更多」 drawer. */
-async function openMoreDrawer(page) {
+export async function openMoreDrawer(page) {
   const more = page.locator('[data-slot="mobile-tab-bar"] button[aria-haspopup="dialog"]');
   await more.waitFor({ state: "visible", timeout: 20000 });
   await more.click({ timeout: 20000 });
@@ -146,15 +169,23 @@ export async function openArchiveView(page) {
   await page.locator("[data-testid=message][data-role=assistant]").waitFor({ timeout: 30000 });
 }
 
-/** A bot's 档案 tab in the side panel, once its personality pickers and rehearsal are there (A5). */
+/** The address of a bot's settings page on one of its sections (P5.1; on a phone the section is the one that starts open). */
+export const settingsAt = (botId, section = "profile") => `#/chat/${botId}/settings?section=${section}`;
+
+/** The settings page's 外观与性格 section, once its personality pickers and rehearsal are there (A5 put them in the right panel's 档案 tab; P5.1 moved them here). */
 export async function openStudio(page) {
-  await openSide(page);
-  await page.locator("#chat-panel").getByRole("tab", { name: "档案" }).click();
-  await page.locator("[data-testid=profile-pane] [data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 });
+  await page.locator("[data-testid=bot-settings-page] [data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 });
   // the preview avatar draws its first frame after its chunk (the body's engine) is in
   await page.locator("[data-testid=rehearsal-stage] svg[data-slot=bot-body]").waitFor({ timeout: 30000 });
   // the preview only runs frames while it is on screen (a body off screen stops): bring it into view, as a reader scrolling to it does
   await page.locator("[data-testid=rehearsal-stage]").scrollIntoViewIfNeeded();
+}
+
+/** Unfold a section of the settings page on a phone (a no-op where the sections are all open). */
+export async function openSection(page, id) {
+  const toggle = page.locator(`[data-testid=section-toggle-${id}]`);
+  if (await toggle.count() && (await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+  await page.locator(`#section-${id}`).scrollIntoViewIfNeeded();
 }
 
 /** The reading of a round's first answer: its message node. */
@@ -192,8 +223,6 @@ export const PAGES = [
   { name: "chat-default-thinking", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page) => { await openProcess(page); } },
   { name: "chat-bot", hash: `#/chat/${BOT.applebot}`, ready: "[data-testid=message]", before: openSide },
-  { name: "chat-bot-profile", hash: `#/chat/${BOT.applebot}`, ready: "[data-testid=message]",
-    before: async (page) => { await openSide(page); await page.locator("#chat-panel").getByRole("tab", { name: "档案" }).click(); await page.locator("[data-testid=profile-pane] .bot-profile").waitFor(); } },
   // P3.3: the evidence's home.  A citation chip clicked (the 来源 tab on the second source), the 过程 tab with one step's raw data opened, the process bar
   // of a turn still running (one step turning, two done with their hit counts), a public mark's card open, an answer from before the step graph, the
   // panel folded away.
@@ -372,18 +401,46 @@ export const PAGES = [
   // The backend unreachable: every API request fails, then a page that needs the API opens: the banner is at the top of the page.
   { name: "offline", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page, { mock }) => { mock.control.down = true; await page.evaluate(() => { location.hash = "#/portfolio"; }); await page.locator('[data-slot="offline-banner"]').waitFor(); } },
-  // A5: the personality pickers (archetype, tempo, easing, aura variant, where they come from) and the rehearsal in the 档案 tab: the reduced-motion still frame of
+  // P5.1: the bot settings page.  The whole page (a phone: the folded column, the first section open), each section by itself, the save bar up, the leave question,
+  // the default bot (no delete, no own Telegram), and a phone with every section open.
+  { name: "bot-settings", hash: settingsAt(BOT.applebot), ready: "[data-testid=bot-settings-page]" },
+  ...["profile", "focus", "look", "model", "tools", "skills", "routines", "notify", "danger"].map((id) => (
+    { name: `bot-settings-${id}`, hash: settingsAt(BOT.applebot, id), ready: "[data-testid=bot-settings-page]", element: `#section-${id}`,
+      before: async (page) => {
+        await openSection(page, id);
+        if (id === "look") await page.locator("[data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 });
+        if (id === "tools") await page.locator("[data-testid=tool-summary]").waitFor();
+        if (id === "skills") await page.locator("[data-testid=skills-list] [data-slot=checkbox]").first().waitFor();
+        if (id === "routines") await page.locator("[data-testid=bot-routines] .bot-routines").waitFor({ timeout: 15000 }).catch(() => {});
+        if (id === "notify") await page.locator("[data-testid=telegram-panel] [data-slot=stepper]").waitFor();
+      } })),
+  { name: "bot-settings-dirty", hash: settingsAt(BOT.applebot), ready: "[data-testid=bot-settings-page]",
+    before: async (page) => { await page.locator("#bot-name").fill("AppleBot 二号"); await page.locator("[data-testid=save-bar]").waitFor(); } },
+  { name: "bot-settings-leave", hash: settingsAt(BOT.applebot), ready: "[data-testid=bot-settings-page]",
+    before: async (page, { width }) => {
+      await page.locator("#bot-name").fill("AppleBot 二号");
+      await page.locator("[data-testid=save-bar]").waitFor();
+      if (hasSidebar(width)) await page.locator("[data-bot-row]", { hasText: "NewsBot" }).first().click(); else await page.locator("[data-testid=back-to-chat]").click();
+      await page.locator('[data-slot="alert-dialog-content"]').waitFor();
+    } },
+  { name: "bot-settings-default", hash: settingsAt(BOT.finbot), ready: "[data-testid=bot-settings-page]", before: async (page) => { await openSection(page, "notify"); await openSection(page, "danger"); } },
+  { name: "bot-settings-default-danger", hash: settingsAt(BOT.finbot, "danger"), ready: "[data-testid=bot-settings-page]", element: "#section-danger", before: async (page) => { await openSection(page, "danger"); } },
+  { name: "bot-settings-open-all", hash: settingsAt(BOT.applebot), ready: "[data-testid=bot-settings-page]",
+    before: async (page) => { for (const id of ["focus", "look", "model", "tools", "skills", "routines", "notify", "danger"]) await openSection(page, id); await page.locator("[data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 }); await page.evaluate(() => window.scrollTo(0, 0)); } },
+  // A5: the personality pickers (archetype, tempo, easing, aura variant, where they come from) and the rehearsal in the settings page's 外观与性格 section (they stood in the right panel's 档案 tab until P5.1): the reduced-motion still frame of
   // each of its states (the shots run with the system's reduced motion), one picture of the whole studio per state.  Then the settings page's animation strength,
   // and the chat page under each level of animation chosen in the app (the browser's own setting left alone): "lite" and "off".
-  { name: "bot-settings-persona", hash: `#/chat/${BOT.applebot}`, ready: "[data-testid=message]", element: "[data-slot=persona-picker]",
+  { name: "bot-settings-persona", hash: settingsAt(BOT.applebot, "look"), ready: "[data-testid=bot-settings-page]", element: "[data-slot=persona-picker]",
     before: async (page) => { await openStudio(page); } },
-  { name: "bot-settings-persona-override", hash: `#/chat/${BOT.teslabot}`, ready: "#agent-draft:not([disabled])", element: "[data-slot=persona-picker]",
+  { name: "bot-settings-persona-override", hash: settingsAt(BOT.teslabot, "look"), ready: "[data-testid=bot-settings-page]", element: "[data-slot=persona-picker]",
     before: async (page) => { await openStudio(page); await page.locator("[data-testid=persona-archetype] [data-option=reader]").click(); await page.locator("[data-testid=persona-tempo] [data-option=calm]").click(); await page.locator('[data-testid=persona-source][data-kind=override]').waitFor(); } },
   ...["idle", "thinking", "tool3", "verify", "answer", "waiting", "done", "partial", "failed"].map((state) => (
-    { name: `bot-settings-rehearsal-${state}`, hash: `#/chat/${BOT.teslabot}`, ready: "#agent-draft:not([disabled])", element: "[data-slot=rehearsal]",
+    { name: `bot-settings-rehearsal-${state}`, hash: settingsAt(BOT.teslabot, "look"), ready: "[data-testid=bot-settings-page]", element: "[data-slot=rehearsal]",
       before: async (page) => { await openStudio(page); await page.locator(`[data-slot=rehearsal] [data-scenario=${state}]`).click(); await page.locator(`[data-slot=rehearsal][data-scenario=${state}]`).waitFor(); } })),
   { name: "settings-appearance-motion", hash: "#/settings/appearance", ready: "[data-slot=motion-level]" },
-  { name: "motion-lite", hash: "#/chat", ready: "[data-testid=message]", view: { reducedMotion: "no-preference", motionLevel: "lite" },
+  // (the header's body runs frames for real here: it is the thing "lite" changes, and two runs never stop it at the same moment, so it is painted over; what lite does to the avatar is
+  // measured by the smoke checks motion-levels-persist and motion-lite-half-rate)
+  { name: "motion-lite", hash: "#/chat", ready: "[data-testid=message]", view: { reducedMotion: "no-preference", motionLevel: "lite" }, mask: ["[data-slot=bot-avatar].bot-orb-live"],
     before: async (page) => { await page.waitForFunction(() => document.documentElement.dataset.motion === "lite"); } },
   { name: "motion-off", hash: "#/chat", ready: "[data-testid=message]", view: { reducedMotion: "no-preference", motionLevel: "off" },
     before: async (page) => { await page.waitForFunction(() => document.documentElement.dataset.motion === "off"); } },
@@ -411,6 +468,32 @@ export const PAGES = [
   ...SIGNATURE_LINES.filter(({ key }) => key === "finbot" || key === "reportbot").map(({ key, bot, conversation }) => (
     { name: `chat-sig-failed-${key}`, hash: `#/chat/${bot}`, ready: "#agent-draft:not([disabled])",
       before: async (page) => { await personaReady(page); const hand = await handTurn(page, { text: "失败", lead: "已经生成的前半句，", botId: bot, conversationId: conversation }); await endWithError(hand, 0, "provider_timeout"); await page.locator("[data-testid=done-line][data-state=failed]").waitFor(); } })),
+  // P5.2: the new-bot dialog (a dialog at 1440, a full-screen drawer at 390: `widths` says where a page is photographed) and the 全部 bot page.  The shots' random numbers are
+  // seeded, so the look the dialog starts from is the same every time.
+  { name: "new-bot", hash: "#/chat", ready: "[data-testid=message]", widths: [1440], before: async (page, { width }) => { await openNewBotDialog(page, width); } },
+  { name: "new-bot-template", hash: "#/chat", ready: "[data-testid=message]", widths: [1440],
+    before: async (page, { width }) => {
+      await openNewBotDialog(page, width);
+      await page.locator("[data-template=news_monitor]").click();
+      await page.locator("[data-testid=new-bot-preview][data-archetype=sentinel]").waitFor();
+      await page.locator("[data-testid=new-bot-preview] [data-slot=bot-avatar][data-archetype=sentinel]").waitFor();
+    } },
+  { name: "new-bot-error", hash: "#/chat", ready: "[data-testid=message]", widths: [1440],
+    before: async (page, { width }) => {
+      await openNewBotDialog(page, width);
+      await page.locator("#new-bot-name").fill("AppleBot");
+      await page.locator("[data-testid=new-bot-create]").click();
+      await page.locator("[data-testid=new-bot-name-error]").waitFor();
+    } },
+  { name: "new-bot-mobile", hash: "#/chat", ready: "[data-testid=message]", widths: [390],
+    before: async (page, { width }) => {
+      await openNewBotDialog(page, width);
+      await page.locator("#new-bot-name").fill("读财报二号");
+      await page.locator("[data-template=earnings_reader]").click();
+      await page.locator("[data-testid=new-bot-preview] [data-slot=bot-avatar][data-archetype=reader]").waitFor();
+    } },
+  { name: "all-bots", hash: "#/assistant/bots", ready: "[data-testid=bot-card]", widths: [1440], view: () => ({ fixtureState: stateWithHiddenBot() }) },
+  { name: "all-bots-mobile", hash: "#/assistant/bots", ready: "[data-testid=bot-card]", widths: [390], view: () => ({ fixtureState: stateWithHiddenBot() }) },
   { name: "dev-kit-menu", hash: "#/dev/kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); } },
 ];

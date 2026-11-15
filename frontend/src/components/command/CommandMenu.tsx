@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useMemo, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { useNavigate } from "react-router";
-import { Bot as BotIcon, Building2, EyeOff, FileText, MessageSquare, Plus } from "lucide-react";
+import { Bot as BotIcon, Building2, EyeOff, FileText, MessageSquare, Plus, SquarePlus } from "lucide-react";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { listAgentConversations, type ConversationSummary } from "../../api/conversations";
 import { type Bot } from "../../api/bots";
-import { arrange, botItems, companyItems, pageItems, recentItems, type PaletteRow } from "../../command-items.mjs";
+import { actionItems, arrange, botItems, companyItems, pageItems, recentItems, type PaletteRow } from "../../command-items.mjs";
 import { useLocale } from "../../i18n";
 import { DelayedSkeleton, SkeletonRows } from "../state/Skeleton";
 import { ErrorBar } from "../state/ErrorBar";
+import { openNewBotDialog } from "../../app/new-bot/events";
 
 /** What the palette lists and what choosing a company does: held by the shell, which already has the watch list and the bots. */
 export type PaletteData = {
@@ -45,7 +46,7 @@ function useRecents(open: boolean, enabled: boolean) {
   return { ...state, retry: () => setAttempt((n) => n + 1) };
 }
 
-const ICON = { company: Building2, add: Plus, bot: BotIcon, page: FileText, recent: MessageSquare } as const;
+const ICON = { company: Building2, add: Plus, bot: BotIcon, action: SquarePlus, page: FileText, recent: MessageSquare } as const;
 
 /**
  * 命令面板 (Cmd-K, design 4.1): jump to a company, a bot, a page or a recent conversation.  Dialog + cmdk, filtering done by
@@ -63,25 +64,29 @@ export default function CommandMenu({ open, onOpenChange, returnFocus, data }: {
   const sources = useMemo(() => ({
     companies: companyItems(data.symbols, { locale }),
     bots: data.personal ? botItems(data.bots, { t }) : [],
+    actions: actionItems({ personal: data.personal, t }),
     pages: pageItems({ personal: data.personal, symbol: data.symbol, t }),
     recents: data.personal ? recentItems(recent.items, { t }) : [],
     symbols: data.symbols,
   }), [data.symbols, data.bots, data.personal, data.symbol, recent.items, locale, t]);
   const groups = useMemo(() => arrange(query, sources), [query, sources]);
 
+  // A command that opens a dialog takes the focus itself: the palette must not hand it back to where the reader was.
+  const opensDialog = useRef(false);
   const choose = useCallback((row: PaletteRow) => {
     onOpenChange(false);
-    if (row.kind === "company" && row.symbol) data.onSelectCompany(row.symbol);
+    if (row.kind === "action") { opensDialog.current = true; openNewBotDialog(); }
+    else if (row.kind === "company" && row.symbol) data.onSelectCompany(row.symbol);
     else if (row.kind === "add" && row.symbol) data.onAddCompany(row.symbol);
     else navigate(row.path);
   }, [data, navigate, onOpenChange]);
 
-  const heading: Record<string, string> = { company: t("公司"), bot: "bot", page: t("页面"), recent: t("最近对话") };
+  const heading: Record<string, string> = { company: t("公司"), bot: "bot", action: t("命令"), page: t("页面"), recent: t("最近对话") };
   const recentLoading = data.personal && (recent.status === "loading" || recent.status === "idle");
   const recentFailed = data.personal && recent.status === "error";
   return <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent showCloseButton={false} closeLabel={t("关闭")} className="top-[20%] translate-y-0 gap-0 overflow-hidden p-0 sm:max-w-xl" data-slot="command-menu"
-      onCloseAutoFocus={(event) => { event.preventDefault(); const target = returnFocus.current ?? document.querySelector<HTMLElement>("[data-more-trigger]"); window.setTimeout(() => { const back = target?.isConnected ? target : document.querySelector<HTMLElement>("[data-more-trigger]"); back?.focus(); }, 0); }}>
+      onCloseAutoFocus={(event) => { event.preventDefault(); if (opensDialog.current) { opensDialog.current = false; return; } const target = returnFocus.current ?? document.querySelector<HTMLElement>("[data-more-trigger]"); window.setTimeout(() => { const back = target?.isConnected ? target : document.querySelector<HTMLElement>("[data-more-trigger]"); back?.focus(); }, 0); }}>
       <DialogHeader className="sr-only">
         <DialogTitle>{t("命令面板")}</DialogTitle>
         <DialogDescription>{t("跳到公司、bot、页面或最近的对话。输入代码可直接打开一家公司。")}</DialogDescription>

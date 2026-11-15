@@ -1,14 +1,14 @@
 // What the command palette (Cmd-K) lists and in what order (design 4.1).  Pure: the labels come in already translated, the
 // data (watch list, bots, recent conversations) is passed in; no React, no window.
 //
-// Four groups: 公司 (the watch list, plus "add and open" for a valid ticker that is not on it), bot (hidden ones too), 页面
+// Five groups: 公司 (the watch list, plus "add and open" for a valid ticker that is not on it), bot (hidden ones too), 命令 (新建 bot), 页面
 // (every page of the route table the reader may open), 最近对话.  Matching is on the name the reader sees (the English one
 // in the English interface), the Chinese phrase it came from, the code and the aliases; no pinyin.
 import { paths } from "./routes.mjs";
 import { areaItems, areaPath, needsLogin } from "./shell-nav.mjs";
 import { MAX_WATCHLIST, normalizeTicker } from "./watchlist.mjs";
 
-export const GROUP_ORDER = ["company", "bot", "page", "recent"];
+export const GROUP_ORDER = ["company", "bot", "action", "page", "recent"];
 export const RECENT_LIMIT = 8;
 
 /** Names for the tickers the app itself ships with and the best-known others: a convenience for matching, never shown as data. */
@@ -74,6 +74,12 @@ export function botItems(bots, { t = (text) => text } = {}) {
   }));
 }
 
+/** The palette's commands (the owner only): things to do, not places to go.  Choosing one runs it (the shell's dialog), it has no address. */
+export function actionItems({ personal = false, t = (text) => text } = {}) {
+  if (!personal) return [];
+  return [{ id: "action:new-bot", kind: "action", label: t("新建 bot"), path: "", keywords: ["新建 bot", "创建 bot", "新增 bot", "new bot", "create bot"] }];
+}
+
 /** The watch list as palette rows; `locale` picks which alias is shown beside the code. */
 export function companyItems(symbols, { locale = "zh-CN" } = {}) {
   return symbols.map((symbol) => {
@@ -103,11 +109,11 @@ export function addCandidate(query, symbols) {
  * and Enter does what the reader typed.  The add row ranks after prefix matches among the companies (typing "TS" selects TSLA,
  * typing "AMD" with no match offers AMD).  With no query: the groups in their default order, the recent list cut to RECENT_LIMIT.
  *
- * `sources`: { companies, bots, pages, recents, symbols } — the rows from the builders above, and the watch list's tickers.
+ * `sources`: { companies, bots, actions, pages, recents, symbols } — the rows from the builders above, and the watch list's tickers.
  */
 export function arrange(query, sources) {
   const q = fold(query);
-  const { companies = [], bots = [], pages = [], recents = [], symbols = [] } = sources;
+  const { companies = [], bots = [], actions = [], pages = [], recents = [], symbols = [] } = sources;
   const ranked = (rows) => rows.map((row, index) => ({ row, index, rank: bestRank(q, [row.label, row.note ?? "", ...(row.keywords ?? [])]) }))
     .filter((entry) => entry.rank >= 0).sort((a, b) => a.rank - b.rank || a.index - b.index);
   const groups = [];
@@ -120,6 +126,7 @@ export function arrange(query, sources) {
   }
   groups.push({ id: "company", entries: company });
   groups.push({ id: "bot", entries: ranked(bots) });
+  groups.push({ id: "action", entries: ranked(actions) });
   groups.push({ id: "page", entries: ranked(pages) });
   const recent = ranked(recents);
   groups.push({ id: "recent", entries: q ? recent : recent.slice(0, RECENT_LIMIT) });

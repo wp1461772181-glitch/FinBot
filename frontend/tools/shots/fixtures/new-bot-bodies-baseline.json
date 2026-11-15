@@ -1,0 +1,138 @@
+{
+  "name-only": {
+    "bodies": [
+      {
+        "name": "读财报二号",
+        "template": "blank",
+        "avatar": "bot:kline-idle",
+        "look": {
+          "shape": "triangle",
+          "color": "creme"
+        }
+      }
+    ],
+    "hash": "#/chat/<id>",
+    "dialogOpen": false,
+    "error": ""
+  },
+  "template-news-with-name": {
+    "bodies": [
+      {
+        "name": "盯新闻",
+        "template": "news_monitor",
+        "title": "新闻监控",
+        "description": "盯新闻、整理要点。",
+        "tool_scope": [],
+        "avatar": "bot:kline-idle",
+        "look": {
+          "shape": "triangle",
+          "color": "creme"
+        }
+      }
+    ],
+    "hash": "#/chat/<id>",
+    "dialogOpen": false,
+    "error": ""
+  },
+  "template-company-with-name": {
+    "bodies": [
+      {
+        "name": "公司二号",
+        "template": "company_researcher",
+        "title": "盯一家公司",
+        "description": "围绕一家公司做证据链研究。",
+        "avatar": "bot:kline-idle",
+        "look": {
+          "shape": "triangle",
+          "color": "creme"
+        }
+      }
+    ],
+    "hash": "#/chat/<id>",
+    "dialogOpen": false,
+    "error": ""
+  },
+  "template-earnings-no-name": {
+    "bodies": [
+      {
+        "name": "ReportBot",
+        "template": "earnings_reader",
+        "title": "财报解读",
+        "description": "读财报与申报文件。",
+        "tool_scope": [],
+        "avatar": "bot:kline-idle",
+        "look": {
+          "shape": "triangle",
+          "color": "creme"
+        }
+      }
+    ],
+    "hash": "#/chat",
+    "dialogOpen": true,
+    "error": "已有同名 bot。"
+  },
+  "template-picked-then-off": {
+    "bodies": [
+      {
+        "name": "取消了模板",
+        "template": "blank",
+        "avatar": "bot:kline-idle",
+        "look": {
+          "shape": "triangle",
+          "color": "creme"
+        }
+      }
+    ],
+    "hash": "#/chat/<id>",
+    "dialogOpen": false,
+    "error": ""
+  },
+  "look-shape-color": {
+    "bodies": [
+      {
+        "name": "换了外形",
+        "template": "blank",
+        "avatar": "bot:kline-idle",
+        "look": {
+          "shape": "nuage",
+          "color": "bleu"
+        }
+      }
+    ],
+    "hash": "#/chat/<id>",
+    "dialogOpen": false,
+    "error": ""
+  },
+  "name-trimmed": {
+    "bodies": [
+      {
+        "name": "有空格",
+        "template": "blank",
+        "avatar": "bot:kline-idle",
+        "look": {
+          "shape": "triangle",
+          "color": "creme"
+        }
+      }
+    ],
+    "hash": "#/chat/<id>",
+    "dialogOpen": false,
+    "error": ""
+  },
+  "duplicate-name": {
+    "bodies": [
+      {
+        "name": "AppleBot",
+        "template": "blank",
+        "avatar": "bot:kline-idle",
+        "look": {
+          "shape": "triangle",
+          "color": "creme"
+        }
+      }
+    ],
+    "hash": "#/chat",
+    "dialogOpen": true,
+    "error": "已有同名 bot。"
+  }
+}

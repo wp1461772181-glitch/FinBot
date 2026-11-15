@@ -33,7 +33,28 @@ export function registerRoutes(route, reply) {
   route.get(`${A}/bot-templates`, own(() => BOT_TEMPLATES));
   route.get(`${A}/model-catalog`, own(() => MODEL_CATALOG));
   route.get(`${A}/model-roles`, own(({ state }) => ({ roles: state.modelRoles })));
-  route.post(`${A}/bots/:id/read`, own(({ params, state }) => { const b = state.bots.find((x) => x.id === params.id); const read = b?.unread ?? 0; if (b) b.unread = 0; return { read }; }));
+  // A save (P5.1): the fields it names replace the bot's, as the server does; the answer is the bot as it now stands.  The bodies are what the smoke checks read from view.mock.requests.
+  route.patch(`${A}/bots/:id`, own(({ params, body, state }) => {
+    const found = state.bots.find((x) => x.id === params.id);
+    if (!found) return reply.status(404, { detail: "bot_not_found" });
+    Object.assign(found, body, { updated_at: "2026-11-13T02:00:01.000Z" });
+    return { bot: found };
+  }));
+  // A create (P5.2): the server's own refusals first (a name must be 1–40 characters and unused among the owner's bots, else 422 with the detail code), then the bot
+  // with the defaults of a fresh record under the fields the request named.  `state.createdBots` collects the new ones so a check can read them back.
+  route.post(`${A}/bots`, own(({ body, state }) => {
+    const name = typeof body?.name === "string" ? body.name.trim() : "";
+    if (!name || name.length > 40) return reply.status(422, { detail: "invalid_name" });
+    if (state.bots.some((x) => x.name === name)) return reply.status(422, { detail: "name_taken" });
+    const n = state.bots.length + 1, hex = String(n).padStart(12, "0");
+    const created = { description: "", tool_scope: null, model: null, reasoning_effort: null, skills: [], avatar: "", look: null, group: "", pinned: false, hidden: false, template: "blank",
+      daily_notify_cap: 5, default_company: null, last_message: null, last_at: null, unread: 0, pending: 0, focus: { companies: [], theme: null }, title: "",
+      ...body, name, id: `b0000000-0000-4000-8000-${hex}`, conversation_id: `c0000000-0000-4000-8000-${hex}`, is_default: false, created_at: "2026-11-13T02:00:00.000Z", updated_at: "2026-11-13T02:00:00.000Z" };
+    state.bots.push(created);
+    state.createdBots = [...(state.createdBots ?? []), created.id];
+    return { bot: created };
+  }));
+  route.post(`${A}/bots/:id/read`,own(({ params, state }) => { const b = state.bots.find((x) => x.id === params.id); const read = b?.unread ?? 0; if (b) b.unread = 0; return { read }; }));
   route.get(`${A}/research-queue`, own(({ state }) => ({ symbols: state.queue })));
   route.put(`${A}/research-queue`, own(({ body, state }) => { state.queue = body.symbols; return { ok: true }; }));
 
@@ -130,7 +151,28 @@ export function registerRoutes(route, reply) {
   route.get(`${A}/recall`, own(() => ({ items: RECALL })));
   route.get(`${A}/telegram/status`, own(() => TELEGRAM));
   route.get(`${A}/pushover/status`, own(() => PUSHOVER));
-  route.get(`${A}/bots/:id/telegram`, own(() => BOT_TELEGRAM));
+  // A bot's own Telegram: answered as bound and running unless a check set state.botTelegram[id] (the P5.1 steps check does: no token yet).  Saving a token, making a binding
+  // code and the bind itself move that record on; `state.botTelegramBound[id] = true` is the message arriving from Telegram.
+  route.get(`${A}/bots/:id/telegram`, own(({ params, state }) => {
+    const mine = state.botTelegram?.[params.id];
+    if (!mine) return BOT_TELEGRAM;
+    return state.botTelegramBound?.[params.id] ? { ...mine, bound: true, bind_code_active: false, status: "running" } : mine;
+  }));
+  route.post(`${A}/bots/:id/telegram/token`, own(({ params, state }) => {
+    state.botTelegram = { ...(state.botTelegram ?? {}), [params.id]: { ...BOT_TELEGRAM, has_token: true, bound: false, status: "unbound", chat_id: null, bound_at: null, shared: false, token_tail: "7f3a" } };
+    return state.botTelegram[params.id];
+  }));
+  // 解绑: the bot's own Telegram is a token without a chat again (the binding steps start over from the code); `state.botTelegramBound[id]` goes back to false.
+  route.post(`${A}/bots/:id/telegram/unbind`, own(({ params, state }) => {
+    const mine = { ...BOT_TELEGRAM, ...(state.botTelegram?.[params.id] ?? {}), bound: false, bind_code_active: false, status: "unbound", chat_id: null, bound_at: null };
+    state.botTelegram = { ...(state.botTelegram ?? {}), [params.id]: mine };
+    state.botTelegramBound = { ...(state.botTelegramBound ?? {}), [params.id]: false };
+    return mine;
+  }));
+  route.post(`${A}/bots/:id/telegram/bind`, own(({ params, state }) => {
+    state.botTelegram = { ...(state.botTelegram ?? {}), [params.id]: { ...state.botTelegram?.[params.id], bind_code_active: true } };
+    return { code: "482913", bot_username: "finbot_fixture_bot", link: null, expires_at: "2026-11-13T02:30:00.000Z" };
+  }));
   route.get(`${A}/background-model`, own(() => ({ configured: true, has_key: true, provider: "siliconflow", model: "deepseek-ai/DeepSeek-V4-Flash", base_url: null, updated_at: null })));
   route.get("/knowledge/documents", () => ({ items: KNOWLEDGE_DOCS }));
   route.get("/knowledge/candidates", () => ({ items: [] }));

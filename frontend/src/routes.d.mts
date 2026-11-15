@@ -50,4 +50,5 @@ export function materialFocusFromParams(params: URLSearchParams): MaterialFocusP
 export function isRecordId(value: unknown): boolean;
 export function sourceTypeParam(value: unknown): SourceType | null;
 export function sectionOfPath(path: string): NavSection;
+export function isBotSettingsPath(path: string): boolean;
 export function pathForSection(section: string, symbol?: string | null): string;

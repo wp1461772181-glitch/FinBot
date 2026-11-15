@@ -2,13 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { PANEL_DEFAULT, PANEL_MAX, PANEL_MIN, THREAD_MIN, availableTabs, clampPanelWidth, hasRoundContent, initialTab, roundQuestion, roundSources, selectedIndex, storedPanelWidth, turnKey } from "../src/panel-model.mjs";
 
-test("a bot's page has four tabs, a conversation with no bot only sources and process", () => {
-  assert.deepEqual(availableTabs({ hasWorkspace: true, hasProfile: true }), ["sources", "process", "workspace", "profile"]);
+test("a bot's page has three tabs (the profile is its settings page since P5.1), a conversation with no bot only sources and process", () => {
+  assert.deepEqual(availableTabs({ hasWorkspace: true }), ["sources", "process", "workspace"]);
+  assert.deepEqual(availableTabs({ hasWorkspace: true, hasProfile: true }), ["sources", "process", "workspace"], "a profile tab is not offered any more");
   assert.deepEqual(availableTabs({}), ["sources", "process"]);
 });
 
-test("the first tab is the stored one, 工作区 by default, 来源 where there is no workspace; 档案 is never restored from storage", () => {
-  const bot = availableTabs({ hasWorkspace: true, hasProfile: true });
+test("the first tab is the stored one, 工作区 by default, 来源 where there is no workspace; a stored 档案 (the tab that was) is ignored", () => {
+  const bot = availableTabs({ hasWorkspace: true });
   assert.equal(initialTab(null, bot), "workspace");
   assert.equal(initialTab("process", bot), "process");
   assert.equal(initialTab("profile", bot), "workspace");

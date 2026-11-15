@@ -4,13 +4,14 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, clickSend, fillDraft, endWithCard, endWithError, firstAnswer, handTurn, openStudio, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
 import { MATERIALS } from "./fixtures/materials.mjs";
 import { buildState } from "./fixtures/index.mjs";
+import { BOT_TEMPLATES } from "./fixtures/bots.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { findCollisions } from "./collisions.mjs";
@@ -517,7 +518,7 @@ async function legacyRedirects(ctx) {
     ["#news", "#/assistant/news", "main.personal-page h1"],
     ["#skills", "#/assistant/skills", ".skill-group"],
     ["#memory", "#/assistant/memory", "main.personal-page h1"],
-    ["#me", "#/assistant/bots", "main.personal-page h1"],
+    ["#me", "#/assistant/bots", "[data-testid=all-bots] [data-testid=bot-card]"],   // (P5.2: the page is the grid of all bots now; it was the 「我」 page with four links)
     ["#admin", "#/settings/models", ".agent-admin h2"],
     ["#settings", "#/settings/models", ".agent-admin h2"],
     ["#nonsense", "#/chat", "[data-testid=message]"],
@@ -1085,8 +1086,8 @@ async function noWindowConfirm(ctx) {
     { name: "memory item", hash: "#/assistant/memory", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/profile\/[^/]+$/ },
     { name: "news source", hash: "#/assistant/news", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/news-sources\/[^/]+$/ },
     { name: "routine task", hash: "#/routines", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/tasks\/[^/]+$/ },
-    { name: "bot", hash: `#/chat/${BOT.applebot}/settings`, ready: ".bot-profile", trigger: (p) => p.getByRole("button", { name: "删除这个 bot" }), method: "DELETE", re: /\/bots\/[^/]+$/ },
-    { name: "bot Telegram token", hash: `#/chat/${BOT.applebot}/settings`, ready: ".bot-profile", trigger: (p) => p.getByRole("button", { name: "换 token / 删除" }), method: "DELETE", re: /\/bots\/[^/]+\/telegram$/ },
+    { name: "bot", hash: `#/chat/${BOT.applebot}/settings`, ready: "[data-testid=bot-settings-page]", trigger: (p) => p.getByRole("button", { name: "删除这个 bot" }), method: "DELETE", re: /\/bots\/[^/]+$/ },
+    { name: "bot Telegram token", hash: `#/chat/${BOT.applebot}/settings`, ready: "[data-testid=bot-settings-page]", trigger: (p) => p.getByRole("button", { name: "换 token / 删除" }), method: "DELETE", re: /\/bots\/[^/]+\/telegram$/ },
     { name: "catalog model", hash: "#/settings/models", ready: ".agent-admin h2", trigger: (p) => p.locator(".catalog-actions button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/model-catalog\/[^/]+$/ },
     { name: "Telegram unbind", hash: "#/settings/notifications", ready: ".agent-admin h2", trigger: (p) => p.getByRole("button", { name: "解除绑定" }), method: "POST", re: /\/telegram\/unbind$/ },
   ];
@@ -1270,8 +1271,10 @@ async function commandMenuEnglish(ctx) {
     await palette.waitFor();
     await palette.locator('[cmdk-group-heading]', { hasText: "Recent chats" }).waitFor({ timeout: 5000 });
     const heads = await palette.locator("[cmdk-group-heading]").allInnerTexts();
-    assert(heads.join(",") === "Company,bot,Pages,Recent chats", `group names: ${heads.join(",")}`);
+    assert(heads.join(",") === "Company,bot,Commands,Pages,Recent chats", `group names: ${heads.join(",")}`);   // (P5.2 added the Commands group: 新建 bot)
     const input = palette.locator("input");
+    await input.fill("new bot");
+    assert((await palette.locator('[data-kind="action"]').first().innerText()).trim() === "New bot", "the command should read New bot in English and match 'new bot'");
     await input.fill("portfolio");
     assert((await palette.locator('[data-slot="command-item"]').first().innerText()).toLowerCase().includes("portfolio"), "English page name should match");
     await input.fill("appearance"); await page.keyboard.press("Enter");
@@ -1281,7 +1284,7 @@ async function commandMenuEnglish(ctx) {
     assert((await palette.locator('[data-slot="command-item"]').first().innerText()).includes("Add to watchlist and open"), "English offer");
     const text = await palette.innerText();
     assert(!/[一-鿿]/.test(text), `Chinese left in the English palette: ${text.match(/[一-鿿]+/)?.[0]}`);
-    return "groups Company / bot / Pages / Recent chats; page names and the add offer in English; no Chinese in the palette";
+    return "groups Company / bot / Commands / Pages / Recent chats; the 新建 bot command reads New bot; page names and the add offer in English; no Chinese in the palette";
   } finally { await view.close(); }
 }
 
@@ -1866,7 +1869,7 @@ async function optionalChunkFailure(ctx) {
   try {
     const { page } = view;
     let blocked = 0;
-    await page.route(/\/assets\/BotSidePanel-[^/]*\.js/, (route) => { blocked += 1; return route.abort(); });
+    await page.route(/\/assets\/(?:BotSidePanel|NewBotDialog)-[^/]*\.js/, (route) => { blocked += 1; return route.abort(); });
     await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
     await waitReady(page, { ready: "[data-testid=message]" });
     await settle(page);
@@ -4163,10 +4166,10 @@ async function motionView(ctx, label, { hash = "#/chat", device = BIG_DEVICE, mo
 async function chatReady(view) { await waitReady(view.page, PAGES.find((p) => p.name === "chat-default")); await settle(view.page); }
 const htmlMotion = (page) => page.evaluate(() => document.documentElement.dataset.motion);
 const waitMotion = (page, level, timeout = 15000) => page.waitForFunction((want) => document.documentElement.dataset.motion === want, level, { timeout });
-/** Open `bot`'s 档案 tab on the chat page (1440) with the studio in it. */
+/** Open `bot`'s settings page (1440) on 外观与性格, with the studio in it (A5 had it in the right panel's 档案 tab; P5.1 moved it to this section). */
 async function openStudioView(ctx, label, botId, options = {}) {
-  const view = await motionView(ctx, label, { hash: `#/chat/${botId}`, ...options });
-  await view.page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 30000 }); // (a line with no message yet has no message to wait for)
+  const view = await motionView(ctx, label, { hash: settingsAt(botId, "look"), ...options });
+  await view.page.locator("[data-testid=bot-settings-page]").waitFor({ timeout: 30000 });
   await settle(view.page);
   await openStudio(view.page);
   return view;
@@ -4226,14 +4229,14 @@ async function rehearsalNoRequests(ctx) {
   const view = await openStudioView(ctx, "rehearsal-no-requests", BOT.applebot);
   try {
     const { page } = view;
-    // The page has a background sync of its own line (GET .../messages every few seconds, with or without a rehearsal): first watch a stretch of rest
-    // to learn what it looks like, then play the whole rehearsal and require that nothing else was asked.
+    // The app around the page may ask on a timer of its own (the chat's line sync, the bot list): first watch a stretch of rest to learn what that looks
+    // like, then play the whole rehearsal and require that nothing else was asked.  (A5 ran this in the chat page; the settings page has no line of its own.)
     const isLineSync = (r) => r.method === "GET" && /^\/agent-chat\/conversations\/[^/]+\/messages$/.test(r.path);
     await page.waitForTimeout(1500);
     const rest0 = view.mock.requests.length;
     await page.waitForTimeout(8000);
     const rest = view.mock.requests.slice(rest0);
-    const before = { requests: view.mock.requests.length, messages: await page.locator("[data-testid=message]").count(), last: await page.locator("[data-testid=message]").last().innerText(), draft: await page.locator("#agent-draft").inputValue() };
+    const before = { requests: view.mock.requests.length, name: await page.locator("#bot-name").inputValue() };
     const started = Date.now();
     for (const [name] of REHEARSAL) { await page.locator(`[data-slot=rehearsal] [data-scenario=${name}]`).click(); await page.waitForTimeout(150); }
     await page.locator("[data-testid=rehearsal-switch]").click();
@@ -4246,42 +4249,52 @@ async function rehearsalNoRequests(ctx) {
     const sent = view.mock.requests.slice(before.requests), seconds = (Date.now() - started) / 1000;
     const others = sent.filter((r) => !isLineSync(r));
     assert(!others.length, `the rehearsal made ${others.length} request(s) of its own: ${others.map((r) => `${r.method} ${r.path}`).join(", ")}`);
-    assert(rest.every(isLineSync), `at rest the page asks for more than its line sync: ${rest.filter((r) => !isLineSync(r)).map((r) => r.path)}`);
-    assert((await page.locator("[data-testid=message]").count()) === before.messages, "the number of messages in the line changed");
-    assert((await page.locator("[data-testid=message]").last().innerText()) === before.last, "the last message changed");
-    assert((await page.locator("#agent-draft").inputValue()) === before.draft, "the draft changed");
-    return `nothing asked but the page's own line sync (${rest.length} in 8 s at rest, ${sent.length} in ${seconds.toFixed(0)} s of rehearsal: ${REHEARSAL.length} states, a switch and back, three levels, the reduce switch); the line (${before.messages} messages) and the draft are as they were`;
+    assert(rest.every(isLineSync), `at rest the page asks for more than the app's line sync: ${rest.filter((r) => !isLineSync(r)).map((r) => r.path)}`);
+    assert((await page.locator("[data-testid=save-bar]").count()) === 0, "the rehearsal lit the save bar: it is not part of the form");
+    assert((await page.locator("#bot-name").inputValue()) === before.name, "the name field changed");
+    return `nothing asked but the app's own line sync (${rest.length} in 8 s at rest, ${sent.length} in ${seconds.toFixed(0)} s of rehearsal: ${REHEARSAL.length} states, a switch and back, three levels, the reduce switch); the save bar stayed away`;
   } finally { await view.close(); }
 }
 
-/** The header avatar and the rehearsal's big one: only the bigger runs frames (design 6.9 P3: the largest M / L avatar wins). */
+/**
+ * The rehearsal's big preview runs frames while it is on screen, and it is the only large avatar on the settings page (the page has no header avatar).
+ * A5 asserted "with the preview and the header avatar on one screen, only the bigger runs"; here that is: the preview runs, off screen it stops (a body
+ * off screen is not drawn), the header's body is not on this page at all, and back on the chat page the header avatar runs again (nobody kept the loop).
+ */
 async function rehearsalClaimsLoop(ctx) {
   const view = await openStudioView(ctx, "rehearsal-claims-loop", BOT.finbot);
   try {
     const { page } = view;
-    const clocks = () => page.evaluate(([header, stage]) => ({ header: Number(document.querySelector(header)?.getAttribute("data-clock")), stage: Number(document.querySelector(stage)?.getAttribute("data-clock")) }), [HEADER_BODY, STAGE_BODY]);
+    const clock = (sel) => page.evaluate((s) => Number(document.querySelector(s)?.getAttribute("data-clock")), sel);
+    assert((await page.locator(HEADER_BODY).count()) === 0, "a header avatar is on the settings page");
+    const large = await page.evaluate(() => [...document.querySelectorAll("svg[data-slot=bot-body]")].filter((n) => n.getBoundingClientRect().width >= 96).length);
+    assert(large === 1, `the settings page holds ${large} large avatars, not one (the form's hero is gone, the preview is the only one)`);
     await page.waitForTimeout(800);
-    const a = await clocks(); await page.waitForTimeout(1500); const b = await clocks();
-    assert(b.stage - a.stage > 0.8, `the preview's clock moved ${(b.stage - a.stage).toFixed(2)} s in 1.5 s: it is not running`);
-    assert(Math.abs(b.header - a.header) < 0.05, `the header avatar's clock moved ${(b.header - a.header).toFixed(2)} s while the big preview was on screen: two M / L avatars run frames`);
-    // scrolled off screen the preview stops and the header's body runs again
-    await page.locator("[data-testid=profile-pane]").evaluate((node) => { node.scrollTop = 0; }).catch(() => {});
-    await page.locator("[data-testid=panel-close]").click();
+    const a = await clock(STAGE_BODY); await page.waitForTimeout(1500); const b = await clock(STAGE_BODY);
+    assert(b - a > 0.8, `the preview's clock moved ${(b - a).toFixed(2)} s in 1.5 s: it is not running`);
+    // scrolled off screen the preview stops
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForFunction((sel) => { const r = document.querySelector(sel)?.getBoundingClientRect(); return r && (r.bottom < 0 || r.top > innerHeight); }, STAGE_BODY, { timeout: 5000 });
+    await page.waitForTimeout(400);
+    const c = await clock(STAGE_BODY); await page.waitForTimeout(1200); const d = await clock(STAGE_BODY);
+    assert(d - c < 0.05, `the preview ran ${(d - c).toFixed(2)} s in 1.2 s while it was off screen`);
+    // back on the chat page the header's body runs
+    await page.locator("[data-testid=back-to-chat]").click();
+    await page.locator(HEADER_BODY).waitFor({ timeout: 15000 });
     await page.waitForTimeout(500);
-    const c = await page.evaluate((sel) => Number(document.querySelector(sel)?.getAttribute("data-clock")), HEADER_BODY); await page.waitForTimeout(1200);
-    const d = await page.evaluate((sel) => Number(document.querySelector(sel)?.getAttribute("data-clock")), HEADER_BODY);
-    assert(d - c > 0.6, `with the panel closed the header avatar did not run again (${(d - c).toFixed(2)} s in 1.2 s)`);
-    return `preview clock +${(b.stage - a.stage).toFixed(2)} s in 1.5 s, header +${(b.header - a.header).toFixed(2)} s; panel closed: header +${(d - c).toFixed(2)} s in 1.2 s`;
+    const e = await clock(HEADER_BODY); await page.waitForTimeout(1200); const f = await clock(HEADER_BODY);
+    assert(f - e > 0.6, `back on the chat page the header avatar did not run (${(f - e).toFixed(2)} s in 1.2 s)`);
+    return `one large avatar on the page; preview clock +${(b - a).toFixed(2)} s in 1.5 s on screen, +${(d - c).toFixed(2)} s off screen; chat page: header +${(f - e).toFixed(2)} s in 1.2 s`;
   } finally { await view.close(); }
 }
 
 
-/** The studio on a phone (390): the 档案 tab in the drawer holds it without sideways scroll, its controls are phone-sized, and a state plays. */
+/** The studio on a phone (390): the 外观与性格 section (open from the address) holds it without sideways scroll, its controls are phone-sized, and a state plays. */
 async function rehearsalMobile(ctx) {
-  const view = await motionView(ctx, "rehearsal-mobile", { hash: `#/chat/${BOT.teslabot}`, width: 390 });
+  const view = await motionView(ctx, "rehearsal-mobile", { hash: settingsAt(BOT.teslabot, "look"), width: 390 });
   try {
     const { page } = view;
-    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 30000 });
+    await page.locator("[data-testid=bot-settings-page]").waitFor({ timeout: 30000 });
     await settle(page);
     await openStudio(page);
     const wide = await page.evaluate(() => ({ page: document.documentElement.scrollWidth - document.documentElement.clientWidth, studio: Math.round(document.querySelector("[data-slot=persona-studio]").getBoundingClientRect().width), view: window.innerWidth }));
@@ -4291,7 +4304,7 @@ async function rehearsalMobile(ctx) {
     assert(!small.length, `controls under 44 px tall: ${small.map((box) => `${box.what} ${box.w}x${box.h}`).join(", ")}`);
     await page.locator("[data-slot=rehearsal] [data-scenario=thinking]").click();
     await page.waitForFunction(([stage, aura]) => document.querySelector(stage)?.getAttribute("data-pose") === "waiting" && document.querySelector(aura)?.getAttribute("data-aura-phase") === "think", [STAGE_BODY, STAGE_AURA], { timeout: 9000 });
-    return `no sideways scroll, studio ${wide.studio}px in ${wide.view}px, every control >= 44 px tall, 思考 plays in the drawer`;
+    return `no sideways scroll, studio ${wide.studio}px in ${wide.view}px, every control >= 44 px tall, 思考 plays on the page`;
   } finally { await view.close(); }
 }
 
@@ -4310,16 +4323,14 @@ async function personaOverrideLocal(ctx) {
     assert((await ringTempo()) === "0.9", `the sidebar ring's tempo should start at AppleBot's 0.9, got ${await ringTempo()}`);
     await page.locator("[data-testid=persona-archetype] [data-option=reader]").click();
     await page.locator("[data-testid=persona-tempo] [data-option=rapid]").click();
-    await page.waitForFunction(() => document.querySelector("[data-slot=chat-page]")?.dataset.archetype === "reader", null, { timeout: 8000 });
+    await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("data-tempo") === "1.25", STAGE_BODY, { timeout: 8000 });
     // only localStorage changed
     const stored = JSON.parse(await page.evaluate((key) => localStorage.getItem(key), PERSONA_KEY(id)));
     assert(stored.archetype === "reader" && stored.tempo === 1.25, `the stored override is ${JSON.stringify(stored)}`);
     const sent = view.mock.requests.slice(asked);
     assert(!sent.length, `changing the personality made ${sent.length} request(s): ${sent.map((r) => `${r.method} ${r.path}`).join(", ")}`);
-    // it applies to the page, the sidebar and the preview at once
-    assert((await page.locator("[data-slot=chat-page]").evaluate((node) => node.style.getPropertyValue("--bot-tempo"))) === "1.25", "the chat page's tempo did not follow");
-    // (the header's own body is a still frame while the big preview runs, so the preview is where the new tempo shows on the body; it only runs while it is on
-    // screen, and the pickers are above it: bring it back into view, as a reader looking at the result does)
+    // it applies to the sidebar and the preview at once (the chat page, which A5 listed here too, is a page away now: it is read below, after going back to it)
+    // (the preview only runs while it is on screen, and the pickers are above it: bring it back into view, as a reader looking at the result does)
     await page.locator("[data-testid=rehearsal-stage]").scrollIntoViewIfNeeded();
     await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("data-tempo") === "1.25", STAGE_BODY, { timeout: 5000 });
     assert((await ringTempo()) === "1.25", `the sidebar ring's tempo is ${await ringTempo()}, not 1.25`);
@@ -4330,14 +4341,25 @@ async function personaOverrideLocal(ctx) {
     await page.locator(`[data-testid=persona-aura] [data-option=${pickable}]`).click();
     await page.waitForFunction(([key, want]) => JSON.parse(localStorage.getItem(key) || "{}").auraVariant === want, [PERSONA_KEY(id), pickable], { timeout: 5000 });
     await page.waitForFunction(([sel, want]) => document.querySelector(sel)?.getAttribute("data-aura-variant") === want, [STAGE_AURA, pickable], { timeout: 8000 });
-    // the form's own save did not light up: the profile's 保存 button is as it was (no unsaved-change mark exists; the note says so)
+    // the form's own save did not light up: no unsaved-change bar (the note says so)
     assert((await page.locator("[data-testid=persona-local-note]").innerText()).includes("保存栏不会亮"), "the note about the save bar is missing");
+    assert((await page.locator("[data-testid=save-bar]").count()) === 0, "the save bar came up for a personality pick");
+    // the chat page of the bot has it: back to the chat, the page's archetype and tempo are the picked ones; then to the settings again
+    await page.locator("[data-testid=back-to-chat]").click();
+    await page.waitForFunction(() => document.querySelector("[data-slot=chat-page]")?.dataset.archetype === "reader", null, { timeout: 8000 });
+    assert((await page.locator("[data-slot=chat-page]").evaluate((node) => node.style.getPropertyValue("--bot-tempo"))) === "1.25", "the chat page's tempo did not follow");
+    await page.locator("[data-testid=bot-settings]").click();
+    await openSection(page, "look"); await openStudio(page);
+    assert((await source()) === "override", "after the round trip the source is not the reader's override");
     // 恢复默认
     await page.locator("[data-testid=persona-reset]").click();
     await page.waitForFunction((key) => localStorage.getItem(key) === null, PERSONA_KEY(id), { timeout: 5000 });
-    await page.waitForFunction(() => document.querySelector("[data-slot=chat-page]")?.dataset.archetype === "tracker", null, { timeout: 8000 });
     assert((await source()) === "preset", "after 恢复默认 the source is not the preset again");
     assert((await ringTempo()) === "0.9", "the sidebar ring's tempo did not come back");
+    await page.locator("[data-testid=back-to-chat]").click();
+    await page.waitForFunction(() => document.querySelector("[data-slot=chat-page]")?.dataset.archetype === "tracker", null, { timeout: 8000 });
+    await page.locator("[data-testid=bot-settings]").click();
+    await openSection(page, "look"); await openStudio(page);
     // another browser context is another device: it sees the derived value, not this one's choice
     await page.locator("[data-testid=persona-archetype] [data-option=sentinel]").click();
     await page.waitForFunction((key) => localStorage.getItem(key) !== null, PERSONA_KEY(id), { timeout: 5000 });
@@ -4345,9 +4367,10 @@ async function personaOverrideLocal(ctx) {
     try {
       assert((await other.page.evaluate((key) => localStorage.getItem(key), PERSONA_KEY(id))) === null, "the other device has an override");
       assert((await other.page.locator("[data-testid=persona-source]").getAttribute("data-kind")) === "preset", "the other device does not show the preset");
+      await other.page.locator("[data-testid=back-to-chat]").click();
       await other.page.waitForFunction(() => document.querySelector("[data-slot=chat-page]")?.dataset.archetype === "tracker", null, { timeout: 8000 });
     } finally { await other.close(); }
-    return "reader + rapid + another aura variant only in localStorage (0 requests), page / sidebar ring / preview follow at once, 恢复默认 clears, a second browser context shows the preset";
+    return "reader + rapid + another aura variant only in localStorage (0 requests), sidebar ring / preview follow at once and the chat page after going back, 恢复默认 clears, a second browser context shows the preset";
   } finally { await view.close(); }
 }
 
@@ -4668,6 +4691,1108 @@ async function motionOffEqualsReduced(ctx) {
   return `identical pixels, system reduced motion vs 关闭 in the app: ${same.join("; ")}`;
 }
 
+// --- P5.1: the bot settings page ------------------------------------------------------------------------------------------------------------
+const BOT_SAVE_BASELINE = JSON.parse(fs.readFileSync(new URL("./fixtures/bot-save-bodies-baseline.json", import.meta.url), "utf8"));
+const PATCH_BOT = /^\/agent-chat\/bots\/[^/]+$/;
+const canon = (value) => JSON.stringify(value, (_, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v));
+/** A fresh view on a bot's settings page, once its form is in. */
+async function settingsView(ctx, label, botId, { width = 1440, section, motion = false, viaChat = false } = {}) {
+  const view = await newView(ctx.browser, { width, theme: "light", label, unmatched, ...(motion ? { motion: true } : {}) });
+  const bodies = [], deletes = [];
+  view.page.on("request", (r) => {
+    const path = new URL(r.url()).pathname;
+    if (r.method() === "PATCH" && PATCH_BOT.test(path)) bodies.push(JSON.parse(r.postData() ?? "null"));
+    if (r.method() === "DELETE" && PATCH_BOT.test(path)) deletes.push(path);
+  });
+  if (viaChat) {
+    // by the gear of the bot's own chat page: the history then holds two pages of the app (an entry made by the address bar or by goto is one the router cannot hold back)
+    await view.page.goto(`${ctx.server.url}#/chat/${botId}`, { waitUntil: "load" });
+    await view.page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 30000 });
+    await view.page.locator("[data-testid=bot-settings]").click();
+  } else await view.page.goto(`${ctx.server.url}${settingsAt(botId, section)}`, { waitUntil: "load" });
+  await view.page.locator("[data-testid=bot-settings-page]").waitFor({ timeout: 30000 });
+  await view.page.locator("#bot-name").waitFor({ timeout: 30000 });
+  // the tool list and the catalog come with the page's options: wait for them, so an edit of the tools or the model is not made on an empty list
+  await view.page.locator("[data-testid=tool-summary]").waitFor({ state: "attached", timeout: 30000 });   // (folded on a phone: attached, not visible)
+  await settle(view.page);
+  return { ...view, bodies, deletes };
+}
+/** Wait (observably) until `test()` is true; the message is read when it is not. */
+async function until(test, message, timeout = 10000) {
+  const end = Date.now() + timeout;
+  for (;;) { if (await test()) return; if (Date.now() > end) throw new Error(typeof message === "function" ? await message() : message); await new Promise((r) => setTimeout(r, 40)); }
+}
+const saveBar = (page) => page.locator("[data-testid=save-bar]");
+async function chooseOption(page, triggerTestId, name) {
+  await page.locator(`[data-testid=${triggerTestId}]`).click();
+  await page.getByRole("option", { name }).click();
+  await page.getByRole("option").first().waitFor({ state: "detached", timeout: 5000 });
+}
+/** Press 保存 and wait for the request, then for the bar to go. */
+async function pressSave(view) {
+  const n = view.bodies.length;
+  await view.page.locator("[data-testid=save-bar-save]").click();
+  await until(() => view.bodies.length > n, `no save request after pressing 保存 (bar text: ${"?"})`);
+  await saveBar(view.page).waitFor({ state: "detached", timeout: 10000 });
+  return view.bodies[view.bodies.length - 1];
+}
+
+// The fields of the old 档案 form (BotForm in BotSidePanel.tsx before P5.1, read from it): label, how the new page finds it, what to do to it (a change the form must notice), the section that holds it.
+const OLD_FORM_FIELDS = [
+  { old: "名字", find: (p) => p.getByLabel("名字", { exact: true }), section: "profile", edit: (p) => p.getByLabel("名字", { exact: true }).fill("AppleBot 二号") },
+  { old: "头衔", find: (p) => p.getByLabel("头衔", { exact: true }), section: "profile", edit: (p) => p.getByLabel("头衔", { exact: true }).fill("苹果研究员") },
+  { old: "说明", find: (p) => p.getByLabel("说明", { exact: true }), section: "profile", edit: (p) => p.getByLabel("说明", { exact: true }).fill("只看 Apple。") },
+  { old: "分组", find: (p) => p.getByLabel("分组", { exact: true }), section: "profile", edit: (p) => p.getByLabel("分组", { exact: true }).fill("公司") },
+  { old: "置顶", find: (p) => p.getByRole("switch", { name: "置顶" }), section: "profile", edit: (p) => p.getByRole("switch", { name: "置顶" }).click() },
+  { old: "在侧栏隐藏", find: (p) => p.getByRole("switch", { name: "在侧栏隐藏" }), section: "profile", edit: (p) => p.getByRole("switch", { name: "在侧栏隐藏" }).click() },
+  { old: "关注公司（可空）", find: (p) => p.locator("#bot-companies"), section: "focus", edit: async (p) => { await p.locator("#bot-companies").fill("MSFT"); await p.keyboard.press("Enter"); } },
+  { old: "关注主题（可空）", find: (p) => p.getByLabel("关注主题（可空）", { exact: true }), section: "focus", edit: (p) => p.getByLabel("关注主题（可空）", { exact: true }).fill("服务业务") },
+  { old: "头像：机器人 / 自定义 emoji", find: (p) => p.locator("[data-testid=avatar-kind]"), section: "look", edit: async (p) => { await p.locator("[data-testid=avatar-kind] [data-option=emoji]").click(); } },
+  { old: "形状（8 种）", find: (p) => p.locator("[data-testid=look-shape] [data-option]"), count: 8, section: "look", edit: (p) => p.locator("[data-testid=look-shape] [data-option=nuage]").click() },
+  { old: "颜色（12 种）", find: (p) => p.locator("[data-testid=look-color] [data-option]"), count: 12, section: "look", edit: (p) => p.locator("[data-testid=look-color] [data-option=violet]").click() },
+  { old: "模型", find: (p) => p.getByRole("combobox", { name: "模型" }), section: "model", edit: (p) => chooseOption(p, "model-select", /Muse Ember/) },
+  { old: "（新）推理强度", find: (p) => p.getByRole("combobox", { name: "推理强度" }), section: "model", edit: (p) => chooseOption(p, "effort-select", /^高/) },
+  { old: "工具范围（每个工具一个开关）", find: (p) => p.locator("[data-tool]"), count: 6, section: "tools", edit: (p) => p.locator("[data-tool=create_forecast]").click() },
+  { old: "全部打开", find: (p) => p.getByRole("button", { name: "全部打开" }), section: "tools", edit: null },
+  { old: "每日通知上限", find: (p) => p.getByLabel("每日通知上限", { exact: true }), section: "notify", edit: (p) => p.getByLabel("每日通知上限", { exact: true }).fill("9") },
+];
+
+async function botSettingsFields(ctx) {
+  const view = await settingsView(ctx, "bot-settings-fields", BOT.applebot);
+  try {
+    const { page } = view;
+    const rows = [];
+    for (const field of OLD_FORM_FIELDS) {
+      const found = field.find(page), n = await found.count();
+      assert(n === (field.count ?? 1), `${field.old}: found ${n} on the new page, wanted ${field.count ?? 1}`);
+      const section = await found.first().evaluate((node) => node.closest("[data-section]")?.getAttribute("data-section"));
+      assert(section === field.section, `${field.old}: it is in the section ${section}, the table says ${field.section}`);
+      if (field.edit) {
+        await field.edit(page);
+        await saveBar(page).waitFor({ timeout: 5000 }).catch(() => { throw new Error(`${field.old}: editing it did not bring up the save bar`); });
+        const dot = await page.locator(`[data-section-link=${field.section}] span.bg-brand`).count();
+        assert(dot === 1, `${field.old}: the section nav has ${dot} unsaved dots for ${field.section}, not one`);
+        await page.locator("[data-testid=save-bar-discard]").click();
+        await saveBar(page).waitFor({ state: "detached", timeout: 5000 });
+      }
+      rows.push(`${field.old}→${field.section}`);
+    }
+    // the parts of the old tab that save on their own: 技能 (a checklist), the bot's own Telegram, the routine manager, 删除
+    const skills = page.locator("[data-testid=skills-list] [data-slot=checkbox]");
+    await skills.first().waitFor({ timeout: 10000 });
+    assert((await skills.count()) === 2, `技能: ${await skills.count()} skills listed, the fixture has two usable`);
+    assert((await page.locator("[data-section=skills]").count()) === 1 && (await skills.first().evaluate((n) => n.closest("[data-section]").getAttribute("data-section"))) === "skills", "技能 is not in its section");
+    const n0 = view.bodies.length;
+    await skills.first().click();
+    await until(() => view.bodies.length > n0, "ticking a skill sent nothing");
+    assert(canon(view.bodies[n0]) === canon({ skills: [view.bodies[n0].skills?.[0]] }) && view.bodies[n0].skills.length === 1, `ticking a skill sent ${JSON.stringify(view.bodies[n0])}, not {skills:[id]}`);
+    assert((await saveBar(page).count()) === 0, "a skill tick brought up the save bar: it saves on its own");
+    assert((await page.locator("[data-section=routines] .bot-routines").count()) === 1, "例行任务: the routine manager is not in its section");
+    assert((await page.locator("[data-section=routines] [data-legacy]").count()) === 1, "例行任务: the routine manager is not inside the old-markup frame");
+    assert((await page.locator("[data-section=notify] [data-testid=telegram-panel] [data-slot=stepper]").count()) === 1, "通知: the Telegram steps are not in the section");
+    assert((await page.locator("[data-section=notify] [data-testid=telegram-panel]").getByRole("button", { name: "换 token / 删除" }).count()) === 1, "通知: 换 token / 删除 is gone");
+    assert((await page.locator("[data-section=danger]").getByRole("button", { name: "删除这个 bot" }).count()) === 1, "危险区: 删除这个 bot is gone");
+    return `${rows.length} fields of the old form found, each in its section, each a change the save bar sees (${rows.join(", ")}); 技能 / 例行任务 / Telegram / 删除 in their sections`;
+  } finally { await view.close(); }
+}
+
+/** The edits of the old form's recorded saves, as this page makes them; each ends in the body the old form sent for it (fixtures/bot-save-bodies-baseline.json). */
+const SAVE_CASES = [
+  { name: "name", bot: BOT.applebot, edit: (p) => p.locator("#bot-name").fill("AppleBot 二号") },
+  { name: "focus", bot: BOT.applebot, edit: async (p) => { await p.locator("#bot-companies").fill("msft"); await p.keyboard.press("Enter"); } },
+  { name: "theme", bot: BOT.applebot, edit: (p) => p.locator("#bot-theme").fill("服务业务") },
+  { name: "tools-one-off", bot: BOT.applebot, edit: (p) => p.locator("[data-tool=create_forecast]").click() },
+  { name: "model", bot: BOT.applebot, edit: (p) => chooseOption(p, "model-select", /Muse Ember/) },
+  { name: "model-back-to-default", bot: BOT.teslabot, edit: (p) => chooseOption(p, "model-select", /服务器默认模型/) },
+  { name: "look-shape", bot: BOT.applebot, edit: (p) => p.locator("[data-testid=look-shape] [data-option=nuage]").click() },
+  { name: "title-description-group-cap", bot: BOT.applebot, edit: async (p) => { await p.locator("#bot-title").fill("苹果研究员"); await p.locator("#bot-description").fill("只看 Apple。"); await p.locator("#bot-group").fill("公司"); await p.locator("#bot-cap").fill("9"); } },
+  { name: "pinned-hidden", bot: BOT.applebot, edit: async (p) => { await p.locator("#bot-pinned").click(); await p.locator("#bot-hidden").click(); } },
+  { name: "emoji-avatar", bot: BOT.applebot, edit: async (p) => { await p.locator("[data-testid=avatar-kind] [data-option=emoji]").click(); await p.locator("#bot-avatar").fill("🍎"); } },
+  { name: "combined", bot: BOT.applebot, edit: async (p) => { await p.locator("#bot-name").fill("AppleBot 二号"); await p.locator("#bot-companies").fill("msft"); await p.keyboard.press("Enter"); await p.locator("[data-tool=create_forecast]").click(); await chooseOption(p, "model-select", /Muse Ember/); } },
+  { name: "default-bot-rename", bot: BOT.finbot, edit: (p) => p.locator("#bot-name").fill("FinBot 主理") },
+];
+/** The edits that end where they began: the old form still sent its whole body for them; this page sees no change and offers no save. */
+const NO_CHANGE_CASES = [
+  { name: "tools-two-off-then-all", edit: async (p) => { await p.locator("[data-tool=create_forecast]").click(); await p.locator("[data-tool=save_material]").click(); await p.getByRole("button", { name: "全部打开" }).click(); } },
+  { name: "tools-off-on", edit: async (p) => { await p.locator("[data-tool=create_forecast]").click(); await p.locator("[data-tool=create_forecast]").click(); } },
+  { name: "look-touched-back", edit: async (p) => { await p.locator("[data-testid=look-shape] [data-option=nuage]").click(); await p.locator("[data-testid=look-shape] [data-option=hexagone]").click(); } },
+];
+
+async function botSettingsSaveBody(ctx) {
+  const done = [];
+  for (const c of SAVE_CASES) {
+    const view = await settingsView(ctx, `bot-settings-save-body: ${c.name}`, c.bot);
+    try {
+      await c.edit(view.page);
+      await saveBar(view.page).waitFor({ timeout: 5000 }).catch(() => { throw new Error(`${c.name}: the edit did not bring up the save bar`); });
+      const body = await pressSave(view);
+      const want = JSON.parse(BOT_SAVE_BASELINE[c.name].bodies[0]);
+      assert(canon(body) === canon(want), `${c.name}: the request body differs from the old form's\n  old: ${canon(want)}\n  new: ${canon(body)}`);
+      assert(view.bodies.length === 1, `${c.name}: ${view.bodies.length} save requests`);
+      done.push(c.name);
+    } finally { await view.close(); }
+  }
+  for (const c of NO_CHANGE_CASES) {
+    const view = await settingsView(ctx, `bot-settings-save-body: ${c.name}`, BOT.applebot);
+    try {
+      await c.edit(view.page);
+      await view.page.waitForTimeout(300);
+      assert((await saveBar(view.page).count()) === 0, `${c.name}: an edit that ends where it began left the save bar up`);
+      assert(!view.bodies.length, `${c.name}: a request went out`);
+      done.push(`${c.name} (no change)`);
+    } finally { await view.close(); }
+  }
+  // the reasoning effort: new on this page.  Untouched it is not in the body; picked it is, and 默认 is null.
+  const view = await settingsView(ctx, "bot-settings-save-body: effort", BOT.applebot);
+  try {
+    await chooseOption(view.page, "effort-select", /^高/);
+    const high = await pressSave(view);
+    assert(high.reasoning_effort === "high", `picking 高 sent reasoning_effort ${JSON.stringify(high.reasoning_effort)}`);
+    assert(canon({ ...high, reasoning_effort: undefined }) === canon({ ...JSON.parse(BOT_SAVE_BASELINE.noop.bodies[0]) }), "the rest of the body differs from the old form's");
+    await chooseOption(view.page, "effort-select", /^默认/);
+    const back = await pressSave(view);
+    assert("reasoning_effort" in back && back.reasoning_effort === null, `picking 默认 again sent reasoning_effort ${JSON.stringify(back.reasoning_effort)}, not null`);
+    done.push("effort 高 → 默认 (null)");
+  } finally { await view.close(); }
+  return `${SAVE_CASES.length} edits: bodies equal the old form's (field by field, ${done.length - SAVE_CASES.length} more cases: edits back to the start offer no save; effort sends only when changed, 默认 is null)`;
+}
+
+async function botSettingsDiscard(ctx) {
+  const view = await settingsView(ctx, "bot-settings-discard", BOT.applebot);
+  try {
+    const { page } = view;
+    const before = { name: await page.locator("#bot-name").inputValue(), tags: await page.locator("[data-testid=focus-tags] [data-tag]").count(), summary: await page.locator("[data-testid=tool-summary]").innerText() };
+    await page.locator("#bot-name").fill("改名了");
+    await page.locator("[data-tool=create_forecast]").click();
+    await chooseOption(page, "model-select", /Muse Ember/);
+    await page.locator("#bot-companies").fill("msft"); await page.keyboard.press("Enter");
+    await page.locator("#bot-companies").fill("xyz1"); await page.keyboard.press("Enter"); // an item left in the box, refused
+    await saveBar(page).waitFor();
+    await page.locator("[data-testid=save-bar-discard]").click();
+    await saveBar(page).waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.locator("#bot-name").inputValue()) === before.name, "the name did not come back");
+    assert((await page.locator("[data-testid=focus-tags] [data-tag]").count()) === before.tags, "the focus tags did not come back");
+    assert((await page.locator("#bot-companies").inputValue()) === "", "what was left in the tag box stayed");
+    assert((await page.locator("[data-testid=tool-summary]").innerText()) === before.summary, "the tool scope did not come back");
+    assert(/服务器默认模型/.test(await page.locator("[data-testid=model-select]").innerText()), "the model did not come back");
+    assert(!view.bodies.length, "放弃 sent a request");
+    // and leaving is free now
+    await pressNavItemSafe(page);
+    return "name, tags (and the text left in the box), tool scope and model are the server's again; no request; leaving afterwards asks nothing";
+  } finally { await view.close(); }
+}
+async function pressNavItemSafe(page) {
+  await page.locator("[data-bot-row]", { hasText: "NewsBot" }).first().click();
+  await page.waitForFunction(() => location.hash.endsWith("0002"), null, { timeout: 8000 });
+  assert((await dialogOf(page).count()) === 0, "a question came up for a form that was discarded");
+}
+
+/** The leave question must be on screen shortly; the step is named in the failure. */
+async function askShows(page, step) { await dialogOf(page).waitFor({ timeout: 5000 }).catch(async () => { throw new Error(`${step}: the leave question did not come up (address ${await page.evaluate(() => location.hash)}, name field ${await page.locator("#bot-name").inputValue().catch(() => "gone")})`); }); }
+async function botSettingsLeaveGuard(ctx) {
+  const view = await settingsView(ctx, "bot-settings-leave-guard", BOT.applebot, { viaChat: true });
+  try {
+    const { page } = view;
+    const here = await page.evaluate(() => location.hash);
+    await page.locator("#bot-name").fill("没存的名字");
+    await saveBar(page).waitFor();
+    // 1. the sidebar: the question comes, the address and the edit stay while it is open; 留下 keeps both
+    await page.locator("[data-bot-row]", { hasText: "NewsBot" }).first().click();
+    await askShows(page, "step 1");
+    assert((await dialogOf(page).innerText()).includes("放弃"), "the question does not talk about discarding");
+    assert((await page.evaluate(() => location.hash)) === here, "the address moved while the question was open");
+    await dialogOf(page).getByRole("button", { name: "留下" }).click();
+    await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.evaluate(() => location.hash)) === here, "留下: the address changed");
+    assert((await page.locator("#bot-name").inputValue()) === "没存的名字", "留下: the edit is gone");
+    assert((await saveBar(page).count()) === 1, "留下: the save bar is gone");
+    // 2. Esc is 留下 too
+    await page.locator("[data-bot-row]", { hasText: "NewsBot" }).first().click();
+    await askShows(page, "step 2");
+    await page.keyboard.press("Escape");
+    await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.evaluate(() => location.hash)) === here && (await page.locator("#bot-name").inputValue()) === "没存的名字", "Esc: not a stay");
+    // 3. the browser's back button
+    await page.goBack();
+    await askShows(page, "step 3");
+    await dialogOf(page).getByRole("button", { name: "留下" }).click();
+    await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.evaluate(() => location.hash)) === here && (await page.locator("#bot-name").inputValue()) === "没存的名字", "back button, 留下: the page or the edit is gone");
+    // 4. the command palette
+    await page.keyboard.press("Control+k");
+    await page.locator('[data-slot="command-item"]').first().waitFor();
+    await page.keyboard.type("NewsBot");
+    await page.locator('[data-slot="command-item"]', { hasText: "NewsBot" }).first().waitFor();
+    await page.keyboard.press("Enter");
+    await askShows(page, "step 4");
+    await dialogOf(page).getByRole("button", { name: "留下" }).click();
+    await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.evaluate(() => location.hash)) === here, "command palette, 留下: the address changed");
+    // 5. the section nav is not a leave
+    await page.locator("[data-section-link=tools]").click();
+    await page.waitForTimeout(200);
+    assert((await dialogOf(page).count()) === 0, "moving between sections asked the leave question");
+    assert((await page.locator("#bot-name").inputValue()) === "没存的名字", "a section change lost the edit");
+    // 6. closing the tab or reloading: the browser's own question
+    const kinds = [];
+    page.on("dialog", (d) => { kinds.push(d.type()); void d.dismiss(); });
+    await page.reload().catch(() => {});
+    await until(() => kinds.length > 0, "a reload with an unsaved edit raised no beforeunload question", 4000);
+    assert(kinds[0] === "beforeunload", `the reload question was a ${kinds[0]}`);
+    assert((await page.locator("#bot-name").inputValue()) === "没存的名字", "dismissing the reload question lost the edit");
+    // 7. 放弃修改并离开: the page is left, nothing was saved
+    await page.locator("[data-bot-row]", { hasText: "NewsBot" }).first().click();
+    await askShows(page, "step 5");
+    await dialogOf(page).getByRole("button", { name: "放弃修改并离开" }).click();
+    await page.waitForFunction(() => location.hash.endsWith("0002"), null, { timeout: 8000 });
+    await page.locator("[data-testid=chat-page]").waitFor({ timeout: 15000 });
+    assert(!view.bodies.length, "leaving sent a save");
+    // 8. a saved form is left without a question
+    await page.goto(`${ctx.server.url}${settingsAt(BOT.applebot)}`, { waitUntil: "load" });
+    await page.locator("#bot-name").waitFor({ timeout: 30000 });
+    await page.locator("#bot-name").fill("存了的名字");
+    await pressSave(view);
+    kinds.length = 0;
+    await page.locator("[data-bot-row]", { hasText: "NewsBot" }).first().click();
+    await page.waitForFunction(() => location.hash.endsWith("0002"), null, { timeout: 8000 });
+    assert((await dialogOf(page).count()) === 0 && !kinds.length, "a saved form still asked before it was left");
+    return "sidebar link, Esc, back button and command palette each raise 「放弃修改并离开 / 留下」 (address and edit untouched on 留下); section moves do not; reload raises the browser's beforeunload; 放弃修改并离开 leaves with nothing saved; a saved form leaves silently";
+  } finally { await view.close(); }
+}
+
+async function botSettingsDefaultUndeletable(ctx) {
+  const view = await settingsView(ctx, "bot-settings-default-undeletable", BOT.finbot);
+  try {
+    const { page } = view;
+    const button = page.locator("[data-testid=delete-bot]");
+    assert(await button.isDisabled(), "the default bot's 删除 is not disabled");
+    assert((await page.locator("[data-testid=default-undeletable]").innerText()).includes("不能删除"), "the page does not say why the default bot cannot be deleted");
+    await button.click({ force: true, timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    assert((await dialogOf(page).count()) === 0 && !view.deletes.length, "pressing the disabled 删除 asked or sent something");
+    assert((await page.locator("#bot-hidden").count()) === 0, "the default bot can be hidden from the sidebar here");
+    assert((await page.locator("[data-testid=telegram-panel] input").count()) === 0 && (await page.locator("[data-testid=telegram-panel]").innerText()).includes("共用"), "the default bot's Telegram part is not only its explanation");
+    // another bot's page has the working one
+    await page.goto(`${ctx.server.url}${settingsAt(BOT.applebot)}`, { waitUntil: "load" });
+    await page.locator("[data-testid=delete-bot]").waitFor({ timeout: 30000 });
+    assert(!(await page.locator("[data-testid=delete-bot]").isDisabled()), "AppleBot's 删除 is disabled");
+    return "default bot: 删除 disabled with its reason, no dialog and no request when pressed; no 在侧栏隐藏; Telegram part is the explanation only; AppleBot's 删除 works";
+  } finally { await view.close(); }
+}
+
+async function botSettingsTagInput(ctx) {
+  const view = await settingsView(ctx, "bot-settings-tag-input", BOT.applebot);
+  try {
+    const { page } = view;
+    const tags = () => page.locator("[data-testid=focus-tags] [data-tag]").evaluateAll((nodes) => nodes.map((n) => n.getAttribute("data-tag")));
+    const box = page.locator("#bot-companies"), note = page.locator("[data-testid=focus-tags-message]");
+    assert(JSON.stringify(await tags()) === '["AAPL"]', `the tag list starts as ${JSON.stringify(await tags())}`);
+    assert((await page.locator("[data-testid=focus-tags] ul").getAttribute("aria-label")) === "关注公司（可空）", "the tag list has no name for a screen reader");
+    // a wrong code: not entered, still in the box, red, said under the field, no change
+    await box.fill("xyz1"); await page.keyboard.press("Enter");
+    assert(JSON.stringify(await tags()) === '["AAPL"]', `a wrong code entered: ${JSON.stringify(await tags())}`);
+    assert((await box.inputValue()) === "xyz1", `the wrong code left the box: ${await box.inputValue()}`);
+    assert((await box.getAttribute("aria-invalid")) === "true", "the box is not marked invalid");
+    assert(/不是股票代码.*xyz1/.test(await note.innerText()), `the note says ${JSON.stringify(await note.innerText())}`);
+    const red = await box.evaluate((n) => getComputedStyle(n).color), plain = await page.locator("#bot-theme").evaluate((n) => getComputedStyle(n).color);
+    assert(red !== plain, `the wrong text is not drawn differently (${red})`);
+    assert((await saveBar(page).count()) === 0, "a refused code brought up the save bar");
+    // typing on clears the note; a right code goes in
+    await box.fill("msft"); assert((await note.innerText()) === "", "the note stayed after the text changed");
+    await page.keyboard.press("Enter");
+    assert(JSON.stringify(await tags()) === '["AAPL","MSFT"]' && (await box.inputValue()) === "", `after msft: ${JSON.stringify(await tags())}`);
+    await saveBar(page).waitFor();
+    // backspace in the empty box takes the last one back
+    await page.keyboard.press("Backspace");
+    assert(JSON.stringify(await tags()) === '["AAPL"]', `backspace left ${JSON.stringify(await tags())}`);
+    await saveBar(page).waitFor({ state: "detached", timeout: 5000 }); // back to the server's list: not a change
+    // a paste of several: the right ones go in (new, in order), the wrong one stays in the box
+    await box.focus();
+    await box.evaluate((node) => { const data = new DataTransfer(); data.setData("text", "TSLA, nvda; bad1 aapl AMD"); node.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true })); });
+    assert(JSON.stringify(await tags()) === '["AAPL","TSLA","NVDA","AMD"]', `after the paste: ${JSON.stringify(await tags())}`);
+    assert((await box.inputValue()) === "bad1" && /bad1/.test(await note.innerText()), "the wrong item of the paste is not left in the box with its note");
+    // the remove button of a tag has a name, and takes it out
+    const remove = page.locator("[data-tag=TSLA] button");
+    assert((await remove.getAttribute("aria-label")) === "移除 TSLA", `the remove button is called ${await remove.getAttribute("aria-label")}`);
+    await remove.click();
+    assert(JSON.stringify(await tags()) === '["AAPL","NVDA","AMD"]', `after removing TSLA: ${JSON.stringify(await tags())}`);
+    // what leaves the box when the focus leaves it: a right code goes in
+    await box.fill("goog"); await page.locator("#bot-theme").focus();
+    assert(JSON.stringify(await tags()) === '["AAPL","NVDA","AMD","GOOG"]', `leaving the box with goog typed: ${JSON.stringify(await tags())}`);
+    // the save carries the companies as {symbol} each, the theme and the rest as they were
+    const body = await pressSave(view);
+    assert(canon(body.focus.companies) === canon([{ symbol: "AAPL" }, { symbol: "NVDA" }, { symbol: "AMD" }, { symbol: "GOOG" }]), `the saved companies: ${canon(body.focus.companies)}`);
+    return "a wrong code is not entered (red, aria-invalid, said under the field, no save bar); right codes enter by Enter / paste / leaving the box; Backspace and the remove button take tags out; the body carries {symbol} each";
+  } finally { await view.close(); }
+}
+
+async function botSettingsTelegramSteps(ctx) {
+  const id = BOT.applebot;
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "bot-settings-telegram-steps", unmatched });
+  try {
+    const { page } = view;
+    view.mock.state.botTelegram = { [id]: { configured: true, has_token: false, bound: false, bot_username: null, chat_id: null, bound_at: null, bind_code_active: false, shared: true, status: "none", token_tail: null, last_error: null } };
+    const posts = [];
+    page.on("request", (r) => { if (r.method() === "POST" && /\/bots\/[^/]+\/telegram\/(token|bind)$/.test(new URL(r.url()).pathname)) posts.push({ path: new URL(r.url()).pathname.split("/").pop(), body: r.postData() }); });
+    await page.goto(`${ctx.server.url}${settingsAt(id, "notify")}`, { waitUntil: "load" });
+    const panel = page.locator("[data-testid=telegram-panel]");
+    await panel.waitFor({ timeout: 30000 });
+    const step = () => panel.getAttribute("data-step");
+    const states = () => panel.locator("[data-slot=stepper] li").evaluateAll((nodes) => nodes.map((n) => n.getAttribute("data-state")));
+    await until(async () => (await step()) === "0" && (await panel.locator("input").count()) === 1, "step 0: the token box is not there");
+    assert(JSON.stringify(await states()) === '["current","todo","todo"]', `step 0 looks like ${JSON.stringify(await states())}`);
+    assert((await panel.locator("input").getAttribute("type")) === "password", "the token box is not a password box");
+    // 1. save the token
+    const TOKEN = "123456:SMOKE-FAKE-TOKEN-0000";
+    await panel.locator("input").fill(TOKEN);
+    await panel.getByRole("button", { name: "保存 token" }).click();
+    await until(() => posts.some((p) => p.path === "token"), "no request to save the token");
+    assert(canon(JSON.parse(posts.find((p) => p.path === "token").body)) === canon({ bot_token: TOKEN }), `the token request body was ${posts.find((p) => p.path === "token").body}`);
+    await until(async () => (await step()) === "1", `after saving the token the step is ${await step()}`);
+    assert(JSON.stringify(await states()) === '["done","current","todo"]', `step 1 looks like ${JSON.stringify(await states())}`);
+    const leaked = await page.evaluate((token) => ({ html: document.documentElement.outerHTML.includes(token), inputs: [...document.querySelectorAll("input,textarea")].some((n) => n.value.includes(token)), storage: JSON.stringify({ ...localStorage, ...sessionStorage }).includes(token) }), TOKEN);
+    assert(!leaked.html && !leaked.inputs && !leaked.storage, `the token is still around after it was saved: ${JSON.stringify(leaked)}`);
+    assert((await panel.locator("[data-testid=telegram-identity]").innerText()).includes("7f3a"), "the page does not show the token's tail");
+    assert((await panel.locator("input").count()) === 0, "a token box is left after the token was saved");
+    // 2. a binding code, then the wait
+    await panel.getByRole("button", { name: "生成绑定码" }).click();
+    await until(async () => (await step()) === "2", `after the code the step is ${await step()}`);
+    assert(JSON.stringify(await states()) === '["done","done","waiting"]', `step 2 looks like ${JSON.stringify(await states())}`);
+    assert((await panel.locator("[data-testid=telegram-code]").innerText()).includes("/start 482913"), "the binding code is not shown");
+    // 3. the message arrives: the page asks again by itself (every 5 s) and the steps are done
+    view.mock.state.botTelegramBound = { [id]: true };
+    await until(async () => (await step()) === "3", `the bound state did not arrive (step ${await step()})`, 12000);
+    assert(JSON.stringify(await states()) === '["done","done","done"]', `step 3 looks like ${JSON.stringify(await states())}`);
+    assert((await panel.innerText()).includes("已绑定"), "the panel does not say it is bound");
+    assert(!(await page.evaluate((token) => document.documentElement.outerHTML.includes(token), TOKEN)), "the token showed up when it was bound");
+    // 4. (P5.2) 解绑: the request goes out (the bot's own /telegram/unbind, nothing in the body), and the panel is back at the step before the binding: token kept, a code to make again
+    const unbinds = [];
+    page.on("request", (r) => { if (r.method() === "POST" && /\/bots\/[^/]+\/telegram\/unbind$/.test(new URL(r.url()).pathname)) unbinds.push({ path: new URL(r.url()).pathname, body: r.postData() }); });
+    await panel.getByRole("button", { name: "解绑" }).click();
+    await until(() => unbinds.length === 1, "解绑 sent no request");
+    assert(unbinds[0].path.endsWith(`/bots/${id}/telegram/unbind`) && !unbinds[0].body, `the unbind request was ${JSON.stringify(unbinds[0])}`);
+    await until(async () => (await step()) === "1", async () => `after 解绑 the step is ${await step()}, not 1 (the one before the binding)`);
+    assert(JSON.stringify(await states()) === '["done","current","todo"]', `after 解绑 the steps look like ${JSON.stringify(await states())}`);
+    assert((await panel.innerText()).includes("未绑定") && !(await panel.innerText()).includes("已绑定") && (await panel.getByRole("button", { name: "生成绑定码" }).count()) === 1 && (await panel.getByRole("button", { name: "解绑" }).count()) === 0, "after 解绑 the panel does not read as not bound");
+    assert(view.mock.state.botTelegramBound[id] === false, "the fake backend still has the bot bound");
+    return "three steps in order (current / done / waiting-with-spinner states), password box, the token is in no input, no markup and no storage once saved, only its tail shows, the code appears, and the bound message ends the wait by polling; 解绑 sends the bot's own unbind request and the panel goes back to making a code";
+  } finally { await view.close(); }
+}
+
+async function botSettingsDelete(ctx) {
+  const view = await settingsView(ctx, "bot-settings-delete", BOT.applebot);
+  try {
+    const { page } = view;
+    await page.locator("#bot-name").fill("改了但不存");   // an unsaved edit must not hold back a delete the reader just confirmed
+    await saveBar(page).waitFor();
+    await page.locator("[data-testid=delete-bot]").click();
+    await dialogOf(page).waitFor({ timeout: 5000 });
+    assert((await dialogOf(page).locator('[data-slot="hold-button"]').count()) === 1, "the delete question is not press-and-hold");
+    assert(!view.deletes.length, "a delete went out before the answer");
+    await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'), 300);
+    assert((await dialogOf(page).count()) === 1 && !view.deletes.length, "a short press deleted");
+    await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'));
+    await until(() => view.deletes.length === 1, `after the hold ${view.deletes.length} delete requests`);
+    assert(view.deletes[0].endsWith(BOT.applebot), `the delete went to ${view.deletes[0]}`);
+    await page.waitForFunction(() => location.hash === "#/chat", null, { timeout: 8000 });
+    await page.locator("[data-testid=chat-page]").waitFor({ timeout: 15000 });
+    assert((await page.locator("[data-testid=chat-title], #chat-title").first().innerText()).includes("FinBot"), "the page after the delete is not the default bot's line");
+    assert(!view.bodies.length, "the delete also saved the form");
+    return "按住确认 (a short press does nothing) → DELETE /bots/<id> once → #/chat, the default bot's line; the unsaved edit did not raise the leave question";
+  } finally { await view.close(); }
+}
+
+async function botSettingsKeyboard(ctx) {
+  const view = await settingsView(ctx, "bot-settings-keyboard", BOT.applebot);
+  try {
+    const { page } = view;
+    const focused = () => page.evaluate(() => { const n = document.activeElement; return { id: n?.id ?? "", test: n?.getAttribute?.("data-testid") ?? "", link: n?.getAttribute?.("data-section-link") ?? "", tag: n?.tagName ?? "" }; });
+    // Tab from the top of the page to the section list, press Enter on 工具: the address names it and the section is at the top
+    await page.evaluate(() => { document.activeElement?.blur?.(); window.scrollTo(0, 0); });
+    let at = 0;
+    for (; at < 80; at += 1) { await page.keyboard.press("Tab"); if ((await focused()).link === "tools") break; }
+    assert(at < 80, "the section list can not be reached with Tab");
+    const ring = await page.evaluate(() => { const n = document.activeElement; const s = getComputedStyle(n); return s.outlineStyle !== "none" || s.boxShadow !== "none"; });
+    assert(ring, "the focused section link shows no focus ring");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => location.hash.endsWith("section=tools"), null, { timeout: 5000 });
+    await page.waitForFunction(() => { const r = document.getElementById("section-tools")?.getBoundingClientRect(); return r && r.top < 200 && r.top > -50; }, null, { timeout: 5000 });
+    // back to the name by Tab from the top, rename, Tab on to 保存, Enter
+    await page.evaluate(() => { window.scrollTo(0, 0); document.activeElement?.blur?.(); });
+    let hops = 0;
+    for (; hops < 120; hops += 1) { await page.keyboard.press("Tab"); if ((await focused()).id === "bot-name") break; }
+    assert(hops < 120, "the name field can not be reached with Tab");
+    await page.keyboard.press("Control+a");
+    await page.keyboard.type("键盘改的名");
+    await saveBar(page).waitFor({ timeout: 5000 });
+    let steps = 0;
+    for (; steps < 200; steps += 1) { await page.keyboard.press("Tab"); if ((await focused()).test === "save-bar-save") break; }
+    assert(steps < 200, "保存 can not be reached with Tab");
+    await page.keyboard.press("Enter");
+    await until(() => view.bodies.length === 1, "Enter on 保存 sent nothing");
+    assert(view.bodies[0].name === "键盘改的名", `the saved name is ${view.bodies[0].name}`);
+    await saveBar(page).waitFor({ state: "detached", timeout: 5000 });
+    return `only the keyboard: Tab to the section list (focus ring drawn, Enter opens 工具 in the address and at the top), Tab to 名字 (${hops + 1} presses), type, Tab to 保存 (${steps + 1} more), Enter: PATCH with the new name`;
+  } finally { await view.close(); }
+}
+
+async function botSettingsNav(ctx) {
+  const view = await settingsView(ctx, "bot-settings-nav", BOT.applebot);
+  try {
+    const { page } = view;
+    const current = () => page.locator("[data-section-link][aria-current=true]").evaluateAll((n) => n.map((x) => x.getAttribute("data-section-link")));
+    assert(JSON.stringify(await current()) === '["profile"]', `the list starts on ${JSON.stringify(await current())}`);
+    await page.locator("[data-section-link=notify]").click();
+    assert(JSON.stringify(await current()) === '["notify"]', "the list does not follow a click at once");
+    assert((await page.evaluate(() => location.hash)).endsWith("settings?section=notify"), `the address is ${await page.evaluate(() => location.hash)}`);
+    await until(() => page.evaluate(() => { const r = document.getElementById("section-notify").getBoundingClientRect(); return r.top < innerHeight - 120 && r.bottom > 0; }), async () => `the section did not scroll into view (top ${await page.evaluate(() => Math.round(document.getElementById("section-notify").getBoundingClientRect().top))})`);
+    // a reload stays on it
+    await page.reload({ waitUntil: "load" });
+    await page.locator("[data-testid=bot-settings-page]").waitFor({ timeout: 30000 });
+    assert(JSON.stringify(await current()) === '["notify"]', `after a reload the list is on ${JSON.stringify(await current())}`);
+    await until(() => page.evaluate(() => { const r = document.getElementById("section-notify").getBoundingClientRect(); return r.top < innerHeight - 120 && r.bottom > 0; }), "after the reload the section is not in view");
+    // scrolling by hand moves the list along (and the address)
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.mouse.move(700, 400); await page.mouse.wheel(0, 1);   // a hand on the wheel gives the list back to the scroll
+    await until(async () => JSON.stringify(await current()) === '["profile"]', async () => `scrolled to the top the list is on ${JSON.stringify(await current())}`);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await until(async () => JSON.stringify(await current()) === '["danger"]', async () => `scrolled to the bottom the list is on ${JSON.stringify(await current())}`);
+    assert((await page.evaluate(() => location.hash)).endsWith("section=danger"), "the address did not follow the scroll");
+    // every section has its heading and its link
+    const ids = await page.locator("[data-section]").evaluateAll((n) => n.map((x) => x.getAttribute("data-section")));
+    assert(JSON.stringify(ids) === JSON.stringify(["profile", "focus", "look", "model", "tools", "skills", "routines", "notify", "danger"]), `the sections are ${ids}`);
+    return "nine sections in the design's order; a click moves the list, the address (?section=) and the scroll; a reload stays on the section; scrolling by hand moves the list and the address";
+  } finally { await view.close(); }
+}
+
+async function botSettingsMobile(ctx) {
+  const view = await settingsView(ctx, "bot-settings-mobile", BOT.applebot, { width: 390 });
+  try {
+    const { page } = view;
+    const open = () => page.locator("[data-section]").evaluateAll((n) => n.filter((x) => x.getAttribute("data-open") === "true").map((x) => x.getAttribute("data-section")));
+    assert(JSON.stringify(await open()) === '["profile"]', `at first these sections are open: ${JSON.stringify(await open())}`);
+    assert((await page.locator("[data-testid=section-nav]").count()) === 0, "the side list is drawn on a phone");
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert(wide <= 1, `the page scrolls sideways by ${wide}px`);
+    // a folded section is hidden (not just short), and opens with its heading; the body keeps its state
+    assert(!(await page.locator("#section-focus [id$=-body]").isVisible()), "a folded section's body is visible");
+    await page.locator("[data-testid=section-toggle-focus]").click();
+    assert(await page.locator("#section-focus [id$=-body]").isVisible(), "the section did not open");
+    assert((await page.locator("[data-testid=section-toggle-focus]").getAttribute("aria-expanded")) === "true", "the heading button does not say it is open");
+    // a change inside, then folded: the heading carries the dot
+    await page.locator("#bot-theme").fill("别的主题");
+    await page.locator("[data-testid=section-toggle-focus]").click();
+    assert(!(await page.locator("#section-focus [id$=-body]").isVisible()), "the section did not fold");
+    assert((await page.locator("[data-testid=unsaved-focus]").count()) === 1, "the folded section with a change has no dot");
+    assert((await page.locator("[data-testid=unsaved-profile]").count()) === 0, "a section without a change has a dot");
+    // the save bar sits above the tab bar, not under it
+    const geometry = await page.evaluate(() => { const bar = document.querySelector("[data-testid=save-bar]").getBoundingClientRect(); const tabs = document.querySelector('[data-slot="mobile-tab-bar"]')?.getBoundingClientRect(); return { barBottom: Math.round(bar.bottom), vh: innerHeight, tabsTop: tabs ? Math.round(tabs.top) : null }; });
+    assert(geometry.barBottom <= geometry.vh, `the save bar ends at ${geometry.barBottom}px, below the window (${geometry.vh}px)`);
+    // (P5.2) above the tab bar means the bar's bottom edge is not below the tab bar's top edge, both measured in the real viewport
+    assert(geometry.tabsTop !== null, "no tab bar is drawn at 390 (the check has nothing to measure against)");
+    assert(geometry.barBottom <= geometry.tabsTop, `the save bar ends at ${geometry.barBottom}px, under the tab bar that starts at ${geometry.tabsTop}px`);
+    // opening the folded section again shows what was typed
+    await page.locator("[data-testid=section-toggle-focus]").click();
+    assert((await page.locator("#bot-theme").inputValue()) === "别的主题", "the folded section lost what was typed");
+    // controls are phone sized
+    const small = await page.evaluate(() => [...document.querySelectorAll("[data-testid=bot-settings-page] button, [data-testid=bot-settings-page] input:not([type=hidden]), [data-testid=bot-settings-page] [role=switch], [data-testid=bot-settings-page] [role=checkbox], [data-testid=bot-settings-page] [role=combobox]")].filter((n) => n.offsetParent && !n.closest("[data-legacy]") && !n.closest("[data-slot=persona-studio]") && !n.closest("[data-slot=stepper]")).map((n) => { const r = n.getBoundingClientRect(); return { what: n.getAttribute("data-testid") ?? n.id ?? n.getAttribute("aria-label") ?? n.tagName, h: Math.round(r.height) }; }).filter((b) => b.h < 32));
+    return `first section open, the rest folded (hidden), no side list, no sideways scroll, a dot on the folded section with a change, the save bar above the tab bar (bottom ${geometry.barBottom} ≤ tab bar top ${geometry.tabsTop}, window ${geometry.vh}${small.length ? `; controls under 32 px: ${small.map((b) => `${b.what} ${b.h}`).join(", ")}` : ""})`;
+  } finally { await view.close(); }
+}
+
+async function botSettingsHandoff(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "bot-settings-handoff", unmatched, motion: true });
+  try {
+    const { page } = view;
+    const box = () => page.evaluate(() => { const b = document.querySelector("#agent-draft"); return b ? { readOnly: b.readOnly, mark: b.dataset.handoff ?? null, entries: document.querySelectorAll("[data-testid=message][data-entry]").length } : null; });
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default")); await settle(page);
+    await page.locator("[data-testid=chat-header] svg[data-slot=bot-body][data-state]").waitFor({ timeout: 15000 });
+    await page.waitForTimeout(900);   // (the handoff chunk is in, as the address watcher only runs from then on)
+    // 0. (P5.2) the quickest round trip: by address to another bot's settings and straight back, the box takes text at once.  A settings address that is heard as a switch makes the
+    //    handoff wait 1.5 s for a line that never comes, and the box refuses input meanwhile; this fails (with the box refusing) when handoff-entry.ts's address pattern takes
+    //    (?:\/settings)? again, which is how the check was tried against the old pattern.
+    await page.evaluate(async (id) => { location.hash = `#/chat/${id}/settings`; await new Promise((resolve) => setTimeout(resolve, 50)); location.hash = "#/chat"; }, BOT.applebot);
+    await page.locator("#agent-draft").waitFor({ timeout: 15000 });
+    const quick = await box();
+    assert(quick && !quick.readOnly && !quick.mark, `the box right after the round trip: ${JSON.stringify(quick)}`);
+    await page.locator("#agent-draft").fill("立刻能打字", { timeout: 3000 }).catch(() => {});
+    assert((await page.locator("#agent-draft").inputValue()) === "立刻能打字", `the box refused text typed at once after a round trip to another bot's settings (it holds ${JSON.stringify(await page.locator("#agent-draft").inputValue())})`);
+    await page.locator("#agent-draft").fill("");
+    // a. the default bot's line → the gear of another bot's page is not reachable from here, so the address: the settings page of AppleBot is a page, not a switch
+    await page.evaluate((id) => { location.hash = `#/chat/${id}/settings`; }, BOT.applebot);
+    await page.locator("[data-testid=bot-settings-page]").waitFor({ timeout: 30000 });
+    // b. straight back to the default bot's line (inside the old half second): the box is writable the moment it is there, no mark, no entrance
+    await page.locator("[data-bot-row]", { hasText: "FinBot" }).first().click();
+    await page.locator("#agent-draft").waitFor({ timeout: 15000 });
+    const first = await box();
+    assert(first && !first.readOnly && !first.mark, `the box of the default line after settings: ${JSON.stringify(first)}`);
+    await page.waitForTimeout(1700);
+    const later = await box();
+    assert(later && !later.readOnly && !later.mark && later.entries === 0, `1.7 s later: ${JSON.stringify(later)}`);
+    // c. the same bot's line → its settings → back: nothing of a switch
+    await page.locator("[data-bot-row]", { hasText: "AppleBot" }).first().click();
+    await page.locator("#agent-draft:not([readonly])").waitFor({ timeout: 15000 });
+    await page.waitForTimeout(1800);
+    await page.locator("[data-testid=bot-settings]").click();
+    await page.locator("[data-testid=bot-settings-page]").waitFor({ timeout: 30000 });
+    await page.waitForTimeout(600);
+    await page.locator("[data-testid=back-to-chat]").click();
+    await page.locator("#agent-draft").waitFor({ timeout: 15000 });
+    const round = await box();
+    assert(round && !round.readOnly && !round.mark && round.entries === 0, `the box of AppleBot's line after its settings: ${JSON.stringify(round)}`);
+    await page.locator("#agent-draft").fill("可以打字");
+    assert((await page.locator("#agent-draft").inputValue()) === "可以打字", "the box does not take text");
+    return "address to another bot's settings and straight back: the box is writable at once, no pending mark, no entrance; line → settings → same line: nothing of a switch (not read-only, no entrance, the box takes text)";
+  } finally { await view.close(); }
+}
+
+// --- P5.2: the new-bot dialog and the 全部 bot page ----------------------------------------------------------------------------------------------
+const NEW_BOT_BASELINE = JSON.parse(fs.readFileSync(new URL("./fixtures/new-bot-bodies-baseline.json", import.meta.url), "utf8"));
+const POST_BOTS = /\/agent-chat\/bots$/;
+const withoutLook = (body) => { const { look, ...rest } = body; return rest; };
+const ARCHETYPE_OF_TEMPLATE = { news_monitor: "sentinel", earnings_reader: "reader", company_researcher: "tracker" };
+
+/** A view at the default chat page that records the create requests (POST /bots) it sends. */
+async function newBotView(ctx, label, { width = 1440, fixtureState, identity } = {}) {
+  const view = await newView(ctx.browser, { width, theme: "light", label, unmatched, ...(fixtureState ? { fixtureState } : {}), ...(identity ? { identity } : {}) });
+  view.creates = [];
+  view.page.on("request", (r) => { if (r.method() === "POST" && POST_BOTS.test(new URL(r.url()).pathname)) view.creates.push(JSON.parse(r.postData() ?? "null")); });
+  await view.page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+  await waitReady(view.page, PAGES.find((p) => p.name === "chat-default"));
+  await settle(view.page);
+  return view;
+}
+const nbDialog = (page) => page.locator("[data-testid=new-bot-dialog]");
+/** The look the dialog's two pickers show as picked. */
+const pickedLook = (page) => page.evaluate(() => ({
+  shape: document.querySelector("[data-testid=new-bot-look-shape] input:checked")?.value ?? null,
+  color: document.querySelector("[data-testid=new-bot-look-color] input:checked")?.value ?? null,
+}));
+/** Do what one baseline scenario did on the old dialog, on the new one (the template chip, the name, the picks), and press 创建. */
+async function runNewBotCase(view, c, width = 1440) {
+  const { page } = view;
+  await openNewBotDialog(page, width);
+  if (c.template) {
+    await page.locator(`[data-template=${c.template}]`).click();
+    if (c.off) await page.locator(`[data-template=${c.template}]`).click();
+  }
+  if (c.name) await page.locator("#new-bot-name").fill(c.name);
+  if (c.shape) await page.locator(`[data-testid=new-bot-look-shape] [data-option=${c.shape}]`).click();
+  if (c.color) await page.locator(`[data-testid=new-bot-look-color] [data-option=${c.color}]`).click();
+  const shown = await pickedLook(page);
+  await page.locator("[data-testid=new-bot-create]").click();
+  await until(() => view.creates.length >= 1, `${c.key}: pressing 创建 sent no request`);
+  return { sent: view.creates[0], shown };
+}
+/** The body must equal what the old dialog sent for the same input (the baseline), field by field; the look is what the pickers showed. */
+function assertSameBody(c, { sent, shown }) {
+  const old = NEW_BOT_BASELINE[c.key].bodies[0];
+  assert(canon(withoutLook(sent)) === canon(withoutLook(old)), `${c.key}: the request body differs from the old dialog's\n  old: ${canon(old)}\n  new: ${canon(sent)}`);
+  assert(canon(sent.look) === canon(shown), `${c.key}: the look sent ${canon(sent.look)} is not the one the pickers showed ${canon(shown)}`);
+  if (c.shape) assert(canon(sent.look) === canon(old.look), `${c.key}: the look picked is ${canon(sent.look)}, the old dialog sent ${canon(old.look)}`);
+}
+const sameRandomLook = (sent, key) => canon(sent.look) === canon(NEW_BOT_BASELINE[key].bodies[0].look);
+
+async function newBotNameOnly(ctx) {
+  const notes = [];
+  // a name is all it takes: the body is the old dialog's for the same input, the new bot's line opens, the sidebar lists it
+  const cases = [
+    { key: "name-only", name: "读财报二号" },
+    { key: "name-trimmed", name: "  有空格  " },
+    { key: "template-picked-then-off", name: "取消了模板", template: "news_monitor", off: true },
+    { key: "look-shape-color", name: "换了外形", shape: "nuage", color: "bleu" },
+  ];
+  for (const c of cases) {
+    const view = await newBotView(ctx, `new-bot-name-only: ${c.key}`);
+    try {
+      const { page } = view;
+      const result = await runNewBotCase(view, c);
+      assertSameBody(c, result);
+      assert(view.creates.length === 1, `${c.key}: ${view.creates.length} create requests`);
+      const id = view.mock.state.createdBots?.[0];
+      assert(id, `${c.key}: the fake backend made no bot`);
+      await page.waitForFunction((want) => location.hash === `#/chat/${want}`, id, { timeout: 10000 }).catch(() => { throw new Error(`${c.key}: the address is ${page.url().split("#")[1]}, not the new bot's line`); });
+      await nbDialog(page).waitFor({ state: "detached", timeout: 5000 });
+      await page.locator("h1", { hasText: view.mock.state.bots.at(-1).name }).first().waitFor({ timeout: 10000 });
+      await page.locator("[data-bot-row]", { hasText: view.mock.state.bots.at(-1).name }).first().waitFor({ timeout: 10000 });
+      if (!c.shape) notes.push(`${c.key}${sameRandomLook(result.sent, c.key) ? " (same random look as before)" : ""}`); else notes.push(c.key);
+    } finally { await view.close(); }
+  }
+  // nothing is needed but the name: with no name the button waits, and with the template list never answered a name still creates
+  const bare = await newBotView(ctx, "new-bot-name-only: no template list");
+  try {
+    const { page } = bare;
+    bare.mock.control.hold = (method, path) => method === "GET" && path.endsWith("/bot-templates");
+    await page.locator('[data-slot="sidebar"] button', { hasText: "新建 bot" }).first().click();
+    await nbDialog(page).waitFor({ timeout: 15000 });
+    assert(await page.locator("[data-testid=new-bot-create]").isDisabled(), "创建 is pressable with no name");
+    await page.locator("#new-bot-name").fill("只有名字");
+    assert(!(await page.locator("[data-testid=new-bot-create]").isDisabled()), "创建 is still disabled with a name");
+    await page.locator("[data-testid=new-bot-create]").click();
+    await until(() => bare.creates.length === 1, "no create request while the template list was never answered");
+    assert(canon(withoutLook(bare.creates[0])) === canon(withoutLook(NEW_BOT_BASELINE["name-only"].bodies[0])) || bare.creates[0].name === "只有名字", "wrong body without the templates");
+    assert(bare.creates[0].template === "blank" && !("title" in bare.creates[0]), `the body without templates: ${canon(bare.creates[0])}`);
+  } finally { await bare.close(); }
+  return `only a name → the old dialog's body field by field (${notes.join(", ")}); the new line opens, the sidebar lists the bot; no name: 创建 waits; the template list never answered: a name still creates`;
+}
+
+async function newBotWithTemplate(ctx) {
+  const notes = [];
+  const cases = [
+    { key: "template-news-with-name", name: "盯新闻", template: "news_monitor" },
+    { key: "template-company-with-name", name: "公司二号", template: "company_researcher" },
+  ];
+  for (const c of cases) {
+    const view = await newBotView(ctx, `new-bot-with-template: ${c.key}`);
+    try {
+      const { page } = view;
+      // the chips are the server's list (not a copy): the labels of the fake backend's templates without 空白, in its order
+      await openNewBotDialog(page, 1440);
+      const chips = await page.locator("[data-testid=new-bot-templates] [data-template]").allInnerTexts();
+      const want = BOT_TEMPLATES.templates.filter((t) => t.id !== "blank").map((t) => t.label);
+      assert(canon(chips) === canon(want), `the chips ${canon(chips)} are not the server's templates ${canon(want)}`);
+      await page.keyboard.press("Escape"); await nbDialog(page).waitFor({ state: "detached", timeout: 5000 });
+      const result = await runNewBotCase(view, c);
+      assertSameBody(c, result);
+      assert(result.sent.template === c.template, `${c.key}: the body names template ${result.sent.template}`);
+      notes.push(c.key);
+    } finally { await view.close(); }
+  }
+  // the template's own name fills a blank name (the old rule), and the preview takes the personality of the template, on the big avatar too
+  const view = await newBotView(ctx, "new-bot-with-template: preview");
+  try {
+    const { page } = view;
+    await openNewBotDialog(page, 1440);
+    const preview = page.locator("[data-testid=new-bot-preview]"), live = preview.locator("[data-slot=bot-avatar][data-archetype]");
+    assert((await preview.getAttribute("data-archetype")) === "generalist" && (await live.getAttribute("data-archetype")) === "generalist", "with no template the preview is not the generalist");
+    assert((await page.locator("[data-testid=new-bot-archetype]").innerText()) === "通才", "the archetype is not named 通才 under the avatar");
+    const seen = [];
+    for (const [id, archetype] of Object.entries(ARCHETYPE_OF_TEMPLATE)) {
+      await page.locator(`[data-template=${id}]`).click();
+      await until(async () => (await preview.getAttribute("data-archetype")) === archetype && (await live.getAttribute("data-archetype")) === archetype, `template ${id}: the preview shows ${await preview.getAttribute("data-archetype")} / ${await live.getAttribute("data-archetype")}, not ${archetype}`);
+      assert((await page.locator(`[data-template=${id}]`).getAttribute("aria-pressed")) === "true", `${id}: the chip is not pressed`);
+      seen.push(`${id}→${await page.locator("[data-testid=new-bot-archetype]").innerText()}`);
+    }
+    // a template's own name stands in for the name; typed, the typed name wins; a typed name does not change the personality
+    await page.locator("[data-template=earnings_reader]").click();
+    assert((await page.locator("#new-bot-name").getAttribute("placeholder")) === "ReportBot", "the template's name is not offered in the empty name box");
+    await page.locator("#new-bot-name").fill("TeslaBot");
+    assert((await preview.getAttribute("data-archetype")) === "reader" && (await page.locator("[data-testid=new-bot-preview-name]").innerText()) === "TeslaBot", "typing a name changed the personality or the name under the avatar");
+    // pressing the chip again takes the template off
+    await page.locator("[data-template=earnings_reader]").click();
+    assert((await page.locator("[data-template=earnings_reader]").getAttribute("aria-pressed")) === "false" && (await preview.getAttribute("data-archetype")) === "generalist", "the chip did not come off");
+    return `bodies equal the old dialog's (${notes.join(", ")}) and carry the template id; chips = the server's templates; ${seen.join(", ")}; the big avatar's personality follows the chip; a chip comes off again`;
+  } finally { await view.close(); }
+}
+
+async function newBotDuplicateName(ctx) {
+  const view = await newBotView(ctx, "new-bot-duplicate-name");
+  try {
+    const { page } = view;
+    await openNewBotDialog(page, 1440);
+    await page.locator("#new-bot-name").fill("AppleBot");
+    await page.locator("[data-testid=new-bot-create]").click();
+    const error = page.locator("[data-testid=new-bot-name-error]");
+    await error.waitFor({ timeout: 8000 });
+    assert((await error.innerText()).trim() === "已有同名 bot。", `the error under the name says ${JSON.stringify(await error.innerText())}`);
+    const input = page.locator("#new-bot-name");
+    assert((await input.getAttribute("aria-invalid")) === "true" && (await input.getAttribute("aria-describedby")) === "new-bot-name-error", "the name box does not point at its error");
+    const below = await page.evaluate(() => ({ input: document.querySelector("#new-bot-name").getBoundingClientRect().bottom, error: document.querySelector("[data-testid=new-bot-name-error]").getBoundingClientRect().top }));
+    assert(below.error >= below.input - 1, `the error is not under the field (input bottom ${below.input}, error top ${below.error})`);
+    assert(await nbDialog(page).isVisible() && (await page.locator('[data-slot="error-bar"]').count()) === 0, "the dialog closed, or a taken name was shown as the dialog's own error");
+    assert(view.creates.length === 1 && view.mock.state.createdBots === undefined, "a bot was made with a taken name");
+    assert(!(await page.locator("[data-testid=new-bot-create]").isDisabled()) && (await page.evaluate(() => location.hash)) === "#/chat", "the button stayed busy, or the page moved");
+    // the baseline: the old dialog stayed open and said the same
+    assert(NEW_BOT_BASELINE["duplicate-name"].error === "已有同名 bot。" && NEW_BOT_BASELINE["duplicate-name"].dialogOpen === true, "(baseline)");
+    // a template's own name that is taken is the same refusal, under the same field
+    await page.locator("#new-bot-name").fill("");
+    await page.locator("[data-template=earnings_reader]").click();
+    await page.locator("[data-testid=new-bot-create]").click();
+    await error.waitFor({ timeout: 8000 });
+    assert(canon(view.creates.at(-1).name) === canon("ReportBot"), `the template's name was not sent (${canon(view.creates.at(-1))})`);
+    await page.locator("[data-template=earnings_reader]").click();
+    // editing the name takes the error away; a new name goes through
+    await page.locator("#new-bot-name").fill("AppleBot 二号");
+    assert((await page.locator("[data-testid=new-bot-name-error]").count()) === 0, "the error stayed after the name was edited");
+    // another failure is the dialog's own: an ErrorBar in the dialog, 重试 sends again once the server is back
+    view.mock.control.down = true;
+    await page.locator("[data-testid=new-bot-create]").click();
+    const bar = nbDialog(page).locator('[data-slot="error-bar"]');
+    await bar.waitFor({ timeout: 8000 });
+    assert(await nbDialog(page).isVisible() && (await page.locator("[data-testid=new-bot-name-error]").count()) === 0, "a network failure closed the dialog or was written under the name");
+    view.mock.control.down = false;
+    await bar.getByRole("button", { name: "重试" }).click();
+    await page.waitForFunction(() => /^#\/chat\/b0000000/.test(location.hash), null, { timeout: 10000 });
+    await nbDialog(page).waitFor({ state: "detached", timeout: 5000 });
+    return "a taken name (typed, or a template's) → 「已有同名 bot。」 under the field, aria-invalid + describedby, the dialog stays open and the button is free again, no ErrorBar; editing clears it; a network failure → ErrorBar in the dialog, 重试 creates";
+  } finally { await view.close(); }
+}
+
+async function newBotEntries(ctx) {
+  const where = [];
+  const sees = async (page, label) => {
+    await nbDialog(page).waitFor({ timeout: 15000 });
+    for (const sel of ["#new-bot-name", "[data-testid=new-bot-templates]", "[data-testid=new-bot-look]", "[data-testid=new-bot-preview]", "[data-testid=new-bot-create]"]) assert((await page.locator(sel).count()) === 1, `${label}: the dialog has no ${sel}`);
+    assert((await page.locator("[data-testid=new-bot-dialog]").count()) === 1, `${label}: more than one dialog`);
+    where.push(label);
+  };
+  // 1. the sidebar; Esc closes it and the focus goes back to the button that opened it
+  const desk = await newBotView(ctx, "new-bot-entries: desktop");
+  try {
+    const { page } = desk;
+    const button = page.locator('[data-slot="sidebar"] button', { hasText: "新建 bot" }).first();
+    await button.focus(); await page.keyboard.press("Enter");
+    await sees(page, "侧栏");
+    assert(await page.evaluate(() => document.activeElement?.id === "new-bot-name"), "the focus is not in the name box when the dialog opens");
+    await page.keyboard.press("Escape"); await nbDialog(page).waitFor({ state: "detached", timeout: 5000 });
+    await until(() => page.evaluate(() => /新建 bot/.test(document.activeElement?.textContent ?? "") && !!document.activeElement.closest('[data-slot="sidebar"]')), "after Esc the focus is not back on the sidebar's button");
+    // 2. the command palette: 「新建 bot」 in its own group, found by its words, no address; the palette is gone and the dialog is up
+    await page.keyboard.press("Control+k");
+    const palette = page.locator('[data-slot="command-menu"]');
+    await palette.waitFor({ timeout: 10000 });
+    await palette.locator("input").fill("新建");
+    const row = palette.locator('[data-kind="action"]');
+    await row.waitFor({ timeout: 5000 });
+    assert((await row.innerText()).includes("新建 bot"), "the command's row does not say 新建 bot");
+    const hashBefore = await page.evaluate(() => location.hash);
+    await page.keyboard.press("Enter");
+    await sees(page, "命令面板");
+    await palette.waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.evaluate(() => location.hash)) === hashBefore, "the palette command moved the address");
+    assert(await page.evaluate(() => document.activeElement?.id === "new-bot-name"), "the palette handed the focus back to the page instead of leaving it to the dialog");
+    await page.keyboard.press("Escape"); await nbDialog(page).waitFor({ state: "detached", timeout: 5000 });
+    // a guest has no such command (they have no bots)
+  } finally { await desk.close(); }
+  // 3. the 全部 bot page's button; a create from here opens the new line
+  const all = await newBotView(ctx, "new-bot-entries: all bots");
+  try {
+    const { page } = all;
+    await page.evaluate(() => { location.hash = "#/assistant/bots"; });
+    await page.locator("[data-testid=bot-card]").first().waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=all-bots-new]").click();
+    await sees(page, "全部 bot 页");
+    await page.locator("#new-bot-name").fill("从全部页建");
+    await page.locator("[data-testid=new-bot-create]").click();
+    await page.waitForFunction(() => /^#\/chat\/b0000000/.test(location.hash), null, { timeout: 10000 });
+  } finally { await all.close(); }
+  // 4. the phone: the 更多 drawer's entry; the dialog is the full-screen drawer there
+  const phone = await newBotView(ctx, "new-bot-entries: phone", { width: 390 });
+  try {
+    const { page } = phone;
+    await openMoreDrawer(page);
+    await page.locator('[data-slot="drawer-content"]').getByRole("button", { name: "新建 bot" }).click();
+    await sees(page, "手机更多抽屉");
+    assert((await nbDialog(page).getAttribute("data-slot")) === "drawer-content", "at 390 the dialog is not the drawer");
+  } finally { await phone.close(); }
+  return `${where.join(" / ")} each open the same dialog (name, templates, look, preview, 创建), one at a time; Esc gives the focus back to the sidebar button; the palette's command has no address and leaves the focus to the dialog`;
+}
+
+async function newBotLayout(ctx) {
+  const notes = [];
+  for (const width of [1440, 768]) {
+    const view = await newBotView(ctx, `new-bot-layout: ${width}`, { width });
+    try {
+      const { page } = view;
+      await openNewBotDialog(page, width);
+      const g = await page.evaluate(() => {
+        const box = (sel) => { const r = document.querySelector(sel)?.getBoundingClientRect(); return r ? { l: Math.round(r.left), r: Math.round(r.right), t: Math.round(r.top), b: Math.round(r.bottom) } : null; };
+        const form = document.querySelector("[data-testid=new-bot-form]");
+        const scroller = [...form.querySelectorAll("div")].find((d) => getComputedStyle(d).overflowY === "auto");
+        return { dialog: box("[data-testid=new-bot-dialog]"), preview: box("[data-testid=new-bot-preview]"), name: box("#new-bot-name"), create: box("[data-testid=new-bot-create]"), vh: innerHeight, vw: innerWidth, over: scroller ? scroller.scrollHeight - scroller.clientHeight : null };
+      });
+      assert(g.preview.r <= g.name.l + 1, `${width}: the preview (right ${g.preview.r}) is not left of the form (left ${g.name.l})`);
+      assert(g.dialog.t >= 0 && g.dialog.b <= g.vh, `${width}: the dialog is ${g.dialog.t}–${g.dialog.b} in a ${g.vh}px window`);
+      assert(g.over !== null && g.over <= 1, `${width}: the three steps do not fit one screen, the form scrolls by ${g.over}px`);
+      assert(g.create.b <= g.dialog.b, `${width}: 创建 is outside the dialog`);
+      notes.push(`${width}: two columns, dialog ${g.dialog.b - g.dialog.t}px high, no inner scroll`);
+    } finally { await view.close(); }
+  }
+  const phone = await newBotView(ctx, "new-bot-layout: 390", { width: 390 });
+  try {
+    const { page } = phone;
+    await openNewBotDialog(page, 390);
+    await page.locator("[data-template=news_monitor]").click();
+    const g = await page.evaluate(() => {
+      const box = (sel) => { const r = document.querySelector(sel)?.getBoundingClientRect(); return r ? { l: Math.round(r.left), r: Math.round(r.right), t: Math.round(r.top), b: Math.round(r.bottom) } : null; };
+      return { dialog: box("[data-testid=new-bot-dialog]"), preview: box("[data-testid=new-bot-preview]"), name: box("#new-bot-name"), create: box("[data-testid=new-bot-create]"), vh: innerHeight, vw: innerWidth, wide: document.documentElement.scrollWidth - innerWidth };
+    });
+    assert(g.dialog.t <= 1 && g.dialog.b >= g.vh - 1 && g.dialog.l <= 1 && g.dialog.r >= g.vw - 1, `at 390 the drawer is not the whole screen: ${JSON.stringify(g.dialog)} in ${g.vw}x${g.vh}`);
+    assert(g.preview.b <= g.name.t + 1, `at 390 the preview (bottom ${g.preview.b}) is not above the form (name top ${g.name.t})`);
+    assert(g.create.b <= g.vh, `at 390 创建 is below the window (${g.create.b} of ${g.vh})`);
+    assert(g.wide <= 1, `at 390 the page scrolls sideways by ${g.wide}px`);
+    const small = await page.evaluate(() => [...document.querySelectorAll("[data-testid=new-bot-dialog] button, [data-testid=new-bot-dialog] input:not([type=radio])")].filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && (r.height < 44 || r.width < 44) && !el.closest("[data-slot=segmented]"); }).map((el) => `${(el.textContent || el.id || "").trim().slice(0, 12)} ${Math.round(el.getBoundingClientRect().width)}x${Math.round(el.getBoundingClientRect().height)}`));
+    assert(!small.length, `controls under 44px on a phone: ${small.join(", ")}`);
+    await page.keyboard.press("Escape"); await nbDialog(page).waitFor({ state: "detached", timeout: 5000 });
+    notes.push("390: the whole screen, preview on top, 创建 in the window, no sideways scroll, controls ≥ 44px, Esc closes");
+  } finally { await phone.close(); }
+  return notes.join("; ");
+}
+
+async function newBotKeyboard(ctx) {
+  const view = await newBotView(ctx, "new-bot-keyboard");
+  try {
+    const { page } = view;
+    await page.locator('[data-slot="sidebar"] button', { hasText: "新建 bot" }).first().focus();
+    await page.keyboard.press("Enter");
+    await nbDialog(page).waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=new-bot-templates] [data-template]").first().waitFor({ timeout: 15000 });
+    await page.keyboard.type("键盘建的");
+    const focusedIs = (sel) => page.evaluate((s) => document.activeElement?.matches(s) ?? false, sel);
+    const tabTo = async (sel, label) => { for (let i = 0; i < 8; i++) { await page.keyboard.press("Tab"); if (await focusedIs(sel)) return i + 1; } throw new Error(`${label} is not reached by Tab`); };
+    // the template chips are buttons: Space puts one on, Space takes it off
+    const toChip = await tabTo("[data-template=news_monitor]", "the first template chip"); // (the order is the server's: 新闻监控 is the first)
+    await page.keyboard.press("Space");
+    assert((await page.locator("[data-template=news_monitor]").getAttribute("aria-pressed")) === "true", "Space did not pick the template");
+    await page.keyboard.press("Space");
+    assert((await page.locator("[data-template=news_monitor]").getAttribute("aria-pressed")) === "false", "Space did not take the template off");
+    // the shape: a radio group, the arrow keys move the pick
+    await tabTo("[data-testid=new-bot-look-shape] input", "the shape group");
+    const before = (await pickedLook(page)).shape;
+    await page.keyboard.press("ArrowRight");
+    const after = (await pickedLook(page)).shape;
+    assert(before && after && before !== after, `the arrow key did not move the shape (${before} → ${after})`);
+    await tabTo("[data-testid=new-bot-look-color] input", "the colour group");
+    const colorBefore = (await pickedLook(page)).color;
+    await page.keyboard.press("ArrowRight");
+    assert((await pickedLook(page)).color !== colorBefore, "the arrow key did not move the colour");
+    // 换一个 and 创建 are reached in order, and Enter on 创建 makes the bot
+    await tabTo("[data-testid=new-bot-reroll]", "换一个").catch(() => {});
+    const toCreate = await tabTo("[data-testid=new-bot-create]", "创建");
+    const shown = await pickedLook(page);
+    await page.keyboard.press("Enter");
+    await until(() => view.creates.length === 1, "Enter on 创建 sent nothing");
+    assert(view.creates[0].name === "键盘建的" && canon(view.creates[0].look) === canon(shown), `the body ${canon(view.creates[0])} is not what the keyboard picked (${canon(shown)})`);
+    await page.waitForFunction(() => /^#\/chat\/b0000000/.test(location.hash), null, { timeout: 10000 });
+    // the same with Enter in the name box (a form submits)
+    await page.locator('[data-slot="sidebar"] button', { hasText: "新建 bot" }).first().click();
+    await nbDialog(page).waitFor({ timeout: 15000 });
+    await page.locator("#new-bot-name").fill("回车建的");
+    await page.keyboard.press("Enter");
+    await until(() => view.creates.length === 2 && view.creates[1].name === "回车建的", "Enter in the name box did not create");
+    return `name typed, Tab ${toChip} → a chip (Space on / off), shape and colour by arrow keys, Tab ${toCreate} → 创建 by Enter; Enter in the name box creates too; the focus starts in the name box`;
+  } finally { await view.close(); }
+}
+
+async function newBotReroll(ctx) {
+  const view = await newBotView(ctx, "new-bot-reroll");
+  try {
+    const { page } = view;
+    await openNewBotDialog(page, 1440);
+    const first = await pickedLook(page);
+    assert(first.shape && first.color, "no look is picked when the dialog opens");
+    assert(canon(first) === canon(NEW_BOT_BASELINE["name-only"].bodies[0].look), `(note) the seeded start look is ${canon(first)}, the old dialog's was ${canon(NEW_BOT_BASELINE["name-only"].bodies[0].look)}`);
+    const seen = new Set([canon(first)]);
+    for (let i = 0; i < 6; i++) { await page.locator("[data-testid=new-bot-reroll]").click(); seen.add(canon(await pickedLook(page))); }
+    assert(seen.size >= 4, `six presses of 换一个 gave only ${seen.size - 1} new looks`);
+    // the preview's body wears what is picked
+    await page.locator("[data-testid=new-bot-look-color] [data-option=rouge]").click();
+    await page.locator("[data-testid=new-bot-look-shape] [data-option=goutte]").click();
+    await until(() => page.evaluate(() => document.querySelector("[data-testid=new-bot-preview] [data-slot=bot-avatar]")?.getAttribute("data-bot-color") === "rouge"), "the preview body does not take the colour picked");
+    return `opens on a random look (seeded: ${canon(first)}), 换一个 draws others (${seen.size} different in 7), the preview's body takes a picked colour`;
+  } finally { await view.close(); }
+}
+
+// 全部 bot ---------------------------------------------------------------------------------------------------------------------------------------
+async function allBotsView(ctx, label, { width = 1440, mutate, identity } = {}) {
+  const fixtureState = buildState();
+  if (mutate) mutate(fixtureState);
+  const view = await newView(ctx.browser, { width, theme: "light", label, unmatched, fixtureState, ...(identity ? { identity } : {}) });
+  view.patches = [];
+  view.page.on("request", (r) => { if (r.method() === "PATCH" && PATCH_BOT.test(new URL(r.url()).pathname)) view.patches.push({ id: new URL(r.url()).pathname.split("/").pop(), body: JSON.parse(r.postData() ?? "null") }); });
+  await view.page.goto(`${ctx.server.url}#/assistant/bots`, { waitUntil: "load" });
+  if (identity !== "guest") await view.page.locator("[data-testid=bot-card]").first().waitFor({ timeout: 30000 });
+  await settle(view.page);
+  return view;
+}
+const hideBot = (id, extra = {}) => (state) => { Object.assign(state.bots.find((b) => b.id === id), { hidden: true, ...extra }); };
+const sidebarBots = (page) => page.locator("[data-slot=sidebar] [data-bot-row]").allInnerTexts().then((rows) => rows.map((t) => t.split("\n")[0].trim()));
+const cardNames = (page) => page.locator("[data-testid=bot-card] h2").allInnerTexts().then((rows) => rows.map((t) => t.trim()));
+
+async function allBotsCards(ctx) {
+  // NewsBot (recent) is the hidden one: it must come after ReportBot and TeslaBot (older), as the last group
+  const view = await allBotsView(ctx, "all-bots-cards", { mutate: hideBot(BOT.newsbot) });
+  try {
+    const { page } = view;
+    assert((await page.locator("h1").first().innerText()).trim() === "全部 bot" && (await page.locator("[data-testid=all-bots-count]").innerText()).trim() === "5", "the title row is not 全部 bot with the count 5");
+    assert(canon(await cardNames(page)) === canon(["FinBot", "AppleBot", "ReportBot", "TeslaBot", "NewsBot"]), `the order of the cards: ${canon(await cardNames(page))}`);
+    assert(canon(await sidebarBots(page)) === canon(["FinBot", "AppleBot", "ReportBot", "TeslaBot"]), `the sidebar lists ${canon(await sidebarBots(page))}`);
+    const card = (id) => page.locator(`[data-testid=bot-card][data-bot-id=${id}]`);
+    const fact = async (id, what) => (await card(id).locator(`[data-testid=bot-card-${what}]`).innerText()).trim();
+    const expect = { [BOT.finbot]: ["主理", "Haiku 5.5", "35分钟前"], [BOT.applebot]: ["追踪", "目录默认", "15小时前"], [BOT.newsbot]: ["哨兵", "目录默认", "3小时前"], [BOT.reportbot]: ["审读", "目录默认", "昨天"], [BOT.teslabot]: ["追踪", "Haiku 5.5", "还没有对话"] };
+    for (const [id, [archetype, model, last]] of Object.entries(expect)) {
+      const got = [await fact(id, "archetype"), await fact(id, "model"), await fact(id, "last")];
+      assert(canon(got) === canon([archetype, model, last]), `${id}: archetype / model / last activity are ${canon(got)}, expected ${canon([archetype, model, last])}`);
+    }
+    // the marks the sidebar draws: ReportBot waits for you, NewsBot (hidden) has 2 unread, the others are quiet
+    assert((await card(BOT.reportbot).getAttribute("data-status")) === "waiting" && (await card(BOT.reportbot).innerText()).includes("等你"), "ReportBot's card does not say it waits");
+    assert((await card(BOT.newsbot).getAttribute("data-status")) === "unread" && (await card(BOT.newsbot).locator("[data-count]").innerText()).trim() === "2", "NewsBot's card has no unread count 2");
+    assert((await card(BOT.finbot).getAttribute("data-status")) === "idle", "FinBot's card has a mark");
+    // hidden: the tag and 取消隐藏 on the hidden one only; a shown one (not the default) has the menu, the default has none
+    assert((await page.locator("[data-testid=bot-card][data-hidden]").count()) === 1 && (await card(BOT.newsbot).locator("[data-testid=bot-card-hidden]").innerText()).trim() === "已隐藏", "the hidden bot's tag is missing, or another card has it");
+    assert((await page.locator("[data-testid=bot-card-unhide]").count()) === 1 && (await card(BOT.newsbot).locator("[data-testid=bot-card-unhide]").count()) === 1, "取消隐藏 is not exactly on the hidden card");
+    assert((await card(BOT.finbot).getByRole("button", { name: /更多操作/ }).count()) === 0 && (await card(BOT.applebot).getByRole("button", { name: /更多操作/ }).count()) === 1, "the menu is on the default bot, or missing from a shown one");
+    // the settings link, and the card body opens the line
+    const settings = card(BOT.applebot).getByRole("link", { name: /设置/ });
+    assert((await settings.getAttribute("href")).endsWith(`/chat/${BOT.applebot}/settings`), `设置 goes to ${await settings.getAttribute("href")}`);
+    await settings.click();
+    await page.waitForFunction((id) => location.hash === `#/chat/${id}/settings`, BOT.applebot, { timeout: 10000 });
+    await page.goBack(); await page.locator("[data-testid=bot-card]").first().waitFor({ timeout: 10000 });
+    const box = await card(BOT.applebot).locator("p.line-clamp-2").boundingBox();
+    await page.mouse.click(box.x + 20, box.y + 6);   // the last line of text on the card: the whole card is the link
+    await page.waitForFunction((id) => location.hash === `#/chat/${id}`, BOT.applebot, { timeout: 10000 });
+    await page.locator("h1", { hasText: "AppleBot" }).first().waitFor({ timeout: 15000 });
+    return "five cards in the sidebar's order with the hidden NewsBot last (although it is the most recent); archetype, model (the catalog's name, or 目录默认), last activity (relative) per card; waiting / unread marks; 已隐藏 + 取消隐藏 on the hidden one only; a menu on every bot but the default; 设置 → its settings; the card body opens the line";
+  } finally { await view.close(); }
+}
+
+async function allBotsUnhide(ctx) {
+  const view = await allBotsView(ctx, "all-bots-unhide", { mutate: hideBot(BOT.teslabot) });
+  try {
+    const { page } = view;
+    const card = (id) => page.locator(`[data-testid=bot-card][data-bot-id=${id}]`);
+    assert(canon(await sidebarBots(page)) === canon(["FinBot", "AppleBot", "NewsBot", "ReportBot"]), `the sidebar before: ${canon(await sidebarBots(page))}`);
+    assert(card(BOT.teslabot) && (await card(BOT.teslabot).getAttribute("data-hidden")) !== null, "the hidden bot is not on the page");
+    // 取消隐藏 → PATCH {hidden:false} (nothing else) → the sidebar has it at once → a toast with 撤销
+    await card(BOT.teslabot).locator("[data-testid=bot-card-unhide]").click();
+    await until(() => view.patches.length === 1, "取消隐藏 sent no request");
+    assert(view.patches[0].id === BOT.teslabot && canon(view.patches[0].body) === canon({ hidden: false }), `the request was ${canon(view.patches[0])}`);
+    await page.locator("[data-slot=sidebar] [data-bot-row]", { hasText: "TeslaBot" }).first().waitFor({ timeout: 8000 });
+    assert((await card(BOT.teslabot).getAttribute("data-hidden")) === null && (await card(BOT.teslabot).locator("[data-testid=bot-card-hidden]").count()) === 0, "the card still says it is hidden");
+    const toast = page.locator("[data-sonner-toast]").first();
+    await toast.waitFor({ timeout: 5000 });
+    assert((await toast.innerText()).includes("TeslaBot") && (await toast.innerText()).includes("撤销"), `the toast says ${JSON.stringify(await toast.innerText())}`);
+    // 撤销 → hidden again, the sidebar loses it
+    await toast.getByRole("button", { name: "撤销" }).click();
+    await until(() => view.patches.length === 2, "撤销 sent no request");
+    assert(view.patches[1].id === BOT.teslabot && canon(view.patches[1].body) === canon({ hidden: true }), `the undo request was ${canon(view.patches[1])}`);
+    await until(async () => !(await sidebarBots(page)).includes("TeslaBot"), "the sidebar still lists TeslaBot after 撤销");
+    await card(BOT.teslabot).locator("[data-testid=bot-card-hidden]").waitFor({ timeout: 5000 });
+    // the other way: a shown bot's menu → 在侧栏隐藏 → {hidden:true}, the sidebar loses it, 撤销 brings it back
+    await card(BOT.applebot).getByRole("button", { name: /更多操作/ }).click();
+    await page.getByRole("menuitem", { name: "在侧栏隐藏" }).click();
+    await until(() => view.patches.length === 3, "在侧栏隐藏 sent no request");
+    assert(view.patches[2].id === BOT.applebot && canon(view.patches[2].body) === canon({ hidden: true }), `the hide request was ${canon(view.patches[2])}`);
+    await until(async () => !(await sidebarBots(page)).includes("AppleBot"), "the sidebar still lists AppleBot after hiding it");
+    assert((await cardNames(page)).at(-1) === "AppleBot" || (await cardNames(page)).slice(-2).includes("AppleBot"), `the hidden AppleBot is not among the last cards: ${canon(await cardNames(page))}`);
+    const undo = page.locator("[data-sonner-toast]").getByRole("button", { name: "撤销" }).first();
+    await undo.click();
+    await until(() => view.patches.length === 4 && canon(view.patches[3].body) === canon({ hidden: false }), "the undo of the hide sent no {hidden:false}");
+    await page.locator("[data-slot=sidebar] [data-bot-row]", { hasText: "AppleBot" }).first().waitFor({ timeout: 8000 });
+    assert(view.mock.state.bots.find((b) => b.id === BOT.applebot).hidden === false && view.mock.state.bots.find((b) => b.id === BOT.teslabot).hidden === true, "the fake backend's bots are not what the page ended on");
+    return "a hidden bot is on the page, marked; 取消隐藏 → PATCH {hidden:false} only → the sidebar lists it → a toast with 撤销 → {hidden:true} → gone again; 在侧栏隐藏 from the menu → {hidden:true} → gone from the sidebar, last on the page; 撤销 → back";
+  } finally { await view.close(); }
+}
+
+async function allBotsStates(ctx) {
+  const notes = [];
+  // loading: the skeleton in card shape (after its delay), then the cards
+  const slow = await newView(ctx.browser, { width: 1440, theme: "light", label: "all-bots-states: loading", unmatched });
+  try {
+    const { page } = slow;
+    // the bot list is never answered: the page shows its skeleton meanwhile
+    slow.mock.control.hold = (method, path) => method === "GET" && path === "/agent-chat/bots";
+    await page.goto(`${ctx.server.url}#/assistant/bots`, { waitUntil: "load" });
+    await page.locator("[data-testid=all-bots]").waitFor({ timeout: 20000 });
+    await page.locator("[data-slot=skeleton]").first().waitFor({ timeout: 8000 });
+    assert((await page.locator("[data-testid=bot-card]").count()) === 0, "cards are drawn while the list is held");
+    assert((await page.locator("[data-testid=all-bots] [data-slot=skeleton]").count()) >= 6, "the skeleton is not made of cards");
+    notes.push("skeleton cards");
+  } finally { await slow.close(); }
+  // an error on the first read: a bar with 重试 in the page's place; the retry brings the cards
+  const first = await newView(ctx.browser, { width: 1440, theme: "light", label: "all-bots-states: first-read error", unmatched });
+  try {
+    const { page } = first;
+    first.mock.control.down = true;
+    await page.goto(`${ctx.server.url}#/assistant/bots`, { waitUntil: "load" });
+    const bar = page.locator('[data-testid=all-bots] [data-slot="error-bar"]');
+    await bar.waitFor({ timeout: 20000 });
+    assert((await page.locator("[data-testid=bot-card]").count()) === 0 && (await bar.getByRole("button", { name: "重试" }).count()) === 1, "the error has no 重试, or cards are drawn");
+    first.mock.control.down = false;
+    await bar.getByRole("button", { name: "重试" }).click();
+    await page.locator("[data-testid=bot-card]").first().waitFor({ timeout: 10000 });
+    assert((await page.locator('[data-testid=all-bots] [data-slot="error-bar"]').count()) === 0, "the error bar stayed after the retry");
+    notes.push("error bar + 重试");
+  } finally { await first.close(); }
+  // empty: one sentence and the way to make a bot
+  const none = await newView(ctx.browser, { width: 1440, theme: "light", label: "all-bots-states: empty", unmatched, fixtureState: Object.assign(buildState(), { bots: [] }) });
+  try {
+    const { page } = none;
+    await page.goto(`${ctx.server.url}#/assistant/bots`, { waitUntil: "load" });
+    await page.locator('[data-testid=all-bots] [data-slot="empty-state"]').waitFor({ timeout: 20000 });
+    await page.locator('[data-testid=all-bots] [data-slot="empty-state"]').getByRole("button", { name: "新建 bot" }).click();
+    await nbDialog(page).waitFor({ timeout: 15000 });
+    notes.push("empty state → 新建 bot opens the dialog");
+  } finally { await none.close(); }
+  // a guest: the one 需要登录 notice, no cards, no request for bots
+  const guest = await newView(ctx.browser, { width: 1440, theme: "light", label: "all-bots-states: guest", unmatched, identity: "guest" });
+  try {
+    const { page } = guest;
+    await page.goto(`${ctx.server.url}#/assistant/bots`, { waitUntil: "load" });
+    await page.locator('[data-slot="need-login"]').waitFor({ timeout: 20000 });
+    assert((await page.locator("[data-testid=bot-card]").count()) === 0, "a guest sees cards");
+    notes.push("guest: 需要登录");
+  } finally { await guest.close(); }
+  return notes.join("; ");
+}
+
+async function allBotsKeyboard(ctx) {
+  const view = await allBotsView(ctx, "all-bots-keyboard", { mutate: hideBot(BOT.teslabot) });
+  try {
+    const { page } = view;
+    const active = () => page.evaluate(() => { const a = document.activeElement; return a ? { tag: a.tagName.toLowerCase(), text: (a.textContent || a.getAttribute("aria-label") || "").trim().slice(0, 30), testid: a.getAttribute("data-testid"), card: a.closest("[data-testid=bot-card]")?.getAttribute("data-bot-id") ?? null } : null; });
+    const tabUntil = async (test, label, limit = 40) => { for (let i = 1; i <= limit; i++) { await page.keyboard.press("Tab"); if (test(await active())) return i; } throw new Error(`${label}: not reached in ${limit} Tab presses (at ${canon(await active())})`); };
+    // from the top of the page: the main region's first controls, the 新建 bot button, then the cards in order
+    await page.locator("[data-testid=all-bots-new]").focus();
+    await page.keyboard.press("Enter");
+    await nbDialog(page).waitFor({ timeout: 15000 });
+    await page.keyboard.press("Escape"); await nbDialog(page).waitFor({ state: "detached", timeout: 5000 });
+    await until(async () => (await active())?.testid === "all-bots-new", `after Esc the focus is on ${canon(await active())}, not the button`);
+    // Tab: the first card's name, 设置 (FinBot: no menu), the second card's name, the menu, 设置 ...
+    const n1 = await tabUntil((a) => a?.card === BOT.finbot && a.tag === "a" && a.text === "FinBot", "FinBot's name");
+    const ring = await page.locator(`[data-testid=bot-card][data-bot-id=${BOT.finbot}] article`).evaluate((el) => getComputedStyle(el).boxShadow);
+    assert(ring && ring !== "none", "the focused card shows no focus ring");
+    await tabUntil((a) => a?.card === BOT.finbot && /设置/.test(a.text), "FinBot's 设置");
+    await tabUntil((a) => a?.card === BOT.applebot && a.tag === "a" && a.text === "AppleBot", "AppleBot's name");
+    await tabUntil((a) => a?.card === BOT.applebot && /更多操作/.test(a.text), "AppleBot's menu");
+    // the menu by keyboard: Enter opens, the item is chosen with Enter; the bot is hidden, the focus stays on the page
+    await page.keyboard.press("Enter");
+    await page.getByRole("menuitem", { name: "在侧栏隐藏" }).waitFor({ timeout: 5000 });
+    await page.keyboard.press("Enter");
+    await until(() => view.patches.length === 1 && view.patches[0].id === BOT.applebot && canon(view.patches[0].body) === canon({ hidden: true }), `the hide by keyboard sent ${canon(view.patches)}`);
+    await until(async () => !(await sidebarBots(page)).includes("AppleBot"), "the sidebar still lists AppleBot");
+    // the hidden TeslaBot's 取消隐藏 is a button in the Tab order, Enter / Space press it
+    await page.locator(`[data-testid=bot-card][data-bot-id=${BOT.teslabot}] [data-testid=bot-card-unhide]`).focus();
+    await page.keyboard.press("Space");
+    await until(() => view.patches.length === 2 && canon(view.patches[1].body) === canon({ hidden: false }), "Space on 取消隐藏 sent nothing");
+    // Enter on a card's name opens the line
+    await page.locator(`[data-testid=bot-card][data-bot-id=${BOT.newsbot}] a`).first().focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction((id) => location.hash === `#/chat/${id}`, BOT.newsbot, { timeout: 10000 });
+    return `新建 bot by Enter, Esc gives the focus back to it; Tab reaches name → 设置 → next name → menu (a focus ring on the card); Enter opens the menu and hides; Space on 取消隐藏; Enter on a name opens the line (first card reached in ${n1} Tabs)`;
+  } finally { await view.close(); }
+}
+
+// P5.1's loose ends (P5.2) -----------------------------------------------------------------------------------------------------------------------
+/** The chat page's model badge shows what the settings page saved: one record, two places. */
+async function settingsModelBadge(ctx) {
+  const view = await settingsView(ctx, "bot-settings-model-badge", BOT.applebot, { viaChat: true });
+  try {
+    const { page } = view;
+    await openSection(page, "model");
+    await chooseOption(page, "model-select", /Muse Ember/);
+    await chooseOption(page, "effort-select", /^高/);
+    const body = await pressSave(view);
+    assert(body.model === "muse-ember" && body.reasoning_effort === "high", `the save sent model ${body.model} / effort ${body.reasoning_effort}`);
+    await page.locator("[data-testid=back-to-chat]").click();
+    await page.locator("[data-testid=model-badge]").waitFor({ timeout: 15000 });
+    const badge = (await page.locator("[data-testid=model-badge]").innerText()).trim();
+    assert(/muse[- ]ember/i.test(badge) && badge.includes("高"), `the badge on the chat page says ${JSON.stringify(badge)}, not Muse Ember / 高`);
+    // and the other way round: the badge's own panel changes the same record, and the settings page reads it
+    return `settings: Muse Ember + 高 saved → back on the chat page the badge says ${JSON.stringify(badge)}`;
+  } finally { await view.close(); }
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -4801,6 +5926,30 @@ const CHECKS = [
   ["motion-auto-device: a low device (<= 4 cores and <= 4 GB, or data-saver) starts on lite and says so; a hand-picked level beats it; 4 cores with 8 GB or unknown memory do not", motionAutoDevice],
   ["motion-auto-runtime: with the CPU slowed the avatar's frames average over 24 ms for 2 s: lite for the visit, one toast with 改回, never stored, never for a hand-picked level", motionAutoRuntime],
   ["motion-off-equals-reduced: chat-default, an answer in progress, a card waiting for you and the settings page are the same pixels under the system's reduced motion and under 关闭 in the app", motionOffEqualsReduced],
+  ["bot-settings-fields: every field of the old 档案 form is on the new page, in the section the design gives it, and is a change the save bar sees; 技能 / 例行任务 / Telegram / 删除 are there", botSettingsFields],
+  ["bot-settings-save-body: eleven edits send the old form's request bodies field by field; edits that end where they began offer no save; the effort goes only when changed, 默认 is null", botSettingsSaveBody],
+  ["bot-settings-discard: 放弃 puts name, tags, tool scope and model back, sends nothing, and leaving is free after it", botSettingsDiscard],
+  ["bot-settings-leave-guard: an unsaved edit: sidebar, Esc, back button and command palette raise the question (留下 keeps address and edit), a reload raises beforeunload, 放弃修改并离开 leaves, a saved form leaves silently", botSettingsLeaveGuard],
+  ["bot-settings-default-undeletable: the default bot's 删除 is disabled with its reason (no dialog, no request), no 在侧栏隐藏, Telegram is the explanation only", botSettingsDefaultUndeletable],
+  ["bot-settings-tag-input: a wrong code is not entered (red, said under the field), right ones enter by Enter / paste / blur, Backspace and the remove button take tags out", botSettingsTagInput],
+  ["bot-settings-telegram-steps: the bot's own Telegram goes through three steps (token, code, wait); the token is never shown again; 解绑 goes back to the code step", botSettingsTelegramSteps],
+  ["bot-settings-delete: 按住确认 → DELETE → back on the default bot's line, with an unsaved edit pending", botSettingsDelete],
+  ["bot-settings-keyboard: the section list and the whole rename-and-save are done with the keyboard alone", botSettingsKeyboard],
+  ["bot-settings-nav: the section list follows clicks, scroll and the address; a reload stays on the section", botSettingsNav],
+  ["bot-settings-mobile: at 390 the first section is open and the rest folded, a dot marks a folded change, the save bar's bottom edge is not below the tab bar's top edge, no sideways scroll", botSettingsMobile],
+  ["bot-settings-handoff: a bot's settings page is a page, not a switch: the line after it is writable at once and plays no entrance", botSettingsHandoff],
+  ["new-bot-name-only: only a name creates the bot, with the old dialog's request body field by field; the new line opens; no name: 创建 waits; no template list: a name still creates", newBotNameOnly],
+  ["new-bot-with-template: a template's id and pre-fills go in the body (the old dialog's, field by field); the chips are the server's list; the big preview takes the template's personality", newBotWithTemplate],
+  ["new-bot-duplicate-name: a taken name is said under the name field and the dialog stays; any other failure is an ErrorBar in the dialog with 重试", newBotDuplicateName],
+  ["new-bot-entries: the sidebar, the command palette, the 全部 bot page and the phone's 更多 drawer open the same dialog; Esc gives the focus back", newBotEntries],
+  ["new-bot-layout: two columns on one screen at 1440 and 768; at 390 the whole screen with the preview on top and phone-sized controls", newBotLayout],
+  ["new-bot-keyboard: the dialog is done with the keyboard alone (chips by Space, shape and colour by arrows, 创建 by Enter, Enter in the name)", newBotKeyboard],
+  ["new-bot-reroll: it opens on a random look, 换一个 draws others, the preview's body wears what is picked", newBotReroll],
+  ["all-bots-cards: every bot a card in the sidebar's order with the hidden ones last; archetype, model, last activity, marks; 设置 and the whole card link", allBotsCards],
+  ["all-bots-unhide: a hidden bot is found and unhidden ({hidden:false}), the sidebar has it at once, 撤销 hides it again; 在侧栏隐藏 and its 撤销 the other way", allBotsUnhide],
+  ["all-bots-states: skeleton cards, an error bar with 重试, the empty state, and 需要登录 for a guest", allBotsStates],
+  ["all-bots-keyboard: the page is done with the keyboard alone (新建 bot, the cards' names and menus, 取消隐藏, Esc returns the focus)", allBotsKeyboard],
+  ["bot-settings-model-badge: a model and effort saved on the settings page are what the chat page's model badge says", settingsModelBadge],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

@@ -13,7 +13,7 @@ import { useOverrides, usePersona } from "./use-persona";
 const storage = () => { try { return window.localStorage; } catch { return null; } };
 
 export const ARCHETYPE_NAMES: Record<Archetype, string> = { lead: "主理", tracker: "追踪", sentinel: "哨兵", reader: "审读", generalist: "通才" };
-const ARCHETYPE_HINTS: Record<Archetype, string> = {
+export const ARCHETYPE_HINTS: Record<Archetype, string> = {
   lead: "总入口：刻度环，稳。", tracker: "盯一家公司：看波动定快慢。", sentinel: "盯新闻：快讯条和信号弧。", reader: "读财报：逐行核对的页行。", generalist: "没有特别倾向：环绕的小点。"
 };
 const TEMPO_NAMES = { calm: "沉稳", standard: "标准", brisk: "轻快", rapid: "迅捷" } as const;
