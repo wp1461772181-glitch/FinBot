@@ -61,17 +61,17 @@ def _rows(observation):
     return data if isinstance(data, list) else None
 
 
-def fit_observations(observations: list[dict], budget: int, max_observations: int = 10):
-    """The accepted-evidence payload for a model: whole sources (rows) until the budget is spent.
-
-    The newest observations have priority, a row is never cut, and an observation that loses rows says
-    how many (``omitted_rows``).  Returns ``(kept, omitted_labels, original_chars, kept_chars)`` where
-    ``omitted_labels`` names each dropped source (its citation marker when it has one)."""
+def fit_observations_detail(observations: list[dict], budget: int, max_observations: int = 10):
+    """fit_observations, plus ``dropped``: every row the payload leaves out, as ``(observation_name, row)`` in
+    chronological order — all rows of the observations past ``max_observations``, then the rows the budget
+    left out of the recent ones.  An observation without rows (``result.data`` not a list) adds nothing.
+    Returns ``(kept, omitted_labels, original_chars, kept_chars, dropped)``."""
     original = size_of(observations)
     old = observations[:-max_observations] if len(observations) > max_observations else []
     recent = observations[len(old):]
+    dropped = []
     if not old and original <= budget:
-        return observations, [], original, original
+        return observations, [], original, original, []
     units = []                                        # (observation, row, size): newest first, rows in order
     shells = {}
     for oi in range(len(recent) - 1, -1, -1):
@@ -93,6 +93,10 @@ def fit_observations(observations: list[dict], budget: int, max_observations: in
         if ri is not None:
             opened.add(oi)
     kept, omitted = [], [o.get('name') for o in old if isinstance(o, dict)]
+    for o in old:
+        rows = _rows(o)
+        if rows:
+            dropped.extend((o.get('name'), row) for row in rows)
     for oi, observation in enumerate(recent):
         data = _rows(observation)
         if data is None:
@@ -104,10 +108,21 @@ def fit_observations(observations: list[dict], budget: int, max_observations: in
         keep = [row for ri, row in enumerate(data) if (oi, ri) in chosen]
         gone = [row for ri, row in enumerate(data) if (oi, ri) not in chosen]
         omitted.extend((row.get('citation') if isinstance(row, dict) else None) or observation.get('name') for row in gone)
+        dropped.extend((observation.get('name'), row) for row in gone)
         if keep:
             kept.append({**observation, 'result': {**observation['result'], 'data': keep,
                                                    **({'omitted_rows': len(gone)} if gone else {})}})
-    return kept, omitted, original, size_of(kept)
+    return kept, omitted, original, size_of(kept), dropped
+
+
+def fit_observations(observations: list[dict], budget: int, max_observations: int = 10):
+    """The accepted-evidence payload for a model: whole sources (rows) until the budget is spent.
+
+    The newest observations have priority, a row is never cut, and an observation that loses rows says
+    how many (``omitted_rows``).  Returns ``(kept, omitted_labels, original_chars, kept_chars)`` where
+    ``omitted_labels`` names each dropped source (its citation marker when it has one)."""
+    kept, omitted, original, used, _ = fit_observations_detail(observations, budget, max_observations)
+    return kept, omitted, original, used
 
 
 def compact_tool_content(content: str, budget: int) -> str:

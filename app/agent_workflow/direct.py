@@ -714,6 +714,25 @@ def unbound_example(unbound,ledger):
     if unbound.get('reason')=='token_suffix_unrecognized':return f'[{ordinal}] 里 {req} 后面跟着系统不认识的后缀'
     return f'输入 {req} 不在 [{ordinal}] 里'
 
+# SW1C (FINBOT_SW1C_OMITTED_DIGEST): when the evidence payload leaves sources out, the numbered figures and calculate results among
+# them are listed once more, one line each, by code. No trigger, no check, no obligation: the system gives back what it hid.
+OMITTED_DIGEST_HEAD='以下是本轮已读、因篇幅不在上面 DATA 里的数，编号和原值仍有效，可以直接引用，或用于 calculate（写不带逗号的数）：'
+OMITTED_DIGEST_TAIL='（另有 {n} 条更早的已读数已省略）'
+OMITTED_DIGEST_LIMIT=6000            # the whole digest text (head, lines, tail); on top of the evidence payload's own 22000
+OMITTED_DIGEST_KEEP=8                # lines a group keeps, newest first, before the limit may cut it further
+OMITTED_DIGEST_SYMBOLS_AUDIT=20      # symbols listed in audit.omitted_digest
+
+def _citation_ordinal(row):
+    """The ordinal of a row's ``[n]`` citation, or None."""
+    if not isinstance(row,dict):return None
+    marker=re.fullmatch(r'\[(\d+)\]',str(row.get('citation') or ''))
+    return int(marker[1]) if marker else None
+
+def calc_value_text(value):
+    """A calculate result as the stored value gives it, with thousands separators (77673.00 -> 77,673.00); text that is not a number stays as written."""
+    number=figure_number(value)
+    return format(number,',') if number is not None else str(value)
+
 # SW1 §6 (FINBOT_SW1_EXISTENCE_KNOWLEDGE): the FP9 note gives the draft back and says what a labelled answer may cover.
 # COMPOUND_EMPTY_NOTE itself is untouched (FP9's tests key on its prefix); the tail is appended after it.
 EXISTENCE_NOTE_TAIL=('上面这句针对的是「因为本轮查不到就断言不存在」。如果你凭一般知识知道它为什么不存在（例如公司未上市、已私有化或已退市，因而不发这类文件），'
@@ -1861,7 +1880,7 @@ class Turn:
             {'role':'user','content':self.question},
             {'role':'system','content':UNDERSTANDING_NOTE+json.dumps(hint,ensure_ascii=False,default=str)},
             *([{'role':'system','content':self.resume_note}] if self.resume_note else []),*([] if closing else self.protocol),
-            {'role':'system','content':self.evidence_payload(accepted)},
+            *self.evidence_messages(accepted),
             *([{'role':'system','content':self.recall_payload()}] if getattr(self,'recalls',None) else []),
             {'role':'system','content':self.status_payload()},
             {'role':'system','content':self.catalogue_payload()}]
@@ -1869,12 +1888,110 @@ class Turn:
     def evidence_payload(self,accepted,budget=22000):
         """The accepted evidence the model reasons over: whole sources, newest first, until the budget is spent.
         What does not fit is left out by source, named in the text, and recorded in ``audit.truncation_events``."""
-        kept,omitted,original,used=truncation.fit_observations(accepted,budget)
+        return self.evidence_parts(accepted,budget)[0]
+
+    def evidence_parts(self,accepted,budget=22000):
+        """evidence_payload's text, and with FINBOT_SW1C_OMITTED_DIGEST on the digest of what it left out ('' when there is none).
+        The text is the same with the switch on or off; the digest is a separate system message (SW1C §1.3)."""
+        kept,omitted,original,used,dropped=truncation.fit_observations_detail(accepted,budget)
         note=''
         if omitted:
             self.note_truncation('tool_messages.accepted_evidence',original,used,omitted_sources=len(omitted))
             note=' Left out for length (%d earlier source(s), not shown to you): %s.'%(len(omitted),' '.join(str(x) for x in omitted[:20]))
-        return 'Accepted evidence DATA (recent sources; all source identities remain in the response catalogue):'+note+' '+json.dumps(kept,ensure_ascii=False,default=str)
+        text='Accepted evidence DATA (recent sources; all source identities remain in the response catalogue):'+note+' '+json.dumps(kept,ensure_ascii=False,default=str)
+        if not flag('FINBOT_SW1C_OMITTED_DIGEST',True):return text,''
+        self.omitted_digest_stats=None
+        digest=self.omitted_digest(kept,dropped) if omitted else ''
+        self.note_omitted_digest()
+        return text,digest
+
+    def evidence_messages(self,accepted):
+        """The evidence as model messages: the DATA message, then the digest of what it left out as its own system message when there is one."""
+        text,digest=self.evidence_parts(accepted)
+        return [{'role':'system','content':text},*([{'role':'system','content':digest}] if digest else [])]
+
+    def omitted_digest(self,kept,dropped):
+        """SW1C §2-§4: one line per numbered reported figure and calculate result that the evidence payload left out. Grouped by company
+        (scope order first, then the rest in order of appearance), newest period first, calculations last; over OMITTED_DIGEST_LIMIT the
+        oldest lines go round the groups. Returns '' when there is no line to list. Its counts go to note_omitted_digest through
+        ``self.omitted_digest_stats``."""
+        self.omitted_digest_stats=None
+        in_data=set()
+        for observation in kept:
+            for row in truncation._rows(observation) or []:
+                ordinal=_citation_ordinal(row)
+                if ordinal is not None:in_data.add(ordinal)
+        from .financials import METRIC_LABELS_ZH
+        entries=[];seen=set()
+        for name,row in dropped:
+            ordinal=_citation_ordinal(row)
+            if ordinal is None or ordinal in seen or ordinal in in_data:continue
+            seen.add(ordinal)
+            if row.get('source_type')=='reported_figure' and row.get('symbol') and row.get('metric'):
+                entries.append({'kind':'figure','ordinal':ordinal,'symbol':str(row['symbol']).upper(),
+                    'metric_zh':METRIC_LABELS_ZH.get(row['metric'],str(row.get('label') or row['metric'])),
+                    'period':str(row.get('period_label') or '').split('（')[0],'period_end':str(row.get('period_end') or ''),
+                    'value_text':figure_value_text(row)})
+            elif name=='calculate':
+                raw=row.get('inputs');raw=raw if isinstance(raw,list) else []
+                inputs=[item for item in raw if isinstance(item,dict)]
+                sources=[]
+                for item in inputs:
+                    if type(item.get('source_ordinal')) is int and item['source_ordinal'] not in sources:sources.append(item['source_ordinal'])
+                entries.append({'kind':'calc','ordinal':ordinal,'inputs':sources,
+                    'stated':any(bool(item.get('user_stated')) for item in inputs),'value_text':calc_value_text(row.get('value'))})
+        if not entries:return ''
+        # SW1C §4.1: the same order of companies as closing_complete_check; a company is one group.
+        scope=getattr(self,'scope',None) or {}
+        named=[]
+        for symbol in [*(scope.get('symbols') or []),scope.get('symbol')]:
+            ticker=str(symbol or '').strip().upper()
+            if ticker and ticker not in named:named.append(ticker)
+        companies={}
+        for entry in entries:
+            if entry['kind']=='figure':companies.setdefault(entry['symbol'],[]).append(entry)
+        order=[s for s in named if s in companies]+[s for s in companies if s not in named]
+        groups=[(s,sorted(companies[s],key=lambda e:(e['period_end'],e['ordinal']),reverse=True)) for s in order]
+        calcs=sorted((e for e in entries if e['kind']=='calc'),key=lambda e:e['ordinal'],reverse=True)
+        if calcs:groups.append((None,calcs))
+        removed=0
+        def line(entry):
+            if entry['kind']=='calc':
+                refs=''.join(f'[{o}]' for o in entry['inputs'])
+                inside='、'.join(p for p in (refs,'用户原话里的数' if entry['stated'] else '') if p)
+                return f"[{entry['ordinal']}] 计算结果 {entry['value_text']}"+(f'（输入 {inside}）' if inside else '')
+            return ' '.join(p for p in (f"[{entry['ordinal']}]",entry['symbol'],entry['metric_zh'],entry['period'],entry['value_text']) if p)
+        def text():
+            lines=[OMITTED_DIGEST_HEAD,*(line(entry) for _,group in groups for entry in group)]
+            if removed:lines.append(OMITTED_DIGEST_TAIL.format(n=removed))
+            return '\n'.join(lines)
+        def trim(floor):
+            # SW1C §4.2 steps 1-2: rounds in which every group above `floor` lines gives up its oldest line, last group first.
+            nonlocal removed
+            while len(text())>OMITTED_DIGEST_LIMIT:
+                victims=[group for _,group in reversed(groups) if len(group)>floor]
+                if not victims:return
+                for group in victims:
+                    group.pop();removed+=1
+                    if len(text())<=OMITTED_DIGEST_LIMIT:return
+        trim(OMITTED_DIGEST_KEEP)
+        trim(1)
+        # SW1C §4.2 step 3: still over with every group down to one line: whole groups go, last group first.
+        while len(text())>OMITTED_DIGEST_LIMIT and len(groups)>1:
+            _,group=groups.pop();removed+=len(group)
+        digest=text()
+        remaining=[entry for _,group in groups for entry in group]
+        self.omitted_digest_stats={'figures':sum(e['kind']=='figure' for e in remaining),'calcs':sum(e['kind']=='calc' for e in remaining),
+            'chars':len(digest),'symbols':[s for s,_ in groups if s is not None][:OMITTED_DIGEST_SYMBOLS_AUDIT],'trimmed':removed}
+        return digest
+
+    def note_omitted_digest(self):
+        """SW1C §5: the digest audit for the build just made. It replaces what an earlier build left; a build with no digest clears it."""
+        stats=getattr(self,'omitted_digest_stats',None)
+        if stats:self.audit['omitted_digest']={k:stats[k] for k in ('figures','calcs','chars','symbols')}
+        else:self.audit.pop('omitted_digest',None)
+        if stats and stats['trimmed']:self.audit['omitted_digest_trimmed']=stats['trimmed']
+        else:self.audit.pop('omitted_digest_trimmed',None)
 
     def recall_payload(self,budget=16000):
         """Past-conversation recalls (memory only, never numbered evidence): whole entries, newest first, dedicated 16 KB budget."""
