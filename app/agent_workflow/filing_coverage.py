@@ -135,9 +135,11 @@ def freshness(periodic: list[dict], saved: list[dict], cutoff, *, latest_period:
     top = ordered[-1]
     top_day = day(top['filed_at'])
     if filing_key(top['form'], top['filed_at']) not in readable and (newest_saved is None or top_day > newest_saved):
+        where = f'库内最新一期是 {latest_period}。' if latest_period else ''
+        due = f'下一期（{next_period_label}）应已发布，库里还没有。' if next_period_label else ''
         return {'kind': 'registered_not_saved', 'overdue': True, 'form': top['form'],
                 'filed_at': str(top['filed_at'])[:10],
-                'note': f"SEC 目录里已有 {str(top['filed_at'])[:10]} 提交的 {top['form']}，正文 / 财务数据还没入库。"}
+                'note': f"{where}SEC 目录里已有 {str(top['filed_at'])[:10]} 提交的 {top['form']}，正文 / 财务数据还没入库。{due}"}
     window = ordered[-9:]
     gaps = [(day(b['filed_at']) - day(a['filed_at'])).days for a, b in zip(window, window[1:])]
     if len(gaps) < 3 or any(not CADENCE_RANGE[0] <= gap <= CADENCE_RANGE[1] for gap in gaps):

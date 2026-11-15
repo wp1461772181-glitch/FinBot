@@ -55,9 +55,17 @@ def test_a_rhythm_long_past_is_stale_and_never_says_due():  # T26
 def test_a_newer_filing_registered_but_not_saved_is_named_first():  # T27
     periodic = msft_meta() + [meta('10-Q', date(2026, 10, 30), status='not_fetched')]
     saved = [m for m in periodic if m['content_status'] == 'fetched']
-    note = freshness(periodic, saved, CUTOFF)
+    note = freshness(periodic, saved, CUTOFF, latest_period='FY2026', latest_end='2026-06-30', next_period_label='FY2027 Q1')
     assert note['kind'] == 'registered_not_saved' and note['overdue'] is True
     assert '2026-10-30' in note['note'] and '还没入库' in note['note']
+    assert '库内最新一期是 FY2026' in note['note'] and 'FY2027 Q1' in note['note'] and '库里还没有' in note['note']
+
+
+def test_a_registered_filing_without_period_labels_keeps_the_plain_note():  # T27, no saved head to label
+    periodic = [meta('10-Q', date(2026, 10, 30), status='not_fetched')]
+    note = freshness(periodic, [], CUTOFF)
+    assert note['kind'] == 'registered_not_saved'
+    assert note['note'] == 'SEC 目录里已有 2026-10-30 提交的 10-Q，正文 / 财务数据还没入库。'
 
 
 def test_the_cutoff_decides_not_the_wall_clock():  # T28
@@ -83,6 +91,18 @@ def test_the_financial_tool_says_when_the_library_is_behind_its_rhythm(monkeypat
         coverage = financials(symbol=symbol, metrics=['revenue'])['meta']['coverage']
         assert coverage['freshness']['overdue'] is True
         assert 'FY2027 Q1' in coverage['freshness']['note']
+    finally:
+        drop(ids)
+
+
+def test_the_registered_but_unread_note_names_both_periods_end_to_end(monkeypatch):  # T27 through the tool
+    monkeypatch.delenv(FRESH_SWITCH, raising=False)
+    symbol = new_symbol()
+    ids = seed(symbol, msft_filings() + [{'form': '10-Q', 'filed': date(2026, 10, 28), 'status': 'not_fetched'}])
+    try:
+        fresh = financials(symbol=symbol, metrics=['revenue'])['meta']['coverage']['freshness']
+        assert fresh['kind'] == 'registered_not_saved' and fresh['filed_at'] == '2026-10-28'
+        assert '库内最新一期是 FY2026' in fresh['note'] and 'FY2027 Q1' in fresh['note']
     finally:
         drop(ids)
 
