@@ -1,0 +1,98 @@
+{
+  "noop": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"所有相关资讯\"},\"tool_scope\":null,\"model\":null,\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "name": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot 二号\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"所有相关资讯\"},\"tool_scope\":null,\"model\":null,\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "focus": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\"},{\"symbol\":\"MSFT\"}],\"theme\":\"所有相关资讯\"},\"tool_scope\":null,\"model\":null,\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "theme": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"服务业务\"},\"tool_scope\":null,\"model\":null,\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "tools-one-off": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"所有相关资讯\"},\"tool_scope\":[\"get_market_data\",\"search_news\",\"read_filing\",\"query_portfolio\",\"save_material\"],\"model\":null,\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "tools-two-off-then-all": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"所有相关资讯\"},\"tool_scope\":null,\"model\":null,\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "tools-off-on": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"所有相关资讯\"},\"tool_scope\":null,\"model\":null,\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "model": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"所有相关资讯\"},\"tool_scope\":null,\"model\":\"muse-ember\",\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "model-back-to-default": {
+    "bot": "b0000000-0000-4000-8000-000000000005",
+    "bodies": [
+      "{\"name\":\"TeslaBot\",\"title\":\"盯一家公司\",\"description\":\"围绕一家公司做证据链研究。\",\"focus\":{\"companies\":[],\"theme\":null},\"tool_scope\":null,\"model\":null,\"avatar\":\"bot:kline-focus\",\"group\":\"\",\"pinned\":false,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"company_researcher\"}"
+    ]
+  },
+  "look-shape": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"look\":{\"shape\":\"nuage\",\"color\":\"orange\"},\"name\":\"AppleBot\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"所有相关资讯\"},\"tool_scope\":null,\"model\":null,\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "look-touched-back": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"所有相关资讯\"},\"tool_scope\":null,\"model\":null,\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "title-description-group-cap": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot\",\"title\":\"苹果研究员\",\"description\":\"只看 Apple。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"所有相关资讯\"},\"tool_scope\":null,\"model\":null,\"avatar\":\"bot:bull-bull\",\"group\":\"公司\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":9,\"template\":\"blank\"}"
+    ]
+  },
+  "pinned-hidden": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"所有相关资讯\"},\"tool_scope\":null,\"model\":null,\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":false,\"hidden\":true,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "emoji-avatar": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\",\"name\":null}],\"theme\":\"所有相关资讯\"},\"tool_scope\":null,\"model\":null,\"avatar\":\"🍎\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "combined": {
+    "bot": "b0000000-0000-4000-8000-000000000003",
+    "bodies": [
+      "{\"name\":\"AppleBot 二号\",\"title\":\"资料助手\",\"description\":\"只关注 Apple：财报、新闻、预测与材料。\",\"focus\":{\"companies\":[{\"symbol\":\"AAPL\"},{\"symbol\":\"MSFT\"}],\"theme\":\"所有相关资讯\"},\"tool_scope\":[\"get_market_data\",\"search_news\",\"read_filing\",\"query_portfolio\",\"save_material\"],\"model\":\"muse-ember\",\"avatar\":\"bot:bull-bull\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  },
+  "default-bot-rename": {
+    "bot": "b0000000-0000-4000-8000-000000000001",
+    "bodies": [
+      "{\"name\":\"FinBot 主理\",\"title\":\"默认助理\",\"description\":\"默认助理：行情、财报、预测与持仓问题都可以问我。\",\"focus\":{\"companies\":[],\"theme\":null},\"tool_scope\":null,\"model\":\"haiku-5.5\",\"avatar\":\"bot:kline-mono\",\"group\":\"\",\"pinned\":true,\"hidden\":false,\"daily_notify_cap\":5,\"template\":\"blank\"}"
+    ]
+  }
+}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  PATTERNS, paths, hashHref, splitPath, companyTab, routinesTab, symbolFromParams, materialFocusFromParams, sectionOfPath, isRecordId, pathForSection,
+  PATTERNS, paths, hashHref, splitPath, companyTab, routinesTab, symbolFromParams, materialFocusFromParams, sectionOfPath, isRecordId, pathForSection, isBotSettingsPath,
 } from "../src/routes.mjs";
 
 const ID = "6f1c2d3e-0000-4000-8000-000000000001";
@@ -132,4 +132,11 @@ test("pathForSection: every old section name leads somewhere, with the company w
   assert.equal(pathForSection("overview", "<x>"), "/research");
   assert.equal(pathForSection("materials"), "/research/materials");
   assert.equal(pathForSection("revisions", ""), "/research/forecasts");
+});
+
+test("a bot's settings page is told from the chat pages: only /chat/<id>/settings (with or without a section) is one", () => {
+  assert.equal(isBotSettingsPath(paths.chatSettings(ID)), true);
+  assert.equal(isBotSettingsPath(`${paths.chatSettings(ID)}?section=tools`), true);
+  for (const path of [paths.chat(), paths.chat(ID), paths.chatHistory(), "/chat/history/settings", "/chat/c/settings", paths.chatConversation(ID), `/chat/${ID}/settings/extra`, "/settings/models", ""]) assert.equal(isBotSettingsPath(path), false, path);
+  assert.equal(sectionOfPath(paths.chatSettings(ID)), "bot", "the bot stays marked in the sidebar on its settings page");
 });

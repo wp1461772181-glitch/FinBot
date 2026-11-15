@@ -6,7 +6,7 @@ export function skeletonKind(path) {
   const { pathname } = splitPath(path);
   const parts = pathname.split("/").filter(Boolean);
   const [head, second] = parts;
-  if (head === "chat") return second === "history" ? "rows" : "messages";
+  if (head === "chat") return second === "history" || parts[2] === "settings" ? "rows" : "messages";
   if (head === "research") {
     if (!second) return "cards";
     if (second === "materials" || second === "forecasts" || second === "replay") return "table";

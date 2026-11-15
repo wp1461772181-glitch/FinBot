@@ -33,9 +33,5 @@ export function slashMatches(skills, text, usualIds) {
 /** Enabled active skills, for pickers (the bot's usual skills, a task's skill). */
 export function usableSkills(skills) { return (Array.isArray(skills) ? skills : []).filter(s => s.enabled && s.status === "active").sort(byName); }
 
-/** Toggle one id in the list of usual skills (max 20). */
-export function toggleUsual(ids, id, max = 20) {
-  const list = Array.isArray(ids) ? ids : [];
-  if (list.includes(id)) return list.filter(x => x !== id);
-  return list.length >= max ? list : [...list, id];
-}
+// toggleUsual (the bot's usual skills) lives in bot-form-items.mjs with the rest of the bot form (P5.1: this file is on the first screen, the composer's / menu reads it); re-exported for the older imports.
+export { toggleUsual } from "./bot-form-items.mjs";

@@ -83,32 +83,17 @@
 /* Bots (personal agent, second edition): the sidebar list, the bot page's right tabs, the catalog card. */
 .bot-avatar { flex: 0 0 auto; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background:rgba(118, 184, 174, .22); color:inherit; font-size: 14px; }
 .bot-title { color:var(--c-muted); font-size: 12px; }
-/* The rail stays mounted when folded, so a half-edited 档案 form survives a collapse. */
-.bot-workspace, .bot-profile { display: grid; gap: 12px; color:var(--c-ink); font-size: 13px; }
-.bot-workspace p, .bot-profile p { margin: 0; }
+.bot-workspace { display: grid; gap: 12px; color:var(--c-ink); font-size: 13px; }
+.bot-workspace p { margin: 0; }
 .bot-focus-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .bot-workspace h3 { margin: 4px 0 0; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color:var(--c-muted, #8a8f98); }
 .bot-focus-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border:1px solid var(--c-line); border-radius: 10px; }
 .bot-focus-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bot-focus-links { display: flex; gap: 10px; flex-shrink: 0; }
-.bot-model-line strong { color:var(--c-accent); }
 .bot-warn { color: var(--c-warn); }
-.bot-placeholder { padding: 10px 12px; border:1px dashed var(--c-line-strong); border-radius: 8px; color:var(--c-muted); }
-.bot-placeholder h3 { margin: 0 0 4px; font-size: 12px; color:var(--c-ink); }
-.bot-placeholder p { font-size: 12px; }
 
-.bot-form { display: grid; gap: 12px; }
-.bot-form label { display: grid; gap: 5px; color:var(--c-muted); font-size: 11px; }
-.bot-form input:not([type="checkbox"]), .bot-form select, .bot-form textarea { box-sizing: border-box; width: 100%; min-height: 36px; border:1px solid var(--c-line-strong); border-radius: 6px; background:var(--c-surface); padding: 8px 10px; color:var(--c-ink); font: 13px var(--sans, inherit); }
-.bot-form textarea { resize: vertical; line-height: 1.55; }
-.bot-form small { color:var(--c-faint); font-size: 10px; line-height: 1.5; }
-.bot-form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 10px; }
-.bot-form .bot-check, .bot-tool { display: flex; align-items: center; gap: 6px; color:var(--c-ink); font-size: 12px; }
-.bot-tools { margin: 0; padding: 10px; border:1px solid var(--c-line); border-radius: 8px; display: grid; gap: 8px; }
-.bot-tools legend { padding: 0 4px; color: var(--c-muted); font-size: 11px; }
-.bot-tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 10px; max-height: 220px; overflow-y: auto; }
+.bot-tool { display: flex; align-items: center; gap: 6px; color:var(--c-ink); font-size: 12px; }
 .bot-tool small { color:var(--c-warn); }
-.bot-tools-actions { display: flex; justify-content: flex-end; }
 .bot-dialog { width: min(640px, 100%); }
 .bot-templates { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
 
@@ -124,9 +109,6 @@
 .catalog-card .catalog-actions { margin-top: auto; flex-wrap: wrap; }
 .bot-routines { display: grid; gap: 10px; }
 .bot-routines h3, .bot-routines h4 { margin: 0; font-size: 12px; }
-.bot-skills { display: grid; gap: 6px; }
-.bot-skills h3 { margin: 0; font-size: 12px; }
-.bot-tool-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 
 /* Fix 4: the bot page's 工作区 toggle in the header. */
 

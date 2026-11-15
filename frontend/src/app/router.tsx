@@ -42,7 +42,8 @@ const chatPages: RouteObject[] = [
   { path: PATTERNS.chat, ...page(() => import("./pages/chat"), "ChatRoute") },
   { path: PATTERNS.chatHistory, ...page(() => import("./pages/chat"), "ChatHistoryRoute") },
   { path: PATTERNS.chatConversation, ...page(() => import("./pages/chat"), "ChatConversationRoute") },
-  { path: PATTERNS.chatBotSettings, ...page(() => import("./pages/chat"), "ChatBotRoute", { profile: true }) },
+  // The bot's settings are a page of their own (P5.1): the page flows (the shell does not hold it to the chat's screen height) and is its own chunk.
+  { path: PATTERNS.chatBotSettings, ...page(() => import("./pages/bot-settings"), "BotSettingsRoute") },
   { path: PATTERNS.chatBot, ...page(() => import("./pages/chat"), "ChatBotRoute") },
 ];
 

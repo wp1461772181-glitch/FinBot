@@ -36,7 +36,8 @@ test("tiers: the ranges of 6.2, edges and gaps; only M and L run a loop for them
 test("sizes: components use the shared constants, not literals", () => {
   assert.match(tsx("app/chat/ChatHeader.tsx"), /size=\{BOT_AVATAR_SIZE\.title\}/);   // P3.1: moved out of AgentChatPanel.tsx
   assert.match(tsx("app/shell/BotRow.tsx"), /BOT_AVATAR_SIZE\.sidebar/);   // P2.2: the sidebar row (design 6.2, size S: 28-40px) replaced the rail row
-  assert.match(tsx("BotSidePanel.tsx"), /size=\{BOT_AVATAR_SIZE\.hero\}/);   // P3.1: BotPages.tsx was split; the profile form is in BotSidePanel.tsx
+  // P5.1: the profile form is the settings page; its only large avatar is the rehearsal's preview, so the form itself has no hero any more (the emoji box keeps its constant)
+  assert.match(tsx("app/bot-settings/LookSection.tsx"), /size=\{BOT_AVATAR_SIZE\.emoji\}/);
   assert.match(tsx("BotSidePanel.tsx"), /size=\{BOT_AVATAR_SIZE\.createHero\}/);
 });
 

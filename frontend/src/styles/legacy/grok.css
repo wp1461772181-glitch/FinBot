@@ -24,9 +24,9 @@ body { -webkit-font-smoothing: antialiased; }
 
 /* --- composer: a pill with a thin inset ring and a round inverted send button --------------------- */
 
-/* --- right rail (工作区 / 档案) ------------------------------------------------------------------ */
+/* --- right rail (工作区) ------------------------------------------------------------------ */
 .bot-focus-item { border-color:var(--me-line); background:var(--me-surface); border-radius: 12px; }
-.bot-form input, .bot-form select, .bot-form textarea, .bot-create input { background:var(--me-surface-2); border:1px solid var(--me-line); color:var(--me-ink); border-radius: 10px; }
+.bot-create input { background:var(--me-surface-2); border:1px solid var(--me-line); color:var(--me-ink); border-radius: 10px; }
 
 /* --- buttons: primary is the inverted pill everywhere (--navy is the dark hero surface, which a
    primary button painted with it would vanish into on the dark page) ------------------------------- */
@@ -47,9 +47,7 @@ body { -webkit-font-smoothing: antialiased; }
 .bot-orb-hero { display: grid; justify-items: center; gap: 6px; margin: 4px 0 14px; }
 .bot-orb-hero small { color: var(--me-muted); font-size: 12px; }
 /* Text yields to the avatar: tighter rows, smaller secondary text, ellipsis everywhere. */
-.avatar-picker { display: grid; gap: 8px; }
 /* Customise panel (bloub's Customizer/BotTile, restyled with this app's tokens; works in both themes). */
-.bloub-hero { display: grid; place-items: center; padding: 10px 0 4px; }
 .bloub-customizer { display: grid; gap: 6px; margin: 0 0 12px; }
 .bloub-customizer h3 { margin: 10px 0 0; font-size: 13px; font-weight: 600; color: var(--me-ink); }
 .bloub-grid { display: grid; gap: 6px; margin-top: 4px; }
@@ -66,7 +64,6 @@ body { -webkit-font-smoothing: antialiased; }
 .bloub-swatch[aria-pressed="true"] { border-color: var(--me-ink); }
 .bloub-tile:focus-visible, .bloub-swatch:focus-visible { outline: 2px solid var(--me-accent); outline-offset: 2px; }
 .bloub-tile:disabled, .bloub-swatch:disabled { cursor: default; opacity: .6; }
-.avatar-picker-modes { display: flex; gap: 12px; font-size: 13px; }
 
 /* --- bot workspace (UX batch 2, P3): stock picker, data cards, ⤢ widths ------------------------ */
 .bot-workspace { display: grid; gap: 10px; padding-top: 10px; }
@@ -97,12 +94,6 @@ body { -webkit-font-smoothing: antialiased; }
 .ws-new { font-size: 10px; color:var(--me-accent); background:var(--me-accent-soft); border-radius: 999px; padding: 0 6px; }
 .ws-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 
-/* --- a bot's own Telegram (UX batch 2, P4) -------------------------------------------------------- */
-.bot-telegram { border-top:1px solid var(--me-line); padding-top: 12px; margin-top: 12px; display: grid; gap: 8px; }
-.bot-telegram h3 { margin: 0; font-size: 14px; }
-.bot-telegram p { margin: 0; }
-.bot-telegram-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.bot-telegram-row input { flex: 1 1 12em; min-width: 0; }
 
 /* 持仓 page and 我的持仓 card.  No red/green: the sign in the text carries gain and loss (the up/down colour
    convention differs by market and the owner has not picked one); the tone classes are hooks for that choice. */

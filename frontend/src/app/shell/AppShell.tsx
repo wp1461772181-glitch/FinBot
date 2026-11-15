@@ -11,6 +11,7 @@ import { PageSkeleton, useDelayedFlag } from "@/components/state/Skeleton";
 import { TaskDock } from "@/components/state/TaskDock";
 import { skeletonKind } from "../../skeleton-kind.mjs";
 import { activeArea, needsLogin } from "../../shell-nav.mjs";
+import { isBotSettingsPath } from "../../routes.mjs";
 import type { ModeChange } from "./account";
 import { AppSidebar, type ShellNavProps } from "./AppSidebar";
 import { LoginDialog } from "./LoginDialog";
@@ -36,7 +37,8 @@ function PendingPage() {
 /** The main column.  The chat fills the screen height (its transcript scrolls inside it); every other page flows and is held to a readable width. */
 function Main({ nav, research, children }: { nav: ShellNavProps; research: ResearchBarProps | null; children: ReactNode }) {
   const { isMobile } = useSidebar();
-  const chat = activeArea(nav.path) === "chat";
+  // A bot's settings page is in the chat area of the navigation (the bot stays marked) but is an ordinary page: it flows, the window scrolls.
+  const chat = activeArea(nav.path) === "chat" && !isBotSettingsPath(nav.path);
   const guarded = !nav.personal && needsLogin(nav.path);
   // On a phone the tab bar sits over the bottom edge: the column keeps clear of it (and of the home indicator).
   const bar = "3.5rem + env(safe-area-inset-bottom, 0px)";

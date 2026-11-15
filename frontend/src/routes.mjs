@@ -114,6 +114,12 @@ export function splitPath(path) {
   return { pathname: at === -1 ? raw : raw.slice(0, at), params: new URLSearchParams(at === -1 ? "" : raw.slice(at + 1)) };
 }
 
+/** Whether an address is a bot's settings page (/chat/<id>/settings): a page of its own, though its section is the bot's. */
+export function isBotSettingsPath(path) {
+  const parts = splitPath(path).pathname.split("/").filter(Boolean);
+  return parts.length === 3 && parts[0] === "chat" && parts[2] === "settings" && parts[1] !== "history" && parts[1] !== "c";
+}
+
 /** The tab a company address asks for; anything unknown is the overview. */
 export function companyTab(params) {
   const tab = params.get("tab");

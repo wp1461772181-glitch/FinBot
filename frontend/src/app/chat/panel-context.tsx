@@ -43,15 +43,14 @@ export type PanelApi = {
 
 const Context = createContext<PanelApi | null>(null);
 
-export function PanelProvider({ hasWorkspace, hasProfile, startOnProfile, children }: { hasWorkspace: boolean; hasProfile: boolean; startOnProfile: boolean; children: ReactNode }) {
+export function PanelProvider({ hasWorkspace, children }: { hasWorkspace: boolean; children: ReactNode }) {
   const c = useChat();
-  const tabs = useMemo(() => availableTabs({ hasWorkspace, hasProfile }), [hasWorkspace, hasProfile]);
+  const tabs = useMemo(() => availableTabs({ hasWorkspace }), [hasWorkspace]);
   const [open, setOpenState] = useState(() => {
-    if (startOnProfile) return true;
     const stored = read(OPEN_KEY);
     return stored === null ? hasWorkspace && wide() : stored === "1";
   });
-  const [tab, setTab] = useState<PanelTab>(() => (startOnProfile && tabs.includes("profile") ? "profile" : initialTab(read(TAB_KEY), tabs)));
+  const [tab, setTab] = useState<PanelTab>(() => initialTab(read(TAB_KEY), tabs));
   const [width, setWidthState] = useState(() => storedPanelWidth(read(WIDTH_KEY)) || PANEL_DEFAULT);
   const [turn, setTurn] = useState<string | null>(null);
   const [focus, setFocus] = useState<SourceFocus | null>(null);
@@ -59,13 +58,11 @@ export function PanelProvider({ hasWorkspace, hasProfile, startOnProfile, childr
 
   const setOpen = useCallback((next: boolean) => { setOpenState(next); write(OPEN_KEY, next ? "1" : "0"); }, []);
   const toggle = useCallback(() => setOpenState((value) => { write(OPEN_KEY, value ? "0" : "1"); return !value; }), []);
-  const chooseTab = useCallback((next: PanelTab) => { setTab(next); if (next !== "profile") write(TAB_KEY, next); }, []);
+  const chooseTab = useCallback((next: PanelTab) => { setTab(next); write(TAB_KEY, next); }, []);
   const setWidth = useCallback((px: number, keep = true) => { const next = clampPanelWidth(px); setWidthState(next); if (keep) write(WIDTH_KEY, String(next)); }, []);
 
   // A tab this page does not have (the page changed from a bot's to none) falls back to the first one it has.
   useEffect(() => { if (!tabs.includes(tab)) setTab(initialTab(null, tabs)); }, [tabs, tab]);
-  // The profile route opened while the page was already up (the header's gear): show 档案.
-  useEffect(() => { if (startOnProfile && tabs.includes("profile")) { setTab("profile"); setOpenState(true); } }, [startOnProfile, tabs]);
   // A new question ends the choice of an older round: the panel follows the turn that is being answered.
   useEffect(() => { if (c.state === "sending") setTurn(null); }, [c.state]);
 

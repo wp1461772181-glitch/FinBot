@@ -23,19 +23,19 @@ const PersonaAttrs = lazy(() => import("@/components/bot/PersonaAttrs"));
 /**
  * The chat page (design 4.2): the header, then the history list (no bot) | the thread with its composer | the right panel.
  * `agent-page` stays on the root only for its custom properties (--c-*), which the old parts still embedded (the confirmation card, the
- * bot's workspace and profile) read.  The thread is at most 760px wide and centred; the 2px line on top of it is the bot's signature colour.
+ * bot's workspace) read.  The thread is at most 760px wide and centred; the 2px line on top of it is the bot's signature colour.
  * The right panel is a column from xl up (the reader drags its width) and lies over the thread below that.
- * `workspace` and `profile` are the bot's own panes (a page with no bot has neither: the panel then holds only 来源 and 过程).
+ * `workspace` is the bot's own pane (a page with no bot has none: the panel then holds only 来源 and 过程).
  */
-export function ChatPage({ bot, workspace, profile, onTurnSettled, onBotChanged, openProfile }: { bot?: Bot | null; workspace?: (wide: boolean) => ReactNode; profile?: ReactNode; onTurnSettled?: () => void; onBotChanged?: () => void; openProfile?: boolean }) {
-  return <PanelProvider hasWorkspace={Boolean(workspace)} hasProfile={Boolean(profile)} startOnProfile={Boolean(openProfile)}>
-    <ChatPageBody bot={bot} workspace={workspace} profile={profile} onTurnSettled={onTurnSettled} onBotChanged={onBotChanged} />
+export function ChatPage({ bot, workspace, onTurnSettled, onBotChanged }: { bot?: Bot | null; workspace?: (wide: boolean) => ReactNode; onTurnSettled?: () => void; onBotChanged?: () => void }) {
+  return <PanelProvider hasWorkspace={Boolean(workspace)}>
+    <ChatPageBody bot={bot} workspace={workspace} onTurnSettled={onTurnSettled} onBotChanged={onBotChanged} />
   </PanelProvider>;
 }
 
 const PAGE_CLASS = "agent-page flex min-h-0 flex-1 flex-col bg-background";
 
-function ChatPageBody({ bot, workspace, profile, onTurnSettled, onBotChanged }: { bot?: Bot | null; workspace?: (wide: boolean) => ReactNode; profile?: ReactNode; onTurnSettled?: () => void; onBotChanged?: () => void }) {
+function ChatPageBody({ bot, workspace, onTurnSettled, onBotChanged }: { bot?: Bot | null; workspace?: (wide: boolean) => ReactNode; onTurnSettled?: () => void; onBotChanged?: () => void }) {
   const { t } = useLocale(), c = useChat();
   // A finished turn changes the bot's last line (and gives a new bot its conversation): tell the list.
   const wasSending = useRef(false);
@@ -71,7 +71,7 @@ function ChatPageBody({ bot, workspace, profile, onTurnSettled, onBotChanged }: 
           <Composer bot={bot} draftBox={draftBox} onBotChanged={onBotChanged} />
         </div>
       </div>
-      <ContextPanel bot={bot} workspace={workspace} profile={profile} />
+      <ContextPanel bot={bot} workspace={workspace} />
     </div>
   </main>;
 }
