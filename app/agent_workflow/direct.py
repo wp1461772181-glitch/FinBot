@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio,copy,hashlib,inspect,json,os,re,time,uuid
 from datetime import UTC,date,datetime,timedelta,timezone
+from decimal import Decimal,InvalidOperation
 from typing import Annotated
 from pydantic import BaseModel,ConfigDict,Field
 from fastapi import HTTPException
@@ -10,7 +11,7 @@ from ..agent_progress import progress_watchdog,mark_progress
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_tool_catalog import definitions,schemas,validate,ALWAYS_ON as DISCLOSED,TOOL_CATEGORIES,CATEGORY_OF
 from .. import agent_context as layers
-from .evidence import gate_row,number_rows,citation_errors,contains,HINT_REASONS
+from .evidence import gate_row,number_rows,citation_errors,contains,HINT_REASONS,_MARKER
 from . import tools,consent,truncation
 from .. import observability
 from .authorization import vetoed,vetoed_phrase,authorized,routine_ask
@@ -643,22 +644,75 @@ EXISTENCE_ANCHOR='也不要为它们编号。'
 EXISTENCE_INSTRUCTION=('公司是否上市、是否还向 SEC 报送某类文件这类存在性问题，可以用一般知识回答，标明“一般知识，未经本轮资料核实”，不标 [n]；库里查不到本身不能证明不存在。')
 def existence_knowledge_on():
     return flag('FINBOT_SW1_EXISTENCE_KNOWLEDGE',True)
+# SW1B §3 (FINBOT_SW1B_SAMPLE_AGGREGATE): a permission, not an obligation. It follows the inference sentence of the evidence paragraph.
+SAMPLE_ANCHOR='并说明是推算；'
+SAMPLE_AGGREGATE_SENTENCE=('问行业、板块或同行整体（如行业营收增速）而本轮没有全行业口径的数时，可以用本轮真实读到的具名公司做样本汇总：'
+    '写明样本、各家期间（期间不一致就照实写出，不因此放弃）、汇总方式（如合计营收算增速），用 calculate 算出并标推算，说明只代表这些样本，'
+    '再与用户问的公司比较；样本里某家缺数，先按回执再查，仍读不到就照实说缺这一家，不要补数。')
 def evidence_instruction(text):
-    """INSTRUCTION with the SW1 read sentences and the existence sentence in place, per switch. Switch off: the constant's text, unchanged."""
+    """INSTRUCTION with the SW1 read sentences, the existence sentence and the SW1B sample sentence in place, per switch. Switch off: the constant's text, unchanged."""
     if flag('FINBOT_SW1_READ_WIDEN',True):
         text=text.replace(EVIDENCE_OLD,EVIDENCE_NEW+(FRESHNESS_SENTENCE if flag('FINBOT_SW1_FRESHNESS',True) else ''),1)
     if existence_knowledge_on():
         text=text.replace(EXISTENCE_ANCHOR,EXISTENCE_ANCHOR+EXISTENCE_INSTRUCTION,1)
+    if flag('FINBOT_SW1B_SAMPLE_AGGREGATE',True):
+        text=text.replace(SAMPLE_ANCHOR,SAMPLE_ANCHOR+SAMPLE_AGGREGATE_SENTENCE,1)
     return text
 # SW1 §2.6: a closing draft that calls the library empty, while a receipt lists filings this turn never read, gets one more look.
 ABSENCE_GAP=re.compile(r'没有可核验|没有.{0,8}(?:数据|资料|记录)|只有年度|不足.{0,4}个季度|查不到|未取到|没有取到|not available|no data',re.I)
 ABSENCE_RECHECK_NOTE=('系统事实：你的草稿说有资料没有取到，但本轮回执显示库里还有没读到的申报：{unread}。你可以再查一次（例如不带 latest、调大 limit 或去掉 form），'
     '也可以照原样回答，但要写明哪些没读到，而不是说库里没有。你的草稿原文：「{draft}」——其中正确的部分可以保留。')
 DRAFT_QUOTE_LIMIT=1200
-def draft_quote(text):
-    """A draft as the system quotes it back to the model: at most DRAFT_QUOTE_LIMIT characters, with a note when cut."""
+def draft_quote(text,limit=DRAFT_QUOTE_LIMIT):
+    """A draft as the system quotes it back to the model: at most ``limit`` characters (DRAFT_QUOTE_LIMIT unless told), with a note when cut."""
     text=text or ''
-    return text if len(text)<=DRAFT_QUOTE_LIMIT else text[:DRAFT_QUOTE_LIMIT]+'（草稿后半已省略）'
+    return text if len(text)<=limit else text[:limit]+'（草稿后半已省略）'
+
+# SW1B §2.3-2.5 (FINBOT_SW1B_CLOSING_COMPLETE): at a closing, figures the company's read put in front of the model and not used,
+# or calculations that failed and were never redone, are named once with their values. The system changes no words.
+CLOSING_DRAFT_LIMIT=3000             # K3: the draft as the SW1B reminder quotes it (merged SW1 notes too)
+CLOSING_LEDGER_LIMIT=1500            # the ledger text's whole budget; over it the oldest labels of the last company go first
+CLOSING_LABELS_PER_COMPANY=12        # period labels listed per company, newest first
+PENDING_GAP=re.compile(r'未(?:计算|核算|算出|补齐|列入|取到|读取)|没有?(?:算|计算|核算|取到|读到)|无法(?:计算|算出)|算不出|not (?:computed|calculated)',re.I)
+UNBOUND_REASONS={'value_not_in_source','value_in_other_source','token_suffix_unrecognized'}
+CLOSING_COMPLETE_HEAD=('系统事实：用户点名的公司里，有的已读数没有用上，有的用来做的计算没成功、之后也没重算。下面是这些公司本轮已读到的数，以及没做成的计算：\n{ledger}\n')
+CLOSING_COMPLETE_TAIL=('你可以先补算（calculate 的输入按资料里的原写法传，换算写进 expression；例如全年减前三季度累计得出第四季度，标推算），再把这些期间放进回答。'
+    '这些行若已不在你眼前的资料里，可以直接用上面的原值（calculate 里写不带逗号的数），或再查一次。'
+    '有意不用的，照原样回答并写明原因即可；如果判断不需要补算，也可以照原样回答，但不要把已读到的数说成没有取到。')
+CLOSING_COMPLETE_NOTE_BODY=CLOSING_COMPLETE_HEAD+CLOSING_COMPLETE_TAIL
+CLOSING_COMPLETE_NOTE=CLOSING_COMPLETE_NOTE_BODY+'你的草稿原文：「{draft}」——其中正确的部分可以保留。'
+
+def figure_value_text(row):
+    """A read figure's value as the source states it (K1): USD in millions when it is a whole number of them ("281,724 百万美元"), else the figure with its unit."""
+    unit=str(row.get('unit') or 'USD')
+    try:value=int(row.get('value'))
+    except (TypeError,ValueError):return str(row.get('value'))
+    if unit=='USD' and value%10**6==0:return f'{value//10**6:,} 百万美元'
+    return f'{value:,} {unit}'
+
+def figure_number(text):
+    try:number=Decimal(str(text).strip())
+    except (InvalidOperation,ValueError):return None
+    return number if number.is_finite() else None
+
+def same_figure(a,b):
+    """Two calculation inputs are the same figure when their Decimal values are equal; text that does not parse is compared as written (implementation clarification 4)."""
+    na,nb=figure_number(a),figure_number(b)
+    if na is not None and nb is not None:return na==nb
+    return str(a)==str(b)
+
+def unbound_example(unbound,ledger):
+    """The first failed input, said once per company in the reminder; None when the receipt names no ordinal to point at.
+    SW1B M1: a value_not_in_source example quotes the source's own value from the ledger (value_text), never closest_in_source,
+    which on a scaled input is a date fragment ("30"). An ordinal the ledger does not hold gets the first half only."""
+    ordinal=unbound.get('ordinal');req=unbound.get('requested_value')
+    if ordinal is None:return None
+    if unbound.get('reason')=='value_not_in_source':
+        original=next((e['value_text'] for e in ledger if e['ordinal']==ordinal),None)
+        return f'输入 {req} 不在 [{ordinal}] 里，[{ordinal}] 的原值是 {original}' if original else f'输入 {req} 不在 [{ordinal}] 里'
+    if unbound.get('reason')=='value_in_other_source':return f'输入 {req} 不在 [{ordinal}] 里，而在别的引用里出现'
+    if unbound.get('reason')=='token_suffix_unrecognized':return f'[{ordinal}] 里 {req} 后面跟着系统不认识的后缀'
+    return f'输入 {req} 不在 [{ordinal}] 里'
 
 # SW1 §6 (FINBOT_SW1_EXISTENCE_KNOWLEDGE): the FP9 note gives the draft back and says what a labelled answer may cover.
 # COMPOUND_EMPTY_NOTE itself is untouched (FP9's tests key on its prefix); the tail is appended after it.
@@ -828,6 +882,8 @@ class Turn:
         self.suggestion_used=False
         self.new_sets=[];self.invalid_calls=set();self.completed=set();self.protocol=[];self.final_protocol={};self.active_call_id=None;self.last_accepted=None
         self.coverage_log=[]   # SW1: one entry per read receipt (coverage, rows read) in call order, for the closing recheck
+        # SW1B: the reported figures the reads put in front of the model, and every calculate attempt (kept only with FINBOT_SW1B_CLOSING_COMPLETE on).
+        self.figure_ledger=[];self.calc_attempts=[]
         # An identical call is replayed from here instead of ending the turn: the model that
         # repeats itself has not run out of progress, it has lost the result it already holds.
         self.replays={};self.replayed=0
@@ -1984,10 +2040,12 @@ class Turn:
                             if code=='calculation_input_unbound':
                                 available=bindable_values(self.citations,args)
                                 if available:outcome['bindable_values']=available
+                            self.note_calc(args,error_code=code,receipts=getattr(exc,'receipts',None))
                             raise _CalculationRefused(outcome) from exc
                         ordinal=len(self.citations)+1
                         self.citations.append({'ordinal':ordinal,'source_type':'calculation','derived':True,'title':'可复核计算','quote':json.dumps(value,ensure_ascii=False),'calculation':value})
                         outcome={'ok':True,'data':[{**value,'citation':'['+str(ordinal)+']'}]}
+                        self.note_calc(args,result_ordinal=ordinal)
                     elif name=='calculate_formula':
                         from .formula_replay import execute_calculate_formula
                         from .formula_sandbox import FormulaError
@@ -2076,6 +2134,120 @@ class Turn:
                 if end is not None and end<horizon:continue
                 gaps.append(label)
         return list(dict.fromkeys(gaps))[:LIST_LIMIT]
+
+    def note_figures(self,rows):
+        """SW1B §2.2: one ledger line per numbered reported figure that a financial read returned, so the ledger holds what the model was shown."""
+        if not flag('FINBOT_SW1B_CLOSING_COMPLETE',True):return
+        from .financials import METRIC_LABELS_ZH
+        have={entry['ordinal'] for entry in self.figure_ledger}
+        for row in rows:
+            if not isinstance(row,dict) or row.get('source_type')!='reported_figure' or not row.get('symbol') or not row.get('metric'):continue
+            marker=re.fullmatch(r'\[(\d+)\]',str(row.get('citation') or ''))
+            if not marker or int(marker[1]) in have:continue
+            ordinal=int(marker[1]);have.add(ordinal)
+            label=str(row.get('label') or row['metric'])
+            self.figure_ledger.append({'ordinal':ordinal,'symbol':str(row['symbol']).upper(),'metric':row['metric'],
+                'metric_zh':METRIC_LABELS_ZH.get(row['metric'],label),'period_span':row.get('period_span'),
+                'period_label_short':str(row.get('period_label') or '').split('（')[0],'period_end':str(row.get('period_end') or ''),
+                'value_text':figure_value_text(row),'label':label})
+
+    def note_calc(self,args,*,result_ordinal=None,error_code=None,receipts=None):
+        """SW1B §2.2: every calculate attempt, refused or not, with its inputs' source ordinals and values, and the first unbound input's receipt."""
+        if not flag('FINBOT_SW1B_CLOSING_COMPLETE',True):return
+        def ordinal_of(value):return value if type(value) is int else None
+        raw=[item for item in (args.get('inputs') or []) if isinstance(item,dict)] if isinstance(args,dict) else []
+        inputs=[{'ordinal':ordinal_of(item.get('source_ordinal')),'value':str(item.get('value'))} for item in raw]
+        unbound=None
+        receipt=next((r for r in receipts or [] if isinstance(r,dict) and not r.get('found') and r.get('reason') in UNBOUND_REASONS),None)
+        if receipt:
+            # Clarification 3: the receipt names its input; the ordinal is that input's source_ordinal, never a position's.
+            owner=None
+            for item in raw:
+                if str(item.get('name'))==str(receipt.get('name')):owner=ordinal_of(item.get('source_ordinal'));break
+            closest=receipt.get('closest_in_source') or []
+            unbound={'ordinal':owner,'requested_value':receipt.get('requested_value'),
+                     'closest':closest[0] if closest else None,'reason':receipt.get('reason')}
+        self.calc_attempts.append({'ok':error_code is None,'inputs':inputs,'result_ordinal':result_ordinal,'error_code':error_code,'unbound':unbound})
+
+    def closing_complete_check(self,content):
+        """SW1B §2.3: the named companies the closing reminder is about and why: C1 a failed calculation never redone, C2 figures read but
+        not used by a multi-company answer. [] when there is none; a company the ledger holds no row for is not checked."""
+        ledger=self.figure_ledger
+        if not ledger:return []
+        named=[]
+        for symbol in [*(self.scope.get('symbols') or []),self.scope.get('symbol')]:
+            text=str(symbol or '').strip().upper()
+            if text and text not in named:named.append(text)
+        named=[s for s in named if any(e['symbol']==s for e in ledger)]
+        if not named:return []
+        cited={int(n) for n in _MARKER.findall(content or '')}
+        pending=bool(PENDING_GAP.search(content or '') or ABSENCE_GAP.search(content or ''))
+        succeeded=[c for c in self.calc_attempts if c['ok']]
+        def redone(item,calc):
+            # The same figure: the same source number, or the same value (a wrong ordinal that was redone with the right one).
+            return any((item['ordinal'] is not None and other['ordinal']==item['ordinal']) or same_figure(item['value'],other['value'])
+                       for other in calc['inputs'])
+        found=[]
+        for symbol in named:
+            rows=[e for e in ledger if e['symbol']==symbol]
+            ordinals={e['ordinal'] for e in rows}
+            used_calcs=[c for c in succeeded if any(i['ordinal'] in ordinals for i in c['inputs'])]
+            used=cited&(ordinals|{c['result_ordinal'] for c in used_calcs if c['result_ordinal'] is not None})
+            unfinished=[]
+            if pending:
+                for attempt in self.calc_attempts:
+                    if attempt['ok'] or not any(i['ordinal'] in ordinals for i in attempt['inputs']):continue
+                    if any(not any(redone(i,c) for c in succeeded) for i in attempt['inputs']):unfinished.append(attempt)
+            kinds={}
+            if unfinished:kinds['unfinished_calc']=sorted({i['ordinal'] for a in unfinished for i in a['inputs'] if i['ordinal'] in ordinals})
+            if len(named)>=2 and any(e['period_span']=='quarter' for e in rows) and not used:kinds['unused_rows']=sorted(ordinals)
+            if kinds:found.append({'symbol':symbol,'kinds':kinds,'rows':rows,'unfinished':unfinished})
+        return found
+
+    def closing_ledger_text(self,found):
+        """SW1B §2.4: one line per named company. Newest period first, CLOSING_LABELS_PER_COMPANY labels at most; over CLOSING_LEDGER_LIMIT
+        the oldest label of the last company goes first, and the line says so."""
+        blocks=[]
+        for item in found:
+            rows=sorted(item['rows'],key=lambda e:(e['period_end'],e['ordinal']),reverse=True)
+            labels=list(dict.fromkeys(e['period_label_short'] for e in rows))
+            blocks.append({'item':item,'rows':rows,'labels':labels[:CLOSING_LABELS_PER_COMPANY],'trimmed':len(labels)>CLOSING_LABELS_PER_COMPANY})
+        def unfinished_clause(unfinished):
+            groups={}
+            for attempt in unfinished:
+                key=tuple(dict.fromkeys(i['ordinal'] for i in attempt['inputs'] if i['ordinal'] is not None))
+                groups[key]=groups.get(key,0)+1
+            used='、'.join('用 '+''.join(f'[{o}]' for o in key)+f' 的 {n} 次' for key,n in groups.items())
+            example=next((unbound_example(a['unbound'],self.figure_ledger) for a in unfinished if a['unbound'] and unbound_example(a['unbound'],self.figure_ledger)),None)
+            return '没做成的计算：'+used+(f'（例如{example}）' if example else '')
+        def render(block):
+            shown=set(block['labels']);groups={}
+            for entry in block['rows']:
+                if entry['period_label_short'] in shown:
+                    groups.setdefault(entry['metric_zh'],[]).append(f"{entry['period_label_short']} [{entry['ordinal']}] {entry['value_text']}")
+            item=block['item'];text=f"- {item['symbol']}："
+            if groups:text+='；'.join(f"{metric} "+'、'.join(items) for metric,items in groups.items())+'。'
+            if 'unfinished_calc' in item['kinds']:text+=unfinished_clause(item['unfinished'])+'。'
+            if 'unused_rows' in item['kinds']:text+='草稿里没有用到这家公司的任何一条。'
+            if block['trimmed']:text+='（其余期间已省略）'
+            return text
+        def assemble():return '\n'.join(render(block) for block in blocks)
+        text=assemble()
+        while len(text)>CLOSING_LEDGER_LIMIT:
+            block=next((b for b in reversed(blocks) if b['labels']),None)
+            if block is None:break
+            block['labels'].pop();block['trimmed']=True
+            text=assemble()
+        return text
+
+    def arm_closing_complete(self,found,content,*,merged):
+        """SW1B §2.6: the audit for a reminder about to be sent. Returns its ledger text."""
+        self.audit['closing_complete_noted']=True
+        self.audit['closing_complete_merged']=merged
+        self.audit['closing_complete_symbols']=[{'symbol':item['symbol'],'kind':kind,'ordinals':ordinals}
+                                                for item in found for kind,ordinals in item['kinds'].items()][:8]
+        self.audit['closing_complete_draft']=content[:DRAFT_COPY_LIMIT]
+        return self.closing_ledger_text(found)
 
     def accept(self,name,args,outcome):
         self.last_accepted=None
@@ -2230,6 +2402,7 @@ class Turn:
             whole=shown.get('_evidence_text');excerpt=shown.get('excerpt') if shown.get('excerpt') is not None else shown.get('summary')
             if isinstance(whole,str) and isinstance(excerpt,str):self.note_truncation(name+'.excerpt',len(whole),len(excerpt))
         rows=number_rows(name,accepted,self.citations,requirements)
+        if name=='query_financials':self.note_figures(rows)
         self.last_accepted={'ok':True,'data':rows,'source':outcome.get('source'),**({'coverage':coverage} if coverage is not None else {})}
         self.observations.append({'name':name,'arguments':args,'result':self.last_accepted,'accepted_evidence':True})
         saved={'id':uuid.uuid4().hex,'owner':self.context.owner_hash,'conversation':self.context.conversation_id,
@@ -3507,23 +3680,44 @@ class Turn:
                     self.audit['empty_close_retried']=True
                     self.protocol.append({'role':'system','content':EMPTY_CLOSE_NOTE.format(sources=self.evidence_sources())})
                     continue
+                sw1_gap=None
                 if self.route=='A' and self.observations and content.strip() and not self.audit.get('absence_recheck_noted') \
                         and flag('FINBOT_SW1_READ_WIDEN',True) and flag('FINBOT_SW1_ABSENCE_RECHECK',True):
                     # SW1 §2.6: once per turn, a closing that calls the library empty while a receipt lists unread filings is
                     # shown those filings and its own draft. It may keep the draft; the system changes no words.
                     gap=self.unread_gap()
-                    if gap and ABSENCE_GAP.search(content):
-                        self.audit['absence_recheck_noted']=True
-                        self.audit['absence_recheck_draft']=content[:DRAFT_COPY_LIMIT]
-                        self.protocol.append({'role':'system','content':ABSENCE_RECHECK_NOTE.format(unread='、'.join(gap),draft=draft_quote(content))})
-                        continue
+                    if gap and ABSENCE_GAP.search(content):sw1_gap=gap
+                # SW1B §2.3: the same closing may also owe a look at read figures that went unused or calculations never redone.
+                # Both are decided before either is sent, so that one message can carry both (§2.5).
+                closing=[]
+                if self.route=='A' and self.observations and content.strip() and not self.audit.get('closing_complete_noted') \
+                        and flag('FINBOT_SW1B_CLOSING_COMPLETE',True):
+                    closing=self.closing_complete_check(content)
+                if sw1_gap and closing:
+                    ledger=self.arm_closing_complete(closing,content,merged=True)
+                    self.audit['absence_recheck_noted']=True
+                    self.audit['absence_recheck_draft']=content[:DRAFT_COPY_LIMIT]
+                    self.protocol.append({'role':'system','content':ABSENCE_RECHECK_NOTE.format(unread='、'.join(sw1_gap),draft=draft_quote(content,CLOSING_DRAFT_LIMIT))
+                                          +'\n'+CLOSING_COMPLETE_NOTE_BODY.format(ledger=ledger)})
+                    continue
+                if sw1_gap:
+                    self.audit['absence_recheck_noted']=True
+                    self.audit['absence_recheck_draft']=content[:DRAFT_COPY_LIMIT]
+                    self.protocol.append({'role':'system','content':ABSENCE_RECHECK_NOTE.format(unread='、'.join(sw1_gap),draft=draft_quote(content))})
+                    continue
+                if closing:
+                    ledger=self.arm_closing_complete(closing,content,merged=False)
+                    self.protocol.append({'role':'system','content':CLOSING_COMPLETE_NOTE.format(ledger=ledger,draft=draft_quote(content,CLOSING_DRAFT_LIMIT))})
+                    continue
                 if self.audit.get('absence_recheck_noted') and self.audit.get('absence_recheck_outcome') is None:self.audit['absence_recheck_outcome']='kept'
+                if self.audit.get('closing_complete_noted') and self.audit.get('closing_complete_outcome') is None:self.audit['closing_complete_outcome']='kept'
                 if await self.recover_remember():return self.remember_card_finish()
                 return await self.finish_answer(content or '没有生成可用的回答。')
             if not isinstance(calls,list) or len(calls)>12:stop='provider_protocol_invalid';break
             if any(not isinstance(c,dict) or not isinstance(c.get('id'),str) for c in calls):stop='provider_protocol_invalid';break
             self.audit['model_tool_requests']+=len(calls)
             if self.audit.get('absence_recheck_noted') and self.audit.get('absence_recheck_outcome') is None:self.audit['absence_recheck_outcome']='requeried'
+            if self.audit.get('closing_complete_noted') and self.audit.get('closing_complete_outcome') is None:self.audit['closing_complete_outcome']='requeried'
             if self.audit.get('nudged') and self.audit.get('nudge_outcome') is None:self.audit['nudge_outcome']='recovered'
             assistant={k:v for k,v in decision.items() if k in {'content','tool_calls','reasoning_content','reasoning_details'}}
             self.protocol.append({'role':'assistant',**assistant})
