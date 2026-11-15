@@ -638,10 +638,17 @@ EVIDENCE_NEW=('查不到就直说“没有可核验资料”并说明本轮查�
     '先读，或明说本轮没读到，不要说成库里没有。')
 FRESHNESS_SENTENCE=('回执的 coverage.freshness 说下一期应已发布但库里没有时，不要把库内最新一期说成“最新一季/最新财报”，'
     '要写明库内最新到哪一期、哪一期应已发布但未入库。')
+# SW1 §6 (FINBOT_SW1_EXISTENCE_KNOWLEDGE): the existence sentence follows the evidence paragraph's last sentence.
+EXISTENCE_ANCHOR='也不要为它们编号。'
+EXISTENCE_INSTRUCTION=('公司是否上市、是否还向 SEC 报送某类文件这类存在性问题，可以用一般知识回答，标明“一般知识，未经本轮资料核实”，不标 [n]；库里查不到本身不能证明不存在。')
+def existence_knowledge_on():
+    return flag('FINBOT_SW1_EXISTENCE_KNOWLEDGE',True)
 def evidence_instruction(text):
-    """INSTRUCTION with the SW1 read sentences in place, per switch. Switch off: the constant's text, unchanged."""
+    """INSTRUCTION with the SW1 read sentences and the existence sentence in place, per switch. Switch off: the constant's text, unchanged."""
     if flag('FINBOT_SW1_READ_WIDEN',True):
         text=text.replace(EVIDENCE_OLD,EVIDENCE_NEW+(FRESHNESS_SENTENCE if flag('FINBOT_SW1_FRESHNESS',True) else ''),1)
+    if existence_knowledge_on():
+        text=text.replace(EXISTENCE_ANCHOR,EXISTENCE_ANCHOR+EXISTENCE_INSTRUCTION,1)
     return text
 # SW1 §2.6: a closing draft that calls the library empty, while a receipt lists filings this turn never read, gets one more look.
 ABSENCE_GAP=re.compile(r'没有可核验|没有.{0,8}(?:数据|资料|记录)|只有年度|不足.{0,4}个季度|查不到|未取到|没有取到|not available|no data',re.I)
@@ -652,6 +659,33 @@ def draft_quote(text):
     """A draft as the system quotes it back to the model: at most DRAFT_QUOTE_LIMIT characters, with a note when cut."""
     text=text or ''
     return text if len(text)<=DRAFT_QUOTE_LIMIT else text[:DRAFT_QUOTE_LIMIT]+'（草稿后半已省略）'
+
+# SW1 §6 (FINBOT_SW1_EXISTENCE_KNOWLEDGE): the FP9 note gives the draft back and says what a labelled answer may cover.
+# COMPOUND_EMPTY_NOTE itself is untouched (FP9's tests key on its prefix); the tail is appended after it.
+EXISTENCE_NOTE_TAIL=('上面这句针对的是「因为本轮查不到就断言不存在」。如果你凭一般知识知道它为什么不存在（例如公司未上市、已私有化或已退市，因而不发这类文件），'
+    '可以写出来，标明是一般知识、未经本轮资料核实。你刚才的草稿原文：「{draft}」——其中正确的内容可以保留。')
+EXISTENCE_NOTE_TAIL_NO_DRAFT=('上面这句针对的是「因为本轮查不到就断言不存在」。如果你凭一般知识知道它为什么不存在（例如公司未上市、已私有化或已退市，因而不发这类文件），'
+    '可以写出来，标明是一般知识、未经本轮资料核实。')
+def compound_empty_note(searched,draft):
+    """FP9's note. Switch off: COMPOUND_EMPTY_NOTE exactly. On: the draft quoted in the note (never as an assistant turn) and the allowance."""
+    note=COMPOUND_EMPTY_NOTE.format(searched=searched)
+    if not existence_knowledge_on():return note
+    if draft and draft.strip():return note+EXISTENCE_NOTE_TAIL.format(draft=draft_quote(draft))
+    return note+EXISTENCE_NOTE_TAIL_NO_DRAFT
+# SW1 §6: the refusal's facts and prompt. The draft is the model's own, usable only as the labelled clause allows.
+EXISTENCE_SCOPE_TAIL=("That rule forbids concluding absence from an empty search. If facts.model_draft states, labelled as general knowledge, why the company or document does not exist or is not published (a private company files no 10-Q; a company taken private stopped reporting), you may keep that point in one sentence, labelled as general knowledge not checked against this turn's sources; take no amount or percentage from the draft.")
+EXISTENCE_DRAFT_LEAD=" (model_draft is the model's own earlier draft, usable only as the clause below allows)"
+def latest_draft(audit):
+    """The model's most recent draft the system replaced or discarded, or ''.  discarded_draft is set only on the closing that ends a turn with no evidence, and absence_recheck_draft only once evidence exists, so checking them first and the FP9 draft last gives the latest one."""
+    for key in ('discarded_draft','absence_recheck_draft','compound_empty_draft'):
+        if audit.get(key):return audit[key]
+    return ''
+# SW1 §6: the no-tool nudge carries the exception for background facts when the switch is on. Switch off: NUDGE_NOTE exactly.
+NUDGE_EXISTENCE='（公司是否上市、是否仍公开披露这类背景常识除外，写出时标明是一般知识）'
+def nudge_note(tools):
+    text=NUDGE_NOTE
+    if existence_knowledge_on():text=text.replace('不要凭记忆写出数字、日期或状态。','不要凭记忆写出数字、日期或状态'+NUDGE_EXISTENCE+'。',1)
+    return text.format(tools=tools)
 
 # A sentence that says a named past or present date is still ahead.  Negated phrases are not claims.
 FUTURE_PHRASES=('尚未到来','还未到来','未到来','还没到','尚未到','还没有到','未来','将来','尚未发生','还没发生','未发生','还没有发生',
@@ -1442,12 +1476,15 @@ class Turn:
         # FP9: the searches and whether a public one ran; with the switch off the prompt and the facts are the old ones.
         compound=flag('FINBOT_FP9_COMPOUND_EMPTY',True)
         if compound:facts['searched']=search_scope(self.feedback);facts['public_search']=public_search_state(self.feedback)
+        # SW1 §6: the draft the system last replaced or discarded is given as facts, with the one-sentence allowance that goes with it.
+        draft=draft_quote(latest_draft(self.audit)) if compound and existence_knowledge_on() else ''
+        if draft:facts['model_draft']=draft
         sentences='three' if compound else 'two'
-        scope_clause=SEARCH_SCOPE_CLAUSE if compound else ''
+        scope_clause=(SEARCH_SCOPE_CLAUSE+(EXISTENCE_SCOPE_TAIL if draft else '')) if compound else ''
         messages=[{'role':'system','content':(
             f'The turn gathered no usable evidence for the user\'s request. Return ONLY JSON: '
             f'{{"useful": false, "reply": string, "reason": string, "route": string}}. '
-            f'The facts message is the only ground you may state: today\'s date, turn_state, what the tools did, '
+            f'The facts message is the only ground you may state{EXISTENCE_DRAFT_LEAD if draft else ""}: today\'s date, turn_state, what the tools did, '
             f'and each date the request names with its position relative to today. '
             f'turn_state no_tool_called means the model called no tool at all; searched_empty means tools ran and found nothing; '
             f'tool_failed means a tool failed, with its error code. '
@@ -3443,7 +3480,7 @@ class Turn:
                         # M2: no tool called and no evidence held.  The model is told so, with its real tools, once.
                         self.audit['nudged']=True
                         self.audit['nudged_draft']=content[:DRAFT_COPY_LIMIT]
-                        self.protocol.append({'role':'system','content':NUDGE_NOTE.format(tools='、'.join(t['function']['name'] for t in self.exposed_tools()))})
+                        self.protocol.append({'role':'system','content':nudge_note('、'.join(t['function']['name'] for t in self.exposed_tools()))})
                         continue
                     # FP9: the model's own searches came back empty twice and no public web search ran.  It is told once what was
                     # searched and may search publicly; nothing is forced, and if it still makes no call the refusal follows as before.
@@ -3452,7 +3489,7 @@ class Turn:
                         if sum(1 for item in mine if item['outcome'] in {'empty','failed'})>=2 and public_search_state(self.feedback)=='not_run' and 'web_research' in {t['function']['name'] for t in self.exposed_tools()}:
                             self.audit['compound_empty_noted']=True
                             if content.strip():self.audit['compound_empty_draft']=content[:DRAFT_COPY_LIMIT]
-                            self.protocol.append({'role':'system','content':COMPOUND_EMPTY_NOTE.format(searched=json.dumps(mine,ensure_ascii=False,default=str))})
+                            self.protocol.append({'role':'system','content':compound_empty_note(json.dumps(mine,ensure_ascii=False,default=str),content)})
                             continue
                     if self.audit.get('nudged') and self.audit.get('nudge_outcome') is None:self.audit['nudge_outcome']='failed'
                     if content.strip():self.audit['discarded_draft']=content[:DRAFT_COPY_LIMIT]

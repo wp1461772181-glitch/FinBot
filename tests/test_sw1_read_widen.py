@@ -282,4 +282,6 @@ def test_the_instruction_carries_the_read_sentences_only_while_their_switches_ar
     no_fresh = direct.evidence_instruction(text)
     assert direct.EVIDENCE_NEW in no_fresh and direct.FRESHNESS_SENTENCE not in no_fresh
     monkeypatch.setenv('FINBOT_SW1_READ_WIDEN', 'off')
+    # S3 (FINBOT_SW1_EXISTENCE_KNOWLEDGE, on by default) adds its own sentence; this check is about S1's sentences alone.
+    monkeypatch.setenv('FINBOT_SW1_EXISTENCE_KNOWLEDGE', 'off')
     assert direct.evidence_instruction(text) == text and direct.EVIDENCE_OLD in text   # off: the constant's own text
