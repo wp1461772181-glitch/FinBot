@@ -171,12 +171,20 @@ def test_e1_the_omitted_numbers_bind_and_the_calculations_go_through(audits):
         digest = digest_of(messages)
         if digest is None:
             return text('')
+        # The ledger rows, whole (spec E1, first assertion): msft's and aapl's FY2026 Q3 rows, and the q4 line with its inputs.
+        lines = digest.split('\n')
+        q4_line = next((line for line in lines if line.startswith(f'[{saved["q4"]}] ')), '')
+        checks['ledger_rows'] = (
+            any(line.startswith(f'[{saved["mq3"]}] {msft} 营业收入 FY2026 Q3 ') for line in lines),
+            any(line.startswith(f'[{saved["aq3"]}] {aapl} 营业收入 FY2026 Q3 ') for line in lines),
+            f'（输入 [{saved["fy"]}][{saved["nine"]}]）' in q4_line)
         fy, nine = plain(ledger_value(digest, saved['fy'])), plain(ledger_value(digest, saved['nine']))
         mq3 = plain(ledger_value(digest, saved['mq3']))
         return calls(
-            ('calculate', {'expression': 'a-b', 'inputs': [
-                {'name': 'a', 'value': fy, 'source_ordinal': saved['fy']},
-                {'name': 'b', 'value': nine, 'source_ordinal': saved['nine']}]}),
+            # The same two numbers as step 3, under other names: an identical call would be answered by the replay, not run.
+            ('calculate', {'expression': 'y-n', 'inputs': [
+                {'name': 'y', 'value': fy, 'source_ordinal': saved['fy']},
+                {'name': 'n', 'value': nine, 'source_ordinal': saved['nine']}]}),
             ('calculate', {'expression': '(a-b)/b*100', 'inputs': [
                 {'name': 'a', 'value': plain(ledger_value(digest, saved['q4'])), 'source_ordinal': saved['q4']},
                 {'name': 'b', 'value': mq3, 'source_ordinal': saved['mq3']}]}))
@@ -200,11 +208,14 @@ def test_e1_the_omitted_numbers_bind_and_the_calculations_go_through(audits):
         audit = turn.audit
         assert result['status'] == 'succeeded'
         assert checks.get('evicted') == (True, True), checks.get('evicted')           # precondition: both first reads are out
+        assert checks.get('ledger_rows') == (True, True, True), checks.get('ledger_rows')   # the ledger rows, whole
         assert result['answer'] == checks['final']                                    # the scripted text, unchanged
         assert 'closing_complete_noted' not in audit and 'absence_recheck_noted' not in audit   # K2 precondition
         assert audit['scope']['counts']['marked_figures'] >= 3                         # the numbered sentences were written
         assert audit['omitted_digest']['symbols'][:2] == [aapl, msft]
         assert all(attempt['ok'] for attempt in turn.calc_attempts)                  # §3.2 (3): no calculation came back unbound
+        assert 'replayed_calls' not in audit                                         # every calculation ran, none was replayed
+        assert len(turn.calc_attempts) == 13                                         # step 3: 1, step 4: 10, step 5: 2
         # §3.2 (1), by the checker itself (K1): the answer's figures bind to the turn's citations, and the
         # sentences that cite the omitted numbers are not rejected or insufficient.
         from app.agent_workflow.evidence import insufficient_number_values, number_review, unsupported_number_values
