@@ -83,3 +83,34 @@ def test_page_returns_turns_beyond_the_old_100kb_display_budget(monkeypatch):
     assert len(older["messages"]) == 6
     assert older["has_more"] is True
     assert older["next_before"] == 9
+
+
+def request_row(sequence, turn_id):
+    """An assistant row that asks for tools; its result rows are written only after the tools run."""
+    item = row(sequence, turn_id, "assistant")
+    item.tool_calls = {"calls": [{"id": f"call-{sequence}", "type": "function",
+                                  "function": {"name": "lookup", "arguments": "{}"}}]}
+    return item
+
+
+def test_a_turn_whose_last_row_asks_for_a_tool_is_still_running():
+    assert _eligible_turn_groups([row(1, "a", "user"), request_row(2, "a")]) == []
+
+
+def test_a_turn_waiting_on_a_second_tool_request_is_not_restored():
+    rows = [row(1, "a", "user"), request_row(2, "a"), row(3, "a", "tool"), request_row(4, "a")]
+    assert _eligible_turn_groups(rows) == []
+
+
+def test_a_turn_is_restored_once_its_last_tool_round_has_an_answer():
+    rows = [row(1, "a", "user"), request_row(2, "a"), row(3, "a", "tool"), row(4, "a", "assistant")]
+    groups = _eligible_turn_groups(rows)
+    assert [[entry.sequence for entry in group] for group in groups] == [[1, 2, 3, 4]]
+
+
+def test_a_failed_or_cancelled_turn_is_restored_even_with_a_citation_only_protocol():
+    cancelled = row(4, "b", "assistant", "cancelled")
+    cancelled.tool_calls = {"citations": []}
+    groups = _eligible_turn_groups([row(1, "a", "user"), row(2, "a", "assistant", "failed"),
+                                    row(3, "b", "user"), cancelled])
+    assert [group[-1].sequence for group in groups] == [2, 4]

@@ -160,9 +160,15 @@ def _eligible_turn_groups(rows):
     for row in rows:
         if not groups or groups[-1][-1].turn_id!=row.turn_id: groups.append([])
         groups[-1].append(row)
+    # A tool-request row is written complete before its tools run, so a turn that ends on one
+    # is still running: its answer is not there yet and must not be restored half-finished.
+    def tool_request(row):
+        protocol=getattr(row,"tool_calls",None)
+        return isinstance(protocol,dict) and bool(protocol.get("calls"))
     return [group for group in groups
             if group and group[0].role=="user" and group[-1].role=="assistant"
-            and group[-1].status in {"complete","failed","cancelled"}]
+            and group[-1].status in {"complete","failed","cancelled"}
+            and not tool_request(group[-1])]
 
 
 def _select_message_page(groups, before_sequence=None, limit_turns=20):
