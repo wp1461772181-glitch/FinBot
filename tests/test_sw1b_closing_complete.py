@@ -235,7 +235,8 @@ def test_b03_a_failed_calculation_never_redone_is_named_with_its_ledger_rows():
     found = turn.closing_complete_check(draft)
     assert [(item['symbol'], list(item['kinds'])) for item in found] == [(M, ['unfinished_calc'])]
     ledger = turn.closing_ledger_text(found)
-    assert M in ledger and '[9]' in ledger and '[13]' in ledger and '331839' in ledger and 'FY2026 Q3 [11]' in ledger
+    assert M in ledger and '[9]' in ledger and '[13]' in ledger and 'FY2026 Q3 [11]' in ledger
+    assert '[9] 的原值是 331,839 百万美元' in ledger and '最接近' not in ledger
     assert turn.arm_closing_complete(found, draft, merged=False) == ledger
     assert turn.audit['closing_complete_symbols'] == [{'symbol': M, 'kind': 'unfinished_calc', 'ordinals': [9, 13]}]
 
@@ -294,6 +295,27 @@ def test_b10_a_question_with_no_named_company_is_never_checked():
     turn.figure_ledger = [entry(1, A), entry(9, M, 'FY2026', span='annual', end='2026-06-30')]
     turn.calc_attempts = [attempt([(9, '331.839')], ok=False, unbound=unbound(9, '331.839', '331839'))]
     assert turn.closing_complete_check('行业增速本轮未核算。') == []
+
+
+# ---- M1: the example quotes the source's own value; closest_in_source never reaches the reminder -------------------
+
+def test_m1_unbound_example_quotes_the_ledger_value_and_never_the_closest():
+    ledger = [entry(9, M, 'FY2026', span='annual', end='2026-06-30', value='331,839 百万美元')]
+    scaled = unbound(9, '331.839', '30')  # a real scaled input: closest_in_source gives a date fragment
+    assert direct.unbound_example(scaled, ledger) == '输入 331.839 不在 [9] 里，[9] 的原值是 331,839 百万美元'
+    assert direct.unbound_example(unbound(9, '331.839', None), ledger) == '输入 331.839 不在 [9] 里，[9] 的原值是 331,839 百万美元'
+    assert direct.unbound_example(scaled, []) == '输入 331.839 不在 [9] 里'
+    assert direct.unbound_example(unbound(12, '331.839', '30'), ledger) == '输入 331.839 不在 [12] 里'
+    assert direct.unbound_example(unbound(None, '331.839', '30'), ledger) is None
+    assert '最接近' not in direct.unbound_example(scaled, ledger)
+
+
+def test_m1_the_other_two_reasons_keep_their_wording():
+    ledger = [entry(9, M, 'FY2026', span='annual', end='2026-06-30', value='331,839 百万美元')]
+    other = {'ordinal': 9, 'requested_value': '331.839', 'closest': '30', 'reason': 'value_in_other_source'}
+    suffix = {'ordinal': 9, 'requested_value': '331.839', 'closest': None, 'reason': 'token_suffix_unrecognized'}
+    assert direct.unbound_example(other, ledger) == '输入 331.839 不在 [9] 里，而在别的引用里出现'
+    assert direct.unbound_example(suffix, ledger) == '[9] 里 331.839 后面跟着系统不认识的后缀'
 
 
 # ---- B11, B12, B14: the closing in a full turn ---------------------------------------------------------------------

@@ -97,6 +97,7 @@ def test_e01_the_q3_shape_gets_one_reminder_with_the_values_and_the_redo_binds(a
         notes = reminders(seen)
         assert len(notes) == 1
         assert '331,839 百万美元' in notes[0]['content'] and '114,634 百万美元' in notes[0]['content']
+        assert '最接近的是' not in notes[0]['content']
         audit = turns_last(audits).audit
         assert audit['closing_complete_outcome'] == 'requeried'
         assert [(item['symbol'], item['kind']) for item in audit['closing_complete_symbols']] == [(msft, 'unfinished_calc')]
@@ -143,6 +144,7 @@ def test_e01b_when_the_read_is_evicted_the_reminder_carries_the_values_and_the_r
         assert result['status'] == 'succeeded' and evicted == [True]
         notes = reminders(seen)
         assert len(notes) == 1 and '331,839 百万美元' in notes[0]['content'] and '114,634 百万美元' in notes[0]['content']
+        assert '最接近的是' not in notes[0]['content']
         turn = turns_last(audits)
         assert turn.audit['closing_complete_outcome'] == 'requeried'
         assert turn.calc_attempts[-1]['ok'] is True

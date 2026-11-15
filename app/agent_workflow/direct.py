@@ -701,11 +701,15 @@ def same_figure(a,b):
     if na is not None and nb is not None:return na==nb
     return str(a)==str(b)
 
-def unbound_example(unbound):
-    """The first failed input, said once per company in the reminder; None when the receipt names no ordinal to point at."""
-    ordinal=unbound.get('ordinal');req=unbound.get('requested_value');closest=unbound.get('closest')
+def unbound_example(unbound,ledger):
+    """The first failed input, said once per company in the reminder; None when the receipt names no ordinal to point at.
+    SW1B M1: a value_not_in_source example quotes the source's own value from the ledger (value_text), never closest_in_source,
+    which on a scaled input is a date fragment ("30"). An ordinal the ledger does not hold gets the first half only."""
+    ordinal=unbound.get('ordinal');req=unbound.get('requested_value')
     if ordinal is None:return None
-    if unbound.get('reason')=='value_not_in_source' and closest:return f'输入 {req} 不在 [{ordinal}] 里，[{ordinal}] 里最接近的是 {closest}'
+    if unbound.get('reason')=='value_not_in_source':
+        original=next((e['value_text'] for e in ledger if e['ordinal']==ordinal),None)
+        return f'输入 {req} 不在 [{ordinal}] 里，[{ordinal}] 的原值是 {original}' if original else f'输入 {req} 不在 [{ordinal}] 里'
     if unbound.get('reason')=='value_in_other_source':return f'输入 {req} 不在 [{ordinal}] 里，而在别的引用里出现'
     if unbound.get('reason')=='token_suffix_unrecognized':return f'[{ordinal}] 里 {req} 后面跟着系统不认识的后缀'
     return f'输入 {req} 不在 [{ordinal}] 里'
@@ -2214,7 +2218,7 @@ class Turn:
                 key=tuple(dict.fromkeys(i['ordinal'] for i in attempt['inputs'] if i['ordinal'] is not None))
                 groups[key]=groups.get(key,0)+1
             used='、'.join('用 '+''.join(f'[{o}]' for o in key)+f' 的 {n} 次' for key,n in groups.items())
-            example=next((unbound_example(a['unbound']) for a in unfinished if a['unbound'] and unbound_example(a['unbound'])),None)
+            example=next((unbound_example(a['unbound'],self.figure_ledger) for a in unfinished if a['unbound'] and unbound_example(a['unbound'],self.figure_ledger)),None)
             return '没做成的计算：'+used+(f'（例如{example}）' if example else '')
         def render(block):
             shown=set(block['labels']);groups={}
