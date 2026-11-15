@@ -17,6 +17,7 @@ import hashlib
 import json
 import re
 import secrets
+import unicodedata
 import uuid
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -71,6 +72,92 @@ def split_for_telegram(text: str, limit: int = 3800) -> list[str]:
     if rest:
         chunks.append(rest)
     return chunks
+
+
+_TABLE_NARROW_MAX_COLUMNS = 3
+_TABLE_NARROW_MAX_WIDTH = 30
+_TABLE_FENCE = re.compile(r"^\s*(?:```|~~~)")
+_TABLE_CELL_BREAK = re.compile(r"(?<!\\)\|")
+# A separator cell: hyphens, or the dashes a phone keyboard swaps in for them (U+2010 to U+2015, U+2212).
+_TABLE_RULE_CELL = re.compile("^:?[-\N{HYPHEN}-\N{HORIZONTAL BAR}\N{MINUS SIGN}]+:?$")
+_TABLE_SPECIALS = re.compile(r"([_*`\[])")
+_TABLE_TITLE_UNSAFE = re.compile(r"[_*`\[\\]")
+
+
+def _table_cells(line: str) -> list[str] | None:
+    """The cells of a pipe row (a line whose first non-blank character is ``|``), else None."""
+    row = line.strip()
+    if not row.startswith("|"):
+        return None
+    parts = _TABLE_CELL_BREAK.split(row)[1:]
+    if parts and not parts[-1].strip():
+        parts.pop()
+    return [part.strip().replace("\\|", "|") for part in parts]
+
+
+def _table_width(text: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in text)
+
+
+def _table_blocks(header: list[str], rows: list[list[str]]) -> list[str] | None:
+    """One block of lines per data row, or None when the table must stay as written."""
+    if any(len(row) > len(header) for row in rows):
+        return None
+    if len(header) <= _TABLE_NARROW_MAX_COLUMNS and all(
+            _table_width("| " + " | ".join(row) + " |") <= _TABLE_NARROW_MAX_WIDTH for row in [header, *rows]):
+        return None
+    labels = [_TABLE_SPECIALS.sub(r"\\\1", cell.replace("**", "").strip()) for cell in header]
+    blocks = []
+    for row in rows:
+        row = row + [""] * (len(header) - len(row))
+        lines = []
+        title = row[0].replace("**", "").strip()
+        if title and not _TABLE_TITLE_UNSAFE.search(title):
+            lines.append(f"*{title}*")
+        elif row[0]:
+            lines.append(row[0])
+        for label, value in zip(labels[1:], row[1:]):
+            if value:
+                lines.append(f"{label}：{value}" if label else value)
+        if lines:
+            blocks.append("\n".join(lines))
+    return blocks or None
+
+
+def tables_for_telegram(text: str) -> str:
+    """Markdown tables as per-row blocks a phone can read: the first column's value is the block's title,
+    every other cell its own 「列名：值」 line.  Lines outside a table are returned untouched; a table that
+    cannot be read with certainty, a narrow one, and anything inside a code fence stay exactly as written."""
+    lines = text.split("\n")
+    out: list[str] = []
+    fenced = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if _TABLE_FENCE.match(line):
+            fenced = not fenced
+        header = None if fenced else _table_cells(line)
+        rule = _table_cells(lines[index + 1]) if header and index + 1 < len(lines) else None
+        if not header or len(header) < 2 or not rule or not all(_TABLE_RULE_CELL.match(cell) for cell in rule):
+            out.append(line)
+            index += 1
+            continue
+        end = index + 2
+        rows = []
+        while end < len(lines) and (cells := _table_cells(lines[end])) is not None:
+            rows.append(cells)
+            end += 1
+        blocks = _table_blocks(header, rows) if rows else None
+        if blocks is None:
+            out.extend(lines[index:end])
+        else:
+            if out and out[-1].strip():
+                out.append("")
+            out.append("\n\n".join(blocks))
+            if end < len(lines) and lines[end].strip():
+                out.append("")
+        index = end
+    return "\n".join(out)
 
 
 class TelegramError(ValueError):

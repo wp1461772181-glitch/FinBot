@@ -40,7 +40,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.agent_telegram import split_for_telegram
+from app.agent_telegram import split_for_telegram, tables_for_telegram
 from app.agent_workflow.fp_flags import flag
 
 TELEGRAM_API = "https://api.telegram.org"
@@ -471,6 +471,12 @@ async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pendin
     ticked = any(isinstance(card, dict) and card.get("options") for card in cards)
     if ticked and not keyboard:
         answer = answer.strip() + "\n\n（这一步需要在网页里选择后确认。）"
+    if flag("FINBOT_TG_TABLE_CARDS", True):
+        # B1: a phone cannot read a wide pipe table.  Presentation only; a failure here must not cost the answer.
+        try:
+            answer = tables_for_telegram(answer)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Telegram table conversion failed: {_redact(exc)}", file=sys.stderr)
     answer = ("" if channel else f"【{bot_name}】\n") + (answer.strip() or ("完成。" if keyboard else "（这条回复没有内容。）"))
     chunks = (split_for_telegram(answer, ANSWER_MAX_CHARS) if flag("FINBOT_FP12_TG_SPLIT", True)
               else [answer[i:i+ANSWER_MAX_CHARS] for i in range(0, len(answer), ANSWER_MAX_CHARS)])
