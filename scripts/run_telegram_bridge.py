@@ -184,6 +184,9 @@ QUEUED_TEXT = "收到，排在上一条后面。"
 DONE_TEXT = "处理完成，回答见下一条。"
 BACKEND_DOWN_TEXT = "后端暂时连不上，提醒不受影响。"
 BUSY_GIVEUP_TEXT = "这个对话正在别处回答中，请稍后再发一次。"
+# FP13-b: a busy conversation (the web page is answering) is waited for, up to this long (a turn's hard cap is 1200 s).
+BUSY_WAIT_SECONDS = 1260
+BUSY_WAITING_TEXT = "这条对话线正在别处回答（比如网页），你的消息已排队，那边结束后自动开始。"
 
 _RUNNER: "TurnRunner | None" = None
 
@@ -428,13 +431,18 @@ async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pendin
         typing = asyncio.create_task(_keep_typing(client, bot_token, bound_chat))
         progress = _Progress(client, bot_token, bound_chat)
         await progress.start()
+
+    async def on_busy():
+        await _send_text(client, bot_token, bound_chat, BUSY_WAITING_TEXT, markdown=False)
+
     try:
         try:
             if not press and len(text) > MESSAGE_MAX_CHARS:
                 await _send_text(client, bot_token, bound_chat, OVERLONG_NOTICE.format(
                     total=len(text), limit=MESSAGE_MAX_CHARS, dropped=len(text) - MESSAGE_MAX_CHARS), markdown=False)
             answer, cards, cid = await _ask_with_retry(client, credential, bot_id, text,
-                                                       on_event=progress.on_event if progress else None, **press)
+                                                       on_event=progress.on_event if progress else None,
+                                                       on_busy=on_busy, **press)
         except BackendUnavailable:
             await _send_text(client, bot_token, bound_chat, BACKEND_DOWN_TEXT, markdown=False)
             return
@@ -465,15 +473,31 @@ async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pendin
         await progress.finish()
 
 
-async def _ask_with_retry(client, credential: str, bot_id: str, text: str, *, on_event=None, **press):
-    """``_ask_agent``, waiting out a 409 conversation_busy a few times.  The extra argument is only passed
-    when there is a progress callback."""
+async def _ask_with_retry(client, credential: str, bot_id: str, text: str, *, on_event=None, on_busy=None, **press):
+    """``_ask_agent``, waiting out a 409 conversation_busy.  With FINBOT_FP13_TG_BUSY_QUEUE off, BUSY_RETRIES
+    short retries (the old behaviour).  On (the default), the turn waits in line until BUSY_WAIT_SECONDS have
+    passed since the first call; ``on_busy`` is awaited once, at the first busy answer.  ``on_busy`` is a
+    keyword of its own, not part of ``press``, so it never reaches ``_ask_agent``.  The extra argument is only
+    passed when there is a progress callback."""
     extra = {"on_event": on_event} if on_event else {}
-    for attempt in range(BUSY_RETRIES + 1):
+    if not flag("FINBOT_FP13_TG_BUSY_QUEUE", True):
+        for attempt in range(BUSY_RETRIES + 1):
+            try:
+                return await _ask_agent(client, credential, bot_id, text, **press, **extra)
+            except ConversationBusy:
+                if attempt == BUSY_RETRIES:
+                    raise
+                await asyncio.sleep(BUSY_RETRY_DELAY)
+    started = time.monotonic()
+    busy_seen = False
+    while True:
         try:
             return await _ask_agent(client, credential, bot_id, text, **press, **extra)
         except ConversationBusy:
-            if attempt == BUSY_RETRIES:
+            if not busy_seen and on_busy is not None:
+                await on_busy()
+            busy_seen = True
+            if time.monotonic() - started > BUSY_WAIT_SECONDS:
                 raise
             await asyncio.sleep(BUSY_RETRY_DELAY)
 
