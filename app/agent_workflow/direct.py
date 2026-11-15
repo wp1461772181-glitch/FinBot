@@ -17,6 +17,7 @@ from .authorization import vetoed,vetoed_phrase,authorized,routine_ask
 from .references import Referent,validate_referents,bounded_stage,normalized,assistant_message_sources,assistant_item_catalogue
 from .trace import TurnTrace,classifier_output,decision_output,resolver_output,verify_output
 from .fp_flags import flag
+from .filing_coverage import LIST_LIMIT,day as filing_day,filing_key
 
 MAX_RETRIES=2
 # Inactivity watchdogs, not wall clocks: they only stop a turn whose model or tool has gone silent.
@@ -317,6 +318,45 @@ REFERENCE_PROMPT=(
  'Never invent a citation absent from the catalogue. Clarify genuine ambiguity only. Use refinement only for time/count changes. Return resolve_reference.'
 )
 
+# SW1 items 2 and 3 (FINBOT_SW1_RESOLVER_RULES): the period a company's "this quarter" means, and a premise the user assumes.
+RESOLVER_ANCHOR='Keep data-dependent wording such as "最新一期" or "最近一期" as it is; never guess a specific period. '
+RESOLVER_RULE_TEXT=(
+ 'For a company\'s disclosed figures (营收、利润、增速、毛利率 and the like) and for an industry built from them, 这季、本季、这个季度、当季、最近一季、现在、目前 mean the most recent quarter already reported, not the calendar quarter in progress: write it as data-dependent wording such as 最近一个已披露的季度 (several companies: 各公司最近已披露的季度) and give it no dates. '
+ 'These keep their calendar meaning with explicit dates: prices, returns, news, events and the user\'s own holdings (这季股价、这季组合收益 → the calendar quarter to date, ending today); guidance, expectations or forecasts about the quarter in progress (这季的指引、这季预期 → that quarter, named as not yet ended); a quarter the user names explicitly (2026 年第四季度、Q4、FY27 Q1 → as named). '
+ 'When the user describes a document, period or event as something they assume (刚出的 FY26 Q4 那份 10-Q、上周公布的指引), keep it as what the user said (用户所说的……) rather than as a confirmed fact, and add no detail to it; the tools check whether it exists. '
+)
+CLASSIFY_PREMISE_TEXT=('\nA form the user mentions only while describing a document they assume exists (刚出的那份 10-Q) is not a filter: leave form null unless the user asks to read that form as such; '
+ 'the tools also widen past a form that hides a newer filing.')
+def resolver_prompt():
+    """REFERENCE_PROMPT with the period and premise rules after its data-dependent sentence, when the switch is on."""
+    if not flag('FINBOT_SW1_RESOLVER_RULES',True):return REFERENCE_PROMPT
+    return REFERENCE_PROMPT.replace(RESOLVER_ANCHOR,RESOLVER_ANCHOR+RESOLVER_RULE_TEXT,1)
+def classify_prompt():
+    """CLASSIFY_PROMPT with the premise sentence at its end, when the switch is on."""
+    return CLASSIFY_PROMPT+CLASSIFY_PREMISE_TEXT if flag('FINBOT_SW1_RESOLVER_RULES',True) else CLASSIFY_PROMPT
+_PERIOD_RANGE=re.compile(r'(\d{4}-\d{2}-\d{2})\s*(?:至|到|~|～|-|—|–|to)\s*(\d{4}-\d{2}-\d{2})')
+_EXPLICIT_PERIOD=re.compile(r'Q[1-4]|第[一二三四1-4]季|FY\d{2,4}|[一二三四1-4]季度',re.I)
+def resolver_today():
+    """Today as the resolver's period check reads it: the research cutoff when a replay sets one, else now; Kuala Lumpur's date."""
+    from ..knowledge.runtime import current_research_context
+    context=current_research_context()
+    base=context.cutoff if context and context.cutoff else datetime.now(UTC)
+    if base.tzinfo is None:base=base.replace(tzinfo=UTC)
+    return base.astimezone(KL_TZ).date()
+def unfinished_period(canonical,original,today):
+    """SW1 §4.2: the first date range the rewrite names that has not ended by today, when the user's own words name no
+    period and neither date is theirs. None otherwise. The rewrite itself is left as it is."""
+    from ..freshness import requested_years
+    if requested_years(original) or _EXPLICIT_PERIOD.search(original or ''):return None
+    for match in _PERIOD_RANGE.finditer(canonical or ''):
+        start,end=match.group(1),match.group(2)
+        try:start_day,end_day=date.fromisoformat(start),date.fromisoformat(end)
+        except ValueError:continue
+        if not start_day<=today<end_day:continue
+        if start in original or end in original:continue
+        return {'start':start,'end':end,'today':today.isoformat()}
+    return None
+
 async def injected(callback,*args):
     value=callback(*args)
     return await value if inspect.isawaitable(value) else value
@@ -592,6 +632,61 @@ SEARCH_SCOPE_CLAUSE=('facts.searched lists each source this turn queried and how
     'Never say or imply that the information does not exist or was never published. ')
 # FP9 (D-F2, verbatim): told once, after two empty searches of the model's own and no public web search, before a refusal.
 COMPOUND_EMPTY_NOTE=('系统事实：本轮你查询的来源都没有取得可用资料：{searched}。其中没有公开网页检索。已保存的数据里查不到，不等于公开信息不存在。你可以调用 web_research 做一次有针对性的公开检索；如果判断不需要，就直接向用户说明本轮查了哪些来源、没有查什么，不要断言这个信息不存在。')
+# SW1 §2.5 / §5.2: the evidence sentence that tells the model how a coverage receipt bounds "the library has no such thing".
+EVIDENCE_OLD='查不到就直说“没有可核验资料”，不要猜数字。'
+EVIDENCE_NEW=('查不到就直说“没有可核验资料”并说明本轮查了什么，不要猜数字；工具回执的 coverage 若列出还没读到的申报（not_read）或被 limit 截掉的期间，'
+    '先读，或明说本轮没读到，不要说成库里没有。')
+FRESHNESS_SENTENCE=('回执的 coverage.freshness 说下一期应已发布但库里没有时，不要把库内最新一期说成“最新一季/最新财报”，'
+    '要写明库内最新到哪一期、哪一期应已发布但未入库。')
+# SW1 §6 (FINBOT_SW1_EXISTENCE_KNOWLEDGE): the existence sentence follows the evidence paragraph's last sentence.
+EXISTENCE_ANCHOR='也不要为它们编号。'
+EXISTENCE_INSTRUCTION=('公司是否上市、是否还向 SEC 报送某类文件这类存在性问题，可以用一般知识回答，标明“一般知识，未经本轮资料核实”，不标 [n]；库里查不到本身不能证明不存在。')
+def existence_knowledge_on():
+    return flag('FINBOT_SW1_EXISTENCE_KNOWLEDGE',True)
+def evidence_instruction(text):
+    """INSTRUCTION with the SW1 read sentences and the existence sentence in place, per switch. Switch off: the constant's text, unchanged."""
+    if flag('FINBOT_SW1_READ_WIDEN',True):
+        text=text.replace(EVIDENCE_OLD,EVIDENCE_NEW+(FRESHNESS_SENTENCE if flag('FINBOT_SW1_FRESHNESS',True) else ''),1)
+    if existence_knowledge_on():
+        text=text.replace(EXISTENCE_ANCHOR,EXISTENCE_ANCHOR+EXISTENCE_INSTRUCTION,1)
+    return text
+# SW1 §2.6: a closing draft that calls the library empty, while a receipt lists filings this turn never read, gets one more look.
+ABSENCE_GAP=re.compile(r'没有可核验|没有.{0,8}(?:数据|资料|记录)|只有年度|不足.{0,4}个季度|查不到|未取到|没有取到|not available|no data',re.I)
+ABSENCE_RECHECK_NOTE=('系统事实：你的草稿说有资料没有取到，但本轮回执显示库里还有没读到的申报：{unread}。你可以再查一次（例如不带 latest、调大 limit 或去掉 form），'
+    '也可以照原样回答，但要写明哪些没读到，而不是说库里没有。你的草稿原文：「{draft}」——其中正确的部分可以保留。')
+DRAFT_QUOTE_LIMIT=1200
+def draft_quote(text):
+    """A draft as the system quotes it back to the model: at most DRAFT_QUOTE_LIMIT characters, with a note when cut."""
+    text=text or ''
+    return text if len(text)<=DRAFT_QUOTE_LIMIT else text[:DRAFT_QUOTE_LIMIT]+'（草稿后半已省略）'
+
+# SW1 §6 (FINBOT_SW1_EXISTENCE_KNOWLEDGE): the FP9 note gives the draft back and says what a labelled answer may cover.
+# COMPOUND_EMPTY_NOTE itself is untouched (FP9's tests key on its prefix); the tail is appended after it.
+EXISTENCE_NOTE_TAIL=('上面这句针对的是「因为本轮查不到就断言不存在」。如果你凭一般知识知道它为什么不存在（例如公司未上市、已私有化或已退市，因而不发这类文件），'
+    '可以写出来，标明是一般知识、未经本轮资料核实。你刚才的草稿原文：「{draft}」——其中正确的内容可以保留。')
+EXISTENCE_NOTE_TAIL_NO_DRAFT=('上面这句针对的是「因为本轮查不到就断言不存在」。如果你凭一般知识知道它为什么不存在（例如公司未上市、已私有化或已退市，因而不发这类文件），'
+    '可以写出来，标明是一般知识、未经本轮资料核实。')
+def compound_empty_note(searched,draft):
+    """FP9's note. Switch off: COMPOUND_EMPTY_NOTE exactly. On: the draft quoted in the note (never as an assistant turn) and the allowance."""
+    note=COMPOUND_EMPTY_NOTE.format(searched=searched)
+    if not existence_knowledge_on():return note
+    if draft and draft.strip():return note+EXISTENCE_NOTE_TAIL.format(draft=draft_quote(draft))
+    return note+EXISTENCE_NOTE_TAIL_NO_DRAFT
+# SW1 §6: the refusal's facts and prompt. The draft is the model's own, usable only as the labelled clause allows.
+EXISTENCE_SCOPE_TAIL=("That rule forbids concluding absence from an empty search. If facts.model_draft states, labelled as general knowledge, why the company or document does not exist or is not published (a private company files no 10-Q; a company taken private stopped reporting), you may keep that point in one sentence, labelled as general knowledge not checked against this turn's sources; take no amount or percentage from the draft.")
+EXISTENCE_DRAFT_LEAD=" (model_draft is the model's own earlier draft, usable only as the clause below allows)"
+def latest_draft(audit):
+    """The model's most recent draft the system replaced or discarded, or ''.  discarded_draft is set only on the closing that ends a turn with no evidence, and absence_recheck_draft only once evidence exists, so checking them first and the FP9 draft last gives the latest one."""
+    for key in ('discarded_draft','absence_recheck_draft','compound_empty_draft'):
+        if audit.get(key):return audit[key]
+    return ''
+# SW1 §6: the no-tool nudge carries the exception for background facts when the switch is on. Switch off: NUDGE_NOTE exactly.
+NUDGE_EXISTENCE='（公司是否上市、是否仍公开披露这类背景常识除外，写出时标明是一般知识）'
+def nudge_note(tools):
+    text=NUDGE_NOTE
+    if existence_knowledge_on():text=text.replace('不要凭记忆写出数字、日期或状态。','不要凭记忆写出数字、日期或状态'+NUDGE_EXISTENCE+'。',1)
+    return text.format(tools=tools)
+
 # A sentence that says a named past or present date is still ahead.  Negated phrases are not claims.
 FUTURE_PHRASES=('尚未到来','还未到来','未到来','还没到','尚未到','还没有到','未来','将来','尚未发生','还没发生','未发生','还没有发生',
     'not yet','hasn\'t arrived','has not arrived','yet to come','in the future','has not happened','hasn\'t happened','has yet to')
@@ -732,6 +827,7 @@ class Turn:
         self.revision_notice=None;self.revision_picks=[]
         self.suggestion_used=False
         self.new_sets=[];self.invalid_calls=set();self.completed=set();self.protocol=[];self.final_protocol={};self.active_call_id=None;self.last_accepted=None
+        self.coverage_log=[]   # SW1: one entry per read receipt (coverage, rows read) in call order, for the closing recheck
         # An identical call is replayed from here instead of ending the turn: the model that
         # repeats itself has not run out of progress, it has lost the result it already holds.
         self.replays={};self.replayed=0
@@ -942,7 +1038,7 @@ class Turn:
         payload['assistant_items']=assistant_item_catalogue(prior)
         payload['as_of_utc']=datetime.now(UTC).isoformat()
         if self.profile_messages():payload['user_profile_hints']=self.profile_messages()[0]['content']
-        prompt=REFERENCE_PROMPT
+        prompt=resolver_prompt()
         value=None;failure=None
         for attempt in range(2):
             try:
@@ -1124,6 +1220,13 @@ class Turn:
             self.reference_stage(False,'reference_period_unbound');self.resolver_failed=True
             self.question=canonical=self.original
             if self.scope.get('period') and not requested_years(self.scope['period'])<=trusted_years:self.scope['period']=None
+        # SW1 §4.2: a rewrite that pins the quarter still in progress, when the user's own words named no period, is noted to the model.
+        unfinished=unfinished_period(self.question,self.original,resolver_today()) if flag('FINBOT_SW1_RESOLVER_RULES',True) else None
+        if unfinished:
+            self.audit['resolver_period_unfinished']=unfinished
+            period=str(self.scope.get('period') or '')
+            if period and (unfinished['start'] in period or unfinished['end'] in period):
+                self.scope['period']=None;self.audit['scope_period_cleared']=True
         trusted+=' '+json.dumps([{'scope':s.get('scope'),'items':[{'title':r.get('title'),'url':r.get('url'),'id':r.get('id')} for r in s['rows']]} for s in self.sets],ensure_ascii=False)
         allowed_figures=figure_values(trusted,zh=True)|figure_values(self.original,zh=True)
         if window_days(self.original):allowed_figures.add(float(window_days(self.original)))
@@ -1179,7 +1282,7 @@ class Turn:
         company=self.default_company()
         if company:payload['default_company']={'symbol':company['symbol'],'company':company.get('company'),
             'note':'Set by the owner for this bot. Use it only when the request names no company; a named company wins.'}
-        prompt=CLASSIFY_PROMPT
+        prompt=classify_prompt()
         messages=[{'role':'system','content':prompt},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}]
         is_injected=bool(self.context.intent_recognizer or self.context.classifier)
         mode_defaulted=False
@@ -1373,12 +1476,15 @@ class Turn:
         # FP9: the searches and whether a public one ran; with the switch off the prompt and the facts are the old ones.
         compound=flag('FINBOT_FP9_COMPOUND_EMPTY',True)
         if compound:facts['searched']=search_scope(self.feedback);facts['public_search']=public_search_state(self.feedback)
+        # SW1 §6: the draft the system last replaced or discarded is given as facts, with the one-sentence allowance that goes with it.
+        draft=draft_quote(latest_draft(self.audit)) if compound and existence_knowledge_on() else ''
+        if draft:facts['model_draft']=draft
         sentences='three' if compound else 'two'
-        scope_clause=SEARCH_SCOPE_CLAUSE if compound else ''
+        scope_clause=(SEARCH_SCOPE_CLAUSE+(EXISTENCE_SCOPE_TAIL if draft else '')) if compound else ''
         messages=[{'role':'system','content':(
             f'The turn gathered no usable evidence for the user\'s request. Return ONLY JSON: '
             f'{{"useful": false, "reply": string, "reason": string, "route": string}}. '
-            f'The facts message is the only ground you may state: today\'s date, turn_state, what the tools did, '
+            f'The facts message is the only ground you may state{EXISTENCE_DRAFT_LEAD if draft else ""}: today\'s date, turn_state, what the tools did, '
             f'and each date the request names with its position relative to today. '
             f'turn_state no_tool_called means the model called no tool at all; searched_empty means tools ran and found nothing; '
             f'tool_failed means a tool failed, with its error code. '
@@ -1647,7 +1753,7 @@ class Turn:
                         self.note_truncation('protocol.tool_result',before,len(m['content']))
                 break
             self.protocol=self.protocol[starts[1]:]
-        instruction='\n'.join(INSTRUCTION)
+        instruction=evidence_instruction('\n'.join(INSTRUCTION))
         if not closing and not self.active_skill:instruction+='\n'+self.disclosure_text()
         from .claim_gate_flags import claim_quote_gate_mode
         if claim_quote_gate_mode() in {'shadow','enforce'}:
@@ -1667,6 +1773,12 @@ class Turn:
         hint={'resolved_question':self.question,
               'referents':[r.get('text') or r.get('mention') for r in self.verified_referents if r.get('text') or r.get('mention')][:6],
               'classifier_scope':{k:self.scope.get(k) for k in ('symbol','symbols','mode','company','metrics','period','form','financial_only','latest','days_back','max_results','requested_actions') if self.scope.get(k) not in (None,[],'',False)}}
+        if self.audit.get('resolver_period_unfinished'):
+            # SW1 §4.2: the model is told, as a fact, that the rewrite's period has not ended; original_words_note is overridden here.
+            u=self.audit['resolver_period_unfinished']
+            hint['period_note']=(f"系统事实：改写里的期间 {u['start']} 至 {u['end']} 截至今天（{u['today']}）还没有结束，而用户原话里的时间说法是相对的。"
+                '问的是已披露的财务数据时，按最近已披露的一期回答并写明是哪一期；问的是行情、新闻、持仓或进行中的指引时，按这一期至今回答。'
+                '这条优先于 original_words_note 里「不要按原话重新推算」那一句。')
         # FP1: the user's own words travel with the rewrite; the rewrite still decides company, metric and period.
         from .fp_flags import flag
         words=self.user_words().strip()
@@ -1928,6 +2040,43 @@ class Turn:
         from ..agent_chat_stream import bounded_tool_result
         await self.emit({'event':'tool_result','call_id':self.active_call_id or self.last_call_id,'name':name,'result':bounded_tool_result(safe)})
 
+    def note_coverage(self,name,args,rows,coverage):
+        """SW1: keep a read's receipt with the rows it actually returned (pre-gate), for the closing recheck and the audit."""
+        read={filing_key(r.get('form'),r.get('filed_at')) for r in rows if isinstance(r,dict)}
+        labels={str(r['period_label']) for r in rows if isinstance(r,dict) and r.get('period_label')}
+        self.coverage_log.append({'name':name,'coverage':coverage,'read_filings':read,'read_labels':labels})
+        for item in coverage.get('widened') or []:
+            if len(self.audit.setdefault('read_widened',[]))<20:
+                self.audit['read_widened'].append({'tool':name,'symbol':args.get('symbol') if isinstance(args,dict) else None,
+                                                   'rung':item.get('rung'),'rows':item.get('rows')})
+        self.audit['coverage_not_read']=len({(n.get('form'),str(n.get('filed_at') or '')[:10])
+                                             for entry in self.coverage_log for n in entry['coverage'].get('not_read') or []})
+
+    def unread_gap(self):
+        """Filings and periods a receipt listed as not read, that no later read this turn covered. Filings more than
+        400 days before the newest filing read are left out: they are not what a short answer is about."""
+        newest=[filing_day(key[1]) for entry in self.coverage_log for key in entry['read_filings'] if key[1]]
+        if not newest:return []
+        horizon=max(newest)-timedelta(days=400)
+        gaps=[]
+        for index,entry in enumerate(self.coverage_log):
+            later_filings=set();later_labels=set()
+            for later in self.coverage_log[index+1:]:
+                later_filings|=later['read_filings'];later_labels|=later['read_labels']
+            cover=entry['coverage']
+            for item in cover.get('not_read') or []:
+                key=filing_key(item.get('form'),item.get('filed_at'))
+                when=filing_day(key[1])
+                if key in later_filings or (when is not None and when<horizon):continue
+                gaps.append(f'{key[0]} {key[1]}')
+            for label in cover.get('periods_left_out') or []:
+                if label in later_labels:continue
+                ends=re.findall(r'\d{4}-\d{2}-\d{2}',label)
+                end=filing_day(ends[-1]) if ends else None
+                if end is not None and end<horizon:continue
+                gaps.append(label)
+        return list(dict.fromkeys(gaps))[:LIST_LIMIT]
+
     def accept(self,name,args,outcome):
         self.last_accepted=None
         if not outcome.get('ok'):
@@ -2029,6 +2178,10 @@ class Turn:
 # F3: the classifier's period only.  Using the model's own search string as the period made
             # gate_row demand its year inside every page body, which discarded good web results.
             requirements['period']=self.scope.get('period')
+        # SW1: a read's coverage receipt travels with the result (never numbered, never evidence) and is logged for the recheck.
+        coverage=(outcome.get('meta') or {}).get('coverage') if isinstance(outcome.get('meta'),dict) else None
+        if not isinstance(coverage,dict):coverage=None
+        if coverage is not None:self.note_coverage(name,args,rows,coverage)
         accepted=[];reasons=[]
         for row in rows:
             if not isinstance(row,dict):continue
@@ -2058,7 +2211,9 @@ class Turn:
         # Failed/rejected bodies never reach the answer model, including in errors.
         if not accepted:
             fallback_hint = 'fallback_to_web_search_recommended' if name=='search_configured_news' else 'The read completed. Empty evidence is not a failed tool: do not retry this saved-data query unchanged. Use a justified public search or conclude that there is no verifiable information.'
-            entry={'name':name,'ok':True,'data':[],'items':[],'meta':outcome.get('meta') or {'hint':fallback_hint},'status':'no_matching_evidence','error_code':reasons[0] if reasons else 'zero_evidence','hint':fallback_hint}
+            meta=outcome.get('meta') or {'hint':fallback_hint}
+            if coverage is not None:meta={'hint':fallback_hint,**meta}   # SW1: the receipt rides beside the hint, which stays
+            entry={'name':name,'ok':True,'data':[],'items':[],'meta':meta,'status':'no_matching_evidence','error_code':reasons[0] if reasons else 'zero_evidence','hint':fallback_hint}
             if flag('FINBOT_FP9_COMPOUND_EMPTY',True):
                 # FP9: every rejection reason with its count, the row count, and the tool's own status when it gave one.
                 from collections import Counter
@@ -2075,7 +2230,7 @@ class Turn:
             whole=shown.get('_evidence_text');excerpt=shown.get('excerpt') if shown.get('excerpt') is not None else shown.get('summary')
             if isinstance(whole,str) and isinstance(excerpt,str):self.note_truncation(name+'.excerpt',len(whole),len(excerpt))
         rows=number_rows(name,accepted,self.citations,requirements)
-        self.last_accepted={'ok':True,'data':rows,'source':outcome.get('source')}
+        self.last_accepted={'ok':True,'data':rows,'source':outcome.get('source'),**({'coverage':coverage} if coverage is not None else {})}
         self.observations.append({'name':name,'arguments':args,'result':self.last_accepted,'accepted_evidence':True})
         saved={'id':uuid.uuid4().hex,'owner':self.context.owner_hash,'conversation':self.context.conversation_id,
             'rows':accepted,'scope':{k:v for k,v in requirements.items() if v is not None},'tool':name,'created_at':datetime.now(UTC).isoformat()}
@@ -3325,7 +3480,7 @@ class Turn:
                         # M2: no tool called and no evidence held.  The model is told so, with its real tools, once.
                         self.audit['nudged']=True
                         self.audit['nudged_draft']=content[:DRAFT_COPY_LIMIT]
-                        self.protocol.append({'role':'system','content':NUDGE_NOTE.format(tools='、'.join(t['function']['name'] for t in self.exposed_tools()))})
+                        self.protocol.append({'role':'system','content':nudge_note('、'.join(t['function']['name'] for t in self.exposed_tools()))})
                         continue
                     # FP9: the model's own searches came back empty twice and no public web search ran.  It is told once what was
                     # searched and may search publicly; nothing is forced, and if it still makes no call the refusal follows as before.
@@ -3334,7 +3489,7 @@ class Turn:
                         if sum(1 for item in mine if item['outcome'] in {'empty','failed'})>=2 and public_search_state(self.feedback)=='not_run' and 'web_research' in {t['function']['name'] for t in self.exposed_tools()}:
                             self.audit['compound_empty_noted']=True
                             if content.strip():self.audit['compound_empty_draft']=content[:DRAFT_COPY_LIMIT]
-                            self.protocol.append({'role':'system','content':COMPOUND_EMPTY_NOTE.format(searched=json.dumps(mine,ensure_ascii=False,default=str))})
+                            self.protocol.append({'role':'system','content':compound_empty_note(json.dumps(mine,ensure_ascii=False,default=str),content)})
                             continue
                     if self.audit.get('nudged') and self.audit.get('nudge_outcome') is None:self.audit['nudge_outcome']='failed'
                     if content.strip():self.audit['discarded_draft']=content[:DRAFT_COPY_LIMIT]
@@ -3352,11 +3507,23 @@ class Turn:
                     self.audit['empty_close_retried']=True
                     self.protocol.append({'role':'system','content':EMPTY_CLOSE_NOTE.format(sources=self.evidence_sources())})
                     continue
+                if self.route=='A' and self.observations and content.strip() and not self.audit.get('absence_recheck_noted') \
+                        and flag('FINBOT_SW1_READ_WIDEN',True) and flag('FINBOT_SW1_ABSENCE_RECHECK',True):
+                    # SW1 §2.6: once per turn, a closing that calls the library empty while a receipt lists unread filings is
+                    # shown those filings and its own draft. It may keep the draft; the system changes no words.
+                    gap=self.unread_gap()
+                    if gap and ABSENCE_GAP.search(content):
+                        self.audit['absence_recheck_noted']=True
+                        self.audit['absence_recheck_draft']=content[:DRAFT_COPY_LIMIT]
+                        self.protocol.append({'role':'system','content':ABSENCE_RECHECK_NOTE.format(unread='、'.join(gap),draft=draft_quote(content))})
+                        continue
+                if self.audit.get('absence_recheck_noted') and self.audit.get('absence_recheck_outcome') is None:self.audit['absence_recheck_outcome']='kept'
                 if await self.recover_remember():return self.remember_card_finish()
                 return await self.finish_answer(content or '没有生成可用的回答。')
             if not isinstance(calls,list) or len(calls)>12:stop='provider_protocol_invalid';break
             if any(not isinstance(c,dict) or not isinstance(c.get('id'),str) for c in calls):stop='provider_protocol_invalid';break
             self.audit['model_tool_requests']+=len(calls)
+            if self.audit.get('absence_recheck_noted') and self.audit.get('absence_recheck_outcome') is None:self.audit['absence_recheck_outcome']='requeried'
             if self.audit.get('nudged') and self.audit.get('nudge_outcome') is None:self.audit['nudge_outcome']='recovered'
             assistant={k:v for k,v in decision.items() if k in {'content','tool_calls','reasoning_content','reasoning_details'}}
             self.protocol.append({'role':'assistant',**assistant})

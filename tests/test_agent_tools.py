@@ -41,6 +41,7 @@ def test_sec_filing_tool_preserves_source_and_selects_item_text(monkeypatch):
     body='Cover page\n'+('x'*1500)+'\nItem 2. Management discussion of operating performance.'+(' substantive text.'*100)
     digest=hashlib.sha256(body.encode()).hexdigest()
     async def query(sql,params):
+        if 'content_financials IS NOT NULL AS has_xbrl' in sql: return []   # SW1 coverage: the library's metadata read, not the inventory
         assert 'accession_number' in sql and 'content_source_url' in sql
         return [{'id':'filing-uuid','accession_number':'0000000000-26-000001','source_url':'https://sec.test/main','content_source_url':'https://sec.test/exhibit','content_excerpt':body,'content_excerpt_sha256':digest,'content_truncated':True,'content_status':'fetched','observed_at':None}]
     monkeypatch.setattr(tools,'_query',query)
@@ -377,6 +378,7 @@ def test_sec_filing_tool_reads_the_full_text_and_reports_its_size(monkeypatch):
     digest = hashlib.sha256(text.encode()).hexdigest()
 
     async def query(sql, params):
+        if 'content_financials IS NOT NULL AS has_xbrl' in sql: return []   # SW1 coverage: the library's metadata read, not the inventory
         assert 'content_text' in sql and 'content_length' in sql
         return [{'id': 'filing-uuid', 'accession_number': '0000000000-26-000009', 'form': '10-K',
                  'filed_at': None, 'source_url': 'https://sec.test/main', 'content_source_url': None,

@@ -27,12 +27,13 @@ def error(code):return {'ok':False,'data':[],'error_code':code,'hint':'用 reque
 async def search_knowledge(args,context):
     """A's mandatory saved-data prelude; explicit structured selectors only."""
     from ..agent_tools import query_materials,query_sec_filings,query_research_faq
-    rows=[];citations=[];read_error=None;symbol=args.get('symbol');query=args['query'];limit=args.get('limit',5)
+    rows=[];citations=[];read_error=None;symbol=args.get('symbol');query=args['query'];limit=args.get('limit',5);filing_meta=None
     with research_context(context.owner_hash,citations=citations):
         if symbol:
             if args.get('latest') or args.get('form'):
                 filing=await query_sec_filings.ainvoke({'symbol':symbol,'limit':1 if args.get('latest') else limit,
                     'form':args.get('form'),'financial_only':args.get('financial_only',False),'source_id':args.get('source_id')})
+                filing_meta=filing.get('meta')   # the filing read's coverage receipt (SW1), handed on to the turn
                 rows.extend({**r,'symbol':symbol,'source_type':'official_filing'} for r in filing.get('data') or [])
                 if not filing.get('ok'):read_error=filing.get('error_code') or 'knowledge_unavailable'
             else:
@@ -58,7 +59,9 @@ async def search_knowledge(args,context):
                 'source_url':r.source_url,'published_at':r.published_at.isoformat() if r.published_at else None,
                 'fetched_at':r.fetched_at.isoformat(),'content_hash':r.content_hash} for r in saved)
     if not rows and read_error:return error(read_error)
-    return {**result(rows[:limit],'saved knowledge'),'_citations':citations}
+    out={**result(rows[:limit],'saved knowledge'),'_citations':citations}
+    if filing_meta:out['meta']=filing_meta
+    return out
 
 
 async def invoke(name,args,context,*,emit=None):
