@@ -1,10 +1,10 @@
-// Minimal static server: serves a Vite build output directory under /FinBot/ (the Pages base path).
+// Minimal static server: serves a Vite build output directory under BASE (production is the finbotai.me root, "/").
 // Unknown paths under the base fall back to index.html (hash routing never needs it, but a refresh would).
 import http from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
-export const BASE = "/FinBot/";
+export const BASE = "/";
 
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
@@ -20,6 +20,7 @@ export async function startServer(distDir) {
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
       if (!url.pathname.startsWith(BASE)) {
+        // Only reachable when BASE is a sub-path: send the bare root there.
         if (url.pathname === "/") { response.writeHead(302, { Location: BASE }); response.end(); return; }
         response.writeHead(404); response.end("not found"); return;
       }

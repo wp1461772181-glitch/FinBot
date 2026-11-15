@@ -1,4 +1,4 @@
-import type { AgentChatMessage } from "../../api";
+import type { AgentChatMessage } from "../../api/conversations";
 
 /** Why a turn failed, as the error bar needs it: the server's code (it decides whether 去设置 is offered), the sentence to show, whether the request never got an answer. */
 export type Failure = { code: string; message: string; network: boolean };

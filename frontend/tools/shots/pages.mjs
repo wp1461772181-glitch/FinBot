@@ -33,11 +33,24 @@ export async function clickSend(page) {
   await page.locator("[data-testid=send]").click({ timeout: 20000 });
 }
 
+/**
+ * Type into the open line's composer, once it is THAT line's composer.  A hash change does not reload the page: right after switching to another
+ * bot the old line's composer is still on screen (enabled, with the old draft) until the new line mounts, and text typed in that gap lands in the
+ * old line's draft; the new line's composer then comes up empty and its send button stays disabled.  So when `botName` is given, wait for the
+ * composer whose placeholder names that bot (「给 <bot> 发消息…」), type, and check the box holds what was typed before anyone presses send.
+ */
+export async function fillDraft(page, text, { botName } = {}) {
+  if (botName) await page.locator(`#agent-draft[placeholder*="${botName}"]`).waitFor({ state: "visible", timeout: 30000 });
+  await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 30000 });
+  await page.locator("#agent-draft").fill(text);
+  await page.waitForFunction((value) => document.querySelector("#agent-draft")?.value === value, text, { timeout: 10000 });
+}
+
 /** Start an answer in TeslaBot's line that never ends, then go back to the default bot: TeslaBot's row shows 回答中 in the background. */
 async function holdTeslaTurn(page) {
   await page.goto(page.url().split("#")[0] + `#/chat/${BOT.teslabot}`, { waitUntil: "load" });
-  await page.locator("#agent-draft:not([disabled])").waitFor();
-  await page.locator("#agent-draft").fill(`${HOLD_MARKER} AAPL`);
+  await page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 30000 });
+  await fillDraft(page, `${HOLD_MARKER} AAPL`, { botName: "TeslaBot" });
   await clickSend(page);
   await page.locator("[data-testid=stop]").waitFor();
   await page.evaluate(() => { location.hash = "#/chat"; });
@@ -127,14 +140,36 @@ export async function openArchiveView(page) {
   const archive = { marker: "market-evidence-agent-chat-archive", version: 1, created_at: stamp, updated_at: stamp,
     conversations: [{ id: "archived-1", created_at: stamp, updated_at: stamp, messages: [{ role: "user", content: "归档里的问题" }, { role: "assistant", content: "归档里的回答", status: "complete" }] }] };
   await page.locator('.chat-archive-settings input[type="file"]').setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) });
-  await page.locator(".chat-archive-settings [role=status]").waitFor({ timeout: 10000 });
+  await page.locator(".chat-archive-settings [role=status]").waitFor({ timeout: 30000 });
   await page.evaluate(() => { location.hash = "#/chat/history"; });
-  await page.locator("[data-testid=archive-banner]").waitFor({ timeout: 10000 });
-  await page.locator("[data-testid=message][data-role=assistant]").waitFor({ timeout: 10000 });
+  await page.locator("[data-testid=archive-banner]").waitFor({ timeout: 30000 });
+  await page.locator("[data-testid=message][data-role=assistant]").waitFor({ timeout: 30000 });
+}
+
+/** A bot's 档案 tab in the side panel, once its personality pickers and rehearsal are there (A5). */
+export async function openStudio(page) {
+  await openSide(page);
+  await page.locator("#chat-panel").getByRole("tab", { name: "档案" }).click();
+  await page.locator("[data-testid=profile-pane] [data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 });
+  // the preview avatar draws its first frame after its chunk (the body's engine) is in
+  await page.locator("[data-testid=rehearsal-stage] svg[data-slot=bot-body]").waitFor({ timeout: 30000 });
+  // the preview only runs frames while it is on screen (a body off screen stops): bring it into view, as a reader scrolling to it does
+  await page.locator("[data-testid=rehearsal-stage]").scrollIntoViewIfNeeded();
 }
 
 /** The reading of a round's first answer: its message node. */
 export const firstAnswer = (page) => page.locator("[data-testid=message][data-role=assistant]").first();
+
+/** The five bots' lines, for the pages that show the line's signature. */
+const SIGNATURE_LINES = [
+  { key: "finbot", bot: BOT.finbot, conversation: CONVERSATION.finbot }, { key: "teslabot", bot: BOT.teslabot, conversation: CONVERSATION.teslabot },
+  { key: "newsbot", bot: BOT.newsbot, conversation: CONVERSATION.newsbot }, { key: "applebot", bot: BOT.applebot, conversation: CONVERSATION.applebot },
+  { key: "reportbot", bot: BOT.reportbot, conversation: CONVERSATION.reportbot },
+];
+/** The line carries who is answering (data-archetype, written by a chunk of its own) once the persona has been read: wait for it, so the picture does not depend on the race. */
+async function personaReady(page) {
+  await page.waitForFunction(() => Boolean(document.querySelector("[data-slot=chat-page]")?.dataset.archetype), null, { timeout: 30000 });
+}
 
 export const PAGES = [
   { name: "entry", hash: "#/login", identity: "none", ready: '[aria-labelledby="login-title"]' },
@@ -243,14 +278,16 @@ export const PAGES = [
     before: async (page) => { await handTurn(page, { text: "取消", lead: "已经生成的前半句，" }); await page.locator("[data-testid=stop]").click(); await page.locator("[data-testid=stopped-note]").waitFor(); } },
   // 后台回答完成: TeslaBot answers in the background while the reader is in the default line; the toast says so.
   { name: "chat-state-background-done", hash: "#/chat", ready: "[data-testid=message]",
-    before: async (page) => {
+    before: async (page, { width }) => {
       await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, BOT.teslabot);
       await page.locator("h1", { hasText: "TeslaBot" }).waitFor();
       const hand = await handTurn(page, { text: "后台", lead: "后台的回答", botId: BOT.teslabot, conversationId: CONVERSATION.teslabot, turnId: "t9000000-0000-4000-8000-0000000000d2" });
       await page.evaluate(() => { location.hash = "#/chat"; });
       await page.locator("[data-testid=message]").first().waitFor();
       await hand.push(0, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000d2", thinking_ms: 900, citations: [], citation_protocol: null }); await hand.close(0);
-      await page.locator("[data-sonner-toast]").waitFor({ timeout: 10000 });
+      // The turn is over for the app once TeslaBot's row says it has something unread (the finished background answer); the toast follows from the same event.
+      if (hasSidebar(width)) await page.locator("[data-bot-row][data-marker=unread]", { hasText: "TeslaBot" }).waitFor({ timeout: 30000 }); // a phone has no sidebar rows
+      await page.locator("[data-sonner-toast]").waitFor({ timeout: 30000 });
     } },
   // 外部来的新消息: a routine's result and a message from elsewhere arrive while the line is open: each has its divider.
   { name: "chat-state-external-message", hash: "#/chat", ready: "[data-testid=message]",
@@ -335,12 +372,51 @@ export const PAGES = [
   // The backend unreachable: every API request fails, then a page that needs the API opens: the banner is at the top of the page.
   { name: "offline", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page, { mock }) => { mock.control.down = true; await page.evaluate(() => { location.hash = "#/portfolio"; }); await page.locator('[data-slot="offline-banner"]').waitFor(); } },
+  // A5: the personality pickers (archetype, tempo, easing, aura variant, where they come from) and the rehearsal in the 档案 tab: the reduced-motion still frame of
+  // each of its states (the shots run with the system's reduced motion), one picture of the whole studio per state.  Then the settings page's animation strength,
+  // and the chat page under each level of animation chosen in the app (the browser's own setting left alone): "lite" and "off".
+  { name: "bot-settings-persona", hash: `#/chat/${BOT.applebot}`, ready: "[data-testid=message]", element: "[data-slot=persona-picker]",
+    before: async (page) => { await openStudio(page); } },
+  { name: "bot-settings-persona-override", hash: `#/chat/${BOT.teslabot}`, ready: "#agent-draft:not([disabled])", element: "[data-slot=persona-picker]",
+    before: async (page) => { await openStudio(page); await page.locator("[data-testid=persona-archetype] [data-option=reader]").click(); await page.locator("[data-testid=persona-tempo] [data-option=calm]").click(); await page.locator('[data-testid=persona-source][data-kind=override]').waitFor(); } },
+  ...["idle", "thinking", "tool3", "verify", "answer", "waiting", "done", "partial", "failed"].map((state) => (
+    { name: `bot-settings-rehearsal-${state}`, hash: `#/chat/${BOT.teslabot}`, ready: "#agent-draft:not([disabled])", element: "[data-slot=rehearsal]",
+      before: async (page) => { await openStudio(page); await page.locator(`[data-slot=rehearsal] [data-scenario=${state}]`).click(); await page.locator(`[data-slot=rehearsal][data-scenario=${state}]`).waitFor(); } })),
+  { name: "settings-appearance-motion", hash: "#/settings/appearance", ready: "[data-slot=motion-level]" },
+  { name: "motion-lite", hash: "#/chat", ready: "[data-testid=message]", view: { reducedMotion: "no-preference", motionLevel: "lite" },
+    before: async (page) => { await page.waitForFunction(() => document.documentElement.dataset.motion === "lite"); } },
+  { name: "motion-off", hash: "#/chat", ready: "[data-testid=message]", view: { reducedMotion: "no-preference", motionLevel: "off" },
+    before: async (page) => { await page.waitForFunction(() => document.documentElement.dataset.motion === "off"); } },
+  // A1: the five bots on the sample page, all in the same state; reduced-motion still frames (the face, the look, the badges of the pose).
+  ...["idle", "listening", "thinking", "tool", "verify", "answer", "waiting", "done", "partial", "failed", "offline", "sleep"].map((state) => (
+    { name: `dev-kit-bots-${state}`, hash: "#/dev/kit/bots", ready: "[data-testid=bots-page]",
+      before: async (page) => { await page.locator(`[data-scenario=${state === "tool" ? "tool3" : state}]`).click(); } })),
+  // A2: the aura of each of the five bots in the still frames of reduced motion (what the shots run with), one bot's card per picture, light and dark:
+  // tool x3, check, done, partial, failed, waiting for you.  Tier M: two examples.
+  ...["FinBot", "TeslaBot", "NewsBot", "AppleBot", "ReportBot"].flatMap((bot) => ["tool3", "verify", "done", "partial", "failed", "waiting"].map((scenario) => (
+    { name: `dev-kit-aura-${bot.toLowerCase()}-${scenario}`, hash: "#/dev/kit/bots", ready: "[data-testid=bots-page]", element: `[data-testid=bot-sample-${bot}]`,
+      before: async (page) => { await page.locator(`[data-scenario=${scenario}]`).click(); } }))),
+  ...[["TeslaBot", "tool3"], ["ReportBot", "verify"]].map(([bot, scenario]) => (
+    { name: `dev-kit-aura-m-${bot.toLowerCase()}-${scenario}`, hash: "#/dev/kit/bots", ready: "[data-testid=bots-page]", element: `[data-testid=bot-sample-m-${bot}]`,
+      before: async (page) => { await page.locator(`[data-scenario=${scenario}]`).click(); } })),
+  // A3: the line's signature.  The sample page's row (the trace of thinking, the caret, the closing line; reduced-motion still poses, what shots run with), and the real
+  // chat page in each of the five bots' lines: waiting for the first word (the trace), an answer half way (the caret), and a turn that failed (the red line).
+  { name: "dev-kit-signature", hash: "#/dev/kit/bots", ready: "[data-testid=signature-row]", element: "[data-testid=signature-row]" },
+  ...SIGNATURE_LINES.flatMap(({ key, bot, conversation }) => [
+    { name: `chat-sig-wait-${key}`, hash: `#/chat/${bot}`, ready: "#agent-draft:not([disabled])",
+      before: async (page) => { await personaReady(page); await handTurn(page, { text: "等首字", botId: bot, conversationId: conversation }); await page.locator("[data-slot=think-trace]").first().waitFor(); } },
+    { name: `chat-sig-stream-${key}`, hash: `#/chat/${bot}`, ready: "#agent-draft:not([disabled])",
+      before: async (page) => { await personaReady(page); await streamHalfway(page, { paragraphs: 1, botId: bot, conversationId: conversation }); await page.locator("[data-testid=message-body][data-streaming]").first().waitFor(); } },
+  ]),
+  ...SIGNATURE_LINES.filter(({ key }) => key === "finbot" || key === "reportbot").map(({ key, bot, conversation }) => (
+    { name: `chat-sig-failed-${key}`, hash: `#/chat/${bot}`, ready: "#agent-draft:not([disabled])",
+      before: async (page) => { await personaReady(page); const hand = await handTurn(page, { text: "失败", lead: "已经生成的前半句，", botId: bot, conversationId: conversation }); await endWithError(hand, 0, "provider_timeout"); await page.locator("[data-testid=done-line][data-state=failed]").waitFor(); } })),
   { name: "dev-kit-menu", hash: "#/dev/kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); } },
 ];
 
 /** Wait for a page's ready condition, then for any loading text to disappear. */
-export async function waitReady(page, def, timeout = 15000) {
+export async function waitReady(page, def, timeout = 30000) {
   if (typeof def.ready === "function") await def.ready(page);
   else await page.waitForSelector(def.ready, { state: "visible", timeout });
   // The states sample page shows skeletons on purpose (their screen-reader text says 正在读取): it opts out of the wait.

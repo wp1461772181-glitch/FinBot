@@ -1,7 +1,10 @@
 import { Tx, formatDate as formatLocalizedDate, translatePhrase, useLocale } from "./i18n";
 import { useEffect, useRef, useState } from "react";
-import { ApiError, createMaterialAnalysisJob, fetchFilingContent, getChatMode, getMaterialAnalysis, getMaterialAnalysisHistory, getMaterialAnalysisJob, getModelCatalog } from "./api";
-import type { CatalogModel } from "./api";
+import { ApiError, getChatMode } from "./api/base";
+import { createMaterialAnalysisJob, getMaterialAnalysis, getMaterialAnalysisHistory, getMaterialAnalysisJob } from "./api/material-library";
+import { fetchFilingContent } from "./api/market-data";
+import { getModelCatalog } from "./api/bots";
+import type { CatalogModel } from "./api/bots";
 import type { MaterialAnalysisJob, MaterialAnalysisVersion, MaterialItem, MaterialCitation, MaterialCitationVerification } from "./types";
 import { useAiContentLocalization, withLocalizedFields } from "./useAiContentLocalization";
 

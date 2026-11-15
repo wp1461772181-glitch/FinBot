@@ -2,8 +2,8 @@
 // choice goes out as what) stay in chat-clarification.mjs; this module only arranges them for the card: which buttons are the two main ones,
 // how long a confirmation lives, what a finished card says of itself, and how many materials a revision card still wants ticked.
 
-/** A write confirmation lives ten minutes on the server (design 4.2); the card counts the same time down for a card made in this session. */
-export const APPROVAL_TTL_MS = 10 * 60 * 1000;
+import { APPROVAL_TTL_MS } from "./approval-ttl.mjs";
+export { APPROVAL_TTL_MS }; // a write confirmation lives ten minutes on the server (design 4.2); the card counts the same time down for a card made in this session
 
 const WRITE_REASONS = new Set(["write_confirmation", "confirm_write", "choose_write_action", "choose_revision_sources"]);
 const CONFIRM_REASONS = new Set(["write_confirmation", "confirm_write", "choose_revision_sources"]);

@@ -1,0 +1,10 @@
+import type { MotionLevel, MotionState } from "./motion-level.mjs";
+export const MOTION_KEY: string;
+export const LEVELS: MotionLevel[];
+export function storedMotionLevel(storage?: Pick<Storage, "getItem">): MotionLevel | null;
+export const getMotion: () => MotionState;
+export const motionOff: () => boolean;
+export function subscribeMotion(fn: () => void): () => void;
+export function setMotion(next: MotionState): void;
+export function refreshMotion(drop?: boolean): MotionState;
+export function setResolver(fn: (drop?: boolean) => MotionState): void;

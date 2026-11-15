@@ -1,0 +1,1 @@
+export declare const T: { ATTENTION: number; SUCCESS: number; ERROR: number; HOVER: number; CLICK: number; SLEEP_AFTER: number; DWELL: number; INTRO: number; PARTIAL: number; SLEEP_FREEZE: number; NUDGE: number; NUDGE_EVERY: number; NUDGE_MAX: number };

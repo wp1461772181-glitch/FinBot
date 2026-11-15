@@ -1,6 +1,8 @@
 // legacy markup, moved as-is in P3.1; restyled in P3.2–P3.4
 import { useCallback, useEffect, useRef, useState } from "react";
-import { addCatalogModel, deleteCatalogModel, discoverCatalogModels, getChatMode, getModelCatalog, getModelRoles, setDefaultCatalogModel, setModelRole, testCatalogModel, updateCatalogModel, type ModelCatalog } from "../../api";
+import { addCatalogModel, deleteCatalogModel, discoverCatalogModels, getModelRoles, setDefaultCatalogModel, setModelRole, testCatalogModel, updateCatalogModel } from "../../api/catalog-admin";
+import { getChatMode } from "../../api/base";
+import { getModelCatalog, type ModelCatalog } from "../../api/bots";
 import { catalogName, entryMoved, entryProblem, probeFor, saveBody, siblingsToInert, type CatalogEntryDraft } from "../../catalog-form.mjs";
 import { createModelDiscoveryScheduler } from "../../model-discovery.mjs";
 import { useLocale } from "../../i18n";

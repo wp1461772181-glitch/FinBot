@@ -2,7 +2,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Skeleton } from "@/components/state/Skeleton";
 import { SourceQuote } from "@/components/SourceCard";
-import type { AgentCitation } from "../../api";
+import type { AgentCitation } from "../../api/conversations";
 import { useLocale } from "../../i18n";
 import { excerptSource } from "../../source-view.mjs";
 import { useCitationDetail } from "./citation-details";

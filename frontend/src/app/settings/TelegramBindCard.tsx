@@ -1,6 +1,7 @@
 // legacy markup, moved as-is in P3.1; restyled in P3.2–P3.4
 import { useEffect, useState } from "react";
-import { getChatMode, getTelegramBind, saveTelegramToken, startTelegramBind, unbindTelegram, type TelegramBindStatus } from "../../api";
+import { getChatMode } from "../../api/base";
+import { getTelegramBind, saveTelegramToken, startTelegramBind, unbindTelegram, type TelegramBindStatus } from "../../api/integrations";
 import { useLocale } from "../../i18n";
 import { confirm } from "@/components/state/confirm";
 

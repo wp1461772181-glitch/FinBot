@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { setChatMode } from "../../api";
+import { setChatMode } from "../../api/base";
 import { chatIdentityKeys } from "../../chat-identity.mjs";
 import { useLocale } from "../../i18n";
 import { paths } from "../../routes.mjs";

@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { useOpenConversation } from "./app/chat/ChatSessionProvider";
-import { confirmInboxItem, confirmProfileItem, createProfileItem, deleteNewsSource, deleteProfileItem, dryRunNewsSource, getChatMode, getNewsSourcesConfig, listBots, listInbox, listProfileItems, listRecall, listTaskProposals, mintInboxCard, repairNewsSource, saveNewsPushSettings, setInboxStatus, setNewsSourceEnabled, updateProfileItem, upsertNewsSource, type Bot, type InboxItem, type NewsDryRunResult, type NewsSource, type NewsSourceInput, type ProfileBot, type ProfileItem, type RecallItem, type TaskProposal } from "./api";
+import { confirmInboxItem, mintInboxCard, setInboxStatus } from "./api/inbox-actions";
+import { confirmProfileItem, createProfileItem, deleteProfileItem, listProfileItems, listRecall, updateProfileItem, type ProfileBot, type ProfileItem, type RecallItem } from "./api/memory";
+import { deleteNewsSource, dryRunNewsSource, getNewsSourcesConfig, repairNewsSource, saveNewsPushSettings, setNewsSourceEnabled, upsertNewsSource, type NewsDryRunResult, type NewsSource, type NewsSourceInput } from "./api/news-sources";
+import { getChatMode } from "./api/base";
+import { listBots, type Bot } from "./api/bots";
+import { listInbox, listTaskProposals, type InboxItem, type TaskProposal } from "./api/inbox";
 import { NewsIcon, RoutineIcon } from "./BotPages";
 import { TaskManager } from "./BotRoutines";
 import { useLocale } from "./i18n";

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { PopPanel } from "@/components/PopPanel";
-import { getModelCatalog, updateBot, type Bot, type ModelCatalog } from "../../api";
+import { getModelCatalog, updateBot, type Bot, type ModelCatalog } from "../../api/bots";
 import { useLocale } from "../../i18n";
 import { badgeText, effectiveEntry, effortChoices, modelChoices, noEffort, patchFor } from "../../model-effort.mjs";
 

@@ -1,6 +1,7 @@
 // Bot avatar look for the bloub engine (src/bloub): which silhouette + colour a bot gets, and which engine state it shows.
 // Pure functions (no engine import) so node --test can cover them.
 import { DEFAULT_AVATAR, parseAvatar } from "./orb.mjs";
+import { presetLook } from "./bot-persona-presets.mjs";
 
 // The full bloub customisation catalog (jeremy-prt/bloub @ b4bb3c1, the ids of src/bloub/skins.ts, expressions.ts, states.ts).
 // bloub-look.test.mjs parses the vendored sources and fails if these lists drift from them.
@@ -45,10 +46,14 @@ export function normalizeLook(raw) {
 
 export function sameLook(a, b) { return Boolean(a && b) && a.shape === b.shape && a.color === b.color; }
 
-/** What a bot shows as its base: the stored look; else an explicit older face pick; else the hashed default. A broken stored value falls through. */
-export function resolveLook(id, avatar, stored) {
+/** What a bot shows as its base, in this order: the stored look; the recommended look of a preset bot (bot-persona: one of the five
+ * existing bots, hit by id then by `name`); an explicit older face pick; the hashed default. A broken stored value falls through.
+ * Every caller that wants "the look of this bot" goes through here, so the answer is the same on every screen. */
+export function resolveLook(id, avatar, stored, name) {
   const own = normalizeLook(stored);
   if (own) return own;
+  const recommended = presetLook({ id, name });
+  if (recommended) return recommended;
   const value = String(avatar ?? "").trim();
   const parsed = parseAvatar(value);
   if (parsed.kind === "bot" && /^bot:/.test(value) && value !== DEFAULT_AVATAR) return { ...faceLook(parsed.style, parsed.mood) };

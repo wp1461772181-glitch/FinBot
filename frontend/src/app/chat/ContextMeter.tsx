@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { PopPanel } from "@/components/PopPanel";
-import { getContextUsage, type ContextUsage } from "../../api";
+import { getContextUsage, type ContextUsage } from "../../api/conversations";
 import { useLocale } from "../../i18n";
 import { barSegments, formatKb, formatTokens, meterTone } from "../../context-usage.mjs";
 

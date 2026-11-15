@@ -2,7 +2,7 @@ import { Link } from "react-router";
 import { Eye, KeyRound, LogOut, Search } from "lucide-react";
 import { openCommandMenu } from "@/components/command/command-events";
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
-import type { Bot } from "../../api";
+import type { Bot } from "../../api/bots";
 import { botSections } from "../../bot-items.mjs";
 import { useLocale } from "../../i18n";
 import { paths } from "../../routes.mjs";

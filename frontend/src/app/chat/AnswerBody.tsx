@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import type { AgentChatMessage } from "../../api";
+import type { AgentChatMessage } from "../../api/conversations";
 import { renderAnswerText } from "../../chat-citations.mjs";
 import { evidenceText, hintText, markUnverified, reasonKey } from "../../chat-unverified.mjs";
 import { attachPublicMarks } from "../../chat-public-marks.mjs";

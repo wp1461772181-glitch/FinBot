@@ -1,8 +1,8 @@
 import { ArrowUpRight } from "lucide-react";
-import { LiveBotOrb } from "../../LiveBotOrb";
+import { BotPresence } from "@/components/bot/BotPresence";
 import { BOT_AVATAR_SIZE } from "../../bot-sizes.mjs";
 import { starterQuestions } from "../../starter-questions.mjs";
-import type { Bot } from "../../api";
+import type { Bot } from "../../api/bots";
 import { useLocale } from "../../i18n";
 
 const starterClass = "inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3.5 py-1.5 text-left text-small text-ink-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sm:min-h-9";
@@ -19,7 +19,7 @@ export default function EmptyChat({ bot, verified, onPick }: { bot?: Bot | null;
     {bot
       ? <>
         <span data-testid="welcome-avatar" className="flex [&_.bot-avatar]:h-[var(--avatar)] [&_.bot-avatar]:w-[var(--avatar)]" style={{ "--avatar": `${BOT_AVATAR_SIZE.hero}px` } as React.CSSProperties}>
-          <LiveBotOrb key={bot.id} avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} arrivalKey={`${bot.id}:hero`} size={BOT_AVATAR_SIZE.hero} chatState="idle" messages={[]} />
+          <BotPresence key={bot.id} avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} arrivalKey={`${bot.id}:hero`} size={BOT_AVATAR_SIZE.hero} chatState="idle" messages={[]} bot={bot} />
         </span>
         <div className="flex max-w-[34rem] flex-col gap-1">
           {bot.title && <p className="text-title-s text-ink">{bot.title}</p>}

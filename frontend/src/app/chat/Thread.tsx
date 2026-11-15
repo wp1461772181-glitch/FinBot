@@ -1,4 +1,4 @@
-import { Fragment, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { Fragment, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { ArrowDown, ChevronRight, LoaderCircle } from "lucide-react";
 import { SkeletonMessages, DelayedSkeleton } from "@/components/state/Skeleton";
 import { chatTurnPreviews } from "../../chat-thread.mjs";
@@ -6,13 +6,18 @@ import { bottomScrollTop, isFollowing, keepPositionAfterPrepend, showJumpToBotto
 import { noticesAfter } from "../../context-usage.mjs";
 import { externalSource, firstOfTurns } from "../../chat-states.mjs";
 import { OptionalChunk } from "../../OptionalChunk";
-import type { Bot } from "../../api";
+import type { Bot } from "../../api/bots";
 import { useLocale } from "../../i18n";
 import { useChat } from "./ChatSessionProvider";
 import { useMarkdown } from "./markdown-loader";
 import { Message, PendingAnswer } from "./Message";
 import { QuestionRail } from "./QuestionRail";
 import { useCopy } from "./use-copy";
+import { useSettledTurn } from "./settled-turn";
+import { loadedEntry, takeEntry } from "./handoff-intent";
+import type { Entry } from "./handoff-entry";
+import { usePhone } from "./use-media";
+import { isActiveClarification } from "../../chat-clarification.mjs";
 
 // The empty line (the bot, its companies, three starter questions) is only needed on a line that has not spoken yet: a chunk of its own.
 const EmptyChat = lazy(() => import("./EmptyChat"));
@@ -41,13 +46,36 @@ function CompactionDivider({ turns, focus, summary }: { turns: number; focus?: s
   </div>;
 }
 
+/**
+ * The page is mounted anew for each bot, and the session moves to the bot's line in a layout effect of the page (pages/chat.tsx): until it has, the session
+ * still holds the line before.  That line is not drawn (it would cost a whole render of messages that are gone a moment later): an empty scroll box stands
+ * in for the thread, and the real thread mounts on the line that belongs to this bot.
+ */
 export function Thread({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObject<HTMLTextAreaElement | null> }) {
+  const { t } = useLocale(), c = useChat();
+  if (bot && c.bot?.id !== bot.id) return <div className="relative flex min-h-0 flex-1 flex-col"><section data-testid="transcript" aria-label={t("对话")} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 lg:px-6" /></div>;
+  return <ThreadBody bot={bot} draftBox={draftBox} />;
+}
+
+function ThreadBody({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObject<HTMLTextAreaElement | null> }) {
   const { t } = useLocale(), c = useChat(), copy = useCopy();
   const transcriptRef = useRef<HTMLElement>(null);
   const turnPreviews = chatTurnPreviews(c.messages);
   const railTurns = turnPreviews.map(turn => ({ ...turn, turnId: c.messages[turn.userIndex]?.turn_id }));
   const [, setFeedbackTick] = useState(0);
   const { phase: markdownPhase } = useMarkdown();
+  const settled = useSettledTurn(c.state, c.messages);
+
+  // The handoff (design 6.7): this thread is the new line of a switch.  It is mounted and usable at once; this only says how it comes in: the last three
+  // messages fade in 20 ms apart (a desktop), the whole line slides 24px sideways (a phone), or the line cross-fades over 150 ms (reduced motion).  It is
+  // known while rendering (this thread mounts on the line that belongs to the bot), so the first frame already has it.
+  const phone = usePhone();
+  const [entry] = useState<Entry | null>(() => {
+    const intent = bot ? takeEntry(bot.id) : null, tools = loadedEntry();
+    return intent && tools ? tools.entryOf(intent, c.messages.length, phone) : null;
+  });
+  // A bot that waits for you: the line opens at its card (the focus stays where the reader put it).
+  useLayoutEffect(() => { if (entry && c.verified && isActiveClarification(c.messages, c.messages.length - 1, false)) void loadedEntry()?.revealWaitingCard(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Following: the newest line stays in view while the reader is at the bottom; one scroll up lets go and offers 回到底部.
   const following = useRef(true);
@@ -89,7 +117,7 @@ export function Thread({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObjec
   const lastIndex = c.messages.length - 1;
   const externalStarts = firstOfTurns(c.messages, c.externalTurns);
   return <div className="relative flex min-h-0 flex-1 flex-col">
-    <section ref={transcriptRef} data-testid="transcript" aria-live="polite" aria-label={t("对话")} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 lg:px-6"
+    <section ref={transcriptRef} data-testid="transcript" data-entry={entry && entry.motion !== "rise" ? entry.motion : undefined} style={entry ? { "--handoff-dir": entry.dir } as CSSProperties : undefined} aria-live="polite" aria-label={t("对话")} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 lg:px-6"
       onScroll={e => { if (e.currentTarget.scrollTop < 32) void loadEarlierAtTop(); }}>
       {!c.archiveView && c.historyHasMore && <div className="flex justify-center pt-4">
         <button type="button" data-testid="load-earlier" disabled={c.loadingEarlier} onClick={() => void loadEarlierAtTop()} className="inline-flex h-8 items-center gap-1.5 rounded-sm px-3 text-caption text-muted-foreground outline-none hover:bg-accent hover:text-ink focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70">
@@ -103,7 +131,9 @@ export function Thread({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObjec
           <div data-testid="thread" className="flex min-w-0 flex-col gap-7 lg:col-start-2 lg:row-start-1">{c.messages.map((m, i) => <Fragment key={i}>
             {externalStarts.has(i) && <ExternalDivider content={m.role === "user" ? m.content : ""} />}
             <Message m={m} i={i} last={i === lastIndex} bot={bot} streaming={i === lastIndex && c.state === "sending"} copy={copy} draftBox={draftBox}
-              turnIndex={m.role === "user" ? turnPreviews.findIndex(turn => turn.userIndex === i) : undefined} onFeedback={() => setFeedbackTick(x => x + 1)} />
+              turnIndex={m.role === "user" ? turnPreviews.findIndex(turn => turn.userIndex === i) : undefined} onFeedback={() => setFeedbackTick(x => x + 1)}
+              ended={settled?.index === i ? settled.outcome : null}
+              entry={entry?.delay(i)} />
             {m.role === "assistant" && noticesAfter(c.notices, m.turn_id).map(notice => <CompactionDivider key={`compaction-${notice.id}`} turns={notice.turns} focus={notice.focus} summary={notice.summary} />)}
           </Fragment>)}
             {c.state === "sending" && c.messages.at(-1)?.role === "user" && <PendingAnswer bot={bot} status={c.status} />}

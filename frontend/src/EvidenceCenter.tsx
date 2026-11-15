@@ -2,7 +2,9 @@ import { Tx, formatDateTime, getLocalePreference, translatePhrase, useLocale } f
 import { useAiContentLocalization, withLocalizedFields } from "./useAiContentLocalization";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { useNavigate } from "react-router";
-import { ApiError, getUploadedEvidence, getV2ForecastRoots, getV2ForecastVersion, getV2Timeline, uploadEvidence } from "./api";
+import { ApiError } from "./api/base";
+import { getUploadedEvidence, uploadEvidence } from "./api/evidence-uploads";
+import { getV2ForecastRoots, getV2ForecastVersion, getV2Timeline } from "./api/forecast-v2";
 import { hashHref, paths } from "./routes.mjs";
 import type { ResearchBrief, ResearchEvidencePointer, ResearchMaterialReference, UploadedEvidence, V2ForecastRoots, V2Timeline, V2VersionDetail } from "./types";
 

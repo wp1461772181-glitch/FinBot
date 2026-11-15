@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PUBLIC_MARK_ARIA, PUBLIC_MARK_GLYPH, publicMarkQuoteText, type PublicMarkView } from "../../chat-public-marks.mjs";
 import { useLocale } from "../../i18n";
-import type { AgentCitation } from "../../api";
+import type { AgentCitation } from "../../api/conversations";
 
 const OPEN_DELAY = 120, CLOSE_DELAY = 180;
 

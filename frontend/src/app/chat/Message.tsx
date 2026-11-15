@@ -1,16 +1,20 @@
-import { Suspense, lazy, useMemo, useRef, useState, type RefObject } from "react";
+import { Suspense, lazy, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { Check, Copy, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Skeleton } from "@/components/state/Skeleton";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { OptionalChunk } from "../../OptionalChunk";
 import { failureNeedsSettings } from "../../chat-states.mjs";
-import { BotOrb } from "../../BotOrb";
+import { BotAvatar } from "@/components/bot/BotAvatar";
+import { BOT_AVATAR_SIZE } from "../../bot-sizes.mjs";
 import { isActiveClarification } from "../../chat-clarification.mjs";
 import { isTaskPostHead } from "../../task-posts.mjs";
+import { doneLineState, type TurnEnd } from "../../signature.mjs";
 import { roundSources, turnKey } from "../../panel-model.mjs";
-import type { AgentChatMessage, Bot } from "../../api";
+import type { AgentChatMessage } from "../../api/conversations";
+import type { Bot } from "../../api/bots";
 import { useLocale } from "../../i18n";
 import { AnswerBody } from "./AnswerBody";
+import { DoneLine } from "./DoneLine";
 import { TaskPostHead } from "./TaskPostHead";
 import { TurnSteps } from "./TurnSteps";
 import { useChat } from "./ChatSessionProvider";
@@ -30,13 +34,17 @@ type Props = {
   m: AgentChatMessage; i: number; last: boolean; bot?: Bot | null; botColor?: string;
   streaming: boolean; copy: CopyState; draftBox: RefObject<HTMLTextAreaElement | null>;
   turnIndex?: number; onFeedback: () => void;
+  /** How the turn that ended on this message ended, when this tab watched it end (the closing line sweeps then); absent for everything else. */
+  ended?: TurnEnd | null;
+  /** The handoff (design 6.7): this message fades in this many seconds after the line was mounted (one of the last three of the line that has just been switched to). */
+  entry?: number;
 };
 
 /** One message of the thread: the owner's bubble, a routine task's head, or the bot's answer (head, process, text, card, foot). */
-export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex, onFeedback }: Props) {
+export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex, onFeedback, ended = null, entry }: Props) {
   const { t } = useLocale(), c = useChat(), panel = usePanel();
   const [tapped, setTapped] = useState(false);
-  const common = { id: `chat-message-${i}`, "data-testid": "message", "data-role": m.role, "data-turn-index": turnIndex, "data-last": last || undefined } as const;
+  const common = { id: `chat-message-${i}`, "data-testid": "message", "data-role": m.role, "data-turn-index": turnIndex, "data-last": last || undefined, ...(entry === undefined ? {} : { "data-entry": "", style: { "--entry-delay": `${entry}s` } as CSSProperties }) } as const;
 
   if (m.role === "user" && isTaskPostHead(m.content)) {
     return <article {...common} data-kind="task-post" className="min-w-0 rounded-md"><TaskPostHead content={m.content} /></article>;
@@ -56,10 +64,11 @@ export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex,
   const time = m.started_at ? new Date(m.started_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
   const copiedHere = copy.copied === i;
   const sourceCount = roundSources(m).length;
+  const lineState = doneLineState(m, { streaming, ended });
   return <article {...common} data-tapped={tapped || undefined} onClick={() => setTapped(x => !x)} className="group/msg flex min-w-0 flex-col gap-2 rounded-md">
     {/* 1. head: small avatar, bot name, time */}
     <header className="flex items-center gap-2 text-caption text-muted-foreground">
-      {bot ? <BotOrb avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={24} /> : null}
+      {bot ? <BotAvatar avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.message} /> : null}
       <span className="font-medium text-ink-2">{name}</span>
       {time && <time className="tabular-nums">{time}</time>}
     </header>
@@ -79,8 +88,8 @@ export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex,
     {m.status === "failed" && <FailedNote m={m as LiveMessage} last={last} />}
     {m.status === "running" && <p className="text-caption text-muted-foreground">{t("任务运行中，可稍后查询状态")}</p>}
     {m.status === "partially_succeeded" && <p className="text-caption text-muted-foreground">{t("部分来源可用；缺项已标出")}</p>}
-    {/* the finish line: a hairline under a finished answer (A3 draws on it) */}
-    {m.content && !streaming && (m.status === "complete" || m.status === "succeeded" || m.status === "partially_succeeded" || !m.status) && <div data-testid="done-line" aria-hidden="true" className="h-px bg-line" />}
+    {/* the finish line: a hairline under a finished answer; the turn this tab just saw end draws the bot's stroke over it once (red and still when it failed) */}
+    {lineState && <DoneLine state={lineState} />}
     {/* 6. foot: the sources chip (always there), copy, helpful, not helpful (these three show on hover, tap or focus) */}
     {m.content && <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
       {sourceCount > 0 && <button type="button" data-testid="sources-chip" data-count={sourceCount} className="inline-flex h-7 items-center gap-1 rounded-full border border-line bg-surface px-2.5 text-caption max-lg:h-11 max-lg:px-3.5 text-ink-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
@@ -113,7 +122,7 @@ export function PendingAnswer({ bot, status }: { bot?: Bot | null; status: strin
   const m = useMemo<AgentChatMessage>(() => ({ role: "assistant", content: "", started_at: sentAt.current }), []);
   return <div data-testid="pending-answer" className="flex min-w-0 flex-col gap-2">
     <header className="flex items-center gap-2 text-caption text-muted-foreground">
-      {bot ? <BotOrb avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={24} /> : null}
+      {bot ? <BotAvatar avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.message} /> : null}
       <span className="font-medium text-ink-2">{bot?.name ?? t("模型")}</span>
     </header>
     <TurnSteps m={m} i={-1} running status={status} />

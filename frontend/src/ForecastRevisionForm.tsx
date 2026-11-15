@@ -1,6 +1,6 @@
 import { Tx, useLocale } from "./i18n";
 import type { Dispatch, SetStateAction } from "react";
-import type { V2RevisionCandidates } from "./api";
+import type { V2RevisionCandidates } from "./api/forecast-v2";
 import type { V2TimelineEntry } from "./types";
 import { formatTime } from "./ForecastShared";
 import type { ResourceState } from "./ForecastShared";

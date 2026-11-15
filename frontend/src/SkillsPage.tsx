@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { copySkill, deleteSkill, exportSkill, importSkill, listSkills, previewSkillImport, setSkillEnabled, createSkill, updateSkill, type Skill, type SkillImportPreview, type SkillTool } from "./api";
+import { copySkill, deleteSkill, exportSkill, importSkill, previewSkillImport, setSkillEnabled, createSkill, updateSkill } from "./api/skills-admin";
+import { listSkills, type Skill, type SkillImportPreview, type SkillTool } from "./api/skills-core";
 import { toolLabel } from "./agent-tool-labels.mjs";
 import { translatePhrase, useLocale } from "./i18n";
 import { useNavigate } from "react-router";

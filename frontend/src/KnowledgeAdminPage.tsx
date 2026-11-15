@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { getKnowledgeCandidates, getKnowledgeChunks, getKnowledgeDocuments, getKnowledgeImportable, importKnowledge, reviewKnowledgeCandidate, retryKnowledgeDocument, runKnowledgeIndex, testKnowledgeRetrieval, uploadEvidence, withdrawKnowledgeDocument, type KnowledgeChunkDetail, type KnowledgeDocumentSummary } from './api';
+import { getKnowledgeCandidates, getKnowledgeChunks, getKnowledgeDocuments, getKnowledgeImportable, importKnowledge, reviewKnowledgeCandidate, retryKnowledgeDocument, runKnowledgeIndex, testKnowledgeRetrieval, withdrawKnowledgeDocument, type KnowledgeChunkDetail, type KnowledgeDocumentSummary } from './api/knowledge-docs';
+import { uploadEvidence } from './api/evidence-uploads';
 
 type Kind='faq'|'upload'|'sec'|'analysis';
 type Importable={id:string;title:string;symbol:string|null;source_type:string};

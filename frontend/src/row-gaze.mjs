@@ -1,6 +1,6 @@
 // Sidebar rows: the hovered bot's eyes follow the pointer. Pure (no React, no engine) so node --test covers it.
 // Only the row under the pointer holds move/leave listeners and only it has a `handle.pointer`; every other row's
-// avatar stays the light prop-driven one. The per-frame work lives in BloubAvatar's shared rAF loop, which only
+// avatar stays the light prop-driven one. The per-frame work lives in the shared rAF loop of components/bot/BotBody, which only
 // looks at a handle that is set.
 import { aimFromPointer, pointerFresh } from "./bloub-gaze.mjs";
 

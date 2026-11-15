@@ -1,7 +1,9 @@
 // The chat session: the state machine behind the thread (SSE turns, one line per bot, cross-tab sync, archive).  No markup here.
 import { dispatchAgentAction } from "../../agent-client-actions.mjs";
 import { createContext, useContext, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { agentChatStream, restoreAgentChat, compactConversation, clearAgentConversation, getChatMode, selectAgentConversation, type Bot, type AgentChatMessage, type AgentChatEvent } from "../../api";
+import { agentChatStream, restoreAgentChat, compactConversation, clearAgentConversation, selectAgentConversation, type AgentChatMessage, type AgentChatEvent } from "../../api/conversations";
+import { getChatMode } from "../../api/base";
+import { type Bot } from "../../api/bots";
 import { normalizeUnverified } from "../../chat-unverified.mjs";
 import { useLocale } from "../../i18n";
 import { chatContext } from "../../agentChatLifecycle.js";

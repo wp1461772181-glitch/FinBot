@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef } from "react";
+import { Suspense, lazy, useEffect, useLayoutEffect, useRef } from "react";
 import { Navigate, useParams } from "react-router";
 import { DelayedSkeleton, SkeletonCard, SkeletonMessages } from "@/components/state/Skeleton";
 import { ChatPage } from "../chat/ChatPage";
@@ -6,7 +6,7 @@ import { useOpenConversation, useSelectBot } from "../chat/ChatSessionProvider";
 import { translatePhrase } from "../../i18n";
 import { OptionalChunk } from "../../OptionalChunk";
 import { isRecordId, paths } from "../../routes.mjs";
-import type { Bot } from "../../api";
+import type { Bot } from "../../api/bots";
 import { useWorkspace } from "../workspace";
 
 // The bot's workspace cards and profile form (the 工作区 and 档案 tabs of the right panel) are only needed once a bot page is open: their own chunk, fetched on demand.
@@ -20,12 +20,14 @@ const paneFallback = <DelayedSkeleton><SkeletonCard /></DelayedSkeleton>;
 function BotPage({ bot, profile = false }: { bot: Bot; profile?: boolean }) {
   const ws = useWorkspace();
   const selectBot = useSelectBot();
-  useEffect(() => { void selectBot(bot); }, [bot]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A layout effect: the line this page shows is in place before the first paint (the page is mounted anew for each bot, and until the session has
+  // moved to this bot's line it still holds the one before it).
+  useLayoutEffect(() => { void selectBot(bot); }, [bot]); // eslint-disable-line react-hooks/exhaustive-deps
   const changed = () => void ws.bots.reload();
   return <ChatPage bot={bot} onTurnSettled={changed} onBotChanged={changed} openProfile={profile}
     workspace={(wide) => <OptionalChunk><Suspense fallback={paneFallback}><BotWorkspacePane key={bot.id} bot={bot} symbol={ws.symbol} watchlist={ws.symbols} onSelectSymbol={ws.setPreferredSymbol} wide={wide}
       onOpenCompany={(ticker, section) => ws.openCompany(ticker, section === "forecast" ? "forecast" : "overview")} /></Suspense></OptionalChunk>}
-    profile={<OptionalChunk><Suspense fallback={paneFallback}><BotProfilePane key={bot.id} bot={bot} onChanged={changed} onDeleted={() => { changed(); ws.go("agent"); }} /></Suspense></OptionalChunk>} />;
+    profile={<OptionalChunk><Suspense fallback={paneFallback}><BotProfilePane key={bot.id} bot={bot} others={ws.bots.bots} onChanged={changed} onDeleted={() => { changed(); ws.go("agent"); }} /></Suspense></OptionalChunk>} />;
 }
 
 /** The bot list is still on its way: the thread's own skeleton (after 400ms); a bot that is not there says so. */

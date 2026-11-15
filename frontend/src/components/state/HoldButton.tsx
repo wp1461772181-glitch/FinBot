@@ -1,4 +1,5 @@
-import { useEffect, useId, useReducer, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useReducer, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { getMotion, subscribeMotion } from "../../motion-store.mjs";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useLocale } from "../../i18n";
@@ -6,17 +7,8 @@ import { initialHold, stepHold, HOLD_MS, type HoldEvent, type HoldState } from "
 
 const reduce = (state: HoldState, event: HoldEvent & { reducedMotion: boolean }): HoldState => stepHold(state, event, { reducedMotion: event.reducedMotion });
 
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
-  useEffect(() => {
-    const query = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-    if (!query) return;
-    const update = () => setReduced(query.matches);
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-  return reduced;
-}
+/** Reduced motion means the "off" level (the system setting, or the reader's choice in the settings): see motion-store.mjs. */
+const usePrefersReducedMotion = () => useSyncExternalStore(subscribeMotion, () => getMotion().level === "off");
 
 /**
  * Press and hold to confirm (design 5.4: for what cannot be undone).  Hold the button about a second, with a fill that shows how

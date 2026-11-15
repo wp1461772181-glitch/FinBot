@@ -1,7 +1,15 @@
 // The bot workspace's data cards (UX batch 2, P3).  Each card loads on its own, so one failing read never blanks
 // the others.  Facts only: prices, dates, counts and titles; no buy/sell wording anywhere.
 import { useEffect, useState } from "react";
-import { getFilingInventory, getMaterialLibrary, getPortfolio, getResearchQueue, getV2Forecasts, getV2Prices, listAgentTasks, listInbox, listTaskProposals, type Bot } from "./api";
+import { getFilingInventory } from "./api/market-data";
+import { getMaterialLibrary } from "./api/material-library";
+import { getPortfolio } from "./api/portfolio-ledger";
+import { getResearchQueue } from "./api/queue";
+import { getV2Forecasts } from "./api/forecast-v2";
+import { getV2Prices } from "./api/prices";
+import { listAgentTasks } from "./api/tasks";
+import { listInbox, listTaskProposals } from "./api/inbox";
+import { type Bot } from "./api/bots";
 import { formatDate, getLocalePreference, useLocale } from "./i18n";
 import { CARDS, forecastCardModel, priceSummary, type LayoutItem } from "./workspace-cards.mjs";
 import { NOT_RECORDED } from "./forecast-model.mjs";

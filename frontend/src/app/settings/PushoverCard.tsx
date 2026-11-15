@@ -1,6 +1,7 @@
 // legacy markup, moved as-is in P3.1; restyled in P3.2–P3.4
 import { useEffect, useState } from "react";
-import { getChatMode, getPushover, savePushover, clearPushover, type PushoverStatus } from "../../api";
+import { getChatMode } from "../../api/base";
+import { getPushover, savePushover, clearPushover, type PushoverStatus } from "../../api/integrations";
 import { useLocale } from "../../i18n";
 
 export function PushoverCard() {

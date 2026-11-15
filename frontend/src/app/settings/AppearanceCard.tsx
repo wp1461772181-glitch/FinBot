@@ -5,6 +5,8 @@ import { applyTheme, saveTheme, storedTheme, type ThemeChoice } from "../../them
 
 // Radix Select is heavy (about 40 kB gzip); the settings page loads it on demand instead of the main bundle carrying it.
 const UpdownSelect = lazy(() => import("@/components/UpdownSelect").then((module) => ({ default: module.UpdownSelect })));
+// The animation strength control (full / lite / off) is a new part too, loaded on demand like the up/down choice.
+const MotionLevelSelect = lazy(() => import("@/components/MotionLevelSelect").then((module) => ({ default: module.MotionLevelSelect })));
 
 export /** 外观 and 语言 live here (moved out of the topbar); storage keys and behaviour are unchanged. */
 function AppearanceCard(){
@@ -17,6 +19,7 @@ function AppearanceCard(){
     <option value="light">{t("浅色")}</option><option value="dark">{t("深色")}</option><option value="system">{t("跟随系统")}</option>
    </select></label>
   <Suspense fallback={<div aria-hidden="true" style={{minHeight:68}}/>}><UpdownSelect/></Suspense>
+  <Suspense fallback={<div aria-hidden="true" style={{minHeight:220}}/>}><MotionLevelSelect/></Suspense>
   <h2>{t("语言")}</h2>
   <label htmlFor="locale">{t("语言")}
    <select id="locale" value={locale} onChange={event=>setLocale(event.target.value as "zh-CN"|"en-US")}>

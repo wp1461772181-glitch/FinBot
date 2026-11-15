@@ -30,6 +30,8 @@
 @import "./theme.css";
 @import "./bots.css";
 @import "./chat-page.css";
+@import "./bots-signature.css";
+@import "./bots-handoff.css";
 @import "./sources.css";
 
 /* Old sheets, in the order main.tsx used to import them. */
@@ -42,3 +44,8 @@
 
 /* Dark mode follows the data-theme attribute theme.mjs writes on <html>; no second mechanism. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* "Motion" is the level of animation (motion-level.mjs writes <html data-motion="full|lite|off">; the system's reduced-motion setting is "off").  Tailwind's
+   own motion-safe / motion-reduce look at the system setting only, so they are redefined to look at the level. */
+@custom-variant motion-safe (&:where(:root:not([data-motion="off"]) *));
+@custom-variant motion-reduce (&:where(:root[data-motion="off"] *));

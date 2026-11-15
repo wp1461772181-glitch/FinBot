@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Check, ChevronRight, Circle, LoaderCircle, X } from "lucide-react";
-import type { AgentChatMessage } from "../../api";
+import type { AgentChatMessage } from "../../api/conversations";
 import { useLocale } from "../../i18n";
 import { legacyToolChips } from "../../process-steps.mjs";
 import { describeOutput, flowRows, formatSeconds, nodeTitle, normalizeTrace, stepCount, type FlowNode } from "../../turn-flow.mjs";

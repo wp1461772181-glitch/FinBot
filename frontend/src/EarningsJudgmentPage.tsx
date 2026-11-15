@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Tx, useLocale } from "./i18n";
-import { ApiError, createV2ForecastJob, getEarningsJudgment, getV2Forecasts, getV2Job } from "./api";
-import type { EarningsJudgment, V2ForecastListRow } from "./api";
+import { ApiError } from "./api/base";
+import { createV2ForecastJob, getEarningsJudgment, getV2Forecasts, getV2Job } from "./api/forecast-v2";
+import type { EarningsJudgment, V2ForecastListRow } from "./api/forecast-v2";
 import type { V2ForecastJob } from "./types";
 import { NOT_RECORDED } from "./forecast-model.mjs";
 import { judgmentRowModel, promotionRequest, promotionState } from "./forecast-home.mjs";

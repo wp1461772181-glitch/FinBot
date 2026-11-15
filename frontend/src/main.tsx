@@ -5,12 +5,14 @@ import { prefetchMarkdown } from "./app/chat/markdown-loader";
 import { watchBackend } from "./components/state/connectivity-store";
 import { LocaleProvider, preloadSavedLocale } from "./i18n";
 import "./styles/index.css";
+import { startMotion } from "./motion-level.mjs";
 import { applyTheme, storedTheme } from "./theme.mjs";
 import { applyUpdown, storedUpdown } from "./updown.mjs";
 
 watchBackend();
 applyTheme(storedTheme());
 applyUpdown(storedUpdown());
+startMotion();
 window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => applyTheme(storedTheme()));
 
 // The chat's Markdown renderer is a chunk of its own: start fetching it now, in parallel with the page's code and the history request,
