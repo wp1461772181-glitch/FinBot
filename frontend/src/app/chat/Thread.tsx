@@ -10,7 +10,7 @@ import type { Bot } from "../../api/bots";
 import { useLocale } from "../../i18n";
 import { useChat } from "./ChatSessionProvider";
 import { useMarkdown } from "./markdown-loader";
-import { Message, PendingAnswer } from "./Message";
+import { BackgroundTurn, Message, PendingAnswer } from "./Message";
 import { QuestionRail } from "./QuestionRail";
 import { useCopy } from "./use-copy";
 import { useSettledTurn } from "./settled-turn";
@@ -28,6 +28,15 @@ function ExternalDivider({ content }: { content: string }) {
   const source = externalSource(content);
   const text = source.kind === "routine" ? `${t("例行任务")}「${source.name}」${source.time ? ` · ${source.time}` : ""}` : t("外部消息");
   return <div data-testid="external-divider" data-source={source.kind} role="separator" aria-label={text} className="flex items-center gap-3 text-caption text-muted-foreground">
+    <span className="h-px flex-1 bg-line" aria-hidden="true" /><span>{text}</span><span className="h-px flex-1 bg-line" aria-hidden="true" />
+  </div>;
+}
+
+/** 「离开期间已完成」: a turn that finished while this page was not watching it.  The same look as the outside divider; only the words differ. */
+function AwayDivider() {
+  const { t } = useLocale();
+  const text = t("离开期间已完成");
+  return <div data-testid="away-divider" role="separator" aria-label={text} className="flex items-center gap-3 text-caption text-muted-foreground">
     <span className="h-px flex-1 bg-line" aria-hidden="true" /><span>{text}</span><span className="h-px flex-1 bg-line" aria-hidden="true" />
   </div>;
 }
@@ -116,6 +125,7 @@ function ThreadBody({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObject<H
 
   const lastIndex = c.messages.length - 1;
   const externalStarts = firstOfTurns(c.messages, c.externalTurns);
+  const awayStarts = firstOfTurns(c.messages, c.awayTurns);
   return <div className="relative flex min-h-0 flex-1 flex-col">
     <section ref={transcriptRef} data-testid="transcript" data-entry={entry && entry.motion !== "rise" ? entry.motion : undefined} style={entry ? { "--handoff-dir": entry.dir } as CSSProperties : undefined} aria-live="polite" aria-label={t("对话")} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 lg:px-6"
       onScroll={e => { if (e.currentTarget.scrollTop < 32) void loadEarlierAtTop(); }}>
@@ -130,6 +140,7 @@ function ThreadBody({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObject<H
           <QuestionRail turns={railTurns} activeTurn={activeTurn} transcriptRef={transcriptRef} conversationId={c.conversationId} />
           <div data-testid="thread" className="flex min-w-0 flex-col gap-7 lg:col-start-2 lg:row-start-1">{c.messages.map((m, i) => <Fragment key={i}>
             {externalStarts.has(i) && <ExternalDivider content={m.role === "user" ? m.content : ""} />}
+            {awayStarts.has(i) && <AwayDivider />}
             <Message m={m} i={i} last={i === lastIndex} bot={bot} streaming={i === lastIndex && c.state === "sending"} copy={copy} draftBox={draftBox}
               turnIndex={m.role === "user" ? turnPreviews.findIndex(turn => turn.userIndex === i) : undefined} onFeedback={() => setFeedbackTick(x => x + 1)}
               ended={settled?.index === i ? settled.outcome : null}
@@ -137,6 +148,7 @@ function ThreadBody({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObject<H
             {m.role === "assistant" && noticesAfter(c.notices, m.turn_id).map(notice => <CompactionDivider key={`compaction-${notice.id}`} turns={notice.turns} focus={notice.focus} summary={notice.summary} />)}
           </Fragment>)}
             {c.state === "sending" && c.messages.at(-1)?.role === "user" && <PendingAnswer bot={bot} status={c.status} />}
+            {c.state !== "sending" && !c.archiveView && c.background && <BackgroundTurn bot={bot} />}
           </div>
         </div>}
     </section>

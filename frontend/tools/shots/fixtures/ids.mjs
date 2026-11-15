@@ -29,3 +29,5 @@ export const HOLD_MARKER = "[hold-the-answer]";
 // a message holding HAND_MARKER never reaches the fake API: smoke.mjs feeds that stream by hand (fake-sse.mjs).
 export const ASK_MARKER = "[ask-which]";
 export const HAND_MARKER = "[hand-fed]";
+// FP13-c: a message holding BUSY_MARKER is refused with 409 conversation_busy (the line is answering elsewhere).
+export const BUSY_MARKER = "[busy]";

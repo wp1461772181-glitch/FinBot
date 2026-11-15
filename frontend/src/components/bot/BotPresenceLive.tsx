@@ -4,6 +4,7 @@
 // (pure, unit-tested); this file wires DOM events and the chat state to them and hands the director to the body.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { createDirector, shouldArrive, turnTransition, type DirectorView } from "../../bloub-director.mjs";
+import { restoredBeforeSend } from "../../chat-detached.mjs";
 import { resolveLook } from "../../bloub-look.mjs";
 import { derivePersona, type Persona, type PersonaBot } from "../../bot-persona.mjs";
 import { parseAvatar } from "../../orb.mjs";
@@ -90,6 +91,8 @@ export default function BotPresenceLive({ avatar, look: stored, name, seed, arri
   const [composerFocused, setComposerFocused] = useState(false);
   const root = useRef<HTMLSpanElement>(null);
   const prevState = useRef(chatState);
+  // FP13-c (§3.9): the list before the send, and the list of the previous run (a busy restore puts the first one back: no turn was produced).
+  const sentFrom = useRef<unknown>(undefined), lastList = useRef<unknown>(messages);
   const ack = useRef(onAcknowledge); ack.current = onAcknowledge;
   const checked = useRef(false); // reduced motion: did this turn go through a check (its marks stay in the still aura)
   const finishTimer = useRef(0);
@@ -141,6 +144,9 @@ export default function BotPresenceLive({ avatar, look: stored, name, seed, arri
   const waitingSince = awaiting(messages, Date.now());
   useEffect(() => {
     const event = turnTransition(prevState.current, chatState, messages);
+    if (event?.type === "turn-start") sentFrom.current = lastList.current;
+    if (event?.type === "turn-end" && restoredBeforeSend(sentFrom.current, messages)) Object.assign(event, { outcome: "cancel" });
+    lastList.current = messages;
     prevState.current = chatState;
     if (event) send(event);
     if (event?.type === "turn-start") checked.current = false;

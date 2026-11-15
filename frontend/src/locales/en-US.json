@@ -2373,5 +2373,18 @@
   "起个名字就能创建；模板、形状和颜色都可以之后再改。": "A name is all it takes; the template, shape and colour can be changed later.",
   "形状与颜色": "Shape and colour",
   "换一个": "Try another",
-  "模板暂时读不到，只填名字也能创建。": "Templates cannot be read right now; a name alone still creates the bot."
+  "模板暂时读不到，只填名字也能创建。": "Templates cannot be read right now; a name alone still creates the bot.",
+  "连接断开了：这一轮仍在服务器上继续，完成后会自动出现在这里。": "The connection dropped. This turn is still running on the server and will appear here when it finishes.",
+  "没能通知服务器停止：这一轮可能仍在后台继续，完成后会出现在对话里。": "The server could not be told to stop. This turn may still be running in the background and will appear in the conversation when it finishes.",
+  "上一条消息还在回答中（可能在别的页面、Telegram 或后台），等它答完再发。": "The previous message is still being answered (in another page, in Telegram or in the background). Send again when it finishes.",
+  "上次离开时这一轮还没答完，它应该仍在服务器上继续，完成后会自动出现在这里。": "This turn had not finished when you left. It should still be running on the server and will appear here when it finishes.",
+  "停止后台回答": "Stop background answer",
+  "已请求停止后台回答。": "The background answer was asked to stop.",
+  "后台那一轮已经结束，结果会自动出现在这里。": "The background turn has already ended. Its result will appear here.",
+  "没有能从这里停止的回答：它可能刚好答完（现在可以再发），也可能来自 Telegram 或未刷新的旧页面（只能等它答完）。": "There is no answer this page can stop. It may have just finished (you can send now), or it comes from Telegram or an older page that was not reloaded (it has to finish first).",
+  "没能连上服务器，稍后再试。": "The server could not be reached. Try again later.",
+  "这一轮在停止前已经答完，结果会自动出现在这里。": "This turn had already finished before the stop. Its result will appear here.",
+  "这一轮在服务器上结束了，但这里没有收到回答；已保存的结果会自动出现在对话里。": "This turn ended on the server, but no answer reached this page. Whatever was saved will appear in the conversation.",
+  "后台那一轮一直没有结果出现，可能已被中断；需要的话可以再发一次。": "No result has appeared for the background turn; it may have been interrupted. Send it again if you need it.",
+  "离开期间已完成": "Finished while you were away"
 }

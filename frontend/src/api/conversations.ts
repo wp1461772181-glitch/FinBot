@@ -4,6 +4,7 @@ import { type CompactionNotice, type ContextUsage, normalizeCompactions, normali
 import { conversationCreatedAtForMode, conversationForMode, selectConversationForMode } from "../chat-identity.mjs";
 import type { FlowNode } from "../turn-flow.mjs";
 import type { UnverifiedLine } from "../chat-unverified.mjs";
+import { nextChunk, STREAM_IDLE_MS } from "../chat-detached.mjs";
 import { ApiError, apiErrorFromPayload, chatCredential, configuredApiBaseUrl } from "./base";
 
 export type AgentChatProvider = "deepseek" | "kimi" | "minimax" | "qwen" | "zhipu" | "doubao" | "hunyuan" | "baidu" | "siliconflow" | "openrouter" | "custom";
@@ -43,6 +44,21 @@ export async function compactConversation(id:string,botId:string|null,focus:stri
   const data=await response.json().catch(()=>null) as {compacted?:unknown;message?:unknown}|null;
   if(!response.ok) throw new ApiError("压缩没有成功，稍后再试。",response.status);
   return {compacted:typeof data?.compacted==="number"?data.compacted:0,message:typeof data?.message==="string"&&data.message?data.message:"完成。"};
+}
+/** Stop a turn that runs on the server while this page is not watching it (the stop button on a detached turn).  Never throws: any failure is `unreachable`. */
+export async function cancelAgentTurn(conversationId: string, turnId?: string | null): Promise<{ cancelled: boolean; reason?: string; turn_id?: string }> {
+  const base = agentChatUrl("stream", configuredApiBaseUrl).replace(/stream$/, "");
+  const controller = new AbortController(), timer = window.setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(`${base}conversations/${encodeURIComponent(conversationId)}/cancel`, { method: "POST", signal: controller.signal, cache: "no-store",
+      headers: { Accept: "application/json", "Content-Type": "application/json", "X-Chat-Session": chatCredential() },
+      body: JSON.stringify(turnId ? { turn_id: turnId } : {}) });
+    if (!response.ok) return { cancelled: false, reason: "unreachable" };
+    const data = await response.json().catch(() => null) as { cancelled?: unknown; reason?: unknown; turn_id?: unknown } | null;
+    if (!data || typeof data !== "object") return { cancelled: false, reason: "unreachable" };
+    return { cancelled: data.cancelled === true, reason: typeof data.reason === "string" ? data.reason : undefined, turn_id: typeof data.turn_id === "string" ? data.turn_id : undefined };
+  } catch { return { cancelled: false, reason: "unreachable" }; }
+  finally { window.clearTimeout(timer); }
 }
 /** Name one of the caller's conversations; resolves to the saved name, or null when it was cleared. */
 export async function renameAgentConversation(id:string,title:string,signal?:AbortSignal): Promise<string|null> {
@@ -85,16 +101,20 @@ export async function restoreAgentChat(selectedId?: string | null, signal?: Abor
 }
 export function clearAgentConversation(): void { selectConversationForMode(window.localStorage,window.sessionStorage,null); }
 export function selectAgentConversation(id:string|null,createdAt?:string|null):void { selectConversationForMode(window.localStorage,window.sessionStorage,id,undefined,createdAt); }
-export async function agentChatStream(config: AgentChatConfig | { bot_id: string } | { catalog_model: string }, message: string, conversationId: string | null, signal: AbortSignal, onEvent: (event: AgentChatEvent) => boolean | void, pendingRequestId?:string, displayMessage?:string): Promise<string> {
-  const response = await fetch(agentChatUrl("stream", configuredApiBaseUrl), { method: "POST", signal, cache: "no-store", headers: { Accept: "text/event-stream", "Content-Type": "application/json", "X-Chat-Session": chatCredential() }, body: JSON.stringify({ ...config, message, conversation_id: conversationId, ...(pendingRequestId?{pending_request_id:pendingRequestId,...(displayMessage?{display_message:displayMessage}:{})}:{}) }) });
+export async function agentChatStream(config: AgentChatConfig | { bot_id: string } | { catalog_model: string }, message: string, conversationId: string | null, signal: AbortSignal, onEvent: (event: AgentChatEvent) => boolean | void, pendingRequestId?:string, displayMessage?:string, onNote?: (note: string) => void): Promise<string> {
+  const response = await fetch(agentChatUrl("stream", configuredApiBaseUrl), { method: "POST", signal, cache: "no-store", headers: { Accept: "text/event-stream", "Content-Type": "application/json", "X-Chat-Session": chatCredential() }, body: JSON.stringify({ ...config, message, conversation_id: conversationId, detach: true, ...(pendingRequestId?{pending_request_id:pendingRequestId,...(displayMessage?{display_message:displayMessage}:{})}:{}) }) });
   if (!response.ok) { const payload = await response.json().catch(() => null); throw apiErrorFromPayload(payload, response.status); }
   const reader = response.body?.getReader(); if (!reader) throw new ApiError("服务未返回流式响应。");
-  const decoder = new TextDecoder(); let buffer = "", answer = "", eventName = "message", receivedDone = false;
+  const decoder = new TextDecoder(); let buffer = "", answer = "", eventName = "message", receivedDone = false, detachable = false;
   while (true) {
-    const { value, done } = await reader.read(); buffer += decoder.decode(value, { stream: !done });
+    // The idle watch (45 s) runs only once the server has said it keeps the turn and no `done` has come: then a silent connection is given up, not waited on.
+    const step = await nextChunk(reader, { idleMs: STREAM_IDLE_MS, watch: detachable && !receivedDone });
+    if ("idle" in step) throw new ApiError("stream_idle");
+    const { value, done } = step; buffer += decoder.decode(value, { stream: !done });
     let boundary; while ((boundary = buffer.indexOf("\n\n")) >= 0) {
       const chunk = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2); let raw = "";
       for (const line of chunk.split(/\r?\n/)) { if (line.startsWith("event:")) eventName = line.slice(6).trim(); else if (line.startsWith("data:")) raw += line.slice(5).trim(); }
+      if (!raw && chunk.startsWith(":")) { const note = chunk.slice(1).trim(); if (note === "detached") detachable = true; onNote?.(note); }
       if (!raw) continue; let data: Record<string, unknown>; try { data = JSON.parse(raw); } catch { throw new ApiError("服务返回了无效的聊天事件。"); }
       if (eventName === "delta" && typeof data.text === "string") answer += data.text;
       const receivedEvent = eventName;

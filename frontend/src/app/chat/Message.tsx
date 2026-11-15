@@ -1,5 +1,5 @@
 import { Suspense, lazy, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
-import { Check, Copy, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Check, Copy, LoaderCircle, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Skeleton } from "@/components/state/Skeleton";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { OptionalChunk } from "../../OptionalChunk";
@@ -126,6 +126,30 @@ export function PendingAnswer({ bot, status }: { bot?: Bot | null; status: strin
       <span className="font-medium text-ink-2">{bot?.name ?? t("模型")}</span>
     </header>
     <TurnSteps m={m} i={-1} running status={status} />
+  </div>;
+}
+
+/** 「后台运行中」: a turn the server is still running while this page is not watching it.  Not an error (no alert, no retry): it sits where the answer will appear, with a stop button. */
+export function BackgroundTurn({ bot }: { bot?: Bot | null }) {
+  const { t } = useLocale(), c = useChat();
+  const [stopping, setStopping] = useState(false);
+  const bg = c.background;
+  if (!bg) return null;
+  const text = bg.reason === "dropped" ? t("连接断开了：这一轮仍在服务器上继续，完成后会自动出现在这里。")
+    : bg.reason === "stop_unreachable" ? t("没能通知服务器停止：这一轮可能仍在后台继续，完成后会出现在对话里。")
+    : bg.reason === "busy" ? t("上一条消息还在回答中（可能在别的页面、Telegram 或后台），等它答完再发。")
+    : t("上次离开时这一轮还没答完，它应该仍在服务器上继续，完成后会自动出现在这里。");
+  return <div className="flex min-w-0 flex-col gap-2">
+    <header className="flex items-center gap-2 text-caption text-muted-foreground">
+      {bot ? <BotAvatar avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.message} /> : null}
+      <span className="font-medium text-ink-2">{bot?.name ?? t("模型")}</span>
+    </header>
+    <p role="status" data-testid="background-turn" data-reason={bg.reason} className="text-small text-muted-foreground">{text}</p>
+    {bg.conversationId && <button type="button" data-testid="stop-background" disabled={stopping} aria-busy={stopping}
+      onClick={() => { setStopping(true); void c.cancelBackground().finally(() => setStopping(false)); }}
+      className="inline-flex h-8 w-fit items-center gap-1.5 rounded-sm border border-line px-3 text-small text-ink outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70">
+      {stopping && <LoaderCircle aria-hidden="true" className="size-3.5 motion-safe:animate-spin" />}{t("停止后台回答")}
+    </button>}
   </div>;
 }
 

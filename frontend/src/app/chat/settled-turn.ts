@@ -3,21 +3,26 @@
 // must not wait for.  History, another tab's turn and a conversation opened later never set it, so they only ever get the plain hairline.
 import { useLayoutEffect, useRef, useState } from "react";
 import { turnEndOutcome, type TurnEnd } from "../../signature.mjs";
+import { restoredBeforeSend } from "../../chat-detached.mjs";
 
 export type SettledTurn = { index: number; outcome: TurnEnd };
 
 export function useSettledTurn(state: string, messages: ReadonlyArray<{ role?: string; status?: string; clarification?: unknown }>): SettledTurn | null {
   const [settled, setSettled] = useState<SettledTurn | null>(null);
   const prev = useRef(state);
+  // FP13-c (§3.9): the list on screen before the send, and the list of the render before last.  A busy restore puts the first one back: no turn was produced.
+  const sentFrom = useRef<unknown>(undefined), lastList = useRef<unknown>(messages);
   // Layout effect: the line is drawn with its sweep in the same frame the turn is over, not a frame later.
   useLayoutEffect(() => {
     const before = prev.current;
     prev.current = state;
-    if (state === "sending") { if (before !== "sending") setSettled(null); return; }
+    if (state === "sending") { if (before !== "sending") { setSettled(null); sentFrom.current = lastList.current; } return; }
     // A turn ends in "ready" (a signed-in line), "idle" (a guest's) or "error"; "restoring" / "testing" are the line being swapped, not a turn ending.
     if (state !== "ready" && state !== "idle" && state !== "error") return;
+    if (restoredBeforeSend(sentFrom.current, messages)) return;
     const outcome = turnEndOutcome(before, state, messages);
     if (outcome) setSettled({ index: messages.length - 1, outcome });
   }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { lastList.current = messages; });
   return settled;
 }

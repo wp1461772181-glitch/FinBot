@@ -5,7 +5,7 @@ import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
 import { PAGES, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
-import { ASK_MARKER, BOT, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
+import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
@@ -5793,6 +5793,192 @@ async function settingsModelBadge(ctx) {
   } finally { await view.close(); }
 }
 
+// FP13-c (§7.2): a turn the server keeps running after this page lets go of it.  The fake server writes a turn into the
+// conversation when the check says so; the page picks it up by its own poll (4 s) or on a restore (reload).
+const DETACHED_TURN = "t9100000-0000-4000-8000-000000000001";
+const BG_TURN = "[data-testid=background-turn]";
+const DETACHED_KEY = `market-evidence-agent:detached-turn:${CONVERSATION.finbot}:v1`;
+const detachedTurnEvent = (turn) => ({ conversation_id: CONVERSATION.finbot, turn_id: turn, bot_id: BOT.finbot });
+/** Send a hand-fed question on FinBot's line; the stream carries the detach note, the conversation frame and a first delta, then the caller decides. */
+async function startDetached(page, hand, text, { note = true } = {}) {
+  await page.locator("#agent-draft").fill(`${HAND_MARKER} ${text}`);
+  await page.locator("[data-testid=send]").click();
+  await hand.opened(0);
+  if (note) await hand.raw(0, ": detached\n\n");
+  await hand.push(0, "conversation", detachedTurnEvent(DETACHED_TURN));
+  await hand.push(0, "delta", { text: "前半句" });
+  await page.locator("[data-testid=message][data-role=assistant]", { hasText: "前半句" }).waitFor({ timeout: 10000 });
+}
+/** The server writes the whole turn (question with its turn id, then the answer). */
+function finishTurn(view, text, answer) {
+  view.mock.state.chat.conversations.get(CONVERSATION.finbot).push(
+    { role: "user", content: `${HAND_MARKER} ${text}`, turn_id: DETACHED_TURN },
+    { role: "assistant", status: "complete", turn_id: DETACHED_TURN, content: answer });
+}
+async function waitUntil(predicate, timeout = 10000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) { if (await predicate()) return true; await new Promise((resolve) => setTimeout(resolve, 100)); }
+  return false;
+}
+async function chatDetachedDrop(ctx) {
+  const view = await openChat(ctx, "chat-detached-drop");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await startDetached(page, hand, "断线测试");
+    await hand.fail(0);
+    await page.locator(`${BG_TURN}[data-reason=dropped]`).waitFor({ timeout: 10000 });
+    assert((await page.locator(BG_TURN).innerText()).includes("连接断开了"), "the banner does not say the connection dropped");
+    assert((await page.locator("[data-testid=turn-error]").count()) === 0, "a detached turn showed an error bar");
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "断线测试" }).count()) === 1, "the question is not on the line");
+    finishTurn(view, "断线测试", "断线之后完成的回答。");
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "断线之后完成的回答" }).waitFor({ timeout: 15000 });
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "断线测试" }).count()) === 1, "the question shows twice after the answer came");
+    assert((await page.locator("[data-testid=away-divider]").count()) === 1, "no 离开期间已完成 divider");
+    assert((await page.locator(BG_TURN).count()) === 0, "the banner is still there");
+    assert((await page.locator("[data-testid=external-divider]").count()) === 0, "the finished turn shows as an outside message");
+    return "the banner says the connection dropped; the answer came back once, under 离开期间已完成";
+  } finally { await view.close(); }
+}
+async function chatDetachedStop(ctx) {
+  const view = await openChat(ctx, "chat-detached-stop");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await startDetached(page, hand, "停止测试");
+    await page.locator("[data-testid=stop]").click();
+    await page.locator("[data-testid=message][data-role=assistant] [data-testid=stopped-note]", { hasText: "已停止" }).waitFor({ timeout: 10000 });
+    assert(await waitUntil(() => (view.mock.state.chat.cancels ?? []).length === 1), "the stop did not send one cancel request");
+    const [cancel] = view.mock.state.chat.cancels;
+    assert(cancel.turn_id === DETACHED_TURN, `the cancel request does not name the turn (${JSON.stringify(cancel)})`);
+    assert(await hand.aborted(0), "the stream was not closed");
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 10000 });
+    return "stop sends one cancel naming the turn; 已停止 shows; the composer is usable";
+  } finally { await view.close(); }
+}
+async function chatDetachedStopUnreachable(ctx) {
+  const view = await openChat(ctx, "chat-detached-stop-unreachable");
+  try {
+    const { page } = view;
+    view.mock.state.chat.cancelReply = 500;
+    const hand = await handFed(page);
+    await startDetached(page, hand, "停止失败测试");
+    await page.locator("[data-testid=stop]").click();
+    await page.locator(`${BG_TURN}[data-reason=stop_unreachable]`).waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=stopped-note]").count()) === 0, "the 已停止 placeholder is still there");
+    return "an unreachable cancel turns the placeholder into the stop_unreachable banner";
+  } finally { await view.close(); }
+}
+async function chatDetachedStopLate(ctx) {
+  const view = await openChat(ctx, "chat-detached-stop-late");
+  try {
+    const { page } = view;
+    view.mock.state.chat.cancelReply = { cancelled: false, reason: "no_running_turn" };
+    const hand = await handFed(page);
+    await startDetached(page, hand, "晚停测试");
+    await page.locator("[data-testid=stop]").click();
+    await page.locator("[data-testid=chat-status]", { hasText: "这一轮在停止前已经答完" }).waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=stopped-note]").count()) === 0, "the 已停止 placeholder is still there");
+    finishTurn(view, "晚停测试", "停止之前已经答完的回答。");
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "停止之前已经答完的回答" }).waitFor({ timeout: 15000 });
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "晚停测试" }).count()) === 1, "the question is not there once");
+    return "a late stop says the turn had already finished; its answer comes back once";
+  } finally { await view.close(); }
+}
+async function chatBusyResend(ctx) {
+  const view = await openChat(ctx, "chat-busy-resend");
+  try {
+    const { page } = view;
+    const messages = () => page.locator("[data-testid=message]").count();
+    const doneStates = () => page.locator("[data-testid=done-line]").evaluateAll((els) => els.map((el) => el.dataset.state));
+    const before = await messages(), doneBefore = await doneStates();
+    const text = `${BUSY_MARKER} 忙时测试`;
+    await page.locator("#agent-draft").fill(text);
+    await page.locator("[data-testid=send]").click();
+    await page.locator(`${BG_TURN}[data-reason=busy]`).waitFor({ timeout: 10000 });
+    assert((await messages()) === before, `the list did not go back to what it was (${before} → ${await messages()})`);
+    assert((await page.locator("#agent-draft").inputValue()) === text, "the text did not go back into the draft");
+    assert((await page.locator("[data-testid=stop-background]").count()) === 1, "the busy banner has no stop button");
+    assert(!(await page.evaluate(() => document.body.innerText)).includes("conversation_busy"), "the internal code shows on the page");
+    assert((await page.locator("[data-testid=turn-error]").count()) === 0, "busy showed an error bar");
+    assert(JSON.stringify(await doneStates()) === JSON.stringify(doneBefore), "the answer above got its closing line drawn again");
+    await page.locator("[data-testid=stop-background]").click();
+    await page.locator("[data-testid=chat-status]", { hasText: "已请求停止后台回答" }).waitFor({ timeout: 10000 });
+    return "busy: list back as it was, text in the draft, banner with stop, no internal code, no second closing line; stop → 已请求停止";
+  } finally { await view.close(); }
+}
+async function chatDetachedReload(ctx) {
+  const view = await openChat(ctx, "chat-detached-reload");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await startDetached(page, hand, "刷新测试");
+    await page.reload({ waitUntil: "load" });
+    await page.locator(`${BG_TURN}[data-reason=restored]`).waitFor({ timeout: 15000 });
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "刷新测试" }).count()) === 1, "the question is not back once");
+    finishTurn(view, "刷新测试", "刷新之后完成的回答。");
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "刷新之后完成的回答" }).waitFor({ timeout: 15000 });
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "刷新测试" }).count()) === 1, "the question shows twice after the answer came");
+    assert((await page.locator("[data-testid=away-divider]").count()) === 1, "no 离开期间已完成 divider");
+    assert((await page.evaluate((k) => window.localStorage.getItem(k), DETACHED_KEY)) === null, "the local note is still there");
+    return "after a reload the question and a restored banner came back; the answer came once, under 离开期间已完成";
+  } finally { await view.close(); }
+}
+async function chatDetachedReloadDone(ctx) {
+  const view = await openChat(ctx, "chat-detached-reload-done");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await startDetached(page, hand, "完成后刷新");
+    // The turn is finished on the server before the reload, so the restore (not the poll) brings it in.
+    finishTurn(view, "完成后刷新", "关页前已经完成的回答。");
+    await page.reload({ waitUntil: "load" });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "关页前已经完成的回答" }).waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=away-divider]").waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "完成后刷新" }).count()) === 1, "the question is not there once");
+    assert((await page.locator(BG_TURN).count()) === 0, "a banner is shown for a turn already finished");
+    assert((await page.locator("[data-testid=external-divider]").count()) === 0, "the finished turn shows as an outside message");
+    assert((await page.evaluate((k) => window.localStorage.getItem(k), DETACHED_KEY)) === null, "the local note is still there");
+    return "a turn finished before the reload keeps its divider: the restore does not clear it";
+  } finally { await view.close(); }
+}
+async function chatNotDetachedUnchanged(ctx) {
+  const view = await openChat(ctx, "chat-not-detached-unchanged");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await startDetached(page, hand, "不分离测试", { note: false });
+    await hand.fail(0);
+    await page.locator("[data-testid=turn-error]").waitFor({ timeout: 10000 });
+    assert((await page.locator(BG_TURN).count()) === 0, "a banner without the detach note");
+    assert((await page.locator("[data-testid=stop-background]").count()) === 0, "a stop button without the detach note");
+    return "without the detach note a broken stream is the same error bar as before";
+  } finally { await view.close(); }
+}
+async function chatDetachedBusyPresync(ctx) {
+  const view = await openChat(ctx, "chat-detached-busy-presync");
+  try {
+    const { page } = view;
+    const hand = await handFed(page);
+    await startDetached(page, hand, "同步前测试");
+    await hand.fail(0);
+    await page.locator(`${BG_TURN}[data-reason=dropped]`).waitFor({ timeout: 10000 });
+    // The turn finishes, and the new question goes out before the next poll (4 s): the sync brings the turn in first.
+    finishTurn(view, "同步前测试", "同步前完成的回答。");
+    await page.locator("#agent-draft").fill("同步之后的新问题");
+    await page.locator("[data-testid=send]").click();
+    await page.locator("[data-testid=message][data-role=user]", { hasText: "同步之后的新问题" }).waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "同步前完成的回答" }).waitFor({ timeout: 15000 });
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "同步前测试" }).count()) === 1, "the earlier question is not there once");
+    assert((await page.locator("[data-testid=message][data-role=assistant]", { hasText: "同步前完成的回答" }).count()) === 1, "the earlier answer is not there once");
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "同步之后的新问题" }).count()) === 1, "the new question is not there once");
+    assert((await page.locator("[data-testid=away-divider]").count()) === 1, "no 离开期间已完成 divider before the new question");
+    assert((await page.locator(BG_TURN).count()) === 0, "the banner is still there after the sync");
+    return "the send-time sync brought the finished turn in first; each message once";
+  } finally { await view.close(); }
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -5802,6 +5988,15 @@ const CHECKS = [
   ["chat-write-confirm: 确认执行 sends the request id; 先不要 sends no confirmation", chatWriteConfirm],
   ["chat-readonly-archive: an opened archive shows its banner, a read-only composer and a working 返回当前对话", chatReadonlyArchive],
   ["chat-external-sync: a turn written from outside appears by itself, the draft stays", chatExternalSync],
+  ["chat-detached-drop: a broken stream of a detached turn: banner dropped, no error bar; the answer comes back once under 离开期间已完成", chatDetachedDrop],
+  ["chat-detached-stop: stop on a detached turn sends one cancel naming it; 已停止; composer usable", chatDetachedStop],
+  ["chat-detached-stop-unreachable: an unreachable cancel shows the stop_unreachable banner", chatDetachedStopUnreachable],
+  ["chat-detached-stop-late: a stop the server had already seen finish says so; the answer comes back once", chatDetachedStopLate],
+  ["chat-busy-resend: a send refused as busy restores the list and the draft, shows the busy banner, no internal code", chatBusyResend],
+  ["chat-detached-reload: a reload while the turn runs restores the question and the banner; the answer comes once", chatDetachedReload],
+  ["chat-detached-reload-done: a turn finished before the reload keeps its 离开期间已完成 divider", chatDetachedReloadDone],
+  ["chat-not-detached-unchanged: without the detach note a broken stream shows the same error bar", chatNotDetachedUnchanged],
+  ["chat-detached-busy-presync: a send with a banner first brings the finished turn in, then goes out; each message once", chatDetachedBusyPresync],
   ["chat-compact: /compact sends the compress request and the thread shows 已压缩 N 轮", chatCompact],
   ["locale-catalog-on-demand: a Chinese session never fetches the English catalog; switching or starting in English fetches it once and the page is English", localeCatalogLoadsOnDemand],
   ["optional-chunk-failure: a blocked workspace chunk leaves the chat page and the right panel working without the cards and the new-bot dialog", optionalChunkFailure],

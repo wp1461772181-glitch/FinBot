@@ -19,6 +19,16 @@ export function stateWithHiddenBot() {
   return state;
 }
 
+/** FP13-c: FinBot's conversation holds a turn that finished while this page was away (its note is in local storage, see the page below). */
+export const AWAY_TURN = "t9100000-0000-4000-8000-0000000000a1";
+export function stateWithAwayTurn() {
+  const state = buildState();
+  state.chat.conversations.get(CONVERSATION.finbot).push(
+    { role: "user", content: "离开期间问的问题", turn_id: AWAY_TURN },
+    { role: "assistant", status: "complete", turn_id: AWAY_TURN, content: "离开期间完成的回答。" });
+  return state;
+}
+
 /**
  * Open the new-bot dialog the way the width has it: the sidebar's 新建 bot from the desktop's width, the 更多 drawer's from a phone's.  Returns once the dialog is up
  * and its preview is the live body of the personality (a still frame stands in until that chunk arrives).
@@ -222,6 +232,25 @@ export const PAGES = [
   // The first answer's process bar opened: the right panel on 过程 with the round's timeline (P3.3).
   { name: "chat-default-thinking", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page) => { await openProcess(page); } },
+  // FP13-c: a broken stream of a detached turn: the banner where the answer will appear (no error bar).
+  { name: "chat-background-turn", hash: "#/chat", ready: "[data-testid=message]", before: async (page) => {
+    const hand = await handFed(page);
+    await page.locator("#agent-draft:not([disabled])").waitFor();
+    await page.locator("#agent-draft").fill(`${HAND_MARKER} 后台测试`);
+    await clickSend(page);
+    await hand.opened(0);
+    await hand.raw(0, ": detached\n\n");
+    await hand.push(0, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: "t9100000-0000-4000-8000-0000000000b1", bot_id: BOT.finbot });
+    await hand.push(0, "delta", { text: "等待中的前半句。" });
+    await hand.fail(0);
+    await page.locator("[data-testid=background-turn]").waitFor({ timeout: 10000 });
+  } },
+  // FP13-c: a turn that finished while away: its divider, once the restore brings it in (the note is set, then the page reloads).
+  { name: "chat-away-done", hash: "#/chat", ready: "[data-testid=message]", view: () => ({ fixtureState: stateWithAwayTurn() }), before: async (page) => {
+    await page.evaluate(([key, value]) => window.localStorage.setItem(key, value), [`market-evidence-agent:detached-turn:${CONVERSATION.finbot}:v1`, JSON.stringify({ turnId: AWAY_TURN, question: "离开期间问的问题", at: Date.now() })]);
+    await page.reload({ waitUntil: "load" });
+    await page.locator("[data-testid=away-divider]").waitFor({ timeout: 15000 });
+  } },
   { name: "chat-bot", hash: `#/chat/${BOT.applebot}`, ready: "[data-testid=message]", before: openSide },
   // P3.3: the evidence's home.  A citation chip clicked (the 来源 tab on the second source), the 过程 tab with one step's raw data opened, the process bar
   // of a turn still running (one step turning, two done with their hit counts), a public mark's card open, an answer from before the step graph, the

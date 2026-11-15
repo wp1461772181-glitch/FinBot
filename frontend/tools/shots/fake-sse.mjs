@@ -37,12 +37,18 @@ export async function handFed(page) {
       entry.controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
     };
     window.__hand.close = (index) => { const entry = streams[index]; if (entry && !entry.closed) { entry.closed = true; entry.controller.close(); } };
+    // Raw text as it is (a comment frame such as ": detached\n\n").
+    window.__hand.raw = (index, text) => { const entry = streams[index]; if (!entry || entry.closed) throw new Error(`hand-fed stream ${index} is not open`); entry.controller.enqueue(encoder.encode(text)); };
+    // A network failure: the stream errors the way a dropped connection does (not an AbortError: the page did not stop it).
+    window.__hand.fail = (index) => { const entry = streams[index]; if (entry && !entry.closed) { entry.closed = true; try { entry.controller.error(new TypeError("network error")); } catch { /* already errored */ } } };
   }, HAND_MARKER);
   return {
     /** Wait until the app has opened the n-th hand-fed request; resolves to its JSON body. */
     opened: async (index = 0) => { await page.waitForFunction((i) => Boolean(window.__hand?.streams[i]?.controller), index, { timeout: 10000 }); return page.evaluate((i) => window.__hand.streams[i].body, index); },
     push: (index, event, data) => page.evaluate(([i, e, d]) => window.__hand.push(i, e, d), [index, event, data]),
     close: (index) => page.evaluate((i) => window.__hand.close(i), index),
+    raw: (index, text) => page.evaluate(([i, t]) => window.__hand.raw(i, t), [index, text]),
+    fail: (index) => page.evaluate((i) => window.__hand.fail(i), index),
     aborted: (index) => page.evaluate((i) => Boolean(window.__hand.streams[i]?.aborted), index),
   };
 }

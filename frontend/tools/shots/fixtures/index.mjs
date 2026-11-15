@@ -1,5 +1,5 @@
 // Fixture entry: buildState() makes a fresh mutable state per browser context; registerRoutes() wires the handlers.
-import { ASK_MARKER, BOT, CONVERSATION, HOLD_MARKER, LOGIN_CODE, WATCHLIST } from "./ids.mjs";
+import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HOLD_MARKER, LOGIN_CODE, WATCHLIST } from "./ids.mjs";
 import { prices } from "./common.mjs";
 import { botList, BOT_TEMPLATES, MODEL_CATALOG, MODEL_ROLES } from "./bots.mjs";
 import { buildChat, CITATION_DETAILS, clarificationEvents, compactionNotice, conversationSummaries, CONTEXT_USAGE, streamEvents } from "./chat.mjs";
@@ -78,6 +78,8 @@ export function registerRoutes(route, reply) {
   route.post(`${A}/stream`, own(({ body, state }) => {
     // A message containing the hold marker is never answered: that bot's line stays "answering" (the sidebar's 回答中 mark).
     if (String(body.message).includes(HOLD_MARKER)) return new Promise(() => {});
+    // FP13-c: the line is answering somewhere else; nothing is written (the server refuses before the turn starts).
+    if (String(body.message).includes(BUSY_MARKER)) return reply.status(409, { detail: "conversation_busy" });
     const bot = body.bot_id ? state.bots.find((b) => b.id === body.bot_id) : null;
     const conversationId = bot?.conversation_id ?? body.conversation_id ?? CONVERSATION.finbot;
     const asking = String(body.message).includes(ASK_MARKER);
@@ -92,6 +94,15 @@ export function registerRoutes(route, reply) {
     const text = events.filter((e) => e.event === "delta").map((e) => e.data.text).join("");
     list.push({ role: "user", content: body.display_message || body.message }, { role: "assistant", status: "complete", turn_id: events[0].data.turn_id, content: text, thinking_ms: 900 });
     return reply.sse(events);
+  }));
+
+  // FP13-c: the stop of a turn.  state.chat.cancels keeps every request body; state.chat.cancelReply picks the answer (500 = unreachable, an object = that answer).
+  route.post(`${A}/conversations/:id/cancel`, own(({ body, state }) => {
+    state.chat.cancels = [...(state.chat.cancels ?? []), body ?? {}];
+    const picked = state.chat.cancelReply;
+    if (picked === 500) return reply.status(500, { detail: "cancel_failed" });
+    if (picked && typeof picked === "object") return picked;
+    return { cancelled: true, turn_id: body?.turn_id ?? null };
   }));
 
   // A citation's chunk (the 来源 tab and the hover card read it).  An id with no entry is a withdrawn source.

@@ -1,14 +1,15 @@
 // The chat session: the state machine behind the thread (SSE turns, one line per bot, cross-tab sync, archive).  No markup here.
 import { dispatchAgentAction } from "../../agent-client-actions.mjs";
 import { createContext, useContext, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { agentChatStream, restoreAgentChat, compactConversation, clearAgentConversation, selectAgentConversation, type AgentChatMessage, type AgentChatEvent } from "../../api/conversations";
-import { getChatMode } from "../../api/base";
+import { agentChatStream, restoreAgentChat, compactConversation, cancelAgentTurn, clearAgentConversation, selectAgentConversation, type AgentChatMessage, type AgentChatEvent } from "../../api/conversations";
+import { ApiError, getChatMode } from "../../api/base";
 import { type Bot } from "../../api/bots";
 import { normalizeUnverified } from "../../chat-unverified.mjs";
 import { useLocale } from "../../i18n";
 import { chatContext } from "../../agentChatLifecycle.js";
 import { createLineStore, lineKey, loadDraft, saveDraft } from "../../chat-lines.mjs";
 import { planTailSync, pollDelay } from "../../chat-sync.mjs";
+import { arrivalSplit, backgroundExpired, completeTurnsOnly, dropDetached, loadDetached, markDetachedGone, resumePlan, restoredBeforeSend, saveDetached, streamBreak, type Background } from "../../chat-detached.mjs";
 import { parseCompactCommand, type CompactionNotice } from "../../context-usage.mjs";
 import { restoreConversationAfterPersistence, restoreConversationSafely } from "../../chat-session.mjs";
 import { normalizeClarification, selectedClarification, selectedOptions, manualClarification } from "../../chat-clarification.mjs";
@@ -22,7 +23,7 @@ import type { LiveMessage, SentRequest } from "./live-message";
 type State = "idle" | "testing" | "ready" | "sending" | "restoring" | "error";
 
 type FileHandle = { name: string; getFile: () => Promise<File>; createWritable: () => Promise<{ write: (value: string) => Promise<void>; close: () => Promise<void> }> };
-type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void>; lineStatus: { running: string[]; unseen: string[]; waiting: string[] }; freshExternal: boolean; ackExternal: () => void; externalTurns: string[]; retry: () => Promise<void>; notices: CompactionNotice[]; compactNow: (focus:string)=>Promise<void> };
+type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void>; lineStatus: { running: string[]; unseen: string[]; waiting: string[] }; freshExternal: boolean; ackExternal: () => void; externalTurns: string[]; retry: () => Promise<void>; notices: CompactionNotice[]; compactNow: (focus:string)=>Promise<void>; background: Background | null; cancelBackground: () => Promise<void>; awayTurns: string[] };
 const Context = createContext<ChatSession | null>(null);
 
 export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
@@ -43,15 +44,19 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   const lines = useRef(createLineStore<AgentChatMessage>()), lineRef = useRef("local"), [, bump] = useState(0);
   lines.current.setActive(lineRef.current);
   const lifecycle = { get current() { return lines.current.get(lineRef.current).lifecycle; } };
+  // FP13-c: the turn a line left running on the server (the banner), the turns this page did not watch finish (by conversation), and per-turn send bookkeeping.
+  const [background,setBackground]=useState<Background|null>(null), [awayByConv,setAwayByConv]=useState<Record<string,string[]>>({});
+  const liveTurns = useRef(new Map<string, {detachable: boolean; turnId?: string; conversationId: string | null}>()), presync = useRef(false);
+  const localStore = () => { try { return window.localStorage; } catch { return undefined; } };
   // Write a line's state; only the viewed line mirrors it into the React state, so a background answer cannot touch the page.
-  function apply(line:string, patch:{messages?:AgentChatMessage[];state?:State;status?:string;conversationId?:string|null;historyHasMore?:boolean;historyBefore?:number|null;restoring?:boolean;draft?:string;loaded?:boolean}) {
+  function apply(line:string, patch:{messages?:AgentChatMessage[];state?:State;status?:string;conversationId?:string|null;historyHasMore?:boolean;historyBefore?:number|null;restoring?:boolean;draft?:string;loaded?:boolean;background?:Background|null}) {
     lines.current.update(line, patch);
-    if (lineRef.current === line) { if (patch.messages !== undefined) { setMessages(patch.messages); latestMessages.current = patch.messages; } if (patch.state !== undefined) setState(patch.state); if (patch.status !== undefined) setStatus(patch.status); if (patch.conversationId !== undefined) setConversationId(patch.conversationId); if (patch.historyHasMore !== undefined) setHistoryHasMore(patch.historyHasMore); if (patch.historyBefore !== undefined) setHistoryBefore(patch.historyBefore); if (patch.restoring !== undefined) setRestoring(patch.restoring); if (patch.draft !== undefined) setDraftState(patch.draft); }
+    if (lineRef.current === line) { if (patch.messages !== undefined) { setMessages(patch.messages); latestMessages.current = patch.messages; } if (patch.state !== undefined) setState(patch.state); if (patch.status !== undefined) setStatus(patch.status); if (patch.conversationId !== undefined) setConversationId(patch.conversationId); if (patch.historyHasMore !== undefined) setHistoryHasMore(patch.historyHasMore); if (patch.historyBefore !== undefined) setHistoryBefore(patch.historyBefore); if (patch.restoring !== undefined) setRestoring(patch.restoring); if (patch.draft !== undefined) setDraftState(patch.draft); if (patch.background !== undefined) setBackground(patch.background); }
     bump(n => n + 1);
   }
   const setDraft = (text:string) => { setDraftState(text); lines.current.update(lineRef.current, { draft: text }); saveDraft(lineRef.current, text); };
   useEffect(() => () => { for (const [, s] of lines.current.all()) s.lifecycle.invalidate(); }, []);
-  useEffect(() => { const line="local", lc=lines.current.get(line).lifecycle, controller=new AbortController(), id=lc.begin(controller); apply(line,{restoring:true,state:"restoring"}); void restoreConversationSafely(lc,id,controller.signal,signal=>restoreAgentChat(undefined,signal),saved=>{if(!saved.conversationId)clearAgentConversation();else{localId.current=saved.conversationId;createdAt.current=saved.createdAt??new Date().toISOString();try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,localId.current)}catch{}}apply(line,{conversationId:saved.conversationId,messages:saved.messages.filter(m=>m.role==="user"||m.role==="assistant"),historyHasMore:saved.hasMore,historyBefore:saved.nextBefore,state:"idle",loaded:true})}).catch(() => { if (lc.isCurrent(id)) apply(line,{status:t("历史记录暂时无法加载；可稍后重试。"),state:"idle"}); }).finally(()=>{if(lc.isCurrent(id))apply(line,{restoring:false})}); return () => { controller.abort(); earlierController.current?.abort(); lc.finish(id); }; }, []);
+  useEffect(() => { const line="local", lc=lines.current.get(line).lifecycle, controller=new AbortController(), id=lc.begin(controller); apply(line,{restoring:true,state:"restoring"}); void restoreConversationSafely(lc,id,controller.signal,signal=>restoreAgentChat(undefined,signal),saved=>{if(!saved.conversationId)clearAgentConversation();else{localId.current=saved.conversationId;createdAt.current=saved.createdAt??new Date().toISOString();try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,localId.current)}catch{}}apply(line,{conversationId:saved.conversationId,messages:saved.messages.filter(m=>m.role==="user"||m.role==="assistant"),historyHasMore:saved.hasMore,historyBefore:saved.nextBefore,state:"idle",loaded:true});if(saved.conversationId)resumeLine(line,saved.conversationId,saved.messages.filter(m=>m.role==="user"||m.role==="assistant"))}).catch(() => { if (lc.isCurrent(id)) apply(line,{status:t("历史记录暂时无法加载；可稍后重试。"),state:"idle"}); }).finally(()=>{if(lc.isCurrent(id))apply(line,{restoring:false})}); return () => { controller.abort(); earlierController.current?.abort(); lc.finish(id); }; }, []);
   const latestMessages=useRef(messages);latestMessages.current=messages;
   // Turns pulled in from outside this tab since the user last interacted: the main avatar shows its notification until then.
   const [freshExternal,setFreshExternal]=useState(false);
@@ -91,8 +96,7 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
       try {
         const page = await restoreAgentChat(target, controller.signal, true, null, 6);
         if (stopped || controller.signal.aborted || lineRef.current !== line || conversationIdRef.current !== target) return;
-        const plan = planTailSync(lines.current.get(line), page.messages, target);
-        if (plan) { const arrived = newTurnIds(lines.current.get(line).messages, plan.messages); apply(line, { messages: plan.messages }); setExternalTurns(known => [...known, ...arrived]); setFreshExternal(true); }
+        mergeTail(line, target, page);
         failures = 0;
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
@@ -153,14 +157,18 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   }
   async function sendContent(content:string,pendingRequestId?:string,label?:string,base?:AgentChatMessage[]) {
     if (!(verified||botRef.current) || loadingEarlierRef.current || !content || state === "sending" || state === "testing") return;
-    let context: AgentChatMessage[]; const history = base ?? messages; try { context = chatContext(history, { role: "user", content }); } catch (error) { setStatus(t(error instanceof Error ? error.message : "消息过长，请缩短后重试。")); return; }
+    // FP13-c: a line with a turn still running on the server first pulls in what has finished (one sync at a time; a second send returns here).
+    const syncLine = lineRef.current;
+    if (lines.current.get(syncLine).background) { if (presync.current) return; presync.current = true; try { await syncBeforeSend(syncLine); } finally { presync.current = false; } }
+    let context: AgentChatMessage[]; const history = base ?? latestMessages.current; try { context = chatContext(history, { role: "user", content }); } catch (error) { setStatus(t(error instanceof Error ? error.message : "消息过长，请缩短后重试。")); return; }
     const line = lineRef.current, lc = lines.current.get(line).lifecycle;
-    const next = [...history, { role: "user" as const, content: label||content }]; lastRequests.current.set(line, { content, pendingRequestId, label }); saveDraft(line, ""); apply(line, { messages: next, draft: "", state: "sending", status: "" }); const turnBot = botRef.current, tested = turnBot ? { bot_id: turnBot.id } : { catalog_model: "" }, controller = new AbortController(), id = lc.begin(controller);
-    let localQueue = ""; let accumulated = ""; let turnId: string|undefined; let citations: NonNullable<AgentChatMessage["citations"]> = []; let citationProtocol: string|undefined; let citationNodes: NonNullable<AgentChatMessage["citation_nodes"]> = []; let clarification:AgentChatMessage["clarification"]; let cardAt:number|undefined; let terminalStatus="complete"; let reusedSources=false; let unverified: ReturnType<typeof normalizeUnverified> = []; const tools: NonNullable<AgentChatMessage["tool_trace"]> = []; let trace: FlowNode[] = []; let thinkingMs: number|undefined; const startedAt = Date.now(); const liveFields = (): Partial<LiveMessage> => (cardAt ? { card_at: cardAt } : {});
+    const next = [...history, { role: "user" as const, content: label||content }]; lastRequests.current.set(line, { content, pendingRequestId, label }); saveDraft(line, ""); const before = latestMessages.current; apply(line, { messages: next, draft: "", state: "sending", status: "" }); liveTurns.current.set(line, { detachable: false, conversationId: lines.current.get(line).conversationId }); const turnBot = botRef.current, tested = turnBot ? { bot_id: turnBot.id } : { catalog_model: "" }, controller = new AbortController(), id = lc.begin(controller);
+    let detachable = false, sawTerminal = false; let localQueue = ""; let accumulated = ""; let turnId: string|undefined; let citations: NonNullable<AgentChatMessage["citations"]> = []; let citationProtocol: string|undefined; let citationNodes: NonNullable<AgentChatMessage["citation_nodes"]> = []; let clarification:AgentChatMessage["clarification"]; let cardAt:number|undefined; let terminalStatus="complete"; let reusedSources=false; let unverified: ReturnType<typeof normalizeUnverified> = []; const tools: NonNullable<AgentChatMessage["tool_trace"]> = []; let trace: FlowNode[] = []; let thinkingMs: number|undefined; const startedAt = Date.now(); const liveFields = (): Partial<LiveMessage> => (cardAt ? { card_at: cardAt } : {});
     try {
       await agentChatStream(tested, content, turnBot ? null : conversationId, controller.signal, (event: AgentChatEvent) => {
         if (!lc.isCurrent(id)) return false;
         if (event.event === "conversation" && typeof event.data.conversation_id === "string") {if(typeof event.data.turn_id==="string")turnId=event.data.turn_id;const cid=event.data.conversation_id;if(lineRef.current===line&&cid!==conversationId){const created=new Date().toISOString();localId.current=cid;createdAt.current=created;selectAgentConversation(cid,created)}apply(line,{conversationId:cid});}
+        if (event.event === "conversation" && typeof event.data.conversation_id === "string") { const cid=String(event.data.conversation_id); apply(line,{background:null}); const live=liveTurns.current.get(line); if(live){live.turnId=turnId;live.conversationId=cid;} if(detachable&&turnId) saveDetached(localStore(),cid,{turnId,question:(label||content).slice(0,4000),at:startedAt}); }
         if (event.event === "client_action") {
           const applied=dispatchAgentAction(event.data, window);
           if (applied && event.data.action === "show_queue") localQueue=`\n\n${t("研究队列")}: ${(watchlistSnapshot() ?? []).join(", ") || "—"}`;
@@ -174,22 +182,37 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
         if (event.event === "clarification") { clarification=normalizeClarification(event.data)??undefined; cardAt=clarification?Date.now():undefined; }
         if (event.event === "trace") trace = upsertNode(trace, event.data);
         if (event.event === "done") {citationProtocol=event.data.citation_protocol==="v2"?"v2":undefined;citationNodes=Array.isArray(event.data.citation_nodes)?event.data.citation_nodes as NonNullable<AgentChatMessage["citation_nodes"]>:citationNodes;terminalStatus=String(event.data.status??"complete");reusedSources=(event.data.audit as {reused_sources?:boolean}|undefined)?.reused_sources===true;const thinking=Number(event.data.thinking_ms);if(Number.isFinite(thinking))thinkingMs=thinking;}
+        if (event.event === "done" || event.event === "error") { sawTerminal = true; const cid = liveTurns.current.get(line)?.conversationId; if (cid) dropDetached(localStore(), cid); }
         if (event.event === "delta" && typeof event.data.text === "string") accumulated += event.data.text;
         if (event.event === "error") throw new Error(String(event.data.code ?? "chat_failed"));
         apply(line,{messages:[...next, { role: "assistant", content: accumulated + localQueue, turn_id:turnId, tool_trace: [...tools], citations, citation_protocol: citationProtocol, citation_nodes: citationNodes, unverified_lines: unverified, clarification, trace, thinking_ms: thinkingMs, started_at: startedAt, status:terminalStatus, reused_sources:reusedSources, ...liveFields() }]});
         return true;
-      },pendingRequestId,label);
+      },pendingRequestId,label,(note)=>{ if (note === "detached") { detachable = true; const live=liveTurns.current.get(line); if(live) live.detachable=true; } });
       if (!lc.isCurrent(id)) return; apply(line,{messages:[...next, { role: "assistant", content: accumulated + localQueue, turn_id:turnId, tool_trace: [...tools], citations, citation_protocol: citationProtocol, citation_nodes: citationNodes, unverified_lines: unverified, clarification, trace, thinking_ms: thinkingMs, started_at: startedAt, status:terminalStatus, reused_sources:reusedSources, ...liveFields() }],status:"",state:"ready"});
     }
-    catch (error) { if (!lc.isCurrent(id)) return; const stopped=error instanceof DOMException && error.name==="AbortError"; const failure={ code:error instanceof Error?error.message:"", network:error instanceof TypeError, message:error instanceof Error ? errorReason(error, translate) : translate("发送失败，请重试") }; const stoppedTools=tools.map(x => x.status === "running" ? { ...x, status: "cancelled" } : x); apply(line,{messages:[...next, { role:"assistant",content:accumulated,status:stopped?"cancelled":"failed",tool_trace:stoppedTools,trace:cancelRunning(trace,stopped?"cancelled":"failed"),thinking_ms:thinkingMs??Date.now()-startedAt, ...(stopped?{}:{ failure }) }],state:stopped?"ready":"error",status:stopped?"":failure.message}); }
+    catch (error) { if (!lc.isCurrent(id)) return;
+      // FP13-c (§3.6): the server refused the send as busy, before anything was written.  The list goes back to what it was, the text back to the box.
+      if (error instanceof ApiError && error.status === 409 && error.message === "conversation_busy") {
+        const priorBackground = lines.current.get(line).background, known = lines.current.get(line).conversationId;
+        apply(line,{messages: before, state:"ready", status:""});
+        if (!pendingRequestId && !label && !base) { apply(line,{draft:content}); saveDraft(line, content); }
+        apply(line,{background:{conversationId: known, turnId: priorBackground?.turnId ?? null, reason:"busy", at: Date.now()}});
+        return;
+      }
+      // FP13-c (§3.2): a broken stream of a detached turn is a background turn, or an ended one; anything else falls through unchanged.
+      const cid = liveTurns.current.get(line)?.conversationId ?? lines.current.get(line).conversationId, turnNow = liveTurns.current.get(line)?.turnId ?? null;
+      const kind = streamBreak({ aborted: error instanceof DOMException && error.name === "AbortError", detachable, sawTerminal, closed: error instanceof ApiError && error.message === "provider_incomplete_stream" });
+      if (kind === "detached") { apply(line,{messages: next, state:"ready", status:"", background:{conversationId: cid, turnId: turnNow, reason:"dropped", at: Date.now()}}); return; }
+      if (kind === "ended") { if (cid) markDetachedGone(localStore(), cid); apply(line,{messages: next, state:"ready", status: t("这一轮在服务器上结束了，但这里没有收到回答；已保存的结果会自动出现在对话里。")}); return; }
+      const stopped=error instanceof DOMException && error.name==="AbortError"; const failure={ code:error instanceof Error?error.message:"", network:error instanceof TypeError, message:error instanceof Error ? errorReason(error, translate) : translate("发送失败，请重试") }; const stoppedTools=tools.map(x => x.status === "running" ? { ...x, status: "cancelled" } : x); apply(line,{messages:[...next, { role:"assistant",content:accumulated,status:stopped?"cancelled":"failed",tool_trace:stoppedTools,trace:cancelRunning(trace,stopped?"cancelled":"failed"),thinking_ms:thinkingMs??Date.now()-startedAt, ...(stopped?{}:{ failure }) }],state:stopped?"ready":"error",status:stopped?"":failure.message}); }
     finally { lc.finish(id); }
   }
-  const cancel = () => { const line = lineRef.current, wasSending = state === "sending"; lifecycle.current.invalidate(); apply(line, { ...(wasSending ? { messages: cancelledMessages(latestMessages.current) } : {}), restoring: false, state: verified ? "ready" : "idle", status: "" }); };
+  const cancel = () => { const line = lineRef.current, wasSending = state === "sending"; const live = liveTurns.current.get(line), liveCid = live?.conversationId ?? lines.current.get(line).conversationId; if (wasSending && live?.detachable && liveCid) void stopDetached(line, liveCid, live.turnId); lifecycle.current.invalidate(); apply(line, { ...(wasSending ? { messages: cancelledMessages(latestMessages.current) } : {}), restoring: false, state: verified ? "ready" : "idle", status: "" }); };
   async function openConversation(id:string, created?:string){
     earlierController.current?.abort();loadingEarlierRef.current=false;setLoadingEarlier(false);
     const previous=latestMessages.current;let lastUser=-1;for(let i=previous.length-1;i>=0;i--)if(previous[i].role==="user"){lastUser=i;break;}const completed=state==="sending"?previous.slice(0,Math.max(0,lastUser)):previous;
     const line=lineRef.current, lc=lines.current.get(line).lifecycle, controller=new AbortController(), token=lc.begin(controller);apply(line,{restoring:true,state:"restoring",status:""});
-    try{await restoreConversationAfterPersistence(lc,token,controller.signal,()=>handle.current&&completed.length?persistConversation(completed):Promise.resolve(),signal=>restoreAgentChat(id,signal,true),saved=>{const restoredId=saved.conversationId??id,chosenCreatedAt=created??saved.createdAt??new Date().toISOString();const display=saved.messages.filter(m=>m.role==="user"||m.role==="assistant");if(lineRef.current===line){selectAgentConversation(restoredId,chosenCreatedAt);localId.current=restoredId;createdAt.current=chosenCreatedAt;try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,restoredId)}catch{}setArchiveView(null);setImportedReadOnly(false);}apply(line,{conversationId:restoredId,messages:display,historyHasMore:saved.hasMore,historyBefore:saved.nextBefore,state:verified?"ready":"idle",loaded:true})})}
+    try{await restoreConversationAfterPersistence(lc,token,controller.signal,()=>handle.current&&completed.length?persistConversation(completed):Promise.resolve(),signal=>restoreAgentChat(id,signal,true),saved=>{const restoredId=saved.conversationId??id,chosenCreatedAt=created??saved.createdAt??new Date().toISOString();const display=saved.messages.filter(m=>m.role==="user"||m.role==="assistant");if(lineRef.current===line){selectAgentConversation(restoredId,chosenCreatedAt);localId.current=restoredId;createdAt.current=chosenCreatedAt;try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,restoredId)}catch{}setArchiveView(null);setImportedReadOnly(false);}apply(line,{conversationId:restoredId,messages:display,historyHasMore:saved.hasMore,historyBefore:saved.nextBefore,state:verified?"ready":"idle",loaded:true});resumeLine(line,restoredId,display)})}
     catch(error){if(lc.isCurrent(token)&&!(error instanceof DOMException&&error.name==="AbortError")){apply(line,{status:t("无法恢复服务端聊天记录。"),state:verified?"ready":"idle"});}}
     finally{if(lc.isCurrent(token)){lc.finish(token);apply(line,{restoring:false})}}
   }
@@ -220,7 +243,7 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
       lines.current.update(prev,{messages:latestMessages.current});
       lineRef.current=line;lines.current.setActive(line);
       const s=lines.current.get(line), text=s.draft||loadDraft(line);
-      setMessages(s.messages);latestMessages.current=s.messages;setState(s.state as State);setStatus(s.status);setConversationId(s.conversationId);setHistoryHasMore(s.historyHasMore);setHistoryBefore(s.historyBefore);setRestoring(s.restoring);setDraftState(text);s.draft=text;setArchiveView(null);bump(n=>n+1);
+      setMessages(s.messages);latestMessages.current=s.messages;setState(s.state as State);setStatus(s.status);setConversationId(s.conversationId);setHistoryHasMore(s.historyHasMore);setHistoryBefore(s.historyBefore);setRestoring(s.restoring);setBackground(s.background ?? null);setDraftState(text);s.draft=text;setArchiveView(null);bump(n=>n+1);
     }
     if(!next)return;
     { const cur=lines.current.get(line); if(cur.state==="sending"||cur.restoring)return; }
@@ -228,8 +251,61 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
     if(next.conversation_id){if(next.conversation_id!==lines.current.get(line).conversationId)await openConversation(next.conversation_id);}
     else if(switched)clearLine(true);
   }
+  // FP13-c: the turns of the open conversation that this page did not watch finish (the divider), and the background banner's own functions.
+  const awayTurns = conversationId ? (awayByConv[conversationId] ?? []) : [];
+  // The poll and the send-time sync share one merge: whole turns only, the chat-sync plan, then the background's bookkeeping.
+  function mergeTail(line:string, target:string, page:{messages:AgentChatMessage[]}) {
+    const cur = lines.current.get(line), plan = planTailSync(cur, completeTurnsOnly(page.messages), target), bg = cur.background;
+    if (plan) {
+      const arrived = newTurnIds(cur.messages, plan.messages), marker = loadDetached(localStore(), target), ownTurnId = marker?.turnId ?? bg?.turnId ?? null;
+      const split = arrivalSplit({ arrived, messages: plan.messages, ownTurnId, background: bg });
+      apply(line, { messages: plan.messages });
+      if (split.clearBackground) apply(line, { background: null, status: "" });
+      if (split.ownArrived) dropDetached(localStore(), target);
+      if (split.away.length) setAwayByConv(m => ({ ...m, [target]: [...(m[target] ?? []), ...split.away] }));
+      setExternalTurns(known => [...known, ...split.external]); setFreshExternal(true);
+    } else if (bg && backgroundExpired(bg, Date.now())) {
+      apply(line, { background: null, status: t("后台那一轮一直没有结果出现，可能已被中断；需要的话可以再发一次。") });
+      dropDetached(localStore(), target);
+    }
+  }
+  async function syncBeforeSend(line:string) {
+    const cid = lines.current.get(line).conversationId; if (!cid) return;
+    try { const page = await restoreAgentChat(cid, undefined, true, null, 6); if (lineRef.current === line && lines.current.get(line).conversationId === cid) mergeTail(line, cid, page); }
+    catch { /* a failed sync is not a failed send: the send goes on */ }
+  }
+  // Stop a turn this page started and then let go of (its stop button was pressed while it was still watched).  The list is touched only if the stopped placeholder is still the last message.
+  async function stopDetached(line:string, cid:string, turnId:string|undefined) {
+    const result = await cancelAgentTurn(cid, turnId ?? null);
+    if (result.cancelled) { dropDetached(localStore(), cid); return; }
+    const cur = lines.current.get(line), last = cur.messages.at(-1);
+    const placeholder = cur.state !== "sending" && last?.role === "assistant" && last.status === "cancelled" && (turnId ? last.turn_id === turnId : true);
+    const gone = result.reason === "no_running_turn" || result.reason === "turn_mismatch";
+    if (gone) markDetachedGone(localStore(), cid);
+    if (!placeholder) return;
+    if (result.reason === "unreachable") { apply(line, { messages: cur.messages.slice(0, -1), background: { conversationId: cid, turnId: turnId ?? null, reason: "stop_unreachable", at: Date.now() } }); return; }
+    if (gone) apply(line, { messages: cur.messages.slice(0, -1), status: t("这一轮在停止前已经答完，结果会自动出现在这里。") });
+  }
+  // The banner's stop button (§3.3): asks the server to stop the background turn and reports what it said.
+  async function cancelBackground() {
+    const line = lineRef.current, bg = lines.current.get(line).background, cid = bg?.conversationId;
+    if (!bg || !cid) return;
+    const result = await cancelAgentTurn(cid, bg.turnId ?? null);
+    if (result.cancelled) { dropDetached(localStore(), cid); apply(line, { background: null, status: t("已请求停止后台回答。") }); return; }
+    if (result.reason === "no_running_turn" || result.reason === "turn_mismatch") { markDetachedGone(localStore(), cid); apply(line, { background: null, status: bg.turnId ? t("后台那一轮已经结束，结果会自动出现在这里。") : t("没有能从这里停止的回答：它可能刚好答完（现在可以再发），也可能来自 Telegram 或未刷新的旧页面（只能等它答完）。") }); return; }
+    apply(line, { status: t("没能连上服务器，稍后再试。") });
+  }
+  // A restored conversation: the note says a turn of this page was running (§3.7).  Arrived turns get the divider; a running one is shown with its question.
+  function resumeLine(line:string, cid:string, messages:AgentChatMessage[]) {
+    const store = localStore(), plan = resumePlan({ marker: loadDetached(store, cid), messages, now: Date.now() });
+    if (plan.kind === "none") return;
+    if (plan.kind === "running") { apply(line, { messages: [...messages, { role: "user", content: plan.question }], background: { conversationId: cid, turnId: plan.turnId, reason: "restored", at: plan.at } }); return; }
+    dropDetached(store, cid);
+    if (plan.kind === "arrived" && plan.away) { const turnId = plan.turnId; setAwayByConv(m => ({ ...m, [cid]: [...(m[cid] ?? []), turnId] })); }
+    if (plan.kind === "expired") apply(line, { status: t("后台那一轮一直没有结果出现，可能已被中断；需要的话可以再发一次。") });
+  }
   const visibleMessages=archiveView?archiveView.messages as AgentChatMessage[]:messages;
-  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,lineStatus:{running:lines.current.running(),unseen:lines.current.unseen(),waiting:lines.current.waiting()},archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot , freshExternal, ackExternal: () => setFreshExternal(false), externalTurns, retry, notices, compactNow }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,lineStatus:{running:lines.current.running(),unseen:lines.current.unseen(),waiting:lines.current.waiting()},archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot , freshExternal, ackExternal: () => setFreshExternal(false), externalTurns, retry, notices, compactNow, background, cancelBackground, awayTurns }}>{children}</Context.Provider>;
 }
 function readLocalConversationId(){try{const key=`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,existing=window.localStorage.getItem(key);if(existing&&/^[\w-]{1,80}$/.test(existing))return existing;const id=crypto.randomUUID();window.localStorage.setItem(key,id);return id;}catch{return crypto.randomUUID();}}
 function archiveMessages(messages:AgentChatMessage[]){return messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role as "user"|"assistant",content:m.content,...(m.status?{status:m.status as "failed"|"cancelled"}:{}),...(m.role==="assistant"&&m.citations?{citations:m.citations}:{}),...(m.role==="assistant"&&m.unverified_lines?.length?{unverified_lines:m.unverified_lines}:{}),...(m.role==="assistant"&&m.tool_trace?{tool_trace:m.tool_trace.map(x=>({call_id:x.call_id,name:x.name,arguments:x.arguments,result:x.result,status:x.status as "running"|"complete"|"not_found"|"failed"|"cancelled"}))}:{})}));}
