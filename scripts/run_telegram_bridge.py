@@ -196,7 +196,20 @@ class BackendUnavailable(Exception):
 
 
 class ConversationBusy(Exception):
-    """The API answered 409 conversation_busy: the same conversation is answering elsewhere."""
+    """The API answered 409; ``code`` is its ``detail``.  Only conversation_busy (the same conversation is answering
+    elsewhere) is worth waiting in line for; any other 409 is not busy and waiting cures nothing."""
+
+    def __init__(self, code: str = "conversation_busy"):
+        super().__init__(code)
+        self.code = code
+
+
+def _conflict_code(body: bytes):
+    """The ``detail`` of a 409 body, e.g. ``{"detail":"conversation_busy"}``; None when it has none."""
+    try:
+        return json.loads(body).get("detail")
+    except (ValueError, AttributeError):
+        return None
 
 
 class TurnRunner:
@@ -490,10 +503,18 @@ async def _ask_with_retry(client, credential: str, bot_id: str, text: str, *, on
                 await asyncio.sleep(BUSY_RETRY_DELAY)
     started = time.monotonic()
     busy_seen = False
+    short = 0
     while True:
         try:
             return await _ask_agent(client, credential, bot_id, text, **press, **extra)
-        except ConversationBusy:
+        except ConversationBusy as busy:
+            if busy.code != "conversation_busy":
+                # Not busy: waiting cures nothing, so the old short retries apply, with no waiting text.
+                short += 1
+                if short > BUSY_RETRIES:
+                    raise
+                await asyncio.sleep(BUSY_RETRY_DELAY)
+                continue
             if not busy_seen and on_busy is not None:
                 await on_busy()
             busy_seen = True
@@ -560,7 +581,8 @@ async def _ask_agent(client, credential: str, bot_id: str, text: str, *, convers
             timeout=httpx.Timeout(300, connect=CONNECT_TIMEOUT),
         ) as response:
             if response.status_code == 409:
-                raise ConversationBusy()
+                body = b"".join([piece async for piece in response.aiter_bytes()])
+                raise ConversationBusy(_conflict_code(body))
             response.raise_for_status()
             async for chunk in response.aiter_bytes():
                 piece = decoder.decode(chunk)

@@ -15,6 +15,7 @@ ANSWER_STREAM = (
     'event: conversation\ndata: {"conversation_id": "c-1"}\n\n'
     'event: delta\ndata: {"text": "答案"}\n\n'
 ).encode("utf-8")
+BUSY_409 = b'{"detail":"conversation_busy"}'     # the body the API sends with its 409 conversation_busy
 
 
 class _Wire:
@@ -42,9 +43,9 @@ class _Wire:
         return [text for _, text in self.sends]
 
 
-def _turn(text="问"):
+def _turn(text="问", client=None):
     tg = SimpleNamespace(record_reply=lambda *args: None)
-    return bridge._bot_turn(None, "cred", "owner", OWNER_ID, {}, tg, "b-default", "助理", text, feedback=True)
+    return bridge._bot_turn(client, "cred", "owner", OWNER_ID, {}, tg, "b-default", "助理", text, feedback=True)
 
 
 class _Response:
@@ -80,7 +81,20 @@ class _BusyThenOkClient:
     def stream(self, method, url, json=None, headers=None, timeout=None):
         self.bodies.append(dict(json))
         if len(self.bodies) == 1:
-            return _Context(_Response(409))
+            return _Context(_Response(409, BUSY_409))
+        return _Context(_Response(200, ANSWER_STREAM))
+
+
+class _Conflicts:
+    """The first ``times`` streams answer 409 with ``body``, then an answer.  Keeps every request body."""
+
+    def __init__(self, body: bytes, times: int):
+        self.body, self.times, self.bodies = body, times, []
+
+    def stream(self, method, url, json=None, headers=None, timeout=None):
+        self.bodies.append(dict(json))
+        if len(self.bodies) <= self.times:
+            return _Context(_Response(409, self.body))
         return _Context(_Response(200, ANSWER_STREAM))
 
 
@@ -161,3 +175,32 @@ def test_the_wait_callback_stays_out_of_the_ask_and_the_request_never_asks_to_de
     assert len(seen_kwargs) == 2 and all("on_busy" not in kw for kw in seen_kwargs)
     assert len(client.bodies) == 2 and all("detach" not in body for body in client.bodies)
     assert answer == "答案" and cid == "c-1"
+
+
+def test_a_409_that_is_not_busy_is_not_queued_and_gets_only_the_short_retries(monkeypatch):
+    """A 409 whose detail is not conversation_busy (a missing model key, a card whose line was replaced) waiting
+    cannot cure: no waiting text, the old short retries, then the old give-up text."""
+    monkeypatch.delenv(FLAG, raising=False)
+    monkeypatch.setattr(bridge, "BUSY_RETRY_DELAY", 0.01)
+    monkeypatch.setattr(bridge, "BUSY_WAIT_SECONDS", 0.05)    # a queue would give up at once, not after 21 minutes
+    wire = _Wire(monkeypatch)
+    client = _Conflicts(b'{"detail":"model_key_missing"}', times=10 ** 6)
+
+    asyncio.run(asyncio.wait_for(_turn(client=client), 5))
+    assert bridge.BUSY_WAITING_TEXT not in wire.texts()
+    assert len(client.bodies) == bridge.BUSY_RETRIES + 1
+    assert wire.texts()[-1] == bridge.BUSY_GIVEUP_TEXT
+
+
+def test_a_conversation_busy_409_still_queues_past_the_short_retries(monkeypatch):
+    """The busy 409 keeps its place in line: more busy answers than the short retries allow, then the answer."""
+    monkeypatch.delenv(FLAG, raising=False)
+    monkeypatch.setattr(bridge, "BUSY_RETRY_DELAY", 0.01)
+    wire = _Wire(monkeypatch)
+    client = _Conflicts(BUSY_409, times=bridge.BUSY_RETRIES + 3)
+
+    asyncio.run(asyncio.wait_for(_turn(client=client), 5))
+    assert len(client.bodies) == bridge.BUSY_RETRIES + 4
+    assert wire.texts().count(bridge.BUSY_WAITING_TEXT) == 1
+    assert bridge.BUSY_GIVEUP_TEXT not in wire.texts()
+    assert wire.texts()[-1] == "【助理】\n答案"
