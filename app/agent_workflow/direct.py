@@ -318,6 +318,45 @@ REFERENCE_PROMPT=(
  'Never invent a citation absent from the catalogue. Clarify genuine ambiguity only. Use refinement only for time/count changes. Return resolve_reference.'
 )
 
+# SW1 items 2 and 3 (FINBOT_SW1_RESOLVER_RULES): the period a company's "this quarter" means, and a premise the user assumes.
+RESOLVER_ANCHOR='Keep data-dependent wording such as "最新一期" or "最近一期" as it is; never guess a specific period. '
+RESOLVER_RULE_TEXT=(
+ 'For a company\'s disclosed figures (营收、利润、增速、毛利率 and the like) and for an industry built from them, 这季、本季、这个季度、当季、最近一季、现在、目前 mean the most recent quarter already reported, not the calendar quarter in progress: write it as data-dependent wording such as 最近一个已披露的季度 (several companies: 各公司最近已披露的季度) and give it no dates. '
+ 'These keep their calendar meaning with explicit dates: prices, returns, news, events and the user\'s own holdings (这季股价、这季组合收益 → the calendar quarter to date, ending today); guidance, expectations or forecasts about the quarter in progress (这季的指引、这季预期 → that quarter, named as not yet ended); a quarter the user names explicitly (2026 年第四季度、Q4、FY27 Q1 → as named). '
+ 'When the user describes a document, period or event as something they assume (刚出的 FY26 Q4 那份 10-Q、上周公布的指引), keep it as what the user said (用户所说的……) rather than as a confirmed fact, and add no detail to it; the tools check whether it exists. '
+)
+CLASSIFY_PREMISE_TEXT=('\nA form the user mentions only while describing a document they assume exists (刚出的那份 10-Q) is not a filter: leave form null unless the user asks to read that form as such; '
+ 'the tools also widen past a form that hides a newer filing.')
+def resolver_prompt():
+    """REFERENCE_PROMPT with the period and premise rules after its data-dependent sentence, when the switch is on."""
+    if not flag('FINBOT_SW1_RESOLVER_RULES',True):return REFERENCE_PROMPT
+    return REFERENCE_PROMPT.replace(RESOLVER_ANCHOR,RESOLVER_ANCHOR+RESOLVER_RULE_TEXT,1)
+def classify_prompt():
+    """CLASSIFY_PROMPT with the premise sentence at its end, when the switch is on."""
+    return CLASSIFY_PROMPT+CLASSIFY_PREMISE_TEXT if flag('FINBOT_SW1_RESOLVER_RULES',True) else CLASSIFY_PROMPT
+_PERIOD_RANGE=re.compile(r'(\d{4}-\d{2}-\d{2})\s*(?:至|到|~|～|-|—|–|to)\s*(\d{4}-\d{2}-\d{2})')
+_EXPLICIT_PERIOD=re.compile(r'Q[1-4]|第[一二三四1-4]季|FY\d{2,4}|[一二三四1-4]季度',re.I)
+def resolver_today():
+    """Today as the resolver's period check reads it: the research cutoff when a replay sets one, else now; Kuala Lumpur's date."""
+    from ..knowledge.runtime import current_research_context
+    context=current_research_context()
+    base=context.cutoff if context and context.cutoff else datetime.now(UTC)
+    if base.tzinfo is None:base=base.replace(tzinfo=UTC)
+    return base.astimezone(KL_TZ).date()
+def unfinished_period(canonical,original,today):
+    """SW1 §4.2: the first date range the rewrite names that has not ended by today, when the user's own words name no
+    period and neither date is theirs. None otherwise. The rewrite itself is left as it is."""
+    from ..freshness import requested_years
+    if requested_years(original) or _EXPLICIT_PERIOD.search(original or ''):return None
+    for match in _PERIOD_RANGE.finditer(canonical or ''):
+        start,end=match.group(1),match.group(2)
+        try:start_day,end_day=date.fromisoformat(start),date.fromisoformat(end)
+        except ValueError:continue
+        if not start_day<=today<end_day:continue
+        if start in original or end in original:continue
+        return {'start':start,'end':end,'today':today.isoformat()}
+    return None
+
 async def injected(callback,*args):
     value=callback(*args)
     return await value if inspect.isawaitable(value) else value
@@ -965,7 +1004,7 @@ class Turn:
         payload['assistant_items']=assistant_item_catalogue(prior)
         payload['as_of_utc']=datetime.now(UTC).isoformat()
         if self.profile_messages():payload['user_profile_hints']=self.profile_messages()[0]['content']
-        prompt=REFERENCE_PROMPT
+        prompt=resolver_prompt()
         value=None;failure=None
         for attempt in range(2):
             try:
@@ -1147,6 +1186,13 @@ class Turn:
             self.reference_stage(False,'reference_period_unbound');self.resolver_failed=True
             self.question=canonical=self.original
             if self.scope.get('period') and not requested_years(self.scope['period'])<=trusted_years:self.scope['period']=None
+        # SW1 §4.2: a rewrite that pins the quarter still in progress, when the user's own words named no period, is noted to the model.
+        unfinished=unfinished_period(self.question,self.original,resolver_today()) if flag('FINBOT_SW1_RESOLVER_RULES',True) else None
+        if unfinished:
+            self.audit['resolver_period_unfinished']=unfinished
+            period=str(self.scope.get('period') or '')
+            if period and (unfinished['start'] in period or unfinished['end'] in period):
+                self.scope['period']=None;self.audit['scope_period_cleared']=True
         trusted+=' '+json.dumps([{'scope':s.get('scope'),'items':[{'title':r.get('title'),'url':r.get('url'),'id':r.get('id')} for r in s['rows']]} for s in self.sets],ensure_ascii=False)
         allowed_figures=figure_values(trusted,zh=True)|figure_values(self.original,zh=True)
         if window_days(self.original):allowed_figures.add(float(window_days(self.original)))
@@ -1202,7 +1248,7 @@ class Turn:
         company=self.default_company()
         if company:payload['default_company']={'symbol':company['symbol'],'company':company.get('company'),
             'note':'Set by the owner for this bot. Use it only when the request names no company; a named company wins.'}
-        prompt=CLASSIFY_PROMPT
+        prompt=classify_prompt()
         messages=[{'role':'system','content':prompt},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}]
         is_injected=bool(self.context.intent_recognizer or self.context.classifier)
         mode_defaulted=False
@@ -1690,6 +1736,12 @@ class Turn:
         hint={'resolved_question':self.question,
               'referents':[r.get('text') or r.get('mention') for r in self.verified_referents if r.get('text') or r.get('mention')][:6],
               'classifier_scope':{k:self.scope.get(k) for k in ('symbol','symbols','mode','company','metrics','period','form','financial_only','latest','days_back','max_results','requested_actions') if self.scope.get(k) not in (None,[],'',False)}}
+        if self.audit.get('resolver_period_unfinished'):
+            # SW1 §4.2: the model is told, as a fact, that the rewrite's period has not ended; original_words_note is overridden here.
+            u=self.audit['resolver_period_unfinished']
+            hint['period_note']=(f"系统事实：改写里的期间 {u['start']} 至 {u['end']} 截至今天（{u['today']}）还没有结束，而用户原话里的时间说法是相对的。"
+                '问的是已披露的财务数据时，按最近已披露的一期回答并写明是哪一期；问的是行情、新闻、持仓或进行中的指引时，按这一期至今回答。'
+                '这条优先于 original_words_note 里「不要按原话重新推算」那一句。')
         # FP1: the user's own words travel with the rewrite; the rewrite still decides company, metric and period.
         from .fp_flags import flag
         words=self.user_words().strip()
