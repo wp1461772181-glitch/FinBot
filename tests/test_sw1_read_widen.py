@@ -284,4 +284,6 @@ def test_the_instruction_carries_the_read_sentences_only_while_their_switches_ar
     monkeypatch.setenv('FINBOT_SW1_READ_WIDEN', 'off')
     # S3 (FINBOT_SW1_EXISTENCE_KNOWLEDGE, on by default) adds its own sentence; this check is about S1's sentences alone.
     monkeypatch.setenv('FINBOT_SW1_EXISTENCE_KNOWLEDGE', 'off')
+    # SW1B's sample sentence (on by default, its own switch) would also differ from the constant; this check is S1's alone.
+    monkeypatch.setenv('FINBOT_SW1B_SAMPLE_AGGREGATE', 'off')
     assert direct.evidence_instruction(text) == text and direct.EVIDENCE_OLD in text   # off: the constant's own text
