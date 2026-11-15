@@ -2,13 +2,14 @@
 // phone), or the line cross-fades over 150 ms (reduced motion); and a bot that waits for you opens its line at the card.  A chunk of its own, fetched shortly
 // after the first paint (handoff-intent.ts): the first screen only asks whether it has arrived (a switch in the first half second has no entrance).
 import { lineMotion, staggerDelay, type LineMotion } from "../../handoff-line.mjs";
+import { getMotion, motionOff } from "../../motion-store.mjs";
 import { beginHandoff, type Intent } from "./handoff-intent";
 
 export interface Entry { motion: LineMotion; dir: number; delay: (index: number) => number | undefined }
 
 /** The entrance of a thread that holds `count` messages, for the switch `intent` (the thread was mounted on the line that belongs to the bot). */
 export function entryOf(intent: Intent, count: number, phone: boolean): Entry {
-  const reduced = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches), motion = lineMotion({ reduced, phone });
+  const motion = lineMotion({ level: getMotion().level, phone });
   return { motion, dir: intent.dir || 1, delay: index => (motion === "rise" && index < count ? staggerDelay(index, count) ?? undefined : undefined) };
 }
 
@@ -19,7 +20,7 @@ export function revealWaitingCard(): Promise<boolean> {
     const look = () => {
       const card = document.querySelector<HTMLElement>('[data-slot="approval-card"][data-state="active"]');
       if (card) {
-        card.scrollIntoView({ block: "center", behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+        card.scrollIntoView({ block: "center", behavior: motionOff() ? "auto" : "smooth" });
         resolve(true);
       } else if (Date.now() - started > 3000) resolve(false);
       else window.setTimeout(look, 100);

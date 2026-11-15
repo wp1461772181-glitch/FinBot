@@ -9,7 +9,7 @@
    Base: 1.2 s for the trace, 1 s for the caret, 1.2 s for the status ring.
 
    Reduced motion (the system setting; A5 adds the app's own 关闭 level at the one place marked ANIMATED below): every shape here has
-   a still pose that is the base style, and the animations are only switched on inside `prefers-reduced-motion: no-preference`.  The trace is
+   a still pose that is the base style, and the animations are only switched on while the level of animation is not "off" (<html data-motion>, motion-level.mjs).  The trace is
    three still shapes, the caret a solid block that does not blink, the closing line a plain hairline, the status ring a whole ring.
    No loop in this file blinks faster than 3 times a second at the top tempo (the sentinel's steps are the fastest: 3 x 1.25 / 1.2 = 3.1 a second
    at 1.25, 2.75 at its own 1.1). */
@@ -110,42 +110,34 @@
   @keyframes bot-status-spin { to { transform: rotate(1turn); } }
 
   /* ================= ANIMATED: the one place the loops are switched on ================= */
-  @media (prefers-reduced-motion: no-preference) {
-    .think-trace > i { animation-duration: var(--tp); animation-iteration-count: infinite; animation-fill-mode: both; }
-    [data-trace="candles"] .think-trace > i { animation-name: trace-candle; animation-timing-function: ease-in-out; animation-delay: calc(var(--tp) * 0.16 * var(--k)); }
-    [data-trace="streaks"] .think-trace > i { animation-name: trace-streak; animation-timing-function: cubic-bezier(0.2, 0.7, 0.3, 1); animation-delay: calc(var(--tp) * -0.33 * var(--k)); }
-    [data-trace="drift"] .think-trace > i { animation-name: trace-drift; animation-timing-function: linear; animation-delay: calc(var(--tp) * -0.33 * var(--k)); }
-    [data-trace="steps"] .think-trace > i:nth-child(n) { opacity: 1; animation-name: trace-step; animation-timing-function: steps(1, end); animation-delay: calc(var(--tp) * -0.3334 * var(--k)); }
-    [data-trace="arc"] .think-trace > i:nth-child(1) { animation-name: trace-arc; animation-timing-function: ease-in-out; animation-duration: calc(var(--tp) * 2); }
-    [data-trace="lines"] .think-trace > i::after { animation: trace-fill var(--tp) ease-out infinite both; animation-delay: calc(var(--tp) * 0.2 * var(--k)); }
-    [data-trace="orbit"] .think-trace > i { animation-name: trace-orbit; animation-timing-function: linear; animation-delay: calc(var(--tp) * -0.3333 * var(--k)); }
+  :where(:root:not([data-motion="off"])) {
+    & .think-trace > i { animation-duration: var(--tp); animation-iteration-count: infinite; animation-fill-mode: both; }
+    & [data-trace="candles"] .think-trace > i { animation-name: trace-candle; animation-timing-function: ease-in-out; animation-delay: calc(var(--tp) * 0.16 * var(--k)); }
+    & [data-trace="streaks"] .think-trace > i { animation-name: trace-streak; animation-timing-function: cubic-bezier(0.2, 0.7, 0.3, 1); animation-delay: calc(var(--tp) * -0.33 * var(--k)); }
+    & [data-trace="drift"] .think-trace > i { animation-name: trace-drift; animation-timing-function: linear; animation-delay: calc(var(--tp) * -0.33 * var(--k)); }
+    & [data-trace="steps"] .think-trace > i:nth-child(n) { opacity: 1; animation-name: trace-step; animation-timing-function: steps(1, end); animation-delay: calc(var(--tp) * -0.3334 * var(--k)); }
+    & [data-trace="arc"] .think-trace > i:nth-child(1) { animation-name: trace-arc; animation-timing-function: ease-in-out; animation-duration: calc(var(--tp) * 2); }
+    & [data-trace="lines"] .think-trace > i::after { animation: trace-fill var(--tp) ease-out infinite both; animation-delay: calc(var(--tp) * 0.2 * var(--k)); }
+    & [data-trace="orbit"] .think-trace > i { animation-name: trace-orbit; animation-timing-function: linear; animation-delay: calc(var(--tp) * -0.3333 * var(--k)); }
 
-    .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
-    .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after { animation: chat-caret calc(1s / var(--bot-tempo, 1)) steps(1) infinite; }
-    [data-caret="hairline"] .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
-    [data-caret="hairline"] .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after { animation: caret-fade calc(1.6s / var(--bot-tempo, 1)) ease-in-out infinite; }
+    & .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
+    & .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after { animation: chat-caret calc(1s / var(--bot-tempo, 1)) steps(1) infinite; }
+    & [data-caret="hairline"] .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
+    & [data-caret="hairline"] .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after { animation: caret-fade calc(1.6s / var(--bot-tempo, 1)) ease-in-out infinite; }
 
-    .done-sweep { animation: done-sweep 320ms var(--curve-out) both, done-fade 160ms linear 320ms both; }
-    .bot-status-ring { animation: bot-status-spin calc(1.2s / var(--bot-tempo, 1)) linear infinite; }
+    & .done-sweep { animation: done-sweep 320ms var(--curve-out) both, done-fade 160ms linear 320ms both; }
+    & .bot-status-ring { animation: bot-status-spin calc(1.2s / var(--bot-tempo, 1)) linear infinite; }
   }
 
-  /* Reduced motion: the still poses above stand; the caret is a block that does not blink, the status ring a whole ring. */
-  @media (prefers-reduced-motion: reduce) {
-    .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
-    .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after {
-      width: 0.55em; height: 1em; margin-left: 2px; vertical-align: text-bottom; background: var(--bot-hue); opacity: 0.55; transform: none; animation: none;
-    }
-    .bot-status-ring { border-color: var(--ring-colour); }
-  }
 
-  /* The app's own switch for the same thing: anything under data-motion="reduce" (the sample page's container today; the root, once A5's
-     关闭 level writes it) gets the same still poses whatever the system says. */
-  [data-motion="reduce"] .think-trace > i, [data-motion="reduce"] .think-trace > i::after, [data-motion="reduce"] .done-sweep, [data-motion="reduce"] .bot-status-ring,
-  [data-motion="reduce"] .chat-prose[data-streaming] > :last-child::after, [data-motion="reduce"] .chat-prose[data-streaming] > li:last-child::after,
-  [data-motion="reduce"] .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after { animation: none !important; }
-  [data-motion="reduce"] .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
-  [data-motion="reduce"] .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after {
+  /* Reduced motion (the system's setting, or the level 关闭): <html data-motion="off"> (motion-level.mjs) or any container carrying it (the sample page's)
+     gets the still poses above: the caret is a block that does not blink, the status ring a whole ring. */
+  [data-motion="off"] .think-trace > i, [data-motion="off"] .think-trace > i::after, [data-motion="off"] .done-sweep, [data-motion="off"] .bot-status-ring,
+  [data-motion="off"] .chat-prose[data-streaming] > :last-child::after, [data-motion="off"] .chat-prose[data-streaming] > li:last-child::after,
+  [data-motion="off"] .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after { animation: none !important; }
+  [data-motion="off"] .chat-prose[data-streaming] > :last-child:not(ul, ol, table, pre)::after,
+  [data-motion="off"] .chat-prose[data-streaming] > :is(ul, ol):last-child > li:last-child::after {
     width: 0.55em; height: 1em; margin-left: 2px; vertical-align: text-bottom; background: var(--bot-hue); opacity: 0.55; transform: none;
   }
-  [data-motion="reduce"] .bot-status-ring { border-color: var(--ring-colour); }
+  [data-motion="off"] .bot-status-ring { border-color: var(--ring-colour); }
 }

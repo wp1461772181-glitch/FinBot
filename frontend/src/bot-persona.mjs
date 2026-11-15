@@ -80,7 +80,20 @@ export function cleanOverrides(raw) {
   if (ARCHETYPES.includes(raw.archetype)) out.archetype = raw.archetype;
   if (typeof raw.tempo === "number" && Number.isFinite(raw.tempo) && raw.tempo >= TEMPO_MIN && raw.tempo <= TEMPO_MAX) out.tempo = raw.tempo;
   if (EASINGS.includes(raw.easing)) out.easing = raw.easing;
+  // A variant belongs to one family: with an archetype in the same record it must be that archetype's; alone it must be some family's (derivePersona
+  // then keeps it only if it is the family of the archetype the bot ends up with, so changing archetype voids the old variant).
+  if (typeof raw.auraVariant === "string") {
+    const families = ARCHETYPES.includes(raw.archetype) ? [raw.archetype] : ARCHETYPES;
+    if (families.some(archetype => AURA_VARIANTS[archetype].includes(raw.auraVariant))) out.auraVariant = raw.auraVariant;
+  }
   return out;
+}
+
+/** The four steps of the tempo knob (6.4: 0.8-0.9 calm, 1.0 standard, 1.1 brisk, 1.25 rapid) and the one that is nearest to any tempo. */
+export const TEMPO_STEPS = [{ id: "calm", value: 0.85 }, { id: "standard", value: 1 }, { id: "brisk", value: 1.1 }, { id: "rapid", value: 1.25 }];
+export function tempoStepOf(tempo) {
+  const value = typeof tempo === "number" && Number.isFinite(tempo) ? tempo : 1;
+  return TEMPO_STEPS.reduce((best, step) => (Math.abs(step.value - value) < Math.abs(best.value - value) ? step : best)).id;
 }
 
 /**
@@ -94,11 +107,36 @@ export function derivePersona(bot, { volatility, overrides } = {}) {
   let persona = preset
     ? { archetype: preset.archetype, tempo: preset.tempo, easing: preset.easing, restGaze: preset.restGaze, auraVariant: preset.auraVariant, source: "preset" }
     : { ...derived(bot, archetypeOf(bot), volatility), source: "derived" };
-  const own = cleanOverrides(overrides);
+  const own = ownOverrides(persona.archetype, overrides);
   if (Object.keys(own).length === 0) return persona;
-  // A new archetype brings its own gaze and aura (derived from this bot's id); tempo and easing overrides then sit on top.
+  // A new archetype brings its own gaze and aura (derived from this bot's id); the other knobs then sit on top.
   if (own.archetype && own.archetype !== persona.archetype) persona = { ...derived(bot, own.archetype, volatility), source: "override" };
-  return { ...persona, ...(own.tempo !== undefined ? { tempo: own.tempo } : {}), ...(own.easing ? { easing: own.easing } : {}), source: "override" };
+  return {
+    ...persona,
+    ...(own.tempo !== undefined ? { tempo: own.tempo } : {}), ...(own.easing ? { easing: own.easing } : {}), ...(own.auraVariant ? { auraVariant: own.auraVariant } : {}),
+    source: "override"
+  };
+}
+
+/** The overrides that count for a bot whose archetype (before them) is `base`: a variant that is not of the archetype it ends up with does not. */
+function ownOverrides(base, overrides) {
+  const own = cleanOverrides(overrides);
+  if (own.auraVariant && !AURA_VARIANTS[own.archetype ?? base].includes(own.auraVariant)) delete own.auraVariant;
+  return own;
+}
+
+/**
+ * Why a bot has the personality it has, for the settings page to say so: `kind` is "preset" (pinned: `name`) or "derived" (`rule`: "default" |
+ * "news_monitor" | "earnings_reader" | "company" | "none"; `symbol` and `band` when it is a tracker with a company); `overridden` is true when
+ * the reader changed something in this browser (the kind then says what it was before).
+ */
+export function personaBasis(bot, { volatility, overrides } = {}) {
+  const base = presetFor(bot);
+  const overridden = Object.keys(ownOverrides(base ? base.archetype : archetypeOf(bot), overrides)).length > 0;
+  if (base) return { kind: "preset", name: base.name, overridden };
+  const archetype = archetypeOf(bot), symbol = trackedSymbol(bot);
+  const rule = bot?.is_default ? "default" : bot?.template === "news_monitor" ? "news_monitor" : bot?.template === "earnings_reader" ? "earnings_reader" : archetype === "tracker" ? "company" : "none";
+  return { kind: "derived", rule, template: bot?.template ?? null, symbol: archetype === "tracker" ? symbol : null, band: archetype === "tracker" && symbol ? volatilityBand(volatility) : null, overridden };
 }
 
 // --- browser-local storage (D4: not synced) -----------------------------------------------------------------------------------
@@ -123,8 +161,15 @@ export function writeOverrides(storage, botId, overrides) {
     if (Object.keys(clean).length) storage?.setItem(OVERRIDE_KEY + botId, JSON.stringify(clean));
     else storage?.removeItem(OVERRIDE_KEY + botId);
   } catch { /* the choice still applies to this visit through the caller */ }
+  for (const listener of [...changeListeners]) listener(botId);
   return clean;
 }
+
+/** Called with the bot id whenever overrides are written in this page (another tab's writes arrive as the browser's `storage` event: see `isOverrideKey`). */
+const changeListeners = new Set();
+export function subscribeOverrides(listener) { changeListeners.add(listener); return () => { changeListeners.delete(listener); }; }
+/** The bot id a `storage` event's key belongs to (null when it is some other key). */
+export function overrideBotId(key) { return typeof key === "string" && key.startsWith(OVERRIDE_KEY) ? key.slice(OVERRIDE_KEY.length) : null; }
 
 export function clearOverrides(storage, botId) { return writeOverrides(storage, botId, {}); }
 

@@ -15,7 +15,7 @@ export async function launch() {
 }
 
 /** Runs in every document before the app: seeded Math.random, preset storage, animations off. */
-function initScript({ theme, locale, credential, guest, seed, motion }) {
+function initScript({ theme, locale, credential, guest, seed, motion, motionLevel }) {
   let state = seed >>> 0;
   Math.random = () => { // mulberry32
     state = (state + 0x6D2B79F5) | 0;
@@ -31,6 +31,9 @@ function initScript({ theme, locale, credential, guest, seed, motion }) {
       localStorage.setItem("market-evidence-agent:personal-chat-session:v1", credential);
     }
     if (guest && !localStorage.getItem("market-evidence-agent:chat-mode:v1")) localStorage.setItem("market-evidence-agent:chat-mode:v1", "guest");
+    // A view that measures real animation is a reader who picked "full" (the product's own rule: a hand-picked level beats the automatic ones, so a slow
+    // machine's frame times can not drop the page to "lite" in the middle of a check).  `motionLevel: null` leaves the choice unmade (checks of the automatic parts).
+    if (motionLevel && !localStorage.getItem("market-evidence-agent:motion:v1")) localStorage.setItem("market-evidence-agent:motion:v1", motionLevel);
   } catch { /* storage unavailable: the page will show its own state */ }
   const css = "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important;scroll-behavior:auto!important}";
   const inject = () => {
@@ -47,17 +50,19 @@ function initScript({ theme, locale, credential, guest, seed, motion }) {
 /**
  * A fresh, deterministic browser context.
  * opts: { width, height?, theme, locale, identity: "personal"|"guest"|"none", label, unmatched, seed?, motion?, fixtureState? }
- * `motion: true` keeps real motion (no reduced-motion preference, no animation-killing style) for checks that measure it.
+ * `motion: true` keeps real motion (no reduced-motion preference, no animation-killing style) for checks that measure it; such a view has "full" stored as
+ * the reader's choice unless `motionLevel` says otherwise ("full" | "lite" | "off" stored; null: none stored, for checks of the automatic parts).  `reducedMotion` ("reduce" | "no-preference") overrides the browser's setting whatever `motion` says.
  * `fixtureState` replaces the default fake backend state (see fixtures/index.mjs buildState).
  */
 export async function newView(browser, opts) {
-  const { width, theme = "light", locale = "zh-CN", identity = "personal", label, unmatched, seed = 20261113, motion = false, fixtureState } = opts;
+  const { width, theme = "light", locale = "zh-CN", identity = "personal", label, unmatched, seed = 20261113, motion = false, fixtureState, reducedMotion } = opts;
+  const motionLevel = "motionLevel" in opts ? opts.motionLevel : motion ? "full" : null;
   const height = opts.height ?? HEIGHTS[width] ?? 900;
   const context = await browser.newContext({
     viewport: { width, height }, deviceScaleFactor: 1, locale, timezoneId: "Asia/Shanghai",
-    reducedMotion: motion ? "no-preference" : "reduce", colorScheme: theme, serviceWorkers: "block", acceptDownloads: false,
+    reducedMotion: reducedMotion ?? (motion ? "no-preference" : "reduce"), colorScheme: theme, serviceWorkers: "block", acceptDownloads: false,
   });
-  await context.addInitScript(initScript, { theme, locale, credential: identity === "personal" ? FAKE_CREDENTIAL : null, guest: identity === "guest", seed, motion });
+  await context.addInitScript(initScript, { theme, locale, credential: identity === "personal" ? FAKE_CREDENTIAL : null, guest: identity === "guest", seed, motion, motionLevel });
   await context.clock.setFixedTime(FIXED_TIME);
   const mock = await installMockApi(context, { label, unmatched, ...(fixtureState ? { fixtureState } : {}) });
   const page = await context.newPage();

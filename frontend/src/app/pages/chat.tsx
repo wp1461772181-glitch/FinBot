@@ -27,7 +27,7 @@ function BotPage({ bot, profile = false }: { bot: Bot; profile?: boolean }) {
   return <ChatPage bot={bot} onTurnSettled={changed} onBotChanged={changed} openProfile={profile}
     workspace={(wide) => <OptionalChunk><Suspense fallback={paneFallback}><BotWorkspacePane key={bot.id} bot={bot} symbol={ws.symbol} watchlist={ws.symbols} onSelectSymbol={ws.setPreferredSymbol} wide={wide}
       onOpenCompany={(ticker, section) => ws.openCompany(ticker, section === "forecast" ? "forecast" : "overview")} /></Suspense></OptionalChunk>}
-    profile={<OptionalChunk><Suspense fallback={paneFallback}><BotProfilePane key={bot.id} bot={bot} onChanged={changed} onDeleted={() => { changed(); ws.go("agent"); }} /></Suspense></OptionalChunk>} />;
+    profile={<OptionalChunk><Suspense fallback={paneFallback}><BotProfilePane key={bot.id} bot={bot} others={ws.bots.bots} onChanged={changed} onDeleted={() => { changed(); ws.go("agent"); }} /></Suspense></OptionalChunk>} />;
 }
 
 /** The bot list is still on its way: the thread's own skeleton (after 400ms); a bot that is not there says so. */

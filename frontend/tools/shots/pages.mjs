@@ -146,6 +146,17 @@ export async function openArchiveView(page) {
   await page.locator("[data-testid=message][data-role=assistant]").waitFor({ timeout: 30000 });
 }
 
+/** A bot's 档案 tab in the side panel, once its personality pickers and rehearsal are there (A5). */
+export async function openStudio(page) {
+  await openSide(page);
+  await page.locator("#chat-panel").getByRole("tab", { name: "档案" }).click();
+  await page.locator("[data-testid=profile-pane] [data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 });
+  // the preview avatar draws its first frame after its chunk (the body's engine) is in
+  await page.locator("[data-testid=rehearsal-stage] svg[data-slot=bot-body]").waitFor({ timeout: 30000 });
+  // the preview only runs frames while it is on screen (a body off screen stops): bring it into view, as a reader scrolling to it does
+  await page.locator("[data-testid=rehearsal-stage]").scrollIntoViewIfNeeded();
+}
+
 /** The reading of a round's first answer: its message node. */
 export const firstAnswer = (page) => page.locator("[data-testid=message][data-role=assistant]").first();
 
@@ -361,6 +372,21 @@ export const PAGES = [
   // The backend unreachable: every API request fails, then a page that needs the API opens: the banner is at the top of the page.
   { name: "offline", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page, { mock }) => { mock.control.down = true; await page.evaluate(() => { location.hash = "#/portfolio"; }); await page.locator('[data-slot="offline-banner"]').waitFor(); } },
+  // A5: the personality pickers (archetype, tempo, easing, aura variant, where they come from) and the rehearsal in the 档案 tab: the reduced-motion still frame of
+  // each of its states (the shots run with the system's reduced motion), one picture of the whole studio per state.  Then the settings page's animation strength,
+  // and the chat page under each level of animation chosen in the app (the browser's own setting left alone): "lite" and "off".
+  { name: "bot-settings-persona", hash: `#/chat/${BOT.applebot}`, ready: "[data-testid=message]", element: "[data-slot=persona-picker]",
+    before: async (page) => { await openStudio(page); } },
+  { name: "bot-settings-persona-override", hash: `#/chat/${BOT.teslabot}`, ready: "#agent-draft:not([disabled])", element: "[data-slot=persona-picker]",
+    before: async (page) => { await openStudio(page); await page.locator("[data-testid=persona-archetype] [data-option=reader]").click(); await page.locator("[data-testid=persona-tempo] [data-option=calm]").click(); await page.locator('[data-testid=persona-source][data-kind=override]').waitFor(); } },
+  ...["idle", "thinking", "tool3", "verify", "answer", "waiting", "done", "partial", "failed"].map((state) => (
+    { name: `bot-settings-rehearsal-${state}`, hash: `#/chat/${BOT.teslabot}`, ready: "#agent-draft:not([disabled])", element: "[data-slot=rehearsal]",
+      before: async (page) => { await openStudio(page); await page.locator(`[data-slot=rehearsal] [data-scenario=${state}]`).click(); await page.locator(`[data-slot=rehearsal][data-scenario=${state}]`).waitFor(); } })),
+  { name: "settings-appearance-motion", hash: "#/settings/appearance", ready: "[data-slot=motion-level]" },
+  { name: "motion-lite", hash: "#/chat", ready: "[data-testid=message]", view: { reducedMotion: "no-preference", motionLevel: "lite" },
+    before: async (page) => { await page.waitForFunction(() => document.documentElement.dataset.motion === "lite"); } },
+  { name: "motion-off", hash: "#/chat", ready: "[data-testid=message]", view: { reducedMotion: "no-preference", motionLevel: "off" },
+    before: async (page) => { await page.waitForFunction(() => document.documentElement.dataset.motion === "off"); } },
   // A1: the five bots on the sample page, all in the same state; reduced-motion still frames (the face, the look, the badges of the pose).
   ...["idle", "listening", "thinking", "tool", "verify", "answer", "waiting", "done", "partial", "failed", "offline", "sleep"].map((state) => (
     { name: `dev-kit-bots-${state}`, hash: "#/dev/kit/bots", ready: "[data-testid=bots-page]",

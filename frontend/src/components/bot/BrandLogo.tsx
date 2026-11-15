@@ -1,5 +1,6 @@
 // The sidebar and login brand mark: the three newspaper-reading poses (public/logo*.svg) crossfading in a random order.
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { getMotion, subscribeMotion } from "../../motion-store.mjs";
 import { nextPose } from "../../orb.mjs";
 
 const BRAND_POSES = ["logo.svg", "logo-peek.svg", "logo-3d.svg"];
@@ -8,13 +9,14 @@ const BRAND_POSES = ["logo.svg", "logo-peek.svg", "logo-3d.svg"];
  * Reduced motion: the tilt pose stays. */
 export function BrandLogo() {
   const [pose, setPose] = useState(0);
+  const off = useSyncExternalStore(subscribeMotion, () => getMotion().level === "off");
   useEffect(() => {
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    if (off) return;
     let timer = 0;
     const tick = () => { timer = window.setTimeout(() => { if (document.visibilityState !== "hidden") setPose(p => nextPose(p, BRAND_POSES.length)); tick(); }, 4000 + Math.random() * 4000); };
     tick();
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [off]);
   return <span className="brand-logo" aria-hidden="true">
     {BRAND_POSES.map((src, i) => <img key={src} src={`${import.meta.env.BASE_URL}${src}`} alt="" className={i === pose ? "is-on" : undefined} />)}
   </span>;

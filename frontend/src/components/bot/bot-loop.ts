@@ -1,13 +1,15 @@
 // One shared requestAnimationFrame loop for every avatar that runs frames, and the rule that at most one M or L avatar does so at a
 // time (design 6.9 P3).
-export type Tick = (dt: number) => void;
+/** `dt` is the step in seconds, bounded; `ms` the real time since the previous frame of the loop (0 on its first frame after a start). */
+export type Tick = (dt: number, ms?: number) => void;
 const subscribers = new Set<Tick>();
 let raf = 0, lastMs = 0;
 function loop(ms: number) {
   // Bounded step: a tab that was hidden resumes where it was instead of jumping ahead.
-  const dt = lastMs ? Math.min((ms - lastMs) / 1000, 0.064) : 0;
+  const real = lastMs ? ms - lastMs : 0;
+  const dt = Math.min(real / 1000, 0.064);
   lastMs = ms;
-  for (const tick of [...subscribers]) tick(dt);
+  for (const tick of [...subscribers]) tick(dt, real);
   raf = subscribers.size ? requestAnimationFrame(loop) : 0;
   if (!raf) lastMs = 0;
 }

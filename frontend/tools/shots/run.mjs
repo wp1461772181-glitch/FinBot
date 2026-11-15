@@ -29,7 +29,7 @@ for (const page of pages) {
     for (const width of widths) {
       const label = page.name;
       const file = `${page.name}.${theme}.${width}.png`;
-      const view = await newView(browser, { width, theme, locale, identity: page.identity ?? "personal", label, unmatched });
+      const view = await newView(browser, { width, theme, locale, identity: page.identity ?? "personal", label, unmatched, ...(page.view ?? {}) });
       const entry = { file, page: page.name, theme, width, ok: true, consoleErrors: [], pageErrors: [] };
       try {
         await view.page.goto(`${server.url}${page.hash ?? ""}`, { waitUntil: "load" });

@@ -12,6 +12,8 @@ export type DirectorEvent =
   | { type: "handoff"; persona: Partial<DirectorPersona>; at?: number; quiet?: boolean; unread?: boolean }
   /** A switch was asked for (the click), the new line does not exist yet: the old aura leaves now.  `handoff` follows with the persona. */
   | { type: "handoff-begin"; at?: number }
+  /** The level of animation has no swirl and no entrance ("lite"): a switch is then just the new bot being there. */
+  | { type: "instant-handoff"; value: boolean }
   /** The same bot's personality changed (a late volatility, an override): swapped silently. */
   | { type: "persona"; persona: Partial<DirectorPersona> };
 export interface HandoffView {
@@ -52,7 +54,7 @@ export interface Director { send(event: DirectorEvent, now: number): void; read(
 export interface DirectorPersona { archetype: string; tempo: number; easing: "smooth" | "spring" | "step"; restGaze: string; auraVariant: string }
 /** The state table of one personality (the default `S` plus that archetype's click reactions). */
 export function bodyTable(persona?: Partial<DirectorPersona>): Record<string, string | string[]>;
-export function createDirector(options?: { now?: number; reducedMotion?: boolean; persona?: Partial<DirectorPersona> }): Director;
+export function createDirector(options?: { now?: number; reducedMotion?: boolean; persona?: Partial<DirectorPersona>; instantHandoff?: boolean }): Director;
 export function shouldArrive(seen: Set<string>, botId: string | null | undefined, reducedMotion: boolean, switching?: boolean): boolean;
 export function turnPhase(chatState: string, messages: ReadonlyArray<{ role?: string; content?: string; tool_trace?: ReadonlyArray<{ status?: string }> }> | undefined): "waiting" | "tool" | "verify" | "answer" | null;
 export function turnTransition(prev: string, next: string, messages: ReadonlyArray<{ role?: string; status?: string; clarification?: unknown }> | undefined): DirectorEvent | null;

@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { bloubState, resolveLook } from "../../bloub-look.mjs";
 import { parseAvatar } from "../../orb.mjs";
+import { getMotion } from "../../motion-store.mjs";
 import { bindRowGaze, type RowGazeHandle } from "../../row-gaze.mjs";
 import { COLOR_BY_ID } from "../../bloub/skins";
 import { BotBody } from "./BotBody";
@@ -62,7 +63,7 @@ function RowFollowing(props: BotAvatarProps) {
   useEffect(() => {
     const host = anchor.current?.closest("[data-bot-row]");
     if (!followable || !host) return;
-    return bindRowGaze(host, { handle, setActive, now: () => performance.now() / 1000, reduced: () => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) });
+    return bindRowGaze(host, { handle, setActive, now: () => performance.now() / 1000, reduced: () => getMotion().level !== "full" });
   }, [followable, handle]);
   return <span ref={anchor} style={{ display: "contents" }}><Avatar {...props} rowGaze={active ? handle : undefined} /></span>;
 }

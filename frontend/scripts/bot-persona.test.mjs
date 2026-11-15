@@ -3,7 +3,8 @@ import test from "node:test";
 import {
   ARCHETYPES, AURA_VARIANTS, EASINGS, PERSONA_PRESETS, REST_GAZES, TEMPO_MAX, TEMPO_MIN, VOL_HIGH, VOL_LOW,
   annualizedVolatility, archetypeOf, clearOverrides, derivePersona, presetFor, presetLook, readOverrides, readVolatility,
-  trackedSymbol, volatilityBand, writeOverrides, writeVolatility
+  trackedSymbol, volatilityBand, writeOverrides, writeVolatility,
+  TEMPO_STEPS, cleanOverrides, overrideBotId, personaBasis, subscribeOverrides, tempoStepOf
 } from "../src/bot-persona.mjs";
 
 // The five bots as the box has them (D6, 2026-11-13).
@@ -177,4 +178,84 @@ test("a computed volatility is stored per bot and symbol and kept (identity does
   storage.setItem([...storage.map.keys()][0], "garbage");
   assert.equal(readVolatility(storage, "bot-1", "TSLA"), null);
   assert.equal(readVolatility(null, "bot-1", "TSLA"), null);
+});
+
+// --- A5: the aura variant joins the overrides; changes are announced; the settings page can say where a personality comes from --------
+
+test("A5 override: an aura variant of the archetype the bot ends up with is kept", () => {
+  const overrides = { auraVariant: "gauge" }; // a lead variant, on a bot that is a lead by its preset
+  assert.equal(derivePersona(BOTS.finbot, { overrides }).auraVariant, "gauge");
+  assert.equal(derivePersona(BOTS.finbot, { overrides }).source, "override");
+  // with an archetype in the same record the variant must be of that archetype
+  assert.deepEqual(cleanOverrides({ archetype: "sentinel", auraVariant: "morse" }), { archetype: "sentinel", auraVariant: "morse" });
+  assert.deepEqual(cleanOverrides({ archetype: "sentinel", auraVariant: "gauge" }), { archetype: "sentinel" }, "a lead variant on a sentinel is void");
+  assert.deepEqual(cleanOverrides({ auraVariant: "no-such-variant" }), {});
+  assert.deepEqual(cleanOverrides({ auraVariant: 3 }), {});
+  const own = derivePersona(BOTS.tesla, { overrides: { archetype: "sentinel", auraVariant: "beacon", tempo: 1.1, easing: "step" } });
+  assert.deepEqual([own.archetype, own.auraVariant, own.tempo, own.easing, own.source], ["sentinel", "beacon", 1.1, "step", "override"]);
+});
+
+test("A5 override: changing the archetype voids a variant that is not the new archetype's", () => {
+  // stored while the bot was a tracker ({ auraVariant: "halo" }), then the archetype is changed to reader without touching the variant
+  const stale = { archetype: "reader", auraVariant: "halo" };
+  const persona = derivePersona(BOTS.apple, { overrides: stale });
+  assert.equal(persona.archetype, "reader");
+  assert.ok(AURA_VARIANTS.reader.includes(persona.auraVariant), `reader aura, got ${persona.auraVariant}`);
+  assert.notEqual(persona.auraVariant, "halo");
+  // the variant stored with no archetype follows the bot's own: a tracker's variant on a reader preset does nothing
+  assert.equal(derivePersona(BOTS.report, { overrides: { auraVariant: "halo" } }).auraVariant, PERSONA_PRESETS[4].auraVariant);
+  assert.equal(derivePersona(BOTS.report, { overrides: { auraVariant: "halo" } }).source, "preset", "nothing that counts is left, so it is still the preset");
+  // storage round trip keeps only what is valid
+  const storage = memoryStorage();
+  assert.deepEqual(writeOverrides(storage, "b1", { archetype: "reader", auraVariant: "halo", tempo: 0.9 }), { archetype: "reader", tempo: 0.9 });
+  assert.deepEqual(readOverrides(storage, "b1"), { archetype: "reader", tempo: 0.9 });
+});
+
+test("A5 override: the old overrides behave as before (no variant = the archetype's own)", () => {
+  const persona = derivePersona(BOTS.finbot, { overrides: { tempo: 1.25 } });
+  assert.equal(persona.tempo, 1.25);
+  assert.equal(persona.auraVariant, "ticks");
+});
+
+test("A5 notify: writing and clearing overrides announce the bot id; unsubscribed listeners hear nothing", () => {
+  const storage = memoryStorage(), heard = [];
+  const off = subscribeOverrides(id => heard.push(id));
+  writeOverrides(storage, "bot-a", { tempo: 1.1 });
+  clearOverrides(storage, "bot-a");
+  writeOverrides(storage, "", { tempo: 1.1 }); // no bot: nothing is written, nothing is announced
+  assert.deepEqual(heard, ["bot-a", "bot-a"]);
+  off();
+  writeOverrides(storage, "bot-b", { tempo: 1.1 });
+  assert.deepEqual(heard, ["bot-a", "bot-a"]);
+  assert.equal(overrideBotId("market-evidence-agent:bot-persona:v1:bot-z"), "bot-z");
+  assert.equal(overrideBotId("market-evidence-agent:theme:v1"), null);
+  assert.equal(overrideBotId(null), null);
+});
+
+test("A5 tempo steps: four, and the nearest one names any tempo", () => {
+  assert.deepEqual(TEMPO_STEPS.map(step => step.id), ["calm", "standard", "brisk", "rapid"]);
+  for (const step of TEMPO_STEPS) { assert.ok(step.value >= TEMPO_MIN && step.value <= TEMPO_MAX); assert.equal(tempoStepOf(step.value), step.id); }
+  assert.equal(tempoStepOf(0.8), "calm");
+  assert.equal(tempoStepOf(0.9), "calm");
+  assert.equal(tempoStepOf(1.05), "standard");
+  assert.equal(tempoStepOf(1.25), "rapid");
+  assert.equal(tempoStepOf(NaN), "standard");
+  // every preset's tempo is a value the override accepts, so "pick my own step" never writes something cleanOverrides drops
+  for (const preset of PERSONA_PRESETS) assert.equal(cleanOverrides({ tempo: preset.tempo }).tempo, preset.tempo);
+  for (const step of TEMPO_STEPS) assert.equal(cleanOverrides({ tempo: step.value }).tempo, step.value);
+});
+
+test("A5 basis: the reason a personality is what it is", () => {
+  assert.deepEqual(personaBasis(BOTS.tesla), { kind: "preset", name: "TeslaBot", overridden: false });
+  assert.deepEqual(personaBasis(BOTS.tesla, { overrides: { tempo: 1 } }), { kind: "preset", name: "TeslaBot", overridden: true });
+  assert.deepEqual(personaBasis(BOTS.tesla, { overrides: { auraVariant: "ticker" } }), { kind: "preset", name: "TeslaBot", overridden: false }, "a variant of another family does not count");
+  assert.equal(personaBasis(custom({ is_default: true })).rule, "default");
+  assert.equal(personaBasis(custom({ template: "news_monitor" })).rule, "news_monitor");
+  assert.equal(personaBasis(custom({ template: "earnings_reader" })).rule, "earnings_reader");
+  assert.equal(personaBasis(custom()).rule, "none");
+  const tracker = personaBasis(custom({ default_company: { symbol: "nvda" } }), { volatility: 0.6 });
+  assert.deepEqual([tracker.kind, tracker.rule, tracker.symbol, tracker.band], ["derived", "company", "NVDA", "fast"]);
+  assert.equal(personaBasis(custom({ template: "company_researcher" })).symbol, null);
+  assert.equal(personaBasis(custom({ default_company: { symbol: "AAPL" } })).band, null, "no stored volatility yet: no band");
+  assert.equal(personaBasis(custom(), { overrides: { archetype: "reader" } }).overridden, true);
 });

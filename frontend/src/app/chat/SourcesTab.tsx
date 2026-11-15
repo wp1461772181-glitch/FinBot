@@ -8,6 +8,7 @@ import { type AgentChatMessage, type AgentCitation } from "../../api/conversatio
 import { citationOrdinal } from "../../chat-citations.mjs";
 import { useLocale } from "../../i18n";
 import { roundSources, turnKey } from "../../panel-model.mjs";
+import { motionOff } from "../../motion-store.mjs";
 import { derivedDetail, excerptSource, isDerived, originalHref, sourceDates, sourceTypeLabel } from "../../source-view.mjs";
 import { useCitationDetail } from "./citation-details";
 import { usePanel } from "./panel-context";
@@ -71,7 +72,7 @@ export default function SourcesTab({ m, i }: { m: AgentChatMessage; i: number })
     panel.handledFocus.current = focus.nonce;
     const card = focus.ordinal === null ? undefined : cards.current.get(focus.ordinal);
     if (!card) return;
-    card.scrollIntoView({ block: "center", behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    card.scrollIntoView({ block: "center", behavior: motionOff() ? "auto" : "smooth" });
     setMarked(focus.ordinal);
     if (focus.byKeyboard) card.focus({ preventScroll: true });
     const timer = window.setTimeout(() => setMarked(null), 1800);

@@ -72,14 +72,14 @@ const WORK_PHASES = ["waiting", "tool", "verify", "answer"];
 const PASSIVE = new Set(["unread", "offline", "hold", "waiting-clear"]);
 const PHASE_ALIAS = { thinking: "waiting" };
 
-export function createDirector({ now = 0, reducedMotion = false, persona = NEUTRAL } = {}) {
+export function createDirector({ now = 0, reducedMotion = false, persona = NEUTRAL, instantHandoff = false } = {}) {
   let who = { ...NEUTRAL, ...persona };
   let table = bodyTable(who);
   let moods = MOODS_BY_ARCHETYPE[who.archetype] ?? MOODS_BY_ARCHETYPE.lead;
   const setPersona = next => { who = { ...NEUTRAL, ...next }; table = bodyTable(who); moods = MOODS_BY_ARCHETYPE[who.archetype] ?? MOODS_BY_ARCHETYPE.lead; };
   const m = {
     hand: null, glance: null,
-    reduced: reducedMotion, lastActivity: now,
+    reduced: reducedMotion, quick: instantHandoff, lastActivity: now,
     turn: null, stinger: null, ended: null, last: null, unread: false, offline: false, listening: null,
     hover: { on: false, since: 0, used: false }, click: null, clicks: 0,
     introUntil: -Infinity,
@@ -179,16 +179,18 @@ export function createDirector({ now = 0, reducedMotion = false, persona = NEUTR
           m.hover.used = true;
           break;
         }
+        // The level of animation went to (or came back from) "lite", which has no swirl and no entrance: a handoff under way is over at once.
+        case "instant-handoff": m.quick = Boolean(event.value); if (m.quick && m.hand) { if (m.hand.to) setPersona(m.hand.to); m.hand = null; } break;
         case "arrive": if (!m.reduced) m.introUntil = t + T.INTRO; break;
         // The click that asks for a switch is heard before the new line exists: the old aura leaves at once; the persona arrives with `handoff`.
-        case "handoff-begin": if (!m.reduced && !m.hand) m.hand = { t0: Number.isFinite(event.at) ? Math.min(event.at, t) : t, fromAura: who.auraVariant, carry: null, to: null, swapped: false, quiet: false, unread: false }; break;
+        case "handoff-begin": if (!m.reduced && !m.quick && !m.hand) m.hand = { t0: Number.isFinite(event.at) ? Math.min(event.at, t) : t, fromAura: who.auraVariant, carry: null, to: null, swapped: false, quiet: false, unread: false }; break;
         case "persona": if (m.hand && !m.hand.swapped) m.hand.to = event.persona; else setPersona(event.persona); break;
         case "handoff": {
           const to = { ...NEUTRAL, ...event.persona }, at = Number.isFinite(event.at) ? Math.min(event.at, t) : t;
           // what belonged to the line that was left goes; the new line's own state arrives with the events that follow
           m.turn = null; m.stinger = null; m.ended = null; m.last = null; m.listening = null; m.click = null; m.glance = null;
           m.unread = false; m.offline = false; m.hover = { on: false, since: 0, used: false };
-          if (m.reduced) { setPersona(to); m.hand = null; break; }
+          if (m.reduced || m.quick) { setPersona(to); m.hand = null; break; } // reduced motion and "lite" have no handoff to play: the new bot is simply there
           const h = m.hand, quiet = Boolean(event.quiet), unread = Boolean(event.unread);
           if (h && !h.swapped) {
             // still in the exit: the one in between is never shown.  Who comes is known only now (the exit began at the click, before the page

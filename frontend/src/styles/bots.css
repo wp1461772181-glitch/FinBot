@@ -52,9 +52,7 @@
   transform-origin: 50% 50%;
   animation: bot-breathe 4s ease-in-out infinite;
 }
-@media (prefers-reduced-motion: reduce) {
-  .bot-breathe { animation: none; }
-}
+:where(:root[data-motion="off"]) .bot-breathe { animation: none; }
 
 /* Offline: the bot is a frozen idle frame with half its colour taken out (design 6.3). A static filter: nothing animates. */
 .bloub-avatar[data-dim="true"] { filter: grayscale(0.5); }
@@ -66,6 +64,4 @@
   90% { opacity: 0.85; }
 }
 .aura-slow-blink { animation: aura-watch 8s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) {
-  .aura-slow-blink { animation: none; }
-}
+:where(:root[data-motion="off"]) .aura-slow-blink { animation: none; }

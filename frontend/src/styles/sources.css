@@ -8,7 +8,5 @@
     outline-offset: 2px;
     animation: source-ring 1.6s var(--curve-out) both;
   }
-  @media (prefers-reduced-motion: reduce) {
-    [data-slot="source-card"][data-highlight] { animation: none; }
-  }
+  :where(:root[data-motion="off"]) [data-slot="source-card"][data-highlight] { animation: none; }
 }

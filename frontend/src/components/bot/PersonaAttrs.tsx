@@ -4,7 +4,7 @@
 // depend on, the avatar; until it has run the line is drawn with the default (generalist) signature.
 import { useLayoutEffect, useRef } from "react";
 import type { PersonaBot } from "../../bot-persona.mjs";
-import { signatureOf } from "../../signature.mjs";
+import { signatureOf } from "../../signature-pick.mjs";
 import { usePersona } from "./use-persona";
 
 export default function PersonaAttrs({ bot }: { bot: PersonaBot }) {

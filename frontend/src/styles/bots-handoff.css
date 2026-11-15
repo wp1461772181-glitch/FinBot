@@ -1,13 +1,13 @@
 /* The handoff (design 6.7): the colour of the line travels, the new thread comes in.
-   Only transform and opacity move (design 6.9 P6).  Every motion is under `no-preference`; reduced motion has the 150 ms cross-fade and nothing else. */
+   Only transform and opacity move (design 6.9 P6).  Every motion is under "level is not off" (<html data-motion>); level "off" (and the system's reduced motion) has the 150 ms cross-fade and nothing else. */
 
 /* --bot-hue and --bot-hue-soft as registered colours: a custom property is only interpolated when the browser knows it is a colour. */
 @property --bot-hue { syntax: "<color>"; inherits: true; initial-value: #0a0a0c; }
 @property --bot-hue-soft { syntax: "<color>"; inherits: true; initial-value: #ececec; }
 
 @layer components {
-  @media (prefers-reduced-motion: no-preference) {
-    [data-slot="chat-page"] { transition: --bot-hue 200ms var(--curve-out), --bot-hue-soft 200ms var(--curve-out); }
+  :where(:root:not([data-motion="off"])) {
+    & [data-slot="chat-page"] { transition: --bot-hue 200ms var(--curve-out), --bot-hue-soft 200ms var(--curve-out); }
   }
 
   @keyframes handoff-fade-in { from { opacity: 0; } to { opacity: 1; } }
@@ -15,12 +15,12 @@
   @keyframes handoff-slide { from { opacity: 0; transform: translateX(calc(var(--handoff-dir, 1) * 24px)); } to { opacity: 1; transform: none; } }
 
   [data-testid="transcript"][data-entry="crossfade"] { animation: handoff-fade-in 150ms linear both; }
-  @media (prefers-reduced-motion: no-preference) {
+  /* the sidebar row that was pressed (a pointer gives it the focus without the keyboard ring): its small avatar's ring flashes once, "that one is going over there" (opacity and transform only) */
+  @keyframes handoff-row-flash { from { opacity: 0.9; transform: scale(0.85); } to { opacity: 0; transform: scale(1.4); } }
+  :where(:root:not([data-motion="off"])) {
     /* the last three messages of the new line, one after the other (--entry-delay is set per message: 160, 180, 200 ms) */
-    [data-testid="message"][data-entry] { animation: handoff-in 160ms var(--curve-out) both; animation-delay: var(--entry-delay, 0s); }
-    [data-testid="transcript"][data-entry="slide"] { animation: handoff-slide 240ms var(--curve-out) both; }
-    /* the sidebar row that was pressed (a pointer gives it the focus without the keyboard ring): its small avatar's ring flashes once, "that one is going over there" (opacity and transform only) */
-    @keyframes handoff-row-flash { from { opacity: 0.9; transform: scale(0.85); } to { opacity: 0; transform: scale(1.4); } }
-    [data-bot-row]:focus:not(:focus-visible) .bot-status::after { content: ""; position: absolute; inset: -2px; border: 2px solid var(--ring-colour, currentColor); border-radius: 9999px; pointer-events: none; animation: handoff-row-flash 420ms var(--curve-out) both; }
+    & [data-testid="message"][data-entry] { animation: handoff-in 160ms var(--curve-out) both; animation-delay: var(--entry-delay, 0s); }
+    & [data-testid="transcript"][data-entry="slide"] { animation: handoff-slide 240ms var(--curve-out) both; }
+    & [data-bot-row]:focus:not(:focus-visible) .bot-status::after { content: ""; position: absolute; inset: -2px; border: 2px solid var(--ring-colour, currentColor); border-radius: 9999px; pointer-events: none; animation: handoff-row-flash 420ms var(--curve-out) both; }
   }
 }

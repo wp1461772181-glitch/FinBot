@@ -1,7 +1,7 @@
 // The "Line signature" block of the Bots sample page (#/dev/kit/bots): the six traces of thinking, the five carets and the closing line
 // (done / partial / failed), side by side, each under the colour of the bot that wears it.  They are the real CSS (styles/bots-signature.css),
 // picked the way the chat page picks them: data-trace / data-caret on a container.  `Replay` mounts them again from their first frame; the
-// switch puts a container under data-motion="reduce" (the app-level hook A5's 关闭 level will use) so the still poses show.  English on purpose.
+// switch puts a container under data-motion="off" (the same hook the app puts on <html>, motion-level.mjs) so the still poses show.  English on purpose.
 import { useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { DoneLine } from "@/app/chat/DoneLine";
@@ -22,7 +22,7 @@ export default function SignatureRow() {
   const [reduced, setReduced] = useState(false);
   const traces = TRACES.map(trace => WEARERS.find(w => w.trace === trace) ?? { ...WEARERS[0]!, trace, persona: { ...WEARERS[0]!.persona, auraVariant: "reticle" } });
   const cursors = CURSORS.map(cursor => WEARERS.find(w => w.cursor === cursor) ?? WEARERS[0]!);
-  return <section aria-label="Line signature" data-testid="signature-row" data-motion={reduced ? "reduce" : undefined} className="space-y-4">
+  return <section aria-label="Line signature" data-testid="signature-row" data-motion={reduced ? "off" : undefined} className="space-y-4">
     <div className="flex flex-wrap items-center gap-2">
       <h2 className="text-lg font-semibold">Line signature</h2>
       <Button type="button" size="sm" variant="outline" data-testid="signature-replay" onClick={() => setRun(value => value + 1)}>Replay</Button>

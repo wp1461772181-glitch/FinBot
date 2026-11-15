@@ -2,18 +2,23 @@
 // The bot standing in the chat: the one avatar that runs the whole interaction (gaze, hover / click reactions, the turn's poses, arrival,
 // sleep, unread, listening, waiting for you, offline). The behaviour is in bloub-director.mjs / bloub-gaze.mjs / turn-signals.mjs
 // (pure, unit-tested); this file wires DOM events and the chat state to them and hands the director to the body.
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { createDirector, shouldArrive, turnTransition, type DirectorView } from "../../bloub-director.mjs";
 import { resolveLook } from "../../bloub-look.mjs";
 import { derivePersona, type Persona, type PersonaBot } from "../../bot-persona.mjs";
 import { parseAvatar } from "../../orb.mjs";
 import { awaiting, isOffline, turnSignal } from "../../turn-signals.mjs";
 import { useBackendDown } from "../state/connectivity-store";
+import { useLocale } from "../../i18n";
+import { notify } from "../state/notify";
+import { activateMotion, canWatch, downgradeNow, revertDowngrade } from "../../motion-control.mjs";
+import { getMotion, subscribeMotion } from "../../motion-store.mjs";
+import { playsSwirl } from "../../handoff-line.mjs";
 import { BotAvatar } from "./BotAvatar";
 import { BotBody, type BloubState, type LiveHandle, type WornLook } from "./BotBody";
 import { currentIntent, subscribeIntent } from "../../app/chat/handoff-intent";
 import { HANDOFF } from "../../handoff.mjs";
-import { drive } from "./live-drive";
+import { drive, pacer } from "./live-drive";
 import { usePersona } from "./use-persona";
 import { RAYON } from "../../bloub/repere";
 import { auraFor } from "../../aura/index.mjs";
@@ -23,23 +28,13 @@ import { tierOf } from "../../bot-sizes.mjs";
 import { drawAura } from "./aura-paint";
 export type { BotPresenceProps };
 
+activateMotion(); // the device and the drop join the level (the first screen settled the system's setting and the reader's choice)
+
 /** Bots whose arrival already played in this page session (module scope: survives remounts, resets on reload). */
 const arrived = new Set<string>();
 const nowSec = () => performance.now() / 1000;
 /** The chat's message box (Composer.tsx): while it has focus and text the bot listens. */
 const COMPOSER_ID = "agent-draft";
-
-function useReducedMotion() {
-  const [reduced, setReduced] = useState(() => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches));
-  useEffect(() => {
-    const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-    if (!mq) return;
-    const on = () => setReduced(mq.matches);
-    mq.addEventListener?.("change", on);
-    return () => mq.removeEventListener?.("change", on);
-  }, []);
-  return reduced;
-}
 
 type Msg = { role?: string; content?: string; status?: string; clarification?: unknown; card_at?: number; tool_trace?: ReadonlyArray<{ status?: string; result?: unknown }>; trace?: ReadonlyArray<{ kind?: string; status?: string }>; failure?: { network?: boolean } };
 
@@ -55,18 +50,38 @@ interface BotPresenceProps {
 export default function BotPresenceLive({ avatar, look: stored, name, seed, arrivalKey, size = 30, chatState, messages, unread = false, onAcknowledge, className = "", draft = "", bot }: BotPresenceProps) {
   const parsed = parseAvatar(avatar, name);
   const persona = usePersona(bot ?? { name: "FinBot" });
-  const reduced = useReducedMotion();
+  const motion = useSyncExternalStore(subscribeMotion, getMotion), reduced = motion.level === "off", lite = motion.level === "lite";
   const backendDown = useBackendDown().down;
   // One director for as long as the avatar stands here, whichever bot it shows: a switch is the director's `handoff` event, not a new director.
-  const director = useMemo(() => createDirector({ now: nowSec(), reducedMotion: reduced, persona }), [reduced]); // eslint-disable-line react-hooks/exhaustive-deps
+  const director = useMemo(() => createDirector({ now: nowSec(), reducedMotion: reduced, persona, instantHandoff: !playsSwirl({ reduced, level: motion.level }) }), [reduced]); // eslint-disable-line react-hooks/exhaustive-deps
   const target = resolveLook(seed || name, avatar, stored, name);
   const [worn, setWorn] = useState<WornLook>({ shape: target.shape, color: target.color });
   const wornRef = useRef(worn); wornRef.current = worn;
   // `look.want` is the bot's own look; the body puts it on when the director says the new persona is in (live-drive.ts), and tells us through `onWear`.
   const live = useMemo<LiveHandle>(() => ({ director, pointer: null, units: 0, drive, look: { want: wornRef.current, worn: wornRef.current } }), [director]);
+  live.pace ??= pacer(live);
   live.look!.want = { shape: target.shape, color: target.color }; live.look!.onWear = setWorn;
   // The look the owner wants changed without a handoff (the colour or shape picked in the bot's settings): a resting body is made to take it.
   useEffect(() => { live.wake?.(); }, [target.shape, target.color]); // eslint-disable-line react-hooks/exhaustive-deps
+  // "lite" has no swirl and no entrance: the director is told when the level moves in or out of it (a director made while "off" is rebuilt anyway).
+  useEffect(() => { director.send({ type: "instant-handoff", value: lite }, nowSec()); live.wake?.(); }, [lite, director]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The frame watch (design 6.9 P10): while the level can still drop (nothing chose it, it has not dropped this visit), the loop's frame intervals go
+  // to a pure watch in a chunk of its own; two seconds of frames averaging over 24 ms take the page to "lite" for this visit, said once and undoable.
+  const { t } = useLocale();
+  useEffect(() => {
+    if (!canWatch()) return;
+    let gone = false;
+    void import("../../motion-watch.mjs").then(({ createFrameWatch }) => {
+      if (gone) return;
+      const watch = createFrameWatch();
+      live.frame = ms => {
+        if (!watch.step(ms)) return;
+        live.frame = undefined;
+        if (downgradeNow()) notify.info(t("已为这台设备切到精简动画"), { description: t("可以在「设置 › 外观」里改动画强度。"), undo: { label: t("改回"), onClick: () => { revertDowngrade(); } } });
+      };
+    });
+    return () => { gone = true; live.frame = undefined; };
+  }, [motion.level, motion.source, live]); // eslint-disable-line react-hooks/exhaustive-deps
   const botKey = bot?.id ?? seed ?? name;
   const prevKey = useRef(botKey), prevPersona = useRef(persona);
   // Reduced motion: the director's view behind the static frame, with the bot it was read for (the first render for a bot that has just taken the

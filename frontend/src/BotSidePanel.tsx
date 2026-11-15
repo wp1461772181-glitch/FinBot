@@ -1,6 +1,6 @@
 // The bot's right rail (工作区 / 档案) and the new-bot dialog; split from BotPages.tsx in P3.1 so the sidebar's chunk does not carry them.
 // Legacy markup, moved as-is; restyled in P5.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { deleteBotTelegram, getBotTelegram, saveBotTelegramToken, startBotTelegramBind, unbindBotTelegram, type BotTelegramStatus } from "./api/integrations";
 import { createBot, deleteBot, getBotTemplates } from "./api/bots-admin";
 import { getModelCatalog, updateBot, type Bot, type BotFields, type BotTemplate, type BotTool, type ModelCatalog } from "./api/bots";
@@ -20,6 +20,9 @@ import { CARDS, addCard, botSymbol, loadLayout, moveCard, pinCardSymbol, removeC
 import { confirm } from "@/components/state/confirm";
 import { message } from "./bot-message";
 
+// The personality pickers and the rehearsal (A5) are a new part under the shape and colour pickers: a chunk of its own, fetched when the 档案 tab is open.
+const PersonaStudio = lazy(() => import("./components/bot/PersonaStudio"));
+
 /** The catalog, the tool list and the templates a bot form needs. */
 function useBotOptions() {
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null), [tools, setTools] = useState<BotTool[]>([]), [templates, setTemplates] = useState<BotTemplate[]>([]), [error, setError] = useState("");
@@ -36,7 +39,7 @@ function useBotOptions() {
 
 /** 档案's avatar: the bloub bot — shape, face and colour chosen in the customiser, kept per bot on the server — or a custom emoji / character.
  * `look` is what the user picked this session (null: not touched, the bot keeps what it has); `seed` is the bot id its hashed default comes from. */
-function AvatarPicker({ value, look, seed, name, onChange, disabled }: { value: string; look: BloubLook | null; seed: string; name: string; onChange: (patch: { avatar?: string; look?: BloubLook | null }) => void; disabled: boolean }) {
+function AvatarPicker({ value, look, seed, name, onChange, disabled, studio }: { value: string; look: BloubLook | null; seed: string; name: string; onChange: (patch: { avatar?: string; look?: BloubLook | null }) => void; disabled: boolean; studio?: ReactNode }) {
   const { t } = useLocale();
   const isOrb = parseAvatar(value, name).kind === "bot";
   const shown = look ?? resolveLook(seed, value, null, name);
@@ -50,6 +53,7 @@ function AvatarPicker({ value, look, seed, name, onChange, disabled }: { value: 
       <BloubCustomizer look={shown} disabled={disabled} onChange={next => onChange({ look: next })} />
     </> : <><BotAvatar avatar={value} name={name || "·"} size={BOT_AVATAR_SIZE.emoji} />
       <input value={value} maxLength={16} disabled={disabled} onChange={e => onChange({ avatar: e.target.value })} placeholder="📈" aria-label={t("头像")} /></>}
+    {studio}
   </div>;
 }
 
@@ -57,7 +61,7 @@ function AvatarPicker({ value, look, seed, name, onChange, disabled }: { value: 
 type Draft = ReturnType<typeof botDraft> & { avatar?: string; look?: BloubLook | null; seed?: string; group?: string; pinned?: boolean; hidden?: boolean; daily_notify_cap?: number };
 
 /** The profile fields of a bot: shared by the new-bot dialog and the 档案 tab. */
-function BotForm({ draft, setDraft, tools, catalog, isDefault, disabled }: { draft: Draft; setDraft: (next: Draft) => void; tools: BotTool[]; catalog: ModelCatalog | null; isDefault: boolean; disabled: boolean }) {
+function BotForm({ draft, setDraft, tools, catalog, isDefault, disabled, studio }: { draft: Draft; setDraft: (next: Draft) => void; tools: BotTool[]; catalog: ModelCatalog | null; isDefault: boolean; disabled: boolean; studio?: ReactNode }) {
   const { t } = useLocale();
   const [focusInput, setFocusInput] = useState(() => focusText(draft.focus));
   const parsed = parseFocusSymbols(focusInput);
@@ -84,7 +88,7 @@ function BotForm({ draft, setDraft, tools, catalog, isDefault, disabled }: { dra
       <label>{t("分组")}<input value={draft.group ?? ""} maxLength={40} disabled={disabled} onChange={e => update({ group: e.target.value })} placeholder={t("例如：公司")} /></label>
       <label>{t("每日通知上限")}<input type="number" min={0} max={50} value={draft.daily_notify_cap ?? 5} disabled={disabled} onChange={e => update({ daily_notify_cap: Math.max(0, Math.min(50, Number(e.target.value) || 0)) })} /></label>
     </div>
-    <AvatarPicker value={draft.avatar ?? ""} look={draft.look ?? null} seed={draft.seed ?? ""} name={draft.name} disabled={disabled} onChange={update} />
+    <AvatarPicker value={draft.avatar ?? ""} look={draft.look ?? null} seed={draft.seed ?? ""} name={draft.name} disabled={disabled} onChange={update} studio={studio} />
     <div className="bot-form-row">
       <label className="bot-check"><input type="checkbox" checked={Boolean(draft.pinned)} disabled={disabled} onChange={e => update({ pinned: e.target.checked })} />{t("置顶")}</label>
       {!isDefault && <label className="bot-check"><input type="checkbox" checked={Boolean(draft.hidden)} disabled={disabled} onChange={e => update({ hidden: e.target.checked })} />{t("在侧栏隐藏")}</label>}
@@ -166,7 +170,7 @@ function BotSkills({ bot, onChanged }: { bot: Bot; onChanged: (bot: Bot) => void
 }
 
 /** The 档案 tab: the bot's settings, saved as a whole; its memory, routines and skills arrive in later stages. */
-function BotProfileTab({ bot, onChanged, onDeleted }: { bot: Bot; onChanged: (bot: Bot) => void; onDeleted: () => void }) {
+function BotProfileTab({ bot, others, onChanged, onDeleted }: { bot: Bot; others: ReadonlyArray<Bot>; onChanged: (bot: Bot) => void; onDeleted: () => void }) {
   const { t } = useLocale();
   const { catalog, tools, error } = useBotOptions();
   const [draft, setDraft] = useState<Draft>(() => draftOf(bot)), [busy, setBusy] = useState(false), [status, setStatus] = useState("");
@@ -185,7 +189,8 @@ function BotProfileTab({ bot, onChanged, onDeleted }: { bot: Bot; onChanged: (bo
     <p className="bot-model-line">{t("模型")}：<strong>{model.label || t("尚未设置")}</strong>{model.isDefault && ` · ${t("服务器默认")}`}{model.name && !model.usable && <span className="bot-warn"> · {t("缺 key，去设置里补上")}</span>}</p>
     {bot.default_company && <p className="fine-print">{t("默认公司")}：{bot.default_company.symbol}{bot.default_company.company ? ` · ${bot.default_company.company}` : ""}</p>}
     {error && <p role="alert">{error}</p>}
-    <BotForm key={bot.id + bot.updated_at} draft={draft} setDraft={setDraft} tools={tools} catalog={catalog} isDefault={bot.is_default} disabled={busy} />
+    <BotForm key={bot.id + bot.updated_at} draft={draft} setDraft={setDraft} tools={tools} catalog={catalog} isDefault={bot.is_default} disabled={busy}
+      studio={<Suspense fallback={null}><PersonaStudio bot={bot} look={draft.look ?? null} others={others} emoji={parseAvatar(draft.avatar ?? bot.avatar, draft.name).kind !== "bot"} /></Suspense>} />
     {status && <p role="status">{status}</p>}
     <div className="chat-archive-tools"><button type="button" className="primary-action" disabled={busy || !draft.name.trim()} onClick={() => void save()}>{busy ? t("正在保存…") : t("保存")}</button>
       {!bot.is_default && <button type="button" className="secondary-action" disabled={busy} onClick={() => void remove()}>{t("删除这个 bot")}</button>}</div>
@@ -288,6 +293,6 @@ export function BotWorkspacePane({ bot, symbol, watchlist = [], onSelectSymbol, 
   return <BotWorkspaceTab bot={bot} symbol={current} watchlist={watchlist} wide={wide} onPickSymbol={pick} onOpenCompany={onOpenCompany} />;
 }
 
-export function BotProfilePane({ bot, onChanged, onDeleted }: { bot: Bot; onChanged: (bot: Bot) => void; onDeleted: () => void }) {
-  return <BotProfileTab key={bot.id} bot={bot} onChanged={onChanged} onDeleted={onDeleted} />;
+export function BotProfilePane({ bot, others = [], onChanged, onDeleted }: { bot: Bot; others?: ReadonlyArray<Bot>; onChanged: (bot: Bot) => void; onDeleted: () => void }) {
+  return <BotProfileTab key={bot.id} bot={bot} others={others} onChanged={onChanged} onDeleted={onDeleted} />;
 }

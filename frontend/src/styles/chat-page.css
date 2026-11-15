@@ -53,8 +53,5 @@
   }
   [data-testid="message"][data-flash] { animation: chat-turn-flash 0.9s var(--curve-out); }
 
-  @media (prefers-reduced-motion: reduce) {
-    .chat-prose[data-streaming] > * { animation: none; }
-    [data-testid="message"][data-flash] { animation: none; }
-  }
+  :where(:root[data-motion="off"]) .chat-prose[data-streaming] > *, :where(:root[data-motion="off"]) [data-testid="message"][data-flash] { animation: none; }
 }

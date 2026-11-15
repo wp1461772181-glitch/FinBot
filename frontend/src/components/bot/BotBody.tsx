@@ -6,7 +6,7 @@
 // Which avatar runs frames: a live one (BotPresence: the director decides the pose each frame) always, except while its director says
 // `frozen`; a light one (state / hover driven) only while something moves its picture (bloub-frames.needsFrames). All of them stop
 // while off screen or covered by a dialog, and at most one M / L avatar runs at a time (bot-loop.ts).
-import { useEffect, useId, useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { BotEngine } from "../../bloub/engine";
 import { liveliness } from "../../bloub/face";
 import { RAYON } from "../../bloub/repere";
@@ -19,6 +19,7 @@ import { rowAim, type RowGazeHandle } from "../../row-gaze.mjs";
 import { frameDemand, needsFrames } from "../../bloub-frames.mjs";
 import { ENGAGE_TIME, easeOutQuint, followLook, restLook } from "../../bloub-gaze.mjs";
 import { FULL_TIERS, tierOf } from "../../bot-sizes.mjs";
+import { getMotion, subscribeMotion } from "../../motion-store.mjs";
 import { claimFullLoop, subscribe, type Tick } from "./bot-loop";
 import type { DriveEnv } from "./live-drive";
 import { VIEW, createPainter, type Painter, type PaintStyle } from "./bot-painter";
@@ -36,6 +37,13 @@ export interface LiveHandle {
   look?: { want: WornLook; worn: WornLook; onWear?: (look: WornLook) => void };
   /** What happens each frame with the director's view (live-drive.ts, set by BotPresence: it is not part of the first-screen code). */
   drive?: (env: DriveEnv, handle: LiveHandle, view: DirectorView, dt: number) => void;
+  /** A level of animation for this avatar alone (the rehearsal's preview, which does not change the page's): "lite" has no aura and runs at 30 fps at size M.
+   * Absent: the page's level (motion-store.mjs).  "off" is not asked here: an avatar that must not move is a still frame (`frozenAt`). */
+  level?: "full" | "lite";
+  /** "lite" runs a light M avatar at 30 fps: asked each frame with the step, it answers null to skip the frame, else the step to take (the skipped time added). */
+  pace?: (dt: number, tier: string) => number | null;
+  /** Fed by the loop with the real time between this avatar's frames (ms; 0 on the first after a start): the watch behind the automatic drop to "lite" (motion-watch.mjs). */
+  frame?: (ms: number) => void;
   /** Set by the body: keep running for this many seconds even when a dialog covers the page (a handoff that starts with a choice in the phone's drawer plays under it and goes on when it closes). */
   ignoreCover?: (seconds: number) => void;
 }
@@ -47,7 +55,6 @@ const STILL_AFTER: Record<string, number> = { orbit: 1, thinking: 1, wink: 0.6, 
 const stillAfter = (state: string) => (state === "idle" ? 0 : STILL_AFTER[state] ?? 1);
 
 let breathSeq = 0;
-const reducedMotion = () => typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
 
 // The page's ink for the black "encre" body, so it stays visible in the dark theme.
 const PALE = new Set(["creme", "gris"]);
@@ -79,7 +86,8 @@ export interface BotBodyProps {
 export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shape = DEFAULT_SHAPE, frozenAt, paper = "#f9f9f9", className, live, rowGaze, auraStill, expression, waiting = false, dim = false, tempo = 1, gazeKind, tilt = 0, unlimited = false }: BotBodyProps) {
   const tier = tierOf(size);
   const full = FULL_TIERS.includes(tier) && !unlimited;
-  const still = frozenAt ?? (tier === "XS" || reducedMotion() ? 0 : undefined);
+  const level = useSyncExternalStore(subscribeMotion, () => getMotion().level);
+  const still = frozenAt ?? (tier === "XS" || level === "off" ? 0 : undefined);
   const liveRef = useRef(live); liveRef.current = live;
   const rowGazeRef = useRef(rowGaze); rowGazeRef.current = rowGaze;
   const stateRef = useRef(state); stateRef.current = state;
@@ -105,7 +113,7 @@ export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shap
   const loop = useRef<{ wake: () => void } | null>(null);
   const quietSince = useRef(-Infinity);
   const running = useRef(false);
-  const parked = useRef(!live && still === undefined && !needsFrames({ state, hovered: Boolean(rowGaze) }));
+  const parked = useRef(!live && !needsFrames({ state, hovered: Boolean(rowGaze) }));
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   // Resting avatars breathe out of step with each other: a fixed negative delay per instance (golden-ratio spacing), within the 4 s period of `.bot-breathe`.
   const breathDelay = useMemo(() => `-${((breathSeq++ * 1.618) % 4).toFixed(2)}s`, []);
@@ -124,13 +132,13 @@ export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shap
     const svg = svgRef.current!;
     painter.current = createPainter(svg, uid);
     svg.style.animationDelay = breathDelay;
-    svg.classList.toggle("bot-breathe", parked.current && tier !== "XS");
+    svg.classList.toggle("bot-breathe", still === undefined && parked.current && tier !== "XS");
     svg.setAttribute("data-tier", tier);
     paintNow();
     return () => { painter.current = null; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   // React may rewrite className when its prop changes: put the breath back.
-  useLayoutEffect(() => { svgRef.current?.classList.toggle("bot-breathe", parked.current && tier !== "XS"); });
+  useLayoutEffect(() => { svgRef.current?.classList.toggle("bot-breathe", still === undefined && parked.current && tier !== "XS"); });
   useLayoutEffect(() => { svgRef.current?.setAttribute("data-tier", tier); }, [tier]);
 
   // Static extras follow their props (a live avatar sets these per frame instead).
@@ -188,10 +196,12 @@ export function BotBody({ state = "idle", size = 40, color = DEFAULT_COLOR, shap
       coverTimer = window.setInterval(() => { if (isCovered()) return; window.clearInterval(coverTimer); coverTimer = 0; covered = false; sync(); }, 500);
     };
 
-    const tick: Tick = dt => {
+    const tick: Tick = (dt, ms = 0) => {
       const h = liveRef.current;
       if (++frames % 30 === 0) { watchCover(); if (covered) return; }
       if (h) {
+        h.frame?.(ms);
+        if (h.pace) { const step = h.pace(dt, sizeRef.current.tier); if (step === null) return; dt = step; }
         const view = h.director.read(nowSec());
         clock.current += dt * view.tempo;
         h.drive?.({ eng: engine.current!, painter: painter.current!, svg, clock: clock.current, style: styleRef.current, size: sizeRef.current.size, tier: sizeRef.current.tier, radii: radiiRef, gaze, intro, motion, setMood, setFace }, h, view, dt);

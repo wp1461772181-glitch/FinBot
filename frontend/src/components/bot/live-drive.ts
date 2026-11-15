@@ -12,6 +12,7 @@ import { bodyMotion } from "../../aura/motion.mjs";
 import { createTracker, type Tracker } from "../../aura/track.mjs";
 import { handoffBody } from "../../aura/handoff.mjs";
 import { HANDOFF } from "../../handoff.mjs";
+import { getMotion } from "../../motion-store.mjs";
 import { COLOR_BY_ID, SHAPE_BY_ID, mixHex } from "../../bloub/skins";
 import type { LiveHandle, WornLook } from "./BotBody";
 import { clearAura, drawAura } from "./aura-paint";
@@ -51,6 +52,20 @@ const SHAPE_MORPH = 0.45; // BotEngine.SHAPE_MORPH
 const hexOf = (color: string) => COLOR_BY_ID.get(color)?.hex ?? "#0a0a0c";
 const radiiOf = (shape: string) => SHAPE_BY_ID.get(shape)?.radii ?? null;
 
+const lite = (h: LiveHandle) => (h.level ?? getMotion().level) === "lite";
+
+/** "lite" runs a light M avatar at 30 fps (BotBody asks `pace` each frame): every other frame is skipped and its time is added to the next one. */
+export function pacer(h: LiveHandle): NonNullable<LiveHandle["pace"]> {
+  let carry = 0, skip = false;
+  return (dt, tier) => {
+    if (tier !== "M" || !lite(h)) { carry = 0; return dt; }
+    carry += dt; skip = !skip;
+    if (skip) return null;
+    const step = carry; carry = 0;
+    return step;
+  };
+}
+
 /** Put on the wanted look: the silhouette goes to the engine (from the shape the picture is showing), the colour starts its 240 ms mix. */
 function wear(env: DriveEnv, h: LiveHandle, wardrobe: Wardrobe, c: number) {
   const look = h.look!, from: WornLook = look.worn, to: WornLook = look.want;
@@ -63,11 +78,11 @@ function wear(env: DriveEnv, h: LiveHandle, wardrobe: Wardrobe, c: number) {
       start = m.from.map((r, i) => r + ((m.to![i] ?? r) - r) * k);
       env.eng.setShape(start, c);
     }
-    if (!env.intro.current.on) env.eng.setShape(next, c); // during the arrival turn the circle is imposed; BotBody puts the silhouette back when it lands
+    if (!env.intro.current.on) env.eng.setShape(next, lite(h) ? c - SHAPE_MORPH * 2 : c); // during the arrival turn the circle is imposed; BotBody puts the silhouette back when it lands
     wardrobe.morph = { from: start, to: next, at: c };
   }
   if (to.color !== from.color) {
-    wardrobe.tween = { from: wardrobe.shown ?? hexOf(from.color), to: hexOf(to.color), toInk: to.color === "encre" ? INK_VAR : hexOf(to.color), fromPale: PALE.has(from.color), toPale: PALE.has(to.color), at: nowSec() };
+    if (!lite(h)) wardrobe.tween = { from: wardrobe.shown ?? hexOf(from.color), to: hexOf(to.color), toInk: to.color === "encre" ? INK_VAR : hexOf(to.color), fromPale: PALE.has(from.color), toPale: PALE.has(to.color), at: nowSec() };
   }
   look.worn = to;
   look.onWear?.(to);
@@ -137,7 +152,11 @@ export function drive(env: DriveEnv, h: LiveHandle, view: DirectorView, dt: numb
   svg.setAttribute("data-clock", c.toFixed(3)); svg.setAttribute("data-pose", view.pose); svg.setAttribute("data-state", view.state);
   svg.setAttribute("data-gaze", view.gaze); svg.setAttribute("data-tempo", String(view.tempo));
   svg.setAttribute("data-handoff", view.handoff?.phase ?? "");
-  if (full) {
+  // "lite": no aura (nor the body movements that belong to it) and the new look goes on at once; the director has no handoff to play then.
+  const lite = (h.level ?? getMotion().level) === "lite";
+  if (full && lite) {
+    if (wardrobe.aura !== null) { clearAura(p.auraHost); wardrobe.aura = null; p.move(0, 0, 1); }
+  } else if (full) {
     // another aura takes the place of this one (a handoff, a late persona): nothing of the old one stays on the page, not even hidden
     if (wardrobe.aura !== view.aura) { if (wardrobe.aura !== null) clearAura(p.auraHost); wardrobe.aura = view.aura; p.auraHost.setAttribute("data-aura-variant", view.aura); }
     drawAura(p.auraHost, auraFor(view.aura)({ ...input, R: RAYON, tier: env.tier }), env.style, input.phase);

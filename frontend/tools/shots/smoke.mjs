@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, clickSend, fillDraft, endWithCard, endWithError, firstAnswer, handTurn, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, clickSend, fillDraft, endWithCard, endWithError, firstAnswer, handTurn, openStudio, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -3945,11 +3945,20 @@ async function handoffIntoWorking(ctx) {
     const frames = await stopProbe(page);
     assert(!frames.some((f) => f.state === "swirl"), "the swirl played although the bot was already working");
     assert(!frames.some((f) => f.ho === "enter"), "the entrance played although the bot was already working");
-    assert(frames.some((f) => f.ho === "leave"), "the old aura did not leave");
-    const end = frames.at(-1);
+    const end = frames.at(-1), oldAura = frames[0]?.aura;
+    // The exit lasts 120 ms (HANDOFF.SWAP), so a sampled frame in "leave" is not guaranteed: when the click and the page's mount run as one long task the browser draws no
+    // frame in that window, and the director swaps at once (the late-handoff rule).  What the product guarantees: either an exit frame was drawn, or the frame where the
+    // new aura first shows came after a gap of 100 ms or more (no frame could have shown the exit); and once the new aura is there the old one never comes back.
+    const trace = frames.slice(0, 40).map((f) => [Math.round(f.t), Math.round(f.gap), f.ho ?? "", f.aura ?? "", f.pose ?? "", f.state ?? ""]);
+    const firstNew = frames.findIndex((f) => f.aura === end.aura && f.aura !== oldAura);
+    const exitDrawn = frames.some((f) => f.ho === "leave");
+    const noFrameFitted = firstNew > 0 && frames[firstNew].gap >= 100;
+    assert(exitDrawn || noFrameFitted, `the old aura did not leave: no exit frame was drawn and the new aura (${end.aura}) ${firstNew < 0 ? "never showed" : `showed after a gap of only ${Math.round(frames[firstNew].gap)} ms`}; frames [ms, gap, handoff, aura, pose, state]: ${JSON.stringify(trace)}`);
+    const stale = firstNew < 0 ? -1 : frames.findIndex((f, i) => i > firstNew && f.aura === oldAura);
+    assert(stale < 0, `the old aura (${oldAura}) came back at ${Math.round(frames[stale]?.t)} ms after the new one had shown; frames [ms, gap, handoff, aura, pose, state]: ${JSON.stringify(trace)}`);
     assert(["waiting", "tool", "answer", "verify", "attention"].includes(end.pose) && end.aura === "speed-lines", `it did not land in TeslaBot's working state: pose ${end.pose}, aura ${end.aura}`);
     const settledAt = frames.find((f) => f.aura === "speed-lines" && ["waiting", "tool", "answer", "verify", "attention"].includes(f.pose));
-    return `landed in TeslaBot's own working pose (${end.pose}, ${end.state}) at ${Math.round(settledAt.t)} ms; no swirl, no entrance, the old aura left first`;
+    return `landed in TeslaBot's own working pose (${end.pose}, ${end.state}) at ${Math.round(settledAt.t)} ms; no swirl, no entrance, ${exitDrawn ? "the old aura left first (exit frame drawn)" : `no frame fitted in the 120 ms exit (the new aura showed after a ${Math.round(frames[firstNew].gap)} ms gap)`}`;
   } finally { await view.close(); }
 }
 
@@ -4125,6 +4134,540 @@ async function handoffNoStrayDraft(ctx) {
   } finally { await view.close(); }
 }
 
+// --- A5: the personality pickers, the rehearsal and the three levels of animation -------------------------------------------------------------
+
+const PERSONA_KEY = (id) => `market-evidence-agent:bot-persona:v1:${id}`;
+const MOTION_KEY = "market-evidence-agent:motion:v1";
+const BIG_DEVICE = { cores: 8, memory: 16, saveData: false };
+const LOW_DEVICE = { cores: 2, memory: 2, saveData: false };
+const HEADER_BODY = "[data-testid=chat-header] svg[data-slot=bot-body]";
+const STAGE_BODY = "[data-testid=rehearsal-stage] svg[data-slot=bot-body]";
+const STAGE_AURA = "[data-testid=rehearsal-stage] [data-slot=bot-aura]";
+
+/** Make the page believe it runs on this hardware: navigator.hardwareConcurrency / deviceMemory / connection.saveData (before the app starts). */
+async function setHardware(context, { cores, memory, saveData }) {
+  await context.addInitScript((hw) => {
+    const define = (target, key, value) => { try { Object.defineProperty(target, key, { get: () => value, configurable: true }); } catch { /* read-only: keep the real one */ } };
+    define(Navigator.prototype, "hardwareConcurrency", hw.cores);
+    define(Navigator.prototype, "deviceMemory", hw.memory);
+    define(Navigator.prototype, "connection", { saveData: hw.saveData, effectiveType: "4g", addEventListener() {}, removeEventListener() {} });
+  }, { cores, memory, saveData });
+}
+/** A view with real motion on a known device; `motionLevel`: what the reader has chosen (null: nothing). */
+async function motionView(ctx, label, { hash = "#/chat", device = BIG_DEVICE, motionLevel = "full", reducedMotion, width = 1440 } = {}) {
+  const view = await newView(ctx.browser, { width, theme: "light", label, unmatched, motion: true, motionLevel, ...(reducedMotion ? { reducedMotion } : {}) });
+  await setHardware(view.context, device);
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  return view;
+}
+async function chatReady(view) { await waitReady(view.page, PAGES.find((p) => p.name === "chat-default")); await settle(view.page); }
+const htmlMotion = (page) => page.evaluate(() => document.documentElement.dataset.motion);
+const waitMotion = (page, level, timeout = 15000) => page.waitForFunction((want) => document.documentElement.dataset.motion === want, level, { timeout });
+/** Open `bot`'s 档案 tab on the chat page (1440) with the studio in it. */
+async function openStudioView(ctx, label, botId, options = {}) {
+  const view = await motionView(ctx, label, { hash: `#/chat/${botId}`, ...options });
+  await view.page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 30000 }); // (a line with no message yet has no message to wait for)
+  await settle(view.page);
+  await openStudio(view.page);
+  return view;
+}
+const stageAttr = (page, name) => page.locator(STAGE_BODY).getAttribute(name);
+/** The aura's phase and units on the rehearsal's stage. */
+const stageAura = (page) => page.evaluate((sel) => { const host = document.querySelector(sel); return host ? { phase: host.getAttribute("data-aura-phase"), units: host.getAttribute("data-aura-units"), form: host.getAttribute("data-aura-form") } : null; }, STAGE_AURA);
+
+// What each rehearsal button should end in, as the avatar shows it: [button, director pose, aura phase, units, form].
+const REHEARSAL = [
+  ["idle", "idle", "idle", "0", null], ["listening", "listen", "listen", "0", null], ["thinking", "waiting", "think", "0", null],
+  ["tool1", "tool", "tool", "1", null], ["tool3", "tool", "tool", "3", null], ["verify", "verify", "verify", "3", null], ["answer", "answer", "answer", "3", null],
+  ["waiting", "hold", "hold", "3", null], ["done", null, "done", null, "closed"], ["partial", null, "partial", null, "gap"], ["failed", null, "error", null, "broken"]
+];
+
+async function rehearsalButtons(ctx) {
+  const view = await openStudioView(ctx, "rehearsal-buttons", BOT.teslabot);
+  try {
+    const { page } = view;
+    const seen = [];
+    for (const [name, pose, phase, units, form] of REHEARSAL) {
+      await page.locator(`[data-slot=rehearsal] [data-testid=rehearsal-states] [data-scenario=${name}]`).click();
+      assert((await page.locator(`[data-slot=rehearsal] [data-testid=rehearsal-states] [data-scenario=${name}]`).getAttribute("aria-pressed")) === "true", `${name}: the button is not shown as pressed`);
+      await page.waitForFunction(([stage, aura, want]) => {
+        const body = document.querySelector(stage), host = document.querySelector(aura);
+        if (!body || !host) return false;
+        return host.getAttribute("data-aura-phase") === want.phase && (want.units === null || host.getAttribute("data-aura-units") === want.units) && (want.pose === null || body.getAttribute("data-pose") === want.pose) && (want.form === null || host.getAttribute("data-aura-form") === want.form);
+      }, [STAGE_BODY, STAGE_AURA, { pose, phase, units, form }], { timeout: 9000 }).catch(async () => {
+        throw new Error(`${name}: wanted pose ${pose ?? "-"} / aura ${phase} / units ${units ?? "-"}${form ? ` / form ${form}` : ""}, got pose ${await stageAttr(page, "data-pose")} / ${JSON.stringify(await stageAura(page))}`);
+      });
+      const status = await page.locator("[data-testid=rehearsal-status]").innerText();
+      assert(status.includes("正在演示"), `${name}: the announcement says ${JSON.stringify(status)}`);
+      seen.push(`${name}:${await stageAttr(page, "data-pose")}/${phase}`);
+    }
+    // and each state is a button that can be reached and pressed from the keyboard
+    await page.locator("[data-scenario=idle]").first().focus();
+    await page.locator("[data-slot=rehearsal] [data-scenario=thinking]").focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.querySelector("[data-slot=rehearsal]")?.getAttribute("data-scenario") === "thinking");
+    // the switch: the same body becomes the other bot (the swirl plays, the shape changes), and a second press goes back
+    const before = { node: await page.locator(STAGE_BODY).elementHandle(), shape: await stageAttr(page, "data-shape") };
+    await page.locator("[data-testid=rehearsal-switch]").click();
+    await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("data-handoff"), STAGE_BODY, { timeout: 5000 });
+    await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("data-pose") === "handoff", STAGE_BODY, { timeout: 5000 });
+    await page.waitForFunction(([sel, shape]) => document.querySelector(sel)?.getAttribute("data-shape") !== shape && !document.querySelector(sel)?.getAttribute("data-handoff"), [STAGE_BODY, before.shape], { timeout: 8000 });
+    const same = await page.evaluate(([sel, node]) => document.querySelector(sel) === node, [STAGE_BODY, before.node]);
+    assert(same, "the switch built a new body instead of turning the same one into the other bot");
+    const wearer = await page.locator("[data-testid=rehearsal-wearer]").innerText();
+    assert(!wearer.includes("TeslaBot"), `after the switch the preview still says ${wearer}`);
+    await page.locator("[data-testid=rehearsal-switch]").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=rehearsal-wearer]")?.innerText.includes("TeslaBot"), null, { timeout: 8000 });
+    return `${REHEARSAL.length} state buttons (pose / aura phase ok), keyboard Enter plays one, switch turns the same body (swirl) into ${wearer.split("·")[0].trim()} and back`;
+  } finally { await view.close(); }
+}
+
+async function rehearsalNoRequests(ctx) {
+  const view = await openStudioView(ctx, "rehearsal-no-requests", BOT.applebot);
+  try {
+    const { page } = view;
+    // The page has a background sync of its own line (GET .../messages every few seconds, with or without a rehearsal): first watch a stretch of rest
+    // to learn what it looks like, then play the whole rehearsal and require that nothing else was asked.
+    const isLineSync = (r) => r.method === "GET" && /^\/agent-chat\/conversations\/[^/]+\/messages$/.test(r.path);
+    await page.waitForTimeout(1500);
+    const rest0 = view.mock.requests.length;
+    await page.waitForTimeout(8000);
+    const rest = view.mock.requests.slice(rest0);
+    const before = { requests: view.mock.requests.length, messages: await page.locator("[data-testid=message]").count(), last: await page.locator("[data-testid=message]").last().innerText(), draft: await page.locator("#agent-draft").inputValue() };
+    const started = Date.now();
+    for (const [name] of REHEARSAL) { await page.locator(`[data-slot=rehearsal] [data-scenario=${name}]`).click(); await page.waitForTimeout(150); }
+    await page.locator("[data-testid=rehearsal-switch]").click();
+    await page.waitForTimeout(1500);
+    for (const level of ["lite", "off", "full"]) { await page.locator(`[data-testid=rehearsal-level] [data-option=${level}]`).click(); await page.waitForTimeout(200); }
+    await page.locator("[data-testid=rehearsal-reduced]").click();
+    await page.locator("[data-testid=rehearsal-reduced]").click();
+    await page.locator("[data-testid=rehearsal-switch]").click();
+    await page.waitForTimeout(1500);
+    const sent = view.mock.requests.slice(before.requests), seconds = (Date.now() - started) / 1000;
+    const others = sent.filter((r) => !isLineSync(r));
+    assert(!others.length, `the rehearsal made ${others.length} request(s) of its own: ${others.map((r) => `${r.method} ${r.path}`).join(", ")}`);
+    assert(rest.every(isLineSync), `at rest the page asks for more than its line sync: ${rest.filter((r) => !isLineSync(r)).map((r) => r.path)}`);
+    assert((await page.locator("[data-testid=message]").count()) === before.messages, "the number of messages in the line changed");
+    assert((await page.locator("[data-testid=message]").last().innerText()) === before.last, "the last message changed");
+    assert((await page.locator("#agent-draft").inputValue()) === before.draft, "the draft changed");
+    return `nothing asked but the page's own line sync (${rest.length} in 8 s at rest, ${sent.length} in ${seconds.toFixed(0)} s of rehearsal: ${REHEARSAL.length} states, a switch and back, three levels, the reduce switch); the line (${before.messages} messages) and the draft are as they were`;
+  } finally { await view.close(); }
+}
+
+/** The header avatar and the rehearsal's big one: only the bigger runs frames (design 6.9 P3: the largest M / L avatar wins). */
+async function rehearsalClaimsLoop(ctx) {
+  const view = await openStudioView(ctx, "rehearsal-claims-loop", BOT.finbot);
+  try {
+    const { page } = view;
+    const clocks = () => page.evaluate(([header, stage]) => ({ header: Number(document.querySelector(header)?.getAttribute("data-clock")), stage: Number(document.querySelector(stage)?.getAttribute("data-clock")) }), [HEADER_BODY, STAGE_BODY]);
+    await page.waitForTimeout(800);
+    const a = await clocks(); await page.waitForTimeout(1500); const b = await clocks();
+    assert(b.stage - a.stage > 0.8, `the preview's clock moved ${(b.stage - a.stage).toFixed(2)} s in 1.5 s: it is not running`);
+    assert(Math.abs(b.header - a.header) < 0.05, `the header avatar's clock moved ${(b.header - a.header).toFixed(2)} s while the big preview was on screen: two M / L avatars run frames`);
+    // scrolled off screen the preview stops and the header's body runs again
+    await page.locator("[data-testid=profile-pane]").evaluate((node) => { node.scrollTop = 0; }).catch(() => {});
+    await page.locator("[data-testid=panel-close]").click();
+    await page.waitForTimeout(500);
+    const c = await page.evaluate((sel) => Number(document.querySelector(sel)?.getAttribute("data-clock")), HEADER_BODY); await page.waitForTimeout(1200);
+    const d = await page.evaluate((sel) => Number(document.querySelector(sel)?.getAttribute("data-clock")), HEADER_BODY);
+    assert(d - c > 0.6, `with the panel closed the header avatar did not run again (${(d - c).toFixed(2)} s in 1.2 s)`);
+    return `preview clock +${(b.stage - a.stage).toFixed(2)} s in 1.5 s, header +${(b.header - a.header).toFixed(2)} s; panel closed: header +${(d - c).toFixed(2)} s in 1.2 s`;
+  } finally { await view.close(); }
+}
+
+
+/** The studio on a phone (390): the 档案 tab in the drawer holds it without sideways scroll, its controls are phone-sized, and a state plays. */
+async function rehearsalMobile(ctx) {
+  const view = await motionView(ctx, "rehearsal-mobile", { hash: `#/chat/${BOT.teslabot}`, width: 390 });
+  try {
+    const { page } = view;
+    await page.locator("#agent-draft:not([disabled])").waitFor({ timeout: 30000 });
+    await settle(page);
+    await openStudio(page);
+    const wide = await page.evaluate(() => ({ page: document.documentElement.scrollWidth - document.documentElement.clientWidth, studio: Math.round(document.querySelector("[data-slot=persona-studio]").getBoundingClientRect().width), view: window.innerWidth }));
+    assert(wide.page <= 1, `the page scrolls sideways by ${wide.page}px`);
+    assert(wide.studio <= wide.view, `the studio is ${wide.studio}px wide in a ${wide.view}px window`);
+    const small = await page.evaluate(() => [...document.querySelectorAll("[data-slot=persona-studio] label[data-option], [data-slot=rehearsal] [data-scenario], [data-testid=persona-reset], label:has([data-testid=rehearsal-reduced])")].map((node) => { const r = node.getBoundingClientRect(); return { what: node.getAttribute("data-option") ?? node.getAttribute("data-scenario") ?? node.getAttribute("data-testid") ?? "reduce-switch label", h: Math.round(r.height), w: Math.round(r.width) }; }).filter((box) => box.h < 44));
+    assert(!small.length, `controls under 44 px tall: ${small.map((box) => `${box.what} ${box.w}x${box.h}`).join(", ")}`);
+    await page.locator("[data-slot=rehearsal] [data-scenario=thinking]").click();
+    await page.waitForFunction(([stage, aura]) => document.querySelector(stage)?.getAttribute("data-pose") === "waiting" && document.querySelector(aura)?.getAttribute("data-aura-phase") === "think", [STAGE_BODY, STAGE_AURA], { timeout: 9000 });
+    return `no sideways scroll, studio ${wide.studio}px in ${wide.view}px, every control >= 44 px tall, 思考 plays in the drawer`;
+  } finally { await view.close(); }
+}
+
+async function personaOverrideLocal(ctx) {
+  const id = BOT.applebot;
+  const view = await openStudioView(ctx, "persona-override-local", id);
+  try {
+    const { page } = view;
+    const source = () => page.locator("[data-testid=persona-source]").getAttribute("data-kind");
+    assert((await source()) === "preset", `before any change the source should be the preset, got ${await source()}`);
+    assert((await page.locator("[data-testid=persona-source]").innerText()).includes("AppleBot"), "the preset line does not name AppleBot");
+    assert((await page.evaluate((key) => localStorage.getItem(key), PERSONA_KEY(id))) === null, "an override exists before any change");
+    const asked = view.mock.requests.length;
+    const row = page.locator("[data-bot-row]", { hasText: "AppleBot" }).first();
+    const ringTempo = () => row.locator("[data-slot=bot-status]").evaluate((node) => node.style.getPropertyValue("--bot-tempo"));
+    assert((await ringTempo()) === "0.9", `the sidebar ring's tempo should start at AppleBot's 0.9, got ${await ringTempo()}`);
+    await page.locator("[data-testid=persona-archetype] [data-option=reader]").click();
+    await page.locator("[data-testid=persona-tempo] [data-option=rapid]").click();
+    await page.waitForFunction(() => document.querySelector("[data-slot=chat-page]")?.dataset.archetype === "reader", null, { timeout: 8000 });
+    // only localStorage changed
+    const stored = JSON.parse(await page.evaluate((key) => localStorage.getItem(key), PERSONA_KEY(id)));
+    assert(stored.archetype === "reader" && stored.tempo === 1.25, `the stored override is ${JSON.stringify(stored)}`);
+    const sent = view.mock.requests.slice(asked);
+    assert(!sent.length, `changing the personality made ${sent.length} request(s): ${sent.map((r) => `${r.method} ${r.path}`).join(", ")}`);
+    // it applies to the page, the sidebar and the preview at once
+    assert((await page.locator("[data-slot=chat-page]").evaluate((node) => node.style.getPropertyValue("--bot-tempo"))) === "1.25", "the chat page's tempo did not follow");
+    // (the header's own body is a still frame while the big preview runs, so the preview is where the new tempo shows on the body; it only runs while it is on
+    // screen, and the pickers are above it: bring it back into view, as a reader looking at the result does)
+    await page.locator("[data-testid=rehearsal-stage]").scrollIntoViewIfNeeded();
+    await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("data-tempo") === "1.25", STAGE_BODY, { timeout: 5000 });
+    assert((await ringTempo()) === "1.25", `the sidebar ring's tempo is ${await ringTempo()}, not 1.25`);
+    assert((await page.locator("[data-testid=rehearsal-wearer]").innerText()).includes("审读"), "the preview does not say 审读");
+    assert((await source()) === "override", "the source line does not say the reader changed it");
+    // an aura variant of the new family can be picked (one that is not the one the bot has by default, or it is no override at all)
+    const pickable = await page.locator("[data-testid=persona-aura] input[type=radio]:not(:checked)").first().getAttribute("value");
+    await page.locator(`[data-testid=persona-aura] [data-option=${pickable}]`).click();
+    await page.waitForFunction(([key, want]) => JSON.parse(localStorage.getItem(key) || "{}").auraVariant === want, [PERSONA_KEY(id), pickable], { timeout: 5000 });
+    await page.waitForFunction(([sel, want]) => document.querySelector(sel)?.getAttribute("data-aura-variant") === want, [STAGE_AURA, pickable], { timeout: 8000 });
+    // the form's own save did not light up: the profile's 保存 button is as it was (no unsaved-change mark exists; the note says so)
+    assert((await page.locator("[data-testid=persona-local-note]").innerText()).includes("保存栏不会亮"), "the note about the save bar is missing");
+    // 恢复默认
+    await page.locator("[data-testid=persona-reset]").click();
+    await page.waitForFunction((key) => localStorage.getItem(key) === null, PERSONA_KEY(id), { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector("[data-slot=chat-page]")?.dataset.archetype === "tracker", null, { timeout: 8000 });
+    assert((await source()) === "preset", "after 恢复默认 the source is not the preset again");
+    assert((await ringTempo()) === "0.9", "the sidebar ring's tempo did not come back");
+    // another browser context is another device: it sees the derived value, not this one's choice
+    await page.locator("[data-testid=persona-archetype] [data-option=sentinel]").click();
+    await page.waitForFunction((key) => localStorage.getItem(key) !== null, PERSONA_KEY(id), { timeout: 5000 });
+    const other = await openStudioView(ctx, "persona-override-local-other", id);
+    try {
+      assert((await other.page.evaluate((key) => localStorage.getItem(key), PERSONA_KEY(id))) === null, "the other device has an override");
+      assert((await other.page.locator("[data-testid=persona-source]").getAttribute("data-kind")) === "preset", "the other device does not show the preset");
+      await other.page.waitForFunction(() => document.querySelector("[data-slot=chat-page]")?.dataset.archetype === "tracker", null, { timeout: 8000 });
+    } finally { await other.close(); }
+    return "reader + rapid + another aura variant only in localStorage (0 requests), page / sidebar ring / preview follow at once, 恢复默认 clears, a second browser context shows the preset";
+  } finally { await view.close(); }
+}
+
+async function personaOtherTab(ctx) {
+  const id = BOT.newsbot;
+  const view = await openStudioView(ctx, "persona-other-tab", id);
+  try {
+    const { page } = view;
+    const twin = await view.context.newPage();
+    await twin.goto(`${ctx.server.url}#/chat/${id}`, { waitUntil: "load" });
+    await twin.locator("#agent-draft:not([disabled])").waitFor({ timeout: 30000 });
+    await twin.waitForFunction(() => Boolean(document.querySelector("[data-slot=chat-page]")?.dataset.archetype), null, { timeout: 15000 });
+    // the first tab changes the personality; the second hears it through the `storage` event, no reload
+    await page.locator("[data-testid=persona-tempo] [data-option=calm]").click();
+    await twin.waitForFunction(() => document.querySelector("[data-slot=chat-page]")?.style.getPropertyValue("--bot-tempo") === "0.85", null, { timeout: 8000 });
+    await twin.close();
+    return "a change in one tab reached the other's chat page without a reload";
+  } finally { await view.close(); }
+}
+
+async function motionLevelsPersist(ctx) {
+  const view = await motionView(ctx, "motion-levels-persist", { hash: "#/settings/appearance", motionLevel: null });
+  try {
+    const { page } = view;
+    await page.locator("[data-slot=motion-level]").waitFor({ timeout: 30000 });
+    const read = () => page.evaluate(() => ({ html: document.documentElement.dataset.motion, source: document.querySelector("[data-slot=motion-level]")?.dataset.source, stored: localStorage.getItem("market-evidence-agent:motion:v1") }));
+    const first = await read();
+    assert(first.html === "full" && first.source === "default" && first.stored === null, `default on a big device should be full / default / nothing stored, got ${JSON.stringify(first)}`);
+    const out = [];
+    for (const level of ["lite", "off", "full", "off"]) {
+      await page.locator(`[data-testid=motion-level-choice] [data-option=${level}]`).click();
+      await waitMotion(page, level, 5000);
+      const now = await read();
+      assert(now.stored === level && now.source === "user", `${level}: stored ${now.stored}, source ${now.source}`);
+      await page.reload({ waitUntil: "load" });
+      await page.locator("[data-slot=motion-level]").waitFor({ timeout: 30000 });
+      assert((await htmlMotion(page)) === level, `${level}: after a reload data-motion is ${await htmlMotion(page)}`);
+      out.push(level);
+    }
+    // off: the avatar is a still frame and the CSS animations are gone; lite: no aura nodes, no swirl; full: the real thing
+    await page.evaluate(() => { location.hash = "#/chat"; });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default")); await settle(page);
+    await page.locator(HEADER_BODY).waitFor({ timeout: 15000 });
+    const clock = () => page.evaluate((sel) => Number(document.querySelector(sel)?.getAttribute("data-clock") ?? "0"), HEADER_BODY);
+    const c0 = await clock(); await page.waitForTimeout(1200); const c1 = await clock();
+    assert(c1 - c0 < 0.05, `off: the header avatar's clock moved ${(c1 - c0).toFixed(2)} s`);
+    const breathing = await page.evaluate(() => [...document.querySelectorAll(".bot-breathe, .bot-status-ring, .think-trace > i")].filter((node) => getComputedStyle(node).animationName !== "none").length);
+    assert(breathing === 0, `off: ${breathing} element(s) still have a CSS animation`);
+    // a running turn in off: the trace and the caret are still, the elapsed seconds still count (information)
+    const hand = await handTurn(page, { text: "关闭档", botId: BOT.finbot });
+    await page.locator("[data-slot=think-trace]").first().waitFor({ timeout: 10000 });
+    const traceAnimations = await page.evaluate(() => [...document.querySelectorAll("[data-slot=think-trace] > i")].map((node) => getComputedStyle(node).animationName));
+    assert(traceAnimations.length && traceAnimations.every((name) => name === "none"), `off: the thinking trace still animates: ${traceAnimations}`);
+    await hand.push(0, "delta", { text: "一句话。" });
+    await finishHand(hand);
+    // lite
+    await page.evaluate((key) => localStorage.setItem(key, "lite"), MOTION_KEY);
+    await page.reload({ waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default")); await settle(page);
+    await waitMotion(page, "lite");
+    await page.locator(HEADER_BODY).waitFor({ timeout: 15000 });
+    await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("data-state"), HEADER_BODY, { timeout: 15000 });
+    const hand2 = await handTurn(page, { text: "精简档", botId: BOT.finbot, turnId: "t9000000-0000-4000-8000-0000000000d2" });
+    await page.locator("[data-slot=think-trace]").first().waitFor({ timeout: 10000 });
+    await page.waitForTimeout(1800);
+    const aura = await page.evaluate(() => { const host = document.querySelector("[data-testid=chat-header] [data-slot=bot-aura]"); return host ? host.children.length : 0; });
+    assert(aura === 0, `lite: the header avatar has ${aura} aura node(s)`);
+    const trace = await page.evaluate(() => getComputedStyle(document.querySelector("[data-slot=think-trace] > i")).animationName);
+    assert(trace !== "none", "lite: the thinking trace (a part of the line) should still animate");
+    await hand2.push(0, "delta", { text: "一句话。" });
+    await finishHand(hand2, "t9000000-0000-4000-8000-0000000000d2");
+    // lite: a switch has no swirl (probe the pose for the whole switch)
+    await page.evaluate((sel) => { window.__poses = new Set(); const tick = () => { const p = document.querySelector(sel)?.getAttribute("data-pose"); if (p) window.__poses.add(p); window.__poseRaf = requestAnimationFrame(tick); }; tick(); }, HEADER_BODY);
+    await pressBotRow(page, "NewsBot");
+    await page.locator("h1", { hasText: "NewsBot" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(2000);
+    const poses = await page.evaluate(() => [...window.__poses]);
+    assert(!poses.includes("handoff"), `lite: the switch played the swirl (poses seen: ${poses})`);
+    return `default full on a big device; ${out.join(" > ")} each kept after a reload; off: still avatar, no CSS animation (trace too); lite: no aura nodes, trace kept, no swirl on a switch (poses ${poses.join("/")})`;
+  } finally { await view.close(); }
+}
+/** End a hand-fed turn as done. */
+async function finishHand(hand, turnId = "t9000000-0000-4000-8000-0000000000d1") {
+  await hand.push(0, "done", { status: "complete", turn_id: turnId, thinking_ms: 500, citations: [], citation_protocol: null });
+  await hand.close(0);
+}
+
+
+/** "lite" runs the light M avatar (the chat header's) at half the frame rate: its engine clock is written on every other animation frame of the page. */
+async function motionLiteHalfRate(ctx) {
+  const measure = async (level) => {
+    const view = await motionView(ctx, `motion-lite-half-rate-${level}`, { motionLevel: level });
+    try {
+      const { page } = view;
+      await chatReady(view);
+      await page.locator(HEADER_BODY).waitFor({ timeout: 15000 });
+      await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("data-state"), HEADER_BODY, { timeout: 15000 });
+      await page.waitForTimeout(800);
+      return await page.evaluate(([sel, ms]) => new Promise((resolve) => {
+        const svg = document.querySelector(sel); let writes = 0, frames = 0;
+        const observer = new MutationObserver((records) => { writes += records.length; });
+        observer.observe(svg, { attributes: true, attributeFilter: ["data-clock"] });
+        const stop = performance.now() + ms;
+        const tick = (t) => { frames += 1; if (t < stop) requestAnimationFrame(tick); else { observer.disconnect(); resolve({ writes, frames }); } };
+        requestAnimationFrame(tick);
+      }), [HEADER_BODY, 3000]);
+    } finally { await view.close(); }
+  };
+  const full = await measure("full"), lite = await measure("lite");
+  const ratio = (m) => m.writes / m.frames;
+  assert(ratio(full) > 0.85, `full: the clock was written on ${(ratio(full) * 100).toFixed(0)}% of the page's frames (should be nearly all)`);
+  assert(ratio(lite) > 0.35 && ratio(lite) < 0.65, `lite: the clock was written on ${(ratio(lite) * 100).toFixed(0)}% of the page's frames (should be about half)`);
+  return `the header avatar's clock is written on ${(ratio(full) * 100).toFixed(0)}% of the page's frames at full (${full.writes}/${full.frames}) and ${(ratio(lite) * 100).toFixed(0)}% at lite (${lite.writes}/${lite.frames})`;
+}
+
+async function motionSystemReducedWins(ctx) {
+  const view = await motionView(ctx, "motion-system-reduced-wins", { hash: "#/settings/appearance", motionLevel: "full", reducedMotion: "reduce" });
+  try {
+    const { page } = view;
+    await page.locator("[data-slot=motion-level]").waitFor({ timeout: 30000 });
+    assert((await htmlMotion(page)) === "off", `with the system's reduced motion and 完整 chosen in the app, data-motion is ${await htmlMotion(page)}`);
+    const state = await page.evaluate(() => { const root = document.querySelector("[data-slot=motion-level]"); return { source: root.dataset.source, level: root.dataset.level, text: root.querySelector("[data-testid=motion-level-current]").innerText, note: root.querySelector("[data-testid=motion-level-system]")?.innerText ?? "", disabled: [...root.querySelectorAll("input[type=radio]")].map((input) => `${input.value}:${input.disabled}`) }; });
+    assert(state.source === "system" && state.level === "off", `the control reports ${state.level} / ${state.source}`);
+    assert(state.text.includes("关闭（跟随系统设置）"), `the current line says ${JSON.stringify(state.text)}`);
+    assert(state.note.includes("不能更强"), "the reason (the app can only be weaker) is not given");
+    assert(state.disabled.join() === "full:true,lite:true,off:false", `the radios are ${state.disabled}`);
+    // the avatar on the chat page is a still frame, the preview in the rehearsal is off as well
+    await page.evaluate(() => { location.hash = "#/chat"; });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default")); await settle(page);
+    await page.locator(HEADER_BODY).waitFor({ timeout: 15000 });
+    const c0 = await page.evaluate((sel) => Number(document.querySelector(sel)?.getAttribute("data-clock") ?? "0"), HEADER_BODY); await page.waitForTimeout(1200);
+    const c1 = await page.evaluate((sel) => Number(document.querySelector(sel)?.getAttribute("data-clock") ?? "0"), HEADER_BODY);
+    assert(c1 - c0 < 0.05, "the avatar runs frames although the system asks for reduced motion");
+    // the system setting changing while the page is open takes effect without a reload
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await waitMotion(page, "full", 5000);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await waitMotion(page, "off", 5000);
+    return "system reduce + 完整 chosen => off, shown as 「关闭（跟随系统设置）」 with 完整 / 精简 disabled and the reason; avatar still; flipping the system setting live moves data-motion both ways";
+  } finally { await view.close(); }
+}
+
+async function motionAutoDevice(ctx) {
+  const view = await motionView(ctx, "motion-auto-device", { hash: "#/settings/appearance", motionLevel: null, device: LOW_DEVICE });
+  try {
+    const { page } = view;
+    await page.locator("[data-slot=motion-level]").waitFor({ timeout: 30000 });
+    await waitMotion(page, "lite", 8000);
+    const read = () => page.evaluate(() => ({ html: document.documentElement.dataset.motion, source: document.querySelector("[data-slot=motion-level]").dataset.source, text: document.querySelector("[data-testid=motion-level-current]").innerText, stored: localStorage.getItem("market-evidence-agent:motion:v1") }));
+    const auto = await read();
+    assert(auto.source === "auto-device" && auto.text.includes("精简（已为这台设备自动选择）") && auto.stored === null, `low device: ${JSON.stringify(auto)}`);
+    await page.locator("[data-testid=motion-level-choice] [data-option=full]").click();
+    await waitMotion(page, "full", 5000);
+    const own = await read();
+    assert(own.source === "user" && own.stored === "full", `after picking 完整 by hand: ${JSON.stringify(own)}`);
+    await page.reload({ waitUntil: "load" });
+    await page.locator("[data-slot=motion-level]").waitFor({ timeout: 30000 });
+    assert((await htmlMotion(page)) === "full", "the hand-picked level did not beat the device after a reload");
+    await page.locator("[data-testid=motion-level-auto]").click();
+    await waitMotion(page, "lite", 5000);
+    // data-saver alone is enough, on an otherwise big device
+    const saver = await motionView(ctx, "motion-auto-device-saver", { hash: "#/settings/appearance", motionLevel: null, device: { ...BIG_DEVICE, saveData: true } });
+    try {
+      await saver.page.locator("[data-slot=motion-level]").waitFor({ timeout: 30000 });
+      await waitMotion(saver.page, "lite", 8000);
+    } finally { await saver.close(); }
+    // 4 cores with 8 GB, and 4 cores with the memory not reported, are ordinary machines
+    for (const [label, device] of [["4 cores 8 GB", { cores: 4, memory: 8, saveData: false }], ["4 cores, memory unknown", { cores: 4, memory: undefined, saveData: false }]]) {
+      const plain = await motionView(ctx, "motion-auto-device-plain", { hash: "#/settings/appearance", motionLevel: null, device });
+      try { await plain.page.locator("[data-slot=motion-level]").waitFor({ timeout: 30000 }); assert((await htmlMotion(plain.page)) === "full", `${label} should start on full, got ${await htmlMotion(plain.page)}`); } finally { await plain.close(); }
+    }
+    return "2 cores / 2 GB => lite, source auto-device, nothing stored; 完整 picked by hand wins (and survives a reload); 恢复自动 returns to lite; data-saver alone => lite; 4 cores with 8 GB or unknown memory => full";
+  } finally { await view.close(); }
+}
+
+/** Frame intervals of the page's own animation frames for `ms` (a probe that does no work of its own). */
+async function frameProbe(page, ms) {
+  return page.evaluate((span) => new Promise((resolve) => {
+    const times = []; const stop = performance.now() + span;
+    const tick = (t) => { times.push(t); if (t < stop) requestAnimationFrame(tick); else { const gaps = times.slice(1).map((v, i) => v - times[i]); resolve({ frames: gaps.length, mean: gaps.reduce((a, b) => a + b, 0) / Math.max(1, gaps.length) }); } };
+    requestAnimationFrame(tick);
+  }), ms);
+}
+
+/** A page whose animation frames can be made slow on purpose: every requestAnimationFrame callback busy-waits `window.__busyMs` ms when that is set (the check's side only; no product code). */
+async function addFrameBallast(context) {
+  await context.addInitScript(() => {
+    window.__busyMs = 0;
+    const native = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) => native((stamp) => { const start = performance.now(); callback(stamp); if (window.__busyMs) while (performance.now() - start < window.__busyMs) { /* spin */ } });
+  });
+}
+const WORKING_POSES = ["waiting", "tool", "verify", "answer", "attention"];
+/** FinBot's line with an answer that stays in progress (the fake server never ends a HOLD_MARKER message): the avatar is working, so its frame loop runs at full speed. */
+async function workingChat(ctx, label, { motionLevel }) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label, unmatched, motion: true, motionLevel });
+  await setHardware(view.context, BIG_DEVICE);
+  await addFrameBallast(view.context);
+  await view.page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+  await chatReady(view);
+  await view.page.locator(HEADER_BODY).waitFor({ timeout: 15000 });
+  await fillDraft(view.page, `${HOLD_MARKER} AAPL`);
+  await clickSend(view.page);
+  await view.page.locator("[data-testid=stop]").waitFor({ timeout: 15000 });
+  await view.page.waitForFunction(([sel, poses]) => poses.includes(document.querySelector(sel)?.getAttribute("data-pose") ?? ""), [HEADER_BODY, WORKING_POSES], { timeout: 15000 });
+  await view.page.waitForTimeout(800);
+  return view;
+}
+/** What the page's frames and the header avatar's loop do over `ms`: page frame mean, and how many frames the avatar's loop drew (its clock written). */
+const loopStats = (page, ms) => page.evaluate(([sel, span]) => new Promise((resolve) => {
+  const svg = document.querySelector(sel); let writes = 0, frames = 0, last = 0, sum = 0;
+  const observer = new MutationObserver((records) => { writes += records.length; });
+  observer.observe(svg, { attributes: true, attributeFilter: ["data-clock"] });
+  const stop = performance.now() + span;
+  const tick = (t) => { if (last) sum += t - last; last = t; frames += 1; if (t < stop) requestAnimationFrame(tick); else { observer.disconnect(); resolve({ mean: sum / Math.max(1, frames - 1), frames, loopFrames: writes, pose: svg.getAttribute("data-pose"), level: document.documentElement.dataset.motion }); } };
+  requestAnimationFrame(tick);
+}), [HEADER_BODY, ms]);
+const fmt = (m) => `page frames ${m.mean.toFixed(1)} ms, avatar loop drew ${m.loopFrames} of ${m.frames} frames, pose ${m.pose}`;
+const droppedToast = (page) => page.locator("[data-sonner-toast]", { hasText: "已为这台设备切到精简动画" });
+
+async function motionAutoRuntime(ctx) {
+  const out = [];
+  // 0. the design's own wording, reported only: an answer in progress, the CPU slowed 4x (whether the frames pass 24 ms depends on the machine: not a condition)
+  const report = await workingChat(ctx, "motion-auto-runtime-4x", { motionLevel: null });
+  try {
+    const cdp = await report.context.newCDPSession(report.page);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+    const m = await loopStats(report.page, 5000);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+    out.push(`reported only: CPU slowed 4x while answering: ${fmt(m)} => ${m.level === "lite" ? "dropped to lite" : "held at " + m.level}`);
+  } finally { await report.close(); }
+
+  // 1. nothing chosen, an answer in progress
+  const view = await workingChat(ctx, "motion-auto-runtime", { motionLevel: null });
+  try {
+    const { page } = view;
+    // 1a. no ballast, no slowdown: it must stay full and say nothing (a drop with nothing slow is a false alarm)
+    const calm = await loopStats(page, 4000);
+    assert(calm.loopFrames > 0.7 * calm.frames, `the avatar's loop is not running while it answers (${fmt(calm)}): the check has nothing to measure`);
+    assert(calm.level === "full" && (await droppedToast(page).count()) === 0, `at ${calm.mean.toFixed(1)} ms frames the level should stay full with no toast: ${fmt(calm)}`);
+    out.push(`calm answering: ${fmt(calm)}: stays full, no toast`);
+    // 1b. every frame made slow (30 ms of work in each animation frame callback): over 24 ms for 2 s => lite for the visit, said once, undoable
+    await page.evaluate(() => { window.__busyMs = 30; });
+    const slow = await loopStats(page, 3000);
+    const dropped = await page.waitForFunction(() => document.documentElement.dataset.motion === "lite", null, { timeout: 12000 }).then(() => true, () => false);
+    assert(slow.mean > 24 && slow.loopFrames > 0, `the ballast did not make the avatar's frames slow: ${fmt(slow)}`);
+    assert(dropped, `with every frame slow (${fmt(slow)}) the level never dropped to lite`);
+    const toast = droppedToast(page);
+    await toast.waitFor({ timeout: 8000 });
+    assert((await toast.locator("button", { hasText: "改回" }).count()) === 1, "the toast has no 改回 button");
+    assert((await page.evaluate(() => localStorage.getItem("market-evidence-agent:motion:v1"))) === null, "the automatic drop was stored as the reader's choice");
+    await page.waitForTimeout(600);
+    const aura = await page.evaluate(() => document.querySelector("[data-testid=chat-header] [data-slot=bot-aura]")?.children.length ?? 0);
+    assert(aura === 0, `after the drop the header avatar still has ${aura} aura node(s)`);
+    out.push(`every frame slow: ${fmt(slow)} => lite + one toast + no aura, nothing stored`);
+    // 1c. 改回 => full; the ballast stays on: it is not measured again this visit and no second toast comes
+    await toast.locator("button", { hasText: "改回" }).click();
+    await waitMotion(page, "full", 5000);
+    const again = await loopStats(page, 5500);
+    assert(again.level === "full", `after 改回 the level dropped again in the same visit (${fmt(again)})`);
+    assert((await droppedToast(page).count()) === 0, "a second toast came");
+    out.push(`改回 => full; ballast still on (${fmt(again)}): not dropped again, no second toast`);
+  } finally { await view.close(); }
+
+  // 2. a level chosen by hand is never dropped, under the same ballast
+  const chosen = await workingChat(ctx, "motion-auto-runtime-chosen", { motionLevel: "full" });
+  try {
+    await chosen.page.evaluate(() => { window.__busyMs = 30; });
+    const slow = await loopStats(chosen.page, 5000);
+    assert(slow.mean > 24, `the ballast did not make the frames slow: ${fmt(slow)}`);
+    assert(slow.level === "full", `a hand-picked 完整 was dropped by the frame watch (${fmt(slow)})`);
+    assert((await chosen.page.locator("[data-sonner-toast]").count()) === 0, "a toast came for a hand-picked level");
+    out.push(`hand-picked 完整 under the ballast (${fmt(slow)}): never dropped, no toast`);
+  } finally { await chosen.close(); }
+  return out.join("; ");
+}
+
+/** The same page under the system's reduced motion and under 关闭 chosen in the app must be the same picture, pixel for pixel. */
+async function motionOffEqualsReduced(ctx) {
+  const open = async (label, how, hash) => {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label, unmatched, motion: true, ...(how === "system" ? { reducedMotion: "reduce", motionLevel: null } : { reducedMotion: "no-preference", motionLevel: "off" }) });
+    await setHardware(view.context, BIG_DEVICE);
+    await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+    return view;
+  };
+  const shoot = (page) => page.screenshot({ fullPage: true, animations: "disabled", caret: "hide" });
+  const scenes = {
+    "chat-default": async (view) => { await chatReady(view); await view.page.locator(HEADER_BODY).waitFor(); await view.page.waitForTimeout(1200); },
+    "answer in progress": async (view) => { await chatReady(view); await streamHalfway(view.page, { paragraphs: 2 }); await view.page.waitForTimeout(1200); },
+    "waiting for you": async (view) => {
+      await chatReady(view); await pressBotRow(view.page, "TeslaBot"); await view.page.locator("h1", { hasText: "TeslaBot" }).waitFor({ timeout: 10000 });
+      await fillDraft(view.page, `${ASK_MARKER} 查一下结果`, { botName: "TeslaBot" }); await view.page.locator("[data-testid=send]").click();
+      await view.page.locator("[data-slot=approval-card][data-state=active]").waitFor({ timeout: 10000 }); await view.page.waitForTimeout(1500);
+    }
+  };
+  const same = [];
+  for (const [name, prepare] of Object.entries(scenes)) {
+    const pictures = [];
+    for (const how of ["system", "off"]) {
+      const view = await open(`motion-off-equals-reduced-${how}`, how, "#/chat");
+      try { await prepare(view); await waitMotion(view.page, "off", 5000); pictures.push(await shoot(view.page)); } finally { await view.close(); }
+    }
+    assert(pictures[0].equals(pictures[1]), `${name}: the two pictures differ (${pictures[0].length} / ${pictures[1].length} bytes)`);
+    same.push(`${name} (${pictures[0].length} B)`);
+  }
+  // the settings page: everything but the strength control itself (its selected choice and its notes), element by element
+  const parts = ["label[for=theme]", "label[for=updown]", "label[for=locale]"];
+  const taken = [];
+  for (const how of ["system", "off"]) {
+    const view = await open(`motion-off-equals-reduced-${how}`, how, "#/settings/appearance");
+    try {
+      await view.page.locator("[data-slot=motion-level]").waitFor({ timeout: 30000 }); await settle(view.page); await waitMotion(view.page, "off", 5000);
+      taken.push(await Promise.all(parts.map((part) => view.page.locator(part).screenshot({ animations: "disabled", caret: "hide" }))));
+    } finally { await view.close(); }
+  }
+  parts.forEach((part, i) => assert(taken[0][i].equals(taken[1][i]), `settings ${part}: the two pictures differ`));
+  same.push("settings page (every part but the strength control)");
+  return `identical pixels, system reduced motion vs 关闭 in the app: ${same.join("; ")}`;
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -4246,6 +4789,18 @@ const CHECKS = [
   ["handoff-mobile-direction: at 390 the line slides in from the side of the bot's place in the list; the box has the focus", handoffMobileDirection],
   ["handoff-keyboard-focus: Enter on a sidebar row leaves the focus on the row; a pointer click puts it in the box", handoffKeyboardFocus],
   ["handoff-no-stray-draft: text written in the same task as the click never reaches the old line's draft", handoffNoStrayDraft],
+  ["rehearsal-buttons: every state button of the rehearsal plays its state on the preview (pose and aura phase), by keyboard too; 切换 turns the same body into the other bot and back", rehearsalButtons],
+  ["rehearsal-no-requests: playing every state, a switch, the three levels and the reduce switch sends no request and leaves the line and the draft alone", rehearsalNoRequests],
+  ["rehearsal-mobile: at 390 the studio in the drawer has no sideways scroll, phone-sized controls, and a state plays", rehearsalMobile],
+  ["rehearsal-claims-loop: with the big preview on screen only it runs frames (the header avatar is still); closing the panel gives the loop back", rehearsalClaimsLoop],
+  ["persona-override-local: archetype, tempo and aura picked in the studio only touch localStorage (no request), apply to the page, sidebar ring, header and preview at once; 恢复默认 clears; another browser context sees the derived value", personaOverrideLocal],
+  ["persona-other-tab: a personality changed in one tab reaches the chat page of another tab without a reload", personaOtherTab],
+  ["motion-levels-persist: 完整 / 精简 / 关闭 can be picked, data-motion follows and each survives a reload; off: still avatar and no CSS animation; lite: no aura, the trace stays, no swirl", motionLevelsPersist],
+  ["motion-lite-half-rate: lite runs the header avatar (tier M) at half the page's frame rate, full at every frame", motionLiteHalfRate],
+  ["motion-system-reduced-wins: the system's reduced motion beats a stored 完整 (data-motion off, 「关闭（跟随系统设置）」, stronger levels disabled), and follows the setting live", motionSystemReducedWins],
+  ["motion-auto-device: a low device (<= 4 cores and <= 4 GB, or data-saver) starts on lite and says so; a hand-picked level beats it; 4 cores with 8 GB or unknown memory do not", motionAutoDevice],
+  ["motion-auto-runtime: with the CPU slowed the avatar's frames average over 24 ms for 2 s: lite for the visit, one toast with 改回, never stored, never for a hand-picked level", motionAutoRuntime],
+  ["motion-off-equals-reduced: chat-default, an answer in progress, a card waiting for you and the settings page are the same pixels under the system's reduced motion and under 关闭 in the app", motionOffEqualsReduced],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

@@ -14,6 +14,7 @@ import { drive } from "@/components/bot/live-drive";
 import { COLOR_BY_ID } from "../bloub/skins";
 import { RAYON } from "../bloub/repere";
 import { createDirector, type DirectorEvent, type DirectorView } from "../bloub-director.mjs";
+import { SCENARIOS, playScenario } from "@/components/bot/rehearsal-scenarios";
 import { resolveLook } from "../bloub-look.mjs";
 import { PERSONA_PRESETS, derivePersona, type Persona } from "../bot-persona.mjs";
 import { BOT_AVATAR_SIZE, tierOf } from "../bot-sizes.mjs";
@@ -32,34 +33,8 @@ const BOTS = [
 const SIZE_L = 144, SIZE_M = BOT_AVATAR_SIZE.title;
 
 const now = () => performance.now() / 1000;
-/** One step of a scenario: at `at` seconds, tell the directors `events` and/or set how many tool calls have come back. */
-interface Step { at: number; events?: ReadonlyArray<DirectorEvent>; units?: number }
-interface Scenario { steps: ReadonlyArray<Step>; /** the end state (reduced motion shows it at once) */ units: number; checked: boolean; caption?: string }
-const START: DirectorEvent = { type: "turn-start", quiet: true };
 const TOOL: DirectorEvent = { type: "phase", phase: "tool" };
 const VERIFY: DirectorEvent = { type: "phase", phase: "verify" };
-const calls = (n: number): Step[] => Array.from({ length: n }, (_, i) => ({ at: 0.6 + i * 0.7, units: i + 1 }));
-/** A whole turn up to the check: three calls come back, then the evidence is checked. */
-const toCheck: Step[] = [{ at: 0, events: [START, TOOL] }, ...calls(3), { at: 2.7, events: [VERIFY] }];
-const end = (outcome: "done" | "error" | "partial" | "waiting", at = 4.2): Step => ({ at, events: [{ type: "turn-end", outcome }] });
-const SCENARIOS: Record<string, Scenario> = {
-  idle: { steps: [], units: 0, checked: false },
-  listening: { steps: [{ at: 0, events: [{ type: "phase", phase: "listening" }] }], units: 0, checked: false },
-  thinking: { steps: [{ at: 0, events: [START] }], units: 0, checked: false },
-  tool1: { steps: [{ at: 0, events: [START, TOOL] }, ...calls(1)], units: 1, checked: false },
-  tool: { steps: [{ at: 0, events: [START, TOOL] }, ...calls(3)], units: 3, checked: false },
-  tool3: { steps: [{ at: 0, events: [START, TOOL] }, ...calls(3)], units: 3, checked: false },
-  tool5: { steps: [{ at: 0, events: [START, TOOL] }, ...calls(5)], units: 5, checked: false },
-  // three calls: the second came back empty, so the units go 1, 1, 2 (not 1, 2, 3)
-  empty: { steps: [{ at: 0, events: [START, TOOL] }, { at: 0.6, units: 1 }, { at: 1.3 }, { at: 2.0, units: 2 }], units: 2, checked: false, caption: "3 calls, 1 empty: 2 units" },
-  verify: { steps: toCheck, units: 3, checked: true },
-  answer: { steps: [...toCheck, { at: 3.6, events: [{ type: "phase", phase: "answer" }] }], units: 3, checked: true },
-  waiting: { steps: [...toCheck, end("waiting", 3.6)], units: 3, checked: true },
-  done: { steps: [...toCheck, end("done")], units: 3, checked: true },
-  partial: { steps: [...toCheck, end("partial")], units: 3, checked: true },
-  failed: { steps: [...toCheck, end("error")], units: 3, checked: true },
-  offline: { steps: [{ at: 0, events: [{ type: "offline", value: true }] }], units: 0, checked: false }
-};
 const LABELS: Record<string, string> = {
   idle: "Idle", listening: "Listening", thinking: "Thinking", tool1: "Tool x1", tool3: "Tool x3", tool5: "Tool x5", empty: "Empty result", verify: "Verify", answer: "Answer",
   waiting: "Waiting for you", done: "Done", partial: "Partial", failed: "Failed", offline: "Offline", sleep: "Asleep"
@@ -67,14 +42,6 @@ const LABELS: Record<string, string> = {
 const ORDER = ["idle", "listening", "thinking", "tool1", "tool3", "tool5", "empty", "verify", "answer", "waiting", "done", "partial", "failed", "offline", "sleep"];
 
 const reducedMotion = () => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
-
-function reset(director: ReturnType<typeof createDirector>) {
-  const t = now();
-  director.send({ type: "turn-end", outcome: "cancel" }, t);
-  director.send({ type: "waiting-clear" }, t);
-  director.send({ type: "offline", value: false }, t);
-  director.send({ type: "phase", phase: "idle" }, t);
-}
 
 interface Row { handles: LiveHandle[] }
 const inkOf = (color: string) => (color === "encre" ? "var(--me-ink, #0a0a0c)" : COLOR_BY_ID.get(color)?.hex ?? "#0a0a0c");
@@ -99,30 +66,15 @@ export default function BotsPage() {
     clearTimers();
     setScenario(name);
     const sets = all();
-    sets.forEach((handle, k) => {
-      handle.units = 0;
-      if (name === "sleep") handle.director = createDirector({ now: now() - 61, reducedMotion: false, persona: personaOf(k) }); // 61 s of nothing: it falls asleep (also read for the still frame: a reduced-motion director never sleeps)
-      else reset(handle.director);
-      handle.wake?.();
-    });
-    const plan = SCENARIOS[name] ?? SCENARIOS.idle!;
-    const apply = (step: Step) => {
-      for (const handle of sets) {
-        for (const event of step.events ?? []) handle.director.send(event, now());
-        if (step.units !== undefined) handle.units = step.units;
-        handle.wake?.();
-      }
-    };
-    if (reduced) {
-      // still frames: every event at once, the turn's end state; a finished turn shows its closed shape (outcomeAge 0 below)
-      for (const step of plan.steps) apply(step);
-      if (name === "sleep") sets.forEach(handle => { handle.units = 0; });
-      setStill({ views: rows.current!.L.handles.map(h => h.director.read(now())), units: plan.units, checked: plan.checked });
+    if (name === "sleep") {
+      // 61 s of nothing: it falls asleep (also read for the still frame: a reduced-motion director never sleeps)
+      sets.forEach((handle, k) => { handle.units = 0; handle.director = createDirector({ now: now() - 61, reducedMotion: false, persona: personaOf(k) }); handle.wake?.(); });
+      if (reduced) setStill({ views: rows.current!.L.handles.map(h => h.director.read(now())), units: 0, checked: false });
       return;
     }
-    for (const step of plan.steps) {
-      if (step.at <= 0) apply(step); else timers.current.push(window.setTimeout(() => apply(step), step.at * 1000));
-    }
+    // reduced motion: every event at once, the turn's end state (a finished turn shows its closed shape: outcomeAge 0 below); else the scenario's own clock
+    const plan = playScenario(name, sets, { now, reduced, timers: timers.current });
+    if (reduced) setStill({ views: rows.current!.L.handles.map(h => h.director.read(now())), units: plan.units, checked: plan.checked });
   };
 
   // The evidence film: one bot's aura at an exact moment of a scripted turn (the real director and tracker, simulated on explicit times).

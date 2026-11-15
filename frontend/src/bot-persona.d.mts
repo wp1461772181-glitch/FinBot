@@ -5,7 +5,9 @@ export type RestGaze = "follow" | "ahead-right" | "scan" | "down" | "front";
 export type PersonaSource = "preset" | "override" | "derived";
 export type VolatilityBand = "fast" | "standard" | "calm";
 export interface Persona { archetype: Archetype; tempo: number; easing: Easing; restGaze: RestGaze; auraVariant: string; source: PersonaSource }
-export interface PersonaOverrides { archetype?: Archetype; tempo?: number; easing?: Easing }
+export interface PersonaOverrides { archetype?: Archetype; tempo?: number; easing?: Easing; auraVariant?: string }
+export type TempoStepId = "calm" | "standard" | "brisk" | "rapid";
+export type PersonaBasis = { kind: "preset"; name: string; overridden: boolean } | { kind: "derived"; rule: "default" | "news_monitor" | "earnings_reader" | "company" | "none"; template: string | null; symbol: string | null; band: VolatilityBand | null; overridden: boolean };
 /** The slice of a bot record the personality reads. */
 export interface PersonaBot {
   id?: string | null; name?: string | null; template?: string | null; is_default?: boolean;
@@ -36,3 +38,8 @@ export declare function clearOverrides(storage: StorageLike | null | undefined, 
 export declare function annualizedVolatility(closes: unknown): number | null;
 export declare function readVolatility(storage: StorageLike | null | undefined, botId: string | null | undefined, symbol: string | null | undefined): number | null;
 export declare function writeVolatility(storage: StorageLike | null | undefined, botId: string | null | undefined, symbol: string | null | undefined, value: number): boolean;
+export declare const TEMPO_STEPS: Array<{ id: TempoStepId; value: number }>;
+export declare function tempoStepOf(tempo: number): TempoStepId;
+export declare function personaBasis(bot: PersonaBot | null | undefined, options?: { volatility?: number | null; overrides?: unknown }): PersonaBasis;
+export declare function subscribeOverrides(listener: (botId: string) => void): () => void;
+export declare function overrideBotId(key: string | null | undefined): string | null;
