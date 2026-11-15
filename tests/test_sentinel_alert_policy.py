@@ -267,7 +267,12 @@ def test_chain_split_is_sent_once(tmp_path):
                              _bars(et(11, 0) + timedelta(minutes=minute), 80.0), PREV, BASE, splits) == []
 
 
-def test_state_survives_a_restart_without_the_api(tmp_path):
+def test_state_survives_a_restart_without_the_api(tmp_path, monkeypatch):
+    # Store.__init__ drops price events older than seven days by the wall clock on every start. The fixture day is
+    # 2026-11-03, so pin the store's clock to that day; the restart is still what this test is about.
+    from types import SimpleNamespace
+    import sentinel.store as store_module
+    monkeypatch.setattr(store_module, "time", SimpleNamespace(time=lambda: et(12, 0).timestamp()))
     s = _sentinel(tmp_path)
     _look(s, 323.50, et(5, 0))
     again = _sentinel(tmp_path)                                         # a new process on the same sqlite file
