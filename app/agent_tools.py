@@ -15,6 +15,7 @@ from .config import DATABASE_URL
 from .symbols import normalize_market_symbol
 from .knowledge.runtime import current_research_context
 from .knowledge.retrieval import KnowledgeUnavailable, retrieve_faq, retrieve_materials, retrieve_analysis
+from .agent_workflow.fp_flags import flag
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 def _rag_enabled() -> bool:
@@ -485,6 +486,13 @@ async def query_sec_filings(symbol: str, form: str | None = None, accession_numb
                             source_id: str | None = None, filed_year: int | None = None,
                             financial_only: bool = False, latest: bool = False, limit: int = 5) -> dict:
     """Read saved SEC filing inventory without contacting SEC."""
+    if flag('FINBOT_SW1_READ_WIDEN', True):
+        return await _sec_filings_widened(symbol, form, accession_number, source_id, filed_year, financial_only, latest, limit)
+    return await _sec_filings_read(symbol, form, accession_number, source_id, filed_year, financial_only, latest, limit)
+
+async def _sec_filings_read(symbol: str, form: str | None, accession_number: str | None, source_id: str | None,
+                            filed_year: int | None, financial_only: bool, latest: bool, limit: int) -> dict:
+    """The saved-inventory read itself, unchanged; the widened path calls it once or twice."""
     from .knowledge.runtime import current_research_context
     context=current_research_context()
     cutoff=context.cutoff if context and context.cutoff else datetime.now(UTC)
@@ -533,7 +541,8 @@ class FinancialsArgs(SymbolArgs):
     fiscal_year: int | None = Field(default=None, ge=1990, le=2100)
     fiscal_period: Literal["FY","Q1","Q2","Q3","Q4"] | None = None
     form: Literal["10-K","10-Q"] | None = None
-    latest: bool = False
+    # Read at import, like the schema it documents: with READ_WIDEN off, latest keeps the old single-filing meaning and says nothing.
+    latest: bool = Field(default=False, description=("Newest periods first across all saved filings (no filing is dropped)." if flag('FINBOT_SW1_READ_WIDEN', True) else None))
     limit: int = Field(default=20, ge=1, le=40)
 
 @tool(args_schema=FinancialsArgs)
@@ -541,6 +550,8 @@ async def query_financials(symbol: str, metrics: list[str] | None = None, fiscal
                            fiscal_period: str | None = None, form: str | None = None, latest: bool = False,
                            limit: int = 20) -> dict:
     """Exact figures each saved 10-K/10-Q reported in XBRL: revenue, cost of revenue, gross profit, operating income, net income, operating cash flow, total assets, cash, total liabilities, stockholders equity. Each row states its fiscal year/quarter, period dates and unit. Prefer it over filing text for these numbers."""
+    if flag('FINBOT_SW1_READ_WIDEN', True):
+        return await _financials_widened(symbol, metrics, fiscal_year, fiscal_period, form, latest, limit)
     from .knowledge.runtime import current_research_context
     from .agent_workflow.financials import figure_rows
     context=current_research_context()
@@ -560,6 +571,182 @@ async def query_financials(symbol: str, metrics: list[str] | None = None, fiscal
     rows=rows[:limit]
     return {"ok":True,"data":[{k:_json(v) for k,v in r.items()} for r in rows],"source":"sec_filing_inventory.content_financials (saved XBRL)",
             "as_of":rows[0]["filed_at"] if rows else None,"error_code":"no_reported_figures" if not rows else None}
+
+_FINANCIAL_FILINGS_SQL=("SELECT id, symbol, form, accession_number, filed_at, source_url, content_source_url, content_financials FROM sec_filing_inventory "
+    "WHERE symbol=:symbol AND form IN ('10-K','10-Q','20-F') AND content_status='fetched' AND content_financials IS NOT NULL "
+    "AND observed_at<=:cutoff AND filed_at<=CAST(:cutoff AS date)")
+_FINANCIAL_METRICS=("revenue","cost_of_revenue","gross_profit","operating_income","net_income","operating_cash_flow",
+    "total_assets","cash_and_equivalents","total_liabilities","stockholders_equity")
+WIDEN_ROW_LIMIT=12   # rows a widening may add on top of limit (SW1 §2.2)
+
+async def _library_rows(symbol: str, cutoff) -> list[dict]:
+    """The company's saved periodic filings, newest first: metadata only, whatever a request filtered."""
+    rows=await _query("SELECT id, form, filed_at, content_status, content_financials IS NOT NULL AS has_xbrl FROM sec_filing_inventory "
+        "WHERE symbol=:symbol AND form IN ('10-K','10-Q','20-F') AND observed_at<=:cutoff AND filed_at<=CAST(:cutoff AS date) "
+        "ORDER BY filed_at DESC, accession_number DESC LIMIT 24",{"symbol":symbol,"cutoff":cutoff})
+    return [{**row,"id":str(row["id"])} for row in rows]
+
+async def _financials_widened(symbol,metrics,fiscal_year,fiscal_period,form,latest,limit) -> dict:
+    """SW1 item 1: every saved filing's figures are read (newest first); a form filter that hides the answer is widened
+    one rung; the receipt says what was read, what was held back and why. Extra rows never count against limit."""
+    from .agent_workflow.financials import figure_rows
+    from .agent_workflow.filing_coverage import (LIST_LIMIT,NEAREST_LIMIT,Q4_NOTE,current_period,day,document_period,
+        filing_key,freshness,library_summary,next_period,order_latest,coverage_receipt)
+    context=current_research_context()
+    cutoff=context.cutoff if context and context.cutoff else datetime.now(UTC)
+    base={"symbol":symbol,"cutoff":cutoff}
+    async def read(form_filter=None,only_id=None,rows_cap=12):
+        params=dict(base);extra=""
+        if form_filter:extra+=" AND form=:form";params["form"]=form_filter
+        if only_id:extra+=" AND id=CAST(:id AS uuid)";params["id"]=only_id
+        return await _query(_FINANCIAL_FILINGS_SQL+extra+f" ORDER BY filed_at DESC, accession_number DESC LIMIT {int(rows_cap)}",params)
+    filings=await read(form)
+    library=await _library_rows(symbol,cutoff)
+    by_key={}
+    def remember(found):
+        for filing in found:by_key.setdefault(filing_key(filing.get("form"),filing.get("filed_at")),filing)
+    remember(filings)
+    everything=None
+    async def unfiltered():
+        # Read at most once: the form-widening and the Q4 level share it, and it is the filings list when no form is asked.
+        nonlocal everything
+        if everything is None:
+            everything=filings if not form else await read(None)
+            remember(everything)
+        return everything
+    def figures(source,*,wanted=metrics,year=fiscal_year,period=fiscal_period,spans=None):
+        found=[]
+        for filing in source:
+            for row in figure_rows(filing,metrics=wanted,fiscal_year=year,fiscal_period=period):
+                if spans is None or row["period_span"] in spans:found.append(row)
+        return found
+    seen=set()
+    def fresh(rows):
+        # The newest filing's figure for a period is the one kept: filings arrive newest first.
+        kept=[]
+        for row in rows:
+            key=(row["metric"],row["period_start"],row["period_end"])
+            if key not in seen:seen.add(key);kept.append(row)
+        return kept
+    main=fresh(figures(filings))
+    widened_form=False
+    if form and not main:
+        # W1: the form filter hid every figure asked for; read without it, and mark what came from there.
+        main=fresh(figures(await unfiltered()))
+        for row in main:row["widened"]="form"
+        widened_form=bool(main)
+    if latest:main=order_latest(main)
+    shown=main[:limit];left_out=main[limit:]
+    appended=[]
+    q4=False
+    if fiscal_period=="Q4" and fiscal_year is not None:
+        # Q4 level: no three-month figure for this fourth quarter; the year's annual and nine-month figures stand in.
+        wanted=list(metrics) if metrics else list(_FINANCIAL_METRICS)
+        have={r["metric"] for r in main if r["fiscal_year"]==fiscal_year and r["fiscal_period"]=="Q4" and r["period_span"]=="quarter"}
+        lacking=[m for m in wanted if m not in have]
+        if lacking:
+            q4=True
+            components=fresh(figures(await unfiltered(),wanted=lacking,year=fiscal_year,period=None,spans={"annual","ytd9"}))
+            for row in components:row["widened"]="q4_components"
+            appended+=components
+    if form and main and not widened_form:
+        # W2: a newer filing of another periodic form, with XBRL, that the form filter hid.
+        newest_read=max(day(r["filed_at"]) for r in main)
+        newer=[item for item in library if item["form"]!=form and item["content_status"]=="fetched" and item["has_xbrl"]
+               and day(item["filed_at"])>newest_read]
+        if newer:
+            target=newer[0]
+            if everything is not None:source=[f for f in everything if str(f.get("id"))==target["id"]]
+            else:source=await read(only_id=target["id"],rows_cap=1)
+            remember(source)
+            added=fresh(figures(source))
+            for row in added:row["widened"]="newer_other_form"
+            appended+=added
+    final=shown+appended[:WIDEN_ROW_LIMIT]
+    rungs={}
+    for row in final:
+        if row.get("widened"):
+            key=(row["widened"],)+filing_key(row["form"],row["filed_at"])
+            rungs[key]=rungs.get(key,0)+1
+    widened=[{"rung":rung,"form":f_form,"filed_at":f_filed,"rows":count} for (rung,f_form,f_filed),count in rungs.items()][:LIST_LIMIT]
+    read_keys={filing_key(r["form"],r["filed_at"]) for r in final}
+    shown_keys={filing_key(r["form"],r["filed_at"]) for r in shown}
+    filings_read=[{"form":k[0],"filed_at":k[1],"period":document_period(by_key[k]) if k in by_key else None}
+                  for k in sorted(read_keys,key=lambda k:k[1],reverse=True)[:LIST_LIMIT]]
+    not_read=[]
+    if form:
+        for item in library:
+            key=filing_key(item["form"],item["filed_at"])
+            if item["form"]==form or item["content_status"]!="fetched" or not item["has_xbrl"] or key in read_keys:continue
+            not_read.append({"form":key[0],"filed_at":key[1],"period":None,"why":"form_filter"})
+    cut_keys={}
+    for row in left_out:
+        key=filing_key(row["form"],row["filed_at"])
+        if key not in shown_keys and key not in read_keys:cut_keys.setdefault(key,None)
+    for key in cut_keys:
+        not_read.append({"form":key[0],"filed_at":key[1],"period":document_period(by_key[key]) if key in by_key else None,"why":"limit"})
+    not_read.sort(key=lambda n:n["filed_at"],reverse=True)
+    shown_labels={r["period_label"] for r in final}
+    periods_left_out=[]
+    for row in left_out:
+        if row["period_label"] not in shown_labels and row["period_label"] not in periods_left_out:periods_left_out.append(row["period_label"])
+    nearest=None
+    if not final and fiscal_year is not None:
+        # Nothing matched: name the real periods nearest the one asked for, from what is already read.
+        ranked=sorted(figures(await unfiltered(),year=None,period=None),key=lambda r:(abs(r["fiscal_year"]-fiscal_year),-day(r["period_end"]).toordinal()))
+        nearest=[]
+        for row in ranked:
+            if row["period_label"] not in nearest:nearest.append(row["period_label"])
+            if len(nearest)>=NEAREST_LIMIT:break
+    fresh_note=None
+    if flag("FINBOT_SW1_FRESHNESS",True):
+        saved=[item for item in library if item["content_status"]=="fetched" and item["has_xbrl"]]
+        latest_period=latest_end=next_label=None
+        head=by_key.get(filing_key(saved[0]["form"],saved[0]["filed_at"])) if saved else None
+        if head is not None and current_period(head) is not None:
+            cp=current_period(head)
+            latest_period=document_period(head);latest_end=str(cp["end"])[:10]
+            next_label=next_period(cp.get("fiscal_year"),cp.get("fiscal_period"))
+        fresh_note=freshness(library,saved,cutoff,latest_period=latest_period,latest_end=latest_end,next_period_label=next_label)
+    coverage=coverage_receipt(filters={"latest":latest,"form":form,"fiscal_year":fiscal_year,"fiscal_period":fiscal_period,"limit":limit},
+        filings_read=filings_read,not_read=not_read,widened=widened,rows_left_out=len(left_out),periods_left_out=periods_left_out,
+        library=library_summary(library),nearest_periods=nearest,q4_note=Q4_NOTE if q4 else None,freshness=fresh_note)
+    return {"ok":True,"data":[{k:_json(v) for k,v in r.items()} for r in final],"source":"sec_filing_inventory.content_financials (saved XBRL)",
+            "as_of":final[0]["filed_at"] if final else None,"error_code":"no_reported_figures" if not final else None,
+            "meta":{"coverage":coverage}}
+
+async def _sec_filings_widened(symbol,form,accession_number,source_id,filed_year,financial_only,latest,limit) -> dict:
+    """SW1 item 1 for filing text: a form filter that hides every filing is widened once; the receipt lists the filings
+    held back by the form or financial_only filter that are newer than what was returned."""
+    from .agent_workflow.filing_coverage import LIST_LIMIT,day,filing_key,library_summary,coverage_receipt
+    context=current_research_context()
+    cutoff=context.cutoff if context and context.cutoff else datetime.now(UTC)
+    result=await _sec_filings_read(symbol,form,accession_number,source_id,filed_year,financial_only,latest,limit)
+    rows=result.get("data") or []
+    widened=[]
+    if form and not rows and result.get("ok"):
+        retry=await _sec_filings_read(symbol,None,accession_number,source_id,filed_year,financial_only,latest,limit)
+        if retry.get("data"):
+            result=retry;rows=retry["data"]
+            for row in rows:
+                row["widened"]="form"
+                widened.append({"rung":"form","form":row.get("form"),"filed_at":str(row.get("filed_at") or "")[:10],"rows":1})
+    library=await _library_rows(symbol,cutoff)
+    read_keys={filing_key(r.get("form"),r.get("filed_at")) for r in rows}
+    newest_read=max((day(r.get("filed_at")) for r in rows if r.get("filed_at")),default=None)
+    not_read=[]
+    for item in library:
+        key=filing_key(item["form"],item["filed_at"])
+        if item["content_status"]!="fetched" or key in read_keys:continue
+        excluded=(bool(form) and item["form"]!=form) or (bool(financial_only) and item["form"] not in ("10-K","10-Q"))
+        if not excluded or (newest_read is not None and day(item["filed_at"])<=newest_read):continue
+        not_read.append({"form":key[0],"filed_at":key[1],"period":None,"why":"form_filter"})
+    filings_read=[{"form":k[0],"filed_at":k[1],"period":None}
+                  for k in sorted(read_keys,key=lambda k:k[1],reverse=True)[:LIST_LIMIT]]
+    coverage=coverage_receipt(filters={"form":form,"accession_number":accession_number,"source_id":source_id,"filed_year":filed_year,
+            "financial_only":financial_only,"latest":latest,"limit":limit},
+        filings_read=filings_read,not_read=not_read,widened=widened[:LIST_LIMIT],library=library_summary(library))
+    return {**result,"data":rows,"meta":{"coverage":coverage}}
 
 @tool(args_schema=FAQArgs)
 async def query_research_faq(keyword: str) -> dict:

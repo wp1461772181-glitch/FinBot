@@ -6,6 +6,7 @@ belongs to is worked out from its dates and the company's fiscal year end.
 """
 from __future__ import annotations
 from datetime import date
+from .fp_flags import flag
 
 METRIC_LABELS_ZH={'revenue':'营业收入','cost_of_revenue':'营业成本','gross_profit':'毛利','operating_income':'营业利润',
  'net_income':'净利润','operating_cash_flow':'经营活动现金流','total_assets':'总资产','cash_and_equivalents':'现金及现金等价物',
@@ -22,6 +23,13 @@ XBRL_METRIC_TERMS={
  'cash_and_equivalents':('现金','现金余额','现金及现金等价物','cash','cash and cash equivalents'),
  'total_liabilities':('总负债','负债总额','total liabilities'),
  'stockholders_equity':('股东权益','净资产','所有者权益','stockholders equity',"stockholders' equity",'shareholders equity'),
+}
+# SW1: a margin needs its numerator and its revenue. Like XBRL_METRIC_TERMS this only decides what the pre-read
+# fetches; it never decides what the answer says.
+RATIO_TERMS={
+ '毛利率':('gross_profit','revenue'),'gross margin':('gross_profit','revenue'),
+ '营业利润率':('operating_income','revenue'),'经营利润率':('operating_income','revenue'),'operating margin':('operating_income','revenue'),
+ '净利率':('net_income','revenue'),'净利润率':('net_income','revenue'),'net margin':('net_income','revenue'),
 }
 _QUALIFIERS=('最近一期','最新一期','全年','年度','季度','单季','本期','上期','合并','总','的')
 _SPANS=((80,100,'quarter'),(170,190,'ytd6'),(260,280,'ytd9'),(350,380,'annual'))
@@ -42,6 +50,11 @@ def xbrl_metrics_for(terms):
             candidates.append(candidates[-1][len(word):].strip())
         for metric,words in XBRL_METRIC_TERMS.items():
             if any(c in {w.casefold() for w in words} for c in candidates) and metric not in found:found.append(metric)
+        if flag('FINBOT_SW1_READ_WIDEN',True):
+            ratio_words={w.casefold():metrics for w,metrics in RATIO_TERMS.items()}
+            for c in candidates:
+                for metric in ratio_words.get(c,()):
+                    if metric not in found:found.append(metric)
     return found
 
 
