@@ -1,0 +1,426 @@
+{
+  "_about": "Requests recorded from the OLD material and evidence pages (HEAD dd6fa99, before P6.3) on the same fixtures; the new UI must send the same. Query lists are sorted key=value pairs. uploadRules.<case>.submitEnabled says whether the old form let the case through; fields are what it then sent (the file as name / type / size).",
+  "filters": {
+    "initial": [
+      "limit=10",
+      "offset=0",
+      "symbol=AAPL"
+    ],
+    "scope-all": [
+      "limit=10",
+      "offset=0"
+    ],
+    "order-recent": [
+      "limit=10",
+      "offset=0",
+      "order=recent",
+      "symbol=AAPL"
+    ],
+    "source-uploaded": [
+      "limit=10",
+      "offset=0",
+      "source_type=uploaded_media",
+      "symbol=AAPL"
+    ],
+    "status-succeeded": [
+      "analysis_status=succeeded",
+      "limit=10",
+      "offset=0",
+      "symbol=AAPL"
+    ],
+    "symbolTSLA": [
+      "limit=10",
+      "offset=0",
+      "symbol=TSLA"
+    ]
+  },
+  "paging": {
+    "next": [
+      "limit=10",
+      "offset=10",
+      "symbol=AAPL"
+    ],
+    "prev": [
+      "limit=10",
+      "offset=0",
+      "symbol=AAPL"
+    ]
+  },
+  "scan": {
+    "posts": [
+      {
+        "kind": "scan",
+        "path": "/filing-inventories/AAPL/scan"
+      }
+    ],
+    "notice": "扫描完成：发现 7 份，新增 3 份。"
+  },
+  "analyze": {
+    "start-default": [
+      {
+        "path": "/v3/materials/official_filing/m0000000-0000-4000-8000-000000000004/analysis-jobs",
+        "body": "{\"idempotency_key\":\"<key>\",\"force\":false}",
+        "idempotencyHeader": true
+      }
+    ],
+    "start-model": [
+      {
+        "path": "/v3/materials/official_filing/m0000000-0000-4000-8000-000000000004/analysis-jobs",
+        "body": "{\"idempotency_key\":\"<key>\",\"force\":false,\"catalog_model\":\"muse-ember\"}",
+        "idempotencyHeader": true
+      }
+    ],
+    "reanalyze-default": [
+      {
+        "path": "/v3/materials/official_filing/m0000000-0000-4000-8000-000000000001/analysis-jobs",
+        "body": "{\"idempotency_key\":\"<key>\",\"force\":true}",
+        "idempotencyHeader": true
+      }
+    ],
+    "reanalyze-model": [
+      {
+        "path": "/v3/materials/official_filing/m0000000-0000-4000-8000-000000000001/analysis-jobs",
+        "body": "{\"idempotency_key\":\"<key>\",\"force\":true,\"catalog_model\":\"deepseek-flash\"}",
+        "idempotencyHeader": true
+      }
+    ]
+  },
+  "upload": {
+    "happy": {
+      "posts": [
+        {
+          "kind": "upload",
+          "path": "/uploaded-evidence/AAPL",
+          "fields": {
+            "file": {
+              "filename": "report.pdf",
+              "type": "application/pdf",
+              "size": 13
+            },
+            "title": "权威媒体报道",
+            "source_url": "https://example.com/a",
+            "published_at": "2026-11-10T01:30:00.000Z",
+            "credibility_stars": "3",
+            "credibility_reason": "一手采访",
+            "impact_severity": "medium"
+          },
+          "session": true
+        }
+      ],
+      "notice": "材料已保存。它仍需经过 AI 分析并被预测简报引用，才会出现在对应版本的证据卡片中。"
+    }
+  },
+  "uploadRules": {
+    "attributes": {
+      "accept": ".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf",
+      "titleMax": 240,
+      "reasonMax": 1000,
+      "defaultStars": "3",
+      "defaultImpact": "medium",
+      "closeLabel": "关闭上传窗口"
+    },
+    "valid": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "report.pdf",
+          "type": "application/pdf",
+          "size": 13
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "一手采访",
+        "impact_severity": "medium"
+      }
+    },
+    "no-file": {
+      "submitEnabled": false,
+      "message": null
+    },
+    "file-exe": {
+      "submitEnabled": false,
+      "message": "请选择 TXT、Markdown 或 PDF 文件。"
+    },
+    "file-csv": {
+      "submitEnabled": false,
+      "message": "请选择 TXT、Markdown 或 PDF 文件。"
+    },
+    "file-TXT-upper": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "NOTE.TXT",
+          "type": "application/octet-stream",
+          "size": 1
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "一手采访",
+        "impact_severity": "medium"
+      }
+    },
+    "file-md": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "n.md",
+          "type": "text/markdown",
+          "size": 1
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "一手采访",
+        "impact_severity": "medium"
+      }
+    },
+    "file-markdown": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "n.markdown",
+          "type": "text/markdown",
+          "size": 1
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "一手采访",
+        "impact_severity": "medium"
+      }
+    },
+    "file-noext-by-mime": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "noext",
+          "type": "text/plain",
+          "size": 1
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "一手采访",
+        "impact_severity": "medium"
+      }
+    },
+    "file-doc-with-pdf-mime": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "a.doc",
+          "type": "application/pdf",
+          "size": 1
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "一手采访",
+        "impact_severity": "medium"
+      }
+    },
+    "title-empty": {
+      "submitEnabled": false,
+      "message": null
+    },
+    "title-spaces": {
+      "submitEnabled": false,
+      "message": null
+    },
+    "title-240": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "report.pdf",
+          "type": "application/pdf",
+          "size": 13
+        },
+        "title": "题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题题",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "一手采访",
+        "impact_severity": "medium"
+      }
+    },
+    "url-empty": {
+      "submitEnabled": false,
+      "message": null
+    },
+    "url-http": {
+      "submitEnabled": false,
+      "message": null
+    },
+    "url-ftp": {
+      "submitEnabled": false,
+      "message": null
+    },
+    "url-text": {
+      "submitEnabled": false,
+      "message": null
+    },
+    "url-https": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "report.pdf",
+          "type": "application/pdf",
+          "size": 13
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://a.b/c?d=1",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "一手采访",
+        "impact_severity": "medium"
+      }
+    },
+    "published-empty": {
+      "submitEnabled": false,
+      "message": null
+    },
+    "reason-empty": {
+      "submitEnabled": false,
+      "message": null
+    },
+    "reason-spaces": {
+      "submitEnabled": false,
+      "message": null
+    },
+    "reason-1000": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "report.pdf",
+          "type": "application/pdf",
+          "size": 13
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因因",
+        "impact_severity": "medium"
+      }
+    },
+    "stars-1": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "report.pdf",
+          "type": "application/pdf",
+          "size": 13
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "1",
+        "credibility_reason": "一手采访",
+        "impact_severity": "medium"
+      }
+    },
+    "stars-5": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "report.pdf",
+          "type": "application/pdf",
+          "size": 13
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "5",
+        "credibility_reason": "一手采访",
+        "impact_severity": "medium"
+      }
+    },
+    "impact-low": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "report.pdf",
+          "type": "application/pdf",
+          "size": 13
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "一手采访",
+        "impact_severity": "low"
+      }
+    },
+    "impact-high": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "report.pdf",
+          "type": "application/pdf",
+          "size": 13
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "一手采访",
+        "impact_severity": "high"
+      }
+    },
+    "title-padded": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "report.pdf",
+          "type": "application/pdf",
+          "size": 13
+        },
+        "title": "两端空格",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "一手采访",
+        "impact_severity": "medium"
+      }
+    },
+    "reason-padded": {
+      "submitEnabled": true,
+      "message": null,
+      "fields": {
+        "file": {
+          "filename": "report.pdf",
+          "type": "application/pdf",
+          "size": 13
+        },
+        "title": "权威媒体报道",
+        "source_url": "https://example.com/a",
+        "published_at": "2026-11-10T01:30:00.000Z",
+        "credibility_stars": "3",
+        "credibility_reason": "两端空格",
+        "impact_severity": "medium"
+      }
+    }
+  }
+}

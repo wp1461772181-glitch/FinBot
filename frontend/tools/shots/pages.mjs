@@ -10,6 +10,7 @@ import { ROOT_IDS } from "./fixtures/forecasts.mjs";
 import { freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { buildState } from "./fixtures/index.mjs";
+import { materialId } from "./fixtures/materials.mjs";
 
 const LOADING = ["正在读取", "正在加载", "读取中", "加载中"];
 
@@ -286,6 +287,37 @@ async function redUp(page) {
   await page.evaluate(() => { try { localStorage.setItem("market-evidence-agent:updown:v1", "red-up"); } catch { /* storage unavailable */ } document.documentElement.dataset.updown = "red-up"; });
 }
 
+// --- P6.3 pictures ---------------------------------------------------------------------------------------------------
+/** The fake backend's state for the material pages: uploads already saved (the dialog's list), a job that never ends (the task bar). */
+export function stateWithMaterials(patch) { return Object.assign(buildState(), patch); }
+const UPLOADED = [
+  { id: "u0000000-0000-4000-8000-000000000011", symbol: "AAPL", title: "券商研报：服务业务利润率复盘", source_url: "https://example.com/research/services-margin", published_at: "2026-11-05T08:00:00.000Z", credibility_stars: 4, credibility_reason: "一手数据", impact_severity: "medium", status: "unconfirmed" },
+  { id: "u0000000-0000-4000-8000-000000000012", symbol: "AAPL", title: "访谈纪要：供应链负责人", source_url: "https://example.com/interview/supply-chain", published_at: "2026-10-18T03:30:00.000Z", credibility_stars: 2, credibility_reason: "匿名来源", impact_severity: "high", status: "unconfirmed" },
+];
+const evidenceLoaded = async (page) => { await page.waitForSelector("[data-testid=evidence-grid] [data-testid=evidence-card]", { state: "visible", timeout: 30000 }); };
+/** The library's list is read and (on a wide screen) the first material's detail is up. */
+const materialsLoaded = async (page) => {
+  await page.waitForSelector("[data-testid=material-row]", { state: "visible", timeout: 30000 });
+  if (page.viewportSize().width >= 1024) await page.waitForSelector("[data-testid=material-detail] [data-testid=analysis-card]", { state: "visible", timeout: 30000 });
+};
+/** Press a row of the list; the detail is on the right (a drawer on a phone). */
+export async function openMaterial(page, text) {
+  await page.locator("[data-testid=material-row]", { hasText: text }).first().click();
+  await page.locator("[data-testid=material-detail]").waitFor({ timeout: 15000 });
+}
+/** The list shows the page that was asked for (the filters and the offset in force have been answered). */
+export async function listReady(page) {
+  await page.waitForFunction(() => { const list = document.querySelector("[data-testid=material-list-section]"); return Boolean(list) && list.dataset.wanted === list.dataset.loaded; }, null, { timeout: 15000 });
+}
+/** Choose one option of a filter select. */
+export async function pickFilter(page, key, option) {
+  await page.locator(`[data-testid=filter-${key}]`).click();
+  await page.getByRole("option", { name: option }).click();
+  await listReady(page);
+}
+const settled = async (page) => { await page.waitForLoadState("networkidle").catch(() => {}); };
+
+
 export const PAGES = [
   { name: "entry", hash: "#/login", identity: "none", ready: '[aria-labelledby="login-title"]' },
   // The login page after a wrong code, the shell with the sidebar collapsed (1440) / the phone's 更多 drawer open (390),
@@ -483,7 +515,7 @@ export const PAGES = [
   { name: "company", hash: "#/research/c/AAPL", ready: companyLoaded },
   { name: "company-red-up", hash: "#/research/c/AAPL", ready: companyLoaded, before: redUp },
   { name: "company-forecasts", hash: "#/research/c/AAPL?tab=forecasts", ready: forecastHomeLoaded },
-  { name: "company-materials", hash: "#/research/c/AAPL?tab=materials", ready: ".material-library-panel h2" },
+  { name: "company-materials", hash: "#/research/c/AAPL?tab=materials", ready: materialsLoaded },
   { name: "company-no-prices", hash: "#/research/c/INTC", ready: "[data-testid=init-prices]" },
   { name: "company-unknown", hash: "#/research/c/NOPE12345", ready: "[data-testid=company-unknown]" },
   // P6.2: the forecast pages.  The home (two lanes, the task bar with a job that keeps running, the empty home), one forecast (the newest version, the second, the three
@@ -515,8 +547,32 @@ export const PAGES = [
       await hideElapsed(page);
     } },
   { name: "judgment", hash: `#/research/judgments/${JUDGMENT.aapl}`, ready: async (page) => { await page.waitForSelector("[data-testid=judgment-card]", { timeout: 30000 }); await page.waitForSelector("[data-testid=judgment-revise]", { timeout: 30000 }); await page.waitForFunction(() => document.querySelectorAll("[data-testid=judgment-page] [aria-busy=true]").length === 0, null, { timeout: 30000 }); } },
-  { name: "evidence", hash: "#/research/evidence", ready: ".evidence-center" },
-  { name: "materials", hash: "#/research/materials", ready: ".material-library-panel h2" },
+  // P6.3: the evidence page (the grid of a version's materials, one material in the drawer, the upload dialog with one refused field, a company with no forecast, the
+  // version picker open) and the material library (the list with the first material's analysis; the broker note's analysis, original and history; the filter bar with chips;
+  // a job under way on the task bar; a filter with no result).  On a phone the detail is a full-screen drawer: the pictures that open one are the phone's drawer form.
+  { name: "evidence", hash: "#/research/evidence", ready: evidenceLoaded },
+  { name: "evidence-detail", hash: `#/research/evidence/${VERSION.aapl3}/uploaded_media/${materialId(3)}`, ready: async (page) => { await evidenceLoaded(page); await page.waitForSelector("[data-testid=evidence-drawer] [data-testid=event]", { timeout: 30000 }); } },
+  { name: "evidence-upload", hash: "#/research/evidence?symbol=AAPL&upload=1", ready: "[data-testid=upload-form]", view: () => ({ fixtureState: stateWithMaterials({ uploaded: { AAPL: UPLOADED } }) }),
+    before: async (page) => {
+      await page.locator("[data-testid=uploaded-item]").first().waitFor({ timeout: 15000 });
+      await page.locator("[data-testid=upload-file]").setInputFiles({ name: "quarterly.csv", mimeType: "text/csv", buffer: Buffer.from("a,b") });
+      await page.locator("[data-testid=upload-error-file]").waitFor();
+    } },
+  { name: "evidence-empty", hash: "#/research/evidence?symbol=MSFT", ready: "[data-testid=evidence-page] [data-slot=empty-state]" },
+  { name: "evidence-version-picker", hash: `#/research/evidence/${VERSION.aapl3}`, ready: evidenceLoaded,
+    before: async (page) => { await page.locator("[data-testid=crumb-version]").click(); await page.locator("[data-crumb]").first().waitFor(); } },
+  { name: "materials", hash: "#/research/materials", ready: materialsLoaded },
+  { name: "materials-analysis", hash: "#/research/materials", ready: materialsLoaded, before: async (page) => { await openMaterial(page, "券商研报"); await page.waitForSelector("[data-testid=analysis-card] [data-slot=citation-status][data-kind=unverified]", { timeout: 15000 }); } },
+  { name: "materials-raw", hash: "#/research/materials", ready: materialsLoaded,
+    before: async (page) => { await openMaterial(page, "券商研报"); await page.locator("[data-testid=analysis-card] [data-testid=citations] button").first().click(); await page.locator("[data-testid=original-quote]").waitFor(); } },
+  { name: "materials-history", hash: "#/research/materials", ready: materialsLoaded,
+    before: async (page) => { await openMaterial(page, "券商研报"); await page.locator("[data-testid=material-tab-history]").click(); await page.locator("[data-testid=history-view] [data-slot=timeline-item]").first().waitFor(); } },
+  { name: "materials-filtered", hash: "#/research/materials", ready: materialsLoaded,
+    before: async (page) => { await pickFilter(page, "scope", "全部股票"); await pickFilter(page, "analysisStatus", "已分析"); await page.locator("[data-testid=filter-chip]").nth(1).waitFor(); await settled(page); } },
+  { name: "materials-analyzing", hash: "#/research/materials", ready: materialsLoaded, view: () => ({ fixtureState: stateWithMaterials({ jobHold: true }) }),
+    before: async (page) => { await openMaterial(page, "新闻稿：欧盟"); await page.locator("[data-slot=task-row]").waitFor({ timeout: 15000 }); await page.locator("[data-testid=analysis-job]").waitFor(); await hideElapsed(page); } },
+  { name: "materials-empty-filter", hash: "#/research/materials", ready: materialsLoaded,
+    before: async (page) => { await pickFilter(page, "sourceType", "SEC 官方"); await pickFilter(page, "analysisStatus", "缺少正文"); await page.locator("[data-testid=material-library] [data-slot=empty-state]").waitFor({ timeout: 15000 }); } },
   { name: "scores", hash: "#/research/scores", ready: "main.workspace h2" },
   { name: "replay", hash: "#/research/replay", ready: ".historical-replay-workspace" },
   { name: "monitor", hash: "#/research/monitor", ready: "main.workspace .v2-desk h2" },
@@ -651,6 +707,7 @@ export const PAGES = [
   { name: "dev-kit-menu", hash: "#/dev/kit", ready: "[data-kit-page]",
     before: async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); } },
 ];
+
 
 /** Wait for a page's ready condition, then for any loading text to disappear. */
 export async function waitReady(page, def, timeout = 30000) {

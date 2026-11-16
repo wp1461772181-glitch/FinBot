@@ -14,6 +14,23 @@ export function buildState() {
   return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX) };
 }
 
+/** The fields of a multipart/form-data body as the page sent them; a file part is described by its name, type and size. */
+export function multipartFields(raw, contentType) {
+  const boundary = /boundary=(?:"([^"]+)"|([^;]+))/.exec(contentType ?? "");
+  const fields = {};
+  if (!boundary || typeof raw !== "string") return fields;
+  for (const part of raw.split(`--${boundary[1] ?? boundary[2]}`)) {
+    const split = part.indexOf("\r\n\r\n");
+    if (split < 0) continue;
+    const head = part.slice(0, split), value = part.slice(split + 4).replace(/\r\n$/, "");
+    const name = /name="([^"]*)"/.exec(head)?.[1];
+    if (!name) continue;
+    const file = /filename="([^"]*)"/.exec(head);
+    fields[name] = file ? { filename: file[1], type: /Content-Type:\s*(\S+)/i.exec(head)?.[1] ?? "", size: value.length } : value;
+  }
+  return fields;
+}
+
 /** Owner-only endpoints answer 403 without the fake credential, like the real server. */
 const owner = (handler, reply) => (ctx) => (ctx.authed ? handler(ctx) : reply.status(403, { detail: "owner_only" }));
 
@@ -150,8 +167,39 @@ export function registerRoutes(route, reply) {
     return { source_type: params.type, source_id: params.id, items: no ? [analysisVersion(no, { symbol: m.symbol })] : [] }; });
   route.get("/v3/materials/:type/:id/original", ({ params }) => materialOriginal(params.type, params.id));
   route.get("/v3/material-analyses/:id", ({ params }) => { const m = MATERIALS.find((x) => x.latest_analysis_id === params.id); return analysisVersion(Number(params.id.slice(-12)), { symbol: m?.symbol ?? "AAPL" }); });
-  route.get("/v3/material-analysis-jobs/:id", ({ params }) => ({ job_id: params.id, status: "succeeded", analysis_id: null, cache_hit: false }));
-  route.get("/uploaded-evidence/:symbol", ({ params }) => ({ symbol: params.symbol, items: [] }));
+  // A job this fake backend created (the POST below) answers "running" for `state.jobRunningPolls` reads (default 2) and then "succeeded" with an analysis; `state.jobHold` keeps every
+  // job running (a page that shows the task bar).  A job id nobody created is "succeeded" with no analysis, as before.
+  route.get("/v3/material-analysis-jobs/:id", ({ params, state }) => {
+    if (state.jobHold) return { job_id: params.id, status: "running", analysis_id: null, cache_hit: false, current_stage: "analyzing" };
+    const made = state.analysisJobs?.[params.id];
+    if (!made) return { job_id: params.id, status: "succeeded", analysis_id: null, cache_hit: false };
+    made.polls += 1;
+    return made.polls < (state.jobRunningPolls ?? 2) ? { job_id: params.id, status: "running", analysis_id: null, cache_hit: false, current_stage: "analyzing" }
+      : { job_id: params.id, status: "succeeded", analysis_id: made.analysisId, cache_hit: false, current_stage: "done" };
+  });
+  // P6.3 writes.  Every request is kept as the browser sent it in state.materialPosts (what the body checks compare with the baseline recorded from the old UI):
+  // a scan, an analysis job (the Idempotency-Key header is random, so only its presence is kept) and an upload (the form fields; the file by name, type and size).
+  const post = (state, entry) => { state.materialPosts = [...(state.materialPosts ?? []), entry]; };
+  route.post("/filing-inventories/:symbol/scan", ({ params, state }) => {
+    post(state, { kind: "scan", path: `/filing-inventories/${params.symbol}/scan` });
+    return { ...filingInventory(params.symbol), cik: "0000000000", discovered_count: state.scanDiscovered ?? 7, created_count: state.scanCreated ?? 3, skipped_count: 4, observed_at: "2026-11-13T02:00:00.000Z" };
+  });
+  route.post("/v3/materials/:type/:id/analysis-jobs", ({ params, rawBody, headers, state }) => {
+    post(state, { kind: "analysis-job", path: `/v3/materials/${params.type}/${params.id}/analysis-jobs`, body: rawBody, idempotencyKey: Boolean(headers["idempotency-key"]) });
+    const jobId = `j9000000-0000-4000-8000-${String(Object.keys(state.analysisJobs ?? {}).length + 1).padStart(12, "0")}`;
+    const row = MATERIALS.find((m) => m.source_id === params.id);
+    state.analysisJobs = { ...(state.analysisJobs ?? {}), [jobId]: { polls: 0, analysisId: row?.latest_analysis_id ?? analysisVersion(1).analysis_id } };
+    return { job_id: jobId, status: "queued", analysis_id: null, cache_hit: false, current_stage: "queued", attempts: 0 };
+  });
+  route.get("/uploaded-evidence/:symbol", ({ params, state }) => ({ symbol: params.symbol, items: state.uploaded?.[params.symbol] ?? [] }));
+  route.post("/uploaded-evidence/:symbol", ({ params, rawBody, headers, state }) => {
+    const fields = multipartFields(rawBody, headers["content-type"]);
+    post(state, { kind: "upload", path: `/uploaded-evidence/${params.symbol}`, fields, session: Boolean(headers["x-chat-session"]) });
+    const item = { id: `u0000000-0000-4000-8000-${String((state.uploaded?.[params.symbol]?.length ?? 0) + 1).padStart(12, "0")}`, symbol: params.symbol, title: fields.title, source_url: fields.source_url, published_at: fields.published_at,
+      uploaded_at: "2026-11-13T02:00:00.000Z", credibility_stars: Number(fields.credibility_stars), credibility_reason: fields.credibility_reason, impact_severity: fields.impact_severity, status: "unconfirmed" };
+    state.uploaded = { ...(state.uploaded ?? {}), [params.symbol]: [item, ...(state.uploaded?.[params.symbol] ?? [])] };
+    return item;
+  });
   route.get("/evidence-revisions/:symbol", ({ params }) => ({ symbol: params.symbol, revisions: [] }));
 
   // --- portfolio, routines, inbox ----------------------------------------------------------------------

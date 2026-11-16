@@ -4,12 +4,13 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
-import { MATERIALS, materialId } from "./fixtures/materials.mjs";
+import { HEX_MATERIAL, MATERIALS, analysisId, materialId } from "./fixtures/materials.mjs";
+import { CASES as UPLOAD_CASES, VALID as UPLOAD_VALID } from "./fixtures/upload-cases.mjs";
 import { REVISE_FILING_ID, ROOT_IDS, revisionCandidates, versionDetail } from "./fixtures/forecasts.mjs";
 import { buildState } from "./fixtures/index.mjs";
 import { BOT_TEMPLATES } from "./fixtures/bots.mjs";
@@ -510,11 +511,11 @@ async function legacyRedirects(ctx) {
     ["#revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`, "[data-testid=forecast-page]"],
     ["#evaluation", "#/research/scores", "main.workspace h2"],
     ["#replay", "#/research/replay", ".historical-replay-workspace"],
-    ["#materials", "#/research/materials", ".material-library-panel h2"],
-    ["#library", "#/research/materials", ".material-library-panel h2"],
-    [`#materials?symbol=AAPL&focus=${material}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${material}&type=official_filing`, "!.material-library-panel"],
-    ["#evidence", "#/research/evidence?symbol=AAPL", ".evidence-center"],
-    [`#evidence/${VERSION.aapl3}`, `#/research/evidence/${VERSION.aapl3}`, ".evidence-center"],
+    ["#materials", "#/research/materials", "[data-testid=material-title]"],
+    ["#library", "#/research/materials", "[data-testid=material-title]"],
+    [`#materials?symbol=AAPL&focus=${material}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${material}&type=official_filing`, "![data-testid=material-library]"],
+    ["#evidence", "#/research/evidence?symbol=AAPL", "[data-testid=evidence-page]"],
+    [`#evidence/${VERSION.aapl3}`, `#/research/evidence/${VERSION.aapl3}`, "[data-testid=evidence-page]"],
     ["#routines", "#/routines", "main.personal-page h1"],
     ["#briefs", "#/routines", "main.personal-page h1"],
     ["#portfolio", "#/portfolio", ".pf-positions"],
@@ -590,11 +591,11 @@ async function deepLinkReload(ctx) {
     await waitReady(page, { ready: "[data-testid=company-overview]" });
     assert((await hashOf(page)) === "#/research/c/TSLA" && (await company()) === "TSLA", `after reload: ${await hashOf(page)} / ${await company()}`);
     await page.evaluate(() => { location.hash = "#/research/c/NVDA?tab=materials"; });
-    await waitReady(page, { ready: ".material-library-panel h2" });
+    await waitReady(page, { ready: "[data-testid=material-title]" });
     await page.reload({ waitUntil: "load" });
-    await waitReady(page, { ready: ".material-library-panel h2" });
+    await waitReady(page, { ready: "[data-testid=material-title]" });
     assert((await hashOf(page)) === "#/research/c/NVDA?tab=materials", `tab lost on reload: ${await hashOf(page)}`);
-    assert((await page.locator(".material-library-panel").innerText()).includes("NVDA") || (await company()) === "NVDA", "the library is not about NVDA");
+    assert((await page.locator("[data-testid=material-library]").innerText()).includes("NVDA") || (await company()) === "NVDA", "the library is not about NVDA");
     // The picker switches the company on the same kind of page, through the address.
     await page.locator('[data-slot="research-bar"] [role="combobox"]').click();
     await page.getByRole("option", { name: "AMD" }).click();
@@ -911,7 +912,7 @@ async function guestReadonly(ctx) {
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached", timeout: 5000 });
     // What a guest can read: the research pages.
-    for (const [hash, ready] of [["#/research/forecasts", "[data-testid=forecast-home]"], ["#/research/materials", ".material-library-panel h2"], ["#/research/replay", ".historical-replay-workspace"], ["#/settings/appearance", "select#theme"]]) {
+    for (const [hash, ready] of [["#/research/forecasts", "[data-testid=forecast-home]"], ["#/research/materials", "[data-testid=material-title]"], ["#/research/replay", ".historical-replay-workspace"], ["#/settings/appearance", "select#theme"]]) {
       await page.evaluate((h) => { location.hash = h; }, hash);
       await waitReady(page, { ready });
     }
@@ -6062,10 +6063,10 @@ async function companySymbolInUrl(ctx) {
     await waitReady(page, { ready: "[data-testid=forecast-home]" });
     await page.locator("[data-testid=tab-materials]").click();
     await waitHash(page, "#/research/c/TSLA?tab=materials");
-    await waitReady(page, { ready: ".material-library-panel h2" });
+    await waitReady(page, { ready: "[data-testid=material-title]" });
     assert((await tabOf()) === "tab-materials" && (await title()) === "TSLA", "the tab or the company changed with a tab press");
     await page.reload({ waitUntil: "load" });
-    await waitReady(page, { ready: ".material-library-panel h2" });
+    await waitReady(page, { ready: "[data-testid=material-title]" });
     assert((await hashOf(page)) === "#/research/c/TSLA?tab=materials" && (await tabOf()) === "tab-materials", `the tab did not survive a reload: ${await hashOf(page)}`);
     await page.goBack(); await waitHash(page, "#/research/c/TSLA?tab=forecasts"); await waitReady(page, { ready: "[data-testid=forecast-home]" });
     assert((await tabOf()) === "tab-forecasts", `back to forecasts: ${await tabOf()}`);
@@ -6721,6 +6722,441 @@ async function forecastGuestView(ctx) {
 }
 
 
+// --- P6.3: the evidence page and the material library ---------------------------------------------------------------------------------------------
+// The requests of the old pages (recorded from HEAD dd6fa99 on these fixtures) are in fixtures/material-bodies-baseline.json: the filters' queries, the scan, the analysis
+// bodies and the upload form (what it let through, and what it sent).
+const MATERIAL_BASE = JSON.parse(fs.readFileSync(new URL("./fixtures/material-bodies-baseline.json", import.meta.url), "utf8"));
+const BROKER_NOTE = "券商研报：服务业务利润率复盘";
+const sortedQuery = (search) => [...new URLSearchParams(search)].map(([key, value]) => `${key}=${value}`).sort();
+const listQueries = (view) => view.mock.requests.filter((r) => r.method === "GET" && r.path === "/v3/materials").map((r) => sortedQuery(r.query));
+const materialPosts = (view) => view.mock.state.materialPosts ?? [];
+const normPost = (post) => ({ path: post.path, body: post.body.replace(/"idempotency_key":"[^"]*"/, '"idempotency_key":"<key>"'), idempotencyHeader: post.idempotencyKey });
+const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const untilCount = async (view, read, count, timeout = 10000) => { const stop = Date.now() + timeout; while (read(view).length < count && Date.now() < stop) await view.page.waitForTimeout(80); return read(view); };
+
+async function openEvidence(ctx, label, hash, { width = 1440, patch, identity } = {}) {
+  const view = await newView(ctx.browser, { width, theme: "light", label, unmatched, ...(identity ? { identity } : {}), ...(patch ? { fixtureState: stateWithMaterials(patch) } : {}) });
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  await view.page.waitForSelector("[data-testid=evidence-grid] [data-testid=evidence-card]", { state: "visible", timeout: 30000 });
+  await settle(view.page);
+  return view;
+}
+async function openMaterials(ctx, label, hash = "#/research/materials", { width = 1440, patch, identity, ready = true } = {}) {
+  const view = await newView(ctx.browser, { width, theme: "light", label, unmatched, ...(identity ? { identity } : {}), ...(patch ? { fixtureState: stateWithMaterials(patch) } : {}) });
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  if (ready) {
+    await view.page.waitForSelector("[data-testid=material-row]", { state: "visible", timeout: 30000 });
+    if (width >= 1024) await view.page.waitForSelector("[data-testid=material-detail] [data-testid=analysis-card]", { state: "visible", timeout: 30000 });
+    await listReady(view.page);
+    await settle(view.page);
+  }
+  return view;
+}
+const cardCount = (page) => page.locator("[data-testid=evidence-card]").count();
+
+/** Acceptance 1: a source number of the forecast brief opens the evidence page on that version with the drawer open on that very material; a material the version does not cite is said so. */
+async function briefFactToEvidence(ctx) {
+  const view = await openForecastPage(ctx, "brief fact to evidence", forecastHash(ROOT.aapl));
+  try {
+    const { page } = view;
+    const brief = versionDetail(VERSION.aapl3).research_brief;
+    const ref = brief.material_refs.find((item) => item.source_id === materialId(3));
+    const target = `#/research/evidence/${VERSION.aapl3}/${ref.source_type}/${ref.source_id}`;
+    const link = page.locator(`[data-testid=forecast-brief] [data-slot=brief-cite][href="${target}"]`).first();
+    assert((await link.count()) === 1, "the brief has no source number for the broker note");
+    await link.click();
+    await waitHash(page, target);
+    await page.locator("[data-testid=evidence-drawer] [data-testid=drawer-material]").waitFor({ timeout: 15000 });
+    assert((await page.locator("[data-testid=evidence-drawer] [data-slot=drawer-title]").innerText()).trim() === ref.title, "the drawer is not about the material the number named");
+    const active = await page.locator("[data-testid=evidence-card][data-active]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-source-id")));
+    assert(active.join() === ref.source_id, `the marked card is not the material: ${active}`);
+    assert((await page.locator("[data-testid=crumb-version]").innerText()).includes("第 3 版"), "the breadcrumb is not on the version the brief belongs to");
+    assert((await page.locator("[data-testid=drawer-rating]").innerText()).includes("4/5"), "the reader's own stars are not in the drawer");
+    assert((await page.locator("[data-testid=evidence-drawer] [data-testid=event]").count()) >= 1, "the material has no events in the drawer");
+  } finally { await view.close(); }
+  // Version 1 cites only the first filing: the broker note's address opens the drawer on a sentence, not on nothing.
+  const other = await openEvidence(ctx, "brief fact not cited", `#/research/evidence/${VERSION.aapl1}/uploaded_media/${materialId(3)}`);
+  try {
+    const empty = other.page.locator("[data-testid=evidence-drawer] [data-slot=empty-state]");
+    await empty.waitFor({ timeout: 15000 });
+    assert((await empty.innerText()).includes("该版本没有引用这份材料"), "a material the version does not cite is not explained");
+    assert((await cardCount(other.page)) === 1, "the grid behind the drawer is not the version's own");
+  } finally { await other.close(); }
+  return "a brief source number opens its version's evidence page with the drawer on that material (title, marked card, breadcrumb, the reader's stars); a material the version does not cite says 该版本没有引用这份材料";
+}
+
+/** The breadcrumb picks the version: the address and the cards follow, Back returns; the company level goes to that company's index; no native select on the page. */
+async function evidenceVersionSwitch(ctx) {
+  const view = await openEvidence(ctx, "evidence version switch", `#/research/evidence/${VERSION.aapl3}`);
+  try {
+    const { page } = view;
+    const refs = (id) => versionDetail(id).research_brief.material_refs;
+    assert((await cardCount(page)) === refs(VERSION.aapl3).length, "the newest version's cards are not all there");
+    assert((await page.locator("select").count()) === 0, "a native select is on the evidence page");
+    await page.locator("[data-testid=crumb-version]").click();
+    const options = await page.locator("[data-crumb]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-crumb")));
+    assert(options.join() === [VERSION.aapl3, VERSION.aapl2, VERSION.aapl1].join(), `the version list: ${options}`);
+    await page.locator(`[data-crumb="${VERSION.aapl2}"]`).click();
+    await waitHash(page, `#/research/evidence/${VERSION.aapl2}`);
+    await page.waitForFunction((n) => document.querySelectorAll("[data-testid=evidence-card]").length === n, refs(VERSION.aapl2).length, { timeout: 10000 });
+    assert((await page.locator("[data-testid=crumb-version]").innerText()).includes("第 2 版"), "the breadcrumb does not say the second version");
+    const titles = await page.locator("[data-testid=evidence-card] [data-slot=source-card-title]").allInnerTexts();
+    assert(titles.join("|") === refs(VERSION.aapl2).map((ref) => ref.title).join("|"), `the cards are not the second version's: ${titles}`);
+    await page.goBack();
+    await waitHash(page, `#/research/evidence/${VERSION.aapl3}`);
+    await page.waitForFunction((n) => document.querySelectorAll("[data-testid=evidence-card]").length === n, refs(VERSION.aapl3).length, { timeout: 10000 });
+    assert((await page.locator("[data-testid=crumb-version]").innerText()).includes("第 3 版"), "Back did not return to the third version");
+    // The company level: the watchlist's companies; TSLA's index (its newest forecast has no brief, which is said).
+    await page.locator("[data-testid=crumb-company]").click();
+    assert((await page.locator('[data-crumb="TSLA"]').count()) === 1, "the company list has no TSLA");
+    await page.locator('[data-crumb="TSLA"]').click();
+    await waitHash(page, "#/research/evidence?symbol=TSLA");
+    await page.locator("[data-testid=evidence-page] [data-slot=empty-state]").waitFor({ timeout: 15000 });
+    assert((await page.locator("[data-testid=crumb-company]").innerText()).trim() === "TSLA" && (await page.locator("[data-testid=crumb-root]").count()) === 1, "the breadcrumb is not on TSLA's forecast");
+  } finally { await view.close(); }
+  // A company with no forecast: the page says what will appear and where to make one, and the upload is still there (and opens): a stock with no forecast can still take a material.
+  const none = await newView(ctx.browser, { width: 1440, theme: "light", label: "evidence no forecast", unmatched });
+  try {
+    const { page } = none;
+    await page.goto(`${ctx.server.url}#/research/evidence?symbol=MSFT`, { waitUntil: "load" });
+    const empty = page.locator("[data-testid=evidence-page] [data-slot=empty-state]");
+    await empty.waitFor({ timeout: 30000 });
+    assert((await empty.innerText()).includes("创建预测后，这里会整理实际引用的材料") && (await empty.locator("a", { hasText: "前往预测工作台" }).count()) === 1, `the empty state: ${await empty.innerText()}`);
+    assert((await page.locator("[data-testid=crumb-root]").count()) === 0 && (await page.locator("[data-testid=evidence-grid]").count()) === 0, "a company with no forecast shows a forecast level or cards");
+    await page.locator("[data-testid=open-upload]").click();
+    await page.locator("[data-testid=upload-form]").waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=upload-submit]").isEnabled()) && (await page.locator("[data-testid=upload-title]").isEnabled()), "the upload is not usable for a company with no forecast");
+  } finally { await none.close(); }
+  // The index address opens the newest forecast's newest version where it stands.
+  const index = await openEvidence(ctx, "evidence index", "#/research/evidence?symbol=AAPL");
+  try {
+    assert((await hashOf(index.page)) === "#/research/evidence?symbol=AAPL", "the index address rewrote itself");
+    assert((await index.page.locator("[data-testid=crumb-version]").innerText()).includes("第 3 版") && (await cardCount(index.page)) === 3, "the index is not the newest version");
+  } finally { await index.close(); }
+  return "the breadcrumb (company › forecast › version, three comboboxes, no native select) moves the address and the cards, Back returns, the company level goes to its index; a company with no forecast says so and still takes an upload; the index address shows the newest version in place";
+}
+
+/** The drawer's address: a card press is a history entry (Back closes, Forward reopens), a direct address opens the drawer at once, Esc closes it and returns to the card; at 1440 it is a right panel, at 390 the whole screen. */
+async function evidenceDetailUrl(ctx) {
+  const base = `#/research/evidence/${VERSION.aapl3}`;
+  const detail = `${base}/uploaded_media/${materialId(3)}`;
+  const view = await openEvidence(ctx, "evidence detail url", base);
+  try {
+    const { page } = view;
+    const drawer = page.locator("[data-testid=evidence-drawer]");
+    assert((await drawer.count()) === 0, "the drawer is open before a card was pressed");
+    const card = page.locator(`[data-testid=evidence-card][data-source-id="${materialId(3)}"]`);
+    await card.locator("[data-testid=card-open]").click();
+    await waitHash(page, detail);
+    await drawer.waitFor({ timeout: 10000 });
+    await page.goBack();
+    await waitHash(page, base);
+    await drawer.waitFor({ state: "detached", timeout: 10000 });
+    await page.goForward();
+    await waitHash(page, detail);
+    await drawer.waitFor({ timeout: 10000 });
+    await page.keyboard.press("Escape");
+    await waitHash(page, base);
+    await drawer.waitFor({ state: "detached", timeout: 10000 });
+    await page.waitForFunction((id) => document.activeElement?.closest("[data-testid=evidence-card]")?.getAttribute("data-source-id") === id, materialId(3), { timeout: 5000 });
+  } finally { await view.close(); }
+  for (const [width, label] of [[1440, "1440"], [390, "390"]]) {
+    const direct = await newView(ctx.browser, { width, theme: "light", label: `evidence detail direct ${label}`, unmatched });
+    try {
+      const { page } = direct;
+      await page.goto(`${ctx.server.url}${detail}`, { waitUntil: "load" });
+      const drawer = page.locator("[data-testid=evidence-drawer]");
+      await drawer.locator("[data-testid=event]").first().waitFor({ timeout: 30000 });
+      await settle(page);
+      const box = await drawer.boundingBox(); const vp = page.viewportSize();
+      if (width === 1440) assert(Math.abs(box.x + box.width - vp.width) <= 1 && box.width >= 400 && box.width <= 620 && Math.abs(box.height - vp.height) <= 1, `at 1440 the drawer is not a right panel: ${JSON.stringify(box)}`);
+      else assert(Math.abs(box.width - vp.width) <= 1 && Math.abs(box.height - vp.height) <= 1, `at 390 the drawer is not the whole screen: ${JSON.stringify(box)}`);
+      if (width === 1440) { await page.keyboard.press("Escape"); await waitHash(page, base); await drawer.waitFor({ state: "detached", timeout: 10000 }); assert((await cardCount(page)) === 3, "the grid is gone behind a direct drawer"); }
+    } finally { await direct.close(); }
+  }
+  return "card press = history entry (Back closes, Forward reopens); Esc closes and returns the focus to the card; a direct address opens the drawer (title and events read); 1440: right panel ≤ 620 wide, 390: the whole screen";
+}
+
+const UPLOAD_FIELD = (name) => (name.startsWith("no-file") || name.startsWith("file-") ? "file" : name.startsWith("title-") ? "title" : name.startsWith("url-") ? "sourceUrl" : name.startsWith("published-") ? "publishedAt" : name.startsWith("reason-") ? "reason" : null);
+async function fillUploadForm(page, c, isValidFile) {
+  const form = page.locator("[data-testid=upload-form]");
+  if (c.file) await form.locator("[data-testid=upload-file]").setInputFiles({ name: c.file.name, mimeType: c.file.mimeType, buffer: Buffer.from(isValidFile ? "%PDF-1.4 fake" : "x") });
+  await form.locator("[data-testid=upload-title]").fill(c.title);
+  await form.locator("[data-testid=upload-url]").fill(c.url);
+  await form.locator("[data-testid=upload-published]").fill(c.published);
+  await form.locator(`input[type=radio][name^=credibility][value="${c.stars}"]`).check({ force: true });
+  await form.locator(`input[type=radio][name^=impact][value="${c.impact}"]`).check({ force: true });
+  await form.locator("[data-testid=upload-reason]").fill(c.reason);
+}
+/** Acceptance 3: every case of the old upload form is tried on the new one: what the old form let through is sent with the same fields, what it held back is not sent and the field says so. */
+async function evidenceUploadValidation(ctx) {
+  const rules = MATERIAL_BASE.uploadRules;
+  const bad = [];
+  // The dialog by keyboard: Enter on the entry opens it with the focus inside, Esc closes it and the focus is back on the entry.
+  const keys = await openEvidence(ctx, "upload dialog keyboard", "#/research/evidence?symbol=AAPL");
+  try {
+    const { page } = keys;
+    await page.locator("[data-testid=open-upload]").focus();
+    await page.keyboard.press("Enter");
+    await page.locator("[data-testid=upload-form]").waitFor({ timeout: 10000 });
+    await page.waitForFunction(() => Boolean(document.activeElement?.closest("[data-testid=upload-dialog]")), null, { timeout: 5000 });
+    await waitHash(page, "#/research/evidence?symbol=AAPL&upload=1");
+    await page.keyboard.press("Escape");
+    await waitHash(page, "#/research/evidence?symbol=AAPL");
+    await page.locator("[data-testid=upload-dialog]").waitFor({ state: "detached", timeout: 5000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "open-upload", null, { timeout: 5000 });
+  } catch (error) { bad.push(`dialog keyboard: ${String(error.message).split("\n")[0]}`); }
+  await keys.close();
+  for (const [name, patch] of UPLOAD_CASES) {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: `upload ${name}`, unmatched });
+    try {
+      const { page } = view;
+      await page.goto(`${ctx.server.url}#/research/evidence?symbol=AAPL&upload=1`, { waitUntil: "load" });
+      await page.locator("[data-testid=upload-form]").waitFor({ timeout: 30000 });
+      if (name === "valid") {
+        const attrs = await page.evaluate(() => ({ accept: document.querySelector("[data-testid=upload-file]").accept, titleMax: document.querySelector("[data-testid=upload-title]").maxLength, reasonMax: document.querySelector("[data-testid=upload-reason]").maxLength,
+          defaultStars: document.querySelector("[data-testid=upload-form] input[type=radio][name^=credibility]:checked")?.value, defaultImpact: document.querySelector("[data-testid=upload-form] input[type=radio][name^=impact]:checked")?.value, selects: document.querySelectorAll("select").length, dialog: document.querySelector("[data-testid=upload-dialog]")?.getAttribute("role") }));
+        const old = rules.attributes;
+        if (attrs.accept !== old.accept || attrs.titleMax !== old.titleMax || attrs.reasonMax !== old.reasonMax || attrs.defaultStars !== old.defaultStars || attrs.defaultImpact !== old.defaultImpact || attrs.selects !== 0 || attrs.dialog !== "dialog") bad.push(`attributes: ${JSON.stringify(attrs)} vs ${JSON.stringify(old)}`);
+      }
+      const c = { ...UPLOAD_VALID, ...patch };
+      await fillUploadForm(page, c, !patch.file);
+      await page.locator("[data-testid=upload-submit]").click();
+      const old = rules[name];
+      if (old.submitEnabled) {
+        const sent = await untilCount(view, materialPosts, 1, 8000);
+        if (sent.length !== 1) bad.push(`${name}: ${sent.length} requests for one press (the old form sent one)`);
+        else if (!sameJson(sent[0].fields, old.fields)) bad.push(`${name}: fields changed\n        now      ${JSON.stringify(sent[0].fields)}\n        baseline ${JSON.stringify(old.fields)}`);
+        else if (!sent[0].session) bad.push(`${name}: the request carries no session header`);
+        else {
+          await page.locator("[data-sonner-toast]", { hasText: "材料已保存" }).waitFor({ timeout: 8000 });
+          const items = await page.locator("[data-testid=uploaded-item] strong").allInnerTexts();
+          if (items[0] !== old.fields.title || (await page.locator("[data-testid=upload-title]").inputValue()) !== "") bad.push(`${name}: the saved item / the reset form: ${items[0]}`);
+        }
+      } else {
+        const field = UPLOAD_FIELD(name);
+        await page.locator(`[data-testid=upload-error-${field}]`).waitFor({ timeout: 5000 });
+        await page.waitForTimeout(350);
+        if (materialPosts(view).length) bad.push(`${name}: the old form held this back, the new one sent it`);
+        const focus = await page.evaluate(() => document.activeElement?.getAttribute("data-testid") ?? document.activeElement?.type ?? "");
+        const wantFocus = { file: "file", title: "upload-title", sourceUrl: "upload-url", publishedAt: "upload-published", reason: "upload-reason" }[field];
+        if (field !== "file" && focus !== wantFocus) bad.push(`${name}: the focus is on ${focus}, not on ${wantFocus}`);
+        const message = (await page.locator(`[data-testid=upload-error-${field}]`).innerText()).trim();
+        if (name.startsWith("file-") && message !== rules[name].message) bad.push(`${name}: the file message is "${message}", the old one said "${rules[name].message}"`);
+      }
+      if (view.problems.pageErrors.length) bad.push(`${name}: uncaught exception ${view.problems.pageErrors[0].split("\n")[0]}`);
+    } catch (error) { bad.push(`${name}: ${String(error.message).split("\n")[0]}`); }
+    await view.close();
+  }
+  assert(!bad.length, bad.join("\n      "));
+  return `${UPLOAD_CASES.length} cases of the old form: what it let through is sent with the same fields (file, title, source, time, stars, impact, reason), what it held back is not sent and the field says why; limits, file filter and defaults as before`;
+}
+
+/** The four filters, each once: the request's query is the old page's; chips show the choice and take it off; a filter goes back to the first page. */
+async function materialsFilters(ctx) {
+  const view = await openMaterials(ctx, "materials filters");
+  try {
+    const { page } = view;
+    assert(sameJson(listQueries(view).at(-1), MATERIAL_BASE.filters.initial), `the first read: ${listQueries(view).at(-1)} vs ${MATERIAL_BASE.filters.initial}`);
+    assert((await page.locator("select").count()) === 0, "a native select is in the library");
+    const steps = [["scope-all", "scope", "全部股票", "scope"], ["order-recent", "order", "最近存入", "order"], ["source-uploaded", "sourceType", "上传材料", "sourceType"], ["status-succeeded", "analysisStatus", "已分析", "analysisStatus"]];
+    for (const [name, key, option, chip] of steps) {
+      const n = listQueries(view).length;
+      await pickFilter(page, key, option);
+      await untilCount(view, listQueries, n + 1);
+      assert(sameJson(listQueries(view).at(-1), MATERIAL_BASE.filters[name]), `${name}: query ${listQueries(view).at(-1)} vs baseline ${MATERIAL_BASE.filters[name]}`);
+      const chips = await page.locator("[data-testid=filter-chip]").evaluateAll((nodes) => nodes.map((node) => [node.getAttribute("data-filter"), node.innerText.trim()]));
+      assert(chips.length === 1 && chips[0][0] === chip && chips[0][1] === option, `${name}: chips ${JSON.stringify(chips)}`);
+      const m = listQueries(view).length;
+      await page.locator("[data-testid=filter-chip]").click();
+      await untilCount(view, listQueries, m + 1);
+      await listReady(page);
+      assert(sameJson(listQueries(view).at(-1), MATERIAL_BASE.filters.initial) && (await page.locator("[data-testid=filter-chip]").count()) === 0, `${name}: taking the chip off did not restore the first read (${listQueries(view).at(-1)})`);
+    }
+    // A filter after a page turn starts again from the first page.
+    let n = listQueries(view).length;
+    await page.getByRole("button", { name: "下一页" }).click(); await untilCount(view, listQueries, n + 1); await listReady(page);
+    n = listQueries(view).length;
+    await pickFilter(page, "analysisStatus", "已分析"); await untilCount(view, listQueries, n + 1);
+    assert(listQueries(view).at(-1).includes("offset=0"), `a filter kept the page: ${listQueries(view).at(-1)}`);
+  } finally { await view.close(); }
+  const tsla = await openMaterials(ctx, "materials symbol", "#/research/materials?symbol=TSLA");
+  try { assert(sameJson(listQueries(tsla).at(-1), MATERIAL_BASE.filters.symbolTSLA), `?symbol=TSLA: ${listQueries(tsla).at(-1)}`); } finally { await tsla.close(); }
+  return "scope / order / source / status each send the old query (limit, offset, symbol, order, source_type, analysis_status), the chip shows the choice and takes it off (back to the first read), a filter returns to offset 0; ?symbol=TSLA reads TSLA; no native select";
+}
+
+/** Ten to a page: Next and Previous send the old queries; the range text and the two buttons' states follow. */
+async function materialsPaging(ctx) {
+  const view = await openMaterials(ctx, "materials paging");
+  try {
+    const { page } = view;
+    const range = () => page.locator("[data-testid=material-range]").innerText();
+    assert((await range()).replace(/\s/g, "") === "1–10/12", `first range ${await range()}`);
+    assert((await page.getByRole("button", { name: "上一页" }).isDisabled()) && !(await page.getByRole("button", { name: "下一页" }).isDisabled()), "the buttons on the first page");
+    assert((await page.locator("[data-testid=material-row]").count()) === 10, "ten rows on the first page");
+    let n = listQueries(view).length;
+    await page.getByRole("button", { name: "下一页" }).click(); await untilCount(view, listQueries, n + 1); await listReady(page);
+    assert(sameJson(listQueries(view).at(-1), MATERIAL_BASE.paging.next), `Next: ${listQueries(view).at(-1)} vs ${MATERIAL_BASE.paging.next}`);
+    assert((await range()).replace(/\s/g, "") === "11–12/12" && (await page.locator("[data-testid=material-row]").count()) === 2, `second page ${await range()}`);
+    assert((await page.getByRole("button", { name: "下一页" }).isDisabled()) && !(await page.getByRole("button", { name: "上一页" }).isDisabled()), "the buttons on the last page");
+    n = listQueries(view).length;
+    await page.getByRole("button", { name: "上一页" }).click(); await untilCount(view, listQueries, n + 1); await listReady(page);
+    assert(sameJson(listQueries(view).at(-1), MATERIAL_BASE.paging.prev), `Previous: ${listQueries(view).at(-1)}`);
+  } finally { await view.close(); }
+  return "10 rows a page, 1–10 / 12 then 11–12 / 12, Next and Previous send the old queries (offset=10, offset=0), the buttons disable at the ends";
+}
+
+/** The scan: the old POST, the toast holds the numbers the server returned (not fixed ones), the list is read again; a failure is a toast and the button is a button again. */
+async function materialsScan(ctx) {
+  const view = await openMaterials(ctx, "materials scan", "#/research/materials", { patch: { scanDiscovered: 12, scanCreated: 5 } });
+  try {
+    const { page } = view;
+    const reads = listQueries(view).length;
+    await page.locator("[data-testid=material-scan]").click();
+    const toast = page.locator("[data-sonner-toast]", { hasText: "发现" });
+    await toast.first().waitFor({ timeout: 8000 });
+    const text = await toast.first().innerText();
+    assert(text.includes("发现 12 份") && text.includes("新增 5 份"), `the toast: ${text}`);
+    assert(sameJson(materialPosts(view), MATERIAL_BASE.scan.posts), `the request: ${JSON.stringify(materialPosts(view))}`);
+    await untilCount(view, listQueries, reads + 1);
+    const oldSentence = MATERIAL_BASE.scan.notice.replace("发现 7 份", "发现 12 份").replace("新增 3 份", "新增 5 份");
+    assert(text.includes(oldSentence), `the sentence is not the old one with the API's numbers: "${text}" vs "${oldSentence}"`);
+  } finally { await view.close(); }
+  const failing = await openMaterials(ctx, "materials scan fails");
+  try {
+    const { page } = failing;
+    failing.mock.control.fail = (method, path) => (method === "POST" && path.endsWith("/scan") ? 500 : 0);
+    await page.locator("[data-testid=material-scan]").click();
+    await page.locator("[data-sonner-toast]").first().waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => document.querySelector("[data-testid=material-scan]")?.dataset.phase === "idle", null, { timeout: 8000 });
+  } finally { await failing.close(); }
+  return "the scan POSTs the old request once; the toast says 发现 12 份，新增 5 份 from the API's numbers; the list is read again; a failed scan toasts and the button comes back";
+}
+
+async function chooseModel(page, name) {
+  await page.locator("[data-testid=analysis-model]").click();
+  await page.getByRole("option", { name }).click();
+}
+async function analyzeOnce(ctx, label, materialText, mode, model, baseKey) {
+  const view = await openMaterials(ctx, label);
+  try {
+    const { page } = view;
+    await openMaterial(page, materialText);
+    if (mode === "reanalyze") await page.locator("[data-testid=analysis-card]").waitFor({ timeout: 15000 });
+    const button = page.locator("[data-testid=analysis-start]");
+    await button.waitFor({ timeout: 10000 });
+    assert((await button.getAttribute("data-mode")) === mode, `the button is ${await button.getAttribute("data-mode")}, not ${mode}`);
+    if (model) await chooseModel(page, model);
+    await button.click();
+    const sent = await untilCount(view, materialPosts, 1, 8000);
+    assert(sent.length === 1, `${sent.length} requests for one press`);
+    assert(sameJson([normPost(sent[0])], MATERIAL_BASE.analyze[baseKey]), `${baseKey}: request changed\n        now      ${JSON.stringify(normPost(sent[0]))}\n        baseline ${JSON.stringify(MATERIAL_BASE.analyze[baseKey])}`);
+    return { view, page };
+  } catch (error) { await view.close(); throw error; }
+}
+
+/** 开始分析: the old request (default model, and a chosen model), the job is a row on the task bar that goes away at the end, the finished analysis is shown and the list is read again. */
+async function materialsAnalyze(ctx) {
+  const first = await analyzeOnce(ctx, "materials analyze", "8-K 0000000000-26-000103", "start", null, "start-default");
+  try {
+    const { page, view } = first;
+    const reads = listQueries(view).length;
+    const row = page.locator("[data-slot=task-row]");
+    await row.first().waitFor({ timeout: 8000 });
+    assert((await row.first().innerText()).includes("分析材料") && (await row.first().innerText()).includes("8-K 0000000000-26-000103"), `the task row: ${await row.first().innerText()}`);
+    assert(await page.locator("[data-testid=analysis-start]").isDisabled(), "the button is not waiting for the job");
+    await row.first().waitFor({ state: "detached", timeout: 20000 });
+    await page.locator("[data-testid=analysis-card]").waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=analysis-card]").getAttribute("data-analysis-id")) === analysisId(1), "the finished analysis is not the job's");
+    await page.locator("[data-sonner-toast]", { hasText: "材料分析完成" }).first().waitFor({ timeout: 5000 });
+    await untilCount(first.view, listQueries, reads + 1);
+  } finally { await first.view.close(); }
+  const model = await analyzeOnce(ctx, "materials analyze model", "8-K 0000000000-26-000103", "start", "Muse Ember", "start-model");
+  await model.view.close();
+  return "开始分析 sends the old body ({idempotency_key, force:false}) with and without a chosen model (catalog_model), one request per press; the job is a task-bar row that goes at the end, the analysis appears, a toast says so, the list is read again";
+}
+
+/** 重新分析 with the one-time model: force:true, the model's name when one is chosen, nothing when the default stays. */
+async function materialsReanalyzeModel(ctx) {
+  const plain = await analyzeOnce(ctx, "materials reanalyze", "10-Q 0000000000-26-000101", "reanalyze", null, "reanalyze-default");
+  await plain.view.close();
+  const chosen = await analyzeOnce(ctx, "materials reanalyze model", "10-Q 0000000000-26-000101", "reanalyze", "DeepSeek Flash", "reanalyze-model");
+  try {
+    assert((await chosen.page.locator("[data-testid=analysis-model]").innerText()).includes("DeepSeek Flash"), "the chosen model is not shown");
+  } finally { await chosen.view.close(); }
+  return "重新分析 sends {idempotency_key, force:true} and, with a model chosen, catalog_model:<name>; one request per press; the model choice shows what is picked";
+}
+
+/** An address's focus: the row is chosen on its own page of the list, the analysis tab shows the version the address named, a missing material is said, a phone gets the drawer. */
+async function materialsFocusLink(ctx) {
+  const version = analysisId(7);
+  const hash = `#/research/materials?symbol=AAPL&focus=${HEX_MATERIAL}&type=official_filing&analysis=${version}`;
+  const view = await openMaterials(ctx, "materials focus", hash, { ready: false });
+  try {
+    const { page } = view;
+    await page.locator(`[data-testid=material-row][data-source-id="${HEX_MATERIAL}"][data-selected]`).waitFor({ timeout: 30000 });
+    await page.locator(`[data-testid=analysis-card][data-analysis-id="${version}"]`).waitFor({ timeout: 15000 });
+    assert((await page.locator("[data-testid=material-tab-analysis]").getAttribute("aria-selected")) === "true", "the analysis tab is not the open one");
+    assert((await page.locator("[data-testid=material-title]").innerText()).includes("10-Q 0000000000-26-000109"), "the detail is not the focused material");
+    // The list is the one the material was found in (this stock, newest stored first, its kind), so the offset the lookup found is the page shown, and the chips say how it is narrowed.
+    const chips = await page.locator("[data-testid=filter-chip]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-filter")).sort().join());
+    assert(chips === "order,sourceType", `the chips after a focus: ${chips}`);
+    assert((await page.locator("[data-testid=material-range]").innerText()).replace(/\s/g, "") === "1–9/9", "the focused material's list is not the SEC filings of the stock");
+    const row = await page.locator(`[data-testid=material-row][data-source-id="${HEX_MATERIAL}"]`).boundingBox(); const vp = page.viewportSize();
+    assert(row && row.y >= 0 && row.y + row.height <= vp.height, `the chosen row is not on screen: ${JSON.stringify(row)}`);
+    // The detail is one element in both layouts: crossing the phone breakpoint and back keeps what the reader had open (the tab) instead of mounting it afresh.
+    // The tabs by keyboard: the arrows move and pick, one tab is in the Tab order.
+    await page.locator("[data-testid=material-tab-analysis]").focus();
+    await page.keyboard.press("ArrowRight");
+    assert((await page.locator("[data-testid=material-tab-original]").getAttribute("aria-selected")) === "true" && (await page.evaluate(() => document.activeElement?.getAttribute("data-testid"))) === "material-tab-original", "ArrowRight did not move to the original tab");
+    await page.keyboard.press("ArrowRight");
+    await page.locator("[data-testid=history-view]").waitFor({ timeout: 10000 });
+    assert((await page.locator("[role=tab][tabindex='0']").count()) === 1, "more than one tab is in the Tab order");
+    await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(150);
+    await page.setViewportSize({ width: 1440, height: 900 }); await page.waitForTimeout(150);
+    assert((await page.locator("[data-testid=material-tab-history]").getAttribute("aria-selected")) === "true", "the detail was mounted afresh when the window crossed the phone breakpoint");
+  } finally { await view.close(); }
+  const phone = await openMaterials(ctx, "materials focus phone", hash, { width: 390, ready: false });
+  try {
+    await phone.page.locator("[data-testid=material-drawer] [data-testid=analysis-card]").waitFor({ timeout: 30000 });
+    const box = await phone.page.locator("[data-testid=material-drawer]").boundingBox(); const vp = phone.page.viewportSize();
+    assert(Math.abs(box.width - vp.width) <= 1 && Math.abs(box.height - vp.height) <= 1, `the phone's detail is not the whole screen: ${JSON.stringify(box)}`);
+  } finally { await phone.close(); }
+  const missing = await openMaterials(ctx, "materials focus missing", `#/research/materials?symbol=AAPL&focus=c0ffee00-0000-4000-8000-0000000000ff&type=official_filing`);
+  try {
+    await missing.page.locator("[data-testid=focus-message]").waitFor({ timeout: 15000 });
+    assert((await missing.page.locator("[data-testid=focus-message]").innerText()).includes("不在该股票的目录中"), "a material that is not in the list is not explained");
+  } finally { await missing.close(); }
+  return "?symbol=&focus=&type=&analysis=: the row is chosen in the list it was found in (SEC filings, newest stored first) and on screen, the analysis tab shows exactly the version in the address (data-analysis-id), a phone gets the full-screen drawer; a material not in the list is said";
+}
+
+/** The check of a quote is a note: no danger colour, no action colour, no icon, no alert, never folded away. */
+async function analysisStatusNeutral(ctx) {
+  const view = await openMaterials(ctx, "analysis status neutral");
+  try {
+    const { page } = view;
+    await openMaterial(page, BROKER_NOTE);
+    await page.waitForSelector("[data-testid=analysis-card] [data-slot=citation-status][data-kind=unverified]", { timeout: 15000 });
+    const found = await page.evaluate(() => {
+      const colour = (name) => { const probe = document.createElement("span"); probe.style.color = `var(${name})`; document.body.append(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; };
+      const rows = [...document.querySelectorAll("[data-testid=analysis-card] [data-slot=citation-status]")].map((node) => { const style = getComputedStyle(node); return {
+        kind: node.getAttribute("data-kind"), text: node.innerText.trim(), color: style.color, background: style.backgroundColor, icons: node.querySelectorAll("svg, img").length, alert: Boolean(node.closest("[role=alert]")), folded: Boolean(node.closest("details:not([open])")), visible: node.getClientRects().length > 0 }; });
+      return { rows, danger: colour("--danger"), action: colour("--action"), alerts: document.querySelectorAll("[data-testid=analysis-card] [role=alert]").length };
+    });
+    const kinds = found.rows.map((row) => row.kind).sort().join();
+    assert(kinds === "fuzzy,note,summary,unverified", `the notes on the card: ${kinds}`);
+    for (const row of found.rows) {
+      assert(row.color !== found.danger && row.color !== found.action, `a ${row.kind} note is drawn in ${row.color} (danger ${found.danger}, action ${found.action})`);
+      assert(row.icons === 0 && !row.alert && !row.folded && row.visible, `a ${row.kind} note has an icon / is an alert / is folded: ${JSON.stringify(row)}`);
+      assert(row.background === "rgba(0, 0, 0, 0)", `a ${row.kind} note has a background: ${row.background}`);
+    }
+    assert(found.alerts === 0, "the analysis card holds an alert");
+    const text = Object.fromEntries(found.rows.map((row) => [row.kind, row.text]));
+    assert(text.unverified === "引用待核对" && text.fuzzy === "近似引用 93%" && text.summary === "引用已核对 8/9", `the notes' words: ${JSON.stringify(text)}`);
+  } finally { await view.close(); }
+  return "the four notes of a checked analysis (引用已核对 8/9, the sentence about 1 unchecked quote, 近似引用 93%, 引用待核对) are plain text: not the danger or action colour, no icon, no alert role, no background, not folded";
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -6907,6 +7343,17 @@ const CHECKS = [
   ["forecast-disclaimer-once: each disclaimer sentence appears exactly as often as it should (once per page area), verbatim", forecastDisclaimerOnce],
   ["chart-text-clear: no two texts of a chart overlap and none leaves its picture, at 390 and 1440", chartTextClear],
   ["forecast-guest-view: a guest: no 问 bot, the initialise press is refused with the server's sentence and keeps its button, the forecast home is the formal lane alone", forecastGuestView],
+  ["brief-fact-to-evidence: a source number of the forecast brief opens the evidence page on that version with the drawer on that very material; a material the version does not cite is said", briefFactToEvidence],
+  ["evidence-version-switch: the breadcrumb's three comboboxes move the address and the cards, Back returns, the company level goes to its index, no native select", evidenceVersionSwitch],
+  ["evidence-detail-url: a card press is a history entry (Back closes, Forward reopens), a direct address opens the drawer, Esc closes it and returns the focus; right panel at 1440, whole screen at 390", evidenceDetailUrl],
+  ["evidence-upload-validation: each of the 27 cases of the old upload form: what it let through is sent with the same fields, what it held back is not sent and the field says why", evidenceUploadValidation],
+  ["materials-filters: scope / order / source / status each send the old query, chips show and take off the choice, a filter goes back to page 1", materialsFilters],
+  ["materials-paging: ten to a page, Next and Previous send the old queries, the range and the buttons follow", materialsPaging],
+  ["materials-scan: the old POST, the toast holds the API's numbers, the list is read again, a failure toasts", materialsScan],
+  ["materials-analyze: 开始分析 sends the old body with and without a chosen model; the job is a task-bar row that goes at the end and the analysis appears", materialsAnalyze],
+  ["materials-reanalyze-model: 重新分析 sends force:true and, with a model chosen, catalog_model", materialsReanalyzeModel],
+  ["materials-focus-link: ?symbol=&focus=&type=&analysis= chooses the row on its page, opens the named version, a phone gets the drawer, a missing material is said", materialsFocusLink],
+  ["analysis-status-neutral: the check of a quote is plain text: no danger or action colour, no icon, no alert, not folded", analysisStatusNeutral],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

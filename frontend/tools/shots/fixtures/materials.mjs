@@ -4,6 +4,8 @@ import { daysAgo, iso } from "./common.mjs";
 const mid = (n) => `m0000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const aid = (n) => `a1000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const evid = (n) => `ee000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+// The address readers (?focus=) only take hex ids, so the twelfth AAPL material (the only one on the library's second page) has one: a link to it can be followed end to end.
+export const HEX_MATERIAL = "c0ffee00-0000-4000-8000-000000000012";
 export const materialId = mid; export const analysisId = aid; export const evidenceVersionId = evid;
 
 // [n, symbol, type, title, published days ago, analysis status, review status, analysisNo|null, extra]
@@ -36,7 +38,7 @@ function job(status, analysisNo, ago) {
 }
 
 export const MATERIALS = ROWS.map(([n, symbol, type, title, ago, status, review, analysisNo]) => ({
-  symbol, source_type: type, source_id: mid(n), title, published_at: daysAgo(ago), observed_at: daysAgo(ago - 1),
+  symbol, source_type: type, source_id: n === 12 ? HEX_MATERIAL : mid(n), title, published_at: daysAgo(ago), observed_at: daysAgo(ago - 1),
   source_url: type === "official_filing" ? `https://www.sec.gov/Archives/edgar/data/0000000/${n}.htm` : "",
   latest_analysis_id: analysisNo ? aid(analysisNo) : null, latest_analysis_version_no: analysisNo ? 1 : null, latest_analysis_created_at: analysisNo ? daysAgo(Math.max(0, ago - 1)) : null,
   latest_analysis_evidence_version_id: analysisNo ? evid(n) : null, analysis_status: status, latest_job: job(status, analysisNo, Math.max(0, ago - 1)),
@@ -62,6 +64,18 @@ const Q = {
 export const FROZEN_TEXT = `Item 2. Management's Discussion and Analysis\n\n${Q.services}\n${Q.iphone}\n${Q.margin}\n\nLiquidity and capital resources\n${Q.buyback}\n${Q.fx}\n`;
 
 export function analysisVersion(n, { versionNo = 1, symbol = "AAPL" } = {}) {
+  const version = baseAnalysisVersion(n, { versionNo, symbol });
+  // P6.3: the broker note's analysis is the one with quotes that were not found word for word (one near match, one not found), so the quiet check notes have something to show.
+  if (n === 3) {
+    const { supporting, uncertainties } = version.payload;
+    supporting[0].citations = [{ ...supporting[0].citations[0], match_kind: "fuzzy", similarity: 0.93, quote: "Services net sales were $28.8 billion, up 14% versus the same quarter of the prior year." }];
+    uncertainties[0].citations = [{ ...uncertainties[0].citations[0], match_kind: "unverified", similarity: 0.41, start_char: null, end_char: null, original_quote: "The Company expects a small currency headwind next quarter." }];
+    version.citation_verification = { total: 9, verified: 8, unverified: 1, exact: 6, normalized: 0, fuzzy: 1, verified_ratio: 8 / 9 };
+  }
+  return version;
+}
+
+function baseAnalysisVersion(n, { versionNo, symbol }) {
   const id = aid(n);
   const row = MATERIALS.find((m) => m.latest_analysis_id === id);
   const at = FROZEN_TEXT;

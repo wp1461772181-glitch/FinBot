@@ -13,7 +13,6 @@ const EXTENSIONS = /\.(tsx?|mjs|js|css)$/;
 const ALLOWED = {
   Jev: new Set([
     "forecast-model.mjs",             // the experimental_jev branch and legacy jev_* error sentences
-    "EvidenceCenter.tsx",             // version label for an old Jev version
     "HistoricalReplayWorkspace.tsx",  // modelLabel for an old Jev replay
     "App.tsx",                        // modelStatusLabel branch and the 早期版本 cohort note
     "ModelScoresPage.tsx",            // B3: inherited App.tsx's cohort groups (modelStatusLabel, 早期版本 note)
@@ -23,7 +22,7 @@ const ALLOWED = {
     "forecast-model.mjs",             // the Jev branch note that names the brief provider
     "MaterialAnalysisDefaultCard.tsx", // settings card for the default model of material analysis (was in AgentChatPanel.tsx until P3.1), not the forecast path
     "model-profiles.mjs",             // provider catalogue
-    "MaterialAnalysisDetail.tsx",     // single-material analysis, not the forecast path
+    "MaterialDetail.tsx",             // single-material analysis (was MaterialAnalysisDetail.tsx until P6.3), not the forecast path
   ]),
 };
 

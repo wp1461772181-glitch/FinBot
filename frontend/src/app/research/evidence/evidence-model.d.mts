@@ -1,0 +1,16 @@
+import type { ResearchBrief, ResearchEvidencePointer, UploadedEvidence, V2ForecastRoots, V2VersionDetail } from "../../../types";
+export type EventTone = "positive" | "negative" | "fact" | "background" | "uncertain";
+export type EventGroupKey = "supporting" | "counter" | "facts" | "background" | "conflicts" | "unknowns" | "changes";
+export type EventRow = { text: string; citations: ResearchEvidencePointer[] };
+export type EventGroup = { key: EventGroupKey; label: string; tone: EventTone; rows: EventRow[] };
+export declare const EVENT_GROUPS: ReadonlyArray<{ key: EventGroupKey; phrase: string; tone: EventTone }>;
+export declare function changePhrase(value: string): string;
+export declare function sectionPhrase(section: string): string;
+export declare function eventGroups(brief: ResearchBrief, analysisId: string, t: (text: string) => string, locale: "zh-CN" | "en-US"): EventGroup[];
+export declare function eventCount(groups: EventGroup[]): number;
+export declare function sourceTypeLabel(sourceType: string, locale: "zh-CN" | "en-US"): string;
+export declare function clampStars(value: number): number;
+export declare function sortUploaded(items: UploadedEvidence[]): UploadedEvidence[];
+export declare function briefModel(version: V2VersionDetail | null | undefined): string | null;
+export declare function latestVersionId(roots: V2ForecastRoots["roots"] | null | undefined): string | null;
+export declare function httpsUrl(value: unknown): string | null;

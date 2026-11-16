@@ -1,5 +1,5 @@
 import { useSearchParams } from "react-router";
-import { MaterialLibrary } from "../../MaterialLibrary";
+import { MaterialLibrary } from "../research/materials/MaterialLibrary";
 import { scanOfficialFilings } from "../../api/market-data";
 import { materialFocusFromParams, symbolFromParams } from "../../routes.mjs";
 import { isSupportedSymbol } from "../research/support";
@@ -7,12 +7,11 @@ import { useWorkspace } from "../workspace";
 
 /** The material library on one company, opened on a row when the address carries one (focus, type, analysis). */
 export function MaterialsPage({ symbol, focus }: { symbol: string; focus: ReturnType<typeof materialFocusFromParams> | null }) {
-  const ws = useWorkspace();
   async function scan() {
     if (!isSupportedSymbol(symbol)) throw new Error("SEC 扫描需要有效的美股代码。");
     return scanOfficialFilings(symbol);
   }
-  return <><MaterialLibrary key={`${symbol}:${focus?.source_type ?? ""}:${focus?.source_id ?? ""}:${focus?.analysis_id ?? ""}`} symbol={symbol} focus={focus} onScan={scan} /></>;
+  return <MaterialLibrary key={`${symbol}:${focus?.source_type ?? ""}:${focus?.source_id ?? ""}:${focus?.analysis_id ?? ""}`} symbol={symbol} focus={focus} onScan={scan} />;
 }
 
 /** /research/materials, ?symbol=&focus=&type=[&analysis=] */
