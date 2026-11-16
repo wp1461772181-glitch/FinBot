@@ -158,7 +158,7 @@ class Reference(BaseModel):
     history_citations:list[HistoryCitationRef]=Field(default_factory=list,max_length=6,description='References to allowlisted sources in earlier answers, selected from citation_catalogue.')
     clarification_answers:list[Annotated[int,Field(ge=1,le=50)]]=Field(default_factory=list,max_length=8,description='Only for clarifying an earlier citation: select the candidate answers_back positions from citation_catalogue. Include the answer holding the requested source. The server renders their exact openings. Do not bind history_citations while clarifying.')
 
-from ..agent_system_prompt import INSTRUCTION,disclosure_note
+from ..agent_system_prompt import INSTRUCTION,SELF_STATE_SENTENCE,disclosure_note
 CLASSIFY_PROMPT=('Return classify_request. Decide by what the request needs, in this order:\n'
     'D — the user wants this product to do something: a write (import, save, fetch, scan, index, analyse, forecast, replay, revise, withdraw, initialise, translate, review, queue change), reading or changing system state such as the research queue, task status or a workspace page, an explicit request to search the public web, or a question about how to use this product.\n'
     'A — answering needs data this product stores: prices, SEC filings, uploaded materials, saved AI analysis, saved FAQ, saved forecasts, or a specific saved source.\n'
@@ -665,6 +665,10 @@ def evidence_instruction(text):
         text=text.replace(EXISTENCE_ANCHOR,EXISTENCE_ANCHOR+EXISTENCE_INSTRUCTION,1)
     if flag('FINBOT_SW1B_SAMPLE_AGGREGATE',True):
         text=text.replace(SAMPLE_ANCHOR,SAMPLE_ANCHOR+SAMPLE_AGGREGATE_SENTENCE,1)
+    # SW2 K5: the self-state sentence follows the existence sentence when that one is in, else the exemption anchor.
+    if flag('FINBOT_SW2_SELF_STATE_WORDING',True):
+        if existence_knowledge_on():text=text.replace(EXISTENCE_INSTRUCTION,EXISTENCE_INSTRUCTION+SELF_STATE_SENTENCE,1)
+        else:text=text.replace(EXISTENCE_ANCHOR,EXISTENCE_ANCHOR+SELF_STATE_SENTENCE,1)
     return text
 # SW1 §2.6: a closing draft that calls the library empty, while a receipt lists filings this turn never read, gets one more look.
 ABSENCE_GAP=re.compile(r'没有可核验|没有.{0,8}(?:数据|资料|记录)|只有年度|不足.{0,4}个季度|查不到|未取到|没有取到|not available|no data',re.I)
@@ -983,6 +987,8 @@ class Turn:
         for name in sorted({*self.granted_actions,*(self.scope.get('requested_actions') or [])}):
             if name in CATEGORY_OF and self.in_scope(name):wanted.append(CATEGORY_OF[name])
         wanted+=[c for c in (self.state.get('previous_scope') or {}).get('_tool_categories') or [] if c in TOOL_CATEGORIES]
+        # SW2 S3 (R3): the owner's memory tools are offered every turn; the visible filter below keeps a bot's own scope.
+        if self.owner and flag('FINBOT_SW2_MEMORY_PRELOAD',True):wanted.append('记忆与技能')
         visible={t['function']['name'] for t in self.permitted_tools()}
         for category in wanted:
             if any(t in visible for t in TOOL_CATEGORIES[category].tools):self.load_category(category)

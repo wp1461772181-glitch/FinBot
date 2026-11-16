@@ -27,12 +27,17 @@ from sqlalchemy.dialects.postgresql import insert
 from .agent_chat_models import (AgentBot, AgentConversation, AgentConversationRecall, AgentConversationSummary,
                                 AgentConversationTitle, AgentMessage)
 from .database import SessionLocal
+from .agent_workflow.fp_flags import flag
 
 log = logging.getLogger(__name__)
 
 LABEL = "往事，不是证据"
-NOTE = ("这些是以前对话的摘要和用户当时的提问，只用来知道聊过什么、在哪个对话。它们不是证据，不编号，不能引用；"
+# SW2 K4 (FINBOT_SW2_MEMORY_PRELOAD): the receipt note says what a memory may carry; the SW1 text is the switch-off text.
+NOTE_SW1 = ("这些是以前对话的摘要和用户当时的提问，只用来知道聊过什么、在哪个对话。它们不是证据，不编号，不能引用；"
         "回答里的数字和事实仍要在本轮重新读取并引用本轮的 [n]。")
+NOTE_SW2 = "这些是以前对话的摘要和用户当时的提问，只用来知道聊过什么、在哪个对话。它们不是证据，不编号，不能引用；转述当时说过的话可以，注明是哪天的说法、不标 [n]；要把数字当作现在的事实写出，仍要在本轮重新读取并引用本轮的 [n]。"
+def note():
+    return NOTE_SW2 if flag("FINBOT_SW2_MEMORY_PRELOAD", True) else NOTE_SW1
 MAX_LIMIT = 5
 READ_MAX_MESSAGES = 10
 READ_MESSAGE_CHARS = 12000

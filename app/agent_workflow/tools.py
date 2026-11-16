@@ -110,14 +110,14 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
             hits=await asyncio.to_thread(recall.search_messages,context.owner_hash,args['query'],args.get('limit',3),bot_ids=[bot])
             rows=recall.attach_matches(rows,hits)
         else:rows=await asyncio.to_thread(recall.search,context.owner_hash,args['query'],args.get('limit',3),exclude=context.conversation_id)
-        return {**result(rows,'past conversations'),'label':recall.LABEL,'note':recall.NOTE}
+        return {**result(rows,'past conversations'),'label':recall.LABEL,'note':recall.note()}
     if name=='read_past_conversation':
         # Any bot's line of this owner (the default bot reads the research bot's analysis); memory, not evidence.
         from .. import agent_recall as recall
         if not is_owner:return error('owner_login_required')
         value=await asyncio.to_thread(recall.read,context.owner_hash,args['conversation_id'],limit=args['limit'],include_user=args['include_user'])
         if value is None:return error('conversation_not_found')
-        return {**result([value],'past conversation'),'label':recall.LABEL,'note':recall.NOTE}
+        return {**result([value],'past conversation'),'label':recall.LABEL,'note':recall.note()}
     if context.executor:
         value=context.executor(name,args)
         return await value if hasattr(value,'__await__') else value

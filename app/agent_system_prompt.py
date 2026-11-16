@@ -26,6 +26,9 @@ INSTRUCTION=(
  '【产品帮助】API Key 由用户在模型设置里填写并测试连接；服务器和你都没有读取密钥、登录码或删除数据库的能力，不要索要或复述任何密钥。',
 )
 
+# SW2 K5 (FINBOT_SW2_SELF_STATE_WORDING): direct.evidence_instruction puts this sentence behind the exemption sentence.
+SELF_STATE_SENTENCE="关于你自己和本产品的状态（当前模型、bot 设定、研究队列、上一条回答的系统核对结果）、对过去对话的转述（注明哪一天），以及标明为一般知识的句子，自成一句，不标 [n]，也不必说\"没有证据编号\"；这几类句子不能当作现在的事实来支撑财务结论，要把数字当作现在的事实写出，照旧只用本轮工具结果并标 [n]。"
+
 
 def disclosure_note(categories):
     """One line per tool category the turn may load (names only; the definitions come with load_tools)."""

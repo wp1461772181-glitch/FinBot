@@ -77,7 +77,10 @@ def test_default_payload_under_8kb():
     assert set(_names(schemas)) == set(ALWAYS_ON)
 
 
-def test_load_tools_adds_schemas_next_call():
+def test_load_tools_adds_schemas_next_call(monkeypatch):
+    # SW2 S3: the owner's memory preload (on by default) sits at its catalogue position and would shift on a load of an
+    # earlier category; this test pins the pre-SW2 tool order, so the preload is off here.
+    monkeypatch.setenv('FINBOT_SW2_MEMORY_PRELOAD', 'off')
     seen = []
     steps = iter([_call("l1", "load_tools", categories=[PRICES]), {"content": "好了。"}])
 
