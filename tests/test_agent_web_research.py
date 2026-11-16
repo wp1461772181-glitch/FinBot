@@ -745,7 +745,9 @@ def test_research_named_span_leaves_out_undated_and_old_pages(monkeypatch):
     from datetime import datetime, timezone, timedelta
     import app.agent_web_research as web
 
-    now = datetime(2026, 11, 4, tzinfo=timezone.utc)
+    # _research measures the span against the real clock (fetched_at), so the fixture is built from the same clock;
+    # a pinned date let the "fresh" page fall outside the 7-day span once the real date moved on.
+    now = datetime.now(timezone.utc)
     old_time = (now - timedelta(days=30)).isoformat()
     fresh_time = (now - timedelta(days=2)).isoformat()
 
