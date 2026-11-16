@@ -134,6 +134,7 @@ def test_latest_answer_without_ordinal_never_falls_back_to_earlier_answer(monkey
 
 
 def test_long_cjk_quote_is_bounded_for_tool_but_full_in_snapshot_and_deduplicated(monkeypatch):
+    monkeypatch.setenv("FINBOT_SW2_HISTORY_PAGES","off")  # SW2 S1: the paged read is pinned in test_sw2_history_pages.py
     import app.agent_chat_store as store
     import app.agent_chat_stream as stream
     quote="数"*5000
@@ -155,9 +156,9 @@ def test_registered_tool_schema_is_narrow_and_dispatches(monkeypatch):
     from app.agent_tool_catalog import definitions, schemas
     from app.agent_workflow import tools
     policy = definitions()["read_history_citation"]
-    assert set(policy.args_schema.model_fields) == {"turn_id", "ordinal"}
+    assert set(policy.args_schema.model_fields) == {"turn_id", "ordinal", "offset"}  # SW2 K3: on at import by default
     schema = next(item for item in schemas(owner=False) if item["function"]["name"] == "read_history_citation")
-    assert set(schema["function"]["parameters"]["properties"]) == {"turn_id", "ordinal"}
+    assert set(schema["function"]["parameters"]["properties"]) == {"turn_id", "ordinal", "offset"}
 
     async def lookup(args, _context):
         return {"ok": True, "data": [args], "source": "history_citation"}
@@ -258,7 +259,7 @@ def test_bound_citation_is_recalled_before_any_search(monkeypatch):
     turn.route="A";turn.bound_history_citations=[{"turn_id":"older","ordinal":2,"answers_back":1,"derived":False,"parents":[]}]
     turn.bound_history_citations.append(dict(turn.bound_history_citations[0]))
     called=[]
-    async def execute(name,args):
+    async def execute(name,args,page_chars=None):
         called.append(name);await turn.emit({"event":"tool_start","call_id":"history","name":name,"arguments":args})
         return {"ok":True,"data":[{"ordinal":2,"quote":"原文"}]}
     def accept(name,args,outcome):
@@ -290,7 +291,7 @@ def test_a_failed_recall_falls_back_to_the_usual_prelude(monkeypatch):
     turn.bound_history_citations=[{"turn_id":"old","ordinal":2,"answers_back":1,"derived":False,"parents":[]}]
     turn.scope={"mode":"rag"}
     calls=[]
-    async def execute(name,args):
+    async def execute(name,args,page_chars=None):
         calls.append(name)
         return {"ok":False,"error_code":"history_citation_unavailable"} if name=="read_history_citation" else {"ok":True,"data":[]}
     async def decision(): return {"content":"未找到。"}
@@ -314,7 +315,7 @@ def test_a_derived_binding_recalls_only_allowlisted_parents(monkeypatch):
     turn=Turn("怎么算",context,emit,[],{})
     turn.bound_history_citations=[{"turn_id":"old","ordinal":11,"answers_back":1,"derived":True,"parents":[1,3,99]}]
     calls=[]
-    async def execute(name,args): calls.append(args["ordinal"]);return {"ok":True,"data":[{"quote":"source"}]}
+    async def execute(name,args,page_chars=None): calls.append(args["ordinal"]);return {"ok":True,"data":[{"quote":"source"}]}
     turn.execute_read=execute
     turn.accept=lambda *args: setattr(turn,"last_accepted",{"ok":True,"data":[{"quote":"source"}]})
     async def publish(*_): pass
@@ -448,7 +449,7 @@ def test_a_source_already_read_is_not_read_again_for_a_derived_binding(monkeypat
         {"turn_id":"old","ordinal":13,"answers_back":1,"derived":False,"parents":[]},
         {"turn_id":"old","ordinal":14,"answers_back":1,"derived":True,"parents":[12]}]
     calls=[]
-    async def execute(name,args): calls.append(args["ordinal"]);return {"ok":True,"data":[{"quote":"source"}]}
+    async def execute(name,args,page_chars=None): calls.append(args["ordinal"]);return {"ok":True,"data":[{"quote":"source"}]}
     turn.execute_read=execute
     turn.accept=lambda *args: setattr(turn,"last_accepted",{"ok":True,"data":[{"quote":"source"}]})
     async def publish(*_): pass

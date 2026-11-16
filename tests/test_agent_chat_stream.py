@@ -177,7 +177,7 @@ def test_route_d_followup_reads_previous_ordinal_and_binds_new_number(stream_fix
     answer=''.join(d['text'] for e,d in events if e=='delta')
     assert '46.2%' in answer and '40.0%' not in answer
     args=next(d['arguments'] for e,d in events if e=='tool_start' and d.get('name')=='read_history_citation')
-    assert args=={'turn_id':latest,'ordinal':2}
+    assert args=={'turn_id':latest,'ordinal':2,'offset':0}  # SW2 S1: validated args carry the offset default (page 1)
     final=next(kwargs['tool_calls']['citations'] for _,kwargs in stored if kwargs.get('tool_calls',{}).get('audit'))
     assert final[0]['ordinal']==1 and final[0]['origin']=={'turn_id':latest,'ordinal':2}
     assert '46.2%' in final[0]['quote'] and '40.0%' not in final[0]['quote']

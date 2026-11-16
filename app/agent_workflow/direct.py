@@ -19,6 +19,8 @@ from .references import Referent,validate_referents,bounded_stage,normalized,ass
 from .trace import TurnTrace,classifier_output,decision_output,resolver_output,verify_output
 from .fp_flags import flag
 from .filing_coverage import LIST_LIMIT,day as filing_day,filing_key
+from .history_citations import HISTORY_PAGE_CHARS
+from .evidence import QUOTE_DISPLAY_CHARS
 
 MAX_RETRIES=2
 # Inactivity watchdogs, not wall clocks: they only stop a turn whose model or tool has gone silent.
@@ -2156,7 +2158,7 @@ class Turn:
     def v2_nodes(self):
         return [] if self.citation_protocol!='v2' or self.citation_issuer_failed or self.citation_issuer is None else list(self.citation_issuer.nodes)
 
-    async def execute_read(self,name,args):
+    async def execute_read(self,name,args,page_chars=None):
         call_id=self.active_call_id or str(uuid.uuid4());await self.emit({'event':'tool_start','call_id':call_id,'name':name,'arguments':args})
         outcome=None
         span=observability.start_span(self.obs,name='tool:'+name,input={'argument_keys':sorted(args) if isinstance(args,dict) else [],
@@ -2200,7 +2202,7 @@ class Turn:
                         # one search and they are thrown away afterwards, so the index still holds
                         # one copy of each passage.
                         from ..knowledge.query_understanding import use_expander
-                        with use_expander(getattr(self.context,'query_expander',None)):outcome=await tools.invoke(name,args,self.context,emit=self.emit)
+                        with use_expander(getattr(self.context,'query_expander',None)):outcome=await tools.invoke(name,args,self.context,emit=self.emit,**({'page_chars':page_chars} if page_chars is not None else {}))
             except _CalculationRefused as refused:outcome=refused.outcome
             except (TimeoutError,ConnectionError):outcome=tools.error('tool_timeout')
             except Exception:outcome=tools.error('tool_failed')
@@ -3678,10 +3680,14 @@ class Turn:
                 key=(binding.get('turn_id'),ordinal)
                 if key in planned:continue
                 planned.add(key);plan.append({'turn_id':binding.get('turn_id'),'ordinal':ordinal})
-        read_ok=0;reads=[]
+        read_ok=0;reads=[];paged=flag('FINBOT_SW2_HISTORY_PAGES',True);long_read=False
         for args in plan[:HISTORY_BINDING_LIMIT]:
-            outcome=await self.execute_read('read_history_citation',args)
+            # SW2 K2: the first long source reads a full page; later long sources read only the display length, so the
+            # evidence budget never drops the source the resolver named first.
+            page=(QUOTE_DISPLAY_CHARS if long_read else HISTORY_PAGE_CHARS) if paged else None
+            outcome=await self.execute_read('read_history_citation',args,page_chars=page)
             reads.append({'turn_id':args['turn_id'],'ordinal':args['ordinal'],'ok':outcome.get('ok') is True})
+            if paged and outcome.get('ok') and (outcome['data'][0].get('chars_total') or 0)>QUOTE_DISPLAY_CHARS:long_read=True
             self.accept('read_history_citation',args,outcome)
             await self.publish_result('read_history_citation',outcome)
             if outcome.get('ok') and self.last_accepted and self.last_accepted.get('ok'):read_ok+=1

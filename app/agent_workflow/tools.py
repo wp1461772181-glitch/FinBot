@@ -64,7 +64,7 @@ async def search_knowledge(args,context):
     return out
 
 
-async def invoke(name,args,context,*,emit=None):
+async def invoke(name,args,context,*,emit=None,page_chars=None):
     scope=getattr(context,'tool_scope',None)
     if scope is not None and name not in scope:return error('tool_not_in_bot_scope')
     try:args=validate(name,args)
@@ -72,7 +72,7 @@ async def invoke(name,args,context,*,emit=None):
     policy=definitions()[name];is_owner=owner_credential_matches(context.identity_credential)
     if not is_owner and not policy.guest:return error('owner_login_required')
     if policy.level=='costly' or (policy.level=='reversible' and is_owner):return error('confirmation_required')
-    return await _dispatch(name,args,context,is_owner,emit)
+    return await _dispatch(name,args,context,is_owner,emit,page_chars=page_chars)
 
 
 async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
@@ -92,10 +92,10 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
     return await _dispatch(name,args,context,True,emit)
 
 
-async def _dispatch(name,args,context,is_owner,emit):
+async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
     if name=='read_history_citation':
         from .history_citations import read_history_citation
-        return await read_history_citation(args,context)
+        return await read_history_citation(args,context,**({'page_chars':page_chars} if page_chars is not None else {}))
     if name=='recall_conversations':
         # The owner's own conversations, never another credential's; memory, not evidence (agent_recall).
         from .. import agent_recall as recall

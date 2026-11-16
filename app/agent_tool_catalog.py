@@ -5,6 +5,7 @@ from datetime import date
 from typing import Literal,Annotated
 from pydantic import BaseModel,ConfigDict,Field,model_validator
 from .agent_tools import SymbolArgs
+from .agent_workflow.fp_flags import flag
 
 class Args(BaseModel):model_config=ConfigDict(extra='forbid',strict=True)
 class Empty(Args):pass
@@ -36,6 +37,8 @@ class CalculateFormulaArgs(Args):
 class HistoryCitationArgs(Args):
     turn_id:str=Field(pattern=r'^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$')
     ordinal:int=Field(ge=1,le=1000)
+    # SW2 K3: read at import, like agent_tools.py:545; a test that switches the flag re-imports or rebuilds the schema.
+    if flag('FINBOT_SW2_HISTORY_PAGES',True):offset:int=Field(default=0,ge=0,le=120_000)
 class KnowledgeArgs(Args):
     query:str=Field(min_length=1,max_length=400)
     symbol:str|None=Field(default=None,pattern=r'^[A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?$')
@@ -284,7 +287,7 @@ class ToolPolicy:
     evidence_class:str="public_page"  # owner_record | subject_row | public_page | system_state | memory | derived
 
 EXTRA=(
- ('read_history_citation',HistoryCitationArgs,'read','Read the saved source behind a citation in an earlier answer. Cite the new number returned for this turn, never the old number. Derived citations cannot be read directly; read their parents first.'),
+ ('read_history_citation',HistoryCitationArgs,'read','Read the saved source behind a citation in an earlier answer. Cite the new number returned for this turn, never the old number. Derived citations cannot be read directly; read their parents first.'+(' A long source comes back in pages: complete=false means you have not seen the end; pass next_offset as offset to read on.' if flag('FINBOT_SW2_HISTORY_PAGES',True) else '')),
  ('calculate',CalculateArgs,'read','Calculate derived figures. Only a..z, + - * / parentheses, number literals (abs<=1000, <=4 decimals; powers of ten convert units). Each input is a cited source number (source_ordinal) or one the user wrote (user_stated:true). Prefer input names in the formula, not typed numbers: e.g. expression "(a-b)/b*100" with inputs a (source_ordinal 3) and b (source_ordinal 4) gives the percent change from b to a. Result must depend on the inputs. Formula and parents are recorded; derived results are not official originals. For series statistics use calculate_formula.'),
  ('calculate_formula',CalculateFormulaArgs,'read','Run a pure Python/numpy formula def f(...) -> float over one or more saved_price_set vectors (e.g. volatility, Sharpe, drawdown, returns across up to 20 bindings in a single call). math and np are pre-injected; do not write import. Verified by server replay.'),
  ('read_workspace',WorkspaceArgs,'read','Read a saved forecast/version timeline, analysis history/original, knowledge chunks/candidates, importable catalogue or revision candidates. Private records remain owner-scoped.'),

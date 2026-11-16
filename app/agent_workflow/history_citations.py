@@ -4,12 +4,21 @@ from __future__ import annotations
 import asyncio
 import copy
 
+from .fp_flags import flag
+
+# SW2 (R2): a saved source is read back in pages of the full saved text, never the 5000-char display quote.
+HISTORY_PAGE_CHARS = 8000
+HISTORY_PAGE_NOTE = '这是已保存正文的第 {start}–{end} 字，共 {total} 字。没读到的部分不能当作"原文没有"；要继续读，用 offset={next_offset} 再调一次。'
+HISTORY_STORED_PARTIAL_NOTE = '这份来源保存时超过 120000 字，后面的部分没有保存；在已保存部分里找不到的内容，只能说"已保存部分里没有"。'
+# Keys a paged read adds to the bound row (K1); a read with the flag off never has them, so the bound row keeps its five keys.
+PAGE_KEYS = ("offset", "chars_total", "next_offset", "complete", "stored_partial", "note")
+
 
 def _failure(code: str) -> dict:
     return {"ok": False, "data": [], "error_code": code}
 
 
-async def read_history_citation(args: dict, context) -> dict:
+async def read_history_citation(args: dict, context, *, page_chars: int | None = None) -> dict:
     turn_id, ordinal = args.get("turn_id"), args.get("ordinal")
     if not isinstance(turn_id, str) or isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 1:
         return _failure("history_citation_not_found")
@@ -43,6 +52,8 @@ async def read_history_citation(args: dict, context) -> dict:
     if not restored or restored[0].get("source_type") == "unavailable" or not str(restored[0].get("quote") or "").strip():
         return _failure("history_citation_unavailable")
     snapshot = copy.deepcopy(restored[0])
+    if flag("FINBOT_SW2_HISTORY_PAGES", True):
+        return _paged_outcome(snapshot, found["origin"], args, page_chars)
     quote = str(snapshot.get("quote") or "")
     # Keep the verified full snapshot for this turn's manifest; bound only the tool payload.
     truncated = bool(snapshot.get("truncated")) or len(quote.encode("utf-8")) > 5200
@@ -50,6 +61,31 @@ async def read_history_citation(args: dict, context) -> dict:
         quote = quote.encode("utf-8")[:5200].decode("utf-8", "ignore")
     data = {key: snapshot.get(key) for key in ("title", "source_type")}
     data.update(quote=quote, truncated=truncated, origin=found["origin"])
+    return {"ok": True, "data": [data], "source": "history_citation", "_snapshot": snapshot}
+
+
+def _paged_outcome(snapshot: dict, origin: dict, args: dict, page_chars: int | None) -> dict:
+    """One page of the full saved text (the longer of quote and check_text), with its position stated."""
+    offset = args.get("offset", 0)
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        return _failure("invalid_arguments")
+    body = max(str(snapshot.get("quote") or ""), str(snapshot.get("check_text") or ""), key=len)
+    total = len(body)
+    start = min(offset, total)
+    end = min(start + (page_chars or HISTORY_PAGE_CHARS), total)
+    complete = end >= total
+    stored_partial = bool(snapshot.get("evidence_incomplete"))
+    notes = []
+    if not complete:
+        notes.append(HISTORY_PAGE_NOTE.format(start=start + 1, end=end, total=total, next_offset=end))
+    if stored_partial:
+        notes.append(HISTORY_STORED_PARTIAL_NOTE)
+    data = {key: snapshot.get(key) for key in ("title", "source_type")}
+    data.update(quote=body[start:end], truncated=(not complete) or stored_partial, origin=origin,
+                offset=start, chars_total=total, next_offset=None if complete else end,
+                complete=complete, stored_partial=stored_partial)
+    if notes:
+        data["note"] = " ".join(notes)
     return {"ok": True, "data": [data], "source": "history_citation", "_snapshot": snapshot}
 
 
@@ -67,5 +103,8 @@ def bind_history_citation(outcome: dict, citations: list[dict]) -> dict:
     else:
         ordinal = existing["ordinal"]
     row = outcome["data"][0]
-    return {"ok": True, "data": [{"citation": f"[{ordinal}]", "title": row.get("title"),
-        "source_type": row.get("source_type"), "quote": row.get("quote"), "truncated": row.get("truncated", False)}]}
+    bound = {"citation": f"[{ordinal}]", "title": row.get("title"),
+        "source_type": row.get("source_type"), "quote": row.get("quote"), "truncated": row.get("truncated", False)}
+    # SW2 K1: the model sees only this bound row, so the page facts ride on it; a row without them stays five keys.
+    bound.update({key: row[key] for key in PAGE_KEYS if key in row})
+    return {"ok": True, "data": [bound]}
