@@ -60,7 +60,7 @@ def test_concurrent_appends_do_not_interleave(tmp_path: Path):
     asyncio.run(_write_records())
 
     # Find the created file
-    files = list(tmp_path.glob("*.jsonl"))
+    files = list(tmp_path.glob("[0-9]*.jsonl"))
     assert len(files) == 1
     lines = files[0].read_text(encoding="utf-8").splitlines()
     assert len(lines) == 200

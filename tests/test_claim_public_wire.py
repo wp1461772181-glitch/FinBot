@@ -177,7 +177,7 @@ def test_shadow_run_writes_record_then_marks_then_history_api_returns_them(shado
 
     asyncio.run(claim_shadow._run(snapshot))
 
-    records = [json.loads(line) for path in shadow.glob("*.jsonl") if path.name != wire.MARKS_NAME
+    records = [json.loads(line) for path in shadow.glob("*.jsonl") if path.name not in {wire.MARKS_NAME, wire.SETTLED_NAME}
                for line in path.read_text(encoding="utf-8").splitlines()]
     assert len(records) == 1 and records[0]["turn_id"] == turn_id and records[0]["outcome"] == "judged"
     assert gate.load_state(shadow / wire.STATE_NAME)["phase"] == "auto"

@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
 from .state import AgentRuntimeContext, AgentWorkflowState, checkpoint_thread_id
+from .fp_flags import flag
 
 
 def _bytes(value: Any) -> int:
@@ -33,11 +34,15 @@ async def _direct_agent_turn(state: AgentWorkflowState, runtime: Runtime[AgentRu
                                    messages=state.get("messages", []), state=state)
     answer = result["answer"]
     # LLM claim judge, stage 2 (shadow): takes a snapshot and returns at once; never touches the answer.
+    judge_schedule = None
     try:
         from .claim_shadow import maybe_schedule
-        maybe_schedule(result, runtime.context, state)
+        judge_schedule = maybe_schedule(result, runtime.context, state)
     except Exception:
         pass
+    # SW2 K-audit: the next turn's self-state block reads this (claim_public_wire.prior_answer_state); off: nothing is written.
+    if judge_schedule is not None and flag("FINBOT_SW2_SELF_STATE", True):
+        result.setdefault("audit", {})["judge_schedule"] = judge_schedule
     # The turn's own checks have run.  Stored citations and result sets keep the full checking text of a source up
     # to STORED_CHECK_TEXT_CHARS: a later answer that reads the source back checks its figures against it.  Text over
     # the cap is dropped and the citation is marked evidence_incomplete, so a later reader treats a miss as insufficient.
@@ -87,7 +92,8 @@ async def stream_workflow(*, question: str, messages: list[dict], provider: str,
                           profile_block: str | None = None, unattended: bool = False,
                           token_budget: int | None = None, action_sink: list | None = None,
                           bot: dict | None = None, skill_block: str | None = None,
-                          active_skill: dict | None = None, context_window: int | None = None):
+                          active_skill: dict | None = None, context_window: int | None = None,
+                          self_state: dict | None = None):
     # These former routing hints/results stay accepted so older callers do not fail;
     # none may influence the direct route or tool scope.  ``bot`` (agent_bots.turn_settings) does narrow it.
     from .checkpoints import open_postgres_checkpointer
@@ -101,7 +107,7 @@ async def stream_workflow(*, question: str, messages: list[dict], provider: str,
         bot_block=bot.get("block"), tool_scope=bot.get("tool_scope"),
         reasoning_effort=bot.get("reasoning_effort"),
         default_company=bot.get("default_company"), skill_block=skill_block, active_skill=active_skill,
-        context_window=context_window or layers_default_window())
+        context_window=context_window or layers_default_window(), self_state=self_state)
     thread = checkpoint_thread_id(owner_hash, conversation_id)
     async with open_postgres_checkpointer(checkpoint_database_url()) as saver:
         graph = build_workflow(saver)

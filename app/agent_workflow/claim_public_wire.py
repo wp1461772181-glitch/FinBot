@@ -228,3 +228,144 @@ def manual_resume(dir_path: str | Path, *, replay_ref: str, note: str) -> dict:
         gate.resume(state, replay_ref=replay_ref, note=note)
         _save_state(dir_path, state)
         return status_view(state)
+
+
+# ---- SW2 S2 (spec-sw2 §3.1; K6–K10): the settled ledger and the previous answer's system source check -------------
+# One line per shadow turn that reaches a terminal outcome: {turn_id, outcome, at}.  No answer, question or credential
+# is written, and the file is 0600 in the 0700 shadow directory.  Readers look only at the last SETTLED_TAIL_LINES.
+SETTLED_NAME = "turn-settled.jsonl"
+SETTLED_TAIL_LINES = 2000
+_SETTLED_CACHE: dict[str, tuple[tuple[int, int], dict[str, dict]]] = {}
+# Ledger outcome -> why the answer was not checked (None: judged, decided by the marks).
+LEDGER_REASON = {"no_judgeable": "no_judgeable", "daily_cap": "daily_cap", "circuit_open": "unavailable",
+                 "model_unavailable": "unavailable", "model_changed": "unavailable", "stopped": "shadow_off",
+                 "error": "unavailable"}
+
+
+def append_settled(dir_path: str | Path, turn_id: str, outcome: str) -> None:
+    """Record that a shadow turn has settled.  Callers ignore a failure: the shadow record and the answer stand."""
+    dir_path = Path(dir_path)
+    row = {"turn_id": str(turn_id), "outcome": outcome, "at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    with _locked(dir_path):
+        fd = os.open(str(dir_path / SETTLED_NAME), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(fd, (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+
+
+def _tail_lines(path: Path, count: int) -> list[bytes]:
+    """The last `count` non-empty lines, read from the end: older bytes are never read."""
+    with open(path, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        pos = handle.tell()
+        data = b""
+        while pos > 0 and data.count(b"\n") <= count:
+            step = min(8192, pos)
+            pos -= step
+            handle.seek(pos)
+            data = handle.read(step) + data
+    lines = data.split(b"\n")
+    if pos > 0:
+        lines = lines[1:]  # the first piece may start in the middle of a line
+    return [line for line in lines if line.strip()][-count:]
+
+
+def _settled_index(dir_path: Path) -> dict[str, dict]:
+    """turn_id -> ledger row, from the tail only.  Missing file or unreadable bytes: nothing indexed (the caller says unknown)."""
+    path = dir_path / SETTLED_NAME
+    try:
+        stat = path.stat()
+    except OSError:
+        return {}
+    key = (stat.st_mtime_ns, stat.st_size)
+    cached = _SETTLED_CACHE.get(str(path))
+    if cached and cached[0] == key:
+        return cached[1]
+    index: dict[str, dict] = {}
+    try:
+        lines = _tail_lines(path, SETTLED_TAIL_LINES)
+    except OSError:
+        return {}
+    for raw in lines:
+        try:
+            row = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and isinstance(row.get("turn_id"), str) and isinstance(row.get("outcome"), str):
+            index[row["turn_id"]] = row
+    _SETTLED_CACHE[str(path)] = (key, index)
+    return index
+
+
+def read_settled(turn_id: str) -> dict | None:
+    dir_path = shadow_dir()
+    if dir_path is None or not turn_id:
+        return None
+    return _settled_index(dir_path).get(str(turn_id))
+
+
+def prior_turn_marks(turn_id: str) -> tuple[bool, list[dict]]:
+    """(paused, displayed marks) for one turn, read the way public_marks_for_turns reads them (SW2 K6).
+
+    The paused flag is its own answer: a pause returns (True, []); a missing state file returns (False, []).
+    public_marks_for_turns keeps its signature and its return value."""
+    dir_path = shadow_dir()
+    wanted = str(turn_id or "")
+    if dir_path is None or not wanted or not (dir_path / STATE_NAME).exists():
+        return False, []
+    try:
+        state = gate.load_state(dir_path / STATE_NAME)
+    except (OSError, ValueError):
+        return False, []
+    if state.get("paused"):
+        return True, []
+    shown = {e.get("id") for e in state.get("displayed", [])}
+    marks: list[dict] = []
+    seen: set[str] = set()
+    for entry in _read_entries(dir_path / MARKS_NAME):
+        if entry["turn_id"] != wanted:
+            continue
+        for mark in entry["marks"]:
+            if not isinstance(mark, Mapping):
+                continue
+            mark_id = mark.get("id")
+            if mark_id in shown and mark_id not in seen:
+                seen.add(mark_id)
+                marks.append(public_view(mark))
+    return False, marks
+
+
+# Reasons a shadow turn can carry in judge_schedule (graph.py) that mean "not checked", spelled as the self-state block says them.
+NOT_CHECKED_CODES = frozenset({"shadow_off", "unattended", "pending_request", "not_succeeded", "no_numbered_sources", "busy"})
+
+
+def prior_answer_state(turn_id: str, *, owner: bool, audit: Mapping | None, elapsed_s: float) -> dict:
+    """The previous answer's system source check, decided once per turn (SW2 §3.1 item 3; K8, K9).
+
+    Returns {state, ...}: shown (with sentences), none, pending, paused, not_checked (with reason), unknown.
+    A requester who is not the owner is not checked at all; that is decided here, not written to the ledger (K8)."""
+    if not owner:
+        return {"state": "not_checked", "reason": "not_owner"}
+    paused, marks = prior_turn_marks(turn_id)
+    sentences = [str(((m.get("hover") or {}).get("answer_sentence")) or "") for m in marks]
+    if not isinstance(audit, Mapping) or "judge_schedule" not in audit:
+        # A turn from before judge_schedule existed (or with the switch off): the marks it has are all there is.
+        return {"state": "shown", "sentences": sentences} if marks else {"state": "unknown"}
+    schedule = audit.get("judge_schedule")
+    if schedule != "scheduled":
+        return {"state": "not_checked", "reason": schedule if schedule in NOT_CHECKED_CODES else "unavailable"}
+    if paused:
+        return {"state": "paused"}
+    settled = read_settled(turn_id)
+    if settled is None:
+        from .claim_shadow import TURN_BUDGET_SECONDS
+        if elapsed_s < TURN_BUDGET_SECONDS + 60:
+            return {"state": "pending", "elapsed_s": elapsed_s}
+        return {"state": "unknown"}
+    outcome = settled.get("outcome")
+    if outcome == "judged":
+        return {"state": "shown", "sentences": sentences} if marks else {"state": "none"}
+    if outcome in LEDGER_REASON:
+        return {"state": "not_checked", "reason": LEDGER_REASON[outcome]}
+    return {"state": "unknown"}

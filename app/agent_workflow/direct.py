@@ -657,6 +657,55 @@ SAMPLE_ANCHOR='并说明是推算；'
 SAMPLE_AGGREGATE_SENTENCE=('问行业、板块或同行整体（如行业营收增速）而本轮没有全行业口径的数时，可以用本轮真实读到的具名公司做样本汇总：'
     '写明样本、各家期间（期间不一致就照实写出，不因此放弃）、汇总方式（如合计营收算增速），用 calculate 算出并标推算，说明只代表这些样本，'
     '再与用户问的公司比较；样本里某家缺数，先按回执再查，仍读不到就照实说缺这一家，不要补数。')
+# SW2 §3.1 (FINBOT_SW2_SELF_STATE): the fact block the model reads about itself and the previous answer's system check.
+# Only the displayed sentence and counts reach it; no judge reason or shadow verdict field is ever read here.
+SELF_STATE_HEAD='关于你自己和这段对话的系统事实（系统记录生成，不是本轮证据，转述时不标 [n]）：'
+SELF_MODEL='- 当前回答模型：{label}'
+SELF_NO_BOT='- 这段对话没有绑定 bot 设定，所以没有「关注公司」这项设置（研究队列是另一份清单）。'
+SELF_PRIOR={
+ 'shown':'- 上一条回答的系统来源核对：已完成，公开显示了 {n} 处标注，分别在：{sentences}。',
+ 'none':'- 上一条回答的系统来源核对：已完成，没有显示任何标注。',
+ 'pending':"- 上一条回答的系统来源核对：还没有结果（核对在回答之后另行进行，距上一条完成约 {s} 秒）；目前没有显示任何标注。",
+ 'paused':'- 上一条回答的系统来源核对：标注展示目前暂停，看不到结果。',
+ 'not_checked':'- 上一条回答的系统来源核对：这条没有做（{reason}）。',
+ 'unknown':'- 上一条回答的系统来源核对：查不到这条的结果。',
+}
+SELF_PRIOR_NOTE='  说明：系统只抽查带编号的句子，只在发现与来源明确矛盾、且复核通过时才公开标注；没有标注不等于每句都核实无误。'
+NOT_CHECKED_REASONS={
+ 'no_numbered_sources':'上一条没有带编号的来源',
+ 'not_owner':'这类对话不做来源核对',
+ 'shadow_off':'来源核对没有开启',
+ 'not_succeeded':'上一条没有完成回答',
+ 'pending_request':'上一条停在等待确认或补充信息',
+ 'unattended':'例行任务的回答不做来源核对',
+ 'busy':'当时核对任务已排满',
+ 'daily_cap':'当日核对额度已用完',
+ 'unavailable':'核对服务当时不可用',
+ 'no_judgeable':'上一条里没有可核对的句子',
+}
+def self_state_block(context):
+    """The fact block and its audit for one turn, built once from the request-time facts (SW2 §3.1, K9)."""
+    info=getattr(context,'self_state',None) or {}
+    label=info.get('model_label') or f'{context.provider}/{context.model}'
+    lines=[SELF_STATE_HEAD,SELF_MODEL.format(label=label)]
+    if not context.bot_id:lines.append(SELF_NO_BOT)
+    audit={'model_label':label}
+    prior=info.get('prior')
+    if prior:
+        state=prior.get('state');sentences=list(prior.get('sentences') or [])
+        audit['prior_state']=state;audit['prior_shown']=len(sentences)
+        if info.get('prior_elapsed_s') is not None:audit['prior_elapsed_s']=round(float(info['prior_elapsed_s']),1)
+        if state=='shown':
+            n=len(sentences)
+            listed='；'.join(sentence[:60] for sentence in sentences[:5])+(f'；等 {n} 处' if n>5 else '')
+            lines.append(SELF_PRIOR['shown'].format(n=n,sentences=listed))
+        elif state=='none':lines.append(SELF_PRIOR['none'])
+        elif state=='pending':lines.append(SELF_PRIOR['pending'].format(s=max(1,round(float(prior.get('elapsed_s') or 0)))))
+        elif state=='paused':lines.append(SELF_PRIOR['paused'])
+        elif state=='not_checked':lines.append(SELF_PRIOR['not_checked'].format(reason=NOT_CHECKED_REASONS.get(prior.get('reason'),NOT_CHECKED_REASONS['unavailable'])))
+        else:lines.append(SELF_PRIOR['unknown'])
+        if state in {'shown','none','pending'}:lines.append(SELF_PRIOR_NOTE)
+    return '\n'.join(lines),audit
 def evidence_instruction(text):
     """INSTRUCTION with the SW1 read sentences, the existence sentence and the SW1B sample sentence in place, per switch. Switch off: the constant's text, unchanged."""
     if flag('FINBOT_SW1_READ_WIDEN',True):
@@ -902,6 +951,9 @@ class Turn:
         self.audit={'tool_calls':0,'distinct_successful_calls':0,'retry_count':0,'decision_steps':0,'model_calls':0,'token_usage':0,'usage_mode':'actual','nodes':[],'stop_reason':None,'stages':{},
                     'model':context.model,'reasoning_effort':sent_effort(getattr(context,'reasoning_effort',None)) or 'default',
                     'model_tool_requests':0,'first_decision_zero_tool':False,'prefetch_hit':False,'nudge_outcome':None}
+        # SW2 §3.1: the self-state block, built once for the whole turn from the request-time facts (K9). Off: none of it.
+        self.self_state_text=None
+        if flag('FINBOT_SW2_SELF_STATE',True):self.self_state_text,self.audit['self_state']=self_state_block(context)
         # Tool results from the model's own requests start here; the system's prefetch sits before it.
         self.model_feedback_from=0
         self.reference_value=None;self.verified_referents=[];self.bound_history_citations=[]
@@ -1912,6 +1964,7 @@ class Turn:
         return [{'role':'system','content':instruction},*self.profile_messages(),*self.skill_messages(),*([{'role':'system','content':HISTORY_NOTE},*prior] if prior else []),
             {'role':'user','content':self.question},
             {'role':'system','content':UNDERSTANDING_NOTE+json.dumps(hint,ensure_ascii=False,default=str)},
+            *([{'role':'system','content':self.self_state_text}] if self.self_state_text else []),
             *([{'role':'system','content':self.resume_note}] if self.resume_note else []),*([] if closing else self.protocol),
             *self.evidence_messages(accepted),
             *([{'role':'system','content':self.recall_payload()}] if getattr(self,'recalls',None) else []),

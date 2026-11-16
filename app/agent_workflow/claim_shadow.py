@@ -185,35 +185,35 @@ def _extract_code_flags(result: dict) -> dict:
     return _top_level_code_flags(result, audit)
 
 
-def maybe_schedule(result: dict, context: Any, state: Mapping[str, Any]) -> None:
+def maybe_schedule(result: dict, context: Any, state: Mapping[str, Any]) -> str:
     """Sync, no I/O beyond one stat(); never raises past the caller's guard."""
     global _DROPPED_BUSY
     if not enabled():
-        return
+        return "shadow_off"
 
     # Synchronous filtering: drop if hit, no record left
     if getattr(context, "unattended", False) is True:
-        return
+        return "unattended"
 
     if result.get("pending_request"):
-        return
+        return "pending_request"
 
     status = result.get("status")
     if status not in {"succeeded", "partially_succeeded"}:
-        return
+        return "not_succeeded"
 
     citations = result.get("citations")
     if not citations or not isinstance(citations, (list, tuple)):
-        return
+        return "no_numbered_sources"
 
     answer = result.get("answer") or ""
     if not re.search(r"\[\d+\]", answer):
-        return
+        return "no_numbered_sources"
 
     # In-flight capacity check
     if len(_TASKS) >= MAX_PENDING_TURNS:
         _DROPPED_BUSY += 1
-        return
+        return "busy"
 
     provider = getattr(context, "provider", None) or ""
     model = getattr(context, "model", None) or ""
@@ -246,6 +246,7 @@ def maybe_schedule(result: dict, context: Any, state: Mapping[str, Any]) -> None
     task = asyncio.create_task(_run(snapshot), context=contextvars.Context())
     _TASKS.add(task)
     task.add_done_callback(_TASKS.discard)
+    return "scheduled"
 
 
 async def _ensure_initialized(dir_path: str) -> None:
@@ -318,6 +319,19 @@ async def _run(snapshot: ShadowTurn) -> None:
 
     started_monotonic = time.monotonic()
     dir_path = os.environ.get("CLAIM_JUDGE_SHADOW_DIR", "")
+    # The one ledger line this turn writes (SW2 K7): a second call is a no-op, and a turn that is owner-refused writes none (K8).
+    settled: list[str] = []
+
+    async def settle(outcome: str) -> None:
+        from .fp_flags import flag
+        if settled or not flag("FINBOT_SW2_SELF_STATE", True):
+            return
+        settled.append(outcome)
+        try:
+            from .claim_public_wire import append_settled
+            await asyncio.to_thread(append_settled, dir_path, snapshot.turn_id, outcome)
+        except Exception as exc:
+            logger.warning("Claim settled ledger error: %s", type(exc).__name__)
     from .claim_judge_pin import expected_model, shadow_model_name
     model_name = shadow_model_name()
     expect_model = expected_model()
@@ -351,11 +365,13 @@ async def _run(snapshot: ShadowTurn) -> None:
             await _write_outcome_record(
                 dir_path, snapshot, "no_judgeable", started_monotonic, selection=selection
             )
+            await settle("no_judgeable")
             return
 
         # Step 4: Check target, daily cap, circuit breaker, STOP file
         stop_path = os.path.join(dir_path, "STOP")
         if os.path.exists(stop_path):
+            await settle("stopped")
             return
 
         # The target is the experiment's report point, not a stop: the marker is written once and judging goes on.
@@ -374,12 +390,14 @@ async def _run(snapshot: ShadowTurn) -> None:
             await _write_outcome_record(
                 dir_path, snapshot, "daily_cap", started_monotonic, selection=selection
             )
+            await settle("daily_cap")
             return
 
         if time.monotonic() < _CIRCUIT_OPEN_UNTIL:
             await _write_outcome_record(
                 dir_path, snapshot, "circuit_open", started_monotonic, selection=selection
             )
+            await settle("circuit_open")
             return
 
         # Step 5 & 6: Catalog resolve and model verification
@@ -403,6 +421,7 @@ async def _run(snapshot: ShadowTurn) -> None:
             await _write_outcome_record(
                 dir_path, snapshot, "model_unavailable", started_monotonic, selection=selection
             )
+            await settle("model_unavailable")
             return
 
         judge_model_info = {
@@ -420,6 +439,7 @@ async def _run(snapshot: ShadowTurn) -> None:
                 selection=selection,
                 judge_model_info=judge_model_info,
             )
+            await settle("model_changed")
             return
 
         # Step 7 & 8: Judge sentences with semaphore and turn budget
@@ -666,13 +686,17 @@ async def _run(snapshot: ShadowTurn) -> None:
 
         # U9 wiring: the record is on disk; the public gate decides what may display.  Its failure never
         # affects the shadow record or the answer.
+        judged_outcome = "judged"
         try:
             from .claim_public_wire import process_record
             await asyncio.to_thread(process_record, dir_path, record)
         except Exception as exc:
             logger.warning("Claim public gate error: %s", type(exc).__name__)
+            judged_outcome = "error"
+        await settle(judged_outcome)
 
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         logger.warning("Claim shadow background task error: %s", type(exc).__name__)
+        await settle("error")

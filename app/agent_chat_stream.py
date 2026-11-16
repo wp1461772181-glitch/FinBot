@@ -409,6 +409,36 @@ async def _skills(credential:str|None,bot:dict|None,message:str):
   return block,active,question
  except Exception:
   return None,None,message
+def _previous_answer(conversation_id,current_turn):
+ """The newest complete assistant answer of this conversation other than this turn's: (turn_id, audit, created_at) or None.
+ Only this conversation (verified by the caller) and only its turn_id, its audit and its time are read."""
+ import uuid as _uuid
+ from sqlalchemy import select
+ from .agent_chat_models import AgentMessage
+ from .database import SessionLocal
+ with SessionLocal() as db:
+  row=db.execute(select(AgentMessage.turn_id,AgentMessage.tool_calls,AgentMessage.created_at).where(
+   AgentMessage.conversation_id==_uuid.UUID(str(conversation_id)),AgentMessage.role=="assistant",AgentMessage.status=="complete",
+   AgentMessage.turn_id!=_uuid.UUID(str(current_turn))).order_by(AgentMessage.sequence.desc()).limit(1)).first()
+ if row is None:return None
+ audit=row.tool_calls.get("audit") if isinstance(row.tool_calls,dict) else None
+ return str(row.turn_id),(audit if isinstance(audit,dict) else None),row.created_at
+def _self_state_inputs(cid,credential,turn,model_label):
+ """The facts the self-state block needs, read once per turn (SW2 §3.1): the model label and the previous answer's check.
+ A failure here leaves the previous answer unknown; it never stops the turn."""
+ from datetime import UTC as _UTC,datetime as _datetime
+ from .agent_workflow.claim_public_wire import prior_answer_state
+ owner=_is_owner(credential);inputs={"model_label":model_label,"prior":None}
+ try:
+  previous=_previous_answer(cid,turn)
+  if previous is not None:
+   turn_id,audit,created=previous
+   elapsed=max(0.0,(_datetime.now(_UTC)-created).total_seconds()) if created else 0.0
+   inputs["prior"]={**prior_answer_state(turn_id,owner=owner,audit=audit,elapsed_s=elapsed),"turn_id":turn_id}
+   inputs["prior_elapsed_s"]=elapsed
+ except Exception:
+  inputs["prior"]={"state":"unknown"}
+ return inputs
 def _bot_turn(payload,credential):
  """A bot's turn settings and its model from the catalog (key in memory only).  The model is resolved on
  every request, so a changed model takes effect on the bot's next turn."""
@@ -453,6 +483,10 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
  else:
   if payload.api_key is None or len(payload.api_key.get_secret_value())<8: raise HTTPException(422,"invalid_agent_chat_request")
   chosen=_Model(payload.provider,payload.model,payload.api_key.get_secret_value(),payload.base_url)
+ # SW2 (spec-sw2 §3.1): the model label the self-state block shows; a bot turn shows the bot's model setting (K11).
+ if bot is not None:model_label=str(bot.get("model") or "")
+ elif payload.catalog_model is not None:model_label=f"{payload.catalog_model}（{chosen.provider}/{chosen.model}）"
+ else:model_label=f"{chosen.provider}/{chosen.model}"
  cid=payload.conversation_id
  if cid:
   if not await verify_conversation(cid,x_chat_session):raise HTTPException(404,"conversation_not_found")
@@ -493,6 +527,8 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    shown=payload.display_message.strip() if payload.pending_request_id and payload.display_message else ""
    await append_message(cid,turn,"user",shown or payload.message)
    context=await conversation_context(cid,x_chat_session,window=chosen.window) or {}
+   # SW2 §3.1: read once at the turn start, shared by every model call of the turn (K9).
+   self_state=await asyncio.to_thread(_self_state_inputs,cid,x_chat_session,turn,model_label) if fp_flag("FINBOT_SW2_SELF_STATE",True) else None
    history_rows=context.get("l1_rows",[])
    messages=[{"role":"system","content":SYSTEM}]
    # Older turns come first (layer 2), then the newest raw turns (layer 1).  The layer-3 note goes
@@ -520,7 +556,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
        api_key=chosen.key(),base_url=chosen.base_url,owner_hash=owner_hash(x_chat_session),
        conversation_id=cid,identity_credential=x_chat_session,turn_id=turn,pending_request_id=payload.pending_request_id,
        legacy_result_sets=legacy_result_sets,legacy_source_choices=legacy_source_choices,
-       history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window):
+       history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window,self_state=self_state):
       await queue.put(("event",event))
     except asyncio.CancelledError:
      raise

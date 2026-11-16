@@ -116,7 +116,7 @@ def test_reaching_the_target_writes_one_marker_and_judging_goes_on(shadow_env):
             maybe_schedule(_turn(n), MagicMock(unattended=False), {})
             await asyncio.gather(*list(_TASKS))
 
-        records = [json.loads(line) for path in shadow_env.glob("*.jsonl")
+        records = [json.loads(line) for path in shadow_env.glob("[0-9]*.jsonl")
                    for line in path.read_text(encoding="utf-8").splitlines()]
         # Every turn is judged, including the ones past the target.
         assert judge.await_count == 3

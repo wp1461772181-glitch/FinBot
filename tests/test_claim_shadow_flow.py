@@ -84,7 +84,7 @@ def test_zero_impact_on_answer_when_switch_off(monkeypatch, tmp_path: Path):
 
     assert not called
     assert "app.agent_workflow.claim_shadow_extract" not in sys.modules
-    assert len(list(tmp_path.glob("*.jsonl"))) == 0
+    assert len(list(tmp_path.glob("[0-9]*.jsonl"))) == 0
 
 
 def test_direct_agent_turn_identical_output_and_check_text_kept_within_cap(monkeypatch, tmp_path: Path):
@@ -146,7 +146,7 @@ def test_direct_agent_turn_identical_output_and_check_text_kept_within_cap(monke
                 assert "shadow" not in res["audit"]  # No new keys in audit
 
                 # But the file on disk MUST have the full text sent to judge
-                files = list(tmp_path.glob("*.jsonl"))
+                files = list(tmp_path.glob("[0-9]*.jsonl"))
                 assert len(files) == 1
                 record = json.loads(files[0].read_text(encoding="utf-8").splitlines()[0])
                 assert record["outcome"] == "judged"
@@ -324,7 +324,7 @@ def test_visitor_and_filter_conditions(monkeypatch, tmp_path: Path):
             await asyncio.gather(*list(_TASKS))
 
         # Visitor leaves NO records on disk
-        assert len(list(tmp_path.glob("*.jsonl"))) == 0
+        assert len(list(tmp_path.glob("[0-9]*.jsonl"))) == 0
 
     asyncio.run(_run())
 
@@ -376,7 +376,7 @@ def test_counted_five_conditions_and_target_reached(monkeypatch, tmp_path: Path)
         assert judge_called
 
         # Check JSONL records
-        records = [json.loads(line) for line in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
+        records = [json.loads(line) for line in list(tmp_path.glob("[0-9]*.jsonl"))[0].read_text().splitlines()]
         t1_rec = next(r for r in records if r["turn_id"] == "t1")
         t2_rec = next(r for r in records if r["turn_id"] == "t2")
         t3_rec = next(r for r in records if r["turn_id"] == "t3")
@@ -417,7 +417,7 @@ def test_model_error_outcomes_and_secret_omission(monkeypatch, tmp_path: Path):
         maybe_schedule({"turn_id": "t_nokey", "answer": "乙公司第四季度利润实现大幅提升 [1]。", "citations": [{"ordinal": 1, "quote": "revenue rose steadily", "source_type": "official_filing"}], "status": "succeeded"}, MagicMock(unattended=False, identity_credential=secret_cred), {})
         await asyncio.gather(*list(_TASKS))
 
-        content = list(tmp_path.glob("*.jsonl"))[0].read_text(encoding="utf-8")
+        content = list(tmp_path.glob("[0-9]*.jsonl"))[0].read_text(encoding="utf-8")
         assert "model_changed" in content
         assert "model_unavailable" in content
 
@@ -469,7 +469,7 @@ def test_rate_limit_circuit_breaker(monkeypatch, tmp_path: Path):
         maybe_schedule(turn2, MagicMock(unattended=False), {})
         await asyncio.gather(*list(_TASKS))
 
-        records = [json.loads(line) for line in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
+        records = [json.loads(line) for line in list(tmp_path.glob("[0-9]*.jsonl"))[0].read_text().splitlines()]
         r1 = next(r for r in records if r["turn_id"] == "t_rate1")
         r2 = next(r for r in records if r["turn_id"] == "t_rate2")
 
@@ -538,7 +538,7 @@ def test_real_catalog_resolve_import_regression(monkeypatch, tmp_path: Path):
                 if _TASKS:
                     await asyncio.gather(*list(_TASKS))
 
-                files = list(tmp_path.glob("*.jsonl"))
+                files = list(tmp_path.glob("[0-9]*.jsonl"))
                 assert len(files) == 1
                 record = json.loads(files[0].read_text(encoding="utf-8").splitlines()[0])
                 assert record["outcome"] == "judged"

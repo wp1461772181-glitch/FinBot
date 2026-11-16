@@ -61,6 +61,8 @@ class AgentRuntimeContext:
     # The bot's own reasoning effort (agent_bots: its setting); None: the environment default (agent_chat_provider).
     reasoning_effort: str | None = None
     tool_scope: frozenset | None = field(default=None, compare=False)
+    # SW2 (spec-sw2 §3.1): the request-time facts for this turn's self-state block: model_label and the previous answer's check.
+    self_state: dict | None = field(default=None, repr=False, compare=False)
     default_company: dict | None = field(default=None, compare=False)
     # Skills (agent_skills): the listing of enabled skills, and a skill started for this turn (「/名字」 or a
     # task's skill): {name, version, body, output_template, tools}.  Steps, never evidence or write authority.
