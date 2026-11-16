@@ -6,7 +6,7 @@ import { formatDelta } from "./delta.mjs";
 
 export type TargetWindow = { start: string; end: string };
 
-/** The width the figure has, measured before paint (null until it is); the tokens variant draws at it so its labels are the size they say. */
+/** The width the figure has, measured before paint (null until it is); the chart draws at it so its labels are the size they say. */
 function useMeasuredWidth(enabled: boolean) {
   const ref = useRef<HTMLElement | null>(null);
   const [width, setWidth] = useState<number | null>(null);
@@ -23,7 +23,7 @@ function useMeasuredWidth(enabled: boolean) {
   return [ref, width] as const;
 }
 
-export function CandlestickChart({ candles, selected, report, target, activeDate, onInspect, cutoffDate, targetEndDate, symbol, tokens = false }: {
+export function CandlestickChart({ candles, selected, report, target, activeDate, onInspect, cutoffDate, targetEndDate, symbol }: {
   candles: PriceCandle[];
   selected?: Snapshot;
   report?: RefreshReport;
@@ -33,12 +33,11 @@ export function CandlestickChart({ candles, selected, report, target, activeDate
   cutoffDate?: string;
   targetEndDate?: string;
   symbol?: string;
-  /** The company page's variant (P6.1): drawn at the figure's real width and styled from the colour and type tokens (styles/chart.css).  Off: the old picture, unchanged. */
-  tokens?: boolean;
 }) {
   const { locale, t } = useLocale();
-  const [figureRef, measured] = useMeasuredWidth(tokens);
-  const width = tokens && measured ? Math.max(300, measured) : 1000;
+  const [figureRef, measured] = useMeasuredWidth(true);
+  // Drawn at the figure's real width, styled from the colour and type tokens (styles/chart.css): a 12px label is 12px on a phone too.  Until it is measured: 1000.
+  const width = measured ? Math.max(300, measured) : 1000;
   const height = 320;
   const margin = { top: 22, right: 58, bottom: 34, left: 8 };
   const plotWidth = width - margin.left - margin.right;
@@ -64,18 +63,18 @@ export function CandlestickChart({ candles, selected, report, target, activeDate
   const v3TargetIndex = markerIndex(targetEndDate);
   const futureV3Target = Boolean(targetEndDate && v3TargetIndex < 0 && targetEndDate > candles.at(-1)!.trading_date);
   const actualStart = targetEnd >= 0 ? targetEnd + 1 : -1;
-  // Two kinds of mark can sit near each other at the top (the cut-off and the fixed target): the tokens variant puts the second kind on its own line so the labels do not overprint.
-  const labelY = (row: number) => 18 + (tokens ? row * 16 : 0);
-  // The tokens variant keeps a mark's label out of the price axis on the right: a label that would run past the plot turns to the left of its line.
-  const markerEdge = tokens ? width - margin.right : undefined;
+  // Two kinds of mark can sit near each other at the top (the cut-off and the fixed target): the second kind goes on its own line so the labels do not overprint.
+  const labelY = (row: number) => 18 + row * 16;
+  // A mark's label stays out of the price axis on the right: a label that would run past the plot turns to the left of its line.
+  const markerEdge = width - margin.right;
   const ticks = [max, (max + min) / 2, min];
   const dateTicks = [0, Math.floor((candles.length - 1) / 2), candles.length - 1];
 
-  return <figure ref={figureRef} className="candlestick-figure" data-chart={tokens ? "tokens" : undefined}>
+  return <figure ref={figureRef} className="candlestick-figure" data-chart="tokens">
     <svg className="candlestick-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="candle-chart-title candle-chart-description">
       <title id="candle-chart-title">{symbol ?? selected?.symbol ?? t("股票")} {t("历史日线蜡烛图")}</title>
       <desc id="candle-chart-description">{t("使用鼠标停留或键盘聚焦蜡烛图中的日线，读取当天开盘、最高、最低和收盘价格。")}{target ? t("阴影区域是保存的 20 个交易日滚动目标窗口。") : ""}{targetEndDate ? ` ${t("固定目标日为")} ${targetEndDate}${locale === "en-US" ? "." : "。"}` : ""}</desc>
-      {ticks.map((tick) => <g key={tick}><line x1={margin.left} x2={width - margin.right} y1={y(tick)} y2={y(tick)} className="chart-grid" /><text x={width - margin.right + 9} y={y(tick) + 4} className="chart-price-label">{formatPrice(tick)}</text></g>)}
+      {ticks.map((tick) => <g key={tick}><line x1={margin.left} x2={width - margin.right} y1={y(tick)} y2={y(tick)} className="chart-grid" /><text x={width - margin.right + 6} y={y(tick) + 4} className="chart-price-label">{formatPrice(tick)}</text></g>)}
       {targetStart >= 0 && targetEnd >= targetStart && <g className="target-window"><rect x={x(targetStart) - bodyWidth} y={margin.top} width={x(targetEnd) - x(targetStart) + bodyWidth * 2} height={plotHeight} /><text x={x(targetStart) + 5} y={margin.top + 14}>{t("20 个交易日目标窗口")}</text></g>}
       {futureTargetSlots > 0 && <g className="target-window target-window-future"><rect x={x(candles.length - 1) + bodyWidth} y={margin.top} width={width - margin.right - (x(candles.length - 1) + bodyWidth)} height={plotHeight} /><text x={x(candles.length - 1) + bodyWidth + 5} y={margin.top + 14}>{t("20 个交易日目标窗口 · 等待结果")}</text></g>}
       {actualStart >= 0 && actualStart < candles.length && <g className="actual-region"><line x1={x(actualStart) - bodyWidth} x2={x(actualStart) - bodyWidth} y1={margin.top} y2={margin.top + plotHeight} /><text x={x(actualStart) + 5} y={height - margin.bottom - 8}>{<Tx text={"目标后实际行情"} />}</text></g>}
@@ -91,11 +90,11 @@ export function CandlestickChart({ candles, selected, report, target, activeDate
       {originalIndex >= 0 && <Marker x={x(originalIndex)} label={t("原始截止")} y={labelY(0)} edge={markerEdge} />}
       {revisedIndex >= 0 && revisedIndex !== originalIndex && <Marker x={x(revisedIndex)} label={t("修订截止")} tone="revised" y={labelY(1)} edge={markerEdge} />}
       {cutoffIndex >= 0 && <Marker x={x(cutoffIndex)} label={t(cutoffDate ? "决策行情截止" : "版本截止")} y={labelY(0)} edge={markerEdge} />}
-      {v3TargetIndex >= 0 && <Marker x={x(v3TargetIndex)} label={t("V3 固定目标日")} tone="revised" y={labelY(1)} edge={markerEdge} />}
+      {v3TargetIndex >= 0 && <Marker x={x(v3TargetIndex)} label={t("固定目标日")} tone="revised" y={labelY(1)} edge={markerEdge} />}
       {futureV3Target && <g className="snapshot-marker revised"><line x1={width - margin.right} x2={width - margin.right} y1={19} y2={287} /><text x={width - margin.right - 6} y={labelY(1)} textAnchor="end">{t("固定目标")} {targetEndDate}</text></g>}
-      {dateTicks.map((index) => <text key={index} x={x(index)} y={height - 10} textAnchor="middle" className="chart-date-label">{shortDate(candles[index]!.trading_date)}</text>)}
+      {dateTicks.map((index, at) => <text key={index} x={at === 0 ? margin.left : x(index)} y={height - 10} textAnchor={at === 0 ? "start" : "middle"} className="chart-date-label">{shortDate(candles[index]!.trading_date)}</text>)}
     </svg>
-    <figcaption><span><i className="legend-up" />↑ {<Tx text={"收高于开"} />}</span><span><i className="legend-down" />↓ {<Tx text={"收低于开"} />}</span>{target && <span><i className="legend-window" />{<Tx text={"保存的目标窗口"} />}</span>}{targetEndDate && <span>{t("V3 固定目标日")}: {targetEndDate}</span>}</figcaption>
+    <figcaption><span><i className="legend-up" />{<Tx text={"收高于开"} />}</span><span><i className="legend-down" />{<Tx text={"收低于开"} />}</span>{target && <span><i className="legend-window" />{<Tx text={"保存的目标窗口"} />}</span>}{targetEndDate && <span>{t("固定目标日")}: {targetEndDate}</span>}</figcaption>
   </figure>;
 }
 

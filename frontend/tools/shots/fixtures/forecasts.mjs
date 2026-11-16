@@ -30,9 +30,9 @@ function evaluationOf(root, version) {
     log_loss: logLossOf(version.p, root.label), direction_correct: root.label === "bullish", price_input_version: "px-v1", created_at: daysAgo(17) };
 }
 
-export function forecastList(query) {
+export function forecastList(query, fixture = {}) {
   const symbols = (query.get("symbols") ?? "").split(",").filter(Boolean); const state = query.get("state");
-  const rows = Object.entries(ROOTS).map(([id, root]) => { const v = root.versions.at(-1); const ev = evaluationOf(root, v);
+  const rows = (fixture.noForecasts ? [] : Object.entries(ROOTS)).map(([id, root]) => { const v = root.versions.at(-1); const ev = evaluationOf(root, v);
     return { id, symbol: root.symbol, decision_at: daysAgo(root.versions[0].ago), target_end_date: root.target, model_status: "experimental_llm", latest_version_id: v.id, latest_version_no: root.versions.length,
       expired: root.expired, decider: DECIDER, probabilities: probs(v.p), evaluation: ev ? { status: ev.status, actual_label: ev.actual_label, result_version: ev.result_version } : null }; })
     .filter((row) => (!symbols.length || symbols.includes(row.symbol)) && (state === "all" || !state ? true : state === "open" ? !row.expired : row.expired));
@@ -44,9 +44,10 @@ export const forecastRoots = (symbol) => ({ symbol, roots: Object.entries(ROOTS)
 function contract(root) { return { target_end_date: root.target, horizon_sessions: 20, threshold: 0.02, anchor_close: root.anchor, anchor_date: daysAgo(root.versions[0].ago).slice(0, 10) }; }
 const rootOfVersion = (versionId) => Object.entries(ROOTS).find(([, r]) => r.versions.some((v) => v.id === versionId));
 
-export function timeline(rootId) {
+export function timeline(rootId, fixture = {}) {
   const root = ROOTS[rootId]; if (!root) return null;
-  return { root_id: rootId, symbol: root.symbol, target_contract: contract(root), versions: root.versions.map((v, i) => ({ id: v.id, parent_version_id: i ? root.versions[i - 1].id : null, version_no: i + 1, decision_at: daysAgo(v.ago), market_cutoff_at: daysAgo(v.ago + 1),
+  // `fixture.invalidTarget`: the target contract holds no readable date (a record the server cannot give a target for).
+  return { root_id: rootId, symbol: root.symbol, target_contract: fixture.invalidTarget ? { ...contract(root), target_end_date: null } : contract(root), versions: root.versions.map((v, i) => ({ id: v.id, parent_version_id: i ? root.versions[i - 1].id : null, version_no: i + 1, decision_at: daysAgo(v.ago), market_cutoff_at: daysAgo(v.ago + 1),
     baseline_probabilities: null, joint_probabilities: null, decision_probabilities: probs(v.p), model_status: "experimental_llm", change_reason: v.reason, trigger_type: v.trigger, created_at: daysAgo(v.ago) })) };
 }
 
@@ -84,7 +85,7 @@ export function versionDetail(versionId) {
   return { id: v.id, root_id: rootId, parent_version_id: index ? root.versions[index - 1].id : null, job_id: `j1000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, version_no: index + 1, symbol: root.symbol,
     target_contract: contract(root), decision_at: daysAgo(v.ago), market_cutoff_at: daysAgo(v.ago + 1), baseline_probabilities: null, joint_probabilities: null, model_status: "experimental_llm",
     decision_probabilities: probs(v.p), research_brief: root.symbol === "AAPL" ? brief(root, v, index) : null,
-    model_manifest: { time_mode: "observed", decision_provider: { provider: "openrouter", requested_model: "openai/gpt-6.1-terra", actual_model: "gpt-6.1-terra", question_version: "q3", confidence: 0.62, request_id: "req-fixture-0001", input_sha256: "2".repeat(64) } },
+    model_manifest: { time_mode: "observed", decision_provider: { provider: "openrouter", requested_model: root.symbol === "AAPL" && index === 0 ? "openai/gpt-6.0-terra" : "openai/gpt-6.1-terra", actual_model: root.symbol === "AAPL" && index === 0 ? "gpt-6.0-terra" : "gpt-6.1-terra", question_version: "q3", confidence: 0.62, request_id: "req-fixture-0001", input_sha256: "2".repeat(64) } },
     research_report: { status: "ready", research_conclusions_status: "ready", time_mode: "observed", automatic_selection: { explicit_source_refs: index > 1 ? [{ source_type: "uploaded_media", source_id: materialId(3) }] : [] } },
     change_reason: v.reason, trigger_type: v.trigger, created_at: daysAgo(v.ago),
     price_input_manifest: { price_input_sha256: `px${index}`.padEnd(64, "0"), market_cutoff_at: daysAgo(v.ago + 1), latest_completed_session: daysAgo(v.ago + 1).slice(0, 10), candle_count: 252 },
@@ -120,11 +121,28 @@ export const MONITOR = { health: "healthy", schedule_interval_seconds: 3600, sta
 export const workspace = (symbol) => { const found = Object.entries(ROOTS).find(([, r]) => r.symbol === symbol && !r.expired); if (!found) return { symbol, status: "empty", current_root: null, current_version: null, pending_job_count: 0, joint_model_status: "experimental_llm", monitor_status: "not_recorded" };
   const [rootId, root] = found; const v = root.versions.at(-1); return { symbol, status: "available", current_root: { id: rootId, target_contract: contract(root) }, current_version: { id: v.id, version_no: root.versions.length, decision_at: daysAgo(v.ago), market_cutoff_at: daysAgo(v.ago + 1), model_status: "experimental_llm", baseline_probabilities: null, joint_probabilities: null, decision_probabilities: probs(v.p), research_brief: null }, pending_job_count: 0, joint_model_status: "experimental_llm", monitor_status: "not_recorded" }; };
 
-export const job = (id) => ({ id, symbol: "AAPL", kind: "manual_revision", root_version_id: VERSION.aapl1, parent_version_id: VERSION.aapl2, source_refs: [], time_mode: "observed", requested_decision_at: null, status: "succeeded", current_stage: "completed", attempts: 1, error: null, result_version_id: VERSION.aapl3, created_at: daysAgo(3), started_at: daysAgo(3), completed_at: daysAgo(3) });
+/** A job as the server reports it.  `state.jobStatus` ("queued" | "running" | "failed" | "succeeded", default succeeded) is what the pages read back; a failed one carries the error code `state.jobError`. */
+export const job = (id, state = {}) => { const status = state.jobStatus ?? "succeeded"; const active = status === "queued" || status === "running";
+  return { id, symbol: state.jobSymbol ?? "AAPL", kind: state.jobKind ?? "manual_revision", root_version_id: VERSION.aapl1, parent_version_id: VERSION.aapl2, source_refs: [], time_mode: "observed", requested_decision_at: null, status,
+    current_stage: active ? "生成研究简报" : status === "failed" ? "failed" : "completed", attempts: 1, error: status === "failed" ? { type: state.jobError ?? "forecast_provider_timeout" } : null, result_version_id: status === "succeeded" ? VERSION.aapl3 : null,
+    created_at: daysAgo(0, 0), started_at: daysAgo(0, 0), completed_at: active ? null : daysAgo(0, 0) }; };
 
-export function revisionCandidates(versionId) { const found = rootOfVersion(versionId); const root = found?.[1]; const v = root?.versions.find((x) => x.id === versionId);
+// The one filing whose id is a hex id: an address's ?revise= only reads those, so the deep-link check and the judgment page point at it.
+export const REVISE_FILING_ID = "6f1c2d3e-0000-4000-8000-0000000000aa";
+const cand = (source_type, source_id, title, kind, pub, obs, category, badge = null) => ({ source_type, source_id, title, kind, published_at: daysAgo(pub), observed_at: daysAgo(obs), category, badge });
+/** AAPL lists one candidate of each group (新发布 / 过往补充 / 新完成分析 / 来源状态更新) and one that was in the library before the forecast; `state.manyCandidates` adds eight more new ones (13 in all: the cap of 10 can be reached and passed). */
+export function revisionCandidates(versionId, state = {}) { const found = rootOfVersion(versionId); const root = found?.[1]; const v = root?.versions.find((x) => x.id === versionId);
+  const aapl = root?.symbol === "AAPL";
+  const candidates = !aapl || state.noCandidates ? [] : [
+    cand("official_filing", materialId(4), "8-K 0000000000-26-000103", "8-K", 21, 20, "backfilled"),
+    cand("uploaded_media", materialId(6), "新闻稿：欧盟 App Store 政策调整", "新闻稿", 2, 1, "new", "新"),
+    cand("official_filing", REVISE_FILING_ID, "10-Q/A 0000000000-26-000107", "10-Q/A", 6, 5, "reanalyzed"),
+    cand("official_filing", materialId(7), "8-K 0000000000-26-000108", "8-K", 4, 3, "source_updated"),
+    cand("uploaded_media", materialId(8), "行业报告：智能手机出货量季度回顾", "研报", 35, 34, "preexisting"),
+    ...(state.manyCandidates ? Array.from({ length: 8 }, (_, n) => cand("uploaded_media", materialId(40 + n), `新闻稿 ${n + 1}：渠道调研摘要`, "新闻稿", 1, 0, "new", "新")) : []),
+  ];
   return { version_id: versionId, version_no: root ? root.versions.indexOf(v) + 1 : 1, symbol: root?.symbol ?? "AAPL", decision_at: daysAgo(v?.ago ?? 3), window_start: daysAgo(40), window_end: daysAgo(0), target_end_date: root?.target ?? null, expired: root?.expired ?? false,
-    candidates: root?.symbol === "AAPL" ? [{ source_type: "official_filing", source_id: materialId(4), title: "8-K 0000000000-26-000103", kind: "8-K", published_at: daysAgo(21), observed_at: daysAgo(20), category: "backfilled", badge: null }, { source_type: "uploaded_media", source_id: materialId(6), title: "新闻稿：欧盟 App Store 政策调整", kind: "新闻稿", published_at: daysAgo(2), observed_at: daysAgo(1), category: "new", badge: "新" }] : [], excluded: [] }; }
+    candidates, excluded: aapl && state.noCandidates ? [{ source_type: "official_filing", source_id: materialId(9), title: "8-K 0000000000-26-000109", reason: "published_after_decision", reason_text: "发布时间晚于这一版的决策时点，不能用来修订。" }] : [] }; }
 
 // --- earnings judgments ---------------------------------------------------------------------------------
 const J = (id, symbol, fields) => ({ id, symbol, accession: `0000000000-26-${id.slice(-3)}`, source_url: `https://www.sec.gov/Archives/edgar/data/0000000/j-${symbol}.htm`, accepted_at: daysAgo(14), held: false, followup_status: "done", delivered: true,

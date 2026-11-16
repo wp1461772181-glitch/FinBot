@@ -121,16 +121,26 @@ export function registerRoutes(route, reply) {
 
   // --- forecasts (V2) ----------------------------------------------------------------------------------
   const found = (value) => (value ?? reply.status(404, { detail: "not_found" }));
-  route.get("/v2/forecasts", ({ query }) => forecastList(query));
+  route.get("/v2/forecasts", ({ query, state }) => forecastList(query, state));
   route.get("/v2/stocks/:symbol/forecast-roots", ({ params }) => forecastRoots(params.symbol));
   route.get("/v2/stocks/:symbol/workspace", ({ params }) => workspace(params.symbol));
-  route.get("/v2/forecast-roots/:id/timeline", ({ params }) => found(timeline(params.id)));
+  route.get("/v2/forecast-roots/:id/timeline", ({ params, state }) => found(timeline(params.id, state)));
   route.get("/v2/forecast-versions/:id", ({ params }) => found(versionDetail(params.id)));
-  route.get("/v2/forecast-versions/:id/revision-candidates", ({ params }) => revisionCandidates(params.id));
-  route.get("/v2/jobs/:id", ({ params }) => job(params.id));
+  route.get("/v2/forecast-versions/:id/revision-candidates", ({ params, state }) => revisionCandidates(params.id, state));
+  route.get("/v2/jobs/:id", ({ params, state }) => job(params.id, state));
+  // The two writes of the forecast pages.  The raw body of every request is kept in state.forecastPosts (what the body checks compare to the baseline); the job they answer with
+  // is the one `job()` describes, so `state.jobStatus` ("running" keeps it on the task bar) decides what the page sees next.
+  route.post("/v2/forecast-jobs", ({ rawBody, body, state }) => {
+    state.forecastPosts = [...(state.forecastPosts ?? []), { path: "/v2/forecast-jobs", body: rawBody }];
+    return job("j2000000-0000-4000-8000-000000000001", { ...state, jobKind: "new", jobSymbol: body?.symbol ?? "AAPL" });
+  });
+  route.post("/v2/forecast-versions/:id/revision-jobs", ({ params, rawBody, state }) => {
+    state.forecastPosts = [...(state.forecastPosts ?? []), { path: `/v2/forecast-versions/${params.id}/revision-jobs`, body: rawBody }];
+    return job("j2000000-0000-4000-8000-000000000002", state);
+  });
   route.get("/v2/monitor/status", () => MONITOR);
   route.get("/v2/evaluations", ({ query }) => evaluations(query.get("symbol")));
-  route.get(`${A}/earnings-judgments`, own(({ query }) => ({ judgments: JUDGMENTS.filter((j) => !query.get("symbol") || j.symbol === query.get("symbol")) })));
+  route.get(`${A}/earnings-judgments`, own(({ query, state }) => ({ judgments: state.noForecasts ? [] : JUDGMENTS.filter((j) => !query.get("symbol") || j.symbol === query.get("symbol")) })));
   route.get(`${A}/earnings-judgments/:id`, own(({ params }) => { const j = JUDGMENTS.find((x) => x.id === params.id); return j ? { judgment: j } : reply.status(404, { detail: "not_found" }); }));
 
   // --- materials (V3) ----------------------------------------------------------------------------------

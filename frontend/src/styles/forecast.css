@@ -1,0 +1,3 @@
+/* The forecast pages carry their own task strip (the jobs of the page, above the lists), so the shell's dock at the foot of the column would show the same
+   rows twice: while a page has `data-task-strip`, the dock is not drawn.  Imported by the forecast pages, so it travels with their chunk and is not part of the first screen's stylesheet. */
+body:has([data-task-strip]) [data-slot="task-dock"] { display: none; }

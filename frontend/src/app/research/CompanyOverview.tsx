@@ -64,7 +64,7 @@ function MarketCard({ symbol, prices, reloadPrices, forecast }: { symbol: string
     {prices.kind === "ready" && (candles.length === 0
       ? <EmptyState title={t("本地没有可展示的行情")} description={t("初始化会从数据供应商取回约一年的日线并保存到本地。")} className="py-6"><InitPrices symbol={symbol} onDone={reloadPrices} /></EmptyState>
       : <>
-        <CandlestickChart tokens candles={candles} symbol={symbol} activeDate={shown!.trading_date} onInspect={setActive}
+        <CandlestickChart candles={candles} symbol={symbol} activeDate={shown!.trading_date} onInspect={setActive}
           cutoffDate={forecast?.decision_at.slice(0, 10)} targetEndDate={forecast?.target_end_date ?? undefined} />
         <p data-testid="candle-readout" aria-live="polite" className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-caption tabular-nums text-muted-foreground">
           <span className="text-ink">{shown!.trading_date}</span>
@@ -100,7 +100,7 @@ export function CompanyOverview({ symbol, prices, reloadPrices }: { symbol: stri
 
   const rows = forecasts.kind === "ready" ? forecasts.value.forecasts : [];
   const own = forecastBySymbol(rows).get(symbol.toUpperCase()) ?? [];
-  const latest = own[0] ?? null;
+  const latest = own.find(row => !row.expired) ?? own[0] ?? null;
   const jobs = forecasts.kind === "ready" ? forecasts.value.job_alerts.filter(alert => alert.symbol === symbol && (alert.status === "queued" || alert.status === "running")).length : 0;
   const lane = judgments.kind === "ready" ? judgments.value.lane : null;
   const judgment = researchRecord(symbol, rows, (lane?.lane === "ready" ? lane.judgments : []) as Parameters<typeof researchRecord>[2]).judgment;

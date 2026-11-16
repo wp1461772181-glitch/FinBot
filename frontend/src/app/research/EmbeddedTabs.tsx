@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router";
-import { ForecastHome } from "../../ForecastHome";
+import { ForecastHome } from "./forecasts/ForecastHome";
 import { LegacyFrame } from "../../LegacyFrame";
 import { MaterialLibrary } from "../../MaterialLibrary";
 import { scanOfficialFilings } from "../../api/market-data";
@@ -7,14 +7,14 @@ import { paths } from "../../routes.mjs";
 import { useWorkspace } from "../workspace";
 import { isSupportedSymbol } from "./support";
 
-// The company page's 预测 and 材料 tabs show the old pages, scoped to the company, until they are redone (P6.2 the forecasts, P6.3 the materials).  Each sits in
-// the old-UI frame (its own styles); the wrapper takes away the page padding the old pages brought, because the company page already has its own.
+// The company page's 预测 tab is the forecast home filtered to the company (P6.2); the 材料 tab still shows the old material library, scoped to the company, until it
+// is redone (P6.3).  The old page sits in the old-UI frame (its own styles); the wrapper takes away the page padding it brought, because the company page already has its own.
 
-/** The old forecast home, filtered to one company. */
+/** The forecast home, filtered to one company. */
 export function ForecastsTab({ symbol }: { symbol: string }) {
   const ws = useWorkspace();
   const navigate = useNavigate();
-  return <LegacyFrame><div className="workspace p-0" data-testid="company-forecasts"><ForecastHome queue={ws.symbols} personal={ws.personal} symbolFilter={symbol} onClearSymbol={() => navigate(paths.forecasts())} /></div></LegacyFrame>;
+  return <div data-testid="company-forecasts"><ForecastHome embedded queue={ws.symbols} personal={ws.personal} symbolFilter={symbol} onClearSymbol={() => navigate(paths.forecasts())} /></div>;
 }
 
 /** The old material library, on one company. */

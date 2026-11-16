@@ -5,7 +5,8 @@
 //   view:   options for the browser view ({ fixtureState, motionLevel, reducedMotion ... }), or a function that makes them (a fresh fake backend per picture).
 //   mask:   selectors painted over in the picture (a flat grey box): what moves for real under the page's own motion, so that two runs of the page are the same pixels.
 //   widths: the widths the page is photographed at when the run asks for them (default: all of them).
-import { BOT, CONVERSATION, ROOT, JUDGMENT, HAND_MARKER, HOLD_MARKER, LOGIN_CODE } from "./fixtures/ids.mjs";
+import { BOT, CONVERSATION, ROOT, VERSION, JUDGMENT, HAND_MARKER, HOLD_MARKER, LOGIN_CODE } from "./fixtures/ids.mjs";
+import { ROOT_IDS } from "./fixtures/forecasts.mjs";
 import { freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { buildState } from "./fixtures/index.mjs";
@@ -237,6 +238,49 @@ async function companyLoaded(page) {
   await page.waitForFunction(() => document.querySelectorAll("[data-testid=company-overview] [aria-busy=true]").length === 0, null, { timeout: 30000 });
 }
 
+/** P6.2: the fake backend's state for the forecast pages: no forecasts at all (the empty home), a job that stays running (the task bar), thirteen revision candidates (the cap of ten can be reached). */
+export function stateWithForecasts(patch) {
+  return Object.assign(buildState(), patch);
+}
+
+/** The forecast home with both lanes read: rows in each, the monitor chip and the next-model line in, no block still loading. */
+export async function forecastHomeLoaded(page) {
+  await page.waitForSelector("[data-testid=forecast-home] [data-slot=formal-row]", { state: "visible", timeout: 30000 });
+  await page.waitForSelector("[data-testid=lane-judgment] [data-slot=judgment-row]", { state: "attached", timeout: 30000 });
+  await page.waitForFunction(() => Boolean(document.querySelector("[data-testid=monitor-chip] [data-slot=status-badge]")) && !/正在读取/.test(document.querySelector("[data-testid=monitor-chip]").innerText)
+    && Boolean(document.querySelector("[data-testid=forecast-next-model]")) && document.querySelectorAll("[data-testid=forecast-home] [aria-busy=true]").length === 0, null, { timeout: 30000 });
+}
+
+/** One forecast read through: the judgment card, the chart drawn, every version's record read (the rail's evidence count and difference are numbers, not dots). */
+export async function forecastLoaded(page) {
+  await page.waitForSelector("[data-testid=forecast-judgment]", { state: "visible", timeout: 30000 });
+  await page.waitForSelector("[data-testid=forecast-chart] svg.candlestick-chart", { state: "visible", timeout: 30000 });
+  await page.waitForFunction(() => /\d/.test(document.querySelector("[data-testid=rail-evidence]")?.innerText ?? "") && !/…/.test(document.querySelector("[data-testid=rail-diff]")?.innerText ?? "…")
+    && document.querySelectorAll("[data-testid=forecast-page] [aria-busy=true]").length === 0, null, { timeout: 30000 });
+}
+
+/** The elapsed time of a task is the real clock and no two pictures agree on it: its numbers are not painted (the row keeps its size). */
+async function hideElapsed(page) {
+  await page.addStyleTag({ content: "[data-elapsed]{color:transparent!important}" });
+}
+
+/** Press 发起修订 and wait for the drawer; it opens on the first step. */
+export async function openRevise(page) {
+  await page.locator("[data-testid=revise-open]").click();
+  await page.locator("[data-testid=revise-drawer] [data-testid=revise-step-parent]").waitFor({ timeout: 15000 });
+}
+/** On to the materials step, with the candidates read. */
+export async function toMaterials(page) {
+  await page.locator("[data-testid=revise-next]").click();
+  await page.locator("[data-testid=revise-step-materials] [data-source]").first().waitFor({ timeout: 15000 });
+}
+/** Tick the first `count` candidates, in the list's order. */
+export async function tickCandidates(page, count) {
+  const boxes = page.locator("[data-testid=revise-step-materials] [role=checkbox][aria-checked=false]:not([disabled])");
+  for (let i = 0; i < count; i += 1) await boxes.first().click();
+  await page.waitForFunction((n) => document.querySelectorAll("[data-testid=revise-step-materials] [role=checkbox][aria-checked=true]").length === n, count, { timeout: 5000 });
+}
+
 /** The market colours switched to red up the way the settings page does it (the attribute is what the tokens read). */
 async function redUp(page) {
   await page.evaluate(() => { try { localStorage.setItem("market-evidence-agent:updown:v1", "red-up"); } catch { /* storage unavailable */ } document.documentElement.dataset.updown = "red-up"; });
@@ -438,13 +482,39 @@ export const PAGES = [
   // (the market card offers 初始化一年行情), an address that is not a ticker, and the overview under red-up.
   { name: "company", hash: "#/research/c/AAPL", ready: companyLoaded },
   { name: "company-red-up", hash: "#/research/c/AAPL", ready: companyLoaded, before: redUp },
-  { name: "company-forecasts", hash: "#/research/c/AAPL?tab=forecasts", ready: ".forecast-home" },
+  { name: "company-forecasts", hash: "#/research/c/AAPL?tab=forecasts", ready: forecastHomeLoaded },
   { name: "company-materials", hash: "#/research/c/AAPL?tab=materials", ready: ".material-library-panel h2" },
   { name: "company-no-prices", hash: "#/research/c/INTC", ready: "[data-testid=init-prices]" },
   { name: "company-unknown", hash: "#/research/c/NOPE12345", ready: "[data-testid=company-unknown]" },
-  { name: "forecast-home", hash: "#/research/forecasts", ready: ".forecast-home" },
-  { name: "forecast-detail", hash: `#/research/forecasts/${ROOT.aapl}`, ready: ".research-brief" },
-  { name: "judgment", hash: `#/research/judgments/${JUDGMENT.aapl}`, ready: ".judgment-page h2" },
+  // P6.2: the forecast pages.  The home (two lanes, the task bar with a job that keeps running, the empty home), one forecast (the newest version, the second, the three
+  // tabs under it, the three steps of the revise drawer, the one whose target has passed, the one that cannot be found, one whose revision is being made) and one judgment.
+  { name: "forecast-home", hash: "#/research/forecasts", ready: forecastHomeLoaded },
+  { name: "forecast-home-empty", hash: "#/research/forecasts", ready: "[data-testid=lane-formal] [data-slot=empty-state]", view: () => ({ fixtureState: stateWithForecasts({ noForecasts: true }) }) },
+  { name: "forecast-home-job", hash: "#/research/forecasts", ready: forecastHomeLoaded, view: () => ({ fixtureState: stateWithForecasts({ jobStatus: "running", jobKind: "new" }) }),
+    before: async (page) => { await page.locator("[data-testid=forecast-create-go]").click(); await page.locator("[data-testid=forecast-jobs] [data-slot=task-row]").waitFor({ timeout: 15000 });
+      // The button shows its check for a moment after the press; the picture is of it at rest (waiting for the job).
+      await page.waitForFunction(() => document.querySelector("[data-testid=forecast-create-go]")?.dataset.phase === "idle", null, { timeout: 8000 }); await hideElapsed(page); } },
+  { name: "forecast-detail", hash: `#/research/forecasts/${ROOT.aapl}`, ready: forecastLoaded },
+  { name: "forecast-detail-v2", hash: `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl2}`, ready: forecastLoaded },
+  { name: "forecast-detail-compare", hash: `#/research/forecasts/${ROOT.aapl}?section=versions`, ready: forecastLoaded },
+  { name: "forecast-detail-evaluation", hash: `#/research/forecasts/${ROOT.aapl}?section=evaluation`, ready: forecastLoaded },
+  { name: "forecast-detail-audit", hash: `#/research/forecasts/${ROOT.aapl}?section=audit`, ready: forecastLoaded },
+  { name: "forecast-revise-1", hash: `#/research/forecasts/${ROOT.aapl}`, ready: forecastLoaded, before: async (page) => { await openRevise(page); } },
+  { name: "forecast-revise-2", hash: `#/research/forecasts/${ROOT.aapl}`, ready: forecastLoaded, view: () => ({ fixtureState: stateWithForecasts({ manyCandidates: true }) }),
+    before: async (page) => { await openRevise(page); await toMaterials(page); await tickCandidates(page, 10); } },
+  { name: "forecast-revise-3", hash: `#/research/forecasts/${ROOT.aapl}`, ready: forecastLoaded,
+    before: async (page) => { await openRevise(page); await toMaterials(page); await tickCandidates(page, 2); await page.locator("[data-testid=revise-next]").click(); await page.locator("[data-testid=revise-step-confirm]").waitFor(); } },
+  { name: "forecast-expired", hash: `#/research/forecasts/${ROOT_IDS.nvda}`, ready: async (page) => { await forecastLoaded(page); await page.waitForSelector("[data-testid=revise-reason]", { timeout: 15000 }); } },
+  { name: "forecast-missing", hash: "#/research/forecasts/f0000000-0000-4000-8000-0000000000ff", ready: "[data-testid=forecast-missing] [data-slot=empty-state]" },
+  { name: "forecast-generating", hash: `#/research/forecasts/${ROOT.aapl}`, ready: forecastLoaded, view: () => ({ fixtureState: stateWithForecasts({ jobStatus: "running" }) }),
+    before: async (page) => {
+      await openRevise(page); await toMaterials(page); await tickCandidates(page, 1);
+      await page.locator("[data-testid=revise-next]").click(); await page.locator("[data-testid=revise-submit]").click();
+      await page.locator("[data-testid=forecast-jobs] [data-slot=task-row]").waitFor({ timeout: 15000 });
+      await page.locator("[data-testid=revise-drawer]").waitFor({ state: "detached", timeout: 15000 });
+      await hideElapsed(page);
+    } },
+  { name: "judgment", hash: `#/research/judgments/${JUDGMENT.aapl}`, ready: async (page) => { await page.waitForSelector("[data-testid=judgment-card]", { timeout: 30000 }); await page.waitForSelector("[data-testid=judgment-revise]", { timeout: 30000 }); await page.waitForFunction(() => document.querySelectorAll("[data-testid=judgment-page] [aria-busy=true]").length === 0, null, { timeout: 30000 }); } },
   { name: "evidence", hash: "#/research/evidence", ready: ".evidence-center" },
   { name: "materials", hash: "#/research/materials", ready: ".material-library-panel h2" },
   { name: "scores", hash: "#/research/scores", ready: "main.workspace h2" },

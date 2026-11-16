@@ -4,12 +4,13 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, streamHalfway, streamParagraph, streamSteps, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
-import { MATERIALS } from "./fixtures/materials.mjs";
+import { MATERIALS, materialId } from "./fixtures/materials.mjs";
+import { REVISE_FILING_ID, ROOT_IDS, revisionCandidates, versionDetail } from "./fixtures/forecasts.mjs";
 import { buildState } from "./fixtures/index.mjs";
 import { BOT_TEMPLATES } from "./fixtures/bots.mjs";
 import fs from "node:fs";
@@ -17,6 +18,7 @@ import path from "node:path";
 import { findCollisions } from "./collisions.mjs";
 import { normalizePublicMarks, publicMarkQuoteText } from "../../src/chat-public-marks.mjs";
 import { followUpQuestion } from "../../src/chat-unverified.mjs";
+import { OPINION_DISCLAIMER } from "../../src/data-display.mjs";
 import { PERSONA_PRESETS } from "../../src/bot-persona-presets.mjs";
 import { CARET_PERIOD_S, TRACE_PERIOD_S, periodFor } from "../../src/signature.mjs";
 
@@ -498,14 +500,14 @@ async function legacyRedirects(ctx) {
     [`#bot/${BOT.applebot}`, `#/chat/${BOT.applebot}`, "[data-testid=message]"],
     ["#overview", "#/research/c/AAPL", "[data-testid=company-overview]"],
     ["#company", "#/research/c/AAPL", "[data-testid=company-overview]"],
-    ["#forecast", "#/research/forecasts", ".forecast-home"],
-    ["#forecast?symbol=TSLA", "#/research/forecasts?symbol=TSLA", ".forecast-home"],
-    [`#forecast/${ROOT.aapl}`, `#/research/forecasts/${ROOT.aapl}`, ".research-brief"],
-    [`#forecast/${ROOT.aapl}?version=${VERSION.aapl2}`, `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl2}`, ".research-brief"],
-    [`#forecast/${ROOT.aapl}?revise=${material}`, `#/research/forecasts/${ROOT.aapl}?revise=${material}`, ".research-brief"],
-    [`#forecast/judgment/${JUDGMENT.aapl}`, `#/research/judgments/${JUDGMENT.aapl}`, ".judgment-page h2"],
+    ["#forecast", "#/research/forecasts", "[data-testid=forecast-home]"],
+    ["#forecast?symbol=TSLA", "#/research/forecasts?symbol=TSLA", "[data-testid=forecast-home]"],
+    [`#forecast/${ROOT.aapl}`, `#/research/forecasts/${ROOT.aapl}`, "[data-testid=forecast-page]"],
+    [`#forecast/${ROOT.aapl}?version=${VERSION.aapl2}`, `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl2}`, "[data-testid=forecast-page]"],
+    [`#forecast/${ROOT.aapl}?revise=${material}`, `#/research/forecasts/${ROOT.aapl}?revise=${material}`, "[data-testid=forecast-page]"],
+    [`#forecast/judgment/${JUDGMENT.aapl}`, `#/research/judgments/${JUDGMENT.aapl}`, "[data-testid=judgment-card]"],
     ["#forecast/monitor", "#/research/monitor", "main.workspace .v2-desk h2"],
-    ["#revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`, ".research-brief"],
+    ["#revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`, "[data-testid=forecast-page]"],
     ["#evaluation", "#/research/scores", "main.workspace h2"],
     ["#replay", "#/research/replay", ".historical-replay-workspace"],
     ["#materials", "#/research/materials", ".material-library-panel h2"],
@@ -564,10 +566,10 @@ async function backButtonChain(ctx) {
     const step = async (act, ready) => { await act(); await page.waitForFunction((last) => location.hash !== last, trail.at(-1), { timeout: 10000 }); await waitReady(page, { ready }); trail.push(await hashOf(page)); };
     await step(() => page.evaluate(() => { location.hash = "#/research"; }), "[data-testid=watchlist-page]");
     await step(() => page.locator("[data-testid=watch-row][data-symbol=AAPL] [data-row-nav=open]").click(), "[data-testid=company-overview]");
-    await step(() => page.locator("[data-testid=open-forecast]").click(), ".research-brief");
+    await step(() => page.locator("[data-testid=open-forecast]").click(), "[data-testid=forecast-page]");
     await step(() => pressNavItem(page, "持仓"), ".pf-positions");
     assert(trail.join(" ") === `#/chat #/research #/research/c/AAPL #/research/forecasts/${ROOT.aapl} #/portfolio`, `unexpected trail ${trail.join(" ")}`);
-    const ready = [".research-brief", "[data-testid=company-overview]", "[data-testid=watchlist-page]", "[data-testid=message]"];
+    const ready = ["[data-testid=forecast-page]", "[data-testid=company-overview]", "[data-testid=watchlist-page]", "[data-testid=message]"];
     for (let i = trail.length - 2; i >= 0; i -= 1) {
       await page.goBack();
       await waitHash(page, trail[i]);
@@ -698,7 +700,7 @@ async function chunkLoadFailure(ctx) {
     blocked = false;
     await page.locator('[data-slot="route-error"] button').click();
     await page.waitForLoadState("load");
-    await waitReady(page, { ready: ".research-brief" });
+    await waitReady(page, { ready: "[data-testid=forecast-page]" });
     return "forecast chunk aborted: notice with reload inside the shell; after reload the forecast opens";
   } finally { await view.close(); }
 }
@@ -867,7 +869,7 @@ async function loginFlow(ctx) {
     assert((await field.getAttribute("aria-invalid")) === "true", "the field is not marked invalid");
     await field.fill(LOGIN_CODE);
     await page.getByRole("button", { name: "登录", exact: true }).click();
-    await waitReady(page, { ready: ".forecast-home" });
+    await waitReady(page, { ready: "[data-testid=forecast-home]" });
     assert((await hashOf(page)) === "#/research/forecasts", `login lost the page: ${await hashOf(page)}`);
     assert((await page.locator('[data-slot="sidebar"] [data-bot-row]').count()) >= 5, "the shell shows no bots after the login");
   } finally { await deep.close(); }
@@ -909,7 +911,7 @@ async function guestReadonly(ctx) {
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached", timeout: 5000 });
     // What a guest can read: the research pages.
-    for (const [hash, ready] of [["#/research/forecasts", ".forecast-home"], ["#/research/materials", ".material-library-panel h2"], ["#/research/replay", ".historical-replay-workspace"], ["#/settings/appearance", "select#theme"]]) {
+    for (const [hash, ready] of [["#/research/forecasts", "[data-testid=forecast-home]"], ["#/research/materials", ".material-library-panel h2"], ["#/research/replay", ".historical-replay-workspace"], ["#/settings/appearance", "select#theme"]]) {
       await page.evaluate((h) => { location.hash = h; }, hash);
       await waitReady(page, { ready });
     }
@@ -6057,7 +6059,7 @@ async function companySymbolInUrl(ctx) {
     assert((await hashOf(page)) === "#/research/c/TSLA" && (await title()) === "TSLA", `after a reload: ${await hashOf(page)} / ${await title()}`);
     await page.locator("[data-testid=tab-forecasts]").click();
     await waitHash(page, "#/research/c/TSLA?tab=forecasts");
-    await waitReady(page, { ready: ".forecast-home" });
+    await waitReady(page, { ready: "[data-testid=forecast-home]" });
     await page.locator("[data-testid=tab-materials]").click();
     await waitHash(page, "#/research/c/TSLA?tab=materials");
     await waitReady(page, { ready: ".material-library-panel h2" });
@@ -6065,7 +6067,7 @@ async function companySymbolInUrl(ctx) {
     await page.reload({ waitUntil: "load" });
     await waitReady(page, { ready: ".material-library-panel h2" });
     assert((await hashOf(page)) === "#/research/c/TSLA?tab=materials" && (await tabOf()) === "tab-materials", `the tab did not survive a reload: ${await hashOf(page)}`);
-    await page.goBack(); await waitHash(page, "#/research/c/TSLA?tab=forecasts"); await waitReady(page, { ready: ".forecast-home" });
+    await page.goBack(); await waitHash(page, "#/research/c/TSLA?tab=forecasts"); await waitReady(page, { ready: "[data-testid=forecast-home]" });
     assert((await tabOf()) === "tab-forecasts", `back to forecasts: ${await tabOf()}`);
     await page.goBack(); await waitHash(page, "#/research/c/TSLA"); await waitReady(page, { ready: "[data-testid=company-overview]" });
     assert((await tabOf()) === "tab-overview" && (await title()) === "TSLA", "back to the overview");
@@ -6260,6 +6262,465 @@ async function watchlistKeyboard(ctx) {
 }
 
 
+// --- P6.2: the forecast pages -------------------------------------------------------------------------------------------
+const FORECAST_BASE = JSON.parse(fs.readFileSync(new URL("./fixtures/forecast-bodies-baseline.json", import.meta.url), "utf8"));
+const FORECAST_SRC = new URL("../../src/app/research/forecasts/", import.meta.url).pathname;
+const JUDGMENT_NOTE = "模型意见，未经盲测，仅供参考；买不买由你决定。";
+const FORECAST_PAGE = () => PAGES.find((p) => p.name === "forecast-detail");
+const posts = (view) => view.mock.state.forecastPosts ?? [];
+/** A view on the forecast pages: its own fake backend (`patch` switches parts of it), the page read to its ready condition. */
+async function openForecastPage(ctx, label, hash, { width = 1440, patch, identity, ready = FORECAST_PAGE() } = {}) {
+  const view = await newView(ctx.browser, { width, theme: "light", label, unmatched, ...(identity ? { identity } : {}), ...(patch ? { fixtureState: stateWithForecasts(patch) } : {}) });
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  await waitReady(view.page, ready);
+  await settle(view.page);
+  return view;
+}
+const forecastHash = (rootId, query = "") => `#/research/forecasts/${rootId}${query}`;
+async function waitForPosts(view, count, timeout = 8000) {
+  const stop = Date.now() + timeout;
+  while (posts(view).length < count && Date.now() < stop) await view.page.waitForTimeout(100);
+  return posts(view);
+}
+/** The text of a source file with its comments taken out (what the file does, not what it says it does). */
+const codeOf = (name) => fs.readFileSync(path.join(FORECAST_SRC, name), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const localImportsOf = (name) => [...codeOf(name).matchAll(/from\s+["'](\.\/[^"']+)["']/g)].map((match) => match[1].replace(/^\.\//, ""));
+const bodyText = (page) => page.evaluate(() => document.body.innerText);
+const occurrences = (text, sentence) => text.split(sentence).length - 1;
+const keyOf = (candidate) => `${candidate.source_type}:${candidate.source_id}`;
+const candidateAt = (versionId, index) => keyOf(revisionCandidates(versionId, {}).candidates[index]);
+
+/** Acceptance 1: the two lanes are two components with two DOM slots; neither imports the other nor a shared row; side by side at 1440, two tabs at 390. */
+async function forecastLanesSeparate(ctx) {
+  const wide = await openForecastPage(ctx, "lanes wide", "#/research/forecasts", { ready: PAGES.find((p) => p.name === "forecast-home") });
+  let detail;
+  try {
+    const { page } = wide;
+    const formal = page.locator("[data-testid=lane-formal]"); const judgment = page.locator("[data-testid=lane-judgment]");
+    const nFormal = await formal.locator("[data-slot=formal-row]").count(); const nJudgment = await judgment.locator("[data-slot=judgment-row]").count();
+    assert(nFormal === 4 && nJudgment === 3, `rows: ${nFormal} formal / ${nJudgment} judgment (the fixtures hold 4 and 3)`);
+    assert((await page.locator("[data-slot=formal-row]").count()) === nFormal && (await page.locator("[data-slot=judgment-row]").count()) === nJudgment, "a row of one lane sits outside its lane");
+    assert((await judgment.locator("[data-slot=formal-row]").count()) === 0 && (await formal.locator("[data-slot=judgment-row]").count()) === 0, "a lane holds the other lane's row");
+    assert((await formal.locator("[data-slot=formal-row] [data-slot=probability-bar]").count()) === nFormal, "a formal row has no probability bar");
+    assert((await judgment.locator("[data-slot=probability-bar]").count()) === 0, "a judgment row draws a probability bar");
+    assert((await judgment.locator("[data-slot=judgment-row] [data-slot=status-badge][data-kind=opinion]").count()) >= 2, "a judgment row does not say its direction as the model's opinion");
+    const boxes = await page.evaluate(() => { const box = (id) => { const r = document.querySelector(`[data-testid=${id}]`).getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top }; }; return { formal: box("lane-formal"), judgment: box("lane-judgment") }; });
+    assert(boxes.formal.right <= boxes.judgment.left + 1 && Math.abs(boxes.formal.top - boxes.judgment.top) < 2, `the lanes are not side by side: ${JSON.stringify(boxes)}`);
+    assert((await page.locator("[data-testid=lane-tab-formal]").isVisible()) === false, "the phone's tabs are drawn at 1440");
+    // The code: neither row file imports the other, and they share no local module.
+    const a = localImportsOf("FormalForecastRow.tsx"), b = localImportsOf("JudgmentRow.tsx");
+    assert(!a.some((name) => name.startsWith("JudgmentRow")) && !b.some((name) => name.startsWith("FormalForecastRow")), `a row imports the other: ${a} | ${b}`);
+    assert(!a.some((name) => b.includes(name)), `the rows share a local module: ${a.filter((name) => b.includes(name))}`);
+    const generic = fs.readdirSync(FORECAST_SRC).filter((name) => /data-slot="(formal|judgment)-row"/.test(codeOf(name)));
+    assert(generic.sort().join() === "FormalForecastRow.tsx,JudgmentRow.tsx", `files that draw a row: ${generic}`);
+  } finally { await wide.close(); }
+  detail = await openForecastPage(ctx, "lanes phone", "#/research/forecasts", { width: 390, ready: PAGES.find((p) => p.name === "forecast-home") });
+  try {
+    const { page } = detail;
+    const shown = async () => ({ formal: await page.locator("[data-testid=lane-formal]").isVisible(), judgment: await page.locator("[data-testid=lane-judgment]").isVisible() });
+    assert(await page.locator("[data-testid=lane-tab-formal]").isVisible() && await page.locator("[data-testid=lane-tab-judgment]").isVisible(), "no tabs at 390");
+    let state = await shown();
+    assert(state.formal && !state.judgment, `at 390 the first tab shows only the formal lane: ${JSON.stringify(state)}`);
+    await page.locator("[data-testid=lane-tab-judgment]").click();
+    state = await shown();
+    assert(!state.formal && state.judgment && (await page.locator("[data-testid=lane-tab-judgment]").getAttribute("aria-selected")) === "true", `after the second tab: ${JSON.stringify(state)}`);
+    await page.locator("[data-testid=lane-tab-judgment]").focus(); await page.keyboard.press("ArrowLeft");
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "lane-tab-formal" && document.querySelector("[data-testid=lane-formal]")?.getBoundingClientRect().width > 0, null, { timeout: 3000 });
+  } finally { await detail.close(); }
+  return "formal / judgment rows: two slots, no row in the other's lane, no bar on a judgment, no shared import; side by side at 1440, two tabs (arrows too) at 390";
+}
+
+/** Acceptance 2: a version press and a tab press rewrite the address in place (a reload stays, no history entry is added: the page's old rule). */
+async function forecastVersionUrl(ctx) {
+  const view = await openForecastPage(ctx, "version url", "#/research/forecasts", { ready: PAGES.find((p) => p.name === "forecast-home") });
+  try {
+    const { page } = view;
+    await page.locator("[data-slot=formal-row]", { hasText: "AAPL" }).locator("a").click();
+    await waitReady(page, FORECAST_PAGE());
+    const entries = await page.evaluate(() => history.length);
+    const selected = () => page.locator("[data-testid=version-rail] [data-slot=timeline-item][data-selected]").getAttribute("data-id");
+    const judgmentTitle = () => page.locator("[data-testid=forecast-judgment] h2").innerText();
+    assert((await selected()) === VERSION.aapl3 && (await judgmentTitle()).includes("第 3 版"), `opens on the newest version: ${await selected()}`);
+    assert((await hashOf(page)) === `#/research/forecasts/${ROOT.aapl}`, `the address names a version by itself: ${await hashOf(page)}`);
+    await page.locator(`[data-testid=version-rail] [data-slot=timeline-item][data-id="${VERSION.aapl2}"] button`).click();
+    await waitHash(page, `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl2}`);
+    await page.waitForFunction(() => document.querySelector("[data-testid=forecast-judgment] h2")?.innerText.includes("第 2 版"), null, { timeout: 8000 });
+    assert((await selected()) === VERSION.aapl2, `the rail does not follow: ${await selected()}`);
+    assert((await page.evaluate(() => history.length)) === entries, "a version press added a history entry");
+    await page.locator("[data-testid=tab-audit]").click();
+    await waitHash(page, `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl2}&section=audit`);
+    assert((await page.locator("[data-testid=tab-audit]").getAttribute("aria-selected")) === "true" && (await page.locator("[data-testid=forecast-audit]").count()) === 1, "the audit tab is not open");
+    await page.reload({ waitUntil: "load" });
+    await waitReady(page, FORECAST_PAGE());
+    assert((await hashOf(page)) === `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl2}&section=audit` && (await selected()) === VERSION.aapl2 && (await judgmentTitle()).includes("第 2 版"), `after a reload: ${await hashOf(page)} / ${await selected()}`);
+    assert((await page.locator("[data-testid=tab-audit]").getAttribute("aria-selected")) === "true", "the tab is not the one in the address after a reload");
+    await page.locator(`[data-testid=version-rail] [data-slot=timeline-item][data-id="${VERSION.aapl1}"] button`).click();
+    await waitHash(page, `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl1}&section=audit`);
+    await page.goBack();
+    await waitHash(page, "#/research/forecasts");
+    return "a version press and a tab press rewrite ?version= and ?section= in place (no history entry), a reload keeps both, back leaves the page for where it came from (the page's rule since P2.1: replace)";
+  } finally { await view.close(); }
+}
+
+/** Acceptance 4: what the old page showed in each of its nine modules is findable in the new layout; the lists are read off the old page (fixtures, v3 of AAPL) and written here. */
+const OLD_MODULES = [
+  { module: "版本头", where: "[data-testid=forecast-judgment]", needles: ["第 3 版", "gpt-6.1-terra", "openrouter", "请求 openai/gpt-6.1-terra，实际返回 gpt-6.1-terra", "决策方式", "推理模型", "20个交易日收盘相对锚点 ±2%", "q3", "校准状态", "未校准", "决策时点", "行情截止", "固定目标日", "2026-12-31"] },
+  { module: "摘要", where: "[data-testid=forecast-judgment]", needles: ["18%", "44%", "38%", "上涨：目标日收盘比锚点收盘高 2% 以上。下跌：低 2% 以上。持平：在 ±2% 以内（含边界）。", "由 gpt-6.1-terra 根据下方研究简报给出。未经校准，仅供参考。", "概率未经校准，属实验性信息。仅供参考，买不买由你决定。"] },
+  { module: "行情图", where: "[data-testid=forecast-chart]", needles: ["固定目标与决策行情截止", "决策行情截止", "固定目标 2026-12-31", "开盘", "最高", "最低", "收盘", "SPY 收盘", "图表仅定位合同时间边界，不计算未来收益或预测准确率。"] },
+  { module: "研究简报", where: "[data-testid=forecast-brief]", needles: ["研究简报", "输入质量", "原始锚点收盘", "$210.40", "近 5 个交易日", "1.23%", "20 日波动", "距目标剩余交易日", "新增事实", "服务业务净销售额同比增长 14%，毛利率 75.0%。", "潜在利好", "潜在利空 / 反证", "持续背景", "持续原因：多期财报一致", "未知问题", "汇率拖累的幅度是多少？", "版本变化", "纳入简报的材料", "3 份", "未纳入材料 (1)", "查看这版分析"] },
+  { module: "修订对比", where: "[data-testid=forecast-compare]", tab: "tab-versions", needles: ["3 个历史版本", "固定目标", "2026-12-31", "当前版本", "第 3 版", "市场输入：已更新（见下方截止时间）。本系统尚未验证各输入对市场结果的定量归因。"] },
+  { module: "版本事件", where: "[data-testid=forecast-events]", tab: "tab-audit", needles: ["预测版本记录", "第 1 版 · 初始版本", "第 2 版 · 修订版本", "第 3 版 · 修订版本", "人工发起修订", "新增 10-Q 与 8-K 财报材料", "纳入券商研报与最近行情"] },
+  { module: "发起修订", where: "[data-testid=forecast-page]", needles: ["发起修订"] },
+  { module: "到期评估", where: "[data-testid=forecast-evaluation]", tab: "tab-evaluation", needles: ["到期评估 · 同一模型组", "独立预测样本", "标签 0 · 评分 0 / 4", "样本不足", "每项独立预测只按最高版本号统计；当前选中的旧版本没有单独计入这组分数。"] },
+  { module: "审计", where: "[data-testid=forecast-audit]", tab: "tab-audit", needles: ["服务方", "openrouter", "请求模型", "openai/gpt-6.1-terra", "实际返回模型", "问题版本", "请求编号", "req-fixture-0001", "输入哈希", "任务编号", "任务状态", "succeeded · completed", "新增 1 · 状态替换 0 · 移除 0 · 继承 3", "简报实际引用 3 条", "未进入简报 1 条", "行情数据截止", "价格输入哈希", "研究已就绪", "模型清单（原始）"] },
+];
+async function forecastModulesPresent(ctx) {
+  const view = await openForecastPage(ctx, "modules present", forecastHash(ROOT.aapl));
+  try {
+    const { page } = view;
+    const missing = [];
+    for (const item of OLD_MODULES) {
+      if (item.tab) { await page.locator(`[data-testid=${item.tab}]`).click(); await page.locator(item.where).waitFor({ timeout: 8000 }); }
+      await page.waitForFunction((sel) => document.querySelectorAll(`${sel} [aria-busy=true]`).length === 0, item.where, { timeout: 8000 });
+      const text = (await page.locator(item.where).first().innerText()).replace(/\s+/g, " ");
+      for (const needle of item.needles) if (!text.includes(needle.replace(/\s+/g, " "))) missing.push(`${item.module}: 「${needle}」`);
+    }
+    assert(!missing.length, `not found in the new layout:\n${missing.join("\n")}`);
+    // The chart holds the two marks (as text in the picture) and the revise entry is the title row's button.
+    const marks = await page.locator("[data-testid=forecast-chart] svg text").evaluateAll((nodes) => nodes.map((node) => node.textContent.trim()));
+    assert(marks.includes("决策行情截止") && marks.some((text) => text.includes("固定目标")), `the chart's marks: ${marks.join(" | ")}`);
+    // The rail is the sticky column at 1440: after the page is scrolled it is still in view at the top.
+    const top = await page.evaluate(async () => {
+      const rail = document.querySelector("[data-testid=version-rail]"); let node = rail.parentElement; while (node && !(node.scrollHeight > node.clientHeight + 50 && /(auto|scroll)/.test(getComputedStyle(node).overflowY))) node = node.parentElement;
+      const scroller = node ?? document.scrollingElement; const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))); scroller.scrollTop = 0; await frame(); const before = rail.getBoundingClientRect().top; scroller.scrollTop = 500; await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return { before, after: rail.getBoundingClientRect().top, scrolled: scroller.scrollTop };
+    });
+    assert(top.scrolled > 100 && top.after >= 0 && top.after <= 40 && top.before > top.after, `the version rail does not stick: ${JSON.stringify(top)}`);
+    return `${OLD_MODULES.length} old modules, ${OLD_MODULES.reduce((sum, item) => sum + item.needles.length, 0)} marks of theirs found in the new places; the rail sticks (top ${Math.round(top.after)}px after a scroll of ${top.scrolled}px)`;
+  } finally { await view.close(); }
+}
+
+/** Acceptance 3: the drawer in three steps; nothing is ticked for the reader; the cap of ten; the request is the old form's, field by field (fixtures/forecast-bodies-baseline.json). */
+async function forecastReviseFlow(ctx) {
+  const scenarios = [["one-new", null, [1]], ["two-reverse-click", null, [1, 0]], ["older-parent", VERSION.aapl1, [0]]];
+  for (const [name, parent, ticks] of scenarios) {
+    const view = await openForecastPage(ctx, `revise ${name}`, forecastHash(ROOT.aapl));
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=revise-open]").click();
+      await page.locator("[data-testid=revise-step-parent]").waitFor({ timeout: 8000 });
+      assert((await page.locator("[data-slot=stepper] [data-state=current]").getAttribute("data-step")) === "parent", "the drawer does not open on the first step");
+      const radios = await page.locator("[data-testid=revise-step-parent] input[type=radio]").evaluateAll((nodes) => nodes.map((node) => [node.value, node.checked]));
+      assert(radios.length === 3 && radios.filter(([, checked]) => checked).map(([value]) => value).join() === VERSION.aapl3, `the parent is not the newest by default: ${JSON.stringify(radios)}`);
+      if (parent) await page.locator(`[data-testid=revise-step-parent] input[value="${parent}"]`).check();
+      await page.locator("[data-testid=revise-next]").click();
+      await page.locator("[data-testid=revise-step-materials] [data-source]").first().waitFor({ timeout: 8000 });
+      // Nothing is ticked for the reader and there is no control that ticks for them.
+      assert((await page.locator("[data-testid=revise-step-materials] [role=checkbox][aria-checked=true]").count()) === 0, "something is ticked before the reader ticked it");
+      assert((await page.locator("[data-testid=revise-step-materials] [role=checkbox]").count()) === 5, "the five fixture candidates are not all listed");
+      const controls = (await page.locator("[data-testid=revise-drawer] button").allInnerTexts()).join("|");
+      assert(!/全选|推荐|自动选|一键/.test(controls), `a control chooses for the reader: ${controls}`);
+      const groups = await page.locator("[data-testid=revise-step-materials] [data-group]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-group")));
+      assert(groups.join() === "new,backfilled,reanalyzed,status", `groups: ${groups}`);
+      assert((await page.locator("[data-testid=revise-next]").isDisabled()) && (await page.locator("[data-testid=revise-count]").innerText()).includes("已选 0 / 最多 10 份"), "the next step is open with nothing ticked");
+      for (const index of ticks) await page.locator(`[data-source="${candidateAt(parent ?? VERSION.aapl3, index)}"] [role=checkbox]`).click();
+      await page.locator("[data-testid=revise-next]").click();
+      await page.locator("[data-testid=revise-step-confirm]").waitFor({ timeout: 8000 });
+      await page.locator("[data-testid=revise-submit]").click();
+      const sent = await waitForPosts(view, 1);
+      assert(sent.length === 1, `${sent.length} requests for one press`);
+      const base = FORECAST_BASE.revise[name];
+      assert(sent[0].path === base.path && sent[0].body === base.body, `${name}: request changed:\n  now      ${sent[0].path} ${sent[0].body}\n  baseline ${base.path} ${base.body}`);
+      await page.locator("[data-testid=revise-drawer]").waitFor({ state: "detached", timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  // The cap: thirteen candidates, ten ticked, the rest cannot be; one untick frees them.
+  const capped = await openForecastPage(ctx, "revise cap", forecastHash(ROOT.aapl), { patch: { manyCandidates: true } });
+  try {
+    const { page } = capped;
+    await page.locator("[data-testid=revise-open]").click(); await page.locator("[data-testid=revise-next]").click();
+    await page.locator("[data-testid=revise-step-materials] [data-source]").first().waitFor({ timeout: 8000 });
+    assert((await page.locator("[data-testid=revise-step-materials] [role=checkbox]").count()) === 13, "thirteen candidates expected");
+    await tickCandidates(page, 10);
+    const free = () => page.locator("[data-testid=revise-step-materials] [role=checkbox]:not([aria-checked=true])");
+    assert((await free().count()) === 3 && (await page.locator("[data-testid=revise-step-materials] [role=checkbox][disabled]").count()) === 3, "after ten ticks the other three are not disabled");
+    assert((await page.locator("[data-testid=revise-count]").innerText()).includes("已选 10 / 最多 10 份"), "the count is not 10 / 10");
+    await page.locator("[data-testid=revise-step-materials] [role=checkbox][aria-checked=true]").first().click();
+    assert((await page.locator("[data-testid=revise-step-materials] [role=checkbox][disabled]").count()) === 0 && (await page.locator("[data-testid=revise-count]").innerText()).includes("已选 9"), "an untick did not free the others");
+    // Esc closes and gives the focus back to the button that opened it.
+    await page.keyboard.press("Escape");
+    await page.locator("[data-testid=revise-drawer]").waitFor({ state: "detached", timeout: 5000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "revise-open", null, { timeout: 3000 });
+  } finally { await capped.close(); }
+  return "three steps (newest parent by default, nothing ticked, four groups, no choose-for-me control); three request bodies identical to the old form's (candidate order, parent version); ten ticks lock the other three, an untick frees them; Esc closes and returns the focus";
+}
+
+/** Acceptance 3: a forecast whose target passed (or has no readable one) cannot be revised: the button is disabled and says why; nothing opens the drawer. */
+async function forecastReviseBlocked(ctx) {
+  const expired = await openForecastPage(ctx, "revise blocked", forecastHash(ROOT_IDS.nvda));
+  try {
+    const { page } = expired;
+    const button = page.locator("[data-testid=revise-open]");
+    assert(await button.isDisabled(), "the revise button is enabled on an expired forecast");
+    assert((await page.locator("[data-testid=revise-reason]").innerText()).trim() === "该预测的目标已到期，只能查看历史版本。", `reason: ${await page.locator("[data-testid=revise-reason]").innerText()}`);
+    assert((await button.getAttribute("aria-describedby")) === "revise-reason", "the reason is not tied to the button");
+    await button.click({ force: true }).catch(() => {});
+    await page.keyboard.press("Enter");
+    assert((await page.locator("[data-testid=revise-drawer]").count()) === 0, "a drawer opened on an expired forecast");
+  } finally { await expired.close(); }
+  const invalid = await openForecastPage(ctx, "revise invalid", forecastHash(ROOT.aapl), { patch: { invalidTarget: true } });
+  try {
+    const { page } = invalid;
+    assert(await page.locator("[data-testid=revise-open]").isDisabled(), "the revise button is enabled on a forecast without a readable target");
+    assert((await page.locator("[data-testid=revise-reason]").innerText()).trim() === "该预测的目标合同无效，只能查看历史版本。", "the invalid-contract reason is not said");
+  } finally { await invalid.close(); }
+  const open = await openForecastPage(ctx, "revise open", forecastHash(ROOT.aapl));
+  try {
+    assert(!(await open.page.locator("[data-testid=revise-open]").isDisabled()) && (await open.page.locator("[data-testid=revise-reason]").count()) === 0, "a forecast that can be revised is blocked or explains itself");
+  } finally { await open.close(); }
+  return "expired target and invalid contract: button disabled, its reason said and tied to it, Enter / forced press opens nothing; an open forecast has neither";
+}
+
+/** Acceptance 3: ?revise= opens the drawer on the materials step and brings the named filing into view, marked; it is never ticked. */
+async function forecastReviseDeeplink(ctx) {
+  const view = await openForecastPage(ctx, "revise deeplink", forecastHash(ROOT.aapl, `?revise=${REVISE_FILING_ID}`));
+  try {
+    const { page } = view;
+    await page.locator("[data-testid=revise-step-materials] [data-source]").first().waitFor({ timeout: 10000 });
+    const named = page.locator(`[data-source="official_filing:${REVISE_FILING_ID}"]`);
+    await named.waitFor({ timeout: 5000 });
+    assert((await named.getAttribute("data-located")) !== null, "the filing the address names is not marked");
+    assert((await page.locator("[data-testid=revise-step-materials] [data-located]").count()) === 1, "more than one filing is marked");
+    assert((await page.locator("[data-testid=revise-step-materials] [role=checkbox][aria-checked=true]").count()) === 0, "the filing the address names is ticked for the reader");
+    assert(await page.locator("[data-testid=revise-next]").isDisabled() && (await page.locator("[data-testid=revise-count]").innerText()).includes("已选 0"), "the next step is open with nothing ticked");
+    const inView = await named.evaluate((node) => { const r = node.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+    assert(inView, "the named filing is not in view");
+    await named.locator("[role=checkbox]").click();
+    assert((await named.locator("[role=checkbox]").getAttribute("aria-checked")) === "true", "the reader could not tick it");
+  } finally { await view.close(); }
+  // An address with a filing that is not a candidate opens the drawer and leaves everything alone; an unreadable one opens nothing.
+  const other = await openForecastPage(ctx, "revise deeplink other", forecastHash(ROOT.aapl, "?revise=6f1c2d3e-0000-4000-8000-0000000000bb"));
+  try {
+    await other.page.locator("[data-testid=revise-step-materials] [data-source]").first().waitFor({ timeout: 10000 });
+    assert((await other.page.locator("[data-located]").count()) === 0 && (await other.page.locator("[role=checkbox][aria-checked=true]").count()) === 0, "a filing that is not a candidate marked or ticked something");
+  } finally { await other.close(); }
+  const unreadable = await openForecastPage(ctx, "revise deeplink unreadable", forecastHash(ROOT.aapl, "?revise=not-an-id"));
+  try {
+    await unreadable.page.waitForTimeout(500);
+    assert((await unreadable.page.locator("[data-testid=revise-drawer]").count()) === 0, "an unreadable ?revise= opened the drawer");
+  } finally { await unreadable.close(); }
+  return "?revise=<filing>: the drawer opens on the materials step, the filing is marked and in view, nothing is ticked and the reader can tick it; another id marks nothing; an unreadable one opens nothing";
+}
+
+/** The create request: the company picked in the combobox (the first by default), kind new, no sources: the old page's body, string for string. */
+async function forecastCreateBody(ctx) {
+  for (const [name, symbol] of [["default", null], ["TSLA", "TSLA"]]) {
+    const view = await openForecastPage(ctx, `create ${name}`, "#/research/forecasts", { ready: PAGES.find((p) => p.name === "forecast-home") });
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=forecast-create-symbol]").click();
+      const items = await page.locator("[role=option][data-symbol]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-symbol")));
+      assert(items.join() === "AAPL,AMD,AMZN,GOOGL,MSFT,NVDA,TSLA", `the choices: ${items}`);
+      if (symbol) await page.locator(`[role=option][data-symbol=${symbol}]`).click(); else await page.keyboard.press("Escape");
+      assert((await page.locator("[data-testid=forecast-create-symbol]").innerText()).trim() === (symbol ?? "AAPL"), "the combobox does not show the pick");
+      await page.locator("[data-testid=forecast-create-go]").click();
+      const sent = await waitForPosts(view, 1);
+      assert(sent.length === 1, `${sent.length} requests for one press`);
+      const base = FORECAST_BASE.create[name];
+      assert(sent[0].path === base.path && sent[0].body === base.body, `${name}: request changed:\n  now      ${sent[0].path} ${sent[0].body}\n  baseline ${base.path} ${base.body}`);
+    } finally { await view.close(); }
+  }
+  return "creating a forecast for the default and a picked company sends the old page's body, string for string (symbol, kind new, no sources)";
+}
+
+/** The job strip: a running job is one row above the list (the shell's dock stays away), a failed one says why and 重试 sends the same request again. */
+async function forecastJobStrip(ctx) {
+  const running = await openForecastPage(ctx, "job running", "#/research/forecasts", { ready: PAGES.find((p) => p.name === "forecast-home"), patch: { jobStatus: "running", jobKind: "new" } });
+  try {
+    const { page } = running;
+    await page.locator("[data-testid=forecast-create-go]").click();
+    await page.locator("[data-testid=forecast-jobs] [data-slot=task-row]").waitFor({ timeout: 8000 });
+    const row = await page.locator("[data-testid=forecast-jobs] [data-slot=task-row]").innerText();
+    assert(row.includes("创建预测 · AAPL") && row.includes("生成研究简报"), `the row: ${row}`);
+    assert((await page.locator("[data-slot=task-row]:visible").count()) === 1, "the job shows twice (the dock is not hidden)");
+    assert(await page.locator("[data-testid=forecast-create-go]").isDisabled(), "a second forecast can be started while one runs");
+  } finally { await running.close(); }
+  const failed = await openForecastPage(ctx, "job failed", "#/research/forecasts", { ready: PAGES.find((p) => p.name === "forecast-home"), patch: { jobStatus: "failed", jobKind: "new" } });
+  try {
+    const { page } = failed;
+    await page.locator("[data-testid=forecast-create-go]").click();
+    const failure = page.locator("[data-slot=job-alert][data-kind=failure]");
+    await failure.waitFor({ timeout: 8000 });
+    const text = await failure.innerText();
+    assert(text.includes("AAPL") && text.includes("处理未完成：") && text.includes("forecast_provider_timeout"), `the failure: ${text}`);
+    await failure.getByRole("button", { name: "重试" }).click();
+    const sent = await waitForPosts(failed, 2);
+    assert(sent.length === 2 && sent[0].body === sent[1].body && sent[1].body === FORECAST_BASE.create.default.body, `the retry is not the same request: ${JSON.stringify(sent)}`);
+  } finally { await failed.close(); }
+  return "a running job: one task row (stage, no dock twin), the create button waits; a failed one: the reason and its code, 重试 sends the old request again";
+}
+
+/** 3.4: the sources a brief statement rests on are numbers that open that material on the evidence page. */
+async function forecastBriefLinks(ctx) {
+  const view = await openForecastPage(ctx, "brief links", forecastHash(ROOT.aapl));
+  try {
+    const { page } = view;
+    const brief = versionDetail(VERSION.aapl3).research_brief;
+    const byAnalysis = new Map(brief.material_refs.map((ref) => [ref.analysis_id, ref]));
+    const expectFor = (rows) => rows.flatMap((row) => row.citations.map((citation) => { const ref = byAnalysis.get(citation.analysis_id); return `#/research/evidence/${VERSION.aapl3}/${ref.source_type}/${ref.source_id}`; }));
+    const groups = [["新增事实", brief.new_facts], ["持续背景", brief.background], ["潜在利好", brief.supporting], ["潜在利空 / 反证", brief.counter], ["未知问题", brief.unknowns]];
+    let total = 0;
+    for (const [title, rows] of groups) {
+      const hrefs = await page.locator("[data-testid=forecast-brief] [data-slot=brief-group]", { has: page.locator("h4", { hasText: title }) }).locator("[data-slot=brief-cite]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("href")));
+      assert(JSON.stringify(hrefs) === JSON.stringify(expectFor(rows)), `${title}: links ${JSON.stringify(hrefs)} != ${JSON.stringify(expectFor(rows))}`);
+      total += hrefs.length;
+    }
+    assert(total === 8, `${total} source numbers (the fixture has 8)`);
+    // Every chip says which material it is: its number is the material's place in 纳入简报的材料.
+    const labels = await page.locator("[data-slot=brief-cite]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("aria-label")));
+    assert(labels.every((label) => /^来源 [123]：/.test(label)), `a source number without its material: ${labels.join(" | ")}`);
+    assert((await page.locator("[data-testid=rail-evidence]").getAttribute("href")) === `#/research/evidence/${VERSION.aapl3}`, "the rail's evidence link is not the version's evidence page");
+    const materials = await page.locator("[data-testid=brief-materials] a", { hasText: "在证据页打开" }).evaluateAll((nodes) => nodes.map((node) => node.getAttribute("href")));
+    assert(materials.length === 3 && materials[0] === `#/research/evidence/${VERSION.aapl3}/official_filing/${brief.material_refs[0].source_id}`, `the materials' own links: ${materials.join(" | ")}`);
+    return `${total} source numbers in five groups open ${new Set(await page.locator("[data-slot=brief-cite]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("href")))).size} evidence addresses (version / type / id), each named in its label; the rail and the three materials link to the evidence page`;
+  } finally { await view.close(); }
+}
+
+/** The judgment page's two actions send what the old page sent (create), or lead where it led (revise); only the one that applies is on. */
+async function judgmentActions(ctx) {
+  const nvda = await openForecastPage(ctx, "judgment create", `#/research/judgments/${JUDGMENT.nvda}`, { ready: { ready: "[data-testid=judgment-actions] [data-testid=judgment-create]" } });
+  try {
+    const { page } = nvda;
+    await page.waitForFunction(() => !document.querySelector("[data-testid=judgment-create]")?.disabled, null, { timeout: 8000 });
+    assert(await page.locator("[data-testid=judgment-revise]").isDisabled(), "the revise action is on for a company with no open forecast");
+    await page.locator("[data-testid=judgment-create]").click();
+    const sent = await waitForPosts(nvda, 1);
+    assert(sent.length === 1 && sent[0].path === FORECAST_BASE.judgment.create.path && sent[0].body === FORECAST_BASE.judgment.create.body, `create: ${JSON.stringify(sent)} != ${JSON.stringify(FORECAST_BASE.judgment.create)}`);
+  } finally { await nvda.close(); }
+  const aapl = await openForecastPage(ctx, "judgment revise", `#/research/judgments/${JUDGMENT.aapl}`, { ready: PAGES.find((p) => p.name === "judgment") });
+  try {
+    const { page } = aapl;
+    assert(await page.locator("[data-testid=judgment-create]").isDisabled(), "the create action is on for a company with an open forecast");
+    const href = await page.locator("[data-testid=judgment-revise]").getAttribute("href");
+    assert(href === FORECAST_BASE.judgment.reviseHref, `revise leads to ${href}, the old page's ${FORECAST_BASE.judgment.reviseHref}`);
+    assert((await page.locator("[data-testid=judgment-material-link]").getAttribute("href")) === `#/research/materials?symbol=AAPL&focus=${materialId(1)}&type=official_filing`, "the link to the filing's library entry is wrong");
+    assert(posts(aapl).length === 0, "opening the page sent a write");
+  } finally { await aapl.close(); }
+  return "NVDA (no open forecast): create sends the old body (symbol, new, the filing), revise is off; AAPL (open forecast): create is off, revise leads to the forecast with ?revise=<filing>; the filing's library entry is linked";
+}
+
+/** An address whose forecast does not exist says so and offers the home; no other forecast stands in for it (no request for any other record). */
+async function forecastMissingNoSubstitute(ctx) {
+  const missing = "f0000000-0000-4000-8000-0000000000ff";
+  const view = await openForecastPage(ctx, "forecast missing", forecastHash(missing), { ready: { ready: "[data-testid=forecast-missing] [data-slot=empty-state]" } });
+  try {
+    const { page } = view;
+    const text = await page.locator("[data-testid=forecast-missing]").innerText();
+    assert(text.includes("找不到这项预测") && text.includes("不会用其他预测代替它"), `the page says: ${text}`);
+    for (const selector of ["[data-testid=forecast-judgment]", "[data-testid=forecast-chart]", "[data-testid=version-rail]", "[data-testid=forecast-brief]"]) assert((await page.locator(selector).count()) === 0, `${selector} is drawn for a forecast that does not exist`);
+    const seen = view.mock.requests.filter((request) => request.method === "GET" && /\/v2\//.test(request.path)).map((request) => request.path);
+    assert(seen.every((path) => path.includes(missing)), `a request for another record: ${seen.join(" | ")}`);
+    const home = page.getByRole("link", { name: "回到预测首页" });
+    assert((await home.getAttribute("href")) === "#/research/forecasts", "the way back is not the forecast home");
+    await home.click();
+    await waitHash(page, "#/research/forecasts");
+  } finally { await view.close(); }
+  return "an unknown forecast id: the page and 「不会用其他预测代替它」, no card, chart or rail, no request for any other record, the way back is the home";
+}
+
+/** The disclaimer is said once per page area, word for word (the probability sentence where bars are drawn; the judgment sentence where a judgment is). */
+async function forecastDisclaimerOnce(ctx) {
+  const cases = [
+    ["forecast-home", "#/research/forecasts", PAGES.find((p) => p.name === "forecast-home"), [[OPINION_DISCLAIMER, 1], [JUDGMENT_NOTE, (width) => width >= 1024 ? 1 : 0]]],
+    ["company-forecasts", "#/research/c/AAPL?tab=forecasts", PAGES.find((p) => p.name === "company-forecasts"), [[OPINION_DISCLAIMER, 1]]],
+    ["forecast-detail", forecastHash(ROOT.aapl), FORECAST_PAGE(), [[OPINION_DISCLAIMER, 1], [JUDGMENT_NOTE, 0]]],
+    ["forecast-detail audit", forecastHash(ROOT.aapl, `?version=${VERSION.aapl2}&section=audit`), FORECAST_PAGE(), [[OPINION_DISCLAIMER, 1]]],
+    ["judgment", `#/research/judgments/${JUDGMENT.aapl}`, PAGES.find((p) => p.name === "judgment"), [[JUDGMENT_NOTE, 1], [OPINION_DISCLAIMER, 0]]],
+  ];
+  const lines = [];
+  for (const [name, hash, ready, expect] of cases) {
+    for (const width of [1440, 390]) {
+      const view = await openForecastPage(ctx, `disclaimer ${name}`, hash, { ready, width });
+      try {
+        const text = await bodyText(view.page);
+        for (const [sentence, wanted] of expect) { const count = typeof wanted === "function" ? wanted(width) : wanted; assert(occurrences(text, sentence) === count, `${name} @${width}: 「${sentence.slice(0, 14)}…」 appears ${occurrences(text, sentence)} times, expected ${count}`); }
+        const slots = await view.page.locator("[data-slot=opinion-disclaimer]").count();
+        assert(slots <= 1, `${name} @${width}: ${slots} disclaimer footnotes`);
+      } finally { await view.close(); }
+    }
+    lines.push(name);
+  }
+  return `${lines.join(", ")} at 1440 and 390: each sentence exactly as often as it should be, verbatim`;
+}
+
+/** FE9: in the pictures that draw a chart, no two texts of the picture overlap and none leaves it (the labels of the marks, the price axis and the dates). */
+const CHART_PAGES = [["company", "#/research/c/AAPL"], ["forecast-detail", forecastHash(ROOT.aapl)], ["forecast-expired", forecastHash(ROOT_IDS.nvda)]];
+async function chartTextClear(ctx) {
+  const bad = []; let texts = 0;
+  for (const [name, hash] of CHART_PAGES) {
+    const def = PAGES.find((p) => p.name === name);
+    for (const width of [390, 1440]) {
+      const view = await newView(ctx.browser, { width, theme: "light", label: `chart text ${name}`, unmatched, ...(typeof def.view === "function" ? def.view() : {}) });
+      try {
+        const { page } = view;
+        await page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+        await waitReady(page, def); await settle(page);
+        await page.locator('figure[data-chart="tokens"] svg').first().waitFor({ timeout: 10000 });
+        const found = await page.evaluate(() => {
+          const out = [];
+          for (const svg of document.querySelectorAll('figure[data-chart="tokens"] svg')) {
+            const frame = svg.getBoundingClientRect(); const items = [];
+            for (const node of svg.querySelectorAll("text")) {
+              const r = node.getBoundingClientRect();
+              if (!(r.width > 0 && r.height > 0) || !node.textContent.trim()) continue;
+              items.push({ text: node.textContent.trim(), left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+            }
+            out.push({ frame: { left: frame.left, right: frame.right, top: frame.top, bottom: frame.bottom }, items });
+          }
+          return out;
+        });
+        const fmt = (item) => `「${item.text}」[${item.left.toFixed(1)},${item.top.toFixed(1)} → ${item.right.toFixed(1)},${item.bottom.toFixed(1)}]`;
+        for (const chart of found) {
+          texts += chart.items.length;
+          for (const item of chart.items) if (item.left < chart.frame.left - 1 || item.right > chart.frame.right + 1 || item.top < chart.frame.top - 1 || item.bottom > chart.frame.bottom + 1) bad.push(`${name} @${width}: ${fmt(item)} leaves the picture [${chart.frame.left.toFixed(1)},${chart.frame.top.toFixed(1)} → ${chart.frame.right.toFixed(1)},${chart.frame.bottom.toFixed(1)}]`);
+          for (let i = 0; i < chart.items.length; i += 1) for (let j = i + 1; j < chart.items.length; j += 1) {
+            const a = chart.items[i], b = chart.items[j];
+            const dx = Math.min(a.right, b.right) - Math.max(a.left, b.left), dy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+            if (dx > 1 && dy > 1) bad.push(`${name} @${width}: ${fmt(a)} overlaps ${fmt(b)}`);
+          }
+        }
+        assert(found.length >= 1, `${name} @${width}: no chart drawn`);
+      } finally { await view.close(); }
+    }
+  }
+  assert(!bad.length, bad.join("\n"));
+  return `${CHART_PAGES.length} pages at 390 and 1440: ${texts} texts of the charts, none overlaps another (1px) and none leaves its picture`;
+}
+
+/** The ruling of P6.1 (item 9): a guest reads the company page without 问 bot, the initialise press is refused with a pointer to the login, and the forecast home has no judgment lane and no create. */
+async function forecastGuestView(ctx) {
+  const company = await openAt(ctx, "guest company", "#/research/c/AAPL", { identity: "guest", ready: "[data-testid=company-overview]" });
+  try {
+    assert((await company.page.locator("[data-testid=ask-bot]").count()) === 0, "a guest is offered 问 bot");
+  } finally { await company.close(); }
+  const bare = await openAt(ctx, "guest company no prices", "#/research/c/INTC", { identity: "guest", ready: "[data-testid=init-prices]" });
+  try {
+    await bare.page.locator("[data-testid=init-prices]").click();
+    // The refusal is the server's (403 without the owner's credential): the page says the server's own sentence in a toast (the fake's is `owner_only`) and keeps the button.
+    await toastOf(bare.page, "owner_only").waitFor({ timeout: 8000 });
+    assert((bare.mock.state.initializations ?? []).length === 0, "a guest's initialise press reached the server's state");
+    assert(await bare.page.locator("[data-testid=init-prices]").isVisible(), "the button is gone after the refusal");
+  } finally { await bare.close(); }
+  const home = await openAt(ctx, "guest forecast home", "#/research/forecasts", { identity: "guest", ready: "[data-testid=forecast-home] [data-slot=formal-row]" });
+  try {
+    const { page } = home;
+    assert((await page.locator("[data-testid=lane-judgment]").count()) === 0 && (await page.locator("[data-testid=forecast-create]").count()) === 0 && (await page.locator("[data-testid=lane-tab-formal]").count()) === 0, "a guest sees the judgment lane, the create control or the tabs");
+    assert((await page.locator("[data-slot=formal-row]").count()) === 4, "a guest does not read the formal forecasts");
+  } finally { await home.close(); }
+  return "a guest: no 问 bot, the refused initialise says the server's sentence (a toast) and keeps its button, the forecast home is the formal lane alone (no judgments, no create, no tabs)";
+}
+
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -6432,6 +6893,20 @@ const CHECKS = [
   ["company-ask-bot: AAPL lists AppleBot, TSLA only the default bot; the line opens with 关于 <代码>： in the draft and the company as the bot's stock; nothing sent; a typed draft is kept", companyAskBot],
   ["probability-bar-a11y: the sentence for a screen reader, down / flat / up = --down / --muted / --up (the two market colours swap under red-up), not rescaled to 100, numbers on focus, words without probabilities", probabilityBarA11y],
   ["watchlist-keyboard: the watchlist is done with the keyboard alone (add, rows by arrows, 打开, 移出 and its question, 撤销 by Alt+T)", watchlistKeyboard],
+  ["forecast-lanes-separate: the two lanes are two components with two DOM slots, no shared row or import; side by side at 1440, two tabs at 390", forecastLanesSeparate],
+  ["forecast-version-url: a version and a tab press rewrite ?version= and ?section= in place; a reload keeps them; no history entry is added", forecastVersionUrl],
+  ["forecast-modules-present: the nine modules of the old forecast page are all found in the new layout (judgment card, chart, brief, three tabs, drawer entry); the version rail sticks", forecastModulesPresent],
+  ["forecast-revise-flow: the drawer's three steps, nothing ticked and nothing that ticks for the reader, the cap of ten, Esc; the requests are the old form's field by field", forecastReviseFlow],
+  ["forecast-revise-blocked: an expired target or an invalid contract disables the revise button and says why; nothing opens the drawer", forecastReviseBlocked],
+  ["forecast-revise-deeplink: ?revise=<filing> opens the drawer on the materials step and marks the filing, never ticks it", forecastReviseDeeplink],
+  ["forecast-create-body: creating a forecast sends the old page's body for the default and the picked company", forecastCreateBody],
+  ["forecast-job-strip: a running job is one row (stage, no dock twin), a failed one says why and 重试 sends the same request again", forecastJobStrip],
+  ["forecast-brief-links: every source number of the brief opens its material on the evidence page (version, type, id)", forecastBriefLinks],
+  ["judgment-actions: create sends the old body, revise leads to the forecast with ?revise=<filing>; only the one that applies is on", judgmentActions],
+  ["forecast-missing-no-substitute: an unknown forecast says so, offers the home and asks for no other record", forecastMissingNoSubstitute],
+  ["forecast-disclaimer-once: each disclaimer sentence appears exactly as often as it should (once per page area), verbatim", forecastDisclaimerOnce],
+  ["chart-text-clear: no two texts of a chart overlap and none leaves its picture, at 390 and 1440", chartTextClear],
+  ["forecast-guest-view: a guest: no 问 bot, the initialise press is refused with the server's sentence and keeps its button, the forecast home is the formal lane alone", forecastGuestView],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

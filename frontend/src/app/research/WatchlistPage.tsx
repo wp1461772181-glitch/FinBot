@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,9 +7,9 @@ import { ErrorBar } from "@/components/state/ErrorBar";
 import { confirm } from "@/components/state/confirm";
 import { notify } from "@/components/state/notify";
 import { StatusBadge } from "@/components/StatusBadge";
-import { getV2Forecasts, getV2MonitorStatus, type V2ForecastList } from "../../api/forecast-v2";
+import { getV2Forecasts, type V2ForecastList } from "../../api/forecast-v2";
 import { companyName } from "../../company-page.mjs";
-import { monitorChip, OPINION_DISCLAIMER } from "../../data-display.mjs";
+import { OPINION_DISCLAIMER } from "../../data-display.mjs";
 import { hasProbabilities } from "../../probability-bar.mjs";
 import { useLocale } from "../../i18n";
 import { paths } from "../../routes.mjs";
@@ -19,21 +18,10 @@ import { checkWatchAdd } from "../../watchlist-add.mjs";
 import { createPool, latestForecast, restoreAt } from "../../watchlist-rows.mjs";
 import { DEFAULT_SYMBOL, DEFAULT_SYMBOLS } from "../WorkspaceLayout";
 import { useWorkspace } from "../workspace";
+import { MonitorChip } from "./MonitorChip";
 import { WatchRow, rowArrowKeys } from "./WatchRow";
 import { removeTitle } from "./support";
 import { useRead } from "./use-read";
-
-/** The small chip at the top right: is the automatic monitor well?  It is a link to the monitor page. */
-function MonitorChip() {
-  const { t } = useLocale();
-  const [monitor] = useRead("monitor", signal => getV2MonitorStatus(signal));
-  const chip = monitor.kind === "ready" ? monitorChip(monitor.value.health) : null;
-  return <Link to={paths.monitor()} data-testid="monitor-chip" className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring">
-    {monitor.kind === "loading" && <StatusBadge kind="neutral">{t("正在读取")}</StatusBadge>}
-    {monitor.kind === "error" && <StatusBadge kind="neutral">{t("监控状态暂不可用")}</StatusBadge>}
-    {chip && <StatusBadge kind={chip.kind}>{t(chip.phrase)}</StatusBadge>}
-  </Link>;
-}
 
 /**
  * 自选 (#/research, design 4.5): the research queue as a table (a card list on a phone), one row per company.  The queue itself is the workspace's

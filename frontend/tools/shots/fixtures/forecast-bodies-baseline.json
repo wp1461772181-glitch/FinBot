@@ -1,0 +1,48 @@
+{
+  "_about": "Request bodies recorded from the OLD forecast UI (HEAD 962b9de, before P6.2) on the same fixtures; the new UI must send the same strings. Revision candidates are ticked by their index in the fixture list (revisionCandidates in forecasts.mjs).",
+  "create": {
+    "default": {
+      "path": "/v2/forecast-jobs",
+      "body": "{\"symbol\":\"AAPL\",\"kind\":\"new\",\"source_refs\":[]}"
+    },
+    "TSLA": {
+      "path": "/v2/forecast-jobs",
+      "body": "{\"symbol\":\"TSLA\",\"kind\":\"new\",\"source_refs\":[]}"
+    }
+  },
+  "revise": {
+    "one-new": {
+      "parent": "latest",
+      "ticks": [
+        1
+      ],
+      "path": "/v2/forecast-versions/f1000000-0000-4000-8000-000000000003/revision-jobs",
+      "body": "{\"source_refs\":[{\"source_type\":\"uploaded_media\",\"source_id\":\"m0000000-0000-4000-8000-000000000006\"}]}"
+    },
+    "two-reverse-click": {
+      "parent": "latest",
+      "ticks": [
+        1,
+        0
+      ],
+      "path": "/v2/forecast-versions/f1000000-0000-4000-8000-000000000003/revision-jobs",
+      "body": "{\"source_refs\":[{\"source_type\":\"official_filing\",\"source_id\":\"m0000000-0000-4000-8000-000000000004\"},{\"source_type\":\"uploaded_media\",\"source_id\":\"m0000000-0000-4000-8000-000000000006\"}]}"
+    },
+    "older-parent": {
+      "parent": "f1000000-0000-4000-8000-000000000001",
+      "ticks": [
+        0
+      ],
+      "path": "/v2/forecast-versions/f1000000-0000-4000-8000-000000000001/revision-jobs",
+      "body": "{\"source_refs\":[{\"source_type\":\"official_filing\",\"source_id\":\"m0000000-0000-4000-8000-000000000004\"}]}"
+    }
+  },
+  "judgment": {
+    "create": {
+      "path": "/v2/forecast-jobs",
+      "body": "{\"symbol\":\"NVDA\",\"kind\":\"new\",\"source_refs\":[{\"source_type\":\"official_filing\",\"source_id\":\"m0000000-0000-4000-8000-000000000031\"}]}"
+    },
+    "reviseHref": "#/research/forecasts/f0000000-0000-4000-8000-000000000001?revise=m0000000-0000-4000-8000-000000000001"
+  },
+  "oldDeepLinkTicked": 1
+}
