@@ -3,21 +3,28 @@
 Pins P-R1 (the five states reach the model as the spec's wording), B1 (one ledger line per shadow terminal, written after
 the gate returns), B2 (reason codes), B3 (turns from before the audit key), B4 (tail only, bad lines unknown), B5 (at most five
 sentences of sixty characters), K6 (paused read), K8 (owner refusal writes nothing), K9 (wording, once per turn), K10 (what the
-ledger keeps; file modes). Off: no block, no audit key, no ledger line.
+ledger keeps; file modes), K11 (the model label keeps the catalog key on every catalog-resolved turn), P-N (one ordinary
+single-company question: the four switches on against off differ only by the fact block, the sentence and the memory tools).
+Off: no block, no audit key, no ledger line.
 """
 import asyncio
+import copy
 import json
 import os
+import re
 import stat
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from app.agent_system_prompt import SELF_STATE_SENTENCE
 from app.agent_workflow import claim_public_wire as wire
 from app.agent_workflow import claim_shadow
 from app.agent_workflow import direct
+from app.agent_workflow import tools
 from app.agent_workflow.state import AgentRuntimeContext
+from test_agent_chat_stream import stream_fixture  # noqa: F401  (the endpoint fixture for the K11 label tests)
 
 OWNER = "owner-credential-for-sw2-tests"
 TURN = "11111111-2222-4333-8444-555555555555"
@@ -321,3 +328,165 @@ def test_settle_failure_is_logged_and_the_turn_still_judges(monkeypatch, tmp_pat
     asyncio.run(claim_shadow._run(_snapshot()))
     assert len(list(tmp_path.glob("[0-9]*.jsonl"))) == 1         # the shadow record is still written
     assert _ledger(tmp_path) == []                               # and the failed ledger line is not
+
+
+# ---- K11 (fix M1): the model label keeps the catalog key on every catalog-resolved turn ------------------------------------
+
+DEFAULT_ENTRY = {"name": "haiku-5.5", "provider": "openrouter", "model": "anthropic/claude-haiku-5-5", "base_url": None, "context_window": None}
+FLASH_ENTRY = {"name": "deepseek-flash", "provider": "siliconflow", "model": "deepseek-ai/DeepSeek-V4-Flash", "base_url": None, "context_window": None}
+
+
+def _chosen(provider, model):
+    from app.agent_chat_stream import _Model
+    return _Model(provider, model, "k" * 16, None)
+
+
+@pytest.mark.parametrize("case,resolved,expected", [
+    ("catalog name", FLASH_ENTRY, "deepseek-flash（siliconflow/deepseek-ai/DeepSeek-V4-Flash）"),
+    ("catalog_model empty (the chat UI's form): the default entry", DEFAULT_ENTRY, "haiku-5.5（openrouter/anthropic/claude-haiku-5-5）"),
+    ("bot with its model set", FLASH_ENTRY, "deepseek-flash（siliconflow/deepseek-ai/DeepSeek-V4-Flash）"),
+    ("bot with model NULL: the catalog default", DEFAULT_ENTRY, "haiku-5.5（openrouter/anthropic/claude-haiku-5-5）"),
+])
+def test_catalog_turns_are_labelled_with_the_entry_they_resolved_to(case, resolved, expected):
+    from app.agent_chat_stream import _model_label
+    assert _model_label(resolved, _chosen(resolved["provider"], resolved["model"])) == expected
+
+
+def test_browser_sent_provider_and_model_are_labelled_as_given():
+    from app.agent_chat_stream import _model_label
+    assert _model_label(None, _chosen("deepseek", "deepseek-chat")) == "deepseek/deepseek-chat"
+
+
+def _run_stream_and_capture_labels(monkeypatch, stream_fixture, payload):
+    """Runs the endpoint with the fixture's stubs; returns the label handed to the self-state read and the label the
+    stored answer's audit carries (the same spy as the probe P4)."""
+    import app.agent_chat_stream as stream
+    from starlette.requests import Request
+    labels = []
+
+    def spy(cid, cred, turn, label):
+        labels.append(label)
+        return {"model_label": label, "prior": None}
+    monkeypatch.setattr(stream, "_self_state_inputs", spy)
+
+    async def go():
+        request = Request({"type": "http", "method": "POST", "path": "/agent-chat/stream", "headers": []})
+        response = await stream.stream_chat(payload, request, "x" * 40)
+        return "".join([part async for part in response.body_iterator])
+    asyncio.run(go())
+    stored = stream_fixture[4]
+    audits = [kw["tool_calls"]["audit"] for _, kw in stored
+              if isinstance(kw.get("tool_calls"), dict) and isinstance(kw["tool_calls"].get("audit"), dict)]
+    return labels, [a.get("self_state", {}).get("model_label") for a in audits]
+
+
+@pytest.mark.parametrize("catalog_model,expected", [
+    ("deepseek-flash", "deepseek-flash（siliconflow/deepseek-ai/DeepSeek-V4-Flash）"),
+    ("", "haiku-5.5（openrouter/anthropic/claude-haiku-5-5）"),
+])
+def test_endpoint_labels_a_catalog_turn_with_the_entry_it_resolved_to(monkeypatch, stream_fixture, catalog_model, expected):
+    import app.agent_chat_stream as stream
+    entries = {DEFAULT_ENTRY["name"]: DEFAULT_ENTRY, FLASH_ENTRY["name"]: FLASH_ENTRY}
+    monkeypatch.setattr(stream, "_catalog_turn", lambda name, _credential: {**entries[name or DEFAULT_ENTRY["name"]], "api_key": "k" * 16})
+    payload = stream.StreamRequest(message="你用的哪个模型？", catalog_model=catalog_model)
+    labels, stored = _run_stream_and_capture_labels(monkeypatch, stream_fixture, payload)
+    assert labels == [expected]
+    assert stored == [expected]
+
+
+def test_endpoint_labels_a_browser_sent_model_as_given(monkeypatch, stream_fixture):
+    import app.agent_chat_stream as stream
+    payload = stream.StreamRequest(provider="deepseek", model="deepseek-chat", api_key="abcdefgh", message="你用的哪个模型？")
+    labels, stored = _run_stream_and_capture_labels(monkeypatch, stream_fixture, payload)
+    assert labels == ["deepseek/deepseek-chat"]
+    assert stored == ["deepseek/deepseek-chat"]
+
+
+# ---- P-N (fix M2, spec-sw2 §4): one ordinary single-company question, the four switches on against off -----------------
+
+PN_QUESTION = "MSFT 最近一期年报的营业收入是多少？"
+PN_ANSWER = "MSFT FY2026 营业收入为 331,839,000,000 美元 [1]。"
+PN_ROW = {"source_id": "pn-msft-10k-revenue", "symbol": "MSFT", "form": "10-K", "source_type": "reported_figure", "metric": "revenue",
+          "title": "MSFT 10-K · 营业收入 FY2026", "filed_at": "2026-07-29", "excerpt": "营业收入（Revenue）FY2026：331,839,000,000 USD。"}
+FOUR_SWITCHES = ("FINBOT_SW2_HISTORY_PAGES", "FINBOT_SW2_MEMORY_PRELOAD", "FINBOT_SW2_SELF_STATE_WORDING", "FINBOT_SW2_SELF_STATE")
+MEMORY_TOOLS = {"recall_conversations", "read_past_conversation"}
+
+
+def _pn_turn(monkeypatch, *, on):
+    """One owner turn, no previous answer, a scripted decider; every request's messages and offered tool names are kept."""
+    from test_sw1b_closing_complete import text
+    for name in FOUR_SWITCHES:
+        if on:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, "off")
+    monkeypatch.setattr(direct, "owner_credential_matches", lambda c: c == OWNER)
+    monkeypatch.setattr(tools, "owner_credential_matches", lambda c: c == OWNER)
+    requests = []
+
+    def decide(messages, offered):
+        requests.append({"messages": copy.deepcopy(list(messages)), "tools": {t["function"]["name"] for t in offered}})
+        return text(PN_ANSWER)
+
+    def execute(name, args):
+        return {"ok": True, "data": [copy.deepcopy(PN_ROW)] if name == "query_financials" else []}
+
+    async def emit(_event):
+        pass
+    ctx = AgentRuntimeContext("custom", "test", "dummy", identity_credential=OWNER, decider=decide, executor=execute,
+        classifier=lambda _: {"category": "A", "mode": "rag", "symbol": "MSFT", "symbols": [], "metrics": ["营业收入"], "days_back": None},
+        self_state=_state(prior=None))
+    result = asyncio.run(direct.run_direct_turn(PN_QUESTION, ctx, emit=emit))
+    return result, requests
+
+
+def _is_evidence(message):
+    return isinstance(message, dict) and str(message.get("content") or "").startswith("Accepted evidence")
+
+
+def _drop_fact_block(messages):
+    return [m for m in messages if not (isinstance(m, dict) and m.get("role") == "system"
+                                        and str(m.get("content") or "").startswith(direct.SELF_STATE_HEAD))]
+
+
+def _strip_sentence(messages):
+    out = []
+    for m in messages:
+        if isinstance(m, dict) and SELF_STATE_SENTENCE in str(m.get("content") or ""):
+            m = {**m, "content": str(m["content"]).replace(SELF_STATE_SENTENCE, "", 1)}
+        out.append(m)
+    return out
+
+
+HEX_ID = re.compile(r"[0-9a-f]{32}")
+
+
+def _ids_masked(messages):
+    """Each turn draws fresh ids (the saved result set's uuid4().hex, in the catalogue); both sides mask them, nothing else."""
+    return [{**m, "content": HEX_ID.sub("<id>", str(m["content"]))} if isinstance(m, dict) and "content" in m else m for m in messages]
+
+
+def test_pn_on_and_off_differ_only_by_the_fact_block_the_sentence_and_the_memory_tools(monkeypatch, disposable_database):
+    on_result, on_requests = _pn_turn(monkeypatch, on=True)
+    off_result, off_requests = _pn_turn(monkeypatch, on=False)
+    assert on_requests and len(on_requests) == len(off_requests)
+    # The two runs really differ in the switches: on carries the audit key, off does not.
+    assert on_result["audit"]["self_state"] == {"model_label": "haiku-5.5（openrouter/anthropic/claude-haiku-5-5）"}
+    assert "self_state" not in off_result["audit"]
+    # (i) the answer, the citations and the evidence area are the same, item by item.
+    assert on_result["status"] == off_result["status"] == "succeeded"
+    assert on_result["answer"] == off_result["answer"] == PN_ANSWER
+    assert on_result["citations"] and on_result["citations"] == off_result["citations"]
+    on_evidence = [m for r in on_requests for m in r["messages"] if _is_evidence(m)]
+    assert on_evidence and on_evidence == [m for r in off_requests for m in r["messages"] if _is_evidence(m)]
+    for on_req, off_req in zip(on_requests, off_requests):
+        # (ii) on, without the fact block and without the one sentence, is off, message for message.
+        assert sum(SELF_STATE_SENTENCE in str(m.get("content") or "") for m in on_req["messages"]) == 1
+        assert not any(SELF_STATE_SENTENCE in str(m.get("content") or "") for m in off_req["messages"])
+        assert _ids_masked(_strip_sentence(_drop_fact_block(on_req["messages"]))) == _ids_masked(off_req["messages"])
+        # (iii) on offers exactly the two memory tools more than off.
+        assert on_req["tools"] == off_req["tools"] | MEMORY_TOOLS
+        assert not (MEMORY_TOOLS & off_req["tools"])
+    assert _block_lines(on_requests[0]["messages"]) == [
+        direct.SELF_STATE_HEAD, "- 当前回答模型：haiku-5.5（openrouter/anthropic/claude-haiku-5-5）", direct.SELF_NO_BOT]
+    assert _block_lines(off_requests[0]["messages"]) is None

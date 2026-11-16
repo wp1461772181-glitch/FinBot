@@ -461,6 +461,12 @@ class _Model:
  def __init__(self,provider,model,api_key,base_url,window=None):self.provider=provider;self.model=model;self.base_url=base_url;self._key=api_key;self.window=window or layers.WINDOW_TOKENS
  def key(self):return self._key
  def __repr__(self):return f"_Model({self.provider!r}, {self.model!r})"
+def _model_label(resolved,chosen):
+ """The model label the self-state block shows (SW2 §3.1, K11). A turn resolved through the catalog (a bot's, or a catalog_model
+ turn, "" included) is labelled with the catalog entry it resolved to, so the key is never lost; a turn whose provider and model
+ the browser sent (resolved is None) is labelled as given."""
+ if resolved is None:return f"{chosen.provider}/{chosen.model}"
+ return f"{resolved['name']}（{chosen.provider}/{chosen.model}）"
 async def _record_cancelled(cid,turn,owner,text_out,citation_sidecar):
  # The three writes of a cancelled turn, in order. Each is isolated, so one failure does not skip the rest.
  try: await append_message(cid,turn,"assistant",text_out,status="cancelled",tool_calls={"citations":citation_sidecar} if citation_sidecar else None)
@@ -472,7 +478,7 @@ async def _record_cancelled(cid,turn,owner,text_out,citation_sidecar):
 @router.post("/stream")
 async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|None=Header(default=None)):
  if not x_chat_session or len(x_chat_session)<32 or len(x_chat_session)>256: raise HTTPException(401,"chat_session_required")
- bot=None
+ bot=None;resolved=None
  if payload.bot_id:
   bot,resolved=await asyncio.to_thread(_bot_turn,payload,x_chat_session)
   chosen=_Model(resolved["provider"],resolved["model"],resolved["api_key"],resolved["base_url"],resolved.get("context_window"))
@@ -483,10 +489,8 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
  else:
   if payload.api_key is None or len(payload.api_key.get_secret_value())<8: raise HTTPException(422,"invalid_agent_chat_request")
   chosen=_Model(payload.provider,payload.model,payload.api_key.get_secret_value(),payload.base_url)
- # SW2 (spec-sw2 §3.1): the model label the self-state block shows; a bot turn shows the bot's model setting (K11).
- if bot is not None:model_label=str(bot.get("model") or "")
- elif payload.catalog_model is not None:model_label=f"{payload.catalog_model}（{chosen.provider}/{chosen.model}）"
- else:model_label=f"{chosen.provider}/{chosen.model}"
+ # SW2 (spec-sw2 §3.1, K11): the model label the self-state block shows; the catalog entry's key is always in it.
+ model_label=_model_label(resolved,chosen)
  cid=payload.conversation_id
  if cid:
   if not await verify_conversation(cid,x_chat_session):raise HTTPException(404,"conversation_not_found")
