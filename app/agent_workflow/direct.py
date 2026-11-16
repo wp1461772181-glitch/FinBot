@@ -336,10 +336,18 @@ RESOLVER_RULE_TEXT=(
 )
 CLASSIFY_PREMISE_TEXT=('\nA form the user mentions only while describing a document they assume exists (刚出的那份 10-Q) is not a filter: leave form null unless the user asks to read that form as such; '
  'the tools also widen past a form that hides a newer filing.')
+# FP13-E5 S1 (FINBOT_FP13E5_RESOLVER_UNFINISHED): an unfinished earlier request in the history is background only.
+RESOLVER_UNFINISHED_ANCHOR='canonical_question 始终用用户的口吻复述用户这一轮的请求（问题或指令），绝不是反问用户，也不请用户确认。'
+RESOLVER_UNFINISHED_TEXT=('对话里后面跟着「（系统记录：……没有完成。）」或「（系统记录：……过程中断。）」的用户消息，是之前没有得到回答的请求，只作背景。'
+ '这一轮的消息本身是完整的问题或指令时，canonical_question 只复述这一轮的消息，不要换成那条旧请求，也不要并入它的公司、指标或任务。'
+ '只有这一轮的消息要求继续、重试、重新回答或修改那条旧请求（如「继续」「再试一次」「接着刚才的」「换成最近两年」），或者明确指着它说话时，才把那条旧请求写进 canonical_question。')
 def resolver_prompt():
-    """REFERENCE_PROMPT with the period and premise rules after its data-dependent sentence, when the switch is on."""
-    if not flag('FINBOT_SW1_RESOLVER_RULES',True):return REFERENCE_PROMPT
-    return REFERENCE_PROMPT.replace(RESOLVER_ANCHOR,RESOLVER_ANCHOR+RESOLVER_RULE_TEXT,1)
+    """REFERENCE_PROMPT with the unfinished-request rule after its user-voice sentence (FINBOT_FP13E5_RESOLVER_UNFINISHED),
+    and the period and premise rules after its data-dependent sentence (FINBOT_SW1_RESOLVER_RULES), each when its switch is on."""
+    prompt=REFERENCE_PROMPT
+    if flag('FINBOT_FP13E5_RESOLVER_UNFINISHED',True):prompt=prompt.replace(RESOLVER_UNFINISHED_ANCHOR,RESOLVER_UNFINISHED_ANCHOR+RESOLVER_UNFINISHED_TEXT,1)
+    if flag('FINBOT_SW1_RESOLVER_RULES',True):prompt=prompt.replace(RESOLVER_ANCHOR,RESOLVER_ANCHOR+RESOLVER_RULE_TEXT,1)
+    return prompt
 def classify_prompt():
     """CLASSIFY_PROMPT with the premise sentence at its end, when the switch is on."""
     return CLASSIFY_PROMPT+CLASSIFY_PREMISE_TEXT if flag('FINBOT_SW1_RESOLVER_RULES',True) else CLASSIFY_PROMPT
