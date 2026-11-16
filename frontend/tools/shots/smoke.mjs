@@ -7130,6 +7130,97 @@ async function materialsFocusLink(ctx) {
   return "?symbol=&focus=&type=&analysis=: the row is chosen in the list it was found in (SEC filings, newest stored first) and on screen, the analysis tab shows exactly the version in the address (data-analysis-id), a phone gets the full-screen drawer; a material not in the list is said";
 }
 
+/** One phone page with the material layer: every way in and out, and that nothing behind the layer can be reached while it is open. `where` names the page in a failure. */
+async function phoneLayerOnPage(page, where) {
+  const DRAWER = "[data-testid=material-drawer]";
+  const vp = page.viewportSize();
+  const state = () => page.evaluate(() => ({
+    drawers: document.querySelectorAll("[data-testid=material-drawer]").length,
+    inert: [...document.querySelectorAll("[inert]")].length,
+    overflow: document.body.style.overflow,
+    onSelectedRow: !!document.activeElement?.matches("[data-testid=material-row][data-selected]"),
+    listVisible: (() => { const el = document.querySelector("[data-testid=material-list-section]"); const box = el?.getBoundingClientRect(); return !!box && box.width > 0 && box.height > 0 && !el.hasAttribute("inert"); })(),
+    listInert: !!document.querySelector("[data-testid=material-list-section]")?.closest("[inert]"),
+  }));
+  const opened = async () => { await page.locator("[data-testid=material-row]").first().click(); await page.locator(DRAWER).waitFor({ timeout: 10000 }); await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "material-drawer-back", null, { timeout: 5000 }); };
+  const closedLike = async (how) => {
+    await page.locator(DRAWER).waitFor({ state: "detached", timeout: 5000 });
+    const now = await state();
+    assert(now.listVisible && !now.listInert, `${where}, ${how}: the list is not back (visible ${now.listVisible}, inert ${now.listInert})`);
+    assert(now.onSelectedRow, `${where}, ${how}: the focus is not on the chosen row`);
+    assert(now.overflow === "", `${where}, ${how}: the page is still locked (overflow "${now.overflow}")`);
+    assert(now.inert === 0, `${where}, ${how}: ${now.inert} node(s) are still inert after the layer closed`);
+  };
+  assert((await state()).drawers === 0, `${where}: the layer is open before a material was pressed`);
+
+  // In: a row opens the layer, the focus goes to 返回列表; the layer is the whole screen.
+  await opened();
+  const box = await page.locator(DRAWER).boundingBox();
+  assert(Math.abs(box.x) <= 1 && Math.abs(box.y) <= 1 && Math.abs(box.width - vp.width) <= 1 && Math.abs(box.height - vp.height) <= 1, `${where}: the layer is not the whole screen: ${JSON.stringify(box)} in ${vp.width}x${vp.height}`);
+  assert((await page.locator(DRAWER).getAttribute("role")) === "dialog" && (await page.locator(DRAWER).getAttribute("aria-modal")) === "true", `${where}: the layer is not a modal dialog`);
+
+  // Nothing outside the layer can be focused: every focusable thing out there is in an inert subtree (the shell's buttons and tab bar, the company page's header and tabs, the list).
+  const outside = await page.evaluate(() => {
+    const focusable = [...document.querySelectorAll("a[href],button,input,select,textarea,summary,[tabindex]:not([tabindex='-1'])")]
+      .filter((el) => !el.closest("[data-testid=material-drawer]") && !el.disabled && el.getClientRects().length > 0);
+    return { total: focusable.length, open: focusable.filter((el) => !el.closest("[inert]")).map((el) => `${el.tagName.toLowerCase()}${el.getAttribute("data-testid") ? `[${el.getAttribute("data-testid")}]` : ""}${el.getAttribute("aria-label") ? ` "${el.getAttribute("aria-label")}"` : ""}`) };
+  });
+  assert(outside.total > 0, `${where}: found nothing outside the layer to test (the page behind is empty?)`);
+  assert(outside.open.length === 0, `${where}: still reachable outside the layer: ${outside.open.slice(0, 8).join(", ")}`);
+  const shell = await page.evaluate(() => ({ tabBar: [...document.querySelectorAll("nav")].every((el) => el.closest("[data-testid=material-drawer]") || el.closest("[inert]")), ancestorsOpen: (() => { for (let el = document.querySelector("[data-testid=material-drawer]"); el; el = el.parentElement) if (el.hasAttribute("inert")) return false; return true; })() }));
+  assert(shell.ancestorsOpen, `${where}: an ancestor of the layer is inert (the layer itself is shut)`);
+  assert(shell.tabBar, `${where}: a nav outside the layer is not inert`);
+
+  // The Tab key: more presses than the layer has focusable things (and Shift+Tab back), and the focus never leaves it.
+  const inLayer = () => page.evaluate(() => { const el = document.activeElement; return { inside: !!el?.closest("[data-testid=material-drawer]"), at: el ? `${el.tagName.toLowerCase()}${el.getAttribute("data-testid") ? `[${el.getAttribute("data-testid")}]` : ""}` : "none" }; });
+  const count = await page.evaluate(() => [...document.querySelectorAll("[data-testid=material-drawer] a[href],[data-testid=material-drawer] button,[data-testid=material-drawer] input,[data-testid=material-drawer] select,[data-testid=material-drawer] textarea,[data-testid=material-drawer] [tabindex]:not([tabindex='-1'])")].filter((el) => !el.disabled && el.getClientRects().length > 0 && !el.closest("[inert]")).length);
+  assert(count >= 2, `${where}: the layer has only ${count} focusable thing(s)`);
+  const trail = [];
+  for (let press = 0; press < count + 2; press += 1) { await page.keyboard.press("Tab"); const where_ = await inLayer(); trail.push(where_.at); assert(where_.inside, `${where}: Tab ${press + 1} of ${count + 2} left the layer (at ${where_.at}); trail ${trail.join(" > ")}`); }
+  for (let press = 0; press < count + 2; press += 1) { await page.keyboard.press("Shift+Tab"); const where_ = await inLayer(); assert(where_.inside, `${where}: Shift+Tab ${press + 1} of ${count + 2} left the layer (at ${where_.at})`); }
+
+  // Out by 返回列表.
+  await page.locator("[data-testid=material-drawer-back]").click();
+  await closedLike("返回列表");
+
+  // In again, out by Esc.
+  await opened();
+  await page.keyboard.press("Escape");
+  await closedLike("Esc");
+
+  // A Radix Select inside the layer takes the Esc itself: only the list closes, the layer stays.
+  await opened();
+  let select = "not applicable (no Select in the detail of the first material)";
+  const trigger = page.locator("[data-testid=material-drawer] [data-testid=analysis-model]");
+  if (await trigger.count()) {
+    await trigger.scrollIntoViewIfNeeded(); await trigger.click();
+    await page.locator("[role=listbox]").waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape");
+    await page.locator("[role=listbox]").waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.locator(DRAWER).count()) === 1, `${where}: Esc on an open Select closed the whole layer`);
+    assert((await state()).inert > 0, `${where}: the page behind the layer is no longer shut after the Select closed`);
+    await page.keyboard.press("Escape");
+    await closedLike("Esc after a Select");
+    select = "Select Esc closes only the Select";
+  }
+  return select;
+}
+
+/** The phone layer of the material detail (Opus ruling on P6.3): the focus stays in it, 返回列表 / Esc close it and give everything back, a Select in it takes its own Esc, and it is the whole screen on the company page too. */
+async function materialsPhoneLayer(ctx) {
+  const alone = await openMaterials(ctx, "materials phone layer", "#/research/materials?symbol=AAPL", { width: 390 });
+  let aloneNote;
+  try { aloneNote = await phoneLayerOnPage(alone.page, "materials page"); } finally { await alone.close(); }
+  const embedded = await openMaterials(ctx, "materials phone layer company", "#/research/c/AAPL?tab=materials", { width: 390, ready: false });
+  let embeddedNote;
+  try {
+    await embedded.page.waitForSelector("[data-testid=material-row]", { state: "visible", timeout: 30000 });
+    await listReady(embedded.page); await settle(embedded.page);
+    embeddedNote = await phoneLayerOnPage(embedded.page, "company page 材料 tab");
+  } finally { await embedded.close(); }
+  return `390: on the materials page and the company page's 材料 tab the layer is the whole screen and a modal dialog; nothing outside it is focusable (all inert, ancestors not), Tab and Shift+Tab over count+2 presses stay in it; 返回列表 and Esc each give back the list, the focus on the chosen row, body overflow and every inert; ${aloneNote}`;
+}
+
 /** The check of a quote is a note: no danger colour, no action colour, no icon, no alert, never folded away. */
 async function analysisStatusNeutral(ctx) {
   const view = await openMaterials(ctx, "analysis status neutral");
@@ -7353,6 +7444,7 @@ const CHECKS = [
   ["materials-analyze: 开始分析 sends the old body with and without a chosen model; the job is a task-bar row that goes at the end and the analysis appears", materialsAnalyze],
   ["materials-reanalyze-model: 重新分析 sends force:true and, with a model chosen, catalog_model", materialsReanalyzeModel],
   ["materials-focus-link: ?symbol=&focus=&type=&analysis= chooses the row on its page, opens the named version, a phone gets the drawer, a missing material is said", materialsFocusLink],
+  ["materials-phone-layer: 390, on the materials page and the company page's 材料 tab: the layer is the whole screen, nothing behind it can be focused, Tab stays in it, 返回列表 and Esc close it and give back focus / scroll / inert, a Select takes its own Esc", materialsPhoneLayer],
   ["analysis-status-neutral: the check of a quote is plain text: no danger or action colour, no icon, no alert, not folded", analysisStatusNeutral],
 ];
 
