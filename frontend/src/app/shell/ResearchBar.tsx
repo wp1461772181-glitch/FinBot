@@ -7,10 +7,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useLocale } from "../../i18n";
 
 /**
- * Where the old top bar's company controls went (design P2.2 §3): the research pages still take the company from the
- * shell, so a thin bar above them holds the company switcher (a Combobox over the watchlist; choosing a company opens
- * the same kind of page for it) and the field that adds a code to the watchlist.  Temporary: the company page (P6)
- * brings its own switcher in the title row.  Loaded only on the research pages.
+ * Where the old top bar's company controls went (design P2.2 §3): the research pages still take the company from the shell, so a thin bar above them holds
+ * the company switcher (a Combobox over the watchlist; choosing a company opens the same kind of page for it) and the field that adds a code to the watchlist.
+ * P6.1: it is on every tab of the company page (the switcher keeps the tab), and not on the watchlist page, which is about no one company and has its own
+ * add field in its title row.  Loaded only on the research pages.
  */
 export default function ResearchBar({ symbol, symbols, onSelectStock, watchInput, setWatchInput, addWatchSymbol, watchError, setWatchError }: {
   symbol: string; symbols: string[]; onSelectStock: (ticker: string) => void; watchInput: string; setWatchInput: (value: string) => void; addWatchSymbol: () => void; watchError: string; setWatchError: (value: string) => void;

@@ -49,7 +49,8 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 async function everyPageOpens(ctx) {
   const bad = [];
   for (const def of PAGES) {
-    const view = await newView(ctx.browser, { width: 1440, theme: "light", identity: def.identity ?? "personal", label: def.name, unmatched });
+    // A page that is about a state of the fake backend (the empty watchlist, a line with a turn that finished while away) opens on that state: its readiness depends on it.
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", identity: def.identity ?? "personal", label: def.name, unmatched, ...(typeof def.view === "function" ? def.view() : {}) });
     try {
       await view.page.goto(`${ctx.server.url}${def.hash ?? ""}`, { waitUntil: "load" });
       await waitReady(view.page, def);
@@ -495,8 +496,8 @@ async function legacyRedirects(ctx) {
     ["#chat", "#/chat", "[data-testid=message]"],
     [`#agent/${CONVERSATION.older}`, `#/chat/c/${CONVERSATION.older}`, "[data-testid=message]"],
     [`#bot/${BOT.applebot}`, `#/chat/${BOT.applebot}`, "[data-testid=message]"],
-    ["#overview", "#/research/c/AAPL", ".overview-workspace"],
-    ["#company", "#/research/c/AAPL", ".overview-workspace"],
+    ["#overview", "#/research/c/AAPL", "[data-testid=company-overview]"],
+    ["#company", "#/research/c/AAPL", "[data-testid=company-overview]"],
     ["#forecast", "#/research/forecasts", ".forecast-home"],
     ["#forecast?symbol=TSLA", "#/research/forecasts?symbol=TSLA", ".forecast-home"],
     [`#forecast/${ROOT.aapl}`, `#/research/forecasts/${ROOT.aapl}`, ".research-brief"],
@@ -561,12 +562,12 @@ async function backButtonChain(ctx) {
     const { page } = view;
     const trail = [await hashOf(page)];
     const step = async (act, ready) => { await act(); await page.waitForFunction((last) => location.hash !== last, trail.at(-1), { timeout: 10000 }); await waitReady(page, { ready }); trail.push(await hashOf(page)); };
-    await step(() => page.evaluate(() => { location.hash = "#/research"; }), ".overview-workspace");
-    await step(() => page.locator(".universe-card", { hasText: "AAPL" }).locator("button.universe-open").click(), ".overview-workspace");
-    await step(() => page.locator(".overview-focus-actions .primary-action").click(), ".research-brief");
+    await step(() => page.evaluate(() => { location.hash = "#/research"; }), "[data-testid=watchlist-page]");
+    await step(() => page.locator("[data-testid=watch-row][data-symbol=AAPL] [data-row-nav=open]").click(), "[data-testid=company-overview]");
+    await step(() => page.locator("[data-testid=open-forecast]").click(), ".research-brief");
     await step(() => pressNavItem(page, "持仓"), ".pf-positions");
     assert(trail.join(" ") === `#/chat #/research #/research/c/AAPL #/research/forecasts/${ROOT.aapl} #/portfolio`, `unexpected trail ${trail.join(" ")}`);
-    const ready = [".research-brief", ".overview-workspace", ".overview-workspace", "[data-testid=message]"];
+    const ready = [".research-brief", "[data-testid=company-overview]", "[data-testid=watchlist-page]", "[data-testid=message]"];
     for (let i = trail.length - 2; i >= 0; i -= 1) {
       await page.goBack();
       await waitHash(page, trail[i]);
@@ -578,13 +579,13 @@ async function backButtonChain(ctx) {
 
 /** The company is in the address: open one, reload, still that company (also with a tab, and on a page that has no company of its own). */
 async function deepLinkReload(ctx) {
-  const view = await openAt(ctx, "deep link", "#/research/c/TSLA", { lastSymbol: null, ready: ".overview-workspace" });
+  const view = await openAt(ctx, "deep link", "#/research/c/TSLA", { lastSymbol: null, ready: "[data-testid=company-overview]" });
   try {
     const { page } = view;
     const company = () => page.locator('[data-slot="research-bar"] [role="combobox"]').first().innerText();
     assert((await company()) === "TSLA", `expected TSLA, got ${await company()}`);
     await page.reload({ waitUntil: "load" });
-    await waitReady(page, { ready: ".overview-workspace" });
+    await waitReady(page, { ready: "[data-testid=company-overview]" });
     assert((await hashOf(page)) === "#/research/c/TSLA" && (await company()) === "TSLA", `after reload: ${await hashOf(page)} / ${await company()}`);
     await page.evaluate(() => { location.hash = "#/research/c/NVDA?tab=materials"; });
     await waitReady(page, { ready: ".material-library-panel h2" });
@@ -615,7 +616,7 @@ async function clientActions(ctx) {
     }
     await dispatchAction(page, { action: "open_page", page: "overview" });
     await waitHash(page, "#/research/c/AAPL");
-    await waitReady(page, { ready: ".overview-workspace" });
+    await waitReady(page, { ready: "[data-testid=company-overview]" });
     await dispatchAction(page, { action: "select_stock", symbol: "TSLA" });
     await waitHash(page, "#/research/c/TSLA");
     await dispatchAction(page, { action: "open_page", page: "materials" });
@@ -624,11 +625,14 @@ async function clientActions(ctx) {
     await waitHash(page, "#/research/materials?symbol=NVDA");
     await dispatchAction(page, { action: "open_page", page: "overview" });
     await waitHash(page, "#/research/c/NVDA");
-    await waitReady(page, { ready: ".overview-workspace" });
+    await waitReady(page, { ready: "[data-testid=company-overview]" });
+    // The queue is the watchlist page's rows: an add the agent makes shows up there, a remove takes it away.
+    await page.evaluate(() => { location.hash = "#/research"; });
+    await waitReady(page, { ready: "[data-testid=watchlist-page]" });
     await dispatchAction(page, { action: "queue_add", symbol: "NFLX" });
-    await page.locator(".universe-card", { hasText: "NFLX" }).waitFor({ timeout: 5000 });
+    await page.locator("[data-testid=watch-row][data-symbol=NFLX]").waitFor({ timeout: 5000 });
     await dispatchAction(page, { action: "queue_remove", symbol: "NFLX" });
-    await page.locator(".universe-card", { hasText: "NFLX" }).waitFor({ state: "detached", timeout: 5000 });
+    await page.locator("[data-testid=watch-row][data-symbol=NFLX]").waitFor({ state: "detached", timeout: 5000 });
     return "open_page x9, select_stock x2, queue_add / queue_remove";
   } finally { await view.close(); }
 }
@@ -727,7 +731,7 @@ const sidebarWidth = (page) => page.evaluate(() => Math.round(document.querySele
 async function noHorizontalScroll390(ctx) {
   const bad = [];
   for (const def of PAGES) {
-    const view = await newView(ctx.browser, { width: 390, theme: "light", identity: def.identity ?? "personal", label: `h-scroll ${def.name}`, unmatched });
+    const view = await newView(ctx.browser, { width: 390, theme: "light", identity: def.identity ?? "personal", label: `h-scroll ${def.name}`, unmatched, ...(typeof def.view === "function" ? def.view() : {}) });
     try {
       await view.page.goto(`${ctx.server.url}${def.hash ?? ""}`, { waitUntil: "load" });
       await waitReady(view.page, def);
@@ -923,7 +927,7 @@ async function guestReadonly(ctx) {
 
 /** Keyboard only: Tab reaches every sidebar entry and Enter follows it; the login dialog closes on Esc and gives focus back. */
 async function keyboardNav(ctx) {
-  const view = await openShell(ctx, "keyboard nav", "#/research", { ready: ".overview-workspace" });
+  const view = await openShell(ctx, "keyboard nav", "#/research", { ready: "[data-testid=watchlist-page]" });
   try {
     const { page } = view;
     await settle(page);
@@ -5979,6 +5983,283 @@ async function chatDetachedBusyPresync(ctx) {
   } finally { await view.close(); }
 }
 
+// --- P6.1: the watchlist page and the company page ---------------------------------------------------------------------
+const WATCHLIST_PAGE = () => PAGES.find((p) => p.name === "watchlist");
+const watchRows = (page) => page.locator("[data-testid=watch-row]");
+const queuePuts = (view) => view.mock.state.queuePuts ?? [];
+const queueBody = (symbols) => JSON.stringify({ symbols });
+const toastOf = (page, text) => page.locator("[data-sonner-toast]", { hasText: text });
+
+/** Add a code, remove one (the question first), undo it: each change reaches the fake API as the queue body the old page sent (the saved text, compared byte for byte). */
+async function watchlistAddRemoveSync(ctx) {
+  const view = await openAt(ctx, "watchlist sync", "#/research", { ready: "[data-testid=watchlist-page]" });
+  try {
+    const { page } = view;
+    await waitReady(page, WATCHLIST_PAGE());
+    const start = [...view.mock.state.queue];
+    assert(start.length === 7 && (await watchRows(page).count()) === 7, `expected the seven fixture companies, got ${start.length} / ${await watchRows(page).count()}`);
+    assert(queuePuts(view).length === 0, `opening the page saved the queue: ${queuePuts(view).join(" | ")}`);
+    // Refusals say why and save nothing: a duplicate, something that is not a code.
+    const field = page.locator("#watchlist-add");
+    await field.fill("aapl"); await page.keyboard.press("Enter");
+    await page.getByRole("alert").filter({ hasText: "该代码已在关注列表中" }).waitFor({ timeout: 5000 });
+    await field.fill("12!"); await page.keyboard.press("Enter");
+    await page.getByRole("alert").filter({ hasText: "请输入有效的美股代码" }).waitFor({ timeout: 5000 });
+    assert(queuePuts(view).length === 0 && (await watchRows(page).count()) === 7, "a refused code changed the queue");
+    // Add: a lower-case code is normalised, the row appears at the end, the page stays where it is, the body is the old page's.
+    await field.fill("nflx"); await page.getByRole("button", { name: "添加", exact: true }).click();
+    await page.locator("[data-testid=watch-row][data-symbol=NFLX]").waitFor({ timeout: 8000 });
+    await waitHash(page, "#/research");
+    await page.waitForFunction(() => document.querySelector("#watchlist-add")?.value === "", null, { timeout: 3000 });
+    const added = [...start, "NFLX"];
+    let deadline = Date.now() + 5000;
+    while (queuePuts(view).length < 1 && Date.now() < deadline) await page.waitForTimeout(100);
+    assert(queuePuts(view).at(-1) === queueBody(added), `add: body ${queuePuts(view).at(-1)}`);
+    assert(JSON.stringify(view.mock.state.queue) === JSON.stringify(added), "the fake API's queue is not the added one");
+    assert((await watchRows(page).locator("[data-testid=watch-symbol]").allInnerTexts()).join(",") === added.join(","), "the rows are not in the queue's order");
+    // Remove: the question first.  Cancelling changes nothing and gives the focus back; confirming removes the row and saves the body.
+    await page.locator("[data-testid=watch-row][data-symbol=TSLA] [data-row-nav=remove]").click();
+    await dialogOf(page).waitFor({ timeout: 5000 });
+    assert((await dialogOf(page).innerText()).includes("TSLA"), "the question does not name the company");
+    await page.getByRole("button", { name: "取消" }).click();
+    await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.locator("[data-testid=watch-row][data-symbol=TSLA]").count()) === 1 && queuePuts(view).length === 1, "cancelling the question removed TSLA or saved");
+    await page.locator("[data-testid=watch-row][data-symbol=TSLA] [data-row-nav=remove]").click();
+    await dialogOf(page).waitFor({ timeout: 5000 });
+    await dialogOf(page).getByRole("button", { name: "移出" }).click();
+    await page.locator("[data-testid=watch-row][data-symbol=TSLA]").waitFor({ state: "detached", timeout: 8000 });
+    const removed = added.filter((s) => s !== "TSLA");
+    deadline = Date.now() + 5000;
+    while (queuePuts(view).length < 2 && Date.now() < deadline) await page.waitForTimeout(100);
+    assert(queuePuts(view).at(-1) === queueBody(removed), `remove: body ${queuePuts(view).at(-1)}`);
+    // 撤销 puts TSLA back at the place it had (second), and the queue saved again is the one before the removal.
+    await toastOf(page, "已移出自选").getByRole("button", { name: "撤销" }).click();
+    await page.locator("[data-testid=watch-row][data-symbol=TSLA]").waitFor({ timeout: 8000 });
+    deadline = Date.now() + 5000;
+    while (queuePuts(view).length < 3 && Date.now() < deadline) await page.waitForTimeout(100);
+    assert(queuePuts(view).at(-1) === queueBody(added), `undo: body ${queuePuts(view).at(-1)}`);
+    assert((await watchRows(page).locator("[data-testid=watch-symbol]").allInnerTexts()).join(",") === added.join(","), "undo did not restore the order");
+    assert(queuePuts(view).length === 3, `${queuePuts(view).length} saves for add, remove, undo (expected 3)`);
+    return "add NFLX / remove TSLA (asked first, cancel changes nothing) / undo: 3 saves, each the queue body byte for byte, the order restored";
+  } finally { await view.close(); }
+}
+
+/** The company is in the address, with its tab: a reload lands on the same company and tab, a tab press is a history entry, back returns. */
+async function companySymbolInUrl(ctx) {
+  const view = await openAt(ctx, "company in url", "#/research/c/TSLA", { lastSymbol: null, ready: "[data-testid=company-overview]" });
+  try {
+    const { page } = view;
+    const title = () => page.locator("[data-testid=company-title]").innerText();
+    const tabOf = () => page.evaluate(() => document.querySelector('[role=tab][aria-selected=true]')?.getAttribute("data-testid"));
+    assert((await title()) === "TSLA" && (await tabOf()) === "tab-overview", `first: ${await title()} / ${await tabOf()}`);
+    await page.reload({ waitUntil: "load" });
+    await waitReady(page, { ready: "[data-testid=company-overview]" });
+    assert((await hashOf(page)) === "#/research/c/TSLA" && (await title()) === "TSLA", `after a reload: ${await hashOf(page)} / ${await title()}`);
+    await page.locator("[data-testid=tab-forecasts]").click();
+    await waitHash(page, "#/research/c/TSLA?tab=forecasts");
+    await waitReady(page, { ready: ".forecast-home" });
+    await page.locator("[data-testid=tab-materials]").click();
+    await waitHash(page, "#/research/c/TSLA?tab=materials");
+    await waitReady(page, { ready: ".material-library-panel h2" });
+    assert((await tabOf()) === "tab-materials" && (await title()) === "TSLA", "the tab or the company changed with a tab press");
+    await page.reload({ waitUntil: "load" });
+    await waitReady(page, { ready: ".material-library-panel h2" });
+    assert((await hashOf(page)) === "#/research/c/TSLA?tab=materials" && (await tabOf()) === "tab-materials", `the tab did not survive a reload: ${await hashOf(page)}`);
+    await page.goBack(); await waitHash(page, "#/research/c/TSLA?tab=forecasts"); await waitReady(page, { ready: ".forecast-home" });
+    assert((await tabOf()) === "tab-forecasts", `back to forecasts: ${await tabOf()}`);
+    await page.goBack(); await waitHash(page, "#/research/c/TSLA"); await waitReady(page, { ready: "[data-testid=company-overview]" });
+    assert((await tabOf()) === "tab-overview" && (await title()) === "TSLA", "back to the overview");
+    // The tabs are a tab list: arrows move between them, Enter or Space opens one.
+    await page.locator("[data-testid=tab-overview]").focus();
+    await page.keyboard.press("ArrowRight");
+    // Radix moves the focus a tick after the key: wait for the fact, not for a moment.
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "tab-forecasts", null, { timeout: 3000 }).catch(async () => { throw new Error(`ArrowRight did not move to 预测: the focus is on ${await page.evaluate(() => document.activeElement?.getAttribute("data-testid"))}`); });
+    assert((await hashOf(page)) === "#/research/c/TSLA", "arrowing alone opened a tab (a history entry per arrow)");
+    await page.keyboard.press("Enter");
+    await waitHash(page, "#/research/c/TSLA?tab=forecasts");
+    // The research bar's picker keeps the tab; the last company is the one opened.
+    await page.locator('[data-slot="research-bar"] [role="combobox"]').click();
+    await page.locator('[data-slot="command-item"]', { hasText: "NVDA" }).click();
+    await waitHash(page, "#/research/c/NVDA?tab=forecasts");
+    assert((await title()) === "NVDA", `the picker: ${await title()}`);
+    assert((await page.evaluate((key) => localStorage.getItem(key), SELECTED_SYMBOL_KEY)) === "NVDA", "the last company was not updated");
+    return "TSLA overview / forecasts / materials survive a reload; a tab press is a history entry and back returns; arrows only move; the picker keeps the tab";
+  } finally { await view.close(); }
+}
+
+/** A company with no candles: the market card offers 初始化一年行情; pressing it sends the request, then the chart and the price appear.  A failure is said and the button stays. */
+async function companyInitPrices(ctx) {
+  const view = await openAt(ctx, "company init prices", "#/research/c/INTC", { ready: "[data-testid=init-prices]" });
+  try {
+    const { page } = view;
+    assert((await page.locator("[data-testid=company-market] svg.candlestick-chart").count()) === 0, "a chart before the prices exist");
+    assert((await page.locator("[data-testid=company-price]").count()) === 0, "a price before the prices exist");
+    assert((await page.locator("[data-testid=watch-toggle]").innerText()).includes("加入自选"), "INTC is not on the list: the title row should offer 加入自选");
+    assert(count(view, "POST", /market-data\/INTC\/initialize$/) === 0, "initialised before the press");
+    // A failing supplier first: said in a toast, the button is a button again.
+    view.mock.control.fail = (method, path) => (method === "POST" && path.endsWith("/market-data/INTC/initialize") ? 500 : 0);
+    await page.locator("[data-testid=init-prices]").click();
+    await page.locator("[data-sonner-toast]").first().waitFor({ timeout: 8000 });
+    assert(view.mock.state.initializations === undefined, "a failed press must not have initialised anything in the fake backend");
+    await page.waitForFunction(() => document.querySelector("[data-testid=init-prices]")?.getAttribute("data-phase") === "idle", null, { timeout: 8000 });
+    view.mock.control.fail = null;
+    await page.locator("[data-testid=init-prices]").click();
+    await page.locator("[data-testid=company-market] svg.candlestick-chart").waitFor({ timeout: 15000 });
+    await page.locator("[data-testid=company-price]").waitFor({ timeout: 5000 });
+    assert(JSON.stringify(view.mock.state.initializations) === JSON.stringify(["INTC"]), `the fake API's initialisations: ${JSON.stringify(view.mock.state.initializations)}`);
+    assert((await page.locator("[data-testid=init-prices]").count()) === 0, "the button is still there with prices on screen");
+    assert(count(view, "GET", /v2\/stocks\/INTC\/prices$/) >= 2, "the prices were not read again after the initialisation");
+    // The title row shows what was read: the last close and a signed change.
+    const change = await page.locator("[data-testid=company-title] ~ [data-slot=change]").first().innerText().catch(() => "");
+    assert(/[+−]|0\.00/.test(change), `no signed change beside the price: '${change}'`);
+    return "INTC: no chart, 初始化一年行情; a failure toasts and keeps the button; the press POSTs once, the prices are read again, chart and price appear";
+  } finally { await view.close(); }
+}
+
+/** 问 bot lists the bots that follow the company, else the default bot; choosing one opens its line with the company as its stock and a draft that starts 关于 <代码>：, nothing sent. */
+async function companyAskBot(ctx) {
+  const view = await openAt(ctx, "company ask bot", "#/research/c/AAPL", { ready: "[data-testid=company-overview]" });
+  try {
+    const { page } = view;
+    const items = async () => { await page.locator("[data-testid=ask-bot]").click(); const menu = page.locator("[data-testid=ask-bot-menu]"); await menu.waitFor(); return { names: await menu.locator("[data-testid=ask-bot-item]").allInnerTexts(), label: (await menu.innerText()).split("\n")[0] }; };
+    const aapl = await items();
+    assert(aapl.names.join(",") === "AppleBot" && aapl.label.includes("AAPL"), `AAPL lists ${aapl.names.join(",")} under '${aapl.label}'`);
+    await page.locator("[data-testid=ask-bot-item]").first().click();
+    await waitHash(page, `#/chat/${BOT.applebot}`);
+    await page.locator(`#agent-draft[placeholder*="AppleBot"]`).waitFor({ timeout: 15000 });
+    await page.waitForFunction(() => document.querySelector("#agent-draft")?.value === "关于 AAPL：", null, { timeout: 8000 });
+    assert((await page.evaluate((id) => localStorage.getItem(`market-evidence-agent:bot-symbol:${id}:v1`), BOT.applebot)) === "AAPL", "AAPL is not AppleBot's current stock");
+    assert(count(view, "POST", /agent-chat\/stream$/) === 0, "a message was sent");
+    // TSLA: nobody follows it (TeslaBot has no focus company), so only the default bot is listed.
+    await page.evaluate(() => { location.hash = "#/research/c/TSLA"; });
+    await waitReady(page, { ready: "[data-testid=company-overview]" });
+    const tsla = await items();
+    assert(tsla.names.join(",") === "FinBot" && tsla.label.includes("默认"), `TSLA lists ${tsla.names.join(",")} under '${tsla.label}'`);
+    await page.locator("[data-testid=ask-bot-item]").first().click();
+    await waitHash(page, "#/chat");
+    await page.locator(`#agent-draft[placeholder*="FinBot"]`).waitFor({ timeout: 15000 });
+    await page.waitForFunction(() => document.querySelector("#agent-draft")?.value === "关于 TSLA：", null, { timeout: 8000 });
+    // A draft the reader had is not overwritten.  The page is reloaded on the company's address first, so the line has nothing in memory and only the stored draft is there to be kept (or overwritten).
+    await page.locator("#agent-draft").fill("我先问一个别的问题");
+    await page.waitForFunction((key) => localStorage.getItem(key) === "我先问一个别的问题", `market-evidence-agent:draft:bot:${BOT.finbot}:v1`, { timeout: 5000 });
+    await page.evaluate(() => { location.hash = "#/research/c/TSLA"; });
+    await waitReady(page, { ready: "[data-testid=company-overview]" });
+    await page.reload({ waitUntil: "load" });
+    await waitReady(page, { ready: "[data-testid=company-overview]" });
+    await items();
+    await page.locator("[data-testid=ask-bot-item]").first().click();
+    await waitHash(page, "#/chat");
+    await page.locator(`#agent-draft[placeholder*="FinBot"]`).waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+    assert((await page.locator("#agent-draft").inputValue()) === "我先问一个别的问题", `the reader's draft was replaced: '${await page.locator("#agent-draft").inputValue()}'`);
+    assert(count(view, "POST", /agent-chat\/stream$/) === 0, "a message was sent");
+    return "AAPL: AppleBot, the line opens with 关于 AAPL：; TSLA: only FinBot; a typed draft is kept; nothing sent";
+  } finally { await view.close(); }
+}
+
+/** The bar says all three numbers to a screen reader; down / flat / up take the down token, the muted grey and the up token; red up swaps the two market colours and not the grey. */
+async function probabilityBarA11y(ctx) {
+  const view = await openAt(ctx, "probability bar", "#/dev/kit/data", { ready: "[data-kit-data]" });
+  try {
+    const { page } = view;
+    const track = page.locator("[data-kit=bar-standard] [data-slot=probability-track]").first();
+    assert((await track.getAttribute("role")) === "img" && (await track.getAttribute("aria-label")) === "下跌 28%，持平 31%，上涨 41%", `label: ${await track.getAttribute("aria-label")}`);
+    assert((await track.locator("[data-segment]").evaluateAll((els) => els.map((el) => el.dataset.tone))).join(",") === "down,muted,up", "segment tones");
+    const colours = () => page.evaluate(() => {
+      const probe = (name) => { const el = document.createElement("div"); el.style.backgroundColor = `var(${name})`; document.body.appendChild(el); const value = getComputedStyle(el).backgroundColor; el.remove(); return value; };
+      const segments = Object.fromEntries([...document.querySelector("[data-kit=bar-standard] [data-slot=probability-track]").querySelectorAll("[data-segment]")].map((el) => [el.dataset.tone, getComputedStyle(el).backgroundColor]));
+      return { segments, down: probe("--down"), up: probe("--up"), muted: probe("--muted") };
+    });
+    const before = await colours();
+    assert(before.segments.down === before.down && before.segments.up === before.up && before.segments.muted === before.muted, `green up: ${JSON.stringify(before)}`);
+    assert(before.down !== before.up, "down and up are the same colour");
+    await page.locator('[data-kit="updown-toggle"]').click();
+    await page.waitForFunction(() => document.documentElement.dataset.updown === "red-up");
+    const after = await colours();
+    assert(after.segments.down === after.down && after.segments.up === after.up && after.segments.muted === after.muted, `red up: ${JSON.stringify(after)}`);
+    assert(after.down === before.up && after.up === before.down, `red up did not swap the two market colours: ${JSON.stringify({ before, after })}`);
+    assert(after.segments.down === before.segments.up && after.segments.up === before.segments.down && after.segments.muted === before.segments.muted, "the segments did not swap (and only the two)");
+    // A triple that does not add to 100 is drawn as given: three segments of 20% of the track, the total said in the legend.
+    const third = page.locator("[data-kit=bar-standard] [data-slot=probability-bar]").nth(2);
+    const widths = await third.locator("[data-segment]").evaluateAll((els) => { const total = els[0].parentElement.getBoundingClientRect().width; return els.map((el) => Math.round((el.getBoundingClientRect().width / total) * 100)); });
+    assert(widths.join(",") === "20,20,20", `20 / 20 / 20 was drawn as ${widths.join(",")}`);
+    assert((await third.locator("[data-slot=probability-legend]").innerText()).includes("合计") , "no total in the legend of a triple that is not 100");
+    // Mini: the numbers come on focus (and hover); no probabilities: the model status in words, no empty track.
+    const mini = page.locator("[data-kit=bar-mini] [data-slot=probability-track]").first();
+    await mini.focus();
+    const tip = page.locator("[data-kit=bar-mini] [data-slot=probability-tip]").first();
+    await tip.waitFor({ state: "visible", timeout: 3000 });
+    assert((await tip.innerText()) === "下跌 28% · 持平 31% · 上涨 41%", `tip: ${await tip.innerText()}`);
+    await page.locator("h1").click();
+    await tip.waitFor({ state: "hidden", timeout: 3000 });
+    const none = page.locator("[data-kit=bar-none] [data-slot=probability-bar]");
+    assert((await none.count()) === 3 && (await none.locator("[data-slot=probability-track]").count()) === 0, "a bar without probabilities drew a track");
+    assert((await none.first().innerText()).includes("研究结果"), `status words: ${await none.first().innerText()}`);
+  } finally { await view.close(); }
+  // The same sentence in English, with the English words and no Chinese in it.
+  const en = await newView(ctx.browser, { width: 1440, theme: "light", locale: "en-US", label: "probability bar en", unmatched });
+  try {
+    await en.page.goto(`${ctx.server.url}#/dev/kit/data`, { waitUntil: "load" });
+    await waitReady(en.page, { ready: "[data-kit-data]" });
+    const label = await en.page.locator("[data-kit=bar-standard] [data-slot=probability-track]").first().getAttribute("aria-label");
+    assert(label === "Down 28%, Flat 31%, Up 41%", `english label: ${label}`);
+  } finally { await en.close(); }
+  return "aria-label '下跌 28%，持平 31%，上涨 41%'; segments = --down / --muted / --up and the two market colours swap under red-up; 20/20/20 not rescaled; mini numbers on focus; no probabilities = words; English sentence";
+}
+
+/** The watchlist by keyboard: add in the field with Enter, arrows between the rows' 打开, Enter opens, 移出 asks (Esc cancels and gives the focus back), 撤销 by Alt+T. */
+async function watchlistKeyboard(ctx) {
+  const view = await openAt(ctx, "watchlist keyboard", "#/research", { ready: "[data-testid=watchlist-page]" });
+  try {
+    const { page } = view;
+    await waitReady(page, WATCHLIST_PAGE());
+    const active = () => page.evaluate(() => { const el = document.activeElement; return el ? `${el.closest("[data-testid=watch-row]")?.dataset.symbol ?? ""}:${el.getAttribute("data-row-nav") ?? el.id ?? el.tagName}` : ""; });
+    // The field, then 添加, the monitor chip, then the first row's 打开: Tab order follows the page.
+    await page.locator("#watchlist-add").focus();
+    await page.keyboard.type("meta"); await page.keyboard.press("Enter");
+    await page.locator("[data-testid=watch-row][data-symbol=META]").waitFor({ timeout: 8000 });
+    await page.keyboard.press("Tab"); await page.keyboard.press("Tab");
+    assert((await page.evaluate(() => document.activeElement?.getAttribute("data-testid"))) === "monitor-chip", `second Tab from the field: ${await active()}`);
+    await page.keyboard.press("Tab");
+    assert((await active()) === "AAPL:open", `Tab after the chip: ${await active()}`);
+    await page.keyboard.press("ArrowDown");
+    assert((await active()) === "TSLA:open", `ArrowDown: ${await active()}`);
+    await page.keyboard.press("ArrowUp");
+    assert((await active()) === "AAPL:open", `ArrowUp: ${await active()}`);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Tab");
+    assert((await active()) === "TSLA:remove", `Tab from 打开: ${await active()}`);
+    // 移出 asks; Esc cancels and the focus is back on the button that asked.
+    await page.keyboard.press("Enter");
+    await dialogOf(page).waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape");
+    await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-row-nav") === "remove" && document.activeElement.closest("[data-testid=watch-row]")?.dataset.symbol === "TSLA", null, { timeout: 3000 }).catch(() => { throw new Error("the focus did not come back to TSLA's 移出"); });
+    assert((await page.locator("[data-testid=watch-row][data-symbol=TSLA]").count()) === 1, "Esc removed the row");
+    // Confirm by keyboard, then 撤销 from the toast by Alt+T, Tab, Enter.
+    await page.keyboard.press("Enter");
+    await dialogOf(page).waitFor({ timeout: 5000 });
+    await page.keyboard.press("Tab"); await page.keyboard.press("Enter");
+    await page.locator("[data-testid=watch-row][data-symbol=TSLA]").waitFor({ state: "detached", timeout: 8000 });
+    await toastOf(page, "已移出自选").waitFor({ timeout: 5000 });
+    await page.keyboard.press("Alt+t");
+    assert(await page.evaluate(() => !!document.activeElement?.closest("[data-sonner-toaster]")), "Alt+T did not move the focus into the toaster");
+    for (let i = 0; i < 4; i += 1) { const label = await page.evaluate(() => document.activeElement?.textContent?.trim()); if (label === "撤销") break; await page.keyboard.press("Tab"); }
+    await page.keyboard.press("Enter");
+    await page.locator("[data-testid=watch-row][data-symbol=TSLA]").waitFor({ timeout: 8000 });
+    // Enter on 打开 opens the company.
+    await page.locator("[data-testid=watch-row][data-symbol=NVDA] [data-row-nav=open]").focus();
+    await page.keyboard.press("Enter");
+    await waitHash(page, "#/research/c/NVDA");
+    // A press on the row itself opens it too (the pointer's way).
+    await page.goBack(); await waitHash(page, "#/research"); await waitReady(page, WATCHLIST_PAGE());
+    await page.locator("[data-testid=watch-row][data-symbol=MSFT] [data-testid=watch-symbol]").click();
+    await waitHash(page, "#/research/c/MSFT");
+    return "type + Enter adds; Tab: field, 添加, chip, 打开; arrows move between rows; 移出 asks, Esc returns the focus; Alt+T 撤销; Enter opens; a row press opens";
+  } finally { await view.close(); }
+}
+
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -6145,6 +6426,12 @@ const CHECKS = [
   ["all-bots-states: skeleton cards, an error bar with 重试, the empty state, and 需要登录 for a guest", allBotsStates],
   ["all-bots-keyboard: the page is done with the keyboard alone (新建 bot, the cards' names and menus, 取消隐藏, Esc returns the focus)", allBotsKeyboard],
   ["bot-settings-model-badge: a model and effort saved on the settings page are what the chat page's model badge says", settingsModelBadge],
+  ["watchlist-add-remove-sync: add / remove (asked first) / undo each save the queue with the old body byte for byte; refusals say why and save nothing; the order is kept", watchlistAddRemoveSync],
+  ["company-symbol-in-url: the company and its tab are in the address: a reload stays, a tab press is a history entry, back returns, arrows only move, the picker keeps the tab", companySymbolInUrl],
+  ["company-init-prices: no candles: 初始化一年行情 in the market card; a failure toasts and keeps the button; the press POSTs once, then the chart and the price appear", companyInitPrices],
+  ["company-ask-bot: AAPL lists AppleBot, TSLA only the default bot; the line opens with 关于 <代码>： in the draft and the company as the bot's stock; nothing sent; a typed draft is kept", companyAskBot],
+  ["probability-bar-a11y: the sentence for a screen reader, down / flat / up = --down / --muted / --up (the two market colours swap under red-up), not rescaled to 100, numbers on focus, words without probabilities", probabilityBarA11y],
+  ["watchlist-keyboard: the watchlist is done with the keyboard alone (add, rows by arrows, 打开, 移出 and its question, 撤销 by Alt+T)", watchlistKeyboard],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

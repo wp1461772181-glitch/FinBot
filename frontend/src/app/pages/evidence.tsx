@@ -1,6 +1,6 @@
 import { useParams, useSearchParams } from "react-router";
 import { EvidenceCenter, type EvidenceRoute } from "../../EvidenceCenter";
-import { isSupportedSymbol } from "../../OverviewWorkspace";
+import { isSupportedSymbol } from "../research/support";
 import { sourceTypeParam, symbolFromParams } from "../../routes.mjs";
 import { ResearchFrame } from "./frames";
 import { useWorkspace } from "../workspace";

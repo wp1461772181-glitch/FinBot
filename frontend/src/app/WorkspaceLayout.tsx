@@ -14,6 +14,7 @@ import { type Bot } from "../api/bots";
 import { normalizeHash } from "../legacy-routes.mjs";
 import { pathForSection, paths, sectionOfPath, splitPath, symbolFromParams, symbolParam } from "../routes.mjs";
 import { MAX_WATCHLIST, normalizeTicker, normalizeWatchlist, selectionForWatchlist } from "../watchlist.mjs";
+import { checkWatchAdd } from "../watchlist-add.mjs";
 import { registerWatchlistAdder, setWatchlistSnapshot } from "../watchlist-bridge.mjs";
 import type { PaletteData } from "@/components/command/CommandMenu";
 import { NEW_BOT_EVENT } from "./new-bot/events";
@@ -174,21 +175,19 @@ export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest"
     navigate(view === "forecast" ? paths.company(clean, "forecasts") : paths.company(clean));
   }, [navigate]);
   function addWatchSymbol() {
-    const ticker = normalizeTicker(watchInput);
-    if (!ticker) { setWatchError("请输入有效的美股代码，例如 AMD 或 BRK.B。"); return; }
-    if (symbols.includes(ticker)) { setWatchError("该代码已在关注列表中。"); return; }
-    if (symbols.length >= MAX_WATCHLIST) { setWatchError("关注列表最多保存 30 个代码。"); return; }
-    setSymbols(items => [...items, ticker]); setWatchInput(""); setWatchError("");
+    const added = checkWatchAdd(watchInput, symbols);
+    if (!added.ok) { setWatchError(added.error); return; }
+    setSymbols(items => [...items, added.ticker]); setWatchInput(""); setWatchError("");
     // A company just added opens on its overview, wherever the reader was.
-    setPreferred(ticker); navigate(paths.company(ticker));
+    setPreferred(added.ticker); navigate(paths.company(added.ticker));
   }
-  const removeWatchSymbol = useCallback((ticker: string) => {
+  const removeWatchSymbol = useCallback((ticker: string, options?: { stay?: boolean }) => {
     const remaining = symbols.filter(item => item !== ticker);
     setSymbols(remaining);
     const next = selectionForWatchlist(preferredRef.current, remaining);
     setPreferred(next);
     // The page was about the company just removed: it moves to the one the queue now starts with.
-    if (symbolRef.current === ticker && next && sectionRef.current === "overview") navigate(addressSymbol ? paths.company(next) : paths.research(), { replace: true });
+    if (!options?.stay && symbolRef.current === ticker && next && sectionRef.current === "overview") navigate(addressSymbol ? paths.company(next) : paths.research(), { replace: true });
   }, [symbols, navigate, addressSymbol]);
 
   const workspace: Workspace = useMemo(() => ({
@@ -200,11 +199,16 @@ export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest"
   const routinesCount = useRoutinesBadge(personal, botList.bots);
   // The old top bar showed the company switcher on the research pages, except the forecast group (its company comes from the record).
   const stockPicker = isResearchSection(activeSection) && navGroup(activeSection) !== "forecast";
+  // P6.1: the bar itself is for the company page (every tab of it, the forecasts tab included: the company comes from the address there) and the old research pages
+  // above; the watchlist page (/research) is about no one company and has its own add field in its title row.
+  const onWatchlist = location.pathname === paths.research();
+  const onCompanyPage = /^\/research\/c\/[^/]+$/.test(location.pathname);
+  const researchBar = !onWatchlist && (stockPicker || onCompanyPage);
   // What the command palette lists: the same watch list, bot list and company switch the sidebar and the research bar use.
   const palette: PaletteData = { personal, symbol, symbols, bots: botList.bots, onSelectCompany: switchSymbol, onAddCompany: openCompany };
   return <AppShell onModeChange={onModeChange} overlay={newBotDialog} palette={palette}
     nav={{ path: addressPath, personal, symbol, bots: botList.bots, botsError: botList.error, activeBotId: activeBot?.id ?? null, lineStatus, routinesCount, onNewBot: () => setNewBotOpen(true), onModeChange }}
-    research={stockPicker ? { symbol, symbols, onSelectStock: switchSymbol, watchInput, setWatchInput, addWatchSymbol, watchError, setWatchError } : null}>
+    research={researchBar ? { symbol, symbols, onSelectStock: switchSymbol, watchInput, setWatchInput, addWatchSymbol, watchError, setWatchError } : null}>
     <WorkspaceContext.Provider value={workspace}><Outlet /></WorkspaceContext.Provider>
   </AppShell>;
 }

@@ -21,8 +21,7 @@
 body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font); }
 
 /* Figures read in a monospaced face with aligned digits. */
-.num, code, kbd, pre, samp,
-.overview-metrics strong, .universe-card dd, .candle-detail strong, .delta {
+.num, code, kbd, pre, samp, .overview-metrics strong, .candle-detail strong, .delta {
   font-family: var(--me-mono);
   font-variant-numeric: tabular-nums;
 }
@@ -163,8 +162,6 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 :root[data-theme="dark"] .status-queued,
 :root[data-theme="dark"] .status-running,
 :root[data-theme="dark"] .status-succeeded,
-:root[data-theme="dark"] .universe-card,
-:root[data-theme="dark"] .universe-card.is-current,
 :root[data-theme="dark"] .v2-card,
 :root[data-theme="dark"] .v2-desk,
 :root[data-theme="dark"] .v2-detail,

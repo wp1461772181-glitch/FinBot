@@ -47,7 +47,9 @@ test("a guest's navigation is what the old guest rail showed: no bots, no 持仓
 test("the forecast group has no stock picker: the company comes from the record", () => {
   const layout = src("app/WorkspaceLayout.tsx");
   assert.match(layout, /const stockPicker = isResearchSection\(activeSection\) && navGroup\(activeSection\) !== "forecast";/);
-  assert.match(layout, /research=\{stockPicker \? \{ symbol, symbols, onSelectStock: switchSymbol/);
+  // P6.1: the bar is shown for the old research pages that have a picker and for every tab of the company page, never on the watchlist page (/research).
+  assert.match(layout, /const researchBar = !onWatchlist && \(stockPicker \|\| onCompanyPage\);/);
+  assert.match(layout, /research=\{researchBar \? \{ symbol, symbols, onSelectStock: switchSymbol/);
   const shell = src("app/shell/AppShell.tsx");
   assert.match(shell, /\{research && !guarded && <Suspense fallback=\{null\}><ResearchBar \{\.\.\.research\} \/><\/Suspense>\}/);
   assert.match(src("app/shell/ResearchBar.tsx"), /role="combobox"/);

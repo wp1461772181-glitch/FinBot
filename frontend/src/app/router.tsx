@@ -47,10 +47,14 @@ const chatPages: RouteObject[] = [
   { path: PATTERNS.chatBot, ...page(() => import("./pages/chat"), "ChatBotRoute") },
 ];
 
+/** The watchlist and the company page are new markup (P6.1): no old-UI marker around them.  The old pages the company page's tabs embed carry their own. */
+const researchPages: RouteObject[] = [
+  { path: PATTERNS.research, ...page(() => import("./pages/research"), "ResearchRoute") },
+  { path: PATTERNS.company, ...page(() => import("./pages/research"), "CompanyRoute") },
+];
+
 const pages: RouteObject[] = [
-  { path: PATTERNS.research, ...page(() => import("./pages/overview"), "ResearchRoute") },
   { path: PATTERNS.companyLatest, ...page(() => import("./pages/latest"), "LatestRoute") },
-  { path: PATTERNS.company, ...page(() => import("./pages/overview"), "CompanyRoute") },
   { path: PATTERNS.forecasts, ...page(() => import("./pages/forecasts"), "ForecastsRoute") },
   { path: PATTERNS.forecast, ...page(() => import("./pages/forecast"), "ForecastRoute") },
   { path: PATTERNS.judgment, ...page(() => import("./pages/judgment"), "JudgmentRoute") },
@@ -78,6 +82,7 @@ const routes: RouteObject[] = [
     { path: PATTERNS.devKit, ...page(() => import("../dev/KitPage"), "default") },
     { path: PATTERNS.devKitProbe, ...page(() => import("../dev/KitPage"), "default", { probe: true }) },
     { path: PATTERNS.devKitStates, ...page(() => import("../dev/StatesPage"), "default") },
+    { path: PATTERNS.devKitData, ...page(() => import("../dev/DataPage"), "default") },
     { path: PATTERNS.devKitBots, ...page(() => import("../dev/BotsPage"), "default") },
   ] : []),
   {
@@ -90,7 +95,7 @@ const routes: RouteObject[] = [
       { path: PATTERNS.login, ...to(paths.chat()) },
       // The error boundary sits below the layout, so a page that fails to load leaves the shell standing.  It is above the
       // old-UI marker, so the notice it shows is new markup outside it.
-      { ErrorBoundary: RouteError, children: [...chatPages, { Component: LegacyPage, children: pages }] },
+      { ErrorBoundary: RouteError, children: [...chatPages, ...researchPages, { Component: LegacyPage, children: pages }] },
     ],
   },
 ];

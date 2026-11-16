@@ -103,6 +103,7 @@ row("row 23: #settings alias", "#settings", "/settings/models");
 row("dev kit: #dev-kit", "#dev-kit", "/dev/kit");
 row("dev kit: #dev-kit/probe", "#dev-kit/probe", "/dev/kit/probe");
 row("dev kit: #dev-kit/states", "#dev-kit/states", "/dev/kit/states");
+row("dev kit: #dev-kit/data", "#dev-kit/data", "/dev/kit/data");
 
 test("new-form and unknown addresses are not this table's business (null)", () => {
   for (const hash of ["#/chat", "#/research/c/AAPL?tab=forecasts", "#/", "#/whatever", "#nonsense", "#portfolio-x", "#x/y/z"]) {

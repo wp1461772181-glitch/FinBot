@@ -1,0 +1,14 @@
+import type { DeltaDirection } from "./delta.mjs";
+export type BadgeKind = "neutral" | "progress" | "success" | "failure" | "opinion" | "action";
+export function signedChange(value: unknown, options?: { digits?: number; scale?: number; suffix?: string }): { direction: DeltaDirection; text: string };
+export function priceChange(candles: unknown): { close: number; date: string; direction: DeltaDirection; change: string; percent: string; text: string } | null;
+export function recentCloses(candles: unknown, count?: number): number[];
+export const BADGE_TONES: BadgeKind[];
+export const BADGE_MATERIALS: BadgeKind[];
+export const BADGE_KINDS: BadgeKind[];
+export function badgeKind(kind: unknown): BadgeKind;
+export function monitorChip(health: unknown): { kind: BadgeKind; phrase: string };
+export function deltaDirection(value: unknown): DeltaDirection;
+export const OPINION_DISCLAIMER: string;
+export function sparklinePoints(closes: unknown, width: number, height: number): string;
+export function usableCandles<T extends { trading_date: string }>(candles: T[] | null | undefined, count?: number): T[];

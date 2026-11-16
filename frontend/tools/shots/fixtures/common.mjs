@@ -53,6 +53,9 @@ export function candles(symbol) {
   cache.set(symbol, rows);
   return rows;
 }
+/** Symbols with no saved candles until their prices are initialised (the company page's 初始化一年行情). */
+export const NO_PRICES = new Set(["INTC"]);
+export const emptyPrices = (symbol) => ({ symbol, price_history: { source: "market_data", latest_trading_date: null, candles: [] } });
 export const lastClose = (symbol) => candles(symbol).at(-1).close;
 export const prices = (symbol) => ({ symbol, price_history: { source: "market_data", latest_trading_date: candles(symbol).at(-1).trading_date, candles: candles(symbol) } });
 

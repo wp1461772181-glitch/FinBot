@@ -1,0 +1,12 @@
+export type ProbabilityKey = "bearish" | "neutral" | "bullish";
+export type ProbabilityTone = "down" | "muted" | "up";
+export type ProbabilitySegment = { key: ProbabilityKey; tone: ProbabilityTone; phrase: string; value: number; percent: number; width: number };
+export type ProbabilityBarModel = { segments: ProbabilitySegment[]; sum: number; sumsToWhole: boolean };
+export const PROBABILITY_KEYS: ProbabilityKey[];
+export const PROBABILITY_PHRASES: Record<ProbabilityKey, string>;
+export const PROBABILITY_TONES: Record<ProbabilityKey, ProbabilityTone>;
+export const LABEL_MIN_WIDTH: number;
+export function hasProbabilities(probabilities: unknown): boolean;
+export function probabilityModel(probabilities: Partial<Record<ProbabilityKey, number>> | null | undefined): ProbabilityBarModel | null;
+export function probabilityText(model: ProbabilityBarModel | null, translate?: (text: string) => string, separator?: string): string;
+export function fitsInside(segment: ProbabilitySegment): boolean;

@@ -1,0 +1,28 @@
+/* The candlestick chart on the company page (P6.1): the same SVG the forecast pages draw, restyled from the colour and type tokens.
+   It applies only to a chart that asks for it (<figure data-chart="tokens">, the `tokens` prop), so the old pages keep their picture until
+   they are redone.  Up and down are the market tokens (they swap under 红涨绿跌); every label is 12px in the token faces; the chart draws at
+   its real width (see CandlestickChart.tsx), so a 12px label is 12px on a phone too.  Not in a layer: it beats the legacy sheets.  It is imported by CandlestickChart.tsx itself, so it travels with the chart's chunk and is not part of the first screen's stylesheet. */
+[data-chart="tokens"] { margin: 0; padding: 8px 0 4px; border-top: 0; border-bottom: 0; }
+[data-chart="tokens"] .chart-grid { stroke: var(--line); stroke-dasharray: 2 4; }
+[data-chart="tokens"] .chart-price-label,
+[data-chart="tokens"] .chart-date-label { fill: var(--muted); font: 12px var(--font-mono); font-variant-numeric: tabular-nums; }
+[data-chart="tokens"] .candle.is-up line { stroke: var(--up); }
+[data-chart="tokens"] .candle.is-up rect { fill: var(--up); }
+[data-chart="tokens"] .candle.is-down line { stroke: var(--down); }
+[data-chart="tokens"] .candle.is-down rect { fill: var(--down); }
+[data-chart="tokens"] .candle.is-active rect,
+[data-chart="tokens"] .candle:focus rect { stroke: var(--ink); stroke-width: 1.6; filter: none; }
+[data-chart="tokens"] .target-window rect { fill: var(--accent-soft); opacity: 1; }
+[data-chart="tokens"] .target-window text,
+[data-chart="tokens"] .actual-region text { fill: var(--accent); font: 12px var(--font-sans); letter-spacing: 0; text-transform: none; }
+[data-chart="tokens"] .actual-region line { stroke: var(--muted); }
+[data-chart="tokens"] .actual-region text { fill: var(--muted); }
+[data-chart="tokens"] .snapshot-marker line { stroke: var(--ink-2); }
+[data-chart="tokens"] .snapshot-marker text { fill: var(--ink-2); font: 12px var(--font-sans); letter-spacing: 0; }
+[data-chart="tokens"] .snapshot-marker.revised line { stroke: var(--accent); }
+[data-chart="tokens"] .snapshot-marker.revised text { fill: var(--accent); }
+[data-chart="tokens"] figcaption { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 16px; gap: 6px 16px; }
+[data-chart="tokens"] figcaption i { width: 10px; height: 10px; border-radius: 2px; }
+[data-chart="tokens"] .legend-up { background: var(--up); }
+[data-chart="tokens"] .legend-down { background: var(--down); }
+[data-chart="tokens"] .legend-window { background: var(--accent-soft); border: 1px solid var(--accent); }

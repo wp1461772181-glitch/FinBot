@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, type Dispatch, type SetStateAction } from "react";
 import type { Bot } from "../api/bots";
 import type { WorkspaceSection } from "../workspace-sections.mjs";
 
@@ -10,7 +10,7 @@ export type Workspace = {
   personal: boolean;
   /** The research queue. */
   symbols: string[];
-  setSymbols: (symbols: string[]) => void;
+  setSymbols: Dispatch<SetStateAction<string[]>>;
   /** The company the page is about: the one in the address when it has one, else the preferred one. */
   symbol: string;
   /** Last company the reader had open (a stored preference; only a default for addresses without a company). */
@@ -21,7 +21,8 @@ export type Workspace = {
   go: (section: WorkspaceSection) => void;
   /** Open a company's page: its overview, or its forecasts. */
   openCompany: (ticker: string, view?: "overview" | "forecast") => void;
-  removeWatchSymbol: (ticker: string) => void;
+  /** Take a code off the watchlist.  `stay`: the reader is looking at that company and keeps looking (the company page's own ★), instead of moving to the next one. */
+  removeWatchSymbol: (ticker: string, options?: { stay?: boolean }) => void;
   /** Open the new-bot dialog (the sidebar's 新建 bot; the phone's bot switcher has the same entry). */
   openNewBot: () => void;
 };

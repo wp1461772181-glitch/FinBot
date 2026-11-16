@@ -1,6 +1,6 @@
 // Fixture entry: buildState() makes a fresh mutable state per browser context; registerRoutes() wires the handlers.
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HOLD_MARKER, LOGIN_CODE, WATCHLIST } from "./ids.mjs";
-import { prices } from "./common.mjs";
+import { NO_PRICES, emptyPrices, prices } from "./common.mjs";
 import { botList, BOT_TEMPLATES, MODEL_CATALOG, MODEL_ROLES } from "./bots.mjs";
 import { buildChat, CITATION_DETAILS, clarificationEvents, compactionNotice, conversationSummaries, CONTEXT_USAGE, streamEvents } from "./chat.mjs";
 import { filingInventory } from "./filings.mjs";
@@ -56,7 +56,8 @@ export function registerRoutes(route, reply) {
   }));
   route.post(`${A}/bots/:id/read`,own(({ params, state }) => { const b = state.bots.find((x) => x.id === params.id); const read = b?.unread ?? 0; if (b) b.unread = 0; return { read }; }));
   route.get(`${A}/research-queue`, own(({ state }) => ({ symbols: state.queue })));
-  route.put(`${A}/research-queue`, own(({ body, state }) => { state.queue = body.symbols; return { ok: true }; }));
+  // Every save is kept as the browser sent it (the raw text): the watchlist checks compare it with the body the old page sent.
+  route.put(`${A}/research-queue`, own(({ body, rawBody, state }) => { state.queue = body.symbols; state.queuePuts = [...(state.queuePuts ?? []), rawBody]; return { ok: true }; }));
 
   // --- conversations -----------------------------------------------------------------------------------
   route.get(`${A}/conversations`, own(({ state }) => ({ conversations: conversationSummaries(state), has_more: false })));
@@ -109,7 +110,13 @@ export function registerRoutes(route, reply) {
   route.get("/knowledge/citations/:id", own(({ params }) => CITATION_DETAILS[params.id] ?? reply.status(404, { detail: "citation_not_found" })));
 
   // --- market data -------------------------------------------------------------------------------------
-  route.get("/v2/stocks/:symbol/prices", ({ params }) => prices(params.symbol));
+  // A symbol in NO_PRICES has no candles until the initialise request (below) has been made for it.
+  route.get("/v2/stocks/:symbol/prices", ({ params, state }) => (NO_PRICES.has(params.symbol) && !state.pricesInitialized?.has(params.symbol) ? emptyPrices(params.symbol) : prices(params.symbol)));
+  route.post("/market-data/:symbol/initialize", own(({ params, state }) => {
+    state.pricesInitialized = new Set([...(state.pricesInitialized ?? []), params.symbol]);
+    state.initializations = [...(state.initializations ?? []), params.symbol];
+    return { symbol: params.symbol, inserted_count: 252, skipped_count: 0 };
+  }));
   route.get("/filing-inventories/:symbol", ({ params }) => filingInventory(params.symbol));
 
   // --- forecasts (V2) ----------------------------------------------------------------------------------

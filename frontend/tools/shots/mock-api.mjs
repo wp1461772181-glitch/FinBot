@@ -72,7 +72,8 @@ export async function installMockApi(context, { label, unmatched, fixtureState =
   // Switches a check can flip while the page runs: `down` makes every API request fail the way an unreachable server does
   // (the browser raises a network error); `down502` answers with a proxy's HTML gateway error instead.
   // `hold`: a function (method, path, query) => boolean; a request it accepts is never answered (a page that is still waiting for it: the history skeleton, the earlier-turns spinner).
-  const control = { down: false, down502: false, hold: null };
+  // `fail`: a function (method, path, query) => HTTP status (or 0); a request it names is answered with that status and a plain error body (a page that has one block failing: a watchlist row).
+  const control = { down: false, down502: false, hold: null, fail: null };
 
   await context.route(() => true, async (pending) => {
     const request = pending.request();
@@ -85,6 +86,10 @@ export async function installMockApi(context, { label, unmatched, fixtureState =
     const method = request.method().toUpperCase();
     if (control.down) return pending.abort("connectionrefused");
     if (control.hold && control.hold(method, url.pathname.replace(/\/+$/, "") || "/", url.searchParams)) return new Promise(() => {});
+    if (control.fail) {
+      const status = control.fail(method, url.pathname.replace(/\/+$/, "") || "/", url.searchParams);
+      if (status) return pending.fulfill({ status, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ detail: "shots: forced failure" }) });
+    }
     if (control.down502) return pending.fulfill({ status: 502, headers: { ...CORS, "Content-Type": "text/html" }, body: "<html><body>502 Bad Gateway</body></html>" });
     if (method === "OPTIONS") return pending.fulfill({ status: 204, headers: CORS });
     const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -101,7 +106,7 @@ export async function installMockApi(context, { label, unmatched, fixtureState =
     const headers = request.headers();
     const authed = headers["x-chat-session"] === FAKE_CREDENTIAL;
     try {
-      const result = await matched.entry.handler({ params: matched.params, query: url.searchParams, body, state: fixtureState, authed, method, path, headers });
+      const result = await matched.entry.handler({ params: matched.params, query: url.searchParams, body, rawBody: raw, state: fixtureState, authed, method, path, headers });
       if (result && result.__reply) {
         return pending.fulfill({ status: result.status, headers: { ...CORS, "Content-Type": result.contentType ?? "application/json" }, body: typeof result.body === "string" ? result.body : JSON.stringify(result.body ?? {}) });
       }

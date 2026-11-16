@@ -212,6 +212,36 @@ async function personaReady(page) {
   await page.waitForFunction(() => Boolean(document.querySelector("[data-slot=chat-page]")?.dataset.archetype), null, { timeout: 30000 });
 }
 
+/** The fake backend's state with the owner's research queue set to `symbols` (the watchlist page's empty state). */
+export function stateWithQueue(symbols) {
+  const state = buildState();
+  state.queue = [...symbols];
+  return state;
+}
+
+/** The watchlist page with every row read: each row has its close, its material count and no cell still loading, and the forecast list is in. */
+async function watchlistLoaded(page) {
+  await page.waitForSelector("[data-testid=watchlist-table] [data-testid=watch-row]", { state: "visible", timeout: 30000 });
+  await page.waitForFunction(() => {
+    const rows = [...document.querySelectorAll("[data-testid=watch-row]")];
+    return rows.length > 0 && rows.every((row) => row.querySelector("[data-testid=watch-close]") && row.querySelector("[data-testid=watch-materials]") && !row.querySelector("[aria-busy=true]"))
+      && Boolean(document.querySelector("[data-testid=monitor-chip] [data-slot=status-badge]")) && !/正在读取/.test(document.querySelector("[data-testid=monitor-chip]").innerText);
+  }, null, { timeout: 30000 });
+}
+
+/** The company overview with its blocks read: the chart is drawn, the judgment card is in, the lists have their rows. */
+async function companyLoaded(page) {
+  await page.waitForSelector("[data-testid=company-overview]", { state: "visible", timeout: 30000 });
+  await page.waitForSelector("[data-testid=company-market] svg.candlestick-chart", { state: "visible", timeout: 30000 });
+  await page.waitForSelector("[data-testid=company-judgment] [data-slot=opinion-card]", { state: "visible", timeout: 30000 });
+  await page.waitForFunction(() => document.querySelectorAll("[data-testid=company-overview] [aria-busy=true]").length === 0, null, { timeout: 30000 });
+}
+
+/** The market colours switched to red up the way the settings page does it (the attribute is what the tokens read). */
+async function redUp(page) {
+  await page.evaluate(() => { try { localStorage.setItem("market-evidence-agent:updown:v1", "red-up"); } catch { /* storage unavailable */ } document.documentElement.dataset.updown = "red-up"; });
+}
+
 export const PAGES = [
   { name: "entry", hash: "#/login", identity: "none", ready: '[aria-labelledby="login-title"]' },
   // The login page after a wrong code, the shell with the sidebar collapsed (1440) / the phone's 更多 drawer open (390),
@@ -390,7 +420,28 @@ export const PAGES = [
   { name: "chat-history", hash: "#/chat/history", ready: (page) => page.waitForSelector("[data-testid=history-row]", { state: "attached", timeout: 15000 }) },
   { name: "chat-history-open", hash: "#/chat/history", ready: (page) => page.waitForSelector("[data-testid=history-row]", { state: "attached", timeout: 15000 }),
     before: async (page, { width }) => { if (width < 1024) { await page.locator("[data-testid=history-toggle]").click(); await page.locator("[data-testid=history-list]").waitFor({ state: "visible" }); } } },
-  { name: "overview", hash: "#/research/c/AAPL", ready: ".overview-workspace .watch-grid, .overview-workspace" },
+  // P6.1: the old overview is two pages (the names `overview` stops here: its pictures are the watchlist and the company page now).
+  // The watchlist: the seven rows with every cell read.  Empty: the server's queue holds nothing.  Row error: one company's price and material reads fail (500) and its row says so with 重试.
+  { name: "watchlist", hash: "#/research", ready: watchlistLoaded },
+  { name: "watchlist-red-up", hash: "#/research", ready: watchlistLoaded, before: redUp },
+  { name: "watchlist-empty", hash: "#/research", ready: "[data-slot=empty-state]", view: () => ({ fixtureState: stateWithQueue([]) }) },
+  { name: "watchlist-row-error", hash: "#/research", ready: watchlistLoaded,
+    before: async (page, { mock }) => {
+      mock.control.fail = (method, path, query) => (method === "GET" && ((path.endsWith("/v2/stocks/TSLA/prices")) || (path.endsWith("/v3/materials") && query.get("symbol") === "TSLA")) ? 500 : 0);
+      await page.evaluate(() => { location.hash = "#/chat"; });
+      await page.locator("[data-testid=message]").first().waitFor();
+      await page.evaluate(() => { location.hash = "#/research"; });
+      await page.locator('[data-testid=watch-row][data-symbol=TSLA] [role=alert]').first().waitFor({ timeout: 15000 });
+      await page.waitForFunction(() => document.querySelectorAll("[data-testid=watch-row] [aria-busy=true]").length === 0, null, { timeout: 15000 });
+    } },
+  // The company page: the overview (chart, latest judgment, recent materials, filings, the four numbers), the two tabs that embed the old pages, a company with no candles
+  // (the market card offers 初始化一年行情), an address that is not a ticker, and the overview under red-up.
+  { name: "company", hash: "#/research/c/AAPL", ready: companyLoaded },
+  { name: "company-red-up", hash: "#/research/c/AAPL", ready: companyLoaded, before: redUp },
+  { name: "company-forecasts", hash: "#/research/c/AAPL?tab=forecasts", ready: ".forecast-home" },
+  { name: "company-materials", hash: "#/research/c/AAPL?tab=materials", ready: ".material-library-panel h2" },
+  { name: "company-no-prices", hash: "#/research/c/INTC", ready: "[data-testid=init-prices]" },
+  { name: "company-unknown", hash: "#/research/c/NOPE12345", ready: "[data-testid=company-unknown]" },
   { name: "forecast-home", hash: "#/research/forecasts", ready: ".forecast-home" },
   { name: "forecast-detail", hash: `#/research/forecasts/${ROOT.aapl}`, ready: ".research-brief" },
   { name: "judgment", hash: `#/research/judgments/${JUDGMENT.aapl}`, ready: ".judgment-page h2" },
@@ -420,6 +471,10 @@ export const PAGES = [
       await page.locator('[data-kit="offline-on"]').click(); await page.locator('[data-slot="offline-banner"]').waitFor();
       await page.locator('[data-kit="toast-pinned"]').click(); await page.locator("[data-sonner-toast]").waitFor();
     } },
+  // P6.1: the four data components at #/dev/kit/data (its own address), and the same page under red up.
+  { name: "dev-kit-data", hash: "#/dev/kit/data", ready: "[data-kit-data]" },
+  { name: "dev-kit-data-red-up", hash: "#/dev/kit/data", ready: "[data-kit-data]",
+    before: async (page) => { await page.locator('[data-kit="updown-toggle"]').click(); await page.waitForFunction(() => document.documentElement.dataset.updown === "red-up"); } },
   { name: "dev-kit-states-confirm", hash: "#/dev/kit/states", ready: "[data-kit-states]", keepLoadingText: true,
     before: async (page) => { await page.locator('[data-kit="confirm-hold"]').click(); await page.locator('[data-slot="alert-dialog-content"]').waitFor(); } },
   // The command palette: opened with the shortcut, with "TS" typed (TSLA from the watch list, then the offer to add TS) and with nothing typed.
