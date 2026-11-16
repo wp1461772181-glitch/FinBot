@@ -1,6 +1,6 @@
 """Two semantic stages followed by one permission-aware, bounded tool loop."""
 from __future__ import annotations
-import asyncio,copy,hashlib,inspect,json,os,re,time,uuid
+import asyncio,copy,difflib,hashlib,inspect,json,os,re,time,uuid
 from datetime import UTC,date,datetime,timedelta,timezone
 from decimal import Decimal,InvalidOperation
 from typing import Annotated
@@ -931,6 +931,27 @@ def public_search_state(entries):
     return 'found'
 
 
+# FP13-E5 S2 (FINBOT_FP13E5_UNFINISHED_FACT): a rewrite that comes back to an unfinished earlier request, while the user's own
+# words are not that request, is handed to the answering model as a fact. The question, the tools and the answer are untouched.
+UNFINISHED_FACT_TEXT=('系统事实：resolved_question 与对话里一条没有完成的早先请求基本相同，而用户这一轮的原话（user_original_words）不是那条请求；classifier_scope 也是按 resolved_question 得出的。'
+ '原话本身是一个完整的新问题时，按原话回答，那条早先请求不用再做；原话是要求继续、重试或修改那条请求时，按 resolved_question 回答。'
+ '这条优先于 original_words_note 里「resolved_question 决定公司、指标和时间」那一句，也优先于开头「以改写后的问题为准」。')
+_UNFINISHED_BRACKETS=re.compile(r'（[^）]*）|\([^)]*\)')
+_UNFINISHED_MARKS=re.compile(r"""[\s。.!！?？,，、:：;；「」“”"'‘’]+""")
+def _unfinished_norm(text):
+    return _UNFINISHED_MARKS.sub('',_UNFINISHED_BRACKETS.sub('',str(text or ''))).casefold()
+def _unfinished_same(a,b):
+    a,b=_unfinished_norm(a),_unfinished_norm(b)
+    return bool(a) and bool(b) and difflib.SequenceMatcher(None,a,b).ratio()>=0.85
+def unfinished_rewrite(messages,canonical,original):
+    """The earlier unfinished request the rewrite came back to, when the user's own words are not that request; else None.
+    An unfinished request is a user message followed by one of the FP3 system records (layers.UNFINISHED_NOTES)."""
+    records=set(layers.UNFINISHED_NOTES.values())
+    for asked,noted in zip(messages,messages[1:]):
+        if asked.get('role')!='user' or noted.get('role')!='assistant' or noted.get('content') not in records:continue
+        question=asked.get('content') or ''
+        if _unfinished_same(canonical,question) and not _unfinished_same(original,question):return question
+    return None
 class Turn:
 
     def __init__(self,question,context,emit,messages,state):
@@ -965,6 +986,7 @@ class Turn:
         # Tool results from the model's own requests start here; the system's prefetch sits before it.
         self.model_feedback_from=0
         self.reference_value=None;self.verified_referents=[];self.bound_history_citations=[]
+        self.unfinished_rewrite=None    # FP13-E5 S2: the unfinished earlier request this rewrite came back to (a fact, never a change)
         self.granted_actions=set();self.write_reasons={}
         # Tool categories whose definitions ride on the model call (progressive disclosure), in load order;
         # `used_categories` are the ones a tool was actually run from, handed on to the next turn.
@@ -1269,6 +1291,10 @@ class Turn:
         for ref in selected:
             target_text=ref.get('text') or ''
             if target_text and target_text not in self.question:self.question+=' '+target_text
+        # FP13-E5 S2: the rewrite came back to an unfinished earlier request and the user's own words did not.
+        if flag('FINBOT_FP13E5_UNFINISHED_FACT',True) and not self.resolver_failed:
+            self.unfinished_rewrite=unfinished_rewrite(prior,canonical,self.user_words())
+            if self.unfinished_rewrite is not None:self.audit['resolver_unfinished_match']=True
         if value.relationship=='new':return
         self.followup=True
         self.refinement=value.relationship=='refinement'
@@ -1956,6 +1982,10 @@ class Turn:
             hint['user_original_words']=words[:4000]
             hint['original_words_note']=('resolved_question 决定公司、指标和时间：相对时间（如「去年」「上季度」）已在其中换算成明确期间，不要按原话重新推算。'
                 'user_original_words 是用户这一轮的原话：原话里有、而 resolved_question 没有体现的要求（口径、对比对象、限定条件、输出形式、语气、对上一答的纠正或质疑），按原话执行。')
+        # FP13-E5 S2: the fact travels with the user's words, which FP1 may not have carried.
+        if flag('FINBOT_FP13E5_UNFINISHED_FACT',True) and self.unfinished_rewrite is not None:
+            if 'user_original_words' not in hint:hint['user_original_words']=self.user_words().strip()[:4000]
+            hint['unfinished_note']=UNFINISHED_FACT_TEXT
         if self.scope.get('symbol') and not self.entity_binds():
             hint['scope_entity_note']='The symbol and company above come from the previous turn or the bot setting, not from this request: use them only if the request is about them.'
         if self.tool_bias:
