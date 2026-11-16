@@ -8,6 +8,7 @@ from contextvars import ContextVar
 from fastapi import HTTPException
 from .agent_chat_api import PROVIDERS, BASE_URLS, PinnedPublicTransport, model_transport
 from .agent_progress import progress_watchdog, mark_progress
+from .agent_workflow.fp_flags import flag
 
 _DECISION_SESSION=ContextVar('agent_decision_session',default=None)
 
@@ -112,6 +113,18 @@ class ProviderFailure(HTTPException):
         self.retryable = retryable
 
 
+class ResponseCheckFailed(HTTPException):
+    """A response check that did not pass: which one (check) and where in the stream (event), never the text."""
+    def __init__(self, code, check, *, event=None, tool_index=None):
+        super().__init__(502, code)
+        self.check=check; self.event=event; self.tool_index=tool_index
+
+
+# SW1D: the parser's own bound on tool-call index.  Memory only (a runaway stream could add entries without end); a step
+# is bounded separately, by Turn.step_call_cap, and a batch past this bound is a FinBot limit, not a provider fault.
+TOOL_CALL_STREAM_GUARD = 128
+
+
 async def _provider_error(response, stage: str) -> ProviderFailure:
     status = response.status_code
     request_id = next((response.headers.get(name) for name in ("x-request-id", "x-ds-request-id", "cf-ray")
@@ -161,6 +174,8 @@ MAX_REASONING_BYTES=4_000_000
 async def _events(response):
     """Bounded SSE parser. Transport keepalives never renew the progress clock."""
     buffer=b''; total=0; done=False
+    # Data events yielded so far.  A check that fails on the next event reports that event's number (1-based).
+    produced=0
     async for chunk in response.aiter_bytes():
         total+=len(chunk)
         if total>MAX_RESPONSE_BYTES:raise HTTPException(502,'provider_response_too_large')
@@ -170,60 +185,67 @@ async def _events(response):
             line,buffer=buffer.split(b'\n',1)
             if len(line)>MAX_LINE_BYTES:raise HTTPException(502,'provider_response_too_large')
             try:line=line.rstrip(b'\r').decode('utf-8')
-            except UnicodeDecodeError as exc:raise HTTPException(502,'provider_incompatible_response') from exc
+            except UnicodeDecodeError as exc:raise ResponseCheckFailed('provider_incompatible_response','utf8_decode',event=produced+1) from exc
             if not line or not line.startswith('data:'):continue
             raw=line[5:].strip()
             if raw=='[DONE]':done=True;break
+            try:event=json.loads(raw)
+            except ValueError as exc:raise ResponseCheckFailed('provider_incompatible_response','non_json_line',event=produced+1) from exc
             try:
-                event=json.loads(raw)
                 if not isinstance(event,dict):raise ValueError()
                 if 'error' in event:raise HTTPException(502,'provider_error')
                 choices=event.get('choices')
                 if choices==[] and isinstance(event.get('usage'),dict):
-                    yield event;continue
+                    produced+=1;yield event;continue
                 choice=choices[0];delta=choice['delta']
                 if not isinstance(delta,dict):raise ValueError()
                 if _semantic_delta(delta):mark_progress()
             except HTTPException:raise
             except (ValueError,KeyError,IndexError,TypeError,AttributeError) as exc:
-                raise HTTPException(502,'provider_incompatible_response') from exc
+                raise ResponseCheckFailed('provider_incompatible_response','choice_shape',event=produced+1) from exc
+            produced+=1
             yield event
         if done:break
     if not done or buffer.strip():raise HTTPException(502,'provider_incomplete_stream')
 
 
-def _merge_delta(message, calls, delta):
+def _merge_delta(message, calls, delta, cap=12, over_cap_code='provider_incompatible_response'):
     for key in ('content','reasoning_content'):
         part=delta.get(key)
         if part is not None:
-            if not isinstance(part,str):raise HTTPException(502,'provider_incompatible_response')
+            if not isinstance(part,str):raise ResponseCheckFailed('provider_incompatible_response','text_not_string')
             message[key]=message.get(key,'')+part
     details=delta.get('reasoning_details')
     if details is not None:
-        if not isinstance(details,list):raise HTTPException(502,'provider_incompatible_response')
+        if not isinstance(details,list):raise ResponseCheckFailed('provider_incompatible_response','reasoning_details_shape')
         message.setdefault('reasoning_details',[]).extend(details)
     # Measured with JSON escapes (six bytes a Chinese character); a memory guard, not a thinking budget.
     if len(json.dumps({k:v for k,v in message.items() if k.startswith('reasoning_')}).encode())>MAX_REASONING_BYTES:
         raise HTTPException(502,'provider_protocol_too_large')
     parts=delta.get('tool_calls',[])
-    if not isinstance(parts,list):raise HTTPException(502,'provider_incompatible_response')
+    if not isinstance(parts,list):raise ResponseCheckFailed('provider_incompatible_response','tool_calls_shape')
     for part in parts:
-        if not isinstance(part,dict) or type(part.get('index')) is not int or not 0<=part['index']<12:
-            raise HTTPException(502,'provider_incompatible_response')
+        if not isinstance(part,dict) or type(part.get('index')) is not int or part['index']<0:
+            raise ResponseCheckFailed('provider_incompatible_response','tool_part_shape')
+        if part['index']>=cap:
+            raise ResponseCheckFailed(over_cap_code,'tool_index',tool_index=part['index'])
         target=calls.setdefault(part['index'],{'id':'','type':'function','function':{'name':'','arguments':''}})
-        if part.get('type') not in (None,'function'):raise HTTPException(502,'provider_incompatible_response')
+        if part.get('type') not in (None,'function'):raise ResponseCheckFailed('provider_incompatible_response','tool_part_type')
         fn=part.get('function',{})
-        if not isinstance(fn,dict):raise HTTPException(502,'provider_incompatible_response')
+        if not isinstance(fn,dict):raise ResponseCheckFailed('provider_incompatible_response','tool_function_shape')
         for container, key, value in ((target,'id',part.get('id')),
                 (target['function'],'name',fn.get('name')),(target['function'],'arguments',fn.get('arguments'))):
             if value is not None:
-                if not isinstance(value,str):raise HTTPException(502,'provider_incompatible_response')
+                if not isinstance(value,str):raise ResponseCheckFailed('provider_incompatible_response','tool_field_not_string')
                 container[key]+=value
 
 
 async def _post(provider,key,body,base_url=None):
     headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'}
     if provider=='openrouter':headers['X-Title']='FinBot'
+    # SW1D: read once per request.  On, the parser accepts tool-call indexes below the stream guard; off, the 4290d8b bound (12).
+    sw1d=flag('FINBOT_SW1D_TOOLCALL_CAP',True)
+    merge_kw={'cap':TOOL_CALL_STREAM_GUARD,'over_cap_code':'tool_call_batch_too_large'} if sw1d else {}
     try:
         async with progress_watchdog(PROVIDER_REQUEST_SECONDS):
           async with _decision_client(base_url) as client:
@@ -231,17 +253,23 @@ async def _post(provider,key,body,base_url=None):
                 if 300<=r.status_code<400:raise HTTPException(502,'provider_redirect_rejected')
                 if r.status_code>=400:raise await _provider_error(r,'tool_decision' if body.get('tools') else 'classification')
                 if 'text/event-stream' in r.headers.get('content-type',''):
-                    message={'role':'assistant','content':''};calls={};finish=None;usage={}
-                    async for event in _events(r):
-                        if isinstance(event.get('usage'),dict):usage=event['usage']
-                        if not event.get('choices'):continue
-                        choice=event['choices'][0]
-                        if finish is not None and _semantic_delta(choice['delta']):raise HTTPException(502,'provider_incompatible_response')
-                        _merge_delta(message,calls,choice['delta'])
-                        reason=choice.get('finish_reason')
-                        if reason is not None:
-                            if reason not in {'stop','tool_calls','length'}:raise HTTPException(502,'provider_incomplete_response')
-                            finish=reason
+                    message={'role':'assistant','content':''};calls={};finish=None;usage={};number=0
+                    try:
+                        async for event in _events(r):
+                            number+=1
+                            if isinstance(event.get('usage'),dict):usage=event['usage']
+                            if not event.get('choices'):continue
+                            choice=event['choices'][0]
+                            if finish is not None and _semantic_delta(choice['delta']):raise ResponseCheckFailed('provider_incompatible_response','post_finish_delta')
+                            _merge_delta(message,calls,choice['delta'],**merge_kw)
+                            reason=choice.get('finish_reason')
+                            if reason is not None:
+                                if reason not in {'stop','tool_calls','length'}:raise HTTPException(502,'provider_incomplete_response')
+                                finish=reason
+                    except ResponseCheckFailed as exc:
+                        # The event this check failed on: the data event being read when it was raised (1-based).
+                        if exc.event is None:exc.event=number
+                        raise
                     if finish is None:raise HTTPException(502,'provider_incomplete_stream')
                     # Out of output tokens: the text written so far is still an answer, a cut tool call is not.
                     if finish=='length' and (calls or not str(message.get('content') or '').strip()):raise HTTPException(502,'provider_incomplete_response')
@@ -262,8 +290,8 @@ async def _post(provider,key,body,base_url=None):
                         chunks.append(chunk)
                     try:
                         data=json.loads(b''.join(chunks));choice=data['choices'][0];message=choice['message']
-                    except (ValueError,KeyError,IndexError,TypeError) as exc:raise HTTPException(502,'provider_incompatible_response') from exc
-                    if not isinstance(message,dict):raise HTTPException(502,'provider_incompatible_response')
+                    except (ValueError,KeyError,IndexError,TypeError) as exc:raise ResponseCheckFailed('provider_incompatible_response','json_body') from exc
+                    if not isinstance(message,dict):raise ResponseCheckFailed('provider_incompatible_response','json_message_shape')
                     if choice.get('finish_reason')=='content_filter' or (choice.get('finish_reason')=='length' and (message.get('tool_calls') or not str(message.get('content') or '').strip())):
                         raise HTTPException(502,'provider_incomplete_response')
                 mark_progress()
@@ -284,17 +312,21 @@ async def stream_answer(provider,model,api_key,messages,reasoning_collector=None
             async with client.stream('POST',endpoint(provider,base_url),headers=headers,json=body) as r:
                 if 300<=r.status_code<400:raise HTTPException(502,'provider_redirect_rejected')
                 if r.status_code>=400:raise await _provider_error(r,'final_answer')
-                message={};calls={};finished=False
+                message={};calls={};finished=False;number=0
                 async for event in _events(r):
+                    number+=1
                     if isinstance(reasoning_collector,dict) and isinstance(event.get('usage'),dict):reasoning_collector['_usage']=event['usage']
                     if not event.get('choices'):continue
                     choice=event['choices'][0];delta=choice['delta'];reason=choice.get('finish_reason')
-                    if finished and _semantic_delta(delta):raise HTTPException(502,'provider_incompatible_response')
+                    if finished and _semantic_delta(delta):raise ResponseCheckFailed('provider_incompatible_response','post_finish_delta',event=number)
                     if reason is not None:
                         if reason not in {'stop','length'}:raise HTTPException(502,'provider_incomplete_stream')
                         finished=True
                     if delta.get('tool_calls'):raise HTTPException(502,'provider_incomplete_stream')
-                    _merge_delta(message,calls,delta)
+                    try:_merge_delta(message,calls,delta)
+                    except ResponseCheckFailed as exc:
+                        if exc.event is None:exc.event=number
+                        raise
                     if reasoning_collector is not None:
                         if isinstance(reasoning_collector,dict):
                             for key in ('reasoning_content','reasoning_details'):

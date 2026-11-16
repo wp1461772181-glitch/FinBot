@@ -45,7 +45,8 @@ def decision_output(decision):
 def tool_output(result):
     result=result if isinstance(result,dict) else {}
     ok=bool(result.get('ok'));data=result.get('data')
-    status='done' if ok and (not isinstance(data,list) or data) else ('warn' if ok else 'failed')
+    # SW1D: a call past the step's cap was not run, not refused: it is shown as a warning, not a failure.
+    status='done' if ok and (not isinstance(data,list) or data) else ('warn' if ok or result.get('error_code')=='step_call_cap' else 'failed')
     return status,{'ok':ok,'count':len(data) if isinstance(data,list) else (0 if data is None else 1),'error_code':result.get('error_code')}
 
 def verify_output(result,issues,citations):
