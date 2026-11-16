@@ -38,7 +38,9 @@ def current_quarter():
     return start, following - timedelta(days=1), today
 
 
-def test_the_resolver_prompt_gets_the_period_and_premise_rules_when_on():  # T30 on
+# SW1's own insertion against the original text; the FP13-E5 rule with SW1 on/off is pinned in test_fp13e5_unfinished_rewrite (K1/K2).
+def test_the_resolver_prompt_gets_the_period_and_premise_rules_when_on(monkeypatch):  # T30 on
+    monkeypatch.setenv('FINBOT_FP13E5_RESOLVER_UNFINISHED', 'off')
     prompt = resolver_prompt()
     assert PERIOD_RULE in prompt and PREMISE_RULE in prompt
     # The rules follow the existing data-dependent sentence, and nothing else of the original text moves.
@@ -47,6 +49,7 @@ def test_the_resolver_prompt_gets_the_period_and_premise_rules_when_on():  # T30
 
 def test_the_resolver_prompt_is_the_original_text_when_off(monkeypatch):  # T30 off
     monkeypatch.setenv(SWITCH, 'off')
+    monkeypatch.setenv('FINBOT_FP13E5_RESOLVER_UNFINISHED', 'off')
     assert resolver_prompt() == V0['REFERENCE_PROMPT'] == REFERENCE_PROMPT
 
 

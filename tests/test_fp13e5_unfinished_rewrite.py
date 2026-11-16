@@ -7,7 +7,6 @@ answering model is given that fact as a hint. Nothing is changed, deleted or blo
 import asyncio
 import hashlib
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -253,10 +252,10 @@ def test_k12_a_failed_resolver_and_a_card_never_compute_the_fact():
     assert carded.unfinished_rewrite is None
 
 
-def test_k13_only_direct_py_changes_under_app_and_agent_context_is_untouched():
-    repo = Path(__file__).resolve().parents[1]
-    changed = subprocess.run(['git', 'diff', '--name-only', '8640abf', '--', 'app'], cwd=repo, capture_output=True,
-                             text=True, check=True).stdout.split()
-    assert changed == ['app/agent_workflow/direct.py']
-    unchanged = subprocess.run(['git', 'diff', '--quiet', '8640abf', '--', 'app/agent_context.py'], cwd=repo)
-    assert unchanged.returncode == 0
+def test_k13_the_fp3_records_are_unchanged():
+    # The diff scope (only app/agent_workflow/direct.py under app/) is checked at acceptance, not in the standing suite.
+    assert layers.UNFINISHED_NOTES == {
+        'cancelled': '（系统记录：这条消息的回答被取消，没有完成。）',
+        'failed': '（系统记录：这条消息的回答失败了，没有完成。）',
+        'interrupted': '（系统记录：这条消息没有得到回答，过程中断。）',
+    }
