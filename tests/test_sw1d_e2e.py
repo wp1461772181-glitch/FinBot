@@ -153,7 +153,7 @@ def test_e1_twenty_calls_in_one_step_all_run_and_all_are_cited(audits):
         calc_ordinals = {c['ordinal'] for c in turn.citations if c.get('source_type') == 'calculation'}
         cited = [int(r['data'][0]['citation'][1:-1]) for r in replies]
         assert len(set(cited)) == 20 and set(cited) <= calc_ordinals
-        visible = json.dumps(seen[2], ensure_ascii=False)
+        visible = json.dumps([m['content'] for m in seen[2] if isinstance(m, dict) and m.get('role') == 'system'], ensure_ascii=False)
         assert all(f'[{n}]' in visible for n in cited)
         # Wall-clock time of the twenty calls, from the request to the last result (recorded in the report).
         ids_of_step = set(batch_ids(turn.protocol, 1))
@@ -393,15 +393,58 @@ def test_e2_the_real_parser_and_loop_run_twenty_calls_from_one_stream(audits, mo
         drop(ids)
 
 
+def spy_post(monkeypatch):
+    """Records (detail, check, tool_index) of every exception provider._post raises, then lets it propagate."""
+    failures = []
+    real = provider._post
+
+    async def wrapped(*args, **kwargs):
+        try:
+            return await real(*args, **kwargs)
+        except Exception as exc:
+            failures.append((getattr(exc, 'detail', None), getattr(exc, 'check', None), getattr(exc, 'tool_index', None)))
+            raise
+    monkeypatch.setattr(provider, '_post', wrapped)
+    return failures
+
+
 def test_e2_off_the_same_stream_is_refused_at_index_twelve_and_nothing_runs(audits, monkeypatch):
     monkeypatch.setenv(SWITCH, 'off')
+    failures = spy_post(monkeypatch)
     tickers, ids = three_companies()
     try:
         result, requests = run_stream_turn(monkeypatch, tickers, e2_steps(tickers))
         turn = audits[-1]
+        assert failures == [('provider_incompatible_response', 'tool_index', 12)] * 2   # both attempts, refused at index 12
+        assert result['reason'] == 'provider_unstable'
         assert turn.audit['provider_retries'] == 1
         assert turn.audit['provider_failure'] == 'provider_incompatible_response'
         assert not any(o['name'] == 'calculate' for o in turn.observations)   # the twenty never ran
         assert len(requests) == turn.audit['model_calls'] + turn.audit['provider_retries']
+    finally:
+        drop(ids)
+
+
+def test_stream_past_the_guard_closes_on_the_evidence_and_is_not_retried(audits, monkeypatch):
+    """129 calls in one streamed step, through the real parser and loop: refused once at index 128, never retried, nothing runs."""
+    failures = spy_post(monkeypatch)
+    tickers, ids = three_companies()
+    try:
+        steps = [reads(tickers),
+                 lambda messages: calls(*[('calculate', {'expression': 'a-b', 'decimals': i % 9, 'inputs': [
+                     {'name': 'a', 'value': '5', 'source_ordinal': 1}, {'name': 'b', 'value': str(i), 'source_ordinal': 2}]})
+                     for i in range(129)])]
+        result, requests = run_stream_turn(monkeypatch, tickers, steps)
+        turn = audits[-1]
+        assert failures == [('tool_call_batch_too_large', 'tool_index', 128)]
+        assert result['reason'] == 'tool_call_batch_too_large' and result['status'] == 'succeeded'
+        assert result['answer'].endswith('（模型这一步一次发出的工具调用超过了系统单次能接收的上限，本轮基于已取得的资料作答。）')
+        assert turn.audit['provider_failure'] == 'tool_call_batch_too_large'
+        assert 'provider_retries' not in turn.audit
+        [check] = turn.audit['provider_checks']
+        assert (check['code'], check['check'], check['retried'], check['tool_index']) == \
+            ('tool_call_batch_too_large', 'tool_index', False, 128)
+        assert not any(o['name'] == 'calculate' for o in turn.observations)
+        assert len(requests) == turn.audit['model_calls']
     finally:
         drop(ids)
