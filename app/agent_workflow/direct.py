@@ -6,7 +6,7 @@ from decimal import Decimal,InvalidOperation
 from typing import Annotated
 from pydantic import BaseModel,ConfigDict,Field
 from fastapi import HTTPException
-from ..agent_chat_provider import decision_request,decision_session,sent_effort
+from ..agent_chat_provider import decision_request,decision_session,sent_effort,TOOL_CALL_STREAM_GUARD
 from ..agent_progress import progress_watchdog,mark_progress
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_tool_catalog import definitions,schemas,validate,ALWAYS_ON as DISCLOSED,TOOL_CATEGORIES,CATEGORY_OF
@@ -46,6 +46,11 @@ HARD_TURN_SECONDS=1200
 # A model that keeps asking the same question gets the same answer back a few times; past this it
 # is looping, not working, so the turn stops with no_progress.
 MAX_REPLAYED_CALLS=3
+# SW1D: a batch of tool results is compacted to this many characters when it alone overflows the protocol half-guard
+# (tool_messages); a step runs at most as many calls as fit that half at this size (Turn.step_call_cap).
+PROTOCOL_COMPACT_CHARS=6000
+# 4290d8b's bound on calls in one step; the SW1D cap never goes below it, whatever the window.
+LEGACY_STEP_CALLS=12
 # A refused calculation carries its own error payload, so it must not be flattened to tool_failed.
 class _CalculationRefused(Exception):
     def __init__(self,outcome):super().__init__(outcome.get('error_code'));self.outcome=outcome
@@ -85,6 +90,7 @@ CLOSING_RETRY_NOTE='上一次回复是一段工具调用。工具已经关闭，
 # could have left the answer short.
 GATHERING_STOPS={'turn_budget':'（为控制等待时间，本轮基于已取得的资料作答。）',
                  'provider_unstable':'（模型这次的响应不完整，本轮基于已取得的资料作答。）',
+                 'tool_call_batch_too_large':'（模型这一步一次发出的工具调用超过了系统单次能接收的上限，本轮基于已取得的资料作答。）',
                  'no_progress':''}
 TRANSIENT={'tool_timeout','provider_timeout','provider_network_error','rate_limited','http_5xx'}
 RETRYABLE_PROVIDER={'provider_protocol_too_large','provider_incomplete_stream','provider_incomplete_response',
@@ -1049,12 +1055,28 @@ class Turn:
                     effort={'reasoning_effort':self.context.reasoning_effort} if getattr(self.context,'reasoning_effort',None) else {}
                     return await decision_request(self.context.provider,self.context.model,self.context.api_key,messages,tool_schemas,self.context.base_url,**effort)
             except HTTPException as exc:
-                if attempt or getattr(exc,'detail',None) not in RETRYABLE_PROVIDER:raise
+                retried=not attempt and getattr(exc,'detail',None) in RETRYABLE_PROVIDER
+                if getattr(exc,'check',None) and flag('FINBOT_SW1D_TOOLCALL_CAP',True):self.record_provider_check(exc,retried)
+                if not retried:raise
                 self.audit['provider_retries']=self.audit.get('provider_retries',0)+1
+
+    def record_provider_check(self,exc,retried):
+        # SW1D: which check failed and where (code and position only, never the text).  A check that was retried and then
+        # passed is recorded too, so a turn that needed a second request still shows what went wrong on the first.
+        entry={'code':exc.detail,'check':exc.check,'retried':retried}
+        if getattr(exc,'event',None) is not None:entry['event']=exc.event
+        if getattr(exc,'tool_index',None) is not None:entry['tool_index']=exc.tool_index
+        checks=self.audit.setdefault('provider_checks',[])
+        if len(checks)<10:checks.append(entry)
 
     def _running_bytes(self):
         window=getattr(self.context,'context_window',0)
         return layers.running_bytes_for_window(window) if window else layers.RUNNING_REQUEST_BYTES
+
+    def step_call_cap(self):
+        # SW1D: the most calls one step runs.  The count whose results, each compacted to PROTOCOL_COMPACT_CHARS, still fit the
+        # protocol half-guard (tool_messages measures against the same half).  Never below the old bound, never above the stream guard.
+        return min(TOOL_CALL_STREAM_GUARD,max(LEGACY_STEP_CALLS,self._running_bytes()//2//PROTOCOL_COMPACT_CHARS))
 
     async def model(self,messages,tool_schemas,*,protocol_retries=1):
         # The same knob as the door: a request that was accepted may grow by the tool results this
@@ -1069,7 +1091,10 @@ class Turn:
                                                       input=messages,metadata={'provider':self.context.provider,'tools_offered':len(tool_schemas or [])})
             try:response,message=await self.provider_request(messages,tool_schemas)
             except BaseException as exc:
-                observability.end_generation(generation,error=exc.detail if isinstance(getattr(exc,'detail',None),str) else type(exc).__name__);raise
+                label=exc.detail if isinstance(getattr(exc,'detail',None),str) else type(exc).__name__
+                # SW1D: a failed check is named after its code, so the trace shows which check failed (never the text).
+                if getattr(exc,'check',None) and flag('FINBOT_SW1D_TOOLCALL_CAP',True):label=f'{label}:{exc.check}'
+                observability.end_generation(generation,error=label);raise
             observability.end_generation(generation,output=message.get('content') if not message.get('tool_calls') else {'content':message.get('content'),'tool_calls':message.get('tool_calls')},
                                          usage=response.get('usage') if isinstance(response,dict) else None)
             mark_progress()
@@ -1823,8 +1848,8 @@ class Turn:
             if len(starts)<2:
                 # Single-batch fallback: compact oversized tool payloads so a multi-symbol batch never overflows RUNNING_REQUEST_BYTES.
                 for m in self.protocol:
-                    if m.get('role')=='tool' and isinstance(m.get('content'),str) and len(m['content'])>6000:
-                        before=len(m['content']);m['content']=truncation.compact_tool_content(m['content'],6000)
+                    if m.get('role')=='tool' and isinstance(m.get('content'),str) and len(m['content'])>PROTOCOL_COMPACT_CHARS:
+                        before=len(m['content']);m['content']=truncation.compact_tool_content(m['content'],PROTOCOL_COMPACT_CHARS)
                         self.note_truncation('protocol.tool_result',before,len(m['content']))
                 break
             self.protocol=self.protocol[starts[1]:]
@@ -3746,6 +3771,8 @@ class Turn:
                 self.audit['stop_reason']='soft_time_budget_closing'
                 break
             self.audit['decision_steps']+=1
+            # SW1D: the only read of the switch, once per decision step; the call cap below and the stop on a batch past the stream guard use this value.
+            sw1d=flag('FINBOT_SW1D_TOOLCALL_CAP',True)
             if self.citation_protocol=='v2' and self.citations and not self.audit.get('citation_v2_note'):
                 self.audit['citation_v2_note']=True
                 self.protocol.append({'role':'system','content':CITATION_V2_NOTE})
@@ -3756,6 +3783,9 @@ class Turn:
             except HTTPException as exc:
                 # A provider that keeps sending broken responses ends gathering, not the turn: the
                 # closing call is smaller and the evidence already gathered still answers.
+                if sw1d and getattr(exc,'detail',None)=='tool_call_batch_too_large' and self.observations:
+                    # SW1D: a FinBot limit, not the provider's fault. Never retried; the evidence in hand still answers.
+                    self.audit['provider_failure']=exc.detail;stop='tool_call_batch_too_large';break
                 if getattr(exc,'detail',None) not in RETRYABLE_PROVIDER or not self.observations:raise
                 self.audit['provider_failure']=exc.detail;stop='provider_unstable';break
             if not isinstance(decision,dict):stop='provider_protocol_invalid';break
@@ -3830,9 +3860,14 @@ class Turn:
                 if self.audit.get('closing_complete_noted') and self.audit.get('closing_complete_outcome') is None:self.audit['closing_complete_outcome']='kept'
                 if await self.recover_remember():return self.remember_card_finish()
                 return await self.finish_answer(content or '没有生成可用的回答。')
-            if not isinstance(calls,list) or len(calls)>12:stop='provider_protocol_invalid';break
+            if not isinstance(calls,list) or (not sw1d and len(calls)>12):stop='provider_protocol_invalid';break
+            if sw1d and len(calls)>TOOL_CALL_STREAM_GUARD:stop='tool_call_batch_too_large';break
             if any(not isinstance(c,dict) or not isinstance(c.get('id'),str) for c in calls):stop='provider_protocol_invalid';break
             self.audit['model_tool_requests']+=len(calls)
+            # SW1D: a step runs its first step_call_cap() calls; the rest are not run and each is answered with a fact (below).
+            cap=self.step_call_cap() if sw1d else None
+            run,deferred=(calls[:cap],calls[cap:]) if cap is not None and len(calls)>cap else (calls,[])
+            if sw1d:self.audit['max_step_calls']=max(self.audit.get('max_step_calls',0),len(calls))
             if self.audit.get('absence_recheck_noted') and self.audit.get('absence_recheck_outcome') is None:self.audit['absence_recheck_outcome']='requeried'
             if self.audit.get('closing_complete_noted') and self.audit.get('closing_complete_outcome') is None:self.audit['closing_complete_outcome']='requeried'
             if self.audit.get('nudged') and self.audit.get('nudge_outcome') is None:self.audit['nudge_outcome']='recovered'
@@ -3840,7 +3875,7 @@ class Turn:
             self.protocol.append({'role':'assistant',**assistant})
             await self.emit({'event':'assistant_tool_request','protocol':{'calls':calls,**{k:v for k,v in assistant.items() if k.startswith('reasoning_')}}})
             batch_failed=False
-            for call in calls:
+            for call in run:
                 self.active_call_id=call['id']
                 # Calls the model already decided on run to the hard cap; the soft cap only ends gathering.
                 if self.budget(soft=False):stop=self.budget(soft=False);break
@@ -3987,6 +4022,19 @@ class Turn:
                 # separately from independent empty directions.
                 if self.repeated_evidence>=3:
                     stop='no_progress';break
+            else:
+                # SW1D: the loop ran to its end, so the calls past the cap get one reply each, in call order. Nothing is
+                # recorded for them as calls (not seen, not replayed, not counted, not in the evidence); a later step may send them again.
+                if deferred:
+                    self.audit.setdefault('step_call_cap',cap)
+                    self.audit['step_calls_deferred']=self.audit.get('step_calls_deferred',0)+len(deferred)
+                    deferrals=self.audit.setdefault('step_call_deferrals',[])
+                    if len(deferrals)<10:deferrals.append({'step':self.audit['decision_steps'],'sent':len(calls),'run':cap})
+                    for position,call in enumerate(deferred,start=cap+1):
+                        reply={'ok':False,'error_code':'step_call_cap','executed':False,'call_position':position,'calls_in_step':len(calls),'step_call_cap':cap,
+                               'note':f'Not run: one step runs the first {cap} calls and this was call {position} of {len(calls)}. It can be sent again in a later step.'}
+                        self.protocol.append({'role':'tool','tool_call_id':call['id'],'content':json.dumps(reply,ensure_ascii=False)})
+                        await self.emit({'event':'tool_result','call_id':call['id'],'name':str((call.get('function') or {}).get('name') or ''),'result':reply})
             if self.proposals:
                 if stop:
                     self.drop_proposals('write_batch_incomplete')
@@ -4006,6 +4054,7 @@ class Turn:
             'turn_budget':'为控制等待时间，本轮在已取得的资料上停止。',
             'soft_time_budget_closing':'为控制等待时间，本轮在已取得的资料上停止。',
             'provider_unstable':'模型这次的响应不完整，本轮在已取得的资料上停止。',
+            'tool_call_batch_too_large':'模型这一步一次发出的工具调用超过了系统单次能接收的上限，已停止。',
             'tool_failures':f'“{self.audit.get("failed_tool","工具")}”工具连续失败 {self.audit.get("failed_attempts",3)} 次（原因：{self.audit.get("failure_code","tool_unavailable")}），已停止重试。',
             'provider_protocol_invalid':'模型返回了无效工具协议，已停止。'}
         if not self.observations:
