@@ -11,6 +11,7 @@ import { paths } from "../../routes.mjs";
 import { activeArea, activeItem, areaItems, areaPath, type Area } from "../../shell-nav.mjs";
 import { openCommandMenu } from "@/components/command/command-events";
 import { ThemeToggle, type ModeChange } from "./account";
+import { MonitorDot } from "./MonitorDot";
 import { BotRow } from "./BotRow";
 
 // The two Radix menus are in their own chunk (menus.tsx); the sidebar draws plain buttons until it arrives.
@@ -53,12 +54,13 @@ function NavGroupItem({ area, props }: { area: "research" | "assistant" | "setti
       <Suspense fallback={button(() => setWanted(true))}>
         <CollapsedGroupMenuLazy area={area} label={label} Icon={Icon} current={current} item={item} symbol={props.symbol} personal={props.personal} defaultOpen={wanted} />
       </Suspense>
+      {area === "research" && <MonitorDot className="pointer-events-none absolute top-1 right-1 ring-2 ring-sidebar" />}
     </SidebarMenuItem>;
   }
   return <SidebarMenuItem>
     <Collapsible open={open} onOpenChange={setOpen}>
       <SidebarMenuButton asChild isActive={current && !item}>
-        <Link to={areaPath(area, props.symbol)} aria-current={current && !item ? "page" : undefined}><Icon aria-hidden="true" /><span>{label}</span></Link>
+        <Link to={areaPath(area, props.symbol)} aria-current={current && !item ? "page" : undefined}><Icon aria-hidden="true" /><span>{label}</span>{area === "research" && <MonitorDot />}</Link>
       </SidebarMenuButton>
       <CollapsibleTrigger asChild>
         <SidebarMenuAction aria-label={`${open ? t("收起") : t("展开")}${label}`} className="data-[state=open]:rotate-90"><ChevronRight aria-hidden="true" /></SidebarMenuAction>

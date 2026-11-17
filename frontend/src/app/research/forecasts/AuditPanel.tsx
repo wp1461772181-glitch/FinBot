@@ -6,7 +6,7 @@ import { getV2Job } from "../../../api/forecast-v2";
 import type { V2ForecastJob, V2Timeline, V2TimelineEntry, V2VersionDetail } from "../../../types";
 import { NOT_RECORDED, hasDecisionProbabilities, recordedModel } from "../../../forecast-model.mjs";
 import { sourceDiff } from "../../../forecast-detail.mjs";
-import { evidenceTitle, processingStatus, sourceKey } from "../../../EvidenceProcessing";
+import { evidenceTitle, processingStatus, sourceKey } from "./processing";
 import { asRecord, asText, modelStatusText } from "../../../ForecastShared";
 import { translatePhrase, useLocale } from "../../../i18n";
 import { day } from "./format";

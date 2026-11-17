@@ -1,5 +1,4 @@
-import { ModelScoresPage } from "../../ModelScoresPage";
-import { ResearchFrame } from "./frames";
+import { ScoresPage } from "../research/scores/ScoresPage";
 
 /** /research/scores */
-export function ScoresRoute() { return <ResearchFrame section="evaluation"><ModelScoresPage /></ResearchFrame>; }
+export function ScoresRoute() { return <ScoresPage />; }

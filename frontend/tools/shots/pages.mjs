@@ -294,6 +294,10 @@ const UPLOADED = [
   { id: "u0000000-0000-4000-8000-000000000011", symbol: "AAPL", title: "券商研报：服务业务利润率复盘", source_url: "https://example.com/research/services-margin", published_at: "2026-11-05T08:00:00.000Z", credibility_stars: 4, credibility_reason: "一手数据", impact_severity: "medium", status: "unconfirmed" },
   { id: "u0000000-0000-4000-8000-000000000012", symbol: "AAPL", title: "访谈纪要：供应链负责人", source_url: "https://example.com/interview/supply-chain", published_at: "2026-10-18T03:30:00.000Z", credibility_stars: 2, credibility_reason: "匿名来源", impact_severity: "high", status: "unconfirmed" },
 ];
+/** The replays of the company are listed and the first one's detail is up (a phone lists only). */
+const replayLoaded = async (page) => { await page.waitForSelector("[data-testid=replay-row]", { state: "visible", timeout: 30000 }); await page.waitForFunction(() => document.querySelector("[data-testid=replay-detail]") || window.matchMedia("(max-width: 1023px)").matches, null, { timeout: 30000 }); };
+/** The monitor's health card is up (the page has read the status). */
+const monitorLoaded = async (page) => { await page.waitForSelector("[data-testid=monitor-health]", { state: "visible", timeout: 30000 }); };
 const evidenceLoaded = async (page) => { await page.waitForSelector("[data-testid=evidence-grid] [data-testid=evidence-card]", { state: "visible", timeout: 30000 }); };
 /** The library's list is read and (on a wide screen) the first material's detail is up. */
 const materialsLoaded = async (page) => {
@@ -573,9 +577,28 @@ export const PAGES = [
     before: async (page) => { await openMaterial(page, "新闻稿：欧盟"); await page.locator("[data-slot=task-row]").waitFor({ timeout: 15000 }); await page.locator("[data-testid=analysis-job]").waitFor(); await hideElapsed(page); } },
   { name: "materials-empty-filter", hash: "#/research/materials", ready: materialsLoaded,
     before: async (page) => { await pickFilter(page, "sourceType", "SEC 官方"); await pickFilter(page, "analysisStatus", "缺少正文"); await page.locator("[data-testid=material-library] [data-slot=empty-state]").waitFor({ timeout: 15000 }); } },
-  { name: "scores", hash: "#/research/scores", ready: "main.workspace h2" },
-  { name: "replay", hash: "#/research/replay", ready: ".historical-replay-workspace" },
-  { name: "monitor", hash: "#/research/monitor", ready: "main.workspace .v2-desk h2" },
+  // P6.4: model scores, historical replays, the automatic monitor.  Each state of the design has its own picture: 样本不足 (scores-insufficient), no replays (replay-empty), a replay
+  // under way (replay-running), a replay that ended without a version (replay-failed), one replay open (replay-detail), no monitor record, a late monitor and a failing one.
+  { name: "scores", hash: "#/research/scores", ready: "[data-testid=cohort-card]" },
+  { name: "scores-insufficient", hash: "#/research/scores", ready: "[data-testid=cohort-card][data-status=insufficient_samples]", view: () => ({ fixtureState: stateWithMaterials({ scoresScored: 12 }) }) },
+  { name: "replay", hash: "#/research/replay", ready: replayLoaded },
+  { name: "replay-empty", hash: "#/research/replay", ready: "[data-testid=replay-list] [data-slot=empty-state]", view: () => ({ fixtureState: stateWithMaterials({ replayEmpty: true }) }) },
+  { name: "replay-running", hash: "#/research/replay", ready: replayLoaded, view: () => ({ fixtureState: stateWithMaterials({ replayHold: true }) }),
+    before: async (page) => { await page.locator("[data-testid=replay-generate]").click(); await page.locator("[data-slot=task-row]").first().waitFor({ timeout: 15000 }); await hideElapsed(page); await settled(page); } },
+  { name: "replay-failed", hash: "#/research/replay", ready: replayLoaded, view: () => ({ fixtureState: stateWithMaterials({ replayFail: true, replayRunningPolls: 1, replayError: "forecast_provider_timeout" }) }),
+    before: async (page) => { await page.locator("[data-testid=replay-generate]").click(); await page.locator("[data-testid=replay-failure]").waitFor({ timeout: 20000 }); await settled(page); } },
+  { name: "replay-detail", hash: "#/research/replay", ready: replayLoaded,
+    before: async (page, { width }) => {
+      // The third replay (行情不足: no real result yet) shows the pending side of the detail; on a phone the press also opens the full-screen layer.
+      await page.locator("[data-testid=replay-row]").nth(2).click();
+      await page.waitForFunction(() => document.querySelector("[data-testid=replay-detail]")?.getAttribute("data-version") === "f3000000-0000-4000-8000-000000000003", null, { timeout: 15000 });
+      if (width < 1024) await page.locator("[data-testid=replay-drawer]").waitFor({ timeout: 10000 });
+      await settled(page);
+    } },
+  { name: "monitor", hash: "#/research/monitor", ready: monitorLoaded },
+  { name: "monitor-no-records", hash: "#/research/monitor", ready: monitorLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "none" }) }) },
+  { name: "monitor-delayed", hash: "#/research/monitor", ready: monitorLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "delayed" }) }) },
+  { name: "monitor-failing", hash: "#/research/monitor", ready: monitorLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "degraded" }) }) },
   { name: "portfolio", hash: "#/portfolio", ready: ".pf-positions" },
   { name: "routines", hash: "#/routines", ready: "main.personal-page h1" },
   { name: "news", hash: "#/assistant/news", ready: "main.personal-page h1" },

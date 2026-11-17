@@ -13,9 +13,9 @@ const EXTENSIONS = /\.(tsx?|mjs|js|css)$/;
 const ALLOWED = {
   Jev: new Set([
     "forecast-model.mjs",             // the experimental_jev branch and legacy jev_* error sentences
-    "HistoricalReplayWorkspace.tsx",  // modelLabel for an old Jev replay
+    "replay-model.mjs",               // modelPhrase for an old Jev replay (was HistoricalReplayWorkspace.tsx until P6.4)
     "App.tsx",                        // modelStatusLabel branch and the 早期版本 cohort note
-    "ModelScoresPage.tsx",            // B3: inherited App.tsx's cohort groups (modelStatusLabel, 早期版本 note)
+    "scores-model.mjs",               // B3: inherited App.tsx's cohort groups (modelStatusPhrase, 早期版本 note; was ModelScoresPage.tsx until P6.4)
     "types.ts",                       // the V2ModelStatus union keeps experimental_jev
   ]),
   DeepSeek: new Set([

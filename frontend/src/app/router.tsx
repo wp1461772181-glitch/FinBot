@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import { useEffect, type ComponentType } from "react";
 import { Navigate, Outlet, createHashRouter, type RouteObject } from "react-router";
 import { DelayedSkeleton, PageSkeleton } from "@/components/state/Skeleton";
 import { LegacyFrame } from "../LegacyFrame";
@@ -29,8 +29,14 @@ const to = (path: string) => ({ element: <Navigate to={path} replace /> });
 /** The catch-all: an old-form address the router met before the legacy-address bridge did, or one nobody knows, goes where the old router sent it. */
 function Fallback() { return <Navigate to={legacyTarget(window.location.hash)} replace />; }
 
-/** Every page in `pages` below is still an old component: the shell puts the old-UI marker around each one (and around nothing else). */
+/** Every page in `pages` below is still an old component: the shell puts the old-UI marker around each one (and around nothing else).  The chat pages and most research pages are new markup (see `researchWrapped`). */
 function LegacyPage() { return <LegacyFrame><Outlet /></LegacyFrame>; }
+
+/** The research area's layout: no markup of its own.  Entering it reads the automatic monitor once (the navigation's dot), through a module that is fetched then. */
+function ResearchRoot() {
+  useEffect(() => { void import("./research/monitor/read-monitor").then(m => m.entered()).catch(() => 0); }, []);
+  return <Outlet />;
+}
 
 /** What stands in for the app until the first page's code has arrived (the shell is not mounted yet). */
 function FirstLoad() {
@@ -47,13 +53,20 @@ const chatPages: RouteObject[] = [
   { path: PATTERNS.chatBot, ...page(() => import("./pages/chat"), "ChatBotRoute") },
 ];
 
-/** The watchlist and the company page are new markup (P6.1): no old-UI marker around them.  The old pages the company page's tabs embed carry their own. */
+/** The pages of the research area that are new markup without an old-UI marker (P6.1, P6.4): the watchlist, the company page, 模型成绩, 历史回放 and 监控. */
 const researchPages: RouteObject[] = [
   { path: PATTERNS.research, ...page(() => import("./pages/research"), "ResearchRoute") },
   { path: PATTERNS.company, ...page(() => import("./pages/research"), "CompanyRoute") },
+  { path: PATTERNS.scores, ...page(() => import("./pages/scores"), "ScoresRoute") },
+  { path: PATTERNS.replay, ...page(() => import("./pages/replay"), "ReplayRoute") },
+  { path: PATTERNS.monitor, ...page(() => import("./pages/monitor"), "MonitorRoute") },
 ];
 
-const pages: RouteObject[] = [
+/**
+ * The research pages of P6.2 and P6.3 are new markup too, but they were drawn inside the old-UI marker and the marker's restore rules reach the plain tags among them: taking
+ * the marker away changes their pixels (forecast home, forecast, judgment, evidence, materials), so they keep it until a package restyles those tags.  Listed in the P6.4 delivery.
+ */
+const researchWrapped: RouteObject[] = [
   { path: PATTERNS.companyLatest, ...page(() => import("./pages/latest"), "LatestRoute") },
   { path: PATTERNS.forecasts, ...page(() => import("./pages/forecasts"), "ForecastsRoute") },
   { path: PATTERNS.forecast, ...page(() => import("./pages/forecast"), "ForecastRoute") },
@@ -62,9 +75,9 @@ const pages: RouteObject[] = [
   { path: PATTERNS.evidenceSource, ...page(() => import("./pages/evidence"), "EvidenceRoute") },
   { path: PATTERNS.evidence, ...page(() => import("./pages/evidence"), "EvidenceRoute") },
   { path: PATTERNS.materials, ...page(() => import("./pages/materials"), "MaterialsRoute") },
-  { path: PATTERNS.scores, ...page(() => import("./pages/scores"), "ScoresRoute") },
-  { path: PATTERNS.replay, ...page(() => import("./pages/replay"), "ReplayRoute") },
-  { path: PATTERNS.monitor, ...page(() => import("./pages/monitor"), "MonitorRoute") },
+];
+
+const pages: RouteObject[] = [
   { path: PATTERNS.portfolio, ...page(() => import("./pages/portfolio"), "PortfolioRoute") },
   { path: PATTERNS.routines, ...page(() => import("./pages/routines"), "RoutinesRoute") },
   { path: PATTERNS.assistantBots, ...page(() => import("./pages/bots"), "BotsRoute") },
@@ -95,7 +108,7 @@ const routes: RouteObject[] = [
       { path: PATTERNS.login, ...to(paths.chat()) },
       // The error boundary sits below the layout, so a page that fails to load leaves the shell standing.  It is above the
       // old-UI marker, so the notice it shows is new markup outside it.
-      { ErrorBoundary: RouteError, children: [...chatPages, ...researchPages, { Component: LegacyPage, children: pages }] },
+      { ErrorBoundary: RouteError, children: [...chatPages, { Component: ResearchRoot, children: [...researchPages, { Component: LegacyPage, children: researchWrapped }] }, { Component: LegacyPage, children: pages }] },
     ],
   },
 ];

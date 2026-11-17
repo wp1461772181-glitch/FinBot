@@ -56,7 +56,7 @@ test("a badge is one of four tones or one of two materials; anything else is neu
 test("the monitor chip maps the health to a kind and a phrase", () => {
   assert.deepEqual(monitorChip("healthy"), { kind: "success", phrase: "监控正常" });
   assert.deepEqual(monitorChip("degraded"), { kind: "failure", phrase: "监控异常" });
-  assert.deepEqual(monitorChip("delayed"), { kind: "neutral", phrase: "监控延迟" });
+  assert.deepEqual(monitorChip("delayed"), { kind: "action", phrase: "监控延迟" });
   assert.deepEqual(monitorChip("not_recorded"), { kind: "neutral", phrase: "尚无记录" });
 });
 

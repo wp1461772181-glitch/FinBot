@@ -69,7 +69,7 @@ export function badgeKind(kind) {
 /** The chip the watchlist page shows for the automatic monitor: `{ kind, phrase }` (a zh-CN phrase key; the component translates it). */
 export function monitorChip(health) {
   if (health === "healthy") return { kind: "success", phrase: "监控正常" };
-  if (health === "delayed") return { kind: "neutral", phrase: "监控延迟" };
+  if (health === "delayed") return { kind: "action", phrase: "监控延迟" };
   if (health === "degraded") return { kind: "failure", phrase: "监控异常" };
   return { kind: "neutral", phrase: "尚无记录" };
 }

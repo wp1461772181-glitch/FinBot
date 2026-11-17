@@ -2502,5 +2502,16 @@
   "请选择要上传的文件。": "Choose a file to upload.",
   "这份材料在这个预测版本里的事件与依据。": "The events of this material in this forecast version, and what they rest on.",
   "这份材料的 AI 分析、原始材料与分析历史。": "This material's AI analysis, original and analysis history.",
-  "这家公司还没有材料": "This company has no materials yet"
+  "这家公司还没有材料": "This company has no materials yet",
+  "逐股结果": "Results by company",
+  "尚无结果": "No result yet",
+  "已有一条回放正在生成。": "A replay is already being generated.",
+  "历史回放用当时可用的行情和材料重做一次预测，再和到期后的真实结果对照。提交上方表单后，回放会显示在这里，并在 20 个交易日目标到期后关联真实结果。": "A historical replay redoes a forecast with the market data and materials that were available then, and compares it with the real outcome once the target date has passed. After you submit the form above, the replay appears here and is linked to the real result when its 20-trading-day target expires.",
+  "去填写上面的表单": "Fill in the form above",
+  "选择一条回放查看详情。": "Choose a replay to see its details.",
+  "无可用分数": "No score available",
+  "与同题基准对比": "Compared with the same-question baseline",
+  "数值越低越好": "Lower is better",
+  "评分规则": "Scoring rule",
+  "去预测首页": "Go to forecasts"
 }

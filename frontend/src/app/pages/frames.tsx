@@ -1,33 +1,11 @@
-import type { ReactNode } from "react";
 import { Navigate, useParams } from "react-router";
-import { WORKSPACE_SECTION_TITLE, type ResearchSection } from "../../workspace-sections.mjs";
-import { translatePhrase, useLocale } from "../../i18n";
-import { isSupportedSymbol } from "../research/support";
+import { translatePhrase } from "../../i18n";
 import { paths, symbolParam } from "../../routes.mjs";
 import { normalizeTicker } from "../../watchlist.mjs";
 import { DEFAULT_SYMBOL, DEFAULT_SYMBOLS } from "../WorkspaceLayout";
 import { useWorkspace } from "../workspace";
 
-/** The heading of an old research page: the company, the section's title, whether new research can start on it. */
-export function WorkspacePageHeader({ symbol, section, recordCount, supported }: { symbol: string; section: ResearchSection; recordCount: number | null; supported: boolean }) {
-  const { t } = useLocale();
-  const title = t(WORKSPACE_SECTION_TITLE[section]);
-  return <header className="workspace-heading">
-    <div><p className="eyebrow">{symbol} / {title}</p><h1 id="workspace-title">{title}</h1></div>
-    <div className="workspace-context"><span className={`live-dot ${supported ? "" : "muted"}`} aria-hidden="true" /><span>{supported ? t("支持新建研究") : t("可查看已有研究")}</span>{recordCount !== null && <span className="workspace-record-count">{recordCount} {t("项独立预测")}</span>}</div>
-  </header>;
-}
-
-/** The old research pages' frame: header, section tabs, then the page.  With an empty queue the pages that read it show this notice instead. */
-export function ResearchFrame({ section, children }: { section: ResearchSection; children: ReactNode }) {
-  const ws = useWorkspace();
-  if (!ws.symbols.length) return <EmptyWatchlist />;
-  return <main className="workspace" aria-labelledby="workspace-title">
-    <WorkspacePageHeader symbol={ws.symbol} section={section} recordCount={null} supported={isSupportedSymbol(ws.symbol)} />
-    {children}
-  </main>;
-}
-
+/** What a research page shows when the watchlist is empty (the pages that start from a company: the replay page). */
 export function EmptyWatchlist() {
   const ws = useWorkspace();
   return <main className="workspace"><section className="empty-watchlist"><h1>{translatePhrase("关注列表为空")}</h1><p>{translatePhrase("添加一只股票，或恢复默认关注股票，继续查看研究总览。")}</p><button className="primary-action" onClick={() => { ws.setSymbols(DEFAULT_SYMBOLS); ws.setPreferredSymbol(DEFAULT_SYMBOL); }}>{translatePhrase("恢复默认股票")}</button></section></main>;

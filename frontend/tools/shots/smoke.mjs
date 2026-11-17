@@ -11,7 +11,7 @@ import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
 import { HEX_MATERIAL, MATERIALS, analysisId, materialId } from "./fixtures/materials.mjs";
 import { CASES as UPLOAD_CASES, VALID as UPLOAD_VALID } from "./fixtures/upload-cases.mjs";
-import { REVISE_FILING_ID, ROOT_IDS, revisionCandidates, versionDetail } from "./fixtures/forecasts.mjs";
+import { REVISE_FILING_ID, ROOT_IDS, evaluations, revisionCandidates, versionDetail } from "./fixtures/forecasts.mjs";
 import { buildState } from "./fixtures/index.mjs";
 import { BOT_TEMPLATES } from "./fixtures/bots.mjs";
 import fs from "node:fs";
@@ -20,6 +20,7 @@ import { findCollisions } from "./collisions.mjs";
 import { normalizePublicMarks, publicMarkQuoteText } from "../../src/chat-public-marks.mjs";
 import { followUpQuestion } from "../../src/chat-unverified.mjs";
 import { OPINION_DISCLAIMER } from "../../src/data-display.mjs";
+import { scoreCard } from "../../src/forecast-model.mjs";
 import { PERSONA_PRESETS } from "../../src/bot-persona-presets.mjs";
 import { CARET_PERIOD_S, TRACE_PERIOD_S, periodFor } from "../../src/signature.mjs";
 
@@ -507,10 +508,10 @@ async function legacyRedirects(ctx) {
     [`#forecast/${ROOT.aapl}?version=${VERSION.aapl2}`, `#/research/forecasts/${ROOT.aapl}?version=${VERSION.aapl2}`, "[data-testid=forecast-page]"],
     [`#forecast/${ROOT.aapl}?revise=${material}`, `#/research/forecasts/${ROOT.aapl}?revise=${material}`, "[data-testid=forecast-page]"],
     [`#forecast/judgment/${JUDGMENT.aapl}`, `#/research/judgments/${JUDGMENT.aapl}`, "[data-testid=judgment-card]"],
-    ["#forecast/monitor", "#/research/monitor", "main.workspace .v2-desk h2"],
+    ["#forecast/monitor", "#/research/monitor", "[data-testid=monitor-health]"],
     ["#revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`, "[data-testid=forecast-page]"],
-    ["#evaluation", "#/research/scores", "main.workspace h2"],
-    ["#replay", "#/research/replay", ".historical-replay-workspace"],
+    ["#evaluation", "#/research/scores", "[data-testid=cohort-card]"],
+    ["#replay", "#/research/replay", "[data-testid=replay-row]"],
     ["#materials", "#/research/materials", "[data-testid=material-title]"],
     ["#library", "#/research/materials", "[data-testid=material-title]"],
     [`#materials?symbol=AAPL&focus=${material}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${material}&type=official_filing`, "![data-testid=material-library]"],
@@ -912,7 +913,7 @@ async function guestReadonly(ctx) {
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached", timeout: 5000 });
     // What a guest can read: the research pages.
-    for (const [hash, ready] of [["#/research/forecasts", "[data-testid=forecast-home]"], ["#/research/materials", "[data-testid=material-title]"], ["#/research/replay", ".historical-replay-workspace"], ["#/settings/appearance", "select#theme"]]) {
+    for (const [hash, ready] of [["#/research/forecasts", "[data-testid=forecast-home]"], ["#/research/materials", "[data-testid=material-title]"], ["#/research/replay", "[data-testid=replay-row]"], ["#/settings/appearance", "select#theme"]]) {
       await page.evaluate((h) => { location.hash = h; }, hash);
       await waitReady(page, { ready });
     }
@@ -6619,14 +6620,19 @@ async function forecastMissingNoSubstitute(ctx) {
     const text = await page.locator("[data-testid=forecast-missing]").innerText();
     assert(text.includes("找不到这项预测") && text.includes("不会用其他预测代替它"), `the page says: ${text}`);
     for (const selector of ["[data-testid=forecast-judgment]", "[data-testid=forecast-chart]", "[data-testid=version-rail]", "[data-testid=forecast-brief]"]) assert((await page.locator(selector).count()) === 0, `${selector} is drawn for a forecast that does not exist`);
-    const seen = view.mock.requests.filter((request) => request.method === "GET" && /\/v2\//.test(request.path)).map((request) => request.path);
-    assert(seen.every((path) => path.includes(missing)), `a request for another record: ${seen.join(" | ")}`);
+    const all = view.mock.requests.filter((request) => request.method === "GET" && /\/v2\//.test(request.path)).map((request) => request.path);
+    // The research area's one read for the navigation's dot (P6.4), not a record that could stand in for the missing forecast: exempt by its whole path, at most once.
+    const MONITOR = "/v2/monitor/status";
+    const monitorReadsHere = all.filter((path) => path === MONITOR).length;
+    const seen = all.filter((path) => path !== MONITOR);
+    assert(seen.every((path) => path.includes(missing)), `a request for another record: ${all.join(" | ")}`);
+    assert(monitorReadsHere <= 1, `${monitorReadsHere} reads of ${MONITOR} on the missing-forecast page (the research area reads it once): ${all.join(" | ")}`);
     const home = page.getByRole("link", { name: "回到预测首页" });
     assert((await home.getAttribute("href")) === "#/research/forecasts", "the way back is not the forecast home");
     await home.click();
     await waitHash(page, "#/research/forecasts");
   } finally { await view.close(); }
-  return "an unknown forecast id: the page and 「不会用其他预测代替它」, no card, chart or rail, no request for any other record, the way back is the home";
+  return "an unknown forecast id: the page and 「不会用其他预测代替它」, no card, chart or rail, no request for any other record (the research area's monitor read aside, at most once), the way back is the home";
 }
 
 /** The disclaimer is said once per page area, word for word (the probability sentence where bars are drawn; the judgment sentence where a judgment is). */
@@ -7248,6 +7254,363 @@ async function analysisStatusNeutral(ctx) {
   return "the four notes of a checked analysis (引用已核对 8/9, the sentence about 1 unchecked quote, 近似引用 93%, 引用待核对) are plain text: not the danger or action colour, no icon, no alert role, no background, not folded";
 }
 
+
+// --- P6.4: model scores, historical replay, monitor -----------------------------------------------------------------------------------------
+const REPLAY_BASE = JSON.parse(fs.readFileSync(new URL("./fixtures/replay-bodies-baseline.json", import.meta.url), "utf8"));
+const REPLAY_ID = { created: "f3000000-0000-4000-8000-000000000009" };
+const replayPosts = (view) => view.mock.state.replayPosts ?? [];
+const monitorReads = (view) => view.mock.requests.filter((r) => r.method === "GET" && r.path === "/v2/monitor/status").length;
+async function openFresh(ctx, label, hash, { width = 1440, patch, ready } = {}) {
+  const view = await newView(ctx.browser, { width, theme: "light", label, unmatched, ...(patch ? { fixtureState: stateWithMaterials(patch) } : {}) });
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  if (ready) await view.page.waitForSelector(ready, { state: "visible", timeout: 30000 });
+  await settle(view.page);
+  return view;
+}
+async function openReplay(ctx, label, { width = 1440, patch } = {}) {
+  const view = await openFresh(ctx, label, "#/research/replay", { width, patch, ready: "[data-testid=replay-list]" });
+  if (!patch?.replayEmpty) await view.page.waitForSelector("[data-testid=replay-row]", { state: "visible", timeout: 30000 });
+  if (width >= 1024 && !patch?.replayEmpty) await view.page.waitForSelector("[data-testid=replay-detail]", { state: "visible", timeout: 30000 });
+  await settle(view.page);
+  return view;
+}
+const pollFor = async (page, read, timeout = 10000) => { const stop = Date.now() + timeout; let value = await read(); while (!value && Date.now() < stop) { await page.waitForTimeout(60); value = await read(); } return value; };
+
+/** What a model-scores card shows, read from the page: its title, status, the four tiles' value and footnote, the comparison numbers. */
+const readCohortCards = (page) => page.evaluate(() => [...document.querySelectorAll("[data-testid=cohort-card]")].map((card) => {
+  const tile = (metric) => { const el = card.querySelector(`[data-metric=${metric}]`); return el ? { value: el.querySelector("[data-slot=stat-value]")?.textContent.trim(), footnote: el.querySelector("[data-slot=stat-footnote]")?.textContent.trim() } : null; };
+  return { title: card.querySelector("h3")?.textContent.trim(), status: card.getAttribute("data-status"), samples: tile("samples"), scored: tile("scored"), brier: tile("brier"), logloss: tile("logloss"),
+    compare: [...card.querySelectorAll("[data-testid=score-compare]")].map((c) => ({ metric: c.getAttribute("data-metric"), numbers: [...c.querySelectorAll("span.font-mono")].map((n) => n.textContent.trim()) })), hasComparison: Boolean(card.querySelector("[data-testid=score-comparison]")) };
+}));
+
+async function scoresInsufficientNoNumber(ctx) {
+  const view = await openFresh(ctx, "scores insufficient", "#/research/scores", { patch: { scoresScored: 12 }, ready: "[data-testid=cohort-card]" });
+  try {
+    const cards = await readCohortCards(view.page);
+    const thin = cards.filter((c) => c.status !== "available");
+    assert(thin.length === 2 && cards.length === 2, `expected two cohorts, both below the floor: ${JSON.stringify(cards.map((c) => [c.title, c.status]))}`);
+    for (const card of thin) {
+      for (const metric of ["brier", "logloss"]) {
+        assert(card[metric].value === "样本不足", `${card.title} ${metric}: the number slot says ${JSON.stringify(card[metric].value)}`);
+        assert(!/\d/.test(card[metric].value), `${card.title} ${metric}: a digit in the number slot`);
+        assert(/\/\s*30/.test(card[metric].footnote), `${card.title} ${metric}: the floor (30) is not said: ${card[metric].footnote}`);
+      }
+      assert(!card.hasComparison, `${card.title}: a baseline comparison under the floor`);
+      assert(card.samples.value && card.scored.value.includes("/"), `${card.title}: the sample counts are gone`);
+    }
+    const stray = await view.page.evaluate(() => [...document.querySelectorAll("[data-testid=cohort-card][data-status=insufficient_samples] [data-metric=brier] [data-slot=stat-value], [data-testid=cohort-card][data-status=insufficient_samples] [data-metric=logloss] [data-slot=stat-value]")].filter((el) => /[0-9—–-]/.test(el.textContent)).length);
+    assert(stray === 0, `${stray} number slots hold a digit or a dash`);
+  } finally { await view.close(); }
+  // At the floor the same slots hold numbers (so the check above is about the state, not about the page never showing any).
+  const ok = await openFresh(ctx, "scores available", "#/research/scores", { ready: "[data-testid=cohort-card]" });
+  try {
+    const cards = await readCohortCards(ok.page);
+    const full = cards.find((c) => c.status === "available");
+    assert(full && /^\d\.\d{3}$/.test(full.brier.value) && /^\d\.\d{3}$/.test(full.logloss.value), `an available card has no numbers: ${JSON.stringify(full)}`);
+  } finally { await ok.close(); }
+  return "below the floor both average slots say 样本不足 with no digit or dash, the floor (/30) in the footnote and no baseline comparison; at the floor they hold three-place numbers";
+}
+
+async function scoresMatchLogic(ctx) {
+  const notes = [];
+  for (const [label, patch] of [["default", {}], ["12 scored", { scoresScored: 12 }]]) {
+    const data = evaluations(null, patch);
+    const view = await openFresh(ctx, `scores match ${label}`, "#/research/scores", { patch, ready: "[data-testid=cohort-card]" });
+    try {
+      const cards = await readCohortCards(view.page);
+      assert(cards.length === data.model_cohorts.length, `${label}: ${cards.length} cards for ${data.model_cohorts.length} cohorts`);
+      for (const cohort of data.model_cohorts) {
+        const card = cards.find((c) => c.title === `${cohort.provider} / ${cohort.actual_model}`);
+        assert(card, `${label}: no card for ${cohort.provider} / ${cohort.actual_model}`);
+        // The expected numbers: forecast-model.mjs's scoreCard, and the old page's own average (over the versions whose latest evaluation succeeded), computed here from the same data.
+        const expected = scoreCard(cohort);
+        const scored = cohort.roots.flatMap((r) => r.versions).map((v) => v.latest_evaluation).filter((e) => e?.status === "succeeded");
+        const avg = (key) => { const vs = scored.map((e) => e[key]).filter((v) => typeof v === "number"); return vs.length ? (vs.reduce((a, b) => a + b, 0) / vs.length).toFixed(3) : null; };
+        assert(card.samples.value === String(cohort.sample.root_denominator), `${card.title} samples ${card.samples.value} != ${cohort.sample.root_denominator}`);
+        assert(card.scored.value === `${cohort.sample.labelled_root_count} / ${cohort.sample.scored_root_count}`, `${card.title} labelled/scored ${card.scored.value}`);
+        if (cohort.status === "available") assert(card.brier.value === avg("brier_score") && card.logloss.value === avg("log_loss"), `${card.title} averages ${card.brier.value} / ${card.logloss.value} != ${avg("brier_score")} / ${avg("log_loss")}`);
+        else assert(card.brier.value === "样本不足" && card.logloss.value === "样本不足", `${card.title}: ${card.brier.value}`);
+        const f = (v) => (v === null ? "—" : v.toFixed(3));
+        if (expected.showMeans) {
+          const brier = card.compare.find((c) => c.metric === "模型平均 Brier"), log = card.compare.find((c) => c.metric === "模型平均 Log loss");
+          assert(sameJson(brier?.numbers, [f(expected.modelBrier), f(expected.baselineBrier)]), `${card.title} brier comparison ${JSON.stringify(brier?.numbers)}`);
+          assert(sameJson(log?.numbers, [f(expected.modelLogLoss), f(expected.baselineLogLoss)]), `${card.title} log loss comparison ${JSON.stringify(log?.numbers)}`);
+        } else assert(!card.hasComparison, `${card.title}: a comparison that scoreCard does not show`);
+      }
+      notes.push(`${label}: ${cards.length} cards`);
+    } finally { await view.close(); }
+  }
+  return `every card's counts, averages and baseline comparison equal what forecast-model.mjs scoreCard and the old average compute on the same fake data (${notes.join("; ")})`;
+}
+
+async function scoresStates(ctx) {
+  const empty = await openFresh(ctx, "scores empty", "#/research/scores", { patch: { scoresEmpty: true }, ready: "[data-testid=scores-empty]" });
+  try {
+    const text = await empty.page.locator("[data-testid=scores-empty]").innerText();
+    assert(text.includes("还没有模型分组评估") && text.includes("预测到期"), `the empty state: ${text}`);
+    await empty.page.locator("[data-testid=scores-empty] a", { hasText: "去预测首页" }).click();
+    await empty.page.waitForFunction(() => location.hash === "#/research/forecasts", null, { timeout: 5000 });
+  } finally { await empty.close(); }
+  const bad = await openFresh(ctx, "scores error", "#/research/scores", { patch: { scoresError: true }, ready: "[data-slot=error-bar]" });
+  try {
+    assert((await bad.page.locator("[data-testid=cohort-card]").count()) === 0, "cards next to the error");
+    bad.mock.state.scoresError = false;
+    await bad.page.locator("[data-slot=error-bar] button", { hasText: "重试" }).click();
+    await bad.page.waitForSelector("[data-testid=cohort-card]", { timeout: 10000 });
+  } finally { await bad.close(); }
+  return "no cohorts: the empty state names when scores come and leads to the forecast home; a failed read is an error bar in place and 重试 reads again";
+}
+
+async function replayGenerateBody(ctx) {
+  const notes = [];
+  const view = await openReplay(ctx, "replay generate", { patch: { replayRunningPolls: 3 } });
+  try {
+    const { page } = view;
+    const form = await page.evaluate(() => ({ date: document.querySelector("[data-testid=replay-date]").value, max: document.querySelector("[data-testid=replay-date]").max, required: document.querySelector("[data-testid=replay-date]").required, symbol: document.querySelector("[data-testid=replay-symbol]").textContent.trim(), button: document.querySelector("[data-testid=replay-generate]").textContent.trim() }));
+    assert(form.date === REPLAY_BASE.form.dateValue && form.max === REPLAY_BASE.form.dateMax && form.required === REPLAY_BASE.form.dateRequired, `the date field: ${JSON.stringify(form)} vs ${REPLAY_BASE.form.dateValue} max ${REPLAY_BASE.form.dateMax}`);
+    assert(form.symbol === REPLAY_BASE.form.selectedSymbol && form.button.includes(REPLAY_BASE.form.buttonText), `the form: ${JSON.stringify(form)}`);
+    const before = await page.locator("[data-testid=replay-row]").count();
+    assert(before === REPLAY_BASE.form.listedReplays.length, `${before} replays listed, the old page listed ${REPLAY_BASE.form.listedReplays.length}`);
+    await page.locator("[data-testid=replay-generate]").click();
+    const sent = await pollFor(page, () => replayPosts(view).length >= 1 && replayPosts(view), 8000);
+    assert(sent.length === 1, `${sent.length} requests for one press`);
+    assert(sameJson(sent.map((q) => ({ body: q.body, idempotencyKey: q.idempotencyKey })), REPLAY_BASE.bodies.defaults.posts), `the default body changed: ${JSON.stringify(sent)} vs ${JSON.stringify(REPLAY_BASE.bodies.defaults.posts)}`);
+    const row = page.locator("[data-slot=task-row]");
+    await row.first().waitFor({ timeout: 8000 });
+    const rowText = await row.first().innerText();
+    assert(rowText.includes("历史回放") && rowText.includes("AAPL") && rowText.includes(REPLAY_BASE.form.dateValue), `the task row: ${rowText}`);
+    assert(await page.locator("[data-testid=replay-generate]").isDisabled(), "the button is not waiting for the job (the old one was disabled)");
+    await row.first().waitFor({ state: "detached", timeout: 25000 });
+    await page.waitForFunction((n) => document.querySelectorAll("[data-testid=replay-row]").length === n + 1, before, { timeout: 15000 });
+    await page.waitForFunction((id) => document.querySelector("[data-testid=replay-detail]")?.getAttribute("data-version") === id, REPLAY_ID.created, { timeout: 15000 });
+    assert(!(await page.locator("[data-testid=replay-generate]").isDisabled()), "the button stays disabled after the job");
+    const trail = view.mock.requests.map((r) => `${r.method} ${r.path}`);
+    const at = (needle, from = 0) => trail.findIndex((line, i) => i >= from && line.includes(needle));
+    const post = at("POST /v2/historical-replays"), job1 = at("GET /v2/jobs/", post), job2 = at("GET /v2/jobs/", job1 + 1), list = at("GET /v2/evaluations", job2), made = at(`GET /v2/forecast-versions/${REPLAY_ID.created}`, list);
+    assert(post >= 0 && job1 > post && job2 > job1 && list > job2 && made > list, `the read order after the press: ${JSON.stringify([post, job1, job2, list, made])}`);
+    notes.push("default body, task row, one more replay");
+  } finally { await view.close(); }
+  const other = await openReplay(ctx, "replay generate tsla");
+  try {
+    const { page } = other;
+    await page.locator("[data-testid=replay-symbol]").click();
+    const choices = await page.locator("[data-symbol]").evaluateAll((els) => els.map((e) => e.getAttribute("data-symbol")));
+    assert(sameJson(choices, REPLAY_BASE.form.symbols), `the companies: ${choices}`);
+    await page.locator("[data-symbol=TSLA]").click();
+    await page.locator("[data-testid=replay-date]").fill("2026-09-15");
+    await page.locator("[data-testid=replay-generate]").click();
+    const sent = await pollFor(page, () => replayPosts(other).length >= 1 && replayPosts(other), 8000);
+    assert(sameJson(sent.map((q) => ({ body: q.body, idempotencyKey: q.idempotencyKey })), REPLAY_BASE.bodies.tsla0915), `the TSLA body: ${JSON.stringify(sent)}`);
+    notes.push("TSLA + 2026-09-15 body");
+  } finally { await other.close(); }
+  return `the request body, header and read order equal the old page's recorded ones (${notes.join("; ")}); the company list is the watchlist`;
+}
+
+async function replayValidation(ctx) {
+  const notes = [];
+  for (const [name, c] of Object.entries(REPLAY_BASE.validation)) {
+    const view = await openReplay(ctx, `replay validation ${name}`);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=replay-date]").fill(c.value);
+      await page.locator("[data-testid=replay-generate]").click();
+      if (c.sent) {
+        const sent = await pollFor(page, () => replayPosts(view).length >= 1 && replayPosts(view), 8000);
+        assert(sent.length === 1 && sent[0].body === c.posts[0].body, `${name}: the old form sent ${c.posts[0].body}, now ${JSON.stringify(sent.map((q) => q.body))}`);
+      } else {
+        await page.locator("[data-testid=replay-form-error]").waitFor({ timeout: 5000 });
+        assert(replayPosts(view).length === 0, `${name}: sent a request the old form held back`);
+        assert(((await page.locator("[data-testid=replay-form-error]").innerText()).trim()).length > 4, `${name}: the field does not say why`);
+        assert((await page.locator("[data-testid=replay-date]").getAttribute("aria-invalid")) === "true", `${name}: the field is not marked invalid`);
+      }
+      notes.push(`${name}:${c.sent ? "sent" : "held"}`);
+    } finally { await view.close(); }
+  }
+  for (const [name, patch] of [["failed-timeout", { replayFail: true, replayRunningPolls: 1, replayError: "forecast_provider_timeout" }], ["failed-unknown-code", { replayFail: true, replayRunningPolls: 1, replayError: "something_new" }], ["blocked-data", { replayFail: "blocked", replayRunningPolls: 1, replayError: "insufficient_price_history" }]]) {
+    const base = REPLAY_BASE.failures[name];
+    const view = await openReplay(ctx, `replay ${name}`, { patch });
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=replay-generate]").click();
+      await page.locator("[data-testid=replay-failure]").waitFor({ timeout: 20000 });
+      const text = (await page.locator("[data-testid=replay-failure]").innerText()).replace(/\s+/g, " ");
+      const title = base.text.includes("资料不足，回放未生成") ? "资料不足，回放未生成" : "回放任务失败";
+      assert(text.includes(title) && text.includes(patch.replayError) && text.includes("未生成回放"), `${name}: ${text}`);
+      const after = (text.split("未生成回放：")[1] ?? "").replace("忽略", "").trim();
+      if (name === "failed-timeout") assert(after !== patch.replayError && after.length > patch.replayError.length + 6, `${name}: the code stands alone, no sentence: ${text}`);
+      if (name === "failed-unknown-code") assert(after === "something_new", `${name}: ${text}`);
+      assert((await page.locator("[data-testid=replay-row]").count()) === base.listCount, `${name}: ${await page.locator("[data-testid=replay-row]").count()} replays listed`);
+      assert(!(await page.locator("[data-testid=replay-generate]").isDisabled()) === !base.buttonDisabled, `${name}: the button`);
+      assert((await page.locator("[data-testid=replay-failure] [data-slot=status-badge]").getAttribute("data-kind")) === "failure", `${name}: the badge kind`);
+      await page.locator("[data-testid=replay-failure] button", { hasText: "忽略" }).click();
+      await page.locator("[data-testid=replay-failure]").waitFor({ state: "detached", timeout: 3000 });
+      notes.push(name);
+    } finally { await view.close(); }
+  }
+  return `the form is held to the old rules (${notes.join(", ")}); an empty or future day is said under the field and nothing is sent; failed / blocked jobs say the status words and the reason`;
+}
+
+async function replayPhoneLayer(ctx) {
+  const view = await openReplay(ctx, "replay phone layer", { width: 1440 });
+  try {
+    const { page } = view;
+    await page.locator("[data-testid=replay-row]").nth(1).click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=replay-detail]")?.getAttribute("data-version") === "f3000000-0000-4000-8000-000000000002", null, { timeout: 15000 });
+    await page.locator("[data-testid=brief-toggle]").click();
+    assert((await page.locator("[data-testid=brief-toggle]").getAttribute("aria-expanded")) === "false", "the brief did not fold");
+    await page.evaluate(() => { document.querySelector("[data-testid=replay-detail]").__marker = "kept"; });
+    const state = () => page.evaluate(() => ({ marker: document.querySelector("[data-testid=replay-detail]")?.__marker ?? null, selected: document.querySelector("[data-testid=replay-row][data-selected]")?.getAttribute("data-id"), folded: document.querySelector("[data-testid=brief-toggle]")?.getAttribute("aria-expanded"), dialog: Boolean(document.querySelector("[data-testid=replay-drawer][role=dialog]")) }));
+    for (const width of [390, 1440, 390, 1440]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      await page.waitForFunction((w) => window.innerWidth === w, width);
+      await settle(page);
+      const now = await state();
+      assert(now.marker === "kept" && now.selected === "f3000000-0000-4000-8000-000000000002" && now.folded === "false", `after ${width}: ${JSON.stringify(now)} (the detail element, the choice or the folded brief was lost)`);
+      assert(!now.dialog, `after ${width}: a layer without a press`);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await settle(page);
+    await page.locator("[data-testid=replay-row]").nth(1).click();
+    const layer = page.locator("[data-testid=replay-drawer]");
+    await layer.waitFor({ timeout: 5000 });
+    const box = await layer.boundingBox();
+    assert(box && box.x === 0 && box.y === 0 && Math.abs(box.width - 390) < 1 && Math.abs(box.height - 844) < 1, `the layer is not the screen: ${JSON.stringify(box)}`);
+    assert((await layer.getAttribute("aria-modal")) === "true" && (await layer.getAttribute("role")) === "dialog", "the layer is not a modal dialog");
+    assert((await page.evaluate(() => document.body.style.overflow)) === "hidden", "the page behind scrolls");
+    const stops = await layer.locator("a[href],button,input,select,textarea,summary").count();
+    for (let i = 0; i < stops + 3; i++) {
+      await page.keyboard.press("Tab");
+      assert(await page.evaluate(() => Boolean(document.activeElement?.closest("[data-testid=replay-drawer]"))), `Tab ${i + 1}: the focus left the layer`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForFunction(() => !document.querySelector("[data-testid=replay-drawer]"));
+    assert((await state()).marker === "kept", "the detail element was replaced at 1440");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await layer.waitFor({ timeout: 5000 });
+    const back = await state();
+    assert(back.marker === "kept" && back.folded === "false", "the detail element or its brief state was lost on the way back");
+    await page.locator("[data-testid=replay-drawer-back]").click();
+    await layer.waitFor({ state: "detached", timeout: 3000 });
+    assert((await page.evaluate(() => document.activeElement?.matches("[data-testid=replay-row][data-selected]"))) === true, "the focus did not return to the chosen row");
+    assert((await page.evaluate(() => document.body.style.overflow)) !== "hidden" && (await page.locator("[inert]").count()) === 0, "scroll lock or inert left behind");
+    await page.locator("[data-testid=replay-row]").nth(1).click();
+    await layer.waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape");
+    await layer.waitFor({ state: "detached", timeout: 3000 });
+    assert((await page.evaluate(() => document.activeElement?.matches("[data-testid=replay-row][data-selected]"))) === true, "Esc: the focus did not return");
+    const count = await page.locator("[data-slot=opinion-disclaimer]").count();
+    assert(count === 1, `${count} disclaimers on the replay page`);
+  } finally { await view.close(); }
+  return "1440 <-> 390 four times (and once with the layer open): the same detail element, the chosen replay and the folded brief are kept; at 390 the layer is the whole screen and modal, Tab stays inside, 返回列表 / Esc close it and return the focus, scroll lock and inert are undone; one disclaimer on the page";
+}
+
+const iconNameOf = (page, selector) => page.evaluate((sel) => { const svg = document.querySelector(`${sel} svg`); return svg ? [...svg.classList].find((c) => c.startsWith("lucide-")) ?? "svg" : null; }, selector);
+async function monitorFourStates(ctx) {
+  const expect = { healthy: ["success", "lucide-circle-check", "text-success", "监控正常", "最近扫描成功"], delayed: ["action", "lucide-hourglass", "text-action", "监控延迟", "运行延迟"], degraded: ["failure", "lucide-circle-x", "text-danger", "监控异常", "部分失败或降级"], none: ["neutral", null, "text-muted-foreground", "尚无记录", "没有运行记录"] };
+  const seen = [];
+  for (const [state, [kind, icon, token, chip, headline]] of Object.entries(expect)) {
+    const view = await openFresh(ctx, `monitor ${state}`, "#/research/monitor", { patch: state === "healthy" ? {} : { monitor: state }, ready: "[data-testid=monitor-health]" });
+    try {
+      const { page } = view;
+      const card = "[data-testid=monitor-health]";
+      assert((await page.locator(card).getAttribute("data-state")) === (state === "none" ? "not_recorded" : state), `${state}: data-state`);
+      assert((await page.locator(`${card} [data-slot=status-badge]`).getAttribute("data-kind")) === kind, `${state}: badge kind`);
+      assert((await page.locator(`${card} [data-slot=status-badge]`).innerText()).trim() === chip, `${state}: chip words`);
+      assert((await page.locator("[data-testid=monitor-headline]").innerText()).trim() === headline, `${state}: headline`);
+      const iconNow = await iconNameOf(page, `${card} [data-slot=status-badge]`);
+      assert(iconNow === icon, `${state}: icon ${iconNow} != ${icon}`);
+      const colours = await page.evaluate(({ card, token }) => {
+        const probe = document.createElement("i"); probe.className = token; document.body.appendChild(probe);
+        const want = getComputedStyle(probe).color; probe.remove();
+        const mark = document.querySelector(`${card} [data-slot=status-badge] svg`) ?? document.querySelector(`${card} [data-slot=status-badge] span[aria-hidden]`);
+        return { want, icon: mark ? getComputedStyle(mark).color : null };
+      }, { card, token });
+      assert(colours.icon === colours.want, `${state}: the icon colour ${colours.icon} is not the ${token} colour ${colours.want}`);
+      seen.push(colours.want);
+      const chipPage = await openFresh(ctx, `monitor chip ${state}`, "#/research", { patch: state === "healthy" ? {} : { monitor: state }, ready: "[data-testid=monitor-chip] [data-slot=status-badge]" });
+      try {
+        await chipPage.page.waitForFunction(() => !/正在读取/.test(document.querySelector("[data-testid=monitor-chip]").innerText), null, { timeout: 10000 });
+        assert((await chipPage.page.locator("[data-testid=monitor-chip] [data-slot=status-badge]").getAttribute("data-kind")) === kind, `${state}: the watchlist chip's kind`);
+        assert((await chipPage.page.locator("[data-testid=monitor-chip]").innerText()).trim() === chip, `${state}: the watchlist chip's words`);
+      } finally { await chipPage.close(); }
+    } finally { await view.close(); }
+  }
+  assert(new Set(seen.slice(0, 3)).size === 3, `the three coloured states do not differ: ${seen}`);
+  return "正常 / 延迟 / 异常 / 无记录: badge kind success / action / failure / neutral, icon circle-check / hourglass / circle-x / none, icon colour = the token, words and headline fixed; the watchlist chip is the same component";
+}
+
+async function monitorDotInSidebar(ctx) {
+  const notes = [];
+  for (const [state, patch, label, token] of [["healthy", {}, null, null], ["none", { monitor: "none" }, null, null], ["delayed", { monitor: "delayed" }, "监控延迟", "--action"], ["degraded", { monitor: "degraded" }, "监控异常", "--danger"]]) {
+    const view = await openFresh(ctx, `monitor dot ${state}`, "#/research/scores", { patch, ready: "[data-testid=cohort-card]" });
+    try {
+      const { page } = view;
+      await pollFor(page, () => monitorReads(view) >= 1, 8000);
+      assert(monitorReads(view) === 1, `${state}: ${monitorReads(view)} reads of the monitor on entering the research area`);
+      await settle(page);
+      const dots = await page.locator('[data-slot="sidebar"] [data-testid=monitor-dot]').count();
+      if (!label) { assert(dots === 0 && (await page.locator("[data-testid=monitor-dot]").count()) === 0, `${state}: a dot for a monitor that is ${state}`); notes.push(`${state}: none`); continue; }
+      await page.locator('[data-slot="sidebar"] [data-testid=monitor-dot]').waitFor({ timeout: 5000 });
+      assert((await page.locator('[data-slot="sidebar"] [data-testid=monitor-dot]').count()) === 1, `${state}: ${dots} dots`);
+      assert((await page.locator('[data-slot="sidebar"] [data-testid=monitor-dot]').getAttribute("aria-label")) === label, `${state}: the dot's words`);
+      const beside = await page.locator('[data-slot="sidebar"] a', { hasText: "研究" }).first().evaluate((a) => Boolean(a.querySelector("[data-testid=monitor-dot]")));
+      assert(beside, `${state}: the dot is not beside 研究`);
+      const same = await page.evaluate((token) => { const probe = document.createElement("i"); probe.style.backgroundColor = `var(${token})`; document.body.appendChild(probe); const want = getComputedStyle(probe).backgroundColor; probe.remove(); return getComputedStyle(document.querySelector("[data-testid=monitor-dot]")).backgroundColor === want; }, token);
+      assert(same, `${state}: the dot is not in the ${token} colour`);
+      notes.push(`${state}: dot "${label}"`);
+    } finally { await view.close(); }
+  }
+  const phone = await openFresh(ctx, "monitor dot phone", "#/research/scores", { width: 390, patch: { monitor: "degraded" }, ready: "[data-testid=cohort-card]" });
+  try {
+    await phone.page.locator('[data-slot="mobile-tab-bar"] [data-testid=monitor-dot]').waitFor({ timeout: 8000 });
+    assert((await phone.page.locator('[data-slot="mobile-tab-bar"] a', { hasText: "研究" }).locator("[data-testid=monitor-dot]").count()) === 1, "the dot is not on the 研究 tab");
+    notes.push("390 tab bar: dot");
+  } finally { await phone.close(); }
+  const chat = await openFresh(ctx, "monitor dot from chat", "#/chat", { patch: { monitor: "degraded" }, ready: "[data-testid=message]" });
+  try {
+    await settle(chat.page);
+    assert(monitorReads(chat) === 0 && (await chat.page.locator("[data-testid=monitor-dot]").count()) === 0, "the chat page read the monitor or shows a dot");
+    await pressNavItem(chat.page, "研究");
+    await chat.page.locator('[data-slot="sidebar"] [data-testid=monitor-dot]').waitFor({ timeout: 8000 });
+    assert(monitorReads(chat) === 1, `${monitorReads(chat)} reads after entering the research area`);
+    notes.push("chat: no read, 研究 reads once");
+  } finally { await chat.close(); }
+  return notes.join("; ");
+}
+
+async function researchNoLegacy(ctx) {
+  // The pages with no old-UI marker, and the five P6.2 / P6.3 pages that still stand inside it (listed in the P6.4 delivery: taking the marker away changes their pixels).
+  // A temporary exception set by the P6.4 ruling: it stays until the research de-legacy package takes the marker off these pages and flips this check to "none"; see opus-p64-ruling.md.
+  const clean = [["#/research", "main"], ["#/research/c/AAPL", "[data-testid=company-overview]"], ["#/research/c/AAPL?tab=forecasts", "main"], ["#/research/c/AAPL?tab=materials", "[data-testid=material-row]"],
+    ["#/research/scores", "[data-testid=cohort-card]"], ["#/research/replay", "[data-testid=replay-row]"], ["#/research/monitor", "[data-testid=monitor-health]"]];
+  const listed = [["#/research/forecasts", "[data-testid=forecast-home]"], [`#/research/forecasts/${ROOT.aapl}`, "[data-testid=forecast-page]"], [`#/research/judgments/${JUDGMENT.aapl}`, "[data-testid=judgment-card]"],
+    ["#/research/evidence?symbol=AAPL", "[data-testid=evidence-page]"], ["#/research/materials", "[data-testid=material-row]"]];
+  const bad = [];
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "research no legacy", unmatched });
+  const read = async (hash, ready) => {
+    await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+    await view.page.waitForSelector(ready, { state: "visible", timeout: 30000 });
+    await settle(view.page);
+    return view.page.evaluate(() => ({ legacy: document.querySelectorAll("[data-legacy]").length, old: document.querySelectorAll("main.workspace, .workspace-stack, .v2-desk, .historical-replay-workspace").length }));
+  };
+  try {
+    for (const [hash, ready] of clean) {
+      const got = await read(hash, ready);
+      if (got.legacy) bad.push(`${hash}: ${got.legacy} data-legacy element(s)`);
+      if (got.old) bad.push(`${hash}: ${got.old} old workspace element(s)`);
+    }
+    for (const [hash, ready] of listed) {
+      const got = await read(hash, ready);
+      if (got.legacy !== 1) bad.push(`${hash}: listed as inside the marker, found ${got.legacy}`);
+    }
+    await view.page.goto(`${ctx.server.url}#/settings/models`, { waitUntil: "load" });
+    await view.page.waitForSelector(".agent-admin h2", { timeout: 30000 });
+    assert((await view.page.locator("[data-legacy]").count()) >= 1, "the settings page lost its old-UI marker too");
+  } finally { await view.close(); }
+  assert(!bad.length, bad.join("; "));
+  return `${clean.length} research pages (watchlist, company and its tabs, 模型成绩, 历史回放, 监控) hold no data-legacy element and no old workspace class; the five listed P6.2 / P6.3 pages are exactly the ones still inside the marker`;
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -7445,6 +7808,15 @@ const CHECKS = [
   ["materials-reanalyze-model: 重新分析 sends force:true and, with a model chosen, catalog_model", materialsReanalyzeModel],
   ["materials-focus-link: ?symbol=&focus=&type=&analysis= chooses the row on its page, opens the named version, a phone gets the drawer, a missing material is said", materialsFocusLink],
   ["materials-phone-layer: 390, on the materials page and the company page's 材料 tab: the layer is the whole screen, nothing behind it can be focused, Tab stays in it, 返回列表 and Esc close it and give back focus / scroll / inert, a Select takes its own Esc", materialsPhoneLayer],
+  ["scores-insufficient-no-number: below the floor the average slots say 样本不足 with the floor and no digit, dash or comparison; at the floor they hold numbers", scoresInsufficientNoNumber],
+  ["scores-match-logic: every card's counts, averages and baseline comparison equal what forecast-model.mjs scoreCard and the old average compute on the same fake data", scoresMatchLogic],
+  ["scores-states: no cohorts is an empty state that leads to the forecast home; a failed read is an error bar with 重试", scoresStates],
+  ["replay-generate-body: the replay request body, header and read order equal the old page's recorded ones; the task row comes and goes, the list has one more", replayGenerateBody],
+  ["replay-validation: the form is held to the old rules (empty and future days stopped, today / weekend / recent sent); failed and blocked jobs say status and reason", replayValidation],
+  ["replay-phone-layer: across the 1024 breakpoint the detail element, the choice and the folded brief are kept; the phone's whole-screen layer is modal, Tab stays inside, 返回列表 / Esc close it; one disclaimer", replayPhoneLayer],
+  ["monitor-four-states: 正常 / 延迟 / 异常 / 无记录 each have their badge kind, icon and colour token; the watchlist chip is the same component", monitorFourStates],
+  ["monitor-dot-in-sidebar: a late or failing monitor puts a dot beside 研究 (sidebar and phone tab bar), a well one or no record nothing; read once on entering the research area, never from the chat page", monitorDotInSidebar],
+  ["research-no-legacy: the watchlist, company page and its tabs, 模型成绩, 历史回放 and 监控 hold no data-legacy element or old workspace class; the five listed older pages are exactly the ones still inside the marker", researchNoLegacy],
   ["analysis-status-neutral: the check of a quote is plain text: no danger or action colour, no icon, no alert, not folded", analysisStatusNeutral],
 ];
 

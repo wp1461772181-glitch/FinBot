@@ -19,7 +19,13 @@ const sourceTypeLabel = (value: string, locale: Locale) => locale === "en-US" ? 
 const changeLabel = (value: string, t: (text: string) => string) => ({ added: t("新增"), withdrawn: t("撤回"), modified: t("修订"), source_status_changed: t("来源状态变化") } as Record<string, string>)[value] ?? value;
 
 /** The source numbers of one statement: every citation is a [n] chip that opens that material on the evidence page (the number is the material's place in 纳入简报的材料). */
-function Cites({ citations, materials, versionId }: { citations: ResearchEvidencePointer[]; materials: ResearchMaterialReference[]; versionId: string }) {
+type CiteTarget = "evidence" | "materials";
+/** Where a citation or a material's link goes: the evidence page (a forecast's brief), or the material library on that material's analysis (a historical replay's brief, which has no evidence page of its own). */
+const cite = (target: CiteTarget, versionId: string, material: ResearchMaterialReference) => target === "materials"
+  ? paths.materials({ symbol: material.symbol, focus: material.source_id, type: material.source_type, analysis: material.analysis_id })
+  : paths.evidence(versionId, material.source_type, material.source_id);
+
+function Cites({ citations, materials, versionId, target }: { citations: ResearchEvidencePointer[]; materials: ResearchMaterialReference[]; versionId: string; target: CiteTarget }) {
   const { t, locale } = useLocale();
   if (!citations.length) return null;
   return <span data-slot="brief-cites" className="flex flex-wrap gap-1.5">
@@ -28,21 +34,21 @@ function Cites({ citations, materials, versionId }: { citations: ResearchEvidenc
       const material = materials[at];
       if (!material) return null;
       const what = `${material.title || sourceTypeLabel(material.source_type, locale)} · ${sectionText(citation.section, locale)} ${citation.item_id}`;
-      return <Link key={`${citation.analysis_id}:${citation.section}:${citation.item_id}:${index}`} to={paths.evidence(versionId, material.source_type, material.source_id)} data-slot="brief-cite" title={what} aria-label={`${t("来源")} ${at + 1}：${what}`}
+      return <Link key={`${citation.analysis_id}:${citation.section}:${citation.item_id}:${index}`} to={cite(target, versionId, material)} data-slot="brief-cite" title={what} aria-label={`${t("来源")} ${at + 1}：${what}`}
         className="inline-flex h-6 items-center gap-1 rounded-sm border border-line-strong bg-background px-1.5 font-mono text-caption text-ink-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">[{at + 1}]<span className="font-sans text-muted-foreground">{sectionText(citation.section, locale)} {citation.item_id}</span></Link>;
     })}
   </span>;
 }
 
-function Group<T extends { citations: ResearchEvidencePointer[] }>({ title, rows, text, materials, versionId, facts = false }: { title: string; rows: T[]; text: (row: T) => string; materials: ResearchMaterialReference[]; versionId: string; facts?: boolean }) {
+function Group<T extends { citations: ResearchEvidencePointer[] }>({ title, rows, text, materials, versionId, target, facts = false }: { title: string; rows: T[]; text: (row: T) => string; materials: ResearchMaterialReference[]; versionId: string; target: CiteTarget; facts?: boolean }) {
   if (rows.length === 0) return null;
   return <section data-slot="brief-group" className="flex min-w-0 flex-col gap-2">
     <h4 className="flex items-baseline gap-2 text-small font-medium text-ink">{title}<span className="font-mono text-caption font-normal text-muted-foreground">{rows.length}</span></h4>
     <ul className="m-0 flex list-none flex-col gap-2 p-0">
       {rows.map((row, index) => <li key={`${text(row)}:${index}`} className="min-w-0">
         {facts
-          ? <OpinionFacts><p className="[overflow-wrap:anywhere]">{text(row)}</p><Cites citations={row.citations} materials={materials} versionId={versionId} /></OpinionFacts>
-          : <div className="flex flex-col gap-1.5"><p className="text-body text-ink [overflow-wrap:anywhere]">{text(row)}</p><Cites citations={row.citations} materials={materials} versionId={versionId} /></div>}
+          ? <OpinionFacts><p className="[overflow-wrap:anywhere]">{text(row)}</p><Cites citations={row.citations} materials={materials} versionId={versionId} target={target} /></OpinionFacts>
+          : <div className="flex flex-col gap-1.5"><p className="text-body text-ink [overflow-wrap:anywhere]">{text(row)}</p><Cites citations={row.citations} materials={materials} versionId={versionId} target={target} /></div>}
       </li>)}
     </ul>
   </section>;
@@ -53,7 +59,7 @@ function Group<T extends { citations: ResearchEvidencePointer[] }>({ title, rows
  * is a nested fact block with its source numbers; the model's own summaries (利好, 利空, 未知问题) are plain opinion text.  Every number opens the material on
  * the evidence page.  The groups and their data are the old brief's.
  */
-export function BriefSection({ version, brief: saved }: { version: V2VersionDetail; brief: ResearchBrief }) {
+export function BriefSection({ version, brief: saved, citeTarget = "evidence" }: { version: V2VersionDetail; brief: ResearchBrief; citeTarget?: CiteTarget }) {
   const { t, locale } = useLocale();
   const [open, setOpen] = useState(true);
   const localization = useAiContentLocalization("forecast_brief", version.id);
@@ -95,13 +101,13 @@ export function BriefSection({ version, brief: saved }: { version: V2VersionDeta
       </OpinionFacts>
       {brief.input_quality.reasons.length > 0 && <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-small text-ink-2">{brief.input_quality.reasons.map((reason, index) => <li key={`${reason}:${index}`}>{reason}</li>)}</ul>}
       <div className="grid gap-4 lg:grid-cols-2">
-        <Group title={t("新增事实")} rows={brief.new_facts} text={row => row.statement} materials={materials} versionId={version.id} facts />
-        <Group title={t("持续背景")} rows={brief.background} text={row => locale === "en-US" ? `${row.statement} (Continuing reason: ${row.continuing_reason})` : `${row.statement}（持续原因：${row.continuing_reason}）`} materials={materials} versionId={version.id} facts />
-        <Group title={t("潜在利好")} rows={brief.supporting} text={row => row.statement} materials={materials} versionId={version.id} />
-        <Group title={t("潜在利空 / 反证")} rows={brief.counter} text={row => row.statement} materials={materials} versionId={version.id} />
-        <Group title={t("来源冲突")} rows={brief.conflicts} text={row => row.description} materials={materials} versionId={version.id} />
-        <Group title={t("未知问题")} rows={brief.unknowns} text={row => locale === "en-US" ? `${row.question}: ${row.reason}` : `${row.question}：${row.reason}`} materials={materials} versionId={version.id} />
-        <Group title={t("版本变化")} rows={brief.changes} text={row => `${changeLabel(row.change_type, t)}: ${row.description}`} materials={materials} versionId={version.id} />
+        <Group title={t("新增事实")} rows={brief.new_facts} text={row => row.statement} materials={materials} versionId={version.id} target={citeTarget} facts />
+        <Group title={t("持续背景")} rows={brief.background} text={row => locale === "en-US" ? `${row.statement} (Continuing reason: ${row.continuing_reason})` : `${row.statement}（持续原因：${row.continuing_reason}）`} materials={materials} versionId={version.id} target={citeTarget} facts />
+        <Group title={t("潜在利好")} rows={brief.supporting} text={row => row.statement} materials={materials} versionId={version.id} target={citeTarget} />
+        <Group title={t("潜在利空 / 反证")} rows={brief.counter} text={row => row.statement} materials={materials} versionId={version.id} target={citeTarget} />
+        <Group title={t("来源冲突")} rows={brief.conflicts} text={row => row.description} materials={materials} versionId={version.id} target={citeTarget} />
+        <Group title={t("未知问题")} rows={brief.unknowns} text={row => locale === "en-US" ? `${row.question}: ${row.reason}` : `${row.question}：${row.reason}`} materials={materials} versionId={version.id} target={citeTarget} />
+        <Group title={t("版本变化")} rows={brief.changes} text={row => `${changeLabel(row.change_type, t)}: ${row.description}`} materials={materials} versionId={version.id} target={citeTarget} />
       </div>
       <section data-testid="brief-materials" className="flex min-w-0 flex-col gap-2">
         <h3 className="flex items-baseline gap-2 text-small font-medium text-ink">{t("纳入简报的材料")}<span className="font-mono text-caption font-normal text-muted-foreground">{materials.length} {locale === "en-US" ? t("份材料") : "份"}</span></h3>
@@ -117,7 +123,7 @@ export function BriefSection({ version, brief: saved }: { version: V2VersionDeta
                 {material.analysis_summary && <span className="text-small text-ink-2 [overflow-wrap:anywhere]">{t("分析摘要")}: {material.analysis_summary}</span>}
                 {material.key_numbers?.length ? <span className="text-caption text-muted-foreground" title={material.key_numbers.flatMap(item => item.citations.map(citation => citation.quote)).join("\n")}>{t("关键数字")}: {material.key_numbers.map(item => `${item.name} ${item.value_text}${item.period ? ` (${item.period})` : ""}`).join(" · ")}</span> : null}
                 <span className="-ml-2 flex flex-wrap gap-x-1">
-                  <Link to={paths.evidence(version.id, material.source_type, material.source_id)} className="inline-flex h-8 items-center rounded-sm px-2 text-small font-medium text-brand outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">{t("在证据页打开")}</Link>
+                  {citeTarget === "evidence" && <Link to={paths.evidence(version.id, material.source_type, material.source_id)} className="inline-flex h-8 items-center rounded-sm px-2 text-small font-medium text-brand outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">{t("在证据页打开")}</Link>}
                   {material.source_url && <a href={material.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex h-8 items-center rounded-sm px-2 text-small font-medium text-brand outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">{t("原始来源")}</a>}
                   <Link to={paths.materials({ symbol: material.symbol, focus: material.source_id, type: material.source_type, analysis: material.analysis_id })} className="inline-flex h-8 items-center rounded-sm px-2 text-small font-medium text-brand outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">{t("查看这版分析")}</Link>
                 </span>

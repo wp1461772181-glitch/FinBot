@@ -1,5 +1,7 @@
-import { Tx, useLocale } from "./i18n";
-import type { ResearchBrief, ResearchMaterialReference } from "./types";
+import type { ResearchBrief, ResearchMaterialReference } from "../../../types";
+
+// What became of each frozen candidate source in a version's research brief (moved here from the old EvidenceProcessing.tsx, whose component the replay page no longer needs):
+// the pure functions the audit panel and the replay page's material list read.  The sentences are the old ones.
 
 type FrozenEvidence = Record<string, unknown>;
 
@@ -8,40 +10,6 @@ type ProcessingStatus = {
   detail: string;
   tone: "included" | "omitted" | "candidate" | "unknown";
 };
-
-export function EvidenceProcessingSummary({
-  evidenceManifest,
-  brief,
-}: {
-  evidenceManifest: FrozenEvidence[];
-  brief: ResearchBrief;
-}) {
-  const { t } = useLocale();
-  const includedKeys = new Set(brief.material_refs.map(sourceKey));
-  const includedCount = evidenceManifest.filter((item) => includedKeys.has(sourceKey(item))).length;
-  const notIncludedCount = evidenceManifest.length - includedCount;
-
-  return <section className="evidence-processing" aria-label={t("冻结候选与简报材料范围")}>
-    <div className="brief-section-heading"><div><p className="section-label">{<Tx text={"本次预测的材料范围"} />}</p><h3>{<Tx text={"冻结候选不等于模型实际输入"} />}</h3></div></div>
-    <div className="evidence-processing-counts">
-      <div><strong>{evidenceManifest.length}</strong><span>{<Tx text={"冻结候选"} />}</span></div>
-      <div><strong>{includedCount}</strong><span>{<Tx text={"分析成功并进入简报"} />}</span></div>
-      <div><strong>{notIncludedCount}</strong><span>{<Tx text={"未进入简报"} />}</span></div>
-    </div>
-      <p className="evidence-processing-note">{<Tx text={"冻结清单保存预测当时可用的来源快照。模型读取的是通过校验的研究简报及其引用，不会直接读取所有候选。"} />}</p>
-    <div className="evidence-processing-list">
-      {evidenceManifest.length ? evidenceManifest.map((item, index) => {
-        const ref = brief.material_refs.find((candidate) => sourceKey(candidate) === sourceKey(item));
-        const status = processingStatus(item, brief, t);
-        const sourceUrl = asText(item.source_url) ?? ref?.source_url ?? null;
-        return <article key={`${sourceKey(item)}:${index}`}>
-          <div className="evidence-processing-title"><strong>{evidenceTitle(item, ref)}</strong><span className={`evidence-processing-badge is-${status.tone}`}>{status.label}</span><small>{status.detail}</small></div>
-          {sourceUrl && <a href={sourceUrl} target="_blank" rel="noopener noreferrer">{<Tx text={"打开原始来源 ↗"} />}</a>}
-        </article>;
-      }) : <p className="brief-empty">{<Tx text={"该版本没有冻结材料候选。"} />}</p>}
-    </div>
-  </section>;
-}
 
 export function processingStatus(item: FrozenEvidence, brief: ResearchBrief | null, t: (text: string) => string = (text) => text): ProcessingStatus {
   if (!brief) return { label: t("无简报状态记录"), detail: t("此版本没有保存研究简报，无法判断材料的分析与纳入结果。"), tone: "unknown" };

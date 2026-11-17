@@ -6,12 +6,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useLocale } from "../../../i18n";
 
 /** The company to forecast: a button that opens a short searchable list (a combobox).  The value is always one of the choices. */
-export function SymbolCombobox({ value, choices, onChange, id }: { value: string; choices: string[]; onChange: (symbol: string) => void; id?: string }) {
+export function SymbolCombobox({ value, choices, onChange, id, testId = "forecast-create-symbol", disabled, className = "" }: { value: string; choices: string[]; onChange: (symbol: string) => void; id?: string; testId?: string; disabled?: boolean; className?: string }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
   return <Popover open={open} onOpenChange={setOpen}>
     <PopoverTrigger asChild>
-      <Button id={id} type="button" variant="outline" role="combobox" aria-expanded={open} aria-label={t("选择股票")} data-testid="forecast-create-symbol" className="w-32 justify-between font-mono">
+      <Button id={id} type="button" variant="outline" role="combobox" aria-expanded={open} aria-label={t("选择股票")} data-testid={testId} disabled={disabled} className={`w-32 justify-between font-mono ${className}`}>
         {value}<ChevronsUpDown aria-hidden="true" className="opacity-60" />
       </Button>
     </PopoverTrigger>

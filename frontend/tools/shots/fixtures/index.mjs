@@ -5,7 +5,7 @@ import { botList, BOT_TEMPLATES, MODEL_CATALOG, MODEL_ROLES } from "./bots.mjs";
 import { buildChat, CITATION_DETAILS, clarificationEvents, compactionNotice, conversationSummaries, CONTEXT_USAGE, streamEvents } from "./chat.mjs";
 import { filingInventory } from "./filings.mjs";
 import { MATERIALS, materialList, analysisVersion, materialOriginal, ANALYSIS_SETTINGS } from "./materials.mjs";
-import { forecastList, forecastRoots, timeline, versionDetail, evaluations, MONITOR, workspace, job, revisionCandidates, JUDGMENTS } from "./forecasts.mjs";
+import { forecastList, forecastRoots, timeline, versionDetail, evaluations, monitorStatus, replayJob, REPLAY_JOB, workspace, job, revisionCandidates, JUDGMENTS } from "./forecasts.mjs";
 import { portfolioSummary, buildPortfolio } from "./portfolio.mjs";
 import { TASKS, RUNS, PROPOSALS, INBOX } from "./routines.mjs";
 import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS } from "./assistant.mjs";
@@ -144,7 +144,7 @@ export function registerRoutes(route, reply) {
   route.get("/v2/forecast-roots/:id/timeline", ({ params, state }) => found(timeline(params.id, state)));
   route.get("/v2/forecast-versions/:id", ({ params }) => found(versionDetail(params.id)));
   route.get("/v2/forecast-versions/:id/revision-candidates", ({ params, state }) => revisionCandidates(params.id, state));
-  route.get("/v2/jobs/:id", ({ params, state }) => job(params.id, state));
+  route.get("/v2/jobs/:id", ({ params, state }) => (params.id === REPLAY_JOB ? (replayJob(state) ?? reply.status(404, { detail: "not_found" })) : job(params.id, state)));
   // The two writes of the forecast pages.  The raw body of every request is kept in state.forecastPosts (what the body checks compare to the baseline); the job they answer with
   // is the one `job()` describes, so `state.jobStatus` ("running" keeps it on the task bar) decides what the page sees next.
   route.post("/v2/forecast-jobs", ({ rawBody, body, state }) => {
@@ -155,8 +155,14 @@ export function registerRoutes(route, reply) {
     state.forecastPosts = [...(state.forecastPosts ?? []), { path: `/v2/forecast-versions/${params.id}/revision-jobs`, body: rawBody }];
     return job("j2000000-0000-4000-8000-000000000002", state);
   });
-  route.get("/v2/monitor/status", () => MONITOR);
-  route.get("/v2/evaluations", ({ query }) => evaluations(query.get("symbol")));
+  route.get("/v2/monitor/status", ({ state }) => (state.monitorError ? reply.status(500, { detail: "monitor_unavailable" }) : monitorStatus(state)));
+  route.get("/v2/evaluations", ({ query, state }) => (state.scoresError && !query.get("symbol") ? reply.status(500, { detail: "evaluations_unavailable" }) : evaluations(query.get("symbol"), state)));
+  // P6.4: the historical replay write.  The raw body and the presence of the Idempotency-Key header are kept in state.replayPosts (what the body check compares with the baseline recorded from the old UI).
+  route.post("/v2/historical-replays", ({ rawBody, body, headers, state }) => {
+    state.replayPosts = [...(state.replayPosts ?? []), { path: "/v2/historical-replays", body: rawBody, idempotencyKey: Boolean(headers["idempotency-key"]) }];
+    state.replayMade = { symbol: body?.symbol ?? "AAPL", date: body?.decision_date ?? "2026-10-12", polls: 0 };
+    return { id: REPLAY_JOB, symbol: state.replayMade.symbol, kind: "new", root_version_id: null, parent_version_id: null, source_refs: [], time_mode: "historical_research", requested_decision_at: `${state.replayMade.date}T00:00:00Z`, status: "queued", current_stage: "queued", attempts: 0, error: null, result_version_id: null, created_at: "2026-11-13T01:00:00Z", started_at: null, completed_at: null };
+  });
   route.get(`${A}/earnings-judgments`, own(({ query, state }) => ({ judgments: state.noForecasts ? [] : JUDGMENTS.filter((j) => !query.get("symbol") || j.symbol === query.get("symbol")) })));
   route.get(`${A}/earnings-judgments/:id`, own(({ params }) => { const j = JUDGMENTS.find((x) => x.id === params.id); return j ? { judgment: j } : reply.status(404, { detail: "not_found" }); }));
 

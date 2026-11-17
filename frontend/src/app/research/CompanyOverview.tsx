@@ -13,7 +13,8 @@ import { ProbabilityBar } from "@/components/ProbabilityBar";
 import { StatTile, Change } from "@/components/StatTile";
 import { StatusBadge } from "@/components/StatusBadge";
 import { cn } from "@/lib/utils";
-import { getEarningsJudgments, getV2Forecasts, getV2MonitorStatus } from "../../api/forecast-v2";
+import { getEarningsJudgments, getV2Forecasts } from "../../api/forecast-v2";
+import { readMonitorStatus } from "./monitor/read-monitor";
 import { getMaterialLibrary } from "../../api/material-library";
 import { getFilingInventory, initializeMarketData } from "../../api/market-data";
 import type { PriceHistory } from "../../types";
@@ -95,7 +96,7 @@ export function CompanyOverview({ symbol, prices, reloadPrices }: { symbol: stri
   const [forecasts, retryForecasts] = useRead(`forecasts:${symbol}`, signal => getV2Forecasts({ symbols: [symbol], state: "all", limit: 20 }, signal));
   const [materials, retryMaterials] = useRead(`materials:${symbol}`, signal => getMaterialLibrary(symbol, { order: "recent", limit: 5, signal }));
   const [filings, retryFilings] = useRead(`filings:${symbol}`, signal => getFilingInventory(symbol, signal));
-  const [monitor] = useRead("monitor", signal => getV2MonitorStatus(signal));
+  const [monitor] = useRead("monitor", signal => readMonitorStatus(signal));
   const [judgments] = useRead(`judgments:${symbol}`, signal => getEarningsJudgments({ limit: 100 }, signal).then(value => ({ lane: judgmentLane({ status: "fulfilled", value }) })).catch(reason => ({ lane: judgmentLane({ status: "rejected", reason }) })), ws.personal);
 
   const rows = forecasts.kind === "ready" ? forecasts.value.forecasts : [];

@@ -1,6 +1,6 @@
 // Formal forecasts (V2): list, roots, versions with research briefs, evaluations, monitor, jobs, revision candidates.
 import { ROOT, VERSION } from "./ids.mjs";
-import { daysAgo, iso, lastClose } from "./common.mjs";
+import { daysAgo, dayOnly, iso, lastClose } from "./common.mjs";
 import { analysisId, materialId, evidenceVersionId } from "./materials.mjs";
 
 const NV = { nvda1: "f1000000-0000-4000-8000-000000000021", nvda2: "f1000000-0000-4000-8000-000000000022", amd1: "f1000000-0000-4000-8000-000000000031" };
@@ -19,6 +19,49 @@ const ROOTS = {
   [ROOT_ALL.amd]: { symbol: "AMD", target: "2026-10-16", anchor: 151.9, expired: true, label: "neutral", versions: [{ id: NV.amd1, ago: 56, p: [0.28, 0.40, 0.32], trigger: "initial", reason: null }] },
 };
 export const ROOT_IDS = ROOT_ALL;
+
+// --- Historical replays (P6.4): versions made for a past decision day, kept in their own cohort (time_mode historical_research).  They are not in the forecast list.
+const RP = (n) => `f3000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+export const REPLAY_VERSION = { a: RP(1), b: RP(2), c: RP(3), created: RP(9) };
+export const REPLAY_JOB = "j3000000-0000-4000-8000-000000000001";
+const REPLAY_ROWS = [
+  { id: REPLAY_VERSION.a, ago: 58, p: [0.22, 0.34, 0.44], label: "bullish", close: 224.6, status: "succeeded" },
+  { id: REPLAY_VERSION.b, ago: 72, p: [0.41, 0.33, 0.26], label: "neutral", close: 205.9, status: "succeeded" },
+  { id: REPLAY_VERSION.c, ago: 90, p: [0.28, 0.40, 0.32], label: null, close: null, status: "blocked_price" },
+];
+const replayRoot = (row, symbol, decisionAgo, rootNo) => ({ symbol, target: dayOnly(decisionAgo - 28), anchor: 207.3, expired: true, replay: true, no: rootNo, versions: [{ id: row.id, ago: decisionAgo, p: row.p, trigger: "historical_replay", reason: null }], row });
+/** The replays the fake backend holds now: three for AAPL, none with `state.replayEmpty`, one more once the page has made one (`state.replayCreated`). */
+function replayRows(state = {}) {
+  const rows = state.replayEmpty ? [] : REPLAY_ROWS.map((row, i) => replayRoot(row, "AAPL", row.ago, i + 1));
+  if (state.replayCreated && state.replayMade) {
+    const days = Math.round((Date.parse(`${dayOnly(0)}T00:00:00Z`) - Date.parse(`${state.replayMade.date}T00:00:00Z`)) / 86400000);
+    rows.push(replayRoot({ id: REPLAY_VERSION.created, p: [0.25, 0.37, 0.38], label: "neutral", close: 212.2, status: "succeeded" }, state.replayMade.symbol, days, 9));
+  }
+  return rows;
+}
+// versionDetail finds a replay by id in this table (the three fixed ones, and the one a job makes).
+const REPLAY_ROOTS = Object.fromEntries([...REPLAY_ROWS.map((row, i) => replayRoot(row, "AAPL", row.ago, i + 1)), replayRoot({ id: REPLAY_VERSION.created, p: [0.25, 0.37, 0.38], label: "neutral", close: 212.2, status: "succeeded" }, "AAPL", 32, 9)].map((r) => [`f4000000-0000-4000-8000-${String(r.no).padStart(12, "0")}`, r]));
+const replayEvaluation = (r) => ({ id: `ev-${r.row.id}`, result_version: 1, status: r.row.status, actual_target_close: r.row.close, actual_label: r.row.label, label_available_at: r.row.label ? daysAgo(r.versions[0].ago - 29) : null,
+  brier_score: r.row.label ? brierOf(r.row.p, r.row.label) : null, log_loss: r.row.label ? logLossOf(r.row.p, r.row.label) : null, direction_correct: r.row.label ? r.row.label === "bullish" : null, price_input_version: "px-v1", created_at: daysAgo(r.versions[0].ago - 29) });
+function replayCohort(symbol, state) {
+  const rows = replayRows(state).filter((r) => !symbol || r.symbol === symbol);
+  const scored = rows.filter((r) => r.row.label).length;
+  return { time_mode: "historical_research", status: scored ? "insufficient_samples" : "pending",
+    sample: { root_denominator: rows.length, labelled_root_count: scored, scored_root_count: scored, unscored_root_count: rows.length - scored, version_count: rows.length, labelled_version_count: scored, scored_version_count: scored },
+    roots: rows.map((r) => ({ root_id: `f4000000-0000-4000-8000-${String(r.no).padStart(12, "0")}`, target_contract_hash: `h-replay-${r.no}`, target_end_date: r.target, versions: r.versions.map((v) => { const e = replayEvaluation(r);
+      return { id: v.id, version_no: 1, decision_at: daysAgo(v.ago), trigger_type: "historical_replay", model_status: "experimental_llm", time_mode: "historical_research", latest_evaluation: e, evaluation_history: [e], provider: "openrouter", actual_model: "gpt-6.1-terra", question_version: "q3" }; }) })) };
+}
+/** The job a POST /v2/historical-replays made: running for `state.replayRunningPolls` reads (default 2), then succeeded with the replay version, or failed with `state.replayError` when `state.replayFail` is set (`"blocked"` = blocked_data); `state.replayHold` keeps it running. */
+export function replayJob(state) {
+  const made = state.replayMade; if (!made) return null;
+  made.polls += 1;
+  const base = { id: REPLAY_JOB, symbol: made.symbol, kind: "new", root_version_id: null, parent_version_id: null, source_refs: [], time_mode: "historical_research", requested_decision_at: `${made.date}T00:00:00Z`, attempts: 1, created_at: daysAgo(0, 1), started_at: daysAgo(0, 1) };
+  if (state.replayHold || made.polls < (state.replayRunningPolls ?? 2)) return { ...base, status: "running", current_stage: "生成研究简报", error: null, result_version_id: null, completed_at: null };
+  if (state.replayFail) return { ...base, status: state.replayFail === "blocked" ? "blocked_data" : "failed", current_stage: "failed", error: { type: state.replayError ?? "forecast_provider_timeout" }, result_version_id: null, completed_at: daysAgo(0, 2) };
+  state.replayCreated = true;
+  return { ...base, status: "succeeded", current_stage: "completed", error: null, result_version_id: REPLAY_VERSION.created, completed_at: daysAgo(0, 2) };
+}
+
 
 const probs = ([bearish, neutral, bullish]) => ({ bearish, neutral, bullish });
 const brierOf = (p, label) => Math.round(["bearish", "neutral", "bullish"].reduce((sum, k, i) => sum + ((p[i]) - (k === label ? 1 : 0)) ** 2, 0) * 10000) / 10000;
@@ -42,7 +85,7 @@ export function forecastList(query, fixture = {}) {
 export const forecastRoots = (symbol) => ({ symbol, roots: Object.entries(ROOTS).filter(([, r]) => r.symbol === symbol).map(([id, r]) => ({ id, decision_at: daysAgo(r.versions[0].ago), target_end_date: r.target, model_status: "experimental_llm", latest_version_id: r.versions.at(-1).id, latest_version_no: r.versions.length, expired: r.expired })) });
 
 function contract(root) { return { target_end_date: root.target, horizon_sessions: 20, threshold: 0.02, anchor_close: root.anchor, anchor_date: daysAgo(root.versions[0].ago).slice(0, 10) }; }
-const rootOfVersion = (versionId) => Object.entries(ROOTS).find(([, r]) => r.versions.some((v) => v.id === versionId));
+const rootOfVersion = (versionId) => Object.entries(ROOTS).find(([, r]) => r.versions.some((v) => v.id === versionId)) ?? Object.entries(REPLAY_ROOTS).find(([, r]) => r.versions.some((v) => v.id === versionId));
 
 export function timeline(rootId, fixture = {}) {
   const root = ROOTS[rootId]; if (!root) return null;
@@ -75,24 +118,28 @@ function brief(root, v, index) {
 
 export function versionDetail(versionId) {
   const found = rootOfVersion(versionId); if (!found) return null;
-  const [rootId, root] = found; const index = root.versions.findIndex((v) => v.id === versionId); const v = root.versions[index];
+  const [rootId, root] = found; const index = root.versions.findIndex((v) => v.id === versionId); const v = root.versions[index]; const rich = root.replay ? 1 : index;
   const sources = [
     { source_type: "official_filing", source_id: materialId(1), event_key: "sec:AAPL:0000000000-26-000101", source_url: "https://www.sec.gov/Archives/edgar/data/0000000/1.htm", published_at: daysAgo(14), observed_at: daysAgo(13), event_version_id: evidenceVersionId(1), is_new: false },
-    ...(index > 0 ? [{ source_type: "official_filing", source_id: materialId(2), event_key: "sec:AAPL:0000000000-26-000102", source_url: "https://www.sec.gov/Archives/edgar/data/0000000/2.htm", published_at: daysAgo(14), observed_at: daysAgo(13), event_version_id: evidenceVersionId(2), is_new: true }] : []),
-    ...(index > 1 ? [{ source_type: "uploaded_media", source_id: materialId(3), source_url: null, published_at: daysAgo(8), observed_at: daysAgo(7), event_version_id: evidenceVersionId(3), is_new: true }] : []),
-    ...(index > 0 ? [{ source_type: "official_filing", source_id: materialId(4), event_key: "sec:AAPL:0000000000-26-000103", source_url: "https://www.sec.gov/Archives/edgar/data/0000000/4.htm", published_at: daysAgo(21), observed_at: daysAgo(20), event_version_id: evidenceVersionId(4), is_new: false }] : []),
+    ...(rich > 0 ? [{ source_type: "official_filing", source_id: materialId(2), event_key: "sec:AAPL:0000000000-26-000102", source_url: "https://www.sec.gov/Archives/edgar/data/0000000/2.htm", published_at: daysAgo(14), observed_at: daysAgo(13), event_version_id: evidenceVersionId(2), is_new: true }] : []),
+    ...(rich > 1 ? [{ source_type: "uploaded_media", source_id: materialId(3), source_url: null, published_at: daysAgo(8), observed_at: daysAgo(7), event_version_id: evidenceVersionId(3), is_new: true }] : []),
+    ...(rich > 0 ? [{ source_type: "official_filing", source_id: materialId(4), event_key: "sec:AAPL:0000000000-26-000103", source_url: "https://www.sec.gov/Archives/edgar/data/0000000/4.htm", published_at: daysAgo(21), observed_at: daysAgo(20), event_version_id: evidenceVersionId(4), is_new: false }] : []),
   ];
   return { id: v.id, root_id: rootId, parent_version_id: index ? root.versions[index - 1].id : null, job_id: `j1000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, version_no: index + 1, symbol: root.symbol,
     target_contract: contract(root), decision_at: daysAgo(v.ago), market_cutoff_at: daysAgo(v.ago + 1), baseline_probabilities: null, joint_probabilities: null, model_status: "experimental_llm",
-    decision_probabilities: probs(v.p), research_brief: root.symbol === "AAPL" ? brief(root, v, index) : null,
-    model_manifest: { time_mode: "observed", decision_provider: { provider: "openrouter", requested_model: root.symbol === "AAPL" && index === 0 ? "openai/gpt-6.0-terra" : "openai/gpt-6.1-terra", actual_model: root.symbol === "AAPL" && index === 0 ? "gpt-6.0-terra" : "gpt-6.1-terra", question_version: "q3", confidence: 0.62, request_id: "req-fixture-0001", input_sha256: "2".repeat(64) } },
-    research_report: { status: "ready", research_conclusions_status: "ready", time_mode: "observed", automatic_selection: { explicit_source_refs: index > 1 ? [{ source_type: "uploaded_media", source_id: materialId(3) }] : [] } },
+    decision_probabilities: probs(v.p), research_brief: root.symbol === "AAPL" ? (root.replay ? { ...brief(root, v, 1), time_mode: "historical_research" } : brief(root, v, index)) : null,
+    model_manifest: { time_mode: root.replay ? "historical_research" : "observed", decision_provider: { provider: "openrouter", requested_model: root.symbol === "AAPL" && index === 0 ? "openai/gpt-6.0-terra" : "openai/gpt-6.1-terra", actual_model: root.symbol === "AAPL" && index === 0 ? "gpt-6.0-terra" : "gpt-6.1-terra", question_version: "q3", confidence: 0.62, request_id: "req-fixture-0001", input_sha256: "2".repeat(64) } },
+    research_report: { status: "ready", research_conclusions_status: "ready", time_mode: root.replay ? "historical_research" : "observed", automatic_selection: { explicit_source_refs: index > 1 ? [{ source_type: "uploaded_media", source_id: materialId(3) }] : [] } },
     change_reason: v.reason, trigger_type: v.trigger, created_at: daysAgo(v.ago),
     price_input_manifest: { price_input_sha256: `px${index}`.padEnd(64, "0"), market_cutoff_at: daysAgo(v.ago + 1), latest_completed_session: daysAgo(v.ago + 1).slice(0, 10), candle_count: 252 },
     evidence_version_manifest: root.symbol === "AAPL" ? sources : [], feature_snapshot: { research_brief_input_quality: "ready" } };
 }
 
-export function evaluations(symbol) {
+/** The cohort of earlier records (the old Jev forecasts): few scored, so it stays below the floor (shown as 样本不足 under 早期版本). */
+const earlierCohort = (roots) => ({ time_mode: "observed", model_status: "experimental_jev", provider: "jev", actual_model: "jev-direct-v1", question_version: null, log_loss_zero_probability_floor: 0.0001, status: "insufficient_samples",
+  sample: { root_denominator: 9, labelled_root_count: 6, scored_root_count: 4, unscored_root_count: 5 }, roots: roots.slice(0, 1) });
+
+export function evaluations(symbol, fx = {}) {
   const rows = Object.entries(ROOTS).filter(([, r]) => r.label && (!symbol || r.symbol === symbol));
   const evRoot = ([rootId, r]) => ({ root_id: rootId, target_contract_hash: `h-${r.symbol}`, target_end_date: r.target, versions: r.versions.map((v, i) => { const e = evaluationOf(r, v);
     return { id: v.id, version_no: i + 1, decision_at: daysAgo(v.ago), trigger_type: v.trigger, model_status: "experimental_llm", time_mode: "observed", latest_evaluation: e, evaluation_history: e ? [e] : [], provider: "openrouter", actual_model: "gpt-6.1-terra", question_version: "q3",
@@ -100,15 +147,16 @@ export function evaluations(symbol) {
   const roots = rows.map(evRoot);
   const empty = { status: "pending", sample: { root_denominator: 0, labelled_root_count: 0, scored_root_count: 0, unscored_root_count: 0, version_count: 0, labelled_version_count: 0, scored_version_count: 0 }, roots: [] };
   // Across every symbol the model cohort has reached the floor (30 scored roots); one symbol alone has only its own few.
-  const scored = symbol ? roots.length : 31; const total = symbol ? Object.keys(ROOTS).length : 34; const labelled = symbol ? roots.length : 32;
+  const scored = symbol ? roots.length : (fx.scoresScored ?? 31); const total = symbol ? Object.keys(ROOTS).length : (fx.scoresScored ?? 31) + 3; const labelled = symbol ? roots.length : scored + 1;
   const state = scored >= 30 ? "available" : "insufficient_samples";
   const sample = { root_denominator: total, labelled_root_count: labelled, scored_root_count: scored, unscored_root_count: total - scored };
   return { symbol: symbol ?? null, status: state, minimum_scored_roots: 30,
     cohorts: { prospective: { time_mode: "observed", status: state, sample: { ...sample, version_count: 7, labelled_version_count: 3, scored_version_count: 3 }, roots },
-      historical_research: { ...empty, time_mode: "historical_research" }, unknown: { ...empty, time_mode: "unknown" } },
+      historical_research: replayCohort(symbol, fx), unknown: { ...empty, time_mode: "unknown" } },
     model_cohorts: [{ time_mode: "observed", model_status: "experimental_llm", provider: "openrouter", actual_model: "gpt-6.1-terra", question_version: "q3", log_loss_zero_probability_floor: 0.0001, status: state, sample,
       naive_baseline_summary: { version: "naive-vol-v1", paired_root_count: scored, baseline_unavailable_root_count: 0, model_mean_brier: 0.571, baseline_mean_brier: 0.604, model_mean_log_loss: 0.962, baseline_mean_log_loss: 1.011 },
-      review_rule: { threshold: 30, paired_root_count: scored, state: state === "available" ? "passed" : "collecting" }, roots }],
+      review_rule: { threshold: 30, paired_root_count: scored, state: state === "available" ? "passed" : "collecting" }, roots },
+    ...(symbol || fx.scoresNoEarlier ? [] : [earlierCohort(roots)])].slice(0, fx.scoresEmpty ? 0 : 9),
     model_cohort_selection_rule: "按服务方、实际模型与问题版本分组。" };
 }
 
@@ -117,6 +165,18 @@ export const MONITOR = { health: "healthy", schedule_interval_seconds: 3600, sta
     per_symbol_results: Object.fromEntries(["AAPL", "TSLA", "NVDA", "AMD", "MSFT", "GOOGL", "AMZN"].map((s, i) => [s, { symbol: s, status: "succeeded", discovered_count: 2 + (i % 3), created_count: i % 2, queued_count: i === 0 ? 1 : 0, skipped_count: 1, complete: true, error: null }])),
     error_summary: null, retry_reason: null },
   last_success: { id: "mr000000-0000-4000-8000-000000000001", completed_at: daysAgo(0, 1), last_success_watermark: { AAPL: daysAgo(1) } } };
+
+
+/** The monitor as the server reports it: `state.monitor` is "delayed" (the last run is older than the threshold), "degraded" (the last run was partial and some companies failed) or "none" (no record yet); otherwise healthy. */
+export function monitorStatus(fx = {}) {
+  if (fx.monitor === "none") return { health: "not_recorded", schedule_interval_seconds: 3600, stale_after_seconds: 7200, last_run: null, last_success: null };
+  if (fx.monitor === "delayed") return { ...MONITOR, health: "delayed", last_run: { ...MONITOR.last_run, started_at: "2026-11-12T21:00:00Z", completed_at: "2026-11-12T21:04:00Z", next_due_at: "2026-11-12T22:00:00Z" }, last_success: { ...MONITOR.last_success, completed_at: "2026-11-12T21:04:00Z" } };
+  if (fx.monitor === "degraded") {
+    const per = { ...MONITOR.last_run.per_symbol_results, TSLA: { symbol: "TSLA", status: "failed", discovered_count: 0, created_count: 0, queued_count: 0, skipped_count: 0, complete: false, error: "sec_fetch_failed" }, AMD: { symbol: "AMD", status: "incomplete", discovered_count: 3, created_count: 1, queued_count: 0, skipped_count: 0, complete: false, error: null } };
+    return { ...MONITOR, health: "degraded", last_run: { ...MONITOR.last_run, status: "partial", per_symbol_results: per, error_summary: { TSLA: "sec_fetch_failed" }, retry_reason: "部分公司没有完整扫描，下一轮会重试。" }, last_success: { ...MONITOR.last_success, completed_at: "2026-11-12T01:04:00Z" } };
+  }
+  return MONITOR;
+}
 
 export const workspace = (symbol) => { const found = Object.entries(ROOTS).find(([, r]) => r.symbol === symbol && !r.expired); if (!found) return { symbol, status: "empty", current_root: null, current_version: null, pending_job_count: 0, joint_model_status: "experimental_llm", monitor_status: "not_recorded" };
   const [rootId, root] = found; const v = root.versions.at(-1); return { symbol, status: "available", current_root: { id: rootId, target_contract: contract(root) }, current_version: { id: v.id, version_no: root.versions.length, decision_at: daysAgo(v.ago), market_cutoff_at: daysAgo(v.ago + 1), model_status: "experimental_llm", baseline_probabilities: null, joint_probabilities: null, decision_probabilities: probs(v.p), research_brief: null }, pending_job_count: 0, joint_model_status: "experimental_llm", monitor_status: "not_recorded" }; };

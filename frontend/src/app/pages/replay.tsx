@@ -1,9 +1,10 @@
-import { HistoricalReplayWorkspace } from "../../HistoricalReplayWorkspace";
-import { ResearchFrame } from "./frames";
+import { ReplayPage } from "../research/replay/ReplayPage";
 import { useWorkspace } from "../workspace";
+import { EmptyWatchlist } from "./frames";
 
-/** /research/replay */
+/** /research/replay (with an empty watchlist the page is the old notice: add a company, or restore the defaults) */
 export function ReplayRoute() {
   const ws = useWorkspace();
-  return <ResearchFrame section="replay"><HistoricalReplayWorkspace key={ws.symbol} initialSymbol={ws.symbol} symbols={ws.symbols} /></ResearchFrame>;
+  if (!ws.symbols.length) return <EmptyWatchlist />;
+  return <ReplayPage key={ws.symbol} initialSymbol={ws.symbol} symbols={ws.symbols} />;
 }

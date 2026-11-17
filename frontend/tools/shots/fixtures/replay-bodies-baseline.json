@@ -1,0 +1,158 @@
+{
+  "_about": "Requests and form rules recorded from the OLD replay page (HEAD 2cb9eec, before P6.4) on the same fixtures; the new UI must send the same.",
+  "form": {
+    "symbols": [
+      "AAPL",
+      "TSLA",
+      "NVDA",
+      "AMD",
+      "MSFT",
+      "GOOGL",
+      "AMZN"
+    ],
+    "selectedSymbol": "AAPL",
+    "dateValue": "2026-10-12",
+    "dateMax": "2026-11-13",
+    "dateRequired": true,
+    "buttonText": "生成历史回放",
+    "buttonDisabled": false,
+    "hint": "只能选择已收盘的 XNYS 交易日，并且该日之后的 20 个交易日必须已经结束。默认日期选在约一个月前；若遇到较长假期，请再选早一些。",
+    "listedReplays": [
+      "2026年9月16日第 1 版 · 历史回放已完成评估 · 看涨",
+      "2026年9月2日第 1 版 · 历史回放已完成评估 · 中性",
+      "2026年8月15日第 1 版 · 历史回放行情不足"
+    ]
+  },
+  "bodies": {
+    "defaults": {
+      "sent": true,
+      "posts": [
+        {
+          "body": "{\"symbol\":\"AAPL\",\"decision_date\":\"2026-10-12\"}",
+          "idempotencyKey": true
+        }
+      ]
+    },
+    "buttonAfterClick": {
+      "disabled": true,
+      "text": "生成历史回放"
+    },
+    "afterSuccess": {
+      "jobStatusText": "历史研究任务 回放已生成 AAPL · 2026年10月12日 · 阶段: completed",
+      "listCount": 4,
+      "buttonDisabled": false
+    },
+    "tsla0915": [
+      {
+        "body": "{\"symbol\":\"TSLA\",\"decision_date\":\"2026-09-15\"}",
+        "idempotencyKey": true
+      }
+    ]
+  },
+  "validation": {
+    "empty-date": {
+      "value": "",
+      "sent": false,
+      "validity": {
+        "valid": false,
+        "rangeOverflow": false,
+        "valueMissing": true,
+        "message": "Please fill out this field."
+      },
+      "posts": []
+    },
+    "future-date": {
+      "value": "2026-12-31",
+      "sent": false,
+      "validity": {
+        "valid": false,
+        "rangeOverflow": true,
+        "valueMissing": false,
+        "message": "Value must be 11/13/2026 or earlier."
+      },
+      "posts": []
+    },
+    "today": {
+      "value": "2026-11-13",
+      "sent": true,
+      "validity": {
+        "valid": true,
+        "rangeOverflow": false,
+        "valueMissing": false,
+        "message": ""
+      },
+      "posts": [
+        {
+          "body": "{\"symbol\":\"AAPL\",\"decision_date\":\"2026-11-13\"}",
+          "idempotencyKey": true
+        }
+      ]
+    },
+    "weekend": {
+      "value": "2026-10-10",
+      "sent": true,
+      "validity": {
+        "valid": true,
+        "rangeOverflow": false,
+        "valueMissing": false,
+        "message": ""
+      },
+      "posts": [
+        {
+          "body": "{\"symbol\":\"AAPL\",\"decision_date\":\"2026-10-10\"}",
+          "idempotencyKey": true
+        }
+      ]
+    },
+    "recent-5-days": {
+      "value": "2026-11-06",
+      "sent": true,
+      "validity": {
+        "valid": true,
+        "rangeOverflow": false,
+        "valueMissing": false,
+        "message": ""
+      },
+      "posts": [
+        {
+          "body": "{\"symbol\":\"AAPL\",\"decision_date\":\"2026-11-06\"}",
+          "idempotencyKey": true
+        }
+      ]
+    }
+  },
+  "sequence": [
+    "GET /v2/evaluations??symbol=AAPL",
+    "GET /agent-chat/research-queue",
+    "GET /agent-chat/bots",
+    "GET /agent-chat/tasks/proposals",
+    "GET /agent-chat/inbox??section=confirm",
+    "GET /agent-chat/tasks/proposals",
+    "GET /agent-chat/inbox??section=confirm",
+    "GET /v2/forecast-versions/f3000000-0000-4000-8000-000000000001",
+    "POST /v2/historical-replays",
+    "GET /v2/forecast-versions/f3000000-0000-4000-8000-000000000001",
+    "GET /v2/jobs/j3000000-0000-4000-8000-000000000001",
+    "GET /v2/jobs/j3000000-0000-4000-8000-000000000001",
+    "GET /v2/evaluations??symbol=AAPL",
+    "GET /v2/forecast-versions/f3000000-0000-4000-8000-000000000009",
+    "GET /v2/forecast-versions/f3000000-0000-4000-8000-000000000009"
+  ],
+  "failures": {
+    "failed-timeout": {
+      "text": "历史研究任务 回放任务失败 AAPL · 2026年10月12日 · 阶段: failed 未生成回放： forecast_provider_timeout",
+      "listCount": 3,
+      "buttonDisabled": false
+    },
+    "failed-unknown-code": {
+      "text": "历史研究任务 回放任务失败 AAPL · 2026年10月12日 · 阶段: failed 未生成回放： something_new",
+      "listCount": 3,
+      "buttonDisabled": false
+    },
+    "blocked-data": {
+      "text": "历史研究任务 资料不足，回放未生成 AAPL · 2026年10月12日 · 阶段: failed 未生成回放： insufficient_price_history",
+      "listCount": 3,
+      "buttonDisabled": false
+    }
+  }
+}

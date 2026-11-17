@@ -1,9 +1,4 @@
-import { useNavigate } from "react-router";
-import { ForecastMonitorPage } from "../../ForecastMonitorPage";
-import { paths } from "../../routes.mjs";
+import { MonitorPage } from "../research/monitor/MonitorPage";
 
 /** /research/monitor */
-export function MonitorRoute() {
-  const navigate = useNavigate();
-  return <main className="workspace"><ForecastMonitorPage onHome={() => navigate(paths.forecasts())} /></main>;
-}
+export function MonitorRoute() { return <MonitorPage />; }
