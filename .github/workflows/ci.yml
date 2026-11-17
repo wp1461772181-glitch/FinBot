@@ -3,6 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
+    # Docs-only pushes skip CI (owner-approved 2026-11-17): if every changed
+    # file matches, no run is created. Mixed code+docs pushes still run.
+    # PRs are never path-filtered, so draft-PR validation always works.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
   pull_request:
   workflow_dispatch:
 
