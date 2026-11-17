@@ -23,8 +23,9 @@
 
 ## 模型与核查（盒上 catalog，2026-11-13 时点）
 
-- 默认对话模型 `haiku-5.5`（OpenRouter，owner 自选）；另有 `muse-ember`、`gpt-6.1-terra`（OpenRouter）、`deepseek-flash`/`background`（SiliconFlow DeepSeek-V4-Flash）、`glm5.3-flash`（智谱）。
-- 后台角色：earnings=muse-ember、forecast=gpt-6.1-terra；声明法官影子通道 = glm-5.3-flash。
+- 默认对话模型 `haiku-5.5`（OpenRouter，owner 自选）；另有 `muse-ember`、`gpt-6.1-terra`（OpenRouter）。
+- 模型政策（owner 2026-11-13）：停用 DeepSeek 与 GLM，全面转向 Haiku 与 Ember；法官影子通道 = `muse-ember`（CLAIM_JUDGE_SHADOW=on，公开 gate phase=auto）。
+- 后台角色：earnings=muse-ember、forecast=gpt-6.1-terra（去留待 owner 定）。
 - 旧数字核查线已停标：`CLAIM_NUMBER_REVIEW=off`（FP0，2026-11-11 上线）——它不再改答案状态、不加脚注、不删句；对外可见的核查标注只走法官的统一公门。
 
 ## 协作分工（owner 2026-11-06 定，2026-11-13 更新额度口径）
