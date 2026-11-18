@@ -503,6 +503,8 @@ export const PAGES = [
   // P6.1: the old overview is two pages (the names `overview` stops here: its pictures are the watchlist and the company page now).
   // The watchlist: the seven rows with every cell read.  Empty: the server's queue holds nothing.  Row error: one company's price and material reads fail (500) and its row says so with 重试.
   { name: "watchlist", hash: "#/research", ready: watchlistLoaded },
+  // The monitor chip in its delayed (action-colour hourglass) state; the monitor page has its own picture, these show it in the top bar of the two pages that carry the chip.
+  { name: "watchlist-monitor-delayed", hash: "#/research", ready: watchlistLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "delayed" }) }) },
   { name: "watchlist-red-up", hash: "#/research", ready: watchlistLoaded, before: redUp },
   { name: "watchlist-empty", hash: "#/research", ready: "[data-slot=empty-state]", view: () => ({ fixtureState: stateWithQueue([]) }) },
   { name: "watchlist-row-error", hash: "#/research", ready: watchlistLoaded,
@@ -525,6 +527,7 @@ export const PAGES = [
   // P6.2: the forecast pages.  The home (two lanes, the task bar with a job that keeps running, the empty home), one forecast (the newest version, the second, the three
   // tabs under it, the three steps of the revise drawer, the one whose target has passed, the one that cannot be found, one whose revision is being made) and one judgment.
   { name: "forecast-home", hash: "#/research/forecasts", ready: forecastHomeLoaded },
+  { name: "forecast-home-monitor-delayed", hash: "#/research/forecasts", ready: forecastHomeLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "delayed" }) }) },
   { name: "forecast-home-empty", hash: "#/research/forecasts", ready: "[data-testid=lane-formal] [data-slot=empty-state]", view: () => ({ fixtureState: stateWithForecasts({ noForecasts: true }) }) },
   { name: "forecast-home-job", hash: "#/research/forecasts", ready: forecastHomeLoaded, view: () => ({ fixtureState: stateWithForecasts({ jobStatus: "running", jobKind: "new" }) }),
     before: async (page) => { await page.locator("[data-testid=forecast-create-go]").click(); await page.locator("[data-testid=forecast-jobs] [data-slot=task-row]").waitFor({ timeout: 15000 });
