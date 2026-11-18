@@ -287,6 +287,11 @@ async function redUp(page) {
   await page.evaluate(() => { try { localStorage.setItem("market-evidence-agent:updown:v1", "red-up"); } catch { /* storage unavailable */ } document.documentElement.dataset.updown = "red-up"; });
 }
 
+// --- P7.1 pictures -------------------------------------------------------------------------------------------------------
+const portfolioLoaded = "[data-testid=portfolio-table]";
+/** The fake backend's state for the portfolio page with switches set (fixtures/portfolio.mjs: empty, fail, referenceOnly, override). */
+export function stateWithPortfolio(patch) { const state = buildState(); Object.assign(state.portfolio, patch); return state; }
+
 // --- P6.3 pictures ---------------------------------------------------------------------------------------------------
 /** The fake backend's state for the material pages: uploads already saved (the dialog's list), a job that never ends (the task bar). */
 export function stateWithMaterials(patch) { return Object.assign(buildState(), patch); }
@@ -602,7 +607,23 @@ export const PAGES = [
   { name: "monitor-no-records", hash: "#/research/monitor", ready: monitorLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "none" }) }) },
   { name: "monitor-delayed", hash: "#/research/monitor", ready: monitorLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "delayed" }) }) },
   { name: "monitor-failing", hash: "#/research/monitor", ready: monitorLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "degraded" }) }) },
-  { name: "portfolio", hash: "#/portfolio", ready: ".pf-positions" },
+  // P7.1: the portfolio page.  The table (a card each on a phone), one position open, the record dialog with one rule broken, the cash being edited, the delete question,
+  // nothing recorded, the read failing, and the market colours switched.
+  { name: "portfolio", hash: "#/portfolio", ready: portfolioLoaded },
+  { name: "portfolio-expanded", hash: "#/portfolio", ready: portfolioLoaded,
+    before: async (page) => { await page.locator("[data-testid=pf-toggle]").first().click(); await page.locator("[data-testid=pf-panel] [data-testid=pf-research-forecast]").waitFor({ timeout: 15000 }); } },
+  { name: "portfolio-record", hash: "#/portfolio", ready: portfolioLoaded,
+    before: async (page) => {
+      await page.locator("[data-testid=record-open]").click(); await page.locator("[data-testid=record-dialog]").waitFor({ timeout: 10000 });
+      await page.locator("[data-testid=record-submit]").click(); await page.locator("[data-testid=record-error]").waitFor({ timeout: 5000 });
+    } },
+  { name: "portfolio-edit-cash", hash: "#/portfolio", ready: portfolioLoaded,
+    before: async (page) => { await page.locator("[data-testid=cash-edit]").click(); await page.locator("[data-testid=cash-input]").waitFor({ timeout: 5000 }); } },
+  { name: "portfolio-delete-confirm", hash: "#/portfolio", ready: portfolioLoaded,
+    before: async (page) => { await page.locator("[data-testid=portfolio-ledger] [data-testid=record-delete]").first().click(); await page.locator('[data-slot="alert-dialog-content"]').waitFor({ timeout: 5000 }); } },
+  { name: "portfolio-empty", hash: "#/portfolio", ready: "[data-testid=portfolio-empty]", view: () => ({ fixtureState: stateWithPortfolio({ empty: true, cash: "0.00" }) }) },
+  { name: "portfolio-error", hash: "#/portfolio", ready: "[data-testid=portfolio-error]", view: () => ({ fixtureState: stateWithPortfolio({ fail: true }) }) },
+  { name: "portfolio-red-up", hash: "#/portfolio", ready: portfolioLoaded, before: async (page) => { await redUp(page); await page.locator("[data-testid=pf-toggle]").first().click(); await page.locator("[data-testid=pf-panel]").waitFor({ timeout: 15000 }); } },
   { name: "routines", hash: "#/routines", ready: "main.personal-page h1" },
   { name: "news", hash: "#/assistant/news", ready: "main.personal-page h1" },
   { name: "skills", hash: "#/assistant/skills", ready: ".skill-group" },

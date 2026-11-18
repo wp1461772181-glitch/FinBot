@@ -2513,5 +2513,21 @@
   "与同题基准对比": "Compared with the same-question baseline",
   "数值越低越好": "Lower is better",
   "评分规则": "Scoring rule",
-  "去预测首页": "Go to forecasts"
+  "去预测首页": "Go to forecasts",
+  "全部流水": "All records",
+  "还没有记录。": "No records yet.",
+  "显示更多": "Show more",
+  "未保存": "Unsaved",
+  "还没有持仓": "No positions yet",
+  "持仓是你自己记的账，助理不会替你交易。点「记第一笔」添加，或对助理说「我买了 100 股 INTC，成本 80」。": "Your portfolio is a ledger you keep yourself; the assistant never trades for you. Press “Record your first entry”, or tell the assistant “I bought 100 shares of INTC at 80”.",
+  "记第一笔": "Record your first entry",
+  "流水": "Records",
+  "这只股票还没有记录。": "No records for this stock yet.",
+  "记下你自己做过的一笔。这里只记账，不会下单。": "Record something you did yourself. This only keeps the books; it never places an order.",
+  "日期": "Date",
+  "数量": "Quantity",
+  "价格 / 金额": "Price / amount",
+  "研究记录暂时读不到。": "The research records can't be read right now.",
+  "暂无研究记录": "No research records yet",
+  "研究记录": "Research records"
 }

@@ -19,7 +19,7 @@ async function files(dir) {
   return out;
 }
 
-const CONFIRM_SITES = ["BotRoutines.tsx", "app/bot-settings/BotSettingsPage.tsx", "app/bot-settings/TelegramPanel.tsx", "app/settings/ModelCatalogCard.tsx", "SkillsPage.tsx", "PersonalPages.tsx", "PortfolioPage.tsx", "app/settings/TelegramBindCard.tsx"].map((name) => path.join(root, name));
+const CONFIRM_SITES = ["BotRoutines.tsx", "app/bot-settings/BotSettingsPage.tsx", "app/bot-settings/TelegramPanel.tsx", "app/settings/ModelCatalogCard.tsx", "SkillsPage.tsx", "PersonalPages.tsx", "app/portfolio/PortfolioPage.tsx", "app/settings/TelegramBindCard.tsx"].map((name) => path.join(root, name));
 
 // P3.1 moved the old chat page and settings page (legacy markup, copy untouched) into src/app/.  Their copy has gaps in the
 // English catalog that were always there (they were in the old-pages group this test never read), so the moved files stay out

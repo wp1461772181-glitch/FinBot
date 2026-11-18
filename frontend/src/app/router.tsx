@@ -77,8 +77,12 @@ const researchWrapped: RouteObject[] = [
   { path: PATTERNS.materials, ...page(() => import("./pages/materials"), "MaterialsRoute") },
 ];
 
-const pages: RouteObject[] = [
+/** 持仓 is new markup (P7.1): no old-UI marker around it. */
+const personalPages: RouteObject[] = [
   { path: PATTERNS.portfolio, ...page(() => import("./pages/portfolio"), "PortfolioRoute") },
+];
+
+const pages: RouteObject[] = [
   { path: PATTERNS.routines, ...page(() => import("./pages/routines"), "RoutinesRoute") },
   { path: PATTERNS.assistantBots, ...page(() => import("./pages/bots"), "BotsRoute") },
   { path: PATTERNS.assistantSkill, ...page(() => import("./pages/skills"), "SkillsRoute") },
@@ -108,7 +112,7 @@ const routes: RouteObject[] = [
       { path: PATTERNS.login, ...to(paths.chat()) },
       // The error boundary sits below the layout, so a page that fails to load leaves the shell standing.  It is above the
       // old-UI marker, so the notice it shows is new markup outside it.
-      { ErrorBoundary: RouteError, children: [...chatPages, { Component: ResearchRoot, children: [...researchPages, { Component: LegacyPage, children: researchWrapped }] }, { Component: LegacyPage, children: pages }] },
+      { ErrorBoundary: RouteError, children: [...chatPages, ...personalPages, { Component: ResearchRoot, children: [...researchPages, { Component: LegacyPage, children: researchWrapped }] }, { Component: LegacyPage, children: pages }] },
     ],
   },
 ];

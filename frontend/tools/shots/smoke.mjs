@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, stateWithPortfolio, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -13,6 +13,11 @@ import { HEX_MATERIAL, MATERIALS, analysisId, materialId } from "./fixtures/mate
 import { CASES as UPLOAD_CASES, VALID as UPLOAD_VALID } from "./fixtures/upload-cases.mjs";
 import { REVISE_FILING_ID, ROOT_IDS, evaluations, revisionCandidates, versionDetail } from "./fixtures/forecasts.mjs";
 import { buildState } from "./fixtures/index.mjs";
+import { portfolioSummary } from "./fixtures/portfolio.mjs";
+import { forecastList } from "./fixtures/forecasts.mjs";
+import { JUDGMENTS } from "./fixtures/forecasts.mjs";
+import { formatMoney, formatPercent, formatPrice, formatShares, researchRecord } from "../../src/portfolio-items.mjs";
+import { ledgerCells } from "../../src/app/portfolio/portfolio-view.mjs";
 import { BOT_TEMPLATES } from "./fixtures/bots.mjs";
 import fs from "node:fs";
 import path from "node:path";
@@ -519,7 +524,7 @@ async function legacyRedirects(ctx) {
     [`#evidence/${VERSION.aapl3}`, `#/research/evidence/${VERSION.aapl3}`, "[data-testid=evidence-page]"],
     ["#routines", "#/routines", "main.personal-page h1"],
     ["#briefs", "#/routines", "main.personal-page h1"],
-    ["#portfolio", "#/portfolio", ".pf-positions"],
+    ["#portfolio", "#/portfolio", "[data-testid=portfolio-table]"],
     ["#news", "#/assistant/news", "main.personal-page h1"],
     ["#skills", "#/assistant/skills", ".skill-group"],
     ["#memory", "#/assistant/memory", "main.personal-page h1"],
@@ -569,7 +574,7 @@ async function backButtonChain(ctx) {
     await step(() => page.evaluate(() => { location.hash = "#/research"; }), "[data-testid=watchlist-page]");
     await step(() => page.locator("[data-testid=watch-row][data-symbol=AAPL] [data-row-nav=open]").click(), "[data-testid=company-overview]");
     await step(() => page.locator("[data-testid=open-forecast]").click(), "[data-testid=forecast-page]");
-    await step(() => pressNavItem(page, "持仓"), ".pf-positions");
+    await step(() => pressNavItem(page, "持仓"), "[data-testid=portfolio-table]");
     assert(trail.join(" ") === `#/chat #/research #/research/c/AAPL #/research/forecasts/${ROOT.aapl} #/portfolio`, `unexpected trail ${trail.join(" ")}`);
     const ready = ["[data-testid=forecast-page]", "[data-testid=company-overview]", "[data-testid=watchlist-page]", "[data-testid=message]"];
     for (let i = trail.length - 2; i >= 0; i -= 1) {
@@ -652,7 +657,7 @@ async function backgroundTurnSurvivesNavigation(ctx) {
     await page.locator("[data-testid=send]").click();
     await pressNavItem(page, "持仓");
     await waitHash(page, "#/portfolio");
-    await waitReady(page, { ready: ".pf-positions" });
+    await waitReady(page, { ready: "[data-testid=portfolio-table]" });
     await pressBotRow(page, "FinBot");
     await waitHash(page, "#/chat");
     await page.locator("[data-testid=message][data-role=user]", { hasText: text }).waitFor({ timeout: 10000 });
@@ -754,7 +759,7 @@ async function noHorizontalScroll390(ctx) {
 
 /** The collapse button folds the sidebar to 56px; a reload keeps the choice, in either direction. */
 async function sidebarCollapsePersists(ctx) {
-  const view = await openShell(ctx, "sidebar collapse", "#/portfolio", { ready: ".pf-positions" });
+  const view = await openShell(ctx, "sidebar collapse", "#/portfolio", { ready: "[data-testid=portfolio-table]" });
   try {
     const { page } = view;
     await settle(page);
@@ -763,7 +768,7 @@ async function sidebarCollapsePersists(ctx) {
     await page.waitForFunction(() => document.querySelector('[data-slot="sidebar"]')?.getAttribute("data-state") === "collapsed");
     assert((await page.evaluate((key) => localStorage.getItem(key), SIDEBAR_KEY)) === "0", "the choice is not stored");
     await page.reload({ waitUntil: "load" });
-    await waitReady(page, { ready: ".pf-positions" });
+    await waitReady(page, { ready: "[data-testid=portfolio-table]" });
     await settle(page);
     assert((await sidebarState(page)) === "collapsed" && (await sidebarWidth(page)) === 56, `after a reload: ${await sidebarState(page)} / ${await sidebarWidth(page)}`);
     // Collapsed, a group with sub-pages is one icon whose menu lists them (the expanded sidebar lists them inline).
@@ -777,7 +782,7 @@ async function sidebarCollapsePersists(ctx) {
     await page.locator('[data-slot="sidebar-trigger"]').click();
     await page.waitForFunction(() => document.querySelector('[data-slot="sidebar"]')?.getAttribute("data-state") === "expanded");
     await page.reload({ waitUntil: "load" });
-    await waitReady(page, { ready: ".pf-positions" });
+    await waitReady(page, { ready: "[data-testid=portfolio-table]" });
     assert((await sidebarState(page)) === "expanded", "expanding was not kept either");
     return "260px -> 56px, reload, still 56px; collapsed 研究 icon opens its menu; back to 260px, reload, still 260px";
   } finally { await view.close(); }
@@ -805,7 +810,7 @@ async function routinesBadgeMatches(ctx) {
     const confirms = await page.locator("#routine-confirms-title").locator("xpath=..").locator("ul.memory-list > li").count();
     assert(proposals + confirms === shown, `the page lists ${proposals} proposals + ${confirms} suggestions, the badge says ${shown}`);
     // The phone's bar carries the same number.
-    const phone = await openShell(ctx, "routines badge phone", "#/portfolio", { width: 390, ready: ".pf-positions" });
+    const phone = await openShell(ctx, "routines badge phone", "#/portfolio", { width: 390, ready: "[data-testid=portfolio-table]" });
     try {
       const phoneBadge = phone.page.locator('[data-slot="mobile-tab-bar"] a[href="#/routines"] [data-count]');
       await phoneBadge.waitFor({ timeout: 10000 });
@@ -1089,7 +1094,7 @@ const focusIsMarked = (page) => page.evaluate(() => document.activeElement?.hasA
 async function noWindowConfirm(ctx) {
   const PF = /\/portfolio\/transactions\/[^/]+$/;
   const sites = [
-    { name: "portfolio record", hash: "#/portfolio", ready: ".pf-positions", trigger: (p) => p.locator(".pf-ledger li button", { hasText: "删除" }).first(), method: "DELETE", re: PF },
+    { name: "portfolio record", hash: "#/portfolio", ready: "[data-testid=portfolio-table]", trigger: (p) => p.locator("[data-testid=portfolio-ledger] [data-testid=record-delete]").first(), method: "DELETE", re: PF },
     { name: "skill", hash: "#/assistant/skills", ready: ".skill-group", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/skills\/[^/]+$/ },
     { name: "memory item", hash: "#/assistant/memory", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/profile\/[^/]+$/ },
     { name: "news source", hash: "#/assistant/news", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/news-sources\/[^/]+$/ },
@@ -1510,7 +1515,7 @@ async function skeletonDelay(ctx) {
     assert(await page.locator('[data-slot="page-pending"] [data-variant="table"]').count() === 1, "no table skeleton after 700ms of waiting for the portfolio page");
     assert(await page.locator("[data-testid=thread]").count() === 1, "the page on screen was unmounted while waiting");
     release();
-    await page.locator(".pf-positions").waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=portfolio-table]").waitFor({ timeout: 10000 });
     assert(await page.locator('[data-slot="page-pending"]').count() === 0, "the skeleton stayed after the page arrived");
     // an ordinary (fast) navigation never shows one
     let flashed = false;
@@ -7611,6 +7616,496 @@ async function researchNoLegacy(ctx) {
   return `${clean.length} research pages (watchlist, company and its tabs, 模型成绩, 历史回放, 监控) hold no data-legacy element and no old workspace class; the five listed P6.2 / P6.3 pages are exactly the ones still inside the marker`;
 }
 
+// --- P7.1: the portfolio page ------------------------------------------------------------------------------------------------------
+// The baseline is what the OLD page (HEAD 476188e) sent and said on the same fixtures (fixtures/portfolio-bodies-baseline.json, recorded before the page was touched).
+const PF_BASE = JSON.parse(fs.readFileSync(new URL("./fixtures/portfolio-bodies-baseline.json", import.meta.url), "utf8"));
+const PF_TABLE = "[data-testid=portfolio-table]";
+const pfWrites = (view) => view.mock.state.portfolio.writes ?? [];
+/** The portfolio page on the fake backend; `state` switches (fixtures/portfolio.mjs) go through stateWithPortfolio. */
+async function openPortfolio(ctx, label, { width = 1440, theme = "light", motion = false, switches, identity } = {}) {
+  const view = await newView(ctx.browser, { width, theme, label, unmatched, motion, ...(identity ? { identity } : {}), ...(switches ? { fixtureState: stateWithPortfolio(switches) } : {}) });
+  await view.page.goto(`${ctx.server.url}#/portfolio`, { waitUntil: "load" });
+  await view.page.waitForSelector(switches?.empty ? "[data-testid=portfolio-empty]" : PF_TABLE, { timeout: 30000 });
+  await settle(view.page);
+  return view;
+}
+/** Fill the record dialog the way a reader would and press 记录 (without waiting for the answer). */
+async function fillRecord(page, c) {
+  await page.locator("[data-testid=record-kind]").getByText(KIND_LABEL[c.kind], { exact: true }).click();
+  const set = async (key, value) => { if (value !== undefined) await page.locator(`[data-testid=record-${key}]`).fill(value); };
+  await set("symbol", c.symbol); await set("quantity", c.quantity); await set("price", c.price); await set("fee", c.fee); await set("ratio", c.ratio); await set("amount", c.amount); await set("occurred_on", c.occurred_on); await set("note", c.note);
+}
+const KIND_LABEL = { buy: "买入", sell: "卖出", opening: "期初持仓", dividend: "分红", split: "拆股", deposit: "入金", withdraw: "出金" };
+const pfUntil = async (page, read, want, what) => { const end = Date.now() + 8000; while (Date.now() < end) { if ((await read()) >= want) return; await page.waitForTimeout(50); } throw new Error(`${what}: not reached`); };
+
+/** 记一笔: every kind sends the old body, field for field; every rule the old form had still stops the form with its sentence and sends nothing; the kinds and the fields per kind are the old ones. */
+async function portfolioRecordBody(ctx) {
+  const done = [];
+  for (const [name, base] of Object.entries(PF_BASE.entry)) {
+    const view = await openPortfolio(ctx, `record body ${name}`);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=record-open]").click(); await page.locator("[data-testid=record-dialog]").waitFor();
+      await fillRecord(page, base.input);
+      await page.locator("[data-testid=record-submit]").click();
+      await pfUntil(page, async () => pfWrites(view).length, 1, `${name}: no request`);
+      const sent = pfWrites(view);
+      assert(sent.length === 1 && sent[0].method === base.method && sent[0].path === base.path, `${name}: sent ${JSON.stringify(sent.map((w) => `${w.method} ${w.path}`))}, the old page sent ${base.method} ${base.path}`);
+      assert(sameJson(sent[0].body, base.body), `${name}: body ${JSON.stringify(sent[0].body)} differs from the old ${JSON.stringify(base.body)}`);
+      await page.locator("[data-testid=record-dialog]").waitFor({ state: "detached", timeout: 8000 });
+      done.push(name);
+    } finally { await view.close(); }
+  }
+  // the rules: each broken one is said in the dialog, the dialog stays, nothing goes out
+  const view = await openPortfolio(ctx, "record validation");
+  try {
+    const { page } = view;
+    for (const [name, c] of Object.entries(PF_BASE.entryValidation)) {
+      await page.locator("[data-testid=record-open]").click(); await page.locator("[data-testid=record-dialog]").waitFor();
+      await fillRecord(page, c.input);
+      await page.locator("[data-testid=record-submit]").click();
+      await page.locator("[data-testid=record-error]").waitFor({ timeout: 5000 });
+      const said = [(await page.locator("[data-testid=record-error]").innerText()).trim()];
+      assert(sameJson(said, c.alert), `${name}: said ${JSON.stringify(said)}, the old page said ${JSON.stringify(c.alert)}`);
+      assert(pfWrites(view).length === 0, `${name}: a request went out`);
+      await page.keyboard.press("Escape"); await page.locator("[data-testid=record-dialog]").waitFor({ state: "detached" });
+      // the draft is kept after Esc: reopening shows what was typed, and the old error is gone
+      await page.locator("[data-testid=record-open]").click(); await page.locator("[data-testid=record-dialog]").waitFor();
+      assert((await page.locator("[data-testid=record-error]").count()) === 0, `${name}: the old error is still up after reopening`);
+      await page.keyboard.press("Escape"); await page.locator("[data-testid=record-dialog]").waitFor({ state: "detached" });
+      // a new kind starts the form over, as the old one did
+      await page.locator("[data-testid=record-open]").click(); await page.locator("[data-testid=record-dialog]").waitFor();
+      await page.locator("[data-testid=record-kind]").getByText("买入", { exact: true }).click();
+      assert((await page.locator("[data-testid=record-symbol]").inputValue()) === "", `${name}: choosing a kind did not blank the form`);
+      await page.keyboard.press("Escape"); await page.locator("[data-testid=record-dialog]").waitFor({ state: "detached" });
+    }
+    // the kinds, and the fields each shows
+    await page.locator("[data-testid=record-open]").click(); await page.locator("[data-testid=record-dialog]").waitFor();
+    const kinds = await page.locator("[data-testid=record-kind] input[type=radio]").evaluateAll((els) => els.map((el) => el.value));
+    assert(sameJson(kinds, PF_BASE.kinds.map(([v]) => v)), `kinds ${JSON.stringify(kinds)}`);
+    for (const [kind, labels] of Object.entries(PF_BASE.fieldsPerKind)) {
+      await page.locator("[data-testid=record-kind]").getByText(KIND_LABEL[kind], { exact: true }).click();
+      const shown = await page.locator("[data-testid=record-form] label:not([data-option])").evaluateAll((els) => els.map((el) => el.textContent.trim()));
+      const want = labels.filter((l) => !l.startsWith("NOTE:") && !l.startsWith("类型"));
+      assert(sameJson(shown, want), `${kind}: fields ${JSON.stringify(shown)}, the old form had ${JSON.stringify(want)}`);
+      const note = await page.locator("[data-testid=record-opening-note]").count();
+      assert(note === (kind === "opening" ? 1 : 0), `${kind}: the 期初持仓 note count is ${note}`);
+    }
+  } finally { await view.close(); }
+  return `${done.length} kinds sent the old bodies (${done.join(", ")}); ${Object.keys(PF_BASE.entryValidation).length} broken rules each stopped with the old sentence and no request; the 7 kinds and their fields are the old ones`;
+}
+
+/** 可用资金: 修改 turns the number into an input (the old starting text); Enter and 保存 send the old body; a bad number is said and nothing goes out; Esc and 取消 send nothing and return focus. */
+async function portfolioCashEdit(ctx) {
+  const done = [];
+  for (const [name, c] of Object.entries(PF_BASE.cash)) {
+    const view = await openPortfolio(ctx, `cash ${name}`);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=cash-edit]").click();
+      const input = page.locator("[data-testid=cash-input]"); await input.waitFor();
+      assert((await input.inputValue()) === c.initial, `${name}: the input starts as ${await input.inputValue()}, the old page started with ${c.initial}`);
+      assert(await input.evaluate((el) => el === document.activeElement), `${name}: the input is not focused`);
+      await input.fill(c.value);
+      // half the cases go by Enter, half by the 保存 key
+      if (done.length % 2 === 0) await input.press("Enter"); else await page.locator("[data-testid=cash-save]").click();
+      if (c.body) {
+        await pfUntil(page, async () => pfWrites(view).length, 1, `${name}: no request`);
+        const w = pfWrites(view);
+        assert(w.length === 1 && w[0].method === "PUT" && w[0].path === "/portfolio/cash" && sameJson(w[0].body, c.body), `${name}: sent ${JSON.stringify(w)}, the old page sent ${JSON.stringify(c.body)}`);
+        await page.locator("[data-testid=cash-form]").waitFor({ state: "detached", timeout: 8000 });
+        const shown = (await page.locator("[data-testid=cash-value]").innerText()).trim();
+        assert(shown === Number(c.body.available_funds).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }), `${name}: the tile shows ${shown} after the save`);
+      } else {
+        await page.locator("[data-testid=cash-problem]").waitFor({ timeout: 5000 });
+        assert(sameJson([(await page.locator("[data-testid=cash-problem]").innerText()).trim()], c.alert), `${name}: said ${await page.locator("[data-testid=cash-problem]").innerText()}, the old page said ${JSON.stringify(c.alert)}`);
+        assert(pfWrites(view).length === 0, `${name}: a request went out`);
+        assert((await input.count()) === 1, `${name}: the editor closed on a bad number`);
+      }
+      done.push(name);
+    } finally { await view.close(); }
+  }
+  const view = await openPortfolio(ctx, "cash cancel");
+  try {
+    const { page } = view;
+    for (const way of ["Escape", "取消"]) {
+      await page.locator("[data-testid=cash-edit]").click();
+      await page.locator("[data-testid=cash-input]").fill("999");
+      if (way === "Escape") await page.locator("[data-testid=cash-input]").press("Escape"); else await page.getByRole("button", { name: "取消" }).click();
+      await page.locator("[data-testid=cash-form]").waitFor({ state: "detached", timeout: 3000 });
+      assert((await page.locator("[data-testid=cash-value]").innerText()).trim() === "25,800.00", `${way}: the old number is not back`);
+      await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "cash-edit", null, { timeout: 3000 }).catch(() => { throw new Error(`${way}: focus did not go back to 修改`); });
+      assert(pfWrites(view).length === 0, `${way}: a request went out`);
+    }
+    // a refused save is said under the input and the editor stays
+    view.mock.control.fail = (method, path) => (method === "PUT" && path.endsWith("/portfolio/cash") ? 500 : 0);
+    await page.locator("[data-testid=cash-edit]").click(); await page.locator("[data-testid=cash-input]").fill("1000"); await page.locator("[data-testid=cash-save]").click();
+    await page.locator("[data-testid=cash-problem]").waitFor({ timeout: 5000 });
+    assert((await page.locator("[data-testid=cash-input]").count()) === 1, "the editor closed on a failed save");
+  } finally { await view.close(); }
+  return `${done.length} typed values: the old bodies (-100 and 0 go out as before) or the old sentence; Esc and 取消 send nothing and give focus back; a failed save stays in the editor with its message`;
+}
+
+/** 我的计划: opening a row and saving sends the old body for every case; a bad price is said and nothing goes out; the draft survives closing the row and another row's save, and is marked 未保存. */
+async function portfolioPlanSave(ctx) {
+  const done = [];
+  for (const [name, c] of Object.entries(PF_BASE.plan)) {
+    if (name.startsWith("_")) continue;
+    const view = await openPortfolio(ctx, `plan ${name}`);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=pf-position][data-symbol=AAPL] [data-testid=pf-toggle]").click();
+      const plan = page.locator("[data-testid=pf-position][data-symbol=AAPL] [data-testid=pf-plan]"); await plan.waitFor();
+      const save = plan.locator("[data-testid=pf-plan-save]");
+      assert(await save.isDisabled(), `${name}: 保存计划 is on before any change`);
+      const { text, add, stop, target } = c.input;
+      if (text !== undefined) await plan.locator("[data-testid=pf-plan-text]").fill(name === "longText" ? "字".repeat(PF_BASE.plan._longTextInput) : text);
+      if (add !== undefined) await plan.locator("[data-testid=pf-add_price]").fill(add);
+      if (stop !== undefined) await plan.locator("[data-testid=pf-stop_price]").fill(stop);
+      if (target !== undefined) await plan.locator("[data-testid=pf-target_price]").fill(target);
+      assert(!(await save.isDisabled()), `${name}: 保存计划 is still off after a change`);
+      assert((await page.locator("[data-testid=pf-position][data-symbol=AAPL] [data-testid=pf-unsaved]").count()) >= 1, `${name}: no 未保存 mark`);
+      await save.click();
+      if (c.body) {
+        await pfUntil(page, async () => pfWrites(view).length, 1, `${name}: no request`);
+        const w = pfWrites(view);
+        assert(w.length === 1 && w[0].method === "PUT" && w[0].path === "/portfolio/plans/AAPL" && sameJson(w[0].body, c.body), `${name}: sent ${JSON.stringify(w)}, the old page sent ${JSON.stringify(c.body)}`);
+        await page.waitForFunction(() => !document.querySelector("[data-testid=pf-position][data-symbol=AAPL] [data-testid=pf-unsaved]"), null, { timeout: 8000 });
+      } else {
+        await plan.locator("[data-testid=pf-plan-problem]").waitFor({ timeout: 5000 });
+        assert(sameJson([(await plan.locator("[data-testid=pf-plan-problem]").innerText()).trim()], c.alert), `${name}: said ${await plan.locator("[data-testid=pf-plan-problem]").innerText()}, the old page said ${JSON.stringify(c.alert)}`);
+        assert(pfWrites(view).length === 0, `${name}: a request went out`);
+      }
+      done.push(name);
+    } finally { await view.close(); }
+  }
+  // the draft: kept when the row is closed and when another row is opened, marked on the closed row, still there when it opens again; a save of another plan leaves it
+  const view = await openPortfolio(ctx, "plan draft");
+  try {
+    const { page } = view;
+    const row = (s) => page.locator(`[data-testid=pf-position][data-symbol=${s}]`);
+    await row("NVDA").locator("[data-testid=pf-toggle]").click();
+    await row("NVDA").locator("[data-testid=pf-plan-text]").fill("未保存的草稿");
+    await row("AAPL").locator("[data-testid=pf-toggle]").click(); // opens AAPL, closes NVDA
+    assert((await row("NVDA").locator("[data-testid=pf-panel]").count()) === 0, "two rows are open at once");
+    assert((await row("NVDA").locator("[data-testid=pf-unsaved]").count()) === 1, "the closed row is not marked 未保存");
+    await row("AAPL").locator("[data-testid=pf-plan-text]").fill("先改 AAPL"); await row("AAPL").locator("[data-testid=pf-plan-save]").click();
+    await pfUntil(page, async () => pfWrites(view).length, 1, "AAPL save");
+    await row("NVDA").locator("[data-testid=pf-toggle]").click();
+    assert((await row("NVDA").locator("[data-testid=pf-plan-text]").inputValue()) === "未保存的草稿", "the draft is gone after another plan's save");
+    assert(pfWrites(view).length === 1 && pfWrites(view)[0].path === "/portfolio/plans/AAPL", `writes ${JSON.stringify(pfWrites(view))}`);
+    assert((await row("NVDA").locator("[data-testid=pf-unsaved]").count()) >= 1, "NVDA lost its 未保存 mark");
+  } finally { await view.close(); }
+  return `${done.length} plans (${done.join(", ")}): the old bodies (blank price = null) or the old sentence; the draft is kept per symbol and marked 未保存`;
+}
+
+/** 删除一笔记录: the question says the positions and the cash are worked out again; Esc and 取消 send nothing and return focus; a full hold sends one DELETE for that id and the list is read again; from the all-records list and from an open position. */
+async function portfolioDeleteRecord(ctx) {
+  const view = await openPortfolio(ctx, "delete record", { motion: true });
+  try {
+    const { page } = view;
+    const dialog = page.locator('[data-slot="alert-dialog-content"]');
+    const dels = () => view.mock.requests.filter((r) => r.method === "DELETE" && /\/portfolio\/transactions\/[^/]+$/.test(r.path));
+    const gets = () => view.mock.requests.filter((r) => r.method === "GET" && r.path.endsWith("/portfolio")).length;
+    const trigger = page.locator("[data-testid=portfolio-ledger] [data-testid=record-delete]").first();
+    await trigger.evaluate((el) => el.setAttribute("data-probe-trigger", ""));
+    const firstId = await page.locator("[data-testid=portfolio-ledger] [data-testid=record-row]").first().getAttribute("data-id");
+    const rowsBefore = await page.locator("[data-testid=portfolio-ledger] [data-testid=record-row]").count();
+    await trigger.click(); await dialog.waitFor();
+    const title = (await dialog.locator('[data-slot="alert-dialog-title"]').innerText()).trim(), description = (await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).trim();
+    assert(title === PF_BASE.remove.dialog.title && description === PF_BASE.remove.dialog.description, `the question reads ${title} / ${description}`);
+    assert(description.includes("重新计算"), "the question does not say the numbers are worked out again");
+    assert(await dialog.locator('[data-slot="hold-button"]').count() === 1, "not a press-and-hold confirmation");
+    assert(dels().length === 0, "a request went out before the answer");
+    await page.keyboard.press("Escape"); await dialog.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.hasAttribute("data-probe-trigger"), null, { timeout: 3000 }).catch(() => { throw new Error("Esc: focus did not return to the delete key"); });
+    await trigger.click(); await dialog.waitFor(); await dialog.getByRole("button", { name: "取消" }).click(); await dialog.waitFor({ state: "detached" });
+    assert(dels().length === 0, "取消 sent a request");
+    const readsBefore = gets();
+    await trigger.click(); await dialog.waitFor();
+    await holdPointer(page, dialog.locator('[data-slot="hold-button"]'), 300);
+    assert(dels().length === 0 && (await dialog.count()) === 1, "a short press confirmed");
+    await holdPointer(page, dialog.locator('[data-slot="hold-button"]'));
+    await dialog.waitFor({ state: "detached", timeout: 5000 });
+    await pfUntil(page, async () => dels().length, 1, "no DELETE after the hold");
+    assert(dels().length === 1 && dels()[0].path.endsWith(`/portfolio/transactions/${firstId}`), `the DELETE was ${JSON.stringify(dels().map((d) => d.path))}, wanted .../${firstId}`);
+    await pfUntil(page, async () => gets() - readsBefore, 1, "the ledger was not read again");
+    await page.waitForFunction((n) => document.querySelectorAll("[data-testid=portfolio-ledger] [data-testid=record-row]").length === n, rowsBefore - 1, { timeout: 8000 });
+    assert((await page.locator(`[data-testid=record-row][data-id="${firstId}"]`).count()) === 0, "the deleted record is still listed");
+    // from an open position's own list
+    await page.locator("[data-testid=pf-position][data-symbol=AAPL] [data-testid=pf-toggle]").click();
+    const own = page.locator("[data-testid=pf-position][data-symbol=AAPL] [data-testid=record-delete]").first();
+    const ownId = await page.locator("[data-testid=pf-position][data-symbol=AAPL] [data-testid=record-row]").first().getAttribute("data-id");
+    await own.click(); await dialog.waitFor(); await holdPointer(page, dialog.locator('[data-slot="hold-button"]'));
+    await dialog.waitFor({ state: "detached", timeout: 5000 });
+    await pfUntil(page, async () => dels().length, 2, "no second DELETE");
+    assert(dels()[1].path.endsWith(`/portfolio/transactions/${ownId}`), `the second DELETE was ${dels()[1].path}`);
+    return `the question is the old one and says 重新计算; Esc / 取消 send nothing and give focus back; a short press does nothing; a hold sends one DELETE for the row's id, the ledger is read again and the row is gone (all-records list and an open position)`;
+  } finally { await view.close(); }
+}
+
+/** The colour that a token resolves to in the page (so a check compares what is drawn, not a name). */
+const tokenColour = (page, token) => page.evaluate((name) => { const probe = document.createElement("i"); probe.style.color = `var(${name})`; document.body.appendChild(probe); const colour = getComputedStyle(probe).color; probe.remove(); return colour; }, token);
+const readPnl = (page) => page.evaluate(() => [...document.querySelectorAll("[data-pnl]")].map((el) => {
+  const change = el.querySelector("[data-slot=change]"), target = change ?? el.firstElementChild;
+  return { dir: el.getAttribute("data-pnl"), text: target.textContent.trim(), arrow: change ? change.querySelectorAll("svg").length : 0, path: change ? [...change.querySelectorAll("svg path")].map((p) => p.getAttribute("d")).join("|") : "", colour: getComputedStyle(target).color, where: el.closest("[data-slot=stat-tile]")?.querySelector("[data-slot=stat-label]")?.textContent ?? el.closest("[data-testid=pf-position]")?.getAttribute("data-symbol") ?? "?" };
+}));
+
+/** Every profit-and-loss figure has all three signals (colour, arrow, sign) or none (zero, missing); red-up swaps the two colours and leaves the arrow and the sign alone. */
+async function portfolioPnlThreeSignals(ctx) {
+  const overrides = { override: { summary: { realized_pnl: "0.00" }, positions: { MSFT: { floating_pnl: "0.00", floating_pnl_pct: "0.00", today_pnl: null } } } };
+  const view = await openPortfolio(ctx, "pnl three signals", { switches: overrides });
+  try {
+    const { page } = view;
+    await page.locator("[data-testid=pf-position][data-symbol=MSFT] [data-testid=pf-toggle]").click(); await page.locator("[data-testid=pf-panel]").waitFor();
+    const green = await tokenColour(page, "--up"), red = await tokenColour(page, "--down");
+    const before = await readPnl(page);
+    assert(before.length >= 12, `only ${before.length} figures carry data-pnl`);
+    const ups = before.filter((f) => f.dir === "up"), downs = before.filter((f) => f.dir === "down"), flats = before.filter((f) => f.dir === "flat" || f.dir === "none");
+    assert(ups.length >= 4 && downs.length >= 3 && flats.length >= 4, `directions: ${ups.length} up, ${downs.length} down, ${flats.length} flat/none`);
+    for (const f of ups) assert(/^\+/.test(f.text) && f.arrow === 1 && f.colour === green, `${f.where}: an up figure is ${JSON.stringify(f)} (green ${green})`);
+    for (const f of downs) assert(/^-/.test(f.text) && f.arrow === 1 && f.colour === red, `${f.where}: a down figure is ${JSON.stringify(f)} (red ${red})`);
+    for (const f of flats) assert(!/^[+-]/.test(f.text) && f.arrow === 0 && f.colour !== green && f.colour !== red, `${f.where}: a flat figure is ${JSON.stringify(f)}`);
+    assert(flats.some((f) => f.dir === "flat" && /^0\.00%?$/.test(f.text)) && flats.some((f) => f.dir === "none" && f.text === "—"), `flat figures: ${JSON.stringify(flats.map((f) => f.text))}`);
+    // red up: the colours trade places, nothing else moves
+    await page.evaluate(() => { try { localStorage.setItem("market-evidence-agent:updown:v1", "red-up"); } catch { /* storage unavailable */ } document.documentElement.dataset.updown = "red-up"; });
+    const greenR = await tokenColour(page, "--up"), redR = await tokenColour(page, "--down"); // the names stay: --up is now the red one
+    assert(greenR === red && redR === green, `under red-up --up is ${greenR} and --down is ${redR}; they should be ${red} and ${green}`);
+    const after = await readPnl(page);
+    assert(after.length === before.length, "red-up changed how many figures there are");
+    after.forEach((f, i) => {
+      const b = before[i];
+      assert(f.text === b.text && f.arrow === b.arrow && f.path === b.path && f.dir === b.dir, `${f.where}: the sign or the arrow changed under red-up (${b.text} -> ${f.text})`);
+      if (f.dir === "up") assert(f.colour === greenR, `${f.where}: an up figure is ${f.colour} under red-up, wanted the new --up ${greenR}`);
+      if (f.dir === "down") assert(f.colour === redR, `${f.where}: a down figure is ${f.colour} under red-up, wanted the new --down ${redR}`);
+    });
+    return `${before.length} figures: ${ups.length} up (green, arrow up, +), ${downs.length} down (red, arrow down, -), ${flats.length} zero or missing (no colour, arrow or sign); under red-up the colours swap and every sign and arrow stays`;
+  } finally { await view.close(); }
+}
+
+/** The numbers on the page are what portfolio-items.mjs makes of the server's figures: the six tiles, every cell of every position, the records, and the research lines. */
+async function portfolioNumbersMatchLogic(ctx) {
+  const state = stateWithPortfolio({});
+  const data = portfolioSummary(state);
+  const view = await openPortfolio(ctx, "numbers match", { switches: {} });
+  try {
+    const { page } = view;
+    const tile = async (label) => (await page.locator("[data-slot=stat-tile]", { has: page.locator(`[data-slot=stat-label]:text-is("${label}")`) }).locator("[data-slot=stat-value]").innerText()).replace(/\s+/g, " ").trim();
+    const want = { 总资产: formatMoney(data.total_assets), 持仓市值: formatMoney(data.positions_value), 浮动盈亏: formatMoney(data.floating_pnl, { signed: true }), 今日盈亏: formatMoney(data.today_pnl, { signed: true }), 已实现盈亏: formatMoney(data.realized_pnl, { signed: true }) };
+    for (const [label, text] of Object.entries(want)) assert((await tile(label)) === text, `${label}: the page shows ${await tile(label)}, the logic gives ${text}`);
+    const cash = (await page.locator("[data-testid=cash-value]").innerText()).trim();
+    assert(cash === formatMoney(data.available_funds), `可用资金 ${cash}`);
+    assert((await page.locator("[data-testid=portfolio-price-date]").innerText()).trim() === `行情数据日期 ${data.price_date}`, "the price date line");
+    for (const p of data.positions) {
+      const cells = await page.locator(`[data-testid=pf-position][data-symbol=${p.symbol}] [role=row]`).first().locator("[role=cell]").evaluateAll((els) => els.map((el) => el.innerText.replace(/\s+/g, " ").trim()));
+      const wantCells = [p.symbol, formatShares(p.shares), formatPrice(p.avg_cost), formatPrice(p.diluted_cost), `${formatPrice(p.price)} ${p.price_date}`, formatMoney(p.market_value), formatPercent(p.weight_pct), `${formatMoney(p.floating_pnl, { signed: true })} ${formatPercent(p.floating_pnl_pct, { signed: true })}`];
+      // a cell begins with its phone label (hidden on the table): compare the figures at the end
+      cells.forEach((text, i) => assert(text.endsWith(wantCells[i]), `${p.symbol} cell ${i}: the page shows "${text}", the logic gives "${wantCells[i]}"`));
+    }
+    const rows = await page.locator("[data-testid=portfolio-ledger] [data-testid=record-row]").evaluateAll((els) => els.map((el) => [...el.querySelectorAll("[role=cell]")].map((c) => c.innerText.replace(/\s+/g, " ").trim())));
+    assert(rows.length === data.transactions.length, `${rows.length} records listed, ${data.transactions.length} held`);
+    data.transactions.forEach((tx, i) => {
+      const cells = ledgerCells(tx);
+      assert(rows[i][0] === tx.occurred_on && rows[i][1] === (tx.symbol || "—") && rows[i][2] === cells.label, `record ${i}: ${JSON.stringify(rows[i])}`);
+      for (const piece of [cells.quantity, cells.price].filter(Boolean)) assert(rows[i].some((c) => c === piece), `record ${i}: ${piece} is not in ${JSON.stringify(rows[i])}`);
+      if (cells.fee) assert(rows[i].some((c) => c.endsWith(cells.fee)), `record ${i}: the fee ${cells.fee} is missing`);
+    });
+    // the research lines: the percentages and the model of the logic's own pick
+    const forecasts = forecastList(new URLSearchParams("symbols=AAPL,NVDA,TSLA,MSFT&state=open&limit=200"), state).forecasts;
+    for (const p of data.positions) {
+      const rec = researchRecord(p.symbol, forecasts, JUDGMENTS);
+      await page.locator(`[data-testid=pf-position][data-symbol=${p.symbol}] [data-testid=pf-toggle]`).click();
+      const panel = page.locator(`[data-testid=pf-position][data-symbol=${p.symbol}] [data-testid=pf-research]`);
+      await panel.waitFor();
+      if (!rec.forecast && !rec.judgment) { await page.waitForFunction((s) => document.querySelector(`[data-testid=pf-position][data-symbol=${s}] [data-testid=pf-research]`)?.textContent.includes("暂无研究记录"), p.symbol, { timeout: 8000 }); continue; }
+      if (rec.forecast) {
+        const line = (await panel.locator("[data-testid=pf-research-forecast]").innerText()).replace(/\s+/g, " ");
+        const { bearish, neutral, bullish } = rec.forecast.percent;
+        assert(line.includes(`下跌 ${bearish}% · 持平 ${neutral}% · 上涨 ${bullish}%`) && line.includes(rec.forecast.targetDate) && line.includes(rec.forecast.model), `${p.symbol}: forecast line "${line}"`);
+      } else assert((await panel.locator("[data-testid=pf-research-forecast]").count()) === 0, `${p.symbol}: a forecast line without a forecast`);
+      assert((await panel.locator("[data-testid=pf-research-judgment]").count()) === (rec.judgment ? 1 : 0), `${p.symbol}: judgment line count`);
+    }
+    return `${Object.keys(want).length} tiles, cash, ${data.positions.length} positions x 8 cells, ${rows.length} records and the research lines equal what portfolio-items.mjs / researchRecord give for the same fixture`;
+  } finally { await view.close(); }
+}
+
+const TRADE_WORDING = [/(?<!不会)(?<!不)下单/, /(?<!不)执行交易/, /(?<!不)立即(买入|卖出|下单|交易)/, /(?<!不)(马上|一键)(买入|卖出)/, /提交订单/, /委托/, /(?<!not )place (an )?order/i, /execute (a )?trade/i, /(buy|sell) now/i, /one-click (buy|sell)/i];
+const TRADE_BUTTON = /^(买入|卖出|立即.*|下单.*|buy|sell|buy now|sell now|trade|place order)$/i;
+/** The page is a ledger, not a trading screen: no wording that offers or implies an order (the list is TRADE_WORDING above; 不会下单 / "never trades" is allowed, it says the opposite), no button named 买入 / 卖出 (the record kinds are radio choices of what the reader did), and the empty state says the assistant does not trade. */
+async function portfolioNoTradeWording(ctx) {
+  const bad = [], seen = [];
+  const sweep = async (page, where) => {
+    const text = await page.evaluate(() => document.body.innerText);
+    for (const re of TRADE_WORDING) { const m = re.exec(text); if (m) bad.push(`${where}: "${m[0]}"`); }
+    const buttons = await page.evaluate(() => [...document.querySelectorAll("button, [role=button], a")].map((el) => (el.getAttribute("aria-label") || el.textContent || "").trim()));
+    for (const b of buttons) if (TRADE_BUTTON.test(b)) bad.push(`${where}: a button named "${b}"`);
+    seen.push(where);
+  };
+  for (const locale of ["zh-CN", "en-US"]) {
+    const view = await openPortfolio(ctx, `no trade wording ${locale}`);
+    try {
+      const { page } = view;
+      if (locale === "en-US") { await page.evaluate(() => { localStorage.setItem("market-evidence-agent:locale:v1", "en-US"); }); await page.reload({ waitUntil: "load" }); await page.waitForSelector(PF_TABLE, { timeout: 30000 }); await settle(page); }
+      await sweep(page, `${locale} page`);
+      await page.locator("[data-testid=pf-position][data-symbol=AAPL] [data-testid=pf-toggle]").click(); await page.locator("[data-testid=pf-research]").waitFor(); await settle(page);
+      await sweep(page, `${locale} open row`);
+      await page.locator("[data-testid=record-open]").click(); await page.locator("[data-testid=record-dialog]").waitFor();
+      for (const kind of Object.keys(KIND_LABEL)) { await page.locator("[data-testid=record-kind] input[type=radio]").evaluateAll((els, k) => els.find((e) => e.value === k).click(), kind); await sweep(page, `${locale} dialog ${kind}`); }
+      await page.keyboard.press("Escape");
+    } finally { await view.close(); }
+  }
+  const empty = await openPortfolio(ctx, "no trade wording empty", { switches: { empty: true, cash: "0.00" } });
+  try {
+    await sweep(empty.page, "empty page");
+    const said = await empty.page.locator("[data-testid=portfolio-empty]").innerText();
+    assert(/自己记的账/.test(said) && /不会替你交易/.test(said), `the empty state says: ${said.replace(/\s+/g, " ")}`);
+  } finally { await empty.close(); }
+  assert(!bad.length, bad.join("; "));
+  return `${seen.length} screens (both languages, the page, an open row, the dialog in all 7 kinds, the empty state) hold none of ${TRADE_WORDING.length} order phrases and no 买入 / 卖出 button; the empty state says 自己记的账 / 不会替你交易`;
+}
+
+/** Only the keyboard: reach a row, open it (Enter), change the plan, save it, close it (Space). */
+async function portfolioKeyboard(ctx) {
+  const view = await openPortfolio(ctx, "portfolio keyboard");
+  try {
+    const { page } = view;
+    const active = () => page.evaluate(() => { const a = document.activeElement; return a ? { id: a.getAttribute("data-testid"), sym: a.closest("[data-symbol]")?.getAttribute("data-symbol") ?? null, expanded: a.getAttribute("aria-expanded") } : null; });
+    const tabTo = async (match, what) => { for (let i = 0; i < 80; i += 1) { await page.keyboard.press("Tab"); const a = await active(); if (a && match(a)) return a; } throw new Error(`Tab never reached ${what}`); };
+    await page.locator("[data-testid=portfolio-page]").evaluate(() => { document.activeElement?.blur?.(); });
+    await tabTo((a) => a.id === "pf-toggle" && a.sym === "AAPL", "the AAPL row");
+    assert((await active()).expanded === "false", "aria-expanded is not false before opening");
+    await page.keyboard.press("Enter");
+    await page.locator("[data-testid=pf-position][data-symbol=AAPL] [data-testid=pf-panel]").waitFor({ timeout: 5000 });
+    assert((await active()).expanded === "true" && (await active()).id === "pf-toggle", "Enter did not open the row (focus stays on its button)");
+    await tabTo((a) => a.id === "pf-plan-text", "the plan text");
+    await page.keyboard.press("End"); await page.keyboard.type(" 键盘加的一句");
+    await tabTo((a) => a.id === "pf-add_price", "the 补仓价"); await page.keyboard.press("Control+a"); await page.keyboard.type("199.5");
+    const save = await tabTo((a) => a.id === "pf-plan-save", "保存计划 (it is on after the change)");
+    assert(save.id === "pf-plan-save", "not on the save key");
+    await page.keyboard.press("Enter");
+    await pfUntil(page, async () => pfWrites(view).length, 1, "the keyboard save sent nothing");
+    const w = pfWrites(view)[0];
+    assert(w.method === "PUT" && w.path === "/portfolio/plans/AAPL" && w.body.plan_text === "回调到 200 附近分批加仓；跌破 185 止损。 键盘加的一句" && w.body.add_price === "199.5" && w.body.stop_price === "185.00" && w.body.target_price === "235.00", `sent ${JSON.stringify(w)}`);
+    // back to the row's button, Space closes it
+    for (let i = 0; i < 12; i += 1) { await page.keyboard.press("Shift+Tab"); if ((await active()).id === "pf-toggle") break; }
+    assert((await active()).id === "pf-toggle", "Shift+Tab did not come back to the row's button");
+    await page.keyboard.press("Space");
+    await page.locator("[data-testid=pf-position][data-symbol=AAPL] [data-testid=pf-panel]").waitFor({ state: "detached", timeout: 5000 });
+    return "Tab reached the AAPL row, Enter opened it (aria-expanded true), Tab reached the plan, the text and a price were typed, Enter on 保存计划 sent the plan, Space closed the row";
+  } finally { await view.close(); }
+}
+
+/** One position opens at a time; the one disclaimer of the research area is on screen once; its lines link to the forecast and the judgment pages; the model's opinion is labelled. */
+async function portfolioResearchArea(ctx) {
+  const view = await openPortfolio(ctx, "portfolio research");
+  try {
+    const { page } = view;
+    await page.locator("[data-testid=pf-position][data-symbol=AAPL] [data-testid=pf-toggle]").click();
+    await page.locator("[data-testid=pf-research-forecast]").waitFor();
+    assert((await page.locator("[data-testid=pf-panel]").count()) === 1, "more than one row is open");
+    assert((await page.getByText("概率未经校准，属实验性信息。仅供参考，买不买由你决定。").count()) === 1, "the disclaimer is not on screen exactly once");
+    const card = page.locator("[data-testid=pf-research-opinion]");
+    assert((await card.locator("[data-slot=opinion-label]").innerText()).includes("模型意见"), "the research area is not labelled 模型意见");
+    const hrefs = await card.locator("a").evaluateAll((els) => els.map((el) => el.getAttribute("href")));
+    assert(hrefs.length === 2 && /^#\/research\/forecasts\/[^/]+$/.test(hrefs[0]) && /^#\/research\/judgments\/[^/]+$/.test(hrefs[1]), `links ${JSON.stringify(hrefs)}`);
+    const colours = await card.locator("[data-testid=pf-research-forecast], [data-testid=pf-research-judgment]").evaluateAll((els) => els.map((el) => getComputedStyle(el).color));
+    const [up, down] = [await tokenColour(page, "--up"), await tokenColour(page, "--down")];
+    assert(colours.length === 2 && new Set(colours).size === 1 && !colours.includes(up) && !colours.includes(down), `the lines are not one plain colour: ${colours} (up ${up}, down ${down})`);
+    await page.locator("[data-testid=pf-position][data-symbol=MSFT] [data-testid=pf-toggle]").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=pf-position][data-symbol=MSFT] [data-testid=pf-research]")?.textContent.includes("暂无研究记录"), null, { timeout: 8000 });
+    assert((await page.getByText("概率未经校准").count()) === 0, "the disclaimer shows where there is no probability");
+    return "one row open at a time; one disclaimer; 模型意见 label; links to #/research/forecasts/<id> and #/research/judgments/<id>; plain colour; 暂无研究记录 for a symbol with none";
+  } finally { await view.close(); }
+}
+
+/** The states: the skeleton after 400 ms and not before, the empty state (the ledger is the reader's own), the error bar with 重试 (not "Failed to fetch"), a refresh that fails keeps the numbers, 今日盈亏 says 仅供参考 only when the server says so. */
+async function portfolioStates(ctx) {
+  const bad = [];
+  { // skeleton
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "portfolio skeleton", unmatched });
+    try {
+      view.mock.control.hold = (method, path) => method === "GET" && path.endsWith("/portfolio");
+      await view.page.goto(`${ctx.server.url}#/portfolio`, { waitUntil: "load" });
+      await view.page.waitForSelector("[data-testid=portfolio-page]", { timeout: 30000 });
+      assert((await view.page.locator("[data-testid=portfolio-skeleton]").count()) === 0, "a skeleton showed at once");
+      await view.page.locator("[data-testid=portfolio-skeleton]").waitFor({ timeout: 3000 });
+      assert((await view.page.locator("[data-testid=portfolio-skeleton] [data-slot=skeleton]").count()) >= 10, "the skeleton has no tiles and rows");
+    } finally { await view.close(); }
+  }
+  { // error and retry; offline wording
+    const view = await openPortfolio(ctx, "portfolio error", { switches: { fail: true } }).catch(() => null);
+    const v = view ?? await newView(ctx.browser, { width: 1440, theme: "light", label: "portfolio error", unmatched, fixtureState: stateWithPortfolio({ fail: true }) });
+    try {
+      if (!view) await v.page.goto(`${ctx.server.url}#/portfolio`, { waitUntil: "load" });
+      await v.page.locator("[data-testid=portfolio-error] [data-slot=error-bar]").waitFor({ timeout: 20000 });
+      v.mock.state.portfolio.fail = false;
+      await v.page.getByRole("button", { name: "重试" }).click();
+      await v.page.waitForSelector(PF_TABLE, { timeout: 10000 });
+    } finally { await v.close(); }
+    const off = await newView(ctx.browser, { width: 1440, theme: "light", label: "portfolio offline", unmatched });
+    try {
+      await off.page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" }); await off.page.locator("[data-testid=message]").first().waitFor();
+      off.mock.control.down = true;
+      await off.page.evaluate(() => { location.hash = "#/portfolio"; });
+      await off.page.locator("[data-testid=portfolio-error] [data-slot=error-bar]").waitFor({ timeout: 20000 });
+      const said = await off.page.locator("[data-testid=portfolio-error]").innerText();
+      assert(!/Failed to fetch/i.test(said) && said.includes("连不上后端"), `an unreachable server reads: ${said}`);
+    } finally { await off.close(); }
+  }
+  { // a refresh that fails keeps the numbers on screen
+    const view = await openPortfolio(ctx, "portfolio refresh fails");
+    try {
+      view.mock.control.fail = (method, path) => (method === "GET" && path.endsWith("/portfolio") ? 500 : 0);
+      await view.page.locator("[data-testid=cash-edit]").click(); await view.page.locator("[data-testid=cash-input]").fill("26000"); await view.page.locator("[data-testid=cash-save]").click();
+      await view.page.locator("[data-slot=error-bar]").first().waitFor({ timeout: 8000 });
+      assert((await view.page.locator(PF_TABLE).count()) === 1 && (await view.page.locator("[data-slot=stat-tile]").count()) === 6, "the numbers left the page when the refresh failed");
+      assert(pfWrites(view).length === 1, "the write did not go out");
+    } finally { await view.close(); }
+  }
+  { // empty
+    const view = await openPortfolio(ctx, "portfolio empty", { switches: { empty: true, cash: "0.00" } });
+    try {
+      await view.page.locator("[data-testid=portfolio-empty]").getByRole("button", { name: "记第一笔" }).click();
+      await view.page.locator("[data-testid=record-dialog]").waitFor();
+    } finally { await view.close(); }
+  }
+  { // 仅供参考
+    const quiet = await openPortfolio(ctx, "portfolio reference off");
+    const flagged = await openPortfolio(ctx, "portfolio reference on", { switches: { referenceOnly: true } });
+    try {
+      assert(!(await quiet.page.locator("[data-slot=stat-label]", { hasText: "今日盈亏" }).innerText()).includes("仅供参考"), "仅供参考 shows when the server did not say so");
+      assert((await flagged.page.locator("[data-slot=stat-label]", { hasText: "今日盈亏" }).innerText()).trim() === "今日盈亏 · 仅供参考", "仅供参考 is missing from 今日盈亏");
+      assert((await flagged.page.locator("[data-testid=portfolio-warning]").count()) === 1, "the server's warning is not shown");
+    } finally { await quiet.close(); await flagged.close(); }
+  }
+  return "skeleton after 400 ms; error bar + 重试 recovers; an unreachable server reads 连不上后端 (not Failed to fetch); a failed refresh keeps the numbers; empty state opens the dialog; 今日盈亏 · 仅供参考 only when flagged, with the server's warning";
+}
+
+/** The dialog is one form in a dialog and in a drawer: the draft typed at 1440 is still there at 390 and back (the breakpoint is 640); the page holds no old-UI marker or old class. */
+async function portfolioDialogBreakpoint(ctx) {
+  const view = await openPortfolio(ctx, "portfolio breakpoint");
+  try {
+    const { page } = view;
+    assert((await page.locator("[data-legacy]").count()) === 0, "the portfolio page is inside the old-UI marker");
+    assert((await page.locator("[class*='pf-'], .personal-page, .portfolio-page, .memory-actions").count()) === 0, "an old class of the page is left");
+    await page.locator("[data-testid=record-open]").click(); await page.locator("[data-testid=record-dialog]").waitFor();
+    await page.locator("[data-testid=record-kind]").getByText("卖出", { exact: true }).click();
+    await page.locator("[data-testid=record-symbol]").fill("tsla"); await page.locator("[data-testid=record-quantity]").fill("12"); await page.locator("[data-testid=record-price]").fill("250"); await page.locator("[data-testid=record-note]").fill("跨断点");
+    for (const width of [390, 1440, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      await page.locator("[data-testid=record-dialog]").waitFor();
+      const drawer = (await page.locator('[data-slot="drawer-content"]').count()) === 1, dialog = (await page.locator('[data-slot="dialog-content"]').count()) === 1;
+      assert(width === 390 ? drawer && !dialog : dialog && !drawer, `at ${width}: drawer ${drawer}, dialog ${dialog}`);
+      const got = await page.evaluate(() => ({ s: document.querySelector("[data-testid=record-symbol]").value, q: document.querySelector("[data-testid=record-quantity]").value, p: document.querySelector("[data-testid=record-price]").value, n: document.querySelector("[data-testid=record-note]").value, k: document.querySelector("[data-testid=record-kind] input:checked")?.value }));
+      assert(sameJson(got, { s: "tsla", q: "12", p: "250", n: "跨断点", k: "sell" }), `at ${width} the draft is ${JSON.stringify(got)}`);
+    }
+    await page.locator("[data-testid=record-submit]").click();
+    await pfUntil(page, async () => pfWrites(view).length, 1, "the send from the drawer");
+    assert(sameJson(pfWrites(view)[0].body, { kind: "sell", symbol: "TSLA", quantity: "12", price: "250", note: "跨断点" }), `sent ${JSON.stringify(pfWrites(view)[0].body)}`);
+    return "dialog at 1440, drawer at 390, dialog again: kind, code, quantity and note survive each crossing; no data-legacy and no old class on the page";
+  } finally { await view.close(); }
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -7818,6 +8313,17 @@ const CHECKS = [
   ["monitor-dot-in-sidebar: a late or failing monitor puts a dot beside 研究 (sidebar and phone tab bar), a well one or no record nothing; read once on entering the research area, never from the chat page", monitorDotInSidebar],
   ["research-no-legacy: the watchlist, company page and its tabs, 模型成绩, 历史回放 and 监控 hold no data-legacy element or old workspace class; the five listed older pages are exactly the ones still inside the marker", researchNoLegacy],
   ["analysis-status-neutral: the check of a quote is plain text: no danger or action colour, no icon, no alert, not folded", analysisStatusNeutral],
+  ["portfolio-record-body: 记一笔 sends the old body for every kind, every old rule still stops the form with its sentence, the kinds and their fields are the old ones", portfolioRecordBody],
+  ["portfolio-cash-edit: 可用资金 edits in place; Enter and 保存 send the old body; a bad number is said; Esc and 取消 send nothing", portfolioCashEdit],
+  ["portfolio-plan-save: 我的计划 saves the old body (blank price = null); the draft is kept per symbol and marked 未保存", portfolioPlanSave],
+  ["portfolio-delete-record: the question says 重新计算; Esc / 取消 send nothing; a hold sends one DELETE; the ledger is read again", portfolioDeleteRecord],
+  ["portfolio-pnl-three-signals: every P&L figure has colour + arrow + sign, or none when zero; red-up swaps the colours only", portfolioPnlThreeSignals],
+  ["portfolio-numbers-match-logic: the tiles, the cells, the records and the research lines equal what portfolio-items.mjs gives for the same data", portfolioNumbersMatchLogic],
+  ["portfolio-no-trade-wording: no order wording, no 买入 / 卖出 button; the empty state says the assistant does not trade", portfolioNoTradeWording],
+  ["portfolio-keyboard: Tab, Enter, type and Enter open a row, change the plan and save it; Space closes", portfolioKeyboard],
+  ["portfolio-research-area: one row open, one disclaimer, 模型意见 label, links to the forecast and judgment pages", portfolioResearchArea],
+  ["portfolio-states: skeleton after 400 ms, error bar + 重试, unreachable wording, a failed refresh keeps the numbers, empty state, 仅供参考", portfolioStates],
+  ["portfolio-dialog-breakpoint: the record draft survives dialog <-> drawer; no old-UI marker or class on the page", portfolioDialogBreakpoint],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

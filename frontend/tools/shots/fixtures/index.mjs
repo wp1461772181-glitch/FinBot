@@ -209,14 +209,34 @@ export function registerRoutes(route, reply) {
   route.get("/evidence-revisions/:symbol", ({ params }) => ({ symbol: params.symbol, revisions: [] }));
 
   // --- portfolio, routines, inbox ----------------------------------------------------------------------
-  route.get(`${A}/portfolio`, own(({ state }) => portfolioSummary(state)));
+  route.get(`${A}/portfolio`, own(({ state }) => (state.portfolio.fail ? reply.status(500, { detail: "shots: forced failure" }) : portfolioSummary(state))));
+  // P7.1: the ledger's three writes.  Each keeps the request exactly as the page sent it (`state.portfolio.writes`: method, path, body) so a check reads the
+  // body back; the answer is what the server answers (`ok`, `status`, the new `id`), and the state moves the way the server's does (a new row, the cash, the plan).
+  const written = (state, method, path, body) => { (state.portfolio.writes ??= []).push({ method, path, body: structuredClone(body) }); };
+  route.post(`${A}/portfolio/transactions`, own(({ body, state }) => {
+    written(state, "POST", "/portfolio/transactions", body);
+    const id = `p0000000-0000-4000-8000-${String(900 + state.portfolio.writes.length).padStart(12, "0")}`;
+    state.portfolio.transactions = [{ id, symbol: body.symbol ?? "", kind: body.kind, quantity: body.quantity ?? null, price: body.price ?? null, fee: body.fee ?? null, amount: body.amount ?? null,
+      ratio: body.ratio ?? null, occurred_on: body.occurred_on ?? "2026-11-13", note: body.note ?? "", created_at: "2026-11-13T02:00:00Z" }, ...state.portfolio.transactions];
+    return { ok: true, status: "recorded", id, warnings: [] };
+  }));
+  route.put(`${A}/portfolio/cash`, own(({ body, state }) => {
+    written(state, "PUT", "/portfolio/cash", body);
+    state.portfolio.cash = Number(body.available_funds).toFixed(2);
+    return { ok: true, status: "updated", available_funds: state.portfolio.cash };
+  }));
+  route.put(`${A}/portfolio/plans/:symbol`, own(({ params, body, state }) => {
+    written(state, "PUT", `/portfolio/plans/${params.symbol}`, body);
+    state.portfolio.plans[params.symbol] = { plan_text: body.plan_text, add_price: body.add_price, stop_price: body.stop_price, target_price: body.target_price, updated_at: "2026-11-13T02:00:00Z" };
+    return { ok: true, status: "saved" };
+  }));
   route.get(`${A}/tasks`, own(({ state, query }) => ({ tasks: state.tasks.filter((t) => !query.get("bot_id") || t.bot_id === query.get("bot_id")) })));
   route.get(`${A}/tasks/runs`, own(({ query }) => ({ runs: RUNS.filter((r) => !query.get("bot_id") || TASKS.find((t) => t.id === r.task_id)?.bot_id === query.get("bot_id")) })));
   route.get(`${A}/tasks/proposals`, own(() => ({ proposals: PROPOSALS })));
   route.get(`${A}/inbox`, own(({ state, query }) => ({ items: state.inbox.filter((i) => (!query.get("section") || i.section === query.get("section")) && (!query.get("bot_id") || i.bot_id === query.get("bot_id"))) })));
 
   // --- the writes the in-app confirmations guard (P2.3): the deletes and the unbind.  Each answers ok; the portfolio one also drops the row. ---
-  route.delete(`${A}/portfolio/transactions/:id`, own(({ params, state }) => { state.portfolio.transactions = state.portfolio.transactions.filter((t) => t.id !== params.id); return { ok: true, status: "deleted" }; }));
+  route.delete(`${A}/portfolio/transactions/:id`, own(({ params, state }) => { written(state, "DELETE", `/portfolio/transactions/${params.id}`, null); state.portfolio.transactions = state.portfolio.transactions.filter((t) => t.id !== params.id); return { ok: true, status: "deleted" }; }));
   route.delete(`${A}/skills/:id`, own(() => ({ ok: true })));
   route.delete(`${A}/profile/:id`, own(() => ({ ok: true })));
   route.delete(`${A}/news-sources/:id`, own(() => ({ ok: true })));
