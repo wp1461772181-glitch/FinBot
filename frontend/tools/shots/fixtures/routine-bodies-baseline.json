@@ -1,0 +1,2782 @@
+{
+  "_about": "Requests, texts and form rules recorded from the OLD 任务 page (HEAD 86ff97b, before P7.2) on the same fixtures; the new UI must send the same bodies.",
+  "load": {
+    "h1": "例行任务",
+    "headings": [
+      "bot 提议、等你确认",
+      "全部例行任务",
+      "最近 20 次运行",
+      "例行任务运行时想做的写操作"
+    ],
+    "proposals": [
+      "ReportBot每周五盘后总结 NVDA 动态NVDAReportBot 提议新建例行任务：每周五 16:30 总结 NVDA 的新闻与申报。去对话确认",
+      "NewsBot删除任务「盘前新闻速览」已过期盘前新闻速览NewsBot 提议删除例行任务「盘前新闻速览」：近三次运行都没有新内容。打开对话"
+    ],
+    "tasks": [
+      "NewsBot盘前新闻速览简报工作日 08:30 · Asia/Shanghai已发布 · 下次：2026/11/16 08:30:00 · 已执行 38 次“汇总关注列表公司的盘前新闻，列出最值得看的三条。”暂停编辑删除",
+      "AppleBotAAPL 财报跟踪简报每天 21:00 · Asia/Shanghai已发布 · 下次：2026/11/13 21:00:00 · 已执行 21 次暂停编辑删除",
+      "FinBot价格线提醒提醒每小时第 15 分 · Asia/Shanghai未触发 · 下次：2026/11/13 11:15:00 · 已执行 212 次暂停编辑删除",
+      "FinBot周日组合复盘简报每 1 周（从 19:00 起） · 共 8 次 · Asia/Shanghai已发布 · 下次：2026/11/15 19:00:00 · 已执行 3 次“检查持仓的价格计划与最近的财报判断，给出下周要关注的事项。”暂停编辑删除",
+      "FinBot旧的盘后提醒已暂停提醒每天 16:30 · Asia/Shanghai尚未运行 · 已执行 0 次启用编辑删除",
+      "TeslaBotNVDA 上下沿提醒提醒每小时第 30 分 · Asia/Shanghai未触发 · 下次：2026/11/16 08:30:00 · 已执行 6 次暂停编辑删除",
+      "TeslaBot悉尼开盘简报简报每天 07:45 · Pacific/Chatham失败：模型超时 · 下次：2026/11/16 08:30:00 · 已执行 2 次“开盘前列出隔夜重要变化。”暂停编辑删除",
+      "AppleBot旧式价格线提醒每天 21:30 · Asia/Shanghai尚未运行 · 下次：2026/11/16 08:30:00 · 已执行 0 次暂停编辑删除",
+      "盘前新闻速览2026/11/13 08:00:00已发布 · 已贴进对话 · 打开过程",
+      "价格线提醒2026/11/13 09:15:00未触发",
+      "AAPL 财报跟踪2026/11/12 21:00:00已发布 · 已贴进对话 · 打开过程",
+      "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    ],
+    "confirms": [
+      "Agent 的建议AppleBot建议抓取并分析 AAPL 最新 10-Kpending_confirm“无人值守的「AAPL 财报跟踪」发现 AAPL 有新的 10-K 还没进材料库，想把它保存并生成分析。”来自任务：AAPL 财报跟踪确认跳过稍后生成确认卡打开对话忽略",
+      "Agent 的建议FinBot建议抓取并分析 NVDA 最新 10-Qpending_confirm“无人值守的「周日组合复盘」发现 NVDA 有新的 10-Q 还没进材料库，想把它保存并生成分析。写入材料库需要你确认。”来自任务：周日组合复盘确认跳过稍后生成确认卡忽略"
+    ],
+    "runs": [
+      "盘前新闻速览2026/11/13 08:00:00已发布 · 已贴进对话 · 打开过程",
+      "价格线提醒2026/11/13 09:15:00未触发",
+      "AAPL 财报跟踪2026/11/12 21:00:00已发布 · 已贴进对话 · 打开过程",
+      "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    ],
+    "fine": [
+      "bot 在对话里提出的新建、修改或删除例行任务，要你在确认卡上点「同意」才生效。确认卡十分钟内有效；过期了在对话里再说一次。",
+      "NVDA",
+      "盘前新闻速览",
+      "任务按时运行（Mac 每 5 分钟检查一次；睡眠期间错过的会在醒来后补跑一次）。简报类任务需要在设置里配置后台任务模型；提醒类任务不调用模型。"
+    ],
+    "skillOptions": [
+      [
+        "",
+        "无"
+      ],
+      [
+        "s3000000-0000-4000-8000-000000000001",
+        "财报速读"
+      ],
+      [
+        "s3000000-0000-4000-8000-000000000002",
+        "周日复盘"
+      ]
+    ],
+    "defaultForm": [
+      {
+        "label": "所属 bot",
+        "type": "select-one",
+        "value": "b0000000-0000-4000-8000-000000000001"
+      },
+      {
+        "label": "名称",
+        "type": "text",
+        "value": "研究队列简报"
+      },
+      {
+        "label": "类型",
+        "type": "select-one",
+        "value": "brief"
+      },
+      {
+        "label": "频率",
+        "type": "select-one",
+        "value": "weekdays"
+      },
+      {
+        "label": "时间",
+        "type": "time",
+        "value": "08:00"
+      },
+      {
+        "label": "执行次数",
+        "type": "select-one",
+        "value": "unlimited"
+      },
+      {
+        "label": "时区",
+        "type": "text",
+        "value": "Asia/Shanghai"
+      },
+      {
+        "label": "范围",
+        "type": "select-one",
+        "value": "research_queue"
+      },
+      {
+        "label": "任务说明",
+        "type": "textarea",
+        "value": ""
+      },
+      {
+        "label": "技能",
+        "type": "select-one",
+        "value": ""
+      }
+    ]
+  },
+  "create": {
+    "briefDefault": {
+      "input": {
+        "instruction": "总结今天的新闻"
+      },
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "研究队列简报"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "brief"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "weekdays"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "08:00"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "research_queue"
+        },
+        {
+          "label": "任务说明",
+          "type": "textarea",
+          "value": "总结今天的新闻"
+        },
+        {
+          "label": "技能",
+          "type": "select-one",
+          "value": ""
+        }
+      ],
+      "sent": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/tasks",
+          "query": "",
+          "body": "{\"name\":\"研究队列简报\",\"kind\":\"brief\",\"schedule_kind\":\"weekdays\",\"schedule_time\":\"08:00\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"instruction\":\"总结今天的新闻\",\"skill_id\":\"\",\"config\":{}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/tasks",
+          "body": {
+            "name": "研究队列简报",
+            "kind": "brief",
+            "schedule_kind": "weekdays",
+            "schedule_time": "08:00",
+            "timezone": "Asia/Shanghai",
+            "scope": "research_queue",
+            "symbols": [],
+            "every_value": null,
+            "every_unit": null,
+            "max_runs": 0,
+            "channel": "inbox",
+            "bot_id": "b0000000-0000-4000-8000-000000000001",
+            "instruction": "总结今天的新闻",
+            "skill_id": "",
+            "config": {}
+          }
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": [],
+      "listTop": "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    },
+    "briefEverything": {
+      "input": {
+        "bot": "b0000000-0000-4000-8000-000000000003",
+        "name": "  AAPL 周报  ",
+        "kind": "brief",
+        "schedule": "every",
+        "every": "2",
+        "unit": "weeks",
+        "time": "09:15",
+        "count": "count",
+        "runs": "3",
+        "tz": "Europe/Paris",
+        "scope": "symbols",
+        "symbols": "aapl, msft  nvda，tsla、aapl",
+        "instruction": "写详细一点",
+        "skill": "s3000000-0000-4000-8000-000000000001"
+      },
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000003"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "  AAPL 周报  "
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "brief"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "every"
+        },
+        {
+          "label": "间隔",
+          "type": "number",
+          "value": "2"
+        },
+        {
+          "label": "单位",
+          "type": "select-one",
+          "value": "weeks"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "09:15"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "count"
+        },
+        {
+          "label": "次数",
+          "type": "number",
+          "value": "3"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Europe/Paris"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "symbols"
+        },
+        {
+          "label": "股票代码",
+          "type": "text",
+          "value": "aapl, msft  nvda，tsla、aapl"
+        },
+        {
+          "label": "任务说明",
+          "type": "textarea",
+          "value": "写详细一点"
+        },
+        {
+          "label": "技能",
+          "type": "select-one",
+          "value": "s3000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "sent": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/tasks",
+          "query": "",
+          "body": "{\"name\":\"AAPL 周报\",\"kind\":\"brief\",\"schedule_kind\":\"every\",\"schedule_time\":\"09:15\",\"timezone\":\"Europe/Paris\",\"scope\":\"symbols\",\"symbols\":[\"AAPL\",\"MSFT\",\"NVDA\",\"TSLA\"],\"every_value\":2,\"every_unit\":\"weeks\",\"max_runs\":3,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000003\",\"instruction\":\"写详细一点\",\"skill_id\":\"s3000000-0000-4000-8000-000000000001\",\"config\":{}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/tasks",
+          "body": {
+            "name": "AAPL 周报",
+            "kind": "brief",
+            "schedule_kind": "every",
+            "schedule_time": "09:15",
+            "timezone": "Europe/Paris",
+            "scope": "symbols",
+            "symbols": [
+              "AAPL",
+              "MSFT",
+              "NVDA",
+              "TSLA"
+            ],
+            "every_value": 2,
+            "every_unit": "weeks",
+            "max_runs": 3,
+            "channel": "inbox",
+            "bot_id": "b0000000-0000-4000-8000-000000000003",
+            "instruction": "写详细一点",
+            "skill_id": "s3000000-0000-4000-8000-000000000001",
+            "config": {}
+          }
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": [],
+      "listTop": "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    },
+    "briefHourly": {
+      "input": {
+        "name": "整点看盘",
+        "schedule": "hourly",
+        "time": "00:20",
+        "count": "once"
+      },
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "整点看盘"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "brief"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "hourly"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "00:20"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "once"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "research_queue"
+        },
+        {
+          "label": "任务说明",
+          "type": "textarea",
+          "value": ""
+        },
+        {
+          "label": "技能",
+          "type": "select-one",
+          "value": ""
+        }
+      ],
+      "sent": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/tasks",
+          "query": "",
+          "body": "{\"name\":\"整点看盘\",\"kind\":\"brief\",\"schedule_kind\":\"hourly\",\"schedule_time\":\"00:20\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":null,\"every_unit\":null,\"max_runs\":1,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"instruction\":\"\",\"skill_id\":\"\",\"config\":{}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/tasks",
+          "body": {
+            "name": "整点看盘",
+            "kind": "brief",
+            "schedule_kind": "hourly",
+            "schedule_time": "00:20",
+            "timezone": "Asia/Shanghai",
+            "scope": "research_queue",
+            "symbols": [],
+            "every_value": null,
+            "every_unit": null,
+            "max_runs": 1,
+            "channel": "inbox",
+            "bot_id": "b0000000-0000-4000-8000-000000000001",
+            "instruction": "",
+            "skill_id": "",
+            "config": {}
+          }
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": [],
+      "listTop": "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    },
+    "briefDaily": {
+      "input": {
+        "name": "每日",
+        "schedule": "daily",
+        "time": "21:00",
+        "tz": "America/New_York",
+        "instruction": ""
+      },
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "每日"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "brief"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "daily"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "21:00"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "America/New_York"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "research_queue"
+        },
+        {
+          "label": "任务说明",
+          "type": "textarea",
+          "value": ""
+        },
+        {
+          "label": "技能",
+          "type": "select-one",
+          "value": ""
+        }
+      ],
+      "sent": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/tasks",
+          "query": "",
+          "body": "{\"name\":\"每日\",\"kind\":\"brief\",\"schedule_kind\":\"daily\",\"schedule_time\":\"21:00\",\"timezone\":\"America/New_York\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"instruction\":\"\",\"skill_id\":\"\",\"config\":{}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/tasks",
+          "body": {
+            "name": "每日",
+            "kind": "brief",
+            "schedule_kind": "daily",
+            "schedule_time": "21:00",
+            "timezone": "America/New_York",
+            "scope": "research_queue",
+            "symbols": [],
+            "every_value": null,
+            "every_unit": null,
+            "max_runs": 0,
+            "channel": "inbox",
+            "bot_id": "b0000000-0000-4000-8000-000000000001",
+            "instruction": "",
+            "skill_id": "",
+            "config": {}
+          }
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": [],
+      "listTop": "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    },
+    "briefSymbolsDaily": {
+      "input": {
+        "name": "公司名单",
+        "scope": "symbols",
+        "symbols": "NVDA",
+        "instruction": "x"
+      },
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "公司名单"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "brief"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "weekdays"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "08:00"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "symbols"
+        },
+        {
+          "label": "股票代码",
+          "type": "text",
+          "value": "NVDA"
+        },
+        {
+          "label": "任务说明",
+          "type": "textarea",
+          "value": "x"
+        },
+        {
+          "label": "技能",
+          "type": "select-one",
+          "value": ""
+        }
+      ],
+      "sent": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/tasks",
+          "query": "",
+          "body": "{\"name\":\"公司名单\",\"kind\":\"brief\",\"schedule_kind\":\"weekdays\",\"schedule_time\":\"08:00\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"symbols\",\"symbols\":[\"NVDA\"],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"instruction\":\"x\",\"skill_id\":\"\",\"config\":{}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/tasks",
+          "body": {
+            "name": "公司名单",
+            "kind": "brief",
+            "schedule_kind": "weekdays",
+            "schedule_time": "08:00",
+            "timezone": "Asia/Shanghai",
+            "scope": "symbols",
+            "symbols": [
+              "NVDA"
+            ],
+            "every_value": null,
+            "every_unit": null,
+            "max_runs": 0,
+            "channel": "inbox",
+            "bot_id": "b0000000-0000-4000-8000-000000000001",
+            "instruction": "x",
+            "skill_id": "",
+            "config": {}
+          }
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": [],
+      "listTop": "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    },
+    "alertPlain": {
+      "input": {
+        "name": "只看申报",
+        "kind": "alerts"
+      },
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "只看申报"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "alerts"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "weekdays"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "08:00"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "research_queue"
+        },
+        {
+          "label": "新申报",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "新闻线索",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "价格线",
+          "type": "text",
+          "value": ""
+        },
+        {
+          "label": "也发 Telegram",
+          "type": "checkbox",
+          "value": false
+        }
+      ],
+      "sent": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/tasks",
+          "query": "",
+          "body": "{\"name\":\"只看申报\",\"kind\":\"alerts\",\"schedule_kind\":\"weekdays\",\"schedule_time\":\"08:00\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"instruction\":null,\"skill_id\":\"\",\"config\":{\"filings\":true,\"news\":true,\"price_lines\":[]}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/tasks",
+          "body": {
+            "name": "只看申报",
+            "kind": "alerts",
+            "schedule_kind": "weekdays",
+            "schedule_time": "08:00",
+            "timezone": "Asia/Shanghai",
+            "scope": "research_queue",
+            "symbols": [],
+            "every_value": null,
+            "every_unit": null,
+            "max_runs": 0,
+            "channel": "inbox",
+            "bot_id": "b0000000-0000-4000-8000-000000000001",
+            "instruction": null,
+            "skill_id": "",
+            "config": {
+              "filings": true,
+              "news": true,
+              "price_lines": []
+            }
+          }
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": [],
+      "listTop": "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    },
+    "alertPrice3": {
+      "input": {
+        "name": "三条价格线",
+        "kind": "alerts",
+        "filings": false,
+        "news": false,
+        "telegram": true,
+        "price": "NVDA>150, AAPL<180, tsla > 200.5",
+        "scope": "symbols",
+        "symbols": "NVDA, AAPL, TSLA"
+      },
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "三条价格线"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "alerts"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "weekdays"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "08:00"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "symbols"
+        },
+        {
+          "label": "股票代码",
+          "type": "text",
+          "value": "NVDA, AAPL, TSLA"
+        },
+        {
+          "label": "新申报",
+          "type": "checkbox",
+          "value": false
+        },
+        {
+          "label": "新闻线索",
+          "type": "checkbox",
+          "value": false
+        },
+        {
+          "label": "价格线",
+          "type": "text",
+          "value": "NVDA>150, AAPL<180, tsla > 200.5"
+        },
+        {
+          "label": "也发 Telegram",
+          "type": "checkbox",
+          "value": true
+        }
+      ],
+      "sent": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/tasks",
+          "query": "",
+          "body": "{\"name\":\"三条价格线\",\"kind\":\"alerts\",\"schedule_kind\":\"weekdays\",\"schedule_time\":\"08:00\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"symbols\",\"symbols\":[\"NVDA\",\"AAPL\",\"TSLA\"],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"telegram\",\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"instruction\":null,\"skill_id\":\"\",\"config\":{\"filings\":false,\"news\":false,\"price_lines\":[{\"symbol\":\"NVDA\",\"above\":150},{\"symbol\":\"AAPL\",\"below\":180},{\"symbol\":\"TSLA\",\"above\":200.5}]}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/tasks",
+          "body": {
+            "name": "三条价格线",
+            "kind": "alerts",
+            "schedule_kind": "weekdays",
+            "schedule_time": "08:00",
+            "timezone": "Asia/Shanghai",
+            "scope": "symbols",
+            "symbols": [
+              "NVDA",
+              "AAPL",
+              "TSLA"
+            ],
+            "every_value": null,
+            "every_unit": null,
+            "max_runs": 0,
+            "channel": "telegram",
+            "bot_id": "b0000000-0000-4000-8000-000000000001",
+            "instruction": null,
+            "skill_id": "",
+            "config": {
+              "filings": false,
+              "news": false,
+              "price_lines": [
+                {
+                  "symbol": "NVDA",
+                  "above": 150
+                },
+                {
+                  "symbol": "AAPL",
+                  "below": 180
+                },
+                {
+                  "symbol": "TSLA",
+                  "above": 200.5
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": [],
+      "listTop": "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    },
+    "alertPriceSeps": {
+      "input": {
+        "name": "分隔符",
+        "kind": "alerts",
+        "price": "nvda>150；aapl<180\nTSLA<230.25,",
+        "schedule": "hourly",
+        "time": "00:10"
+      },
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "分隔符"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "alerts"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "hourly"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "00:10"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "research_queue"
+        },
+        {
+          "label": "新申报",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "新闻线索",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "价格线",
+          "type": "text",
+          "value": "nvda>150；aapl<180 TSLA<230.25,"
+        },
+        {
+          "label": "也发 Telegram",
+          "type": "checkbox",
+          "value": false
+        }
+      ],
+      "sent": [],
+      "writes": [],
+      "formStillOpen": 1,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ],
+      "listTop": "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    },
+    "alertPriceSpaces": {
+      "input": {
+        "name": "空格",
+        "kind": "alerts",
+        "price": "  NVDA  >  150 , AAPL<180",
+        "count": "count",
+        "runs": "2"
+      },
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "空格"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "alerts"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "weekdays"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "08:00"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "count"
+        },
+        {
+          "label": "次数",
+          "type": "number",
+          "value": "2"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "research_queue"
+        },
+        {
+          "label": "新申报",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "新闻线索",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "价格线",
+          "type": "text",
+          "value": "  NVDA  >  150 , AAPL<180"
+        },
+        {
+          "label": "也发 Telegram",
+          "type": "checkbox",
+          "value": false
+        }
+      ],
+      "sent": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/tasks",
+          "query": "",
+          "body": "{\"name\":\"空格\",\"kind\":\"alerts\",\"schedule_kind\":\"weekdays\",\"schedule_time\":\"08:00\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":null,\"every_unit\":null,\"max_runs\":2,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"instruction\":null,\"skill_id\":\"\",\"config\":{\"filings\":true,\"news\":true,\"price_lines\":[{\"symbol\":\"NVDA\",\"above\":150},{\"symbol\":\"AAPL\",\"below\":180}]}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/tasks",
+          "body": {
+            "name": "空格",
+            "kind": "alerts",
+            "schedule_kind": "weekdays",
+            "schedule_time": "08:00",
+            "timezone": "Asia/Shanghai",
+            "scope": "research_queue",
+            "symbols": [],
+            "every_value": null,
+            "every_unit": null,
+            "max_runs": 2,
+            "channel": "inbox",
+            "bot_id": "b0000000-0000-4000-8000-000000000001",
+            "instruction": null,
+            "skill_id": "",
+            "config": {
+              "filings": true,
+              "news": true,
+              "price_lines": [
+                {
+                  "symbol": "NVDA",
+                  "above": 150
+                },
+                {
+                  "symbol": "AAPL",
+                  "below": 180
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": [],
+      "listTop": "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    },
+    "alertBothSides": {
+      "input": {
+        "name": "同一代码两边",
+        "kind": "alerts",
+        "price": "NVDA>150, NVDA<120"
+      },
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "同一代码两边"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "alerts"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "weekdays"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "08:00"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "research_queue"
+        },
+        {
+          "label": "新申报",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "新闻线索",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "价格线",
+          "type": "text",
+          "value": "NVDA>150, NVDA<120"
+        },
+        {
+          "label": "也发 Telegram",
+          "type": "checkbox",
+          "value": false
+        }
+      ],
+      "sent": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/tasks",
+          "query": "",
+          "body": "{\"name\":\"同一代码两边\",\"kind\":\"alerts\",\"schedule_kind\":\"weekdays\",\"schedule_time\":\"08:00\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"instruction\":null,\"skill_id\":\"\",\"config\":{\"filings\":true,\"news\":true,\"price_lines\":[{\"symbol\":\"NVDA\",\"above\":150},{\"symbol\":\"NVDA\",\"below\":120}]}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/tasks",
+          "body": {
+            "name": "同一代码两边",
+            "kind": "alerts",
+            "schedule_kind": "weekdays",
+            "schedule_time": "08:00",
+            "timezone": "Asia/Shanghai",
+            "scope": "research_queue",
+            "symbols": [],
+            "every_value": null,
+            "every_unit": null,
+            "max_runs": 0,
+            "channel": "inbox",
+            "bot_id": "b0000000-0000-4000-8000-000000000001",
+            "instruction": null,
+            "skill_id": "",
+            "config": {
+              "filings": true,
+              "news": true,
+              "price_lines": [
+                {
+                  "symbol": "NVDA",
+                  "above": 150
+                },
+                {
+                  "symbol": "NVDA",
+                  "below": 120
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": [],
+      "listTop": "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    },
+    "alertEvery": {
+      "input": {
+        "name": "每三小时",
+        "kind": "alerts",
+        "schedule": "every",
+        "every": "3",
+        "unit": "hours",
+        "time": "10:00",
+        "price": "AAPL<180",
+        "bot": "b0000000-0000-4000-8000-000000000002"
+      },
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000002"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "每三小时"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "alerts"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "every"
+        },
+        {
+          "label": "间隔",
+          "type": "number",
+          "value": "3"
+        },
+        {
+          "label": "单位",
+          "type": "select-one",
+          "value": "hours"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "10:00"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "research_queue"
+        },
+        {
+          "label": "新申报",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "新闻线索",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "价格线",
+          "type": "text",
+          "value": "AAPL<180"
+        },
+        {
+          "label": "也发 Telegram",
+          "type": "checkbox",
+          "value": false
+        }
+      ],
+      "sent": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/tasks",
+          "query": "",
+          "body": "{\"name\":\"每三小时\",\"kind\":\"alerts\",\"schedule_kind\":\"every\",\"schedule_time\":\"10:00\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":3,\"every_unit\":\"hours\",\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000002\",\"instruction\":null,\"skill_id\":\"\",\"config\":{\"filings\":true,\"news\":true,\"price_lines\":[{\"symbol\":\"AAPL\",\"below\":180}]}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/tasks",
+          "body": {
+            "name": "每三小时",
+            "kind": "alerts",
+            "schedule_kind": "every",
+            "schedule_time": "10:00",
+            "timezone": "Asia/Shanghai",
+            "scope": "research_queue",
+            "symbols": [],
+            "every_value": 3,
+            "every_unit": "hours",
+            "max_runs": 0,
+            "channel": "inbox",
+            "bot_id": "b0000000-0000-4000-8000-000000000002",
+            "instruction": null,
+            "skill_id": "",
+            "config": {
+              "filings": true,
+              "news": true,
+              "price_lines": [
+                {
+                  "symbol": "AAPL",
+                  "below": 180
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": [],
+      "listTop": "盘前新闻速览2026/11/11 08:00:00失败：模型超时"
+    }
+  },
+  "createValidation": {
+    "noName": {
+      "input": {
+        "name": ""
+      },
+      "sent": 0,
+      "alert": [
+        "请填任务名称（最多 80 字）。"
+      ],
+      "formOpen": 1
+    },
+    "spaceName": {
+      "input": {
+        "name": "   "
+      },
+      "sent": 0,
+      "alert": [
+        "请填任务名称（最多 80 字）。"
+      ],
+      "formOpen": 1
+    },
+    "longName": {
+      "input": {
+        "name": "名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名"
+      },
+      "sent": 1,
+      "alert": [],
+      "formOpen": 0
+    },
+    "symbolsEmpty": {
+      "input": {
+        "scope": "symbols",
+        "symbols": ""
+      },
+      "sent": 0,
+      "alert": [
+        "股票代码无效，或指定公司时没有填代码。"
+      ],
+      "formOpen": 1
+    },
+    "symbolsBlank": {
+      "input": {
+        "scope": "symbols",
+        "symbols": " , ，、 "
+      },
+      "sent": 0,
+      "alert": [
+        "股票代码无效，或指定公司时没有填代码。"
+      ],
+      "formOpen": 1
+    },
+    "priceBad": {
+      "input": {
+        "kind": "alerts",
+        "price": "NVDA>=150"
+      },
+      "sent": 0,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ],
+      "formOpen": 1
+    },
+    "everyZero": {
+      "input": {
+        "schedule": "every",
+        "every": "0"
+      },
+      "sent": 0,
+      "alert": [],
+      "formOpen": 1
+    },
+    "everyFraction": {
+      "input": {
+        "schedule": "every",
+        "every": "1.5"
+      },
+      "sent": 0,
+      "alert": [],
+      "formOpen": 1
+    },
+    "everyEmpty": {
+      "input": {
+        "schedule": "every",
+        "every": ""
+      },
+      "sent": 0,
+      "alert": [],
+      "formOpen": 1
+    },
+    "countZero": {
+      "input": {
+        "count": "count",
+        "runs": "0"
+      },
+      "sent": 0,
+      "alert": [],
+      "formOpen": 1
+    },
+    "countFraction": {
+      "input": {
+        "count": "count",
+        "runs": "2.5"
+      },
+      "sent": 0,
+      "alert": [],
+      "formOpen": 1
+    }
+  },
+  "priceText": {
+    "\"NVDA>150\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 150
+        }
+      ],
+      "alert": []
+    },
+    "\"nvda<150\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "below": 150
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA > 150\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 150
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>150.5\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 150.5
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>150.\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>.5\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>0\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 0
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>0.0\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 0
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>=150\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA<=150\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA=150\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA 150\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\">150\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>-5\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>1e3\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>1,000\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>$150\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"$NVDA>150\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"BRK.B>450\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "BRK.B",
+          "above": 450
+        }
+      ],
+      "alert": []
+    },
+    "\"BRK-B>450\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "BRK-B",
+          "above": 450
+        }
+      ],
+      "alert": []
+    },
+    "\"A1>5\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "A1",
+          "above": 5
+        }
+      ],
+      "alert": []
+    },
+    "\"1A>5\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"ABCDEFGHIJ>1\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "ABCDEFGHIJ",
+          "above": 1
+        }
+      ],
+      "alert": []
+    },
+    "\"ABCDEFGHIJK>1\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"腾讯>300\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>150,,AAPL<180\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 150
+        },
+        {
+          "symbol": "AAPL",
+          "below": 180
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>150 AAPL<180\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>150，AAPL<180\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 150
+        },
+        {
+          "symbol": "AAPL",
+          "below": 180
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>150、AAPL<180\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>150;AAPL<180\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 150
+        },
+        {
+          "symbol": "AAPL",
+          "below": 180
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>150；AAPL<180\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 150
+        },
+        {
+          "symbol": "AAPL",
+          "below": 180
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>150\\nAAPL<180\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>150, \"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 150
+        }
+      ],
+      "alert": []
+    },
+    "\",NVDA>150\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 150
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>150,NVDA>150\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 150
+        },
+        {
+          "symbol": "NVDA",
+          "above": 150
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>150, NVDA<120\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 150
+        },
+        {
+          "symbol": "NVDA",
+          "below": 120
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>１５０\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"NVDA>150%\"": {
+      "accepted": false,
+      "price_lines": null,
+      "alert": [
+        "价格线格式：代码>价格 或 代码<价格，用逗号分隔。"
+      ]
+    },
+    "\"  \"": {
+      "accepted": true,
+      "price_lines": [],
+      "alert": []
+    },
+    "\"\"": {
+      "accepted": true,
+      "price_lines": [],
+      "alert": []
+    },
+    "\"NVDA>99999999\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 99999999
+        }
+      ],
+      "alert": []
+    },
+    "\"NVDA>0.0000001\"": {
+      "accepted": true,
+      "price_lines": [
+        {
+          "symbol": "NVDA",
+          "above": 1e-7
+        }
+      ],
+      "alert": []
+    }
+  },
+  "edit": {
+    "盘前新闻速览": {
+      "rowText": "NewsBot 盘前新闻速览 简报 工作日 08:30 · Asia/Shanghai 已发布 · 下次：2026/11/16 08:30:00 · 已执行 38 次 “汇总关注列表公司的盘前新闻，列出最值得看的三条。” 暂停 编辑 删除",
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000002"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "盘前新闻速览"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "brief"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "weekdays"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "08:30"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "research_queue"
+        },
+        {
+          "label": "任务说明",
+          "type": "textarea",
+          "value": "汇总关注列表公司的盘前新闻，列出最值得看的三条。"
+        },
+        {
+          "label": "技能",
+          "type": "select-one",
+          "value": ""
+        }
+      ],
+      "sent": [
+        {
+          "method": "PATCH",
+          "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000001",
+          "query": "",
+          "body": "{\"name\":\"盘前新闻速览\",\"kind\":\"brief\",\"schedule_kind\":\"weekdays\",\"schedule_time\":\"08:30\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000002\",\"instruction\":\"汇总关注列表公司的盘前新闻，列出最值得看的三条。\",\"skill_id\":\"\",\"config\":{}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": []
+    },
+    "AAPL 财报跟踪": {
+      "rowText": "AppleBot AAPL 财报跟踪 简报 每天 21:00 · Asia/Shanghai 已发布 · 下次：2026/11/13 21:00:00 · 已执行 21 次 暂停 编辑 删除",
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000003"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "AAPL 财报跟踪"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "brief"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "daily"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "21:00"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "symbols"
+        },
+        {
+          "label": "股票代码",
+          "type": "text",
+          "value": "AAPL"
+        },
+        {
+          "label": "任务说明",
+          "type": "textarea",
+          "value": ""
+        },
+        {
+          "label": "技能",
+          "type": "select-one",
+          "value": ""
+        }
+      ],
+      "sent": [
+        {
+          "method": "PATCH",
+          "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000002",
+          "query": "",
+          "body": "{\"name\":\"AAPL 财报跟踪\",\"kind\":\"brief\",\"schedule_kind\":\"daily\",\"schedule_time\":\"21:00\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"symbols\",\"symbols\":[\"AAPL\"],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000003\",\"instruction\":\"\",\"skill_id\":\"\",\"config\":{}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": []
+    },
+    "价格线提醒": {
+      "rowText": "FinBot 价格线提醒 提醒 每小时第 15 分 · Asia/Shanghai 未触发 · 下次：2026/11/13 11:15:00 · 已执行 212 次 暂停 编辑 删除",
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "价格线提醒"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "alerts"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "hourly"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "00:15"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "symbols"
+        },
+        {
+          "label": "股票代码",
+          "type": "text",
+          "value": "NVDA, AAPL"
+        },
+        {
+          "label": "新申报",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "新闻线索",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "价格线",
+          "type": "text",
+          "value": "NVDA>140, AAPL<190"
+        },
+        {
+          "label": "也发 Telegram",
+          "type": "checkbox",
+          "value": true
+        }
+      ],
+      "sent": [
+        {
+          "method": "PATCH",
+          "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000003",
+          "query": "",
+          "body": "{\"name\":\"价格线提醒\",\"kind\":\"alerts\",\"schedule_kind\":\"hourly\",\"schedule_time\":\"00:15\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"symbols\",\"symbols\":[\"NVDA\",\"AAPL\"],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"telegram\",\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"instruction\":null,\"skill_id\":\"\",\"config\":{\"filings\":true,\"news\":true,\"price_lines\":[{\"symbol\":\"NVDA\",\"above\":140},{\"symbol\":\"AAPL\",\"below\":190}]}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": []
+    },
+    "周日组合复盘": {
+      "rowText": "FinBot 周日组合复盘 简报 每 1 周（从 19:00 起） · 共 8 次 · Asia/Shanghai 已发布 · 下次：2026/11/15 19:00:00 · 已执行 3 次 “检查持仓的价格计划与最近的财报判断，给出下周要关注的事项。” 暂停 编辑 删除",
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "周日组合复盘"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "brief"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "every"
+        },
+        {
+          "label": "间隔",
+          "type": "number",
+          "value": "1"
+        },
+        {
+          "label": "单位",
+          "type": "select-one",
+          "value": "weeks"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "19:00"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "count"
+        },
+        {
+          "label": "次数",
+          "type": "number",
+          "value": "8"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "research_queue"
+        },
+        {
+          "label": "任务说明",
+          "type": "textarea",
+          "value": "检查持仓的价格计划与最近的财报判断，给出下周要关注的事项。"
+        },
+        {
+          "label": "技能",
+          "type": "select-one",
+          "value": ""
+        }
+      ],
+      "sent": [
+        {
+          "method": "PATCH",
+          "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000004",
+          "query": "",
+          "body": "{\"name\":\"周日组合复盘\",\"kind\":\"brief\",\"schedule_kind\":\"every\",\"schedule_time\":\"19:00\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":1,\"every_unit\":\"weeks\",\"max_runs\":8,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"instruction\":\"检查持仓的价格计划与最近的财报判断，给出下周要关注的事项。\",\"skill_id\":\"\",\"config\":{}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": []
+    },
+    "旧的盘后提醒": {
+      "rowText": "FinBot 旧的盘后提醒 已暂停 提醒 每天 16:30 · Asia/Shanghai 尚未运行 · 已执行 0 次 启用 编辑 删除",
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000001"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "旧的盘后提醒"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "alerts"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "daily"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "16:30"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "symbols"
+        },
+        {
+          "label": "股票代码",
+          "type": "text",
+          "value": "TSLA"
+        },
+        {
+          "label": "新申报",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "新闻线索",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "价格线",
+          "type": "text",
+          "value": "TSLA<230"
+        },
+        {
+          "label": "也发 Telegram",
+          "type": "checkbox",
+          "value": false
+        }
+      ],
+      "sent": [
+        {
+          "method": "PATCH",
+          "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000005",
+          "query": "",
+          "body": "{\"name\":\"旧的盘后提醒\",\"kind\":\"alerts\",\"schedule_kind\":\"daily\",\"schedule_time\":\"16:30\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"symbols\",\"symbols\":[\"TSLA\"],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000001\",\"instruction\":null,\"skill_id\":\"\",\"config\":{\"filings\":true,\"news\":true,\"price_lines\":[{\"symbol\":\"TSLA\",\"below\":230}]}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": []
+    },
+    "NVDA 上下沿提醒": {
+      "rowText": "TeslaBot NVDA 上下沿提醒 提醒 每小时第 30 分 · Asia/Shanghai 未触发 · 下次：2026/11/16 08:30:00 · 已执行 6 次 暂停 编辑 删除",
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000005"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "NVDA 上下沿提醒"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "alerts"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "hourly"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "00:30"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "symbols"
+        },
+        {
+          "label": "股票代码",
+          "type": "text",
+          "value": "NVDA"
+        },
+        {
+          "label": "新申报",
+          "type": "checkbox",
+          "value": false
+        },
+        {
+          "label": "新闻线索",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "价格线",
+          "type": "text",
+          "value": "NVDA>150, NVDA<120.5"
+        },
+        {
+          "label": "也发 Telegram",
+          "type": "checkbox",
+          "value": false
+        }
+      ],
+      "sent": [
+        {
+          "method": "PATCH",
+          "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000006",
+          "query": "",
+          "body": "{\"name\":\"NVDA 上下沿提醒\",\"kind\":\"alerts\",\"schedule_kind\":\"hourly\",\"schedule_time\":\"00:30\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"symbols\",\"symbols\":[\"NVDA\"],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000005\",\"instruction\":null,\"skill_id\":\"\",\"config\":{\"filings\":false,\"news\":true,\"price_lines\":[{\"symbol\":\"NVDA\",\"above\":150},{\"symbol\":\"NVDA\",\"below\":120.5}]}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": []
+    },
+    "悉尼开盘简报": {
+      "rowText": "TeslaBot 悉尼开盘简报 简报 每天 07:45 · Pacific/Chatham 失败：模型超时 · 下次：2026/11/16 08:30:00 · 已执行 2 次 “开盘前列出隔夜重要变化。” 暂停 编辑 删除",
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000005"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "悉尼开盘简报"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "brief"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "daily"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "07:45"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Pacific/Chatham"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "research_queue"
+        },
+        {
+          "label": "任务说明",
+          "type": "textarea",
+          "value": "开盘前列出隔夜重要变化。"
+        },
+        {
+          "label": "技能",
+          "type": "select-one",
+          "value": ""
+        }
+      ],
+      "sent": [
+        {
+          "method": "PATCH",
+          "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000007",
+          "query": "",
+          "body": "{\"name\":\"悉尼开盘简报\",\"kind\":\"brief\",\"schedule_kind\":\"daily\",\"schedule_time\":\"07:45\",\"timezone\":\"Pacific/Chatham\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000005\",\"instruction\":\"开盘前列出隔夜重要变化。\",\"skill_id\":\"\",\"config\":{}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": []
+    },
+    "旧式价格线": {
+      "rowText": "AppleBot 旧式价格线 提醒 每天 21:30 · Asia/Shanghai 尚未运行 · 下次：2026/11/16 08:30:00 · 已执行 0 次 暂停 编辑 删除",
+      "form": [
+        {
+          "label": "所属 bot",
+          "type": "select-one",
+          "value": "b0000000-0000-4000-8000-000000000003"
+        },
+        {
+          "label": "名称",
+          "type": "text",
+          "value": "旧式价格线"
+        },
+        {
+          "label": "类型",
+          "type": "select-one",
+          "value": "alerts"
+        },
+        {
+          "label": "频率",
+          "type": "select-one",
+          "value": "daily"
+        },
+        {
+          "label": "时间",
+          "type": "time",
+          "value": "21:30"
+        },
+        {
+          "label": "执行次数",
+          "type": "select-one",
+          "value": "unlimited"
+        },
+        {
+          "label": "时区",
+          "type": "text",
+          "value": "Asia/Shanghai"
+        },
+        {
+          "label": "范围",
+          "type": "select-one",
+          "value": "symbols"
+        },
+        {
+          "label": "股票代码",
+          "type": "text",
+          "value": "NVDA, AAPL"
+        },
+        {
+          "label": "新申报",
+          "type": "checkbox",
+          "value": true
+        },
+        {
+          "label": "新闻线索",
+          "type": "checkbox",
+          "value": false
+        },
+        {
+          "label": "价格线",
+          "type": "text",
+          "value": ""
+        },
+        {
+          "label": "也发 Telegram",
+          "type": "checkbox",
+          "value": false
+        }
+      ],
+      "sent": [
+        {
+          "method": "PATCH",
+          "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000008",
+          "query": "",
+          "body": "{\"name\":\"旧式价格线\",\"kind\":\"alerts\",\"schedule_kind\":\"daily\",\"schedule_time\":\"21:30\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"symbols\",\"symbols\":[\"NVDA\",\"AAPL\"],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000003\",\"instruction\":null,\"skill_id\":\"\",\"config\":{\"filings\":true,\"news\":false,\"price_lines\":[]}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "formStillOpen": 0,
+      "alert": []
+    },
+    "_changed": {
+      "sent": [
+        {
+          "method": "PATCH",
+          "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000007",
+          "query": "",
+          "body": "{\"name\":\"悉尼开盘简报 2\",\"kind\":\"brief\",\"schedule_kind\":\"daily\",\"schedule_time\":\"07:45\",\"timezone\":\"Australia/Sydney\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000005\",\"instruction\":\"开盘前列出隔夜重要变化。\",\"skill_id\":\"\",\"config\":{}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ]
+    }
+  },
+  "toggle": {
+    "盘前新闻速览:暂停": {
+      "before": "NewsBot 盘前新闻速览 简报 工作日 08:30 · Asia/Shanghai 已发布 · 下次：2026/11/16 08:30:00 · 已执行 38 次 “汇总关注列表公司的盘前新闻，列出最值得看的三条。” 暂停 编辑 删除",
+      "after": "NewsBot 盘前新闻速览 已暂停 简报 工作日 08:30 · Asia/Shanghai 已发布 · 已执行 38 次 “汇总关注列表公司的盘前新闻，列出最值得看的三条。” 启用 编辑 删除",
+      "sent": [
+        {
+          "method": "PATCH",
+          "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000001",
+          "query": "",
+          "body": "{\"enabled\":false}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ]
+    },
+    "旧的盘后提醒:启用": {
+      "before": "FinBot 旧的盘后提醒 已暂停 提醒 每天 16:30 · Asia/Shanghai 尚未运行 · 已执行 0 次 启用 编辑 删除",
+      "after": "FinBot 旧的盘后提醒 提醒 每天 16:30 · Asia/Shanghai 尚未运行 · 已执行 0 次 暂停 编辑 删除",
+      "sent": [
+        {
+          "method": "PATCH",
+          "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000005",
+          "query": "",
+          "body": "{\"enabled\":true}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ]
+    }
+  },
+  "del": {
+    "dialog": {
+      "title": "删除这个任务？",
+      "description": "已生成的简报会保留，这个任务之后不再运行。",
+      "buttons": [
+        "取消",
+        "删除"
+      ]
+    },
+    "sentAfterEsc": 0,
+    "sent": [
+      {
+        "method": "DELETE",
+        "path": "/agent-chat/tasks/t2000000-0000-4000-8000-000000000002",
+        "query": "",
+        "body": null,
+        "contentType": null,
+        "hasSession": true
+      }
+    ],
+    "tasksAfter": [
+      "盘前新闻速览",
+      "价格线提醒",
+      "周日组合复盘",
+      "旧的盘后提醒",
+      "NVDA 上下沿提醒",
+      "悉尼开盘简报",
+      "旧式价格线",
+      "盘前新闻速览",
+      "价格线提醒",
+      "AAPL 财报跟踪",
+      "盘前新闻速览"
+    ]
+  },
+  "proposals": {
+    "live": {
+      "text": "ReportBot 每周五盘后总结 NVDA 动态 NVDA ReportBot 提议新建例行任务：每周五 16:30 总结 NVDA 的新闻与申报。 去对话确认",
+      "hashAfter": "#/chat",
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/bots/b0000000-0000-4000-8000-000000000001/read",
+          "query": "",
+          "body": null,
+          "contentType": null,
+          "hasSession": true
+        }
+      ],
+      "reads": [
+        "/agent-chat/conversations/c0000000-0000-4000-8000-000000000004/messages?limit=20",
+        "/agent-chat/conversations/c0000000-0000-4000-8000-000000000004/messages?limit=1",
+        "/agent-chat/conversations?limit=30&offset=0",
+        "/agent-chat/context?bot_id=b0000000-0000-4000-8000-000000000001"
+      ]
+    },
+    "expired": {
+      "text": "NewsBot 删除任务「盘前新闻速览」 已过期 盘前新闻速览 NewsBot 提议删除例行任务「盘前新闻速览」：近三次运行都没有新内容。 打开对话",
+      "hashAfter": "#/chat",
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/bots/b0000000-0000-4000-8000-000000000001/read",
+          "query": "",
+          "body": null,
+          "contentType": null,
+          "hasSession": true
+        }
+      ],
+      "reads": [
+        "/agent-chat/conversations/c0000000-0000-4000-8000-000000000002/messages?limit=20",
+        "/agent-chat/conversations/c0000000-0000-4000-8000-000000000002/messages?limit=1",
+        "/agent-chat/conversations?limit=30&offset=0",
+        "/agent-chat/context?bot_id=b0000000-0000-4000-8000-000000000001"
+      ]
+    }
+  },
+  "suggestions": {
+    "confirm": {
+      "text": "Agent 的建议 FinBot 建议抓取并分析 NVDA 最新 10-Q pending_confirm “无人值守的「周日组合复盘」发现 NVDA 有新的 10-Q 还没进材料库，想把它保存并生成分析。写入材料库需要你确认。” 来自任务：周日组合复盘 确认 跳过 稍后 生成确认卡 忽略",
+      "buttonsBefore": [
+        "确认",
+        "跳过",
+        "稍后",
+        "生成确认卡",
+        "忽略"
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/inbox/i0000000-0000-4000-8000-000000000001/confirm",
+          "query": "",
+          "body": "{\"action\":\"confirm\",\"action_token\":\"fixture-ref\"}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "hashAfter": "#/routines",
+      "listAfter": [
+        "Agent 的建议 AppleBot 建议抓取并分析 AAPL 最新 10-K pending_confirm “无人值守的「AAPL 财报跟踪」发现 AAPL 有新的 10-K 还没进材料库，想把它保存并生成分析。” 来自任务：AAPL 财报跟踪 确认 跳过 稍后 生成确认卡 打开对话 忽略",
+        "Agent 的建议 FinBot 建议抓取并分析 NVDA 最新 10-Q confirmed “无人值守的「周日组合复盘」发现 NVDA 有新的 10-Q 还没进材料库，想把它保存并生成分析。写入材料库需要你确认。” 来自任务：周日组合复盘 确认 跳过 稍后 生成确认卡 忽略"
+      ]
+    },
+    "skip": {
+      "text": "Agent 的建议 FinBot 建议抓取并分析 NVDA 最新 10-Q pending_confirm “无人值守的「周日组合复盘」发现 NVDA 有新的 10-Q 还没进材料库，想把它保存并生成分析。写入材料库需要你确认。” 来自任务：周日组合复盘 确认 跳过 稍后 生成确认卡 忽略",
+      "buttonsBefore": [
+        "确认",
+        "跳过",
+        "稍后",
+        "生成确认卡",
+        "忽略"
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/inbox/i0000000-0000-4000-8000-000000000001/confirm",
+          "query": "",
+          "body": "{\"action\":\"skip\",\"action_token\":\"fixture-ref\"}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "hashAfter": "#/routines",
+      "listAfter": [
+        "Agent 的建议 AppleBot 建议抓取并分析 AAPL 最新 10-K pending_confirm “无人值守的「AAPL 财报跟踪」发现 AAPL 有新的 10-K 还没进材料库，想把它保存并生成分析。” 来自任务：AAPL 财报跟踪 确认 跳过 稍后 生成确认卡 打开对话 忽略"
+      ]
+    },
+    "later": {
+      "text": "Agent 的建议 FinBot 建议抓取并分析 NVDA 最新 10-Q pending_confirm “无人值守的「周日组合复盘」发现 NVDA 有新的 10-Q 还没进材料库，想把它保存并生成分析。写入材料库需要你确认。” 来自任务：周日组合复盘 确认 跳过 稍后 生成确认卡 忽略",
+      "buttonsBefore": [
+        "确认",
+        "跳过",
+        "稍后",
+        "生成确认卡",
+        "忽略"
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/inbox/i0000000-0000-4000-8000-000000000001/confirm",
+          "query": "",
+          "body": "{\"action\":\"later\",\"action_token\":\"fixture-ref\"}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "hashAfter": "#/routines",
+      "listAfter": [
+        "Agent 的建议 AppleBot 建议抓取并分析 AAPL 最新 10-K pending_confirm “无人值守的「AAPL 财报跟踪」发现 AAPL 有新的 10-K 还没进材料库，想把它保存并生成分析。” 来自任务：AAPL 财报跟踪 确认 跳过 稍后 生成确认卡 打开对话 忽略",
+        "Agent 的建议 FinBot 建议抓取并分析 NVDA 最新 10-Q pending_confirm “无人值守的「周日组合复盘」发现 NVDA 有新的 10-Q 还没进材料库，想把它保存并生成分析。写入材料库需要你确认。” 来自任务：周日组合复盘 确认 跳过 稍后 生成确认卡 忽略"
+      ]
+    },
+    "mint": {
+      "text": "Agent 的建议 FinBot 建议抓取并分析 NVDA 最新 10-Q pending_confirm “无人值守的「周日组合复盘」发现 NVDA 有新的 10-Q 还没进材料库，想把它保存并生成分析。写入材料库需要你确认。” 来自任务：周日组合复盘 确认 跳过 稍后 生成确认卡 忽略",
+      "buttonsBefore": [
+        "确认",
+        "跳过",
+        "稍后",
+        "生成确认卡",
+        "忽略"
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/inbox/i0000000-0000-4000-8000-000000000001/card",
+          "query": "",
+          "body": null,
+          "contentType": null,
+          "hasSession": true
+        },
+        {
+          "method": "POST",
+          "path": "/agent-chat/bots/b0000000-0000-4000-8000-000000000001/read",
+          "query": "",
+          "body": null,
+          "contentType": null,
+          "hasSession": true
+        }
+      ],
+      "hashAfter": "#/chat",
+      "listAfter": []
+    },
+    "dismiss": {
+      "text": "Agent 的建议 FinBot 建议抓取并分析 NVDA 最新 10-Q pending_confirm “无人值守的「周日组合复盘」发现 NVDA 有新的 10-Q 还没进材料库，想把它保存并生成分析。写入材料库需要你确认。” 来自任务：周日组合复盘 确认 跳过 稍后 生成确认卡 忽略",
+      "buttonsBefore": [
+        "确认",
+        "跳过",
+        "稍后",
+        "生成确认卡",
+        "忽略"
+      ],
+      "writes": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/inbox/i0000000-0000-4000-8000-000000000001/status",
+          "query": "",
+          "body": "{\"status\":\"dismissed\"}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ],
+      "hashAfter": "#/routines",
+      "listAfter": [
+        "Agent 的建议 AppleBot 建议抓取并分析 AAPL 最新 10-K pending_confirm “无人值守的「AAPL 财报跟踪」发现 AAPL 有新的 10-K 还没进材料库，想把它保存并生成分析。” 来自任务：AAPL 财报跟踪 确认 跳过 稍后 生成确认卡 打开对话 忽略"
+      ]
+    },
+    "open": {
+      "text": "Agent 的建议 AppleBot 建议抓取并分析 AAPL 最新 10-K pending_confirm “无人值守的「AAPL 财报跟踪」发现 AAPL 有新的 10-K 还没进材料库，想把它保存并生成分析。” 来自任务：AAPL 财报跟踪 确认 跳过 稍后 生成确认卡 打开对话 忽略",
+      "buttonsBefore": [
+        "确认",
+        "跳过",
+        "稍后",
+        "生成确认卡",
+        "打开对话",
+        "忽略"
+      ],
+      "writes": [],
+      "hashAfter": "#/chat/c/c0000000-0000-4000-8000-000000000003",
+      "listAfter": []
+    }
+  },
+  "botPage": {
+    "load": {
+      "heads": [
+        "例行任务和最近运行",
+        "最近 20 次运行"
+      ],
+      "tasks": [
+        "AAPL 财报跟踪简报每天 21:00 · Asia/Shanghai已发布 · 下次：2026/11/13 21:00:00 · 已执行 21 次暂停编辑删除",
+        "旧式价格线提醒每天 21:30 · Asia/Shanghai尚未运行 · 下次：2026/11/16 08:30:00 · 已执行 0 次暂停编辑删除",
+        "AAPL 财报跟踪2026/11/12 21:00:00已发布 · 已贴进对话 · 打开过程"
+      ],
+      "runs": [
+        "AAPL 财报跟踪2026/11/12 21:00:00已发布 · 已贴进对话 · 打开过程"
+      ]
+    },
+    "formLabels": [
+      {
+        "label": "名称",
+        "type": "text",
+        "value": "研究队列简报"
+      },
+      {
+        "label": "类型",
+        "type": "select-one",
+        "value": "brief"
+      },
+      {
+        "label": "频率",
+        "type": "select-one",
+        "value": "weekdays"
+      },
+      {
+        "label": "时间",
+        "type": "time",
+        "value": "08:00"
+      },
+      {
+        "label": "执行次数",
+        "type": "select-one",
+        "value": "unlimited"
+      },
+      {
+        "label": "时区",
+        "type": "text",
+        "value": "Asia/Shanghai"
+      },
+      {
+        "label": "范围",
+        "type": "select-one",
+        "value": "research_queue"
+      },
+      {
+        "label": "任务说明",
+        "type": "textarea",
+        "value": ""
+      },
+      {
+        "label": "技能",
+        "type": "select-one",
+        "value": ""
+      }
+    ],
+    "create": {
+      "sent": [
+        {
+          "method": "POST",
+          "path": "/agent-chat/bots/b0000000-0000-4000-8000-000000000003/read",
+          "query": "",
+          "body": null,
+          "contentType": null,
+          "hasSession": true
+        },
+        {
+          "method": "POST",
+          "path": "/agent-chat/tasks",
+          "query": "",
+          "body": "{\"name\":\"本 bot 简报\",\"kind\":\"brief\",\"schedule_kind\":\"weekdays\",\"schedule_time\":\"08:00\",\"timezone\":\"Asia/Shanghai\",\"scope\":\"research_queue\",\"symbols\":[],\"every_value\":null,\"every_unit\":null,\"max_runs\":0,\"channel\":\"inbox\",\"bot_id\":\"b0000000-0000-4000-8000-000000000003\",\"instruction\":\"x\",\"skill_id\":\"\",\"config\":{}}",
+          "contentType": "application/json",
+          "hasSession": true
+        }
+      ]
+    }
+  }
+}

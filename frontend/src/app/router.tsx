@@ -77,13 +77,13 @@ const researchWrapped: RouteObject[] = [
   { path: PATTERNS.materials, ...page(() => import("./pages/materials"), "MaterialsRoute") },
 ];
 
-/** 持仓 is new markup (P7.1): no old-UI marker around it. */
+/** 持仓 (P7.1) and 任务 (P7.2) are new markup: no old-UI marker around them. */
 const personalPages: RouteObject[] = [
   { path: PATTERNS.portfolio, ...page(() => import("./pages/portfolio"), "PortfolioRoute") },
+  { path: PATTERNS.routines, ...page(() => import("./pages/routines"), "RoutinesRoute") },
 ];
 
 const pages: RouteObject[] = [
-  { path: PATTERNS.routines, ...page(() => import("./pages/routines"), "RoutinesRoute") },
   { path: PATTERNS.assistantBots, ...page(() => import("./pages/bots"), "BotsRoute") },
   { path: PATTERNS.assistantSkill, ...page(() => import("./pages/skills"), "SkillsRoute") },
   { path: PATTERNS.assistantSkills, ...page(() => import("./pages/skills"), "SkillsRoute") },

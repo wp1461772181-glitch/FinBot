@@ -11,6 +11,7 @@ import { freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { buildState } from "./fixtures/index.mjs";
 import { materialId } from "./fixtures/materials.mjs";
+import { EXTRA_INBOX, EXTRA_PROPOSALS, EXTRA_TASKS } from "./fixtures/routines.mjs";
 
 const LOADING = ["正在读取", "正在加载", "读取中", "加载中"];
 
@@ -290,6 +291,20 @@ async function redUp(page) {
 // --- P7.1 pictures -------------------------------------------------------------------------------------------------------
 const portfolioLoaded = "[data-testid=portfolio-table]";
 /** The fake backend's state for the portfolio page with switches set (fixtures/portfolio.mjs: empty, fail, referenceOnly, override). */
+/** P7.2: the fake backend's state with the extra routines: a task with both price sides, one in a rare time zone, one with an old free-text price line, an expired proposal and a second suggestion. */
+export function stateWithRoutines({ tasks = true, expired = true, inbox = true } = {}) {
+  const state = buildState();
+  if (tasks) state.tasks.push(...structuredClone(EXTRA_TASKS));
+  if (expired) state.proposals.push(...structuredClone(EXTRA_PROPOSALS));
+  if (inbox) state.inbox.push(...structuredClone(EXTRA_INBOX));
+  return state;
+}
+/** P7.2: nothing waits for the reader (no proposal, no suggested write). */
+export function stateWithoutConfirms() {
+  const state = buildState();
+  state.proposals = []; state.inbox = state.inbox.filter((item) => item.section !== "confirm");
+  return state;
+}
 export function stateWithPortfolio(patch) { const state = buildState(); Object.assign(state.portfolio, patch); return state; }
 
 // --- P6.3 pictures ---------------------------------------------------------------------------------------------------
@@ -302,6 +317,41 @@ const UPLOADED = [
 /** The replays of the company are listed and the first one's detail is up (a phone lists only). */
 const replayLoaded = async (page) => { await page.waitForSelector("[data-testid=replay-row]", { state: "visible", timeout: 30000 }); await page.waitForFunction(() => document.querySelector("[data-testid=replay-detail]") || window.matchMedia("(max-width: 1023px)").matches, null, { timeout: 30000 }); };
 /** The monitor's health card is up (the page has read the status). */
+/** P7.2: open the task drawer for a new task of the kind, on the section, with the sample content the picture shows. */
+export async function openNewTask(page, kind, section) {
+  await page.locator("[data-testid=task-new]").first().click();
+  const drawer = page.locator("[data-testid=task-drawer]");
+  await drawer.waitFor({ timeout: 10000 });
+  const go = async (id) => { await drawer.locator(`[data-step-button=${id}]`).click(); await drawer.locator(`[data-testid=task-section-${id}]`).waitFor({ timeout: 5000 }); };
+  if (kind === "alerts") { await drawer.locator('[data-testid=task-kind] [data-option=alerts]').click(); await drawer.locator("#task-name").fill("价格线提醒（示例）"); }
+  if (section === "time") await go("time");
+  if (section === "scope") { await go("scope"); await drawer.locator('[data-testid=task-scope] [data-option=symbols]').click(); await drawer.locator("#task-symbols").fill("AAPL, MSFT"); await drawer.locator("#task-symbols").press("Enter"); await drawer.locator("[data-tag=MSFT]").waitFor({ timeout: 5000 }); }
+  if (section === "content") {
+    await go("content");
+    if (kind === "brief") await drawer.locator("#task-instruction").fill("总结研究队列公司过去一天的新申报和新闻，列出值得注意的变化。");
+    else {
+      for (let i = 0; i < 3; i++) await drawer.locator("[data-testid=price-add]").click();
+      const rows = drawer.locator("[data-testid=price-row]");
+      for (const [i, [symbol, side, price]] of [["NVDA", "above", "150"], ["AAPL", "below", "180"], ["TSLA", "above", "200.5"]].entries()) {
+        await rows.nth(i).locator("[data-field=symbol]").fill(symbol); await rows.nth(i).locator(`[data-option=${side}]`).click(); await rows.nth(i).locator("[data-field=price]").fill(price);
+      }
+      await drawer.locator("#task-telegram").click();
+    }
+  }
+  await settled(page);
+}
+/** P7.2: open the edit drawer of the task card with that name (its 「…」 menu, then 编辑). */
+export async function editTask(page, name) {
+  const card = page.locator("[data-testid=task-card]", { hasText: name }).first();
+  await card.locator("[data-testid=task-menu]").click();
+  await page.locator("[data-testid=task-edit]").click();
+  await page.locator("[data-testid=task-drawer]").waitFor({ timeout: 10000 });
+}
+/** The task page's 待你确认 tab shows its cards (their chunk is in) or its empty sentence. */
+/** The task drawer is photographed by itself: a whole-page picture of a page taller than the screen resizes the viewport, and the drawer's library (vaul) answers a viewport change by resizing the drawer, so two pictures of the same page could differ. */
+const DRAWER = "[data-testid=task-drawer]";
+const routinesTasksLoaded = async (page) => { await page.waitForSelector("[data-testid=tasks-list] [data-testid=task-card]", { state: "visible", timeout: 30000 }); };
+const routinesLoaded = async (page) => { await page.waitForSelector('[data-testid=confirm-entry] [data-slot="approval-card"], [data-testid=confirm-empty]', { state: "visible", timeout: 30000 }); };
 const monitorLoaded = async (page) => { await page.waitForSelector("[data-testid=monitor-health]", { state: "visible", timeout: 30000 }); };
 const evidenceLoaded = async (page) => { await page.waitForSelector("[data-testid=evidence-grid] [data-testid=evidence-card]", { state: "visible", timeout: 30000 }); };
 /** The library's list is read and (on a wide screen) the first material's detail is up. */
@@ -624,7 +674,18 @@ export const PAGES = [
   { name: "portfolio-empty", hash: "#/portfolio", ready: "[data-testid=portfolio-empty]", view: () => ({ fixtureState: stateWithPortfolio({ empty: true, cash: "0.00" }) }) },
   { name: "portfolio-error", hash: "#/portfolio", ready: "[data-testid=portfolio-error]", view: () => ({ fixtureState: stateWithPortfolio({ fail: true }) }) },
   { name: "portfolio-red-up", hash: "#/portfolio", ready: portfolioLoaded, before: async (page) => { await redUp(page); await page.locator("[data-testid=pf-toggle]").first().click(); await page.locator("[data-testid=pf-panel]").waitFor({ timeout: 15000 }); } },
-  { name: "routines", hash: "#/routines", ready: "main.personal-page h1" },
+  { name: "routines", hash: "#/routines?tab=confirm", ready: routinesLoaded },
+  // P7.2: the task page.  The three tabs, the drawer's four sections (a brief; and an alert with three price lines), a task that holds an old free-text price line, a proposal that expired,
+  // and nothing waiting.  The default state has one live proposal and one live suggested write; `stateWithRoutines` adds the extra tasks, the expired proposal and a second suggestion.
+  { name: "routines-tasks", hash: "#/routines?tab=tasks", ready: routinesTasksLoaded },
+  { name: "routines-runs", hash: "#/routines?tab=runs", ready: "[data-testid=runs-pane] [data-slot=timeline-item]" },
+  ...["basics", "time", "scope", "content"].map((section, index) => (
+    { name: `routines-new-brief-${index + 1}`, hash: "#/routines?tab=tasks", ready: routinesTasksLoaded, element: DRAWER, before: async (page) => { await openNewTask(page, "brief", section); } })),
+  { name: "routines-new-alert-content", hash: "#/routines?tab=tasks", ready: routinesTasksLoaded, element: DRAWER, before: async (page) => { await openNewTask(page, "alerts", "content"); } },
+  { name: "routines-edit-legacy-priceline", hash: "#/routines?tab=tasks", ready: routinesTasksLoaded, element: DRAWER, view: () => ({ fixtureState: stateWithRoutines() }),
+    before: async (page) => { await editTask(page, "旧式价格线"); await page.locator('[data-testid=task-drawer] [data-step-button=content]').click(); await page.locator("[data-testid=task-section-content] [data-testid=price-row]").first().waitFor({ timeout: 10000 }); } },
+  { name: "routines-expired", hash: "#/routines?tab=confirm", ready: routinesLoaded, view: () => ({ fixtureState: stateWithRoutines() }) },
+  { name: "routines-empty-confirm", hash: "#/routines?tab=confirm", ready: "[data-testid=confirm-empty]", view: () => ({ fixtureState: stateWithoutConfirms() }) },
   { name: "news", hash: "#/assistant/news", ready: "main.personal-page h1" },
   { name: "skills", hash: "#/assistant/skills", ready: ".skill-group" },
   { name: "memory", hash: "#/assistant/memory", ready: "main.personal-page h1" },
@@ -668,7 +729,7 @@ export const PAGES = [
         if (id === "look") await page.locator("[data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 });
         if (id === "tools") await page.locator("[data-testid=tool-summary]").waitFor();
         if (id === "skills") await page.locator("[data-testid=skills-list] [data-slot=checkbox]").first().waitFor();
-        if (id === "routines") await page.locator("[data-testid=bot-routines] .bot-routines").waitFor({ timeout: 15000 }).catch(() => {});
+        if (id === "routines") await page.locator("[data-testid=bot-routines] [data-testid=task-card]").first().waitFor({ timeout: 15000 }).catch(() => {});
         if (id === "notify") await page.locator("[data-testid=telegram-panel] [data-slot=stepper]").waitFor();
       } })),
   { name: "bot-settings-dirty", hash: settingsAt(BOT.applebot), ready: "[data-testid=bot-settings-page]",
@@ -683,7 +744,7 @@ export const PAGES = [
   { name: "bot-settings-default", hash: settingsAt(BOT.finbot), ready: "[data-testid=bot-settings-page]", before: async (page) => { await openSection(page, "notify"); await openSection(page, "danger"); } },
   { name: "bot-settings-default-danger", hash: settingsAt(BOT.finbot, "danger"), ready: "[data-testid=bot-settings-page]", element: "#section-danger", before: async (page) => { await openSection(page, "danger"); } },
   { name: "bot-settings-open-all", hash: settingsAt(BOT.applebot), ready: "[data-testid=bot-settings-page]",
-    before: async (page) => { for (const id of ["focus", "look", "model", "tools", "skills", "routines", "notify", "danger"]) await openSection(page, id); await page.locator("[data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 }); await page.evaluate(() => window.scrollTo(0, 0)); } },
+    before: async (page) => { for (const id of ["focus", "look", "model", "tools", "skills", "routines", "notify", "danger"]) await openSection(page, id); await page.locator("[data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 }); } },
   // A5: the personality pickers (archetype, tempo, easing, aura variant, where they come from) and the rehearsal in the settings page's 外观与性格 section (they stood in the right panel's 档案 tab until P5.1): the reduced-motion still frame of
   // each of its states (the shots run with the system's reduced motion), one picture of the whole studio per state.  Then the settings page's animation strength,
   // and the chat page under each level of animation chosen in the app (the browser's own setting left alone): "lite" and "off".

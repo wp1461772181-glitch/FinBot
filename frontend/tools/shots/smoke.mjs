@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, stateWithPortfolio, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -522,8 +522,8 @@ async function legacyRedirects(ctx) {
     [`#materials?symbol=AAPL&focus=${material}&type=official_filing`, `#/research/materials?symbol=AAPL&focus=${material}&type=official_filing`, "![data-testid=material-library]"],
     ["#evidence", "#/research/evidence?symbol=AAPL", "[data-testid=evidence-page]"],
     [`#evidence/${VERSION.aapl3}`, `#/research/evidence/${VERSION.aapl3}`, "[data-testid=evidence-page]"],
-    ["#routines", "#/routines", "main.personal-page h1"],
-    ["#briefs", "#/routines", "main.personal-page h1"],
+    ["#routines", "#/routines", "[data-testid=routines-page]"],
+    ["#briefs", "#/routines", "[data-testid=routines-page]"],
     ["#portfolio", "#/portfolio", "[data-testid=portfolio-table]"],
     ["#news", "#/assistant/news", "main.personal-page h1"],
     ["#skills", "#/assistant/skills", ".skill-group"],
@@ -801,14 +801,15 @@ async function routinesBadgeMatches(ctx) {
     // No bot row repeats a task number: ReportBot has a pending item and no unread count.
     const reportRow = page.locator("[data-bot-row]", { hasText: "ReportBot" });
     assert((await reportRow.locator("[data-count]").count()) === 0, "a bot row prints a number for its pending task items");
-    // The page: live proposals + suggestions waiting.
+    // The page: the 待你确认 tab holds exactly that many live cards, and says the same number in its title.
     await pressNavItem(page, "任务");
     await waitHash(page, "#/routines");
-    await waitReady(page, { ready: "main.personal-page h1" });
-    await page.locator("#routine-confirms-title").waitFor({ timeout: 10000 });
-    const proposals = await page.locator("#routine-proposals-title").locator("xpath=..").locator("li").filter({ hasNotText: "已过期" }).count();
-    const confirms = await page.locator("#routine-confirms-title").locator("xpath=..").locator("ul.memory-list > li").count();
-    assert(proposals + confirms === shown, `the page lists ${proposals} proposals + ${confirms} suggestions, the badge says ${shown}`);
+    await waitReady(page, { ready: "[data-testid=confirm-entry]" });
+    await page.locator('[data-testid=confirm-entry] [data-slot="approval-card"]').first().waitFor({ timeout: 10000 });
+    const cards = await page.locator('[data-testid=confirm-entry][data-phase=live] [data-slot="approval-card"][data-state="active"]').count();
+    const proposals = await page.locator("[data-testid=confirm-entry][data-kind=proposal][data-phase=live]").count();
+    const confirms = await page.locator("[data-testid=confirm-entry][data-kind=suggestion][data-phase=live]").count();
+    assert(cards === shown && proposals + confirms === shown, `the page lists ${proposals} proposals + ${confirms} suggestions (${cards} live cards), the badge says ${shown}`);
     // The phone's bar carries the same number.
     const phone = await openShell(ctx, "routines badge phone", "#/portfolio", { width: 390, ready: "[data-testid=portfolio-table]" });
     try {
@@ -1098,7 +1099,9 @@ async function noWindowConfirm(ctx) {
     { name: "skill", hash: "#/assistant/skills", ready: ".skill-group", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/skills\/[^/]+$/ },
     { name: "memory item", hash: "#/assistant/memory", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/profile\/[^/]+$/ },
     { name: "news source", hash: "#/assistant/news", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/news-sources\/[^/]+$/ },
-    { name: "routine task", hash: "#/routines", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/tasks\/[^/]+$/ },
+    { name: "routine task", hash: "#/routines?tab=tasks", ready: "[data-testid=task-card]", trigger: (p) => p.locator("[data-testid=task-menu]").first(), method: "DELETE", re: /\/tasks\/[^/]+$/,
+      // the delete is in the card's 「…」 menu: open it, press 删除; the focus comes back to the menu's button
+      activate: async (page, trigger) => { await trigger.click(); await page.locator("[data-testid=task-delete]").click(); } },
     { name: "bot", hash: `#/chat/${BOT.applebot}/settings`, ready: "[data-testid=bot-settings-page]", trigger: (p) => p.getByRole("button", { name: "删除这个 bot" }), method: "DELETE", re: /\/bots\/[^/]+$/ },
     { name: "bot Telegram token", hash: `#/chat/${BOT.applebot}/settings`, ready: "[data-testid=bot-settings-page]", trigger: (p) => p.getByRole("button", { name: "换 token / 删除" }), method: "DELETE", re: /\/bots\/[^/]+\/telegram$/ },
     { name: "catalog model", hash: "#/settings/models", ready: ".agent-admin h2", trigger: (p) => p.locator(".catalog-actions button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/model-catalog\/[^/]+$/ },
@@ -1117,7 +1120,8 @@ async function noWindowConfirm(ctx) {
       await trigger.waitFor({ timeout: 10000 });
       await trigger.evaluate((el) => el.setAttribute("data-probe-trigger", ""));
       // 1. open, then Esc
-      await trigger.click();
+      const activate = site.activate ?? ((_page, el) => el.click());
+      await activate(page, trigger);
       await dialogOf(page).waitFor({ timeout: 5000 });
       assert((await dialogOf(page).locator('[data-slot="alert-dialog-title"]').innerText()).trim().length > 0, `${site.name}: the dialog has no title`);
       assert((await dialogOf(page).locator('[data-slot="alert-dialog-description"]').innerText()).trim().length > 0, `${site.name}: the dialog says nothing about what follows`);
@@ -1128,14 +1132,14 @@ async function noWindowConfirm(ctx) {
       await page.waitForFunction(() => document.activeElement?.hasAttribute("data-probe-trigger"), null, { timeout: 3000 });
       assert(count(view, site.method, site.re) === 0, `${site.name}: Esc did not cancel`);
       // 2. open, 取消
-      await trigger.click();
+      await activate(page, trigger);
       await dialogOf(page).waitFor({ timeout: 5000 });
       await dialogOf(page).getByRole("button", { name: "取消" }).click();
       await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
       await page.waitForFunction(() => document.activeElement?.hasAttribute("data-probe-trigger"), null, { timeout: 3000 });
       assert(count(view, site.method, site.re) === 0, `${site.name}: 取消 did not cancel`);
       // 3. open, a short press does nothing, a full hold confirms
-      await trigger.click();
+      await activate(page, trigger);
       await dialogOf(page).waitFor({ timeout: 5000 });
       await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'), 300);
       assert(await dialogOf(page).count() === 1 && count(view, site.method, site.re) === 0, `${site.name}: a short press confirmed`);
@@ -1521,7 +1525,7 @@ async function skeletonDelay(ctx) {
     let flashed = false;
     await page.evaluate(() => { window.__pendingSeen = false; new MutationObserver(() => { if (document.querySelector('[data-slot="page-pending"]')) window.__pendingSeen = true; }).observe(document.body, { childList: true, subtree: true }); });
     await page.evaluate(() => { location.hash = "#/routines"; });
-    await page.locator("main.personal-page h1").waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=routines-page]").waitFor({ timeout: 10000 });
     flashed = await page.evaluate(() => window.__pendingSeen);
     assert(!flashed, "a quick page change flashed a skeleton");
   } finally { await view.close(); }
@@ -4800,8 +4804,8 @@ async function botSettingsFields(ctx) {
     await until(() => view.bodies.length > n0, "ticking a skill sent nothing");
     assert(canon(view.bodies[n0]) === canon({ skills: [view.bodies[n0].skills?.[0]] }) && view.bodies[n0].skills.length === 1, `ticking a skill sent ${JSON.stringify(view.bodies[n0])}, not {skills:[id]}`);
     assert((await saveBar(page).count()) === 0, "a skill tick brought up the save bar: it saves on its own");
-    assert((await page.locator("[data-section=routines] .bot-routines").count()) === 1, "例行任务: the routine manager is not in its section");
-    assert((await page.locator("[data-section=routines] [data-legacy]").count()) === 1, "例行任务: the routine manager is not inside the old-markup frame");
+    assert((await page.locator("[data-section=routines] [data-testid=bot-routines]").count()) === 1, "例行任务: the routine list is not in its section");
+    assert((await page.locator("[data-section=routines] [data-legacy]").count()) === 0, "例行任务: the section still sits inside the old-markup frame");
     assert((await page.locator("[data-section=notify] [data-testid=telegram-panel] [data-slot=stepper]").count()) === 1, "通知: the Telegram steps are not in the section");
     assert((await page.locator("[data-section=notify] [data-testid=telegram-panel]").getByRole("button", { name: "换 token / 删除" }).count()) === 1, "通知: 换 token / 删除 is gone");
     assert((await page.locator("[data-section=danger]").getByRole("button", { name: "删除这个 bot" }).count()) === 1, "危险区: 删除这个 bot is gone");
@@ -8106,6 +8110,817 @@ async function portfolioDialogBreakpoint(ctx) {
   } finally { await view.close(); }
 }
 
+// --- P7.2: the task page ----------------------------------------------------------------------------------------------------------
+// The baseline is what the OLD page (HEAD 86ff97b) sent and said on the same fixtures (fixtures/routine-bodies-baseline.json, recorded before the page was touched).
+const RT_BASE = JSON.parse(fs.readFileSync(new URL("./fixtures/routine-bodies-baseline.json", import.meta.url), "utf8"));
+const RT_CARDS = "[data-testid=tasks-list] [data-testid=task-card]";
+const RT_DRAWER = "[data-testid=task-drawer]";
+const RT_CONFIRM_READY = '[data-testid=confirm-entry] [data-slot="approval-card"], [data-testid=confirm-empty]';
+const rtWrites = (view) => view.mock.state.routines.writes ?? [];
+const rtBotName = (id) => ({ [BOT.finbot]: "FinBot", [BOT.newsbot]: "NewsBot", [BOT.applebot]: "AppleBot", [BOT.reportbot]: "ReportBot", [BOT.teslabot]: "TeslaBot" })[id];
+/** The body the old page sent for a write (a string, as it went out), found by its method and path in a baseline's `sent` list. */
+const rtOldBody = (sent, method, re) => sent.find((r) => r.method === method && re.test(r.path))?.body ?? null;
+/** What the page sent, as the fake backend kept it, as the same compact string. */
+const rtBody = (write) => (write.body === null ? null : JSON.stringify(write.body));
+async function openRoutines(ctx, label, { tab = "tasks", width = 1440, theme = "light", state, motion = false, hash, ready } = {}) {
+  const view = await newView(ctx.browser, { width, theme, label, unmatched, motion, ...(state ? { fixtureState: state } : {}) });
+  await view.page.goto(`${ctx.server.url}${hash ?? `#/routines?tab=${tab}`}`, { waitUntil: "load" });
+  await view.page.waitForSelector(ready ?? (tab === "tasks" ? RT_CARDS : tab === "runs" ? "[data-testid=runs-pane] [data-slot=timeline-item]" : RT_CONFIRM_READY), { state: "visible", timeout: 30000 });
+  await settle(view.page);
+  return view;
+}
+const rtWritesAfter = async (view, count, what) => { const end = Date.now() + 8000; while (rtWrites(view).length < count && Date.now() < end) await view.page.waitForTimeout(60); if (rtWrites(view).length < count) throw new Error(`${what}: no request went out`); return rtWrites(view); };
+async function rtGo(page, section) { await page.locator(`${RT_DRAWER} [data-step-button=${section}]`).click(); await page.locator(`[data-testid=task-section-${section}]`).waitFor({ timeout: 5000 }); }
+/** Choose in one of the two comboboxes (the bot, the time zone): open it, search, press the item. */
+async function rtCombo(page, button, search, itemText) {
+  await page.locator(button).click();
+  await page.locator("[cmdk-input]").fill(search);
+  await page.locator("[cmdk-item]", { hasText: itemText }).first().click();
+  await page.locator("[cmdk-item]").first().waitFor({ state: "detached", timeout: 5000 });
+}
+async function rtCheck(page, selector, on) { const box = page.locator(selector); if ((await box.getAttribute("data-state")) === (on ? "checked" : "unchecked")) return; await box.click(); }
+/** Fill the drawer the way the old form was filled (the baseline's `input`: the old labels), section by section, price lines as rows. */
+async function rtFill(page, c, rows = []) {
+  const d = page.locator(RT_DRAWER);
+  await rtGo(page, "basics");
+  if (c.bot) await rtCombo(page, "#task-bot", rtBotName(c.bot), rtBotName(c.bot));
+  if (c.name !== undefined) await d.locator("#task-name").fill(c.name);
+  if (c.kind) await d.locator(`[data-testid=task-kind] [data-option=${c.kind}]`).click();
+  await rtGo(page, "time");
+  if (c.schedule) await d.locator(`[data-testid=task-schedule] [data-option=${c.schedule}]`).click();
+  if (c.every !== undefined) await d.locator("#task-every").fill(c.every);
+  if (c.unit) await d.locator(`[data-testid=task-unit] [data-option=${c.unit}]`).click();
+  if (c.time) await d.locator("#task-time").fill(c.time);
+  if (c.tz) await rtCombo(page, "#task-timezone", c.tz, c.tz.replaceAll("_", " "));
+  if (c.count) await d.locator(`[data-testid=task-count] [data-option=${c.count}]`).click();
+  if (c.runs !== undefined) await d.locator("#task-runs").fill(c.runs);
+  await rtGo(page, "scope");
+  if (c.scope) await d.locator(`[data-testid=task-scope] [data-option=${c.scope}]`).click();
+  if (c.symbols) { await d.locator("#task-symbols").fill(c.symbols); await d.locator("#task-symbols").press("Enter"); }
+  await rtGo(page, "content");
+  if (c.instruction !== undefined && c.kind !== "alerts") await d.locator("#task-instruction").fill(c.instruction);
+  if (c.skill && c.kind !== "alerts") { await d.locator("#task-skill").click(); await page.getByRole("option", { name: c.skill === RT_BASE.load.skillOptions[1][0] ? RT_BASE.load.skillOptions[1][1] : RT_BASE.load.skillOptions[2][1] }).click(); }
+  if (c.kind === "alerts") {
+    if (c.filings !== undefined) await rtCheck(page, "#task-filings", c.filings);
+    if (c.news !== undefined) await rtCheck(page, "#task-news", c.news);
+    if (c.telegram !== undefined) await rtCheck(page, "#task-telegram", c.telegram);
+    await rtRows(page, rows);
+  }
+}
+async function rtRows(page, rows) {
+  const d = page.locator(RT_DRAWER);
+  for (let i = 0; i < rows.length; i++) await d.locator("[data-testid=price-add]").click();
+  const list = d.locator("[data-testid=price-row]");
+  const have = (await list.count()) - rows.length;
+  for (const [i, [symbol, side, price]] of rows.entries()) {
+    await list.nth(have + i).locator("[data-field=symbol]").fill(symbol);
+    await list.nth(have + i).locator(`[data-option=${side}]`).click();
+    await list.nth(have + i).locator("[data-field=price]").fill(price);
+  }
+}
+/** The price lines of the old cases that had some, as the rows a reader would write for the text they typed. */
+const RT_ROWS = {
+  alertPrice3: [["NVDA", "above", "150"], ["AAPL", "below", "180"], ["tsla", "above", "200.5"]],
+  alertPriceSpaces: [["NVDA", "above", "150"], ["AAPL", "below", "180"]],
+  alertBothSides: [["NVDA", "above", "150"], ["NVDA", "below", "120"]],
+  alertEvery: [["AAPL", "below", "180"]],
+};
+async function rtNewTask(view) { await view.page.locator("[data-testid=task-new]").first().click(); await view.page.locator(RT_DRAWER).waitFor({ timeout: 10000 }); }
+async function rtSave(view) { await view.page.locator("[data-testid=task-submit]").click(); }
+async function rtEdit(page, name) {
+  const card = page.locator(RT_CARDS, { hasText: name }).first();
+  await card.locator("[data-testid=task-menu]").click();
+  await page.locator("[data-testid=task-edit]").click();
+  await page.locator(RT_DRAWER).waitFor({ timeout: 10000 });
+}
+/** Run the old new-task cases through the drawer: the body that went out is the old body, character for character. */
+async function rtCreateCases(ctx, names, label) {
+  const done = [];
+  for (const name of names) {
+    const old = RT_BASE.create[name];
+    const view = await openRoutines(ctx, `${label} ${name}`);
+    try {
+      await rtNewTask(view);
+      await rtFill(view.page, old.input, RT_ROWS[name] ?? []);
+      await rtSave(view);
+      const writes = await rtWritesAfter(view, 1, name);
+      const want = rtOldBody(old.sent, "POST", /\/tasks$/);
+      assert(writes.length === 1 && writes[0].method === "POST" && writes[0].path === "/tasks", `${name}: sent ${JSON.stringify(writes.map((w) => `${w.method} ${w.path}`))}`);
+      assert(rtBody(writes[0]) === want, `${name}: body\n  ${rtBody(writes[0])}\n  differs from the old one\n  ${want}`);
+      await view.page.locator(RT_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+      await view.page.locator(RT_CARDS, { hasText: old.input.name?.trim() ?? "研究队列简报" }).first().waitFor({ timeout: 8000 });
+      done.push(name);
+    } finally { await view.close(); }
+  }
+  return done;
+}
+const rtBrief = ["briefDefault", "briefEverything", "briefHourly", "briefDaily", "briefSymbolsDaily"];
+const rtAlert = ["alertPlain", "alertPrice3", "alertPriceSpaces", "alertBothSides", "alertEvery"];
+
+async function routinesCreateBrief(ctx) {
+  const done = await rtCreateCases(ctx, rtBrief, "create brief");
+  return `${done.length} new brief tasks (${done.join(", ")}) sent the old body character for character, the drawer closed and the card is in the list`;
+}
+async function routinesCreateAlert(ctx) {
+  const done = await rtCreateCases(ctx, rtAlert, "create alert");
+  return `${done.length} new alert tasks (${done.join(", ")}) sent the old body character for character, price lines made of rows, the drawer closed and the card is in the list`;
+}
+
+async function routinesPricelineFormat(ctx) {
+  const notes = [];
+  // 1. the rows say what the old text said: the price_lines of the body are the old ones, as the compact JSON the server reads
+  for (const name of ["alertPrice3", "alertPriceSpaces", "alertBothSides", "alertEvery"]) {
+    const old = JSON.parse(rtOldBody(RT_BASE.create[name].sent, "POST", /\/tasks$/)).config.price_lines;
+    const view = await openRoutines(ctx, `priceline ${name}`);
+    try {
+      await rtNewTask(view); await rtFill(view.page, RT_BASE.create[name].input, RT_ROWS[name]); await rtSave(view);
+      const [write] = await rtWritesAfter(view, 1, name);
+      assert(JSON.stringify(write.body.config.price_lines) === JSON.stringify(old), `${name}: price_lines ${JSON.stringify(write.body.config.price_lines)}, the old text gave ${JSON.stringify(old)}`);
+      notes.push(name);
+    } finally { await view.close(); }
+  }
+  // 2. an existing task saved with its price lines untouched sends them as they were stored (a line with both sides: the two lines the old form made of it)
+  for (const [name, stored] of [["价格线提醒", '[{"symbol":"NVDA","above":140},{"symbol":"AAPL","below":190}]'], ["NVDA 上下沿提醒", '[{"symbol":"NVDA","above":150},{"symbol":"NVDA","below":120.5}]']]) {
+    const view = await openRoutines(ctx, `priceline keep ${name}`, { state: stateWithRoutines() });
+    try {
+      await rtEdit(view.page, name); await rtGo(view.page, "content");
+      assert((await view.page.locator("[data-testid=price-row]").count()) === JSON.parse(stored).length, `${name}: the rows are not the stored lines`);
+      await rtSave(view);
+      const [write] = await rtWritesAfter(view, 1, name);
+      assert(JSON.stringify(write.body.config.price_lines) === stored, `${name}: saved ${JSON.stringify(write.body.config.price_lines)}, stored ${stored}`);
+      assert(rtBody(write) === rtOldBody(RT_BASE.edit[name].sent, "PATCH", /\/tasks\//), `${name}: the whole body differs from the old form's`);
+    } finally { await view.close(); }
+  }
+  // 3. a row that is wrong is said at the row and stops the save; nothing goes out
+  const view = await openRoutines(ctx, "priceline rules");
+  try {
+    await rtNewTask(view);
+    const page = view.page;
+    await rtFill(page, { kind: "alerts", name: "规则" }, [["NVDA", "above", "abc"], ["1A", "above", "5"], ["AAPL", "below", ""], ["", "above", "5"]]);
+    await rtSave(view);
+    await page.locator("[data-testid=price-row-message]").first().waitFor({ timeout: 5000 });
+    const said = await page.locator("[data-testid=price-row-message]").allInnerTexts();
+    assert(said.length === 4, `${said.length} rows said what is wrong, 4 are wrong: ${JSON.stringify(said)}`);
+    assert(said[0].includes("价格要写成数字") && said[1].includes("代码要以字母开头") && said[2].includes("代码和价格都要填") && said[3].includes("代码和价格都要填"), `the sentences: ${JSON.stringify(said)}`);
+    assert(rtWrites(view).length === 0, "a request went out with a wrong price line");
+    // fixing them one by one: the sentence goes with the fault
+    const rows = page.locator("[data-testid=price-row]");
+    await rows.nth(0).locator("[data-field=price]").fill("150");
+    await rows.nth(1).locator("[data-field=symbol]").fill("MSFT");
+    await rows.nth(2).locator("[data-field=price]").fill("180");
+    await rows.nth(3).locator("[data-testid=price-remove]").click();
+    await page.waitForFunction(() => document.querySelectorAll("[data-testid=price-row-message]").length === 0, null, { timeout: 5000 });
+    await rtSave(view);
+    const [write] = await rtWritesAfter(view, 1, "fixed rows");
+    assert(JSON.stringify(write.body.config.price_lines) === '[{"symbol":"NVDA","above":150},{"symbol":"MSFT","above":5},{"symbol":"AAPL","below":180}]', `the fixed rows sent ${JSON.stringify(write.body.config.price_lines)}`);
+    notes.push("4 wrong rows each said, the save held, fixed rows sent");
+  } finally { await view.close(); }
+  // 4. a task whose price line is an old free text: the parts it can read become rows, the part it cannot stays as written and is said at once; the save waits; it is never dropped
+  const legacy = await openRoutines(ctx, "priceline legacy", { state: stateWithRoutines() });
+  try {
+    const page = legacy.page;
+    await rtEdit(page, "旧式价格线"); await rtGo(page, "content");
+    const rows = page.locator("[data-testid=price-row]");
+    assert((await rows.count()) === 3, `the old text became ${await rows.count()} rows, not 3`);
+    assert((await rows.nth(0).locator("[data-field=symbol]").inputValue()) === "NVDA" && (await rows.nth(0).locator("[data-field=price]").inputValue()) === "150.5", "the first part (nvda > 150.5) is not the row NVDA 高于 150.5");
+    assert((await rows.nth(1).locator("[data-field=price]").inputValue()) === "180", "the second part (AAPL<180) is not a row");
+    const raw = page.locator('[data-testid=price-row][data-problem=raw]');
+    assert((await raw.count()) === 1 && (await raw.locator("[data-field=raw]").inputValue()) === "腾讯>300", "the part that is not a line is not kept as written");
+    assert((await raw.locator("[data-testid=price-row-message]").innerText()).includes("这一行读不出代码和价格"), "the unreadable part is not said at once");
+    await rtSave(legacy);
+    await page.locator("[data-testid=task-problems]").waitFor({ timeout: 5000 });
+    assert(rtWrites(legacy).length === 0, "an old task with an unreadable price line was saved (it would lose that line)");
+    // written as a line by the reader: it becomes a row and goes out
+    await raw.locator("[data-field=raw]").fill("TCEHY > 300");
+    await page.waitForFunction(() => document.querySelectorAll("[data-testid=price-row][data-problem=raw]").length === 0, null, { timeout: 5000 });
+    await rtSave(legacy);
+    const [write] = await rtWritesAfter(legacy, 1, "legacy fixed");
+    assert(JSON.stringify(write.body.config.price_lines) === '[{"symbol":"NVDA","above":150.5},{"symbol":"AAPL","below":180},{"symbol":"TCEHY","above":300}]', `saved ${JSON.stringify(write.body.config.price_lines)}`);
+    notes.push("legacy text: 2 rows + 1 kept as written, said, save held, rewritten and sent (the old form sent [] and lost all three)");
+  } finally { await legacy.close(); }
+  const legacy2 = await openRoutines(ctx, "priceline legacy delete", { state: stateWithRoutines() });
+  try {
+    const page = legacy2.page;
+    await rtEdit(page, "旧式价格线"); await rtGo(page, "content");
+    await page.locator('[data-testid=price-row][data-problem=raw] [data-testid=price-remove]').click();
+    await rtSave(legacy2);
+    const [write] = await rtWritesAfter(legacy2, 1, "legacy delete");
+    assert(JSON.stringify(write.body.config.price_lines) === '[{"symbol":"NVDA","above":150.5},{"symbol":"AAPL","below":180}]', `saved ${JSON.stringify(write.body.config.price_lines)}`);
+    notes.push("the unreadable row deleted: the other two sent");
+  } finally { await legacy2.close(); }
+  return `price_lines of the rows = the old text's, character for character (${notes.join("; ")})`;
+}
+
+async function routinesEditRoundtrip(ctx) {
+  const state = () => stateWithRoutines();
+  const names = ["盘前新闻速览", "AAPL 财报跟踪", "价格线提醒", "周日组合复盘", "旧的盘后提醒", "NVDA 上下沿提醒", "悉尼开盘简报"];
+  const done = [];
+  for (const name of names) {
+    const view = await openRoutines(ctx, `roundtrip ${name}`, { state: state() });
+    try {
+      const page = view.page;
+      const task = view.mock.state.tasks.find((t) => t.name === name);
+      await rtEdit(page, name);
+      // what the drawer shows is the task
+      await rtGo(page, "basics");
+      assert((await page.locator("#task-name").inputValue()) === task.name, `${name}: the name field holds ${await page.locator("#task-name").inputValue()}`);
+      assert((await page.locator("#task-bot").innerText()).includes(rtBotName(task.bot_id)), `${name}: the bot is not ${rtBotName(task.bot_id)}`);
+      assert((await page.locator(`[data-testid=task-kind] input:checked`).getAttribute("value")) === task.kind, `${name}: kind`);
+      await rtGo(page, "time");
+      assert((await page.locator(`[data-testid=task-schedule] input:checked`).getAttribute("value")) === task.schedule_kind, `${name}: schedule`);
+      assert((await page.locator("#task-time").inputValue()) === task.schedule_time, `${name}: time`);
+      assert((await page.locator("#task-timezone").innerText()).includes(task.timezone.replaceAll("_", " ")), `${name}: the time zone button says ${await page.locator("#task-timezone").innerText()}, the task has ${task.timezone}`);
+      await rtSave(view);
+      const [write] = await rtWritesAfter(view, 1, name);
+      assert(write.method === "PATCH" && write.path === `/tasks/${task.id}`, `${name}: ${write.method} ${write.path}`);
+      assert(rtBody(write) === rtOldBody(RT_BASE.edit[name].sent, "PATCH", /\/tasks\//), `${name}: body\n  ${rtBody(write)}\n  differs from the old form's\n  ${rtOldBody(RT_BASE.edit[name].sent, "PATCH", /\/tasks\//)}`);
+      // equivalent to the task as stored (the fields the form owns)
+      const b = write.body;
+      assert(b.timezone === task.timezone && b.schedule_time === task.schedule_time && b.schedule_kind === task.schedule_kind && b.name === task.name && b.kind === task.kind && b.bot_id === task.bot_id, `${name}: a stored field changed`);
+      assert(JSON.stringify(b.config.price_lines ?? null) === JSON.stringify(task.kind === "alerts" ? task.config.price_lines : null), `${name}: price lines changed`);
+      done.push(name);
+    } finally { await view.close(); }
+  }
+  // the one change the old form made too: rename and re-zone
+  const view = await openRoutines(ctx, "roundtrip changed", { state: state() });
+  try {
+    await rtEdit(view.page, "悉尼开盘简报");
+    await view.page.locator("#task-name").fill("悉尼开盘简报 2");
+    await rtGo(view.page, "time"); await rtCombo(view.page, "#task-timezone", "Sydney", "Australia/Sydney");
+    await rtSave(view);
+    const [write] = await rtWritesAfter(view, 1, "changed");
+    assert(rtBody(write) === rtOldBody(RT_BASE.edit._changed.sent, "PATCH", /\/tasks\//), `the changed body differs: ${rtBody(write)}`);
+  } finally { await view.close(); }
+  return `${done.length} tasks opened and saved untouched sent the old form's body and equal their stored fields (${done.join(", ")}); a rename + new zone sent the old changed body`;
+}
+
+async function routinesTimezoneKept(ctx) {
+  const notes = [];
+  // a zone that is in the browser's list is found in the list; one that is not (an alias the server accepts) is shown, offered under 已保存的值 and kept
+  const state = stateWithRoutines();
+  const alias = state.tasks.find((t) => t.name === "悉尼开盘简报");
+  const view = await openRoutines(ctx, "timezone kept", { state });
+  try {
+    const page = view.page;
+    const candidates = ["US/Eastern", "US/Pacific", "Asia/Calcutta", "Australia/ACT"];
+    const absent = await page.evaluate((list) => list.find((z) => !Intl.supportedValuesOf("timeZone").includes(z)) ?? null, candidates);
+    assert(absent, "every candidate alias is in this browser's list: pick another one for the check");
+    alias.timezone = absent;
+    await page.reload({ waitUntil: "load" }); await page.locator(RT_CARDS).first().waitFor({ timeout: 15000 });
+    assert((await page.locator(RT_CARDS, { hasText: "悉尼开盘简报" }).first().innerText()).includes(absent), `the card does not show ${absent}`);
+    await rtEdit(page, "悉尼开盘简报"); await rtGo(page, "time");
+    assert((await page.locator("#task-timezone").innerText()).includes(absent), `the drawer shows ${await page.locator("#task-timezone").innerText()}, not ${absent}`);
+    await page.locator("#task-timezone").click();
+    const group = page.locator("[cmdk-group]", { hasText: "已保存的值" });
+    assert((await group.locator("[cmdk-item]", { hasText: absent }).count()) === 1, `${absent} is not offered under 已保存的值`);
+    await page.keyboard.press("Escape");
+    await rtSave(view);
+    const [write] = await rtWritesAfter(view, 1, "kept");
+    assert(write.body.timezone === absent, `saved ${write.body.timezone}, the task had ${absent}`);
+    notes.push(`${absent} shown on the card and in the drawer, listed under 已保存的值, saved unchanged`);
+  } finally { await view.close(); }
+  // the usual ones are on top, the rest follow, the search finds by any part
+  const second = await openRoutines(ctx, "timezone list");
+  try {
+    const page = second.page;
+    await rtNewTask(second); await rtGo(page, "time");
+    await page.locator("#task-timezone").click();
+    const heads = await page.locator("[cmdk-group-heading]").allInnerTexts();
+    assert(heads[0] === "常用时区" && heads.includes("全部时区"), `the groups are ${JSON.stringify(heads)}`);
+    const first = await page.locator("[cmdk-group]").first().locator("[cmdk-item]").evaluateAll((els) => els.map((e) => e.textContent.trim()));
+    assert(first[0] === "Asia/Shanghai" && first.includes("UTC") && first.includes("America/New York"), `the usual zones: ${JSON.stringify(first)}`);
+    const total = await page.locator("[cmdk-item]").count();
+    assert(total > 100, `only ${total} zones are offered`);
+    await page.locator("[cmdk-input]").fill("tokyo");
+    assert((await page.locator("[cmdk-item]").first().innerText()).includes("Asia/Tokyo") && (await page.locator("[cmdk-item]").count()) < 6, `the search for tokyo finds ${await page.locator("[cmdk-item]").count()} zones, the first is ${await page.locator("[cmdk-item]").first().innerText()}`);
+    await page.keyboard.press("Escape");
+    // the submitted value is an IANA name, as before
+    await rtFill(page, { name: "时区试验", tz: "Europe/Paris" });
+    await rtSave(second);
+    const [write] = await rtWritesAfter(second, 1, "zone");
+    assert(write.body.timezone === "Europe/Paris", `sent ${write.body.timezone}`);
+    notes.push(`${total} zones, the usual ones first, search by any part, the sent value is the IANA name`);
+  } finally { await second.close(); }
+  return notes.join("; ");
+}
+
+async function routinesToggle(ctx) {
+  const notes = [];
+  for (const [name, label, enabled] of [["盘前新闻速览", "暂停", false], ["旧的盘后提醒", "启用", true]]) {
+    const view = await openRoutines(ctx, `toggle ${label}`);
+    try {
+      const page = view.page;
+      const card = page.locator(RT_CARDS, { hasText: name }).first();
+      const sw = card.locator("[data-testid=task-switch]");
+      assert((await sw.getAttribute("aria-checked")) === String(!enabled), `${name}: the switch does not start ${!enabled ? "on" : "off"}`);
+      assert((await sw.getAttribute("aria-label")).startsWith(label), `${name}: the switch is named ${await sw.getAttribute("aria-label")}`);
+      await sw.click();
+      const [write] = await rtWritesAfter(view, 1, name);
+      const old = RT_BASE.toggle[`${name}:${label}`].sent[0];
+      assert(write.method === "PATCH" && write.path.endsWith(old.path.replace("/agent-chat", "")) && rtBody(write) === old.body, `${name}: sent ${write.method} ${write.path} ${rtBody(write)}, the old one sent ${old.method} ${old.path} ${old.body}`);
+      await page.waitForFunction(([n, on]) => [...document.querySelectorAll("[data-testid=task-card]")].find((c) => c.textContent.includes(n))?.querySelector("[data-testid=task-switch]").getAttribute("aria-checked") === String(on), [name, enabled], { timeout: 8000 });
+      // the badge follows the switch as it is shown (not only the server's later answer), and is still right after the lists are read again
+      for (let round = 0; round < 2; round++) {
+        const paused = await card.getByText("已暂停", { exact: true }).count();
+        assert(paused === (enabled ? 0 : 1), `${name}: the 已暂停 badge count is ${paused}${round ? " after the lists were read again" : ""}`);
+        await page.waitForFunction(([n]) => { const c = [...document.querySelectorAll("[data-testid=task-card]")].find((x) => x.textContent.includes(n)); return c && !c.querySelector("[data-testid=task-switch]").disabled; }, [name], { timeout: 8000 });
+      }
+      notes.push(`${label}: ${old.body}`);
+    } finally { await view.close(); }
+  }
+  // a failed save puts the switch back and says so
+  const view = await openRoutines(ctx, "toggle fails");
+  try {
+    const page = view.page;
+    view.mock.control.fail = (method, path) => (method === "PATCH" && /\/tasks\//.test(path) ? 500 : 0);
+    const sw = page.locator(RT_CARDS, { hasText: "盘前新闻速览" }).first().locator("[data-testid=task-switch]");
+    await sw.click();
+    await page.locator("[data-sonner-toast]").first().waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => document.querySelector("[data-testid=task-card] [data-testid=task-switch]").getAttribute("aria-checked") === "true", null, { timeout: 8000 });
+    assert(((await page.locator("[data-sonner-toast]").first().innerText()).trim()).length > 0, "the toast is empty");
+    notes.push("a failed save: the switch is back on and a toast says so");
+  } finally { await view.close(); }
+  return notes.join("; ");
+}
+
+async function routinesDelete(ctx) {
+  const view = await openRoutines(ctx, "delete", { motion: true });
+  try {
+    const page = view.page;
+    const card = page.locator(RT_CARDS, { hasText: "AAPL 财报跟踪" }).first();
+    const menu = card.locator("[data-testid=task-menu]");
+    await menu.click(); await page.locator("[data-testid=task-delete]").click();
+    const dlg = page.locator('[data-slot="alert-dialog-content"]'); await dlg.waitFor({ timeout: 5000 });
+    const dialog = { title: (await dlg.locator('[data-slot="alert-dialog-title"]').innerText()).trim(), description: (await dlg.locator('[data-slot="alert-dialog-description"]').innerText()).trim(), buttons: await dlg.locator("button").allInnerTexts() };
+    assert(JSON.stringify(dialog.title) === JSON.stringify(RT_BASE.del.dialog.title) && JSON.stringify(dialog.description) === JSON.stringify(RT_BASE.del.dialog.description), `the question is ${JSON.stringify(dialog)}, the old one ${JSON.stringify(RT_BASE.del.dialog)}`);
+    assert(JSON.stringify(dialog.buttons) === JSON.stringify(RT_BASE.del.dialog.buttons), `the buttons are ${JSON.stringify(dialog.buttons)}`);
+    await page.keyboard.press("Escape"); await dlg.waitFor({ state: "detached", timeout: 5000 });
+    assert(rtWrites(view).length === 0, "Esc sent a request");
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "task-menu", null, { timeout: 3000 }).catch(() => { throw new Error("the focus did not return to the card's 「…」 button after Esc"); });
+    await menu.click(); await page.locator("[data-testid=task-delete]").click(); await dlg.waitFor({ timeout: 5000 });
+    await holdPointer(page, dlg.locator('[data-slot="hold-button"]'), 300);
+    assert((await dlg.count()) === 1 && rtWrites(view).length === 0, "a short press deleted the task");
+    await holdPointer(page, dlg.locator('[data-slot="hold-button"]'));
+    await dlg.waitFor({ state: "detached", timeout: 5000 });
+    const [write] = await rtWritesAfter(view, 1, "delete");
+    const old = RT_BASE.del.sent[0];
+    assert(write.method === "DELETE" && old.method === "DELETE" && write.path === old.path.replace("/agent-chat", ""), `sent ${write.method} ${write.path}, the old one ${old.method} ${old.path}`);
+    await page.waitForFunction(() => ![...document.querySelectorAll("[data-testid=task-card]")].some((c) => c.textContent.includes("AAPL 财报跟踪")), null, { timeout: 8000 });
+    return "the question is the old one (title, words, 取消 / 删除); Esc sends nothing and the focus returns to 「…」; a short press does nothing; a full hold sends one DELETE of the old path; the card is gone";
+  } finally { await view.close(); }
+}
+
+const rtBadge = (page) => page.locator('[data-slot="sidebar"] a[href="#/routines"]').locator("xpath=..").locator("[data-count]");
+const rtBadgeNumber = async (page) => { const badge = rtBadge(page); return (await badge.count()) ? Number((await badge.innerText()).trim()) : 0; };
+const rtTabNumber = async (page) => { const n = page.locator("[data-testid=tab-confirm-count]"); return (await n.count()) ? Number((await n.innerText()).trim()) : 0; };
+const rtLiveCards = (page) => page.locator('[data-testid=confirm-entry][data-phase=live] [data-slot="approval-card"][data-state="active"]').count();
+async function rtNumbers(page, want, what) {
+  const end = Date.now() + 10000;
+  let got;
+  for (;;) {
+    got = [await rtBadgeNumber(page), await rtTabNumber(page), await rtLiveCards(page)];
+    if (got.every((n) => n === want)) return got;
+    if (Date.now() > end) throw new Error(`${what}: sidebar ${got[0]}, tab ${got[1]}, live cards ${got[2]}; expected all ${want}`);
+    await page.waitForTimeout(80);
+  }
+}
+const rtEntry = (page, text) => page.locator("[data-testid=confirm-entry]", { hasText: text }).first();
+async function rtMore(page, entry, item) { await entry.getByRole("button", { name: "更多操作" }).click(); await page.getByRole("menuitem", { name: item }).click(); }
+
+async function routinesBadgeEqualsTab(ctx) {
+  const notes = [];
+  const liveFixtures = PROPOSALS.filter((p) => !p.expired).length + INBOX.filter((i) => i.section === "confirm" && i.status !== "done" && i.status !== "dismissed").length;
+  const view = await openRoutines(ctx, "badge equals tab", { tab: "confirm" });
+  try {
+    const page = view.page;
+    await rtNumbers(page, liveFixtures, "opening");
+    // one handled: the three drop together
+    await rtEntry(page, "NVDA 10-Q").getByRole("button", { name: "更多操作" }).click();
+    await page.getByRole("menuitem", { name: "跳过" }).click();
+    await rtNumbers(page, liveFixtures - 1, "after 跳过");
+    notes.push(`${liveFixtures} = ${liveFixtures} = ${liveFixtures} on opening; 跳过 → ${liveFixtures - 1} in all three`);
+    await rtEntry(page, "每周五盘后总结").getByRole("button", { name: "去对话核对" }).waitFor({ timeout: 5000 });
+  } finally { await view.close(); }
+  // with an expired proposal, another suggestion and a confirmed one: expired and confirmed are lines, not live cards, not counted
+  const second = await openRoutines(ctx, "badge equals tab extras", { tab: "confirm", state: stateWithRoutines() });
+  try {
+    const page = second.page;
+    await rtNumbers(page, liveFixtures + 1, "with extras");
+    assert((await page.locator('[data-testid=confirm-entry][data-phase=expired]').count()) === 1, "the expired proposal is not shown as a line");
+    assert((await rtEntry(page, "NVDA").locator('[data-slot="approval-card"]').getAttribute("data-state")) === "active", "a live card is not active");
+    await rtEntry(page, "AAPL 10-K").getByRole("button", { name: "同意" }).click();
+    await rtNumbers(page, liveFixtures, "after 同意");
+    const folded = page.locator("[data-testid=confirm-entry][data-phase=done]");
+    await folded.waitFor({ timeout: 5000 });
+    assert((await folded.innerText()).includes("已确认"), `the confirmed write's line says ${await folded.innerText()}`);
+    // 稍后 leaves the card where it is and the number as it is
+    await rtEntry(page, "NVDA 10-Q").getByRole("button", { name: "更多操作" }).click();
+    await page.getByRole("menuitem", { name: "稍后" }).click();
+    await page.waitForFunction(() => document.querySelector("[data-sonner-toast]"), null, { timeout: 5000 });
+    await rtNumbers(page, liveFixtures, "after 稍后");
+    notes.push(`with an expired proposal and a second write: ${liveFixtures + 1} in all three, the expired one a line and not counted; 同意 → ${liveFixtures} and a 已确认 line; 稍后 changes nothing`);
+  } finally { await second.close(); }
+  // the phone's bar says it too
+  const phone = await openRoutines(ctx, "badge phone", { tab: "confirm", width: 390 });
+  try {
+    const bar = phone.page.locator('[data-slot="mobile-tab-bar"] a[href="#/routines"] [data-count]');
+    await bar.waitFor({ timeout: 10000 });
+    assert(Number((await bar.innerText()).trim()) === liveFixtures && (await rtTabNumber(phone.page)) === liveFixtures && (await rtLiveCards(phone.page)) === liveFixtures, "the phone's bar, the tab and the cards differ");
+    notes.push("same on the phone");
+  } finally { await phone.close(); }
+  return notes.join("; ");
+}
+
+/** The two ways to a conversation: what the old page's presses did.  The reads and writes of the old page are the baseline's. */
+const rtReads = (view, from) => view.mock.requests.slice(from).filter((r) => r.method === "GET").map((r) => r.path + r.query);
+async function routinesProposalActions(ctx) {
+  const notes = [];
+  const view = await openRoutines(ctx, "proposal actions", { tab: "confirm", state: stateWithRoutines() });
+  try {
+    const page = view.page;
+    const live = page.locator("[data-testid=confirm-entry][data-kind=proposal][data-phase=live]");
+    assert((await live.count()) === 1, "there is not one live proposal");
+    const buttons = await live.locator("button").allInnerTexts();
+    assert(JSON.stringify(buttons.map((b) => b.trim())) === JSON.stringify(["去对话核对"]), `the proposal card's buttons are ${JSON.stringify(buttons)}: its only press is the way to its conversation`);
+    assert((await live.getByRole("button", { name: /同意|确认/ }).count()) === 0, "a proposal card carries a 同意 button the old page did not have");
+    assert((await live.locator('[data-slot="approval-card"]').getAttribute("data-kind")) === "write", "the card is not the action material's write card");
+    const from = view.mock.requests.length;
+    await live.getByRole("button", { name: "去对话核对" }).click();
+    await waitHash(page, RT_BASE.proposals.live.hashAfter);
+    await until(() => rtReads(view, from).some((p) => p.includes(`/conversations/${PROPOSALS[0].conversation_id}/messages`)), "the proposal's conversation was not opened");
+    assert(rtWrites(view).length === 0, "pressing 去对话核对 on a proposal wrote something to the task lists");
+    const old = RT_BASE.proposals.live.writes.map((w) => `${w.method} ${w.path}`);
+    const got = view.mock.requests.slice(from).filter((r) => r.method !== "GET").map((r) => `${r.method} ${r.path.startsWith("/agent-chat") ? r.path : `/agent-chat${r.path}`}`);
+    assert(JSON.stringify(got) === JSON.stringify(old), `the requests that followed: ${JSON.stringify(got)}, the old page's: ${JSON.stringify(old)}`);
+    notes.push(`a live proposal: one button, 去对话核对, opens its conversation (${RT_BASE.proposals.live.hashAfter}), the old requests`);
+  } finally { await view.close(); }
+  const second = await openRoutines(ctx, "proposal expired", { tab: "confirm", state: stateWithRoutines() });
+  try {
+    const page = second.page;
+    const line = page.locator("[data-testid=confirm-entry][data-kind=proposal][data-phase=expired]");
+    const text = (await line.innerText()).replace(/\s+/g, " ");
+    assert(text.includes("已过期") && text.includes("在对话里再说一次") && text.includes("NewsBot") && text.includes("删除任务「盘前新闻速览」"), `the expired line says: ${text}`);
+    assert((await line.locator('[data-slot="approval-card"]').getAttribute("data-state")) === "expired", "the expired line is not the card's own folded state");
+    const from = second.mock.requests.length;
+    await line.getByRole("button", { name: "打开对话" }).click();
+    await waitHash(page, RT_BASE.proposals.expired.hashAfter);
+    await until(() => rtReads(second, from).some((p) => p.includes(`/conversations/${EXPIRED_PROPOSAL_CONVERSATION}/messages`)), "the expired proposal's conversation was not opened");
+    notes.push("an expired proposal: a line 已过期 · 在对话里再说一次 with the bot and what it was, and 打开对话 to its conversation");
+  } finally { await second.close(); }
+  return notes.join("; ");
+}
+const EXPIRED_PROPOSAL_CONVERSATION = CONVERSATION.newsbot;
+
+async function routinesSuggestionActions(ctx) {
+  const done = [];
+  const CASES = [
+    ["confirm", (page, e) => e.getByRole("button", { name: "同意", exact: true }).click(), "NVDA 10-Q"],
+    ["skip", (page, e) => rtMore(page, e, "跳过"), "NVDA 10-Q"],
+    ["later", (page, e) => rtMore(page, e, "稍后"), "NVDA 10-Q"],
+    ["mint", (page, e) => e.getByRole("button", { name: "去对话核对", exact: true }).click(), "NVDA 10-Q"],
+    ["dismiss", (page, e) => rtMore(page, e, "忽略"), "NVDA 10-Q"],
+    ["open", (page, e) => rtMore(page, e, "打开对话"), "AAPL 10-K"],
+  ];
+  for (const [name, press, text] of CASES) {
+    const old = RT_BASE.suggestions[name];
+    const view = await openRoutines(ctx, `suggestion ${name}`, { tab: "confirm", state: stateWithRoutines() });
+    try {
+      const page = view.page;
+      const entry = rtEntry(page, text);
+      if (name === "confirm") {
+        // at most two main buttons; the rest are in 「…」
+        const visible = (await entry.locator("button").allInnerTexts()).map((b) => b.trim()).filter(Boolean);
+        assert(JSON.stringify(visible) === JSON.stringify(["同意", "去对话核对"]), `the card's visible buttons are ${JSON.stringify(visible)}`);
+        await entry.getByRole("button", { name: "更多操作" }).click();
+        const items = await page.getByRole("menuitem").allInnerTexts();
+        assert(JSON.stringify(items.map((i) => i.trim())) === JSON.stringify(["跳过", "稍后", "忽略"]), `the 「…」 menu holds ${JSON.stringify(items)}`);
+        await page.keyboard.press("Escape");
+        assert((await entry.innerText()).includes("周日组合复盘") && (await entry.innerText()).includes("FinBot"), "the card does not say which bot and which task it comes from");
+      }
+      const from = view.mock.requests.length;
+      await press(page, entry);
+      if (name === "mint" || name === "open") await waitHash(page, old.hashAfter);
+      else await until(() => rtWrites(view).length >= 1, `${name}: nothing was sent`);
+      await page.waitForTimeout(250);
+      const got = rtWrites(view).map((w) => ({ path: `/agent-chat${w.path}`, body: rtBody(w) }));
+      const want = old.writes.filter((w) => /\/inbox\//.test(w.path)).map((w) => ({ path: w.path, body: w.body }));
+      assert(JSON.stringify(got) === JSON.stringify(want), `${name}: sent ${JSON.stringify(got)}, the old page sent ${JSON.stringify(want)}`);
+      if (name === "mint") assert(view.mock.requests.slice(from).some((r) => r.method === "GET" && r.path.includes("/conversations/")), "mint: the conversation of the run was not opened");
+      // what is left on the page
+      if (name === "confirm") assert((await page.locator("[data-testid=confirm-entry][data-phase=done]").count()) === 1, "confirm: no 已确认 line");
+      if (name === "skip" || name === "dismiss") assert((await page.locator("[data-testid=confirm-entry]", { hasText: "NVDA 10-Q" }).count()) === 0, `${name}: the card is still there`);
+      if (name === "later") assert((await rtLiveCards(page)) === 3, `later: ${await rtLiveCards(page)} live cards, 3 expected`);
+      done.push(name);
+    } finally { await view.close(); }
+  }
+  return `${done.length} presses (${done.join(", ")}) sent the old requests with the old bodies; the card has two main buttons (同意, 去对话核对) and 跳过 / 稍后 / 忽略 in 「…」; 打开对话 only where the run has a conversation`;
+}
+
+async function routinesValidation(ctx) {
+  const view = await openRoutines(ctx, "validation");
+  try {
+    const page = view.page;
+    await rtNewTask(view);
+    // everything wrong at once: every rule is listed, the stepper marks the sections, the form jumps to the first
+    await rtGo(page, "basics"); await page.locator("#task-name").fill("");
+    await rtGo(page, "time"); await page.locator(`[data-testid=task-schedule] [data-option=every]`).click(); await page.locator("#task-every").fill("0");
+    await page.locator("#task-time").fill("");
+    await page.locator(`[data-testid=task-count] [data-option=count]`).click(); await page.locator("#task-runs").fill("2.5");
+    await rtGo(page, "scope"); await page.locator("[data-testid=task-scope] [data-option=symbols]").click();
+    await rtGo(page, "basics"); await page.locator("[data-testid=task-kind] [data-option=alerts]").click();
+    await rtGo(page, "content"); await rtRows(page, [["NVDA", "above", ""]]);
+    await rtSave(view);
+    const list = page.locator("[data-testid=task-problems]");
+    await list.waitFor({ timeout: 5000 });
+    const said = (await list.locator("li").allInnerTexts()).map((t) => t.trim());
+    assert(said.length === 6, `${said.length} rules listed, 6 are broken: ${JSON.stringify(said)}`);
+    assert(said[0] === RT_BASE.createValidation.noName.alert[0] && said.includes(RT_BASE.createValidation.symbolsEmpty.alert[0]), `the old sentences are not there: ${JSON.stringify(said)}`);
+    assert(said.includes("间隔要填整数，至少为 1。") && said.includes("执行次数要填整数，至少为 1。") && said.includes("请填运行时间。") && said.includes("代码和价格都要填。"), `the sentences: ${JSON.stringify(said)}`);
+    assert(rtWrites(view).length === 0, "a request went out with the form broken");
+    assert((await page.locator(`${RT_DRAWER}`).getAttribute("data-section")) === "basics", "the form did not jump to the first section with a problem");
+    assert((await page.locator(`${RT_DRAWER} [data-slot=stepper] [data-step-button]`).count()) === 4, "the step row is not four buttons");
+    const marked = await page.locator(`${RT_DRAWER} [data-slot=stepper] li`).evaluateAll((els) => els.filter((e) => /这一步有要改/.test(e.textContent)).map((e) => e.getAttribute("data-step")));
+    assert(JSON.stringify(marked) === JSON.stringify(["basics", "time", "scope", "content"]), `the step row marks ${JSON.stringify(marked)}`);
+    // a sentence in the list goes to its section; in the section it is at its field
+    await page.locator("[data-testid=task-problems] button", { hasText: "股票代码无效" }).click();
+    await page.locator("[data-testid=task-section-scope]").waitFor({ timeout: 5000 });
+    await page.locator("[data-slot=field-error]", { hasText: "股票代码无效" }).waitFor({ timeout: 5000 });
+    // mending them one by one empties the list; then the save goes out
+    await page.locator("#task-symbols").fill("AAPL"); await page.locator("#task-symbols").press("Enter");
+    await rtGo(page, "basics"); await page.locator("#task-name").fill("全修好");
+    await rtGo(page, "time"); await page.locator("#task-every").fill("2"); await page.locator("#task-time").fill("09:00"); await page.locator("#task-runs").fill("4");
+    await rtGo(page, "content"); await page.locator("[data-testid=price-row] [data-field=price]").fill("150");
+    await page.waitForFunction(() => !document.querySelector("[data-testid=task-problems]"), null, { timeout: 5000 });
+    await rtSave(view);
+    const [write] = await rtWritesAfter(view, 1, "mended");
+    assert(write.body.name === "全修好" && write.body.every_value === 2 && write.body.max_runs === 4 && JSON.stringify(write.body.symbols) === '["AAPL"]', `mended body ${JSON.stringify(write.body)}`);
+    // the code of a company is checked as it is typed: what the server would refuse never becomes a tag
+    return "6 broken rules listed at once with the old sentences, the step row marks all four sections, the form jumps to the first, a listed sentence goes to its field, mending them clears the list and the save goes out";
+  } finally { await view.close(); }
+}
+
+async function routinesUnsavedClose(ctx) {
+  const view = await openRoutines(ctx, "unsaved close");
+  try {
+    const page = view.page;
+    const button = page.locator("[data-testid=task-new]").first();
+    // nothing changed: Esc closes at once
+    await button.focus(); await page.keyboard.press("Enter"); await page.locator(RT_DRAWER).waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape"); await page.locator(RT_DRAWER).waitFor({ state: "detached", timeout: 5000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "task-new", null, { timeout: 3000 }).catch(() => { throw new Error("the focus did not return to 新建任务 after the drawer closed"); });
+    // a change: Esc, the button and the overlay each ask first
+    for (const how of ["escape", "cancel", "overlay"]) {
+      await button.focus(); await page.keyboard.press("Enter"); await page.locator(RT_DRAWER).waitFor({ timeout: 5000 });
+      await page.locator("#task-name").fill(`改过的名字 ${how}`);
+      if (how === "escape") await page.keyboard.press("Escape"); else if (how === "cancel") await page.locator("[data-testid=task-cancel]").click(); else await page.mouse.click(60, 600);
+      const dlg = page.locator('[data-slot="alert-dialog-content"]'); await dlg.waitFor({ timeout: 5000 });
+      assert((await dlg.locator('[data-slot="alert-dialog-title"]').innerText()).includes("放弃未保存的修改"), `${how}: the question is not about unsaved changes`);
+      await dlg.getByRole("button", { name: "继续编辑" }).click(); await dlg.waitFor({ state: "detached", timeout: 5000 });
+      assert((await page.locator("#task-name").inputValue()) === `改过的名字 ${how}`, `${how}: the draft was lost on 继续编辑`);
+      if (how === "overlay") { await page.keyboard.press("Escape"); await dlg.waitFor({ timeout: 5000 }); await dlg.getByRole("button", { name: "放弃修改" }).click(); await page.locator(RT_DRAWER).waitFor({ state: "detached", timeout: 5000 }); }
+      else { await page.keyboard.press("Escape"); await dlg.waitFor({ timeout: 5000 }); await dlg.getByRole("button", { name: "放弃修改" }).click(); await page.locator(RT_DRAWER).waitFor({ state: "detached", timeout: 5000 }); }
+    }
+    assert(rtWrites(view).length === 0, "closing sent a request");
+    // reopened: a fresh form, not the thrown-away draft
+    await button.click(); await page.locator(RT_DRAWER).waitFor({ timeout: 5000 });
+    assert((await page.locator("#task-name").inputValue()) === "研究队列简报", "the thrown-away draft came back");
+    return "no change: Esc closes at once and the focus returns to 新建任务; a change: Esc, 取消 and a click outside each ask 放弃未保存的修改？; 继续编辑 keeps the draft, 放弃修改 closes it and the next form is fresh; nothing was sent";
+  } finally { await view.close(); }
+}
+
+async function routinesDrawerBreakpoint(ctx) {
+  const view = await openRoutines(ctx, "drawer breakpoint");
+  try {
+    const page = view.page;
+    await rtNewTask(view);
+    await page.locator(RT_DRAWER).evaluate((el) => { el.setAttribute("data-mark", "same"); });
+    await page.locator("#task-name").fill("跨断点不丢");
+    await rtGo(page, "time"); await page.locator(`[data-testid=task-schedule] [data-option=daily]`).click();
+    for (const width of [390, 1023, 1024, 1440]) {
+      await page.setViewportSize({ width, height: width < 1024 ? 844 : 900 });
+      await page.waitForTimeout(250);
+      assert((await page.locator(RT_DRAWER).getAttribute("data-mark")) === "same", `at ${width}: the drawer is another element (it was re-mounted)`);
+      assert((await page.locator(RT_DRAWER).getAttribute("data-section")) === "time", `at ${width}: the section changed`);
+      assert((await page.locator(`[data-testid=task-schedule] input:checked`).getAttribute("value")) === "daily", `at ${width}: the schedule was lost`);
+    }
+    await rtGo(page, "basics");
+    assert((await page.locator("#task-name").inputValue()) === "跨断点不丢", "the name was lost");
+    const box = await page.locator(RT_DRAWER).boundingBox();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(250);
+    const phone = await page.locator(RT_DRAWER).boundingBox();
+    assert(phone.width >= 388 && phone.height >= 840, `on a phone the drawer is ${phone.width}x${phone.height}, not the whole screen`);
+    assert(box.width < 600, `on a desktop the drawer is ${box.width} wide`);
+    return "one drawer element across 390 → 1023 → 1024 → 1440 (the same node, the section, the choice and the name kept); the whole screen on a phone, a side panel on a desktop";
+  } finally { await view.close(); }
+}
+
+async function routinesKeyboard(ctx) {
+  const view = await openRoutines(ctx, "keyboard", { tab: "confirm" });
+  try {
+    const page = view.page;
+    const tab = (testid) => page.locator(`[data-testid=${testid}]`);
+    // the tabs (the company page's tab list: manual activation): the arrow keys move the focus, Enter or Space opens the one in focus and the address follows (replace, no history entry)
+    await tab("tab-confirm").focus();
+    const length = await page.evaluate(() => history.length);
+    await page.keyboard.press("ArrowRight");
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "tab-tasks", null, { timeout: 5000 }).catch(() => { throw new Error("ArrowRight did not move the focus to 全部任务"); });
+    assert(!(await page.evaluate(() => /[?&]tab=tasks/.test(location.hash))), "an arrow key opened a tab (it should only move the focus)");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => /[?&]tab=tasks/.test(location.hash), null, { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector("[data-testid=tab-tasks]")?.getAttribute("aria-selected") === "true", null, { timeout: 5000 }).catch(() => { throw new Error("Enter did not select 全部任务"); });
+    await page.keyboard.press("ArrowRight"); await page.keyboard.press("Space");
+    await page.waitForFunction(() => /[?&]tab=runs/.test(location.hash), null, { timeout: 5000 });
+    assert((await page.evaluate(() => history.length)) === length, "switching tabs added history entries");
+    await page.keyboard.press("ArrowLeft"); await page.keyboard.press("Enter"); await page.waitForFunction(() => /[?&]tab=tasks/.test(location.hash), null, { timeout: 5000 });
+    await page.locator(RT_CARDS).first().waitFor({ timeout: 10000 });
+    // a card's switch with Space, its menu with Enter and the arrow keys
+    const first = page.locator(RT_CARDS).first();
+    await first.locator("[data-testid=task-switch]").focus(); await page.keyboard.press("Space");
+    await rtWritesAfter(view, 1, "Space on the switch");
+    assert(rtBody(rtWrites(view)[0]) === '{"enabled":false}', `Space sent ${rtBody(rtWrites(view)[0])}`);
+    await page.waitForFunction(() => !document.querySelector("[data-testid=task-menu]").disabled, null, { timeout: 8000 });
+    await first.locator("[data-testid=task-menu]").focus(); await page.keyboard.press("Enter");
+    await page.locator("[data-testid=task-edit]").waitFor({ timeout: 5000 });
+    await page.keyboard.press("Enter");
+    await page.locator(RT_DRAWER).waitFor({ timeout: 5000 });
+    // in the drawer: the focus is inside it, the step buttons are reachable, Tab does not leave it
+    await page.waitForFunction(() => !!document.activeElement?.closest("[data-testid=task-drawer]"), null, { timeout: 4000 }).catch(() => { throw new Error("the focus did not move into the drawer"); });
+    for (let i = 0; i < 40; i++) { await page.keyboard.press("Tab"); if (!(await page.evaluate(() => !!document.activeElement?.closest("[data-testid=task-drawer]")))) throw new Error(`Tab left the drawer after ${i + 1} presses`); }
+    // the drawer is modal: what is behind it is hidden from a screen reader and cannot be reached (an overlay is up)
+    assert(await page.evaluate(() => !!document.querySelector("[data-testid=routines-page]")?.closest('[aria-hidden="true"], [inert]')), "the page behind the drawer is not hidden from a screen reader (the drawer is not modal)");
+    assert((await page.locator('[data-slot="drawer-overlay"]').count()) === 1, "the drawer has no overlay");
+    // from the name, only the keyboard: type, go to 内容, save
+    await page.locator("[data-step-button=basics]").focus(); await page.keyboard.press("Enter");
+    await page.locator("#task-name").focus(); await page.keyboard.press("Control+a"); await page.keyboard.type("键盘改的名字");
+    await page.locator("[data-step-button=content]").focus(); await page.keyboard.press("Enter");
+    await page.locator("[data-testid=task-section-content]").waitFor({ timeout: 5000 });
+    await page.locator("[data-testid=task-submit]").focus(); await page.keyboard.press("Enter");
+    await rtWritesAfter(view, 2, "the keyboard save");
+    assert(rtWrites(view)[1].body.name === "键盘改的名字", `the keyboard save sent ${rtBody(rtWrites(view)[1])}`);
+    await page.locator(RT_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "task-menu", null, { timeout: 3000 }).catch(() => { throw new Error("the focus did not return to the card's 「…」 button after the save"); });
+    // 待你确认: the card's buttons are reached by Tab, the 「…」 menu opens with Enter
+    await tab("tab-confirm").click();
+    await page.locator('[data-testid=confirm-entry] [data-slot="approval-card"]').first().waitFor({ timeout: 10000 });
+    const entry = rtEntry(page, "NVDA 10-Q");
+    await entry.getByRole("button", { name: "更多操作" }).focus(); await page.keyboard.press("Enter");
+    await page.getByRole("menuitem", { name: "跳过" }).waitFor({ timeout: 5000 });
+    await page.keyboard.press("ArrowDown"); await page.keyboard.press("Escape");
+    return "tabs: arrow keys move the focus, Enter / Space open (the address follows, no history entry); Space flips a switch; Enter opens the 「…」 menu and 编辑; the drawer holds the focus (40 Tabs stay in), a keyboard-only save sends the new name, the focus returns to 「…」; a card's 「…」 menu opens by Enter";
+  } finally { await view.close(); }
+}
+
+async function routinesStates(ctx) {
+  const notes = [];
+  // 全部任务: skeleton after 400 ms; the read failing: an error bar with 重试 and the other tabs unharmed; empty: the first-task offer
+  const held = await newView(ctx.browser, { width: 1440, theme: "light", label: "routines held", unmatched });
+  try {
+    const page = held.page;
+    held.mock.control.hold = (method, path) => method === "GET" && /\/tasks$/.test(path);
+    await page.goto(`${ctx.server.url}#/routines?tab=tasks`, { waitUntil: "load" });
+    await page.locator("[data-testid=routines-page]").waitFor({ timeout: 15000 });
+    assert((await page.locator("[data-testid=tasks-skeleton]").count()) === 0, "a skeleton before 400 ms");
+    await page.locator("[data-testid=tasks-skeleton]").waitFor({ timeout: 3000 });
+    // the other tabs have their own states: 运行记录 is not waiting for the tasks
+    await page.locator("[data-testid=tab-runs]").click();
+    await page.locator("[data-testid=runs-pane] [data-slot=timeline-item]").first().waitFor({ timeout: 8000 });
+    notes.push("tasks held: no skeleton before 400 ms, one after; the runs tab is not held up by it");
+  } finally { await held.close(); }
+  const failing = await newView(ctx.browser, { width: 1440, theme: "light", label: "routines failing", unmatched });
+  try {
+    const page = failing.page;
+    failing.mock.control.fail = (method, path) => (method === "GET" && /\/tasks$/.test(path) ? 500 : 0);
+    await page.goto(`${ctx.server.url}#/routines?tab=tasks`, { waitUntil: "load" });
+    const bar = page.locator('[data-testid=tasks-list] [data-slot="error-bar"]');
+    await bar.waitFor({ timeout: 15000 });
+    assert((await bar.getByRole("button", { name: "重试" }).count()) === 1, "no 重试");
+    failing.mock.control.fail = null;
+    await bar.getByRole("button", { name: "重试" }).click();
+    await page.locator(RT_CARDS).first().waitFor({ timeout: 8000 });
+    assert((await bar.count()) === 0, "the error bar stayed after the list came");
+    notes.push("a failing read: error bar with 重试 in the tab, the list comes with it");
+  } finally { await failing.close(); }
+  const empty = await newView(ctx.browser, { width: 1440, theme: "light", label: "routines empty", unmatched, fixtureState: (() => { const s = buildState(); s.tasks = []; s.runs = []; return s; })() });
+  try {
+    const page = empty.page;
+    await page.goto(`${ctx.server.url}#/routines?tab=tasks`, { waitUntil: "load" });
+    await page.locator("[data-testid=tasks-empty]").waitFor({ timeout: 15000 });
+    assert((await page.locator("[data-testid=tasks-empty]").innerText()).includes("还没有任务。"), "the empty sentence is not the old one");
+    await page.locator("[data-testid=tasks-empty]").getByRole("button", { name: "新建任务" }).click();
+    await page.locator(RT_DRAWER).waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape"); await page.locator(RT_DRAWER).waitFor({ state: "detached", timeout: 5000 });
+    await page.locator("[data-testid=tab-runs]").click();
+    await page.locator("[data-testid=runs-empty]").waitFor({ timeout: 8000 });
+    assert((await page.locator("[data-testid=runs-empty]").innerText()).includes("还没有运行记录。"), "the runs' empty sentence is not the old one");
+    notes.push("empty: 还没有任务。 with 新建任务 that opens the drawer; 还没有运行记录。");
+  } finally { await empty.close(); }
+  // 待你确认: nothing waits (one sentence), one of the two lists failing (the other still lists, with an error bar)
+  const none = await openRoutines(ctx, "routines none", { tab: "confirm", state: stateWithoutConfirms(), ready: "[data-testid=confirm-empty]" });
+  try {
+    assert((await none.page.locator("[data-testid=confirm-empty]").innerText()).includes("没有等你确认的事"), "the empty sentence is wrong");
+    assert((await rtBadgeNumber(none.page)) === 0 && (await rtTabNumber(none.page)) === 0, "a number is shown with nothing waiting");
+    notes.push("nothing waiting: 没有等你确认的事, no number anywhere");
+  } finally { await none.close(); }
+  const partial = await newView(ctx.browser, { width: 1440, theme: "light", label: "routines partial", unmatched });
+  try {
+    const page = partial.page;
+    partial.mock.control.fail = (method, path) => (method === "GET" && /\/tasks\/proposals$/.test(path) ? 500 : 0);
+    await page.goto(`${ctx.server.url}#/routines?tab=confirm`, { waitUntil: "load" });
+    await page.locator('[data-testid=confirm-tab] [data-slot="error-bar"]').waitFor({ timeout: 15000 });
+    await page.locator('[data-testid=confirm-entry][data-kind=suggestion] [data-slot="approval-card"]').first().waitFor({ timeout: 10000 });
+    notes.push("proposals unreadable: the error bar and the suggested writes still listed");
+  } finally { await partial.close(); }
+  return notes.join("; ");
+}
+
+async function routinesTabAddress(ctx) {
+  const notes = [];
+  const view = await openRoutines(ctx, "tab address", { hash: "#/routines", ready: RT_CONFIRM_READY });
+  try {
+    const page = view.page;
+    assert((await page.locator("[data-testid=tab-confirm]").getAttribute("aria-selected")) === "true", "an address without ?tab= does not open 待你确认");
+    await page.locator("[data-testid=tab-tasks]").click();
+    await page.waitForFunction(() => /[?&]tab=tasks/.test(location.hash), null, { timeout: 5000 });
+    await page.locator(RT_CARDS).first().waitFor({ timeout: 8000 });
+    // the bot filter: in the address, on the list and on the runs (the server is asked for that bot's)
+    await rtCombo(page, "[data-testid=bot-filter]", "News", "NewsBot");
+    await page.waitForFunction(() => /[?&]bot=/.test(location.hash), null, { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelectorAll("[data-testid=task-card]").length === 1, null, { timeout: 5000 });
+    assert((await page.locator(RT_CARDS).first().innerText()).includes("盘前新闻速览"), "the filtered list is not NewsBot's");
+    await page.locator("[data-testid=tab-runs]").click();
+    await page.locator("[data-testid=runs-pane] [data-slot=timeline-item]").first().waitFor({ timeout: 8000 });
+    assert(view.mock.requests.some((r) => r.method === "GET" && /\/tasks\/runs$/.test(r.path) && r.query.includes(`bot_id=${BOT.newsbot}`)), "the runs were not asked for NewsBot's");
+    assert((await page.locator("[data-testid=runs-pane] [data-slot=timeline-item]").count()) === 2, "NewsBot has two runs in the fixtures");
+    notes.push("no ?tab= → 待你确认; clicking a tab writes it into the address; ?bot= filters the tasks (one) and asks the server for that bot's runs (two)");
+  } finally { await view.close(); }
+  // an address names everything: a refresh and a pasted link land on the same tab, bot and (for a bad value) fall back
+  for (const [hash, tab, bot] of [[`#/routines?tab=runs&bot=${BOT.applebot}`, "runs", "AppleBot"], [`#/routines?tab=tasks&bot=${BOT.finbot}`, "tasks", "FinBot"], ["#/routines?tab=nonsense&bot=nope", "confirm", null]]) {
+    const v = await openRoutines(ctx, `address ${tab}`, { hash, ready: "[data-testid=routines-page]" });
+    try {
+      await v.page.waitForFunction((t) => document.querySelector(`[data-testid=tab-${t}]`)?.getAttribute("aria-selected") === "true", tab, { timeout: 8000 });
+      if (bot) assert((await v.page.locator("[data-testid=bot-filter]").innerText()).includes(bot), `${hash}: the filter says ${await v.page.locator("[data-testid=bot-filter]").innerText()}`);
+    } finally { await v.close(); }
+  }
+  notes.push("a pasted link opens the named tab and bot; an unknown tab or bot falls back");
+  return notes.join("; ");
+}
+
+async function routinesBotSection(ctx) {
+  const view = await openRoutines(ctx, "bot section", { state: stateWithRoutines(), hash: `#/chat/${BOT.applebot}/settings?section=routines`, ready: "[data-testid=bot-settings-page]" });
+  try {
+    const page = view.page;
+    await openSection(page, "routines");
+    const section = page.locator("[data-section=routines]");
+    await section.locator("[data-testid=task-card]").first().waitFor({ timeout: 15000 });
+    const names = (await section.locator("[data-testid=task-card] h3").allInnerTexts()).map((n) => n.trim());
+    assert(JSON.stringify(names) === JSON.stringify(["AAPL 财报跟踪", "旧式价格线"]), `the section lists ${JSON.stringify(names)}: AppleBot's two tasks and no one else's`);
+    assert((await section.locator("[data-legacy]").count()) === 0 && (await section.locator(".bot-routines, .task-form, .personal-badge, .memory-list").count()) === 0, "the section still carries the old markup");
+    await section.locator("[data-slot=timeline-item]").first().waitFor({ timeout: 8000 });
+    assert((await section.locator("h3", { hasText: "最近 20 次运行" }).count()) === 1, "the runs heading is gone");
+    assert((await section.locator("[data-testid=bot-routines] [data-testid=task-card] [data-slot=bot-avatar]").count()) === 0, "a card repeats the bot's avatar on the bot's own page");
+    // new: the bot is fixed; the body is the old settings-page body
+    await section.locator("[data-testid=task-new]").click(); await page.locator(RT_DRAWER).waitFor({ timeout: 5000 });
+    assert((await page.locator("[data-testid=task-bot-locked]").innerText()).includes("AppleBot"), "the bot is not shown as fixed");
+    assert((await page.locator("#task-bot[role=combobox]").count()) === 0, "the bot can be changed on the bot's own page");
+    await page.locator("#task-name").fill("本 bot 简报"); await rtGo(page, "content"); await page.locator("#task-instruction").fill("x");
+    await rtSave(view);
+    const [write] = await rtWritesAfter(view, 1, "bot section");
+    assert(rtBody(write) === rtOldBody(RT_BASE.botPage.create.sent, "POST", /\/tasks$/), `body ${rtBody(write)} differs from the old section's ${rtOldBody(RT_BASE.botPage.create.sent, "POST", /\/tasks$/)}`);
+    await section.locator("[data-testid=task-card]", { hasText: "本 bot 简报" }).waitFor({ timeout: 8000 });
+    assert((await page.locator('[data-testid=save-bar]').count()) === 0, "a task change brought up the bot's save bar");
+    // the same page, a phone
+    return "AppleBot's two tasks and its runs, no old markup; 新建 fixes the bot and sends the old body; the card is listed and the save bar stays away";
+  } finally { await view.close(); }
+}
+
+async function routinesNoLegacy(ctx) {
+  const view = await openRoutines(ctx, "routines no legacy", { tab: "confirm", state: stateWithRoutines() });
+  try {
+    const page = view.page;
+    const check = async (what) => {
+      const found = await page.evaluate(() => {
+        const OLD = ".personal-page, .personal-card, .memory-panel, .memory-list, .memory-quote, .personal-badge, .task-form, .bot-routines, .secondary-action, .primary-action, .fine-print";
+        return { legacy: document.querySelectorAll("[data-legacy]").length, old: document.querySelectorAll(`:is(main, [data-testid=task-drawer]) :is(${OLD}), :is(main, [data-testid=task-drawer]):is(${OLD})`).length, native: document.querySelectorAll("main select, [data-testid=task-drawer] select").length };
+      });
+      assert(found.legacy === 0 && found.old === 0, `${what}: ${found.legacy} old-UI frames and ${found.old} old class elements`);
+      assert(found.native === 0, `${what}: ${found.native} native <select>`);
+    };
+    await check("待你确认");
+    await page.locator("[data-testid=tab-tasks]").click(); await page.locator(RT_CARDS).first().waitFor({ timeout: 8000 }); await check("全部任务");
+    await page.locator("[data-testid=tab-runs]").click(); await page.locator("[data-slot=timeline-item]").first().waitFor({ timeout: 8000 }); await check("运行记录");
+    await page.locator("[data-testid=tab-tasks]").click(); await page.locator("[data-testid=task-new]").first().click(); await page.locator(RT_DRAWER).waitFor({ timeout: 5000 });
+    for (const section of ["basics", "time", "scope", "content"]) { await rtGo(page, section); await check(`抽屉 ${section}`); }
+    // no order wording anywhere: the page is a list of routines and nods, never a trade
+    const words = await page.locator("main").innerText();
+    assert(!/买入|卖出|下单|成交|执行交易/.test(words.replace(/新建任务/g, "")), `the page holds trade wording: ${words.match(/买入|卖出|下单|成交|执行交易/)}`);
+    const small = await page.evaluate(() => [...document.querySelectorAll("[data-testid=routines-page] *, [data-testid=task-drawer] *")].filter((el) => el.childNodes.length && [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && parseFloat(getComputedStyle(el).fontSize) < 12).length);
+    assert(small === 0, `${small} text elements under 12px`);
+    return "the three tabs and the drawer's four sections: no old-UI frame, no old class, no native <select>, no trade wording, no text under 12px";
+  } finally { await view.close(); }
+}
+
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -8324,6 +9139,24 @@ const CHECKS = [
   ["portfolio-research-area: one row open, one disclaimer, 模型意见 label, links to the forecast and judgment pages", portfolioResearchArea],
   ["portfolio-states: skeleton after 400 ms, error bar + 重试, unreachable wording, a failed refresh keeps the numbers, empty state, 仅供参考", portfolioStates],
   ["portfolio-dialog-breakpoint: the record draft survives dialog <-> drawer; no old-UI marker or class on the page", portfolioDialogBreakpoint],
+  ["routines-badge-equals-tab: the sidebar's 任务 number = the 待你确认 tab's number = the live cards on it; handling one drops all three together; an expired proposal and a confirmed write are lines, not counted; the phone's bar says the same", routinesBadgeEqualsTab],
+  ["routines-create-brief: five new brief tasks through the drawer send the old form's body character for character", routinesCreateBrief],
+  ["routines-create-alert: five new alert tasks (price lines made of rows) send the old form's body character for character", routinesCreateAlert],
+  ["routines-priceline-format: the rows give the old text's price_lines character for character; an untouched edit keeps the stored lines; wrong rows are said and stop the save; an old free-text line is kept as written, said, never dropped", routinesPricelineFormat],
+  ["routines-edit-roundtrip: seven tasks opened and saved untouched send the old form's body and equal their stored fields; a rename + new zone sends the old changed body", routinesEditRoundtrip],
+  ["routines-toggle: the switch saves at once with the old body in both directions; a failed save puts it back and says so", routinesToggle],
+  ["routines-delete: the old question; Esc / a short press send nothing, a full hold one DELETE; focus returns to 「…」", routinesDelete],
+  ["routines-proposal-actions: a proposal's card has one press (去对话核对) and sends nothing but the conversation's own reads; an expired one is a line with 打开对话", routinesProposalActions],
+  ["routines-suggestion-actions: 同意 / 跳过 / 稍后 / 忽略 / 去对话核对 / 打开对话 send the old requests with the old bodies; two main buttons, the rest in 「…」", routinesSuggestionActions],
+  ["routines-timezone-kept: a zone the list does not hold is shown, offered under 已保存的值 and saved unchanged; the usual zones come first; the sent value is the IANA name", routinesTimezoneKept],
+  ["routines-validation: every broken rule is listed at once with the old sentences, the step row marks the sections, the form jumps to the first, mending clears the list", routinesValidation],
+  ["routines-unsaved-close: closing with changes asks first (Esc, 取消, a click outside); 继续编辑 keeps the draft; no change closes at once; focus returns", routinesUnsavedClose],
+  ["routines-drawer-breakpoint: the drawer is one element across 390 / 1023 / 1024 / 1440 and keeps its section and fields; whole screen on a phone", routinesDrawerBreakpoint],
+  ["routines-keyboard: tabs by arrow keys and Enter / Space, the menu by Enter, the drawer is modal, keeps the focus and saves from the keyboard, focus returns", routinesKeyboard],
+  ["routines-states: skeleton after 400 ms, error bar + 重试, empty sentences, nothing waiting, one of the two lists failing", routinesStates],
+  ["routines-tab-address: ?tab= and ?bot= are the address; a pasted link opens the same view; unknown values fall back", routinesTabAddress],
+  ["routines-bot-section: a bot's settings page lists that bot's tasks and runs in the new components, 新建 fixes the bot and sends the old body, no save bar", routinesBotSection],
+  ["routines-no-legacy: the three tabs and the drawer's four sections hold no old-UI frame or class, no native select, no trade wording, no text under 12px", routinesNoLegacy],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

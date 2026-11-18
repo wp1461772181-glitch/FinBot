@@ -1,0 +1,13 @@
+export type PriceRow = { symbol: string; side: "above" | "below"; price: string } | { raw: string };
+export type PriceLine = { symbol: string; above?: number; below?: number };
+export declare const PRICE_SIDES: readonly ["above", "below"];
+export declare function blankRow(): { symbol: string; side: "above" | "below"; price: string };
+export declare function isRawRow(row: unknown): row is { raw: string };
+export declare function plainNumber(value: unknown): string;
+export declare function parsePriceText(text: unknown): PriceRow[];
+export declare function linesToRows(lines: unknown): PriceRow[];
+export declare function rowProblem(row: unknown): null | "raw" | "symbol" | "price" | "incomplete";
+export declare function rowsProblems(rows: unknown): Array<{ index: number; problem: "raw" | "symbol" | "price" | "incomplete" }>;
+export declare function rowsToLines(rows: unknown): PriceLine[] | null;
+export declare function rowsToText(rows: unknown): string;
+export declare function sameRows(a: unknown, b: unknown): boolean;

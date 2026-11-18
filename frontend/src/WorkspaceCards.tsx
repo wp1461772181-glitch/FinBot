@@ -124,11 +124,11 @@ function RoutinesCard({ bot }: { bot: Bot }) {
       waiting: waitingCount(bot.id, proposals, confirms) })));
   return <>
     <Body state={state} empty={v => !v.tasks.length && !v.waiting}>{v => <>
-      {v.waiting > 0 && <p><a href={hashHref(paths.routines())}>{v.waiting} {t("项等你确认")} →</a></p>}
+      {v.waiting > 0 && <p><a href={hashHref(paths.routines({ tab: "confirm" }))}>{v.waiting} {t("项等你确认")} →</a></p>}
       <ul className="ws-list">{v.tasks.slice(0, 5).map(task =>
         <li key={task.id}><span>{task.name}{task.enabled ? "" : ` · ${t("已停用")}`}</span>
           <small className="ws-muted"> {t("下次")} {day(task.next_run_at)}{task.last_status_label ? ` · ${t("上次")} ${t(task.last_status_label)}` : ""}</small></li>)}</ul></>}</Body>
-    <a className="text-button" href={hashHref(paths.routines())}>{t("管理例行任务")} →</a>
+    <a className="text-button" href={hashHref(paths.routines({ tab: "tasks" }))}>{t("管理例行任务")} →</a>
   </>;
 }
 

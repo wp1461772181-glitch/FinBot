@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { Check, Clock, Ellipsis, Hand, Minus, Reply, X } from "lucide-react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Check, Clock, Ellipsis, Minus, Reply, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { AgentChatMessage } from "../api/conversations";
@@ -23,7 +23,20 @@ type Props = {
   onChoose: (value: string) => Promise<void>;
   onChooseMany: (values: string[]) => Promise<void>;
   onReply: (value: string) => Promise<void>;
+  /** The task page's use (P7.2): who is asking and from where, under the label line; the buttons arranged by the page (a choice with `disabled` is shown but cannot be pressed);
+   *  and `bare`, which drops the note about the ten minutes (an item that has no clock of its own).  The chat gives none of these. */
+  header?: ReactNode;
+  arrangement?: ReturnType<typeof arrangeChoices>;
+  bare?: boolean;
 };
+
+/** lucide's Hand, drawn here: the chat's composer also uses that icon, and an icon module shared by the chat and this card (which the task page loads too) would be cut into a chunk of its own on the chat's first screen. */
+function Hand({ className }: { className?: string }) {
+  return <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`lucide lucide-hand ${className ?? ""}`}>
+    <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" /><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" /><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" />
+    <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
+  </svg>;
+}
 
 const row = "min-h-11 sm:min-h-9";
 const quietButton = "border-line-strong bg-background";
@@ -61,7 +74,7 @@ function Summary({ card, state, outcome, detail, title }: { card: ApprovalCardDa
  * Once answered, or past its ten minutes, it folds to a line.  A card made in this session (`freshAt`) counts its time down; one read back from the
  * server shows only that the time is ten minutes.  Whether a late press is still accepted is the server's answer, not this clock's.
  */
-export default function ApprovalCard({ card, active, answered = false, reply = "", freshAt, botName, onChoose, onChooseMany, onReply }: Props) {
+export default function ApprovalCard({ card, active, answered = false, reply = "", freshAt, botName, onChoose, onChooseMany, onReply, header, arrangement, bare = false }: Props) {
   const { t } = useLocale();
   const kind = approvalKind(card), confirm = isConfirmCard(card), write = isWriteCard(card);
   const title = t(clarificationTitle(card));
@@ -77,11 +90,11 @@ export default function ApprovalCard({ card, active, answered = false, reply = "
   if (answered) { const summary = answerSummary(card, reply); return <Summary card={card} state="answered" outcome={summary.outcome} detail={summary.detail} title={title} />; }
   if (active && countdown?.expired) return <Summary card={card} state="expired" outcome="expired" detail="" title={title} />;
 
-  const arranged = arrangeChoices(card);
+  const arranged = arrangement ?? arrangeChoices(card);
   const need = pickState(card, picked.length);
   // A button that sends the ticked materials waits for the minimum; with nothing to tick, a confirming button has nothing to send.
   const ticks = (choice: ApprovalChoice) => options.length > 0 && /^confirm:/.test(choice.value);
-  const blocked = (choice: ApprovalChoice) => !active || (ticks(choice) && need.missing > 0) || (need.noCandidates && /^confirm:/.test(choice.value));
+  const blocked = (choice: ApprovalChoice) => !active || Boolean((choice as { disabled?: boolean }).disabled) || (ticks(choice) && need.missing > 0) || (need.noCandidates && /^confirm:/.test(choice.value));
   const press = (choice: ApprovalChoice) => void (ticks(choice) ? onChooseMany(picked) : onChoose(choice.value));
   const reason = !active ? "" : need.noCandidates ? t("没有可用于修订的新材料") : need.missing > 0 ? `${t("至少勾选")} ${need.min} ${t("份材料")}（${t("已选")} ${need.picked}）` : "";
 
@@ -114,8 +127,9 @@ export default function ApprovalCard({ card, active, answered = false, reply = "
       <span className="material-action-label inline-flex items-center gap-1"><Hand aria-hidden="true" className="size-3.5" />{label}</span>
       {countdown
         ? <span data-slot="approval-timer" data-testid="approval-timer" role="timer" aria-label={t("确认剩余时间")} className="material-action-timer ml-auto">{formatRemaining(countdown.left)}</span>
-        : confirm && <span data-slot="approval-note" className="ml-auto text-caption text-muted-foreground">{t("确认有效期为十分钟")}</span>}
+        : confirm && !bare && <span data-slot="approval-note" className="ml-auto text-caption text-muted-foreground">{t("确认有效期为十分钟")}</span>}
     </div>
+    {header}
     <h3 className="text-body font-medium text-ink">{title}</h3>
     {display?.agent_suggestion && <p className="text-small text-ink-2">{t("这是 agent 的建议，不是你的要求。批准后才会继续。")}</p>}
     {card.question && <p className="text-body text-ink">{card.question}</p>}
