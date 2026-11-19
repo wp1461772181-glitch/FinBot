@@ -139,7 +139,8 @@ export function registerRoutes(route, reply) {
   // --- forecasts (V2) ----------------------------------------------------------------------------------
   const found = (value) => (value ?? reply.status(404, { detail: "not_found" }));
   route.get("/v2/forecasts", ({ query, state }) => forecastList(query, state));
-  route.get("/v2/stocks/:symbol/forecast-roots", ({ params }) => forecastRoots(params.symbol));
+  // P7.3: `state.forecastRootsError` makes the company's forecast-root list unreadable (the `latest` redirect page's error state).
+  route.get("/v2/stocks/:symbol/forecast-roots", ({ params, state }) => (state.forecastRootsError ? reply.status(500, { detail: "forecast_roots_unavailable" }) : forecastRoots(params.symbol)));
   route.get("/v2/stocks/:symbol/workspace", ({ params }) => workspace(params.symbol));
   route.get("/v2/forecast-roots/:id/timeline", ({ params, state }) => found(timeline(params.id, state)));
   route.get("/v2/forecast-versions/:id", ({ params }) => found(versionDetail(params.id)));

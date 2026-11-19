@@ -290,6 +290,26 @@ async function redUp(page) {
 
 // --- P7.1 pictures -------------------------------------------------------------------------------------------------------
 const portfolioLoaded = "[data-testid=portfolio-table]";
+/**
+ * P7.3 (C3).  A full-page picture is taken through Chromium's capture-beyond-viewport, which for a moment makes the layout viewport 1 x 1 and then gives the real size back.
+ * Whether the page's own code sees that moment is a race inside the browser (a picture taken at once, or after 500 ms under load, may or may not).  The 记一笔 dialog
+ * follows a width query: below 640 px it is a drawer, so on that moment it swaps its shell, the dialog is unmounted and mounted again, and the focus ring
+ * comes back on its first field.  The picture is of the dialog undisturbed (focus on 记录), so this view does not pass the capture's transient size on: while the window is
+ * narrower than 100 px, `matchMedia(...).matches` keeps the answer it gave at a real size.  Nothing about the page changes at any real size.
+ */
+async function holdViewportAnswers(page) {
+  await page.evaluate(() => {
+    const native = window.matchMedia.bind(window); const answers = new Map();
+    window.matchMedia = (query) => {
+      const list = native(query);
+      if (window.innerWidth >= 100) answers.set(query, list.matches);
+      return new Proxy(list, { get(target, key) {
+        if (key === "matches") { if (window.innerWidth < 100 && answers.has(query)) return answers.get(query); answers.set(query, target.matches); return target.matches; }
+        const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
+      } });
+    };
+  });
+}
 /** The fake backend's state for the portfolio page with switches set (fixtures/portfolio.mjs: empty, fail, referenceOnly, override). */
 /** P7.2: the fake backend's state with the extra routines: a task with both price sides, one in a rare time zone, one with an old free-text price line, an expired proposal and a second suggestion. */
 export function stateWithRoutines({ tasks = true, expired = true, inbox = true } = {}) {
@@ -608,6 +628,8 @@ export const PAGES = [
       await page.locator("[data-testid=revise-drawer]").waitFor({ state: "detached", timeout: 15000 });
       await hideElapsed(page);
     } },
+  // P7.3: the `latest` redirect page when the company's forecast list cannot be read (the fake backend's `forecastRootsError` switch): it stops on its error state.
+  { name: "latest-error", hash: "#/research/c/AAPL/latest?section=versions", ready: "[data-testid=latest-error] [data-slot=empty-state]", view: () => ({ fixtureState: stateWithForecasts({ forecastRootsError: true }) }) },
   { name: "judgment", hash: `#/research/judgments/${JUDGMENT.aapl}`, ready: async (page) => { await page.waitForSelector("[data-testid=judgment-card]", { timeout: 30000 }); await page.waitForSelector("[data-testid=judgment-revise]", { timeout: 30000 }); await page.waitForFunction(() => document.querySelectorAll("[data-testid=judgment-page] [aria-busy=true]").length === 0, null, { timeout: 30000 }); } },
   // P6.3: the evidence page (the grid of a version's materials, one material in the drawer, the upload dialog with one refused field, a company with no forecast, the
   // version picker open) and the material library (the list with the first material's analysis; the broker note's analysis, original and history; the filter bar with chips;
@@ -664,6 +686,7 @@ export const PAGES = [
     before: async (page) => { await page.locator("[data-testid=pf-toggle]").first().click(); await page.locator("[data-testid=pf-panel] [data-testid=pf-research-forecast]").waitFor({ timeout: 15000 }); } },
   { name: "portfolio-record", hash: "#/portfolio", ready: portfolioLoaded,
     before: async (page) => {
+      await holdViewportAnswers(page);
       await page.locator("[data-testid=record-open]").click(); await page.locator("[data-testid=record-dialog]").waitFor({ timeout: 10000 });
       await page.locator("[data-testid=record-submit]").click(); await page.locator("[data-testid=record-error]").waitFor({ timeout: 5000 });
     } },
@@ -744,7 +767,7 @@ export const PAGES = [
   { name: "bot-settings-default", hash: settingsAt(BOT.finbot), ready: "[data-testid=bot-settings-page]", before: async (page) => { await openSection(page, "notify"); await openSection(page, "danger"); } },
   { name: "bot-settings-default-danger", hash: settingsAt(BOT.finbot, "danger"), ready: "[data-testid=bot-settings-page]", element: "#section-danger", before: async (page) => { await openSection(page, "danger"); } },
   { name: "bot-settings-open-all", hash: settingsAt(BOT.applebot), ready: "[data-testid=bot-settings-page]",
-    before: async (page) => { for (const id of ["focus", "look", "model", "tools", "skills", "routines", "notify", "danger"]) await openSection(page, id); await page.locator("[data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 }); } },
+    before: async (page) => { for (const id of ["focus", "look", "model", "tools", "skills", "routines", "notify", "danger"]) await openSection(page, id); await page.locator("[data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 }); await page.evaluate(() => window.scrollTo(0, 0)); } },
   // A5: the personality pickers (archetype, tempo, easing, aura variant, where they come from) and the rehearsal in the settings page's 外观与性格 section (they stood in the right panel's 档案 tab until P5.1): the reduced-motion still frame of
   // each of its states (the shots run with the system's reduced motion), one picture of the whole studio per state.  Then the settings page's animation strength,
   // and the chat page under each level of animation chosen in the app (the browser's own setting left alone): "lite" and "off".

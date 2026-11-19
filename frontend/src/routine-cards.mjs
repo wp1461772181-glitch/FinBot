@@ -40,7 +40,7 @@ export function entryCard(entry) {
     request_id: entry.id, reason: "write_confirmation", question: entry.detail || undefined,
     display: { title: entry.title || undefined, targets, ...(proposal ? {} : { agent_suggestion: true }) },
     choices: proposal ? [choice("review", "去对话核对")]
-      : [choice("confirm:inbox", "同意", entry.state === "confirmed"), choice("review", "去对话核对"), choice("skip", "跳过", entry.state === "skipped"), choice("later", "稍后"), ...(entry.conversationId ? [choice("open", "打开对话")] : []), choice("dismiss", "忽略")],
+      : [choice("confirm:inbox", "同意", entry.state === "confirmed"), choice("review", "去对话核对"), choice("skip", "跳过", entry.state === "skipped"), choice("later", "稍后再说"), ...(entry.conversationId ? [choice("open", "打开对话")] : []), choice("dismiss", "忽略")],
   };
   const [primary, secondary, ...more] = card.choices;
   return { card, layout: { layout: "confirm", primary, secondary: secondary ?? null, more, list: [] } };

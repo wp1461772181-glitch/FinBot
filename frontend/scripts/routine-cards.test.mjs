@@ -53,8 +53,8 @@ test("a suggested write's card: two main buttons (同意, 去对话核对) and t
   const [plain, withConversation] = [confirmEntries([], confirms)[0], confirmEntries([], EXTRA_INBOX)[0]];
   const a = entryCard(plain), b = entryCard(withConversation);
   assert.deepEqual([a.layout.primary.label, a.layout.secondary.label], ["同意", "去对话核对"]);
-  assert.deepEqual(a.layout.more.map((c) => c.label), ["跳过", "稍后", "忽略"]);
-  assert.deepEqual(b.layout.more.map((c) => c.label), ["跳过", "稍后", "打开对话", "忽略"]);
+  assert.deepEqual(a.layout.more.map((c) => c.label), ["跳过", "稍后再说", "忽略"]);
+  assert.deepEqual(b.layout.more.map((c) => c.label), ["跳过", "稍后再说", "打开对话", "忽略"]);
   assert.equal(a.card.display.agent_suggestion, true);
   assert.equal(plain.token, "fixture-ref");
   assert.equal(plain.taskName, "周日组合复盘");

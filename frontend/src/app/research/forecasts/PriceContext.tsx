@@ -32,20 +32,20 @@ export function PriceContext({ symbol, history, version }: { symbol: string; his
   const shown = candles.find(candle => candle.trading_date === active) ?? candles.at(-1) ?? null;
   return <section data-testid="forecast-chart" aria-label={t("所选预测的固定目标和行情时间边界")} className="material-fact flex min-w-0 flex-col gap-2 p-4">
     <div className="flex flex-wrap items-baseline gap-x-3">
-      <h2 className="text-title-s text-ink">{t("行情")}</h2>
-      <p className="font-mono text-caption text-muted-foreground">{symbol} · {t("固定目标与决策行情截止")}</p>
+      <h2 className="text-title-s text-ink mb-[0.83em]">{t("行情")}</h2>
+      <p className="font-mono text-caption text-muted-foreground mb-[1em]">{symbol} · {t("固定目标与决策行情截止")}</p>
     </div>
     {!shown
       ? <EmptyState title={t("暂时没有已保存的 K 线")} description={t("预测版本的决策时点与目标日已保存，但本地没有可绘制的 OHLC 行情。")} className="py-6" />
       : <>
-        <p className="text-small text-muted-foreground">{t("图表只显示本地保存的 K 线。强调色的线标记该版本的固定目标日，另一条线标记行情截止日；不会把新版判断伪装成历史概率或蜡烛。")}</p>
+        <p className="text-small text-muted-foreground mb-[1em]">{t("图表只显示本地保存的 K 线。强调色的线标记该版本的固定目标日，另一条线标记行情截止日；不会把新版判断伪装成历史概率或蜡烛。")}</p>
         <CandlestickChart candles={candles} symbol={symbol} activeDate={shown.trading_date} onInspect={setActive} cutoffDate={cutoffDate} targetEndDate={target ?? undefined} />
-        <p data-testid="candle-readout" aria-live="polite" className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-caption tabular-nums text-muted-foreground">
+        <p data-testid="candle-readout" aria-live="polite" className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-caption tabular-nums text-muted-foreground mb-[1em]">
           <span className="text-ink">{shown.trading_date}</span>
           <span>{t("开盘")} {price(shown.open)}</span><span>{t("最高")} {price(shown.high)}</span><span>{t("最低")} {price(shown.low)}</span><span>{t("收盘")} {price(shown.close)}</span>
           {shown.benchmark_close !== null && shown.benchmark_close !== undefined && <span>SPY {t("收盘")} {price(shown.benchmark_close)}</span>}
         </p>
-        <p className="text-caption text-muted-foreground">{t("图表仅定位合同时间边界，不计算未来收益或预测准确率。")}</p>
+        <p className="text-caption text-muted-foreground mb-[1em]">{t("图表仅定位合同时间边界，不计算未来收益或预测准确率。")}</p>
       </>}
   </section>;
 }

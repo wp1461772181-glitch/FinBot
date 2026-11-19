@@ -155,12 +155,12 @@ export function ForecastDetail({ rootId, versionId, reviseSourceId, section }: {
   const tabLabel = (id: DetailSection) => t(SECTION_PHRASE[id]);
   return <main data-testid="forecast-page" data-root={rootId} aria-labelledby="forecast-title" className="mx-auto flex w-full max-w-[1280px] flex-1 flex-col gap-4 p-4 lg:p-6">
     <header className="flex flex-wrap items-center gap-x-4 gap-y-2">
-      <Link to={paths.forecasts()} data-testid="forecast-back" className="inline-flex h-8 items-center gap-1 rounded-sm text-small text-ink-2 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11"><ArrowLeft aria-hidden="true" className="size-4" />{t("预测")}</Link>
-      <h1 id="forecast-title" className="min-w-0 text-title-m text-ink"><span className="font-mono">{symbol ?? "…"}</span> · {t("预测")}</h1>
+      <Link to={paths.forecasts()} data-testid="forecast-back" className="inline-flex h-8 items-center gap-1 rounded-sm text-small text-ink-2 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11 underline"><ArrowLeft aria-hidden="true" className="size-4" />{t("预测")}</Link>
+      <h1 id="forecast-title" className="min-w-0 text-title-m text-ink mb-[0.67em]"><span className="font-mono">{symbol ?? "…"}</span> · {t("预测")}</h1>
       <div className="ml-auto flex flex-col items-end gap-1">
         <Button ref={reviseButton} type="button" data-testid="revise-open" disabled={!canRevise} aria-describedby={!gate.allowed ? "revise-reason" : undefined} onClick={() => setDrawerOpen(true)}><FilePen aria-hidden="true" />{t("发起修订")}</Button>
-        {timeline.kind === "ready" && !gate.allowed && <p id="revise-reason" data-testid="revise-reason" role="status" className="max-w-xs text-right text-caption text-muted-foreground">{t(gate.reason!)}</p>}
-        {timeline.kind === "ready" && gate.allowed && jobRunning && <p data-testid="revise-reason" role="status" className="text-caption text-muted-foreground">{t("任务处理中…")}</p>}
+        {timeline.kind === "ready" && !gate.allowed && <p id="revise-reason" data-testid="revise-reason" role="status" className="max-w-xs text-right text-caption text-muted-foreground mb-[1em]">{t(gate.reason!)}</p>}
+        {timeline.kind === "ready" && gate.allowed && jobRunning && <p data-testid="revise-reason" role="status" className="text-caption text-muted-foreground mb-[1em]">{t("任务处理中…")}</p>}
       </div>
     </header>
     <TaskStrip />
@@ -182,7 +182,7 @@ export function ForecastDetail({ rootId, versionId, reviseSourceId, section }: {
         <section data-testid="forecast-tabs" aria-label={t("版本与来源")} className="flex min-w-0 flex-col gap-4">
           <div ref={tabs} role="tablist" aria-label={t("版本与来源")} onKeyDown={moveTab} className="flex gap-1 overflow-x-auto border-b border-line">
             {DETAIL_SECTIONS.map(id => <button key={id} type="button" role="tab" id={`forecast-tab-${id}`} data-testid={`tab-${id}`} aria-selected={tab === id} aria-controls="forecast-tab-panel" tabIndex={tab === id ? 0 : -1} onClick={() => pickTab(id)}
-              className={cn("-mb-px min-h-11 whitespace-nowrap border-x-0 border-t-0 border-b-2 bg-transparent px-4 text-body outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring lg:min-h-10", tab === id ? "border-brand font-medium text-ink" : "border-transparent text-muted-foreground hover:text-ink")}>{tabLabel(id)}</button>)}
+              className={cn("-mb-px min-h-11 whitespace-nowrap border-x-0 border-t-0 border-b-2 bg-transparent px-4 text-body outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring lg:min-h-10 cursor-pointer appearance-auto py-px", tab === id ? "border-brand font-medium text-ink" : "border-transparent text-muted-foreground hover:text-ink")}>{tabLabel(id)}</button>)}
           </div>
           <div role="tabpanel" id="forecast-tab-panel" aria-labelledby={`forecast-tab-${tab}`} tabIndex={-1} className="min-w-0 outline-none">
             {tab === "versions" && (compareReady ? <VersionsPanel timeline={data} current={current} parent={parent} /> : <SkeletonCard />)}

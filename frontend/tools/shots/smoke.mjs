@@ -11,7 +11,7 @@ import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
 import { HEX_MATERIAL, MATERIALS, analysisId, materialId } from "./fixtures/materials.mjs";
 import { CASES as UPLOAD_CASES, VALID as UPLOAD_VALID } from "./fixtures/upload-cases.mjs";
-import { REVISE_FILING_ID, ROOT_IDS, evaluations, revisionCandidates, versionDetail } from "./fixtures/forecasts.mjs";
+import { REVISE_FILING_ID, ROOT_IDS, evaluations, forecastRoots, revisionCandidates, versionDetail } from "./fixtures/forecasts.mjs";
 import { buildState } from "./fixtures/index.mjs";
 import { portfolioSummary } from "./fixtures/portfolio.mjs";
 import { forecastList } from "./fixtures/forecasts.mjs";
@@ -7587,37 +7587,47 @@ async function monitorDotInSidebar(ctx) {
   return notes.join("; ");
 }
 
+/** The old marker and the old classes: nothing in the research area may carry either (the old classes are what the legacy sheets are keyed on). */
+const OLD_MARKS = "main.workspace, .workspace-stack, .v2-desk, .historical-replay-workspace, .v2-notice, .text-button";
+const oldMarkCounts = (page) => page.evaluate((selector) => ({ legacy: document.querySelectorAll("[data-legacy]").length, old: document.querySelectorAll(selector).length }), OLD_MARKS);
+
 async function researchNoLegacy(ctx) {
-  // The pages with no old-UI marker, and the five P6.2 / P6.3 pages that still stand inside it (listed in the P6.4 delivery: taking the marker away changes their pixels).
-  // A temporary exception set by the P6.4 ruling: it stays until the research de-legacy package takes the marker off these pages and flips this check to "none"; see opus-p64-ruling.md.
+  // Every research-area route has at least one address here (add a row when a research-area route is added): all of them hold no old-UI marker and no old class.
+  // Since P7.3 the research area is at 0; the five P6.2 / P6.3 pages and the `latest` redirect page were the temporary exception of opus-p64-ruling.md item 3.
   const clean = [["#/research", "main"], ["#/research/c/AAPL", "[data-testid=company-overview]"], ["#/research/c/AAPL?tab=forecasts", "main"], ["#/research/c/AAPL?tab=materials", "[data-testid=material-row]"],
-    ["#/research/scores", "[data-testid=cohort-card]"], ["#/research/replay", "[data-testid=replay-row]"], ["#/research/monitor", "[data-testid=monitor-health]"]];
-  const listed = [["#/research/forecasts", "[data-testid=forecast-home]"], [`#/research/forecasts/${ROOT.aapl}`, "[data-testid=forecast-page]"], [`#/research/judgments/${JUDGMENT.aapl}`, "[data-testid=judgment-card]"],
-    ["#/research/evidence?symbol=AAPL", "[data-testid=evidence-page]"], ["#/research/materials", "[data-testid=material-row]"]];
+    ["#/research/scores", "[data-testid=cohort-card]"], ["#/research/replay", "[data-testid=replay-row]"], ["#/research/monitor", "[data-testid=monitor-health]"],
+    ["#/research/forecasts", "[data-testid=forecast-home]"], [`#/research/forecasts/${ROOT.aapl}`, "[data-testid=forecast-page]"], [`#/research/judgments/${JUDGMENT.aapl}`, "[data-testid=judgment-card]"],
+    ["#/research/evidence?symbol=AAPL", "[data-testid=evidence-page]"], [`#/research/evidence/${VERSION.aapl3}`, "[data-testid=evidence-page]"],
+    [`#/research/evidence/${VERSION.aapl3}/uploaded_media/${materialId(3)}`, "[data-testid=evidence-drawer]"], ["#/research/materials", "[data-testid=material-row]"],
+    ["#/research/c/AAPL/latest?section=versions", "[data-testid=forecast-page]"]];
   const bad = [];
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "research no legacy", unmatched });
   const read = async (hash, ready) => {
     await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
     await view.page.waitForSelector(ready, { state: "visible", timeout: 30000 });
     await settle(view.page);
-    return view.page.evaluate(() => ({ legacy: document.querySelectorAll("[data-legacy]").length, old: document.querySelectorAll("main.workspace, .workspace-stack, .v2-desk, .historical-replay-workspace").length }));
+    return oldMarkCounts(view.page);
   };
+  const judge = (hash, got) => {
+    if (got.legacy) bad.push(`${hash}: ${got.legacy} data-legacy element(s)`);
+    if (got.old) bad.push(`${hash}: ${got.old} old workspace element(s)`);
+  };
+  const failing = await newView(ctx.browser, { width: 1440, theme: "light", label: "research no legacy (latest, list unreadable)", unmatched, fixtureState: stateWithMaterials({ forecastRootsError: true }) });
   try {
-    for (const [hash, ready] of clean) {
-      const got = await read(hash, ready);
-      if (got.legacy) bad.push(`${hash}: ${got.legacy} data-legacy element(s)`);
-      if (got.old) bad.push(`${hash}: ${got.old} old workspace element(s)`);
-    }
-    for (const [hash, ready] of listed) {
-      const got = await read(hash, ready);
-      if (got.legacy !== 1) bad.push(`${hash}: listed as inside the marker, found ${got.legacy}`);
-    }
+    for (const [hash, ready] of clean) judge(hash, await read(hash, ready));
+    // the `latest` redirect page stopped on its error state (the company's forecast list cannot be read)
+    const errorHash = "#/research/c/AAPL/latest?section=versions";
+    await failing.page.goto(`${ctx.server.url}${errorHash}`, { waitUntil: "load" });
+    await failing.page.waitForSelector("[data-testid=latest-error]", { state: "visible", timeout: 30000 });
+    await settle(failing.page);
+    judge(`${errorHash} (list unreadable)`, await oldMarkCounts(failing.page));
+    // the positive control: a page that is still old keeps its marker, so a selector that is broken (and would read 0 everywhere) cannot pass
     await view.page.goto(`${ctx.server.url}#/settings/models`, { waitUntil: "load" });
     await view.page.waitForSelector(".agent-admin h2", { timeout: 30000 });
     assert((await view.page.locator("[data-legacy]").count()) >= 1, "the settings page lost its old-UI marker too");
-  } finally { await view.close(); }
+  } finally { await failing.close(); await view.close(); }
   assert(!bad.length, bad.join("; "));
-  return `${clean.length} research pages (watchlist, company and its tabs, 模型成绩, 历史回放, 监控) hold no data-legacy element and no old workspace class; the five listed P6.2 / P6.3 pages are exactly the ones still inside the marker`;
+  return `${clean.length + 1} research-area addresses (watchlist, company and its tabs, forecast home, one forecast, judgment, the three evidence addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page opened and stopped on its error) hold no data-legacy element and no old workspace class; the settings page still holds the marker`;
 }
 
 // --- P7.1: the portfolio page ------------------------------------------------------------------------------------------------------
@@ -8513,12 +8523,12 @@ async function routinesBadgeEqualsTab(ctx) {
     const folded = page.locator("[data-testid=confirm-entry][data-phase=done]");
     await folded.waitFor({ timeout: 5000 });
     assert((await folded.innerText()).includes("已确认"), `the confirmed write's line says ${await folded.innerText()}`);
-    // 稍后 leaves the card where it is and the number as it is
+    // 稍后再说 leaves the card where it is and the number as it is
     await rtEntry(page, "NVDA 10-Q").getByRole("button", { name: "更多操作" }).click();
-    await page.getByRole("menuitem", { name: "稍后" }).click();
+    await page.getByRole("menuitem", { name: "稍后再说" }).click();
     await page.waitForFunction(() => document.querySelector("[data-sonner-toast]"), null, { timeout: 5000 });
-    await rtNumbers(page, liveFixtures, "after 稍后");
-    notes.push(`with an expired proposal and a second write: ${liveFixtures + 1} in all three, the expired one a line and not counted; 同意 → ${liveFixtures} and a 已确认 line; 稍后 changes nothing`);
+    await rtNumbers(page, liveFixtures, "after 稍后再说");
+    notes.push(`with an expired proposal and a second write: ${liveFixtures + 1} in all three, the expired one a line and not counted; 同意 → ${liveFixtures} and a 已确认 line; 稍后再说 changes nothing`);
   } finally { await second.close(); }
   // the phone's bar says it too
   const phone = await openRoutines(ctx, "badge phone", { tab: "confirm", width: 390 });
@@ -8550,7 +8560,10 @@ async function routinesProposalActions(ctx) {
     await until(() => rtReads(view, from).some((p) => p.includes(`/conversations/${PROPOSALS[0].conversation_id}/messages`)), "the proposal's conversation was not opened");
     assert(rtWrites(view).length === 0, "pressing 去对话核对 on a proposal wrote something to the task lists");
     const old = RT_BASE.proposals.live.writes.map((w) => `${w.method} ${w.path}`);
-    const got = view.mock.requests.slice(from).filter((r) => r.method !== "GET").map((r) => `${r.method} ${r.path.startsWith("/agent-chat") ? r.path : `/agent-chat${r.path}`}`);
+    const followed = () => view.mock.requests.slice(from).filter((r) => r.method !== "GET").map((r) => `${r.method} ${r.path.startsWith("/agent-chat") ? r.path : `/agent-chat${r.path}`}`);
+    // The bot's read mark is sent a moment after the conversation's messages are read: wait for the request the old page sent (the fact), then compare the whole list.
+    await until(() => followed().length >= old.length, `the old page's ${JSON.stringify(old)} was not sent (sent: ${JSON.stringify(followed())})`);
+    const got = followed();
     assert(JSON.stringify(got) === JSON.stringify(old), `the requests that followed: ${JSON.stringify(got)}, the old page's: ${JSON.stringify(old)}`);
     notes.push(`a live proposal: one button, 去对话核对, opens its conversation (${RT_BASE.proposals.live.hashAfter}), the old requests`);
   } finally { await view.close(); }
@@ -8576,7 +8589,7 @@ async function routinesSuggestionActions(ctx) {
   const CASES = [
     ["confirm", (page, e) => e.getByRole("button", { name: "同意", exact: true }).click(), "NVDA 10-Q"],
     ["skip", (page, e) => rtMore(page, e, "跳过"), "NVDA 10-Q"],
-    ["later", (page, e) => rtMore(page, e, "稍后"), "NVDA 10-Q"],
+    ["later", (page, e) => rtMore(page, e, "稍后再说"), "NVDA 10-Q"],
     ["mint", (page, e) => e.getByRole("button", { name: "去对话核对", exact: true }).click(), "NVDA 10-Q"],
     ["dismiss", (page, e) => rtMore(page, e, "忽略"), "NVDA 10-Q"],
     ["open", (page, e) => rtMore(page, e, "打开对话"), "AAPL 10-K"],
@@ -8593,7 +8606,7 @@ async function routinesSuggestionActions(ctx) {
         assert(JSON.stringify(visible) === JSON.stringify(["同意", "去对话核对"]), `the card's visible buttons are ${JSON.stringify(visible)}`);
         await entry.getByRole("button", { name: "更多操作" }).click();
         const items = await page.getByRole("menuitem").allInnerTexts();
-        assert(JSON.stringify(items.map((i) => i.trim())) === JSON.stringify(["跳过", "稍后", "忽略"]), `the 「…」 menu holds ${JSON.stringify(items)}`);
+        assert(JSON.stringify(items.map((i) => i.trim())) === JSON.stringify(["跳过", "稍后再说", "忽略"]), `the 「…」 menu holds ${JSON.stringify(items)}`);
         await page.keyboard.press("Escape");
         assert((await entry.innerText()).includes("周日组合复盘") && (await entry.innerText()).includes("FinBot"), "the card does not say which bot and which task it comes from");
       }
@@ -8613,7 +8626,7 @@ async function routinesSuggestionActions(ctx) {
       done.push(name);
     } finally { await view.close(); }
   }
-  return `${done.length} presses (${done.join(", ")}) sent the old requests with the old bodies; the card has two main buttons (同意, 去对话核对) and 跳过 / 稍后 / 忽略 in 「…」; 打开对话 only where the run has a conversation`;
+  return `${done.length} presses (${done.join(", ")}) sent the old requests with the old bodies; the card has two main buttons (同意, 去对话核对) and 跳过 / 稍后再说 / 忽略 in 「…」; 打开对话 only where the run has a conversation`;
 }
 
 async function routinesValidation(ctx) {
@@ -8921,6 +8934,147 @@ async function routinesNoLegacy(ctx) {
 }
 
 
+// --- P7.3: the research area without the old-UI marker -------------------------------------------------------------------------------------
+/** A watcher that lives in the page from its first byte: it counts the most old-marker / old-class elements the document ever held at one time (a state that comes and goes between two reads is still seen). */
+function watchOldMarks(selector) {
+  window.__oldMarkPeak = 0;
+  const look = () => { const n = document.querySelectorAll(`[data-legacy], ${selector}`).length; if (n > window.__oldMarkPeak) window.__oldMarkPeak = n; };
+  new MutationObserver(look).observe(document, { childList: true, subtree: true, attributes: true });
+  document.addEventListener("DOMContentLoaded", look);
+}
+
+async function latestRedirectStates(ctx) {
+  const notes = [];
+  const expectedRoot = forecastRoots("AAPL").roots[0].id;
+  assert(forecastRoots("MSFT").roots.length === 0, "the fixture changed: MSFT has forecasts now, so there is no company without one");
+  const open = async (label, symbol, patch) => {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label, unmatched, ...(patch ? { fixtureState: stateWithMaterials(patch) } : {}) });
+    await view.context.addInitScript(watchOldMarks, OLD_MARKS);
+    await view.page.goto(`${ctx.server.url}#/research/c/${symbol}/latest?section=versions`, { waitUntil: "load" });
+    return view;
+  };
+  const peak = (view) => view.page.evaluate(() => window.__oldMarkPeak ?? -1);
+  // 1. a company with a forecast: the page replaces itself with that forecast's address, on its version list
+  const withForecast = await open("latest: company with a forecast", "AAPL");
+  try {
+    const { page } = withForecast;
+    await page.waitForSelector("[data-testid=forecast-page]", { state: "visible", timeout: 30000 });
+    const hash = await hashOf(page);
+    assert(hash.startsWith(`#/research/forecasts/${expectedRoot}`) && hash.includes("section=versions"), `landed on ${hash}, expected the forecast ${expectedRoot} on its version list`);
+    await settle(page);
+    assert((await peak(withForecast)) === 0, `${await peak(withForecast)} old-marker / old-class element(s) were in the page at some point`);
+    assert((await oldMarkCounts(page)).legacy === 0 && (await oldMarkCounts(page)).old === 0, "the forecast page holds an old marker");
+    notes.push("a company with a forecast lands on its forecast with section=versions");
+  } finally { await withForecast.close(); }
+  // 2. a company with no forecast: the forecast home
+  const none = await open("latest: company without a forecast", "MSFT");
+  try {
+    await none.page.waitForSelector("[data-testid=forecast-home]", { state: "visible", timeout: 30000 });
+    assert((await hashOf(none.page)) === "#/research/forecasts", `landed on ${await hashOf(none.page)}, expected #/research/forecasts`);
+    await settle(none.page);
+    assert((await peak(none)) === 0, `${await peak(none)} old-marker / old-class element(s) were in the page at some point`);
+    notes.push("a company with none lands on the forecast home");
+  } finally { await none.close(); }
+  // 3. the list cannot be read: the error stays, says the old sentence, and its one way out leads to the forecast home
+  const failing = await open("latest: list unreadable", "AAPL", { forecastRootsError: true });
+  try {
+    const { page } = failing;
+    const box = page.locator("[data-testid=latest-error]");
+    await box.waitFor({ state: "visible", timeout: 30000 });
+    await settle(page);
+    const text = (await box.innerText()).replace(/\s+/g, " ");
+    assert(text.includes("暂时无法读取预测日期列表。"), `the error says: ${text}`);
+    assert((await box.getAttribute("role")) === "alert", "the error is not announced as an alert");
+    assert((await hashOf(page)).startsWith("#/research/c/AAPL/latest"), `the page left the redirect address: ${await hashOf(page)}`);
+    await box.getByText("回到预测首页", { exact: true }).click();
+    await page.waitForSelector("[data-testid=forecast-home]", { state: "visible", timeout: 30000 });
+    assert((await hashOf(page)) === "#/research/forecasts", `回到预测首页 led to ${await hashOf(page)}`);
+    assert((await peak(failing)) === 0, `${await peak(failing)} old-marker / old-class element(s) were in the page at some point`);
+    notes.push("an unreadable list stops on the error sentence; 回到预测首页 leads to the forecast home");
+  } finally { await failing.close(); }
+  return `${notes.join("; ")}; in all three the document never held a data-legacy element or an old class`;
+}
+
+/** The plain buttons of the research pages keep the pointer, and the links that were underlined by the browser's own rule keep their line. */
+async function researchBareControls(ctx) {
+  const notes = [];
+  const measure = (page, rootSelector) => page.evaluate((rootSel) => {
+    const shown = (el) => { const style = getComputedStyle(el); return el.getClientRects().length > 0 && style.visibility !== "hidden" && style.display !== "none"; };
+    // The restore rules of the old marker never reached a data-slot part inside the page, or anything in one, so such buttons are not part of what this check is about.
+    // (The shell's own data-slot containers sit above the page's root and do not count.)
+    const root = document.querySelector(rootSel);
+    const inPart = (el) => { const part = el.closest("[data-slot]"); return Boolean(part) && root.contains(part) && part !== root; };
+    const buttons = [...root.querySelectorAll("button")].filter((el) => !el.disabled && !inPart(el) && shown(el));
+    return { count: buttons.length, wrong: buttons.filter((el) => getComputedStyle(el).cursor !== "pointer").map((el) => `${el.getAttribute("data-testid") ?? (el.textContent || "").trim().slice(0, 20)}=${getComputedStyle(el).cursor}`) };
+  }, rootSelector);
+  const underlined = (page, selector) => page.evaluate((sel) => { const el = document.querySelector(sel); return el ? getComputedStyle(el).textDecorationLine : null; }, selector);
+  // [label, width, address, ready, the page's root, how many plain buttons it holds (counted on the page as it was inside the marker), before(page), links that stay underlined]
+  const PAGES_READ = [
+    ["forecast home", 1440, "#/research/forecasts", "[data-testid=forecast-home] [data-slot=formal-row]", "[data-testid=forecast-home]", 3, null, []],
+    ["forecast home (phone)", 390, "#/research/forecasts", "[data-testid=forecast-home] [data-slot=formal-row]", "[data-testid=forecast-home]", 5, null, []],
+    ["one forecast", 1440, `#/research/forecasts/${ROOT.aapl}`, "[data-testid=forecast-judgment]", "[data-testid=forecast-page]", 3, null, ["[data-testid=forecast-back]", "[data-testid=rail-evidence]"]],
+    ["one forecast (phone)", 390, `#/research/forecasts/${ROOT.aapl}`, "[data-testid=forecast-judgment]", "[data-testid=forecast-page]", 4, null, ["[data-testid=forecast-back]", "[data-testid=rail-evidence]"]],
+    ["forecast, audit tab", 1440, `#/research/forecasts/${ROOT.aapl}?section=audit`, "[data-testid=forecast-judgment]", "[data-testid=forecast-page]", 6, async (page) => { await page.waitForSelector("[data-testid=forecast-events]", { timeout: 15000 }); }, ["[data-testid=forecast-back]", "[data-testid=forecast-sources] a[href^=http]"]],
+    ["judgment", 1440, `#/research/judgments/${JUDGMENT.aapl}`, "[data-testid=judgment-card]", "[data-testid=judgment-page]", 0, null, ["[data-testid=judgment-back]", "[data-testid=judgment-open-forecast]"]],
+    ["evidence", 1440, `#/research/evidence/${VERSION.aapl3}`, "[data-testid=evidence-card]", "[data-testid=evidence-page]", 3, null, []],
+    ["materials", 1440, "#/research/materials", "[data-testid=material-row]", "[data-testid=material-library]", 10, null, []],
+  ];
+  for (const [label, width, hash, ready, rootSelector, expected, before, links] of PAGES_READ) {
+    const view = await newView(ctx.browser, { width, theme: "light", label: `bare controls: ${label}`, unmatched });
+    try {
+      const { page } = view;
+      await page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+      await page.waitForSelector(ready, { state: "visible", timeout: 30000 });
+      await settle(page);
+      if (before) { await before(page); await settle(page, { pinTranscript: false }); }
+      const got = await measure(page, rootSelector);
+      assert(got.count === expected, `${label}: ${got.count} plain button(s) on the page, ${expected} expected (the population is the one counted on the page before the marker came off)`);
+      assert(!got.wrong.length, `${label}: plain button(s) without the pointer: ${got.wrong.join(", ")}`);
+      for (const selector of links) {
+        const line = await underlined(page, selector);
+        assert(line !== null, `${label}: ${selector} is not on the page`);
+        assert(line.includes("underline"), `${label}: ${selector} lost its underline (text-decoration-line: ${line})`);
+      }
+      notes.push(`${label}: ${got.count} button(s)${links.length ? `, ${links.length} underlined link(s)` : ""}`);
+    } finally { await view.close(); }
+  }
+  return notes.join("; ");
+}
+
+/** The 「…」 menu of a suggested write in the English interface: Skip, Later, Ignore (Later sends the same request as 稍后再说); the sign-in dialog keeps its Cancel. */
+async function routinesLaterEnglish(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", locale: "en-US", label: "routines later (en)", unmatched, fixtureState: stateWithRoutines() });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/routines?tab=confirm`, { waitUntil: "load" });
+    await page.waitForSelector(RT_CONFIRM_READY, { state: "visible", timeout: 30000 });
+    await settle(page);
+    const entry = rtEntry(page, "NVDA 10-Q");
+    await entry.getByRole("button", { name: "More actions" }).click();
+    const items = (await page.getByRole("menuitem").allInnerTexts()).map((item) => item.trim());
+    assert(JSON.stringify(items) === JSON.stringify(["Skip", "Later", "Ignore"]), `the 「…」 menu reads ${JSON.stringify(items)}`);
+    await page.getByRole("menuitem", { name: "Later", exact: true }).click();
+    await until(() => rtWrites(view).length >= 1, "Later: nothing was sent");
+    await page.waitForTimeout(250);
+    const got = rtWrites(view).map((w) => ({ path: `/agent-chat${w.path}`, body: rtBody(w) }));
+    const want = RT_BASE.suggestions.later.writes.filter((w) => /\/inbox\//.test(w.path)).map((w) => ({ path: w.path, body: w.body }));
+    assert(JSON.stringify(got) === JSON.stringify(want), `Later sent ${JSON.stringify(got)}, 稍后再说 sent ${JSON.stringify(want)} in the old baseline`);
+    assert(got.length === 1 && JSON.parse(got[0].body).action === "later", `Later's body is ${got[0]?.body}`);
+  } finally { await view.close(); }
+  const guest = await newView(ctx.browser, { width: 1440, theme: "light", locale: "en-US", label: "login dialog (en)", unmatched, identity: "guest" });
+  try {
+    const { page } = guest;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await page.waitForSelector('[data-slot="guest-composer"]', { state: "visible", timeout: 30000 });
+    await settle(page);
+    await page.locator('[data-slot="guest-composer"] button').first().click();
+    const dialog = page.getByRole("dialog");
+    await dialog.waitFor({ timeout: 5000 });
+    assert((await dialog.getByRole("button", { name: "Cancel", exact: true }).count()) === 1, `the sign-in dialog's buttons: ${JSON.stringify(await dialog.getByRole("button").allInnerTexts())}`);
+  } finally { await guest.close(); }
+  return "English 「…」 menu: Skip / Later / Ignore; Later sends the baseline's later body (action: later); the sign-in dialog still reads Cancel";
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -9126,7 +9280,7 @@ const CHECKS = [
   ["replay-phone-layer: across the 1024 breakpoint the detail element, the choice and the folded brief are kept; the phone's whole-screen layer is modal, Tab stays inside, 返回列表 / Esc close it; one disclaimer", replayPhoneLayer],
   ["monitor-four-states: 正常 / 延迟 / 异常 / 无记录 each have their badge kind, icon and colour token; the watchlist chip is the same component", monitorFourStates],
   ["monitor-dot-in-sidebar: a late or failing monitor puts a dot beside 研究 (sidebar and phone tab bar), a well one or no record nothing; read once on entering the research area, never from the chat page", monitorDotInSidebar],
-  ["research-no-legacy: the watchlist, company page and its tabs, 模型成绩, 历史回放 and 监控 hold no data-legacy element or old workspace class; the five listed older pages are exactly the ones still inside the marker", researchNoLegacy],
+  ["research-no-legacy: every research-area route (the watchlist, company page and its tabs, forecast home and one forecast, judgment, evidence in its three addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page) holds no data-legacy element and no old workspace class; the settings page still holds the marker", researchNoLegacy],
   ["analysis-status-neutral: the check of a quote is plain text: no danger or action colour, no icon, no alert, not folded", analysisStatusNeutral],
   ["portfolio-record-body: 记一笔 sends the old body for every kind, every old rule still stops the form with its sentence, the kinds and their fields are the old ones", portfolioRecordBody],
   ["portfolio-cash-edit: 可用资金 edits in place; Enter and 保存 send the old body; a bad number is said; Esc and 取消 send nothing", portfolioCashEdit],
@@ -9147,7 +9301,7 @@ const CHECKS = [
   ["routines-toggle: the switch saves at once with the old body in both directions; a failed save puts it back and says so", routinesToggle],
   ["routines-delete: the old question; Esc / a short press send nothing, a full hold one DELETE; focus returns to 「…」", routinesDelete],
   ["routines-proposal-actions: a proposal's card has one press (去对话核对) and sends nothing but the conversation's own reads; an expired one is a line with 打开对话", routinesProposalActions],
-  ["routines-suggestion-actions: 同意 / 跳过 / 稍后 / 忽略 / 去对话核对 / 打开对话 send the old requests with the old bodies; two main buttons, the rest in 「…」", routinesSuggestionActions],
+  ["routines-suggestion-actions: 同意 / 跳过 / 稍后再说 / 忽略 / 去对话核对 / 打开对话 send the old requests with the old bodies; two main buttons, the rest in 「…」", routinesSuggestionActions],
   ["routines-timezone-kept: a zone the list does not hold is shown, offered under 已保存的值 and saved unchanged; the usual zones come first; the sent value is the IANA name", routinesTimezoneKept],
   ["routines-validation: every broken rule is listed at once with the old sentences, the step row marks the sections, the form jumps to the first, mending clears the list", routinesValidation],
   ["routines-unsaved-close: closing with changes asks first (Esc, 取消, a click outside); 继续编辑 keeps the draft; no change closes at once; focus returns", routinesUnsavedClose],
@@ -9157,6 +9311,9 @@ const CHECKS = [
   ["routines-tab-address: ?tab= and ?bot= are the address; a pasted link opens the same view; unknown values fall back", routinesTabAddress],
   ["routines-bot-section: a bot's settings page lists that bot's tasks and runs in the new components, 新建 fixes the bot and sends the old body, no save bar", routinesBotSection],
   ["routines-no-legacy: the three tabs and the drawer's four sections hold no old-UI frame or class, no native select, no trade wording, no text under 12px", routinesNoLegacy],
+  ["latest-redirect-states: a company with a forecast lands on that forecast (section=versions), one with none on the forecast home, an unreadable list stops on its error sentence and 回到预测首页 leads to the forecast home; in all three the document never holds a data-legacy element or an old class", latestRedirectStates],
+  ["research-bare-controls: the plain buttons on the forecast, judgment, evidence and material pages (outside data-slot parts) show the pointer, and the links the browser's own rule underlined keep their line", researchBareControls],
+  ["routines-later-english: the English 「…」 menu of a suggested write reads Skip / Later / Ignore, Later sends the old later body, the sign-in dialog still reads Cancel", routinesLaterEnglish],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

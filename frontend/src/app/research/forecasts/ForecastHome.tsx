@@ -100,14 +100,14 @@ export function ForecastHome({ queue, personal, symbolFilter, onClearSymbol, emb
   const Heading = embedded ? "h2" : "h1";
   const Root = embedded ? "section" : "main";
   const laneClass = (id: "formal" | "judgment") => cn("min-w-0 flex-col gap-3", tab === id ? "flex" : "hidden", "lg:flex");
-  return <Root data-testid="forecast-home" aria-labelledby="forecast-home-title" className={cn("flex min-w-0 flex-col gap-4", !embedded && "mx-auto w-full max-w-[1280px] flex-1 p-4 lg:p-6")}>
+  return <Root data-testid="forecast-home" aria-labelledby="forecast-home-title" className={cn("flex min-w-0 flex-col gap-4", !embedded && "mx-auto w-full max-w-[1280px] flex-1 p-4 lg:p-6 text-[length:medium] leading-[normal]")}>
     <header className="flex flex-wrap items-start gap-x-4 gap-y-3">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-        <Heading id="forecast-home-title" className="text-title-m text-ink">{t("预测")}</Heading>
+        <Heading id="forecast-home-title" className="text-title-m text-ink mb-[0.67em]">{t("预测")}</Heading>
         <div role="group" aria-label={t("筛选")} className="flex flex-wrap items-center gap-1">
           {scopes.map(item => <button key={item} type="button" data-testid={`scope-${item}`} aria-pressed={item === activeScope} onClick={() => setScope(item)}
-            className={cn("inline-flex h-8 items-center rounded-sm border px-3 text-small outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11", item === activeScope ? "border-brand bg-brand-soft font-medium text-ink" : "border-line bg-surface text-ink-2 hover:bg-sunken")}>{t(SCOPE_LABEL[item])}</button>)}
-          {symbolFilter && <button type="button" data-testid="symbol-chip" onClick={onClearSymbol} aria-label={`${t("清除公司筛选")} ${symbolFilter}`} className="inline-flex h-8 items-center gap-1 rounded-sm border border-line-strong bg-sunken px-2 font-mono text-small text-ink outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11">{symbolFilter}<X aria-hidden="true" className="size-3.5" /></button>}
+            className={cn("inline-flex h-8 items-center rounded-sm border px-3 text-small outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11 cursor-pointer appearance-auto py-px", item === activeScope ? "border-brand bg-brand-soft font-medium text-ink" : "border-line bg-surface text-ink-2 hover:bg-sunken")}>{t(SCOPE_LABEL[item])}</button>)}
+          {symbolFilter && <button type="button" data-testid="symbol-chip" onClick={onClearSymbol} aria-label={`${t("清除公司筛选")} ${symbolFilter}`} className="inline-flex h-8 items-center gap-1 rounded-sm border border-line-strong bg-sunken px-2 font-mono text-small text-ink outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11 cursor-pointer appearance-auto py-px">{symbolFilter}<X aria-hidden="true" className="size-3.5" /></button>}
         </div>
       </div>
       <div className="ml-auto flex min-w-0 flex-col items-end gap-1.5">
@@ -128,7 +128,7 @@ export function ForecastHome({ queue, personal, symbolFilter, onClearSymbol, emb
     {showJudgments && <div role="tablist" aria-label={t("预测类型")} className="flex gap-1 border-b border-line lg:hidden">
       {(["formal", "judgment"] as const).map(id => <button key={id} type="button" role="tab" id={`lane-tab-${id}`} data-testid={`lane-tab-${id}`} aria-selected={tab === id} aria-controls={`lane-${id}`} tabIndex={tab === id ? 0 : -1} onClick={() => setTab(id)}
         onKeyDown={event => { if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); const next = id === "formal" ? "judgment" : "formal"; setTab(next); document.getElementById(`lane-tab-${next}`)?.focus(); } }}
-        className={cn("-mb-px min-h-11 border-x-0 border-t-0 border-b-2 bg-transparent px-4 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring", tab === id ? "border-brand font-medium text-ink" : "border-transparent text-muted-foreground")}>
+        className={cn("-mb-px min-h-11 border-x-0 border-t-0 border-b-2 bg-transparent px-4 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer appearance-auto py-px", tab === id ? "border-brand font-medium text-ink" : "border-transparent text-muted-foreground")}>
         {id === "formal" ? t("正式预测") : t("财报判断")}<span className="ml-1.5 font-mono text-caption text-muted-foreground">{id === "formal" ? sorted.length : lane?.lane === "ready" ? delivered.length : 0}</span>
       </button>)}
     </div>}
@@ -169,6 +169,6 @@ export function ForecastHome({ queue, personal, symbolFilter, onClearSymbol, emb
         {delivered.length + skipped.length > 0 && <p data-testid="judgment-lane-note" className="material-opinion-footnote">{t(JUDGMENT_NOTE)}</p>}
       </section>}
     </div>
-    {withBars && <p data-testid="forecast-disclaimer" className="material-opinion-footnote">{t(OPINION_DISCLAIMER)}</p>}
+    {withBars && <p data-testid="forecast-disclaimer" className="material-opinion-footnote mb-[1em]">{t(OPINION_DISCLAIMER)}</p>}
   </Root>;
 }
