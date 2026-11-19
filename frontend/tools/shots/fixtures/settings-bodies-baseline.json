@@ -1,0 +1,1823 @@
+{
+ "_about": "Requests, answers, visible words and storage writes recorded from the OLD settings page (one long page; HEAD d8a045e = the p81-dist-final production build, before P8.2) on the fake backend of the same commit plus the P8.2 write routes; the new settings pages must send the same requests.  Recorder: frontend-lead/tools/p82-record-baseline.mjs.  Every secret typed is an obvious fake (fake-key-for-smoke-01 ...).",
+ "models": {
+  "load": {
+   "sent": [
+    "GET /agent-chat/model-catalog",
+    "GET /v3/materials/analysis-settings",
+    "GET /agent-chat/model-catalog",
+    "GET /agent-chat/telegram/status",
+    "GET /agent-chat/pushover/status",
+    "GET /agent-chat/model-roles",
+    "GET /agent-chat/model-roles",
+    "GET /agent-chat/model-roles"
+   ],
+   "note": "every GET the old page sends while loading (model-catalog ×2, model-roles ×3, analysis-settings, telegram/status, pushover/status)"
+  },
+  "cards": [
+   {
+    "text": "★ 默认 Haiku 5.5 OpenRouter · anthropic/claude-haiku-5.5 已配置 · haiku-5.5 编辑 删除",
+    "buttons": [
+     "编辑",
+     "删除"
+    ]
+   },
+   {
+    "text": "已保存 Muse Ember OpenRouter · muse/ember 已配置 · muse-ember 编辑 设为默认 删除",
+    "buttons": [
+     "编辑",
+     "设为默认",
+     "删除"
+    ]
+   },
+   {
+    "text": "已保存 GPT 6.1 Terra OpenRouter · openai/gpt-6.1-terra 已配置 · gpt-6.1-terra 编辑 设为默认 删除",
+    "buttons": [
+     "编辑",
+     "设为默认",
+     "删除"
+    ]
+   },
+   {
+    "text": "已保存 DeepSeek Flash SiliconFlow · deepseek-ai/DeepSeek-V4-Flash 已配置 · deepseek-flash 编辑 设为默认 删除",
+    "buttons": [
+     "编辑",
+     "设为默认",
+     "删除"
+    ]
+   },
+   {
+    "text": "已保存 GLM 5.3 Flash 智谱 GLM · glm-5.3-flash 已配置 · glm5.3-flash 编辑 设为默认 删除",
+    "buttons": [
+     "编辑",
+     "设为默认",
+     "删除"
+    ]
+   }
+  ],
+  "add": {
+   "vault": {
+    "opened": {
+     "heading": "添加模型配置",
+     "values": {
+      "显示名称": "",
+      "模型服务": "deepseek",
+      "Base URL": "https://api.deepseek.com",
+      "Model ID": "",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "deepseek",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [],
+     "placeholder": "",
+     "primaryDisabled": true
+    },
+    "beforeSave": {
+     "heading": "添加模型配置",
+     "values": {
+      "显示名称": "  测试模型 A  ",
+      "模型服务": "deepseek",
+      "Base URL": "https://api.deepseek.com",
+      "Model ID": "  deepseek-chat  ",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "fake-key-for-smoke-01",
+      "目录名（bot 用它引用这个模型）": "a",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [
+      "选择列表中的模型填入 Model ID"
+     ],
+     "placeholder": "",
+     "primaryDisabled": false
+    },
+    "discoverySent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/models",
+      "body": "{\"provider\":\"deepseek\",\"base_url\":\"https://api.deepseek.com\",\"model\":\"deepseek-chat\",\"api_key\":\"fake-key-for-smoke-01\"}",
+      "hasSession": true
+     }
+    ],
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/test",
+      "body": "{\"provider\":\"deepseek\",\"base_url\":\"https://api.deepseek.com\",\"model\":\"deepseek-chat\",\"api_key\":\"fake-key-for-smoke-01\"}",
+      "hasSession": true
+     },
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog",
+      "body": "{\"display_name\":\"测试模型 A\",\"provider\":\"deepseek\",\"model\":\"deepseek-chat\",\"base_url\":\"https://api.deepseek.com\",\"api_key\":\"fake-key-for-smoke-01\",\"name\":\"a\"}",
+      "hasSession": true
+     },
+     {
+      "method": "GET",
+      "path": "/agent-chat/model-catalog",
+      "body": null,
+      "hasSession": true
+     }
+    ],
+    "dialogOpenAfter": 0,
+    "status": [
+     "当前：关闭（跟随系统设置）",
+     "已测试并保存。用它的 bot 下一轮生效。"
+    ],
+    "cardsAfter": [
+     "Haiku 5.5",
+     "Muse Ember",
+     "GPT 6.1 Terra",
+     "DeepSeek Flash",
+     "GLM 5.3 Flash",
+     "测试模型 A"
+    ],
+    "defaultAfter": [
+     "Haiku 5.5"
+    ]
+   },
+   "envDefault": {
+    "opened": {
+     "heading": "添加模型配置",
+     "values": {
+      "显示名称": "",
+      "模型服务": "deepseek",
+      "Base URL": "https://api.deepseek.com",
+      "Model ID": "",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "deepseek",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [],
+     "placeholder": "",
+     "primaryDisabled": true
+    },
+    "beforeSave": {
+     "heading": "添加模型配置",
+     "values": {
+      "显示名称": "环境变量模型",
+      "模型服务": "openrouter",
+      "Base URL": "https://openrouter.ai/api/v1",
+      "Model ID": "vendor/fixture-model",
+      "服务商可用模型": "",
+      "key 从哪来": "env",
+      "环境变量名": "MY_FIXTURE_API_KEY",
+      "目录名（bot 用它引用这个模型）": "model",
+      "": null
+     },
+     "keyType": null,
+     "hasPassword": false,
+     "checked": true,
+     "warnings": [
+      "选择列表中的模型填入 Model ID"
+     ],
+     "placeholder": null,
+     "primaryDisabled": false
+    },
+    "discoverySent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/models",
+      "body": "{\"provider\":\"openrouter\",\"base_url\":\"https://openrouter.ai/api/v1\",\"model\":\"vendor/fixture-model\",\"key_env\":\"MY_FIXTURE_API_KEY\"}",
+      "hasSession": true
+     }
+    ],
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/test",
+      "body": "{\"provider\":\"openrouter\",\"base_url\":\"https://openrouter.ai/api/v1\",\"model\":\"vendor/fixture-model\",\"key_env\":\"MY_FIXTURE_API_KEY\"}",
+      "hasSession": true
+     },
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog",
+      "body": "{\"display_name\":\"环境变量模型\",\"provider\":\"openrouter\",\"model\":\"vendor/fixture-model\",\"base_url\":\"https://openrouter.ai/api/v1\",\"key_env\":\"MY_FIXTURE_API_KEY\",\"is_default\":true,\"name\":\"model\"}",
+      "hasSession": true
+     },
+     {
+      "method": "GET",
+      "path": "/agent-chat/model-catalog",
+      "body": null,
+      "hasSession": true
+     }
+    ],
+    "dialogOpenAfter": 0,
+    "status": [
+     "当前：关闭（跟随系统设置）",
+     "已测试并保存。用它的 bot 下一轮生效。"
+    ],
+    "cardsAfter": [
+     "Haiku 5.5",
+     "Muse Ember",
+     "GPT 6.1 Terra",
+     "DeepSeek Flash",
+     "GLM 5.3 Flash",
+     "环境变量模型"
+    ],
+    "defaultAfter": [
+     "环境变量模型"
+    ]
+   },
+   "custom": {
+    "opened": {
+     "heading": "添加模型配置",
+     "values": {
+      "显示名称": "",
+      "模型服务": "deepseek",
+      "Base URL": "https://api.deepseek.com",
+      "Model ID": "",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "deepseek",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [],
+     "placeholder": "",
+     "primaryDisabled": true
+    },
+    "beforeSave": {
+     "heading": "添加模型配置",
+     "values": {
+      "显示名称": "",
+      "模型服务": "custom",
+      "Base URL": "  https://models.example.test/v1  ",
+      "Model ID": "m1",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "fake-key-for-smoke-01",
+      "目录名（bot 用它引用这个模型）": "my-model",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [
+      "选择列表中的模型填入 Model ID"
+     ],
+     "placeholder": "",
+     "primaryDisabled": false
+    },
+    "discoverySent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/models",
+      "body": "{\"provider\":\"custom\",\"base_url\":\"https://models.example.test/v1\",\"model\":\"m1\",\"api_key\":\"fake-key-for-smoke-01\"}",
+      "hasSession": true
+     }
+    ],
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/test",
+      "body": "{\"provider\":\"custom\",\"base_url\":\"https://models.example.test/v1\",\"model\":\"m1\",\"api_key\":\"fake-key-for-smoke-01\"}",
+      "hasSession": true
+     },
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog",
+      "body": "{\"provider\":\"custom\",\"model\":\"m1\",\"base_url\":\"https://models.example.test/v1\",\"api_key\":\"fake-key-for-smoke-01\",\"name\":\"my-model\"}",
+      "hasSession": true
+     },
+     {
+      "method": "GET",
+      "path": "/agent-chat/model-catalog",
+      "body": null,
+      "hasSession": true
+     }
+    ],
+    "dialogOpenAfter": 0,
+    "status": [
+     "当前：关闭（跟随系统设置）",
+     "已测试并保存。用它的 bot 下一轮生效。"
+    ],
+    "cardsAfter": [
+     "Haiku 5.5",
+     "Muse Ember",
+     "GPT 6.1 Terra",
+     "DeepSeek Flash",
+     "GLM 5.3 Flash",
+     "my-model"
+    ],
+    "defaultAfter": [
+     "Haiku 5.5"
+    ]
+   },
+   "invalid": {
+    "empty": {
+     "heading": "添加模型配置",
+     "values": {
+      "显示名称": "",
+      "模型服务": "deepseek",
+      "Base URL": "https://api.deepseek.com",
+      "Model ID": "",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "deepseek",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [],
+     "placeholder": "",
+     "primaryDisabled": true
+    },
+    "modelOnly": true,
+    "withKey": false,
+    "takenName": {
+     "disabled": true
+    }
+   }
+  },
+  "edit": {
+   "untouched": {
+    "name": "deepseek-flash",
+    "opened": {
+     "heading": "模型配置",
+     "values": {
+      "显示名称": "DeepSeek Flash",
+      "模型服务": "siliconflow",
+      "Base URL": "",
+      "Model ID": "deepseek-ai/DeepSeek-V4-Flash",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "deepseek-flash",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [
+      "选择列表中的模型填入 Model ID"
+     ],
+     "placeholder": "不改就留空",
+     "primaryDisabled": false
+    },
+    "onOpenSent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/models",
+      "body": "{\"provider\":\"siliconflow\",\"base_url\":null,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"name\":\"deepseek-flash\"}",
+      "hasSession": true
+     }
+    ],
+    "beforeSave": {
+     "heading": "模型配置",
+     "values": {
+      "显示名称": "DeepSeek Flash",
+      "模型服务": "siliconflow",
+      "Base URL": "",
+      "Model ID": "deepseek-ai/DeepSeek-V4-Flash",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "deepseek-flash",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [
+      "选择列表中的模型填入 Model ID"
+     ],
+     "placeholder": "不改就留空",
+     "primaryDisabled": false
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/test",
+      "body": "{\"provider\":\"siliconflow\",\"base_url\":null,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"name\":\"deepseek-flash\"}",
+      "hasSession": true
+     },
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/model-catalog/deepseek-flash",
+      "body": "{\"display_name\":\"DeepSeek Flash\",\"provider\":\"siliconflow\",\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"base_url\":null,\"name\":\"deepseek-flash\"}",
+      "hasSession": true
+     },
+     {
+      "method": "GET",
+      "path": "/agent-chat/model-catalog",
+      "body": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "当前：关闭（跟随系统设置）",
+     "已测试并保存。用它的 bot 下一轮生效。"
+    ],
+    "cardsAfter": [
+     "Haiku 5.5",
+     "Muse Ember",
+     "GPT 6.1 Terra",
+     "DeepSeek Flash",
+     "GLM 5.3 Flash"
+    ],
+    "rolesAfter": [
+     "muse-ember",
+     "gpt-6.1-terra",
+     "glm5.3-flash"
+    ]
+   },
+   "rename": {
+    "name": "muse-ember",
+    "opened": {
+     "heading": "模型配置",
+     "values": {
+      "显示名称": "Muse Ember",
+      "模型服务": "openrouter",
+      "Base URL": "",
+      "Model ID": "muse/ember",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "muse-ember",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [
+      "选择列表中的模型填入 Model ID"
+     ],
+     "placeholder": "不改就留空",
+     "primaryDisabled": false
+    },
+    "onOpenSent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/models",
+      "body": "{\"provider\":\"openrouter\",\"base_url\":null,\"model\":\"muse/ember\",\"name\":\"muse-ember\"}",
+      "hasSession": true
+     }
+    ],
+    "beforeSave": {
+     "heading": "模型配置",
+     "values": {
+      "显示名称": "Muse Ember",
+      "模型服务": "openrouter",
+      "Base URL": "",
+      "Model ID": "muse/ember",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "muse-ember-2",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [
+      "选择列表中的模型填入 Model ID",
+      "改名会同时更新用它的 bot，以及财报判断模型、预测模型、审查模型的设置。"
+     ],
+     "placeholder": "不改就留空",
+     "primaryDisabled": false
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/test",
+      "body": "{\"provider\":\"openrouter\",\"base_url\":null,\"model\":\"muse/ember\",\"name\":\"muse-ember\"}",
+      "hasSession": true
+     },
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/model-catalog/muse-ember",
+      "body": "{\"display_name\":\"Muse Ember\",\"provider\":\"openrouter\",\"model\":\"muse/ember\",\"base_url\":null,\"name\":\"muse-ember-2\"}",
+      "hasSession": true
+     },
+     {
+      "method": "GET",
+      "path": "/agent-chat/model-catalog",
+      "body": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "当前：关闭（跟随系统设置）",
+     "已测试并保存。用它的 bot 下一轮生效。"
+    ],
+    "cardsAfter": [
+     "Haiku 5.5",
+     "Muse Ember",
+     "GPT 6.1 Terra",
+     "DeepSeek Flash",
+     "GLM 5.3 Flash"
+    ],
+    "rolesAfter": [
+     "",
+     "gpt-6.1-terra",
+     "glm5.3-flash"
+    ]
+   },
+   "newKey": {
+    "name": "glm5.3-flash",
+    "opened": {
+     "heading": "模型配置",
+     "values": {
+      "显示名称": "GLM 5.3 Flash",
+      "模型服务": "zhipu",
+      "Base URL": "",
+      "Model ID": "glm-5.3-flash",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "glm5.3-flash",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [
+      "选择列表中的模型填入 Model ID"
+     ],
+     "placeholder": "不改就留空",
+     "primaryDisabled": false
+    },
+    "onOpenSent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/models",
+      "body": "{\"provider\":\"zhipu\",\"base_url\":null,\"model\":\"glm-5.3-flash\",\"name\":\"glm5.3-flash\"}",
+      "hasSession": true
+     }
+    ],
+    "beforeSave": {
+     "heading": "模型配置",
+     "values": {
+      "显示名称": "GLM 5.3 Flash",
+      "模型服务": "zhipu",
+      "Base URL": "",
+      "Model ID": "glm-5.3-flash",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "fake-key-for-smoke-02",
+      "目录名（bot 用它引用这个模型）": "glm5.3-flash",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [
+      "选择列表中的模型填入 Model ID"
+     ],
+     "placeholder": "不改就留空",
+     "primaryDisabled": false
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/test",
+      "body": "{\"provider\":\"zhipu\",\"base_url\":null,\"model\":\"glm-5.3-flash\",\"api_key\":\"fake-key-for-smoke-02\"}",
+      "hasSession": true
+     },
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/model-catalog/glm5.3-flash",
+      "body": "{\"display_name\":\"GLM 5.3 Flash\",\"provider\":\"zhipu\",\"model\":\"glm-5.3-flash\",\"base_url\":null,\"api_key\":\"fake-key-for-smoke-02\",\"name\":\"glm5.3-flash\"}",
+      "hasSession": true
+     },
+     {
+      "method": "GET",
+      "path": "/agent-chat/model-catalog",
+      "body": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "当前：关闭（跟随系统设置）",
+     "已测试并保存。用它的 bot 下一轮生效。"
+    ],
+    "cardsAfter": [
+     "Haiku 5.5",
+     "Muse Ember",
+     "GPT 6.1 Terra",
+     "DeepSeek Flash",
+     "GLM 5.3 Flash"
+    ],
+    "rolesAfter": [
+     "muse-ember",
+     "gpt-6.1-terra",
+     "glm5.3-flash"
+    ]
+   },
+   "newProvider": {
+    "name": "deepseek-flash",
+    "opened": {
+     "heading": "模型配置",
+     "values": {
+      "显示名称": "DeepSeek Flash",
+      "模型服务": "siliconflow",
+      "Base URL": "",
+      "Model ID": "deepseek-ai/DeepSeek-V4-Flash",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "deepseek-flash",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [
+      "选择列表中的模型填入 Model ID"
+     ],
+     "placeholder": "不改就留空",
+     "primaryDisabled": false
+    },
+    "onOpenSent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/models",
+      "body": "{\"provider\":\"siliconflow\",\"base_url\":null,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"name\":\"deepseek-flash\"}",
+      "hasSession": true
+     }
+    ],
+    "beforeSave": {
+     "heading": "模型配置",
+     "values": {
+      "显示名称": "DeepSeek Flash",
+      "模型服务": "openrouter",
+      "Base URL": "https://openrouter.ai/api/v1",
+      "Model ID": "vendor/moved",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "fake-key-for-smoke-02",
+      "目录名（bot 用它引用这个模型）": "deepseek-flash",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [
+      "选择列表中的模型填入 Model ID",
+      "换了服务或接口地址，需要重新填写 key。"
+     ],
+     "placeholder": "",
+     "primaryDisabled": false
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/test",
+      "body": "{\"provider\":\"openrouter\",\"base_url\":\"https://openrouter.ai/api/v1\",\"model\":\"vendor/moved\",\"api_key\":\"fake-key-for-smoke-02\"}",
+      "hasSession": true
+     },
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/model-catalog/deepseek-flash",
+      "body": "{\"display_name\":\"DeepSeek Flash\",\"provider\":\"openrouter\",\"model\":\"vendor/moved\",\"base_url\":\"https://openrouter.ai/api/v1\",\"api_key\":\"fake-key-for-smoke-02\",\"name\":\"deepseek-flash\"}",
+      "hasSession": true
+     },
+     {
+      "method": "GET",
+      "path": "/agent-chat/model-catalog",
+      "body": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "当前：关闭（跟随系统设置）",
+     "已测试并保存。用它的 bot 下一轮生效。"
+    ],
+    "cardsAfter": [
+     "Haiku 5.5",
+     "Muse Ember",
+     "GPT 6.1 Terra",
+     "DeepSeek Flash",
+     "GLM 5.3 Flash"
+    ],
+    "rolesAfter": [
+     "muse-ember",
+     "gpt-6.1-terra",
+     "glm5.3-flash"
+    ]
+   },
+   "displayAndDefault": {
+    "name": "gpt-6.1-terra",
+    "opened": {
+     "heading": "模型配置",
+     "values": {
+      "显示名称": "GPT 6.1 Terra",
+      "模型服务": "openrouter",
+      "Base URL": "",
+      "Model ID": "openai/gpt-6.1-terra",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "gpt-6.1-terra",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": false,
+     "warnings": [
+      "选择列表中的模型填入 Model ID"
+     ],
+     "placeholder": "不改就留空",
+     "primaryDisabled": false
+    },
+    "onOpenSent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/models",
+      "body": "{\"provider\":\"openrouter\",\"base_url\":null,\"model\":\"openai/gpt-6.1-terra\",\"name\":\"gpt-6.1-terra\"}",
+      "hasSession": true
+     }
+    ],
+    "beforeSave": {
+     "heading": "模型配置",
+     "values": {
+      "显示名称": "GPT Terra（改名）",
+      "模型服务": "openrouter",
+      "Base URL": "",
+      "Model ID": "openai/gpt-6.1-terra",
+      "服务商可用模型": "",
+      "key 从哪来": "vault",
+      "API key": "",
+      "目录名（bot 用它引用这个模型）": "gpt-6.1-terra",
+      "": null
+     },
+     "keyType": "password",
+     "hasPassword": true,
+     "checked": true,
+     "warnings": [
+      "选择列表中的模型填入 Model ID"
+     ],
+     "placeholder": "不改就留空",
+     "primaryDisabled": false
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/test",
+      "body": "{\"provider\":\"openrouter\",\"base_url\":null,\"model\":\"openai/gpt-6.1-terra\",\"name\":\"gpt-6.1-terra\"}",
+      "hasSession": true
+     },
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/model-catalog/gpt-6.1-terra",
+      "body": "{\"display_name\":\"GPT Terra（改名）\",\"provider\":\"openrouter\",\"model\":\"openai/gpt-6.1-terra\",\"base_url\":null,\"is_default\":true,\"name\":\"gpt-6.1-terra\"}",
+      "hasSession": true
+     },
+     {
+      "method": "GET",
+      "path": "/agent-chat/model-catalog",
+      "body": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "当前：关闭（跟随系统设置）",
+     "已测试并保存。用它的 bot 下一轮生效。"
+    ],
+    "cardsAfter": [
+     "Haiku 5.5",
+     "Muse Ember",
+     "GPT Terra（改名）",
+     "DeepSeek Flash",
+     "GLM 5.3 Flash"
+    ],
+    "rolesAfter": [
+     "muse-ember",
+     "gpt-6.1-terra",
+     "glm5.3-flash"
+    ]
+   }
+  },
+  "fail": {
+   "keyMissing": {
+    "code": "model_key_missing",
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/test",
+      "body": "{\"provider\":\"siliconflow\",\"base_url\":null,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"name\":\"deepseek-flash\"}",
+      "hasSession": true
+     }
+    ],
+    "alert": [
+     "服务器上没有找到这个 key：检查环境变量名，或重新填写 key。"
+    ],
+    "dialogOpen": 1
+   },
+   "unknownCode": {
+    "code": "some_new_code",
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/test",
+      "body": "{\"provider\":\"siliconflow\",\"base_url\":null,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"name\":\"deepseek-flash\"}",
+      "hasSession": true
+     }
+    ],
+    "alert": [
+     "连接失败，请检查服务、Model ID 和 key。"
+    ],
+    "dialogOpen": 1
+   }
+  },
+  "cancel": {
+   "during": {
+    "primary": "正在测试…",
+    "cancelEnabled": true
+   },
+   "sent": [
+    {
+     "method": "POST",
+     "path": "/agent-chat/model-catalog/test",
+     "body": "{\"provider\":\"siliconflow\",\"base_url\":null,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"name\":\"deepseek-flash\"}",
+     "hasSession": true
+    }
+   ],
+   "after": {
+    "primary": "测试并保存",
+    "alert": [],
+    "dialogOpen": 1,
+    "cancelEnabled": false
+   }
+  },
+  "discovery": {
+   "onOpen": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/models",
+      "body": "{\"provider\":\"siliconflow\",\"base_url\":null,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"name\":\"deepseek-flash\"}",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "选择列表中的模型填入 Model ID"
+    ],
+    "options": [
+     "选择列表中的模型填入 Model ID",
+     "alpha-1",
+     "alpha-1-mini",
+     "Beta 2 · beta-2",
+     "beta-2-thinking",
+     "gamma-3"
+    ]
+   },
+   "picked": {
+    "modelId": "alpha-1-mini"
+   },
+   "typing": {
+    "statusAtOnce": [
+     "输入完成后将自动获取模型列表"
+    ],
+    "sentAtOnce": 0
+   },
+   "afterKey": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/models",
+      "body": "{\"provider\":\"siliconflow\",\"base_url\":null,\"model\":\"alpha-1-mini\",\"api_key\":\"fake-key-for-smoke-02\"}",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "选择列表中的模型填入 Model ID"
+    ]
+   },
+   "refresh": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/model-catalog/models",
+      "body": "{\"provider\":\"siliconflow\",\"base_url\":null,\"model\":\"alpha-1-mini\",\"api_key\":\"fake-key-for-smoke-02\"}",
+      "hasSession": true
+     }
+    ]
+   },
+   "unsupported": {
+    "status": [
+     "该服务商没有可用的模型列表接口，可手动填写 Model ID"
+    ],
+    "options": [
+     "选择列表中的模型填入 Model ID"
+    ]
+   },
+   "empty": {
+    "status": [
+     "服务商暂未返回可用模型，可手动填写 Model ID"
+    ],
+    "options": [
+     "选择列表中的模型填入 Model ID"
+    ]
+   },
+   "model_discovery_auth_required": {
+    "status": [
+     "暂时无法获取服务商模型列表。"
+    ],
+    "options": [
+     "选择列表中的模型填入 Model ID"
+    ]
+   },
+   "model_discovery_access_denied": {
+    "status": [
+     "暂时无法获取服务商模型列表。"
+    ],
+    "options": [
+     "选择列表中的模型填入 Model ID"
+    ]
+   },
+   "model_discovery_rate_limited": {
+    "status": [
+     "暂时无法获取服务商模型列表。"
+    ],
+    "options": [
+     "选择列表中的模型填入 Model ID"
+    ]
+   },
+   "model_discovery_timeout": {
+    "status": [
+     "暂时无法获取服务商模型列表。"
+    ],
+    "options": [
+     "选择列表中的模型填入 Model ID"
+    ]
+   },
+   "some_other_code": {
+    "status": [
+     "暂时无法获取服务商模型列表。"
+    ],
+    "options": [
+     "选择列表中的模型填入 Model ID"
+    ]
+   },
+   "addNoKey": {
+    "sent": [],
+    "status": []
+   }
+  },
+  "def": {
+   "buttons": [
+    [
+     "编辑",
+     "删除"
+    ],
+    [
+     "编辑",
+     "设为默认",
+     "删除"
+    ],
+    [
+     "编辑",
+     "设为默认",
+     "删除"
+    ],
+    [
+     "编辑",
+     "设为默认",
+     "删除"
+    ],
+    [
+     "编辑",
+     "设为默认",
+     "删除"
+    ]
+   ],
+   "sent": [
+    {
+     "method": "PUT",
+     "path": "/agent-chat/model-catalog/default",
+     "body": "{\"name\":\"muse-ember\"}",
+     "hasSession": true
+    },
+    {
+     "method": "GET",
+     "path": "/agent-chat/model-catalog",
+     "body": null,
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "当前：完整动画",
+    "已设为默认模型。"
+   ],
+   "activeAfter": [
+    "Muse Ember"
+   ]
+  },
+  "del": {
+   "dialog": {
+    "title": "删除模型 GPT 6.1 Terra？",
+    "description": "删除后这个模型会从模型目录里移除，不能恢复。",
+    "buttons": [
+     "取消",
+     "删除"
+    ]
+   },
+   "afterEsc": {
+    "sent": [],
+    "cards": 5
+   },
+   "sent": [
+    {
+     "method": "DELETE",
+     "path": "/agent-chat/model-catalog/gpt-6.1-terra",
+     "body": null,
+     "hasSession": true
+    },
+    {
+     "method": "GET",
+     "path": "/agent-chat/model-catalog",
+     "body": null,
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "当前：完整动画",
+    "已删除。"
+   ],
+   "cardsAfter": [
+    "Haiku 5.5",
+    "Muse Ember",
+    "DeepSeek Flash",
+    "GLM 5.3 Flash"
+   ]
+  },
+  "header": [
+   "对话、bot、定时任务和材料分析都只用这里的模型。key 只发给服务器一次，加密保存或读服务器的环境变量；页面只显示「已配置」或「缺 key」，不会再显示 key。"
+  ],
+  "roleLabels": [
+   {
+    "label": "财报判断模型",
+    "options": [
+     "服务器默认模型 (haiku-5.5)",
+     "Haiku 5.5",
+     "Muse Ember",
+     "GPT 6.1 Terra",
+     "DeepSeek Flash",
+     "GLM 5.3 Flash"
+    ],
+    "value": "muse-ember",
+    "hint": "读财报、判断涨跌用的模型；不选就用服务器默认模型。"
+   },
+   {
+    "label": "预测模型",
+    "options": [
+     "服务器默认模型 (haiku-5.5)",
+     "Haiku 5.5",
+     "Muse Ember",
+     "GPT 6.1 Terra",
+     "DeepSeek Flash",
+     "GLM 5.3 Flash"
+    ],
+    "value": "gpt-6.1-terra",
+    "hint": "给出 20 个交易日涨/平/跌概率的模型，建议选推理模型；不选就用服务器默认模型。"
+   },
+   {
+    "label": "审查模型",
+    "options": [
+     "部署配置的审查模型",
+     "Haiku 5.5",
+     "Muse Ember",
+     "GPT 6.1 Terra",
+     "DeepSeek Flash",
+     "GLM 5.3 Flash"
+    ],
+    "value": "glm5.3-flash",
+    "hint": "回答之后核查其中论断与依据的模型；不选就用部署时配置的审查模型。"
+   }
+  ],
+  "readonly": {
+   "cards": [
+    {
+     "text": "★ 默认 Haiku 5.5 OpenRouter · anthropic/claude-haiku-5.5 已配置 · haiku-5.5 编辑 删除",
+     "buttons": [
+      "编辑",
+      "删除"
+     ]
+    },
+    {
+     "text": "已保存 Muse Ember OpenRouter · muse/ember 已配置 · muse-ember 编辑 设为默认 删除",
+     "buttons": [
+      "编辑",
+      "设为默认",
+      "删除"
+     ]
+    },
+    {
+     "text": "已保存 GPT 6.1 Terra OpenRouter · openai/gpt-6.1-terra 已配置 · gpt-6.1-terra 编辑 设为默认 删除",
+     "buttons": [
+      "编辑",
+      "设为默认",
+      "删除"
+     ]
+    },
+    {
+     "text": "已保存 DeepSeek Flash SiliconFlow · deepseek-ai/DeepSeek-V4-Flash 已配置 · deepseek-flash 编辑 设为默认 删除",
+     "buttons": [
+      "编辑",
+      "设为默认",
+      "删除"
+     ]
+    },
+    {
+     "text": "已保存 GLM 5.3 Flash 智谱 GLM · glm-5.3-flash 已配置 · glm5.3-flash 编辑 设为默认 删除",
+     "buttons": [
+      "编辑",
+      "设为默认",
+      "删除"
+     ]
+    },
+    {
+     "text": "来自配置文件 Kimi K3 Kimi（Moonshot） · kimi-k3-preview 已配置 · 环境变量 KIMI_API_KEY · kimi-k3",
+     "buttons": []
+    },
+    {
+     "text": "来自配置文件 Qwen Max 通义千问 · qwen-max-latest 缺 key · 环境变量 QWEN_API_KEY · qwen-max",
+     "buttons": []
+    }
+   ],
+   "notes": [
+    "服务器配置文件里的模型只能在服务器上改。 配置文件有问题：1",
+    "OpenRouter · anthropic/claude-haiku-5.5",
+    "已配置 · haiku-5.5",
+    "OpenRouter · muse/ember",
+    "已配置 · muse-ember",
+    "OpenRouter · openai/gpt-6.1-terra",
+    "已配置 · gpt-6.1-terra",
+    "SiliconFlow · deepseek-ai/DeepSeek-V4-Flash",
+    "已配置 · deepseek-flash",
+    "智谱 GLM · glm-5.3-flash",
+    "已配置 · glm5.3-flash",
+    "Kimi（Moonshot） · kimi-k3-preview",
+    "已配置 · 环境变量 KIMI_API_KEY · kimi-k3",
+    "通义千问 · qwen-max-latest",
+    "缺 key · 环境变量 QWEN_API_KEY · qwen-max",
+    "添加一个已兼容的服务配置",
+    "读财报、判断涨跌用的模型；不选就用服务器默认模型。",
+    "给出 20 个交易日涨/平/跌概率的模型，建议选推理模型；不选就用服务器默认模型。",
+    "回答之后核查其中论断与依据的模型；不选就用部署时配置的审查模型。"
+   ]
+  },
+  "empty": {
+   "notes": [
+    "添加一个已兼容的服务配置",
+    "目录是空的：先添加一个模型，bot 才能回答。"
+   ],
+   "roleSelects": 0,
+   "material": [
+    "材料分析默认模型 AI 材料分析默认使用这里选的目录模型；在材料详情页也可以只针对一次分析临时选择其他模型。 当前默认：系统 DeepSeek · deepseek-chat · 使用服务端环境变量 默认模型 系统默认（DeepSeek 环境配置） 恢复系统默认 模型目录里还没有可用的模型；请先在上方添加并测试一个。"
+   ]
+  }
+ },
+ "roles": {
+  "change": {
+   "earnings": {
+    "sent": [
+     {
+      "method": "PUT",
+      "path": "/agent-chat/model-roles/earnings",
+      "body": "{\"model\":\"deepseek-flash\"}",
+      "hasSession": true
+     }
+    ],
+    "note": [
+     "已保存。"
+    ]
+   },
+   "forecast": {
+    "sent": [
+     {
+      "method": "PUT",
+      "path": "/agent-chat/model-roles/forecast",
+      "body": "{\"model\":\"deepseek-flash\"}",
+      "hasSession": true
+     }
+    ],
+    "note": [
+     "已保存。"
+    ]
+   },
+   "judge": {
+    "sent": [
+     {
+      "method": "PUT",
+      "path": "/agent-chat/model-roles/judge",
+      "body": "{\"model\":\"deepseek-flash\"}",
+      "hasSession": true
+     }
+    ],
+    "note": [
+     "已保存。"
+    ]
+   }
+  },
+  "back": {
+   "earnings": {
+    "sent": [
+     {
+      "method": "PUT",
+      "path": "/agent-chat/model-roles/earnings",
+      "body": "{\"model\":null}",
+      "hasSession": true
+     }
+    ],
+    "value": ""
+   },
+   "forecast": {
+    "sent": [
+     {
+      "method": "PUT",
+      "path": "/agent-chat/model-roles/forecast",
+      "body": "{\"model\":null}",
+      "hasSession": true
+     }
+    ],
+    "value": ""
+   },
+   "judge": {
+    "sent": [
+     {
+      "method": "PUT",
+      "path": "/agent-chat/model-roles/judge",
+      "body": "{\"model\":null}",
+      "hasSession": true
+     }
+    ],
+    "value": ""
+   }
+  },
+  "failure": {
+   "note": [
+    "保存失败。"
+   ],
+   "value": "gpt-6.1-terra"
+  }
+ },
+ "analysis": {
+  "initial": {
+   "text": [
+    "AI 材料分析默认使用这里选的目录模型；在材料详情页也可以只针对一次分析临时选择其他模型。",
+    "当前默认：openrouter · muse/ember · API key 已保存"
+   ],
+   "selected": "muse-ember",
+   "options": [
+    "系统默认（DeepSeek 环境配置）",
+    "Haiku 5.5 · anthropic/claude-haiku-5.5",
+    "Muse Ember · muse/ember",
+    "GPT 6.1 Terra · openai/gpt-6.1-terra",
+    "DeepSeek Flash · deepseek-ai/DeepSeek-V4-Flash",
+    "GLM 5.3 Flash · glm-5.3-flash"
+   ],
+   "button": "设为默认"
+  },
+  "afterChoose": {
+   "sentAtOnce": [],
+   "button": "设为默认"
+  },
+  "save": {
+   "sent": [
+    {
+     "method": "PUT",
+     "path": "/v3/materials/analysis-settings",
+     "body": "{\"catalog_model\":\"deepseek-flash\"}",
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "已保存。下一次材料分析将使用这个默认模型。"
+   ],
+   "current": [
+    "AI 材料分析默认使用这里选的目录模型；在材料详情页也可以只针对一次分析临时选择其他模型。",
+    "当前默认：siliconflow · deepseek-ai/DeepSeek-V4-Flash · API key 已保存",
+    "已保存。下一次材料分析将使用这个默认模型。"
+   ]
+  },
+  "afterReset": {
+   "button": "恢复系统默认"
+  },
+  "reset": {
+   "sent": [
+    {
+     "method": "DELETE",
+     "path": "/v3/materials/analysis-settings",
+     "body": null,
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "已保存。下一次材料分析将使用这个默认模型。"
+   ],
+   "current": [
+    "AI 材料分析默认使用这里选的目录模型；在材料详情页也可以只针对一次分析临时选择其他模型。",
+    "当前默认：系统 DeepSeek · deepseek-chat · 使用服务端环境变量",
+    "已保存。下一次材料分析将使用这个默认模型。"
+   ]
+  },
+  "system": {
+   "text": [
+    "AI 材料分析默认使用这里选的目录模型；在材料详情页也可以只针对一次分析临时选择其他模型。",
+    "当前默认：系统 DeepSeek · deepseek-chat · 使用服务端环境变量"
+   ],
+   "selected": ""
+  }
+ },
+ "telegram": {
+  "noToken": {
+   "text": [
+    "绑定 Telegram 账号后：直接发的消息进默认 bot「助理」的那条线，回复哪个 bot 的消息就进哪个 bot，也可以用「@名字」点名。bot 按自己的说明调用「发 Telegram 通知」，每个 bot 每天有上限（在 bot 档案里设）。确认卡变成按钮。",
+    "状态：尚未配置"
+   ],
+   "tokenInput": {
+    "type": "password",
+    "max": 256,
+    "placeholder": "(an example token shape; elided so no key-shaped string stays in the repository)"
+   },
+   "saveDisabled": true
+  },
+  "blankDisabled": true,
+  "token": {
+   "sent": [
+    {
+     "method": "POST",
+     "path": "/agent-chat/telegram/token",
+     "body": "{\"bot_token\":\"fake-token-for-smoke-01\"}",
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "Bot Token 已保存。"
+   ],
+   "inputAfter": 0,
+   "summary": [
+    "绑定 Telegram 账号后：直接发的消息进默认 bot「助理」的那条线，回复哪个 bot 的消息就进哪个 bot，也可以用「@名字」点名。bot 按自己的说明调用「发 Telegram 通知」，每个 bot 每天有上限（在 bot 档案里设）。确认卡变成按钮。",
+    "状态：Token 已保存 @finbot_fixture_bot",
+    "请先生成一个绑定码，然后在 Telegram 上向你的 Bot 发送 /bind 命令加这个码。",
+    "Bot Token 已保存。"
+   ]
+  },
+  "bind": {
+   "sent": [
+    {
+     "method": "POST",
+     "path": "/agent-chat/telegram/bind",
+     "body": null,
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "绑定码已生成，30 分钟内有效。"
+   ],
+   "code": [
+    "绑定码: 482913 在 Telegram 上发送: /bind 482913"
+   ],
+   "button": [
+    "重新生成"
+   ]
+  },
+  "rebind": {
+   "sent": [
+    {
+     "method": "POST",
+     "path": "/agent-chat/telegram/bind",
+     "body": null,
+     "hasSession": true
+    }
+   ]
+  },
+  "noPolling": {
+   "sent": [],
+   "summary": [
+    "绑定 Telegram 账号后：直接发的消息进默认 bot「助理」的那条线，回复哪个 bot 的消息就进哪个 bot，也可以用「@名字」点名。bot 按自己的说明调用「发 Telegram 通知」，每个 bot 每天有上限（在 bot 档案里设）。确认卡变成按钮。",
+    "状态：Token 已保存 @finbot_fixture_bot",
+    "请先生成一个绑定码，然后在 Telegram 上向你的 Bot 发送 /bind 命令加这个码。",
+    "绑定码: 482913 在 Telegram 上发送: /bind 482913",
+    "绑定码已生成，30 分钟内有效。"
+   ]
+  },
+  "bound": {
+   "text": [
+    "绑定 Telegram 账号后：直接发的消息进默认 bot「助理」的那条线，回复哪个 bot 的消息就进哪个 bot，也可以用「@名字」点名。bot 按自己的说明调用「发 Telegram 通知」，每个 bot 每天有上限（在 bot 档案里设）。确认卡变成按钮。",
+    "状态：已绑定 @finbot_fixture_bot (chat 100000001)"
+   ],
+   "buttons": [
+    "解除绑定"
+   ]
+  },
+  "unbindDialog": {
+   "title": "解除 Telegram 绑定？",
+   "description": "解除绑定后，Telegram 消息不再被处理。",
+   "buttons": [
+    "取消",
+    "解除绑定"
+   ]
+  },
+  "unbindEsc": {
+   "sent": []
+  },
+  "unbind": {
+   "sent": [
+    {
+     "method": "POST",
+     "path": "/agent-chat/telegram/unbind",
+     "body": null,
+     "hasSession": true
+    }
+   ],
+   "summary": [
+    "绑定 Telegram 账号后：直接发的消息进默认 bot「助理」的那条线，回复哪个 bot 的消息就进哪个 bot，也可以用「@名字」点名。bot 按自己的说明调用「发 Telegram 通知」，每个 bot 每天有上限（在 bot 档案里设）。确认卡变成按钮。",
+    "状态：Token 已保存 @finbot_fixture_bot",
+    "请先生成一个绑定码，然后在 Telegram 上向你的 Bot 发送 /bind 命令加这个码。"
+   ],
+   "buttons": [
+    "生成绑定码"
+   ]
+  },
+  "unbound": {
+   "text": [
+    "绑定 Telegram 账号后：直接发的消息进默认 bot「助理」的那条线，回复哪个 bot 的消息就进哪个 bot，也可以用「@名字」点名。bot 按自己的说明调用「发 Telegram 通知」，每个 bot 每天有上限（在 bot 档案里设）。确认卡变成按钮。",
+    "状态：Token 已保存 @finbot_fixture_bot",
+    "请先生成一个绑定码，然后在 Telegram 上向你的 Bot 发送 /bind 命令加这个码。"
+   ],
+   "buttons": [
+    "生成绑定码"
+   ]
+  }
+ },
+ "pushover": {
+  "initial": {
+   "text": [
+    "急跌等提醒发到 Telegram 后，1 分钟内没点「收到」，就用 Pushover 紧急级通知响铃（每分钟一次，最多 30 分钟）；在 Pushover 里确认或在 Telegram 点「收到」都会停。两个值加密保存，保存后不会再显示。",
+    "状态：尚未配置"
+   ],
+   "inputs": [
+    {
+     "type": "password",
+     "max": 64,
+     "autocomplete": "off"
+    },
+    {
+     "type": "password",
+     "max": 64,
+     "autocomplete": "off"
+    }
+   ],
+   "buttons": [
+    "保存 Pushover"
+   ]
+  },
+  "oneFilled": {
+   "saveDisabled": true
+  },
+  "save": {
+   "sent": [
+    {
+     "method": "PUT",
+     "path": "/agent-chat/pushover",
+     "body": "{\"user_key\":\"fake-pushover-user-01\",\"app_token\":\"fake-pushover-app-01\"}",
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "Pushover 已保存。"
+   ],
+   "inputsAfter": [
+    "",
+    ""
+   ],
+   "state": [
+    "急跌等提醒发到 Telegram 后，1 分钟内没点「收到」，就用 Pushover 紧急级通知响铃（每分钟一次，最多 30 分钟）；在 Pushover 里确认或在 Telegram 点「收到」都会停。两个值加密保存，保存后不会再显示。",
+    "状态：已配置",
+    "Pushover 已保存。"
+   ],
+   "buttons": [
+    "保存 Pushover",
+    "清除 Pushover"
+   ]
+  },
+  "clear": {
+   "sent": [
+    {
+     "method": "DELETE",
+     "path": "/agent-chat/pushover",
+     "body": null,
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "Pushover 已清除。"
+   ],
+   "state": [
+    "急跌等提醒发到 Telegram 后，1 分钟内没点「收到」，就用 Pushover 紧急级通知响铃（每分钟一次，最多 30 分钟）；在 Pushover 里确认或在 Telegram 点「收到」都会停。两个值加密保存，保存后不会再显示。",
+    "状态：尚未配置",
+    "Pushover 已清除。"
+   ]
+  }
+ },
+ "appearance": {
+  "theme": {
+   "dark": {
+    "storage": {
+     "market-evidence-agent:locale:v1": "zh-CN",
+     "market-evidence-agent:theme:v1": "dark"
+    },
+    "html": {
+     "theme": "dark",
+     "updown": "green-up",
+     "motion": "off",
+     "lang": "zh-CN"
+    },
+    "sent": [],
+    "afterReload": {
+     "storage": {
+      "market-evidence-agent:locale:v1": "zh-CN",
+      "market-evidence-agent:theme:v1": "dark"
+     },
+     "html": {
+      "theme": "dark",
+      "updown": "green-up",
+      "motion": "off",
+      "lang": "zh-CN"
+     }
+    }
+   },
+   "system": {
+    "storage": {
+     "market-evidence-agent:locale:v1": "zh-CN",
+     "market-evidence-agent:theme:v1": "system"
+    },
+    "html": {
+     "theme": "light",
+     "updown": "green-up",
+     "motion": "off",
+     "lang": "zh-CN"
+    },
+    "sent": [],
+    "afterReload": {
+     "storage": {
+      "market-evidence-agent:locale:v1": "zh-CN",
+      "market-evidence-agent:theme:v1": "system"
+     },
+     "html": {
+      "theme": "light",
+      "updown": "green-up",
+      "motion": "off",
+      "lang": "zh-CN"
+     }
+    }
+   },
+   "light": {
+    "storage": {
+     "market-evidence-agent:locale:v1": "zh-CN",
+     "market-evidence-agent:theme:v1": "light"
+    },
+    "html": {
+     "theme": "light",
+     "updown": "green-up",
+     "motion": "off",
+     "lang": "zh-CN"
+    },
+    "sent": [],
+    "afterReload": {
+     "storage": {
+      "market-evidence-agent:locale:v1": "zh-CN",
+      "market-evidence-agent:theme:v1": "light"
+     },
+     "html": {
+      "theme": "light",
+      "updown": "green-up",
+      "motion": "off",
+      "lang": "zh-CN"
+     }
+    }
+   }
+  },
+  "updown": {
+   "options": [
+    "绿涨红跌",
+    "红涨绿跌"
+   ],
+   "red-up": {
+    "storage": {
+     "market-evidence-agent:locale:v1": "zh-CN",
+     "market-evidence-agent:theme:v1": "light",
+     "market-evidence-agent:updown:v1": "red-up"
+    },
+    "html": {
+     "theme": "light",
+     "updown": "red-up",
+     "motion": "off",
+     "lang": "zh-CN"
+    },
+    "afterReload": {
+     "storage": {
+      "market-evidence-agent:locale:v1": "zh-CN",
+      "market-evidence-agent:theme:v1": "light",
+      "market-evidence-agent:updown:v1": "red-up"
+     },
+     "html": {
+      "theme": "light",
+      "updown": "red-up",
+      "motion": "off",
+      "lang": "zh-CN"
+     }
+    }
+   },
+   "green-up": {
+    "storage": {
+     "market-evidence-agent:locale:v1": "zh-CN",
+     "market-evidence-agent:theme:v1": "light"
+    },
+    "html": {
+     "theme": "light",
+     "updown": "green-up",
+     "motion": "off",
+     "lang": "zh-CN"
+    },
+    "afterReload": {
+     "storage": {
+      "market-evidence-agent:locale:v1": "zh-CN",
+      "market-evidence-agent:theme:v1": "light"
+     },
+     "html": {
+      "theme": "light",
+      "updown": "green-up",
+      "motion": "off",
+      "lang": "zh-CN"
+     }
+    }
+   }
+  },
+  "locale": {
+   "en-US": {
+    "storage": {
+     "market-evidence-agent:locale:v1": "en-US",
+     "market-evidence-agent:theme:v1": "light"
+    },
+    "html": {
+     "theme": "light",
+     "updown": "green-up",
+     "motion": "off",
+     "lang": "en-US"
+    },
+    "localeChunks": 1
+   },
+   "zh-CN": {
+    "storage": {
+     "market-evidence-agent:locale:v1": "zh-CN",
+     "market-evidence-agent:theme:v1": "light"
+    },
+    "html": {
+     "theme": "light",
+     "updown": "green-up",
+     "motion": "off",
+     "lang": "zh-CN"
+    },
+    "localeChunks": 0
+   }
+  },
+  "motion": {
+   "options": [
+    "完整动画",
+    "精简动画",
+    "关闭动画"
+   ],
+   "lite": {
+    "storage": {
+     "market-evidence-agent:locale:v1": "zh-CN",
+     "market-evidence-agent:motion:v1": "lite",
+     "market-evidence-agent:theme:v1": "light"
+    },
+    "html": {
+     "theme": "light",
+     "updown": "green-up",
+     "motion": "lite",
+     "lang": "zh-CN"
+    }
+   },
+   "off": {
+    "storage": {
+     "market-evidence-agent:locale:v1": "zh-CN",
+     "market-evidence-agent:motion:v1": "off",
+     "market-evidence-agent:theme:v1": "light"
+    },
+    "html": {
+     "theme": "light",
+     "updown": "green-up",
+     "motion": "off",
+     "lang": "zh-CN"
+    }
+   },
+   "full": {
+    "storage": {
+     "market-evidence-agent:locale:v1": "zh-CN",
+     "market-evidence-agent:motion:v1": "full",
+     "market-evidence-agent:theme:v1": "light"
+    },
+    "html": {
+     "theme": "light",
+     "updown": "green-up",
+     "motion": "full",
+     "lang": "zh-CN"
+    }
+   }
+  },
+  "labels": {
+   "headings": [
+    "模型连接设置",
+    "外观",
+    "语言",
+    "模型配置",
+    "材料分析默认模型",
+    "本地对话归档",
+    "Telegram 随身入口",
+    "紧急提醒（Pushover）"
+   ],
+   "themeOptions": [
+    "浅色",
+    "深色",
+    "跟随系统"
+   ],
+   "localeOptions": [
+    "中文",
+    "English"
+   ]
+  }
+ },
+ "archive": {
+  "initial": {
+   "text": [
+    "本地对话归档 归档仅供本地只读查看，不会作为模型上下文发送。 连接自动保存文件 导出 JSON 导入查看"
+   ],
+   "buttons": [
+    "连接自动保存文件",
+    "导出 JSON",
+    "导入查看"
+   ]
+  },
+  "export": {
+   "downloads": [
+    "market-evidence-chat.json"
+   ],
+   "status": []
+  },
+  "import": {
+   "status": [
+    "归档已打开，只读查看"
+   ],
+   "banner": [
+    "本地归档只读查看；这些内容不会发送给模型，也不是已核验的服务端证据。 返回当前对话 选择归档对话 2026/11/12 16:00:00 · 2 2026/11/11 16:00:00 · 1"
+   ],
+   "options": [
+    "2026/11/12 16:00:00 · 2",
+    "2026/11/11 16:00:00 · 1"
+   ],
+   "fileInput": {
+    "accept": "application/json,.json"
+   }
+  },
+  "select": {
+   "value": "archived-2"
+  },
+  "back": {
+   "banner": 0,
+   "hash": "#/settings/data",
+   "status": [
+    "已返回当前对话"
+   ]
+  },
+  "unsupported": {
+   "status": [
+    "当前浏览器不支持自动写入文件；请使用导出和导入。"
+   ],
+   "buttons": [
+    "连接自动保存文件",
+    "导出 JSON",
+    "导入查看"
+   ]
+  },
+  "badFile": {
+   "status": [
+    "Unexpected token 'o', \"not json\" is not valid JSON"
+   ]
+  }
+ }
+}

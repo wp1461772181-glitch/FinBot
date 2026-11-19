@@ -176,8 +176,8 @@ export async function openArchiveView(page) {
   const stamp = "2026-11-12T08:00:00.000Z";
   const archive = { marker: "market-evidence-agent-chat-archive", version: 1, created_at: stamp, updated_at: stamp,
     conversations: [{ id: "archived-1", created_at: stamp, updated_at: stamp, messages: [{ role: "user", content: "归档里的问题" }, { role: "assistant", content: "归档里的回答", status: "complete" }] }] };
-  await page.locator('.chat-archive-settings input[type="file"]').setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) });
-  await page.locator(".chat-archive-settings [role=status]").waitFor({ timeout: 30000 });
+  await page.locator("[data-testid=archive-file-input]").setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) });
+  await page.locator("[data-testid=archive-status]").waitFor({ timeout: 30000 });
   await page.evaluate(() => { location.hash = "#/chat/history"; });
   await page.locator("[data-testid=archive-banner]").waitFor({ timeout: 30000 });
   await page.locator("[data-testid=message][data-role=assistant]").waitFor({ timeout: 30000 });
@@ -362,6 +362,48 @@ export function stateWithKnowledgeCandidates() {
   const state = buildState();
   state.assistant.candidates = structuredClone(KNOWLEDGE_CANDIDATES);
   state.assistant.docs.push(...structuredClone(KNOWLEDGE_EXTRA_DOCS));
+  return state;
+}
+// P8.2: the states of the 设置 pages.  The default state is the fixtures' own (five catalog models, all saved on the server, all with a key; every role set; Telegram bound; Pushover not set; the material-analysis default a catalog model).
+/** The model page with nothing in the catalog (no model, so no role to set). */
+export function stateModelsEmpty() {
+  const state = buildState();
+  Object.assign(state.settings.catalog, { models: [], default: null });
+  state.modelRoles = { earnings: null, forecast: null, judge: null };
+  state.settings.analysis = { source: "environment", provider: "deepseek", base_url: null, model: "deepseek-chat", has_api_key: false, api_key_last4: null };
+  return state;
+}
+/** The model page with a catalog file on the server: two models that come from it (one reads its key from an environment variable, one has none), one problem in the file, and the default one of them. */
+export function stateModelsReadonly() {
+  const state = buildState();
+  const catalog = state.settings.catalog;
+  const file = (name, display_name, provider, model, extra) => ({ name, display_name, provider, model, base_url: null, origin: "file", key_source: "env", key_env: "KIMI_API_KEY", key_status: "configured", is_default: false, migrated: false, ...extra });
+  catalog.models.push(file("kimi-k3", "Kimi K3", "kimi", "kimi-k3-preview", { is_default: false }), file("qwen-max", "Qwen Max", "qwen", "qwen-max-latest", { key_env: "QWEN_API_KEY", key_status: "missing" }));
+  catalog.config_file = { present: true, problems: ["models[2]: unknown provider"] };
+  return state;
+}
+/** The model page where 测试 is refused with a code the page has a sentence for (the key was not found on the server). */
+export function stateModelTestFails() {
+  const state = buildState();
+  state.settings.testFail = "model_key_missing";
+  return state;
+}
+/** Telegram with no token yet (step 1). */
+export function stateTelegramNoToken() {
+  const state = buildState();
+  state.settings.telegram = { configured: false, has_token: false, bound: false, bot_username: null, chat_id: null, bound_at: null, bind_code_active: false };
+  return state;
+}
+/** Telegram with a token and no binding yet (the code is made on the page). */
+export function stateTelegramUnbound() {
+  const state = buildState();
+  state.settings.telegram = { configured: true, has_token: true, bound: false, bot_username: "finbot_fixture_bot", chat_id: null, bound_at: null, bind_code_active: false };
+  return state;
+}
+/** Pushover set. */
+export function statePushoverConfigured() {
+  const state = buildState();
+  state.settings.pushover = { configured: true, updated_at: "2026-11-10T08:00:00.000Z" };
   return state;
 }
 const UPLOADED = [
@@ -577,7 +619,7 @@ export const PAGES = [
       await page.locator("[data-testid=external-divider]").nth(1).waitFor({ timeout: 20000 });
     } },
   // 只读归档: the banner on top, 返回当前对话 in place of the input.
-  { name: "chat-state-archive", hash: "#/settings/data", ready: ".chat-archive-settings", before: async (page) => { await openArchiveView(page); } },
+  { name: "chat-state-archive", hash: "#/settings/data", ready: "[data-testid=archive-card]", before: async (page) => { await openArchiveView(page); } },
   // 未登录: the input is the sign-in notice.
   { name: "chat-state-guest", hash: "#/chat", identity: "guest", ready: '[data-slot="guest-composer"]' },
   // 离线: the backend is gone; the message that could not be sent is a failed turn with 重试, and the banner is up.
@@ -775,7 +817,47 @@ export const PAGES = [
       await page.locator("[data-testid=knowledge-doc]", { hasText: "AAPL 服务业务分析" }).locator("[data-testid=knowledge-doc-open]").click(); await page.locator("[data-testid=knowledge-chunk]").first().waitFor({ timeout: 10000 });
     } },
   { name: "knowledge-empty", hash: "#/assistant/knowledge", ready: "[data-testid=knowledge-docs-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
-  { name: "settings", hash: "#/settings/models", ready: ".agent-admin h2" },
+  // P8.2: the five settings pages.  `settings` is the model page's whole page (the name stays, so the comparison with the old long page is a changed picture, not a vanished one); the rest are new names.
+  { name: "settings", hash: "#/settings/models", ready: "[data-testid=role-row]" },
+  { name: "settings-model-new", hash: "#/settings/models", ready: "[data-testid=role-row]", element: "[data-testid=model-dialog]", before: async (page) => {
+      await page.locator("[data-testid=model-new]").click(); await page.locator("[data-testid=model-dialog]").waitFor({ timeout: 10000 });
+      await page.locator("#model-display").fill("研究助手"); await page.locator("#model-key").fill("fake-key-for-smoke-01");
+      await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? "") && !document.querySelector("[data-testid=model-discovered]")?.disabled, null, { timeout: 15000 });
+      await page.locator("[data-testid=model-discovered]").click(); await page.getByRole("option", { name: "alpha-1", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector("#model-model")?.value === "alpha-1");
+    } },
+  { name: "settings-model-edit", hash: "#/settings/models", ready: "[data-testid=role-row]", element: "[data-testid=model-dialog]", before: async (page) => {
+      await page.locator("[data-testid=model-card][data-model=muse-ember] [data-testid=model-edit]").click(); await page.locator("[data-testid=model-dialog]").waitFor({ timeout: 10000 });
+      await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? ""), null, { timeout: 15000 });
+    } },
+  { name: "settings-model-test-fail", hash: "#/settings/models", ready: "[data-testid=role-row]", element: "[data-testid=model-dialog]", view: () => ({ fixtureState: stateModelTestFails() }), before: async (page) => {
+      await page.locator("[data-testid=model-card][data-model=muse-ember] [data-testid=model-edit]").click(); await page.locator("[data-testid=model-dialog]").waitFor({ timeout: 10000 });
+      await page.locator("[data-testid=model-test-save]").click(); await page.locator("[data-testid=model-dialog] [data-slot=error-bar]").waitFor({ timeout: 10000 });
+      await page.waitForSelector("[data-testid=model-test-save][data-phase=idle]", { timeout: 10000 });
+      // the reason is at the foot of the form: bring it into the picture (the form scrolls inside the dialog)
+      await page.locator("[data-testid=model-dialog] [data-slot=error-bar]").scrollIntoViewIfNeeded();
+    } },
+  { name: "settings-roles", hash: "#/settings/models", ready: "[data-testid=role-row]", element: "[data-testid=roles-card]" },
+  { name: "settings-models-empty", hash: "#/settings/models", ready: "[data-testid=models-empty]", view: () => ({ fixtureState: stateModelsEmpty() }) },
+  { name: "settings-models-readonly", hash: "#/settings/models", ready: "[data-testid=model-readonly-note]", view: () => ({ fixtureState: stateModelsReadonly() }) },
+  { name: "settings-models-guest", hash: "#/settings/models", identity: "guest", ready: "[data-testid=settings-guest-note]" },
+  { name: "settings-notifications", hash: "#/settings/notifications", ready: "[data-testid=telegram-unbind]" },
+  { name: "settings-telegram-token", hash: "#/settings/notifications", ready: "#telegram-token", view: () => ({ fixtureState: stateTelegramNoToken() }) },
+  { name: "settings-telegram-waiting", hash: "#/settings/notifications", ready: "[data-testid=telegram-make-code]", view: () => ({ fixtureState: stateTelegramUnbound() }), before: async (page) => {
+      await page.locator("[data-testid=telegram-make-code]").click(); await page.locator("[data-testid=telegram-waiting]").waitFor({ timeout: 10000 });
+      await page.waitForSelector("[data-testid=telegram-make-code][data-phase=idle]", { timeout: 10000 });
+    } },
+  { name: "settings-data", hash: "#/settings/data", ready: "[data-testid=archive-card]" },
+  { name: "settings-data-archive", hash: "#/settings/data", ready: "[data-testid=archive-card]", before: async (page) => {
+      const stamp = "2026-11-12T08:00:00.000Z";
+      const archive = { marker: "market-evidence-agent-chat-archive", version: 1, created_at: stamp, updated_at: stamp, conversations: [
+        { id: "archived-1", created_at: stamp, updated_at: stamp, messages: [{ role: "user", content: "归档里的问题" }, { role: "assistant", content: "归档里的回答", status: "complete" }] },
+        { id: "archived-2", created_at: stamp, updated_at: "2026-11-11T08:00:00.000Z", messages: [{ role: "user", content: "第二个问题" }] }] };
+      await page.locator("[data-testid=archive-file-input]").setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) });
+      await page.locator("[data-testid=archive-view]").waitFor({ timeout: 10000 });
+    } },
+  { name: "settings-account", hash: "#/settings/account", ready: "[data-testid=account-about]" },
+  { name: "settings-account-guest", hash: "#/settings/account", identity: "guest", ready: "[data-testid=account-about]" },
   // Developer sample page of the shadcn components (only in builds with VITE_DEV_KIT=1; fe-check.sh shots/smoke set it).
   // The first shows everything closed; the other two open the Dialog and the DropdownMenu.
   { name: "dev-kit", hash: "#/dev/kit", ready: "[data-kit-page]" },

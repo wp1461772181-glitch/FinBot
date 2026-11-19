@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, stateAssistantEmpty, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -125,12 +125,12 @@ async function themeToggles(ctx) {
   try {
     const { page } = view;
     await page.goto(`${ctx.server.url}#/settings/appearance`, { waitUntil: "load" });
-    await page.locator("select#theme").waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=appearance-theme-choice]").waitFor({ timeout: 10000 });
     const theme = () => page.evaluate(() => document.documentElement.dataset.theme);
     assert((await theme()) === "light", `expected light at start, got ${await theme()}`);
-    await page.locator("select#theme").selectOption("dark");
+    await page.locator("[data-testid=appearance-theme-choice] label[data-option=dark]").click();   // P8.2: the old select#theme is a row of choices
     await page.waitForFunction(() => document.documentElement.dataset.theme === "dark", null, { timeout: 5000 });
-    await page.locator("select#theme").selectOption("light");
+    await page.locator("[data-testid=appearance-theme-choice] label[data-option=light]").click();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "light", null, { timeout: 5000 });
     return "light -> dark -> light";
   } finally { await view.close(); }
@@ -456,21 +456,20 @@ async function updownSettingPersists(ctx) {
   try {
     const { page } = view;
     await page.goto(`${ctx.server.url}#/settings/appearance`, { waitUntil: "load" });
-    await page.locator("#updown").waitFor({ timeout: 10000 });
+    const choice = "[data-testid=appearance-updown-choice]";
+    await page.locator(choice).waitFor({ timeout: 10000 });
     const attr = () => page.evaluate(() => document.documentElement.dataset.updown);
     assert((await attr()) === "green-up", `expected green-up at start, got ${await attr()}`);
-    // Focus the trigger and open it from the keyboard (Enter), then pick the second item.
-    await page.locator("#updown").focus();
-    await page.keyboard.press("Enter");
-    await page.getByRole("option", { name: "红涨绿跌" }).waitFor({ timeout: 5000 });
-    await page.getByRole("option", { name: "红涨绿跌" }).click();
+    // P8.2: the choice is a row of radios; focus the picked one and move to the second with the arrow key.
+    await page.locator(`${choice} input:checked`).focus();
+    await page.keyboard.press("ArrowRight");
     await page.waitForFunction(() => document.documentElement.dataset.updown === "red-up", null, { timeout: 5000 });
     const stored = await page.evaluate(() => localStorage.getItem("market-evidence-agent:updown:v1"));
     assert(stored === "red-up", `localStorage should hold red-up, got ${stored}`);
     await page.reload({ waitUntil: "load" });
-    await page.locator("#updown").waitFor({ timeout: 10000 });
+    await page.locator(choice).waitFor({ timeout: 10000 });
     assert((await attr()) === "red-up", `after reload expected red-up, got ${await attr()}`);
-    const shown = (await page.locator("#updown").innerText()).trim();
+    const shown = (await page.locator(`${choice} label:has(input:checked)`).innerText()).trim();
     assert(shown === "红涨绿跌", `the control should show the stored choice, got "${shown}"`);
     return "pick red-up -> data-updown=red-up, saved, still red-up after reload, control shows it";
   } finally { await view.close(); }
@@ -530,8 +529,8 @@ async function legacyRedirects(ctx) {
     ["#skills", "#/assistant/skills", "[data-testid=skill-card]"],
     ["#memory", "#/assistant/memory", "[data-testid=memory-item]"],
     ["#me", "#/assistant/bots", "[data-testid=all-bots] [data-testid=bot-card]"],   // (P5.2: the page is the grid of all bots now; it was the 「我」 page with four links)
-    ["#admin", "#/settings/models", ".agent-admin h2"],
-    ["#settings", "#/settings/models", ".agent-admin h2"],
+    ["#admin", "#/settings/models", "[data-testid=settings-models]"],
+    ["#settings", "#/settings/models", "[data-testid=settings-models]"],
     ["#nonsense", "#/chat", "[data-testid=message]"],
     ["#/no/such/page", "#/chat", "[data-testid=message]"],
   ];
@@ -822,7 +821,7 @@ async function routinesBadgeMatches(ctx) {
   } finally { await view.close(); }
 }
 
-/** Mode switch and sign-out exist once, in the account menu; the chat header, settings and the other pages have neither. */
+/** Mode switch and sign-out exist once, in the account menu; the chat header, settings and the other pages have neither (P8.2: the settings account page only shows the mode and says where the menu is). */
 async function modeSwitchSingleEntry(ctx) {
   const names = /切换模式|切换到访客只读|登出|登录个人/;
   const view = await openShell(ctx, "mode switch", "#/chat", { ready: "[data-testid=message]" });
@@ -838,7 +837,7 @@ async function modeSwitchSingleEntry(ctx) {
     await trigger.click();
     await page.getByRole("menuitem", { name: "切换到访客只读" }).waitFor();
     assert((await page.getByRole("menuitem", { name: "登出" }).count()) === 1 && (await page.getByRole("menuitem", { name: "登录个人" }).count()) === 0, "personal menu: expected 切换到访客只读 + 登出 only");
-    for (const hash of ["#/settings/models", "#/research", "#/assistant/memory"]) {
+    for (const hash of ["#/settings/models", "#/settings/account", "#/research", "#/assistant/memory"]) {
       await page.keyboard.press("Escape");
       await page.evaluate((h) => { location.hash = h; }, hash);
       await page.waitForFunction((h) => location.hash === h, hash);
@@ -857,7 +856,7 @@ async function modeSwitchSingleEntry(ctx) {
     await page.getByRole("menuitem", { name: "登出" }).click();
     await page.locator('[aria-labelledby="login-title"]').waitFor({ timeout: 10000 });
     assert((await page.evaluate((key) => localStorage.getItem(key), MODE_KEY)) === null, "the chosen mode survives a sign-out");
-    return "one trigger; personal menu = 切换到访客只读 + 登出; guest menu = 登录个人 + 登出; none on chat / settings / research / memory; sign-out reaches the login page";
+    return "one trigger; personal menu = 切换到访客只读 + 登出; guest menu = 登录个人 + 登出; none on chat / settings (models, account) / research / memory; sign-out reaches the login page";
   } finally { await view.close(); }
 }
 
@@ -920,7 +919,7 @@ async function guestReadonly(ctx) {
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached", timeout: 5000 });
     // What a guest can read: the research pages.
-    for (const [hash, ready] of [["#/research/forecasts", "[data-testid=forecast-home]"], ["#/research/materials", "[data-testid=material-title]"], ["#/research/replay", "[data-testid=replay-row]"], ["#/settings/appearance", "select#theme"]]) {
+    for (const [hash, ready] of [["#/research/forecasts", "[data-testid=forecast-home]"], ["#/research/materials", "[data-testid=material-title]"], ["#/research/replay", "[data-testid=replay-row]"], ["#/settings/appearance", "[data-testid=appearance-theme-choice]"]]) {
       await page.evaluate((h) => { location.hash = h; }, hash);
       await waitReady(page, { ready });
     }
@@ -1013,13 +1012,13 @@ async function mobileBarAndMore(ctx) {
   } finally { await view.close(); }
 }
 
-/** The old-UI restore still works inside the new shell: bare tags on the old settings page (the last of the three old pages this once measured: 技能 and 记忆 left the marker in P8.1, assistant-no-legacy says so) keep the browser's margins; the sidebar's tags do not. */
+/** The old-UI restore still works inside the new shell: bare tags on the 全部 bot page (P8.2: the last page still inside the marker; the settings pages left it, as 技能 and 记忆 did in P8.1, and settings-no-legacy says so) keep the browser's margins; the sidebar's tags do not. */
 async function legacyRestoreInShell(ctx) {
-  const view = await openShell(ctx, "restore in shell", "#/settings/models", { ready: ".agent-admin h2" });
+  const view = await openShell(ctx, "restore in shell", "#/assistant/bots", { ready: "[data-testid=bot-card]" });
   try {
     const { page } = view;
     const bad = [];
-    for (const [hash, ready] of [["#/settings/models", ".agent-admin h2"]]) {
+    for (const [hash, ready] of [["#/assistant/bots", "[data-testid=bot-card]"]]) {
       await page.evaluate((h) => { location.hash = h; }, hash);
       await waitReady(page, { ready });
       await settle(page, { pinTranscript: false });
@@ -1044,7 +1043,7 @@ async function legacyRestoreInShell(ctx) {
     if (sidebar.border !== "0px") bad.push(`sidebar <button> has a browser border`);
     if (sidebar.pMargin !== "0px") bad.push(`sidebar <p> has a margin`);
     assert(!bad.length, bad.join("\n      "));
-    return "the old settings page: browser margins back on bare <h2>/<p>; the sidebar's <ul>/<a>/<button>/<p> are plain preflight";
+    return "the 全部 bot page (the last one inside the marker): browser margins back on bare <h2>/<p>; the sidebar's <ul>/<a>/<button>/<p> are plain preflight";
   } finally { await view.close(); }
 }
 
@@ -1108,8 +1107,10 @@ async function noWindowConfirm(ctx) {
       activate: async (page, trigger) => { await trigger.click(); await page.locator("[data-testid=task-delete]").click(); } },
     { name: "bot", hash: `#/chat/${BOT.applebot}/settings`, ready: "[data-testid=bot-settings-page]", trigger: (p) => p.getByRole("button", { name: "删除这个 bot" }), method: "DELETE", re: /\/bots\/[^/]+$/ },
     { name: "bot Telegram token", hash: `#/chat/${BOT.applebot}/settings`, ready: "[data-testid=bot-settings-page]", trigger: (p) => p.getByRole("button", { name: "换 token / 删除" }), method: "DELETE", re: /\/bots\/[^/]+\/telegram$/ },
-    { name: "catalog model", hash: "#/settings/models", ready: ".agent-admin h2", trigger: (p) => p.locator(".catalog-actions button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/model-catalog\/[^/]+$/ },
-    { name: "Telegram unbind", hash: "#/settings/notifications", ready: ".agent-admin h2", trigger: (p) => p.getByRole("button", { name: "解除绑定" }), method: "POST", re: /\/telegram\/unbind$/ },
+    { name: "catalog model", hash: "#/settings/models", ready: "[data-testid=model-card]", trigger: (p) => p.locator("[data-testid=model-menu]").first(), method: "DELETE", re: /\/model-catalog\/[^/]+$/,
+      // the delete is in the card's 「…」 menu (P8.2): open it, press 删除
+      activate: async (page, trigger) => { await trigger.click(); await page.locator("[data-testid=model-delete]").click(); } },
+    { name: "Telegram unbind", hash: "#/settings/notifications", ready: "[data-testid=telegram-unbind]", trigger: (p) => p.getByRole("button", { name: "解除绑定" }), method: "POST", re: /\/telegram\/unbind$/ },
   ];
   const report = [];
   for (const site of sites) {
@@ -1767,14 +1768,14 @@ async function chatWriteConfirm(ctx) {
 }
 
 async function chatReadonlyArchive(ctx) {
-  const view = await openShell(ctx, "chat-readonly-archive", "#/settings/data", { ready: ".chat-archive-settings" });
+  const view = await openShell(ctx, "chat-readonly-archive", "#/settings/data", { ready: "[data-testid=archive-card]" });
   try {
     const { page } = view;
     const stamp = "2026-11-12T08:00:00.000Z";
     const archive = { marker: "market-evidence-agent-chat-archive", version: 1, created_at: stamp, updated_at: stamp,
       conversations: [{ id: "archived-1", created_at: stamp, updated_at: stamp, messages: [{ role: "user", content: "归档里的问题" }, { role: "assistant", content: "归档里的回答", status: "complete" }] }] };
-    await page.locator('.chat-archive-settings input[type="file"]').setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) });
-    await page.locator(".chat-archive-settings [role=status]", { hasText: "归档已打开" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=archive-file-input]").setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) });
+    await page.locator("[data-testid=archive-status]", { hasText: "归档已打开" }).waitFor({ timeout: 10000 });
     // A bot's line is a server conversation and ends the archive view when opened; the archive is read on the plain conversation page (no bot).
     await page.evaluate(() => { location.hash = "#/chat/history"; });
     await waitHash(page, "#/chat/history");
@@ -1865,22 +1866,24 @@ async function localeCatalogLoadsOnDemand(ctx) {
     const { page } = view;
     const catalogRequests = [];
     page.on("request", (request) => { if (/\/assets\/en-US-[^/]+\.js$/.test(new URL(request.url()).pathname)) catalogRequests.push(request.url()); });
-    await page.goto(`${ctx.server.url}#/settings/models`, { waitUntil: "load" });
-    await page.locator("select#locale").waitFor({ timeout: 10000 });
+    // P8.2: the language is a row of choices on the appearance page; its title (the h1 #settings-title) is the page's label 外观, which has a fixed English phrase.
+    const choose = (value) => page.locator(`[data-testid=appearance-locale-choice] label[data-option=${value}]`).click();
+    await page.goto(`${ctx.server.url}#/settings/appearance`, { waitUntil: "load" });
+    await page.locator("[data-testid=appearance-locale-choice]").waitFor({ timeout: 10000 });
     await settle(page);
     assert(catalogRequests.length === 0, `a Chinese session fetched the English catalog: ${catalogRequests[0]}`);
-    const title = page.locator("#agent-admin-title");
-    assert((await title.innerText()) === "模型连接设置", "the settings title is not Chinese at the start");
-    await page.locator("select#locale").selectOption("en-US");
-    await page.waitForFunction((text) => document.querySelector("#agent-admin-title")?.textContent === text, english["模型连接设置"], { timeout: 10000 });
+    const title = page.locator("#settings-title");
+    assert((await title.innerText()) === "外观", "the settings title is not Chinese at the start");
+    await choose("en-US");
+    await page.waitForFunction((text) => document.querySelector("#settings-title")?.textContent === text, english["外观"], { timeout: 10000 });
     assert(catalogRequests.length === 1, `switching to English fetched the catalog ${catalogRequests.length} times`);
     // A reload with English saved: the first draw is already English (the catalog is awaited before the first render).
     await page.reload({ waitUntil: "load" });
-    await page.waitForFunction((text) => document.querySelector("#agent-admin-title")?.textContent === text, english["模型连接设置"], { timeout: 10000 });
+    await page.waitForFunction((text) => document.querySelector("#settings-title")?.textContent === text, english["外观"], { timeout: 10000 });
     assert(catalogRequests.length === 2, `the English reload fetched the catalog ${catalogRequests.length - 1} more times`);
-    await page.locator("select#locale").selectOption("zh-CN");
-    await page.waitForFunction(() => document.querySelector("#agent-admin-title")?.textContent === "模型连接设置", null, { timeout: 10000 });
-    return `Chinese session: no request for the English chunk; switch: one request, title "${english["模型连接设置"]}"; reload in English: the title is English; back to 中文 works`;
+    await choose("zh-CN");
+    await page.waitForFunction(() => document.querySelector("#settings-title")?.textContent === "外观", null, { timeout: 10000 });
+    return `Chinese session: no request for the English chunk; switch: one request, title "${english["外观"]}"; reload in English: the title is English; back to 中文 works`;
   } finally { await view.close(); }
 }
 
@@ -4698,7 +4701,7 @@ async function motionOffEqualsReduced(ctx) {
     same.push(`${name} (${pictures[0].length} B)`);
   }
   // the settings page: everything but the strength control itself (its selected choice and its notes), element by element
-  const parts = ["label[for=theme]", "label[for=updown]", "label[for=locale]"];
+  const parts = ["[data-testid=appearance-theme]", "[data-testid=appearance-updown]", "[data-testid=appearance-locale]"];   // P8.2: the three cards of the appearance page (were the three labels of the old long page)
   const taken = [];
   for (const how of ["system", "off"]) {
     const view = await open(`motion-off-equals-reduced-${how}`, how, "#/settings/appearance");
@@ -7626,12 +7629,12 @@ async function researchNoLegacy(ctx) {
     await settle(failing.page);
     judge(`${errorHash} (list unreadable)`, await oldMarkCounts(failing.page));
     // the positive control: a page that is still old keeps its marker, so a selector that is broken (and would read 0 everywhere) cannot pass
-    await view.page.goto(`${ctx.server.url}#/settings/models`, { waitUntil: "load" });
-    await view.page.waitForSelector(".agent-admin h2", { timeout: 30000 });
-    assert((await view.page.locator("[data-legacy]").count()) >= 1, "the settings page lost its old-UI marker too");
+    await view.page.goto(`${ctx.server.url}#/assistant/bots`, { waitUntil: "load" });
+    await view.page.waitForSelector("[data-testid=bot-card]", { timeout: 30000 });
+    assert((await view.page.locator("[data-legacy]").count()) >= 1, "the 全部 bot page lost its old-UI marker too");   // P8.2: the settings pages are new markup; this page is the one left inside the marker
   } finally { await failing.close(); await view.close(); }
   assert(!bad.length, bad.join("; "));
-  return `${clean.length + 1} research-area addresses (watchlist, company and its tabs, forecast home, one forecast, judgment, the three evidence addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page opened and stopped on its error) hold no data-legacy element and no old workspace class; the settings page still holds the marker`;
+  return `${clean.length + 1} research-area addresses (watchlist, company and its tabs, forecast home, one forecast, judgment, the three evidence addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page opened and stopped on its error) hold no data-legacy element and no old workspace class; the 全部 bot page still holds the marker`;
 }
 
 // --- P7.1: the portfolio page ------------------------------------------------------------------------------------------------------
@@ -10093,22 +10096,24 @@ async function knowledgeEntries(ctx) {
     await waitHash(page, "#/assistant/knowledge", 10000);
     await page.locator("[data-testid=knowledge-page]").waitFor({ timeout: 15000 });
     assert((await sidebarActive(page)).includes("知识库"), `${what}: the sidebar does not highlight 知识库 (${JSON.stringify(await sidebarActive(page))})`);
-    assert((await page.locator(".agent-admin").count()) === 0, `${what}: the settings page is still on screen`);
+    assert((await page.locator("[data-testid=settings-page]").count()) === 0, `${what}: the settings page is still on screen`);
   };
   // 1. the sidebar
   const side = await openAt(ctx, "knowledge entry sidebar", "#/assistant/bots", { ready: "[data-testid=bot-card]" });
   try { await side.page.locator('[data-slot="sidebar"] a', { hasText: "知识库" }).first().click(); await landed(side.page, "the sidebar"); notes.push("sidebar"); } finally { await side.close(); }
-  // 2. the settings page's button (kept for now): it goes to the page, the settings address never shows the library
-  const settings = await openAt(ctx, "knowledge entry settings", "#/settings/models", { ready: ".agent-admin h2" });
-  try {
-    const { page } = settings;
-    await page.getByRole("button", { name: "研究知识库", exact: true }).click();
-    await landed(page, "the settings button");
-    await page.goBack(); await waitHash(page, "#/settings/models");
-    await page.locator(".agent-admin h2").first().waitFor({ timeout: 10000 });
-    assert((await page.locator("[data-testid=knowledge-page]").count()) === 0, "the settings address shows the knowledge page");
-    notes.push("settings button (and Back returns to the settings page)");
-  } finally { await settings.close(); }
+  // 2. P8.2: the settings pages no longer have the button.  None of the five has, in its own content (the sidebar's 知识库 row is outside it), a button or a link named 知识库 or one that goes to /assistant/knowledge.
+  for (const section of ["models", "notifications", "appearance", "data", "account"]) {
+    const settings = await openAt(ctx, `knowledge entry settings ${section}`, `#/settings/${section}`, { ready: `[data-testid=settings-${section}]` });
+    try {
+      const { page } = settings;
+      await settle(page, { pinTranscript: false });
+      const area = page.locator(`[data-testid=settings-${section}]`);
+      assert((await area.count()) === 1 && (await area.locator("h1").count()) === 1, `${section}: the settings content area is not there (the check would read 0 of everything)`);
+      const found = await area.evaluate((el) => ({ buttons: [...el.querySelectorAll("button, a, [role=button], [role=link]")].filter((x) => /知识库/.test(x.textContent + (x.getAttribute("aria-label") ?? ""))).length, links: el.querySelectorAll('a[href*="/assistant/knowledge"]').length }));
+      assert(found.buttons === 0 && found.links === 0, `${section}: ${found.buttons} button/link named 知识库, ${found.links} link to /assistant/knowledge in the settings content`);
+    } finally { await settings.close(); }
+  }
+  notes.push("none of the five settings pages has a way to the library in its content");
   // 3. the agent's open_page
   const agent = await openAt(ctx, "knowledge entry agent", "#/chat", { ready: "[data-testid=message]" });
   try { await dispatchAction(agent.page, { action: "open_page", page: "knowledge" }); await landed(agent.page, "open_page knowledge"); notes.push("open_page"); } finally { await agent.close(); }
@@ -10120,7 +10125,7 @@ async function knowledgeEntries(ctx) {
     assert((await page.page.locator("main h1").innerText()).trim() === "研究知识库", "the title is not 研究知识库");
     notes.push("no 返回模型设置");
   } finally { await page.close(); }
-  return `the sidebar, the settings page's button and the agent's open_page (knowledge) all land on #/assistant/knowledge with 知识库 highlighted and no settings page under it; ${notes.slice(-1)}`;
+  return `the sidebar and the agent's open_page (knowledge) land on #/assistant/knowledge with 知识库 highlighted and no settings page under it; ${notes.slice(-2).join("; ")}`;
 }
 
 async function knowledgeKeyboard(ctx) {
@@ -10186,10 +10191,879 @@ async function assistantNoLegacy(ctx) {
   await run("新闻源（空）", "#/assistant/news", "[data-testid=news-empty]", null, { state: stateAssistantEmpty() });
   await run("知识库", "#/assistant/knowledge", KN_DOC, async (page, again) => { await knDoc(page, "AAPL 10-Q").locator("[data-testid=knowledge-doc-open]").click(); await page.locator("[data-testid=knowledge-chunk]").first().waitFor(); await again("分块抽屉"); }, { state: KN_STATE() });
   await run("知识库（空）", "#/assistant/knowledge", "[data-testid=knowledge-docs-empty]", null, { state: stateAssistantEmpty() });
-  // the control: the settings page is still an old page, so a selector that reads 0 everywhere is told apart from one that is broken
-  const settings = await asOpen(ctx, "no legacy control", "#/settings/models", ".agent-admin h2");
-  try { assert((await settings.page.locator("[data-legacy]").count()) >= 1, "the settings page holds no data-legacy element (the selector is broken, not the pages clean)"); } finally { await settings.close(); }
+  // the control: the 全部 bot page is still an old page (P8.2: the settings pages are new), so a selector that reads 0 everywhere is told apart from one that is broken
+  const control = await asOpen(ctx, "no legacy control", "#/assistant/bots", "[data-testid=bot-card]");
+  try { assert((await control.page.locator("[data-legacy]").count()) >= 1, "the 全部 bot page holds no data-legacy element (the selector is broken, not the pages clean)"); } finally { await control.close(); }
   return `${seen.length} addresses / states (skills incl. :skillId and its two drawers, memory both tabs, news with a test result and the drawer, knowledge with the chunk drawer, each page empty): 0 data-legacy, 0 old classes, 0 native <select>, 0 text under 12px; the settings page still holds the marker`;
+}
+
+// --- P8.2: the settings pages ------------------------------------------------------------------------------------------------------------
+// The baseline is what the OLD settings page (HEAD d8a045e, one long page) sent and said on the same fixtures (fixtures/settings-bodies-baseline.json, recorded before any page was touched):
+// the new pages must send the same requests, body for body.  Writes are read from the fake backend (`state.settings.writes`); the keys typed are obvious fakes.
+const SB = JSON.parse(fs.readFileSync(new URL("./fixtures/settings-bodies-baseline.json", import.meta.url), "utf8"));
+const ST_KEY1 = "fake-key-for-smoke-01", ST_KEY2 = "fake-key-for-smoke-02", ST_TOKEN = "fake-token-for-smoke-01", ST_PUSH_USER = "fake-pushover-user-01", ST_PUSH_APP = "fake-pushover-app-01";
+const ST_SECTIONS = ["models", "notifications", "appearance", "data", "account"];
+const ST_LABELS = { models: "模型", notifications: "通知", appearance: "外观", data: "数据", account: "账户" };
+const stAll = (view) => view.mock.state.settings.writes;
+/** The writes of the page without the asks for the provider's model list (those are reads in spirit and come on their own timing; settings-model-discovery counts them). */
+const stWrites = (view) => stAll(view).filter((w) => w.path !== "/model-catalog/models");
+/** The writes of the baseline's `sent` list (GETs are reads, not writes): method, path and the body as the old page sent it. */
+const stOld = (sent) => sent.filter((r) => r.method !== "GET").map((r) => ({ method: r.method, path: r.path.replace(/^\/agent-chat/, ""), body: r.body }));
+/** The fake backend's writes `from` on, against what the old page sent: same count, same order, same method, path and body (character for character). */
+function stSame(view, old, what, from = 0) {
+  const got = stWrites(view).slice(from).map((w) => ({ method: w.method, path: w.path, body: w.body === null ? null : JSON.stringify(w.body) }));
+  assert(JSON.stringify(got) === JSON.stringify(stOld(old)), `${what}: sent ${JSON.stringify(got)}, the old page sent ${JSON.stringify(stOld(old))}`);
+}
+async function stWaitWrites(view, count, what) {
+  const end = Date.now() + 10000;
+  while (stWrites(view).length < count && Date.now() < end) await view.page.waitForTimeout(60);
+  assert(stWrites(view).length >= count, `${what}: ${stWrites(view).length} of ${count} request(s) went out`);
+  await view.page.waitForTimeout(150);
+}
+/** A settings sub page on the fake backend; `ready` is its body (the page has read what it shows). */
+async function stOpen(ctx, label, section, ready, { state, width = 1440, theme = "light", motion = false, identity = "personal", locale } = {}) {
+  const view = await newView(ctx.browser, { width, theme, label, unmatched, motion, identity, ...(locale ? { locale } : {}), ...(state ? { fixtureState: state } : {}) });
+  view.consoleTexts = [];
+  view.page.on("console", (m) => { view.consoleTexts.push(m.text()); });
+  await view.context.addInitScript(() => { window.__downloads = []; const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { if (this.download) { window.__downloads.push(this.download); return; } return click.call(this); }; });
+  await view.page.goto(`${ctx.server.url}#/settings/${section}`, { waitUntil: "load" });
+  await view.page.waitForSelector(ready, { state: "visible", timeout: 30000 });
+  await settle(view.page, { pinTranscript: false });
+  return view;
+}
+const ST_MODELS = "[data-testid=role-row]";
+const stCard = (page, name) => page.locator(`[data-testid=model-card][data-model="${name}"]`);
+const stDialog = (page) => page.locator("[data-testid=model-dialog]");
+/** Press-and-hold the in-app confirmation's button (the view keeps real motion). */
+async function stHold(page) {
+  const dlg = page.locator('[data-slot="alert-dialog-content"]'); await dlg.waitFor({ timeout: 10000 });
+  await holdPointer(page, dlg.locator('[data-slot="hold-button"]'), 1500);
+}
+async function stOpenAdd(page) { await page.locator("[data-testid=model-new]").click(); await stDialog(page).waitFor({ timeout: 10000 }); }
+async function stOpenEdit(page, name) { await stCard(page, name).locator("[data-testid=model-edit]").click(); await stDialog(page).waitFor({ timeout: 10000 }); }
+/** What the three add forms and the five edit forms of the baseline did to the dialog, done again through the new fields. */
+const ST_ADD = {
+  vault: async (page) => { await page.locator("#model-display").fill("  测试模型 A  "); await page.locator("#model-model").fill("  deepseek-chat  "); await page.locator("#model-key").fill(ST_KEY1); },
+  envDefault: async (page) => {
+    await page.locator("#model-display").fill("环境变量模型"); await asPick(page, page.locator("[data-testid=model-provider]"), "OpenRouter");
+    await page.locator("#model-model").fill("vendor/fixture-model"); await asPick(page, page.locator("[data-testid=model-key-mode]"), "读服务器的环境变量");
+    await page.locator("#model-key-env").fill("my_fixture_api_key"); await page.locator("[data-testid=model-default]").click();
+  },
+  custom: async (page) => {
+    await page.locator("#model-display").fill(""); await asPick(page, page.locator("[data-testid=model-provider]"), "自定义（OpenAI 兼容）");
+    await page.locator("#model-base-url").fill("  https://models.example.test/v1  "); await page.locator("#model-model").fill("m1"); await page.locator("#model-key").fill(ST_KEY1); await page.locator("#model-name").fill("My-Model");
+  },
+};
+const ST_EDIT = {
+  untouched: ["deepseek-flash", async () => {}],
+  rename: ["muse-ember", async (page) => { await page.locator("#model-name").fill("muse-ember-2"); }],
+  newKey: ["glm5.3-flash", async (page) => { await page.locator("#model-key").fill(ST_KEY2); }],
+  newProvider: ["deepseek-flash", async (page) => { await asPick(page, page.locator("[data-testid=model-provider]"), "OpenRouter"); await page.locator("#model-model").fill("vendor/moved"); await page.locator("#model-key").fill(ST_KEY2); }],
+  displayAndDefault: ["gpt-6.1-terra", async (page) => { await page.locator("#model-display").fill("GPT Terra（改名）"); await page.locator("[data-testid=model-default]").click(); }],
+};
+
+/** Five addresses, five pages: each shows only its own, the list beside it and the sidebar mark it, a reload stays on it, a phone can use the list, the old addresses land on 模型. */
+async function settingsFivePages(ctx) {
+  const BODY = (id) => `[data-testid=settings-${id}-body]`;
+  const notes = [];
+  for (const id of ST_SECTIONS) {
+    const view = await stOpen(ctx, `settings five ${id}`, id, BODY(id));
+    try {
+      const { page } = view;
+      for (const other of ST_SECTIONS.filter((x) => x !== id)) assert((await page.locator(BODY(other)).count()) === 0, `${id}: shows the content of ${other}`);
+      assert((await page.locator("h1").innerText()).trim() === ST_LABELS[id], `${id}: the title is "${await page.locator("h1").innerText()}"`);
+      const current = await page.locator("[data-testid=settings-subnav] [aria-current=page]").allInnerTexts();
+      assert(current.length === 1 && current[0].trim() === ST_LABELS[id], `${id}: the list beside the page marks ${JSON.stringify(current)}`);
+      const side = (await page.locator('[data-slot="sidebar"] a[aria-current=page]').allInnerTexts()).map((s) => s.trim());
+      assert(side.includes(ST_LABELS[id]), `${id}: the sidebar marks ${JSON.stringify(side)}`);
+      await page.reload({ waitUntil: "load" }); await page.waitForSelector(BODY(id), { state: "visible", timeout: 30000 });
+      assert((await page.evaluate(() => location.hash)) === `#/settings/${id}`, `${id}: a reload left the page`);
+      assert((await page.locator("[data-legacy]").count()) === 0, `${id}: inside the old-UI marker`);
+    } finally { await view.close(); }
+    notes.push(id);
+  }
+  // the list is one node in both shapes: below 1024 it is a row above the page, and it works
+  const phone = await stOpen(ctx, "settings five phone", "models", BODY("models"), { width: 390 });
+  try {
+    const { page } = phone;
+    assert((await page.locator("[data-testid=settings-subnav]").count()) === 1, "the list of sub pages is mounted more than once");
+    const box = await page.locator("[data-testid=settings-subnav]").boundingBox(), content = await page.locator("[data-testid=settings-models]").boundingBox();
+    assert(box.y + box.height <= content.y + 1, `on a phone the list is not above the page (${JSON.stringify(box)} / ${JSON.stringify(content)})`);
+    const small = await page.locator("[data-testid=settings-subnav] a").evaluateAll((a) => a.filter((x) => x.getBoundingClientRect().height < 44).length);
+    assert(small === 0, `${small} item(s) of the list are under 44px tall on a phone`);
+    await page.locator("[data-testid=settings-nav-account]").click();
+    await page.waitForSelector(BODY("account"), { timeout: 10000 });
+    assert((await page.evaluate(() => location.hash)) === "#/settings/account", "the phone's list did not go to 账户");
+    assert((await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)), "the page scrolls sideways on a phone");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    assert((await page.locator("[data-testid=settings-subnav]").count()) === 1, "the list is mounted twice after the width changed");
+    const wide = await page.locator("[data-testid=settings-subnav]").boundingBox();
+    const wideContent = await page.locator("[data-testid=settings-account]").boundingBox();
+    assert(wide.x + wide.width <= wideContent.x + 1 && wide.width < 260, `on a wide screen the list is not a narrow column beside the page (${JSON.stringify(wide)} / ${JSON.stringify(wideContent)})`);
+  } finally { await phone.close(); }
+  // the old addresses and an unknown one
+  for (const [from, to] of [["#admin", "#/settings/models"], ["#settings", "#/settings/models"]]) {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: `settings five ${from}`, unmatched });
+    try { await view.page.goto(`${ctx.server.url}${from}`, { waitUntil: "load" }); await view.page.waitForSelector(BODY("models"), { timeout: 30000 }); assert((await view.page.evaluate(() => location.hash)) === to, `${from} did not land on ${to}`); } finally { await view.close(); }
+  }
+  const unknown = await newView(ctx.browser, { width: 1440, theme: "light", label: "settings five unknown", unmatched });
+  try { await unknown.page.goto(`${ctx.server.url}#/settings/xyz`, { waitUntil: "load" }); await unknown.page.waitForSelector("[data-testid=message]", { timeout: 30000 }); assert((await unknown.page.locator("[data-testid=settings-page]").count()) === 0, "an unknown settings address shows a settings page"); } finally { await unknown.close(); }
+  return `${notes.length} addresses each show only their own page (title, list mark, sidebar mark, reload, no old-UI marker); the list is one node, above the page at 390 with items >= 44px, a narrow column at 1440; #admin and #settings land on 模型; #/settings/xyz still leaves for the chat`;
+}
+
+/** 测试并保存: the test goes first and the save only after it passed, both with the old bodies; a failed test sends no save, shows the server's own words and leaves the dialog; 取消测试 stops it; a form that cannot be sent has the button off. */
+async function settingsModelTestAndSave(ctx) {
+  // success
+  const ok = await stOpen(ctx, "settings model test ok", "models", ST_MODELS);
+  try {
+    const { page } = ok;
+    await stOpenAdd(page); await ST_ADD.vault(page);
+    await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? ""), null, { timeout: 15000 });
+    const before = stWrites(ok).length;
+    await page.locator("[data-testid=model-test-save]").click();
+    await stWaitWrites(ok, before + 2, "测试并保存");
+    const sent = stWrites(ok).slice(before);
+    assert(sent[0].path === "/model-catalog/test" && sent[1].path === "/model-catalog" && sent[1].method === "POST", `order: ${sent.map((w) => w.path)}`);
+    stSame(ok, SB.models.add.vault.sent, "测试并保存 (add)", before);
+    await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+    await page.locator("[data-testid=model-card]", { hasText: "测试模型 A" }).waitFor({ timeout: 10000 });
+    await asToast(page, "已测试并保存。用它的 bot 下一轮生效。");
+    assert(await page.evaluate(() => document.activeElement?.getAttribute("data-testid") === "model-new"), "the focus did not come back to 添加模型");
+  } finally { await ok.close(); }
+  // failure: the server's own words, no save, the dialog stays
+  for (const [key, code] of [["keyMissing", "model_key_missing"], ["unknownCode", "some_new_code"]]) {
+    const view = await stOpen(ctx, `settings model test fail ${key}`, "models", ST_MODELS);
+    try {
+      const { page } = view; view.mock.state.settings.testFail = code;
+      await stOpenEdit(page, "deepseek-flash");
+      await page.locator("[data-testid=model-test-save]").click();
+      await stDialog(page).locator("[data-slot=error-bar]").waitFor({ timeout: 10000 });
+      assert(stWrites(view).length === 1 && stWrites(view)[0].path === "/model-catalog/test", `a failed test sent ${JSON.stringify(stWrites(view).map((w) => `${w.method} ${w.path}`))}`);
+      const said = (await stDialog(page).locator("[data-slot=error-bar]").innerText()).trim();
+      assert(said === SB.models.fail[key].alert[0], `the reason is "${said}", the old page said "${SB.models.fail[key].alert[0]}"`);
+      assert((await stDialog(page).count()) === 1, "the dialog closed after a failed test");
+      await page.waitForTimeout(300);
+      assert(stWrites(view).length === 1, "something was saved after the failed test");
+    } finally { await view.close(); }
+  }
+  // cancel
+  const cancel = await stOpen(ctx, "settings model test cancel", "models", ST_MODELS);
+  try {
+    const { page } = cancel;
+    const posts = []; page.on("request", (r) => { if (r.method() === "POST" && /model-catalog(\/test)?$/.test(new URL(r.url()).pathname)) posts.push(new URL(r.url()).pathname); });
+    cancel.mock.control.hold = (method, path) => method === "POST" && /model-catalog\/test$/.test(path);
+    await stOpenEdit(page, "deepseek-flash");
+    await page.waitForTimeout(600);
+    const base = posts.length;
+    await page.locator("[data-testid=model-test-save]").click();
+    await page.waitForSelector("[data-testid=model-test-save][data-phase=loading]", { timeout: 5000 });
+    assert(await page.locator("[data-testid=model-cancel-test]").isEnabled(), "取消测试 is not usable while testing");
+    await page.locator("[data-testid=model-cancel-test]").click();
+    await page.waitForSelector("[data-testid=model-test-save][data-phase=idle]", { timeout: 5000 });
+    await page.waitForTimeout(500);
+    assert(posts.length - base === 1 && !posts.slice(base).some((p) => p.endsWith("/model-catalog")), `after the cancel: ${JSON.stringify(posts.slice(base))}`);
+    assert(stWrites(cancel).length === 0, "something was saved after the test was cancelled");
+    assert((await stDialog(page).count()) === 1 && (await stDialog(page).locator("[data-slot=error-bar]").count()) === 0, "the dialog is gone or shows an error after 取消测试");
+    assert(await page.locator("[data-testid=model-cancel-test]").isDisabled(), "取消测试 stays usable when nothing is running");
+  } finally { await cancel.close(); }
+  // a form that cannot be sent
+  const bad = await stOpen(ctx, "settings model test invalid", "models", ST_MODELS);
+  try {
+    const { page } = bad;
+    await stOpenAdd(page);
+    const off = () => page.locator("[data-testid=model-test-save]").isDisabled();
+    assert(await off(), "the button is on for an empty form");
+    await page.locator("#model-model").fill("x"); assert(await off() === SB.models.add.invalid.modelOnly, "the button is on with a Model ID but no key");
+    await page.locator("#model-key").fill(ST_KEY1); assert((await off()) === SB.models.add.invalid.withKey, "the button is off with a Model ID and a key");
+    await page.locator("#model-name").fill("muse-ember"); assert((await off()) === SB.models.add.invalid.takenName.disabled, "the button is on with a catalog name that is taken");
+    assert(stWrites(bad).length === 0, "a request went out from a form that cannot be sent");
+  } finally { await bad.close(); }
+  return "add: 测试 then 保存, bodies as the old page's, the dialog closes, the toast and the focus on 添加模型; a refused test: no save, the server's own sentence (and the fallback for an unknown code), dialog stays; 取消测试 sends no save; the button is off for an empty form, a missing key and a taken name";
+}
+
+/** Add (three forms), edit (five), 设为默认 and 删除 each send the old requests; a rename carries into the role table; the dialog's draft survives crossing 1024 both ways. */
+async function settingsModelCrud(ctx) {
+  const done = [];
+  for (const [k, fill] of Object.entries(ST_ADD)) {
+    const view = await stOpen(ctx, `settings model add ${k}`, "models", ST_MODELS);
+    try {
+      const { page } = view;
+      await stOpenAdd(page); await fill(page); await page.waitForTimeout(1000);
+      await page.locator("[data-testid=model-test-save]").click();
+      await stWaitWrites(view, 2, `add ${k}`); stSame(view, SB.models.add[k].sent, `add ${k}`);
+      await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+      const names = await page.locator("[data-testid=model-card] h3").allInnerTexts();
+      assert(JSON.stringify(names) === JSON.stringify(SB.models.add[k].cardsAfter), `add ${k}: the cards are ${JSON.stringify(names)}, the old page showed ${JSON.stringify(SB.models.add[k].cardsAfter)}`);
+      const marked = await page.locator("[data-testid=model-card][data-default] h3").allInnerTexts();
+      assert(JSON.stringify(marked) === JSON.stringify(SB.models.add[k].defaultAfter), `add ${k}: the default is ${JSON.stringify(marked)}`);
+    } finally { await view.close(); }
+    done.push(`add ${k}`);
+  }
+  for (const [k, [name, change]] of Object.entries(ST_EDIT)) {
+    const view = await stOpen(ctx, `settings model edit ${k}`, "models", ST_MODELS);
+    try {
+      const { page } = view;
+      await stOpenEdit(page, name); await change(page); await page.waitForTimeout(1000);
+      await page.locator("[data-testid=model-test-save]").click();
+      await stWaitWrites(view, 2, `edit ${k}`); stSame(view, SB.models.edit[k].sent, `edit ${k}`);
+      await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+      if (k === "rename") {
+        // the role table follows the rename (the old page showed 不指定 until it was reloaded)
+        const shown = (await page.locator("[data-testid=role-earnings]").innerText()).trim();
+        assert(shown === "Muse Ember", `after the rename the 财报判断 row shows "${shown}"`);
+      }
+    } finally { await view.close(); }
+    done.push(`edit ${k}`);
+  }
+  // 设为默认
+  const def = await stOpen(ctx, "settings model default", "models", ST_MODELS);
+  try {
+    const { page } = def;
+    const menus = await page.locator("[data-testid=model-card]").evaluateAll((c) => c.map((x) => [x.dataset.model, !!x.querySelector("[data-testid=model-menu]")]));
+    await stCard(page, "haiku-5.5").locator("[data-testid=model-menu]").click();
+    assert((await page.locator("[data-testid=model-set-default]").count()) === 0, "the default model's menu offers 设为默认");
+    await page.keyboard.press("Escape");
+    await stCard(page, "muse-ember").locator("[data-testid=model-menu]").click(); await page.locator("[data-testid=model-set-default]").click();
+    await stWaitWrites(def, 1, "设为默认"); stSame(def, SB.models.def.sent, "设为默认");
+    await asToast(page, "已设为默认模型。");
+    await page.waitForSelector("[data-testid=model-card][data-model=muse-ember][data-default]", { timeout: 10000 });
+    assert(menus.length === 5, `${menus.length} cards`);
+  } finally { await def.close(); }
+  done.push("default");
+  // 删除 by holding
+  const del = await stOpen(ctx, "settings model delete", "models", ST_MODELS, { motion: true });
+  try {
+    const { page } = del;
+    await stCard(page, "gpt-6.1-terra").locator("[data-testid=model-menu]").click(); await page.locator("[data-testid=model-delete]").click();
+    const dlg = page.locator('[data-slot="alert-dialog-content"]'); await dlg.waitFor({ timeout: 10000 });
+    assert((await dlg.locator('[data-slot="alert-dialog-title"]').innerText()).trim() === SB.models.del.dialog.title && (await dlg.locator('[data-slot="alert-dialog-description"]').innerText()).trim() === SB.models.del.dialog.description, "the delete question is not the old one");
+    await page.keyboard.press("Escape"); await dlg.waitFor({ state: "detached", timeout: 5000 });
+    assert(stWrites(del).length === 0, "Esc on the delete question sent a request");
+    await stCard(page, "gpt-6.1-terra").locator("[data-testid=model-menu]").click(); await page.locator("[data-testid=model-delete]").click();
+    await stHold(page);
+    await stWaitWrites(del, 1, "删除"); stSame(del, SB.models.del.sent, "删除");
+    await asToast(page, "已删除。");
+    await stCard(page, "gpt-6.1-terra").waitFor({ state: "detached", timeout: 10000 });
+  } finally { await del.close(); }
+  done.push("delete");
+  // the draft across the 1024 line
+  const cross = await stOpen(ctx, "settings model cross 1024", "models", ST_MODELS);
+  try {
+    const { page } = cross;
+    await stOpenAdd(page);
+    await page.locator("#model-display").fill("跨断点草稿"); await page.locator("#model-model").fill("draft-model"); await page.locator("#model-key").fill(ST_KEY1);
+    const read = () => page.evaluate(() => ({ display: document.querySelector("#model-display")?.value, model: document.querySelector("#model-model")?.value, key: document.querySelector("#model-key")?.value, name: document.querySelector("#model-name")?.value, dialogs: document.querySelectorAll("[data-testid=model-dialog]").length }));
+    const first = await read();
+    for (const width of [800, 1440, 600, 1300]) {
+      await page.setViewportSize({ width, height: 900 }); await page.waitForTimeout(500);
+      await page.locator("#model-display").waitFor({ timeout: 5000 });
+      const now = await read();
+      assert(JSON.stringify(now) === JSON.stringify(first), `at ${width}px the draft is ${JSON.stringify(now)}, it was ${JSON.stringify(first)}`);
+    }
+    assert(stWrites(cross).length === 0, "crossing the breakpoint sent something");
+  } finally { await cross.close(); }
+  done.push("draft across 1024 (800, 1440, 600, 1300)");
+  return done.join(", ");
+}
+
+/** 服务商可用模型: asked once on opening an entry that can be asked, again after the key is typed (delayed) and on 刷新, with the old bodies; at most five candidates, one fills Model ID; the refusals and the empty answers are said as the old page said them. */
+async function settingsModelDiscovery(ctx) {
+  const view = await stOpen(ctx, "settings model discovery", "models", ST_MODELS);
+  try {
+    const { page } = view;
+    await stOpenEdit(page, "deepseek-flash");
+    await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? ""), null, { timeout: 15000 });
+    const asked = () => view.mock.requests.filter((r) => r.method === "POST" && /model-catalog\/models$/.test(r.path)).length;
+    assert(asked() === SB.models.discovery.onOpen.sent.length, `opening asked ${asked()} time(s), the old page ${SB.models.discovery.onOpen.sent.length}`);
+    assert(JSON.stringify(stAll(view).map((w) => JSON.stringify(w.body))) === JSON.stringify(SB.models.discovery.onOpen.sent.map((r) => r.body)), "the body asked on opening differs from the old page's");
+    await page.locator("[data-testid=model-discovered]").click();
+    const options = await page.getByRole("option").allInnerTexts();
+    assert(options.length === 5 && options[2].trim() === "Beta 2 · beta-2", `the candidates are ${JSON.stringify(options)} (five at most; a name differing from the ID is shown with it)`);
+    await page.getByRole("option", { name: "alpha-1-mini", exact: true }).click();
+    assert((await page.locator("#model-model").inputValue()) === SB.models.discovery.picked.modelId, "the chosen candidate did not fill Model ID");
+    // typing a key: nothing at once, the status says it will follow, then one request
+    const n = asked();
+    await page.locator("#model-key").fill(ST_KEY2);
+    assert(asked() === n && /自动获取/.test(await page.locator("[data-testid=model-discovery-status]").innerText()), "typing a key asked at once or did not say it will follow");
+    await page.waitForTimeout(1300);
+    assert(asked() === n + 1, `after the key was typed the list was asked ${asked() - n} time(s)`);
+    const last = stAll(view).filter((w) => w.path === "/model-catalog/models").at(-1);
+    assert(JSON.stringify(last.body) === SB.models.discovery.afterKey.sent[0].body, `the body after typing a key was ${JSON.stringify(last.body)}`);
+    await page.locator("[data-testid=model-refresh]").click(); await page.waitForTimeout(500);
+    assert(asked() === n + 2, "刷新 did not ask once");
+    const refreshed = stAll(view).filter((w) => w.path === "/model-catalog/models").at(-1);
+    assert(JSON.stringify(refreshed.body) === SB.models.discovery.refresh.sent[0].body, `the body of 刷新 was ${JSON.stringify(refreshed.body)}`);
+  } finally { await view.close(); }
+  // the other answers
+  const says = [["unsupported", "unsupported"], ["empty", "empty"], ["model_discovery_auth_required", "model_discovery_auth_required"], ["model_discovery_access_denied", "model_discovery_access_denied"], ["model_discovery_rate_limited", "model_discovery_rate_limited"], ["model_discovery_timeout", "model_discovery_timeout"], ["some_other_code", "some_other_code"]];
+  for (const [mode, key] of says) {
+    const v = await stOpen(ctx, `settings model discovery ${mode}`, "models", ST_MODELS);
+    try {
+      const { page } = v; v.mock.state.settings.discovery = mode;
+      await stOpenEdit(page, "deepseek-flash");
+      const want = SB.models.discovery[key].status[0];
+      await page.waitForFunction((text) => (document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? "") === text, want, { timeout: 15000 }).catch(async () => { throw new Error(`${mode}: the status is "${await page.locator("[data-testid=model-discovery-status]").innerText()}", the old page said "${want}"`); });
+      assert(await page.locator("[data-testid=model-discovered]").isDisabled(), `${mode}: the candidate list is usable with no candidates`);
+    } finally { await v.close(); }
+  }
+  // a new entry: no key, no request; a keyless provider asks at once
+  const fresh = await stOpen(ctx, "settings model discovery add", "models", ST_MODELS);
+  try {
+    const { page } = fresh;
+    await stOpenAdd(page); await page.waitForTimeout(900);
+    assert(stAll(fresh).length === 0, "an add form with no key asked for models");
+    await asPick(page, page.locator("[data-testid=model-provider]"), "OpenRouter");
+    await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? ""), null, { timeout: 15000 });
+    assert(stAll(fresh).filter((w) => w.path === "/model-catalog/models").length === 1, "a keyless provider did not ask exactly once");
+  } finally { await fresh.close(); }
+  return "opening an entry with a stored key asks once (old body); a typed key asks once after the delay, 刷新 asks once; five candidates, one fills Model ID; unsupported / empty / four codes / an unknown code say what the old page said (the four codes show the generic sentence there too); an add form asks nothing until a key or a keyless provider";
+}
+
+/** A model that comes from the catalog file has no 编辑, 设为默认 or 删除 and says why; 对话默认 cannot be set to it; a missing key is said in words. */
+async function settingsModelConfigFile(ctx) {
+  const view = await stOpen(ctx, "settings model config file", "models", ST_MODELS, { state: stateModelsReadonly() });
+  try {
+    const { page } = view;
+    const files = page.locator("[data-testid=model-card][data-origin=file]");
+    assert((await files.count()) === 2, `${await files.count()} cards from the file, expected 2`);
+    for (let i = 0; i < 2; i += 1) {
+      const card = files.nth(i);
+      assert((await card.locator("button").count()) === 0, "a card from the file has a button");
+      assert((await card.locator("[data-testid=model-readonly-note]").innerText()).trim() === "服务器配置文件里的模型只能在服务器上改。", "a card from the file does not say why it has no buttons");
+    }
+    assert((await page.locator("[data-testid=model-card][data-origin=server] [data-testid=model-edit]").count()) === 5, "the models saved on the server lost their 编辑");
+    const note = (await page.locator("[data-testid=config-file-note]").innerText()).replace(/\s+/g, " ");
+    assert(note.includes("服务器配置文件里的模型只能在服务器上改。") && note.includes("配置文件有问题：1"), `the file note is "${note}"`);
+    const missing = (await page.locator("[data-testid=model-card][data-model=qwen-max] [data-testid=model-key-status]").innerText()).trim();
+    assert(missing === "缺 key" && (await page.locator("[data-testid=model-card][data-model=qwen-max]").innerText()).includes("QWEN_API_KEY"), `the model without a key says "${missing}"`);
+    // 对话默认: the ones from the file are shown and cannot be picked
+    await page.locator("[data-testid=role-chat]").click();
+    const items = await page.getByRole("option").evaluateAll((o) => o.map((x) => ({ text: x.textContent, disabled: x.getAttribute("aria-disabled") === "true" || x.hasAttribute("data-disabled") })));
+    assert(items.length === 7 && items.filter((x) => x.disabled).length === 2 && items.filter((x) => x.disabled).every((x) => /Kimi K3|Qwen Max/.test(x.text)), `the 对话默认 choices are ${JSON.stringify(items)}`);
+    await page.keyboard.press("Escape");
+    assert(stWrites(view).length === 0, "something was sent");
+    // a catalog whose default is a file entry still shows it
+    const state = stateModelsReadonly(); state.settings.catalog.default = "kimi-k3"; state.settings.catalog.models.forEach((m) => { m.is_default = m.name === "kimi-k3"; });
+    const second = await stOpen(ctx, "settings model config file default", "models", ST_MODELS, { state });
+    try { const shown = (await second.page.locator("[data-testid=role-chat]").innerText()).trim(); assert(shown.startsWith("Kimi K3"), `a default from the file is shown as "${shown}"`); } finally { await second.close(); }
+  } finally { await view.close(); }
+  return "2 file entries: no button, the old sentence on each, the file note with its problem count; 5 server entries keep 编辑; 缺 key said in words with the variable; 对话默认 lists the file entries disabled and shows one when it is the default";
+}
+
+/** The role table: five rows in one table, a choice is saved at once with the old body (back to 不指定 is null / DELETE), no save button, and the page reads the roles and the catalog once. */
+async function settingsRolesOneTable(ctx) {
+  const view = await stOpen(ctx, "settings roles", "models", ST_MODELS);
+  try {
+    const { page } = view;
+    const rows = await page.locator("[data-testid=roles-table] [data-testid=role-row]").evaluateAll((r) => r.map((x) => x.dataset.role));
+    assert(JSON.stringify(rows) === JSON.stringify(["chat", "earnings", "forecast", "judge", "analysis"]), `the rows are ${JSON.stringify(rows)}`);
+    const reads = (re) => view.mock.requests.filter((r) => r.method === "GET" && re.test(r.path)).length;
+    assert(reads(/model-roles$/) === 1 && reads(/model-catalog$/) === 1 && reads(/analysis-settings$/) === 1, `reads on entering: roles ${reads(/model-roles$/)}, catalog ${reads(/model-catalog$/)}, analysis ${reads(/analysis-settings$/)} (one each; the old page read 3, 2, 1)`);
+    assert((await page.locator("[data-testid=roles-card]").getByRole("button", { name: /保存|设为默认|恢复/ }).count()) === 0, "the table has a save button");
+    const options = [];
+    for (const r of ["earnings", "forecast", "judge"]) { await page.locator(`[data-testid=role-${r}]`).click(); await page.getByRole("option").first().waitFor({ timeout: 5000 }); const o = await page.getByRole("option").allInnerTexts(); await page.keyboard.press("Escape"); await page.getByRole("option").first().waitFor({ state: "detached", timeout: 5000 }); options.push(o.map((x) => x.trim())); }
+    SB.models.roleLabels.forEach((l, i) => assert(JSON.stringify(options[i]) === JSON.stringify(l.options), `row ${l.label} offers ${JSON.stringify(options[i])}, the old select offered ${JSON.stringify(l.options)}`));
+    for (const [i, role] of ["earnings", "forecast", "judge"].entries()) {
+      const before = stWrites(view).length;
+      await asPick(page, page.locator(`[data-testid=role-${role}]`), "DeepSeek Flash");
+      await stWaitWrites(view, before + 1, `${role} → DeepSeek Flash`); stSame(view, SB.roles.change[role].sent, `${role} chosen`, before);
+      await asToast(page, "已保存。");
+      const back = stWrites(view).length;
+      await asPick(page, page.locator(`[data-testid=role-${role}]`), SB.models.roleLabels[i].options[0]);
+      await stWaitWrites(view, back + 1, `${role} → 不指定`); stSame(view, SB.roles.back[role].sent, `${role} back to 不指定`, back);
+      assert(stWrites(view).at(-1).body.model === null, `${role}: 不指定 is not null`);
+    }
+    // 材料分析: a choice is saved at once; back to the system default is a DELETE
+    const a = stWrites(view).length;
+    await asPick(page, page.locator("[data-testid=role-analysis]"), "DeepSeek Flash · deepseek-ai/DeepSeek-V4-Flash");
+    await stWaitWrites(view, a + 1, "材料分析 → 模型"); stSame(view, SB.analysis.save.sent, "材料分析 chosen", a);
+    assert(stWrites(view).at(-1).method === "PUT", "材料分析 is not a PUT");
+    await asToast(page, "已保存。下一次材料分析将使用这个默认模型。");
+    const cur = (await page.locator("[data-testid=analysis-current]").innerText()).replace(/\s+/g, " ").trim();
+    assert(cur === "当前默认：siliconflow · deepseek-ai/DeepSeek-V4-Flash · API key 已保存", `the 当前默认 line is "${cur}"`);
+    const b = stWrites(view).length;
+    await asPick(page, page.locator("[data-testid=role-analysis]"), "系统默认（DeepSeek 环境配置）");
+    await stWaitWrites(view, b + 1, "材料分析 → 系统默认"); stSame(view, SB.analysis.reset.sent, "材料分析 back", b);
+    assert(stWrites(view).at(-1).method === "DELETE", "材料分析 back to the system default is not a DELETE");
+    // the chat default
+    const c = stWrites(view).length;
+    await asPick(page, page.locator("[data-testid=role-chat]"), "Muse Ember");
+    await stWaitWrites(view, c + 1, "对话默认"); stSame(view, SB.models.def.sent, "对话默认", c);
+  } finally { await view.close(); }
+  // the one with no model at all: three rows are not there, the material row says so
+  const empty = await stOpen(ctx, "settings roles empty", "models", "[data-testid=models-empty]", { state: stateModelsEmpty() });
+  try {
+    const { page } = empty;
+    const rows = await page.locator("[data-testid=role-row]").evaluateAll((r) => r.map((x) => x.dataset.role));
+    assert(JSON.stringify(rows) === JSON.stringify(["analysis"]), `with an empty catalog the rows are ${JSON.stringify(rows)}`);
+    assert((await page.locator("[data-testid=analysis-no-models]").innerText()).trim() === "模型目录里还没有可用的模型；请先在上方添加并测试一个。", "the empty-catalog sentence is missing");
+    assert((await page.locator("[data-testid=models-empty]").innerText()).includes("目录是空的：先添加一个模型，bot 才能回答。"), "the empty-catalog sentence of the catalog is missing");
+  } finally { await empty.close(); }
+  return "five rows in one table, no save button, one read of roles / catalog / analysis; each of 财报判断 / 预测 / 审查 sends the old PUT (back to 不指定 = null), 材料分析 PUT and DELETE, 对话默认 the old PUT default; an empty catalog keeps only the material row with the old sentence";
+}
+
+/** The shared Telegram bot in three steps: the step bar follows the server's state, the three writes send the old bodies, the token box is a password box that is empty once saved, the page asks again every 5 s only while a code made here is out and ends that by itself. */
+async function settingsTelegramThreeSteps(ctx) {
+  const GETS = (view) => view.mock.requests.filter((r) => r.method === "GET" && /\/telegram\/status$/.test(r.path)).length;
+  const states = (page) => page.locator("[data-testid=telegram-card] [data-step][data-state]").evaluateAll((l) => l.map((x) => x.dataset.state));
+  const view = await stOpen(ctx, "settings telegram steps", "notifications", "#telegram-token", { state: stateTelegramNoToken(), motion: true });
+  try {
+    const { page } = view;
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["current", "todo", "todo"]), `step 1: ${JSON.stringify(await states(page))}`);
+    const box = await page.locator("#telegram-token").evaluate((i) => ({ type: i.type, max: i.maxLength }));
+    assert(box.type === "password" && box.max === SB.telegram.noToken.tokenInput.max, `the token box is ${JSON.stringify(box)}`);
+    assert(await page.locator("[data-testid=telegram-save-token]").isDisabled(), "保存 Token is on with an empty box");
+    await page.locator("#telegram-token").fill("   ");
+    assert(await page.locator("[data-testid=telegram-save-token]").isDisabled() === SB.telegram.blankDisabled, "保存 Token is on with blanks");
+    await page.locator("#telegram-token").fill(`  ${ST_TOKEN}  `);
+    await page.locator("[data-testid=telegram-save-token]").click();
+    await stWaitWrites(view, 1, "保存 Token"); stSame(view, SB.telegram.token.sent, "保存 Token");
+    await page.waitForSelector("[data-testid=telegram-make-code]", { timeout: 10000 });
+    assert((await page.locator("#telegram-token").count()) === 0, "the token box is still there after the save");
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["done", "current", "todo"]), `step 2: ${JSON.stringify(await states(page))}`);
+    assert((await page.locator("[data-testid=telegram-card]").innerText()).includes(ST_TOKEN) === false, "the token is on the page after the save");
+    await asToast(page, "Bot Token 已保存。");
+    // no code yet: nothing is polled
+    const quiet = GETS(view); await page.waitForTimeout(5600);
+    assert(GETS(view) === quiet, `the page read the status ${GETS(view) - quiet} time(s) before any code was made`);
+    // the code
+    await page.locator("[data-testid=telegram-make-code]").click();
+    await stWaitWrites(view, 2, "生成绑定码"); stSame(view, SB.telegram.bind.sent, "生成绑定码", 1);
+    await page.locator("[data-testid=telegram-waiting]").waitFor({ timeout: 10000 });
+    const code = (await page.locator("[data-testid=telegram-code-line]").innerText()).replace(/\s+/g, " ");
+    assert(code === SB.telegram.bind.code[0], `the code line is "${code}", the old page "${SB.telegram.bind.code[0]}"`);
+    assert((await page.locator("[data-testid=telegram-waiting]").innerText()).trim() === SB.telegram.bind.status[0], "the 30-minute sentence differs");
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["done", "done", "waiting"]), `step 3: ${JSON.stringify(await states(page))}`);
+    await page.waitForSelector("[data-testid=telegram-make-code][data-phase=idle]", { timeout: 5000 });
+    assert((await page.locator("[data-testid=telegram-make-code]").innerText()).trim() === "重新生成", "the button does not say 重新生成 once a code is out");
+    // waiting: one read every 5 s
+    const at = GETS(view); await page.waitForTimeout(5800);
+    const during = GETS(view) - at;
+    assert(during === 1, `while waiting the page read the status ${during} time(s) in 5.8 s (expected one)`);
+    // the message arrives from Telegram: the page notices by itself and stops asking
+    view.mock.state.settings.telegram = { configured: true, has_token: true, bound: true, bot_username: "finbot_fixture_bot", chat_id: 100000001, bound_at: "2026-11-13T02:00:00.000Z", bind_code_active: false };
+    await page.waitForSelector("[data-testid=telegram-unbind]", { timeout: 9000 });
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["done", "done", "done"]), `bound: ${JSON.stringify(await states(page))}`);
+    const status = (await page.locator("[data-testid=telegram-status]").innerText()).trim();
+    assert(status === "已绑定 @finbot_fixture_bot (chat 100000001)", `the status line is "${status}"`);
+    const stopped = GETS(view); await page.waitForTimeout(5800);
+    assert(GETS(view) === stopped, `the page kept reading the status after the binding (${GETS(view) - stopped} more)`);
+    // 解除绑定: Esc sends nothing, holding sends the old request, the steps start over at the code
+    const n = stWrites(view).length;
+    await page.locator("[data-testid=telegram-unbind]").click();
+    const dlg = page.locator('[data-slot="alert-dialog-content"]'); await dlg.waitFor({ timeout: 10000 });
+    assert((await dlg.locator('[data-slot="alert-dialog-title"]').innerText()).trim() === SB.telegram.unbindDialog.title && (await dlg.locator('[data-slot="alert-dialog-description"]').innerText()).trim() === SB.telegram.unbindDialog.description, "the unbind question is not the old one");
+    await page.keyboard.press("Escape"); await dlg.waitFor({ state: "detached", timeout: 5000 });
+    assert(stWrites(view).length === n, "Esc on the unbind question sent a request");
+    await page.locator("[data-testid=telegram-unbind]").click(); await stHold(page);
+    await stWaitWrites(view, n + 1, "解除绑定"); stSame(view, SB.telegram.unbind.sent, "解除绑定", n);
+    await page.waitForSelector("[data-testid=telegram-make-code]", { timeout: 10000 });
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["done", "current", "todo"]), `after the unbind: ${JSON.stringify(await states(page))}`);
+  } finally { await view.close(); }
+  // leaving the page ends the asking
+  const leave = await stOpen(ctx, "settings telegram leave", "notifications", "[data-testid=telegram-make-code]", { state: stateTelegramUnbound() });
+  try {
+    const { page } = leave;
+    await page.locator("[data-testid=telegram-make-code]").click(); await page.locator("[data-testid=telegram-waiting]").waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=settings-nav-appearance]").click(); await page.waitForSelector("[data-testid=settings-appearance-body]", { timeout: 10000 });
+    const gone = GETS(leave); await page.waitForTimeout(5800);
+    assert(GETS(leave) === gone, `after leaving the page the status was read ${GETS(leave) - gone} more time(s)`);
+  } finally { await leave.close(); }
+  // a code the server still holds that this page no longer has (after a reload): step 3, the old 重新生成, no asking
+  const reloaded = await stOpen(ctx, "settings telegram reloaded", "notifications", "[data-testid=telegram-make-code]", { state: (() => { const s = stateTelegramUnbound(); s.settings.telegram.bind_code_active = true; return s; })() });
+  try {
+    const { page } = reloaded;
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["done", "done", "waiting"]), `a live code, none held: ${JSON.stringify(await states(page))}`);
+    assert((await page.locator("[data-testid=telegram-make-code]").innerText()).trim() === "重新生成", "a live code with none held does not offer 重新生成");
+    const seen = GETS(reloaded); await page.waitForTimeout(5800);
+    assert(GETS(reloaded) === seen, "the page asks while it holds no code");
+  } finally { await reloaded.close(); }
+  return "step bar: current / done / waiting / all done from the server's state; token saved with the old body, box is a password box (256) and gone after the save; no asking before a code; one read per 5 s while waiting, stops when bound and after leaving; a live code with none held is step 3 with 重新生成 and no asking; unbind needs the hold (Esc sends nothing) and sends the old request";
+}
+
+/** Pushover: the two values go as typed minus the blanks, the button needs both, the boxes are empty after the save, 清除 sends the old DELETE. */
+async function settingsPushover(ctx) {
+  const view = await stOpen(ctx, "settings pushover", "notifications", "[data-testid=pushover-card]");
+  try {
+    const { page } = view;
+    const boxes = await page.locator("#pushover-user, #pushover-app").evaluateAll((l) => l.map((i) => ({ type: i.type, max: i.maxLength })));
+    assert(JSON.stringify(boxes) === JSON.stringify(SB.pushover.initial.inputs.map((i) => ({ type: i.type, max: i.max }))), `the boxes are ${JSON.stringify(boxes)}`);
+    assert((await page.locator("[data-testid=pushover-status]").innerText()).trim() === "尚未配置", "the status is not 尚未配置 at the start");
+    await page.locator("#pushover-user").fill("  "); await page.locator("#pushover-app").fill(ST_PUSH_APP);
+    assert((await page.locator("[data-testid=pushover-save]").isDisabled()) === SB.pushover.oneFilled.saveDisabled, "the button is on with one value");
+    await page.locator("#pushover-user").fill(`  ${ST_PUSH_USER}  `); await page.locator("#pushover-app").fill(`  ${ST_PUSH_APP}  `);
+    await page.locator("[data-testid=pushover-save]").click();
+    await stWaitWrites(view, 1, "保存 Pushover"); stSame(view, SB.pushover.save.sent, "保存 Pushover");
+    await asToast(page, "Pushover 已保存。");
+    await page.waitForFunction(() => document.querySelector("[data-testid=pushover-status]")?.textContent?.trim() === "已配置", null, { timeout: 10000 });
+    const values = await page.locator("#pushover-user, #pushover-app").evaluateAll((l) => l.map((i) => i.value));
+    assert(JSON.stringify(values) === JSON.stringify(SB.pushover.save.inputsAfter), `the boxes after the save: ${JSON.stringify(values)}`);
+    const labels = await page.locator("[data-testid=pushover-save], [data-testid=pushover-clear]").evaluateAll((l) => l.map((b) => b.textContent));
+    assert(labels.length === SB.pushover.save.buttons.length && SB.pushover.save.buttons.every((want, i) => labels[i].includes(want)), `the buttons after the save are ${JSON.stringify(labels)}, the old page ${JSON.stringify(SB.pushover.save.buttons)}`);
+    await page.locator("[data-testid=pushover-clear]").click();
+    await stWaitWrites(view, 2, "清除 Pushover"); stSame(view, SB.pushover.clear.sent, "清除 Pushover", 1);
+    assert(stWrites(view).at(-1).method === "DELETE", "清除 is not a DELETE");
+    await asToast(page, "Pushover 已清除。");
+    await page.waitForFunction(() => document.querySelector("[data-testid=pushover-status]")?.textContent?.trim() === "尚未配置", null, { timeout: 10000 });
+    // the clear asks nothing first (as the old page did)
+    assert((await page.locator('[data-slot="alert-dialog-content"]').count()) === 0, "清除 asks a question first");
+  } finally { await view.close(); }
+  return "two password boxes (64), the button needs both; PUT with both trimmed, boxes empty, 已配置; 清除 = DELETE with no question, 尚未配置";
+}
+
+/** No key, token or Pushover value is kept by the browser or shown again: after each save they are in no storage, no text, no box and no console line; no last four characters; every secret box is a password box. */
+async function settingsNoSecretInStorage(ctx) {
+  const SECRETS = [ST_KEY1, ST_KEY2, ST_TOKEN, ST_PUSH_USER, ST_PUSH_APP];
+  const state = stateTelegramNoToken(); state.settings.analysis.api_key_last4 = "9a1c";   // what a server may send: the page must not show it
+  const view = await stOpen(ctx, "settings no secret", "models", ST_MODELS, { state });
+  const scan = async (what) => {
+    const { page } = view;
+    const found = await page.evaluate((secrets) => {
+      const hit = (text) => secrets.filter((s) => text.includes(s));
+      const store = (s) => { try { return Object.entries(s).map(([k, v]) => `${k}=${v}`).join("\n"); } catch { return ""; } };
+      const inputs = [...document.querySelectorAll("input, textarea")].map((i) => i.value).join("\n");
+      return { local: hit(store(localStorage)), session: hit(store(sessionStorage)), text: hit(document.body.innerText), inputs: hit(inputs), hash: hit(location.href), cookie: hit(document.cookie), shown: /…\s*9a1c|9a1c/.test(document.body.innerText), tails: [...document.body.innerText.matchAll(/（…\w{4}）|\(…\w{4}\)/g)].length };
+    }, SECRETS);
+    const gotConsole = SECRETS.filter((s) => view.consoleTexts.some((t) => t.includes(s)));
+    assert(!found.local.length && !found.session.length, `${what}: a secret is in browser storage (${JSON.stringify(found)})`);
+    assert(!found.text.length && !found.inputs.length && !found.hash.length && !found.cookie.length, `${what}: a secret is on the page or in a box (${JSON.stringify(found)})`);
+    assert(!found.shown && found.tails === 0, `${what}: the page shows the last characters of a key`);
+    assert(!gotConsole.length, `${what}: a secret is in the console: ${gotConsole}`);
+  };
+  try {
+    const { page } = view;
+    // typed but not saved: the draft is only in the dialog's box
+    await stOpenAdd(page);
+    assert((await page.locator("#model-key").getAttribute("type")) === "password", "the model's API key box is not a password box");
+    await page.locator("#model-display").fill("密钥检查"); await page.locator("#model-model").fill("deepseek-chat"); await page.locator("#model-key").fill(ST_KEY1);
+    const during = await page.evaluate((s) => [localStorage, sessionStorage].map((st) => Object.entries(st).some(([k, v]) => `${k}=${v}`.includes(s))), ST_KEY1);
+    assert(!during[0] && !during[1], "the typed key is in a storage while the dialog is open");
+    await page.waitForTimeout(900);
+    await page.locator("[data-testid=model-test-save]").click(); await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+    await scan("after a new model");
+    assert((await page.locator("[data-testid=analysis-current]").innerText()).includes("API key 已保存") && !/9a1c/.test(await page.locator("[data-testid=analysis-current]").innerText()), "the material-analysis line shows the key's last characters or lost 「API key 已保存」");
+    await stOpenEdit(page, "glm5.3-flash");
+    assert((await page.locator("#model-key").inputValue()) === "", "an edit starts with the key box filled");
+    await page.locator("#model-key").fill(ST_KEY2); await page.waitForTimeout(900);
+    await page.locator("[data-testid=model-test-save]").click(); await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+    await scan("after a new key");
+    assert((await page.locator("[data-testid=model-card][data-model=\"glm5.3-flash\"]").innerText()).includes("已配置"), "the card does not say 已配置");
+    // Telegram
+    await page.locator("[data-testid=settings-nav-notifications]").click(); await page.waitForSelector("#telegram-token", { timeout: 10000 });
+    assert((await page.locator("#telegram-token").getAttribute("type")) === "password", "the token box is not a password box");
+    assert((await page.locator("#pushover-user").getAttribute("type")) === "password" && (await page.locator("#pushover-app").getAttribute("type")) === "password", "a Pushover box is not a password box");
+    await page.locator("#telegram-token").fill(ST_TOKEN); await page.locator("[data-testid=telegram-save-token]").click(); await page.waitForSelector("[data-testid=telegram-make-code]", { timeout: 10000 });
+    await scan("after the token");
+    // Pushover
+    await page.locator("#pushover-user").fill(ST_PUSH_USER); await page.locator("#pushover-app").fill(ST_PUSH_APP); await page.locator("[data-testid=pushover-save]").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=pushover-status]")?.textContent?.trim() === "已配置", null, { timeout: 10000 });
+    await scan("after Pushover");
+    // and a reload shows none of it again
+    await page.reload({ waitUntil: "load" }); await page.waitForSelector("[data-testid=pushover-card]", { timeout: 20000 }); await settle(page, { pinTranscript: false });
+    await scan("after a reload");
+    const secretBoxes = await page.evaluate(() => [...document.querySelectorAll("input")].filter((i) => /key|token|secret|pass/i.test(`${i.id} ${i.name} ${i.getAttribute("aria-label") ?? ""}`)).map((i) => i.type));
+    assert(secretBoxes.every((t) => t === "password"), `a secret-looking box is not a password box: ${JSON.stringify(secretBoxes)}`);
+  } finally { await view.close(); }
+  return "the typed key is in no storage even while the dialog is open; after a new model, a new key, the Telegram token and Pushover: no secret in localStorage, sessionStorage, the page text, any box, the address or the console; the server's last four characters (9a1c) are not shown; every secret box is a password box and starts empty";
+}
+
+/** Theme (3), language (2) and the up / down colours (2) take effect and are kept at once, writing the old keys and values, sending nothing; the arrow keys alone change them; a reload keeps them; English asks for its words once. */
+async function settingsAppearance(ctx) {
+  const dump = (page) => page.evaluate(() => ({ storage: Object.fromEntries(Object.entries(localStorage).filter(([k]) => /:(theme|updown|locale|motion):v1$/.test(k)).sort()), html: { theme: document.documentElement.dataset.theme ?? null, updown: document.documentElement.dataset.updown ?? null, motion: document.documentElement.dataset.motion ?? null, lang: document.documentElement.lang } }));
+  const same = (got, want, what) => assert(JSON.stringify(got) === JSON.stringify(want), `${what}: ${JSON.stringify(got)}, the old page left ${JSON.stringify(want)}`);
+  const writesOf = (view) => view.mock.requests.filter((r) => r.method !== "GET").length;
+  for (const choice of ["dark", "system", "light"]) {
+    const view = await stOpen(ctx, `settings appearance theme ${choice}`, "appearance", "[data-testid=appearance-theme-choice]");
+    try {
+      const { page } = view;
+      await page.locator(`[data-testid=appearance-theme-choice] label[data-option=${choice}]`).click(); await page.waitForTimeout(250);
+      const got = await dump(page);
+      same({ storage: got.storage, html: got.html }, { storage: SB.appearance.theme[choice].storage, html: SB.appearance.theme[choice].html }, `theme ${choice}`);
+      await page.reload({ waitUntil: "load" }); await page.waitForSelector("[data-testid=appearance-theme-choice]", { timeout: 20000 });
+      same(await dump(page), SB.appearance.theme[choice].afterReload, `theme ${choice} after a reload`);
+      assert((await page.locator("[data-testid=appearance-theme-choice] input:checked").getAttribute("value")) === choice, `after a reload the row does not show ${choice}`);
+      assert(writesOf(view) === 0, "a theme choice sent a request");
+    } finally { await view.close(); }
+  }
+  for (const [choice, label] of [["red-up", "红涨绿跌"], ["green-up", "绿涨红跌"]]) {
+    const view = await stOpen(ctx, `settings appearance updown ${choice}`, "appearance", "[data-testid=appearance-updown-choice]");
+    try {
+      const { page } = view;
+      const options = (await page.locator("[data-testid=appearance-updown-choice] label").allInnerTexts()).map((s) => s.trim());
+      same(options, SB.appearance.updown.options, "the up / down choices");
+      // (the old select did not fire for the choice already picked; a row of choices keeps the one pressed, so green-up is reached by leaving it first)
+      if (choice === "green-up") { await page.locator("[data-testid=appearance-updown-choice] label[data-option=red-up]").click(); await page.waitForTimeout(150); }
+      await page.locator(`[data-testid=appearance-updown-choice] label[data-option=${choice}]`).click(); await page.waitForTimeout(250);
+      const want = choice === "green-up" ? { storage: { ...SB.appearance.updown[choice].storage, "market-evidence-agent:updown:v1": "green-up" }, html: SB.appearance.updown[choice].html } : { storage: SB.appearance.updown[choice].storage, html: SB.appearance.updown[choice].html };
+      same(await dump(page), want, `updown ${choice}`);
+      await page.reload({ waitUntil: "load" }); await page.waitForSelector("[data-testid=appearance-updown-choice]", { timeout: 20000 });
+      same((await dump(page)).html, SB.appearance.updown[choice].afterReload.html, `updown ${choice} after a reload`);
+      assert(((await page.locator("[data-testid=appearance-updown-choice] label:has(input:checked)").innerText()).trim()) === label, `the row after a reload shows another choice than ${label}`);
+    } finally { await view.close(); }
+  }
+  // the language: English fetches its words once, the page is English at once and after a reload; back to 中文
+  const lang = await stOpen(ctx, "settings appearance locale", "appearance", "[data-testid=appearance-locale-choice]");
+  try {
+    const { page } = lang;
+    const chunks = []; page.on("request", (r) => { if (/\/assets\/en-US-[^/]+\.js$/.test(new URL(r.url()).pathname)) chunks.push(r.url()); });
+    await page.locator("[data-testid=appearance-locale-choice] label[data-option=en-US]").click(); await page.waitForFunction(() => document.documentElement.lang === "en-US", null, { timeout: 10000 });
+    same(await dump(page), { storage: SB.appearance.locale["en-US"].storage, html: SB.appearance.locale["en-US"].html }, "language English");
+    assert(chunks.length === SB.appearance.locale["en-US"].localeChunks, `English asked for its words ${chunks.length} time(s)`);
+    await page.waitForFunction(() => document.querySelector("h1")?.textContent?.trim() === "Appearance", null, { timeout: 10000 }).catch(async () => { throw new Error(`the title is "${await page.locator("h1").innerText()}", not English`); });
+    await page.reload({ waitUntil: "load" }); await page.waitForSelector("[data-testid=appearance-locale-choice]", { timeout: 20000 });
+    assert((await page.evaluate(() => document.documentElement.lang)) === "en-US", "a reload left English");
+    await page.locator("[data-testid=appearance-locale-choice] label[data-option=zh-CN]").click(); await page.waitForFunction(() => document.documentElement.lang === "zh-CN", null, { timeout: 10000 });
+    same(await dump(page), { storage: SB.appearance.locale["zh-CN"].storage, html: SB.appearance.locale["zh-CN"].html }, "language 中文");
+  } finally { await lang.close(); }
+  // only the arrow keys
+  const keys = await stOpen(ctx, "settings appearance keys", "appearance", "[data-testid=appearance-theme-choice]");
+  try {
+    const { page } = keys;
+    await page.locator("[data-testid=appearance-theme-choice] input:checked").focus();
+    await page.keyboard.press("ArrowRight"); await page.waitForFunction(() => document.documentElement.dataset.theme === "dark", null, { timeout: 5000 });
+    await page.keyboard.press("ArrowLeft"); await page.waitForFunction(() => document.documentElement.dataset.theme === "light", null, { timeout: 5000 });
+    await page.locator("[data-testid=appearance-updown-choice] input:checked").focus(); await page.keyboard.press("ArrowRight");
+    await page.waitForFunction(() => document.documentElement.dataset.updown === "red-up", null, { timeout: 5000 });
+    await page.locator("[data-testid=appearance-locale-choice] input:checked").focus(); await page.keyboard.press("ArrowRight");
+    await page.waitForFunction(() => document.documentElement.lang === "en-US", null, { timeout: 10000 });
+  } finally { await keys.close(); }
+  return "theme ×3, up / down ×2, language ×2: <html> attributes and the four stored keys equal the old page's, kept after a reload, no request; English fetches its chunk once; the arrow keys alone change all three";
+}
+
+/** The local archive: export names the old file, importing opens it read-only with the old words and the choice of conversation, 返回当前对话 works, a browser that cannot write a file says so, nothing goes to the server. */
+async function settingsArchive(ctx) {
+  const stamp = "2026-11-12T08:00:00.000Z";
+  const file = { marker: "market-evidence-agent-chat-archive", version: 1, created_at: stamp, updated_at: stamp, conversations: [{ id: "archived-1", created_at: stamp, updated_at: stamp, messages: [{ role: "user", content: "归档里的问题" }, { role: "assistant", content: "归档里的回答", status: "complete" }] }, { id: "archived-2", created_at: stamp, updated_at: "2026-11-11T08:00:00.000Z", messages: [{ role: "user", content: "第二个问题" }] }] };
+  const view = await stOpen(ctx, "settings archive", "data", "[data-testid=archive-card]");
+  try {
+    const { page } = view;
+    const buttons = (await page.locator("[data-testid=archive-card] button").allInnerTexts()).map((s) => s.trim());
+    assert(JSON.stringify(buttons) === JSON.stringify(SB.archive.initial.buttons), `the buttons are ${JSON.stringify(buttons)}`);
+    assert((await page.locator("[data-testid=archive-card]").innerText()).includes("归档仅供本地只读查看，不会作为模型上下文发送。"), "the archive sentence is missing");
+    assert((await page.locator("[data-testid=data-where]").innerText()).includes("消息和研究工具轨迹会保存到服务端；工具按权限读取资料并执行明确请求的系统任务。"), "the sentence on where the data goes is missing");
+    await page.locator("[data-testid=archive-export]").click(); await page.waitForTimeout(300);
+    assert(JSON.stringify(await page.evaluate(() => window.__downloads)) === JSON.stringify(SB.archive.export.downloads), `the export is named ${JSON.stringify(await page.evaluate(() => window.__downloads))}`);
+    assert((await page.locator("[data-testid=archive-file-input]").getAttribute("accept")) === SB.archive.import.fileInput.accept, "the file box takes other files than the old one");
+    await page.locator("[data-testid=archive-file-input]").setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(file)) });
+    await page.locator("[data-testid=archive-view]").waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=archive-status]").innerText()).trim() === SB.archive.import.status[0], "the status after the import differs");
+    assert((await page.locator("[data-testid=archive-view]").innerText()).includes("本地归档只读查看；这些内容不会发送给模型，也不是已核验的服务端证据。"), "the read-only sentence is missing");
+    await page.locator("[data-testid=archive-pick]").click();
+    const options = (await page.getByRole("option").allInnerTexts()).map((s) => s.trim());
+    assert(JSON.stringify(options) === JSON.stringify(SB.archive.import.options), `the conversations are ${JSON.stringify(options)}, the old page ${JSON.stringify(SB.archive.import.options)}`);
+    await page.getByRole("option").nth(1).click();
+    assert((await page.locator("[data-testid=archive-pick]").innerText()).trim() === SB.archive.import.options[1], "the second conversation was not chosen");
+    await page.locator("[data-testid=archive-return]").click();
+    await page.locator("[data-testid=archive-view]").waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.locator("[data-testid=archive-status]").innerText()).trim() === SB.archive.back.status[0], "the status after 返回当前对话 differs");
+    assert((await page.evaluate(() => location.hash)) === SB.archive.back.hash, "返回当前对话 left the page");
+    assert(view.mock.requests.filter((r) => r.method !== "GET").length === 0, "the archive sent a write");
+  } finally { await view.close(); }
+  const bad = await stOpen(ctx, "settings archive unsupported", "data", "[data-testid=archive-card]");
+  try {
+    const { page } = bad;
+    await page.evaluate(() => { delete window.showSaveFilePicker; });
+    await page.locator("[data-testid=archive-connect]").click();
+    await page.locator("[data-testid=archive-status]").waitFor({ timeout: 5000 });
+    assert((await page.locator("[data-testid=archive-status]").innerText()).trim() === SB.archive.unsupported.status[0], "a browser that cannot write a file does not say so in the old words");
+    await page.locator("[data-testid=archive-file-input]").setInputFiles({ name: "bad.json", mimeType: "application/json", buffer: Buffer.from("not json") });
+    await page.waitForFunction((text) => document.querySelector("[data-testid=archive-status]")?.textContent?.trim() === text, SB.archive.badFile.status[0], { timeout: 5000 });
+  } finally { await bad.close(); }
+  return "the three buttons and the export's file name as before; an imported file opens read-only with the old status, sentence and the two conversations (time · count), the second can be chosen, 返回当前对话 closes the view; no automatic file writing: the old sentence; a bad file: the old status; nothing sent";
+}
+
+/** 账户: the mode in words, where to switch and sign out (no button for either here), 关于: the version of package.json, the statement once in the whole settings area, the two third-party notices, a still picture. */
+async function settingsAbout(ctx) {
+  const pkg = JSON.parse(fs.readFileSync(path.resolve(flags.dist, "..", "package.json"), "utf8"));
+  const SENTENCE = "FinBot · 本地研究记录 · 研究判断可追溯到原始来源";
+  const view = await stOpen(ctx, "settings about", "account", "[data-testid=account-about]");
+  try {
+    const { page } = view;
+    assert((await page.locator("[data-testid=account-mode-name]").innerText()).trim() === "个人模式", "the mode is not 个人模式");
+    const content = page.locator("[data-testid=settings-account]");
+    const doers = await content.evaluate((el) => [...el.querySelectorAll("button, a, [role=button], [role=link], [role=menuitem]")].map((x) => x.textContent.trim()).filter((t) => /登出|切换|登录|退出|sign/i.test(t)));
+    assert(doers.length === 0, `the account page has a way to sign out / switch / sign in: ${JSON.stringify(doers)}`);
+    assert((await content.getByText("切换模式和登出都在侧栏底部的账户菜单里；手机上在「更多」里。").count()) === 1, "the pointer to the account menu is missing");
+    assert((await page.locator("[data-testid=account-version]").innerText()).trim() === pkg.version, `the version is "${await page.locator("[data-testid=account-version]").innerText()}", package.json says ${pkg.version}`);
+    const bloub = await page.locator("[data-testid=notice-bloub]").innerText(), fonts = await page.locator("[data-testid=notice-fonts]").innerText();
+    assert(/Bloub/.test(bloub) && /MIT/.test(bloub) && /Copyright \(c\) 2026 Jérémy Perret/.test(bloub), `the Bloub notice is "${bloub}"`);
+    assert(/Inter/.test(fonts) && /JetBrains Mono/.test(fonts) && /Source Serif 4/.test(fonts) && /OFL-1\.1/.test(fonts), `the fonts notice is "${fonts}"`);
+    const logo = await page.locator("[data-testid=account-logo]").evaluate((i) => ({ ok: i.complete && i.naturalWidth > 0, tag: i.tagName }));
+    assert(logo.ok && logo.tag === "IMG", `the picture is ${JSON.stringify(logo)}`);
+    assert((await page.locator("body").innerText()).split(SENTENCE).length - 1 === 1, "the statement is not on the account page exactly once");
+    for (const id of ST_SECTIONS.filter((x) => x !== "account")) {
+      await page.evaluate((h) => { location.hash = h; }, `#/settings/${id}`);
+      await page.waitForSelector(`[data-testid=settings-${id}-body]`, { timeout: 15000 }); await settle(page, { pinTranscript: false });
+      assert(!(await page.locator("body").innerText()).includes(SENTENCE), `the statement is also on the ${id} page`);
+    }
+  } finally { await view.close(); }
+  return `the mode in words, no sign-out / switch / sign-in control, the pointer to the account menu; version ${pkg.version} = package.json; Bloub (MIT, Copyright 2026 Jérémy Perret) and the three fonts (OFL-1.1) named; a still <img>; the statement once on 账户 and on none of the other four pages`;
+}
+
+/** A guest: 模型 and 通知 say to sign in and draw no form and send no owner request; 外观 and 数据 work; 账户 says 访客只读. */
+async function settingsGuest(ctx) {
+  const OWNER = /\/(model-catalog|model-roles|telegram|pushover)|analysis-settings/;
+  const view = await stOpen(ctx, "settings guest", "models", "[data-testid=settings-guest-note]", { identity: "guest" });
+  try {
+    const { page } = view;
+    assert((await page.locator("[data-testid=settings-guest-note]").innerText()).trim() === "登录个人聊天后才能配置模型：对话、bot 和定时任务都用服务器模型目录里的模型。", "the sign-in sentence on 模型 differs");
+    assert((await page.locator("[data-testid=model-card], [data-testid=roles-card], [data-testid=model-new]").count()) === 0, "a guest sees the catalog");
+    await page.evaluate(() => { location.hash = "#/settings/notifications"; });
+    await page.waitForSelector("[data-testid=settings-notifications] [data-testid=settings-guest-note]", { timeout: 15000 });
+    assert((await page.locator("[data-testid=settings-guest-note]").innerText()).includes("登录个人聊天后才能设置通知"), "the sign-in sentence on 通知 differs");
+    assert((await page.locator("[data-testid=telegram-card], [data-testid=pushover-card]").count()) === 0, "a guest sees the notification forms");
+    await settle(page, { pinTranscript: false });
+    const owner = view.mock.requests.filter((r) => OWNER.test(r.path));
+    assert(owner.length === 0, `a guest's settings pages sent owner requests: ${JSON.stringify(owner.map((r) => `${r.method} ${r.path}`))}`);
+    await page.evaluate(() => { location.hash = "#/settings/appearance"; });
+    await page.waitForSelector("[data-testid=appearance-theme-choice]", { timeout: 15000 });
+    await page.locator("[data-testid=appearance-theme-choice] label[data-option=dark]").click();
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "dark", null, { timeout: 5000 });
+    await page.evaluate(() => { location.hash = "#/settings/data"; });
+    await page.waitForSelector("[data-testid=archive-card]", { timeout: 15000 });
+    await page.evaluate(() => { location.hash = "#/settings/account"; });
+    await page.waitForSelector("[data-testid=account-mode-name]", { timeout: 15000 });
+    assert((await page.locator("[data-testid=account-mode-name]").innerText()).trim() === "访客只读", "a guest's mode is not 访客只读");
+    assert(view.mock.requests.filter((r) => OWNER.test(r.path)).length === 0, "an owner request went out later");
+  } finally { await view.close(); }
+  return "a guest: 模型 and 通知 show one sentence each (the old one for 模型), no form, no owner request; 外观 changes the theme; 数据 opens; 账户 says 访客只读";
+}
+
+/** The keyboard alone: the list of sub pages, the add dialog (filled, sent with Enter, Esc, focus back), a card's 「…」 menu, a role row, the first Telegram step. */
+async function settingsKeyboard(ctx) {
+  const view = await stOpen(ctx, "settings keyboard models", "models", ST_MODELS);
+  try {
+    const { page } = view;
+    await asTabTo(page, "[data-testid=settings-nav-appearance]"); await page.keyboard.press("Enter");
+    await page.waitForSelector("[data-testid=settings-appearance-body]", { timeout: 10000 });
+    await asTabTo(page, "[data-testid=settings-nav-models]"); await page.keyboard.press("Enter");
+    await page.waitForSelector(ST_MODELS, { timeout: 15000 });
+    // the dialog: opened with Enter, filled in field by field, sent with Enter, the focus back
+    await asTabTo(page, "[data-testid=model-new]"); await page.keyboard.press("Enter");
+    await stDialog(page).waitFor({ timeout: 10000 });
+    assert(await page.evaluate(() => document.activeElement?.id === "model-display"), "the focus did not go to the first field");
+    await page.keyboard.type("键盘模型");
+    await asTabTo(page, "#model-model"); await page.keyboard.type("deepseek-chat");
+    await asTabTo(page, "#model-key"); await page.keyboard.type(ST_KEY1);
+    await page.waitForTimeout(1000);
+    await page.keyboard.press("Enter");
+    await stWaitWrites(view, 2, "the dialog sent with Enter"); stSame(view, [{ method: "POST", path: "/agent-chat/model-catalog/test", body: JSON.stringify({ provider: "deepseek", base_url: "https://api.deepseek.com", model: "deepseek-chat", api_key: ST_KEY1 }) }, { method: "POST", path: "/agent-chat/model-catalog", body: JSON.stringify({ display_name: "键盘模型", provider: "deepseek", model: "deepseek-chat", base_url: "https://api.deepseek.com", api_key: ST_KEY1, name: "model" }) }], "the dialog filled and sent by the keyboard");
+    await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+    assert(await page.evaluate(() => document.activeElement?.getAttribute("data-testid") === "model-new"), "the focus did not come back to 添加模型 after saving");
+    // Esc closes and gives the focus back
+    await page.keyboard.press("Enter"); await stDialog(page).waitFor({ timeout: 10000 });
+    await page.keyboard.press("Escape"); await stDialog(page).waitFor({ state: "detached", timeout: 5000 });
+    assert(await page.evaluate(() => document.activeElement?.getAttribute("data-testid") === "model-new"), "the focus did not come back to 添加模型 after Esc");
+    // a card's 「…」 menu: Enter opens it, Esc closes it, the focus stays on the button
+    const menu = "[data-testid=model-card][data-model=muse-ember] [data-testid=model-menu]";
+    await asTabTo(page, menu); await page.keyboard.press("Enter");
+    await page.locator("[data-testid=model-set-default]").waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape"); await page.locator("[data-testid=model-set-default]").waitFor({ state: "detached", timeout: 5000 });
+    // (Radix hands the focus back after the menu has left the page: wait for that, do not read it in the same frame)
+    await page.waitForFunction((s) => document.activeElement?.matches(s), menu, { timeout: 5000 }).catch(() => { throw new Error("the focus left the menu's button after Esc"); });
+    // a role row: Enter opens the list, the arrows and Enter choose
+    const before = stWrites(view).length;
+    await asTabTo(page, "[data-testid=role-earnings]"); await page.keyboard.press("Enter");
+    await page.getByRole("option", { name: "DeepSeek Flash", exact: true }).focus(); await page.keyboard.press("Enter");
+    await stWaitWrites(view, before + 1, "a role chosen with the keyboard");
+    assert(JSON.stringify(stWrites(view).at(-1)) === JSON.stringify({ method: "PUT", path: "/model-roles/earnings", body: { model: "deepseek-flash" } }), `the role request was ${JSON.stringify(stWrites(view).at(-1))}`);
+  } finally { await view.close(); }
+  const tg = await stOpen(ctx, "settings keyboard telegram", "notifications", "#telegram-token", { state: stateTelegramNoToken() });
+  try {
+    const { page } = tg;
+    await asTabTo(page, "#telegram-token"); await page.keyboard.type(ST_TOKEN);
+    await asTabTo(page, "[data-testid=telegram-save-token]"); await page.keyboard.press("Enter");
+    await stWaitWrites(tg, 1, "step 1 by the keyboard");
+    assert(JSON.stringify(stWrites(tg)[0]) === JSON.stringify({ method: "POST", path: "/telegram/token", body: { bot_token: ST_TOKEN } }), `the token request was ${JSON.stringify(stWrites(tg)[0])}`);
+    await page.waitForSelector("[data-testid=telegram-make-code]", { timeout: 10000 });
+  } finally { await tg.close(); }
+  return "the list of sub pages by Tab and Enter; the add dialog opened, filled, sent with Enter (old bodies), the focus back on 添加模型; Esc closes it and returns the focus; a card's 「…」 menu opens and closes by key; a role is chosen from the keyboard; Telegram step 1 is done from the keyboard";
+}
+
+/** No Chinese is left in the English interface: the five pages, the dialog and the open lists (names the server or the fixtures give — models, the bot's username — are data, not copy). */
+async function settingsEnglish(ctx) {
+  // Ideographs only (a full-width colon is punctuation).  Two names are data, not copy, and the English sentences of the old pages keep them as they are: the default bot's name 「助理」 and Telegram's button 收到.
+  const CJK = /[\u3400-\u9fff]/;
+  const NAMES = /助理|收到|^中文$/g;
+  const bad = [];
+  const scan = async (page, what) => {
+    const found = await page.evaluate(() => {
+      const seen = [];
+      const walk = (root) => {
+        for (const el of root.querySelectorAll("*")) {
+          for (const n of el.childNodes) if (n.nodeType === 3 && n.textContent.trim()) seen.push(n.textContent.trim());
+          for (const a of ["placeholder", "aria-label", "title", "alt"]) if (el.getAttribute(a)) seen.push(el.getAttribute(a));
+        }
+      };
+      walk(document.querySelector("[data-testid=settings-page]") ?? document.body);
+      for (const layer of document.querySelectorAll("[data-radix-popper-content-wrapper], [role=dialog], [data-slot=dropdown-menu-content], [data-slot=select-content]")) walk(layer);
+      return seen;
+    });
+    for (const text of found) if (CJK.test(text.replace(NAMES, ""))) bad.push(`${what}: "${text.slice(0, 60)}"`);
+  };
+  const open = (label, section, ready, opts = {}) => stOpen(ctx, label, section, ready, { locale: "en-US", ...opts });
+  const models = await open("settings english models", "models", ST_MODELS);
+  try {
+    const { page } = models;
+    await scan(page, "models");
+    await stOpenEdit(page, "muse-ember"); await page.waitForTimeout(900); await scan(page, "model dialog (edit)");
+    await asPick(page, page.locator("[data-testid=model-provider]"), "Custom (OpenAI-compatible)"); await scan(page, "model dialog (custom)");
+    await page.locator("[data-testid=model-provider]").click(); await scan(page, "model dialog provider list"); await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+  } finally { await models.close(); }
+  const ro = await open("settings english readonly", "models", "[data-testid=model-readonly-note]", { state: stateModelsReadonly() });
+  try { await scan(ro.page, "models (catalog file)"); await ro.page.locator("[data-testid=role-chat]").click(); await scan(ro.page, "models (default list)"); } finally { await ro.close(); }
+  const empty = await open("settings english empty", "models", "[data-testid=models-empty]", { state: stateModelsEmpty() });
+  try { await scan(empty.page, "models (empty)"); } finally { await empty.close(); }
+  for (const [section, ready, state] of [["notifications", "[data-testid=telegram-unbind]", undefined], ["notifications", "#telegram-token", stateTelegramNoToken()], ["appearance", "[data-testid=appearance-theme-choice]", undefined], ["data", "[data-testid=archive-card]", undefined], ["account", "[data-testid=account-about]", undefined]]) {
+    const view = await open(`settings english ${section}`, section, ready, { ...(state ? { state } : {}) });
+    try { await scan(view.page, section + (state ? " (no token)" : "")); } finally { await view.close(); }
+  }
+  const guest = await open("settings english guest", "models", "[data-testid=settings-guest-note]", { identity: "guest" });
+  try { await scan(guest.page, "models (guest)"); await guest.page.evaluate(() => { location.hash = "#/settings/notifications"; }); await guest.page.waitForSelector("[data-testid=settings-notifications] [data-testid=settings-guest-note]", { timeout: 15000 }); await scan(guest.page, "notifications (guest)"); } finally { await guest.close(); }
+  assert(!bad.length, bad.join("; "));
+  return "no Chinese in the English interface: models (cards, roles table, dialog in edit and custom form, provider list), the catalog-file and empty states, notifications (with and without a token), appearance, data, account, and a guest's two sentences";
+}
+
+/** The five pages, the dialog open, a guest and an empty catalog hold no old-UI marker, no class of the old sheets this package deleted, no native <select>, no text under 12px; a page that is still old is the control. */
+async function settingsNoLegacy(ctx) {
+  const OLD = [".agent-admin", ".agent-header-actions", ".agent-settings-card", ".agent-chat-status", ".catalog-card", ".catalog-key", ".catalog-actions", ".profile-grid", ".profile-card", ".profile-add", ".profile-backdrop", ".profile-modal", ".profile-close", ".profile-note", ".model-discovery-row", ".chat-archive-settings", ".chat-archive-tools", ".chat-archive-banner", ".secondary-action", ".workspace-heading", ".bot-warn", ".is-ready", ".is-missing", ".is-error"].join(", ");
+  const SCOPE = "main, [data-testid=model-dialog]";
+  const check = async (page, what) => {
+    const found = await page.evaluate(({ old, scope }) => ({
+      legacy: document.querySelectorAll("[data-legacy]").length,
+      old: [...document.querySelectorAll(old)].filter((el) => el.closest(scope)).length,
+      native: document.querySelectorAll(`:is(${scope}) select`).length,
+      small: [...document.querySelectorAll(`:is(${scope}) *`)].filter((el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && parseFloat(getComputedStyle(el).fontSize) < 12).length,
+    }), { old: OLD, scope: SCOPE });
+    assert(found.legacy === 0, `${what}: ${found.legacy} data-legacy element(s)`);
+    assert(found.old === 0, `${what}: ${found.old} element(s) with a class of the old sheets`);
+    assert(found.native === 0, `${what}: ${found.native} native <select>`);
+    assert(found.small === 0, `${what}: ${found.small} text element(s) under 12px`);
+  };
+  const seen = [];
+  const run = async (label, section, ready, opts, steps) => {
+    const view = await stOpen(ctx, `settings no legacy ${label}`, section, ready, opts);
+    try { await check(view.page, label); if (steps) await steps(view.page, (what) => check(view.page, `${label} · ${what}`)); seen.push(label); } finally { await view.close(); }
+  };
+  await run("模型", "models", ST_MODELS, {}, async (page, again) => {
+    await stOpenAdd(page); await again("添加对话框"); await page.keyboard.press("Escape"); await stDialog(page).waitFor({ state: "detached", timeout: 5000 });
+    await stOpenEdit(page, "muse-ember"); await page.waitForTimeout(800); await again("编辑对话框"); await page.keyboard.press("Escape"); await stDialog(page).waitFor({ state: "detached", timeout: 5000 });
+  });
+  await run("模型（手机，抽屉）", "models", ST_MODELS, { width: 390 }, async (page, again) => { await stOpenAdd(page); await page.waitForTimeout(500); await again("添加抽屉"); });
+  await run("模型（配置文件）", "models", "[data-testid=model-readonly-note]", { state: stateModelsReadonly() });
+  await run("模型（空）", "models", "[data-testid=models-empty]", { state: stateModelsEmpty() });
+  await run("模型（访客）", "models", "[data-testid=settings-guest-note]", { identity: "guest" });
+  await run("通知", "notifications", "[data-testid=telegram-unbind]", {});
+  await run("通知（无 token）", "notifications", "#telegram-token", { state: stateTelegramNoToken() });
+  await run("外观", "appearance", "[data-slot=motion-level]", {});
+  await run("数据", "data", "[data-testid=archive-card]", {});
+  await run("账户", "account", "[data-testid=account-about]", {});
+  await run("账户（访客）", "account", "[data-testid=account-about]", { identity: "guest" });
+  // the control: the 全部 bot page is still an old page, so a selector that reads 0 everywhere is told apart from one that is broken
+  const control = await asOpen(ctx, "settings no legacy control", "#/assistant/bots", "[data-testid=bot-card]");
+  try { assert((await control.page.locator("[data-legacy]").count()) >= 1, "the 全部 bot page holds no data-legacy element (the selector is broken, not the pages clean)"); } finally { await control.close(); }
+  return `${seen.length} addresses / states (the five pages, both dialog shells, the catalog file, an empty catalog, a guest's three): 0 data-legacy, 0 old classes, 0 native <select>, 0 text under 12px; the 全部 bot page still holds the marker`;
 }
 
 const CHECKS = [
@@ -10397,7 +11271,7 @@ const CHECKS = [
   ["replay-phone-layer: across the 1024 breakpoint the detail element, the choice and the folded brief are kept; the phone's whole-screen layer is modal, Tab stays inside, 返回列表 / Esc close it; one disclaimer", replayPhoneLayer],
   ["monitor-four-states: 正常 / 延迟 / 异常 / 无记录 each have their badge kind, icon and colour token; the watchlist chip is the same component", monitorFourStates],
   ["monitor-dot-in-sidebar: a late or failing monitor puts a dot beside 研究 (sidebar and phone tab bar), a well one or no record nothing; read once on entering the research area, never from the chat page", monitorDotInSidebar],
-  ["research-no-legacy: every research-area route (the watchlist, company page and its tabs, forecast home and one forecast, judgment, evidence in its three addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page) holds no data-legacy element and no old workspace class; the settings page still holds the marker", researchNoLegacy],
+  ["research-no-legacy: every research-area route (the watchlist, company page and its tabs, forecast home and one forecast, judgment, evidence in its three addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page) holds no data-legacy element and no old workspace class; the 全部 bot page still holds the marker", researchNoLegacy],
   ["analysis-status-neutral: the check of a quote is plain text: no danger or action colour, no icon, no alert, not folded", analysisStatusNeutral],
   ["portfolio-record-body: 记一笔 sends the old body for every kind, every old rule still stops the form with its sentence, the kinds and their fields are the old ones", portfolioRecordBody],
   ["portfolio-cash-edit: 可用资金 edits in place; Enter and 保存 send the old body; a bad number is said; Esc and 取消 send nothing", portfolioCashEdit],
@@ -10445,9 +11319,25 @@ const CHECKS = [
   ["news-health-not-color-only: every row says its health in words (an unknown value as given) and its last error as the server gave it; the dot is decoration", newsHealthNotColorOnly],
   ["news-keyboard: a row's 「…」 menu and its test, the new-source drawer with all fields and the three tag boxes, saved with Enter; Esc closes the drawer and returns the focus", newsKeyboard],
   ["knowledge-ops: the ten knowledge operations (upload with the fixed 3 stars and medium, load ×4, import, index, retrieval ×4, chunks, retry, withdraw, reject, approve) send the old requests; nothing promises that an import is searchable", knowledgeOps],
-  ["knowledge-entries: the sidebar, the settings page's button and the agent's open_page (knowledge) land on #/assistant/knowledge with 知识库 highlighted; the settings address never shows the library; no 返回模型设置", knowledgeEntries],
+  ["knowledge-entries: the sidebar and the agent's open_page (knowledge) land on #/assistant/knowledge with 知识库 highlighted; none of the five settings pages holds a button or link to the library in its content; no 返回模型设置", knowledgeEntries],
   ["knowledge-keyboard: a document's chunks open and close from the keyboard with the focus returned to the row; the retrieval test and the source list are used with the keyboard alone", knowledgeKeyboard],
-  ["assistant-no-legacy: the four pages (each address and each opened drawer, each empty) hold no data-legacy element, no old class, no native <select>, no text under 12px; the settings page still holds the marker", assistantNoLegacy],
+  ["assistant-no-legacy: the four pages (each address and each opened drawer, each empty) hold no data-legacy element, no old class, no native <select>, no text under 12px; the 全部 bot page still holds the marker", assistantNoLegacy],
+  ["settings-five-pages: five addresses show five pages (title, list beside the page, sidebar mark, reload), none inside the old-UI marker; the list is one node, above the page at 390; #admin and #settings land on 模型", settingsFivePages],
+  ["settings-model-test-and-save: 测试 then 保存 with the old bodies, a refused test saves nothing and shows the server's own sentence, 取消测试 saves nothing, the button is off for a form that cannot be sent, the focus returns to 添加模型", settingsModelTestAndSave],
+  ["settings-model-crud: add ×3, edit ×5 (rename, new key, new provider, display name + default), 设为默认 and 删除 by hold send the old requests; a rename follows into the role table; the dialog's draft survives crossing 1024", settingsModelCrud],
+  ["settings-model-discovery: the provider's models are asked on opening, after a typed key and by 刷新 with the old bodies; five candidates, one fills Model ID; unsupported, empty and the refusals say what the old page said", settingsModelDiscovery],
+  ["settings-model-config-file: a model from the catalog file has no button and says why; 对话默认 cannot be set to it; a missing key is said in words", settingsModelConfigFile],
+  ["settings-roles-one-table: five roles in one table, each choice is saved at once with the old body (不指定 = null, 材料分析 back = DELETE), one read of the roles and the catalog", settingsRolesOneTable],
+  ["settings-telegram-three-steps: the step bar follows the server, the three writes send the old bodies, the token box is a password box and empty after the save, one read per 5 s only while a code made here is out, stopped when bound and after leaving, 解除绑定 needs the hold", settingsTelegramThreeSteps],
+  ["settings-pushover: both values trimmed with the old body, the button needs both, the boxes are empty after the save, 清除 sends DELETE", settingsPushover],
+  ["settings-no-secret-in-storage: after a model, a new key, the Telegram token and Pushover, no secret is in localStorage, sessionStorage, the page, a box, the address or the console; no last four characters; every secret box is a password box", settingsNoSecretInStorage],
+  ["settings-appearance: theme ×3, language ×2 and the up / down colours ×2 take effect and are kept at once with the old keys and values, no request, a reload keeps them, the arrow keys alone change them", settingsAppearance],
+  ["settings-archive: the export's file name, an import opens read-only with the old words and the choice of conversation, 返回当前对话, the old sentence when the browser cannot write a file, nothing sent", settingsArchive],
+  ["settings-about: 账户 says the mode and where the account menu is, has no sign-out / switch / sign-in control; the version is package.json's, the statement is on 账户 only, the two third-party notices are there", settingsAbout],
+  ["settings-guest: a guest sees one sign-in sentence on 模型 and on 通知 and no owner request is sent; 外观 and 数据 work; 账户 says 访客只读", settingsGuest],
+  ["settings-keyboard: the list of sub pages, the add dialog (filled, sent with Enter, Esc, focus back), a card's 「…」 menu, a role row and Telegram step 1 by the keyboard alone", settingsKeyboard],
+  ["settings-english: no Chinese in the English interface on the five pages, the dialog, the open lists and the empty / catalog-file / guest states", settingsEnglish],
+  ["settings-no-legacy: the five pages (dialog open in both shells, a catalog file, an empty catalog, a guest) hold no data-legacy element, no deleted old class, no native <select>, no text under 12px; the 全部 bot page still holds the marker", settingsNoLegacy],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

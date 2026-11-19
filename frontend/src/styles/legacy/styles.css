@@ -414,23 +414,15 @@ body{background:var(--canvas);color:var(--ink)}
 
 .workspace{max-width:1440px;margin:0 auto;padding:34px clamp(20px,4vw,56px) 48px}
 
-.workspace-heading{display:flex;justify-content:space-between;align-items:end;gap:20px;padding-bottom:25px;border-bottom:1px solid var(--edge)}
-
-.workspace-heading h1{margin:5px 0 0;font:500 clamp(31px,4vw,48px)/.98 var(--serif);letter-spacing:-.045em}
-
 .eyebrow{margin:0;color:var(--accent);font:700 10px/1.2 var(--sans);letter-spacing:.14em;text-transform:uppercase}
 
-.primary-action,.secondary-action{border:0;border-radius:7px;padding:10px 14px;font:600 12px var(--sans);transition:transform .15s ease,background .15s ease}
+.primary-action{border:0;border-radius:7px;padding:10px 14px;font:600 12px var(--sans);transition:transform .15s ease,background .15s ease}
 
 .primary-action{background:var(--navy);color:#fff;box-shadow:0 6px 12px rgba(15,34,39,.14)}
 
 .primary-action:hover:not(:disabled){background:var(--accent);transform:translateY(-1px)}
 
 .primary-action:disabled{opacity:.55;cursor:not-allowed}
-
-.secondary-action{background:transparent;color:var(--ink);border:1px solid var(--me-line-strong)}
-
-.secondary-action:hover{background:var(--accent-soft)}
 
 .workspace-restriction{margin:0;padding:12px 14px;border-left:3px solid var(--warning);background:#fff7f1;color:#784832;font-size:12px;line-height:1.55}
 
@@ -476,7 +468,7 @@ body{background:var(--canvas);color:var(--ink)}
 
 @media(max-width:1100px){.workspace{padding-left:28px;padding-right:28px}}
 
-@media(max-width:760px){.workspace{padding:22px 16px 34px}.workspace-heading{align-items:start;flex-direction:column;padding-bottom:18px}.workspace-heading h1{font-size:34px}.workspace .analysis-grid,.workspace .revision-review-grid{grid-template-columns:1fr}.workspace .version-strip,.workspace .filing-inventory,.workspace .evidence-workbench,.workspace .panel,.workspace .evaluation{padding:16px}.workspace .analysis-grid .panel+.panel{padding-left:16px}.workspace .workbench-grid{padding-top:15px}.workspace .workbench-card+.workbench-card{padding-left:0}}
+@media(max-width:760px){.workspace{padding:22px 16px 34px}.workspace .analysis-grid,.workspace .revision-review-grid{grid-template-columns:1fr}.workspace .version-strip,.workspace .filing-inventory,.workspace .evidence-workbench,.workspace .panel,.workspace .evaluation{padding:16px}.workspace .analysis-grid .panel+.panel{padding-left:16px}.workspace .workbench-grid{padding-top:15px}.workspace .workbench-card+.workbench-card{padding-left:0}}
 
 .evidence-layout{display:grid;gap:22px}
 
@@ -579,23 +571,7 @@ body{background:var(--canvas);color:var(--ink)}
 
 .rail-admin-link:hover{color:var(--teal);text-decoration:underline;text-underline-offset:3px}
 
-.agent-admin button{min-height:35px;font-size:11px}
-
-.agent-settings-card{display:grid;gap:16px;width:min(680px,100%);padding:23px;border:1px solid var(--edge);background:color-mix(in srgb, var(--surface) 72%, transparent)}
-
-.agent-settings-card>p{margin:0 0 3px;color:var(--muted);font-size:12px;line-height:1.65}
-
-.agent-settings-card label{display:grid;gap:6px;color:var(--muted);font-size:11px}
-
-.agent-settings-card input,.agent-settings-card select{box-sizing:border-box;width:100%;min-height:40px;border:1px solid var(--edge);border-radius:4px;background:var(--surface);padding:9px 10px;color:var(--ink);font:13px var(--sans)}
-
-.agent-settings-card input:focus-visible,.agent-settings-card select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-
-.agent-settings-card>small{color:var(--muted);font-size:10px;line-height:1.5}
-
 .rail-admin-link:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-
-@media(max-width:760px){.agent-settings-card{padding:17px}}
 
 /* Refined chat workbench */
 
@@ -611,69 +587,7 @@ body{background:var(--canvas);color:var(--ink)}
 
 .empty-watchlist p{color:var(--muted);line-height:1.6}
 
-.profile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:22px 0}
-
-.profile-card{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-height:135px;padding:17px;border:1px solid var(--edge);border-radius:10px;background:var(--surface);color:var(--ink);text-align:left;cursor:pointer}
-
-.profile-card strong{font:600 18px var(--serif)}
-
-.profile-card small{color:var(--muted);font-size:11px}
-
-.profile-card.is-active{border-color:#547969;box-shadow:inset 0 0 0 1px #547969;background:var(--sunken)}
-
-.profile-add{justify-content:center;border-style:dashed;background:transparent}
-
-.profile-backdrop{position:fixed;inset:0;z-index:80;display:grid;place-items:center;padding:20px;background:rgba(18,35,29,.52);backdrop-filter:blur(3px)}
-
-.profile-modal{position:relative;width:min(540px,100%);max-height:min(90dvh,850px);overflow:auto;padding:30px;background:var(--sunken);border:1px solid var(--line);border-radius:14px;box-shadow:0 24px 80px #13271f44}
-
-.profile-modal h2{font:500 30px var(--serif);margin:5px 0 20px}
-
-.profile-modal label{display:grid;gap:6px;margin:13px 0;color:var(--ink);font-size:12px}
-
-.profile-modal input,.profile-modal select{width:100%;box-sizing:border-box;min-height:42px;padding:9px 11px;border:1px solid var(--edge);border-radius:5px;background:var(--surface);color:var(--ink);font:13px var(--sans)}
-
-.profile-close{position:absolute;right:15px;top:13px;border:0;background:none;font-size:26px;color:var(--muted);cursor:pointer}
-
-.profile-note{color:var(--muted);font-size:12px;line-height:1.55}
-
-.profile-modal .primary-action{width:100%;margin-top:10px}
-
-@media(max-width:600px){.profile-modal{padding:23px 18px}.profile-grid{grid-template-columns:1fr}}
-
-.chat-archive-tools{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--edge);border-radius:8px;background:var(--surface)}
-
-.chat-archive-tools>strong{margin-right:5px;color:var(--ink);font:500 13px var(--serif)}
-
-.chat-archive-tools .secondary-action,.chat-archive-banner .secondary-action{min-height:31px;padding:6px 9px;font-size:10px}
-
-.chat-archive-tools>span{font-size:10px;color:var(--teal);overflow-wrap:anywhere}
-
-.chat-archive-tools>small{margin-left:auto;color:var(--muted);font-size:10px}
-
-.chat-archive-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;background:var(--sunken);border-left:3px solid var(--teal);font-size:11px;color:var(--ink)}
-
-.chat-archive-banner>span{flex:1 1 280px;line-height:1.5}
-
-.chat-archive-banner label{display:flex;align-items:center;gap:6px;color:var(--muted)}
-
-.chat-archive-banner select{max-width:min(260px,45vw);min-height:32px;border:1px solid var(--edge);background:var(--surface);color:var(--ink)}
-
-@media(max-width:760px){.chat-archive-tools{gap:5px;padding:8px}.chat-archive-tools>strong{flex-basis:100%}.chat-archive-tools>small{flex-basis:100%;margin-left:0}.chat-archive-banner{align-items:flex-start}.chat-archive-banner label{width:100%;justify-content:space-between}}
-
 /* Archive controls and optional banner are intrinsic rows; transcript owns remaining height. */
-
-.chat-archive-tools,.chat-archive-banner{box-sizing:border-box;max-width:100%;min-width:0;overflow-wrap:anywhere}
-
-@media(max-width:760px){.chat-archive-tools>*{min-width:0}.chat-archive-tools .secondary-action{max-width:100%;white-space:normal}.chat-archive-banner select{min-width:0}}
-
-.model-discovery-row{display:flex;align-items:center;gap:8px}
-
-.model-discovery-row select{min-width:0;flex:1}
-
-.profile-modal label>small{color:var(--muted);font-size:10px;line-height:1.5}
-
-@media(max-width:600px){.model-discovery-row{align-items:stretch}.model-discovery-row button{flex:0 0 auto}}
 
 /* Chat UX revision: compact research desk, accessible nav drawer, readable Markdown. */
 
@@ -681,17 +595,7 @@ html,body,#root{max-width:100%}
 
 .workspace{min-width:0}
 
-.chat-archive-settings{margin:20px 0;padding:17px;border:1px solid var(--edge);border-radius:10px;background:var(--surface)}
-
-.chat-archive-settings h2{font:500 20px var(--serif)}
-
-.chat-archive-settings>p{font-size:12px;color:var(--muted)}
-
 /* Chat acceptance refinements: readable answer width, compact identity-safe controls, and in-place mobile history. */
-
-.agent-admin{max-width:980px}
-
-@media(max-width:760px){.chat-archive-banner{flex-wrap:wrap}.chat-archive-banner span{width:100%}}
 
 /* Approved chat refinements: docked desktop navigation, centered transcript, and compact turn previews. */
 

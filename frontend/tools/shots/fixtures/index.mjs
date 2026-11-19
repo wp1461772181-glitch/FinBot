@@ -11,7 +11,13 @@ import { TASKS, RUNS, PROPOSALS, INBOX } from "./routines.mjs";
 import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS, DRY_RUNS, REPAIRS, KNOWLEDGE_IMPORTABLE, knowledgeChunks, readSkillFile } from "./assistant.mjs";
 
 export function buildState() {
-  return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant() };
+  return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), settings: buildSettings() };
+}
+
+/** The 设置 pages' data as a mutable copy (P8.2): the write routes below change it and the reads answer from it.  `writes` keeps every write as the page sent it (the role table's own state is `modelRoles`).
+ *  `testFail` (a refusal code) makes 测试 answer 422; `discovery` is what 服务商可用模型 answers ("ok", "unsupported", "empty" or a refusal code). */
+function buildSettings() {
+  return { writes: [], catalog: structuredClone(MODEL_CATALOG), analysis: structuredClone(ANALYSIS_SETTINGS), telegram: structuredClone(TELEGRAM), pushover: structuredClone(PUSHOVER), testFail: null, discovery: "ok", counter: 0 };
 }
 
 /** The 助手 pages' data as a mutable copy (P8.1): the write routes below change it and the reads answer from it, so a save shows in the list.  `writes` keeps every write as the page sent it. */
@@ -53,7 +59,7 @@ export function registerRoutes(route, reply) {
   // --- bots, models, queue -----------------------------------------------------------------------------
   route.get(`${A}/bots`, own(({ state }) => ({ bots: state.bots, default_bot_id: BOT.finbot })));
   route.get(`${A}/bot-templates`, own(() => BOT_TEMPLATES));
-  route.get(`${A}/model-catalog`, own(() => MODEL_CATALOG));
+  route.get(`${A}/model-catalog`, own(({ state }) => state.settings.catalog));
   route.get(`${A}/model-roles`, own(({ state }) => ({ roles: state.modelRoles })));
   // A save (P5.1): the fields it names replace the bot's, as the server does; the answer is the bot as it now stands.  The bodies are what the smoke checks read from view.mock.requests.
   route.patch(`${A}/bots/:id`, own(({ params, body, state }) => {
@@ -174,7 +180,7 @@ export function registerRoutes(route, reply) {
 
   // --- materials (V3) ----------------------------------------------------------------------------------
   route.get("/v3/materials", ({ query }) => materialList(query));
-  route.get("/v3/materials/analysis-settings", () => ANALYSIS_SETTINGS);
+  route.get("/v3/materials/analysis-settings", ({ state }) => state.settings.analysis);
   route.get("/v3/materials/:type/:id/analyses", ({ params }) => { const m = MATERIALS.find((x) => x.source_id === params.id); const no = m?.latest_analysis_id ? Number(m.latest_analysis_id.slice(-12)) : null;
     return { source_type: params.type, source_id: params.id, items: no ? [analysisVersion(no, { symbol: m.symbol })] : [] }; });
   route.get("/v3/materials/:type/:id/original", ({ params }) => materialOriginal(params.type, params.id));
@@ -285,13 +291,10 @@ export function registerRoutes(route, reply) {
   route.delete(`${A}/tasks/:id`, own(({ params, state }) => { routineWritten(state, "DELETE", `/tasks/${params.id}`, null); state.tasks = state.tasks.filter((t) => t.id !== params.id); return { ok: true }; }));
   route.delete(`${A}/bots/:id`, own(() => ({ ok: true })));
   route.delete(`${A}/bots/:id/telegram`, own(() => ({ ...BOT_TELEGRAM, configured: false, has_token: false, bound: false, shared: true })));
-  route.delete(`${A}/model-catalog/:name`, own(() => ({ ok: true })));
-  route.post(`${A}/telegram/unbind`, own(() => ({ ...TELEGRAM, bound: false, chat_id: null })));
 
   // --- assistant: news sources, skills, memory, settings cards -----------------------------------------
   assistantRoutes(route, reply, own);
-  route.get(`${A}/telegram/status`, own(() => TELEGRAM));
-  route.get(`${A}/pushover/status`, own(() => PUSHOVER));
+  settingsRoutes(route, reply, own);
   // A bot's own Telegram: answered as bound and running unless a check set state.botTelegram[id] (the P5.1 steps check does: no token yet).  Saving a token, making a binding
   // code and the bind itself move that record on; `state.botTelegramBound[id] = true` is the message arriving from Telegram.
   route.get(`${A}/bots/:id/telegram`, own(({ params, state }) => {
@@ -465,4 +468,122 @@ function assistantRoutes(route, reply, own) {
     state.assistant.candidates = state.assistant.candidates.filter((c) => c.id !== params.id);
     return { ok: true };
   });
+}
+
+/** The 设置 routes (P8.2): the model catalog, the role table, the material-analysis default, Telegram and Pushover.  Reads answer from `state.settings` (and `state.modelRoles`); every write is kept as `{ method, path, body }` in `state.settings.writes` and moves the state the way the server's answer says.
+ *  No answer carries a key: the entries say only whether one is configured. */
+function settingsRoutes(route, reply, own) {
+  const A = "/agent-chat";
+  const kept = (state, method, path, body) => { state.settings.writes.push({ method, path, body: body === undefined ? null : structuredClone(body) }); };
+  const find = (state, name) => state.settings.catalog.models.find((m) => m.name === name);
+  const refuse = (status, detail) => reply.status(status, { detail });
+  const makeDefault = (catalog, name) => { for (const m of catalog.models) m.is_default = m.name === name; catalog.default = name; };
+
+  // --- the catalog
+  route.post(`${A}/model-catalog`, own(({ body, state }) => {
+    kept(state, "POST", "/model-catalog", body);
+    const catalog = state.settings.catalog;
+    if (find(state, body?.name)) return refuse(409, "model_exists");
+    const model = { name: body.name, display_name: body.display_name ?? "", provider: body.provider, model: body.model, base_url: body.base_url ?? null, origin: "server", key_source: body.key_env ? "env" : "vault", key_env: body.key_env ?? null,
+      key_status: "configured", is_default: false, migrated: false };
+    catalog.models.push(model);
+    if (body.is_default || !catalog.default) makeDefault(catalog, model.name);
+    return { model };
+  }));
+  // The two fixed addresses come before the :name ones: "test", "models" and "default" must not be read as a name.
+  route.post(`${A}/model-catalog/test`, own(({ body, state }) => {
+    kept(state, "POST", "/model-catalog/test", body);
+    return state.settings.testFail ? refuse(422, state.settings.testFail) : { ok: true };
+  }));
+  route.post(`${A}/model-catalog/models`, own(({ body, state }) => {
+    kept(state, "POST", "/model-catalog/models", body);
+    const mode = state.settings.discovery;
+    if (mode === "unsupported") return { status: "unsupported", ordering: "provider", models: [] };
+    if (mode === "empty") return { status: "ok", ordering: "provider", models: [] };
+    if (mode !== "ok") return refuse(422, mode);
+    return { status: "ok", ordering: "provider", models: ["alpha-1", "alpha-1-mini", "beta-2", "beta-2-thinking", "gamma-3", "delta-4"].map((id) => ({ id, name: id === "beta-2" ? "Beta 2" : id })) };
+  }));
+  route.put(`${A}/model-catalog/default`, own(({ body, state }) => {
+    kept(state, "PUT", "/model-catalog/default", body);
+    const model = find(state, body?.name);
+    if (!model) return refuse(404, "model_not_found");
+    makeDefault(state.settings.catalog, model.name);
+    return { model };
+  }));
+  route.patch(`${A}/model-catalog/:name`, own(({ params, body, state }) => {
+    kept(state, "PATCH", `/model-catalog/${params.name}`, body);
+    const catalog = state.settings.catalog, model = find(state, params.name);
+    if (!model) return refuse(404, "model_not_found");
+    if (model.origin !== "server") return refuse(422, "model_from_file");
+    const { name, is_default, api_key, key_env, ...fields } = body ?? {};
+    if (name && name !== model.name) {
+      if (find(state, name)) return refuse(409, "model_exists");
+      // A rename follows into the roles and the bots that name the model, as the server does.
+      for (const role of Object.keys(state.modelRoles)) if (state.modelRoles[role] === model.name) state.modelRoles[role] = name;
+      for (const bot of state.bots) if (bot.model === model.name) bot.model = name;
+      if (catalog.default === model.name) catalog.default = name;
+      model.name = name;
+    }
+    Object.assign(model, fields);
+    if (api_key) { model.key_source = "vault"; model.key_env = null; model.key_status = "configured"; }
+    if (key_env) { model.key_source = "env"; model.key_env = key_env; model.key_status = "configured"; }
+    if (is_default) makeDefault(catalog, model.name);
+    return { model };
+  }));
+  route.delete(`${A}/model-catalog/:name`, own(({ params, state }) => {
+    kept(state, "DELETE", `/model-catalog/${params.name}`, undefined);
+    const catalog = state.settings.catalog, at = catalog.models.findIndex((m) => m.name === params.name);
+    if (at < 0) return refuse(404, "model_not_found");
+    catalog.models.splice(at, 1);
+    if (catalog.default === params.name) catalog.default = catalog.models[0]?.name ?? null;
+    return { ok: true };
+  }));
+
+  // --- the roles and the material-analysis default
+  route.put(`${A}/model-roles/:role`, own(({ params, body, state }) => {
+    kept(state, "PUT", `/model-roles/${params.role}`, body);
+    state.modelRoles[params.role] = body?.model ?? null;
+    return { roles: state.modelRoles };
+  }));
+  route.put("/v3/materials/analysis-settings", ({ body, state }) => {
+    kept(state, "PUT", "/v3/materials/analysis-settings", body);
+    const model = find(state, body?.catalog_model);
+    if (!model) return refuse(404, "model_not_found");
+    state.settings.analysis = { source: "settings", provider: model.provider, base_url: model.base_url, model: model.model, has_api_key: true, api_key_last4: null };
+    return state.settings.analysis;
+  });
+  route.delete("/v3/materials/analysis-settings", ({ state }) => {
+    kept(state, "DELETE", "/v3/materials/analysis-settings", undefined);
+    state.settings.analysis = { source: "environment", provider: "deepseek", base_url: null, model: "deepseek-chat", has_api_key: false, api_key_last4: null };
+    return state.settings.analysis;
+  });
+
+  // --- Telegram (the shared bot) and Pushover.  A check that plays the message arriving from Telegram sets `state.settings.telegram` to the bound record.
+  route.get(`${A}/telegram/status`, own(({ state }) => state.settings.telegram));
+  route.post(`${A}/telegram/token`, own(({ body, state }) => {
+    kept(state, "POST", "/telegram/token", body);
+    state.settings.telegram = { configured: true, has_token: true, bound: false, bot_username: "finbot_fixture_bot", chat_id: null, bound_at: null, bind_code_active: false };
+    return state.settings.telegram;
+  }));
+  route.post(`${A}/telegram/bind`, own(({ state }) => {
+    kept(state, "POST", "/telegram/bind", undefined);
+    state.settings.telegram = { ...state.settings.telegram, bind_code_active: true };
+    return { code: "482913", bot_username: state.settings.telegram.bot_username };
+  }));
+  route.post(`${A}/telegram/unbind`, own(({ state }) => {
+    kept(state, "POST", "/telegram/unbind", undefined);
+    state.settings.telegram = { ...state.settings.telegram, bound: false, chat_id: null, bound_at: null, bind_code_active: false };
+    return state.settings.telegram;
+  }));
+  route.get(`${A}/pushover/status`, own(({ state }) => state.settings.pushover));
+  route.put(`${A}/pushover`, own(({ body, state }) => {
+    kept(state, "PUT", "/pushover", body);
+    state.settings.pushover = { configured: true, updated_at: "2026-11-13T02:00:00.000Z" };
+    return state.settings.pushover;
+  }));
+  route.delete(`${A}/pushover`, own(({ state }) => {
+    kept(state, "DELETE", "/pushover", undefined);
+    state.settings.pushover = { configured: false, updated_at: null };
+    return state.settings.pushover;
+  }));
 }
