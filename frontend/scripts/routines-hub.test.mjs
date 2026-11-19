@@ -48,16 +48,17 @@ test("the card counts this bot's live proposals and open suggestions", () => {
 
 test("新闻源 is a page under 助手, opens its own page, and the 例行任务 page no longer carries it", () => {
   // P2.2: it was a rail row under 例行任务; it is now one of the 助手 sub-pages (the sidebar's group, the phone's 更多 drawer).
-  const router = src("app/router.tsx"), page = src("PersonalPages.tsx"), more = src("app/shell/MoreDrawer.tsx");
+  const router = src("app/router.tsx"), page = src("app/assistant/news/NewsPage.tsx"), more = src("app/shell/MoreDrawer.tsx");
   assert.ok(ASSISTANT_ITEMS.some((item) => item.id === "news" && item.label === "新闻源"));
   assert.equal(areaPath("assistant", "AAPL", "news"), "/assistant/news");
   assert.match(more, /areaItems\("assistant"/);
   assert.match(router, /path: PATTERNS\.assistantNews, \.\.\.page\(\(\) => import\("\.\/pages\/personal"\), "NewsRoute"\)/);
-  assert.match(src("app/pages/personal.tsx"), /export function NewsRoute\(\) \{ return <NewsSourcesPage \/>; \}/);
+  assert.match(src("app/pages/personal.tsx"), /export function NewsRoute\(\) \{ return <NewsPage \/>; \}/);
   assert.equal(legacyHashToPath("#news"), "/assistant/news");   // was: "news" in App.tsx's list of known hash sections
   assert.doesNotMatch(src("app/routines/RoutinesPage.tsx"), /NewsSourcesPanel|getNewsSourcesConfig/);
-  const newsPage = page.slice(page.indexOf("export function NewsSourcesPage"), page.indexOf("const KIND_LABELS"));
-  assert.match(newsPage, /<NewsSourcesPanel /);
+  // The page that holds them is app/assistant/news/ (P8.1): the table of sources and the drawer, not the task page.
+  assert.match(page, /getNewsSourcesConfig/);
+  assert.match(page, /<NewsRow /);
 });
 
 test("the routine form has no token caps; the frequency offers intervals and run counts", () => {

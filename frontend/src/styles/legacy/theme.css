@@ -36,77 +36,14 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 .candle.is-down rect, .legend-down { fill: var(--me-down); background: var(--me-down); }
 
 /* Personal-agent pages: tabs inside 公司 and 资料库, placeholders, the mobile tab bar. */
-.section-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 clamp(20px,4vw,56px); padding: 12px 0 0; border-bottom:1px solid var(--me-line); }
-.section-tabs.is-secondary { border-bottom:0; padding-top: 8px; }
-.section-tabs button { border:0; background:transparent; color:var(--me-muted); padding: 8px 12px; border-bottom:2px solid transparent; font-size: 13px; }
-.section-tabs.is-secondary button { border:1px solid var(--me-line); border-radius: 999px; padding: 4px 12px; font-size: 12px; }
-.section-tabs button[aria-current="page"] { color:var(--me-accent); border-bottom-color:var(--me-accent); font-weight: 600; }
-.section-tabs.is-secondary button[aria-current="page"] { background:var(--me-accent-soft); border-color:var(--me-accent); }
-.personal-page { padding: 28px clamp(20px,4vw,56px) 40px; display: grid; gap: 18px; max-width: 980px; }
-.personal-page h1 { font-size: 26px; font-weight: 600; margin: 0; }
-.personal-card { background:var(--me-surface); border:1px solid var(--me-line); border-radius: 12px; padding: 18px 20px; }
-.personal-card h2 { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
-.personal-card p { color:var(--me-muted); margin: 0; line-height: 1.6; }
-.personal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-.personal-badge { display: inline-block; font-size: 11px; color: var(--me-accent); background: var(--me-accent-soft); border-radius: 999px; padding: 2px 8px; margin-bottom: 8px; }
 .theme-form select { font: inherit; }
-.memory-tabs { margin: 0; }
-.memory-panel { display: grid; gap: 12px; }
-.memory-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.memory-list li { border-top:1px solid var(--me-line); padding-top: 10px; display: grid; gap: 6px; }
-.memory-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
-.memory-line .personal-badge { margin-bottom: 0; }
-.personal-badge.origin-inferred { color: var(--me-muted); background: transparent; border: 1px dashed var(--me-line); }
-.memory-quote { margin: 0; padding-left: 10px; border-left:2px solid var(--me-line); color:var(--me-muted); font-size: 13px; }
-.memory-actions { display: flex; gap: 8px; }
-.memory-search { display: flex; gap: 8px; }
-.memory-search input { flex: 1; font: inherit; padding: 6px 10px; border:1px solid var(--me-line); border-radius: 8px; background:var(--me-surface); color:var(--me-ink); }
-.memory-archived summary { cursor: pointer; color:var(--me-muted); font-size: 13px; }
 @media (max-width: 760px) {
   .theme-form { display: none; }
 }
 
 /* Dark mode: the older sheets paint some surfaces light directly (generated from every rule whose
    background is a light colour), so those surfaces are pointed at the dark tokens here. */
-:root[data-theme="dark"] .action-notice.error,
-:root[data-theme="dark"] .action-notice.success,
-:root[data-theme="dark"] .agent-settings-card,
-:root[data-theme="dark"] .agent-settings-card input,
-:root[data-theme="dark"] .agent-settings-card select,
-:root[data-theme="dark"] .badge-backfilled,
-:root[data-theme="dark"] .badge-new,
-:root[data-theme="dark"] .badge-updated,
-:root[data-theme="dark"] .chat-archive-banner,
-:root[data-theme="dark"] .chat-archive-banner select,
-:root[data-theme="dark"] .chat-archive-settings,
-:root[data-theme="dark"] .chat-archive-tools,
-:root[data-theme="dark"] .empty-watchlist,
-:root[data-theme="dark"] .knowledge-chunk,
-:root[data-theme="dark"] .knowledge-drawer,
-:root[data-theme="dark"] .knowledge-error,
-:root[data-theme="dark"] .knowledge-import-card,
-:root[data-theme="dark"] .knowledge-list,
-:root[data-theme="dark"] .knowledge-retrieval-result,
-:root[data-theme="dark"] .knowledge-status,
-:root[data-theme="dark"] .language-form select,
-:root[data-theme="dark"] .legacy-empty-archive,
-:root[data-theme="dark"] .legacy-forecast-records,
-:root[data-theme="dark"] .meter,
-:root[data-theme="dark"] .profile-card,
-:root[data-theme="dark"] .profile-card.is-active,
-:root[data-theme="dark"] .profile-modal,
-:root[data-theme="dark"] .review-decisions button.selected.reject,
-:root[data-theme="dark"] .revision-automation-note,
-:root[data-theme="dark"] .v2-job-status,
-:root[data-theme="dark"] .v2-job-status.is-blocked_data,
-:root[data-theme="dark"] .v2-job-status.is-failed,
-:root[data-theme="dark"] .v2-notice.error,
-:root[data-theme="dark"] .v2-probabilities span,
-:root[data-theme="dark"] .v2-revision-empty,
-:root[data-theme="dark"] .v2-workflow-note,
-:root[data-theme="dark"] .workspace .filing-row,
-:root[data-theme="dark"] .workspace .revision-note,
-:root[data-theme="dark"] .workspace-restriction {
+:root[data-theme="dark"] .action-notice.error, :root[data-theme="dark"] .action-notice.success, :root[data-theme="dark"] .agent-settings-card, :root[data-theme="dark"] .agent-settings-card input, :root[data-theme="dark"] .agent-settings-card select, :root[data-theme="dark"] .badge-backfilled, :root[data-theme="dark"] .badge-new, :root[data-theme="dark"] .badge-updated, :root[data-theme="dark"] .chat-archive-banner, :root[data-theme="dark"] .chat-archive-banner select, :root[data-theme="dark"] .chat-archive-settings, :root[data-theme="dark"] .chat-archive-tools, :root[data-theme="dark"] .empty-watchlist, :root[data-theme="dark"] .language-form select, :root[data-theme="dark"] .legacy-empty-archive, :root[data-theme="dark"] .legacy-forecast-records, :root[data-theme="dark"] .meter, :root[data-theme="dark"] .profile-card, :root[data-theme="dark"] .profile-card.is-active, :root[data-theme="dark"] .profile-modal, :root[data-theme="dark"] .review-decisions button.selected.reject, :root[data-theme="dark"] .revision-automation-note, :root[data-theme="dark"] .v2-job-status, :root[data-theme="dark"] .v2-job-status.is-blocked_data, :root[data-theme="dark"] .v2-job-status.is-failed, :root[data-theme="dark"] .v2-notice.error, :root[data-theme="dark"] .v2-probabilities span, :root[data-theme="dark"] .v2-revision-empty, :root[data-theme="dark"] .v2-workflow-note, :root[data-theme="dark"] .workspace .filing-row, :root[data-theme="dark"] .workspace .revision-note, :root[data-theme="dark"] .workspace-restriction {
   background: var(--me-surface);
   color: var(--me-ink);
 }
@@ -114,22 +51,4 @@ body { background:var(--me-bg); color:var(--me-ink); font-family: var(--me-font)
 
 .brief-sources { margin: 4px 0 0; padding-left: 0; list-style: none; display: grid; gap: 2px; font-size: 13px; }
 .brief-sources a { color:inherit; text-decoration: underline; }
-.task-form { display: grid; gap: 10px; }
-.task-form label { display: grid; gap: 4px; }
-.task-form-row { display: flex; gap: 10px; flex-wrap: wrap; }
 /* Memory layers (stage B): 全局 / each bot. */
-.memory-layer + .memory-layer { margin-top: 14px; }
-.memory-layer-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; color:var(--me-ink); }
-.memory-scope { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color:var(--me-muted); }
-.memory-scope select, .memory-search select { font: inherit; font-size: 13px; padding: 4px 8px; border:1px solid var(--me-line); border-radius: 8px; background:var(--me-surface); color:var(--me-ink); max-width: 12em; }
-.memory-edit { flex: 1; min-width: 0; font: inherit; padding: 4px 8px; border:1px solid var(--me-line); border-radius: 8px; background:var(--me-surface); color:var(--me-ink); }
-.memory-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 14px; padding: 10px; border:1px dashed var(--me-line); border-radius: 10px; }
-.memory-add .memory-edit { flex: 1 1 16em; padding: 6px 10px; }
-.skill-card { display: grid; gap: 8px; align-content: start; }
-.skill-card .memory-line h2 { margin: 0; }
-.skill-group { display: grid; gap: 8px; margin-top: 18px; }
-.skill-group > h2 { font-size: 14px; margin: 0; }
-.skill-tools { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0; padding: 0; }
-.skill-tool-list { display: grid; gap: 4px; border:1px solid var(--me-line); border-radius: 8px; padding: 8px 10px; }
-.skill-editor, .skill-import { margin: 12px 0; }
-.skill-editor textarea, .skill-import textarea { font: inherit; width: 100%; box-sizing: border-box; }

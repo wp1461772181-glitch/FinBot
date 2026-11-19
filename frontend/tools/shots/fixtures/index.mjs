@@ -8,10 +8,15 @@ import { MATERIALS, materialList, analysisVersion, materialOriginal, ANALYSIS_SE
 import { forecastList, forecastRoots, timeline, versionDetail, evaluations, monitorStatus, replayJob, REPLAY_JOB, workspace, job, revisionCandidates, JUDGMENTS } from "./forecasts.mjs";
 import { portfolioSummary, buildPortfolio } from "./portfolio.mjs";
 import { TASKS, RUNS, PROPOSALS, INBOX } from "./routines.mjs";
-import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS } from "./assistant.mjs";
+import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS, DRY_RUNS, REPAIRS, KNOWLEDGE_IMPORTABLE, knowledgeChunks, readSkillFile } from "./assistant.mjs";
 
 export function buildState() {
-  return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] } };
+  return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant() };
+}
+
+/** The 助手 pages' data as a mutable copy (P8.1): the write routes below change it and the reads answer from it, so a save shows in the list.  `writes` keeps every write as the page sent it. */
+function buildAssistant() {
+  return { writes: [], skills: structuredClone(SKILLS.skills), news: structuredClone(NEWS), profile: structuredClone(PROFILE.items), recall: structuredClone(RECALL), docs: structuredClone(KNOWLEDGE_DOCS), candidates: [], counter: 0 };
 }
 
 /** The fields of a multipart/form-data body as the page sent them; a file part is described by its name, type and size. */
@@ -277,9 +282,6 @@ export function registerRoutes(route, reply) {
 
   // --- the writes the in-app confirmations guard (P2.3): the deletes and the unbind.  Each answers ok; the portfolio one also drops the row. ---
   route.delete(`${A}/portfolio/transactions/:id`, own(({ params, state }) => { written(state, "DELETE", `/portfolio/transactions/${params.id}`, null); state.portfolio.transactions = state.portfolio.transactions.filter((t) => t.id !== params.id); return { ok: true, status: "deleted" }; }));
-  route.delete(`${A}/skills/:id`, own(() => ({ ok: true })));
-  route.delete(`${A}/profile/:id`, own(() => ({ ok: true })));
-  route.delete(`${A}/news-sources/:id`, own(() => ({ ok: true })));
   route.delete(`${A}/tasks/:id`, own(({ params, state }) => { routineWritten(state, "DELETE", `/tasks/${params.id}`, null); state.tasks = state.tasks.filter((t) => t.id !== params.id); return { ok: true }; }));
   route.delete(`${A}/bots/:id`, own(() => ({ ok: true })));
   route.delete(`${A}/bots/:id/telegram`, own(() => ({ ...BOT_TELEGRAM, configured: false, has_token: false, bound: false, shared: true })));
@@ -287,10 +289,7 @@ export function registerRoutes(route, reply) {
   route.post(`${A}/telegram/unbind`, own(() => ({ ...TELEGRAM, bound: false, chat_id: null })));
 
   // --- assistant: news sources, skills, memory, settings cards -----------------------------------------
-  route.get(`${A}/news-sources`, own(() => NEWS));
-  route.get(`${A}/skills`, own(() => SKILLS));
-  route.get(`${A}/profile`, own(() => PROFILE));
-  route.get(`${A}/recall`, own(() => ({ items: RECALL })));
+  assistantRoutes(route, reply, own);
   route.get(`${A}/telegram/status`, own(() => TELEGRAM));
   route.get(`${A}/pushover/status`, own(() => PUSHOVER));
   // A bot's own Telegram: answered as bound and running unless a check set state.botTelegram[id] (the P5.1 steps check does: no token yet).  Saving a token, making a binding
@@ -316,6 +315,154 @@ export function registerRoutes(route, reply) {
     return { code: "482913", bot_username: "finbot_fixture_bot", link: null, expires_at: "2026-11-13T02:30:00.000Z" };
   }));
   route.get(`${A}/background-model`, own(() => ({ configured: true, has_key: true, provider: "siliconflow", model: "deepseek-ai/DeepSeek-V4-Flash", base_url: null, updated_at: null })));
-  route.get("/knowledge/documents", () => ({ items: KNOWLEDGE_DOCS }));
-  route.get("/knowledge/candidates", () => ({ items: [] }));
+}
+
+/** The 助手 routes (P8.1).  Reads answer from `state.assistant`; every write is kept as `{ method, path, body }` in `state.assistant.writes` and moves the state the way the server's answer says. */
+function assistantRoutes(route, reply, own) {
+  const A = "/agent-chat";
+  const kept = (state, method, path, body) => { state.assistant.writes.push({ method, path, body: body === undefined ? null : structuredClone(body) }); };
+  const id = (state, prefix) => `${prefix}-0000-4000-8000-${String(900 + ++state.assistant.counter).padStart(12, "0")}`;
+  const unknownSkill = () => reply.status(404, { detail: "unknown_skill" });
+
+  // --- skills
+  route.get(`${A}/skills`, own(({ state }) => ({ skills: state.assistant.skills, tools: SKILLS.tools })));
+  route.post(`${A}/skills`, own(({ body, state }) => {
+    kept(state, "POST", "/skills", body);
+    const skill = { id: id(state, "s3000000"), version: 1, origin: "mine", status: "active", builtin: false, updated_at: "2026-11-13T02:00:00.000Z", enabled: true, output_template: null, ...body };
+    state.assistant.skills.push(skill);
+    return { skill };
+  }));
+  // Import comes before the :id routes: "import" must not be read as a skill id.
+  route.post(`${A}/skills/import/preview`, own(({ body, state }) => {
+    kept(state, "POST", "/skills/import/preview", body);
+    const read = readSkillFile(body?.markdown);
+    return read.error ? reply.status(422, { detail: read.error }) : read;
+  }));
+  route.post(`${A}/skills/import`, own(({ body, state }) => {
+    kept(state, "POST", "/skills/import", body);
+    const read = readSkillFile(body?.markdown);
+    if (read.error) return reply.status(422, { detail: read.error });
+    if (state.assistant.skills.some((s) => s.name === read.skill.name)) return reply.status(422, { detail: "name_taken" });
+    const skill = { id: id(state, "s3000000"), version: 1, origin: "imported", status: "active", builtin: false, updated_at: "2026-11-13T02:00:00.000Z", enabled: true, ...read.skill };
+    state.assistant.skills.push(skill);
+    return { skill };
+  }));
+  route.patch(`${A}/skills/:id`, own(({ params, body, state }) => {
+    kept(state, "PATCH", `/skills/${params.id}`, body);
+    const skill = state.assistant.skills.find((s) => s.id === params.id);
+    if (!skill) return unknownSkill();
+    const { save_draft, ...fields } = body ?? {};
+    Object.assign(skill, fields, save_draft ? { status: "active" } : {}, { version: skill.version + 1 });
+    return { skill };
+  }));
+  route.post(`${A}/skills/:id/enabled`, own(({ params, body, state }) => {
+    kept(state, "POST", `/skills/${params.id}/enabled`, body);
+    const skill = state.assistant.skills.find((s) => s.id === params.id);
+    if (!skill) return unknownSkill();
+    skill.enabled = Boolean(body?.enabled);
+    return { skill };
+  }));
+  route.post(`${A}/skills/:id/copy`, own(({ params, state }) => {
+    kept(state, "POST", `/skills/${params.id}/copy`, null);
+    const from = state.assistant.skills.find((s) => s.id === params.id);
+    if (!from) return unknownSkill();
+    const skill = { ...structuredClone(from), id: id(state, "s3000000"), name: `${from.name} 副本`, origin: "mine", builtin: false, status: "active", version: 1 };
+    state.assistant.skills.push(skill);
+    return { skill };
+  }));
+  route.get(`${A}/skills/:id/export`, own(({ params, state }) => {
+    const skill = state.assistant.skills.find((s) => s.id === params.id);
+    return skill ? reply.text(`---\nname: ${skill.name}\ndescription: ${skill.description}\ntools: ${skill.allowed_tools.join(", ")}\n---\n${skill.body}\n`, "text/markdown; charset=utf-8") : unknownSkill();
+  }));
+  route.delete(`${A}/skills/:id`, own(({ params, state }) => { kept(state, "DELETE", `/skills/${params.id}`, null); state.assistant.skills = state.assistant.skills.filter((s) => s.id !== params.id); return { ok: true }; }));
+
+  // --- memory
+  route.get(`${A}/profile`, own(({ state }) => ({ items: state.assistant.profile, bots: PROFILE.bots })));
+  const botName = (botId) => PROFILE.bots.find((b) => b.id === botId)?.name ?? null;
+  route.post(`${A}/profile`, own(({ body, state }) => {
+    kept(state, "POST", "/profile", body);
+    const n = state.assistant.profile.length + 1;
+    const item = { id: id(state, "pf000000"), handle: `P${n}`, topic: null, origin: "manual", quote: "", status: "active", scope: body.bot_id ? "bot" : "global", bot_name: botName(body.bot_id), created_at: "2026-11-13T02:00:00.000Z", updated_at: "2026-11-13T02:00:00.000Z", last_used_at: null, ...body };
+    state.assistant.profile.push(item);
+    return { item };
+  }));
+  route.patch(`${A}/profile/:id`, own(({ params, body, state }) => {
+    kept(state, "PATCH", `/profile/${params.id}`, body);
+    const item = state.assistant.profile.find((i) => i.id === params.id);
+    if (!item) return reply.status(404, { detail: "profile_item_not_found" });
+    Object.assign(item, body);
+    if ("bot_id" in body) Object.assign(item, { scope: body.bot_id ? "bot" : "global", bot_name: botName(body.bot_id) });
+    return { item };
+  }));
+  route.post(`${A}/profile/:id/confirm`, own(({ params, state }) => {
+    kept(state, "POST", `/profile/${params.id}/confirm`, null);
+    const item = state.assistant.profile.find((i) => i.id === params.id);
+    if (!item) return reply.status(404, { detail: "profile_item_not_found" });
+    item.origin = "explicit";
+    return { item };
+  }));
+  route.delete(`${A}/profile/:id`, own(({ params, state }) => { kept(state, "DELETE", `/profile/${params.id}`, null); state.assistant.profile = state.assistant.profile.filter((i) => i.id !== params.id); return { ok: true }; }));
+  // The query is read for one thing only: a search for 无结果 finds nothing (the page's no-match sentence).  Which address was asked is what the checks read, from the request log.
+  route.get(`${A}/recall`, own(({ state, query }) => ({ items: String(query.get("q") ?? "").includes("无结果") ? [] : state.assistant.recall })));
+
+  // --- news sources
+  route.get(`${A}/news-sources`, own(({ state }) => state.assistant.news));
+  route.post(`${A}/news-sources`, own(({ body, state }) => {
+    kept(state, "POST", "/news-sources", body);
+    const sources = state.assistant.news.sources, at = sources.findIndex((s) => s.id === body.id);
+    const source = { health: "ok", consecutive_failures: 0, last_error: null, ...(at >= 0 ? sources[at] : {}), ...body };
+    if (at >= 0) sources[at] = source; else sources.push(source);
+    return { ok: true, source };
+  }));
+  route.put(`${A}/news-sources/push-settings`, own(({ body, state }) => {
+    kept(state, "PUT", "/news-sources/push-settings", body);
+    state.assistant.news.push.summary_max_tokens = body.summary_max_tokens;
+    return { ok: true, push: { summary_max_tokens: body.summary_max_tokens } };
+  }));
+  route.post(`${A}/news-sources/:id/enabled`, own(({ params, body, state }) => {
+    kept(state, "POST", `/news-sources/${params.id}/enabled`, body);
+    const source = state.assistant.news.sources.find((s) => s.id === params.id);
+    if (source) source.enabled = Boolean(body?.enabled);
+    return { ok: true, enabled: Boolean(body?.enabled) };
+  }));
+  route.post(`${A}/news-sources/:id/dry-run`, own(({ params, state }) => { kept(state, "POST", `/news-sources/${params.id}/dry-run`, null); return { source_id: params.id, ...(DRY_RUNS[params.id] ?? { ok: false }) }; }));
+  route.post(`${A}/news-sources/:id/repair`, own(({ params, state }) => {
+    kept(state, "POST", `/news-sources/${params.id}/repair`, null);
+    const answer = REPAIRS[params.id] ?? { ok: false };
+    const source = state.assistant.news.sources.find((s) => s.id === params.id);
+    if (answer.ok && source) Object.assign(source, { health: "ok", consecutive_failures: 0, last_error: null });
+    return answer;
+  }));
+  route.delete(`${A}/news-sources/:id`, own(({ params, state }) => { kept(state, "DELETE", `/news-sources/${params.id}`, null); state.assistant.news.sources = state.assistant.news.sources.filter((s) => s.id !== params.id); return { ok: true }; }));
+
+  // --- the knowledge library (owner endpoints without the /agent-chat prefix; the page sends the session header)
+  route.get("/knowledge/documents", ({ state }) => ({ items: state.assistant.docs }));
+  route.get("/knowledge/candidates", ({ state }) => ({ items: state.assistant.candidates }));
+  route.get("/knowledge/importable/:source", ({ params }) => ({ items: KNOWLEDGE_IMPORTABLE[params.source] ?? [] }));
+  route.post("/knowledge/import", ({ body, state }) => {
+    kept(state, "POST", "/knowledge/import", body);
+    for (const sourceId of body.source_ids) {
+      const row = (KNOWLEDGE_IMPORTABLE[body.source_type] ?? []).find((r) => r.id === sourceId);
+      if (row) state.assistant.docs.push({ id: id(state, "kd000000"), title: row.title, symbol: row.symbol, source_type: row.source_type, observed_at: "2026-11-12T00:00:00.000Z", available_at: "2026-11-12T00:00:00.000Z", status: "pending", active: true, owner_scope: "owner", chunks: 5 });
+    }
+    return { ok: true, accepted_sources: body.source_ids.length, chunks: body.source_ids.length * 5, needs_review: 0 };
+  });
+  route.post("/knowledge/index", ({ body, state }) => { kept(state, "POST", "/knowledge/index", body); return { ok: true, indexed: 3, failed: 1, idle: 0 }; });
+  route.post("/knowledge/retrieval-test", ({ body, state }) => {
+    kept(state, "POST", "/knowledge/retrieval-test", body);
+    return { result: { ok: true, data: [{ title: "AAPL 10-Q（2026 财年第四季度）", snippet: "Services revenue grew year over year.", score: 0.83 }] }, citations: [{ index: 1, title: "AAPL 10-Q（2026 财年第四季度）", url: "https://example.test/docs/01" }] };
+  });
+  route.get("/knowledge/documents/:id/chunks", ({ params, state }) => knowledgeChunks(params.id, state.assistant.docs) ?? reply.status(404, { detail: "document_not_found" }));
+  route.post("/knowledge/documents/:id/retry", ({ params, state }) => { kept(state, "POST", `/knowledge/documents/${params.id}/retry`, null); return { ok: true, queued_chunks: 3 }; });
+  route.post("/knowledge/documents/:id/withdraw", ({ params, state }) => {
+    kept(state, "POST", `/knowledge/documents/${params.id}/withdraw`, null);
+    const doc = state.assistant.docs.find((d) => d.id === params.id);
+    if (doc) Object.assign(doc, { active: false, status: "withdrawn" });
+    return { ok: true, status: "withdrawn" };
+  });
+  route.post("/knowledge/candidates/:id/review", ({ params, body, state }) => {
+    kept(state, "POST", `/knowledge/candidates/${params.id}/review`, body);
+    state.assistant.candidates = state.assistant.candidates.filter((c) => c.id !== params.id);
+    return { ok: true };
+  });
 }

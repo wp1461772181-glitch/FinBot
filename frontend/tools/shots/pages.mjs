@@ -12,6 +12,7 @@ import { handFed } from "./fake-sse.mjs";
 import { buildState } from "./fixtures/index.mjs";
 import { materialId } from "./fixtures/materials.mjs";
 import { EXTRA_INBOX, EXTRA_PROPOSALS, EXTRA_TASKS } from "./fixtures/routines.mjs";
+import { EXTRA_SOURCES, IMPORT_SAMPLE, KNOWLEDGE_CANDIDATES, KNOWLEDGE_EXTRA_DOCS } from "./fixtures/assistant.mjs";
 
 const LOADING = ["正在读取", "正在加载", "读取中", "加载中"];
 
@@ -325,11 +326,44 @@ export function stateWithoutConfirms() {
   state.proposals = []; state.inbox = state.inbox.filter((item) => item.section !== "confirm");
   return state;
 }
+// P8.1: pieces the pictures of the assistant pages are made of.
+const SKILL_DRAWER = "[data-testid=skill-drawer]";
+const NEWS_DRAWER = "[data-testid=news-drawer]";
+const DRAFT_SKILL = "s3000000-0000-4000-8000-000000000004";
+const newsRow = (page, id) => page.locator("[data-testid=news-row]", { has: page.locator(`[data-testid=news-id]`, { hasText: new RegExp(`^${id}$`) }) });
+async function openSkillEditor(page, name) {
+  await page.locator("[data-testid=skill-card]", { hasText: name }).first().locator("[data-testid=skill-edit]").click();
+  await page.locator(SKILL_DRAWER).waitFor({ timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector("#skill-name")?.value);
+}
+
 export function stateWithPortfolio(patch) { const state = buildState(); Object.assign(state.portfolio, patch); return state; }
 
 // --- P6.3 pictures ---------------------------------------------------------------------------------------------------
 /** The fake backend's state for the material pages: uploads already saved (the dialog's list), a job that never ends (the task bar). */
 export function stateWithMaterials(patch) { return Object.assign(buildState(), patch); }
+
+// P8.1: the states of the 助手 pages.  The default state is the fixtures' own (4 skills, 6 profile items, 4 past conversations, 6 news sources, 2 documents, no candidate); these change it the way a page needs.
+/** Nothing in any of the four pages: no skill, no profile item, no past conversation, no news source, no document. */
+export function stateAssistantEmpty() {
+  const state = buildState();
+  Object.assign(state.assistant, { skills: [], profile: [], recall: [], docs: [], candidates: [] });
+  state.assistant.news.sources = [];
+  return state;
+}
+/** The news page with three more sources: two that can be repaired (one repair fails with a code, one without) and one whose health value the page does not know. */
+export function stateWithNewsExtras() {
+  const state = buildState();
+  state.assistant.news.sources.push(...structuredClone(EXTRA_SOURCES));
+  return state;
+}
+/** The knowledge page with two candidates to review and two more documents (an AI analysis not indexed yet; a withdrawn upload). */
+export function stateWithKnowledgeCandidates() {
+  const state = buildState();
+  state.assistant.candidates = structuredClone(KNOWLEDGE_CANDIDATES);
+  state.assistant.docs.push(...structuredClone(KNOWLEDGE_EXTRA_DOCS));
+  return state;
+}
 const UPLOADED = [
   { id: "u0000000-0000-4000-8000-000000000011", symbol: "AAPL", title: "券商研报：服务业务利润率复盘", source_url: "https://example.com/research/services-margin", published_at: "2026-11-05T08:00:00.000Z", credibility_stars: 4, credibility_reason: "一手数据", impact_severity: "medium", status: "unconfirmed" },
   { id: "u0000000-0000-4000-8000-000000000012", symbol: "AAPL", title: "访谈纪要：供应链负责人", source_url: "https://example.com/interview/supply-chain", published_at: "2026-10-18T03:30:00.000Z", credibility_stars: 2, credibility_reason: "匿名来源", impact_severity: "high", status: "unconfirmed" },
@@ -709,9 +743,38 @@ export const PAGES = [
     before: async (page) => { await editTask(page, "旧式价格线"); await page.locator('[data-testid=task-drawer] [data-step-button=content]').click(); await page.locator("[data-testid=task-section-content] [data-testid=price-row]").first().waitFor({ timeout: 10000 }); } },
   { name: "routines-expired", hash: "#/routines?tab=confirm", ready: routinesLoaded, view: () => ({ fixtureState: stateWithRoutines() }) },
   { name: "routines-empty-confirm", hash: "#/routines?tab=confirm", ready: "[data-testid=confirm-empty]", view: () => ({ fixtureState: stateWithoutConfirms() }) },
-  { name: "news", hash: "#/assistant/news", ready: "main.personal-page h1" },
-  { name: "skills", hash: "#/assistant/skills", ready: ".skill-group" },
-  { name: "memory", hash: "#/assistant/memory", ready: "main.personal-page h1" },
+  // P8.1: the assistant's four pages in the new markup.  `news`, `skills` and `memory` are the old page names (every picture of them changes); the others are new.
+  // The default fixtures are the pictures' data: 4 skills (a built-in, an own one, an imported one that is off, a draft), 6 profile items (2 inferred, 1 typed, 1 archived), 4 past conversations, 6 news sources (a degraded one that REA can repair, a failing one, a paused one), 2 documents.
+  { name: "news", hash: "#/assistant/news", ready: "[data-testid=news-row]" },
+  { name: "skills", hash: "#/assistant/skills", ready: "[data-testid=skill-card]" },
+  { name: "memory", hash: "#/assistant/memory", ready: "[data-testid=memory-item]" },
+  { name: "skills-edit", hash: "#/assistant/skills", ready: "[data-testid=skill-card]", element: SKILL_DRAWER, before: async (page) => { await openSkillEditor(page, "周日复盘"); } },
+  { name: "skills-import-preview", hash: "#/assistant/skills", ready: "[data-testid=skill-card]", element: "[data-testid=skill-import-drawer]", before: async (page) => {
+      await page.locator("[data-testid=skill-import-open]").click(); await page.locator("[data-testid=skill-import-text]").fill(IMPORT_SAMPLE);
+      await page.locator("[data-testid=skill-import-preview]").click(); await page.locator("[data-testid=skill-preview]").waitFor({ timeout: 10000 });
+    } },
+  { name: "skills-draft", hash: `#/assistant/skills/${DRAFT_SKILL}`, ready: `${SKILL_DRAWER}[data-draft=true] #skill-name`, element: SKILL_DRAWER, before: async (page) => { await page.waitForFunction(() => document.querySelector("#skill-name")?.value); } },
+  { name: "skills-empty", hash: "#/assistant/skills", ready: "[data-testid=skills-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
+  { name: "memory-recall", hash: "#/assistant/memory?tab=recall", ready: "[data-testid=recall-item]" },
+  { name: "memory-empty", hash: "#/assistant/memory", ready: "[data-testid=memory-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
+  { name: "news-test-result", hash: "#/assistant/news", ready: "[data-testid=news-row]", before: async (page) => {
+      for (const id of ["wire-markets", "ev-weekly"]) { await newsRow(page, id).locator("[data-testid=news-menu]").click(); await page.locator("[data-testid=news-test]").click(); await newsRow(page, id).locator("[data-testid=news-test-result]").waitFor({ timeout: 10000 }); }
+    } },
+  { name: "news-edit", hash: "#/assistant/news", ready: "[data-testid=news-row]", element: NEWS_DRAWER, view: () => ({ fixtureState: stateWithNewsExtras() }), before: async (page) => {
+      await newsRow(page, "chip-watch").locator("[data-testid=news-menu]").click(); await page.locator("[data-testid=news-edit]").click(); await page.locator(NEWS_DRAWER).waitFor({ timeout: 10000 });
+      await page.waitForFunction(() => document.querySelector("#news-name")?.value);
+    } },
+  { name: "news-new", hash: "#/assistant/news", ready: "[data-testid=news-row]", element: NEWS_DRAWER, before: async (page) => {
+      await page.locator("[data-testid=news-new]").click(); await page.locator(NEWS_DRAWER).waitFor({ timeout: 10000 });
+      await page.locator("#news-name").fill("Tech Daily Brief"); await page.waitForFunction(() => document.querySelector("#news-id")?.value === "tech-daily-brief");
+    } },
+  { name: "news-empty", hash: "#/assistant/news", ready: "[data-testid=news-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
+  { name: "knowledge", hash: "#/assistant/knowledge", ready: "[data-testid=knowledge-doc]" },
+  { name: "knowledge-candidates", hash: "#/assistant/knowledge", ready: "[data-testid=knowledge-candidate]", view: () => ({ fixtureState: stateWithKnowledgeCandidates() }) },
+  { name: "knowledge-chunks", hash: "#/assistant/knowledge", ready: "[data-testid=knowledge-doc]", element: "[data-testid=knowledge-drawer]", view: () => ({ fixtureState: stateWithKnowledgeCandidates() }), before: async (page) => {
+      await page.locator("[data-testid=knowledge-doc]", { hasText: "AAPL 服务业务分析" }).locator("[data-testid=knowledge-doc-open]").click(); await page.locator("[data-testid=knowledge-chunk]").first().waitFor({ timeout: 10000 });
+    } },
+  { name: "knowledge-empty", hash: "#/assistant/knowledge", ready: "[data-testid=knowledge-docs-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
   { name: "settings", hash: "#/settings/models", ready: ".agent-admin h2" },
   // Developer sample page of the shadcn components (only in builds with VITE_DEV_KIT=1; fe-check.sh shots/smoke set it).
   // The first shows everything closed; the other two open the Dialog and the DropdownMenu.

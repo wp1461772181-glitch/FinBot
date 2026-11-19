@@ -91,9 +91,6 @@
 .bot-focus-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bot-focus-links { display: flex; gap: 10px; flex-shrink: 0; }
 .bot-warn { color: var(--c-warn); }
-
-.bot-tool { display: flex; align-items: center; gap: 6px; color:var(--c-ink); font-size: 12px; }
-.bot-tool small { color:var(--c-warn); }
 .bot-templates { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
 
 .catalog-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }

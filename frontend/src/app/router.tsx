@@ -29,7 +29,7 @@ const to = (path: string) => ({ element: <Navigate to={path} replace /> });
 /** The catch-all: an old-form address the router met before the legacy-address bridge did, or one nobody knows, goes where the old router sent it. */
 function Fallback() { return <Navigate to={legacyTarget(window.location.hash)} replace />; }
 
-/** Every page in `pages` below is still an old component: the shell puts the old-UI marker around each one (and around nothing else).  The chat pages, the research area, 持仓 and 任务 are new markup: no marker around them. */
+/** Every page in `pages` below is still an old component: the shell puts the old-UI marker around each one (and around nothing else).  The chat pages, the research area, 持仓, 任务 and the assistant pages (skills, memory, news sources, knowledge) are new markup: no marker around them. */
 function LegacyPage() { return <LegacyFrame><Outlet /></LegacyFrame>; }
 
 /** The research area's layout: no markup of its own.  Entering it reads the automatic monitor once (the navigation's dot), through a module that is fetched then. */
@@ -74,19 +74,19 @@ const researchPages: RouteObject[] = [
   { path: PATTERNS.monitor, ...page(() => import("./pages/monitor"), "MonitorRoute") },
 ];
 
-/** 持仓 (P7.1) and 任务 (P7.2) are new markup: no old-UI marker around them. */
+/** 持仓 (P7.1), 任务 (P7.2) and the assistant's skills, memory, news sources and knowledge pages (P8.1) are new markup: no old-UI marker around them. */
 const personalPages: RouteObject[] = [
   { path: PATTERNS.portfolio, ...page(() => import("./pages/portfolio"), "PortfolioRoute") },
   { path: PATTERNS.routines, ...page(() => import("./pages/routines"), "RoutinesRoute") },
-];
-
-const pages: RouteObject[] = [
-  { path: PATTERNS.assistantBots, ...page(() => import("./pages/bots"), "BotsRoute") },
   { path: PATTERNS.assistantSkill, ...page(() => import("./pages/skills"), "SkillsRoute") },
   { path: PATTERNS.assistantSkills, ...page(() => import("./pages/skills"), "SkillsRoute") },
   { path: PATTERNS.assistantMemory, ...page(() => import("./pages/personal"), "MemoryRoute") },
   { path: PATTERNS.assistantNews, ...page(() => import("./pages/personal"), "NewsRoute") },
   { path: PATTERNS.assistantKnowledge, ...page(() => import("./pages/knowledge"), "KnowledgeRoute") },
+];
+
+const pages: RouteObject[] = [
+  { path: PATTERNS.assistantBots, ...page(() => import("./pages/bots"), "BotsRoute") },
   ...SETTINGS_SECTIONS.map((section): RouteObject => ({ path: paths.settings(section), ...page(() => import("./pages/settings"), "SettingsRoute") })),
   { path: "*", Component: Fallback },
 ];

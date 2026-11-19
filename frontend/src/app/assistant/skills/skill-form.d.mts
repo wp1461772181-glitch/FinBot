@@ -1,0 +1,14 @@
+import type { Skill } from "../../../api/skills-core";
+export type SkillEditor = { id: string | null; name: string; description: string; body: string; template: string; tools: string[]; draft: boolean };
+export declare const NAME_MAX: number; export declare const DESCRIPTION_MAX: number; export declare const BODY_MAX: number; export declare const TEMPLATE_MAX: number; export declare const IMPORT_MAX: number;
+export declare const LEVEL_LABELS: Record<string, string>;
+export declare function isWriteLevel(level: string): boolean;
+export declare function blankEditor(): SkillEditor;
+export declare function editorOf(skill: Skill): SkillEditor;
+export declare function inputOf(editor: SkillEditor): { name: string; description: string; body: string; allowed_tools: string[]; output_template: string | null };
+export declare function saveOf(editor: SkillEditor): { create: true; body: ReturnType<typeof inputOf> & { enabled: true } } | { create: false; id: string; body: ReturnType<typeof inputOf> & { save_draft?: true } };
+export declare function toggleTool(tools: string[], name: string, on: boolean): string[];
+export declare function linkTarget(skills: Skill[], skillId: string | null): { kind: "none" } | { kind: "missing" } | { kind: "builtin" } | { kind: "editor"; skill: Skill };
+export declare function hasSwitch(skill: Skill): boolean;
+export declare function isEditable(skill: Skill): boolean;
+export declare function exportName(skill: Skill): string;

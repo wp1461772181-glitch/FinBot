@@ -4,11 +4,12 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, stateAssistantEmpty, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
+import { IMPORT_SAMPLE } from "./fixtures/assistant.mjs";
 import { HEX_MATERIAL, MATERIALS, analysisId, materialId } from "./fixtures/materials.mjs";
 import { CASES as UPLOAD_CASES, VALID as UPLOAD_VALID } from "./fixtures/upload-cases.mjs";
 import { REVISE_FILING_ID, ROOT_IDS, evaluations, forecastRoots, revisionCandidates, versionDetail } from "./fixtures/forecasts.mjs";
@@ -525,9 +526,9 @@ async function legacyRedirects(ctx) {
     ["#routines", "#/routines", "[data-testid=routines-page]"],
     ["#briefs", "#/routines", "[data-testid=routines-page]"],
     ["#portfolio", "#/portfolio", "[data-testid=portfolio-table]"],
-    ["#news", "#/assistant/news", "main.personal-page h1"],
-    ["#skills", "#/assistant/skills", ".skill-group"],
-    ["#memory", "#/assistant/memory", "main.personal-page h1"],
+    ["#news", "#/assistant/news", "[data-testid=news-row]"],
+    ["#skills", "#/assistant/skills", "[data-testid=skill-card]"],
+    ["#memory", "#/assistant/memory", "[data-testid=memory-item]"],
     ["#me", "#/assistant/bots", "[data-testid=all-bots] [data-testid=bot-card]"],   // (P5.2: the page is the grid of all bots now; it was the 「我」 page with four links)
     ["#admin", "#/settings/models", ".agent-admin h2"],
     ["#settings", "#/settings/models", ".agent-admin h2"],
@@ -617,7 +618,7 @@ async function clientActions(ctx) {
     const { page } = view;
     const expected = [
       ["overview", "#/research/c/AAPL"], ["predictions", "#/research/forecasts"], ["materials", "#/research/materials"], ["sec", "#/research/evidence?symbol=AAPL"],
-      ["revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`], ["evaluation", "#/research/scores"], ["knowledge", "#/settings/models"], ["agent", "#/chat"],
+      ["revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`], ["evaluation", "#/research/scores"], ["knowledge", "#/assistant/knowledge"], ["agent", "#/chat"],
     ];
     for (const [pageName, hash] of expected) {
       await dispatchAction(page, { action: "open_page", page: pageName });
@@ -1012,13 +1013,13 @@ async function mobileBarAndMore(ctx) {
   } finally { await view.close(); }
 }
 
-/** The old-UI restore still works inside the new shell: bare tags on three old pages keep the browser's margins; the sidebar's tags do not. */
+/** The old-UI restore still works inside the new shell: bare tags on the old settings page (the last of the three old pages this once measured: 技能 and 记忆 left the marker in P8.1, assistant-no-legacy says so) keep the browser's margins; the sidebar's tags do not. */
 async function legacyRestoreInShell(ctx) {
   const view = await openShell(ctx, "restore in shell", "#/settings/models", { ready: ".agent-admin h2" });
   try {
     const { page } = view;
     const bad = [];
-    for (const [hash, ready] of [["#/settings/models", ".agent-admin h2"], ["#/assistant/skills", ".skill-group"], ["#/assistant/memory", "main.personal-page h1"]]) {
+    for (const [hash, ready] of [["#/settings/models", ".agent-admin h2"]]) {
       await page.evaluate((h) => { location.hash = h; }, hash);
       await waitReady(page, { ready });
       await settle(page, { pinTranscript: false });
@@ -1043,7 +1044,7 @@ async function legacyRestoreInShell(ctx) {
     if (sidebar.border !== "0px") bad.push(`sidebar <button> has a browser border`);
     if (sidebar.pMargin !== "0px") bad.push(`sidebar <p> has a margin`);
     assert(!bad.length, bad.join("\n      "));
-    return "3 old pages: browser margins back on bare <h2>/<p>; the sidebar's <ul>/<a>/<button>/<p> are plain preflight";
+    return "the old settings page: browser margins back on bare <h2>/<p>; the sidebar's <ul>/<a>/<button>/<p> are plain preflight";
   } finally { await view.close(); }
 }
 
@@ -1096,9 +1097,12 @@ async function noWindowConfirm(ctx) {
   const PF = /\/portfolio\/transactions\/[^/]+$/;
   const sites = [
     { name: "portfolio record", hash: "#/portfolio", ready: "[data-testid=portfolio-table]", trigger: (p) => p.locator("[data-testid=portfolio-ledger] [data-testid=record-delete]").first(), method: "DELETE", re: PF },
-    { name: "skill", hash: "#/assistant/skills", ready: ".skill-group", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/skills\/[^/]+$/ },
-    { name: "memory item", hash: "#/assistant/memory", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/profile\/[^/]+$/ },
-    { name: "news source", hash: "#/assistant/news", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/news-sources\/[^/]+$/ },
+    // the delete of a skill and of a news source is in the card's / row's 「…」 menu: open it, press 删除; the focus comes back to the menu's button (a memory item's 删除 is a button of its own row)
+    { name: "skill", hash: "#/assistant/skills", ready: "[data-testid=skill-card]", trigger: (p) => p.locator("[data-testid=skill-menu]").first(), method: "DELETE", re: /\/skills\/[^/]+$/,
+      activate: async (page, trigger) => { await trigger.click(); await page.locator("[data-testid=skill-delete]").click(); } },
+    { name: "memory item", hash: "#/assistant/memory", ready: "[data-testid=memory-item]", trigger: (p) => p.locator("[data-testid=memory-delete]").first(), method: "DELETE", re: /\/profile\/[^/]+$/ },
+    { name: "news source", hash: "#/assistant/news", ready: "[data-testid=news-row]", trigger: (p) => p.locator("[data-testid=news-menu]").first(), method: "DELETE", re: /\/news-sources\/[^/]+$/,
+      activate: async (page, trigger) => { await trigger.click(); await page.locator("[data-testid=news-delete]").click(); } },
     { name: "routine task", hash: "#/routines?tab=tasks", ready: "[data-testid=task-card]", trigger: (p) => p.locator("[data-testid=task-menu]").first(), method: "DELETE", re: /\/tasks\/[^/]+$/,
       // the delete is in the card's 「…」 menu: open it, press 删除; the focus comes back to the menu's button
       activate: async (page, trigger) => { await trigger.click(); await page.locator("[data-testid=task-delete]").click(); } },
@@ -9075,6 +9079,1119 @@ async function routinesLaterEnglish(ctx) {
   return "English 「…」 menu: Skip / Later / Ignore; Later sends the baseline's later body (action: later); the sign-in dialog still reads Cancel";
 }
 
+// --- P8.1: the assistant's four pages (技能, 记忆, 新闻源, 知识库) ---------------------------------------------------------------------------
+// The baseline is what the OLD pages (the production build of af8b894) sent and showed on the same fixtures (fixtures/assistant-bodies-baseline.json, recorded before any page was touched):
+// the new pages must send the same requests, body for body.  Writes are read from the fake backend (`state.assistant.writes`; an upload from `state.materialPosts`), reads from its request log.
+const AS = JSON.parse(fs.readFileSync(new URL("./fixtures/assistant-bodies-baseline.json", import.meta.url), "utf8"));
+const asWrites = (view) => view.mock.state.assistant.writes;
+const asBody = (write) => (write.body === null ? null : JSON.stringify(write.body));
+/** The body the old page sent (as a string) for the first request of that method whose path ends as the pattern says. */
+const asOld = (entry, method, re) => entry.sent.find((r) => r.method === method && re.test(r.path))?.body ?? null;
+const asReads = (view, re) => view.mock.requests.filter((r) => r.method === "GET" && re.test(r.path)).map((r) => r.path + r.query);
+async function asOpen(ctx, label, hash, ready, { state, width = 1440, theme = "light", motion = false } = {}) {
+  const view = await newView(ctx.browser, { width, theme, label, unmatched, motion, ...(state ? { fixtureState: state } : {}) });
+  await view.context.addInitScript(() => { window.__downloads = []; const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { if (this.download) { window.__downloads.push(this.download); return; } return click.call(this); }; });
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  await view.page.waitForSelector(ready, { state: "visible", timeout: 30000 });
+  await settle(view.page);
+  return view;
+}
+async function asWritesAfter(view, count, what) {
+  const end = Date.now() + 8000;
+  while (asWrites(view).length < count && Date.now() < end) await view.page.waitForTimeout(60);
+  if (asWrites(view).length < count) throw new Error(`${what}: no request went out`);
+  return asWrites(view);
+}
+/** Settle for a moment and say that nothing (more) went out. */
+async function asNoWrites(view, what, ms = 500) { await view.page.waitForTimeout(ms); assert(asWrites(view).length === 0, `${what}: ${asWrites(view).length} request(s) went out: ${JSON.stringify(asWrites(view).map((w) => `${w.method} ${w.path}`))}`); }
+const asToast = (page, text) => page.getByText(text, { exact: true }).first().waitFor({ timeout: 8000 });
+const asHere = (w, method, re, what) => { assert(w.method === method && re.test(w.path), `${what}: sent ${w.method} ${w.path}`); };
+/** Choose an item of a Radix select: open it, press the option. */
+async function asPick(page, trigger, name) { await trigger.click(); await page.getByRole("option", { name, exact: true }).click(); }
+/** Press Tab until the focus is on the element the selector names (a keyboard user's walk; fails when it is not reached). */
+async function asTabTo(page, selector, max = 40) {
+  for (let i = 0; i < max; i += 1) {
+    if (await page.evaluate((s) => !!document.activeElement?.matches(s), selector)) return;
+    await page.keyboard.press("Tab");
+  }
+  throw new Error(`the keyboard never reached ${selector}`);
+}
+const asOnly = (page, selector) => page.evaluate((s) => document.activeElement?.matches(s) ?? false, selector);
+const SK_CARD = "[data-testid=skill-card]", SK_DRAWER = "[data-testid=skill-drawer]", SK_IMPORT = "[data-testid=skill-import-drawer]";
+const skCard = (page, name) => page.locator(SK_CARD, { hasText: name }).first();
+const SK_ID = { builtin: "s3000000-0000-4000-8000-000000000001", mine: "s3000000-0000-4000-8000-000000000002", imported: "s3000000-0000-4000-8000-000000000003", draft: "s3000000-0000-4000-8000-000000000004" };
+async function skFill(page, c) {
+  const d = page.locator(SK_DRAWER);
+  if (c.name !== undefined) await d.locator("#skill-name").fill(c.name);
+  if (c.description !== undefined) await d.locator("#skill-description").fill(c.description);
+  if (c.body !== undefined) await d.locator("#skill-body").fill(c.body);
+  if (c.template !== undefined) await d.locator("#skill-template").fill(c.template);
+  for (const i of c.tools ?? []) await d.locator("[data-testid=skill-tool-list] li").nth(i).locator("button[role=checkbox]").click();
+}
+const skMenu = async (page, name, item) => { await skCard(page, name).locator("[data-testid=skill-menu]").click(); await page.locator(`[data-testid=${item}]`).click(); };
+
+async function skillsOps(ctx) {
+  const done = [];
+  // 1. 新建: four cases of the old editor, each the old body character for character (enabled: true, the template null when blank, tools in the order they were ticked)
+  const CASES = {
+    minimal: { name: "  新技能一  ", description: "  说明一句  ", body: "步骤1\n步骤2", tools: [0] },
+    withTemplate: { name: "带模板", description: "d", body: "b", template: "## 要点\n## 风险", tools: [2, 0] },
+    allTools: { name: "全部工具", description: "全部", body: "x", template: "  ", tools: [0, 1, 2, 3, 4] },
+    noTools: { name: "没有工具", description: "无", body: "z", tools: [] },
+  };
+  for (const [k, c] of Object.entries(CASES)) {
+    const view = await asOpen(ctx, `skills new ${k}`, "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=skill-new]").click(); await page.locator(SK_DRAWER).waitFor({ timeout: 8000 });
+      await skFill(page, c);
+      await page.locator("[data-testid=skill-save]").click();
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "POST", /\/skills$/, k);
+      assert(asBody(w) === asOld(AS.skills.create[k], "POST", /\/skills$/), `${k}: body\n  ${asBody(w)}\n  differs from the old one\n  ${asOld(AS.skills.create[k], "POST", /\/skills$/)}`);
+      assert(w.body.enabled === true, `${k}: a new skill was not created enabled`);
+      await page.locator(SK_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+      await asToast(page, "已保存。");
+      await skCard(page, c.name.trim()).waitFor({ timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  done.push("4 new skills");
+  // 2. 编辑 (the body has no `enabled`), and 3. a draft saved: 核对并保存 → 保存为技能 sends save_draft
+  for (const [k, name, change] of [["untouched", "周日复盘", null], ["rename", "周日复盘", { name: "周日复盘 v2", description: "改过的说明" }], ["tools", "新闻去重", { tools: [0] }]]) {
+    const view = await asOpen(ctx, `skills edit ${k}`, "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      await skCard(page, name).locator("[data-testid=skill-edit]").click(); await page.locator(SK_DRAWER).waitFor({ timeout: 8000 });
+      await page.waitForFunction(() => document.querySelector("#skill-name")?.value, null, { timeout: 5000 });
+      assert((await page.locator(SK_DRAWER).getAttribute("data-draft")) === "false", `${k}: an own skill's editor says it is a draft`);
+      if (change) await skFill(page, change);
+      await page.locator("[data-testid=skill-save]").click();
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "PATCH", /\/skills\/s3000000-0000-4000-8000-00000000000[23]$/, k);
+      assert(asBody(w) === asOld(AS.skills.edit[k], "PATCH", /\/skills\//), `${k}: body ${asBody(w)} differs from the old ${asOld(AS.skills.edit[k], "PATCH", /\/skills\//)}`);
+      assert(!("enabled" in w.body) && !("save_draft" in w.body), `${k}: the body carries enabled or save_draft`);
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "skills draft save", "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      const draft = skCard(page, "估值草稿");
+      assert((await draft.locator("[data-testid=skill-edit]").innerText()).trim() === "核对并保存", "the draft's main button is not 核对并保存");
+      await draft.locator("[data-testid=skill-edit]").click(); await page.locator(SK_DRAWER).waitFor({ timeout: 8000 });
+      assert((await page.locator("[data-testid=skill-save]").innerText()).trim() === "保存为技能", "a draft saves as 保存为技能");
+      await page.locator("[data-testid=skill-save]").click();
+      const [w] = await asWritesAfter(view, 1, "draft");
+      asHere(w, "PATCH", /\/skills\/s3000000-0000-4000-8000-000000000004$/, "draft");
+      assert(asBody(w) === asOld(AS.skills.draft, "PATCH", /\/skills\//) && w.body.save_draft === true, `draft: body ${asBody(w)}`);
+    } finally { await view.close(); }
+  }
+  done.push("3 edits + the draft (save_draft)");
+  // 4. 启用 / 停用: saved as it is flipped; only an active skill has the switch (a draft has none)
+  for (const [k, name] of [["off", "周日复盘"], ["on", "新闻去重"], ["builtin", "财报速读"]]) {
+    const view = await asOpen(ctx, `skills toggle ${k}`, "#/assistant/skills", SK_CARD);
+    try {
+      await skCard(view.page, name).locator("[data-testid=skill-switch]").click();
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "POST", /\/skills\/s3000000-0000-4000-8000-00000000000\d\/enabled$/, k);
+      assert(asBody(w) === asOld(AS.skills.toggle[k], "POST", /\/enabled$/), `${k}: body ${asBody(w)}`);
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "skills no switch", "#/assistant/skills", SK_CARD);
+    try {
+      assert((await skCard(view.page, "估值草稿").locator("[data-testid=skill-switch]").count()) === 0, "a draft has an on / off switch");
+      assert((await skCard(view.page, "周日复盘").locator("[data-testid=skill-switch]").count()) === 1, "an active skill has no switch");
+    } finally { await view.close(); }
+  }
+  done.push("switch both ways, none on a draft");
+  // 5. 复制 and 6. 导出 (the file is <name>.md)
+  {
+    const view = await asOpen(ctx, "skills copy", "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      await skMenu(page, "财报速读", "skill-copy");
+      const [w] = await asWritesAfter(view, 1, "copy");
+      asHere(w, "POST", /\/skills\/s3000000-0000-4000-8000-000000000001\/copy$/, "copy");
+      assert(w.body === null, "a copy sends a body");
+      await asToast(page, "已复制，可以在「我的」里编辑。");
+      await skCard(page, "财报速读 副本").waitFor({ timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  for (const name of ["财报速读", "周日复盘"]) {
+    const view = await asOpen(ctx, `skills export ${name}`, "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      await skMenu(page, name, "skill-export");
+      await page.waitForFunction(() => window.__downloads.length === 1, null, { timeout: 8000 });
+      assert((await page.evaluate(() => window.__downloads[0])) === `${name}.md`, `the file is called ${await page.evaluate(() => window.__downloads[0])}`);
+      assert(asReads(view, /\/skills\/[^/]+\/export$/).length === 1, "the export was not one GET");
+      assert(asWrites(view).length === 0, "an export wrote something");
+    } finally { await view.close(); }
+  }
+  done.push("copy, export (name.md)");
+  // 7. 导入预览 and 8. 确认导入: the old bodies; the text is sent as typed
+  {
+    const view = await asOpen(ctx, "skills import", "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=skill-import-open]").click(); await page.locator(SK_IMPORT).waitFor({ timeout: 8000 });
+      await page.locator("[data-testid=skill-import-text]").fill(AS.skills.importOp.pasted.markdown);
+      await page.locator("[data-testid=skill-import-preview]").click(); await page.locator("[data-testid=skill-preview]").waitFor({ timeout: 8000 });
+      const [preview] = await asWritesAfter(view, 1, "preview");
+      asHere(preview, "POST", /\/skills\/import\/preview$/, "preview");
+      assert(asBody(preview) === asOld(AS.skills.importOp.pasted.preview, "POST", /import\/preview$/), `preview body ${asBody(preview)}`);
+      await page.locator("[data-testid=skill-import-confirm]").click();
+      const w = await asWritesAfter(view, 2, "import");
+      asHere(w[1], "POST", /\/skills\/import$/, "import");
+      assert(asBody(w[1]) === asOld(AS.skills.importOp.pasted, "POST", /\/skills\/import$/), `import body ${asBody(w[1])}`);
+      await asToast(page, "已导入。");
+      await skCard(page, "周报整理").waitFor({ timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  done.push("import: preview, then import");
+  // 9. 删除 (press and hold): a built-in has neither 编辑 nor 删除; Esc sends nothing
+  {
+    const view = await asOpen(ctx, "skills delete", "#/assistant/skills", SK_CARD, { motion: true });
+    try {
+      const { page } = view;
+      const builtin = skCard(page, "财报速读");
+      assert((await builtin.locator("[data-testid=skill-edit]").count()) === 0, "a built-in skill has 编辑");
+      await builtin.locator("[data-testid=skill-menu]").click();
+      assert((await page.locator("[data-testid=skill-export]").count()) === 1 && (await page.locator("[data-testid=skill-copy]").count()) === 1 && (await page.locator("[data-testid=skill-delete]").count()) === 0, "a built-in skill's menu is not just 导出 and 复制");
+      await page.keyboard.press("Escape");
+      await skMenu(page, "周日复盘", "skill-delete");
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      assert((await dialogOf(page).locator('[data-slot="alert-dialog-title"]').innerText()).includes("周日复盘"), "the question does not name the skill");
+      await page.keyboard.press("Escape"); await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+      await asNoWrites(view, "Esc");
+      await skMenu(page, "周日复盘", "skill-delete");
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'));
+      const [w] = await asWritesAfter(view, 1, "delete");
+      asHere(w, "DELETE", /\/skills\/s3000000-0000-4000-8000-000000000002$/, "delete");
+      await asToast(page, "已删除。");
+      await skCard(page, "周日复盘").waitFor({ state: "detached", timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  done.push("delete (hold); a built-in has no edit or delete");
+  return `9 operations: ${done.join("; ")}; every request equals the old page's`;
+}
+
+async function skillsImportPreviewListsWrites(ctx) {
+  const view = await asOpen(ctx, "skills import preview", "#/assistant/skills", SK_CARD);
+  try {
+    const { page } = view;
+    await page.locator("[data-testid=skill-import-open]").click(); await page.locator(SK_IMPORT).waitFor({ timeout: 8000 });
+    const confirmBtn = page.locator("[data-testid=skill-import-confirm]"), preview = page.locator("[data-testid=skill-import-preview]"), text = page.locator("[data-testid=skill-import-text]");
+    assert(await confirmBtn.isDisabled(), "导入 can be pressed before there is any preview");
+    assert(await preview.isDisabled(), "预览 can be pressed with an empty box");
+    await text.fill(AS.skills.importOp.pasted.markdown);
+    assert(await confirmBtn.isDisabled(), "导入 can be pressed with text but no preview");
+    await preview.click(); await page.locator("[data-testid=skill-preview]").waitFor({ timeout: 8000 });
+    assert(!(await confirmBtn.isDisabled()), "导入 cannot be pressed after the preview");
+    // everything the old preview said: the name and description, every tool, the write mark on the one that writes, the sentence
+    const old = AS.skills.importOp.pasted.preview.text;
+    assert(old[0].startsWith("周报整理") && (await page.locator("[data-testid=skill-preview-name]").innerText()).trim() === "周报整理", "the skill's name is not in the preview");
+    assert((await page.locator("[data-testid=skill-preview]").innerText()).includes("把本周的新闻和材料整理成一页周报"), "the description is not in the preview");
+    const tools = await page.locator("[data-testid=skill-preview] [data-testid=skill-tool]").evaluateAll((l) => l.map((e) => [e.getAttribute("data-tool"), e.getAttribute("data-write"), e.textContent.trim()]));
+    assert(tools.length === 3 && tools.map((t) => t[0]).join() === "search_news,get_market_data,save_material", `the tools: ${JSON.stringify(tools)}`);
+    assert(tools.filter((t) => t[1] === "true").map((t) => t[0]).join() === "save_material" && tools.find((t) => t[0] === "save_material")[2].includes("写操作"), `the write mark: ${JSON.stringify(tools)}`);
+    assert(tools.filter((t) => t[1] === "false").every((t) => !t[2].includes("写操作")), "a read tool is marked as a write");
+    assert((await page.locator("[data-testid=skill-preview-write-note]").innerText()).trim() === "写操作：仍需确认卡", "the sentence for a write is missing");
+    // a text changed afterwards withdraws the preview
+    await text.fill(`${AS.skills.importOp.pasted.markdown}\n4. 多一步`);
+    assert((await page.locator("[data-testid=skill-preview]").count()) === 0 && (await confirmBtn.isDisabled()), "the preview stayed after the text changed");
+    // a skill of read tools only: no write mark, no sentence
+    await text.fill(AS.skills.importOp.readOnly.markdown); await preview.click(); await page.locator("[data-testid=skill-preview]").waitFor({ timeout: 8000 });
+    assert((await page.locator("[data-testid=skill-preview] [data-write=true]").count()) === 0 && (await page.locator("[data-testid=skill-preview-write-note]").count()) === 0, "a read-only skill shows a write mark or the write sentence");
+    // a file is read into the box; a text that is not a skill is refused with the server's sentence and no preview
+    await page.locator("[data-testid=skill-import-file]").setInputFiles({ name: "skill.md", mimeType: "text/markdown", buffer: Buffer.from(AS.skills.importOp.pasted.markdown, "utf8") });
+    await page.waitForFunction((md) => document.querySelector("[data-testid=skill-import-text]").value === md, AS.skills.importOp.pasted.markdown, { timeout: 5000 });
+    assert((await page.locator("[data-testid=skill-preview]").count()) === 0, "a chosen file kept the old preview");
+    await text.fill("这不是技能文件"); await preview.click();
+    await page.locator(`${SK_IMPORT} [role=alert]`).waitFor({ timeout: 8000 });
+    assert((await page.locator(`${SK_IMPORT} [role=alert]`).first().innerText()).includes(AS.skills.importOp.refused.alert[0]), "the refusal sentence is not the old one");
+    assert((await page.locator("[data-testid=skill-preview]").count()) === 0 && (await confirmBtn.isDisabled()), "a refused text has a preview");
+    assert(asWrites(view).filter((w) => !/import\/preview$/.test(w.path)).length === 0, "something other than a preview was sent");
+    return "导入 stays disabled until a preview of this very text exists; the preview lists all 3 tools, marks save_material 写操作 with the sentence; editing withdraws it; a read-only skill has no mark; a file fills the box; a refusal says why";
+  } finally { await view.close(); }
+}
+
+async function skillsDraftLink(ctx) {
+  const notes = [];
+  const draftNote = AS.skills.draft.opened.note;
+  for (const [label, hash] of [["new address", `#/assistant/skills/${SK_ID.draft}`], ["old address #skills/<id>", `#skills/${SK_ID.draft}`]]) {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: `skill link ${label}`, unmatched });
+    try {
+      const { page } = view;
+      await page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+      await page.locator(`${SK_DRAWER}[data-draft=true]`).waitFor({ timeout: 15000 });
+      await waitHash(page, `#/assistant/skills/${SK_ID.draft}`);
+      assert((await page.locator("[data-testid=skill-draft-note]").innerText()).trim() === draftNote, `${label}: the draft sentence is not "${draftNote}"`);
+      assert((await page.locator("#skill-name").inputValue()) === "估值草稿", `${label}: the drawer is not that draft's`);
+      assert((await page.locator("[data-testid=skill-save]").innerText()).trim() === "保存为技能", `${label}: not 保存为技能`);
+      await page.locator("[data-testid=skill-cancel]").click();
+      await page.locator(SK_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+      await waitHash(page, "#/assistant/skills");
+      assert((await page.locator("[data-testid=skill-group][data-group=drafts] [data-testid=skill-group-note]").innerText()).trim() === draftNote, `${label}: the sentence above the drafts is missing`);
+      notes.push(label);
+    } finally { await view.close(); }
+  }
+  // an own skill's link opens its editor (no draft sentence); a built-in's opens none and says nothing; a missing one says 这个技能不存在。
+  const own = await asOpen(ctx, "skill link own", `#/assistant/skills/${SK_ID.mine}`, `${SK_DRAWER}[data-draft=false]`);
+  try { assert((await own.page.locator("#skill-name").inputValue()) === "周日复盘" && (await own.page.locator("[data-testid=skill-draft-note]").count()) === 0, "an own skill's link did not open its editor"); notes.push("own skill"); } finally { await own.close(); }
+  const builtin = await asOpen(ctx, "skill link builtin", `#/assistant/skills/${SK_ID.builtin}`, SK_CARD);
+  try { await builtin.page.waitForTimeout(600); assert((await builtin.page.locator(SK_DRAWER).count()) === 0 && !(await builtin.page.locator("main").innerText()).includes("这个技能不存在。"), "a built-in's link opened a drawer or said it is missing"); notes.push("built-in: nothing"); } finally { await builtin.close(); }
+  const missing = await asOpen(ctx, "skill link missing", "#/assistant/skills/s3000000-0000-4000-8000-0000000000ff", SK_CARD);
+  try { await missing.page.getByText("这个技能不存在。").first().waitFor({ timeout: 8000 }); assert((await missing.page.locator(SK_DRAWER).count()) === 0, "a missing skill opened a drawer"); notes.push("missing: said"); } finally { await missing.close(); }
+  return `the new and the old (#skills/<id>) address open the draft's drawer with its sentence and 保存为技能, closing goes back to /assistant/skills; ${notes.slice(2).join(", ")}`;
+}
+
+async function skillsKeyboard(ctx) {
+  const view = await asOpen(ctx, "skills keyboard", "#/assistant/skills", SK_CARD);
+  try {
+    const { page } = view;
+    // 新建 → type → save, with the keyboard alone
+    await page.locator("[data-testid=skill-new]").focus(); await page.keyboard.press("Enter");
+    await page.locator(SK_DRAWER).waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => document.activeElement?.closest("[data-testid=skill-drawer]"), null, { timeout: 5000 });
+    await asTabTo(page, "#skill-name"); await page.keyboard.type("键盘技能");
+    await asTabTo(page, "#skill-description"); await page.keyboard.type("只用键盘建的");
+    await asTabTo(page, "#skill-body"); await page.keyboard.type("第一步");
+    await asTabTo(page, "#skill-template");
+    await asTabTo(page, "[data-testid=skill-tool-list] button[role=checkbox]"); await page.keyboard.press("Space");
+    await asTabTo(page, "[data-testid=skill-save]"); await page.keyboard.press("Enter");
+    const [w] = await asWritesAfter(view, 1, "keyboard save");
+    assert(asBody(w) === JSON.stringify({ name: "键盘技能", description: "只用键盘建的", body: "第一步", allowed_tools: ["get_market_data"], output_template: null, enabled: true }), `the keyboard-made skill sent ${asBody(w)}`);
+    await page.locator(SK_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+    await skCard(page, "键盘技能").waitFor({ timeout: 8000 });
+    // the card's 「…」 menu opens with Enter, Esc closes it and the focus is back on the button
+    const menu = skCard(page, "周日复盘").locator("[data-testid=skill-menu]");
+    await menu.focus(); await page.keyboard.press("Enter");
+    await page.getByRole("menuitem", { name: "导出" }).waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape");
+    await page.getByRole("menuitem", { name: "导出" }).waitFor({ state: "detached", timeout: 5000 });
+    assert(await menu.evaluate((e) => e === document.activeElement), "the focus did not come back to 「…」");
+    // an editor opened with Enter: Esc closes it and the focus is back on 编辑
+    const edit = skCard(page, "周日复盘").locator("[data-testid=skill-edit]");
+    await edit.focus(); await page.keyboard.press("Enter"); await page.locator(SK_DRAWER).waitFor({ timeout: 8000 });
+    await page.keyboard.press("Escape"); await page.locator(SK_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "skill-edit", null, { timeout: 3000 });
+    assert(asWrites(view).length === 1, "Esc saved something");
+    return "新建 opened and saved from the keyboard (fields, a tool with Space, Enter on 保存); 「…」 opens with Enter and Esc returns the focus; the editor closes with Esc and the focus returns to 编辑";
+  } finally { await view.close(); }
+}
+
+const MEM_ITEM = "[data-testid=memory-item]";
+const memItem = (page, text) => page.locator(MEM_ITEM, { hasText: text }).first();
+const REC_READS = /\/recall$/;
+async function memoryOps(ctx) {
+  const done = [];
+  const B = AS.memory;
+  // 1. 添加: the old bodies (the text's blanks become one space; 全局 is bot_id null); a blank text cannot be added at all
+  for (const [k, scope, kind, text] of [["globalPref", "全局（所有 bot）", "偏好", "  金额   都用  亿美元 "], ["botInstruction", "本 bot · AppleBot", "长期指令", "只谈 AAPL"], ["aboutMe", "全局（所有 bot）", "关于我", "我在上海"]]) {
+    const view = await asOpen(ctx, `memory add ${k}`, "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      await asPick(page, page.locator("[data-testid=memory-add-scope]"), scope); await asPick(page, page.locator("[data-testid=memory-add-kind]"), kind);
+      await page.locator("[data-testid=memory-add-text]").fill(text);
+      await page.locator("[data-testid=memory-add-submit]").click();
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "POST", /\/profile$/, k);
+      assert(asBody(w) === asOld(B.add[k], "POST", /\/profile$/), `${k}: body ${asBody(w)} differs from the old ${asOld(B.add[k], "POST", /\/profile$/)}`);
+      await page.waitForFunction(() => document.querySelector("[data-testid=memory-add-text]").value === "", null, { timeout: 5000 });
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "memory add blank", "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=memory-add-text]").fill("   ");
+      assert(await page.locator("[data-testid=memory-add-submit]").isDisabled(), "a blank text can be added");
+      await page.locator("[data-testid=memory-add-text]").press("Enter");
+      await asNoWrites(view, "a blank add");
+      assert((await page.locator("[data-testid=memory-add-text]").getAttribute("maxlength")) === "200", "the box does not stop at 200");
+    } finally { await view.close(); }
+  }
+  done.push("3 adds (+ blank refused)");
+  // 2. 编辑: Enter saves, Esc leaves, a blank text is not saved and the box stays
+  for (const [k, how, typed] of [["enter", "Enter", "  新的写法  "], ["escape", "Escape", "不会保存"], ["button", "button", "按钮保存"], ["blank", "Enter", "   "]]) {
+    const view = await asOpen(ctx, `memory edit ${k}`, "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      await memItem(page, "回答先给结论").locator("[data-testid=memory-edit]").click();
+      const box = page.locator("[data-testid=memory-edit-input]"); await box.waitFor({ timeout: 5000 });
+      assert((await box.inputValue()) === B.edit.opened.value && await box.evaluate((e) => e === document.activeElement), `${k}: the box does not open with the text, focused`);
+      await box.fill(typed);
+      if (how === "button") await page.locator("[data-testid=memory-save]").click(); else await box.press(how);
+      if (k === "enter" || k === "button") {
+        const [w] = await asWritesAfter(view, 1, k);
+        asHere(w, "PATCH", /\/profile\/pf000000-0000-4000-8000-000000000002$/, k);
+        assert(asBody(w) === asOld(B.edit[k], "PATCH", /\/profile\//), `${k}: body ${asBody(w)}`);
+        await box.waitFor({ state: "detached", timeout: 5000 });
+      } else {
+        await asNoWrites(view, k);
+        const open = (await page.locator("[data-testid=memory-edit-input]").count()) === 1;
+        assert(open === (k === "blank"), `${k}: the box is ${open ? "still" : "no longer"} open`);
+      }
+    } finally { await view.close(); }
+  }
+  done.push("edit: Enter / 保存 save, Esc leaves, blank refused");
+  // 3. 范围 (saved as chosen), 4. 确认 (only an inferred item has it), 5. 删除 (hold; an archived one too)
+  for (const [k, item, to] of [["toBot", "回答先给结论", "ReportBot"], ["toGlobal", "新闻只保留", "全局"], ["botToBot", "AAPL 的服务业务", "NewsBot"]]) {
+    const view = await asOpen(ctx, `memory scope ${k}`, "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      await asPick(page, memItem(page, item).locator("[data-testid=memory-scope]"), to);
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "PATCH", /\/profile\/pf000000-0000-4000-8000-00000000000\d$/, k);
+      assert(asBody(w) === asOld(B.scope[k], "PATCH", /\/profile\//), `${k}: body ${asBody(w)} differs from the old ${asOld(B.scope[k], "PATCH", /\/profile\//)}`);
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "memory confirm", "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      assert((await page.locator("[data-testid=memory-confirm]").count()) === B.confirm.countWithButton, `${await page.locator("[data-testid=memory-confirm]").count()} items have 确认, the old page had ${B.confirm.countWithButton}`);
+      for (const el of await page.locator(MEM_ITEM).all()) assert(((await el.getAttribute("data-origin")) === "inferred") === ((await el.locator("[data-testid=memory-confirm]").count()) === 1), "确认 is not exactly on the inferred items");
+      await memItem(page, "新闻只保留").locator("[data-testid=memory-confirm]").click();
+      const [w] = await asWritesAfter(view, 1, "confirm");
+      asHere(w, "POST", /\/profile\/pf000000-0000-4000-8000-000000000004\/confirm$/, "confirm");
+      assert(w.body === null, "a confirm sends a body");
+      await page.waitForFunction(() => document.querySelectorAll("[data-testid=memory-confirm]").length === 1, null, { timeout: 5000 });
+    } finally { await view.close(); }
+  }
+  for (const [k, item, archived] of [["active", "回答先给结论", false], ["archived", "用简体中文回答", true]]) {
+    const view = await asOpen(ctx, `memory delete ${k}`, "#/assistant/memory", MEM_ITEM, { motion: true });
+    try {
+      const { page } = view;
+      if (archived) await page.locator("[data-testid=memory-archived] button").first().click();
+      const row = archived ? page.locator("[data-testid=memory-archived-item]", { hasText: item }) : memItem(page, item);
+      await (archived ? row.getByRole("button", { name: /^删除/ }) : row.locator("[data-testid=memory-delete]")).click();
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      const dialog = B.del[k].dialog;
+      assert((await dialogOf(page).locator('[data-slot="alert-dialog-title"]').innerText()).trim() === dialog.title && (await dialogOf(page).locator('[data-slot="alert-dialog-description"]').innerText()).trim() === dialog.description, `${k}: the question is not the old one`);
+      await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'));
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "DELETE", /\/profile\/pf000000-0000-4000-8000-00000000000[26]$/, k);
+    } finally { await view.close(); }
+  }
+  done.push("scope ×3 (bot_id / null), 确认 only on inferred, delete (hold; archived too)");
+  // 6. the tab is in the address; 往事 reads limit=20; 7. a search goes out when submitted, never while typing; 8. the bot filter; 9. 打开对话
+  {
+    const view = await asOpen(ctx, "memory recall", "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      const reads = () => asReads(view, REC_READS);
+      assert(reads().length === 0, "the profile tab read the past conversations");
+      await page.locator("[data-testid=tab-recall]").click();
+      await page.locator("[data-testid=recall-item]").first().waitFor({ timeout: 8000 });
+      await page.waitForFunction(() => location.hash.endsWith("?tab=recall"), null, { timeout: 5000 });
+      assert(reads().join() === `/agent-chat/recall${B.recall.enter.sent[0].query}`, `entering the tab read ${reads().join()}`);
+      const box = page.locator("[data-testid=recall-query]");
+      await box.pressSequentially("英伟达", { delay: 40 }); await page.waitForTimeout(700);
+      assert(reads().length === 1, `typing sent ${reads().length - 1} request(s)`);
+      await page.locator("[data-testid=recall-submit]").click(); await page.waitForTimeout(700);
+      assert(reads().length === 2 && reads()[1] === `/agent-chat/recall${B.recall.submitButton.sent[0].query}`, `the 搜索 button: ${reads().slice(1).join()}`);
+      await page.locator("[data-testid=recall-submit]").click(); await page.waitForTimeout(500);
+      assert(reads().length === 2, "the same search sent again (the old page did not)");
+      await box.fill("美联储"); await box.press("Enter"); await page.waitForTimeout(700);
+      assert(reads().length === 3 && reads()[2] === `/agent-chat/recall${B.recall.submitEnter.sent[0].query}`, `Enter in the box: ${reads().slice(2).join()}`);
+      await asPick(page, page.locator("[data-testid=recall-bot]"), "AppleBot"); await page.waitForTimeout(700);
+      assert(reads().length === 4 && reads()[3] === `/agent-chat/recall${B.recall.filterWithQuery.sent[0].query}`, `the bot filter with a word: ${reads().slice(3).join()}`);
+      await box.fill(""); await page.locator("[data-testid=recall-submit]").click(); await page.waitForTimeout(700);
+      assert(reads()[4] === `/agent-chat/recall${B.recall.clearedWithFilter.sent[0].query}`, `a cleared word with the filter: ${reads()[4]}`);
+      await asPick(page, page.locator("[data-testid=recall-bot]"), "全部 bot"); await page.waitForTimeout(700);
+      assert(reads()[5] === `/agent-chat/recall${B.recall.filterCleared.sent[0].query}`, `the filter cleared: ${reads()[5]}`);
+      await box.fill("无结果词"); await box.press("Enter");
+      await page.locator("[data-testid=recall-empty]").waitFor({ timeout: 8000 });
+      assert((await page.locator("[data-testid=recall-empty]").innerText()).includes("没有找到相关的往事。"), "the no-match sentence is missing");
+      // a refresh stays on the tab
+      await page.reload({ waitUntil: "load" });
+      await page.locator("[data-testid=recall-item]").first().waitFor({ timeout: 15000 });
+      assert((await page.locator("[data-testid=tab-recall]").getAttribute("aria-selected")) === "true", "a refresh left the 往事 tab");
+    } finally { await view.close(); }
+  }
+  for (const [k, title, hash] of [["otherBot", "AAPL 本季服务收入", `#/chat/${BOT.applebot}`], ["defaultBot", "AAPL 服务收入与预测对比", "#/chat"], ["unowned", "可信度星级是什么", "#/chat"]]) {
+    const view = await asOpen(ctx, `memory open ${k}`, "#/assistant/memory?tab=recall", "[data-testid=recall-item]");
+    try {
+      await view.page.locator("[data-testid=recall-item]", { hasText: title }).getByRole("button", { name: /^打开对话/ }).click();
+      await waitHash(view.page, hash, 15000);
+      assert(B.open[k].hash === hash, `the baseline says ${B.open[k].hash}`);
+    } finally { await view.close(); }
+  }
+  done.push("往事: tab in the address and kept on refresh; typing sends nothing; 搜索 / Enter send once; the filter; 打开对话 ×3");
+  return `9 operations: ${done.join("; ")}`;
+}
+
+async function memoryNotesOnce(ctx) {
+  const PROFILE = AS.memory.load.paragraphs[0], SCOPE = AS.memory.load.paragraphs[1], RECALL = AS.memory.recall.load.paragraphs[0];
+  const times = (text, note) => text.split(note).length - 1;
+  const profile = await asOpen(ctx, "memory notes profile", "#/assistant/memory", MEM_ITEM);
+  try {
+    const { page } = profile;
+    const text = await page.locator("main").innerText();
+    assert(times(text, PROFILE) === 1 && times(text, SCOPE) === 1, `the profile tab says its sentence ${times(text, PROFILE)} times (scope sentence ${times(text, SCOPE)})`);
+    assert(times(text, RECALL) === 0, "the past-conversations sentence is on the profile tab");
+    assert((await page.locator("[data-testid=memory-note-profile]").innerText()).trim() === PROFILE, "the profile sentence is not the old one, word for word");
+    // inferred: the mark 推断, 确认, the opinion colour; the rest: neither
+    const items = await page.locator(MEM_ITEM).evaluateAll((els) => els.map((e) => ({ origin: e.getAttribute("data-origin"), badge: e.querySelector("[data-testid=memory-origin]").textContent.trim(), tone: e.querySelector("[data-testid=memory-origin] [data-slot=status-badge]").getAttribute("data-kind"), confirm: !!e.querySelector("[data-testid=memory-confirm]"), quote: !!e.querySelector("[data-testid=memory-quote]") })));
+    const inferred = items.filter((i) => i.origin === "inferred");
+    assert(inferred.length === 2 && inferred.every((i) => i.badge === "推断" && i.confirm && i.tone === "opinion"), `inferred items: ${JSON.stringify(inferred)}`);
+    assert(items.filter((i) => i.origin !== "inferred").every((i) => !i.confirm && i.tone === "neutral" && i.badge !== "推断"), `the others: ${JSON.stringify(items.filter((i) => i.origin !== "inferred"))}`);
+    assert(items.find((i) => i.origin === "manual").quote === false && items.filter((i) => i.origin !== "manual").every((i) => i.quote), "an item with no quote draws an empty quote block (or one with a quote lacks it)");
+    const quote = await page.locator("[data-testid=memory-quote]").first().evaluate((e) => ({ cls: e.className, font: getComputedStyle(e).fontFamily }));
+    assert(/font-quote/.test(quote.cls) && /material-fact/.test(quote.cls), `the quote is not in the fact material: ${quote.cls}`);
+  } finally { await profile.close(); }
+  const recall = await asOpen(ctx, "memory notes recall", "#/assistant/memory?tab=recall", "[data-testid=recall-item]");
+  try {
+    const text = await recall.page.locator("main").innerText();
+    assert(times(text, RECALL) === 1, `the recall tab says its sentence ${times(text, RECALL)} times`);
+    assert(times(text, PROFILE) === 0, "the profile sentence is on the recall tab");
+    assert((await recall.page.locator("[data-testid=memory-note-recall]").innerText()).trim() === RECALL, "the recall sentence is not the old one, word for word");
+    assert(text.includes(AS.memory.recall.load.paragraphs[1]), "the second recall sentence is missing");
+  } finally { await recall.close(); }
+  return "each tab holds its own sentence exactly once, word for word as the old page; the other tab does not; the 2 inferred items have 推断 (opinion badge) and 确认, the 4 others neither; an empty quote is not drawn; quotes are fact material";
+}
+
+async function memoryKeyboard(ctx) {
+  const view = await asOpen(ctx, "memory keyboard", "#/assistant/memory", MEM_ITEM);
+  try {
+    const { page } = view;
+    // the tabs: arrows move the focus, Enter / Space opens (the company page's tab list)
+    await page.locator("[data-testid=tab-profile]").focus();
+    await page.keyboard.press("ArrowRight");
+    assert(await asOnly(page, "[data-testid=tab-recall]"), "ArrowRight did not move the focus to 往事");
+    assert(!(await page.evaluate(() => location.hash.includes("tab=recall"))), "an arrow key opened the tab");
+    await page.keyboard.press("Enter");
+    await page.locator("[data-testid=recall-item]").first().waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => location.hash.endsWith("?tab=recall"), null, { timeout: 5000 });
+    await page.keyboard.press("ArrowLeft"); await page.keyboard.press("Space");
+    await page.locator(MEM_ITEM).first().waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => !location.hash.includes("tab="), null, { timeout: 5000 });
+    // an item added from the keyboard: the add box, Enter
+    await page.locator("[data-testid=memory-add-text]").focus(); await page.keyboard.type("键盘加的一条"); await page.keyboard.press("Enter");
+    const [added] = await asWritesAfter(view, 1, "keyboard add");
+    assert(asBody(added) === JSON.stringify({ kind: "preference", text: "键盘加的一条", bot_id: null }), `the keyboard add sent ${asBody(added)}`);
+    // a row's text edited from the keyboard: 编辑 (Enter) → the box has the focus → Enter saves
+    const edit = memItem(page, "回答先给结论").locator("[data-testid=memory-edit]");
+    await edit.focus(); await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "memory-edit-input", null, { timeout: 5000 });
+    await page.keyboard.press("End"); await page.keyboard.type("（键盘）"); await page.keyboard.press("Enter");
+    const w = await asWritesAfter(view, 2, "keyboard edit");
+    assert(asBody(w[1]) === JSON.stringify({ text: "回答先给结论，再给依据；数字要带出处。（键盘）" }), `the keyboard edit sent ${asBody(w[1])}`);
+    // and left with Esc
+    await memItem(page, "回答先给结论").locator("[data-testid=memory-edit]").focus(); await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "memory-edit-input", null, { timeout: 5000 });
+    await page.keyboard.type("不要保存"); await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector("[data-testid=memory-edit-input]"), null, { timeout: 5000 });
+    await page.waitForTimeout(400);
+    assert(asWrites(view).length === 2, "Esc saved the edit");
+    return "tabs by arrows + Enter / Space (the address follows); an item added with Enter in the box; a row edited (Enter saves) and left (Esc) from the keyboard";
+  } finally { await view.close(); }
+}
+
+const NW_ROW = "[data-testid=news-row]", NW_DRAWER = "[data-testid=news-drawer]";
+const nwRow = (page, id) => page.locator(NW_ROW, { has: page.locator("[data-testid=news-id]", { hasText: new RegExp(`^${id}$`) }) });
+const nwMenu = async (page, id, item) => { await nwRow(page, id).locator("[data-testid=news-menu]").click(); await page.locator(`[data-testid=${item}]`).click(); };
+const NW_STATE = () => stateWithNewsExtras();
+/** Fill the news drawer's text fields; the three tag boxes are emptied of their first values (US, news) and filled from text, the way the old text boxes were replaced. */
+async function nwFill(page, c) {
+  const d = page.locator(NW_DRAWER);
+  if (c.name !== undefined) await d.locator("#news-name").fill(c.name);
+  if (c.id !== undefined) await d.locator("#news-id").fill(c.id);
+  if (c.kind) await asPick(page, d.locator("#news-kind"), { rss: "RSS / Atom 订阅源", http_json: "HTTP JSON 接口", http_html: "HTTP HTML 列表页" }[c.kind]);
+  if (c.url !== undefined) await d.locator("#news-url").fill(c.url);
+  if (c.homepage !== undefined) await d.locator("#news-homepage").fill(c.homepage);
+  for (const [field, id] of [["markets", "#news-markets"], ["tags", "#news-tags"], ["alternates", "#news-alternates"]]) {
+    if (c[field] === undefined) continue;
+    const box = d.locator(`[data-testid=news-field-${field}]`);
+    while ((await box.locator('button[aria-label^="移除"]').count()) > 0) await box.locator('button[aria-label^="移除"]').first().click();
+    if (c[field]) { await d.locator(id).fill(c[field]); await d.locator(id).press("Enter"); }
+  }
+  for (const [flag, key] of [["enabled", "enabled"], ["rea", "rea"]]) {
+    if (c[flag] === undefined) continue;
+    const sw = d.locator(`[data-testid=news-field-${key}]`);
+    if (((await sw.getAttribute("data-state")) === "checked") !== c[flag]) await sw.click();
+  }
+}
+const nwSave = (page) => page.locator("[data-testid=news-save]").click();
+
+async function newsOps(ctx) {
+  const B = AS.news, done = [];
+  // 1. 新建 (the ID typed; a blank name is the ID) and 2. 编辑 (each source opened and saved untouched sends the old body; the ID box is locked)
+  {
+    const view = await asOpen(ctx, "news create", "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=news-new]").click(); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+      await nwFill(page, { id: "new-feed", url: "https://example.test/new.xml" });
+      await nwSave(page);
+      const [w] = await asWritesAfter(view, 1, "create");
+      asHere(w, "POST", /\/news-sources$/, "create");
+      assert(asBody(w) === asOld(B.create.defaults, "POST", /\/news-sources$/), `create: body ${asBody(w)} differs from the old ${asOld(B.create.defaults, "POST", /\/news-sources$/)}`);
+      await page.locator(NW_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+      await nwRow(page, "new-feed").waitFor({ timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  for (const id of ["wire-markets", "tech-daily", "earnings-feed", "chip-watch", "ev-weekly", "old-blog"]) {
+    const view = await asOpen(ctx, `news edit ${id}`, "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await nwMenu(page, id, "news-edit"); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+      await page.waitForFunction(() => document.querySelector("#news-name")?.value, null, { timeout: 5000 });
+      assert(await page.locator("#news-id").isDisabled(), `${id}: the ID of an existing source can be changed`);
+      await nwSave(page);
+      const [w] = await asWritesAfter(view, 1, id);
+      asHere(w, "POST", /\/news-sources$/, id);
+      assert(asBody(w) === asOld(B.edit[id], "POST", /\/news-sources$/), `${id}: body ${asBody(w)} differs from the old ${asOld(B.edit[id], "POST", /\/news-sources$/)}`);
+    } finally { await view.close(); }
+  }
+  done.push("new + 6 untouched edits");
+  // 3. 启用 / 暂停: the value that is not the current one
+  for (const [k, id] of [["pause", "wire-markets"], ["enable", "old-blog"]]) {
+    const view = await asOpen(ctx, `news toggle ${k}`, "#/assistant/news", NW_ROW);
+    try {
+      await nwRow(view.page, id).locator("[data-testid=news-switch]").click();
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "POST", new RegExp(`/news-sources/${id}/enabled$`), k);
+      assert(asBody(w) === asOld(B.toggle[k], "POST", /\/enabled$/), `${k}: body ${asBody(w)}`);
+    } finally { await view.close(); }
+  }
+  done.push("switch both ways");
+  // 4. 测试抓取: the result opens under its row, in the old words; the row's operations wait for it
+  for (const id of ["wire-markets", "earnings-feed", "chip-watch", "ev-weekly", "old-blog", "tech-daily"]) {
+    const view = await asOpen(ctx, `news test ${id}`, "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await nwMenu(page, id, "news-test");
+      const result = nwRow(page, id).locator("[data-testid=news-test-result]"); await result.waitFor({ timeout: 8000 });
+      const [w] = await asWritesAfter(view, 1, id);
+      asHere(w, "POST", new RegExp(`/news-sources/${id}/dry-run$`), id);
+      assert(w.body === null, `${id}: the test sends a body`);
+      const shown = (await result.innerText()).replace(/\s+/g, " ").trim();
+      const old = B.test[id].shown.replace(/（(\d{4}-\d\d-\d\dT\d\d:\d\d)）/g, " $1").replace(/\s+/g, " ").replace(/ · /g, " ");
+      assert(shown.replace(/\s+/g, " ") === old.replace(/\s+/g, " "), `${id}: shows "${shown}", the old row showed "${old}"`);
+      const links = await result.locator("a").evaluateAll((a) => a.map((x) => [x.textContent, x.getAttribute("href"), x.target]));
+      assert(JSON.stringify(links.map((l) => [l[0], l[1]])) === JSON.stringify(B.test[id].links.map((l) => [l[0], l[1]])) && links.every((l) => l[2] === "_blank"), `${id}: the sample links ${JSON.stringify(links)}`);
+      assert((await nwRow(page, id).locator("[data-testid=news-test-result]").count()) === 1, `${id}: the result is not inside its row`);
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "news test busy", "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      view.mock.control.hold = (m, p) => m === "POST" && /dry-run$/.test(p);
+      await nwMenu(page, "wire-markets", "news-test");
+      await nwRow(page, "wire-markets").locator("[data-testid=news-probing]").waitFor({ timeout: 5000 });
+      assert(await nwRow(page, "wire-markets").locator("[data-testid=news-menu]").isDisabled() && await nwRow(page, "wire-markets").locator("[data-testid=news-switch]").isDisabled(), "the row's operations are not locked while the test runs");
+      assert(!(await nwRow(page, "tech-daily").locator("[data-testid=news-menu]").isDisabled()), "another row was locked too");
+    } finally { await view.close(); }
+  }
+  done.push("6 test fetches (success, reason, code only, nothing) in the old words, links external, the row locked meanwhile");
+  // 5. REA 修复: only where the source allows it; the three answers
+  {
+    const view = await asOpen(ctx, "news repair buttons", "#/assistant/news", NW_ROW, { state: NW_STATE() });
+    try {
+      const { page } = view;
+      const have = [];
+      for (const row of await page.locator(NW_ROW).all()) {
+        const id = (await row.locator("[data-testid=news-id]").innerText()).trim();
+        await row.locator("[data-testid=news-menu]").click();
+        if ((await page.locator("[data-testid=news-repair]").count()) === 1) have.push(id);
+        await page.keyboard.press("Escape"); await page.locator("[data-testid=news-test]").waitFor({ state: "detached", timeout: 3000 });
+        const rea = (await row.locator("[data-testid=news-rea]").count()) === 1;
+        assert(rea === have.includes(id), `${id}: 支持 REA 自动诊断 and the repair item disagree`);
+      }
+      assert(have.join() === B.repair.buttonOn.map((s) => s.replace("）", "")).join(), `REA 修复 is on ${have.join()}, the old page had it on ${B.repair.buttonOn.join()}`);
+    } finally { await view.close(); }
+  }
+  for (const id of ["chip-watch", "ai-wire", "macro-wire"]) {
+    const view = await asOpen(ctx, `news repair ${id}`, "#/assistant/news", NW_ROW, { state: NW_STATE() });
+    try {
+      const { page } = view;
+      await nwMenu(page, id, "news-repair");
+      const note = nwRow(page, id).locator("[data-testid=news-repair-note]"); await note.waitFor({ timeout: 8000 });
+      const [w] = await asWritesAfter(view, 1, id);
+      asHere(w, "POST", new RegExp(`/news-sources/${id}/repair$`), id);
+      assert(w.body === null, `${id}: the repair sends a body`);
+      const oldNote = B.repair[id].note.match(/REA (修复成功（抽样 \d+ 条有效新闻）|暂未自动修复：\S+)/)[0];
+      assert((await note.innerText()).trim() === oldNote, `${id}: says "${(await note.innerText()).trim()}", the old row said "${oldNote}"`);
+    } finally { await view.close(); }
+  }
+  done.push("REA 修复 only on the 3 repairable sources; success / code / no-code answers in the old words");
+  // 6. 删除 (hold)
+  {
+    const view = await asOpen(ctx, "news delete", "#/assistant/news", NW_ROW, { motion: true });
+    try {
+      const { page } = view;
+      await nwMenu(page, "ev-weekly", "news-delete");
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      assert((await dialogOf(page).locator('[data-slot="alert-dialog-title"]').innerText()).trim() === B.del["ev-weekly"].dialog.title, "the question is not the old one");
+      await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'));
+      const [w] = await asWritesAfter(view, 1, "delete");
+      asHere(w, "DELETE", /\/news-sources\/ev-weekly$/, "delete");
+      await nwRow(page, "ev-weekly").waitFor({ state: "detached", timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  // 7. the push summary length
+  for (const [value, label] of [["128", "短（128 tokens）"], ["512", "长（512 tokens）"], ["256", "中（256 tokens）"]]) {
+    const view = await asOpen(ctx, `news push ${value}`, "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      if (value === "256") { await asPick(page, page.locator("[data-testid=news-push]"), "短（128 tokens）"); await asWritesAfter(view, 1, "push first"); view.mock.state.assistant.writes.length = 0; }
+      await asPick(page, page.locator("[data-testid=news-push]"), label);
+      const [w] = await asWritesAfter(view, 1, `push ${value}`);
+      asHere(w, "PUT", /\/news-sources\/push-settings$/, value);
+      assert(asBody(w) === asOld(B.push[value], "PUT", /push-settings$/), `${value}: body ${asBody(w)}`);
+      assert((await page.locator("[data-testid=news-push]").innerText()).includes(label), "the select does not show the saved value");
+    } finally { await view.close(); }
+  }
+  done.push("delete (hold), push length 128 / 512 / 256");
+  return `7 operations: ${done.join("; ")}; every request equals the old page's`;
+}
+
+async function newsIdRule(ctx) {
+  const view = await asOpen(ctx, "news id rule", "#/assistant/news", NW_ROW);
+  try {
+    const { page } = view;
+    const d = page.locator(NW_DRAWER), id = () => d.locator("#news-id").inputValue(), err = () => d.locator("[data-testid=news-id-error]");
+    await page.locator("[data-testid=news-new]").click(); await d.waitFor({ timeout: 8000 });
+    // made from the name; fits the rule; follows the name until the ID is typed in; a taken one gets -2
+    await d.locator("#news-name").fill("Tech Daily Brief");
+    assert((await id()) === "tech-daily-brief" && /^[A-Za-z0-9._-]{2,80}$/.test(await id()), `the ID made of the name is "${await id()}"`);
+    await d.locator("#news-name").fill("Markets Wire（示例）"); assert((await id()) === "markets-wire-2" || (await id()) === "markets-wire", `the ID made of 'Markets Wire（示例）' is "${await id()}"`);
+    await d.locator("#news-name").fill("Tech Daily（示例）");
+    assert((await id()) === "tech-daily-2", `a name whose ID is taken gave "${await id()}", not tech-daily-2`);
+    // a Chinese-only name gives no ID and says so
+    await d.locator("#news-name").fill("财联社电报");
+    assert((await id()) === "" && (await err().innerText()).includes("请自己填一个 ID"), `a Chinese-only name: ID "${await id()}", message "${await err().count() ? await err().innerText() : ""}"`);
+    // typing in the ID box ends the following
+    await d.locator("#news-id").fill("my-own-id"); await d.locator("#news-name").fill("Another Name");
+    assert((await id()) === "my-own-id", "the ID still followed the name after the reader typed one");
+    // wrong IDs are said at once and nothing is sent
+    await d.locator("#news-url").fill("https://example.test/x.xml");
+    for (const bad of ["a", "bad id", "新闻源", "a/b"]) {
+      await d.locator("#news-id").fill(bad);
+      assert((await err().innerText()).trim() === AS.news.createRefused.idOne.alert[0], `"${bad}": the message is "${await err().count() ? await err().innerText() : ""}"`);
+      await nwSave(page); await asNoWrites(view, `ID "${bad}"`, 300);
+    }
+    // an ID that is already a source's is refused (the old page overwrote it quietly)
+    await d.locator("#news-id").fill("wire-markets");
+    assert((await err().innerText()).includes("已经有这个 ID 的新闻源了"), "a taken ID is not said");
+    await nwSave(page); await asNoWrites(view, "a taken ID", 400);
+    // the URL rule, and 81 typed characters stop at 80 (a legal ID, as in the old page)
+    await d.locator("#news-id").fill("good-id"); await d.locator("#news-url").fill("ftp://example.test/x");
+    await nwSave(page);
+    assert((await d.locator("[data-testid=news-url-error]").innerText()).trim() === AS.news.createRefused.urlFtp.alert[0], "the URL sentence is not the old one");
+    await asNoWrites(view, "a bad URL", 300);
+    await d.locator("#news-url").fill("https://example.test/x.xml");
+    await d.locator("#news-id").fill("x".repeat(81));
+    assert((await id()).length === 80, `81 typed characters gave ${(await id()).length}`);
+    await nwSave(page);
+    const [w] = await asWritesAfter(view, 1, "the legal 80-character ID");
+    assert(w.body.id === "x".repeat(80), "the 80-character ID was not sent");
+    // an existing source's ID box is locked
+    await page.locator(NW_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+    await nwMenu(page, "tech-daily", "news-edit"); await d.waitFor({ timeout: 8000 });
+    assert(await d.locator("#news-id").isDisabled(), "the ID of an existing source can be changed");
+    return "the ID follows the name (tech-daily-brief; -2 when taken; empty with the sentence for a Chinese name) until typed in; a, 'bad id', 新闻源, a/b, an existing ID and a bad URL are said at once and send nothing; 81 characters stop at 80; an existing source's ID is locked";
+  } finally { await view.close(); }
+}
+
+async function newsTagsBody(ctx) {
+  const B = AS.news, notes = [];
+  const create = async (k, c) => {
+    const view = await asOpen(ctx, `news tags ${k}`, "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=news-new]").click(); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+      await nwFill(page, c); await nwSave(page);
+      const [w] = await asWritesAfter(view, 1, k);
+      assert(asBody(w) === asOld(B.create[k], "POST", /\/news-sources$/), `${k}: body\n  ${asBody(w)}\n  differs from the old\n  ${asOld(B.create[k], "POST", /\/news-sources$/)}`);
+      assert(Array.isArray(w.body.markets) && Array.isArray(w.body.tags) && Array.isArray(w.body.alternates) && w.body.markets.every((m) => m === m.toUpperCase()), `${k}: the lists are not arrays or the markets are not in capitals`);
+      notes.push(k);
+    } finally { await view.close(); }
+  };
+  // markets in capitals, split from pasted text; the three lists are arrays; homepage only when filled; language zh-CN; name blank = the ID
+  await create("everything", { name: "完整源", id: "  full-source  ", kind: "http_json", url: "  https://example.test/full.json  ", homepage: " https://example.test/ ", markets: "us, cn  hk，jp、sg", tags: "macro flash,，ai、 earnings", alternates: "https://a.test/x.xml, https://b.test/y.xml，https://c.test/z", rea: false, enabled: false });
+  await create("html", { id: "html.src_2", kind: "http_html", url: "HTTPS://example.test/list", markets: "", tags: "", rea: true });
+  await create("defaults", { id: "new-feed", url: "https://example.test/new.xml" });
+  // editing: the old language kept (en), the homepage left out when emptied, the lists replaced
+  {
+    const view = await asOpen(ctx, "news tags edit", "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await nwMenu(page, "chip-watch", "news-edit"); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+      await page.waitForFunction(() => document.querySelector("#news-name")?.value, null, { timeout: 5000 });
+      await nwFill(page, { name: "芯片观察（改名）", markets: "us, tw", tags: "semis", alternates: "https://alt.test/a.xml", homepage: "", rea: false });
+      await nwSave(page);
+      const [w] = await asWritesAfter(view, 1, "edit");
+      assert(asBody(w) === asOld(B.edit.changed, "POST", /\/news-sources$/), `edit: body ${asBody(w)} differs from the old ${asOld(B.edit.changed, "POST", /\/news-sources$/)}`);
+      assert(w.body.language === "en" && !("homepage" in w.body), "edit: language is not kept or the emptied homepage is sent");
+      notes.push("edit (language en kept, homepage left out)");
+    } finally { await view.close(); }
+  }
+  // a pasted list becomes separate tags; a tag has its own remove button
+  {
+    const view = await asOpen(ctx, "news tags paste", "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=news-new]").click(); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+      const box = page.locator("[data-testid=news-field-markets]");
+      await box.locator("input").evaluate((el) => { const data = new DataTransfer(); data.setData("text", "cn, hk"); el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true })); });
+      await page.waitForFunction(() => [...document.querySelectorAll("[data-testid=news-field-markets] [data-tag]")].map((e) => e.getAttribute("data-tag")).join() === "US,CN,HK", null, { timeout: 5000 });
+      notes.push("paste 'cn, hk' → CN, HK");
+    } finally { await view.close(); }
+  }
+  return `markets / tags / spare addresses typed or pasted into the tag boxes send the old arrays (markets in capitals), body for body: ${notes.join("; ")}`;
+}
+
+async function newsHealthNotColorOnly(ctx) {
+  const view = await asOpen(ctx, "news health", "#/assistant/news", NW_ROW, { state: NW_STATE() });
+  try {
+    const { page } = view;
+    const rows = await page.locator(NW_ROW).evaluateAll((els) => els.map((e) => ({ id: e.querySelector("[data-testid=news-id]").textContent.trim(), health: e.querySelector("[data-testid=news-health]").getAttribute("data-health"), text: e.querySelector("[data-testid=news-health]").textContent.trim(), dotHidden: e.querySelector("[data-testid=news-health] > span")?.getAttribute("aria-hidden"), error: e.querySelector("[data-testid=news-last-error]")?.textContent.trim() ?? null })));
+    assert(rows.length === 9, `${rows.length} rows, expected 9`);
+    const words = { ok: "健康", degraded: "降级", failed: "异常" };
+    for (const r of rows) {
+      assert(r.text.length > 0, `${r.id}: the health has no words`);
+      assert(r.text === (words[r.health] ?? r.health), `${r.id}: "${r.text}" for health ${r.health}`);
+      assert(r.dotHidden === "true", `${r.id}: the dot is not marked decoration`);
+    }
+    assert(rows.find((r) => r.id === "odd-state").text === "unknown", "a health value the page does not know is not shown as the server gave it");
+    const errs = Object.fromEntries(rows.filter((r) => r.error).map((r) => [r.id, r.error]));
+    assert(JSON.stringify(errs) === JSON.stringify({ "chip-watch": "最近错误 parse_changed", "ev-weekly": "最近错误 http_503", "ai-wire": "最近错误 feed_moved", "macro-wire": "最近错误 timeout" }), `the last errors: ${JSON.stringify(errs)}`);
+    return "all 9 rows say their health in words (健康 / 降级 / 异常, an unknown value as given), the dot is decoration; the 4 last errors are shown as the server gave them";
+  } finally { await view.close(); }
+}
+
+async function newsKeyboard(ctx) {
+  const view = await asOpen(ctx, "news keyboard", "#/assistant/news", NW_ROW);
+  try {
+    const { page } = view;
+    // a row's 「…」 menu with the keyboard: Enter opens, the arrows choose, Enter does it
+    const menu = nwRow(page, "tech-daily").locator("[data-testid=news-menu]");
+    await menu.focus(); await page.keyboard.press("Enter");
+    await page.getByRole("menuitem", { name: "测试抓取" }).waitFor({ timeout: 5000 });
+    await page.keyboard.press("ArrowDown"); 
+    await page.keyboard.press("Escape"); await page.getByRole("menuitem", { name: "测试抓取" }).waitFor({ state: "detached", timeout: 5000 });
+    assert(await menu.evaluate((e) => e === document.activeElement), "Esc did not return the focus to 「…」");
+    await page.keyboard.press("Enter"); await page.getByRole("menuitem", { name: "测试抓取" }).waitFor({ timeout: 5000 });
+    await page.getByRole("menuitem", { name: "测试抓取" }).focus(); await page.keyboard.press("Enter");
+    const [t] = await asWritesAfter(view, 1, "keyboard test");
+    asHere(t, "POST", /\/news-sources\/tech-daily\/dry-run$/, "keyboard test");
+    // the new-source drawer, every field and all three tag boxes, then 保存
+    await page.locator("[data-testid=news-new]").focus(); await page.keyboard.press("Enter");
+    await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => document.activeElement?.closest("[data-testid=news-drawer]"), null, { timeout: 5000 });
+    await asTabTo(page, "#news-name"); await page.keyboard.type("Keyboard Feed");
+    await asTabTo(page, "#news-id");
+    await asTabTo(page, "#news-kind"); await page.keyboard.press("Enter"); await page.getByRole("option", { name: "HTTP JSON 接口", exact: true }).click();
+    await asTabTo(page, "#news-url"); await page.keyboard.type("https://example.test/kb.json");
+    await asTabTo(page, "#news-homepage"); await page.keyboard.type("https://example.test/");
+    await asTabTo(page, "#news-markets"); await page.keyboard.type("jp"); await page.keyboard.press("Enter");
+    await asTabTo(page, "#news-tags"); await page.keyboard.type("kb"); await page.keyboard.press("Enter");
+    await asTabTo(page, "#news-alternates"); await page.keyboard.type("https://alt.test/kb.json"); await page.keyboard.press("Enter");
+    await asTabTo(page, "#news-enabled"); await page.keyboard.press("Space");
+    await asTabTo(page, "[data-testid=news-save]"); await page.keyboard.press("Enter");
+    const w = await asWritesAfter(view, 2, "keyboard create");
+    assert(asBody(w[1]) === JSON.stringify({ id: "keyboard-feed", name: "Keyboard Feed", kind: "http_json", url: "https://example.test/kb.json", homepage: "https://example.test/", language: "zh-CN", markets: ["US", "JP"], tags: ["news", "kb"], alternates: ["https://alt.test/kb.json"], rea_repair: true, enabled: false }), `the keyboard-made source sent ${asBody(w[1])}`);
+    await page.locator(NW_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+    await nwRow(page, "keyboard-feed").waitFor({ timeout: 8000 });
+    // Esc closes a drawer and returns the focus to the button that opened it
+    await page.locator("[data-testid=news-new]").focus(); await page.keyboard.press("Enter"); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+    await page.keyboard.press("Escape"); await page.locator(NW_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "news-new", null, { timeout: 3000 });
+    return "a row's 「…」 opens with Enter, Esc returns the focus, 测试抓取 runs from the menu; the new-source drawer is filled with the keyboard alone (name, kind list, URL, homepage, the three tag boxes, a switch) and saved with Enter; Esc closes a drawer and returns the focus";
+  } finally { await view.close(); }
+}
+
+const KN_DOC = "[data-testid=knowledge-doc]";
+const KN_STATE = () => stateWithKnowledgeCandidates();
+const knDoc = (page, text) => page.locator(KN_DOC, { hasText: text }).first();
+const SOURCE_LABEL = { faq: "常见问题", upload: "我的上传材料", sec: "已保存 / 已获取 SEC 摘录", analysis: "已保存 AI 分析" };
+const knUploads = (view) => (view.mock.state.materialPosts ?? []).filter((p) => p.kind === "upload");
+async function knFillUpload(page, c) {
+  await page.locator("#knowledge-upload-symbol").fill(c.symbol);
+  await page.locator("[data-testid=knowledge-upload-title]").fill(c.title);
+  await page.locator("[data-testid=knowledge-upload-url]").fill(c.url);
+  await page.locator("[data-testid=knowledge-upload-time]").fill(c.published);
+  await page.locator("[data-testid=knowledge-upload-reason]").fill(c.reason);
+  await page.locator("input[data-testid=upload-file]").setInputFiles({ name: c.file.name, mimeType: c.file.mimeType, buffer: Buffer.from(c.file.text, "utf8") });
+}
+async function knowledgeOps(ctx) {
+  const B = AS.knowledge, done = [];
+  // 1. 上传材料: the old multipart fields, with the fixed 3 stars and "medium"; the button waits for a file, title, link and reason; after it the source is 我的上传材料 and its material is loaded
+  const UP = {
+    markdown: { symbol: "aapl", title: "供应链报道", url: "https://example.test/report", published: "2026-11-10T09:30", reason: "一手采访", file: { name: "report.md", mimeType: "text/markdown", text: "# 报道\n正文" } },
+    pdf: { symbol: "NVDA", title: "PDF 材料", url: "https://example.test/p.pdf", published: "2026-01-02T00:00", reason: "交叉验证", file: { name: "deck.pdf", mimeType: "application/pdf", text: "%PDF-1.4 fake" } },
+  };
+  for (const [k, c] of Object.entries(UP)) {
+    const view = await asOpen(ctx, `knowledge upload ${k}`, "#/assistant/knowledge", KN_DOC);
+    try {
+      const { page } = view;
+      const submit = page.locator("[data-testid=knowledge-upload-submit]");
+      assert(await submit.isDisabled(), `${k}: 上传材料 can be pressed with nothing filled in`);
+      await knFillUpload(page, c);
+      assert(!(await submit.isDisabled()), `${k}: 上传材料 cannot be pressed with everything filled in`);
+      await submit.click();
+      await page.waitForFunction(() => document.querySelector("[data-testid=knowledge-importable]"), null, { timeout: 10000 });
+      const [post] = knUploads(view);
+      const old = B.upload[k].sent[0];
+      assert(post && post.path === `/uploaded-evidence/${old.path.split("/").pop()}` && post.session === true, `${k}: the upload went to ${post?.path}`);
+      assert(JSON.stringify(post.fields) === JSON.stringify(old.fields), `${k}: fields\n  ${JSON.stringify(post.fields)}\n  differ from the old\n  ${JSON.stringify(old.fields)}`);
+      assert(post.fields.credibility_stars === "3" && post.fields.impact_severity === "medium", `${k}: the fixed stars / impact are ${post.fields.credibility_stars} / ${post.fields.impact_severity}`);
+      assert(asReads(view, /\/knowledge\/importable\/upload$/).join() === `/knowledge/importable/upload${B.upload[k].sent[1].query}`, `${k}: the material read after it was ${asReads(view, /importable/).join()}`);
+      assert((await page.locator("#knowledge-source").innerText()).includes("我的上传材料"), `${k}: the source did not change to 我的上传材料`);
+      await asToast(page, "上传已保存；请选择材料并导入知识库");
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "knowledge upload time", "#/assistant/knowledge", KN_DOC);
+    try {
+      const { page } = view;
+      await knFillUpload(page, { ...UP.markdown, published: "" });
+      await page.locator("[data-testid=knowledge-upload-submit]").click();
+      await page.getByText(B.upload.invalidTime.alert[0].replace(/重试$/, ""), { exact: false }).first().waitFor({ timeout: 5000 });
+      assert(knUploads(view).length === 0, "an upload with no valid time went out");
+    } finally { await view.close(); }
+  }
+  done.push("upload ×2 (fields, 3 stars, medium) + invalid time");
+  // 2. 载入可选材料 for each source and code, 3. 导入所选 (the ids in the order ticked)
+  for (const src of ["faq", "upload", "sec", "analysis"]) {
+    const view = await asOpen(ctx, `knowledge load ${src}`, "#/assistant/knowledge", KN_DOC);
+    try {
+      const { page } = view;
+      await asPick(page, page.locator("#knowledge-source"), SOURCE_LABEL[src]);
+      await page.locator("#knowledge-import-symbol").fill("msft");
+      await page.locator("[data-testid=knowledge-load]").click();
+      await page.locator("[data-testid=knowledge-importable]").waitFor({ timeout: 8000 });
+      assert(asReads(view, /\/knowledge\/importable\//).join() === `/knowledge/importable/${src}${B.importable[src].sent[0].query}`, `${src}: read ${asReads(view, /importable/).join()}`);
+      assert((await page.locator("#knowledge-upload-symbol").inputValue()) === "MSFT", `${src}: the code is not shared by the two forms`);
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "knowledge import", "#/assistant/knowledge", KN_DOC);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=knowledge-load]").click(); await page.locator("[data-testid=knowledge-importable]").waitFor({ timeout: 8000 });
+      assert((await page.locator("[data-testid=knowledge-import]").isDisabled()), "导入所选 can be pressed with nothing ticked");
+      const boxes = page.locator("[data-testid=knowledge-importable-item]");
+      await boxes.nth(1).click(); await boxes.nth(0).click();
+      assert((await page.locator("[data-testid=knowledge-import]").innerText()).includes("2"), "the import button does not count the 2 ticked");
+      await page.locator("[data-testid=knowledge-import]").click();
+      const [w] = await asWritesAfter(view, 1, "import");
+      asHere(w, "POST", /\/knowledge\/import$/, "import");
+      assert(asBody(w) === asOld(B.importOp.two, "POST", /\/knowledge\/import$/), `import body ${asBody(w)}`);
+      await asToast(page, "接收 2 份材料，生成 10 个块");
+      await page.waitForFunction(() => document.querySelectorAll("[data-testid=knowledge-doc]").length === 4, null, { timeout: 8000 });
+      // nothing on the page promises that the import is searchable now: the status is the server's word
+      const text = await page.locator("main").innerText();
+      assert(!/已可检索|已生效|立即可检索|立即可用|可以检索了/.test(text), `the page promises searchability: ${text.match(/已可检索|已生效|立即可检索|立即可用|可以检索了/)}`);
+      assert((await knDoc(page, "AAPL 渠道调研纪要").locator("[data-testid=knowledge-doc-status]").innerText()).trim() === "pending", "the status of a new import is not shown as the server gave it (pending)");
+    } finally { await view.close(); }
+  }
+  done.push("4 sources × load, import in the ticked order, no promise of searchability");
+  // 4. 运行索引
+  {
+    const view = await asOpen(ctx, "knowledge index", "#/assistant/knowledge", KN_DOC);
+    try {
+      await view.page.locator("[data-testid=knowledge-index]").click();
+      const [w] = await asWritesAfter(view, 1, "index");
+      asHere(w, "POST", /\/knowledge\/index$/, "index");
+      assert(asBody(w) === asOld(B.index, "POST", /\/knowledge\/index$/), `index body ${asBody(w)}`);
+      await asToast(view.page, "索引完成 3，失败 1");
+    } finally { await view.close(); }
+  }
+  // 5. 检索测试: the kind comes from the source, 常见问题 sends no code; the two inputs are shown on the card itself
+  for (const [key, src, symbol] of [["upload-AAPL", "upload", "AAPL"], ["faq-AAPL", "faq", "AAPL"], ["analysis-TSLA", "analysis", "TSLA"], ["sec-NVDA", "sec", "NVDA"]]) {
+    const view = await asOpen(ctx, `knowledge retrieval ${key}`, "#/assistant/knowledge", KN_DOC);
+    try {
+      const { page } = view;
+      await asPick(page, page.locator("#knowledge-source"), SOURCE_LABEL[src]); await page.locator("#knowledge-import-symbol").fill(symbol);
+      assert((await page.locator("[data-testid=knowledge-retrieval-source]").innerText()).trim() === SOURCE_LABEL[src], `${key}: the retrieval card does not show its source`);
+      assert((await page.locator("[data-testid=knowledge-retrieval-symbol]").innerText()).trim() === (src === "faq" ? "不带代码" : symbol), `${key}: the retrieval card does not show its code`);
+      assert(await page.locator("[data-testid=knowledge-test]").isDisabled(), `${key}: 测试检索 can be pressed with no query`);
+      assert((await page.locator("[data-testid=knowledge-query]").getAttribute("maxlength")) === "800", "the query box does not stop at 800");
+      await page.locator("[data-testid=knowledge-query]").fill("服务收入");
+      await page.locator("[data-testid=knowledge-test]").click();
+      const [w] = await asWritesAfter(view, 1, key);
+      asHere(w, "POST", /\/knowledge\/retrieval-test$/, key);
+      assert(asBody(w) === asOld(B.retrieval[key], "POST", /retrieval-test$/), `${key}: body ${asBody(w)} differs from the old ${asOld(B.retrieval[key], "POST", /retrieval-test$/)}`);
+      await page.locator("[data-testid=knowledge-result]").waitFor({ timeout: 8000 });
+      assert((await page.locator("[data-testid=knowledge-result]").innerText()) === B.retrieval[key].pre, `${key}: the result is not the old JSON text`);
+      await asToast(page, "已通过当前权限执行真实知识检索");
+    } finally { await view.close(); }
+  }
+  done.push("index, retrieval ×4 (kind from the source; the two inputs shown on the card)");
+  // 6. a document's chunks; 7. 重试; 8. 撤回 (disabled once withdrawn)
+  {
+    const view = await asOpen(ctx, "knowledge docs", "#/assistant/knowledge", KN_DOC, { state: KN_STATE() });
+    try {
+      const { page } = view;
+      const rows = await page.locator(KN_DOC).evaluateAll((els) => els.map((e) => e.innerText.replace(/\s+/g, " ")));
+      const docs = view.mock.state.assistant.docs;
+      docs.forEach((d, i) => { for (const part of [d.title, d.symbol || "FAQ", d.source_type, d.status, `${d.chunks} 块`, d.observed_at || "观察时间未知", d.owner_scope]) assert(rows[i].includes(part), `row ${i} "${rows[i]}" lacks "${part}"`); });
+      const opener = knDoc(page, "AAPL 10-Q").locator("[data-testid=knowledge-doc-open]");
+      await opener.click(); await page.locator("[data-testid=knowledge-chunk]").first().waitFor({ timeout: 8000 });
+      assert(asReads(view, /\/chunks$/).join() === B.chunks.source.sent[0].path.replace(/^\/agent-chat/, ""), `the chunks read ${asReads(view, /chunks/).join()}`);
+      const drawer = page.locator("[data-testid=knowledge-drawer]");
+      const text = (await drawer.innerText()).replace(/\s+/g, " ");
+      assert(text.includes("AAPL 10-Q（2026 财年第四季度）") && text.includes("保存的原文") && text.includes("文本块 · 3") && text.includes("1 · 第 1 节 · indexed") && text.includes("2 · 正文 · indexed"), `the drawer: ${text}`);
+      assert((await drawer.locator("a").first().getAttribute("href")) === B.chunks.source.link[0][1], "the source link is not the old one");
+      await page.keyboard.press("Escape"); await drawer.waitFor({ state: "detached", timeout: 5000 });
+      await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "knowledge-doc-open" && document.activeElement.closest("[data-testid=knowledge-doc]").innerText.includes("AAPL 10-Q"), null, { timeout: 3000 });
+      // an AI analysis keeps its provenance label
+      await knDoc(page, "AAPL 服务业务分析").locator("[data-testid=knowledge-doc-open]").click(); await page.locator("[data-testid=knowledge-chunk]").first().waitFor({ timeout: 8000 });
+      assert((await drawer.locator("[data-testid=knowledge-source-label]").innerText()).trim() === "分析文本（含 AI 派生内容）", "an AI analysis's text is not labelled 分析文本（含 AI 派生内容）");
+      await page.keyboard.press("Escape"); await drawer.waitFor({ state: "detached", timeout: 5000 });
+      // 重试 and 撤回
+      await knDoc(page, "AAPL 10-Q").locator("[data-testid=knowledge-retry]").click();
+      let w = await asWritesAfter(view, 1, "retry");
+      asHere(w[0], "POST", /\/knowledge\/documents\/kd000000-0000-4000-8000-000000000001\/retry$/, "retry");
+      await asToast(page, "已重新排入索引队列");
+      await knDoc(page, "AAPL 10-Q").locator("[data-testid=knowledge-withdraw]").click();
+      w = await asWritesAfter(view, 2, "withdraw");
+      asHere(w[1], "POST", /\/knowledge\/documents\/kd000000-0000-4000-8000-000000000001\/withdraw$/, "withdraw");
+      await asToast(page, "文档已软撤回");
+      await page.waitForFunction(() => [...document.querySelectorAll("[data-testid=knowledge-doc]")].find((e) => e.innerText.includes("AAPL 10-Q")).querySelector("[data-testid=knowledge-withdraw]").disabled, null, { timeout: 8000 });
+      assert(await knDoc(page, "旧上传：TSLA").locator("[data-testid=knowledge-withdraw]").isDisabled(), "撤回 is enabled on a withdrawn document");
+      assert((await knDoc(page, "旧上传：TSLA").innerText()).includes("观察时间未知"), "a document with no observation time does not say 观察时间未知");
+    } finally { await view.close(); }
+  }
+  // 9. 拒绝 and 10. 审核并排队索引
+  {
+    const view = await asOpen(ctx, "knowledge review", "#/assistant/knowledge", "[data-testid=knowledge-candidate]", { state: KN_STATE() });
+    try {
+      const { page } = view;
+      const first = page.locator("[data-testid=knowledge-candidate]").first();
+      assert((await first.locator("blockquote").getAttribute("class")).includes("font-quote"), "a candidate's quote is not in the fact material");
+      await first.locator("[data-testid=knowledge-reject]").click();
+      let w = await asWritesAfter(view, 1, "reject");
+      asHere(w[0], "POST", /\/knowledge\/candidates\/kc000000-0000-4000-8000-000000000001\/review$/, "reject");
+      assert(asBody(w[0]) === asOld(B.review.reject, "POST", /review$/), `reject body ${asBody(w[0])}`);
+      await asToast(page, "候选已拒绝");
+      await page.waitForFunction(() => document.querySelectorAll("[data-testid=knowledge-candidate]").length === 1, null, { timeout: 8000 });
+      await page.locator("[data-testid=knowledge-approve]").click();
+      w = await asWritesAfter(view, 2, "approve");
+      assert(asBody(w[1]) === asOld(B.review.approve, "POST", /review$/) && w[1].body.approved === true, `approve body ${asBody(w[1])}`);
+      await asToast(page, "已审核，已加入索引队列");
+      await page.locator("[data-testid=knowledge-candidates-empty]").waitFor({ timeout: 8000 });
+      assert((await page.locator("[data-testid=knowledge-candidates-empty]").innerText()).includes("没有待审核条目。"), "the empty sentence for candidates is missing");
+    } finally { await view.close(); }
+  }
+  done.push("chunks (Esc closes, focus back on the row), retry, withdraw (then disabled), reject, approve");
+  return `10 operations: ${done.join("; ")}; every request equals the old page's`;
+}
+
+async function knowledgeEntries(ctx) {
+  const notes = [];
+  const sidebarActive = (page) => page.locator('[data-slot="sidebar"] a[aria-current=page]').allInnerTexts().then((a) => a.map((s) => s.trim()));
+  const landed = async (page, what) => {
+    await waitHash(page, "#/assistant/knowledge", 10000);
+    await page.locator("[data-testid=knowledge-page]").waitFor({ timeout: 15000 });
+    assert((await sidebarActive(page)).includes("知识库"), `${what}: the sidebar does not highlight 知识库 (${JSON.stringify(await sidebarActive(page))})`);
+    assert((await page.locator(".agent-admin").count()) === 0, `${what}: the settings page is still on screen`);
+  };
+  // 1. the sidebar
+  const side = await openAt(ctx, "knowledge entry sidebar", "#/assistant/bots", { ready: "[data-testid=bot-card]" });
+  try { await side.page.locator('[data-slot="sidebar"] a', { hasText: "知识库" }).first().click(); await landed(side.page, "the sidebar"); notes.push("sidebar"); } finally { await side.close(); }
+  // 2. the settings page's button (kept for now): it goes to the page, the settings address never shows the library
+  const settings = await openAt(ctx, "knowledge entry settings", "#/settings/models", { ready: ".agent-admin h2" });
+  try {
+    const { page } = settings;
+    await page.getByRole("button", { name: "研究知识库", exact: true }).click();
+    await landed(page, "the settings button");
+    await page.goBack(); await waitHash(page, "#/settings/models");
+    await page.locator(".agent-admin h2").first().waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=knowledge-page]").count()) === 0, "the settings address shows the knowledge page");
+    notes.push("settings button (and Back returns to the settings page)");
+  } finally { await settings.close(); }
+  // 3. the agent's open_page
+  const agent = await openAt(ctx, "knowledge entry agent", "#/chat", { ready: "[data-testid=message]" });
+  try { await dispatchAction(agent.page, { action: "open_page", page: "knowledge" }); await landed(agent.page, "open_page knowledge"); notes.push("open_page"); } finally { await agent.close(); }
+  // 4. the page is a page of its own: no way back to the model settings, no eyebrow
+  const page = await asOpen(ctx, "knowledge no back", "#/assistant/knowledge", KN_DOC);
+  try {
+    const text = await page.page.locator("main").innerText();
+    assert(!text.includes("返回模型设置") && !text.includes("FinBot / Knowledge"), "the page still has 返回模型设置 or the eyebrow");
+    assert((await page.page.locator("main h1").innerText()).trim() === "研究知识库", "the title is not 研究知识库");
+    notes.push("no 返回模型设置");
+  } finally { await page.close(); }
+  return `the sidebar, the settings page's button and the agent's open_page (knowledge) all land on #/assistant/knowledge with 知识库 highlighted and no settings page under it; ${notes.slice(-1)}`;
+}
+
+async function knowledgeKeyboard(ctx) {
+  const view = await asOpen(ctx, "knowledge keyboard", "#/assistant/knowledge", KN_DOC, { state: KN_STATE() });
+  try {
+    const { page } = view;
+    // a document's chunks: Enter on the title opens the drawer (the focus goes in), Esc closes it and the focus returns to that row
+    const opener = knDoc(page, "AAPL 服务业务分析").locator("[data-testid=knowledge-doc-open]");
+    await opener.focus(); await page.keyboard.press("Enter");
+    await page.locator("[data-testid=knowledge-chunk]").first().waitFor({ timeout: 8000 });
+    assert(await page.evaluate(() => !!document.activeElement?.closest("[data-testid=knowledge-drawer]")), "the focus did not go into the drawer");
+    await page.keyboard.press("Escape"); await page.locator("[data-testid=knowledge-drawer]").waitFor({ state: "detached", timeout: 5000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "knowledge-doc-open" && document.activeElement.closest("[data-testid=knowledge-doc]").innerText.includes("AAPL 服务业务分析"), null, { timeout: 3000 });
+    // the retrieval test: type the query, Tab to the button, Enter
+    await page.locator("[data-testid=knowledge-query]").focus(); await page.keyboard.type("服务收入");
+    await asTabTo(page, "[data-testid=knowledge-test]"); await page.keyboard.press("Enter");
+    const [w] = await asWritesAfter(view, 1, "keyboard retrieval");
+    assert(asBody(w) === JSON.stringify({ kind: "material", keyword: "服务收入", symbol: "AAPL" }), `the keyboard retrieval sent ${asBody(w)}`);
+    await page.locator("[data-testid=knowledge-result]").waitFor({ timeout: 8000 });
+    // the source list opens with the keyboard and a choice is made with it
+    await page.locator("#knowledge-source").focus(); await page.keyboard.press("Enter");
+    await page.getByRole("option", { name: "常见问题", exact: true }).focus(); await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.querySelector("[data-testid=knowledge-retrieval-symbol]").textContent.trim() === "不带代码", null, { timeout: 5000 });
+    return "a document's chunks open with Enter (focus goes into the drawer) and Esc closes them with the focus back on that row; the retrieval test is typed and run from the keyboard; the source list is chosen with the keyboard and the retrieval card follows";
+  } finally { await view.close(); }
+}
+
+async function assistantNoLegacy(ctx) {
+  const OLD = [".personal-page", ".personal-card", ".personal-badge", ".personal-grid", ".memory-panel", ".memory-list", ".memory-layer", ".memory-layer-title", ".memory-line", ".memory-actions", ".memory-add", ".memory-edit", ".memory-scope", ".memory-search", ".memory-tabs", ".memory-quote", ".memory-archived", ".skill-group", ".skill-card", ".skill-tools", ".skill-editor", ".skill-import", ".skill-preview", ".skill-tool-list",
+    ".knowledge-admin", ".knowledge-import-card", ".knowledge-controls", ".knowledge-select-list", ".knowledge-list", ".knowledge-doc-row", ".knowledge-doc-main", ".knowledge-candidate", ".knowledge-drawer-backdrop", ".knowledge-chunk", ".knowledge-status", ".knowledge-error", ".knowledge-retrieval-result",
+    ".task-form", ".task-form-row", ".bot-tool", ".section-tabs", ".origin-inferred", ".secondary-action", ".primary-action", ".fine-print", ".workspace", ".workspace-heading", ".eyebrow"].join(", ");
+  const SCOPE = "main, [data-testid=skill-drawer], [data-testid=skill-import-drawer], [data-testid=news-drawer], [data-testid=knowledge-drawer]";
+  const check = async (page, what) => {
+    const found = await page.evaluate(({ old, scope }) => ({
+      legacy: document.querySelectorAll("[data-legacy]").length,
+      old: [...document.querySelectorAll(old)].filter((el) => el.closest(scope)).map((el) => el.className).length,
+      native: document.querySelectorAll(`:is(${scope}) select`).length,
+      small: [...document.querySelectorAll(`:is(${scope}) *`)].filter((el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && parseFloat(getComputedStyle(el).fontSize) < 12).length,
+    }), { old: OLD, scope: SCOPE });
+    assert(found.legacy === 0, `${what}: ${found.legacy} data-legacy element(s)`);
+    assert(found.old === 0, `${what}: ${found.old} element(s) with an old class`);
+    assert(found.native === 0, `${what}: ${found.native} native <select>`);
+    assert(found.small === 0, `${what}: ${found.small} text element(s) under 12px`);
+  };
+  const seen = [];
+  const run = async (label, hash, ready, steps, opts = {}) => {
+    const view = await asOpen(ctx, `no legacy ${label}`, hash, ready, opts);
+    try { await check(view.page, label); if (steps) await steps(view.page, (what) => check(view.page, `${label} · ${what}`)); seen.push(label); } finally { await view.close(); }
+  };
+  await run("技能", "#/assistant/skills", SK_CARD, async (page, again) => {
+    await page.locator("[data-testid=skill-new]").click(); await page.locator(SK_DRAWER).waitFor(); await again("编辑抽屉"); await page.keyboard.press("Escape"); await page.locator(SK_DRAWER).waitFor({ state: "detached" });
+    await page.locator("[data-testid=skill-import-open]").click(); await page.locator(SK_IMPORT).waitFor(); await page.locator("[data-testid=skill-import-text]").fill(IMPORT_SAMPLE); await page.locator("[data-testid=skill-import-preview]").click(); await page.locator("[data-testid=skill-preview]").waitFor(); await again("导入预览");
+  });
+  await run("技能 :skillId", `#/assistant/skills/${SK_ID.draft}`, `${SK_DRAWER}[data-draft=true]`);
+  await run("技能（空）", "#/assistant/skills", "[data-testid=skills-empty]", null, { state: stateAssistantEmpty() });
+  await run("记忆", "#/assistant/memory", MEM_ITEM, async (page, again) => { await page.locator("[data-testid=memory-archived] button").first().click(); await again("已归档展开"); await memItem(page, "回答先给结论").locator("[data-testid=memory-edit]").click(); await again("行内编辑"); });
+  await run("记忆 ?tab=recall", "#/assistant/memory?tab=recall", "[data-testid=recall-item]");
+  await run("记忆（空）", "#/assistant/memory", "[data-testid=memory-empty]", null, { state: stateAssistantEmpty() });
+  await run("新闻源", "#/assistant/news", NW_ROW, async (page, again) => {
+    await nwMenu(page, "wire-markets", "news-test"); await nwRow(page, "wire-markets").locator("[data-testid=news-test-result]").waitFor(); await again("测试结果展开");
+    await page.locator("[data-testid=news-new]").click(); await page.locator(NW_DRAWER).waitFor(); await again("新建抽屉");
+  });
+  await run("新闻源（空）", "#/assistant/news", "[data-testid=news-empty]", null, { state: stateAssistantEmpty() });
+  await run("知识库", "#/assistant/knowledge", KN_DOC, async (page, again) => { await knDoc(page, "AAPL 10-Q").locator("[data-testid=knowledge-doc-open]").click(); await page.locator("[data-testid=knowledge-chunk]").first().waitFor(); await again("分块抽屉"); }, { state: KN_STATE() });
+  await run("知识库（空）", "#/assistant/knowledge", "[data-testid=knowledge-docs-empty]", null, { state: stateAssistantEmpty() });
+  // the control: the settings page is still an old page, so a selector that reads 0 everywhere is told apart from one that is broken
+  const settings = await asOpen(ctx, "no legacy control", "#/settings/models", ".agent-admin h2");
+  try { assert((await settings.page.locator("[data-legacy]").count()) >= 1, "the settings page holds no data-legacy element (the selector is broken, not the pages clean)"); } finally { await settings.close(); }
+  return `${seen.length} addresses / states (skills incl. :skillId and its two drawers, memory both tabs, news with a test result and the drawer, knowledge with the chunk drawer, each page empty): 0 data-legacy, 0 old classes, 0 native <select>, 0 text under 12px; the settings page still holds the marker`;
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -9314,6 +10431,23 @@ const CHECKS = [
   ["latest-redirect-states: a company with a forecast lands on that forecast (section=versions), one with none on the forecast home, an unreadable list stops on its error sentence and 回到预测首页 leads to the forecast home; in all three the document never holds a data-legacy element or an old class", latestRedirectStates],
   ["research-bare-controls: the plain buttons on the forecast, judgment, evidence and material pages (outside data-slot parts) show the pointer, and the links the browser's own rule underlined keep their line", researchBareControls],
   ["routines-later-english: the English 「…」 menu of a suggested write reads Skip / Later / Ignore, Later sends the old later body, the sign-in dialog still reads Cancel", routinesLaterEnglish],
+  // P8.1: the assistant's four pages
+  ["skills-ops: the nine skill operations (new ×4, edit ×3, the draft saved with save_draft, switch both ways, copy, export, import preview then import, delete by hold) send the old page's requests body for body; a built-in has no edit or delete; a draft has no switch", skillsOps],
+  ["skills-import-preview-lists-writes: 导入 cannot be pressed without a preview of the text in the box; the preview lists every tool and marks the write one with the sentence; editing withdraws it; a file fills the box; a refusal says why", skillsImportPreviewListsWrites],
+  ["skills-draft-link: #/assistant/skills/<draft> and the old #skills/<draft> open the draft's drawer with its sentence; a missing id says 这个技能不存在。; a built-in opens none; closing goes back to /assistant/skills", skillsDraftLink],
+  ["skills-keyboard: a skill made and saved with the keyboard alone, the card's 「…」 menu with Esc returning the focus, the editor closed with Esc and the focus back on 编辑", skillsKeyboard],
+  ["memory-ops: the nine memory operations (add ×3, edit with Enter / Esc, scope, 确认 only on inferred, delete by hold, the 往事 tab in the address, search only on submit, the bot filter, open a conversation) send the old requests; a refresh keeps the tab", memoryOps],
+  ["memory-notes-once: each tab's one sentence appears exactly once, word for word as the old page, and not on the other tab; inferred items carry 推断 and 确认, the others neither", memoryNotesOnce],
+  ["memory-keyboard: the tabs by arrow keys and Enter / Space, an item added with Enter, a row edited (Enter saves, Esc leaves) from the keyboard", memoryKeyboard],
+  ["news-ops: the seven news-source operations (new, edit ×6, switch both ways, test fetch ×6 opening under the row, REA repair only on repairable sources, delete by hold, the push length) send the old requests body for body", newsOps],
+  ["news-id-rule: the ID made of the name fits the rule, follows the name until typed in, gets -2 when taken, is empty (and said) for a Chinese name; wrong and taken IDs and a bad URL are said at once and send nothing; an existing source's ID is locked", newsIdRule],
+  ["news-tags-body: markets, tags and spare addresses entered in the tag boxes send the old arrays (markets in capitals); language, homepage and name are carried as the old form carried them", newsTagsBody],
+  ["news-health-not-color-only: every row says its health in words (an unknown value as given) and its last error as the server gave it; the dot is decoration", newsHealthNotColorOnly],
+  ["news-keyboard: a row's 「…」 menu and its test, the new-source drawer with all fields and the three tag boxes, saved with Enter; Esc closes the drawer and returns the focus", newsKeyboard],
+  ["knowledge-ops: the ten knowledge operations (upload with the fixed 3 stars and medium, load ×4, import, index, retrieval ×4, chunks, retry, withdraw, reject, approve) send the old requests; nothing promises that an import is searchable", knowledgeOps],
+  ["knowledge-entries: the sidebar, the settings page's button and the agent's open_page (knowledge) land on #/assistant/knowledge with 知识库 highlighted; the settings address never shows the library; no 返回模型设置", knowledgeEntries],
+  ["knowledge-keyboard: a document's chunks open and close from the keyboard with the focus returned to the row; the retrieval test and the source list are used with the keyboard alone", knowledgeKeyboard],
+  ["assistant-no-legacy: the four pages (each address and each opened drawer, each empty) hold no data-legacy element, no old class, no native <select>, no text under 12px; the settings page still holds the marker", assistantNoLegacy],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

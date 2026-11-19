@@ -36,8 +36,6 @@ body { -webkit-font-smoothing: antialiased; }
 .bot-chip[aria-pressed="true"] { border-color:var(--me-ink); background:var(--me-surface-2); }
 
 /* The research pages share the surfaces, so they sit on the same neutral background. */
-.section-tabs button[aria-current="page"] { color:var(--me-ink); border-bottom-color:var(--me-ink); }
-.section-tabs.is-secondary button[aria-current="page"] { background:var(--me-surface-2); border-color:var(--me-line-strong); }
 
 /* --- FinBot bot faces: 4 silhouettes × 4 eye colours (components/bot/BotAvatar.tsx) ---------------------------------- */
 .bot-orb { flex: 0 0 auto; display: inline-block; line-height: 0; }
