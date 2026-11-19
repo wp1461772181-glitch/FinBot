@@ -37,15 +37,15 @@ export function VersionsPanel({ timeline, current, parent }: { timeline: V2Timel
   const rowOf = (label: string, now: string, before: string, change?: string) => <tr key={label} className="border-t border-line"><th scope="row" className={cn(head, "text-ink-2")}>{label}</th><td className={cell}>{now}</td><td className={cn(cell, "text-ink-2")}>{before}</td><td className={cn(cell, "font-mono tabular-nums")}>{change ?? ""}</td></tr>;
   return <section data-testid="forecast-compare" aria-labelledby="compare-title" className="flex min-w-0 flex-col gap-3">
     <div className="flex flex-col gap-1">
-      <h3 id="compare-title" className="text-title-s text-ink">{versions.length ? count : t("尚无版本链")}</h3>
-      <p className="text-small text-muted-foreground">{versions.length > 1 ? t("每个子版本保留固定目标合同；版本差异见「审计与来源」页签里的事件记录。") : t("出现新的合规材料后，可以用页面右上角的「发起修订」选择版本发起人工修订。")}</p>
+      <h3 id="compare-title" className="text-title-s text-ink mb-[1em]">{versions.length ? count : t("尚无版本链")}</h3>
+      <p className="text-small text-muted-foreground mb-[1em]">{versions.length > 1 ? t("每个子版本保留固定目标合同；版本差异见「审计与来源」页签里的事件记录。") : t("出现新的合规材料后，可以用页面右上角的「发起修订」选择版本发起人工修订。")}</p>
     </div>
     {versions.length > 0 && <dl className="m-0 flex flex-wrap gap-x-8 gap-y-1 text-small">
       <div className="flex gap-2"><dt className="text-muted-foreground">{t("固定目标")}</dt><dd data-testid="compare-target" className="m-0 font-mono tabular-nums text-ink">{target}</dd></div>
       <div className="flex gap-2"><dt className="text-muted-foreground">{t("当前版本")}</dt><dd className="m-0 text-ink">{t("第")} {versions.at(-1)?.version_no} {t("版")}</dd></div>
     </dl>}
-    {current && parent && <p className="text-small text-ink-2">{locale === "en-US" ? `${t("市场输入：")} ${marketChanged ? t("已更新（见下方截止时间）") : t("与父版清单一致")}. ${t("本系统尚未验证各输入对市场结果的定量归因。")}` : `${t("市场输入：")}${marketChanged ? t("已更新（见下方截止时间）") : t("与父版清单一致")}。${t("本系统尚未验证各输入对市场结果的定量归因。")}`}</p>}
-    {current && !parent && <p className="text-small text-muted-foreground">{t("初始版本没有父版本可比较。")}</p>}
+    {current && parent && <p className="text-small text-ink-2 mb-[1em]">{locale === "en-US" ? `${t("市场输入：")} ${marketChanged ? t("已更新（见下方截止时间）") : t("与父版清单一致")}. ${t("本系统尚未验证各输入对市场结果的定量归因。")}` : `${t("市场输入：")}${marketChanged ? t("已更新（见下方截止时间）") : t("与父版清单一致")}。${t("本系统尚未验证各输入对市场结果的定量归因。")}`}</p>}
+    {current && !parent && <p className="text-small text-muted-foreground mb-[1em]">{t("初始版本没有父版本可比较。")}</p>}
     {current && parent && <div className="min-w-0 overflow-x-auto rounded-md border border-line bg-surface">
       <table data-testid="compare-table" className="w-full min-w-[20rem] border-collapse">
         <caption className="sr-only">{t("所选版本与上一版的对比")}</caption>

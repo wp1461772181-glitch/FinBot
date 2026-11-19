@@ -27,7 +27,7 @@ export function MaterialFilters({ symbol, filters, total, onChange, onClear }: {
     </div>
     {chips.length > 0 && <ul data-testid="filter-chips" aria-label={t("已选筛选")} className="m-0 flex list-none flex-wrap gap-1.5 p-0">
       {chips.map(chip => <li key={chip.key}><button type="button" data-testid="filter-chip" data-filter={chip.key} aria-label={`${t("清除筛选")}：${t(chip.phrase)}`} onClick={() => onClear(chip.key)}
-        className="inline-flex h-8 items-center gap-1 rounded-sm border border-line-strong bg-sunken px-2 text-small text-ink outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11">{t(chip.phrase)}<X aria-hidden="true" className="size-3.5" /></button></li>)}
+        className="inline-flex h-8 items-center gap-1 rounded-sm border border-line-strong bg-sunken px-2 text-small text-ink outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11 cursor-pointer appearance-auto py-px">{t(chip.phrase)}<X aria-hidden="true" className="size-3.5" /></button></li>)}
     </ul>}
   </div>;
 }

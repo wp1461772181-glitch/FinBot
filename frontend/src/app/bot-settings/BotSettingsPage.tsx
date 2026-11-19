@@ -5,8 +5,6 @@ import { Button } from "@/components/ui/button";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { confirm } from "@/components/state/confirm";
 import { notify } from "@/components/state/notify";
-import { LegacyFrame } from "../../LegacyFrame";
-import { TaskManager } from "../../BotRoutines";
 import { deleteBot } from "../../api/bots-admin";
 import { updateBot, type Bot } from "../../api/bots";
 import { message } from "../../bot-message";
@@ -16,6 +14,7 @@ import { paths } from "../../routes.mjs";
 import { SECTIONS, draftOf, fieldsToSave, hasChanges, sectionFromSearch, sectionsChanged, validate, type BotDraft, type SectionId } from "../../bot-settings-form.mjs";
 import { useNarrowViewport } from "@/components/ui/sidebar";
 import { FocusFields, ModelFields, NotifyCapField, ProfileFields, ToolFields } from "./FormSections";
+import { BotRoutinesSection } from "../routines/BotRoutinesSection";
 import { LookSection } from "./LookSection";
 import { SaveBar } from "./SaveBar";
 import { SettingsSection } from "./Section";
@@ -122,7 +121,7 @@ export default function BotSettingsPage({ bot, others, onChanged, onDeleted }: {
       case "model": return <ModelFields {...form} bot={server} catalog={options.catalog} />;
       case "tools": return <ToolFields {...form} tools={options.tools} loaded={options.loaded} />;
       case "skills": return <SkillsSection bot={bot} onSaved={onChanged} />;
-      case "routines": return <LegacyFrame><div className="agent-page" data-testid="bot-routines"><TaskManager botId={bot.id} /></div></LegacyFrame>;
+      case "routines": return <BotRoutinesSection bot={bot} onChanged={onChanged} />;
       case "notify": return <><NotifyCapField {...form} /><TelegramPanel bot={bot} /></>;
       case "danger": return <div className="grid gap-3">
         {bot.is_default ? <p data-testid="default-undeletable" className="text-small text-muted-foreground">{t("默认 bot 可以改名和说明，不能删除。没指明给谁的消息进它。")}</p>

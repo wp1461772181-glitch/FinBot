@@ -1,0 +1,574 @@
+{
+ "_about": "Request bodies and form rules recorded from the OLD portfolio page (HEAD 476188e, before P7.1) on the same fixtures; the new page must send the same.",
+ "entry": {
+  "buy": {
+   "input": {
+    "kind": "buy",
+    "symbol": "msft",
+    "quantity": "10",
+    "price": "401.5",
+    "fee": "1.5",
+    "occurred_on": "2026-11-10",
+    "note": "  加仓一笔  "
+   },
+   "method": "POST",
+   "path": "/portfolio/transactions",
+   "body": {
+    "kind": "buy",
+    "symbol": "MSFT",
+    "quantity": "10",
+    "price": "401.5",
+    "fee": "1.5",
+    "occurred_on": "2026-11-10",
+    "note": "加仓一笔"
+   },
+   "contentType": "application/json"
+  },
+  "buyMin": {
+   "input": {
+    "kind": "buy",
+    "symbol": "AAPL",
+    "quantity": "1,000",
+    "price": "190"
+   },
+   "method": "POST",
+   "path": "/portfolio/transactions",
+   "body": {
+    "kind": "buy",
+    "symbol": "AAPL",
+    "quantity": "1000",
+    "price": "190"
+   },
+   "contentType": "application/json"
+  },
+  "sell": {
+   "input": {
+    "kind": "sell",
+    "symbol": "TSLA",
+    "quantity": "5.5",
+    "price": "260.25",
+    "fee": "0.99"
+   },
+   "method": "POST",
+   "path": "/portfolio/transactions",
+   "body": {
+    "kind": "sell",
+    "symbol": "TSLA",
+    "quantity": "5.5",
+    "price": "260.25",
+    "fee": "0.99"
+   },
+   "contentType": "application/json"
+  },
+  "opening": {
+   "input": {
+    "kind": "opening",
+    "symbol": "GOOGL",
+    "quantity": "30",
+    "price": "168.1234"
+   },
+   "method": "POST",
+   "path": "/portfolio/transactions",
+   "body": {
+    "kind": "opening",
+    "symbol": "GOOGL",
+    "quantity": "30",
+    "price": "168.1234"
+   },
+   "contentType": "application/json"
+  },
+  "dividend": {
+   "input": {
+    "kind": "dividend",
+    "symbol": "AAPL",
+    "amount": "12.5",
+    "occurred_on": "2026-11-01"
+   },
+   "method": "POST",
+   "path": "/portfolio/transactions",
+   "body": {
+    "kind": "dividend",
+    "symbol": "AAPL",
+    "amount": "12.5",
+    "occurred_on": "2026-11-01"
+   },
+   "contentType": "application/json"
+  },
+  "split": {
+   "input": {
+    "kind": "split",
+    "symbol": "NVDA",
+    "ratio": "2"
+   },
+   "method": "POST",
+   "path": "/portfolio/transactions",
+   "body": {
+    "kind": "split",
+    "symbol": "NVDA",
+    "ratio": "2"
+   },
+   "contentType": "application/json"
+  },
+  "deposit": {
+   "input": {
+    "kind": "deposit",
+    "amount": "5,000"
+   },
+   "method": "POST",
+   "path": "/portfolio/transactions",
+   "body": {
+    "kind": "deposit",
+    "amount": "5000"
+   },
+   "contentType": "application/json"
+  },
+  "withdraw": {
+   "input": {
+    "kind": "withdraw",
+    "amount": "100.75",
+    "note": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "method": "POST",
+   "path": "/portfolio/transactions",
+   "body": {
+    "kind": "withdraw",
+    "amount": "100.75",
+    "note": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "contentType": "application/json"
+  },
+  "brk": {
+   "input": {
+    "kind": "buy",
+    "symbol": "brk.b",
+    "quantity": "2",
+    "price": "450"
+   },
+   "method": "POST",
+   "path": "/portfolio/transactions",
+   "body": {
+    "kind": "buy",
+    "symbol": "BRK.B",
+    "quantity": "2",
+    "price": "450"
+   },
+   "contentType": "application/json"
+  }
+ },
+ "entryValidation": {
+  "no-symbol": {
+   "input": {
+    "kind": "buy",
+    "symbol": "",
+    "quantity": "1",
+    "price": "1"
+   },
+   "alert": [
+    "请输入有效的美股代码，例如 INTC 或 BRK.B。"
+   ]
+  },
+  "bad-symbol": {
+   "input": {
+    "kind": "buy",
+    "symbol": "123",
+    "quantity": "1",
+    "price": "1"
+   },
+   "alert": [
+    "请输入有效的美股代码，例如 INTC 或 BRK.B。"
+   ]
+  },
+  "long-symbol": {
+   "input": {
+    "kind": "buy",
+    "symbol": "ABCDEF",
+    "quantity": "1",
+    "price": "1"
+   },
+   "alert": [
+    "请输入有效的美股代码，例如 INTC 或 BRK.B。"
+   ]
+  },
+  "zero-qty": {
+   "input": {
+    "kind": "buy",
+    "symbol": "AAPL",
+    "quantity": "0",
+    "price": "1"
+   },
+   "alert": [
+    "股数要大于 0。"
+   ]
+  },
+  "empty-qty": {
+   "input": {
+    "kind": "buy",
+    "symbol": "AAPL",
+    "quantity": "",
+    "price": "1"
+   },
+   "alert": [
+    "股数要大于 0。"
+   ]
+  },
+  "text-qty": {
+   "input": {
+    "kind": "buy",
+    "symbol": "AAPL",
+    "quantity": "abc",
+    "price": "1"
+   },
+   "alert": [
+    "股数要大于 0。"
+   ]
+  },
+  "zero-price": {
+   "input": {
+    "kind": "buy",
+    "symbol": "AAPL",
+    "quantity": "1",
+    "price": "0"
+   },
+   "alert": [
+    "成交价要大于 0。"
+   ]
+  },
+  "opening-no-price": {
+   "input": {
+    "kind": "opening",
+    "symbol": "AAPL",
+    "quantity": "1",
+    "price": ""
+   },
+   "alert": [
+    "请填平均成本（每股）。"
+   ]
+  },
+  "bad-fee": {
+   "input": {
+    "kind": "buy",
+    "symbol": "AAPL",
+    "quantity": "1",
+    "price": "1",
+    "fee": "-1"
+   },
+   "alert": [
+    "手续费要填不小于 0 的数字。"
+   ]
+  },
+  "split-1": {
+   "input": {
+    "kind": "split",
+    "symbol": "NVDA",
+    "ratio": "1"
+   },
+   "alert": [
+    "拆股比例要大于 0 且不等于 1（1 拆 2 填 2）。"
+   ]
+  },
+  "split-empty": {
+   "input": {
+    "kind": "split",
+    "symbol": "NVDA",
+    "ratio": ""
+   },
+   "alert": [
+    "拆股比例要大于 0 且不等于 1（1 拆 2 填 2）。"
+   ]
+  },
+  "dividend-zero": {
+   "input": {
+    "kind": "dividend",
+    "symbol": "AAPL",
+    "amount": "0"
+   },
+   "alert": [
+    "金额要大于 0。"
+   ]
+  },
+  "deposit-neg": {
+   "input": {
+    "kind": "deposit",
+    "amount": "-5"
+   },
+   "alert": [
+    "金额要大于 0。"
+   ]
+  },
+  "deposit-empty": {
+   "input": {
+    "kind": "deposit",
+    "amount": ""
+   },
+   "alert": [
+    "金额要大于 0。"
+   ]
+  }
+ },
+ "cash": {
+  "plain": {
+   "value": "30000.5",
+   "initial": "25800.00",
+   "body": {
+    "available_funds": "30000.5"
+   },
+   "alert": []
+  },
+  "commas": {
+   "value": "1,234",
+   "initial": "25800.00",
+   "body": {
+    "available_funds": "1234"
+   },
+   "alert": []
+  },
+  "zero": {
+   "value": "0",
+   "initial": "25800.00",
+   "body": {
+    "available_funds": "0"
+   },
+   "alert": []
+  },
+  "negative": {
+   "value": "-100",
+   "initial": "25800.00",
+   "body": {
+    "available_funds": "-100"
+   },
+   "alert": []
+  },
+  "text": {
+   "value": "abc",
+   "initial": "25800.00",
+   "body": null,
+   "alert": [
+    "金额要填数字。"
+   ]
+  },
+  "empty": {
+   "value": "",
+   "initial": "25800.00",
+   "body": null,
+   "alert": [
+    "金额要填数字。"
+   ]
+  },
+  "sci": {
+   "value": "1e3",
+   "initial": "25800.00",
+   "body": null,
+   "alert": [
+    "金额要填数字。"
+   ]
+  }
+ },
+ "plan": {
+  "full": {
+   "input": {
+    "text": "分两次补仓",
+    "add": "190",
+    "stop": "175.5",
+    "target": "250"
+   },
+   "body": {
+    "plan_text": "分两次补仓",
+    "add_price": "190",
+    "stop_price": "175.5",
+    "target_price": "250"
+   },
+   "alert": []
+  },
+  "clearPrices": {
+   "input": {
+    "text": "只有文字",
+    "add": "",
+    "stop": "",
+    "target": ""
+   },
+   "body": {
+    "plan_text": "只有文字",
+    "add_price": null,
+    "stop_price": null,
+    "target_price": null
+   },
+   "alert": []
+  },
+  "textOnlyChange": {
+   "input": {
+    "text": "改个字"
+   },
+   "body": {
+    "plan_text": "改个字",
+    "add_price": "200.00",
+    "stop_price": "185.00",
+    "target_price": "235.00"
+   },
+   "alert": []
+  },
+  "priceOnlyChange": {
+   "input": {
+    "add": "199.5"
+   },
+   "body": {
+    "plan_text": "回调到 200 附近分批加仓；跌破 185 止损。",
+    "add_price": "199.5",
+    "stop_price": "185.00",
+    "target_price": "235.00"
+   },
+   "alert": []
+  },
+  "clearText": {
+   "input": {
+    "text": ""
+   },
+   "body": {
+    "plan_text": "",
+    "add_price": "200.00",
+    "stop_price": "185.00",
+    "target_price": "235.00"
+   },
+   "alert": []
+  },
+  "commas": {
+   "input": {
+    "add": "1,200"
+   },
+   "body": {
+    "plan_text": "回调到 200 附近分批加仓；跌破 185 止损。",
+    "add_price": "1200",
+    "stop_price": "185.00",
+    "target_price": "235.00"
+   },
+   "alert": []
+  },
+  "badPrice": {
+   "input": {
+    "add": "abc"
+   },
+   "body": null,
+   "alert": [
+    "价格要填不小于 0 的数字，不填表示不设。"
+   ]
+  },
+  "negPrice": {
+   "input": {
+    "stop": "-5"
+   },
+   "body": null,
+   "alert": [
+    "价格要填不小于 0 的数字，不填表示不设。"
+   ]
+  },
+  "longText": {
+   "input": {
+    "text": "(2100 chars)"
+   },
+   "body": {
+    "plan_text": "字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字",
+    "add_price": "200.00",
+    "stop_price": "185.00",
+    "target_price": "235.00"
+   },
+   "alert": []
+  },
+  "_longTextInput": 2100
+ },
+ "remove": {
+  "dialog": {
+   "title": "删除这一笔记录？",
+   "description": "持仓和可用资金会按剩下的记录重新计算。",
+   "buttons": [
+    "取消",
+    "删除"
+   ]
+  },
+  "path": "/portfolio/transactions/p0000000-0000-4000-8000-000000000008",
+  "firstRow": "2026-11-01 MSFT 分红 36.00 删除"
+ },
+ "fieldsPerKind": {
+  "buy": [
+   "类型买入卖出期初持仓分红拆股入金出金",
+   "股票代码",
+   "股数",
+   "成交价",
+   "手续费（可不填）",
+   "日期（可不填，默认今天）",
+   "备注（可不填）"
+  ],
+  "sell": [
+   "类型买入卖出期初持仓分红拆股入金出金",
+   "股票代码",
+   "股数",
+   "成交价",
+   "手续费（可不填）",
+   "日期（可不填，默认今天）",
+   "备注（可不填）"
+  ],
+  "opening": [
+   "类型买入卖出期初持仓分红拆股入金出金",
+   "股票代码",
+   "股数",
+   "平均成本（每股）",
+   "日期（可不填，默认今天）",
+   "备注（可不填）",
+   "NOTE:期初持仓是你已经持有的仓位，不会改变可用资金。"
+  ],
+  "dividend": [
+   "类型买入卖出期初持仓分红拆股入金出金",
+   "股票代码",
+   "金额",
+   "日期（可不填，默认今天）",
+   "备注（可不填）"
+  ],
+  "split": [
+   "类型买入卖出期初持仓分红拆股入金出金",
+   "股票代码",
+   "拆股比例（1 拆 2 填 2）",
+   "日期（可不填，默认今天）",
+   "备注（可不填）"
+  ],
+  "deposit": [
+   "类型买入卖出期初持仓分红拆股入金出金",
+   "金额",
+   "日期（可不填，默认今天）",
+   "备注（可不填）"
+  ],
+  "withdraw": [
+   "类型买入卖出期初持仓分红拆股入金出金",
+   "金额",
+   "日期（可不填，默认今天）",
+   "备注（可不填）"
+  ]
+ },
+ "kinds": [
+  [
+   "buy",
+   "买入"
+  ],
+  [
+   "sell",
+   "卖出"
+  ],
+  [
+   "opening",
+   "期初持仓"
+  ],
+  [
+   "dividend",
+   "分红"
+  ],
+  [
+   "split",
+   "拆股"
+  ],
+  [
+   "deposit",
+   "入金"
+  ],
+  [
+   "withdraw",
+   "出金"
+  ]
+ ]
+}

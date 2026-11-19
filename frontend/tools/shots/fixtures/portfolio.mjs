@@ -4,20 +4,29 @@ import { candles, lastClose, daysAgo, dayOnly } from "./common.mjs";
 const HOLDINGS = [["AAPL", 150, 188.4], ["NVDA", 300, 104.2], ["TSLA", 40, 255.0], ["MSFT", 25, 396.5]];
 const fix = (n) => (Math.round(n * 100) / 100).toFixed(2);
 
+// `state.portfolio` can carry switches a page or a check sets up (P7.1): `empty` (nothing recorded), `referenceOnly` (today's P&L is for reference only, a warning
+// and an unpriced symbol come with it), `override` ({ summary, positions: { SYMBOL: {...} } } laid over the computed figures: a zero P&L, a missing price).
+// `fail` makes the read itself fail with a 500.
 export function portfolioSummary(state) {
+  const flags = state.portfolio;
+  if (flags.empty) {
+    return { available_funds: flags.cash, positions_value: "0.00", total_assets: flags.cash, total_assets_complete: true, floating_pnl: "0.00", today_pnl: "0.00", today_pnl_reference_only: false, realized_pnl: "0.00",
+      price_date: null, unpriced: [], warnings: [], positions: [], plans_without_position: [], transactions: [] };
+  }
   const positions = HOLDINGS.map(([symbol, shares, avg]) => {
     const rows = candles(symbol); const price = rows.at(-1).close; const prev = rows.at(-2).close;
     const cost = shares * avg; const value = shares * price;
     return { symbol, shares: String(shares), cost: fix(cost), avg_cost: fix(avg), diluted_cost: fix(avg), realized_pnl: symbol === "TSLA" ? "412.50" : "0.00", price: fix(price), price_date: rows.at(-1).trading_date,
-      market_value: fix(value), floating_pnl: fix(value - cost), floating_pnl_pct: fix(((value - cost) / cost) * 100), today_pnl: fix(shares * (price - prev)), today_pnl_reference_only: false, weight_pct: null,
-      plan: state.portfolio.plans[symbol] ?? { plan_text: "", add_price: null, stop_price: null, target_price: null } };
+      market_value: fix(value), floating_pnl: fix(value - cost), floating_pnl_pct: fix(((value - cost) / cost) * 100), today_pnl: fix(shares * (price - prev)), today_pnl_reference_only: Boolean(flags.referenceOnly), weight_pct: null,
+      plan: flags.plans[symbol] ?? { plan_text: "", add_price: null, stop_price: null, target_price: null }, ...(flags.override?.positions?.[symbol] ?? {}) };
   });
   const total = positions.reduce((s, p) => s + Number(p.market_value), 0);
   positions.forEach((p) => { p.weight_pct = fix((Number(p.market_value) / total) * 100); });
-  const funds = Number(state.portfolio.cash);
-  return { available_funds: state.portfolio.cash, positions_value: fix(total), total_assets: fix(total + funds), total_assets_complete: true,
-    floating_pnl: fix(positions.reduce((s, p) => s + Number(p.floating_pnl), 0)), today_pnl: fix(positions.reduce((s, p) => s + Number(p.today_pnl), 0)), today_pnl_reference_only: false,
-    realized_pnl: "412.50", price_date: candles("AAPL").at(-1).trading_date, unpriced: [], warnings: [], positions, plans_without_position: Object.keys(state.portfolio.plans).filter((s) => !HOLDINGS.some(([h]) => h === s)), transactions: state.portfolio.transactions };
+  const funds = Number(flags.cash);
+  return { available_funds: flags.cash, positions_value: fix(total), total_assets: fix(total + funds), total_assets_complete: true,
+    floating_pnl: fix(positions.reduce((s, p) => s + Number(p.floating_pnl), 0)), today_pnl: fix(positions.reduce((s, p) => s + Number(p.today_pnl), 0)), today_pnl_reference_only: Boolean(flags.referenceOnly),
+    realized_pnl: "412.50", price_date: candles("AAPL").at(-1).trading_date, unpriced: [], warnings: flags.referenceOnly ? ["price_missing"] : [], positions, plans_without_position: Object.keys(flags.plans).filter((s) => !HOLDINGS.some(([h]) => h === s)),
+    transactions: flags.transactions, ...(flags.override?.summary ?? {}) };
 }
 
 export function buildPortfolio() {

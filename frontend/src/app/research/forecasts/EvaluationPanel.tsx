@@ -11,9 +11,9 @@ import { day } from "./format";
 function Block({ aria, label, title, sub, children }: { aria?: string; label: string; title: string; sub?: ReactNode; children?: ReactNode }) {
   return <section data-testid="forecast-evaluation" aria-label={aria} className="flex min-w-0 flex-col gap-3">
     <div className="flex flex-col gap-1">
-      <p className="text-caption font-medium text-muted-foreground">{label}</p>
-      <h3 className="text-title-s text-ink">{title}</h3>
-      {sub && <p className="text-small text-ink-2 [overflow-wrap:anywhere]">{sub}</p>}
+      <p className="text-caption font-medium text-muted-foreground mb-[1em]">{label}</p>
+      <h3 className="text-title-s text-ink mb-[1em]">{title}</h3>
+      {sub && <p className="text-small text-ink-2 [overflow-wrap:anywhere] mb-[1em]">{sub}</p>}
     </div>
     {children}
   </section>;
@@ -21,7 +21,7 @@ function Block({ aria, label, title, sub, children }: { aria?: string; label: st
 function Sample({ label, value, note }: { label: string; value: string; note: string }) {
   return <div className="material-fact flex flex-col gap-0.5 px-3 py-2"><span className="text-caption text-muted-foreground">{label}</span><strong className="font-mono text-small font-medium tabular-nums text-ink">{value}</strong><small className="text-caption text-muted-foreground">{note}</small></div>;
 }
-const Note = ({ children }: { children: ReactNode }) => <p className="text-caption text-muted-foreground [overflow-wrap:anywhere]">{children}</p>;
+const Note = ({ children }: { children: ReactNode }) => <p className="text-caption text-muted-foreground [overflow-wrap:anywhere] mb-[1em]">{children}</p>;
 
 /**
  * 到期评估 (the old 到期评估 readout, same reading rules): only saved results are shown, nothing is fetched or computed here.  For a version with

@@ -90,12 +90,12 @@ export function EvidencePage({ symbol, companies, address, uploadOpen }: { symbo
       {versionData && <span data-testid="evidence-decision" className="text-caption text-muted-foreground">{t("决策时间")} {time(versionData.decision_at)}</span>}
       <Button asChild className="ml-auto"><Link to={uploadHref} data-testid="open-upload" aria-haspopup="dialog"><Upload aria-hidden="true" />{t("上传媒体材料")}</Link></Button>
     </header>
-    <p className="max-w-3xl text-small text-muted-foreground">{t("按预测版本查看简报实际引用的材料及其事件判断。候选冻结材料只有被简报引用后才会出现在这里。")}</p>
+    <p className="max-w-3xl text-small text-muted-foreground mb-[1em]">{t("按预测版本查看简报实际引用的材料及其事件判断。候选冻结材料只有被简报引用后才会出现在这里。")}</p>
 
     {roots.kind === "error" && !routeVersionId && <ErrorBar message={actionMessage(roots.error, "暂时无法读取预测版本。")} onRetry={retryRoots} />}
     {failedVersion && <ErrorBar message={failedVersion} onRetry={routeVersionId ? retryRoute : retryIndex} />}
-    {localization.kind === "loading" && <p role="status" className="text-caption text-muted-foreground">{t("Translating saved research brief…")}</p>}
-    {localization.kind === "error" && <p role="status" className="text-caption text-muted-foreground">{t("English translation is temporarily unavailable; showing the saved original.")}</p>}
+    {localization.kind === "loading" && <p role="status" className="text-caption text-muted-foreground mb-[1em]">{t("Translating saved research brief…")}</p>}
+    {localization.kind === "error" && <p role="status" className="text-caption text-muted-foreground mb-[1em]">{t("English translation is temporarily unavailable; showing the saved original.")}</p>}
 
     {loading && <DelayedSkeleton><div data-testid="evidence-loading" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"><SkeletonCard /><SkeletonCard /><SkeletonCard /></div></DelayedSkeleton>}
     {noForecast && <EmptyState title={t("创建预测后，这里会整理实际引用的材料")} description={t("SEC 原始材料和 AI 分析历史仍在材料库中管理。媒体材料可以先上传保存，分析后再由预测版本引用。")} action={{ label: t("前往预测工作台"), to: paths.forecasts() }} className="rounded-md border border-dashed border-line" />}

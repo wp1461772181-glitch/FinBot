@@ -11,6 +11,7 @@ import { freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { buildState } from "./fixtures/index.mjs";
 import { materialId } from "./fixtures/materials.mjs";
+import { EXTRA_INBOX, EXTRA_PROPOSALS, EXTRA_TASKS } from "./fixtures/routines.mjs";
 
 const LOADING = ["正在读取", "正在加载", "读取中", "加载中"];
 
@@ -287,6 +288,45 @@ async function redUp(page) {
   await page.evaluate(() => { try { localStorage.setItem("market-evidence-agent:updown:v1", "red-up"); } catch { /* storage unavailable */ } document.documentElement.dataset.updown = "red-up"; });
 }
 
+// --- P7.1 pictures -------------------------------------------------------------------------------------------------------
+const portfolioLoaded = "[data-testid=portfolio-table]";
+/**
+ * P7.3 (C3).  A full-page picture is taken through Chromium's capture-beyond-viewport, which for a moment makes the layout viewport 1 x 1 and then gives the real size back.
+ * Whether the page's own code sees that moment is a race inside the browser (a picture taken at once, or after 500 ms under load, may or may not).  The 记一笔 dialog
+ * follows a width query: below 640 px it is a drawer, so on that moment it swaps its shell, the dialog is unmounted and mounted again, and the focus ring
+ * comes back on its first field.  The picture is of the dialog undisturbed (focus on 记录), so this view does not pass the capture's transient size on: while the window is
+ * narrower than 100 px, `matchMedia(...).matches` keeps the answer it gave at a real size.  Nothing about the page changes at any real size.
+ */
+async function holdViewportAnswers(page) {
+  await page.evaluate(() => {
+    const native = window.matchMedia.bind(window); const answers = new Map();
+    window.matchMedia = (query) => {
+      const list = native(query);
+      if (window.innerWidth >= 100) answers.set(query, list.matches);
+      return new Proxy(list, { get(target, key) {
+        if (key === "matches") { if (window.innerWidth < 100 && answers.has(query)) return answers.get(query); answers.set(query, target.matches); return target.matches; }
+        const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
+      } });
+    };
+  });
+}
+/** The fake backend's state for the portfolio page with switches set (fixtures/portfolio.mjs: empty, fail, referenceOnly, override). */
+/** P7.2: the fake backend's state with the extra routines: a task with both price sides, one in a rare time zone, one with an old free-text price line, an expired proposal and a second suggestion. */
+export function stateWithRoutines({ tasks = true, expired = true, inbox = true } = {}) {
+  const state = buildState();
+  if (tasks) state.tasks.push(...structuredClone(EXTRA_TASKS));
+  if (expired) state.proposals.push(...structuredClone(EXTRA_PROPOSALS));
+  if (inbox) state.inbox.push(...structuredClone(EXTRA_INBOX));
+  return state;
+}
+/** P7.2: nothing waits for the reader (no proposal, no suggested write). */
+export function stateWithoutConfirms() {
+  const state = buildState();
+  state.proposals = []; state.inbox = state.inbox.filter((item) => item.section !== "confirm");
+  return state;
+}
+export function stateWithPortfolio(patch) { const state = buildState(); Object.assign(state.portfolio, patch); return state; }
+
 // --- P6.3 pictures ---------------------------------------------------------------------------------------------------
 /** The fake backend's state for the material pages: uploads already saved (the dialog's list), a job that never ends (the task bar). */
 export function stateWithMaterials(patch) { return Object.assign(buildState(), patch); }
@@ -297,6 +337,41 @@ const UPLOADED = [
 /** The replays of the company are listed and the first one's detail is up (a phone lists only). */
 const replayLoaded = async (page) => { await page.waitForSelector("[data-testid=replay-row]", { state: "visible", timeout: 30000 }); await page.waitForFunction(() => document.querySelector("[data-testid=replay-detail]") || window.matchMedia("(max-width: 1023px)").matches, null, { timeout: 30000 }); };
 /** The monitor's health card is up (the page has read the status). */
+/** P7.2: open the task drawer for a new task of the kind, on the section, with the sample content the picture shows. */
+export async function openNewTask(page, kind, section) {
+  await page.locator("[data-testid=task-new]").first().click();
+  const drawer = page.locator("[data-testid=task-drawer]");
+  await drawer.waitFor({ timeout: 10000 });
+  const go = async (id) => { await drawer.locator(`[data-step-button=${id}]`).click(); await drawer.locator(`[data-testid=task-section-${id}]`).waitFor({ timeout: 5000 }); };
+  if (kind === "alerts") { await drawer.locator('[data-testid=task-kind] [data-option=alerts]').click(); await drawer.locator("#task-name").fill("价格线提醒（示例）"); }
+  if (section === "time") await go("time");
+  if (section === "scope") { await go("scope"); await drawer.locator('[data-testid=task-scope] [data-option=symbols]').click(); await drawer.locator("#task-symbols").fill("AAPL, MSFT"); await drawer.locator("#task-symbols").press("Enter"); await drawer.locator("[data-tag=MSFT]").waitFor({ timeout: 5000 }); }
+  if (section === "content") {
+    await go("content");
+    if (kind === "brief") await drawer.locator("#task-instruction").fill("总结研究队列公司过去一天的新申报和新闻，列出值得注意的变化。");
+    else {
+      for (let i = 0; i < 3; i++) await drawer.locator("[data-testid=price-add]").click();
+      const rows = drawer.locator("[data-testid=price-row]");
+      for (const [i, [symbol, side, price]] of [["NVDA", "above", "150"], ["AAPL", "below", "180"], ["TSLA", "above", "200.5"]].entries()) {
+        await rows.nth(i).locator("[data-field=symbol]").fill(symbol); await rows.nth(i).locator(`[data-option=${side}]`).click(); await rows.nth(i).locator("[data-field=price]").fill(price);
+      }
+      await drawer.locator("#task-telegram").click();
+    }
+  }
+  await settled(page);
+}
+/** P7.2: open the edit drawer of the task card with that name (its 「…」 menu, then 编辑). */
+export async function editTask(page, name) {
+  const card = page.locator("[data-testid=task-card]", { hasText: name }).first();
+  await card.locator("[data-testid=task-menu]").click();
+  await page.locator("[data-testid=task-edit]").click();
+  await page.locator("[data-testid=task-drawer]").waitFor({ timeout: 10000 });
+}
+/** The task page's 待你确认 tab shows its cards (their chunk is in) or its empty sentence. */
+/** The task drawer is photographed by itself: a whole-page picture of a page taller than the screen resizes the viewport, and the drawer's library (vaul) answers a viewport change by resizing the drawer, so two pictures of the same page could differ. */
+const DRAWER = "[data-testid=task-drawer]";
+const routinesTasksLoaded = async (page) => { await page.waitForSelector("[data-testid=tasks-list] [data-testid=task-card]", { state: "visible", timeout: 30000 }); };
+const routinesLoaded = async (page) => { await page.waitForSelector('[data-testid=confirm-entry] [data-slot="approval-card"], [data-testid=confirm-empty]', { state: "visible", timeout: 30000 }); };
 const monitorLoaded = async (page) => { await page.waitForSelector("[data-testid=monitor-health]", { state: "visible", timeout: 30000 }); };
 const evidenceLoaded = async (page) => { await page.waitForSelector("[data-testid=evidence-grid] [data-testid=evidence-card]", { state: "visible", timeout: 30000 }); };
 /** The library's list is read and (on a wide screen) the first material's detail is up. */
@@ -503,6 +578,8 @@ export const PAGES = [
   // P6.1: the old overview is two pages (the names `overview` stops here: its pictures are the watchlist and the company page now).
   // The watchlist: the seven rows with every cell read.  Empty: the server's queue holds nothing.  Row error: one company's price and material reads fail (500) and its row says so with 重试.
   { name: "watchlist", hash: "#/research", ready: watchlistLoaded },
+  // The monitor chip in its delayed (action-colour hourglass) state; the monitor page has its own picture, these show it in the top bar of the two pages that carry the chip.
+  { name: "watchlist-monitor-delayed", hash: "#/research", ready: watchlistLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "delayed" }) }) },
   { name: "watchlist-red-up", hash: "#/research", ready: watchlistLoaded, before: redUp },
   { name: "watchlist-empty", hash: "#/research", ready: "[data-slot=empty-state]", view: () => ({ fixtureState: stateWithQueue([]) }) },
   { name: "watchlist-row-error", hash: "#/research", ready: watchlistLoaded,
@@ -525,6 +602,7 @@ export const PAGES = [
   // P6.2: the forecast pages.  The home (two lanes, the task bar with a job that keeps running, the empty home), one forecast (the newest version, the second, the three
   // tabs under it, the three steps of the revise drawer, the one whose target has passed, the one that cannot be found, one whose revision is being made) and one judgment.
   { name: "forecast-home", hash: "#/research/forecasts", ready: forecastHomeLoaded },
+  { name: "forecast-home-monitor-delayed", hash: "#/research/forecasts", ready: forecastHomeLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "delayed" }) }) },
   { name: "forecast-home-empty", hash: "#/research/forecasts", ready: "[data-testid=lane-formal] [data-slot=empty-state]", view: () => ({ fixtureState: stateWithForecasts({ noForecasts: true }) }) },
   { name: "forecast-home-job", hash: "#/research/forecasts", ready: forecastHomeLoaded, view: () => ({ fixtureState: stateWithForecasts({ jobStatus: "running", jobKind: "new" }) }),
     before: async (page) => { await page.locator("[data-testid=forecast-create-go]").click(); await page.locator("[data-testid=forecast-jobs] [data-slot=task-row]").waitFor({ timeout: 15000 });
@@ -550,6 +628,8 @@ export const PAGES = [
       await page.locator("[data-testid=revise-drawer]").waitFor({ state: "detached", timeout: 15000 });
       await hideElapsed(page);
     } },
+  // P7.3: the `latest` redirect page when the company's forecast list cannot be read (the fake backend's `forecastRootsError` switch): it stops on its error state.
+  { name: "latest-error", hash: "#/research/c/AAPL/latest?section=versions", ready: "[data-testid=latest-error] [data-slot=empty-state]", view: () => ({ fixtureState: stateWithForecasts({ forecastRootsError: true }) }) },
   { name: "judgment", hash: `#/research/judgments/${JUDGMENT.aapl}`, ready: async (page) => { await page.waitForSelector("[data-testid=judgment-card]", { timeout: 30000 }); await page.waitForSelector("[data-testid=judgment-revise]", { timeout: 30000 }); await page.waitForFunction(() => document.querySelectorAll("[data-testid=judgment-page] [aria-busy=true]").length === 0, null, { timeout: 30000 }); } },
   // P6.3: the evidence page (the grid of a version's materials, one material in the drawer, the upload dialog with one refused field, a company with no forecast, the
   // version picker open) and the material library (the list with the first material's analysis; the broker note's analysis, original and history; the filter bar with chips;
@@ -599,8 +679,36 @@ export const PAGES = [
   { name: "monitor-no-records", hash: "#/research/monitor", ready: monitorLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "none" }) }) },
   { name: "monitor-delayed", hash: "#/research/monitor", ready: monitorLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "delayed" }) }) },
   { name: "monitor-failing", hash: "#/research/monitor", ready: monitorLoaded, view: () => ({ fixtureState: stateWithMaterials({ monitor: "degraded" }) }) },
-  { name: "portfolio", hash: "#/portfolio", ready: ".pf-positions" },
-  { name: "routines", hash: "#/routines", ready: "main.personal-page h1" },
+  // P7.1: the portfolio page.  The table (a card each on a phone), one position open, the record dialog with one rule broken, the cash being edited, the delete question,
+  // nothing recorded, the read failing, and the market colours switched.
+  { name: "portfolio", hash: "#/portfolio", ready: portfolioLoaded },
+  { name: "portfolio-expanded", hash: "#/portfolio", ready: portfolioLoaded,
+    before: async (page) => { await page.locator("[data-testid=pf-toggle]").first().click(); await page.locator("[data-testid=pf-panel] [data-testid=pf-research-forecast]").waitFor({ timeout: 15000 }); } },
+  { name: "portfolio-record", hash: "#/portfolio", ready: portfolioLoaded,
+    before: async (page) => {
+      await holdViewportAnswers(page);
+      await page.locator("[data-testid=record-open]").click(); await page.locator("[data-testid=record-dialog]").waitFor({ timeout: 10000 });
+      await page.locator("[data-testid=record-submit]").click(); await page.locator("[data-testid=record-error]").waitFor({ timeout: 5000 });
+    } },
+  { name: "portfolio-edit-cash", hash: "#/portfolio", ready: portfolioLoaded,
+    before: async (page) => { await page.locator("[data-testid=cash-edit]").click(); await page.locator("[data-testid=cash-input]").waitFor({ timeout: 5000 }); } },
+  { name: "portfolio-delete-confirm", hash: "#/portfolio", ready: portfolioLoaded,
+    before: async (page) => { await page.locator("[data-testid=portfolio-ledger] [data-testid=record-delete]").first().click(); await page.locator('[data-slot="alert-dialog-content"]').waitFor({ timeout: 5000 }); } },
+  { name: "portfolio-empty", hash: "#/portfolio", ready: "[data-testid=portfolio-empty]", view: () => ({ fixtureState: stateWithPortfolio({ empty: true, cash: "0.00" }) }) },
+  { name: "portfolio-error", hash: "#/portfolio", ready: "[data-testid=portfolio-error]", view: () => ({ fixtureState: stateWithPortfolio({ fail: true }) }) },
+  { name: "portfolio-red-up", hash: "#/portfolio", ready: portfolioLoaded, before: async (page) => { await redUp(page); await page.locator("[data-testid=pf-toggle]").first().click(); await page.locator("[data-testid=pf-panel]").waitFor({ timeout: 15000 }); } },
+  { name: "routines", hash: "#/routines?tab=confirm", ready: routinesLoaded },
+  // P7.2: the task page.  The three tabs, the drawer's four sections (a brief; and an alert with three price lines), a task that holds an old free-text price line, a proposal that expired,
+  // and nothing waiting.  The default state has one live proposal and one live suggested write; `stateWithRoutines` adds the extra tasks, the expired proposal and a second suggestion.
+  { name: "routines-tasks", hash: "#/routines?tab=tasks", ready: routinesTasksLoaded },
+  { name: "routines-runs", hash: "#/routines?tab=runs", ready: "[data-testid=runs-pane] [data-slot=timeline-item]" },
+  ...["basics", "time", "scope", "content"].map((section, index) => (
+    { name: `routines-new-brief-${index + 1}`, hash: "#/routines?tab=tasks", ready: routinesTasksLoaded, element: DRAWER, before: async (page) => { await openNewTask(page, "brief", section); } })),
+  { name: "routines-new-alert-content", hash: "#/routines?tab=tasks", ready: routinesTasksLoaded, element: DRAWER, before: async (page) => { await openNewTask(page, "alerts", "content"); } },
+  { name: "routines-edit-legacy-priceline", hash: "#/routines?tab=tasks", ready: routinesTasksLoaded, element: DRAWER, view: () => ({ fixtureState: stateWithRoutines() }),
+    before: async (page) => { await editTask(page, "旧式价格线"); await page.locator('[data-testid=task-drawer] [data-step-button=content]').click(); await page.locator("[data-testid=task-section-content] [data-testid=price-row]").first().waitFor({ timeout: 10000 }); } },
+  { name: "routines-expired", hash: "#/routines?tab=confirm", ready: routinesLoaded, view: () => ({ fixtureState: stateWithRoutines() }) },
+  { name: "routines-empty-confirm", hash: "#/routines?tab=confirm", ready: "[data-testid=confirm-empty]", view: () => ({ fixtureState: stateWithoutConfirms() }) },
   { name: "news", hash: "#/assistant/news", ready: "main.personal-page h1" },
   { name: "skills", hash: "#/assistant/skills", ready: ".skill-group" },
   { name: "memory", hash: "#/assistant/memory", ready: "main.personal-page h1" },
@@ -644,7 +752,7 @@ export const PAGES = [
         if (id === "look") await page.locator("[data-slot=persona-studio] [data-slot=rehearsal]").waitFor({ timeout: 30000 });
         if (id === "tools") await page.locator("[data-testid=tool-summary]").waitFor();
         if (id === "skills") await page.locator("[data-testid=skills-list] [data-slot=checkbox]").first().waitFor();
-        if (id === "routines") await page.locator("[data-testid=bot-routines] .bot-routines").waitFor({ timeout: 15000 }).catch(() => {});
+        if (id === "routines") await page.locator("[data-testid=bot-routines] [data-testid=task-card]").first().waitFor({ timeout: 15000 }).catch(() => {});
         if (id === "notify") await page.locator("[data-testid=telegram-panel] [data-slot=stepper]").waitFor();
       } })),
   { name: "bot-settings-dirty", hash: settingsAt(BOT.applebot), ready: "[data-testid=bot-settings-page]",

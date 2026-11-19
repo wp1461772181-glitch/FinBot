@@ -11,7 +11,7 @@ import { TASKS, RUNS, PROPOSALS, INBOX } from "./routines.mjs";
 import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS } from "./assistant.mjs";
 
 export function buildState() {
-  return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX) };
+  return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] } };
 }
 
 /** The fields of a multipart/form-data body as the page sent them; a file part is described by its name, type and size. */
@@ -139,7 +139,8 @@ export function registerRoutes(route, reply) {
   // --- forecasts (V2) ----------------------------------------------------------------------------------
   const found = (value) => (value ?? reply.status(404, { detail: "not_found" }));
   route.get("/v2/forecasts", ({ query, state }) => forecastList(query, state));
-  route.get("/v2/stocks/:symbol/forecast-roots", ({ params }) => forecastRoots(params.symbol));
+  // P7.3: `state.forecastRootsError` makes the company's forecast-root list unreadable (the `latest` redirect page's error state).
+  route.get("/v2/stocks/:symbol/forecast-roots", ({ params, state }) => (state.forecastRootsError ? reply.status(500, { detail: "forecast_roots_unavailable" }) : forecastRoots(params.symbol)));
   route.get("/v2/stocks/:symbol/workspace", ({ params }) => workspace(params.symbol));
   route.get("/v2/forecast-roots/:id/timeline", ({ params, state }) => found(timeline(params.id, state)));
   route.get("/v2/forecast-versions/:id", ({ params }) => found(versionDetail(params.id)));
@@ -209,18 +210,77 @@ export function registerRoutes(route, reply) {
   route.get("/evidence-revisions/:symbol", ({ params }) => ({ symbol: params.symbol, revisions: [] }));
 
   // --- portfolio, routines, inbox ----------------------------------------------------------------------
-  route.get(`${A}/portfolio`, own(({ state }) => portfolioSummary(state)));
+  route.get(`${A}/portfolio`, own(({ state }) => (state.portfolio.fail ? reply.status(500, { detail: "shots: forced failure" }) : portfolioSummary(state))));
+  // P7.1: the ledger's three writes.  Each keeps the request exactly as the page sent it (`state.portfolio.writes`: method, path, body) so a check reads the
+  // body back; the answer is what the server answers (`ok`, `status`, the new `id`), and the state moves the way the server's does (a new row, the cash, the plan).
+  const written = (state, method, path, body) => { (state.portfolio.writes ??= []).push({ method, path, body: structuredClone(body) }); };
+  route.post(`${A}/portfolio/transactions`, own(({ body, state }) => {
+    written(state, "POST", "/portfolio/transactions", body);
+    const id = `p0000000-0000-4000-8000-${String(900 + state.portfolio.writes.length).padStart(12, "0")}`;
+    state.portfolio.transactions = [{ id, symbol: body.symbol ?? "", kind: body.kind, quantity: body.quantity ?? null, price: body.price ?? null, fee: body.fee ?? null, amount: body.amount ?? null,
+      ratio: body.ratio ?? null, occurred_on: body.occurred_on ?? "2026-11-13", note: body.note ?? "", created_at: "2026-11-13T02:00:00Z" }, ...state.portfolio.transactions];
+    return { ok: true, status: "recorded", id, warnings: [] };
+  }));
+  route.put(`${A}/portfolio/cash`, own(({ body, state }) => {
+    written(state, "PUT", "/portfolio/cash", body);
+    state.portfolio.cash = Number(body.available_funds).toFixed(2);
+    return { ok: true, status: "updated", available_funds: state.portfolio.cash };
+  }));
+  route.put(`${A}/portfolio/plans/:symbol`, own(({ params, body, state }) => {
+    written(state, "PUT", `/portfolio/plans/${params.symbol}`, body);
+    state.portfolio.plans[params.symbol] = { plan_text: body.plan_text, add_price: body.add_price, stop_price: body.stop_price, target_price: body.target_price, updated_at: "2026-11-13T02:00:00Z" };
+    return { ok: true, status: "saved" };
+  }));
   route.get(`${A}/tasks`, own(({ state, query }) => ({ tasks: state.tasks.filter((t) => !query.get("bot_id") || t.bot_id === query.get("bot_id")) })));
-  route.get(`${A}/tasks/runs`, own(({ query }) => ({ runs: RUNS.filter((r) => !query.get("bot_id") || TASKS.find((t) => t.id === r.task_id)?.bot_id === query.get("bot_id")) })));
-  route.get(`${A}/tasks/proposals`, own(() => ({ proposals: PROPOSALS })));
+  route.get(`${A}/tasks/runs`, own(({ state, query }) => ({ runs: state.runs.filter((r) => !query.get("bot_id") || TASKS.find((t) => t.id === r.task_id)?.bot_id === query.get("bot_id")) })));
+  route.get(`${A}/tasks/proposals`, own(({ state }) => ({ proposals: state.proposals })));
+  // P7.2: the routine writes.  Each keeps the request exactly as the page sent it (`state.routines.writes`: method, path, body) so a check reads the body back; the state moves
+  // the way the server's does: a new task is listed, a patch merges into its task, and an inbox action sets the item's status the way fin_news_engine's
+  // handle_inline_confirmation_action does (confirm: done / confirmed; skip: dismissed / skipped; later: read; the status route: whatever it is told; the card: a minted card).
+  const routineWritten = (state, method, path, body) => { (state.routines.writes ??= []).push({ method, path, body: structuredClone(body) }); };
+  const taskDefaults = { every_value: null, every_unit: null, max_runs: null, runs_done: 0, finished: false, enabled: true, last_run_at: null, next_run_at: "2026-11-16T00:30:00Z", last_status: null, last_status_label: null, last_conversation_id: null };
+  route.post(`${A}/tasks`, own(({ body, state }) => {
+    routineWritten(state, "POST", "/tasks", body);
+    const task = { ...taskDefaults, ...body, id: `t2000000-0000-4000-8000-${String(900 + state.routines.writes.length).padStart(12, "0")}`, max_runs: body.max_runs ? body.max_runs : null };
+    state.tasks = [...state.tasks, task];
+    return { task };
+  }));
+  route.patch(`${A}/tasks/:id`, own(({ params, body, state }) => {
+    routineWritten(state, "PATCH", `/tasks/${params.id}`, body);
+    const task = state.tasks.find((t) => t.id === params.id);
+    if (!task) return reply.status(404, { detail: "task_not_found" });
+    Object.assign(task, body, body.max_runs !== undefined ? { max_runs: body.max_runs ? body.max_runs : null } : {});
+    return { task };
+  }));
+  route.post(`${A}/inbox/:id/confirm`, own(({ params, body, state }) => {
+    routineWritten(state, "POST", `/inbox/${params.id}/confirm`, body);
+    const item = state.inbox.find((i) => i.id === params.id);
+    if (!item) return reply.status(404, { detail: "confirmation_not_found" });
+    const next = { confirm: ["done", "confirmed"], skip: ["dismissed", "skipped"], later: ["read", item.confirmation_state] }[body.action];
+    if (!next) return reply.status(400, { detail: "invalid_confirmation_action" });
+    item.status = next[0]; item.confirmation_state = next[1]; item.payload = { ...item.payload, confirmation_state: next[1] };
+    return { ok: true, state: next[1], item };
+  }));
+  route.post(`${A}/inbox/:id/status`, own(({ params, body, state }) => {
+    routineWritten(state, "POST", `/inbox/${params.id}/status`, body);
+    const item = state.inbox.find((i) => i.id === params.id);
+    if (!item) return reply.status(404, { detail: "item_not_found" });
+    item.status = body.status;
+    return { item };
+  }));
+  route.post(`${A}/inbox/:id/card`, own(({ params, state }) => {
+    routineWritten(state, "POST", `/inbox/${params.id}/card`, null);
+    const item = state.inbox.find((i) => i.id === params.id);
+    return { conversation_id: item?.conversation_id ?? CONVERSATION.finbot, request_id: "q0000000-0000-4000-8000-000000000001", expires_at: null };
+  }));
   route.get(`${A}/inbox`, own(({ state, query }) => ({ items: state.inbox.filter((i) => (!query.get("section") || i.section === query.get("section")) && (!query.get("bot_id") || i.bot_id === query.get("bot_id"))) })));
 
   // --- the writes the in-app confirmations guard (P2.3): the deletes and the unbind.  Each answers ok; the portfolio one also drops the row. ---
-  route.delete(`${A}/portfolio/transactions/:id`, own(({ params, state }) => { state.portfolio.transactions = state.portfolio.transactions.filter((t) => t.id !== params.id); return { ok: true, status: "deleted" }; }));
+  route.delete(`${A}/portfolio/transactions/:id`, own(({ params, state }) => { written(state, "DELETE", `/portfolio/transactions/${params.id}`, null); state.portfolio.transactions = state.portfolio.transactions.filter((t) => t.id !== params.id); return { ok: true, status: "deleted" }; }));
   route.delete(`${A}/skills/:id`, own(() => ({ ok: true })));
   route.delete(`${A}/profile/:id`, own(() => ({ ok: true })));
   route.delete(`${A}/news-sources/:id`, own(() => ({ ok: true })));
-  route.delete(`${A}/tasks/:id`, own(() => ({ ok: true })));
+  route.delete(`${A}/tasks/:id`, own(({ params, state }) => { routineWritten(state, "DELETE", `/tasks/${params.id}`, null); state.tasks = state.tasks.filter((t) => t.id !== params.id); return { ok: true }; }));
   route.delete(`${A}/bots/:id`, own(() => ({ ok: true })));
   route.delete(`${A}/bots/:id/telegram`, own(() => ({ ...BOT_TELEGRAM, configured: false, has_token: false, bound: false, shared: true })));
   route.delete(`${A}/model-catalog/:name`, own(() => ({ ok: true })));

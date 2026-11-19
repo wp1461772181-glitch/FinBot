@@ -1,7 +1,7 @@
 import { useRef, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-export type TabSpec<T extends string> = { value: T; label: string; testId: string };
+export type TabSpec<T extends string> = { value: T; label: ReactNode; testId: string };
 
 /**
  * The company page's tab list (overview | forecasts | materials): a WAI-ARIA tab list with manual activation, so the arrow keys only move the focus

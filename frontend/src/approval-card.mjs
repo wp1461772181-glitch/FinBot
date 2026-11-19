@@ -2,8 +2,10 @@
 // choice goes out as what) stay in chat-clarification.mjs; this module only arranges them for the card: which buttons are the two main ones,
 // how long a confirmation lives, what a finished card says of itself, and how many materials a revision card still wants ticked.
 
-import { APPROVAL_TTL_MS } from "./approval-ttl.mjs";
-export { APPROVAL_TTL_MS }; // a write confirmation lives ten minutes on the server (design 4.2); the card counts the same time down for a card made in this session
+// A write confirmation lives ten minutes on the server (design 4.2); the card counts the same time down for a card made in this session.  This is the same number as
+// approval-ttl.mjs (which the avatar's signals read); it is written here again on purpose: a second page (the task page, P7.2) loads this card, and a module that both the
+// chat and the card import would be cut into a chunk of its own that the chat's first screen must carry.  scripts/approval-ttl.test.mjs holds the two numbers together.
+export const APPROVAL_TTL_MS = 10 * 60 * 1000;
 
 const WRITE_REASONS = new Set(["write_confirmation", "confirm_write", "choose_write_action", "choose_revision_sources"]);
 const CONFIRM_REASONS = new Set(["write_confirmation", "confirm_write", "choose_revision_sources"]);

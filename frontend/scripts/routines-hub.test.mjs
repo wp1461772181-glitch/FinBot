@@ -11,28 +11,27 @@ import { ASSISTANT_ITEMS, areaPath } from "../src/shell-nav.mjs";
 // legacy-routes.mjs; P2.2: the rail became the sidebar and the phone's tab bar, app/shell/.  The assertions say the same things.)
 const src = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
-test("the sidebar entry, the phone's tab and the page say 任务 / 例行任务 with a drawn icon, not 待你确认", () => {
-  // P2.2: the rail row became the sidebar's 任务 entry (lucide icon) and the phone bar's tab; the page keeps its drawn RoutineIcon.
-  const sidebar = src("app/shell/AppSidebar.tsx"), bar = src("app/shell/MobileTabBar.tsx"), page = src("PersonalPages.tsx"), icons = src("BotPages.tsx");
+test("the sidebar entry, the phone's tab and the page say 任务, not 待你确认", () => {
+  // P2.2: the rail row became the sidebar's 任务 entry (lucide icon) and the phone bar's tab.  P7.2: the page is app/routines/ (its title is 任务, as the sidebar says;
+  // the drawn RoutineIcon of the old title went with the old page).
+  const sidebar = src("app/shell/AppSidebar.tsx"), bar = src("app/shell/MobileTabBar.tsx"), page = src("app/routines/RoutinesPage.tsx"), icons = src("BotPages.tsx");
   assert.match(sidebar, /routines: "任务"/);
   assert.match(sidebar, /routines: CalendarClock/);
   assert.match(bar, /\{ area: "routines", label: "任务", icon: CalendarClock \}/);
-  assert.match(icons, /export function RoutineIcon\(\)[\s\S]*?<svg/);
-  assert.match(page, /<h1 id="routines-title"><RoutineIcon \/> \{t\("例行任务"\)\}<\/h1>/);
-  for (const text of [sidebar, bar, page]) assert.doesNotMatch(text, /t\("待你确认"\)/);
+  assert.match(page, /<h1 id="routines-title" className="[^"]*">\{t\("任务"\)\}<\/h1>/);
+  for (const text of [sidebar, bar, page]) assert.doesNotMatch(text, /t\("待你确认"\)\}<\/h1>/);
   assert.doesNotMatch(icons, />✉</);
 });
 
 test("#briefs still opens the page, which lists every routine, the proposals and the run suggestions", () => {
   assert.match(src("legacy-routes.mjs"), /case "briefs":/);
   assert.equal(legacyHashToPath("#briefs"), "/routines");
-  const page = src("PersonalPages.tsx");
-  assert.match(page, /listTaskProposals\(signal\)/);
-  assert.match(page, /<TaskManager bots=\{bots\}/);          // every bot's routines: no botId
-  assert.match(page, /listInbox\("confirm", signal\)/);
-  const manager = src("BotRoutines.tsx");
-  assert.match(manager, /botId\?: string/);
-  assert.match(manager, /bot_id: botId \?\? draftBot/);       // the hub's form picks the bot
+  const data = src("app/routines/use-routines.ts");
+  assert.match(data, /listTaskProposals\(signal\)/);
+  assert.match(data, /listInbox\("confirm", signal\)/);
+  assert.match(data, /listAgentTasks\(signal, botId \|\| undefined\)/);   // no botId: every bot's routines
+  assert.match(src("app/routines/RoutinesPage.tsx"), /useRoutinesData\(\{ runsBotId: filter \}\)/);   // the page asks for no bot's tasks in particular
+  assert.match(src("routine-form.mjs"), /bot_id: lockedBotId \?\? draft\.botId/);       // the page's form picks the bot, a bot's own page fixes it
 });
 
 test("one 例行任务 workspace card; a saved 待你确认 card becomes it", () => {
@@ -56,15 +55,15 @@ test("新闻源 is a page under 助手, opens its own page, and the 例行任务
   assert.match(router, /path: PATTERNS\.assistantNews, \.\.\.page\(\(\) => import\("\.\/pages\/personal"\), "NewsRoute"\)/);
   assert.match(src("app/pages/personal.tsx"), /export function NewsRoute\(\) \{ return <NewsSourcesPage \/>; \}/);
   assert.equal(legacyHashToPath("#news"), "/assistant/news");   // was: "news" in App.tsx's list of known hash sections
-  const routines = page.slice(page.indexOf("export function RoutinesPage"), page.indexOf("const HEALTH_LABELS"));
-  assert.doesNotMatch(routines, /NewsSourcesPanel|getNewsSourcesConfig/);
+  assert.doesNotMatch(src("app/routines/RoutinesPage.tsx"), /NewsSourcesPanel|getNewsSourcesConfig/);
   const newsPage = page.slice(page.indexOf("export function NewsSourcesPage"), page.indexOf("const KIND_LABELS"));
   assert.match(newsPage, /<NewsSourcesPanel /);
 });
 
 test("the routine form has no token caps; the frequency offers intervals and run counts", () => {
-  const form = src("BotRoutines.tsx");
+  const form = src("app/routines/TaskDrawer.tsx"), model = src("routine-form.mjs");
   assert.doesNotMatch(form, /token|Cap/);
-  assert.match(form, /<option value="every">\{t\("每隔一段时间"\)\}<\/option>/);
-  assert.match(form, /max_runs: draftCount === "once" \? 1 : draftCount === "count" \? draftRuns : 0/);
+  assert.doesNotMatch(model, /token|Cap/);
+  assert.match(form, /\{ value: "every", label: t\("每隔一段时间"\) \}/);
+  assert.match(model, /max_runs: draft\.countMode === "once" \? 1 : draft\.countMode === "count" \? Number\(draft\.runs\) : 0/);
 });

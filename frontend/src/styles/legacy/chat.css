@@ -106,8 +106,6 @@
 .catalog-actions { grid-column: 1 / -1; display: flex; gap: 12px; }
 .catalog-card { cursor: default; }
 .catalog-card .catalog-actions { margin-top: auto; flex-wrap: wrap; }
-.bot-routines { display: grid; gap: 10px; }
-.bot-routines h3, .bot-routines h4 { margin: 0; font-size: 12px; }
 
 /* Fix 4: the bot page's 工作区 toggle in the header. */
 

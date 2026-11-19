@@ -85,11 +85,11 @@ export function JudgmentPage({ judgmentId }: { judgmentId: string }) {
   const reviseHref = promotion.state === "revise" && openForecast && judgment.filing_source_id ? paths.forecast(openForecast.id, { revise: judgment.filing_source_id }) : null;
   return frame(<>
     <header className="flex flex-wrap items-center gap-x-4 gap-y-2">
-      <Link to={paths.forecasts()} data-testid="judgment-back" className="inline-flex h-8 items-center gap-1 rounded-sm text-small text-ink-2 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11"><ArrowLeft aria-hidden="true" className="size-4" />{t("预测")}</Link>
-      <h1 id="judgment-title" className="min-w-0 text-title-m text-ink"><span className="font-mono">{judgment.symbol}</span> · {t("财报判断")}</h1>
+      <Link to={paths.forecasts()} data-testid="judgment-back" className="inline-flex h-8 items-center gap-1 rounded-sm text-small text-ink-2 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11 underline"><ArrowLeft aria-hidden="true" className="size-4" />{t("预测")}</Link>
+      <h1 id="judgment-title" className="min-w-0 text-title-m text-ink mb-[0.67em]"><span className="font-mono">{judgment.symbol}</span> · {t("财报判断")}</h1>
     </header>
     <TaskStrip />
-    {!judgment.delivered && <p role="status" className="text-small text-ink-2">{t("这条判断没有发送给你。")}</p>}
+    {!judgment.delivered && <p role="status" className="text-small text-ink-2 mb-[1em]">{t("这条判断没有发送给你。")}</p>}
 
     <OpinionCard data-testid="judgment-card" model={judgment.model} time={day(judgment.accepted_at)} footnote={<p data-testid="judgment-disclaimer">{t(JUDGMENT_NOTE)}</p>}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -111,21 +111,21 @@ export function JudgmentPage({ judgmentId }: { judgmentId: string }) {
     </OpinionCard>
 
     <section data-testid="judgment-reasons" aria-labelledby="judgment-reasons-title" className="flex min-w-0 flex-col gap-3">
-      <h2 id="judgment-reasons-title" className="text-title-s text-ink">{t("理由（附原文）")}</h2>
-      {judgment.reasons.length === 0 ? <p className="text-small text-muted-foreground">{t(NOT_RECORDED)}</p> : <ol className="m-0 flex list-none flex-col gap-4 p-0">
+      <h2 id="judgment-reasons-title" className="text-title-s text-ink mb-[0.83em]">{t("理由（附原文）")}</h2>
+      {judgment.reasons.length === 0 ? <p className="text-small text-muted-foreground mb-[1em]">{t(NOT_RECORDED)}</p> : <ol className="m-0 flex list-none flex-col gap-4 p-0">
         {judgment.reasons.map((reason, index) => <li key={index} className="flex min-w-0 flex-col gap-2">
-          <p className="text-body text-ink [overflow-wrap:anywhere]">{reason.text}</p>
+          <p className="text-body text-ink [overflow-wrap:anywhere] mb-[1em]">{reason.text}</p>
           <SourceCard ordinal={index + 1} title={t("财报原文摘录")} meta={[judgment.accession]} openLabel={t("打开原始来源")}><SourceQuote>“{reason.quote}”</SourceQuote></SourceCard>
         </li>)}
       </ol>}
     </section>
     {judgment.counter_argument && <section data-testid="judgment-counter" aria-labelledby="judgment-counter-title" className="flex min-w-0 flex-col gap-2">
-      <h2 id="judgment-counter-title" className="text-title-s text-ink">{t("反方")}</h2>
-      <p className="text-body text-ink [overflow-wrap:anywhere]">{judgment.counter_argument}</p>
+      <h2 id="judgment-counter-title" className="text-title-s text-ink mb-[0.83em]">{t("反方")}</h2>
+      <p className="text-body text-ink [overflow-wrap:anywhere] mb-[1em]">{judgment.counter_argument}</p>
     </section>}
 
     <section data-testid="judgment-actions" aria-labelledby="judgment-actions-title" className="flex min-w-0 flex-col gap-3 rounded-md border border-line bg-surface p-4">
-      <h2 id="judgment-actions-title" className="text-title-s text-ink">{t("基于这份财报")}</h2>
+      <h2 id="judgment-actions-title" className="text-title-s text-ink mb-[0.83em]">{t("基于这份财报")}</h2>
       <div className="flex flex-wrap items-start gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <StatefulButton type="button" data-testid="judgment-create" disabled={promotion.state !== "create" || jobRunning} onClick={create} onError={error => setActionError(actionMessage(error, "无法创建预测任务。"))}>{jobRunning && promotion.state === "create" ? t("任务处理中…") : t("基于这份财报创建正式预测")}</StatefulButton>
@@ -138,16 +138,16 @@ export function JudgmentPage({ judgmentId }: { judgmentId: string }) {
           {promotion.state === "create" && <span className="max-w-64 text-caption text-muted-foreground">{t("这家公司没有进行中的预测可以修订。")}</span>}
         </div>
       </div>
-      {promotion.state === "unavailable" && promotion.reason && <p role="status" className="text-small text-ink-2">
+      {promotion.state === "unavailable" && promotion.reason && <p role="status" className="text-small text-ink-2 mb-[1em]">
         {t(PROMOTION_REASON[promotion.reason])}
-        {promotion.reason === "filing_not_in_library" && <> · <Link to={paths.materials({ symbol: judgment.symbol })} className="text-brand underline-offset-2 hover:underline">{t("打开资料库")}</Link></>}
+        {promotion.reason === "filing_not_in_library" && <> · <Link to={paths.materials({ symbol: judgment.symbol })} className="text-brand underline-offset-2 hover:underline underline">{t("打开资料库")}</Link></>}
       </p>}
-      {promotion.state !== "unavailable" && <p className="text-caption text-muted-foreground">{t("新预测只从这份财报的原文出发，不带这条判断的方向和理由。")}</p>}
+      {promotion.state !== "unavailable" && <p className="text-caption text-muted-foreground mb-[1em]">{t("新预测只从这份财报的原文出发，不带这条判断的方向和理由。")}</p>}
       {actionError && <ErrorBar message={actionError} />}
     </section>
 
-    {openForecast && <p className="text-small text-muted-foreground">
-      {t("两者问题不同：财报判断看首个交易日，正式预测看 20 个交易日。")} <Link to={paths.forecast(openForecast.id)} data-testid="judgment-open-forecast" className="text-brand underline-offset-2 hover:underline">{t("查看这家公司的正式预测")}</Link>
+    {openForecast && <p className="text-small text-muted-foreground mb-[1em]">
+      {t("两者问题不同：财报判断看首个交易日，正式预测看 20 个交易日。")} <Link to={paths.forecast(openForecast.id)} data-testid="judgment-open-forecast" className="text-brand underline-offset-2 hover:underline underline">{t("查看这家公司的正式预测")}</Link>
     </p>}
   </>);
 }

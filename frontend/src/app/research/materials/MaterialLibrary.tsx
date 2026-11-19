@@ -178,12 +178,12 @@ export function MaterialLibrary({ symbol, focus, onScan, embedded = false }: { s
   return <Root data-testid="material-library" aria-labelledby="material-library-title" className={embedded ? "flex min-w-0 flex-col gap-4" : "mx-auto flex w-full min-w-0 max-w-[1280px] flex-1 flex-col gap-4 p-4 lg:p-6"}>
     <header className="flex flex-wrap items-end gap-x-4 gap-y-2">
       {/* On the company page the tab already says 材料: the title stays for screen readers and the one-line note remains. */}
-      <div className={embedded ? "sr-only" : "min-w-0"}><p className="text-caption text-muted-foreground">{symbol} / {t("研究材料")}</p><Heading id="material-library-title" className="text-title-m text-ink">{t("材料库")}</Heading></div>
-      <p className="hidden text-caption text-muted-foreground sm:block">{t("每页 10 条 · 分析版本与原文分开保存")}</p>
+      <div className={embedded ? "sr-only" : "min-w-0"}><p className="text-caption text-muted-foreground mb-[1em]">{symbol} / {t("研究材料")}</p><Heading id="material-library-title" className="text-title-m text-ink mb-[0.67em]">{t("材料库")}</Heading></div>
+      <p className="hidden text-caption text-muted-foreground sm:block mb-[1em]">{t("每页 10 条 · 分析版本与原文分开保存")}</p>
       <StatefulButton type="button" variant="outline" data-testid="material-scan" className="ml-auto max-sm:h-11" onClick={scan} onError={scanFailed}>{t("扫描 SEC 资料")}</StatefulButton>
     </header>
     <div data-task-strip="" data-testid="material-jobs" className="empty:hidden"><Suspense fallback={null}><TaskBar /></Suspense></div>
-    {focusMessage && <p role="status" data-testid="focus-message" className="rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2">{focusMessage}</p>}
+    {focusMessage && <p role="status" data-testid="focus-message" className="rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2 mb-[1em]">{focusMessage}</p>}
     <div className="grid min-w-0 items-start gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
       <section aria-label={t("材料列表")} data-testid="material-list-section" data-wanted={wanted} data-loaded={page.kind === "ready" ? page.key ?? "" : ""} className="flex min-w-0 flex-col gap-3">
         <MaterialFilters symbol={symbol} filters={filters} total={page.kind === "ready" ? page.total : null} onChange={change} onClear={clear} />

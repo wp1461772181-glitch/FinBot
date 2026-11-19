@@ -36,3 +36,23 @@ export const INBOX = [
   { id: "i0000000-0000-4000-8000-000000000003", section: "brief", kind: "filing", title: "NVDA 新申报：10-Q", body: "NVDA 提交了新的季度报告。", sources: [], payload: { event_id: "e0000000-0000-4000-8000-000000000002" },
     task_id: null, bot_id: BOT.reportbot, posted: false, conversation_id: null, status: "read", created_at: daysAgo(11, 1) },
 ];
+
+// P7.2: what only some pictures and checks need (stateWithRoutines in pages.mjs adds them; the default state stays what it was, so every other page keeps its pixels).
+export const EXTRA_TASKS = [
+  // One entry with both sides: the old form split it into two lines when it was saved, the new one keeps the same two lines.
+  task(6, { name: "NVDA 上下沿提醒", kind: "alerts", schedule_kind: "hourly", schedule_time: "00:30", scope: "symbols", symbols: ["NVDA"], bot_id: BOT.teslabot, config: { filings: false, news: true, price_lines: [{ symbol: "NVDA", above: 150, below: 120.5 }] }, last_status_label: "未触发", runs_done: 6 }),
+  // A time zone nobody would put in a short list: it must still show and save unchanged.
+  task(7, { name: "悉尼开盘简报", timezone: "Pacific/Chatham", schedule_kind: "daily", schedule_time: "07:45", bot_id: BOT.teslabot, instruction: "开盘前列出隔夜重要变化。", last_status: "failed", last_status_label: "失败：模型超时", runs_done: 2 }),
+  // A task saved before price lines were a list: the line is one text, one part of it not a line at all.
+  task(8, { name: "旧式价格线", kind: "alerts", schedule_kind: "daily", schedule_time: "21:30", scope: "symbols", symbols: ["NVDA", "AAPL"], bot_id: BOT.applebot, config: { filings: true, news: false, price_lines: "nvda > 150.5; AAPL<180, 腾讯>300" }, last_status: null, last_status_label: null, last_run_at: null }),
+];
+export const EXTRA_PROPOSALS = [
+  { id: "pr000000-0000-4000-8000-000000000002", conversation_id: CONVERSATION.newsbot, bot_id: BOT.newsbot, tools: ["delete_task"], title: "删除任务「盘前新闻速览」", targets: [{ title: "盘前新闻速览" }],
+    detail: "NewsBot 提议删除例行任务「盘前新闻速览」：近三次运行都没有新内容。", expires_at: iso(new Date("2026-11-12T09:00:00Z")), expired: true, created_at: minutesAgo(2900) },
+];
+export const EXTRA_INBOX = [
+  { id: "i0000000-0000-4000-8000-000000000004", section: "confirm", kind: "action", title: "建议抓取并分析 AAPL 最新 10-K", body: "无人值守的「AAPL 财报跟踪」发现 AAPL 有新的 10-K 还没进材料库，想把它保存并生成分析。",
+    sources: [], payload: { task_name: "AAPL 财报跟踪", display: { title: "抓取并分析 AAPL 10-K", targets: [{ symbol: "AAPL", form: "10-K" }] }, confirmation_state: "pending_confirm", action_token: "fixture-ref-2", short_code: "C3D4" },
+    confirmation_state: "pending_confirm", action_token: "fixture-ref-2", short_code: "C3D4", actions: [{ id: "confirm", label: "确认", kind: "primary" }, { id: "skip", label: "跳过", kind: "secondary" }, { id: "later", label: "稍后", kind: "secondary" }],
+    task_id: TASKS[1].id, bot_id: BOT.applebot, posted: false, conversation_id: CONVERSATION.applebot, status: "unread", created_at: minutesAgo(120) },
+];
