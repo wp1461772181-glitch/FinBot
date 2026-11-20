@@ -24,7 +24,3 @@ export function isResearchSection(section) {
   return group === "company" || group === "forecast" || group === "library";
 }
 
-/** The page titles of the old research header. */
-export const WORKSPACE_SECTION_TITLE = {
-  overview: "研究总览", forecast: "预测", evidence: "证据中心", materials: "材料库", revisions: "预测修订", evaluation: "模型成绩", replay: "历史回放",
-};

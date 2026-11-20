@@ -16,12 +16,16 @@ const when = (value: string | null) => (value ? new Date(value).toLocaleString()
 /** Who the card is from and where: the bot (with its avatar), what it came from, when. */
 function Meta({ entry, bot }: { entry: ConfirmEntry; bot: Bot | undefined }) {
   const { t } = useLocale();
-  return <p data-testid="entry-meta" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-small text-ink-2">
-    {bot ? <BotAvatar avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={20} /> : <span aria-hidden="true" className="size-5 rounded-full bg-sunken" />}
-    <span data-testid="entry-bot" className="font-medium text-ink">{bot?.name ?? t("已删除的 bot")}</span>
-    <span>·</span>
-    <span data-testid="entry-source">{entry.kind === "proposal" ? t("提议的例行任务") : entry.taskName ? `${t("来自任务：")}${entry.taskName}` : t("无人值守的运行")}</span>
-    {entry.createdAt && <><span aria-hidden="true">·</span><time dateTime={entry.createdAt} className="font-mono text-muted-foreground">{when(entry.createdAt)}</time></>}
+  const source = entry.kind === "proposal" ? t("提议的例行任务") : entry.taskName ? `${t("来自任务：")}${entry.taskName}` : t("无人值守的运行");
+  // From `sm` up the three parts sit on one line (the source gives way with an ellipsis); below it they are three lines and the dots are gone, so no line ever starts or ends with a lone 「·」.
+  return <p data-testid="entry-meta" className="flex min-w-0 flex-col items-start gap-y-1 text-small text-ink-2 sm:flex-row sm:items-center sm:gap-x-2">
+    <span className="inline-flex min-w-0 items-center gap-2">
+      {bot ? <BotAvatar avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={20} /> : <span aria-hidden="true" className="size-5 rounded-full bg-sunken" />}
+      <span data-testid="entry-bot" className="font-medium text-ink">{bot?.name ?? t("已删除的 bot")}</span>
+    </span>
+    <span aria-hidden="true" className="max-sm:hidden">·</span>
+    <span data-testid="entry-source" title={source} className="min-w-0 sm:truncate">{source}</span>
+    {entry.createdAt && <><span aria-hidden="true" className="max-sm:hidden">·</span><time dateTime={entry.createdAt} className="font-mono text-muted-foreground">{when(entry.createdAt)}</time></>}
   </p>;
 }
 

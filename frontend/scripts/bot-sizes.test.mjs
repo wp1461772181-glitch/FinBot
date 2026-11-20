@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { BOT_AVATAR_SIZE } from "../src/bot-sizes.mjs";
 
-const css = readFileSync(new URL("../src/styles/legacy/grok.css", import.meta.url), "utf8");
+const css = readFileSync(new URL("../src/styles/bots.css", import.meta.url), "utf8");
 const tsx = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
 
 // A1: the sizes are the four tiers of design 6.2 (XS <= 24, S 28-40, M 48-64, L 96-160). `rail` (48, used by nothing since P2.2) left the

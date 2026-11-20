@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 
 export type PickOption = { value: string; label: ReactNode; /** What a search matches. */ search: string; /** The choice as plain text (the button names its value for a screen reader); the search text when not given. */ text?: string; group?: string };
 
@@ -29,7 +29,7 @@ export function PickCombobox({ value, options, onChange, label, searchLabel, emp
   }, []);
   return <Popover open={open} onOpenChange={setOpen}>
     <PopoverTrigger asChild>
-      <Button id={id} type="button" variant="outline" role="combobox" aria-expanded={open} aria-label={`${label}：${chosen ? chosen.text ?? chosen.search : t("请选择")}`} data-testid={testId} disabled={disabled} className={cn("w-full justify-between font-normal", className)}>
+      <Button id={id} type="button" variant="outline" role="combobox" aria-expanded={open} aria-label={`${label}${colon()}${chosen ? chosen.text ?? chosen.search : t("请选择")}`} data-testid={testId} disabled={disabled} className={cn("w-full justify-between font-normal", className)}>
         <span className="flex min-w-0 items-center gap-2 truncate">{chosen?.label ?? t("请选择")}</span><ChevronsUpDown aria-hidden="true" className="opacity-60" />
       </Button>
     </PopoverTrigger>

@@ -1,14 +1,18 @@
 import { Navigate, useParams } from "react-router";
+import { EmptyState } from "@/components/state/EmptyState";
 import { translatePhrase } from "../../i18n";
 import { paths, symbolParam } from "../../routes.mjs";
 import { normalizeTicker } from "../../watchlist.mjs";
 import { DEFAULT_SYMBOL, DEFAULT_SYMBOLS } from "../WorkspaceLayout";
 import { useWorkspace } from "../workspace";
 
-/** What a research page shows when the watchlist is empty (the pages that start from a company: the replay page). */
+/** What a research page shows when the watchlist is empty (the pages that start from a company: the replay page): the notice, and one way out, putting the default stocks back. */
 export function EmptyWatchlist() {
   const ws = useWorkspace();
-  return <main className="workspace"><section className="empty-watchlist"><h1>{translatePhrase("关注列表为空")}</h1><p>{translatePhrase("添加一只股票，或恢复默认关注股票，继续查看研究总览。")}</p><button className="primary-action" onClick={() => { ws.setSymbols(DEFAULT_SYMBOLS); ws.setPreferredSymbol(DEFAULT_SYMBOL); }}>{translatePhrase("恢复默认股票")}</button></section></main>;
+  return <main className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col p-4 lg:p-6">
+    <EmptyState title={translatePhrase("关注列表为空")} description={translatePhrase("添加一只股票，或恢复默认关注股票，继续查看研究总览。")}
+      action={{ label: translatePhrase("恢复默认股票"), onClick: () => { ws.setSymbols(DEFAULT_SYMBOLS); ws.setPreferredSymbol(DEFAULT_SYMBOL); } }} />
+  </main>;
 }
 
 /** A record id from the address, or a redirect to the forecast home (an unreadable address never guesses at a record). */

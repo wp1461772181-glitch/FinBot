@@ -3,9 +3,8 @@ import { PanelRightClose } from "lucide-react";
 import { SkeletonCard } from "@/components/state/Skeleton";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { LegacyFrame } from "../../LegacyFrame";
 import type { AgentChatMessage } from "../../api/conversations";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 import { PANEL_KEY_STEP, PANEL_MAX, PANEL_MIN, clampPanelWidth, roundQuestion, roundSources, type PanelTab } from "../../panel-model.mjs";
 import { useChat } from "./ChatSessionProvider";
 import { usePanel } from "./panel-context";
@@ -90,11 +89,10 @@ export function PanelTabs({ workspace, wide }: { workspace?: (wide: boolean) => 
         <button type="button" data-testid="panel-close" aria-label={t("收起右侧面板")} title={t("收起右侧面板")} onClick={() => { panel.setOpen(false); toggle()?.focus(); }}
           className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-ink focus-visible:ring-2 focus-visible:ring-ring max-lg:size-11 [&_svg]:size-4"><PanelRightClose aria-hidden="true" /></button>
       </div>
-      {(panel.tab === "sources" || panel.tab === "process") && m && label && <p data-testid="panel-round" className="shrink-0 truncate border-b border-line px-3 py-2 text-caption text-muted-foreground" title={label}>{t("这一轮")}：{label}</p>}
+      {(panel.tab === "sources" || panel.tab === "process") && m && label && <p data-testid="panel-round" className="shrink-0 truncate border-b border-line px-3 py-2 text-caption text-muted-foreground" title={label}>{t("这一轮")}{colon()}{label}</p>}
       <TabsContent value="sources" data-testid="sources-pane" className="min-h-0 overflow-y-auto overscroll-contain p-3">{m ? <Pane load={loadSources} m={m} i={panel.index} running={running} /> : empty}</TabsContent>
       <TabsContent value="process" data-testid="process-pane" className="min-h-0 overflow-y-auto overscroll-contain p-3">{m ? <Pane load={loadProcess} m={m} i={panel.index} running={running} /> : empty}</TabsContent>
-      {/* The workspace cards are still the old markup (their rebuild is not in the chat page's package): wrapped on their own, here and nowhere else. */}
-      {panel.tabs.includes("workspace") && <TabsContent value="workspace" data-testid="workspace-pane" className="min-h-0 overflow-y-auto overscroll-contain p-3"><LegacyFrame>{workspace?.(wide)}</LegacyFrame></TabsContent>}
+      {panel.tabs.includes("workspace") && <TabsContent value="workspace" data-testid="workspace-pane" className="min-h-0 overflow-y-auto overscroll-contain p-3">{workspace?.(wide)}</TabsContent>}
     </Tabs>;
 }
 

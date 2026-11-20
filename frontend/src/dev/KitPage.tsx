@@ -41,17 +41,12 @@ function BareTags() {
   );
 }
 
-// Scope probes, shown only on #dev-kit/probe.  "outside": no data-legacy above, so plain preflight must apply.
-// "island": a data-legacy subtree inside a shadcn-style container (what the P2 shell does), so the old
-// browser-default restore must apply even though a data-slot element sits above it.
+// Scope probe, shown only on #dev-kit/probe: bare tags with no part around them must get plain preflight (margins 0, no list markers, bare buttons, inherited link colour ...).
 function ScopeProbes() {
   return (
     <section className="space-y-3" data-kit-section="Scope probes">
       <h2 className="text-sm font-semibold text-muted-foreground">Scope probes</h2>
       <div data-probe="outside" className="flex flex-col items-start gap-2 text-sm"><BareTags /></div>
-      <div data-slot="probe-container">
-        <div data-legacy="" data-probe="island"><BareTags /></div>
-      </div>
     </section>
   );
 }

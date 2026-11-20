@@ -1,7 +1,6 @@
 import { useEffect, type ComponentType } from "react";
 import { Navigate, Outlet, createHashRouter, type RouteObject } from "react-router";
 import { DelayedSkeleton, PageSkeleton } from "@/components/state/Skeleton";
-import { LegacyFrame } from "../LegacyFrame";
 import { skeletonKind } from "../skeleton-kind.mjs";
 import { PATTERNS, SETTINGS_SECTIONS, paths } from "../routes.mjs";
 import { RouteError } from "./RouteError";
@@ -29,9 +28,6 @@ const to = (path: string) => ({ element: <Navigate to={path} replace /> });
 /** The catch-all: an old-form address the router met before the legacy-address bridge did, or one nobody knows, goes where the old router sent it. */
 function Fallback() { return <Navigate to={legacyTarget(window.location.hash)} replace />; }
 
-/** Every page in `pages` below is still an old component: the shell puts the old-UI marker around each one (and around nothing else).  The chat pages, the research area, 持仓, 任务, the assistant pages (skills, memory, news sources, knowledge) and the five settings pages are new markup: no marker around them. */
-function LegacyPage() { return <LegacyFrame><Outlet /></LegacyFrame>; }
-
 /** The research area's layout: no markup of its own.  Entering it reads the automatic monitor once (the navigation's dot), through a module that is fetched then. */
 function ResearchRoot() {
   useEffect(() => { void import("./research/monitor/read-monitor").then(m => m.entered()).catch(() => 0); }, []);
@@ -43,7 +39,7 @@ function FirstLoad() {
   return <DelayedSkeleton><PageSkeleton kind={skeletonKind(window.location.hash.replace(/^#/, "") || "/chat")} /></DelayedSkeleton>;
 }
 
-/** The chat pages are new markup (P3.2): no old-UI marker around them.  The old parts they still hold (process bar, confirmation card, citation drawer, the right panel) carry their own. */
+/** The chat pages (P3.2): the line, its history list and the bot's settings page, each its own chunk. */
 const chatPages: RouteObject[] = [
   { path: PATTERNS.chat, ...page(() => import("./pages/chat"), "ChatRoute") },
   { path: PATTERNS.chatHistory, ...page(() => import("./pages/chat"), "ChatHistoryRoute") },
@@ -55,8 +51,7 @@ const chatPages: RouteObject[] = [
 
 /**
  * The research area's pages (P6.1–P6.4, P7.3): the watchlist, the company page, the forecast home, one forecast, the earnings judgment, the evidence pages, the material library,
- * 模型成绩, 历史回放 and 监控, plus the `latest` redirect page.  All are new markup with no old-UI marker around them; the plain tags among them carry the spacing,
- * link and button values that the marker's restore rules used to give them, written out in their own classes.
+ * 模型成绩, 历史回放 and 监控, plus the `latest` redirect page.  The plain tags among them carry their spacing, link and button values in their own classes.
  */
 const researchPages: RouteObject[] = [
   { path: PATTERNS.research, ...page(() => import("./pages/research"), "ResearchRoute") },
@@ -74,7 +69,7 @@ const researchPages: RouteObject[] = [
   { path: PATTERNS.monitor, ...page(() => import("./pages/monitor"), "MonitorRoute") },
 ];
 
-/** 持仓 (P7.1), 任务 (P7.2), the assistant's skills, memory, news sources and knowledge pages (P8.1) and the five settings pages (P8.2) are new markup: no old-UI marker around them. */
+/** 持仓 (P7.1), 任务 (P7.2), the assistant's skills, memory, news sources, knowledge and 全部 bot pages (P8.1, P9.1) and the five settings pages (P8.2). */
 const personalPages: RouteObject[] = [
   { path: PATTERNS.portfolio, ...page(() => import("./pages/portfolio"), "PortfolioRoute") },
   { path: PATTERNS.routines, ...page(() => import("./pages/routines"), "RoutinesRoute") },
@@ -83,13 +78,9 @@ const personalPages: RouteObject[] = [
   { path: PATTERNS.assistantMemory, ...page(() => import("./pages/personal"), "MemoryRoute") },
   { path: PATTERNS.assistantNews, ...page(() => import("./pages/personal"), "NewsRoute") },
   { path: PATTERNS.assistantKnowledge, ...page(() => import("./pages/knowledge"), "KnowledgeRoute") },
+  { path: PATTERNS.assistantBots, ...page(() => import("./pages/bots"), "BotsRoute") },
   // The five settings addresses are literal routes, so the page is told which one it is (there is no :section parameter to read).
   ...SETTINGS_SECTIONS.map((section): RouteObject => ({ path: paths.settings(section), ...page(() => import("./pages/settings"), "SettingsRoute", { section }) })),
-];
-
-const pages: RouteObject[] = [
-  { path: PATTERNS.assistantBots, ...page(() => import("./pages/bots"), "BotsRoute") },
-  { path: "*", Component: Fallback },
 ];
 
 const routes: RouteObject[] = [
@@ -108,9 +99,8 @@ const routes: RouteObject[] = [
     children: [
       { index: true, ...to(paths.chat()) },
       { path: PATTERNS.login, ...to(paths.chat()) },
-      // The error boundary sits below the layout, so a page that fails to load leaves the shell standing.  It is above the
-      // old-UI marker, so the notice it shows is new markup outside it.
-      { ErrorBoundary: RouteError, children: [...chatPages, ...personalPages, { Component: ResearchRoot, children: researchPages }, { Component: LegacyPage, children: pages }] },
+      // The error boundary sits below the layout, so a page that fails to load leaves the shell standing.
+      { ErrorBoundary: RouteError, children: [...chatPages, ...personalPages, { Component: ResearchRoot, children: researchPages }, { path: "*", Component: Fallback }] },
     ],
   },
 ];

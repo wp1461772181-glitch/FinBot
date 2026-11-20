@@ -141,30 +141,12 @@ function Login() {
   </Row>;
 }
 
-/** Bare-looking markup of the three components that end up inside old pages, for the scope probe. */
-function LegacyIsland() {
-  return <div data-legacy="" data-probe="state-island" className="space-y-3">
-    <ErrorBar message="示例错误" onRetry={() => {}} />
-    <EmptyState title="示例空状态" action={{ label: "示例操作", onClick: () => {} }} />
-    <StatefulButton>示例按钮</StatefulButton>
-  </div>;
-}
-
 export default function StatesPage() {
   return <main className="min-h-screen bg-background text-foreground" data-kit-page data-kit-states>
     <OfflineBanner />
     <div className="space-y-8 p-6">
       <h1 className="text-xl font-semibold">States (dev only)</h1>
       <Loading /><Empty /><Errors /><Offline /><Toasts /><Buttons /><Confirms /><LongTasks /><Login />
-      <section className="space-y-3 border-t border-line pt-4" data-kit-section="Old-page island">
-        <h2 className="text-sm font-semibold text-muted-foreground">The same three components inside an old page (data-legacy) and outside it</h2>
-        <div data-probe="state-outside" className="space-y-3">
-          <ErrorBar message="示例错误" onRetry={() => {}} />
-          <EmptyState title="示例空状态" action={{ label: "示例操作", onClick: () => {} }} />
-          <StatefulButton>示例按钮</StatefulButton>
-        </div>
-        <LegacyIsland />
-      </section>
     </div>
     <ConfirmHost />
     <NotifyHost />

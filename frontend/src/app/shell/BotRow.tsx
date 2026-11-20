@@ -4,7 +4,7 @@ import type { Bot } from "../../api/bots";
 import { BotAvatar, type AvatarStatus } from "@/components/bot/BotAvatar";
 import { BOT_AVATAR_SIZE } from "../../bot-sizes.mjs";
 import { botMarker, countLabel } from "../../bot-marker.mjs";
-import { useLocale } from "../../i18n";
+import { useLocale, comma } from "../../i18n";
 import { beginHandoff } from "../chat/handoff-intent";
 import { sourceOfClick } from "../../handoff.mjs";
 import { paths } from "../../routes.mjs";
@@ -23,7 +23,9 @@ export function BotRow({ bot, active, running, waiting, unseen, onNavigate }: { 
   const marker = botMarker({ running, waiting, unread: (bot.unread > 0 ? bot.unread : 0) + (unseen ? 1 : 0), active });
   const status = marker.word === "running" ? t("回答中") : marker.word === "waiting" ? t("等你") : "";
   const unreadText = marker.count > 0 ? `${marker.count} ${t("条未读")}` : "";
-  const label = [bot.name, status, unreadText].filter(Boolean).join("，");
+  // The name a screen reader gets must contain what the row shows (WCAG 2.5.3, "label in name"): the bot's name, then the status word or 「默认」.
+  const shown = status || (bot.is_default && marker.count === 0 ? t("默认") : "");
+  const label = [[bot.name, shown].filter(Boolean).join(" "), unreadText].filter(Boolean).join(comma());
   const avatarStatus: AvatarStatus = marker.kind === "running" ? "answering" : marker.kind === "waiting" ? "waiting" : marker.kind === "unread" ? "unread" : "idle";
   return <SidebarMenuItem>
     <SidebarMenuButton asChild isActive={active} tooltip={label} className="h-10 gap-3 group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!">
@@ -33,7 +35,7 @@ export function BotRow({ bot, active, running, waiting, unseen, onNavigate }: { 
           {collapsed && marker.count > 0 && <span aria-hidden="true" className="absolute -right-1 -bottom-1 grid min-w-4 place-items-center rounded-full bg-brand px-1 text-caption leading-4 text-primary-foreground ring-2 ring-sidebar">{countLabel(marker.count)}</span>}
         </span>
         {!collapsed && <>
-          <span className="min-w-0 flex-1 truncate text-sm">{bot.name}</span>
+          <span className="min-w-0 flex-1 truncate text-sm">{bot.name}</span>{" "}
           <span className="flex shrink-0 items-center gap-1.5">
             {marker.word === "running" && <span className="text-caption text-muted-foreground">{t("回答中")}</span>}
             {marker.word === "waiting" && <span className="text-caption font-medium text-action">{t("等你")}</span>}

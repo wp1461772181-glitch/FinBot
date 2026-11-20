@@ -2,8 +2,8 @@ import type { AgentTask, InboxItem, InboxSource, PriceLine, TaskProposal } from 
 export function waitingCount(botId: string, proposals: Pick<TaskProposal, "bot_id" | "expired">[], confirms: Pick<InboxItem, "status">[]): number;
 export function routinesBadge(proposals: Pick<TaskProposal, "expired">[], confirms: Pick<InboxItem, "status">[]): number;
 export function inboxKindLabel(kind: string): string;
-export function scheduleLabel(task: Pick<AgentTask, "schedule_kind" | "schedule_time" | "every_value" | "every_unit">): string;
-export function runsLabel(task: Pick<AgentTask, "max_runs">): string;
+export function scheduleLabel(task: Pick<AgentTask, "schedule_kind" | "schedule_time" | "every_value" | "every_unit">, locale?: string): string;
+export function runsLabel(task: Pick<AgentTask, "max_runs">, locale?: string): string;
 export function inboxOrder(items: InboxItem[]): InboxItem[];
 export function judgmentLink(item: Pick<InboxItem, "payload"> | null | undefined): string | null;
 export function numberedSources(item: InboxItem): InboxSource[];

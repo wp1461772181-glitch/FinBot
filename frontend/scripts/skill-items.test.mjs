@@ -1,16 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { skillFromHash, skillGroups, slashMatches, toggleUsual, usableSkills } from "../src/skill-items.mjs";
+import { skillGroups, slashMatches, toggleUsual, usableSkills } from "../src/skill-items.mjs";
 
 const mk = (id, name, extra = {}) => ({ id, name, enabled: true, status: "active", builtin: false, ...extra });
-
-test("skillFromHash reads #skills/<id> only", () => {
-  assert.equal(skillFromHash("#skills/abc-123"), "abc-123");
-  assert.equal(skillFromHash("#skills"), null);
-  assert.equal(skillFromHash("#bot/abc"), null);
-  assert.equal(skillFromHash("#skills/a/b"), null);
-  assert.equal(skillFromHash(undefined), null);
-});
 
 test("skillGroups splits drafts, built-ins and the owner's skills", () => {
   const g = skillGroups([mk("1", "b"), mk("2", "a", { builtin: true }), mk("3", "c", { status: "draft" }), mk("4", "a")]);

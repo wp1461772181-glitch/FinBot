@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { forecastHash, forecastHomeHash, judgmentHash, legacyForecastSection, parseForecastHash, reviseHash } from "../src/forecast-routes.mjs";
+import { forecastHash, forecastHomeHash, judgmentHash, parseForecastHash, reviseHash } from "../src/forecast-routes.mjs";
 
 const ROOT = "3f2b8c1e-9d4a-4e6b-8a57-1c0d2e3f4a5b";
 const VERSION = "a1b2c3d4-0000-4000-8000-123456789abc";
@@ -60,14 +60,7 @@ test("a hash that is not a forecast route is home, and non-strings do not throw"
   assert.deepEqual(parseForecastHash(undefined), { view: "home" });
 });
 
-test("old hashes still name their section", () => {
-  assert.equal(legacyForecastSection("#revisions"), "revisions");
-  assert.equal(legacyForecastSection("#evaluation"), "evaluation");
-  assert.equal(legacyForecastSection("#replay"), "replay");
-  assert.equal(legacyForecastSection("#replay?symbol=AMD"), "replay");
-  assert.equal(legacyForecastSection("#forecast"), null);
-  assert.equal(legacyForecastSection("#materials"), null);
-  // The old hashes are not forecast routes, so they never open a record by accident.
+test("old section hashes are not forecast routes, so they never open a record by accident", () => {
   assert.deepEqual(parseForecastHash("#revisions"), { view: "home" });
 });
 

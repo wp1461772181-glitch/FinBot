@@ -1,0 +1,57 @@
+{
+  "_about": "Reads of the chat page's 工作区 cards recorded from the OLD markup (HEAD 3c1cf42, before P9.1) on the fake backend: each card alone (minus the page's own reads), and the new reads after three actions with all eight cards in the pane. Written by workspace-requests.mjs; the new cards must send the same.",
+  "cards": {
+    "price": [
+      "GET /v2/stocks/AAPL/prices"
+    ],
+    "forecast": [
+      "GET /v2/forecasts?symbols=AAPL&state=all&limit=20"
+    ],
+    "materials": [
+      "GET /v3/materials?limit=5&offset=0&symbol=AAPL&order=recent"
+    ],
+    "filings": [
+      "GET /filing-inventories/AAPL"
+    ],
+    "routines": [
+      "GET /agent-chat/inbox?section=confirm&bot_id=b0000000-0000-4000-8000-000000000001",
+      "GET /agent-chat/tasks/proposals",
+      "GET /agent-chat/tasks?bot_id=b0000000-0000-4000-8000-000000000001"
+    ],
+    "brief": [
+      "GET /agent-chat/inbox?section=brief&bot_id=b0000000-0000-4000-8000-000000000001"
+    ],
+    "watchlist": [
+      "GET /agent-chat/research-queue"
+    ],
+    "portfolio": [
+      "GET /agent-chat/portfolio"
+    ]
+  },
+  "actions": {
+    "switch-current-stock": [
+      "GET /filing-inventories/MSFT",
+      "GET /v2/forecasts?symbols=MSFT&state=all&limit=20",
+      "GET /v2/stocks/MSFT/prices",
+      "GET /v3/materials?limit=5&offset=0&symbol=MSFT&order=recent"
+    ],
+    "pin-price-card": [
+      "GET /agent-chat/inbox?section=brief&bot_id=b0000000-0000-4000-8000-000000000001",
+      "GET /agent-chat/inbox?section=confirm&bot_id=b0000000-0000-4000-8000-000000000001",
+      "GET /agent-chat/portfolio",
+      "GET /agent-chat/research-queue",
+      "GET /agent-chat/tasks/proposals",
+      "GET /agent-chat/tasks?bot_id=b0000000-0000-4000-8000-000000000001",
+      "GET /v2/forecasts?symbols=AAPL&state=all&limit=20",
+      "GET /v2/stocks/NVDA/prices",
+      "GET /v3/materials?limit=5&offset=0&symbol=AAPL&order=recent"
+    ],
+    "pick-from-watchlist-card": [
+      "GET /filing-inventories/TSLA",
+      "GET /v2/forecasts?symbols=TSLA&state=all&limit=20",
+      "GET /v2/stocks/TSLA/prices",
+      "GET /v3/materials?limit=5&offset=0&symbol=TSLA&order=recent"
+    ]
+  },
+  "writes": []
+}

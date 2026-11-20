@@ -1,5 +1,5 @@
-// "外观与性格" of one bot, below the shape and colour pickers (design 4.3): the personality pickers and the rehearsal.  A new part embedded in the old
-// profile tab (`data-slot` keeps the old sheets' restore block off it); loaded on demand.  Until the bot settings page of P5.1 exists it stands here.
+// "外观与性格" of one bot, below the shape and colour pickers (design 4.3): the personality pickers and the rehearsal.  Loaded on demand
+// (the bot settings page, P5.1, holds it).
 import { useLocale } from "../../i18n";
 import type { BloubLook } from "../../bloub-look.mjs";
 import { PersonaPicker } from "./PersonaPicker";

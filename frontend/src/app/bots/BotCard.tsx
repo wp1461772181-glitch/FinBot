@@ -11,7 +11,7 @@ import { countLabel } from "../../bot-marker.mjs";
 import { derivePersona } from "../../bot-persona.mjs";
 import { BOT_AVATAR_SIZE } from "../../bot-sizes.mjs";
 import { sourceOfClick } from "../../handoff.mjs";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 import { paths } from "../../routes.mjs";
 import { beginHandoff } from "../chat/handoff-intent";
 
@@ -33,16 +33,18 @@ export function BotCard({ bot, catalog, lineStatus, now, busy, onSetHidden }: {
   const hidden = bot.hidden && !bot.is_default;
   const fact = "flex min-w-0 items-baseline gap-2";
   const label = "w-14 shrink-0 text-caption text-muted-foreground";
+  // The values sit 40px in from their labels and the text blocks keep a 12px space below them: the values the old-UI marker's browser margins gave this page, written out.
+  const value = "ml-10 min-w-0 truncate text-ink";
   return <li data-testid="bot-card" data-bot-id={bot.id} data-hidden={hidden || undefined} data-status={status.status}>
     <article className={`relative flex h-full flex-col gap-3 rounded-md border border-line bg-surface p-4 transition-colors hover:bg-accent/40 has-[[data-card-link]:focus-visible]:ring-[3px] has-[[data-card-link]:focus-visible]:ring-ring/50 ${hidden ? "bg-sunken" : ""}`}>
       <div className="flex items-start gap-3">
         <span className="mt-0.5 grid shrink-0 place-items-center"><BotAvatar status={status.status} avatar={bot.avatar} look={bot.look} name={bot.name} seed={bot.id} size={BOT_AVATAR_SIZE.emoji} /></span>
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-body font-medium text-ink">
+          <h2 className="mb-3 truncate text-body font-medium text-ink">
             <Link to={bot.is_default ? paths.chat() : paths.chat(bot.id)} data-card-link="" className="text-ink no-underline outline-none after:absolute after:inset-0 after:content-[''] hover:no-underline"
               onClick={(event) => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && event.button === 0) beginHandoff({ to: bot.id, source: sourceOfClick(event.detail) }); }}>{bot.name}</Link>
           </h2>
-          <p className="truncate text-caption text-muted-foreground">{bot.title || (bot.is_default ? t("默认") : " ")}</p>
+          <p className="mb-3 truncate text-caption text-muted-foreground">{bot.title || (bot.is_default ? t("默认") : " ")}</p>
         </div>
         <div className="relative z-10 flex shrink-0 items-center gap-1.5">
           {hidden && <span data-testid="bot-card-hidden" className="rounded-full border border-line bg-surface px-2 py-0.5 text-caption text-muted-foreground">{t("已隐藏")}</span>}
@@ -51,7 +53,7 @@ export function BotCard({ bot, catalog, lineStatus, now, busy, onSetHidden }: {
           {status.count > 0 && <span data-count="" aria-label={`${status.count} ${t("条未读")}`} className="min-w-5 rounded-full bg-brand px-1.5 text-center text-caption leading-5 font-medium text-primary-foreground">{countLabel(status.count)}</span>}
           {!bot.is_default && !hidden && <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button type="button" variant="ghost" size="icon-sm" aria-label={`${t("更多操作")}：${bot.name}`} disabled={busy}><Ellipsis aria-hidden="true" /></Button>
+              <Button type="button" variant="ghost" size="icon-sm" aria-label={`${t("更多操作")}${colon()}${bot.name}`} disabled={busy}><Ellipsis aria-hidden="true" /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onSelect={() => onSetHidden(bot, true)}><EyeOff aria-hidden="true" />{t("在侧栏隐藏")}</DropdownMenuItem>
@@ -60,11 +62,11 @@ export function BotCard({ bot, catalog, lineStatus, now, busy, onSetHidden }: {
         </div>
       </div>
       <dl className="flex flex-col gap-1 text-small">
-        <div className={fact}><dt className={label}>{t("性格原型")}</dt><dd data-testid="bot-card-archetype" className="min-w-0 truncate text-ink">{t(ARCHETYPE_NAMES[archetype])}</dd></div>
-        <div className={fact}><dt className={label}>{t("模型")}</dt><dd data-testid="bot-card-model" className="min-w-0 truncate text-ink">{model ?? t("目录默认")}</dd></div>
-        <div className={fact}><dt className={label}>{t("最近活动")}</dt><dd data-testid="bot-card-last" className="min-w-0 truncate text-ink">{when ?? t("还没有对话")}</dd></div>
+        <div className={fact}><dt className={label}>{t("性格原型")}</dt><dd data-testid="bot-card-archetype" className={value}>{t(ARCHETYPE_NAMES[archetype])}</dd></div>
+        <div className={fact}><dt className={label}>{t("模型")}</dt><dd data-testid="bot-card-model" className={value}>{model ?? t("目录默认")}</dd></div>
+        <div className={fact}><dt className={label}>{t("最近活动")}</dt><dd data-testid="bot-card-last" className={value}>{when ?? t("还没有对话")}</dd></div>
       </dl>
-      {bot.last_message && <p className="line-clamp-2 text-small text-muted-foreground">{bot.last_message}</p>}
+      {bot.last_message && <p className="mb-3 line-clamp-2 text-small text-muted-foreground">{bot.last_message}</p>}
       <div className="relative z-10 mt-auto flex items-center gap-2 pt-1">
         <Button asChild variant="outline" size="sm"><Link to={paths.chatSettings(bot.id)}><Settings aria-hidden="true" />{t("设置")}<span className="sr-only"> · {bot.name}</span></Link></Button>
         {hidden && <Button type="button" variant="outline" size="sm" disabled={busy} data-testid="bot-card-unhide" onClick={() => onSetHidden(bot, false)}><Eye aria-hidden="true" />{t("取消隐藏")}<span className="sr-only"> · {bot.name}</span></Button>}

@@ -42,13 +42,13 @@ export function VersionRail({ versions, selectedId, onSelect, details, changedId
       <Chevron className={cn("text-muted-foreground", open && "rotate-180")} />
     </button>
     <div id="version-rail-list" className={cn("flex-col gap-4 rounded-md border border-line bg-surface p-3", open ? "flex" : "hidden", "lg:flex")}>
-      <h2 className="hidden text-small font-medium text-ink lg:block mb-[0.83em]">{t("版本")}</h2>
+      <h2 className="hidden text-small font-medium text-ink lg:block">{t("版本")}</h2>
       <Timeline items={items} selectedId={selected.id} onSelect={id => { onSelect(id); setOpen(false); }} label={t("预测版本")} />
       <div className="flex flex-col gap-1.5 border-t border-line pt-3 text-small">
         <Link to={paths.evidence(selected.id)} data-testid="rail-evidence" className="inline-flex min-h-8 items-center text-brand underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring underline">
           {detail ? `${t("本版证据")} ${detail.evidence_version_manifest.length} ${t("份")}` : t("本版证据")} →
         </Link>
-        <p data-testid="rail-diff" className="text-caption text-muted-foreground mb-[1em]">
+        <p data-testid="rail-diff" className="text-caption text-muted-foreground">
           {!selected.parent_version_id ? t("第一版，没有上一版可比较。") : diff?.hasParent ? <>{t("与上一版相比：")}<span className="font-mono tabular-nums text-ink">+{diff.added} −{diff.removed}</span></> : t("与上一版相比：…")}
         </p>
       </div>

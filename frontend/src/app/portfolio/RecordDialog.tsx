@@ -8,6 +8,7 @@ import { Segmented } from "@/components/Segmented";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { StatefulButton } from "@/components/state/StatefulButton";
 import { useLocale } from "../../i18n";
+import { useFocusKeep } from "../use-focus-keep";
 import { ENTRY_KINDS, KIND_LABELS, blankEntry, entryBody, type PortfolioEntryForm } from "../../portfolio-items.mjs";
 
 /** The dialog's width from this on; below it the same form is a drawer from the bottom.  (Its own matchMedia hook, as the new-bot dialog has.) */
@@ -33,20 +34,21 @@ export function RecordDialog({ entry, setEntry, error, setError, onSubmit, onClo
   const wide = useWide();
   const [busy, setBusy] = useState(false);
   const content = useRef<HTMLDivElement>(null);
+  const keep = useFocusKeep("record-dialog");
   const close = (open: boolean) => { if (!open && !busy) onClose(); };
   const giveBackFocus = (event: Event) => { event.preventDefault(); returnFocus(); };
   const body = (title: ReactNode, description: ReactNode) => <RecordForm wide={wide} entry={entry} setEntry={setEntry} error={error} setError={setError} busy={busy} setBusy={setBusy} onSubmit={onSubmit} onClose={onClose} title={title} description={description} />;
   if (wide) {
     return <Dialog open onOpenChange={close}>
       <DialogContent data-testid="record-dialog" closeLabel={t("关闭")} className="max-h-[92dvh] gap-0 overflow-y-auto p-0 sm:max-w-xl"
-        onOpenAutoFocus={event => { event.preventDefault(); content.current?.querySelector<HTMLElement>("#record-symbol, #record-amount")?.focus(); }}
+        onOpenAutoFocus={event => { event.preventDefault(); keep(() => content.current?.querySelector<HTMLElement>("#record-symbol, #record-amount")); }}
         onCloseAutoFocus={giveBackFocus} onEscapeKeyDown={event => { if (busy) event.preventDefault(); }} onInteractOutside={event => { if (busy) event.preventDefault(); }} ref={content}>
         {body(<DialogTitle className="text-title-s font-semibold text-ink">{t("记一笔")}</DialogTitle>, <DialogDescription className="text-small text-muted-foreground">{t("记下你自己做过的一笔。这里只记账，不会下单。")}</DialogDescription>)}
       </DialogContent>
     </Dialog>;
   }
   return <Drawer open onOpenChange={close} dismissible={!busy} handleOnly>
-    <DrawerContent data-testid="record-dialog" className="data-[vaul-drawer-direction=bottom]:max-h-[92dvh]" onOpenAutoFocus={event => { event.preventDefault(); content.current?.focus(); }} onCloseAutoFocus={giveBackFocus} ref={content}>
+    <DrawerContent data-testid="record-dialog" className="data-[vaul-drawer-direction=bottom]:max-h-[92dvh]" onOpenAutoFocus={event => { event.preventDefault(); keep(() => content.current); }} onCloseAutoFocus={giveBackFocus} ref={content}>
       {body(<DrawerTitle className="text-title-s font-semibold text-ink">{t("记一笔")}</DrawerTitle>, <DrawerDescription className="text-small text-muted-foreground">{t("记下你自己做过的一笔。这里只记账，不会下单。")}</DrawerDescription>)}
     </DrawerContent>
   </Drawer>;

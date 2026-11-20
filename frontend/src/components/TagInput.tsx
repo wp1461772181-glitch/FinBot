@@ -6,7 +6,7 @@
 import { useId, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useLocale } from "../i18n";
+import { useLocale, colon } from "../i18n";
 import { SPLIT, readTags } from "../tag-input.mjs";
 
 export function TagInput({ id, value, onChange, normalize = (raw) => raw.trim(), validate = () => true, max, invalidLabel, limitLabel, placeholder, disabled, label, describedBy, className, testid }: {
@@ -26,7 +26,7 @@ export function TagInput({ id, value, onChange, normalize = (raw) => raw.trim(),
     const { add, invalid: refused, cut } = readTags(source, value, { normalize, validate, max });
     if (add.length) onChange([...value, ...add]);
     setText(refused.join(" "));
-    setMessage(refused.length ? `${invalidLabel}：${refused.join(", ")}` : cut && limitLabel ? limitLabel : "");
+    setMessage(refused.length ? `${invalidLabel}${colon()}${refused.join(", ")}` : cut && limitLabel ? limitLabel : "");
   }
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing) return; // an input method is choosing its candidates

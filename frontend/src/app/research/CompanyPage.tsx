@@ -12,7 +12,7 @@ import { companyName } from "../../company-page.mjs";
 import { checkWatchAdd } from "../../watchlist-add.mjs";
 import { restoreAt } from "../../watchlist-rows.mjs";
 import { priceChange } from "../../data-display.mjs";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 import { companyTab, paths, type CompanyTab } from "../../routes.mjs";
 import { useWorkspace } from "../workspace";
 import { AskBotMenu } from "./AskBotMenu";
@@ -21,7 +21,7 @@ import { CompanyTabs } from "./CompanyTabs";
 import { removeTitle } from "./support";
 import { useRead } from "./use-read";
 
-// The two old pages the tabs embed are chunks of their own, fetched when the tab is opened.
+// The two pages the tabs embed are chunks of their own, fetched when the tab is opened.
 const ForecastsTab = lazy(() => import("./EmbeddedTabs").then(m => ({ default: m.ForecastsTab })));
 const MaterialsTab = lazy(() => import("./EmbeddedTabs").then(m => ({ default: m.MaterialsTab })));
 
@@ -53,7 +53,7 @@ export function CompanyPage({ symbol }: { symbol: string }) {
   const toggleListed = async () => {
     if (!listed) {
       const added = checkWatchAdd(symbol, ws.symbols);
-      if (added.ok) { ws.setSymbols(items => [...items, added.ticker]); notify.success(`${t("已加入自选")}：${symbol}`, { id: `watch-add:${symbol}` }); }
+      if (added.ok) { ws.setSymbols(items => [...items, added.ticker]); notify.success(`${t("已加入自选")}${colon()}${symbol}`, { id: `watch-add:${symbol}` }); }
       else notify.error(t(added.error), { id: `watch-add:${symbol}` });
       return;
     }
@@ -64,7 +64,7 @@ export function CompanyPage({ symbol }: { symbol: string }) {
     });
     if (!ok) return;
     ws.removeWatchSymbol(symbol, { stay: true });
-    notify.success(`${t("已移出自选")}：${symbol}`, { id: `watch-remove:${symbol}`, undo: { label: t("撤销"), onClick: () => ws.setSymbols(items => restoreAt(items, symbol, index)) } });
+    notify.success(`${t("已移出自选")}${colon()}${symbol}`, { id: `watch-remove:${symbol}`, undo: { label: t("撤销"), onClick: () => ws.setSymbols(items => restoreAt(items, symbol, index)) } });
   };
 
   return <main data-testid="company-page" data-symbol={symbol} aria-labelledby="company-title" className="mx-auto flex w-full max-w-[1280px] flex-1 flex-col gap-4 p-4 lg:p-6">

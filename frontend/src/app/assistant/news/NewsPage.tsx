@@ -9,7 +9,7 @@ import { confirm } from "@/components/state/confirm";
 import { notify } from "@/components/state/notify";
 import { deleteNewsSource, dryRunNewsSource, getNewsSourcesConfig, repairNewsSource, saveNewsPushSettings, setNewsSourceEnabled, upsertNewsSource, type NewsDryRunResult, type NewsSource, type NewsSourceInput } from "../../../api/news-sources";
 import { useLocale } from "../../../i18n";
-import { useLoad } from "../use-load";
+import { useLoad } from "../../use-load";
 import { NewsDrawer } from "./NewsDrawer";
 import { NewsHeader, NewsRow } from "./NewsRow";
 import { repairView } from "./news-form.mjs";

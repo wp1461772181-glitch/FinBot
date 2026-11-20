@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { conversationFromHash, originLabel, profileGroups, recallKindLabel } from "../src/memory-items.mjs";
+import { originLabel, profileGroups, recallKindLabel } from "../src/memory-items.mjs";
 
 const item = (id, origin, status, created_at) => ({ id, origin, status, created_at, kind: "preference", text: id, quote: id });
 
@@ -18,14 +18,6 @@ test("badges name where an item came from and what a recall line is", () => {
   assert.equal(originLabel("inferred"), "推断");
   assert.equal(recallKindLabel("summary"), "摘要");
   assert.equal(recallKindLabel("questions"), "你的提问");
-});
-
-test("a recall link names one conversation; anything else is not one", () => {
-  const id = "0f8b3c1e-2d4a-4b6c-8e9f-0123456789ab";
-  assert.equal(conversationFromHash(`#agent/${id}`), id);
-  assert.equal(conversationFromHash("#agent"), null);
-  assert.equal(conversationFromHash("#agent/not-an-id"), null);
-  assert.equal(conversationFromHash(`#memory/${id}`), null);
 });
 
 test("profile items are grouped 全局 first, then each bot (default first), then deleted bots", async () => {

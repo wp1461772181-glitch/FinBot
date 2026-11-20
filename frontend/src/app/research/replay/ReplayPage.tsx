@@ -14,7 +14,7 @@ import { ReplayForm } from "./ReplayForm";
 import { ReplayList, type ListState } from "./ReplayList";
 import { dismissReplayFailure, followReplayJob, onReplaySettled, useReplayFailure, useReplayRunning } from "./replay-jobs";
 import { defaultReplayDate, replayFailure, replayRows } from "./replay-model.mjs";
-import { useDetailLayer } from "./use-detail-layer";
+import { useDetailLayer } from "../use-detail-layer";
 import { usePhone } from "../materials/use-phone";
 
 // The bar is a chunk of its own, fetched when a task runs (the shell's dock does the same).

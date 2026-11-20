@@ -11,9 +11,9 @@ import { getModelCatalog, type CatalogModel } from "../../../api/bots";
 import { getMaterialAnalysisSettings, resetMaterialAnalysisSettings, saveMaterialAnalysisSettings, type MaterialAnalysisSettings } from "../../../api/material-library";
 import { message } from "../../../bot-message";
 import type { CatalogEntryDraft } from "../../../catalog-form.mjs";
-import { useLocale } from "../../../i18n";
+import { useLocale, colon } from "../../../i18n";
 import { useWorkspace } from "../../workspace";
-import { useLoad } from "../../assistant/use-load";
+import { useLoad } from "../../use-load";
 import { SettingsCard } from "../SettingsCard";
 import { SettingsGuestNote } from "../SettingsGuestNote";
 import { ModelCard } from "./ModelCard";
@@ -80,7 +80,7 @@ function ModelsBody() {
   return <div data-testid="settings-models-body" className="flex flex-col gap-5">
     <SettingsCard id="model-catalog" title={t("模型配置")} testid="catalog-card" description={t("对话、bot、定时任务和材料分析都只用这里的模型。key 只发给服务器一次，加密保存或读服务器的环境变量；页面只显示「已配置」或「缺 key」，不会再显示 key。")}
       actions={<Button ref={addButton} type="button" data-testid="model-new" className="max-sm:h-11" disabled={!catalog || busy !== null} onClick={() => setDialog({ initial: blankEntry(taken), opener: here() })}><Plus aria-hidden="true" />{t("添加模型")}</Button>}>
-      {config?.present && <p data-testid="config-file-note" className="m-0 text-small text-muted-foreground">{t("服务器配置文件里的模型只能在服务器上改。")}{config.problems.length ? ` ${t("配置文件有问题")}：${config.problems.length}` : ""}</p>}
+      {config?.present && <p data-testid="config-file-note" className="m-0 text-small text-muted-foreground">{t("服务器配置文件里的模型只能在服务器上改。")}{config.problems.length ? ` ${t("配置文件有问题")}${colon()}${config.problems.length}` : ""}</p>}
       {failure && <ErrorBar message={failure} />}
       {catalogLoad.error != null && <ErrorBar error={catalogLoad.error} onRetry={() => void catalogLoad.reload()} retrying={catalogLoad.loading} />}
       {!catalog && catalogLoad.loading && <DelayedSkeleton><div role="status" aria-busy="true" data-testid="models-skeleton" className="grid gap-3 sm:grid-cols-2"><span className="sr-only">{t("正在读取")}</span>{[0, 1].map((i) => <Skeleton key={i} className="h-28 w-full" />)}</div></DelayedSkeleton>}

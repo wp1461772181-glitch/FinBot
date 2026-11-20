@@ -17,7 +17,7 @@ export function useDelayedFlag(active: boolean, delay = SKELETON_DELAY_MS): bool
 
 /**
  * One block of a skeleton.  The pulse is only for readers who have not asked for less motion; with reduced motion the block is
- * simply there (no flicker).  Plain markup: skeletons are used inside old pages and in the first load.
+ * simply there (no flicker).  Plain markup: skeletons are used inside pages and in the first load.
  */
 export function Skeleton({ className = "" }: { className?: string }) {
   return <div data-slot="skeleton" aria-hidden="true" className={`rounded-sm bg-sunken motion-safe:animate-pulse ${className}`} />;

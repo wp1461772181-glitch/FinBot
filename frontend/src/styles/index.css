@@ -1,17 +1,17 @@
 /* The single style entry (main.tsx imports only this file).
-   Layer order, lowest to highest priority.  `legacy` sits above Tailwind's reset (`base`) so the old pages keep
-   their look, and below `components` / `utilities` so new components always win over the old global selectors.
+   Layer order, lowest to highest priority: Tailwind's `theme`, its reset (`base`), `components` (the hand-written rules of the bots, the chat page, the chart ...) and `utilities`.
    Declared first so it wins over the order Tailwind's own `@layer` statement would set. */
-@layer theme, base, legacy, components, utilities;
+@layer theme, base, components, utilities;
 
-/* Tailwind only scans the new code.  Automatic detection would also read the old pages' source (and any stale
-   dist/), and every English word there that happens to be a utility name (`running`, `table`, `block` ...) would
-   become a utility class in the layer above `legacy` and hijack old elements with the same class.
-   Convention: new code lives only in src/components/ (shadcn parts), src/app/ (shell, pages, hooks) and src/dev/;
-   old files stay in the src/ root until they are redone.  A new top-level source folder needs a line here. */
+/* Tailwind scans only the folders named here (`source(none)` turns automatic detection off).  Automatic detection follows the .gitignore files it finds, and the repository root's
+   `data/` rule would hide src/app/settings/data/ from it (P8.2 lost a page's classes that way); an explicit list is the same in a scratch copy and in a real checkout.
+   A new top-level source folder needs a line here. */
 @import "tailwindcss" source(none);
 @source "../components";
 @source "../app";
+/* A registered @source path still obeys .gitignore: the repository root's `data/` rule hides src/app/settings/data/ from the line above, so it is named on its own (checked in a real checkout: a class used
+   only in that folder is missing from the CSS without this line and present with it). */
+@source "../app/settings/data";
 @source "../dev";
 @import "tw-animate-css";
 
@@ -23,14 +23,6 @@
 @import "./bots-signature.css";
 @import "./bots-handoff.css";
 @import "./sources.css";
-
-/* Old sheets, in the order main.tsx used to import them. */
-@import "./legacy/restore.css" layer(legacy);
-@import "./legacy/styles.css" layer(legacy);
-@import "./legacy/chat.css" layer(legacy);
-@import "./legacy/theme.css" layer(legacy);
-@import "./legacy/grok.css" layer(legacy);
-@import "./legacy/bridge.css" layer(legacy);
 
 /* Dark mode follows the data-theme attribute theme.mjs writes on <html>; no second mechanism. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));

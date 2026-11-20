@@ -2,7 +2,7 @@ import { ArrowUpRight } from "lucide-react";
 import { OpinionCard, OpinionFacts } from "@/components/OpinionCard";
 import { SourceQuote } from "@/components/SourceCard";
 import type { MaterialAnalysisVersion, MaterialCitation } from "../../../types";
-import { formatDate as formatLocalizedDate, useLocale } from "../../../i18n";
+import { comma, formatDate as formatLocalizedDate, useLocale } from "../../../i18n";
 import { citationNote, verificationOf } from "./materials-model.mjs";
 
 type Row = { id: string; statement: string; rationale?: string; reason?: string; citations: MaterialCitation[] };
@@ -30,7 +30,7 @@ function Citations({ citations, onLocate }: { citations: MaterialCitation[]; onL
   if (!citations?.length) return null;
   return <div data-testid="citations" className="flex min-w-0 flex-col gap-1.5">
     {citations.map((citation, index) => <div key={`${citation.quote}:${index}`} data-slot="citation"><OpinionFacts>
-      <SourceQuote><button type="button" aria-label={t("查看这条引文的原始来源")} onClick={() => onLocate(citation)} className="rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">“{citation.quote}”<ArrowUpRight aria-hidden="true" className="ml-1 inline size-3.5 align-text-bottom text-muted-foreground" /></button></SourceQuote>
+      <SourceQuote><button type="button" aria-label={`${citation.quote}${comma()}${t("查看这条引文的原始来源")}`} onClick={() => onLocate(citation)} className="rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">“{citation.quote}”<ArrowUpRight aria-hidden="true" className="ml-1 inline size-3.5 align-text-bottom text-muted-foreground" /></button></SourceQuote>
       <CheckNote citation={citation} />
     </OpinionFacts></div>)}
   </div>;

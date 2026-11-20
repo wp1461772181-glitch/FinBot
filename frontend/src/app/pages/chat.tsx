@@ -10,7 +10,7 @@ import type { Bot } from "../../api/bots";
 import { useWorkspace } from "../workspace";
 
 // The bot's workspace cards (the 工作区 tab of the right panel) are only needed once a bot page is open: their own chunk, fetched on demand.
-const BotWorkspacePane = lazy(() => import("../../BotSidePanel").then((module) => ({ default: module.BotWorkspacePane })));
+const BotWorkspacePane = lazy(() => import("../chat/workspace/WorkspacePane").then((module) => ({ default: module.BotWorkspacePane })));
 
 /** What stands in a panel tab while its chunk comes: nothing for the first 400ms, then a card's shape. */
 const paneFallback = <DelayedSkeleton><SkeletonCard /></DelayedSkeleton>;
@@ -24,8 +24,7 @@ function BotPage({ bot }: { bot: Bot }) {
   useLayoutEffect(() => { void selectBot(bot); }, [bot]); // eslint-disable-line react-hooks/exhaustive-deps
   const changed = () => void ws.bots.reload();
   return <ChatPage bot={bot} onTurnSettled={changed} onBotChanged={changed}
-    workspace={(wide) => <OptionalChunk><Suspense fallback={paneFallback}><BotWorkspacePane key={bot.id} bot={bot} symbol={ws.symbol} watchlist={ws.symbols} onSelectSymbol={ws.setPreferredSymbol} wide={wide}
-      onOpenCompany={(ticker, section) => ws.openCompany(ticker, section === "forecast" ? "forecast" : "overview")} /></Suspense></OptionalChunk>} />;
+    workspace={(wide) => <OptionalChunk><Suspense fallback={paneFallback}><BotWorkspacePane key={bot.id} bot={bot} symbol={ws.symbol} watchlist={ws.symbols} onSelectSymbol={ws.setPreferredSymbol} wide={wide} /></Suspense></OptionalChunk>} />;
 }
 
 /** The bot list is still on its way: the thread's own skeleton (after 400ms); a bot that is not there says so. */

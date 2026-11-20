@@ -2,7 +2,7 @@
 // appearance card (like UpdownSelect), loaded on demand.  The system's reduced-motion setting wins: then the level is 关闭 and cannot be set stronger.
 // A hand-picked level beats the automatic ones (the device, the drop after slow frames); `恢复自动` forgets the pick.
 import { useSyncExternalStore } from "react";
-import { useLocale } from "../i18n";
+import { useLocale, colon } from "../i18n";
 import { LEVELS, getMotion, subscribeMotion } from "../motion-store.mjs";
 import { activateMotion, chooseMotion } from "../motion-control.mjs";
 import type { MotionLevel } from "../motion-level.mjs";
@@ -28,7 +28,7 @@ export function MotionLevelSelect() {
       <ul className="m-0 grid list-none gap-0.5 p-0 text-small text-muted-foreground">
         {LEVELS.map((value: MotionLevel) => <li key={value}><span className="font-medium text-ink">{t(NAMES[value])}</span> · {t(HINTS[value])}</li>)}
       </ul>
-      <p role="status" data-testid="motion-level-current" className="m-0 text-small text-ink">{t("当前")}：{current}</p>
+      <p role="status" data-testid="motion-level-current" className="m-0 text-small text-ink">{t("当前")}{colon()}{current}</p>
       {system && <p data-testid="motion-level-system" className="m-0 text-small text-muted-foreground">{t("系统开了「减少动效」，所以这里固定为关闭；站内选项只能更弱，不能更强。")}</p>}
       {source === "user" && !system && (
         <button type="button" data-testid="motion-level-auto" onClick={() => { chooseMotion(null); }}

@@ -15,18 +15,18 @@ test("theme token text/background pairs meet WCAG contrast in light and dark", (
   assert.equal(failures.length, 0, show(failures));
 });
 
-test("--navy stays a dark brand colour in both themes (white text is written on it)", () => {
+test("--deep stays a dark surface in both themes (the on-deep text tokens are written on it)", () => {
   const tokens = themeTokens(loadRules(SRC));
   for (const theme of ["light", "dark"]) {
-    const navy = resolveToken(tokens[theme], "--navy");
-    assert.ok(navy && navy.r + navy.g + navy.b < 3 * 60, `${theme}: --navy resolves to ${JSON.stringify(navy)}`);
+    const deep = resolveToken(tokens[theme], "--deep");
+    assert.ok(deep && deep.r + deep.g + deep.b < 3 * 60, `${theme}: --deep resolves to ${JSON.stringify(deep)}`);
   }
 });
 
 test("a new light card with token text fails the guard", () => {
   const rules = loadRules(SRC, ".zz-new-card{background:#fff;color:var(--ink)}");
   assert.ok(check(rules).some((f) => f.check === "A1" && f.selector === ".zz-new-card"));
-  const onLight = loadRules(SRC, ".zz-hero{background:var(--me-surface);color:#fff}");
+  const onLight = loadRules(SRC, ".zz-hero{background:var(--surface);color:#fff}");
   assert.ok(check(onLight).some((f) => f.check === "A2" && f.selector === ".zz-hero"));
 });
 
@@ -71,8 +71,8 @@ test("the contrast guard really reads tokens.css and follows var() chains (a bro
   assert.ok(checkDesign(broken).some((f) => f.pair.startsWith("--muted") && f.set === "light"), "a pale --muted must fail the table");
   const noDarkSwap = loadRules(SRC).filter((r) => !r.selectors.includes(":root[data-theme=dark][data-updown=red-up]"));
   assert.ok(checkDesign(noDarkSwap).some((f) => f.set === "darkRedUp"), "dropping the dark red-up rule must fail");
-  const viaBridge = loadRules(SRC, ":root{--me-ink:#eeeeee}");
-  assert.ok(checkPairs(viaBridge).some((f) => f.pair.startsWith("--me-ink") && f.theme === "light"), "the --me-* names are resolved through the bridge");
+  const paleInk = loadRules(SRC, ":root{--ink:#eeeeee}");
+  assert.ok(checkPairs(paleInk).some((f) => f.pair.startsWith("--ink") && f.theme === "light"), "a pale --ink must fail the token pairs");
 });
 
 test("every bot hue has 3:1 against the page backgrounds of its theme", () => {

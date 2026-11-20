@@ -3,7 +3,7 @@ import { useEffect, useRef, type ComponentType } from "react";
 import { ChevronsUpDown, Eye, KeyRound, LogOut, UserRound } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { SidebarMenuButton } from "@/components/ui/sidebar";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 import { areaItems, areaPath, type Area } from "../../shell-nav.mjs";
 import { useAccountActions, type ModeChange } from "./account";
 import { openLoginDialog } from "./login-events";
@@ -29,7 +29,7 @@ export function AccountMenu({ personal, onModeChange, defaultOpen, focusOnMount 
       </SidebarMenuButton>
     </DropdownMenuTrigger>
     <DropdownMenuContent side="top" align="start" className="w-(--radix-dropdown-menu-trigger-width) min-w-56">
-      <DropdownMenuLabel className="text-caption text-muted-foreground">{t("当前")}：{mode}</DropdownMenuLabel>
+      <DropdownMenuLabel className="text-caption text-muted-foreground">{t("当前")}{colon()}{mode}</DropdownMenuLabel>
       <DropdownMenuSeparator />
       {personal
         ? <DropdownMenuItem onSelect={actions.toGuest}><Eye aria-hidden="true" />{t("切换到访客只读")}</DropdownMenuItem>

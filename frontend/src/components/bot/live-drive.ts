@@ -47,7 +47,7 @@ interface Wardrobe { morph: { from: number[] | null; to: number[] | null; at: nu
 interface Tween { from: string; to: string; toInk: string; fromPale: boolean; toPale: boolean; at: number }
 const wardrobes = new WeakMap<LiveHandle, Wardrobe>();
 const PALE = new Set(["creme", "gris"]);
-const INK_VAR = "var(--me-ink, #0a0a0c)";
+const INK_VAR = "var(--ink, #0a0a0c)";
 const SHAPE_MORPH = 0.45; // BotEngine.SHAPE_MORPH
 const hexOf = (color: string) => COLOR_BY_ID.get(color)?.hex ?? "#0a0a0c";
 const radiiOf = (shape: string) => SHAPE_BY_ID.get(shape)?.radii ?? null;

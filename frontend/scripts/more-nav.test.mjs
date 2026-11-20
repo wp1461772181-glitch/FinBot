@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 import { ASSISTANT_ITEMS, GUEST_ASSISTANT_ITEMS, RESEARCH_ITEMS, SETTINGS_ITEMS, areaItems } from "../src/shell-nav.mjs";
 
@@ -61,5 +61,5 @@ test("the sidebar is 260px, 56px collapsed, and remembers the choice", () => {
   assert.match(sidebar, /const SIDEBAR_WIDTH_ICON = "56px"/);
   assert.match(sidebar, /SIDEBAR_STORAGE_KEY = "market-evidence-agent:sidebar-open:v1"/);
   assert.match(sidebar, /SIDEBAR_BREAKPOINT = 1024/);
-  assert.doesNotMatch(src("styles/legacy/styles.css"), /\.app-frame/);
+  for (const sheet of readdirSync(new URL("../src/styles/", import.meta.url)).filter((name) => name.endsWith(".css"))) assert.doesNotMatch(src(`styles/${sheet}`), /\.app-frame/, sheet);
 });

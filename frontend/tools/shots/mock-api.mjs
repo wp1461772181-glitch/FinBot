@@ -17,7 +17,10 @@ export const FAKE_CREDENTIAL = "shots-fixture-credential-0000";
  * Each entry: [method, path regexp, why].  Keep this list short and justified.
  */
 export const INTENTIONALLY_IGNORED = [
-  // (none yet) -- see the P1.0 delivery note for the reasoning behind every entry added here.
+  // P9.1: the English interface asks the server to translate a material analysis and a forecast brief (POST .../localization, .../brief-localization).  The fake backend has
+  // no such route on purpose: the fixtures' own Chinese data then stays as written, which is exactly what `english-no-cjk` (and its fixture-derived whitelist) expects; the page
+  // shows the original text when the call fails.  Only these two paths, only POST.
+  ["POST", /\/(brief-localization|localization)$/],
 ];
 
 const CORS = {

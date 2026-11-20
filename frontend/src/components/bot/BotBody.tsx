@@ -58,7 +58,7 @@ let breathSeq = 0;
 
 // The page's ink for the black "encre" body, so it stays visible in the dark theme.
 const PALE = new Set(["creme", "gris"]);
-const INK_VAR = "var(--me-ink, #0a0a0c)";
+const INK_VAR = "var(--ink, #0a0a0c)";
 
 export interface BotBodyProps {
   live?: LiveHandle;

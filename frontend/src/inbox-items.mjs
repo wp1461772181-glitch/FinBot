@@ -3,20 +3,28 @@
 const KIND_LABELS = { task_brief: "任务简报", filing: "新申报", news: "新闻线索", price: "价格线", action: "待你确认" };
 const SCHEDULE_LABELS = { daily: "每天", weekdays: "工作日", hourly: "每小时" };
 const EVERY_LABELS = { hours: "小时", days: "天", weeks: "周" };
+const SCHEDULE_LABELS_EN = { daily: "Daily", weekdays: "Weekdays", hourly: "Hourly" };
+const EVERY_LABELS_EN = { hours: "hours", days: "days", weeks: "weeks" };
 
 export function inboxKindLabel(kind) { return KIND_LABELS[kind] ?? kind; }
 
 /** "工作日 08:00" / "每天 08:00" / "每小时第 15 分" / "每 7 天（从 08:00 起）". */
-export function scheduleLabel(task) {
+export function scheduleLabel(task, locale = "zh-CN") {
   const time = String(task?.schedule_time ?? "");
+  if (locale === "en-US") {
+    if (task?.schedule_kind === "hourly") return `Hourly at minute ${Number(time.slice(3, 5)) || 0}`;
+    if (task?.schedule_kind === "every") return `Every ${task.every_value ?? ""} ${EVERY_LABELS_EN[task.every_unit] ?? ""} (from ${time})`;
+    return `${SCHEDULE_LABELS_EN[task?.schedule_kind] ?? ""} ${time}`.trim();
+  }
   if (task?.schedule_kind === "hourly") return `每小时第 ${Number(time.slice(3, 5)) || 0} 分`;
   if (task?.schedule_kind === "every") return `每 ${task.every_value ?? ""} ${EVERY_LABELS[task.every_unit] ?? ""}（从 ${time} 起）`;
   return `${SCHEDULE_LABELS[task?.schedule_kind] ?? ""} ${time}`.trim();
 }
 
 /** "只执行一次" / "共 4 次"; "" when the task has no run limit. */
-export function runsLabel(task) {
+export function runsLabel(task, locale = "zh-CN") {
   if (!task?.max_runs) return "";
+  if (locale === "en-US") return task.max_runs === 1 ? "Runs once" : `${task.max_runs} runs`;
   return task.max_runs === 1 ? "只执行一次" : `共 ${task.max_runs} 次`;
 }
 

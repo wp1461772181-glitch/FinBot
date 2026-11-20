@@ -63,7 +63,7 @@ function MobileBar({ nav }: { nav: ShellNavProps }) {
 /**
  * The shell around every page (design 3.1 and 4.1): the sidebar on a desktop, the tab bar on a phone, the one global
  * login dialog, and the page in the main column.  No top bar and no footer: each page's own title row is its top.
- * The pages inside are still the old ones; the router wraps each in its own `data-legacy` marker.
+ * Every page inside is new markup; each draws its own title row on the shell's background.
  */
 export function AppShell({ nav, research, palette, overlay, onModeChange, children }: { nav: ShellNavProps; research: ResearchBarProps | null; palette: PaletteData; overlay?: ReactNode; onModeChange: ModeChange; children: ReactNode }) {
   return <AvatarTempoProvider bots={nav.bots}><SidebarProvider>

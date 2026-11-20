@@ -156,11 +156,11 @@ export function ForecastDetail({ rootId, versionId, reviseSourceId, section }: {
   return <main data-testid="forecast-page" data-root={rootId} aria-labelledby="forecast-title" className="mx-auto flex w-full max-w-[1280px] flex-1 flex-col gap-4 p-4 lg:p-6">
     <header className="flex flex-wrap items-center gap-x-4 gap-y-2">
       <Link to={paths.forecasts()} data-testid="forecast-back" className="inline-flex h-8 items-center gap-1 rounded-sm text-small text-ink-2 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11 underline"><ArrowLeft aria-hidden="true" className="size-4" />{t("预测")}</Link>
-      <h1 id="forecast-title" className="min-w-0 text-title-m text-ink mb-[0.67em]"><span className="font-mono">{symbol ?? "…"}</span> · {t("预测")}</h1>
+      <h1 id="forecast-title" className="min-w-0 text-title-m text-ink mb-3.5"><span className="font-mono">{symbol ?? "…"}</span> · {t("预测")}</h1>
       <div className="ml-auto flex flex-col items-end gap-1">
         <Button ref={reviseButton} type="button" data-testid="revise-open" disabled={!canRevise} aria-describedby={!gate.allowed ? "revise-reason" : undefined} onClick={() => setDrawerOpen(true)}><FilePen aria-hidden="true" />{t("发起修订")}</Button>
-        {timeline.kind === "ready" && !gate.allowed && <p id="revise-reason" data-testid="revise-reason" role="status" className="max-w-xs text-right text-caption text-muted-foreground mb-[1em]">{t(gate.reason!)}</p>}
-        {timeline.kind === "ready" && gate.allowed && jobRunning && <p data-testid="revise-reason" role="status" className="text-caption text-muted-foreground mb-[1em]">{t("任务处理中…")}</p>}
+        {timeline.kind === "ready" && !gate.allowed && <p id="revise-reason" data-testid="revise-reason" role="status" className="max-w-xs text-right text-caption text-muted-foreground">{t(gate.reason!)}</p>}
+        {timeline.kind === "ready" && gate.allowed && jobRunning && <p data-testid="revise-reason" role="status" className="text-caption text-muted-foreground">{t("任务处理中…")}</p>}
       </div>
     </header>
     <TaskStrip />

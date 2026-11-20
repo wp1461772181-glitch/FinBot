@@ -3,7 +3,7 @@ import { ProbabilityBar } from "@/components/ProbabilityBar";
 import type { V2VersionDetail } from "../../../types";
 import { NOT_RECORDED, forecastCopy, hasDecisionProbabilities, recordedModel, versionHeader } from "../../../forecast-model.mjs";
 import { asText, formatTime } from "../../../ForecastShared";
-import { formatDateTime, useLocale } from "../../../i18n";
+import { formatDateTime, useLocale, parens } from "../../../i18n";
 import { day } from "./format";
 
 const HIDDEN_ROWS = new Set(["probabilities", "times"]);
@@ -36,7 +36,7 @@ export function JudgmentBlock({ version }: { version: V2VersionDetail }) {
     {probabilities
       ? <ProbabilityBar probabilities={probabilities} status={version.model_status} />
       : <p className="text-small text-ink-2">{t(copy.noProbabilityNote)}</p>}
-    {probabilities && <p className="text-caption text-muted-foreground">{decision ? t(copy.stripLabel) : t("实验性联合概率")}{typeof confidence === "number" ? ` · ${t("分布集中度")} ${Math.round(confidence * 100)}%（${t("不是准确率")}）` : ""}</p>}
+    {probabilities && <p className="text-caption text-muted-foreground">{decision ? t(copy.stripLabel) : t("实验性联合概率")}{typeof confidence === "number" ? ` · ${t("分布集中度")} ${Math.round(confidence * 100)}%${parens(t("不是准确率"))}` : ""}</p>}
     <dl className="m-0 grid grid-cols-1 gap-x-6 gap-y-2 text-small sm:grid-cols-3">
       <div><dt className="text-caption text-muted-foreground">{t("固定目标日")}</dt><dd data-testid="judgment-target-date" className="m-0 font-mono tabular-nums text-ink">{target ?? t("未记录")}</dd></div>
       <div><dt className="text-caption text-muted-foreground">{t("行情截止")}</dt><dd className="m-0 font-mono tabular-nums text-ink">{formatTime(version.market_cutoff_at)}</dd></div>

@@ -2,11 +2,6 @@
 // new-bot dialog are in bot-form-items.mjs (P5.1): this file is on the first screen (the sidebar reads it), so nothing only the settings page needs stays here.
 // They are re-exported below so that every older import and its test read what they always read.
 
-const BOT_LINK = /^#bot\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
-
-/** The bot id of a bot link (#bot/<id>), else null. */
-export function botFromHash(hash) { const match = BOT_LINK.exec(String(hash ?? "")); return match ? match[1].toLowerCase() : null; }
-
 /** The sidebar: the default bot alone on top, then the owner's groups (ungrouped first, then by name); pinned
  * first inside each, then the most recently active, then by name.  Hidden bots are left out unless asked for. */
 export function botSections(bots, { showHidden = false } = {}) {

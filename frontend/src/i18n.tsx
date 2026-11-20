@@ -71,6 +71,13 @@ export function Tx({ text }: { text: string }) {
   return <>{t(text)}</>;
 }
 
+/** The separator between a label and its value, between two clauses, and around a remark: full-width in a Chinese interface, ASCII (with its space) in an English one. */
+export function colon(locale: Locale = getLocalePreference()) { return locale === "en-US" ? ": " : "："; }
+export function comma(locale: Locale = getLocalePreference()) { return locale === "en-US" ? ", " : "，"; }
+/** A name set off in a sentence: corner quotes in Chinese, plain double quotes (with a space before) in English. */
+export function quoted(text: string, locale: Locale = getLocalePreference()) { return locale === "en-US" ? ` "${text}"` : `「${text}」`; }
+export function parens(text: string, locale: Locale = getLocalePreference()) { return locale === "en-US" ? ` (${text})` : `（${text}）`; }
+
 export function formatDateTime(value: string | Date, locale: Locale, timeZone = "UTC") {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.valueOf())) return String(value);

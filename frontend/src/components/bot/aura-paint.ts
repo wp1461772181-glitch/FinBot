@@ -6,7 +6,7 @@ import type { PaintStyle } from "./bot-painter";
 
 const NS = "http://www.w3.org/2000/svg";
 const TAG = { line: "line", arc: "path", dot: "circle", rect: "rect", path: "path" } as const;
-const INK = "var(--me-ink, #0a0a0c)", AMBER = "var(--action, #9a4a06)", DANGER = "var(--danger, #c4281c)";
+const INK = "var(--ink, #0a0a0c)", AMBER = "var(--action, #9a4a06)", DANGER = "var(--danger, #c4281c)";
 
 type Cached = { _a?: Record<string, string> };
 function put(node: Element, name: string, value: string | number | null) {

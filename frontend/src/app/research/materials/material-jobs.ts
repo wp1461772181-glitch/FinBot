@@ -1,5 +1,5 @@
 import { getMaterialAnalysis, getMaterialAnalysisJob } from "../../../api/material-library";
-import { translatePhrase } from "../../../i18n";
+import { translatePhrase, colon } from "../../../i18n";
 import type { MaterialAnalysisJob, MaterialAnalysisVersion, MaterialSourceType } from "../../../types";
 import { tasks } from "@/components/state/tasks";
 import { isActiveJobStatus, jobErrorPhrase } from "./materials-model.mjs";
@@ -32,7 +32,7 @@ export function followMaterialJob(job: MaterialAnalysisJob, about: { sourceType:
     window.clearInterval(running.get(id));
     running.delete(id);
     if (next.status === "succeeded") handle.done(`${translatePhrase("材料分析完成")} · ${about.title}`);
-    else handle.fail(`${translatePhrase("材料分析没有完成")}：${translatePhrase(jobErrorPhrase(next.safe_error_code))} · ${about.title}`);
+    else handle.fail(`${translatePhrase("材料分析没有完成")}${colon()}${translatePhrase(jobErrorPhrase(next.safe_error_code))} · ${about.title}`);
     for (const listener of [...listeners]) listener({ job: next, analysis, sourceType: about.sourceType, sourceId: about.sourceId });
   };
   const timer = window.setInterval(async () => {

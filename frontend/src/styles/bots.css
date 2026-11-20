@@ -43,7 +43,7 @@
 /* Idle small avatars (sidebar rows, lists, cards) are a still frame; the only life they have is this breath.
  * BotBody adds the class while the avatar rests with no frame loop and removes it when the loop takes over.
  * Transform only (no layout, no paint), 4 s period, about 3% amplitude; each instance gets its own animation-delay.
- * Plain class on purpose: Tailwind does not scan src/ root files, and nothing here belongs in a legacy layer. */
+ * Plain class on purpose: Tailwind does not scan src/ root files. */
 @keyframes bot-breathe {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.03); }
@@ -65,3 +65,15 @@
 }
 .aura-slow-blink { animation: aura-watch 8s ease-in-out infinite; }
 :where(:root[data-motion="off"]) .aura-slow-blink { animation: none; }
+
+/* The orb's box and the sign-in page's logo: rules that belonged to the old stylesheets until P9.1 moved them here, values written with the tokens they resolved to.
+   In the `components` layer (above the reset, below the utilities) so a utility on the element still wins. */
+@layer components {
+  .bot-orb { flex: 0 0 auto; display: inline-block; line-height: 0; }
+  .bot-orb svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .bot-orb-live { cursor: pointer; }
+  .brand-logo { display: block; flex: 0 0 auto; width: 56px; height: 56px; position: relative; }
+  .brand-logo img { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity .6s ease-in-out; }
+  .brand-logo img.is-on { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .brand-logo img { transition: none; } }
+}

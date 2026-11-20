@@ -31,7 +31,7 @@ const choice = (value, label, disabled = false) => ({ value, label, ...(disabled
 /**
  * The confirmation card of an entry and how its presses are arranged (components/ApprovalCard.tsx takes both).  A proposal's only press is the way to its
  * conversation, where its card is: 去对话核对 (the clock of its ten minutes is the server's: `expired` says when they are over, the card counts nothing down, so the list and the sidebar never disagree).  A suggested write has 同意 (it runs now), 去对话核对 (a card is made in the run's conversation and opened),
- * and in 「…」 the rest: 跳过, 稍后, 打开对话 (when the run has one), 忽略.  The two main buttons come first.
+ * and in 「…」 the rest: 跳过, 稍后再说, 打开对话 (when the run has one), 忽略.  The two main buttons come first.
  */
 export function entryCard(entry) {
   const proposal = entry.kind === "proposal";

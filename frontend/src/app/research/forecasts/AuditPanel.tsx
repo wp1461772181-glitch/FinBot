@@ -76,7 +76,7 @@ function Rows({ rows }: { rows: Row[] }) {
 function VersionEvents({ versions, selectedId, onSelect }: { versions: V2TimelineEntry[]; selectedId: string; onSelect: (id: string) => void }) {
   const { t, locale } = useLocale();
   return <section data-testid="forecast-events" aria-labelledby="events-title" className="flex min-w-0 flex-col gap-2">
-    <div className="flex items-baseline gap-3"><h3 id="events-title" className="text-title-s text-ink mb-[1em]">{t("预测版本记录")}</h3><span className="text-caption text-muted-foreground">{t("同一固定目标")}</span></div>
+    <div className="flex items-baseline gap-3"><h3 id="events-title" className="text-title-s text-ink mb-3.5">{t("预测版本记录")}</h3><span className="text-caption text-muted-foreground">{t("同一固定目标")}</span></div>
     <ol className="m-0 flex list-none flex-col gap-2 p-0">
       {versions.map(version => <li key={version.id} data-selected={version.id === selectedId ? "" : undefined}>
         <button type="button" onClick={() => onSelect(version.id)} aria-current={version.id === selectedId ? "true" : undefined}
@@ -110,9 +110,9 @@ function SourceDetail({ current, parent }: { current: V2VersionDetail; parent: V
   const status = researchStatusText(current.research_report?.research_conclusions_status ?? current.research_report?.status);
   return <section data-testid="forecast-sources" aria-label={t("所选版本的保存的输入")} className="flex min-w-0 flex-col gap-3">
     <div className="flex flex-col gap-1">
-      <p className="text-caption font-medium text-muted-foreground mb-[1em]">{t("所选第")} {current.version_no} {t("版的来源差异")}</p>
-      <h3 className="text-title-s text-ink mb-[1em]">{parent ? `${t("新增")} ${diff.added} · ${t("状态替换")} ${diff.replaced} · ${t("移除")} ${diff.removed} · ${t("继承")} ${diff.inherited}` : locale === "en-US" ? `Frozen candidates: ${countLabel(sources.length)}` : `${t("冻结候选")} ${countLabel(sources.length)}`}</h3>
-      <p className="text-small text-ink-2 mb-[1em]">{parent ? locale === "en-US" ? `Source composition: ${countLabel(diff.inherited)} inherited from the parent, ${countLabel(explicitCount)} manually selected, and ${countLabel(automaticAdded)} automatically added by the system.` : `${t("本版来源构成：父版继承")} ${diff.inherited} ${t("条，人工选入")} ${explicitCount} ${t("条，系统自动新增")} ${automaticAdded} ${t("条。")}` : t("初始版本没有父版本可比较。")}</p>
+      <p className="text-caption font-medium text-muted-foreground">{t("所选第")} {current.version_no} {t("版的来源差异")}</p>
+      <h3 className="text-title-s text-ink">{parent ? `${t("新增")} ${diff.added} · ${t("状态替换")} ${diff.replaced} · ${t("移除")} ${diff.removed} · ${t("继承")} ${diff.inherited}` : locale === "en-US" ? `Frozen candidates: ${countLabel(sources.length)}` : `${t("冻结候选")} ${countLabel(sources.length)}`}</h3>
+      <p className="text-small text-ink-2">{parent ? locale === "en-US" ? `Source composition: ${countLabel(diff.inherited)} inherited from the parent, ${countLabel(explicitCount)} manually selected, and ${countLabel(automaticAdded)} automatically added by the system.` : `${t("本版来源构成：父版继承")} ${diff.inherited} ${t("条，人工选入")} ${explicitCount} ${t("条，系统自动新增")} ${automaticAdded} ${t("条。")}` : t("初始版本没有父版本可比较。")}</p>
     </div>
     <div className="flex flex-col gap-0.5">
       <strong className="text-small font-medium text-ink">{brief ? locale === "en-US" ? `Actually cited in the brief: ${countLabel(includedCount)}` : `${t("简报实际引用")} ${countLabel(includedCount)}` : t("该版本未保存简报引用")}</strong>
@@ -124,7 +124,7 @@ function SourceDetail({ current, parent }: { current: V2VersionDetail; parent: V
       { label: "价格输入哈希", value: shortHash(market.price_input_sha256) },
       { label: "研究报告", value: status },
     ]} />
-    {sources.length === 0 ? <p className="text-small text-muted-foreground mb-[1em]">{t("这个版本没有保存合规证据来源。")}</p>
+    {sources.length === 0 ? <p className="text-small text-muted-foreground">{t("这个版本没有保存合规证据来源。")}</p>
       : <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {sources.map((item, index) => {
           const url = typeof item.source_url === "string" ? item.source_url : null;

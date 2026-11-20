@@ -4,7 +4,15 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState } from "@/components/state/EmptyState";
 import { cn } from "@/lib/utils";
 import type { KnowledgeDocumentSummary } from "../../../api/knowledge-docs";
-import { useLocale } from "../../../i18n";
+import { formatDate, useLocale } from "../../../i18n";
+
+/** The observed time the way the rest of the site writes a date (the material library, the research brief): short date in the reader's language, the backend's own string in `dateTime` and `title`; a value that is not a date is shown as it came. */
+function ObservedAt({ value }: { value: string }) {
+  const { locale } = useLocale();
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return <>{value}</>;
+  return <time dateTime={value} title={value}>{formatDate(date, locale)}</time>;
+}
 
 /** The columns of the documents table (from a desktop's width); below `xl` the same cells are a card, two to a line. */
 const COLUMNS = "xl:grid-cols-[minmax(11rem,2.4fr)_minmax(4rem,0.7fr)_minmax(4.5rem,0.8fr)_minmax(6.5rem,0.9fr)_minmax(3.5rem,0.6fr)_minmax(11rem,1.6fr)_minmax(4.5rem,0.8fr)_minmax(9rem,1.1fr)]";
@@ -40,7 +48,7 @@ export function DocsList({ docs, busy, onOpen, onRetry, onWithdraw }: {
         <Cell label={t("来源类型")}>{doc.source_type}</Cell>
         <Cell label={t("状态")} className="items-start"><span data-testid="knowledge-doc-status"><StatusBadge kind="neutral" className="h-5">{doc.status}</StatusBadge></span></Cell>
         <Cell label={t("块数")} mono>{doc.chunks} {t("块")}</Cell>
-        <Cell label={t("观察时间")} mono>{doc.observed_at || <span className="font-sans text-muted-foreground">{t("观察时间未知")}</span>}</Cell>
+        <Cell label={t("观察时间")} mono>{doc.observed_at ? <ObservedAt value={doc.observed_at} /> : <span className="font-sans text-muted-foreground">{t("观察时间未知")}</span>}</Cell>
         <Cell label={t("归属范围")}>{doc.owner_scope}</Cell>
         <div role="cell" className="col-span-2 flex items-center gap-2 xl:col-span-1 xl:justify-end">
           <Button type="button" size="sm" variant="outline" data-testid="knowledge-retry" disabled={busy} aria-label={`${t("重试")} · ${doc.title}`} className="max-xl:h-11" onClick={() => onRetry(doc)}>{t("重试")}</Button>

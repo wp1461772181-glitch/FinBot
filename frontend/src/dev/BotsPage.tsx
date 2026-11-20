@@ -44,7 +44,7 @@ const ORDER = ["idle", "listening", "thinking", "tool1", "tool3", "tool5", "empt
 const reducedMotion = () => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
 
 interface Row { handles: LiveHandle[] }
-const inkOf = (color: string) => (color === "encre" ? "var(--me-ink, #0a0a0c)" : COLOR_BY_ID.get(color)?.hex ?? "#0a0a0c");
+const inkOf = (color: string) => (color === "encre" ? "var(--ink, #0a0a0c)" : COLOR_BY_ID.get(color)?.hex ?? "#0a0a0c");
 
 export default function BotsPage() {
   const systemReduced = useMemo(reducedMotion, []);

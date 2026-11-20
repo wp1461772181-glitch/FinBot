@@ -17,7 +17,12 @@ node smoke.mjs --dist ../../dist [--strict] [--only <text in a check name>]
   API requests no fixture answered). `--strict` fails when that list is not empty.
 - `compare.mjs` compares same-named PNGs; a size change or a missing file counts as a difference. Exit code 1 on any.
 - `smoke.mjs` prints PASS / FAIL per check; any FAIL exits 1. `--only <text>` runs just the checks whose name contains it.
-- `utility-legacy-collisions` (smoke, no browser, reads `<dist>/assets/*.css` and `<dist>/../src`): fails when a class the built `utilities` layer defines is also an old class name (`src/styles/legacy/*.css`, `className` strings of the old `.tsx` in the `src/` root). Tailwind scans `src/app`, `src/components`, `src/dev`, and a word in a comment there (`table`, `contents`…) becomes a utility that beats the `legacy` layer. Fix by rewording or moving the code; `ALLOWED` in `collisions.mjs` takes an entry only with a reason.
+- Counts (P9.1): `PAGES` holds 260 page entries; `CHECKS` in `smoke.mjs` holds 280 checks (`--only` takes any text of a name; `fe-check.sh smoke` runs all).
+- Checks that stand guard over what the redesign removed: `site-no-old-markup` (one address per route, the sign-in page and the chat's 工作区 tab: no `data-legacy` element, no element with a class of `old-class-names.mjs`'s list that is not in its kept list, no text under 12px), `settings-no-legacy` / `research-no-legacy` / `assistant-no-legacy` (the same per area, with an injected probe control that proves the test can see), `shell-preflight` (the sidebar's tags are plain preflight and neither the shell nor its page holds a `data-legacy` element; it was `legacy-restore-in-shell`).
+- Retired in P9.1 with the old stylesheet layer (`src/styles/legacy/`, deleted): `utility-legacy-collisions` (there is no old class left to collide with), `state-components-in-legacy`, and the dev sample page's check that shadcn parts keep their look inside an old-style island (no island is left). `tools/shots/collisions.mjs` went with them.
+- `no-idle-timers`: the chat, a research page and a settings page left alone for 10 s: the page registers no `setInterval` and no timer under 1 s, and asks for animation frames only from the one shared avatar loop (counted as what was registered, not as a speed threshold), and sends no request except the chat's own tail read.
+- `english-no-cjk`: the English interface shows no Chinese character in a visible text node, `aria-label`, `title` or `placeholder` on 29 addresses/states; Chinese that the fake backend's data carries (bot names, material titles, messages…) is whitelisted by a list derived from the fixtures, so the check cannot be silenced by adding a phrase to it.
+- `workspace-cards-requests` + `fixtures/workspace-requests-baseline.json` (`workspace-requests.mjs`): the reads the chat page's 工作区 cards send, recorded once on the OLD markup and compared on every run (cards alone, the three actions, no write).
 
 ## Determinism
 `settle()` forces one layout of every native `<select>` after the fonts are ready (a select lays its text out once, and a web font that lands later leaves it 1px off, depending on when the page mounted it).
@@ -107,3 +112,15 @@ Write one named async function in `smoke.mjs` (throw to fail, return a short det
 - Baseline: `fixtures/material-bodies-baseline.json` is what the OLD pages (HEAD dd6fa99) sent on these fixtures: `filters` / `paging` (sorted query pairs), `scan`, `analyze` (bodies with the idempotency key replaced), `upload.happy`, `uploadRules.<case>` (whether the old form let the case through, and its fields).  `fixtures/upload-cases.mjs` is the case table (also read by `scripts/evidence-upload.test.mjs`).  Re-recording needs the old build; the one-off recorder is not in the repo.
 - Fake backend: the three writes (`POST /uploaded-evidence/:symbol`, `POST /filing-inventories/:symbol/scan`, `POST /v3/materials/:type/:id/analysis-jobs`) keep what the browser sent in `state.materialPosts` (the upload as parsed form fields, a file by name / type / size).  `state.scanDiscovered` / `scanCreated` set the scan's numbers; a job the fake created answers running for `state.jobRunningPolls` reads (default 2) and then succeeded; `state.jobHold` keeps every job running; `state.uploaded[symbol]` seeds the saved list.  The twelfth AAPL material has a hex id (`HEX_MATERIAL`): an address's `?focus=` only takes hex ids.
 - The list section carries `data-wanted` / `data-loaded` (the request in force and the one the shown page answers): `listReady(page)` waits until they are equal, so a check does not read a page that is about to be replaced.
+
+
+## P9.1 accessibility run (`axe.mjs`)
+```
+node axe.mjs --dist ../../dist --out out/axe.json [--pages a,b] [--themes light,dark] [--width 1440]
+```
+axe-core (devDependency of this package only) over every page name of `pages.mjs`, light and dark, opened the way the screenshot run opens them.  The report lists, per page, the violations; the
+run prints the critical/serious ones.  `color-contrast` is off (the token tests in `scripts/theme-contrast.mjs` guard contrast; axe cannot read it over gradients and the avatar's painted faces).
+It is resumable: a page already in the output file is skipped, so after a fix delete the keys of the pages it touches and run again.  It is a tool, not a smoke check (about 25 minutes).
+
+## English interface
+`run.mjs --locale en-US` photographs the English interface (`fe-check.sh shots <label> --locale en-US --themes light --widths 1440`).  Page hooks that click a Chinese label go through `either()` / `eitherIn()` in `pages.mjs`, which read the English text from `src/locales/en-US.json`, so a hook never needs a second copy of a phrase.

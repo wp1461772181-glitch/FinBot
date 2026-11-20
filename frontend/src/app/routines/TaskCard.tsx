@@ -18,7 +18,7 @@ export function TaskCard({ task, bot, showBot = true, enabled, busy, onToggle, o
   task: AgentTask; bot: Bot | undefined; showBot?: boolean; enabled: boolean; busy: boolean;
   onToggle: (enabled: boolean) => void; onEdit: (opener: HTMLElement | null) => void; onDelete: (opener: HTMLElement | null) => void;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const menu = useRef<HTMLButtonElement>(null);
   // An item that opens a drawer or a question must not have the menu hand the focus back to its button as it closes (it would land outside the layer that just opened).
   const opening = useRef(false);
@@ -34,7 +34,7 @@ export function TaskCard({ task, bot, showBot = true, enabled, busy, onToggle, o
           {state === "paused" && <StatusBadge kind="neutral" className="h-5">{t("已暂停")}</StatusBadge>}
           {state === "finished" && <StatusBadge kind="neutral" className="h-5">{t("已完成")}</StatusBadge>}
         </div>
-        <p className="text-small text-muted-foreground [overflow-wrap:anywhere]">{showBot && <>{bot?.name ?? t("已删除的 bot")} · </>}{scheduleSummary(task)} · <span data-testid="task-timezone">{task.timezone}</span></p>
+        <p className="text-small text-muted-foreground [overflow-wrap:anywhere]">{showBot && <>{bot?.name ?? t("已删除的 bot")} · </>}{scheduleSummary(task, locale)} · <span data-testid="task-timezone">{task.timezone}</span></p>
       </div>
       <div className="flex shrink-0 items-center gap-1">
         <Switch checked={enabled} disabled={busy} aria-label={`${t(enabled ? "暂停" : "启用")} ${task.name}`} data-testid="task-switch" onCheckedChange={onToggle} className="max-sm:scale-110" />
@@ -48,7 +48,7 @@ export function TaskCard({ task, bot, showBot = true, enabled, busy, onToggle, o
       </div>
     </div>
     <dl className="m-0 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-small">
-      <div className="flex items-center gap-1.5"><dt className="text-muted-foreground">{t("上次结果")}</dt><dd className="m-0">{result ? <span data-testid="task-result" data-tone={statusKind(task.last_status)}><StatusBadge kind={statusKind(task.last_status)} className="h-5">{result}</StatusBadge></span> : <span className="text-muted-foreground" data-testid="task-result">{t("尚未运行")}</span>}</dd></div>
+      <div className="flex items-center gap-1.5"><dt className="text-muted-foreground">{t("上次结果")}</dt><dd className="m-0">{result ? <span data-testid="task-result" data-tone={statusKind(task.last_status)}><StatusBadge kind={statusKind(task.last_status)} className="h-5">{t(result)}</StatusBadge></span> : <span className="text-muted-foreground" data-testid="task-result">{t("尚未运行")}</span>}</dd></div>
       {enabled && task.next_run_at && <div className="flex items-center gap-1.5"><dt className="text-muted-foreground">{t("下次运行")}</dt><dd className="m-0 font-mono text-ink-2" data-testid="task-next">{new Date(task.next_run_at).toLocaleString()}</dd></div>}
       <div className="flex items-center gap-1.5"><dt className="text-muted-foreground">{t("已执行")}</dt><dd className="m-0 font-mono text-ink-2">{task.runs_done} {t("次")}</dd></div>
     </dl>

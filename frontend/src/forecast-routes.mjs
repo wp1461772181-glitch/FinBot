@@ -9,8 +9,8 @@
 //   #forecast/monitor                 monitor status
 //
 // Anything under #forecast that does not match one of these exactly is malformed and goes to home; it never
-// guesses at a record.  The older hashes (#revisions, #evaluation, #replay) are not forecast routes: App still
-// routes them itself, and `legacyForecastSection` names them.
+// guesses at a record.  The older hashes (#revisions, #evaluation, #replay) are not forecast routes: the legacy-address bridge
+// (app/legacy-bridge.ts) maps them.
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TICKER = /^[A-Z]{1,5}(?:[.-][A-Z]{1,2})?$/;
@@ -57,12 +57,6 @@ export function parseForecastHash(hash) {
     return route;
   }
   return home;
-}
-
-/** The older sections that now live inside the forecast group, by hash; null for any other hash. */
-export function legacyForecastSection(hash) {
-  const name = splitHash(hash).segments[0];
-  return name === "revisions" || name === "evaluation" || name === "replay" ? name : null;
 }
 
 export function forecastHash(rootId, versionId) {
