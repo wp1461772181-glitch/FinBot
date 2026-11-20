@@ -844,8 +844,13 @@ export const PAGES = [
   { name: "settings-notifications", hash: "#/settings/notifications", ready: "[data-testid=telegram-unbind]" },
   { name: "settings-telegram-token", hash: "#/settings/notifications", ready: "#telegram-token", view: () => ({ fixtureState: stateTelegramNoToken() }) },
   { name: "settings-telegram-waiting", hash: "#/settings/notifications", ready: "[data-testid=telegram-make-code]", view: () => ({ fixtureState: stateTelegramUnbound() }), before: async (page) => {
+      // The page asks the status again 5 s after the code is out, and the answer changes the status badge (「… · 正在等待绑定」).  Shooting right after the code made the picture depend on whether those 5 s had passed:
+      // wait for the first of those answers (listen BEFORE the click) and for the badge it brings, so the picture is the same however slow the machine is.
+      const firstPoll = page.waitForResponse((r) => r.request().method() === "GET" && /\/telegram\/status$/.test(new URL(r.url()).pathname), { timeout: 20000 });
       await page.locator("[data-testid=telegram-make-code]").click(); await page.locator("[data-testid=telegram-waiting]").waitFor({ timeout: 10000 });
       await page.waitForSelector("[data-testid=telegram-make-code][data-phase=idle]", { timeout: 10000 });
+      await firstPoll;
+      await page.locator("[data-testid=telegram-status]", { hasText: "·" }).waitFor({ timeout: 10000 }); // the badge now carries " · <waiting for the binding>" (no wording here: --locale en-US shoots the same page)
     } },
   { name: "settings-data", hash: "#/settings/data", ready: "[data-testid=archive-card]" },
   { name: "settings-data-archive", hash: "#/settings/data", ready: "[data-testid=archive-card]", before: async (page) => {

@@ -54,6 +54,27 @@ async function pressNavItem(page, name) {
   await page.locator('[data-slot="sidebar"] a', { hasText: name }).first().click();
 }
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
+/** What holds the focus right now, in one short phrase (for a failure message: the actual value, not only "it was not there"). */
+const describeFocus = (page) => page.evaluate(() => {
+  const a = document.activeElement;
+  if (!a) return "nothing (document.activeElement is null)";
+  if (a === document.body) return "<body>";
+  const label = (a.getAttribute("aria-label") || a.textContent || "").trim().slice(0, 24);
+  return `<${a.tagName.toLowerCase()}${a.id ? `#${a.id}` : ""}${a.getAttribute("data-testid") ? ` data-testid=${a.getAttribute("data-testid")}` : ""}${a.getAttribute("role") ? ` role=${a.getAttribute("role")}` : ""}${label ? ` "${label}"` : ""}>`;
+});
+/**
+ * Wait until the focus is on the target, then say so; when it never arrives, say where it really was.
+ * Radix hands the focus back to the trigger a tick AFTER the layer has left the page (FocusScope's unmount runs in a setTimeout), so "the layer is detached" does not yet mean "the focus is back":
+ * reading `document.activeElement` in the same breath is a sample of one phase.  `target` is a Locator (the element itself) or a CSS selector (what the focused element must match).
+ */
+async function focusOn(page, target, what, timeout = 5000) {
+  const element = typeof target === "string" ? null : await target.elementHandle({ timeout });
+  try {
+    await page.waitForFunction(([selector, el]) => { const a = document.activeElement; return Boolean(a) && (el ? a === el : a.matches(selector)); }, [typeof target === "string" ? target : null, element], { timeout });
+  } catch {
+    throw new Error(`${what} (the focus stayed on ${await describeFocus(page)} for ${timeout} ms)`);
+  } finally { await element?.dispose(); }
+}
 
 // --- checks ----------------------------------------------------------------------------------------------
 async function everyPageOpens(ctx) {
@@ -2260,7 +2281,7 @@ async function chatPopoverKeyboard(ctx) {
       assert(await panel.evaluate((el) => el.contains(document.activeElement)), `${id}: focus did not move into the panel`);
       await page.keyboard.press("Escape");
       await panel.waitFor({ state: "detached", timeout: 5000 });
-      assert(await trigger.evaluate((el) => el === document.activeElement), `${id}: focus did not return to the button after Esc`);
+      await focusOn(page, trigger, `${id}: focus did not return to the button after Esc`);
     }
     // A press outside closes the model panel too.
     await page.locator("[data-testid=model-badge]").click();
@@ -7507,13 +7528,13 @@ async function replayPhoneLayer(ctx) {
     assert(back.marker === "kept" && back.folded === "false", "the detail element or its brief state was lost on the way back");
     await page.locator("[data-testid=replay-drawer-back]").click();
     await layer.waitFor({ state: "detached", timeout: 3000 });
-    assert((await page.evaluate(() => document.activeElement?.matches("[data-testid=replay-row][data-selected]"))) === true, "the focus did not return to the chosen row");
+    await focusOn(page, "[data-testid=replay-row][data-selected]", "the focus did not return to the chosen row", 3000);
     assert((await page.evaluate(() => document.body.style.overflow)) !== "hidden" && (await page.locator("[inert]").count()) === 0, "scroll lock or inert left behind");
     await page.locator("[data-testid=replay-row]").nth(1).click();
     await layer.waitFor({ timeout: 5000 });
     await page.keyboard.press("Escape");
     await layer.waitFor({ state: "detached", timeout: 3000 });
-    assert((await page.evaluate(() => document.activeElement?.matches("[data-testid=replay-row][data-selected]"))) === true, "Esc: the focus did not return");
+    await focusOn(page, "[data-testid=replay-row][data-selected]", "Esc: the focus did not return", 3000);
     const count = await page.locator("[data-slot=opinion-disclaimer]").count();
     assert(count === 1, `${count} disclaimers on the replay page`);
   } finally { await view.close(); }
@@ -9375,7 +9396,7 @@ async function skillsKeyboard(ctx) {
     await page.getByRole("menuitem", { name: "导出" }).waitFor({ timeout: 5000 });
     await page.keyboard.press("Escape");
     await page.getByRole("menuitem", { name: "导出" }).waitFor({ state: "detached", timeout: 5000 });
-    assert(await menu.evaluate((e) => e === document.activeElement), "the focus did not come back to 「…」");
+    await focusOn(page, menu, "the focus did not come back to 「…」");
     // an editor opened with Enter: Esc closes it and the focus is back on 编辑
     const edit = skCard(page, "周日复盘").locator("[data-testid=skill-edit]");
     await edit.focus(); await page.keyboard.press("Enter"); await page.locator(SK_DRAWER).waitFor({ timeout: 8000 });
@@ -9569,26 +9590,35 @@ async function memoryKeyboard(ctx) {
     assert(!(await page.evaluate(() => location.hash.includes("tab=recall"))), "an arrow key opened the tab");
     await page.keyboard.press("Enter");
     await page.locator("[data-testid=recall-item]").first().waitFor({ timeout: 8000 });
-    await page.waitForFunction(() => location.hash.endsWith("?tab=recall"), null, { timeout: 5000 });
+    await page.waitForFunction(() => location.hash.endsWith("?tab=recall"), null, { timeout: 5000 })
+      .catch(async () => { throw new Error(`[wait 1/5: the address after Enter on 往事] ?tab=recall never reached the address (it is ${await page.evaluate(() => location.hash)})`); });
     await page.keyboard.press("ArrowLeft"); await page.keyboard.press("Space");
     await page.locator(MEM_ITEM).first().waitFor({ timeout: 8000 });
-    await page.waitForFunction(() => !location.hash.includes("tab="), null, { timeout: 5000 });
+    await page.waitForFunction(() => !location.hash.includes("tab="), null, { timeout: 5000 })
+      .catch(async () => { throw new Error(`[wait 2/5: the address after Space on 画像] tab= never left the address (it is ${await page.evaluate(() => location.hash)})`); });
     // an item added from the keyboard: the add box, Enter
     await page.locator("[data-testid=memory-add-text]").focus(); await page.keyboard.type("键盘加的一条"); await page.keyboard.press("Enter");
     const [added] = await asWritesAfter(view, 1, "keyboard add");
     assert(asBody(added) === JSON.stringify({ kind: "preference", text: "键盘加的一条", bot_id: null }), `the keyboard add sent ${asBody(added)}`);
+    // The request going out is not the add being done: the page takes the answer, reloads the list, THEN empties the box and puts the focus back in it (ProfilePanel `add`).
+    // Moving on at once lets that late focus() land on the box after the keyboard has already gone to 编辑 / after the edit box has mounted, and the focus wait below never sees its box.
+    // So wait for the observable end of the add: the box is empty and the new row is on the page.
+    await page.waitForFunction(() => document.querySelector("[data-testid=memory-add-text]")?.value === "", null, { timeout: 5000 })
+      .catch(async () => { throw new Error(`[the add being done (new wait, before wait 3/5)] the add box was never emptied after the keyboard add (it holds "${await page.locator("[data-testid=memory-add-text]").inputValue()}")`); });
+    await memItem(page, "键盘加的一条").waitFor({ timeout: 5000 });
     // a row's text edited from the keyboard: 编辑 (Enter) → the box has the focus → Enter saves
     const edit = memItem(page, "回答先给结论").locator("[data-testid=memory-edit]");
     await edit.focus(); await page.keyboard.press("Enter");
-    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "memory-edit-input", null, { timeout: 5000 });
+    await focusOn(page, "[data-testid=memory-edit-input]", "[wait 3/5: the first edit box] Enter on 编辑 did not put the focus in the edit box");
     await page.keyboard.press("End"); await page.keyboard.type("（键盘）"); await page.keyboard.press("Enter");
     const w = await asWritesAfter(view, 2, "keyboard edit");
     assert(asBody(w[1]) === JSON.stringify({ text: "回答先给结论，再给依据；数字要带出处。（键盘）" }), `the keyboard edit sent ${asBody(w[1])}`);
     // and left with Esc
     await memItem(page, "回答先给结论").locator("[data-testid=memory-edit]").focus(); await page.keyboard.press("Enter");
-    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "memory-edit-input", null, { timeout: 5000 });
+    await focusOn(page, "[data-testid=memory-edit-input]", "[wait 4/5: the second edit box] Enter on 编辑 did not put the focus in the edit box");
     await page.keyboard.type("不要保存"); await page.keyboard.press("Escape");
-    await page.waitForFunction(() => !document.querySelector("[data-testid=memory-edit-input]"), null, { timeout: 5000 });
+    await page.waitForFunction(() => !document.querySelector("[data-testid=memory-edit-input]"), null, { timeout: 5000 })
+      .catch(() => { throw new Error("[wait 5/5: the edit box after Esc] the edit box was still on the page 5000 ms after Esc"); });
     await page.waitForTimeout(400);
     assert(asWrites(view).length === 2, "Esc saved the edit");
     return "tabs by arrows + Enter / Space (the address follows); an item added with Enter in the box; a row edited (Enter saves) and left (Esc) from the keyboard";
@@ -9880,7 +9910,7 @@ async function newsKeyboard(ctx) {
     await page.getByRole("menuitem", { name: "测试抓取" }).waitFor({ timeout: 5000 });
     await page.keyboard.press("ArrowDown"); 
     await page.keyboard.press("Escape"); await page.getByRole("menuitem", { name: "测试抓取" }).waitFor({ state: "detached", timeout: 5000 });
-    assert(await menu.evaluate((e) => e === document.activeElement), "Esc did not return the focus to 「…」");
+    await focusOn(page, menu, "Esc did not return the focus to 「…」");
     await page.keyboard.press("Enter"); await page.getByRole("menuitem", { name: "测试抓取" }).waitFor({ timeout: 5000 });
     await page.getByRole("menuitem", { name: "测试抓取" }).focus(); await page.keyboard.press("Enter");
     const [t] = await asWritesAfter(view, 1, "keyboard test");
@@ -10194,7 +10224,7 @@ async function assistantNoLegacy(ctx) {
   // the control: the 全部 bot page is still an old page (P8.2: the settings pages are new), so a selector that reads 0 everywhere is told apart from one that is broken
   const control = await asOpen(ctx, "no legacy control", "#/assistant/bots", "[data-testid=bot-card]");
   try { assert((await control.page.locator("[data-legacy]").count()) >= 1, "the 全部 bot page holds no data-legacy element (the selector is broken, not the pages clean)"); } finally { await control.close(); }
-  return `${seen.length} addresses / states (skills incl. :skillId and its two drawers, memory both tabs, news with a test result and the drawer, knowledge with the chunk drawer, each page empty): 0 data-legacy, 0 old classes, 0 native <select>, 0 text under 12px; the settings page still holds the marker`;
+  return `${seen.length} addresses / states (skills incl. :skillId and its two drawers, memory both tabs, news with a test result and the drawer, knowledge with the chunk drawer, each page empty): 0 data-legacy, 0 old classes, 0 native <select>, 0 text under 12px; the 全部 bot page still holds the marker`;
 }
 
 // --- P8.2: the settings pages ------------------------------------------------------------------------------------------------------------
@@ -10609,6 +10639,13 @@ async function settingsTelegramThreeSteps(ctx) {
   const view = await stOpen(ctx, "settings telegram steps", "notifications", "#telegram-token", { state: stateTelegramNoToken(), motion: true });
   try {
     const { page } = view;
+    // The page's own clock, from outside: when the code was made (the POST) and when each status read went out.  The 5 s rhythm is read off these two, not off a window opened "some time after the code".
+    const stamps = { code: null, reads: [] };
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (r.method() === "POST" && /\/telegram\/bind$/.test(path)) stamps.code = Date.now();
+      else if (r.method() === "GET" && /\/telegram\/status$/.test(path) && stamps.code !== null) stamps.reads.push(Date.now());
+    });
     assert(JSON.stringify(await states(page)) === JSON.stringify(["current", "todo", "todo"]), `step 1: ${JSON.stringify(await states(page))}`);
     const box = await page.locator("#telegram-token").evaluate((i) => ({ type: i.type, max: i.maxLength }));
     assert(box.type === "password" && box.max === SB.telegram.noToken.tokenInput.max, `the token box is ${JSON.stringify(box)}`);
@@ -10636,10 +10673,12 @@ async function settingsTelegramThreeSteps(ctx) {
     assert(JSON.stringify(await states(page)) === JSON.stringify(["done", "done", "waiting"]), `step 3: ${JSON.stringify(await states(page))}`);
     await page.waitForSelector("[data-testid=telegram-make-code][data-phase=idle]", { timeout: 5000 });
     assert((await page.locator("[data-testid=telegram-make-code]").innerText()).trim() === "重新生成", "the button does not say 重新生成 once a code is out");
-    // waiting: one read every 5 s
-    const at = GETS(view); await page.waitForTimeout(5800);
-    const during = GETS(view) - at;
-    assert(during === 1, `while waiting the page read the status ${during} time(s) in 5.8 s (expected one)`);
+    // waiting: one read every 5 s, counted from the moment the code was made (the POST), not from when this check got round to it: wait for two reads, then read the gaps
+    // (code -> 1st read, 1st -> 2nd).  Each is 5 s: never under 4 s (asking faster), and a read that takes over 9 s is asking that has stopped.  The stamps are taken outside the page, so a gap can come out a little short
+    // under load but never by seconds; "no read before 4 s" is also what the old 5.8 s window said, now without the machine's speed in it.
+    await until(() => stamps.reads.length >= 2, () => `while waiting the page read the status ${stamps.reads.length} time(s) in 20 s after the code (expected a read every 5 s)`, 20000);
+    const gaps = [stamps.reads[0] - stamps.code, stamps.reads[1] - stamps.reads[0]];
+    assert(gaps.every((g) => g >= 4000 && g <= 9000), `while waiting the status was read ${gaps.map((g) => `${(g / 1000).toFixed(1)} s`).join(" and ")} apart (code -> 1st read, 1st -> 2nd; expected 5 s each)`);
     // the message arrives from Telegram: the page notices by itself and stops asking
     view.mock.state.settings.telegram = { configured: true, has_token: true, bound: true, bot_username: "finbot_fixture_bot", chat_id: 100000001, bound_at: "2026-11-13T02:00:00.000Z", bind_code_active: false };
     await page.waitForSelector("[data-testid=telegram-unbind]", { timeout: 9000 });
@@ -10949,18 +10988,18 @@ async function settingsKeyboard(ctx) {
     await page.keyboard.press("Enter");
     await stWaitWrites(view, 2, "the dialog sent with Enter"); stSame(view, [{ method: "POST", path: "/agent-chat/model-catalog/test", body: JSON.stringify({ provider: "deepseek", base_url: "https://api.deepseek.com", model: "deepseek-chat", api_key: ST_KEY1 }) }, { method: "POST", path: "/agent-chat/model-catalog", body: JSON.stringify({ display_name: "键盘模型", provider: "deepseek", model: "deepseek-chat", base_url: "https://api.deepseek.com", api_key: ST_KEY1, name: "model" }) }], "the dialog filled and sent by the keyboard");
     await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
-    assert(await page.evaluate(() => document.activeElement?.getAttribute("data-testid") === "model-new"), "the focus did not come back to 添加模型 after saving");
+    await focusOn(page, "[data-testid=model-new]", "the focus did not come back to 添加模型 after saving");
     // Esc closes and gives the focus back
     await page.keyboard.press("Enter"); await stDialog(page).waitFor({ timeout: 10000 });
     await page.keyboard.press("Escape"); await stDialog(page).waitFor({ state: "detached", timeout: 5000 });
-    assert(await page.evaluate(() => document.activeElement?.getAttribute("data-testid") === "model-new"), "the focus did not come back to 添加模型 after Esc");
+    await focusOn(page, "[data-testid=model-new]", "the focus did not come back to 添加模型 after Esc");
     // a card's 「…」 menu: Enter opens it, Esc closes it, the focus stays on the button
     const menu = "[data-testid=model-card][data-model=muse-ember] [data-testid=model-menu]";
     await asTabTo(page, menu); await page.keyboard.press("Enter");
     await page.locator("[data-testid=model-set-default]").waitFor({ timeout: 5000 });
     await page.keyboard.press("Escape"); await page.locator("[data-testid=model-set-default]").waitFor({ state: "detached", timeout: 5000 });
     // (Radix hands the focus back after the menu has left the page: wait for that, do not read it in the same frame)
-    await page.waitForFunction((s) => document.activeElement?.matches(s), menu, { timeout: 5000 }).catch(() => { throw new Error("the focus left the menu's button after Esc"); });
+    await focusOn(page, menu, "the focus left the menu's button after Esc");
     // a role row: Enter opens the list, the arrows and Enter choose
     const before = stWrites(view).length;
     await asTabTo(page, "[data-testid=role-earnings]"); await page.keyboard.press("Enter");
