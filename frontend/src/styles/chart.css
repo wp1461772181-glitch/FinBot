@@ -1,7 +1,45 @@
-/* The candlestick chart on the company page (P6.1): the same SVG the forecast pages draw, restyled from the colour and type tokens.
-   It applies only to a chart that asks for it (<figure data-chart="tokens">, the `tokens` prop), so the old pages keep their picture until
-   they are redone.  Up and down are the market tokens (they swap under 红涨绿跌); every label is 12px in the token faces; the chart draws at
-   its real width (see CandlestickChart.tsx), so a 12px label is 12px on a phone too.  Not in a layer: it beats the legacy sheets.  It is imported by CandlestickChart.tsx itself, so it travels with the chart's chunk and is not part of the first screen's stylesheet. */
+/* The candlestick chart (company page, single forecast): the same SVG the forecast pages draw.  The chart's own rules are below in the `components` layer; the `[data-chart="tokens"]` rules
+   after them restyle a chart that asks for it (<figure data-chart="tokens">, the `tokens` prop) from the colour and type tokens: up and down are the market tokens (they swap under
+   红涨绿跌), every label is 12px in the token faces, and the chart draws at its real width (see CandlestickChart.tsx), so a 12px label is 12px on a phone too.  This file is imported by
+   CandlestickChart.tsx itself, so it travels with the chart's chunk and is not part of the first screen's stylesheet. */
+
+/* The chart's own rules, values written with the tokens they resolved to.  In the `components` layer: above the reset, below the utilities.  The `[data-chart="tokens"]` rules further
+   down are not in a layer, so they win over these whatever the specificity. */
+@layer components {
+  .candlestick-figure { margin: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 15px 0 9px; }
+  .candlestick-chart { display: block; width: 100%; overflow: visible; }
+  .chart-grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 4; }
+  .chart-price-label, .chart-date-label { fill: var(--muted); font: 10px var(--font-sans); }
+  .target-window rect { fill: var(--accent-soft); opacity: .76; }
+  .target-window text, .actual-region text { fill: var(--accent); font: 9px var(--font-sans); letter-spacing: .08em; text-transform: uppercase; }
+  .actual-region line { stroke: var(--danger); stroke-dasharray: 3 4; }
+  .actual-region text { fill: var(--danger); }
+  .candle { outline: none; }
+  .candle line { stroke: var(--accent); stroke-width: 1.25; }
+  .candle rect { fill: var(--accent); }
+  .candle.is-down line { stroke: var(--down); }
+  .candle.is-down rect { fill: var(--down); }
+  .candle.is-actual { opacity: .52; }
+  .candle.is-active rect, .candle:focus rect { stroke: var(--ink); stroke-width: 1.6; }
+  .candle:focus rect { filter: drop-shadow(0 0 2px rgba(23, 35, 33, .45)); }
+  .snapshot-marker line { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 3; }
+  .snapshot-marker text { fill: var(--ink); font: 9px var(--font-sans); letter-spacing: .06em; }
+  .snapshot-marker.revised line { stroke: var(--accent); stroke-width: 1.5; }
+  .snapshot-marker.revised text { fill: var(--accent); }
+  .candlestick-figure figcaption { display: flex; gap: 15px; flex-wrap: wrap; margin: 9px 2px 0; color: var(--muted); font-size: 10px; }
+  .candlestick-figure figcaption span { display: inline-flex; align-items: center; gap: 5px; }
+  .candlestick-figure figcaption i { display: inline-block; width: 9px; height: 9px; }
+  .legend-up { background: var(--accent); }
+  .legend-down { background: var(--down); }
+  .legend-window { background: var(--accent-soft); border: 1px solid var(--accent); }
+  @media (max-width: 760px) { .target-window text, .actual-region text, .snapshot-marker text { font-size: 11px; } }
+  /* The market colours (they swap under 红涨绿跌); these come after the rules above and so win over them, as theme.css did. */
+  .candle.is-up line { stroke: var(--up); }
+  .candle.is-up rect, .legend-up { fill: var(--up); background: var(--up); }
+  .candle.is-down line { stroke: var(--down); }
+  .candle.is-down rect, .legend-down { fill: var(--down); background: var(--down); }
+}
+
 [data-chart="tokens"] { margin: 0; padding: 8px 0 4px; border-top: 0; border-bottom: 0; }
 [data-chart="tokens"] .chart-grid { stroke: var(--line); stroke-dasharray: 2 4; }
 [data-chart="tokens"] .chart-price-label,

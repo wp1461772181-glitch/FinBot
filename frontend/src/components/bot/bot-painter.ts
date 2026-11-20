@@ -88,12 +88,12 @@ export function createPainter(svg: SVGSVGElement, uid: string): Painter {
   const dotsBehind = make("g");
   const bodyGroup = make("g");
   const plate = make("path");
-  plate.style.fill = "var(--me-surface, #f9f9f9)"; // opaque plate: the eye holes must not show the back half of the rings
+  plate.style.fill = "var(--surface, #f9f9f9)"; // opaque plate: the eye holes must not show the back half of the rings
   const masked = make("g", { mask: `url(#${maskId})` });
   const fill = make("rect", { x: -DEMI_VIEWBOX, y: -DEMI_VIEWBOX, width: DEMI_VIEWBOX * 2, height: DEMI_VIEWBOX * 2 });
   masked.appendChild(fill);
   const rim = make("path", { fill: "none", "stroke-width": 3, "vector-effect": "non-scaling-stroke" });
-  rim.style.stroke = "var(--me-line-strong, rgba(0,0,0,.28))";
+  rim.style.stroke = "var(--line-strong, rgba(0,0,0,.28))";
   bodyGroup.append(plate, masked, rim);
   const dotsFront = make("g");
   const notif = make("circle", { fill: NOTIF_BLUE });
@@ -101,7 +101,7 @@ export function createPainter(svg: SVGSVGElement, uid: string): Painter {
   const auraGroup = make("g", { "data-slot": "bot-aura" });
   // The amber dot sits low on the right, the way the unread dot sits high on the right; a surface-coloured ring separates it from the body.
   const waitingRing = make("circle", { cx: RAYON * 0.72, cy: RAYON * 0.72, r: RAYON * 0.23, display: "none", "data-slot": "waiting-ring" });
-  waitingRing.style.fill = "var(--me-surface, #f9f9f9)";
+  waitingRing.style.fill = "var(--surface, #f9f9f9)";
   const waitingDot = make("circle", { cx: RAYON * 0.72, cy: RAYON * 0.72, r: RAYON * 0.17, display: "none", "data-slot": "waiting-dot" });
   waitingDot.style.fill = "var(--action, #9a4a06)";
   figure.append(arcsBack, dotsBehind, bodyGroup, dotsFront, notif, arcsFront);

@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import { Suspense, lazy, useEffect, useRef, useState, type ComponentType } from "react";
 import { CalendarClock, ChartLine, Ellipsis, MessageSquare, Wallet } from "lucide-react";
-import { useLocale } from "../../i18n";
+import { useLocale, comma } from "../../i18n";
 import { activeArea, areaPath, type Area } from "../../shell-nav.mjs";
 import type { ShellNavProps } from "./AppSidebar";
 import { MonitorDot } from "./MonitorDot";
@@ -37,11 +37,11 @@ export function MobileTabBar({ props }: { props: ShellNavProps }) {
         const current = area === tab.area;
         const badge = tab.area === "routines" ? props.routinesCount : 0;
         const label = t(tab.label);
-        return <Link key={tab.area} to={areaPath(tab.area, props.symbol)} aria-current={current ? "page" : undefined} aria-label={badge > 0 ? `${label}，${badge} ${t("条待确认")}` : label} className={item}>
+        return <Link key={tab.area} to={areaPath(tab.area, props.symbol)} aria-current={current ? "page" : undefined} aria-label={badge > 0 ? `${badge} ${label}${comma()}${t("待你确认")}` : label} className={item}>
           <span className="relative"><tab.icon aria-hidden="true" className="size-5" />
             {tab.area === "research" && <MonitorDot className="absolute -top-0.5 -right-1 ring-2 ring-background" />}
             {badge > 0 && <span aria-hidden="true" data-count="" className="absolute -top-1.5 left-3 grid min-w-4 place-items-center rounded-full bg-brand px-1 text-caption leading-4 text-primary-foreground">{badge > 99 ? "99+" : badge}</span>}
-          </span>
+          </span>{" "}
           <span>{label}</span>
         </Link>;
       })}

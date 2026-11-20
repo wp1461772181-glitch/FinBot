@@ -11,7 +11,7 @@ import { toolLabel } from "../../agent-tool-labels.mjs";
 import { announcement, isOffline, runningTool, turnSignal } from "../../turn-signals.mjs";
 import { useBackendDown } from "@/components/state/connectivity-store";
 import { slashMatches } from "../../skill-items.mjs";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 import { ContextMeter } from "./ContextMeter";
 import { ModelEffortPicker } from "./ModelEffortPicker";
 import { useChat } from "./ChatSessionProvider";
@@ -77,7 +77,7 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
   // The one status line for screen readers (design 6.9): what the bot is doing, said when the phase changes; the avatar itself is hidden from them.
   const backendDown = useBackendDown().down;
   const said = announcement({ phase: turnSignal({ chatState: c.state, messages: c.messages }).phase, waiting: waitingCard, offline: isOffline({ backendDown, chatState: c.state, messages: c.messages }), tool: runningTool(c.messages) });
-  const saying = said ? `${waitingName} ${t(said.phrase)}${said.detail ? `：${t(toolLabel(said.detail))}` : ""}` : "";
+  const saying = said ? `${waitingName} ${t(said.phrase)}${said.detail ? `${colon()}${t(toolLabel(said.detail))}` : ""}` : "";
   const sendDisabled = Boolean(c.archiveView) || c.restoring || !c.verified || !c.draft.trim() || sending;
   const fine = typeof window !== "undefined" && window.matchMedia?.("(pointer: fine) and (min-width: 640px)").matches;
   const placeholder = bot ? `${t("给")} ${bot.name} ${t("发消息…")}${fine ? ` · ${t("Enter 发送，Shift+Enter 换行")}` : ""}` : t(c.verified ? "给 Agent 发消息…" : "登录个人聊天后才能对话");

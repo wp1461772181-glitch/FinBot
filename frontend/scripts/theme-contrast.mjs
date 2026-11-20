@@ -1,5 +1,5 @@
 // Contrast guard for the two themes (UX batch 2, P0; extended in P1.2).  Pure Node: it parses tokens.css and the
-// four old sheets (plus bridge.css) in load order, resolves the theme tokens through their var() chains for light
+// stylesheets of src/styles in load order, resolves the theme tokens through their var() chains for light
 // and dark (and for the red-up market colours), and reports
 //   A1  a rule that paints a hard-coded light background while its text follows the theme (a token that
 //       turns light in dark mode, or no colour at all), unless dark mode repoints that selector (theme.css);
@@ -12,8 +12,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// Load order: the tokens, the old sheets, then the bridge that points the old names at the tokens.
-export const SHEETS = ["styles/tokens.css", "styles/legacy/styles.css", "styles/legacy/chat.css", "styles/legacy/theme.css", "styles/legacy/grok.css", "styles/legacy/bridge.css"];
+// Load order: the tokens, then every other stylesheet of src/styles (index.css's import order).  The old sheets and the bridge that pointed their names at the tokens are gone (P9.1).
+export const SHEETS = ["styles/tokens.css", "styles/theme.css", "styles/bots.css", "styles/chat-page.css", "styles/bots-signature.css", "styles/bots-handoff.css", "styles/sources.css", "styles/forecast.css", "styles/chart.css"];
 export const BOT_SHEET = "styles/bots.css";
 
 /** Flat rule list: {selectors, decls, media}.  Good enough for our hand-written and minified sheets. */
@@ -167,7 +167,7 @@ function resolveValue(tokens, value) {
 // --- checks ----------------------------------------------------------------------------------------
 const DARK_PREFIX = ":root[data-theme=dark] ";
 // Ink tokens made for a dark surface the rule sits inside (the hero card, the inverted pill).
-const ON_DARK_SURFACE = /^--me-(hero|invert)-/;
+const ON_DARK_SURFACE = /^--(on-deep|on-deep-2|bg)$/;
 
 export function check(rules) {
   const tokens = themeTokens(rules);
@@ -208,12 +208,11 @@ export function check(rules) {
 
 // Token pairs that carry text.  [text, background, minimum ratio]
 export const PAIRS = [
-  ["--me-ink", "--me-bg", 4.5], ["--me-ink", "--me-surface", 4.5], ["--me-ink", "--me-surface-2", 4.5],
-  ["--me-muted", "--me-bg", 3], ["--me-muted", "--me-surface", 3], ["--me-muted", "--me-surface-2", 3],
-  ["--me-rail-ink", "--me-rail", 4.5], ["--me-invert-ink", "--me-invert", 4.5],
-  ["--me-hero-ink", "--me-hero", 4.5], ["--me-hero-muted", "--me-hero", 3],
-  ["--me-accent", "--me-surface", 3], ["--me-accent", "--me-bg", 3],
-  ["--ink", "--surface", 4.5], ["--ink", "--paper", 4.5],
+  ["--ink", "--bg", 4.5], ["--ink", "--surface", 4.5], ["--ink", "--sunken", 4.5],
+  ["--muted", "--bg", 3], ["--muted", "--surface", 3], ["--muted", "--sunken", 3],
+  ["--bg", "--ink", 4.5],
+  ["--on-deep", "--deep", 4.5], ["--on-deep-2", "--deep", 3],
+  ["--accent", "--surface", 3], ["--accent", "--bg", 3],
 ];
 
 export function checkPairs(rules, pairs = PAIRS) {

@@ -3,7 +3,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { SourceCard } from "@/components/SourceCard";
 import { cn } from "@/lib/utils";
 import type { ResearchBrief, ResearchMaterialReference } from "../../../types";
-import { useLocale } from "../../../i18n";
+import { useLocale, colon } from "../../../i18n";
 import { day } from "../forecasts/format";
 import { eventCount, eventGroups, sourceTypeLabel } from "./evidence-model.mjs";
 import { StarsReadout } from "./Stars";
@@ -29,7 +29,7 @@ export function MaterialCard({ ordinal, source, brief, active, onOpen }: { ordin
       </div>
       <p data-testid="card-events" className="text-caption text-ink-2">{count} {t("条关联判断")}{groups.length > 0 && <span className="text-muted-foreground"> · {groups.map(group => group.label).join(" · ")}</span>}</p>
     </SourceCard>
-    <button type="button" data-testid="card-open" aria-label={`${t("查看事件详情")}：${title}`} aria-haspopup="dialog" onClick={onOpen}
+    <button type="button" data-testid="card-open" aria-label={`${t("查看事件详情")}${colon()}${title}`} aria-haspopup="dialog" onClick={onOpen}
       className="absolute inset-0 z-10 m-0 cursor-pointer rounded-[inherit] border-0 bg-transparent p-0 outline-none hover:bg-foreground/[0.03] focus-visible:ring-2 focus-visible:ring-ring appearance-auto" />
   </li>;
 }

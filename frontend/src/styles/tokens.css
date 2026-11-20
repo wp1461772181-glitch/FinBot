@@ -3,7 +3,7 @@
    Pages and components only read layer 2 (and layer 3 in theme.css, which hands them to Tailwind and shadcn).
 
    These rules are deliberately NOT inside a cascade layer: an unlayered declaration beats every layer, so the
-   old sheets (layer `legacy`) can never override a token by accident.  Dark mode keys off <html data-theme="dark">
+   hand-written rule of a layer can never override a token by accident.  Dark mode keys off <html data-theme="dark">
    (theme.mjs); the up/down switch keys off <html data-updown="red-up"> (updown.mjs). */
 
 /* ---- Layer 1: raw palette ------------------------------------------------------------------------------------

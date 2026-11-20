@@ -103,7 +103,7 @@ export function ForecastHome({ queue, personal, symbolFilter, onClearSymbol, emb
   return <Root data-testid="forecast-home" aria-labelledby="forecast-home-title" className={cn("flex min-w-0 flex-col gap-4", !embedded && "mx-auto w-full max-w-[1280px] flex-1 p-4 lg:p-6 text-[length:medium] leading-[normal]")}>
     <header className="flex flex-wrap items-start gap-x-4 gap-y-3">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-        <Heading id="forecast-home-title" className="text-title-m text-ink mb-[0.67em]">{t("预测")}</Heading>
+        <Heading id="forecast-home-title" className="text-title-m text-ink">{t("预测")}</Heading>
         <div role="group" aria-label={t("筛选")} className="flex flex-wrap items-center gap-1">
           {scopes.map(item => <button key={item} type="button" data-testid={`scope-${item}`} aria-pressed={item === activeScope} onClick={() => setScope(item)}
             className={cn("inline-flex h-8 items-center rounded-sm border px-3 text-small outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11 cursor-pointer appearance-auto py-px", item === activeScope ? "border-brand bg-brand-soft font-medium text-ink" : "border-line bg-surface text-ink-2 hover:bg-sunken")}>{t(SCOPE_LABEL[item])}</button>)}
@@ -169,6 +169,6 @@ export function ForecastHome({ queue, personal, symbolFilter, onClearSymbol, emb
         {delivered.length + skipped.length > 0 && <p data-testid="judgment-lane-note" className="material-opinion-footnote">{t(JUDGMENT_NOTE)}</p>}
       </section>}
     </div>
-    {withBars && <p data-testid="forecast-disclaimer" className="material-opinion-footnote mb-[1em]">{t(OPINION_DISCLAIMER)}</p>}
+    {withBars && <p data-testid="forecast-disclaimer" className="material-opinion-footnote">{t(OPINION_DISCLAIMER)}</p>}
   </Root>;
 }

@@ -22,8 +22,7 @@ const PersonaAttrs = lazy(() => import("@/components/bot/PersonaAttrs"));
 
 /**
  * The chat page (design 4.2): the header, then the history list (no bot) | the thread with its composer | the right panel.
- * `agent-page` stays on the root only for its custom properties (--c-*), which the old parts still embedded (the confirmation card, the
- * bot's workspace) read.  The thread is at most 760px wide and centred; the 2px line on top of it is the bot's signature colour.
+ * The thread is at most 760px wide and centred; the 2px line on top of it is the bot's signature colour.
  * The right panel is a column from xl up (the reader drags its width) and lies over the thread below that.
  * `workspace` is the bot's own pane (a page with no bot has none: the panel then holds only 来源 and 过程).
  */
@@ -33,7 +32,7 @@ export function ChatPage({ bot, workspace, onTurnSettled, onBotChanged }: { bot?
   </PanelProvider>;
 }
 
-const PAGE_CLASS = "agent-page flex min-h-0 flex-1 flex-col bg-background";
+const PAGE_CLASS = "flex min-h-0 flex-1 flex-col bg-background";
 
 function ChatPageBody({ bot, workspace, onTurnSettled, onBotChanged }: { bot?: Bot | null; workspace?: (wide: boolean) => ReactNode; onTurnSettled?: () => void; onBotChanged?: () => void }) {
   const { t } = useLocale(), c = useChat();

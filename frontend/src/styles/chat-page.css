@@ -1,5 +1,5 @@
 /* The chat page's own sheet (P3.2): the typography of an answer's Markdown, and the two small animations.  Everything else on the
-   page is utility classes.  In layer `components`, so it beats the old sheets (layer `legacy`) at any specificity and loses to
+   page is utility classes.  In layer `components`, so it beats the reset (`base`) at any specificity and loses to
    utilities.  Only tokens, no colours written here. */
 @layer components {
   /* ---- An answer's text: 15/26 (text-chat), a looser line for Chinese long text comes from the 26px line height ---- */

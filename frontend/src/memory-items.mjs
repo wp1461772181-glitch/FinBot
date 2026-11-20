@@ -2,7 +2,6 @@
 
 const ORIGIN_LABELS = { explicit: "你说的", inferred: "推断", manual: "你写的" };
 const RECALL_KIND_LABELS = { summary: "摘要", questions: "你的提问" };
-const CONVERSATION_LINK = /^#agent\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 export function originLabel(origin) { return ORIGIN_LABELS[origin] ?? origin; }
 export function recallKindLabel(kind) { return RECALL_KIND_LABELS[kind] ?? kind; }
@@ -52,6 +51,3 @@ export function recallGroups(items) {
   }
   return [...groups.values()];
 }
-
-/** The conversation id of a recall link (#agent/<id>), else null. */
-export function conversationFromHash(hash) { const match = CONVERSATION_LINK.exec(String(hash ?? "")); return match ? match[1] : null; }

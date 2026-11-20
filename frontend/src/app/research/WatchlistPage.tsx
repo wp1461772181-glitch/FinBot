@@ -11,7 +11,7 @@ import { getV2Forecasts, type V2ForecastList } from "../../api/forecast-v2";
 import { companyName } from "../../company-page.mjs";
 import { OPINION_DISCLAIMER } from "../../data-display.mjs";
 import { hasProbabilities } from "../../probability-bar.mjs";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 import { paths } from "../../routes.mjs";
 import { MAX_WATCHLIST } from "../../watchlist.mjs";
 import { checkWatchAdd } from "../../watchlist-add.mjs";
@@ -60,7 +60,7 @@ export function WatchlistPage() {
     if (!added.ok) { setError(added.error); return; }
     ws.setSymbols(items => [...items, added.ticker]);
     setCode(""); setError("");
-    notify.success(`${t("已加入自选")}：${added.ticker}`, { id: `watch-add:${added.ticker}` });
+    notify.success(`${t("已加入自选")}${colon()}${added.ticker}`, { id: `watch-add:${added.ticker}` });
   };
   const remove = async (symbol: string) => {
     const index = wsRef.current.symbols.indexOf(symbol);
@@ -70,7 +70,7 @@ export function WatchlistPage() {
     });
     if (!ok) return;
     wsRef.current.removeWatchSymbol(symbol);
-    notify.success(`${t("已移出自选")}：${symbol}`, { id: `watch-remove:${symbol}`, undo: { label: t("撤销"), onClick: () => wsRef.current.setSymbols(items => restoreAt(items, symbol, index)) } });
+    notify.success(`${t("已移出自选")}${colon()}${symbol}`, { id: `watch-remove:${symbol}`, undo: { label: t("撤销"), onClick: () => wsRef.current.setSymbols(items => restoreAt(items, symbol, index)) } });
   };
   const restoreDefaults = () => { ws.setSymbols(DEFAULT_SYMBOLS); ws.setPreferredSymbol(DEFAULT_SYMBOL); };
 

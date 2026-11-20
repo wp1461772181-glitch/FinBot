@@ -5,15 +5,15 @@ import type { V2EvaluationCohort, V2EvaluationResponse, V2EvaluationRoot, V2Mode
 import { BASELINE_NAME, forecastCopy, hasDecisionProbabilities } from "../../../forecast-model.mjs";
 import { asRecord, asText } from "../../../ForecastShared";
 import type { ResourceState } from "../../../ForecastShared";
-import { translatePhrase, useLocale } from "../../../i18n";
+import { translatePhrase, useLocale, colon } from "../../../i18n";
 import { day } from "./format";
 
 function Block({ aria, label, title, sub, children }: { aria?: string; label: string; title: string; sub?: ReactNode; children?: ReactNode }) {
   return <section data-testid="forecast-evaluation" aria-label={aria} className="flex min-w-0 flex-col gap-3">
     <div className="flex flex-col gap-1">
-      <p className="text-caption font-medium text-muted-foreground mb-[1em]">{label}</p>
-      <h3 className="text-title-s text-ink mb-[1em]">{title}</h3>
-      {sub && <p className="text-small text-ink-2 [overflow-wrap:anywhere] mb-[1em]">{sub}</p>}
+      <p className="text-caption font-medium text-muted-foreground">{label}</p>
+      <h3 className="text-title-s text-ink">{title}</h3>
+      {sub && <p className="text-small text-ink-2 [overflow-wrap:anywhere]">{sub}</p>}
     </div>
     {children}
   </section>;
@@ -21,7 +21,7 @@ function Block({ aria, label, title, sub, children }: { aria?: string; label: st
 function Sample({ label, value, note }: { label: string; value: string; note: string }) {
   return <div className="material-fact flex flex-col gap-0.5 px-3 py-2"><span className="text-caption text-muted-foreground">{label}</span><strong className="font-mono text-small font-medium tabular-nums text-ink">{value}</strong><small className="text-caption text-muted-foreground">{note}</small></div>;
 }
-const Note = ({ children }: { children: ReactNode }) => <p className="text-caption text-muted-foreground [overflow-wrap:anywhere] mb-[1em]">{children}</p>;
+const Note = ({ children }: { children: ReactNode }) => <p className="text-caption text-muted-foreground [overflow-wrap:anywhere]">{children}</p>;
 
 /**
  * 到期评估 (the old 到期评估 readout, same reading rules): only saved results are shown, nothing is fetched or computed here.  For a version with
@@ -48,7 +48,7 @@ export function EvaluationPanel({ evaluations, selectedRootId, selectedVersionId
         note={locale === "en-US" ? `${cohortStatusText(modelCohort.status).trim()}; ${t("按服务方、模型、问题版本和时间模式分组，每项独立预测只计一个代表版本。")}` : `${cohortStatusText(modelCohort.status)}；${t("按服务方、模型、问题版本和时间模式分组，每项独立预测只计一个代表版本。")}`} />
       {evaluation?.status === "succeeded" && <Sample label={t("真实标签")} value={labelText(evaluation.actual_label)}
         note={`${evaluation.actual_target_close === null ? t("目标收盘价未记录") : `${t("目标收盘")} ${evaluation.actual_target_close}`}${evaluation.label_available_at ? ` · ${day(evaluation.label_available_at)} ${t("可用")}` : ""} · ${t(copy.evalScoreLabel)} ${scoreParts.length ? scoreParts.join(" · ") : t("无可用数值评分")}`} />}
-      {representsSelected && representative?.naive_baseline && <Note>{t("同题基准")} {BASELINE_NAME}：Brier {scoreText(representative.naive_baseline.brier_score)} · Log loss {scoreText(representative.naive_baseline.log_loss)}</Note>}
+      {representsSelected && representative?.naive_baseline && <Note>{t("同题基准")} {BASELINE_NAME}{colon()}Brier {scoreText(representative.naive_baseline.brier_score)} · Log loss {scoreText(representative.naive_baseline.log_loss)}</Note>}
       {!representsSelected && <Note>{t("每项独立预测只按最高版本号统计；当前选中的旧版本没有单独计入这组分数。")}</Note>}
       {representative && <Note>{t("代表版本：")} {t("第")} {representative.version_no} {t("版")} · {t("分组")} {modelCohort.provider} / {modelCohort.actual_model} / {modelCohort.question_version ?? "—"} · {t("选择规则：")} {evaluations.data.model_cohort_selection_rule ?? t("每项独立预测按最高版本号选一个代表版本")}</Note>}
     </Block>;

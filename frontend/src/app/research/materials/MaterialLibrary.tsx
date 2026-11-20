@@ -6,11 +6,12 @@ import { notify } from "@/components/state/notify";
 import { ApiError } from "../../../api/base";
 import { getMaterialLibrary } from "../../../api/material-library";
 import type { FilingScanResult, MaterialItem } from "../../../types";
-import { translatePhrase, useLocale } from "../../../i18n";
+import { translatePhrase, useLocale, colon, comma } from "../../../i18n";
 import { librarySymbol, usableFocus, type UsableFocus } from "../../../material-focus.mjs";
 import "../../../styles/forecast.css";
 import { MaterialDetail } from "./MaterialDetail";
 import { usePhone } from "./use-phone";
+import { useDetailLayer } from "../use-detail-layer";
 import { MaterialFilters } from "./MaterialFilters";
 import { MaterialList, type PageState } from "./MaterialList";
 import { DEFAULT_FILTERS, PAGE_SIZE, withoutFilter, type FilterKey, type Filters } from "./materials-model.mjs";
@@ -123,7 +124,7 @@ export function MaterialLibrary({ symbol, focus, onScan, embedded = false }: { s
   const scan = useCallback(async () => {
     const result = await onScan();
     refresh();
-    notify.success(`${t("扫描完成")}：${t("发现")} ${result.discovered_count} ${t("份")}，${t("新增")} ${result.created_count} ${t("份")}。`);
+    notify.success(`${t("扫描完成")}${colon()}${t("发现")} ${result.discovered_count} ${t("份")}${comma()}${t("新增")} ${result.created_count} ${t("份")}。`);
   }, [onScan, refresh, t]);
   const scanFailed = (error: unknown) => notify.error(translatePhrase(error instanceof ApiError ? error.message : error instanceof Error ? error.message : "扫描 SEC 资料失败。"));
 
@@ -132,43 +133,7 @@ export function MaterialLibrary({ symbol, focus, onScan, embedded = false }: { s
   const overlay = phone && detailOpen && selected !== null;
   const back = useRef<HTMLButtonElement | null>(null);
   const layer = useRef<HTMLDivElement | null>(null);
-  const wasOverlay = useRef(false);
-  useEffect(() => {
-    if (!overlay) {
-      if (wasOverlay.current) document.querySelector<HTMLElement>("[data-testid=material-row][data-selected]")?.focus();
-      wasOverlay.current = false;
-      return;
-    }
-    wasOverlay.current = true;
-    // Everything outside the layer cannot be reached while it is open (the shell's sidebar button, top bar and tab bar, the company page's own header and tabs, the
-    // library's list): on every level of the layer's ancestor chain the siblings of that level are made inert; the ancestors themselves must not be (that would shut the layer too).
-    const shut: Element[] = [];
-    for (let level: HTMLElement | null = layer.current; level && level !== document.body; level = level.parentElement) {
-      for (const sibling of Array.from(level.parentElement?.children ?? [])) {
-        if (sibling !== level && !sibling.hasAttribute("inert")) { sibling.setAttribute("inert", ""); shut.push(sibling); }
-      }
-    }
-    back.current?.focus();
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    // With the rest of the page shut, Tab past the last control would leave the document (to the browser's own bar): it wraps inside the layer instead.  A focus in a
-    // popup of the layer (a Select's list is drawn outside it) is left alone.
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) { setDetailOpen(false); return; }
-      const root = layer.current;
-      if (event.key !== "Tab" || event.defaultPrevented || !root) return;
-      const active = document.activeElement;
-      if (active && active !== document.body && !root.contains(active)) return;
-      const stops = Array.from(root.querySelectorAll<HTMLElement>("a[href],button,input,select,textarea,summary,[tabindex]:not([tabindex='-1'])"))
-        .filter(node => !(node as HTMLButtonElement).disabled && node.getClientRects().length > 0 && !node.closest("[inert]"));
-      const first = stops[0], last = stops[stops.length - 1];
-      if (!first || !last) { event.preventDefault(); return; }
-      const leaving = active === document.body || !root.contains(active) || (event.shiftKey ? active === first || active === root : active === last);
-      if (leaving) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => { shut.forEach(node => node.removeAttribute("inert")); document.body.style.overflow = previousOverflow; window.removeEventListener("keydown", onKeyDown); };
-  }, [overlay]);
+  useDetailLayer({ open: overlay, layer, back, onClose: () => setDetailOpen(false), returnTo: "[data-testid=material-row][data-selected]" });
 
   const Heading = embedded ? "h2" : "h1";
   const Root = embedded ? "section" : "main";
@@ -178,12 +143,12 @@ export function MaterialLibrary({ symbol, focus, onScan, embedded = false }: { s
   return <Root data-testid="material-library" aria-labelledby="material-library-title" className={embedded ? "flex min-w-0 flex-col gap-4" : "mx-auto flex w-full min-w-0 max-w-[1280px] flex-1 flex-col gap-4 p-4 lg:p-6"}>
     <header className="flex flex-wrap items-end gap-x-4 gap-y-2">
       {/* On the company page the tab already says 材料: the title stays for screen readers and the one-line note remains. */}
-      <div className={embedded ? "sr-only" : "min-w-0"}><p className="text-caption text-muted-foreground mb-[1em]">{symbol} / {t("研究材料")}</p><Heading id="material-library-title" className="text-title-m text-ink mb-[0.67em]">{t("材料库")}</Heading></div>
-      <p className="hidden text-caption text-muted-foreground sm:block mb-[1em]">{t("每页 10 条 · 分析版本与原文分开保存")}</p>
+      <div className={embedded ? "sr-only" : "min-w-0"}><p className="text-caption text-muted-foreground mb-3">{symbol} / {t("研究材料")}</p><Heading id="material-library-title" className="text-title-m text-ink mb-3.5">{t("材料库")}</Heading></div>
+      <p className="hidden text-caption text-muted-foreground sm:block mb-3">{t("每页 10 条 · 分析版本与原文分开保存")}</p>
       <StatefulButton type="button" variant="outline" data-testid="material-scan" className="ml-auto max-sm:h-11" onClick={scan} onError={scanFailed}>{t("扫描 SEC 资料")}</StatefulButton>
     </header>
     <div data-task-strip="" data-testid="material-jobs" className="empty:hidden"><Suspense fallback={null}><TaskBar /></Suspense></div>
-    {focusMessage && <p role="status" data-testid="focus-message" className="rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2 mb-[1em]">{focusMessage}</p>}
+    {focusMessage && <p role="status" data-testid="focus-message" className="rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2">{focusMessage}</p>}
     <div className="grid min-w-0 items-start gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
       <section aria-label={t("材料列表")} data-testid="material-list-section" data-wanted={wanted} data-loaded={page.kind === "ready" ? page.key ?? "" : ""} className="flex min-w-0 flex-col gap-3">
         <MaterialFilters symbol={symbol} filters={filters} total={page.kind === "ready" ? page.total : null} onChange={change} onClear={clear} />

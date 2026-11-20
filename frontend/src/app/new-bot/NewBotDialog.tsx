@@ -24,6 +24,7 @@ import { BOT_AVATAR_SIZE } from "../../bot-sizes.mjs";
 import { useLocale } from "../../i18n";
 import { DEFAULT_AVATAR } from "../../orb.mjs";
 import { createFields, createName, previewBot } from "../../new-bot-form.mjs";
+import { useFocusKeep } from "../use-focus-keep";
 
 /** The dialog's width from this on; below it the same body is a full-screen drawer.  (Its own matchMedia hook: the chat's one (app/chat/use-media) would be a shared chunk of its own for the first screen to load.) */
 const WIDE_QUERY = "(min-width: 640px)";
@@ -37,15 +38,17 @@ export default function NewBotDialog({ onClose, onCreated }: Props) {
   const wide = useWide();
   const [busy, setBusy] = useState(false);
   const content = useRef<HTMLDivElement>(null);
+  const keep = useFocusKeep("new-bot-dialog");
+  const draft = useNewBotDraft();
   // Where the focus was when the dialog came up (the sidebar's button, say): Radix hands it back to its trigger on closing, and this dialog is opened by state, so it has none.
   const [opener] = useState<HTMLElement | null>(() => (document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null));
   const giveBackFocus = (event: Event) => { event.preventDefault(); if (opener?.isConnected) opener.focus(); };
   const close = (open: boolean) => { if (!open && !busy) onClose(); };
-  const body = (title: ReactNode, description: ReactNode) => <NewBotBody wide={wide} busy={busy} setBusy={setBusy} onClose={onClose} onCreated={onCreated} title={title} description={description} />;
+  const body = (title: ReactNode, description: ReactNode) => <NewBotBody wide={wide} busy={busy} setBusy={setBusy} onClose={onClose} onCreated={onCreated} title={title} description={description} draft={draft} />;
   if (wide) {
     return <Dialog open onOpenChange={close}>
       <DialogContent closeLabel={t("关闭")} data-testid="new-bot-dialog" className="gap-0 overflow-hidden p-0 sm:max-w-[820px]"
-        onOpenAutoFocus={(event) => { event.preventDefault(); content.current?.querySelector<HTMLElement>("#new-bot-name")?.focus(); }}
+        onOpenAutoFocus={(event) => { event.preventDefault(); keep(() => content.current?.querySelector<HTMLElement>("#new-bot-name")); }}
         onCloseAutoFocus={giveBackFocus} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onInteractOutside={(event) => { if (busy) event.preventDefault(); }}
         ref={content}>
         {body(<DialogTitle className="text-title-s font-semibold text-ink">{t("新建 bot")}</DialogTitle>, <DialogDescription className="sr-only">{t("起个名字就能创建；模板、形状和颜色都可以之后再改。")}</DialogDescription>)}
@@ -55,7 +58,7 @@ export default function NewBotDialog({ onClose, onCreated }: Props) {
   // A phone: the whole screen.  The keyboard must not open by itself over the preview, so the name field is not focused on opening.
   return <Drawer open onOpenChange={close} dismissible={!busy} handleOnly>
     <DrawerContent data-testid="new-bot-dialog" className="data-[vaul-drawer-direction=bottom]:mt-0 data-[vaul-drawer-direction=bottom]:h-dvh data-[vaul-drawer-direction=bottom]:max-h-dvh data-[vaul-drawer-direction=bottom]:rounded-none"
-      onOpenAutoFocus={(event) => { event.preventDefault(); content.current?.focus(); }} onCloseAutoFocus={giveBackFocus} ref={content}>
+      onOpenAutoFocus={(event) => { event.preventDefault(); keep(() => content.current); }} onCloseAutoFocus={giveBackFocus} ref={content}>
       {body(<DrawerTitle className="text-title-s font-semibold text-ink">{t("新建 bot")}</DrawerTitle>, <DrawerDescription className="sr-only">{t("起个名字就能创建；模板、形状和颜色都可以之后再改。")}</DrawerDescription>)}
     </DrawerContent>
   </Drawer>;
@@ -63,10 +66,11 @@ export default function NewBotDialog({ onClose, onCreated }: Props) {
 
 const stepNo = "mr-1.5 inline-grid size-5 place-items-center rounded-full bg-sunken font-mono text-caption text-muted-foreground";
 
-function NewBotBody({ wide, busy, setBusy, onClose, onCreated, title, description }: {
-  wide: boolean; busy: boolean; setBusy: (busy: boolean) => void; onClose: () => void; onCreated: (bot: Bot) => void; title: ReactNode; description: ReactNode;
-}) {
-  const { t } = useLocale();
+/**
+ * The draft of the form, kept above both shells: a window dragged across 640px swaps the dialog for the drawer and back, and the body under either is mounted anew each time, so what
+ * was typed, the template, the shape and colour (random to begin with) and the error must not live in it.
+ */
+function useNewBotDraft() {
   const [templates, setTemplates] = useState<BotTemplate[] | null>(null), [tools, setTools] = useState<BotTool[]>([]);
   const [name, setName] = useState(""), [picked, setPicked] = useState<BotTemplate | null>(null);
   // A new bot starts from a random shape and colour of the catalog (shown, and stored on create); 换一个 draws another pair.
@@ -78,6 +82,15 @@ function NewBotBody({ wide, busy, setBusy, onClose, onCreated, title, descriptio
     getBotTemplates(controller.signal).then(v => { setTemplates(v.templates.filter(x => x.id !== "blank")); setTools(v.tools); }).catch(() => { if (!controller.signal.aborted) setTemplates([]); });
     return () => controller.abort();
   }, []);
+  return { templates, tools, name, setName, picked, setPicked, look, setLook, nameError, setNameError, failure, setFailure };
+}
+type Draft = ReturnType<typeof useNewBotDraft>;
+
+function NewBotBody({ wide, busy, setBusy, onClose, onCreated, title, description, draft }: {
+  wide: boolean; busy: boolean; setBusy: (busy: boolean) => void; onClose: () => void; onCreated: (bot: Bot) => void; title: ReactNode; description: ReactNode; draft: Draft;
+}) {
+  const { t } = useLocale();
+  const { templates, tools, name, setName, picked, setPicked, look, setLook, nameError, setNameError, failure, setFailure } = draft;
   const finalName = createName(name, picked, tools);
   async function submit() {
     if (!finalName || busy) return;

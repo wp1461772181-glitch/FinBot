@@ -4,4 +4,3 @@ export type ResearchSection = Exclude<WorkspaceSection, "agent" | "bot" | "admin
 export type NavGroup = "chat" | "routines" | "portfolio" | "news" | "company" | "forecast" | "library" | "skills" | "memory" | "settings";
 export function navGroup(section: WorkspaceSection): NavGroup;
 export function isResearchSection(section: WorkspaceSection): section is ResearchSection;
-export const WORKSPACE_SECTION_TITLE: Record<ResearchSection, string>;

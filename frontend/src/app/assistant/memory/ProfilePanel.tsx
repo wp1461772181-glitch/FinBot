@@ -12,7 +12,7 @@ import { confirm } from "@/components/state/confirm";
 import { confirmProfileItem, createProfileItem, deleteProfileItem, listProfileItems, updateProfileItem, type ProfileItem } from "../../../api/memory";
 import { useLocale } from "../../../i18n";
 import { layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers } from "../../../memory-items.mjs";
-import { useLoad } from "../use-load";
+import { useLoad } from "../../use-load";
 import { KINDS, KIND_LABELS, MAX_TEXT, canSaveEdit, isInferred, scopeChoices } from "./memory-view.mjs";
 
 const GLOBAL = "__global__"; // Radix Select has no empty item value
@@ -103,7 +103,7 @@ export function ProfilePanel() {
           </div>
           {mine && <Input value={editing.text} maxLength={MAX_TEXT} aria-label={t("编辑")} data-testid="memory-edit-input" autoFocus className="max-md:h-11" onChange={event => setEditing({ id: item.id, text: event.target.value })}
             onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter") { event.preventDefault(); void saveEdit(); } if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setEditing(null); } }} />}
-          {item.quote && <blockquote data-testid="memory-quote" className="material-fact m-0 px-3 py-2 font-quote text-small text-ink">“{item.quote}”</blockquote>}
+          {item.quote?.trim() && <blockquote data-testid="memory-quote" className="material-fact m-0 px-3 py-2 font-quote text-small text-ink">“{item.quote}”</blockquote>}
           <div className="flex flex-wrap items-center gap-2">
             <Select value={item.bot_id ?? GLOBAL} disabled={busy === item.id} onValueChange={value => { const target = value === GLOBAL ? null : value; void run(item.id, () => updateProfileItem(item.id, { bot_id: target })); }}>
               <SelectTrigger size="sm" aria-label={`${t("范围")} · ${item.text}`} data-testid="memory-scope" className="w-44 max-md:h-11"><SelectValue /></SelectTrigger>

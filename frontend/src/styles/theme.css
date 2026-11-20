@@ -141,11 +141,24 @@
 }
 
 /* ---- Global base ----------------------------------------------------------------------------------------------
-   Page typography comes from the tokens.  The old pages inherit the same colour and typeface; their line-height and
-   size are put back on the data-legacy root (restore.css), so only the new areas get 14/22.
+   Page typography comes from the tokens: every page gets 14/22 in the token face and ink.
    shadcn's own `* { border-color; outline-color }` rule is scoped to its parts (below), not global. */
 @layer base {
+  /* The page-level values the old stylesheets set on <html>, <body> and #root (P9.1: the computed styles of the three were compared with and without the old layer, and these are the ones that differed;
+     they stay as they were so nothing about the page's own box, text size adjustment, tab width or tap highlight changes). */
+  html {
+    line-height: normal;
+    tab-size: 8;
+    -webkit-text-size-adjust: auto;
+    -webkit-tap-highlight-color: revert;
+  }
+
+  html, body, #root {
+    max-width: 100%;
+  }
+
   body {
+    -webkit-font-smoothing: antialiased;
     background-color: var(--bg);
     color: var(--ink);
     font-family: var(--font-sans);
@@ -245,4 +258,10 @@
   font-size: var(--fs-caption);
   line-height: var(--lh-caption);
   font-variant-numeric: tabular-nums;
+}
+
+/* Figures and code read in the monospaced face with aligned digits (`.num` is the class a figure carries; the old stylesheet's rule, moved here in P9.1).  `components` layer: above the
+   reset, below the utilities. */
+@layer components {
+  .num, code, kbd, pre, samp { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 }

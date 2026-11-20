@@ -13,7 +13,7 @@ import { listSkills, type Skill } from "../../../api/skills-core";
 import { useLocale } from "../../../i18n";
 import { paths } from "../../../routes.mjs";
 import { skillGroups } from "../../../skill-items.mjs";
-import { useLoad } from "../use-load";
+import { useLoad } from "../../use-load";
 import { ImportDrawer } from "./ImportDrawer";
 import { SkillCard } from "./SkillCard";
 import { SkillDrawer } from "./SkillDrawer";

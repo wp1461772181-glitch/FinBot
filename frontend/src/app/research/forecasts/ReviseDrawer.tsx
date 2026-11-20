@@ -12,7 +12,7 @@ import { createV2ManualRevisionJob, getV2RevisionCandidates } from "../../../api
 import type { V2RevisionCandidates } from "../../../api/forecast-v2";
 import type { V2ForecastJob, V2SourceRef, V2TimelineEntry } from "../../../types";
 import { MAX_REVISION_SOURCES, REVISE_STEPS, candidateGroups, canContinue, pickedSources, revisionRefs, reviseTarget, sourceDisabled, toggleSource, versionMethod } from "../../../forecast-detail.mjs";
-import { useLocale } from "../../../i18n";
+import { useLocale, colon } from "../../../i18n";
 import { actionMessage } from "../support";
 import { day } from "./format";
 
@@ -144,7 +144,7 @@ export function ReviseDrawer({ open, onOpenChange, versions, locate, onSubmitted
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex flex-wrap items-center gap-x-2 gap-y-1"><StatusBadge kind="neutral" className="h-5">{typeLabel(option.revisionType)}</StatusBadge>{here && <StatusBadge kind="progress" className="h-5">{t("地址指向这份")}</StatusBadge>}</span>
                       <span className="text-small text-ink [overflow-wrap:anywhere]">{option.label}</span>
-                      <span className="text-caption text-muted-foreground">{t("发布时间")}：{day(option.publishedAt)}{option.observedAt && <> · {t("入库时间")}：{day(option.observedAt)}</>}</span>
+                      <span className="text-caption text-muted-foreground">{t("发布时间")}{colon()}{day(option.publishedAt)}{option.observedAt && <> · {t("入库时间")}{colon()}{day(option.observedAt)}</>}</span>
                     </span>
                   </label>
                 </li>;

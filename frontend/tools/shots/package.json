@@ -10,8 +10,11 @@
     "smoke": "node smoke.mjs"
   },
   "dependencies": {
-    "playwright-core": "1.65.0",
     "pixelmatch": "^7.0.0",
+    "playwright-core": "1.65.0",
     "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "axe-core": "^4.14.1"
   }
 }

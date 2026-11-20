@@ -2,7 +2,7 @@ import { StatTile } from "@/components/StatTile";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { DelayedSkeleton, SkeletonCard } from "@/components/state/Skeleton";
 import type { V2EvaluationVersion, V2VersionDetail } from "../../../types";
-import { useLocale } from "../../../i18n";
+import { useLocale, colon } from "../../../i18n";
 import { BriefSection } from "../forecasts/BriefSection";
 import { JudgmentBlock } from "../forecasts/JudgmentBlock";
 import { day } from "../forecasts/format";
@@ -25,13 +25,13 @@ export function ReplayDetail({ symbol, evaluation, read, onRetry }: { symbol: st
   const none = t("尚无结果");
   return <div data-testid="replay-detail" data-version={version.id} className="flex min-w-0 flex-col gap-4">
     <header className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-      <div className="min-w-0 flex-1"><p className="m-0 text-caption text-muted-foreground">{t("历史回放详情")} · <span className="font-mono">{version.symbol || symbol}</span></p><h2 id="replay-detail-title" className="text-title-m text-ink">{t("决策日")} {day(version.decision_at)}</h2></div>
+      <div className="min-w-0 flex-1"><p className="m-0 text-caption text-muted-foreground">{t("历史回放详情")} · <span className="font-mono">{version.symbol || symbol}</span></p><h2 id="replay-detail-title" className="text-title-m text-ink"><span className="whitespace-nowrap">{t("决策日")} {day(version.decision_at)}</span></h2></div>
       <span className="text-small text-ink-2">{t("目标截止")} <span className="font-mono tabular-nums">{targetEnd}</span></span>
     </header>
     {version.research_brief && <p data-testid="replay-warning" className="m-0 rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2">{t("回放输入可能含有当时之后才被系统获取的材料。页面会保留材料发布时间与实际获取时间；该预测用于研究复盘，不代表当时真实可得的信息。")}</p>}
     <JudgmentBlock version={version} />
     <section data-testid="replay-result" aria-label={t("到期评估")} className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <StatTile label={t("预测模型状态")} value={<span className="font-sans text-body">{t(modelPhrase(version.model_status))}</span>} footnote={`${t("任务")}：${t(jobStatusPhrase("succeeded"))}`} />
+      <StatTile label={t("预测模型状态")} value={<span className="font-sans text-body">{t(modelPhrase(version.model_status))}</span>} footnote={`${t("任务")}${colon()}${t(jobStatusPhrase("succeeded"))}`} />
       <StatTile label={t("到期评估")} value={<span className="font-sans text-body">{t(evaluationPhrase(result?.status ?? "pending"))}</span>} footnote={result?.label_available_at ? `${t("实际结果于")} ${day(result.label_available_at)} ${t("可用")}` : t("等待或无法取得目标期价格")} />
       <StatTile label={t("真实走势")} value={<span className="font-sans text-body">{result?.actual_label ? t(directionPhrase(result.actual_label)) : none}</span>} footnote={result?.actual_target_close != null ? `${t("目标期收盘价")} $${result.actual_target_close.toFixed(2)}` : t("暂无可用收盘价")} />
       <StatTile label="Brier / Log loss" value={<span className="text-title-s">{result?.brier_score != null || result?.log_loss != null ? `${result?.brier_score != null ? result.brier_score.toFixed(4) : none} / ${result?.log_loss != null ? result.log_loss.toFixed(4) : none}` : none}</span>} footnote={t("只在可计算时显示")} />

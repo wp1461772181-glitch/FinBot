@@ -1,8 +1,6 @@
 // Pure helpers of the skills page and the "/" picker (personal agent, stage E), kept apart so node tests read them.
 
-const SKILL_LINK = /^#skills\/([A-Za-z0-9_-]{1,64})$/;
 export const MAX_SLASH_MATCHES = 8;
-
 /** The skill id of a skill link (#skills/<id>), else null. */
 export function skillFromHash(hash) { const match = SKILL_LINK.exec(String(hash ?? "")); return match ? match[1] : null; }
 

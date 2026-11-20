@@ -7,7 +7,7 @@ import { Chevron } from "./icons";
 import type { ResearchBrief, ResearchEvidencePointer, ResearchMaterialReference, V2VersionDetail } from "../../../types";
 import { forecastCopy, recordedModel } from "../../../forecast-model.mjs";
 import { asText } from "../../../ForecastShared";
-import { useLocale } from "../../../i18n";
+import { useLocale, colon } from "../../../i18n";
 import { paths } from "../../../routes.mjs";
 import { useAiContentLocalization, withLocalizedFields } from "../../../useAiContentLocalization";
 import { day, money, numberText, percent2 } from "./format";
@@ -34,8 +34,8 @@ function Cites({ citations, materials, versionId, target }: { citations: Researc
       const material = materials[at];
       if (!material) return null;
       const what = `${material.title || sourceTypeLabel(material.source_type, locale)} · ${sectionText(citation.section, locale)} ${citation.item_id}`;
-      return <Link key={`${citation.analysis_id}:${citation.section}:${citation.item_id}:${index}`} to={cite(target, versionId, material)} data-slot="brief-cite" title={what} aria-label={`${t("来源")} ${at + 1}：${what}`}
-        className="inline-flex h-6 items-center gap-1 rounded-sm border border-line-strong bg-background px-1.5 font-mono text-caption text-ink-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">[{at + 1}]<span className="font-sans text-muted-foreground">{sectionText(citation.section, locale)} {citation.item_id}</span></Link>;
+      return <Link key={`${citation.analysis_id}:${citation.section}:${citation.item_id}:${index}`} to={cite(target, versionId, material)} data-slot="brief-cite" title={what} aria-label={`${t("来源")} ${at + 1} ${sectionText(citation.section, locale)} ${citation.item_id}${colon()}${material.title || sourceTypeLabel(material.source_type, locale)}`}
+        className="inline-flex h-6 items-center gap-1 rounded-sm border border-line-strong bg-background px-1.5 font-mono text-caption text-ink-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">[{at + 1}]{" "}<span className="font-sans text-muted-foreground">{sectionText(citation.section, locale)} {citation.item_id}</span></Link>;
     })}
   </span>;
 }

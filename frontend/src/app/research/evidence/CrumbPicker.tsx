@@ -3,7 +3,7 @@ import { Check } from "lucide-react";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { useLocale } from "../../../i18n";
+import { useLocale, colon } from "../../../i18n";
 import { Chevron } from "../forecasts/icons";
 
 export type Crumb = { id: string; label: string; hint?: string };
@@ -26,13 +26,13 @@ export function CrumbPicker({ level, current, options, selectedId, onPick, testi
   const [open, setOpen] = useState(false);
   return <Popover open={open} onOpenChange={setOpen}>
     <PopoverTrigger asChild>
-      <button type="button" role="combobox" aria-expanded={open} aria-label={`${level}：${current}`} data-testid={testid} disabled={options.length === 0}
+      <button type="button" role="combobox" aria-expanded={open} aria-label={`${level}${colon()}${current}`} data-testid={testid} disabled={options.length === 0}
         className={cn("inline-flex h-9 min-w-0 max-w-full items-center gap-1.5 rounded-sm px-2 text-title-s text-ink outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:hover:bg-transparent max-sm:min-h-11", mono && "font-mono")}>
         <span className="truncate">{current}</span>
         <Chevron className="text-muted-foreground" />
       </button>
     </PopoverTrigger>
-    <PopoverContent align="start" className="w-72 max-w-[calc(100vw-2rem)] p-0">
+    <PopoverContent align="start" aria-label={level} className="w-72 max-w-[calc(100vw-2rem)] p-0">
       <Command>
         {options.length > searchAfter && <CommandInput placeholder={t("搜索")} />}
         <CommandList>

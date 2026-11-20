@@ -8,7 +8,7 @@ import { notify } from "@/components/state/notify";
 import { getModelCatalog, updateBot, type Bot, type ModelCatalog } from "../../api/bots";
 import { orderAllBots } from "../../all-bots-items.mjs";
 import { message } from "../../bot-message";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 import { useLineStatus } from "../chat/ChatSessionProvider";
 import { useWorkspace } from "../workspace";
 import { BotCard } from "./BotCard";
@@ -41,7 +41,7 @@ export function AllBotsPage() {
     try {
       await updateBot(bot.id, { hidden });
       await reload();
-      notify.success(hidden ? `${t("已在侧栏隐藏")}：${bot.name}` : `${t("已取消隐藏")}：${bot.name}`, {
+      notify.success(hidden ? `${t("已在侧栏隐藏")}${colon()}${bot.name}` : `${t("已取消隐藏")}${colon()}${bot.name}`, {
         id: `bot-hidden:${bot.id}`,
         undo: { label: t("撤销"), onClick: () => { void setHidden(bot, !hidden); } },
       });
@@ -55,7 +55,7 @@ export function AllBotsPage() {
   const now = Date.now();
   return <main data-testid="all-bots" aria-labelledby="all-bots-title" className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-5 p-4 lg:p-6">
     <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
-      <h1 id="all-bots-title" className="text-title-m text-ink">{t("全部 bot")}</h1>
+      <h1 id="all-bots-title" className="mb-3.5 text-title-m text-ink">{t("全部 bot")}</h1>
       {loaded && ordered.length > 0 && <span data-testid="all-bots-count" className="rounded-full bg-sunken px-2 py-0.5 font-mono text-caption text-muted-foreground" aria-label={`${ordered.length} bot${hiddenCount ? `, ${hiddenCount} ${t("已隐藏")}` : ""}`}>{ordered.length}</span>}
       <Button type="button" className="ml-auto" onClick={ws.openNewBot} data-testid="all-bots-new"><Plus aria-hidden="true" />{t("新建 bot")}</Button>
     </header>

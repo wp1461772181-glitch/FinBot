@@ -14,6 +14,13 @@ import { materialId } from "./fixtures/materials.mjs";
 import { EXTRA_INBOX, EXTRA_PROPOSALS, EXTRA_TASKS } from "./fixtures/routines.mjs";
 import { EXTRA_SOURCES, IMPORT_SAMPLE, KNOWLEDGE_CANDIDATES, KNOWLEDGE_EXTRA_DOCS } from "./fixtures/assistant.mjs";
 
+import fs from "node:fs";
+// P9.1: a hook that presses or waits for a LABEL must work in the English interface too (the English run photographs every page): `either("登录")` matches the Chinese label or its English translation, exactly.
+const EN_CATALOG = JSON.parse(fs.readFileSync(new URL("../../src/locales/en-US.json", import.meta.url), "utf8"));
+const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const either = (zh) => new RegExp(`^(${escapeRe(zh)}|${escapeRe(EN_CATALOG[zh] ?? zh)})$`);
+export const eitherIn = (zh) => new RegExp(`${escapeRe(zh)}|${escapeRe(EN_CATALOG[zh] ?? zh)}`);
+
 const LOADING = ["正在读取", "正在加载", "读取中", "加载中"];
 
 /** The fake backend's state with TeslaBot hidden from the sidebar (the 全部 bot page lists it last, marked). */
@@ -38,8 +45,8 @@ export function stateWithAwayTurn() {
  * and its preview is the live body of the personality (a still frame stands in until that chunk arrives).
  */
 export async function openNewBotDialog(page, width) {
-  if (width >= 1024) await page.locator('[data-slot="sidebar"] button', { hasText: "新建 bot" }).first().click();
-  else { await openMoreDrawer(page); await page.locator('[data-slot="drawer-content"]').getByRole("button", { name: "新建 bot" }).click(); }
+  if (width >= 1024) await page.locator('[data-slot="sidebar"] button', { hasText: eitherIn("新建 bot") }).first().click();
+  else { await openMoreDrawer(page); await page.locator('[data-slot="drawer-content"]').getByRole("button", { name: either("新建 bot") }).click(); }
   await page.locator("[data-testid=new-bot-dialog]").waitFor({ timeout: 15000 });
   await page.locator("[data-testid=new-bot-templates] [data-template]").first().waitFor({ timeout: 15000 });
   await page.locator("[data-testid=new-bot-preview] [data-slot=bot-avatar][data-archetype]").waitFor({ timeout: 15000 });
@@ -49,6 +56,14 @@ export async function openNewBotDialog(page, width) {
 async function openSide(page) {
   const toggle = page.locator("[data-testid=side-toggle]");
   if (await toggle.count() && (await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+}
+
+/** The workspace tab's cards are all drawn and none still reads (each card loads on its own). */
+export async function workspaceCardsLoaded(page) {
+  await page.waitForFunction(() => {
+    const pane = document.querySelector("[data-testid=workspace-pane]");
+    return Boolean(pane) && pane.querySelectorAll("section[aria-label]").length > 0 && !/正在读取/.test(pane.innerText);
+  }, null, { timeout: 20000 });
 }
 
 /** Click the first answer's process bar: the panel opens on 过程 with that round's steps. */
@@ -467,7 +482,7 @@ export async function listReady(page) {
 /** Choose one option of a filter select. */
 export async function pickFilter(page, key, option) {
   await page.locator(`[data-testid=filter-${key}]`).click();
-  await page.getByRole("option", { name: option }).click();
+  await page.getByRole("option", { name: either(option) }).click();
   await listReady(page);
 }
 const settled = async (page) => { await page.waitForLoadState("networkidle").catch(() => {}); };
@@ -478,7 +493,7 @@ export const PAGES = [
   // The login page after a wrong code, the shell with the sidebar collapsed (1440) / the phone's 更多 drawer open (390),
   // the four marks of a bot row, and the chat as a read-only guest.
   { name: "login-error", hash: "#/login", identity: "none", ready: '[aria-labelledby="login-title"]',
-    before: async (page) => { await page.locator('input[type="password"]').fill("not-the-code"); await page.getByRole("button", { name: "登录", exact: true }).click(); await page.locator("#login-error").waitFor(); } },
+    before: async (page) => { await page.locator('input[type="password"]').fill("not-the-code"); await page.getByRole("button", { name: either("登录") }).click(); await page.locator("#login-error").waitFor(); } },
   { name: "shell-collapsed", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page, { width }) => { if (hasSidebar(width)) { await page.locator('[data-slot="sidebar-trigger"]').click(); await page.waitForFunction(() => document.querySelector('[data-slot="sidebar"]')?.closest("[data-state]")?.getAttribute("data-state") === "collapsed"); } } },
   { name: "shell-mobile-more", hash: "#/chat", ready: "[data-testid=message]",
@@ -647,6 +662,11 @@ export const PAGES = [
     before: async (page, { width }) => { if (width < 1024) { await firstAnswer(page).locator("[data-testid=citation-chip][data-ordinal='2']").first().click(); await page.locator("[data-slot=drawer-content] [data-slot=source-card]").first().waitFor(); await page.mouse.move(1, 1); } } },
   { name: "chat-mobile-outline", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page, { width }) => { if (width < 1024) { await page.locator("[data-testid=outline-button]").click(); await page.locator("[data-testid=outline-drawer] [data-testid=outline-row]").first().waitFor(); } } },
+  // P9.1 step 0: the workspace tab's two states that no picture had caught: the edit bar with every card's controls (1440), and the phone's drawer on 工作区 (390).
+  { name: "chat-workspace-edit", hash: "#/chat", ready: "[data-testid=message]", widths: [1440],
+    before: async (page) => { await workspaceCardsLoaded(page); await page.locator("[data-testid=workspace-pane]").getByRole("button", { name: eitherIn("编辑卡片") }).click(); await page.locator("[data-testid=workspace-pane]").getByRole("button", { name: either("完成") }).waitFor(); await page.mouse.move(1, 1); } },
+  { name: "chat-mobile-workspace", hash: "#/chat", ready: "[data-testid=message]", widths: [390],
+    before: async (page) => { await page.locator("[data-testid=side-toggle]").click(); await page.locator("[data-slot=drawer-content][data-testid=context-panel]").waitFor({ timeout: 15000 }); await page.locator("[data-testid=tab-workspace]").click(); await workspaceCardsLoaded(page); await page.mouse.move(1, 1); } },
   // The conversation page with no bot (#/chat/history): the history list on the left (a drawer below lg, opened by the header's history button), the plain thread.
   { name: "chat-history", hash: "#/chat/history", ready: (page) => page.waitForSelector("[data-testid=history-row]", { state: "attached", timeout: 15000 }) },
   { name: "chat-history-open", hash: "#/chat/history", ready: (page) => page.waitForSelector("[data-testid=history-row]", { state: "attached", timeout: 15000 }),
@@ -725,10 +745,13 @@ export const PAGES = [
   { name: "materials-analysis", hash: "#/research/materials", ready: materialsLoaded, before: async (page) => { await openMaterial(page, "券商研报"); await page.waitForSelector("[data-testid=analysis-card] [data-slot=citation-status][data-kind=unverified]", { timeout: 15000 }); } },
   { name: "materials-raw", hash: "#/research/materials", ready: materialsLoaded,
     before: async (page) => { await openMaterial(page, "券商研报"); await page.locator("[data-testid=analysis-card] [data-testid=citations] button").first().click(); await page.locator("[data-testid=original-quote]").waitFor(); } },
+  // P9.1 step 0: an official filing's 原始材料 view with its source address (the broker note of `materials-raw` has none, so no link is drawn there).
+  { name: "materials-raw-link", hash: "#/research/materials", ready: materialsLoaded,
+    before: async (page) => { await openMaterial(page, "10-Q 0000000000-26-000101"); await page.locator("[data-testid=material-tab-original]").click(); await page.locator("[data-testid=original-link]").waitFor({ timeout: 15000 }); } },
   { name: "materials-history", hash: "#/research/materials", ready: materialsLoaded,
     before: async (page) => { await openMaterial(page, "券商研报"); await page.locator("[data-testid=material-tab-history]").click(); await page.locator("[data-testid=history-view] [data-slot=timeline-item]").first().waitFor(); } },
   { name: "materials-filtered", hash: "#/research/materials", ready: materialsLoaded,
-    before: async (page) => { await pickFilter(page, "scope", "全部股票"); await pickFilter(page, "analysisStatus", "已分析"); await page.locator("[data-testid=filter-chip]").nth(1).waitFor(); await settled(page); } },
+    before: async (page) => { await pickFilter(page, "scope", "全部股票"); await pickFilter(page, "analysisStatus", "已分析"); await page.locator("[data-testid=filter-chip]").nth(1).waitFor(); await page.mouse.move(0, 0); await settled(page); } },   // the pointer is moved off the content (a fact about where it is, not a wait): the last filter choice left it over a row, which painted the hover fill in some runs
   { name: "materials-analyzing", hash: "#/research/materials", ready: materialsLoaded, view: () => ({ fixtureState: stateWithMaterials({ jobHold: true }) }),
     before: async (page) => { await openMaterial(page, "新闻稿：欧盟"); await page.locator("[data-slot=task-row]").waitFor({ timeout: 15000 }); await page.locator("[data-testid=analysis-job]").waitFor(); await hideElapsed(page); } },
   { name: "materials-empty-filter", hash: "#/research/materials", ready: materialsLoaded,
@@ -739,6 +762,8 @@ export const PAGES = [
   { name: "scores-insufficient", hash: "#/research/scores", ready: "[data-testid=cohort-card][data-status=insufficient_samples]", view: () => ({ fixtureState: stateWithMaterials({ scoresScored: 12 }) }) },
   { name: "replay", hash: "#/research/replay", ready: replayLoaded },
   { name: "replay-empty", hash: "#/research/replay", ready: "[data-testid=replay-list] [data-slot=empty-state]", view: () => ({ fixtureState: stateWithMaterials({ replayEmpty: true }) }) },
+  // P9.1 step 0: the replay page with an EMPTY watchlist (the notice 关注列表为空 + 恢复默认股票).  `replay-empty` above is the other state (no records for a company).
+  { name: "replay-empty-watchlist", hash: "#/research/replay", ready: (page) => page.waitForSelector("main [data-slot=empty-state]", { state: "visible", timeout: 30000 }), view: () => ({ fixtureState: stateWithQueue([]) }) },
   { name: "replay-running", hash: "#/research/replay", ready: replayLoaded, view: () => ({ fixtureState: stateWithMaterials({ replayHold: true }) }),
     before: async (page) => { await page.locator("[data-testid=replay-generate]").click(); await page.locator("[data-slot=task-row]").first().waitFor({ timeout: 15000 }); await hideElapsed(page); await settled(page); } },
   { name: "replay-failed", hash: "#/research/replay", ready: replayLoaded, view: () => ({ fixtureState: stateWithMaterials({ replayFail: true, replayRunningPolls: 1, replayError: "forecast_provider_timeout" }) }),
@@ -822,13 +847,13 @@ export const PAGES = [
   { name: "settings-model-new", hash: "#/settings/models", ready: "[data-testid=role-row]", element: "[data-testid=model-dialog]", before: async (page) => {
       await page.locator("[data-testid=model-new]").click(); await page.locator("[data-testid=model-dialog]").waitFor({ timeout: 10000 });
       await page.locator("#model-display").fill("研究助手"); await page.locator("#model-key").fill("fake-key-for-smoke-01");
-      await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? "") && !document.querySelector("[data-testid=model-discovered]")?.disabled, null, { timeout: 15000 });
+      await page.waitForFunction(() => /选择列表中的模型|Choose a listed model/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? "") && !document.querySelector("[data-testid=model-discovered]")?.disabled, null, { timeout: 15000 });
       await page.locator("[data-testid=model-discovered]").click(); await page.getByRole("option", { name: "alpha-1", exact: true }).click();
       await page.waitForFunction(() => document.querySelector("#model-model")?.value === "alpha-1");
     } },
   { name: "settings-model-edit", hash: "#/settings/models", ready: "[data-testid=role-row]", element: "[data-testid=model-dialog]", before: async (page) => {
       await page.locator("[data-testid=model-card][data-model=muse-ember] [data-testid=model-edit]").click(); await page.locator("[data-testid=model-dialog]").waitFor({ timeout: 10000 });
-      await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? ""), null, { timeout: 15000 });
+      await page.waitForFunction(() => /选择列表中的模型|Choose a listed model/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? ""), null, { timeout: 15000 });
     } },
   { name: "settings-model-test-fail", hash: "#/settings/models", ready: "[data-testid=role-row]", element: "[data-testid=model-dialog]", view: () => ({ fixtureState: stateModelTestFails() }), before: async (page) => {
       await page.locator("[data-testid=model-card][data-model=muse-ember] [data-testid=model-edit]").click(); await page.locator("[data-testid=model-dialog]").waitFor({ timeout: 10000 });
@@ -888,7 +913,7 @@ export const PAGES = [
   { name: "command-menu", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page) => { await page.keyboard.press("Control+k"); await page.locator('[data-slot="command-menu"] input').fill("TS"); await page.locator('[data-slot="command-item"]').first().waitFor(); } },
   { name: "command-menu-all", hash: "#/chat", ready: "[data-testid=message]",
-    before: async (page) => { await page.keyboard.press("Control+k"); await page.locator('[data-slot="command-item"]').first().waitFor(); await page.locator('[data-slot="command-menu"] [cmdk-group-heading]', { hasText: "最近对话" }).waitFor(); } },
+    before: async (page) => { await page.keyboard.press("Control+k"); await page.locator('[data-slot="command-item"]').first().waitFor(); await page.locator('[data-slot="command-menu"] [cmdk-group-heading]', { hasText: eitherIn("最近对话") }).waitFor(); } },
   // The backend unreachable: every API request fails, then a page that needs the API opens: the banner is at the top of the page.
   { name: "offline", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page, { mock }) => { mock.control.down = true; await page.evaluate(() => { location.hash = "#/portfolio"; }); await page.locator('[data-slot="offline-banner"]').waitFor(); } },

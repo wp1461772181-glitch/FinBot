@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, workspaceCardsLoaded, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, stateWithQueue, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -22,7 +22,8 @@ import { ledgerCells } from "../../src/app/portfolio/portfolio-view.mjs";
 import { BOT_TEMPLATES } from "./fixtures/bots.mjs";
 import fs from "node:fs";
 import path from "node:path";
-import { findCollisions } from "./collisions.mjs";
+import { OLD_CLASS_NAMES, KEPT_CLASS_NAMES } from "./old-class-names.mjs";
+import { collectWorkspaceRequests, diffRecords, choose, openWithLayout, paneQuiet, LAYOUT_KEY } from "./workspace-requests.mjs";
 import { normalizePublicMarks, publicMarkQuoteText } from "../../src/chat-public-marks.mjs";
 import { followUpQuestion } from "../../src/chat-unverified.mjs";
 import { OPINION_DISCLAIMER } from "../../src/data-display.mjs";
@@ -171,100 +172,6 @@ async function thinkingPanelExpands(ctx) {
   } finally { await view.close(); }
 }
 
-/** Legacy selectors that may match shadcn parts because the match is known to change nothing.  Keep this list short and justified. */
-const SELECTOR_MATCH_ALLOWED = new Set([
-  "*", // box-sizing: border-box, the same value preflight sets
-]);
-
-/** The shadcn parts on #/dev/kit must look the same with the whole `legacy` layer deleted from the page. */
-async function kitNotPolluted(ctx) {
-  const states = [
-    ["closed", async () => {}],
-    ["dialog open", async (page) => { await page.locator('[data-kit="dialog-trigger"]').click(); await page.locator('[data-slot="dialog-content"]').waitFor(); }],
-    ["menu open", async (page) => { await page.locator('[data-kit="menu-trigger"]').click(); await page.locator('[data-slot="dropdown-menu-content"]').waitFor(); }],
-    ["select open", async (page) => { await page.locator('[data-kit="select-trigger"]').click(); await page.locator('[data-slot="select-content"]').waitFor(); }],
-    ["tooltip open", async (page) => { await page.locator('[data-kit="tooltip-trigger"]').focus(); await page.locator('[data-slot="tooltip-content"]').first().waitFor(); }],
-  ];
-  const problems = [];
-  let parts = 0, props = 0;
-  const inheritedSeen = new Map();
-  const matched = new Map();
-  for (const theme of ["light", "dark"]) {
-    for (const [state, open] of states) {
-      const view = await newView(ctx.browser, { width: 1440, theme, label: `kit-${state}`, unmatched });
-      try {
-        const { page } = view;
-        await page.goto(`${ctx.server.url}#/dev/kit`, { waitUntil: "load" });
-        await waitReady(page, PAGES.find((p) => p.name === "dev-kit"));
-        await settle(page);
-        await open(page);
-        await settle(page, { pinTranscript: false });
-        const result = await page.evaluate(() => {
-          // Custom properties are definitions, not styling; every value a component really uses shows up in a normal property.
-          const snapshot = (elements) => elements.map((el) => { const cs = getComputedStyle(el); const o = {}; for (const name of cs) if (!name.startsWith("--")) o[name] = cs.getPropertyValue(name); return o; });
-          const parts = [...document.querySelectorAll("[data-slot], [data-slot] *")];
-          const parents = parts.map((el) => el.parentElement);
-          const slotOf = (el) => el.getAttribute("data-slot") ?? `${el.tagName.toLowerCase()} in ${el.closest("[data-slot]").getAttribute("data-slot")}`;
-          const label = (el, i) => `${slotOf(el)}#${i}`;
-          const roots = [document.body, document.documentElement];
-          const before = snapshot(parts), parentsBefore = snapshot(parents), rootsBefore = snapshot(roots);
-          // Selector scan: every style rule inside the legacy layer whose selector matches a shadcn part.  This also catches
-          // a rule that sets the same value the part would inherit anyway, which the computed-style comparison cannot see.
-          const matches = {};
-          const scan = (rules) => {
-            for (const rule of rules) {
-              if (rule.cssRules && !(rule instanceof CSSStyleRule)) { scan(rule.cssRules); continue; }
-              if (!(rule instanceof CSSStyleRule) || rule.style.length === 0) continue;
-              const hit = new Set();
-              try { parts.forEach((el) => { if (el.matches(rule.selectorText)) hit.add(slotOf(el)); }); } catch { /* pseudo-element or unsupported selector */ }
-              if (hit.size) matches[`${rule.selectorText} { ${[...rule.style].filter((n) => !n.startsWith("--")).join(", ") || "(custom properties only)"} }`] = [...hit].join(",");
-            }
-          };
-          for (const sheet of document.styleSheets) for (const rule of sheet.cssRules) if (rule instanceof CSSLayerBlockRule && rule.name === "legacy") scan(rule.cssRules);
-          let removed = 0;
-          for (const sheet of document.styleSheets) {
-            for (let i = sheet.cssRules.length - 1; i >= 0; i--) {
-              const rule = sheet.cssRules[i];
-              if (rule instanceof CSSLayerBlockRule && rule.name === "legacy") { sheet.deleteRule(i); removed += 1; }
-            }
-          }
-          const after = snapshot(parts), parentsAfter = snapshot(parents), rootsAfter = snapshot(roots);
-          // A difference is a leak unless the part merely inherits it: same value as its parent both before and after
-          // (text defaults the old sheets set on <html>/<body>, e.g. font-family).  Those are listed, not failed.
-          const diffs = [], inherited = {};
-          parts.forEach((el, i) => {
-            for (const name of Object.keys(before[i])) {
-              if (before[i][name] === after[i][name]) continue;
-              // Resolved currentColor (stroke, outline-color ...): a copy of `color`, which is checked on its own line.
-              if (name !== "color" && before[i][name] === before[i].color && after[i][name] === after[i].color) continue;
-              if (before[i][name] === parentsBefore[i][name] && after[i][name] === parentsAfter[i][name]) { inherited[name] = (inherited[name] ?? 0) + 1; continue; }
-              diffs.push(`${label(el, i)} ${name}: ${before[i][name]} -> ${after[i][name]}`);
-            }
-          });
-          const control = roots.map((_, i) => Object.keys(rootsBefore[i]).filter((name) => rootsBefore[i][name] !== rootsAfter[i][name]).length).reduce((a, b) => a + b, 0);
-          return { removed, matches, count: parts.length, slots: [...new Set(parts.map((el) => el.getAttribute("data-slot")).filter(Boolean))], diffs, inherited, control, nprops: Object.keys(before[0] ?? {}).length };
-        });
-        assert(result.removed >= 1, `${theme}/${state}: no @layer legacy block found to remove`);
-        assert(result.control > 0, `${theme}/${state}: removing the legacy layer changed nothing on <body>/<html>, so the check proves nothing`);
-        assert(result.count > 0, `${theme}/${state}: no [data-slot] elements on the page`);
-        parts += result.count; props += result.count * result.nprops;
-        for (const slot of ["button", "input", "checkbox", "switch", "select-trigger"]) assert(result.slots.includes(slot), `${theme}/${state}: missing shadcn part ${slot}`);
-        if (state === "dialog open") assert(result.slots.includes("dialog-content"), "dialog content missing");
-        if (state === "menu open") assert(result.slots.includes("dropdown-menu-content"), "menu content missing");
-        if (state === "select open") assert(result.slots.includes("select-content"), "select content missing");
-        if (state === "tooltip open") assert(result.slots.includes("tooltip-content"), "tooltip content missing");
-        for (const [name, n] of Object.entries(result.inherited)) inheritedSeen.set(name, (inheritedSeen.get(name) ?? 0) + n);
-        for (const line of result.diffs) problems.push(`[${theme}/${state}] ${line}`);
-        for (const [rule, slots] of Object.entries(result.matches)) if (!SELECTOR_MATCH_ALLOWED.has(rule.replace(/\{.*$/, "").trim())) matched.set(rule, slots);
-      } finally { await view.close(); }
-    }
-  }
-  if (matched.size) { for (const [rule, slots] of matched) problems.push(`legacy rule matches a shadcn part: ${rule}   <- ${slots}`); }
-  if (problems.length) { for (const line of problems.slice(0, Number(process.env.SMOKE_DIFF_LINES ?? 60))) console.log(`      ${line}`); throw new Error(`${problems.length} computed-style differences with the legacy layer removed`); }
-  const inheritedNote = [...inheritedSeen.keys()].sort().join(", ");
-  return `${parts} part snapshots (light+dark, 5 states), ${props} property values compared, ${SELECTOR_MATCH_ALLOWED.size} allowlisted selector(s); only inherited from <html>/<body>, not leaks: ${inheritedNote || "none"}`;
-}
-
 /** Keyboard only: the dev-kit overlays open from the keyboard, Esc closes them and focus returns to the trigger. */
 async function kitKeyboard(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "kit-keyboard", unmatched });
@@ -292,16 +199,15 @@ async function kitKeyboard(ctx) {
 }
 
 /**
- * Where the old-browser-default restore applies.  #/dev/kit/probe has the same bare tags twice:
- *  - "outside": no data-legacy above them -> plain preflight (margins 0, no list markers, bare button, inherited link colour ...);
- *  - "island": a data-legacy subtree inside a data-slot container (the P2 shell case) -> browser defaults, as the old pages had.
+ * Bare tags with no shadcn part around them get Tailwind's plain preflight (P9.1: the old-UI restore block and its marker are gone, so there is no second half to this check).
+ * #/dev/kit/probe has them once: margins 0, no list markers, a bare button, the inherited link colour ...
  */
-async function legacyScope(ctx) {
+async function kitBarePreflight(ctx) {
   const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "kit-scope", unmatched });
   try {
     const { page } = view;
     await page.goto(`${ctx.server.url}#/dev/kit/probe`, { waitUntil: "load" });
-    await page.locator('[data-probe="island"]').waitFor({ timeout: 10000 });
+    await page.locator('[data-probe="outside"]').waitFor({ timeout: 10000 });
     await settle(page, { pinTranscript: false });
     const read = (which) => page.evaluate((name) => {
       const root = document.querySelector(`[data-probe="${name}"]`);
@@ -317,7 +223,7 @@ async function legacyScope(ctx) {
     }, which);
     const bad = [];
     const expect = (label, ok, got) => { if (!ok) bad.push(`${label}  (got ${JSON.stringify(got)})`); };
-    const o = await read("outside"), i = await read("island");
+    const o = await read("outside");
     expect("outside <h2> margin-bottom is 0", o.h2.marginBottom === "0px", o.h2.marginBottom);
     expect("outside <h2> inherits font-size", o.h2.fontSize === o.h2.parentFontSize, [o.h2.fontSize, o.h2.parentFontSize]);
     expect("outside <h2> inherits font-weight", o.h2.fontWeight === o.h2.parentFontWeight, [o.h2.fontWeight, o.h2.parentFontWeight]);
@@ -328,16 +234,8 @@ async function legacyScope(ctx) {
     expect("outside <button> does not get the old cursor:pointer", o.button.cursor !== "pointer", o.button.cursor);
     expect("outside <a> inherits colour and has no underline", o.a.color === o.a.parentColor && o.a.textDecorationLine === "none", o.a);
     expect("outside <svg> is display:block", o.svg.display === "block", o.svg.display);
-    expect("island <h2> has the browser margin", parseFloat(i.h2.marginBottom) > 0, i.h2.marginBottom);
-    expect("island <h2> is larger than its parent and heavier (the old sheet sets weight 500, the browser 700)", parseFloat(i.h2.fontSize) > parseFloat(i.h2.parentFontSize) && Number(i.h2.fontWeight) > Number(i.h2.parentFontWeight), i.h2);
-    expect("island <p> has the browser margin", parseFloat(i.p.marginBottom) > 0, i.p.marginBottom);
-    expect("island <ul> has bullets and indent", i.ul.listStyleType === "disc" && parseFloat(i.ul.paddingLeft) > 0, i.ul);
-    expect("island <button> has the browser border and background", parseFloat(i.button.borderTopWidth) > 0 && i.button.backgroundColor !== "rgba(0, 0, 0, 0)", i.button);
-    expect("island <button> has the old cursor:pointer", i.button.cursor === "pointer", i.button.cursor);
-    expect("island <a> is the browser link blue and underlined", i.a.color === "rgb(0, 0, 238)" && i.a.textDecorationLine === "underline", i.a);
-    expect("island <svg> is inline", i.svg.display === "inline", i.svg.display);
     if (bad.length) throw new Error(bad.join("\n"));
-    return "outside the marker: plain preflight; marker inside a data-slot container: browser defaults restored";
+    return "bare tags outside any part: plain preflight (margins 0, no list markers, bare button, inherited link colour, block svg)";
   } finally { await view.close(); }
 }
 
@@ -418,33 +316,16 @@ async function updownSwitchesMarketOnly(ctx) {
     await page.goto(`${ctx.server.url}#/dev/kit`, { waitUntil: "load" });
     await page.locator('[data-kit="updown-toggle"]').waitFor({ timeout: 10000 });
     await settle(page, { pinTranscript: false });
-    // Probe the old sheets too: throw-away elements carrying the old classes, read the same way.
-    const legacyProbe = () => page.evaluate(() => {
-      const make = (html) => { const host = document.createElement("div"); host.setAttribute("data-legacy", ""); host.setAttribute("data-smoke-probe", ""); host.innerHTML = html; document.body.appendChild(host); return host; };
-      const host = make('<span class="delta-up">+1</span><span class="delta-down">-1</span><p class="inventory-error">x</p><div class="action-notice error">x</div><div class="meter"><i class="bearish" style="display:block;width:4px;height:4px"></i></div>');
-      const q = (sel) => host.querySelector(sel);
-      const out = {
-        legacyUp: getComputedStyle(q(".delta-up")).color, legacyDown: getComputedStyle(q(".delta-down")).color,
-        legacyError: getComputedStyle(q(".inventory-error")).color, legacyNotice: getComputedStyle(q(".action-notice.error")).borderTopColor,
-        legacyBearish: getComputedStyle(q(".meter .bearish")).backgroundColor,
-      };
-      host.remove();
-      return out;
-    });
     const read = async () => ({
       attr: await page.evaluate(() => document.documentElement.dataset.updown),
       up: await colorOf(page, '[data-kit-delta="up"]'), down: await colorOf(page, '[data-kit-delta="down"]'),
       success: await colorOf(page, '[data-kit-status="success"]'), danger: await colorOf(page, '[data-kit-status="error"]'),
       barUp: await colorOf(page, '[data-segment="up"]', "backgroundColor"), barDown: await colorOf(page, '[data-segment="down"]', "backgroundColor"),
-      ...(await legacyProbe()),
     });
     const before = await read();
     assert(before.attr === "green-up", `default data-updown should be green-up, got ${before.attr}`);
     assert(before.up !== before.down, "up and down must differ");
     assert(before.success === before.up && before.danger === before.down, "by default success is the up colour and danger the down colour");
-    assert(before.legacyUp === before.up && before.legacyDown === before.down, `old .delta-up / .delta-down follow --up / --down: ${JSON.stringify(before)}`);
-    assert(before.legacyError === before.danger && before.legacyNotice === before.danger, "old error rules use the danger colour");
-    assert(before.legacyBearish === before.down, "the old probability bar's bearish segment is the down colour");
     await page.locator('[data-kit="updown-toggle"]').click();
     await page.waitForFunction(() => document.documentElement.dataset.updown === "red-up", null, { timeout: 5000 });
     const after = await read();
@@ -455,9 +336,6 @@ async function updownSwitchesMarketOnly(ctx) {
     expect("probability bar segments swap", after.barUp === before.barDown && after.barDown === before.barUp, [after.barUp, after.barDown]);
     expect("success message keeps its colour", after.success === before.success, [after.success, before.success]);
     expect("error message keeps its colour", after.danger === before.danger, [after.danger, before.danger]);
-    expect("old .delta-up / .delta-down swap with the market", after.legacyUp === before.legacyDown && after.legacyDown === before.legacyUp, after);
-    expect("old error rules keep their colour", after.legacyError === before.legacyError && after.legacyNotice === before.legacyNotice, after);
-    expect("old bearish segment follows the down token", after.legacyBearish === after.down, [after.legacyBearish, after.down]);
     // Dark mode swaps the same way (the highest-specificity rule is the dark + red-up one).
     await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
     const dark = await read();
@@ -733,17 +611,6 @@ async function chunkLoadFailure(ctx) {
   } finally { await view.close(); }
 }
 
-/**
- * No class the built `utilities` layer defines may also be a class the old UI uses (see collisions.mjs): Tailwind turns
- * words in src/app, src/components and src/dev (comments included) into utility rules, and that layer beats `legacy`.
- * Reads the build output and the sources next to it (<dist>/../src); no browser.
- */
-async function utilityLegacyCollisions() {
-  const result = findCollisions({ distDir: path.resolve(flags.dist), srcDir: path.resolve(flags.dist, "..", "src") });
-  assert(!result.collisions.length, `utility classes that also name old classes: ${result.collisions.join(", ")}.  Find the word in src/app, src/components or src/dev (comments and strings count) and reword it, or move the code out of the scanned folders; allow it in collisions.mjs only with a reason.`);
-  return `${result.utilities.size} utility classes vs ${result.legacy.size} old class names (${result.oldTsx} old tsx files + legacy css): none shared${result.allowed.length ? ` except the allowed ${result.allowed.join(", ")}` : ""}`;
-}
-
 // --- P2.2: the shell -----------------------------------------------------------------------------------------------
 const SIDEBAR_KEY = "market-evidence-agent:sidebar-open:v1";
 const MODE_KEY = "market-evidence-agent:chat-mode:v1";
@@ -756,6 +623,62 @@ async function openShell(ctx, label, hash, { width = 1440, identity = "personal"
 }
 const sidebarState = (page) => page.evaluate(() => document.querySelector('[data-slot="sidebar"]')?.getAttribute("data-state") ?? null);
 const sidebarWidth = (page) => page.evaluate(() => Math.round(document.querySelector('[data-slot="sidebar-container"]')?.getBoundingClientRect().width ?? -1));
+
+/**
+ * P9.1 (design 6.9 P1/P4/P5): a page left alone does no work of its own.  Three pages (the chat, a research page, a settings page), ten seconds with no input.
+ * What it counts is a FACT about what the page REGISTERED in those ten seconds (an init script wraps setInterval / setTimeout / requestAnimationFrame), not how fast the
+ * machine ran, so there is no speed-dependent threshold (`_common.md` §2):
+ *   - no interval is registered or alive (every poll of the app is a chained setTimeout; the interval ones, Telegram's 5 s and the job polls, exist only while a code or a job is shown);
+ *   - the frames a page asks for come from at most ONE callback: the shared avatar loop (bot-loop.ts), which the chat page's header avatar runs and a research / settings page does not (how often it runs is the avatar's business, asserted by idle-avatars-no-raf and avatar-no-react-frames, and is not counted here);
+ *   - every timer registered has a delay of at least 1 s (nothing chains short timers); the chat's own tail read is the one 4 s timer;
+ *   - the requests sent are reads (GET) of the paths listed for the page, and none on the research and settings pages.
+ * The numbers seen are returned as the detail, so a change shows in the log.
+ */
+async function noIdleTimers(ctx) {
+  const targets = [
+    { name: "chat", page: "chat-default", hash: "#/chat", loops: 1, reads: [/^GET \/agent-chat\/conversations\//, /^GET \/agent-chat\/bots\/[^/]+\/messages/] },
+    { name: "research", page: "watchlist", hash: "#/research", loops: 0, reads: [] },
+    { name: "settings", page: "settings", hash: "#/settings/models", loops: 0, reads: [] },
+  ];
+  const seen = [], bad = [];
+  for (const target of targets) {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: `no-idle-${target.name}`, unmatched, motion: true });
+    try {
+      await view.context.addInitScript(() => {
+        const w = window, st = { intervals: [], timeouts: [], rafs: 0, rafSources: new Set(), alive: new Set() };
+        w.__idle = st;
+        const si = w.setInterval.bind(w), ci = w.clearInterval.bind(w), tm = w.setTimeout.bind(w), raf = w.requestAnimationFrame.bind(w);
+        w.setInterval = (fn, delay, ...rest) => { const id = si(fn, delay, ...rest); st.intervals.push(Number(delay) || 0); st.alive.add(id); return id; };
+        w.clearInterval = (id) => { st.alive.delete(id); return ci(id); };
+        w.setTimeout = (fn, delay, ...rest) => { st.timeouts.push(Number(delay) || 0); return tm(fn, delay, ...rest); };
+        w.requestAnimationFrame = (fn) => { st.rafs += 1; st.rafSources.add(String(fn).slice(0, 160)); return raf(fn); };
+      });
+      const requests = [];
+      view.page.on("request", (r) => { const u = new URL(r.url()); if (u.origin === "https://api.example.test" && r.method() !== "OPTIONS") requests.push(`${r.method()} ${u.pathname}`); });
+      await view.page.goto(`${ctx.server.url}${target.hash}`, { waitUntil: "load" });
+      await waitReady(view.page, PAGES.find((p) => p.name === target.page));
+      await settle(view.page);
+      await view.page.mouse.move(1100, 500);
+      // The window starts when the page has settled: what the page registered up to now is its start-up, not its idling.
+      await view.page.evaluate(() => { const st = window.__idle; st.intervals.length = 0; st.timeouts.length = 0; st.rafs = 0; st.rafSources.clear(); });
+      const mark = requests.length;
+      await view.page.waitForTimeout(10000);
+      const got = await view.page.evaluate(() => { const st = window.__idle; return { intervals: st.intervals.slice(), timeouts: st.timeouts.slice(), rafs: st.rafs, sources: st.rafSources.size, avatars: document.querySelectorAll('[data-slot="bot-presence"], .bloub-avatar').length, alive: st.alive.size }; });
+      const sent = requests.slice(mark);
+      if (got.sources && !got.avatars) bad.push(`${target.name}: frames are requested but no avatar is on the page`);
+      const short = got.timeouts.filter((d) => d < 1000);
+      seen.push(`${target.name}: ${got.intervals.length} intervals (${got.alive} alive), ${got.rafs} frames from ${got.sources} callback(s), timers [${got.timeouts.join(",")}] ms, ${sent.length} reads`);
+      if (got.intervals.length || got.alive) bad.push(`${target.name}: ${got.intervals.length} interval(s) registered in 10 s, ${got.alive} alive (delays ${got.intervals.join(",")})`);
+      // The one frame loop the app has (bot-loop.ts) is shared by every avatar that runs frames, so what a page may show is ONE source of frames, and only with an avatar on it.
+      if (got.sources > target.loops) bad.push(`${target.name}: ${got.sources} different requestAnimationFrame callbacks in 10 s on a page left alone (at most ${target.loops}: the shared avatar loop)`);
+      if (short.length) bad.push(`${target.name}: timer(s) shorter than 1 s registered in 10 s: ${short.join(",")} ms`);
+      const stray = sent.filter((line) => !target.reads.some((re) => re.test(line)));
+      if (stray.length) bad.push(`${target.name}: request(s) beyond the page's own reads in 10 s: ${stray.join(", ")}`);
+    } finally { await view.close(); }
+  }
+  assert(!bad.length, `${bad.join("; ")}  [${seen.join(" | ")}]`);
+  return seen.join(" | ");
+}
 
 /** Every page, at 390 wide: nothing makes the document wider than the window. */
 async function noHorizontalScroll390(ctx) {
@@ -1033,26 +956,14 @@ async function mobileBarAndMore(ctx) {
   } finally { await view.close(); }
 }
 
-/** The old-UI restore still works inside the new shell: bare tags on the 全部 bot page (P8.2: the last page still inside the marker; the settings pages left it, as 技能 and 记忆 did in P8.1, and settings-no-legacy says so) keep the browser's margins; the sidebar's tags do not. */
-async function legacyRestoreInShell(ctx) {
-  const view = await openShell(ctx, "restore in shell", "#/assistant/bots", { ready: "[data-testid=bot-card]" });
+/** P9.1 (was legacy-restore-in-shell): the sidebar's tags are plain preflight (lists without markers, links without a line, buttons without a border, paragraphs without a margin), and neither the shell nor the page it holds has a data-legacy element: the marker's restore rules are gone with the old pages. */
+async function shellPreflight(ctx) {
+  const view = await openShell(ctx, "shell preflight", "#/assistant/bots", { ready: "[data-testid=bot-card]" });
   try {
     const { page } = view;
     const bad = [];
-    for (const [hash, ready] of [["#/assistant/bots", "[data-testid=bot-card]"]]) {
-      await page.evaluate((h) => { location.hash = h; }, hash);
-      await waitReady(page, { ready });
-      await settle(page, { pinTranscript: false });
-      const read = await page.evaluate(() => {
-        // A tag of an old page, not inside a shadcn part that sits within the marker (those keep preflight by design).
-        const inPage = (tag) => [...document.querySelectorAll(`[data-legacy] ${tag}`)].find((el) => { const slot = el.closest("[data-slot]"); return !slot || !el.closest("[data-legacy]").contains(slot); });
-        const margin = (el) => (el ? parseFloat(getComputedStyle(el).marginBottom) : null);
-        return { h2: margin(inPage("h2")), p: margin(inPage("p")), marker: Boolean(document.querySelector("[data-legacy]")), insideSidebar: Boolean(document.querySelector('[data-slot="sidebar"]')?.closest("[data-legacy]")) };
-      });
-      if (!read.marker) bad.push(`${hash}: no data-legacy marker`);
-      if (read.insideSidebar) bad.push(`${hash}: the sidebar is inside the old-UI marker`);
-      if (!(read.h2 > 0) && !(read.p > 0)) bad.push(`${hash}: bare <h2>/<p> margins are ${read.h2}/${read.p}; the browser default should be back`);
-    }
+    const legacy = await page.locator("[data-legacy]").count();
+    if (legacy) bad.push(`${legacy} data-legacy element(s) in the shell and the page it holds`);
     const sidebar = await page.evaluate(() => {
       const root = document.querySelector('[data-slot="sidebar"]');
       const ul = root.querySelector("ul"), a = root.querySelector("a"), button = root.querySelector('[data-slot="sidebar-trigger"]'), p = root.querySelector("p");
@@ -1064,7 +975,7 @@ async function legacyRestoreInShell(ctx) {
     if (sidebar.border !== "0px") bad.push(`sidebar <button> has a browser border`);
     if (sidebar.pMargin !== "0px") bad.push(`sidebar <p> has a margin`);
     assert(!bad.length, bad.join("\n      "));
-    return "the 全部 bot page (the last one inside the marker): browser margins back on bare <h2>/<p>; the sidebar's <ul>/<a>/<button>/<p> are plain preflight";
+    return "no data-legacy element in the shell or the page; the sidebar's <ul>/<a>/<button>/<p> are plain preflight";
   } finally { await view.close(); }
 }
 
@@ -1257,7 +1168,7 @@ async function commandMenuNavigates(ctx) {
     const input = palette.locator("input");
     const open = async (how = "shortcut") => {
       if (how === "shortcut") await page.keyboard.press("Control+k");
-      else await page.locator('[data-slot="sidebar"] button[aria-label="命令面板"]').click();
+      else await page.locator('[data-slot="sidebar"] button[aria-label^="命令面板"]').click();
       await palette.waitFor({ timeout: 5000 });
       assert(await page.evaluate(() => document.activeElement?.tagName === "INPUT"), "focus did not go to the search field");
     };
@@ -1292,7 +1203,7 @@ async function commandMenuNavigates(ctx) {
     await anchor.focus(); await open(); await page.keyboard.press("Escape"); await palette.waitFor({ state: "detached" });
     await page.waitForFunction(() => document.activeElement?.getAttribute("href") === "#/routines", null, { timeout: 3000 });
     await open("button"); await page.keyboard.press("Escape"); await palette.waitFor({ state: "detached" });
-    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "命令面板", null, { timeout: 3000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label")?.startsWith("命令面板"), null, { timeout: 3000 });
     // The shortcut also closes it.
     await open(); await page.keyboard.press("Control+k"); await palette.waitFor({ state: "detached" });
     // The dialog is labelled for a screen reader.
@@ -1556,34 +1467,6 @@ async function skeletonDelay(ctx) {
     assert(!flashed, "a quick page change flashed a skeleton");
   } finally { await view.close(); }
   return "200ms: never; 1.5s: after 400ms, gone at the end; blocks pulse only with motion allowed; a held-back page chunk is covered after 400ms by a table skeleton and a quick change shows none";
-}
-
-/** The three components that end up inside old pages look the same inside a data-legacy island as outside it (they carry data-slot, so the restore block leaves them alone). */
-async function stateComponentsInLegacy(ctx) {
-  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "states in legacy", unmatched });
-  try {
-    const { page } = view;
-    await page.goto(`${ctx.server.url}#/dev/kit/states`, { waitUntil: "load" });
-    await page.locator('[data-probe="state-island"]').waitFor();
-    await settle(page, { pinTranscript: false });
-    const props = ["display", "marginTop", "marginBottom", "marginLeft", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textTransform", "color", "backgroundColor", "borderTopWidth", "borderTopStyle", "borderTopColor", "borderRadius", "listStyleType", "textDecorationLine", "cursor", "width", "height", "textAlign"];
-    const read = (probe) => page.evaluate(([name, list]) => {
-      const root = document.querySelector(`[data-probe="${name}"]`);
-      const pick = (el) => { const cs = getComputedStyle(el); return Object.fromEntries(list.map((prop) => [prop, cs[prop]])); };
-      const out = {};
-      const parts = { errorBar: '[data-slot="error-bar"]', errorText: '[data-slot="error-bar"] p', errorButton: '[data-slot="error-bar"] button', errorIcon: '[data-slot="error-bar"] svg', empty: '[data-slot="empty-state"]', emptyTitle: '[data-slot="empty-state"] h3', emptyButton: '[data-slot="empty-state"] button', stateful: '[data-slot="button"]' };
-      for (const [key, selector] of Object.entries(parts)) { const el = root.querySelector(selector); out[key] = el ? pick(el) : null; }
-      return out;
-    }, [probe, props]);
-    const outside = await read("state-outside"), inside = await read("state-island");
-    const bad = [];
-    for (const key of Object.keys(outside)) {
-      if (!outside[key] || !inside[key]) { bad.push(`${key}: missing in ${outside[key] ? "the island" : "the outside copy"}`); continue; }
-      for (const prop of props) if (outside[key][prop] !== inside[key][prop]) bad.push(`${key}.${prop}: outside ${outside[key][prop]} / inside the legacy island ${inside[key][prop]}`);
-    }
-    assert(!bad.length, bad.join("\n"));
-    return `ErrorBar, EmptyState and StatefulButton: ${Object.keys(outside).length} parts x ${props.length} properties identical inside data-legacy and outside`;
-  } finally { await view.close(); }
 }
 
 /** The long-task bar: stage and elapsed time, survives leaving the page, the end is a toast. */
@@ -1914,7 +1797,7 @@ async function optionalChunkFailure(ctx) {
   try {
     const { page } = view;
     let blocked = 0;
-    await page.route(/\/assets\/(?:BotSidePanel|NewBotDialog)-[^/]*\.js/, (route) => { blocked += 1; return route.abort(); });
+    await page.route(/\/assets\/(?:WorkspacePane|NewBotDialog)-[^/]*\.js/, (route) => { blocked += 1; return route.abort(); });
     await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
     await waitReady(page, { ready: "[data-testid=message]" });
     await settle(page);
@@ -1922,7 +1805,7 @@ async function optionalChunkFailure(ctx) {
     assert((await page.locator("#agent-draft").count()) === 1, "the composer is gone: the failed chunk took the chat page down");
     assert((await page.locator('[data-slot="route-error"]').count()) === 0, "a failed optional chunk fell through to the route error");
     assert((await page.locator("[data-testid=context-panel]").count()) === 1, "the right panel itself (来源 / 过程) is gone with the workspace chunk");
-    assert((await page.locator(".bot-workspace").count()) === 0, "the workspace cards are drawn although their chunk was blocked");
+    assert((await page.locator("[data-testid=workspace-tab]").count()) === 0, "the workspace cards are drawn although their chunk was blocked");
     await page.locator('[data-slot="sidebar"] button', { hasText: "新建 bot" }).first().click();
     await page.waitForTimeout(800);
     assert((await page.locator('[role="dialog"]').count()) === 0, "the new-bot dialog is drawn although its chunk was blocked");
@@ -2618,8 +2501,8 @@ async function workspaceCardsInPanel(ctx) {
     const { page } = view;
     const pane = page.locator("[data-testid=workspace-pane]");
     assert((await page.locator("[data-testid=tab-workspace]").getAttribute("aria-selected")) === "true", "the panel does not open on 工作区 by default");
-    await pane.locator("section.ws-card").first().waitFor({ timeout: 10000 });
-    const titles = () => pane.locator("section.ws-card").evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
+    await pane.locator("[data-testid=workspace-card]").first().waitFor({ timeout: 10000 });
+    const titles = () => pane.locator("[data-testid=workspace-card]").evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
     const first = await titles();
     assert(first.length === 6, `${first.length} cards by default`);
     await pane.getByRole("button", { name: /编辑卡片/ }).click();
@@ -2627,26 +2510,419 @@ async function workspaceCardsInPanel(ctx) {
     await pane.getByRole("button", { name: "下移" }).first().click();
     const moved = await titles();
     assert(moved[0] === first[1] && moved[1] === first[0], `the first card did not move down: ${moved.join(" / ")}`);
-    await pane.locator("select[aria-label=大小]").nth(1).selectOption("l");
+    await choose(page, pane.getByRole("combobox", { name: "大小" }).nth(1), "L");
     await pane.locator("input[aria-label=固定股票]").first().fill("NVDA");
     await pane.locator("input[aria-label=固定股票]").first().blur();
     // Delete the last card, then add it back from the list of missing ones.
     await pane.getByRole("button", { name: "删除" }).last().click();
     assert((await titles()).length === 5, "the last card was not deleted");
-    await pane.locator("select[aria-label=添加卡片]").selectOption({ index: 1 });
+    await pane.getByRole("combobox", { name: "添加卡片" }).click();
+    await page.getByRole("option").first().click();
     assert((await titles()).length === 6, "the added card is not in the list");
     await pane.getByRole("button", { name: "完成" }).click();
     const stored = await page.evaluate((id) => JSON.parse(localStorage.getItem(`market-evidence-agent:workspace:${id}:v1`)), BOT.finbot);
     assert(stored[1].size === "l" && stored.some((item) => item.symbol === "NVDA"), `the stored layout is ${JSON.stringify(stored)}`);
     // The layout is kept per bot over a reload; 恢复默认 puts the six back.
     await page.reload({ waitUntil: "load" });
-    await pane.locator("section.ws-card").first().waitFor({ timeout: 10000 });
+    await pane.locator("[data-testid=workspace-card]").first().waitFor({ timeout: 10000 });
     const kept = await titles();
     assert(kept.join() === (await titles()).join() && kept[0] === first[1], `the layout is not kept over a reload: ${kept.join(" / ")}`);
     await pane.getByRole("button", { name: /编辑卡片/ }).click();
     await pane.getByRole("button", { name: "恢复默认" }).click();
     assert((await titles()).join() === first.join(), "恢复默认 did not bring the default order back");
     return "six default cards; move down, size L, pin NVDA, delete, add back; stored per bot, kept over a reload; 恢复默认 restores the order";
+  } finally { await view.close(); }
+}
+
+/** P9.1: the new-bot dialog (a dialog from 640px, a full-screen drawer below) keeps what was typed, the template, the shape and colour, AND the focus across the swap: the draft lives above both shells, the focus goes back to the control it was on. */
+async function newBotDialogBreakpoint(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "new-bot breakpoint", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/chat`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "chat-default"));
+    await settle(page);
+    // The chat's right panel is a column at 1440 and a drawer of its own below 1024: with it open, a window shrunk to 390 would put that drawer over the dialog's.  The check is about the dialog, so the panel is folded first.
+    if (await page.locator("[data-testid=panel-close]").count()) await page.locator("[data-testid=panel-close]").click();
+    await openNewBotDialog(page, 1440);
+    await page.locator("[data-template=news_monitor]").click();
+    await page.locator("[data-testid=new-bot-preview][data-archetype=sentinel]").waitFor({ timeout: 10000 });
+    await page.locator("#new-bot-name").fill("跨断点");
+    const read = () => page.evaluate(() => ({ name: document.querySelector("#new-bot-name")?.value, template: document.querySelector("[data-template][aria-pressed=true]")?.getAttribute("data-template"),
+      look: document.querySelector("[data-testid=new-bot-look] input:checked, [data-testid=new-bot-look] [aria-checked=true]")?.getAttribute("value") ?? document.querySelector("[data-testid=new-bot-look] [aria-checked=true]")?.getAttribute("data-option") ?? "",
+      archetype: document.querySelector("[data-testid=new-bot-archetype]")?.textContent?.trim() }));
+    const before = await read();
+    assert(before.name === "跨断点" && before.template === "news_monitor", `before the crossings: ${JSON.stringify(before)}`);
+    for (const width of [390, 1440, 390, 1440]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      const shell = (phone) => `[data-testid=new-bot-dialog][data-slot="${phone ? "drawer-content" : "dialog-content"}"]`;
+      await page.locator(shell(width === 390)).waitFor({ timeout: 8000 }).catch(() => { throw new Error(`at ${width}: the ${width === 390 ? "drawer" : "dialog"} did not come up`); });
+      assert((await page.locator(shell(width !== 390)).count()) === 0, `at ${width}: the other shell is still there`);
+      await page.locator("[data-testid=new-bot-dialog]").waitFor();
+      const now = await read();
+      assert(sameJson(now, before), `at ${width} the draft is ${JSON.stringify(now)} (was ${JSON.stringify(before)})`);
+      await focusOn(page, "#new-bot-name", `at ${width}: after the swap the focus is not on the name field it was on`, 3000);
+    }
+    // A control other than the first field keeps its focus too (the 换一个 button).
+    await page.locator("[data-testid=new-bot-reroll]").focus();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('[data-testid=new-bot-dialog][data-slot="drawer-content"]').waitFor();
+    await focusOn(page, "[data-testid=new-bot-reroll]", "after the swap the focus left 换一个", 3000);
+    return "390 / 1440 / 390 / 1440 with the dialog open: the name, the chosen template and the archetype survive every swap; the focus stays on the name field, and on 换一个 when that had it";
+  } finally { await view.close(); }
+}
+
+/** P9.1 (opus-p72-accept, end of section 5, item 2): a stepper whose sections may be done in any order does not tick the ones before the current one.  The task drawer (`onSelect`) lights the current section, shows every other one by its number and reads 「第 N 节，共 M 节」 (never 已完成 / 未开始); the linear ones (the revise drawer's steps, the Telegram binding's three) keep reading 已完成. */
+async function stepperSemantics(ctx) {
+  const view = await openRoutines(ctx, "stepper semantics", { tab: "tasks" });
+  const notes = [];
+  try {
+    const { page } = view;
+    await rtNewTask(view);
+    await rtGo(page, "scope");
+    const read = () => page.evaluate((drawer) => [...document.querySelectorAll(`${drawer} [data-slot=stepper] li`)].map((li) => ({ id: li.getAttribute("data-step"), state: li.getAttribute("data-state"), current: li.getAttribute("aria-current"),
+      said: (li.querySelector(".sr-only")?.textContent ?? "").trim(), ticks: li.querySelectorAll("svg").length, number: (li.querySelector("[data-step-button] [aria-hidden=true]")?.textContent ?? "").trim(), button: li.querySelector("[data-step-button]")?.getAttribute("aria-label") ?? "" })), RT_DRAWER);
+    const rows = await read();
+    assert(rows.length === 4, `${rows.length} steps`);
+    rows.forEach((row, i) => {
+      assert(row.ticks === 0, `step ${i + 1} (${row.id}) draws a tick: a section that was passed is not one that was filled in`);
+      assert(row.said === `第 ${i + 1} 节，共 4 节`, `step ${i + 1} reads ${JSON.stringify(row.said)}`);
+      assert(!/已完成|未开始/.test(row.said), `step ${i + 1} reads done / not started`);
+      assert(row.state === (i === 2 ? "current" : "free") && row.current === (i === 2 ? "step" : null), `step ${i + 1}: state ${row.state}, aria-current ${row.current}`);
+      assert(row.number === String(i + 1), `step ${i + 1} shows ${JSON.stringify(row.number)} instead of its number`);
+      // The name is the visible text, number first (axe's label-in-name rule: the button shows "1 基本"), and says nothing of done / not started.
+      assert(row.button && row.button.startsWith(`${i + 1} `) && row.button.length > `${i + 1} `.length && !/已完成|未开始/.test(row.button), `step ${i + 1}'s button is named ${JSON.stringify(row.button)} (expected "${i + 1} <the section's name>")`);
+    });
+    notes.push("task drawer on the third section: four numbers, no tick, each reads 第 N 节，共 4 节, only the third is current");
+    // a section with something to look at keeps its mark and its words
+    await rtGo(page, "basics"); await page.locator("#task-name").fill("");
+    await rtSave(view); await page.locator("[data-testid=task-problems]").waitFor({ timeout: 5000 }).catch(() => {});
+    const marked = (await read()).filter((row) => /这一步有要改/.test(row.said)).map((row) => row.id);
+    assert(marked.length >= 1 && (await read()).filter((row) => /这一步有要改/.test(row.said)).every((row) => /^第 \d 节，共 4 节/.test(row.said)), `the sections with something to mend: ${JSON.stringify(marked)}`);
+    notes.push(`the mark is kept (${marked.join(", ")}) and read after the place`);
+  } finally { await view.close(); }
+  // The linear use: the Telegram binding's steps still tick the ones before the current one and say 已完成.
+  const tg = await newView(ctx.browser, { width: 1440, theme: "light", label: "stepper linear", unmatched });
+  try {
+    await tg.page.goto(`${ctx.server.url}#/settings/notifications`, { waitUntil: "load" });
+    await tg.page.waitForSelector("[data-testid=telegram-unbind], #telegram-token", { state: "visible", timeout: 30000 });
+    await settle(tg.page);
+    const said = await tg.page.evaluate(() => [...document.querySelectorAll("[data-testid=telegram-panel] [data-slot=stepper] li, [data-slot=stepper] li")].map((li) => (li.querySelector(".sr-only")?.textContent ?? "").trim()));
+    assert(said.length === 3 && said.some((text) => /已完成/.test(text)), `the Telegram steps read ${JSON.stringify(said)}`);
+    notes.push(`the Telegram binding (linear) still reads ${JSON.stringify(said)}`);
+  } finally { await tg.close(); }
+  return notes.join("; ");
+}
+
+/** P9.1 (keyboard walk-through, the portfolio): 记一笔 done with the keyboard alone: the button reached by Tab and opened with Enter, the fields reached by Tab and typed into, Enter in the last box sends the old body, the dialog goes and the focus is back on 记一笔; a second time Esc closes it and the focus is back again. */
+async function keyboardPortfolioRecord(ctx) {
+  const view = await openPortfolio(ctx, "keyboard portfolio record");
+  try {
+    const { page } = view;
+    const tabTo = async (selector, what) => {
+      for (let i = 0; i < 60; i += 1) { await page.keyboard.press("Tab"); if (await page.evaluate((sel) => Boolean(document.activeElement?.matches(sel)), selector)) { await focusOn(page, selector, what, 2000); return; } }
+      throw new Error(`Tab never reached ${what}`);
+    };
+    await page.locator("[data-testid=portfolio-page]").evaluate(() => { document.activeElement?.blur?.(); });
+    await tabTo("[data-testid=record-open]", "记一笔");
+    await page.keyboard.press("Enter");
+    await page.locator("[data-testid=record-dialog]").waitFor({ timeout: 5000 });
+    await page.waitForFunction(() => Boolean(document.activeElement?.closest("[data-testid=record-dialog]")), null, { timeout: 5000 }).catch(() => { throw new Error("opening 记一笔 with Enter did not put the focus inside the dialog"); });
+    await tabTo("[data-testid=record-symbol]", "the stock code box"); await page.keyboard.type("msft");
+    await tabTo("[data-testid=record-quantity]", "the shares box"); await page.keyboard.type("10");
+    await tabTo("[data-testid=record-price]", "the price box"); await page.keyboard.type("401.5");
+    await tabTo("[data-testid=record-fee]", "the fee box"); await page.keyboard.type("1.5");
+    await tabTo("[data-testid=record-note]", "the note box"); await page.keyboard.type("键盘记一笔");
+    await page.keyboard.press("Enter");
+    await pfUntil(page, async () => pfWrites(view).length, 1, "Enter in the note box sent nothing");
+    const sent = pfWrites(view);
+    assert(sent.length === 1 && sent[0].method === "POST" && sent[0].path === "/portfolio/transactions", `sent ${JSON.stringify(sent.map((w) => `${w.method} ${w.path}`))}`);
+    assert(sameJson(sent[0].body, { kind: "buy", symbol: "MSFT", quantity: "10", price: "401.5", fee: "1.5", note: "键盘记一笔" }), `the body is ${JSON.stringify(sent[0].body)}`);
+    await page.locator("[data-testid=record-dialog]").waitFor({ state: "detached", timeout: 8000 });
+    await focusOn(page, "[data-testid=record-open]", "after the dialog closed the focus is not back on 记一笔", 5000);
+    await page.keyboard.press("Enter");
+    await page.locator("[data-testid=record-dialog]").waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape");
+    await page.locator("[data-testid=record-dialog]").waitFor({ state: "detached", timeout: 5000 });
+    await focusOn(page, "[data-testid=record-open]", "after Esc the focus is not back on 记一笔", 5000);
+    assert(pfWrites(view).length === 1, "Esc sent a request");
+    return "Tab, Enter, type, Enter: one POST with the old body; Esc closes and returns the focus";
+  } finally { await view.close(); }
+}
+
+/** P9.1 (keyboard walk-through, the research area): only the keyboard switches the company, opens a forecast and switches its version; the focus is visible all the way and returns where it should. */
+async function keyboardResearch(ctx) {
+  const view = await openForecastPage(ctx, "keyboard research", "#/research/c/AAPL", { ready: PAGES.find((p) => p.name === "company") });
+  try {
+    const { page } = view;
+    const visibleFocus = (what) => page.evaluate((w) => { const el = document.activeElement; if (!el || el === document.body) return `${w}: the focus is on the page, not on a control`; return el.matches(":focus-visible") ? "" : `${w}: the focused control (${el.tagName.toLowerCase()}${el.getAttribute("data-testid") ? `[${el.getAttribute("data-testid")}]` : ""}) does not show a focus ring`; }, what);
+    // 1. the company: the switch opens with Enter, the list takes typing, Enter chooses.
+    const combo = page.getByRole("combobox", { name: /切换股票/ });
+    await combo.focus();
+    assert(!(await visibleFocus("company switch")), await visibleFocus("company switch"));
+    await page.keyboard.press("Enter");
+    await page.locator("[cmdk-input]").waitFor({ timeout: 5000 });
+    await page.keyboard.type("MSFT");
+    await page.locator("[cmdk-item]", { hasText: "MSFT" }).first().waitFor({ timeout: 5000 });
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => /#\/research\/c\/MSFT/.test(location.hash), null, { timeout: 8000 });
+    await page.locator("[cmdk-input]").waitFor({ state: "detached", timeout: 5000 });
+    await focusOn(page, '[role=combobox][aria-label*="MSFT"]', "after choosing the company the focus did not return to the switch", 4000);
+    // 2. a forecast: the sidebar's 预测 by Enter, then the row's link by Tab + Enter.
+    await page.locator('[data-slot="sidebar"] a[href$="#/research/forecasts"], [data-slot="sidebar"] a[href$="/research/forecasts"]').first().focus();
+    assert(!(await visibleFocus("sidebar 预测")), await visibleFocus("sidebar 预测"));
+    await page.keyboard.press("Enter");
+    await page.locator("[data-slot=formal-row]").first().waitFor({ timeout: 15000 });
+    const rowLink = page.locator("[data-slot=formal-row]", { hasText: "AAPL" }).locator("a").first();
+    await rowLink.focus();
+    assert(!(await visibleFocus("forecast row link")), await visibleFocus("forecast row link"));
+    await page.keyboard.press("Enter");
+    await page.locator("[data-testid=forecast-page]").waitFor({ timeout: 15000 });
+    // 3. a version: a button of the rail, by Enter; the address follows, the focus stays on that button.
+    const older = page.locator(`[data-testid=version-rail] [data-slot=timeline-item][data-id="${VERSION.aapl2}"] button`);
+    await older.focus();
+    assert(!(await visibleFocus("version button")), await visibleFocus("version button"));
+    await page.keyboard.press("Enter");
+    await page.waitForFunction((id) => location.hash.includes(`version=${id}`), VERSION.aapl2, { timeout: 8000 });
+    await focusOn(page, `[data-testid=version-rail] [data-slot=timeline-item][data-id="${VERSION.aapl2}"] button`, "after choosing a version the focus left its button", 4000);
+    // no trap: Tab many times leaves the rail, Shift+Tab many times comes back out of the page's first control, never stuck on one element
+    const seen = new Set();
+    for (let i = 0; i < 12; i++) { await page.keyboard.press("Tab"); seen.add(await page.evaluate(() => { const el = document.activeElement; return `${el?.tagName}#${[...document.querySelectorAll("*")].indexOf(el)}`; })); }
+    assert(seen.size >= 6, `12 Tab presses reached only ${seen.size} different elements (a trap?): ${[...seen].join(" | ")}`);
+    return "company switch by Enter + typing + Enter (the focus returns to the switch), the sidebar's 预测 and the row's link by Enter, a version by Enter (the address follows, the focus stays); a focus ring on every stop; 12 Tab presses move through 6+ controls";
+  } finally { await view.close(); }
+}
+
+/**
+ * P9.1: the system's Back closes the phone's full-screen detail (the materials page and the replay page share one hook).  Opening puts one history entry on top of the page's own
+ * (same address); Back pops it and closes the layer, with the focus on the chosen row; closing with the layer's 返回列表 or Esc pops it itself, so `history.length` does not keep
+ * growing and one more Back leaves the page instead of opening the layer again.  (`history.length` can not shrink: the popped entry stays as a forward entry.)
+ */
+async function detailLayerBack(ctx) {
+  const notes = [];
+  const pages = [
+    { name: "materials", open: () => openMaterials(ctx, "detail layer back materials", "#/research/materials?symbol=AAPL", { width: 390 }), row: "[data-testid=material-row]", layer: "[data-testid=material-drawer]", back: "[data-testid=material-drawer-back]", selected: "[data-testid=material-row][data-selected]" },
+    { name: "replay", open: () => openReplay(ctx, "detail layer back replay", { width: 390 }), row: "[data-testid=replay-row]", layer: "[data-testid=replay-drawer]", back: "[data-testid=replay-drawer-back]", selected: "[data-testid=replay-row][data-selected]" },
+  ];
+  for (const spec of pages) {
+    const view = await spec.open();
+    try {
+      const { page } = view;
+      // A page to leave to: this one is the second entry of the session.
+      const home = await page.evaluate(() => location.hash);
+      await page.evaluate(() => { location.hash = "#/chat"; });
+      await page.waitForFunction(() => location.hash === "#/chat", null, { timeout: 8000 });
+      await page.evaluate((h) => { location.hash = h; }, home);
+      await page.waitForFunction((h) => location.hash === h, home, { timeout: 8000 });
+      await page.locator(spec.row).first().waitFor({ state: "visible", timeout: 20000 });
+      await settle(page);
+      const hashHere = await page.evaluate(() => location.hash);
+      const lengthBefore = await page.evaluate(() => history.length);
+      const press = async () => { await page.locator(spec.row).nth(spec.name === "replay" ? 1 : 0).click(); await page.locator(spec.layer).waitFor({ timeout: 8000 }); };
+      // 1. system Back closes the layer, the address is the same, the focus is on the chosen row.
+      await press();
+      assert((await page.evaluate(() => history.length)) === lengthBefore + 1, `${spec.name}: opening did not add exactly one history entry`);
+      assert((await page.evaluate(() => location.hash)) === hashHere, `${spec.name}: opening changed the address`);
+      await page.goBack();
+      await page.locator(spec.layer).waitFor({ state: "detached", timeout: 5000 });
+      assert((await page.evaluate(() => location.hash)) === hashHere, `${spec.name}: Back changed the address (now ${await page.evaluate(() => location.hash)})`);
+      await focusOn(page, spec.selected, `${spec.name}: after Back the focus is not on the chosen row`, 4000);
+      // 2. 返回列表 and Esc close it and pop their own entry: the length stays where it was after the first opening, and Back leaves the page.
+      const lengthAfterFirst = await page.evaluate(() => history.length);
+      for (const how of ["返回列表", "Esc"]) {
+        await press();
+        if (how === "Esc") await page.keyboard.press("Escape"); else await page.locator(spec.back).click();
+        await page.locator(spec.layer).waitFor({ state: "detached", timeout: 5000 });
+        await focusOn(page, spec.selected, `${spec.name}, ${how}: the focus is not on the chosen row`, 4000);
+        await page.waitForFunction((n) => history.length <= n, lengthAfterFirst, { timeout: 3000 }).catch(() => {});
+        assert((await page.evaluate(() => history.length)) <= lengthAfterFirst, `${spec.name}, ${how}: the history kept growing (${await page.evaluate(() => history.length)} > ${lengthAfterFirst})`);
+        assert((await page.evaluate(() => location.hash)) === hashHere, `${spec.name}, ${how}: the address changed`);
+      }
+      await page.goBack();
+      await page.waitForFunction((h) => location.hash !== h, hashHere, { timeout: 5000 }).catch(() => {});
+      const left = await page.evaluate(() => location.hash);
+      assert(left !== hashHere && (await page.locator(spec.layer).count()) === 0, `${spec.name}: one more Back did not leave the page (hash ${left})`);
+      notes.push(`${spec.name}: Back closes the layer (+1 entry on opening), 返回列表 / Esc leave no extra entry, the next Back leaves the page`);
+    } finally { await view.close(); }
+  }
+  return notes.join("; ");
+}
+
+// --- P9.1: the English interface holds no Chinese ----------------------------------------------------------------------------------------------------------------------------------------------
+/** The Chinese of the fake backend (names, titles, messages, facts typed into the fixtures): that is DATA, shown as given in any language.  Read from the fixture files, not from the baselines (those hold UI words). */
+const FIXTURE_FILES = ["mock-api.mjs", "fake-sse.mjs", ...fs.readdirSync(new URL("./fixtures/", import.meta.url)).filter((name) => name.endsWith(".mjs")).map((name) => `fixtures/${name}`)];
+const FIXTURE_TEXT = FIXTURE_FILES.map((name) => fs.readFileSync(new URL(`./${name}`, import.meta.url), "utf8")).join("\n");
+/** A punctuation-only text (a full stop between two pieces of data) is data when it sits in one of these containers: a message and its history row, a brief's facts. */
+const DATA_CONTAINERS = ["[data-testid=message]", "[data-testid=history-row]", "[data-slot=opinion-facts]", "[data-slot=opinion-body]", "[data-testid=skill-card]"];
+/** Visible text nodes and aria-label / title / placeholder values with CJK characters (ideographs, CJK or full-width punctuation) that are not data, as `where: text`. */
+const cjkResidue = (page) => page.evaluate(({ fixtureText, containers }) => {
+  const cjk = /[　-〿㐀-鿿＀-￯]/, ideo = /[㐀-鿿]+/g;
+  const isData = (text, el) => { const runs = text.match(ideo); return runs ? runs.every((run) => fixtureText.includes(run)) : Boolean(el && containers.some((selector) => el.closest(selector))); };
+  const found = [], walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node.textContent.trim(), el = node.parentElement;
+    if (!text || !cjk.test(text) || !el || el.getClientRects().length === 0 || getComputedStyle(el).visibility === "hidden" || isData(text, el)) continue;
+    found.push(`${el.tagName.toLowerCase()}${el.getAttribute("data-testid") ? `[${el.getAttribute("data-testid")}]` : ""}: ${text.slice(0, 50)}`);
+  }
+  for (const el of document.querySelectorAll("[aria-label],[title],[placeholder]")) for (const attr of ["aria-label", "title", "placeholder"]) {
+    const value = el.getAttribute(attr); if (value && cjk.test(value) && !isData(value, null)) found.push(`@${attr}${el.getAttribute("data-testid") ? `[${el.getAttribute("data-testid")}]` : ""}: ${value.slice(0, 50)}`);
+  }
+  return found;
+}, { fixtureText: FIXTURE_TEXT, containers: DATA_CONTAINERS });
+
+async function englishNoCjk(ctx) {
+  const bad = [], seen = [];
+  const where = new Map();   // the same text on many pages is one finding (with the pages it is on)
+  const scan = async (label, view) => { const found = await cjkResidue(view.page); seen.push(label); for (const line of found) where.set(line, [...(where.get(line) ?? []), label.split(" ")[0]]); };
+  for (const name of SITE_PAGES) {
+    const def = PAGES.find((page) => page.name === name);
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", locale: "en-US", identity: def.identity ?? "personal", label: `english ${name}`, unmatched, ...(typeof def.view === "function" ? def.view() : {}) });
+    try {
+      await view.page.goto(`${ctx.server.url}${def.hash}`, { waitUntil: "load" });
+      await waitReady(view.page, name === "replay-empty-watchlist" ? { ready: "[data-slot=empty-state]" } : def);
+      await settle(view.page, { pinTranscript: false });
+      if (name === "chat-default") {
+        await workspaceCardsLoaded(view.page);
+        await scan("chat · 工作区 default", view);
+        await view.page.locator("[data-testid=workspace-pane]").getByRole("button", { name: /Edit cards/ }).click();
+        await view.page.locator("[data-testid=workspace-pane]").getByRole("button", { name: "Done" }).waitFor();
+        await settle(view.page, { pinTranscript: false });
+        await scan("chat · 工作区 edit", view);
+      } else await scan(`${name} ${def.hash}`, view);
+    } finally { await view.close(); }
+  }
+  for (const [line, pages] of where) bad.push(`${line}   [${[...new Set(pages)].slice(0, 4).join(", ")}${new Set(pages).size > 4 ? ", …" : ""}]`);
+  assert(!bad.length, `Chinese in the English interface (data of the fake backend excluded: ${FIXTURE_TEXT.length} characters of fixtures; punctuation-only text inside ${DATA_CONTAINERS.join(", ")}):\n      ${bad.join("\n      ")}`);
+  return `${seen.length} addresses/states of site-no-old-markup in English: no Chinese outside the fake backend's own data`;
+}
+
+/** P9.1: no line of a 待确认 card's source line (bot · source · time) starts or ends with a lone 「·」: at every width each visible dot has its two neighbours on its own line (below 640 the dots are not drawn and the parts stack). */
+async function routinesSourceLine(ctx) {
+  const notes = [];
+  for (const width of [390, 600, 639, 640, 700, 820, 1024, 1440]) {
+    const view = await openRoutines(ctx, `source line ${width}`, { tab: "confirm", width });
+    try {
+      const read = await view.page.evaluate(() => [...document.querySelectorAll("[data-testid=entry-meta]")].map((meta) => {
+        const kids = [...meta.children].filter((el) => el.getClientRects().length > 0);
+        const top = (el) => Math.round(el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2);
+        const dots = kids.filter((el) => (el.textContent || "").trim() === "·");
+        return { kids: kids.length, dots: dots.length, bad: dots.filter((dot) => { const i = kids.indexOf(dot); const a = kids[i - 1], b = kids[i + 1]; return !a || !b || Math.abs(top(a) - top(dot)) > 3 || Math.abs(top(b) - top(dot)) > 3; }).length, textOverflow: meta.scrollWidth > meta.clientWidth + 1 };
+      }));
+      assert(read.length > 0, `${width}: no source line on the page`);
+      const bad = read.filter((r) => r.bad || r.textOverflow);
+      assert(!bad.length, `${width}: ${bad.length} source line(s) with a lone dot or sideways overflow: ${JSON.stringify(bad)}`);
+      notes.push(`${width}:${read[0].dots} dot(s)`);
+    } finally { await view.close(); }
+  }
+  return `${notes.join(" ")}; every visible 「·」 has both neighbours on its line, no line overflows`;
+}
+
+/** P9.1: the reads each workspace card sends (alone in the pane, minus the page's own reads) and the reads that are new after switching the current stock, pinning the price card and picking from the watchlist card: the record from the old cards (fixtures/workspace-requests-baseline.json). */
+async function workspaceCardsRequests(ctx) {
+  const base = JSON.parse(fs.readFileSync(new URL("./fixtures/workspace-requests-baseline.json", import.meta.url), "utf8"));
+  const now = await collectWorkspaceRequests(ctx, { unmatched });
+  const problems = diffRecords(now, base);
+  assert(!problems.length, `the cards' requests differ from the baseline:\n${problems.join("\n")}`);
+  const per = Object.entries(now.cards).map(([id, lines]) => `${id}:${lines.length}`).join(" ");
+  return `eight cards alone (${per}) and three actions (${Object.entries(now.actions).map(([k, v]) => `${k}:${v.length}`).join(" ")}) send the baseline's reads, no write`;
+}
+
+/** P9.1: a layout the OLD code wrote (a changed order, an L card, a card pinned to another stock, a deleted card) is read back as it was; 恢复默认 returns to the default six. */
+async function workspaceLayoutKept(ctx) {
+  // The layout as workspace-cards.mjs saveLayout writes it: entries { card, size?, symbol? } in that key order, filings deleted.
+  const stored = [{ card: "portfolio" }, { card: "price", size: "l", symbol: "NVDA" }, { card: "forecast" }, { card: "routines", size: "s" }, { card: "materials", symbol: "MSFT" }];
+  const view = await openWithLayout(ctx, "workspace-layout-kept", stored, { unmatched });
+  try {
+    const { page } = view;
+    const pane = page.locator("[data-testid=workspace-pane]");
+    const cards = pane.locator("section[aria-label]");
+    const titles = () => cards.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
+    const expected = ["我的持仓", "行情", "研究预测", "例行任务", "最近资料"];
+    assert((await titles()).join() === expected.join(), `the order reads ${(await titles()).join(" / ")}`);
+    const heading = (title) => page.locator(`section[aria-label="${title}"]`).getByRole("heading").first().innerText();
+    assert(/行情\s*·\s*NVDA/.test(await heading("行情")) && /最近资料\s*·\s*MSFT/.test(await heading("最近资料")) && /研究预测\s*·\s*AAPL/.test(await heading("研究预测")), "the pinned stocks are not in the card titles");
+    assert(view.sent.some((l) => l === "GET /v2/stocks/NVDA/prices") && view.sent.some((l) => /^GET \/v3\/materials\?.*symbol=MSFT/.test(l)), "the pinned stocks were not read");
+    // The edit controls tell the size and the pinned stock of each card.
+    await pane.getByRole("button", { name: /编辑卡片/ }).click();
+    await pane.getByRole("button", { name: "完成" }).waitFor();
+    const sizeText = async (card) => { const combo = card.getByRole("combobox", { name: "大小" }); return (await combo.evaluate((el) => el.tagName === "SELECT" ? el.selectedOptions[0].textContent : el.textContent)).trim(); };
+    const rows = [];
+    for (let i = 0; i < (await cards.count()); i += 1) {
+      const card = cards.nth(i), pin = card.getByRole("textbox", { name: "固定股票" });
+      rows.push({ title: await card.getAttribute("aria-label"), size: await sizeText(card), pin: (await pin.count()) ? await pin.inputValue() : null });
+    }
+    const want = [{ title: "我的持仓", size: "默认", pin: null }, { title: "行情", size: "L", pin: "NVDA" }, { title: "研究预测", size: "默认", pin: "" }, { title: "例行任务", size: "S", pin: null }, { title: "最近资料", size: "默认", pin: "MSFT" }];
+    assert(JSON.stringify(rows) === JSON.stringify(want), `the cards' size and pin read ${JSON.stringify(rows)}`);
+    assert(JSON.stringify(await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), LAYOUT_KEY)) === JSON.stringify(stored), "opening and looking rewrote the stored layout");
+    await pane.getByRole("button", { name: "恢复默认" }).click();
+    assert((await titles()).join() === ["行情", "研究预测", "最近资料", "官方申报", "例行任务", "我的持仓"].join(), `恢复默认 reads ${(await titles()).join(" / ")}`);
+    assert((await page.evaluate((key) => localStorage.getItem(key), LAYOUT_KEY)) === null, "恢复默认 left a stored layout");
+    return "stored layout (order, an L card, two pinned stocks, one card deleted) read back as written and not rewritten; 恢复默认 gives the default six and clears the key";
+  } finally { await view.close(); }
+}
+
+/** P9.1: the replay page with an empty watchlist: the notice in its words, the keyboard reaches 恢复默认股票, pressing it restores the default watchlist and opens the page; the writes are the recorded ones. */
+const REPLAY_EMPTY_WRITES = [{ method: "PUT", path: "/agent-chat/research-queue", body: JSON.stringify({ symbols: ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"] }) }];   // recorded from the old notice (HEAD 3c1cf42): the body as the browser sent it
+async function replayEmptyWatchlist(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "replay-empty-watchlist", unmatched, fixtureState: stateWithQueue([]) });
+  try {
+    const { page } = view;
+    const writes = [];
+    page.on("request", (r) => { const u = new URL(r.url()); if (u.origin === "https://api.example.test" && !["GET", "OPTIONS"].includes(r.method())) writes.push({ method: r.method(), path: u.pathname, body: r.postData() }); });
+    await page.goto(`${ctx.server.url}#/research/replay`, { waitUntil: "load" });
+    await page.getByText("关注列表为空", { exact: true }).waitFor({ timeout: 20000 });
+    await settle(page);
+    assert(await page.getByText("添加一只股票，或恢复默认关注股票，继续查看研究总览。", { exact: true }).isVisible(), "the sentence under the title is not the old one");
+    const button = page.getByRole("button", { name: "恢复默认股票", exact: true });
+    assert(await button.isVisible(), "no 恢复默认股票 button");
+    assert((await page.locator("[data-testid=replay-row]").count()) === 0, "the replay list is drawn with an empty watchlist");
+    // Only the keyboard: Tab until the focus is on the button, then Enter.
+    let reached = false;
+    for (let i = 0; i < 80 && !reached; i += 1) {
+      await page.keyboard.press("Tab");
+      reached = await page.evaluate(() => { const a = document.activeElement; return Boolean(a) && a.tagName === "BUTTON" && (a.textContent || "").trim() === "恢复默认股票"; });
+    }
+    assert(reached, `the keyboard never reached 恢复默认股票 in 80 Tab presses (the focus is on ${await describeFocus(page)})`);
+    await page.keyboard.press("Enter");
+    try { await page.locator("[data-testid=replay-list]").waitFor({ timeout: 20000 }); }
+    catch { throw new Error(`pressing 恢复默认股票 did not open the replay page (the notice is ${(await page.getByText("关注列表为空", { exact: true }).count()) ? "still" : "no longer"} there; the stored watchlist is ${await page.evaluate(() => localStorage.getItem("market-evidence-agent:watchlist:v1"))})`); }
+    await settle(page);
+    const stored = await page.evaluate(() => ({ watch: localStorage.getItem("market-evidence-agent:watchlist:v1"), selected: localStorage.getItem("market-evidence-agent:selected-symbol:v1") }));
+    assert(stored.watch === JSON.stringify(["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]), `the watchlist after the press is ${stored.watch}`);
+    assert(stored.selected === "AAPL", `the current stock after the press is ${stored.selected}`);
+    assert((await page.getByText("关注列表为空", { exact: true }).count()) === 0, "the notice is still there after the press");
+    // The writes from entering the page to after the press: recorded from the old notice.
+    assert(JSON.stringify(writes) === JSON.stringify(REPLAY_EMPTY_WRITES), `writes ${JSON.stringify(writes)} (baseline ${JSON.stringify(REPLAY_EMPTY_WRITES)})`);
+    // A phone: the same notice, no sideways scroll.
+    const phone = await newView(ctx.browser, { width: 390, theme: "light", label: "replay-empty-watchlist-390", unmatched, fixtureState: stateWithQueue([]) });
+    try {
+      await phone.page.goto(`${ctx.server.url}#/research/replay`, { waitUntil: "load" });
+      await phone.page.getByText("关注列表为空", { exact: true }).waitFor({ timeout: 20000 });
+      await settle(phone.page);
+      const wide = await phone.page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      assert(wide <= 0, `at 390 the page scrolls sideways by ${wide}px`);
+    } finally { await phone.close(); }
+    return "notice, sentence and button in the old words; Tab reaches the button and Enter restores the seven default stocks (current AAPL) and opens the replay page; the one write is the queue PUT; 390 does not scroll sideways";
+  } finally { await view.close(); }
+}
+
+/** P9.1 (opus-p73-accept 8.3 item 4): the 原始材料 view's link to the source of a filing: its address, a new tab with noopener, and the underline the page gives it. */
+async function materialsOriginalLink(ctx) {
+  const view = await newView(ctx.browser, { width: 1440, theme: "light", label: "materials-original-link", unmatched });
+  try {
+    const { page } = view;
+    await page.goto(`${ctx.server.url}#/research/materials`, { waitUntil: "load" });
+    await waitReady(page, PAGES.find((p) => p.name === "materials"));
+    await openMaterial(page, "10-Q 0000000000-26-000101");
+    await page.locator("[data-testid=material-tab-original]").click();
+    const link = page.locator("[data-testid=original-link]");
+    await link.waitFor({ timeout: 15000 });
+    const got = await link.evaluate((el) => ({ href: el.getAttribute("href"), target: el.getAttribute("target"), rel: el.getAttribute("rel") ?? "", line: getComputedStyle(el).textDecorationLine }));
+    assert(got.href === "https://www.sec.gov/Archives/edgar/data/0000000/1.htm", `the link goes to ${got.href}`);
+    assert(got.target === "_blank", `target is ${got.target}`);
+    assert(/\bnoopener\b/.test(got.rel), `rel is ${JSON.stringify(got.rel)}`);
+    assert(got.line.includes("underline"), `text-decoration-line is ${JSON.stringify(got.line)}`);
+    return `href ${got.href}, target _blank, rel ${got.rel}, text-decoration-line ${got.line}`;
   } finally { await view.close(); }
 }
 
@@ -3456,7 +3732,7 @@ async function auraSingleHue(ctx) {
       const frames = ["done", "partial", "failed"].includes(scenario) ? 40 : 16;
       for (let i = 0; i < frames; i += 1) { await sample(); await page.waitForTimeout(180); }
     }
-    const allowed = ["var(--me-ink, #0a0a0c)", "var(--action, #9a4a06)", "var(--danger, #c4281c)"];
+    const allowed = ["var(--ink, #0a0a0c)", "var(--action, #9a4a06)", "var(--danger, #c4281c)"];
     const bad = [...found].filter(([key, body]) => { const colour = key.split("|")[1]; return colour !== body && !allowed.includes(colour); }).map(([key]) => key);
     assert(!bad.length, `colours that are neither the bot's own, the ink, amber nor red: ${bad.join("; ")}`);
     const kinds = new Set([...found.keys()].map((key) => key.split("|")[1]));
@@ -6617,7 +6893,7 @@ async function forecastBriefLinks(ctx) {
     assert(total === 8, `${total} source numbers (the fixture has 8)`);
     // Every chip says which material it is: its number is the material's place in 纳入简报的材料.
     const labels = await page.locator("[data-slot=brief-cite]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("aria-label")));
-    assert(labels.every((label) => /^来源 [123]：/.test(label)), `a source number without its material: ${labels.join(" | ")}`);
+    assert(labels.every((label) => /^来源 [123] [^：]+：/.test(label)), `a source number without its material: ${labels.join(" | ")}`);
     assert((await page.locator("[data-testid=rail-evidence]").getAttribute("href")) === `#/research/evidence/${VERSION.aapl3}`, "the rail's evidence link is not the version's evidence page");
     const materials = await page.locator("[data-testid=brief-materials] a", { hasText: "在证据页打开" }).evaluateAll((nodes) => nodes.map((node) => node.getAttribute("href")));
     assert(materials.length === 3 && materials[0] === `#/research/evidence/${VERSION.aapl3}/official_filing/${brief.material_refs[0].source_id}`, `the materials' own links: ${materials.join(" | ")}`);
@@ -7615,8 +7891,33 @@ async function monitorDotInSidebar(ctx) {
   return notes.join("; ");
 }
 
+/**
+ * P9.1: the positive control of the `*-no-legacy` checks.  No product page is inside the old-UI marker any more, so a control that opens "a page that is still old" is gone;
+ * instead a probe is put into the page itself (the marker attribute, one old class, a native <select>, a text of 11px), read with the SAME counting function the check uses,
+ * taken out again, and read once more.  A selector that is broken (and would read 0 everywhere) fails here, whichever page is clean.
+ */
+async function probeControl(page, count, oldClass) {
+  const before = await count(page);
+  await page.evaluate((cls) => {
+    const probe = document.createElement("div");
+    probe.setAttribute("data-legacy", ""); probe.setAttribute("data-smoke-injected", ""); if (cls) probe.className = cls;
+    probe.innerHTML = '<select aria-hidden="true"><option>x</option></select><span style="font-size:11px">probe</span>';
+    (document.querySelector("main") ?? document.body).appendChild(probe);
+  }, oldClass);
+  const withProbe = await count(page);
+  await page.evaluate(() => document.querySelectorAll("[data-smoke-injected]").forEach((el) => el.remove()));
+  const after = await count(page);
+  return { before, withProbe, after };
+}
+/** What the control must read (relative to what the page already read, so the control says nothing about the page's own cleanliness): each counter the check keeps goes up with the probe in and is back where it was once the probe is out (`keys` = the counters this check has). */
+function assertProbe(name, keys, { before, withProbe, after }) {
+  const blind = keys.filter((key) => !(withProbe[key] > before[key])), stuck = keys.filter((key) => after[key] !== before[key]);
+  assert(!blind.length, `${name}: the control's probe was not counted (${blind.map((key) => `${key} ${JSON.stringify(before[key])} -> ${JSON.stringify(withProbe[key])}`).join(", ")}): the selector is broken, not the pages clean`);
+  assert(!stuck.length, `${name}: ${stuck.map((key) => `${key} ${JSON.stringify(before[key])} -> ${JSON.stringify(after[key])}`).join(", ")} once the probe was taken out`);
+}
+
 /** The old marker and the old classes: nothing in the research area may carry either (the old classes are what the legacy sheets are keyed on). */
-const OLD_MARKS = "main.workspace, .workspace-stack, .v2-desk, .historical-replay-workspace, .v2-notice, .text-button";
+const OLD_MARKS = "main.workspace, .workspace-stack, .v2-desk, .historical-replay-workspace, .v2-notice, .text-button, .empty-watchlist, .primary-action";
 const oldMarkCounts = (page) => page.evaluate((selector) => ({ legacy: document.querySelectorAll("[data-legacy]").length, old: document.querySelectorAll(selector).length }), OLD_MARKS);
 
 async function researchNoLegacy(ctx) {
@@ -7649,13 +7950,21 @@ async function researchNoLegacy(ctx) {
     await failing.page.waitForSelector("[data-testid=latest-error]", { state: "visible", timeout: 30000 });
     await settle(failing.page);
     judge(`${errorHash} (list unreadable)`, await oldMarkCounts(failing.page));
-    // the positive control: a page that is still old keeps its marker, so a selector that is broken (and would read 0 everywhere) cannot pass
-    await view.page.goto(`${ctx.server.url}#/assistant/bots`, { waitUntil: "load" });
-    await view.page.waitForSelector("[data-testid=bot-card]", { timeout: 30000 });
-    assert((await view.page.locator("[data-legacy]").count()) >= 1, "the 全部 bot page lost its old-UI marker too");   // P8.2: the settings pages are new markup; this page is the one left inside the marker
+    // the replay page with an EMPTY watchlist (it was drawn with old classes until P9.1, and no address above reaches it)
+    const empty = await newView(ctx.browser, { width: 1440, theme: "light", label: "research no legacy (empty watchlist)", unmatched, fixtureState: stateWithQueue([]) });
+    try {
+      await empty.page.goto(`${ctx.server.url}#/research/replay`, { waitUntil: "load" });
+      await empty.page.getByText("关注列表为空", { exact: true }).waitFor({ timeout: 30000 });
+      await settle(empty.page);
+      judge("#/research/replay (empty watchlist)", await oldMarkCounts(empty.page));
+    } finally { await empty.close(); }
+    // the positive control (P9.1: injected, since no product page keeps the marker): a probe with the marker and an old class is counted by the same function, and is gone again after
+    await view.page.goto(`${ctx.server.url}#/research/materials`, { waitUntil: "load" });
+    await view.page.waitForSelector("[data-testid=material-row]", { state: "visible", timeout: 30000 });
+    assertProbe("research-no-legacy", ["legacy", "old"], await probeControl(view.page, oldMarkCounts, "workspace-stack"));
   } finally { await failing.close(); await view.close(); }
   assert(!bad.length, bad.join("; "));
-  return `${clean.length + 1} research-area addresses (watchlist, company and its tabs, forecast home, one forecast, judgment, the three evidence addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page opened and stopped on its error) hold no data-legacy element and no old workspace class; the 全部 bot page still holds the marker`;
+  return `${clean.length + 2} research-area addresses (watchlist, company and its tabs, forecast home, one forecast, judgment, the three evidence addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page opened and stopped on its error, the replay page with an empty watchlist) hold no data-legacy element and no old workspace class; the control (a probe with the marker and an old class, injected into the page) is counted and reads 0 once removed`;
 }
 
 // --- P7.1: the portfolio page ------------------------------------------------------------------------------------------------------
@@ -8140,6 +8449,8 @@ async function portfolioDialogBreakpoint(ctx) {
       assert(width === 390 ? drawer && !dialog : dialog && !drawer, `at ${width}: drawer ${drawer}, dialog ${dialog}`);
       const got = await page.evaluate(() => ({ s: document.querySelector("[data-testid=record-symbol]").value, q: document.querySelector("[data-testid=record-quantity]").value, p: document.querySelector("[data-testid=record-price]").value, n: document.querySelector("[data-testid=record-note]").value, k: document.querySelector("[data-testid=record-kind] input:checked")?.value }));
       assert(sameJson(got, { s: "tsla", q: "12", p: "250", n: "跨断点", k: "sell" }), `at ${width} the draft is ${JSON.stringify(got)}`);
+      // P9.1: the focus stays on the control it was on (the note, the last one typed in), not on the new shell's first field.
+      await focusOn(page, "[data-testid=record-note]", `at ${width}: after the swap the focus is not on the note field it was on`, 3000);
     }
     await page.locator("[data-testid=record-submit]").click();
     await pfUntil(page, async () => pfWrites(view).length, 1, "the send from the drawer");
@@ -8571,6 +8882,9 @@ async function routinesBadgeEqualsTab(ctx) {
 
 /** The two ways to a conversation: what the old page's presses did.  The reads and writes of the old page are the baseline's. */
 const rtReads = (view, from) => view.mock.requests.slice(from).filter((r) => r.method === "GET").map((r) => r.path + r.query);
+// What this check can and cannot see (P9.1, opus-phase7-accept 2.4 criterion 2): after 「去对话核对」 the chat page has no last fact to wait for, so the check does not wait for one.  It catches a
+// request that goes out EARLY or WRONG (an extra one that arrives before the comparison, a changed body or path); a duplicate that arrives LATER than the comparison is a blind spot, covered only
+// by reading the code.  Whoever quotes this check says no more than that.
 async function routinesProposalActions(ctx) {
   const notes = [];
   const view = await openRoutines(ctx, "proposal actions", { tab: "confirm", state: stateWithRoutines() });
@@ -9083,7 +9397,8 @@ async function routinesLaterEnglish(ctx) {
     assert(JSON.stringify(items) === JSON.stringify(["Skip", "Later", "Ignore"]), `the 「…」 menu reads ${JSON.stringify(items)}`);
     await page.getByRole("menuitem", { name: "Later", exact: true }).click();
     await until(() => rtWrites(view).length >= 1, "Later: nothing was sent");
-    await page.waitForTimeout(250);
+    // The press ends with the bot list read again (write -> notice -> the two lists -> the bot list, RoutinesPage `after`): wait for THAT fact, not for a time, then compare the whole set of writes.
+    await until(() => { const sent = view.mock.requests; const w = sent.findIndex((r) => r.method !== "GET" && /\/inbox\//.test(r.path)); return w >= 0 && sent.slice(w + 1).some((r) => r.method === "GET" && /\/agent-chat\/bots$/.test(r.path)); }, "Later: the bot list was not read again after the write (the press has not ended)");
     const got = rtWrites(view).map((w) => ({ path: `/agent-chat${w.path}`, body: rtBody(w) }));
     const want = RT_BASE.suggestions.later.writes.filter((w) => /\/inbox\//.test(w.path)).map((w) => ({ path: w.path, body: w.body }));
     assert(JSON.stringify(got) === JSON.stringify(want), `Later sent ${JSON.stringify(got)}, 稍后再说 sent ${JSON.stringify(want)} in the old baseline`);
@@ -10066,7 +10381,13 @@ async function knowledgeOps(ctx) {
       const { page } = view;
       const rows = await page.locator(KN_DOC).evaluateAll((els) => els.map((e) => e.innerText.replace(/\s+/g, " ")));
       const docs = view.mock.state.assistant.docs;
-      docs.forEach((d, i) => { for (const part of [d.title, d.symbol || "FAQ", d.source_type, d.status, `${d.chunks} 块`, d.observed_at || "观察时间未知", d.owner_scope]) assert(rows[i].includes(part), `row ${i} "${rows[i]}" lacks "${part}"`); });
+      // P9.1: the observed time is the site's short date (2026年10月31日), the backend's own string stays in <time dateTime> and title; a document with none says 观察时间未知.
+      const shortDate = (iso) => new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(iso));
+      docs.forEach((d, i) => { for (const part of [d.title, d.symbol || "FAQ", d.source_type, d.status, `${d.chunks} 块`, d.observed_at ? shortDate(d.observed_at) : "观察时间未知", d.owner_scope]) assert(rows[i].includes(part), `row ${i} "${rows[i]}" lacks "${part}"`); });
+      for (const [i, d] of docs.entries()) if (d.observed_at) {
+        const t = page.locator(KN_DOC).nth(i).locator("time");
+        assert((await t.count()) === 1 && (await t.getAttribute("datetime")) === d.observed_at && (await t.getAttribute("title")) === d.observed_at, `row ${i}: the observed time is not a <time> carrying the backend's string ${d.observed_at}`);
+      }
       const opener = knDoc(page, "AAPL 10-Q").locator("[data-testid=knowledge-doc-open]");
       await opener.click(); await page.locator("[data-testid=knowledge-chunk]").first().waitFor({ timeout: 8000 });
       assert(asReads(view, /\/chunks$/).join() === B.chunks.source.sent[0].path.replace(/^\/agent-chat/, ""), `the chunks read ${asReads(view, /chunks/).join()}`);
@@ -10188,13 +10509,14 @@ async function assistantNoLegacy(ctx) {
     ".knowledge-admin", ".knowledge-import-card", ".knowledge-controls", ".knowledge-select-list", ".knowledge-list", ".knowledge-doc-row", ".knowledge-doc-main", ".knowledge-candidate", ".knowledge-drawer-backdrop", ".knowledge-chunk", ".knowledge-status", ".knowledge-error", ".knowledge-retrieval-result",
     ".task-form", ".task-form-row", ".bot-tool", ".section-tabs", ".origin-inferred", ".secondary-action", ".primary-action", ".fine-print", ".workspace", ".workspace-heading", ".eyebrow"].join(", ");
   const SCOPE = "main, [data-testid=skill-drawer], [data-testid=skill-import-drawer], [data-testid=news-drawer], [data-testid=knowledge-drawer]";
+  const count = (page) => page.evaluate(({ old, scope }) => ({
+    legacy: document.querySelectorAll("[data-legacy]").length,
+    old: [...document.querySelectorAll(old)].filter((el) => el.closest(scope)).map((el) => el.className).length,
+    native: document.querySelectorAll(`:is(${scope}) select`).length,
+    small: [...document.querySelectorAll(`:is(${scope}) *`)].filter((el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && parseFloat(getComputedStyle(el).fontSize) < 12).length,
+  }), { old: OLD, scope: SCOPE });
   const check = async (page, what) => {
-    const found = await page.evaluate(({ old, scope }) => ({
-      legacy: document.querySelectorAll("[data-legacy]").length,
-      old: [...document.querySelectorAll(old)].filter((el) => el.closest(scope)).map((el) => el.className).length,
-      native: document.querySelectorAll(`:is(${scope}) select`).length,
-      small: [...document.querySelectorAll(`:is(${scope}) *`)].filter((el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && parseFloat(getComputedStyle(el).fontSize) < 12).length,
-    }), { old: OLD, scope: SCOPE });
+    const found = await count(page);
     assert(found.legacy === 0, `${what}: ${found.legacy} data-legacy element(s)`);
     assert(found.old === 0, `${what}: ${found.old} element(s) with an old class`);
     assert(found.native === 0, `${what}: ${found.native} native <select>`);
@@ -10221,10 +10543,10 @@ async function assistantNoLegacy(ctx) {
   await run("新闻源（空）", "#/assistant/news", "[data-testid=news-empty]", null, { state: stateAssistantEmpty() });
   await run("知识库", "#/assistant/knowledge", KN_DOC, async (page, again) => { await knDoc(page, "AAPL 10-Q").locator("[data-testid=knowledge-doc-open]").click(); await page.locator("[data-testid=knowledge-chunk]").first().waitFor(); await again("分块抽屉"); }, { state: KN_STATE() });
   await run("知识库（空）", "#/assistant/knowledge", "[data-testid=knowledge-docs-empty]", null, { state: stateAssistantEmpty() });
-  // the control: the 全部 bot page is still an old page (P8.2: the settings pages are new), so a selector that reads 0 everywhere is told apart from one that is broken
-  const control = await asOpen(ctx, "no legacy control", "#/assistant/bots", "[data-testid=bot-card]");
-  try { assert((await control.page.locator("[data-legacy]").count()) >= 1, "the 全部 bot page holds no data-legacy element (the selector is broken, not the pages clean)"); } finally { await control.close(); }
-  return `${seen.length} addresses / states (skills incl. :skillId and its two drawers, memory both tabs, news with a test result and the drawer, knowledge with the chunk drawer, each page empty): 0 data-legacy, 0 old classes, 0 native <select>, 0 text under 12px; the 全部 bot page still holds the marker`;
+  // the control (P9.1: injected, since no product page keeps the marker): a probe with the marker, an old class, a native <select> and 11px text is read by the same `count`, and reads 0 once removed
+  const control = await asOpen(ctx, "no legacy control", "#/assistant/skills", SK_CARD);
+  try { assertProbe("assistant-no-legacy", ["legacy", "old", "native", "small"], await probeControl(control.page, count, "personal-page")); } finally { await control.close(); }
+  return `${seen.length} addresses / states (skills incl. :skillId and its two drawers, memory both tabs, news with a test result and the drawer, knowledge with the chunk drawer, each page empty): 0 data-legacy, 0 old classes, 0 native <select>, 0 text under 12px; the injected control probe is counted by all four counters and reads 0 once removed`;
 }
 
 // --- P8.2: the settings pages ------------------------------------------------------------------------------------------------------------
@@ -11068,13 +11390,14 @@ async function settingsEnglish(ctx) {
 async function settingsNoLegacy(ctx) {
   const OLD = [".agent-admin", ".agent-header-actions", ".agent-settings-card", ".agent-chat-status", ".catalog-card", ".catalog-key", ".catalog-actions", ".profile-grid", ".profile-card", ".profile-add", ".profile-backdrop", ".profile-modal", ".profile-close", ".profile-note", ".model-discovery-row", ".chat-archive-settings", ".chat-archive-tools", ".chat-archive-banner", ".secondary-action", ".workspace-heading", ".bot-warn", ".is-ready", ".is-missing", ".is-error"].join(", ");
   const SCOPE = "main, [data-testid=model-dialog]";
+  const count = (page) => page.evaluate(({ old, scope }) => ({
+    legacy: document.querySelectorAll("[data-legacy]").length,
+    old: [...document.querySelectorAll(old)].filter((el) => el.closest(scope)).length,
+    native: document.querySelectorAll(`:is(${scope}) select`).length,
+    small: [...document.querySelectorAll(`:is(${scope}) *`)].filter((el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && parseFloat(getComputedStyle(el).fontSize) < 12).length,
+  }), { old: OLD, scope: SCOPE });
   const check = async (page, what) => {
-    const found = await page.evaluate(({ old, scope }) => ({
-      legacy: document.querySelectorAll("[data-legacy]").length,
-      old: [...document.querySelectorAll(old)].filter((el) => el.closest(scope)).length,
-      native: document.querySelectorAll(`:is(${scope}) select`).length,
-      small: [...document.querySelectorAll(`:is(${scope}) *`)].filter((el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && parseFloat(getComputedStyle(el).fontSize) < 12).length,
-    }), { old: OLD, scope: SCOPE });
+    const found = await count(page);
     assert(found.legacy === 0, `${what}: ${found.legacy} data-legacy element(s)`);
     assert(found.old === 0, `${what}: ${found.old} element(s) with a class of the old sheets`);
     assert(found.native === 0, `${what}: ${found.native} native <select>`);
@@ -11099,10 +11422,64 @@ async function settingsNoLegacy(ctx) {
   await run("数据", "data", "[data-testid=archive-card]", {});
   await run("账户", "account", "[data-testid=account-about]", {});
   await run("账户（访客）", "account", "[data-testid=account-about]", { identity: "guest" });
-  // the control: the 全部 bot page is still an old page, so a selector that reads 0 everywhere is told apart from one that is broken
-  const control = await asOpen(ctx, "settings no legacy control", "#/assistant/bots", "[data-testid=bot-card]");
-  try { assert((await control.page.locator("[data-legacy]").count()) >= 1, "the 全部 bot page holds no data-legacy element (the selector is broken, not the pages clean)"); } finally { await control.close(); }
-  return `${seen.length} addresses / states (the five pages, both dialog shells, the catalog file, an empty catalog, a guest's three): 0 data-legacy, 0 old classes, 0 native <select>, 0 text under 12px; the 全部 bot page still holds the marker`;
+  // the control (P9.1: injected, since no product page keeps the marker): a probe with the marker, an old class, a native <select> and 11px text is read by the same `count`, and reads 0 once removed
+  const control = await stOpen(ctx, "settings no legacy control", "models", ST_MODELS, {});
+  try { assertProbe("settings-no-legacy", ["legacy", "old", "native", "small"], await probeControl(control.page, count, "agent-admin")); } finally { await control.close(); }
+  return `${seen.length} addresses / states (the five pages, both dialog shells, the catalog file, an empty catalog, a guest's three): 0 data-legacy, 0 old classes, 0 native <select>, 0 text under 12px; the injected control probe is counted by all four counters and reads 0 once removed`;
+}
+
+// --- P9.1: the whole site holds no old markup (the run-time proof that the old-UI layer is gone) ---------------------------------------------------------------------------
+/** One address per route of app/router.tsx (the sample pages excluded), named by the entry of tools/shots/pages.mjs that already opens it, plus the sign-in page and the chat's 工作区 tab in its default and its edit state. */
+const SITE_PAGES = ["entry", "chat-default", "chat-bot", "bot-settings", "chat-history", "watchlist", "company", "latest-error", "forecast-home", "forecast-detail", "judgment", "evidence", "evidence-version-picker", "evidence-detail",
+  "materials", "scores", "replay", "replay-empty-watchlist", "monitor", "portfolio", "routines", "all-bots", "skills", "skills-draft", "memory", "news", "knowledge", "settings"];
+/** Text under 12px that is meant (a selector each, with the reason).  Empty: nothing the scan met was kept. */
+const SITE_SMALL_EXEMPT = [];
+/** What the scan counts in the open document: old-UI marker elements, elements carrying a class of the deleted old stylesheets (the names in old-class-names.mjs, bar the kept families), native <select>, and visible text under 12px (as `tag.class "text"`). */
+const siteScan = (page) => page.evaluate(({ exempt, oldNames }) => {
+  const visible = (el) => el.getClientRects().length > 0;
+  const small = [...document.querySelectorAll("body *")].filter((el) => visible(el) && [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && parseFloat(getComputedStyle(el).fontSize) < 12 && !exempt.some((rule) => el.matches(rule)))
+    .map((el) => `${el.tagName.toLowerCase()}${typeof el.className === "string" && el.className.trim() ? "." + el.className.trim().split(/\s+/)[0] : ""} "${(el.textContent || "").trim().slice(0, 24)}" ${getComputedStyle(el).fontSize}`);
+  const oldSet = new Set(oldNames), oldHits = [];
+  for (const el of document.querySelectorAll("body *")) for (const c of (typeof el.className === "string" ? el.className : el.getAttribute("class") || "").split(/\s+/)) if (c && oldSet.has(c)) oldHits.push(`${el.tagName.toLowerCase()}.${c}`);
+  return { legacy: document.querySelectorAll("[data-legacy]").length, old: oldHits.length, oldSamples: [...new Set(oldHits)].slice(0, 6), native: document.querySelectorAll("select").length, small: small.length, smallSamples: small.slice(0, 4) };
+}, { exempt: SITE_SMALL_EXEMPT, oldNames: OLD_CLASS_NAMES.filter((name) => !KEPT_CLASS_NAMES.includes(name)) });
+
+async function siteNoOldMarkup(ctx) {
+  const bad = [], seen = [];
+  const judge = (label, got) => {
+    seen.push(label);
+    if (got.legacy) bad.push(`${label}: ${got.legacy} data-legacy element(s)`);
+    if (got.old) bad.push(`${label}: ${got.old} element(s) with a class of the deleted old stylesheets (${got.oldSamples.join(", ")})`);
+    if (got.native) bad.push(`${label}: ${got.native} native <select>`);
+    if (got.small) bad.push(`${label}: ${got.small} text element(s) under 12px (${got.smallSamples.join(" | ")})`);
+  };
+  const open = async (label, def, hash) => {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", identity: def?.identity ?? "personal", label: `site ${label}`, unmatched, ...(typeof def?.view === "function" ? def.view() : {}) });
+    await view.page.goto(`${ctx.server.url}${hash ?? def.hash}`, { waitUntil: "load" });
+    await waitReady(view.page, def ?? { ready: "[data-testid=message]" });
+    await settle(view.page, { pinTranscript: false });
+    return view;
+  };
+  for (const name of SITE_PAGES) {
+    const def = PAGES.find((page) => page.name === name);
+    assert(def, `no page entry named ${name}`);
+    const view = await open(name, def);
+    try {
+      if (name === "chat-default") {
+        await workspaceCardsLoaded(view.page);
+        judge("chat · 工作区 default", await siteScan(view.page));
+        assertProbe("site-no-old-markup", ["legacy", "old", "native", "small"], await probeControl(view.page, siteScan, "empty-watchlist"));
+        await view.page.locator("[data-testid=workspace-pane]").getByRole("button", { name: /编辑卡片/ }).click();
+        await view.page.locator("[data-testid=workspace-pane]").getByRole("button", { name: "完成" }).waitFor();
+        await settle(view.page, { pinTranscript: false });
+        judge("chat · 工作区 edit", await siteScan(view.page));
+      } else judge(`${name} ${def.hash}`, await siteScan(view.page));
+    } finally { await view.close(); }
+  }
+  const conversation = await open("chat conversation", null, `#/chat/c/${CONVERSATION.older}`);
+  try { judge(`#/chat/c/${CONVERSATION.older}`, await siteScan(conversation.page)); } finally { await conversation.close(); }
+  assert(!bad.length, bad.join("\n      "));
+  return `${seen.length} addresses (one per route, the sign-in page, the chat's 工作区 tab default and edit): 0 data-legacy, 0 elements with one of ${OLD_CLASS_NAMES.length - KEPT_CLASS_NAMES.length} old class names (${KEPT_CLASS_NAMES.length} kept), 0 native <select>, 0 text under 12px (${SITE_SMALL_EXEMPT.length} exemptions); the injected control probe is counted and reads 0 once removed`;
 }
 
 const CHECKS = [
@@ -11134,17 +11511,16 @@ const CHECKS = [
   ["back-button-chain: chat > research > company > forecast > portfolio, four backs", backButtonChain],
   ["deep-link-reload: the company in the address survives a reload; the picker moves the address", deepLinkReload],
   ["client-actions: open_page, select_stock, queue events move the address", clientActions],
-  ["utility-legacy-collisions: no utility class defined by the build is also an old class name", utilityLegacyCollisions],
   ["answer-links: old-form anchors in past answers open the new routes; back returns", answerLinks],
   ["chunk-load-failure: a page that fails to load shows the notice inside the shell; reload recovers", chunkLoadFailure],
   ["background-turn-survives-navigation: a turn sent before leaving is in the line on return", backgroundTurnSurvivesNavigation],
   ["thinking panel expands to the turn trace", thinkingPanelExpands],
-  ["#/dev/kit: shadcn parts are identical with the legacy layer removed", kitNotPolluted],
   ["#/dev/kit: dialog, menu and select work from the keyboard and return focus", kitKeyboard],
-  ["#/dev/kit/probe: restore applies only inside data-legacy, preflight everywhere else", legacyScope],
-  ["#/dev/kit: the up/down switch swaps market colours only (new and old styles); success and error stay", updownSwitchesMarketOnly],
+  ["#/dev/kit/probe: bare tags outside any part get plain preflight", kitBarePreflight],
+  ["#/dev/kit: the up/down switch swaps market colours only; success and error stay", updownSwitchesMarketOnly],
   ["settings page: the up/down choice changes <html data-updown> and survives a reload", updownSettingPersists],
   ["idle-avatars-no-raf: sidebar avatars (idle or unread) run no frame loop; hover starts it, leaving stops it", idleAvatarsNoRaf],
+  ["no-idle-timers: the chat, a research page and a settings page left alone for 10 s register no interval and no timer under 1 s, ask for frames only from the shared avatar loop, and send no request beyond the chat's own tail read", noIdleTimers],
   ["no-horizontal-scroll-390: every page fits a 390px window", noHorizontalScroll390],
   ["sidebar-collapse-persists: collapse to 56px, reload, still collapsed (and back)", sidebarCollapsePersists],
   ["routines-badge-matches: the 任务 number = live proposals + open suggestions = what the 任务 page lists", routinesBadgeMatches],
@@ -11153,7 +11529,7 @@ const CHECKS = [
   ["guest-readonly: read-only chat input is the sign-in notice; owner pages say 需要登录; no bots", guestReadonly],
   ["keyboard-nav: Tab reaches every sidebar entry, Enter navigates, dialog and menu close on Esc and return focus", keyboardNav],
   ["mobile-bar-and-more: five 44px items, no sidebar, 更多 lists the bots, 助手, 设置, account, theme", mobileBarAndMore],
-  ["legacy-restore-in-shell: old pages keep browser margins inside the new shell; the sidebar's tags are preflight", legacyRestoreInShell],
+  ["shell-preflight: the sidebar's tags are plain preflight and neither the shell nor the page it holds has a data-legacy element", shellPreflight],
   ["bot-row-marks: answering / waiting / unread / quiet rows are told apart", botRowMarks],
   ["no-window-confirm: the nine former window.confirm places ask in the app; Esc / 取消 send nothing, a full hold sends one request", noWindowConfirm],
   ["confirm-dialog-keyboard: focus starts on 取消, Esc cancels, holding Space or Enter confirms, reduced motion and bare clicks press twice", confirmDialogKeyboard],
@@ -11166,7 +11542,6 @@ const CHECKS = [
   ["offline-banner: failed requests light one banner at the top; 重试 with the backend back puts it out", offlineBanner],
   ["offline-banner-quiet: application errors (a guest's 403s) never light the banner", offlineBannerQuiet],
   ["skeleton-delay: no skeleton for a quick load, one after 400ms for a slow one, none pulsing under reduced motion, route-level cover", skeletonDelay],
-  ["state-components-in-legacy: ErrorBar, EmptyState, StatefulButton look the same inside a data-legacy island", stateComponentsInLegacy],
   ["task-bar: stage and elapsed time, follows the reader to another page, the end is a toast", taskBar],
   ["states-sample: the nine states at #/dev/kit/states work", statesSamplePage],
   ["composer-ime: Enter during an input-method composition never sends; after compositionend it does", composerIme],
@@ -11205,6 +11580,17 @@ const CHECKS = [
   ["mobile-touch-targets: the line's controls are ≥ 44x44 and the page does not scroll sideways at 390", mobileTouchTargets],
   ["mobile-keyboard-inset: a keyboard over the page lifts the composer above it", mobileKeyboardInset],
   ["workspace-cards-in-panel: add, move, resize, pin, delete and reset the workspace cards in the panel's 工作区 tab; the layout is kept per bot", workspaceCardsInPanel],
+  ["workspace-cards-requests: each of the eight cards alone and the three actions (switch the current stock, pin the price card, pick from the watchlist card) send the reads recorded from the old cards, no more, no fewer, no write", workspaceCardsRequests],
+  ["workspace-layout-kept: a layout the old code wrote (order, an L card, two pinned stocks, a deleted card) is read back as written and not rewritten; 恢复默认 gives the default six", workspaceLayoutKept],
+  ["replay-empty-watchlist: with an empty watchlist the replay page says 关注列表为空 in the old words, the keyboard reaches 恢复默认股票, the press restores the default stocks and opens the page, the writes are the recorded ones, 390 does not scroll sideways", replayEmptyWatchlist],
+  ["new-bot-dialog-breakpoint: the new-bot dialog (dialog from 640px, drawer below) keeps the name, the template and the focus when the window crosses 640px, both ways, twice", newBotDialogBreakpoint],
+  ["stepper-semantics: a stepper whose sections can be done in any order (the task drawer) ticks none, shows every section by its number and reads 第 N 节，共 M 节; a linear one (the Telegram binding) still reads 已完成", stepperSemantics],
+  ["keyboard-portfolio-record: 记一笔 with the keyboard alone: Tab to the button, Enter opens, the fields by Tab and typing, Enter sends the old body, the dialog closes and the focus returns; Esc closes it again and the focus returns", keyboardPortfolioRecord],
+  ["keyboard-research: only the keyboard switches the company, opens a forecast and switches its version; a focus ring on every stop, the focus returns to the switch, no trap", keyboardResearch],
+  ["detail-layer-back: the phone's full-screen detail of the materials page and of the replay page: system Back closes it (the address and the chosen row stay), 返回列表 and Esc leave no extra history entry, the next Back leaves the page", detailLayerBack],
+  ["english-no-cjk: the English interface of every site address (and the chat's 工作区 tab, default and edit) holds no Chinese text, label or tooltip except the fake backend's own data", englishNoCjk],
+  ["routines-source-line: a 待确认 card's source line (bot · source · time) never has a lone 「·」 at the start or end of a line, at eight widths from 390 to 1440; the dots are not drawn below 640", routinesSourceLine],
+  ["materials-original-link: the 原始材料 view's link to a filing's source has its address, opens a new tab with noopener and is underlined", materialsOriginalLink],
   ["avatar-no-react-frames: the header avatar runs frames for 3 s with next to no React commits", avatarNoReactFrames],
   ["avatar-waiting-pose: a turn that ends in a card leaves the avatar waiting: amber dot up, never a wink, one nudge in 10 s", avatarWaitingPose],
   ["avatar-tempo-differs: the five bots' engine clocks advance in the ratio of their tempos", avatarTempoDiffers],
@@ -11310,7 +11696,7 @@ const CHECKS = [
   ["replay-phone-layer: across the 1024 breakpoint the detail element, the choice and the folded brief are kept; the phone's whole-screen layer is modal, Tab stays inside, 返回列表 / Esc close it; one disclaimer", replayPhoneLayer],
   ["monitor-four-states: 正常 / 延迟 / 异常 / 无记录 each have their badge kind, icon and colour token; the watchlist chip is the same component", monitorFourStates],
   ["monitor-dot-in-sidebar: a late or failing monitor puts a dot beside 研究 (sidebar and phone tab bar), a well one or no record nothing; read once on entering the research area, never from the chat page", monitorDotInSidebar],
-  ["research-no-legacy: every research-area route (the watchlist, company page and its tabs, forecast home and one forecast, judgment, evidence in its three addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page) holds no data-legacy element and no old workspace class; the 全部 bot page still holds the marker", researchNoLegacy],
+  ["research-no-legacy: every research-area route (the watchlist, company page and its tabs, forecast home and one forecast, judgment, evidence in its three addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page) holds no data-legacy element and no old workspace class; the control is a probe (marker + an old class) injected into a page and read by the same function", researchNoLegacy],
   ["analysis-status-neutral: the check of a quote is plain text: no danger or action colour, no icon, no alert, not folded", analysisStatusNeutral],
   ["portfolio-record-body: 记一笔 sends the old body for every kind, every old rule still stops the form with its sentence, the kinds and their fields are the old ones", portfolioRecordBody],
   ["portfolio-cash-edit: 可用资金 edits in place; Enter and 保存 send the old body; a bad number is said; Esc and 取消 send nothing", portfolioCashEdit],
@@ -11360,7 +11746,7 @@ const CHECKS = [
   ["knowledge-ops: the ten knowledge operations (upload with the fixed 3 stars and medium, load ×4, import, index, retrieval ×4, chunks, retry, withdraw, reject, approve) send the old requests; nothing promises that an import is searchable", knowledgeOps],
   ["knowledge-entries: the sidebar and the agent's open_page (knowledge) land on #/assistant/knowledge with 知识库 highlighted; none of the five settings pages holds a button or link to the library in its content; no 返回模型设置", knowledgeEntries],
   ["knowledge-keyboard: a document's chunks open and close from the keyboard with the focus returned to the row; the retrieval test and the source list are used with the keyboard alone", knowledgeKeyboard],
-  ["assistant-no-legacy: the four pages (each address and each opened drawer, each empty) hold no data-legacy element, no old class, no native <select>, no text under 12px; the 全部 bot page still holds the marker", assistantNoLegacy],
+  ["assistant-no-legacy: the four pages (each address and each opened drawer, each empty) hold no data-legacy element, no old class, no native <select>, no text under 12px; the control is an injected probe read by the same counters", assistantNoLegacy],
   ["settings-five-pages: five addresses show five pages (title, list beside the page, sidebar mark, reload), none inside the old-UI marker; the list is one node, above the page at 390; #admin and #settings land on 模型", settingsFivePages],
   ["settings-model-test-and-save: 测试 then 保存 with the old bodies, a refused test saves nothing and shows the server's own sentence, 取消测试 saves nothing, the button is off for a form that cannot be sent, the focus returns to 添加模型", settingsModelTestAndSave],
   ["settings-model-crud: add ×3, edit ×5 (rename, new key, new provider, display name + default), 设为默认 and 删除 by hold send the old requests; a rename follows into the role table; the dialog's draft survives crossing 1024", settingsModelCrud],
@@ -11376,7 +11762,8 @@ const CHECKS = [
   ["settings-guest: a guest sees one sign-in sentence on 模型 and on 通知 and no owner request is sent; 外观 and 数据 work; 账户 says 访客只读", settingsGuest],
   ["settings-keyboard: the list of sub pages, the add dialog (filled, sent with Enter, Esc, focus back), a card's 「…」 menu, a role row and Telegram step 1 by the keyboard alone", settingsKeyboard],
   ["settings-english: no Chinese in the English interface on the five pages, the dialog, the open lists and the empty / catalog-file / guest states", settingsEnglish],
-  ["settings-no-legacy: the five pages (dialog open in both shells, a catalog file, an empty catalog, a guest) hold no data-legacy element, no deleted old class, no native <select>, no text under 12px; the 全部 bot page still holds the marker", settingsNoLegacy],
+  ["settings-no-legacy: the five pages (dialog open in both shells, a catalog file, an empty catalog, a guest) hold no data-legacy element, no deleted old class, no native <select>, no text under 12px; the control is an injected probe, read by the same counters", settingsNoLegacy],
+  ["site-no-old-markup: one address per route (sample pages excluded), the sign-in page and the chat's 工作区 tab in its default and edit state hold no data-legacy element, no element with a class of the deleted old stylesheets, no native <select> and no text under 12px; the control is an injected probe read by the same function", siteNoOldMarkup],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

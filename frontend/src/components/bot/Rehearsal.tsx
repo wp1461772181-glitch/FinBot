@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 import { RAYON } from "../../bloub/repere";
 import { createDirector, type DirectorView } from "../../bloub-director.mjs";
 import { resolveLook, type BloubLook } from "../../bloub-look.mjs";
@@ -102,7 +102,7 @@ export function Rehearsal({ bot, look, others }: { bot: StudioBot; look?: BloubL
   const play = (name: string) => {
     clearTimers();
     setScenario(name);
-    setAnnounced(`${t("正在演示")}：${label(name)}`);
+    setAnnounced(`${t("正在演示")}${colon()}${label(name)}`);
     const plan = playScenario(name, [live], { now: nowSec, reduced, timers: timers.current });
     planRef.current = plan;
     refreshStill();
@@ -118,7 +118,7 @@ export function Rehearsal({ bot, look, others }: { bot: StudioBot; look?: BloubL
     lastPersona.current = persona;
     setAway(to ? to.id : null);
     setScenario("switch");
-    setAnnounced(`${t("正在演示")}：${t("切换到另一个 bot")} → ${next.name}`);
+    setAnnounced(`${t("正在演示")}${colon()}${t("切换到另一个 bot")} → ${next.name}`);
     planRef.current = null;
     live.wake?.(); refreshStill();
   };

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { CatalogModel, ModelCatalog } from "../../../api/bots";
 import type { MaterialAnalysisSettings } from "../../../api/material-library";
-import { useLocale } from "../../../i18n";
+import { useLocale, colon } from "../../../i18n";
 import { SettingsCard } from "../SettingsCard";
 
 const NONE = "__none__";   // Radix Select has no empty value: this stands for 不指定 / 系统默认
@@ -42,7 +42,7 @@ export function RoleTable({ catalog, roles, analysis, busy, onChange }: { catalo
   rows.push({ key: "analysis", label: "材料分析默认模型", hint: "AI 材料分析默认使用这里选的目录模型；在材料详情页也可以只针对一次分析临时选择其他模型。", value: chosen || NONE,
     options: [{ value: NONE, label: t("系统默认（DeepSeek 环境配置）") }, ...ready.map((m) => ({ value: m.name, label: `${shown(m)} · ${m.model}` }))], missing: false,
     extra: <>
-      <p data-testid="analysis-current" className="m-0 text-small text-ink"><strong className="font-medium">{t("当前默认")}：</strong>{current}</p>
+      <p data-testid="analysis-current" className="m-0 text-small text-ink"><strong className="font-medium">{t("当前默认")}{colon()}</strong>{current}</p>
       {ready.length === 0 && <p data-testid="analysis-no-models" className="m-0 text-small text-muted-foreground">{t("模型目录里还没有可用的模型；请先在上方添加并测试一个。")}</p>}
     </> });
   return <SettingsCard id="roles" title={t("角色 → 模型")} testid="roles-card" description={t("每个角色用哪个模型，选了就保存，用它的 bot 下一轮生效。")}>

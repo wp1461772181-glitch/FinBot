@@ -4,7 +4,7 @@ import { openCommandMenu } from "@/components/command/command-events";
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import type { Bot } from "../../api/bots";
 import { botSections } from "../../bot-items.mjs";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 import { paths } from "../../routes.mjs";
 import { activeItem, areaItems, areaPath } from "../../shell-nav.mjs";
 import { ThemeToggle, useAccountActions } from "./account";
@@ -54,7 +54,7 @@ export default function MoreDrawer({ open, onOpenChange, props }: { open: boolea
           {areaItems("settings").map(item => <li key={item.id}><Link to={areaPath("settings", props.symbol, item.id)} onClick={close} aria-current={props.path.startsWith("/settings") && assistantItem === item.id ? "page" : undefined} className={rowClass}>{t(item.label)}</Link></li>)}
         </ul>
         <p className={sectionTitle}>{t("账户")}</p>
-        <div className="flex items-center gap-2 px-4 py-1"><span className="min-w-0 flex-1 truncate text-body text-muted-foreground">{t("当前")}：{mode}</span><ThemeToggle className="size-11" /></div>
+        <div className="flex items-center gap-2 px-4 py-1"><span className="min-w-0 flex-1 truncate text-body text-muted-foreground">{t("当前")}{colon()}{mode}</span><ThemeToggle className="size-11" /></div>
         <ul className="flex flex-col">
           {props.personal
             ? <li><button type="button" onClick={() => { close(); actions.toGuest(); }} className={`${rowClass} w-full text-left`}><Eye aria-hidden="true" className="size-4 text-muted-foreground" />{t("切换到访客只读")}</button></li>

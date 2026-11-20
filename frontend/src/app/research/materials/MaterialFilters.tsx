@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useLocale } from "../../../i18n";
+import { useLocale, colon } from "../../../i18n";
 import { ORDER_PHRASE, SOURCE_PHRASE, STATUSES, STATUS_PHRASE, activeFilters, type FilterKey, type Filters } from "./materials-model.mjs";
 
 /**
@@ -26,7 +26,7 @@ export function MaterialFilters({ symbol, filters, total, onChange, onClear }: {
       <span data-testid="material-count" className="ml-auto self-end pb-1.5 font-mono text-caption text-muted-foreground max-sm:col-span-2 max-sm:ml-0">{total === null ? "" : `${total} ${t("份材料")}`}</span>
     </div>
     {chips.length > 0 && <ul data-testid="filter-chips" aria-label={t("已选筛选")} className="m-0 flex list-none flex-wrap gap-1.5 p-0">
-      {chips.map(chip => <li key={chip.key}><button type="button" data-testid="filter-chip" data-filter={chip.key} aria-label={`${t("清除筛选")}：${t(chip.phrase)}`} onClick={() => onClear(chip.key)}
+      {chips.map(chip => <li key={chip.key}><button type="button" data-testid="filter-chip" data-filter={chip.key} aria-label={`${t("清除筛选")}${colon()}${t(chip.phrase)}`} onClick={() => onClear(chip.key)}
         className="inline-flex h-8 items-center gap-1 rounded-sm border border-line-strong bg-sunken px-2 text-small text-ink outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11 cursor-pointer appearance-auto py-px">{t(chip.phrase)}<X aria-hidden="true" className="size-3.5" /></button></li>)}
     </ul>}
   </div>;

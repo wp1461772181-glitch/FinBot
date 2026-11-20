@@ -11,8 +11,8 @@ export function statusKind(status) {
 }
 
 /** "工作日 08:30 · 共 8 次"; the old list's words.  The time zone is its own item. */
-export function scheduleSummary(task) {
-  return [scheduleLabel(task), runsLabel(task)].filter(Boolean).join(" · ");
+export function scheduleSummary(task, locale = "zh-CN") {
+  return [scheduleLabel(task, locale), runsLabel(task, locale)].filter(Boolean).join(" · ");
 }
 
 /** What a task's state is when it is not simply running: 已暂停 / 已完成 (null otherwise).  `enabled` is the switch as it is shown (it leads the server's answer for a moment after a flip). */

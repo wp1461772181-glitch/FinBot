@@ -14,7 +14,7 @@ import { recallGroups, recallKindLabel } from "../../../memory-items.mjs";
 import { paths } from "../../../routes.mjs";
 import { useOpenConversation } from "../../chat/ChatSessionProvider";
 import { useWorkspace } from "../../workspace";
-import { useLoad } from "../use-load";
+import { useLoad } from "../../use-load";
 
 const ALL = "__all__"; // Radix Select has no empty item value
 

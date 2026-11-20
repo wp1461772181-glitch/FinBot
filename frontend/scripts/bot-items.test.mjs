@@ -1,15 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { newBotFields, botDraft, botFromHash, botModelLabel, botSections, focusText, keyStatusLabel, parseFocusSymbols, toggleTool, toolEnabled } from "../src/bot-items.mjs";
+import { newBotFields, botDraft, botModelLabel, botSections, focusText, keyStatusLabel, parseFocusSymbols, toggleTool, toolEnabled } from "../src/bot-items.mjs";
 
 const bot = (id, extra = {}) => ({ id, name: id, group: "", pinned: false, hidden: false, is_default: false, last_at: null, model: null, ...extra });
-
-test("a bot link names a bot id; anything else is not one", () => {
-  assert.equal(botFromHash("#bot/0A1B2C3D-0000-4000-8000-000000000001"), "0a1b2c3d-0000-4000-8000-000000000001");
-  assert.equal(botFromHash("#bot/not-an-id"), null);
-  assert.equal(botFromHash("#agent/0a1b2c3d-0000-4000-8000-000000000001"), null);
-  assert.equal(botFromHash(undefined), null);
-});
 
 test("the default bot sits alone on top; groups follow, ungrouped first; pinned, then recent, inside each", () => {
   const { top, groups } = botSections([

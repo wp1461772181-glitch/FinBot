@@ -6,7 +6,7 @@ import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupActio
 import type { Bot } from "../../api/bots";
 import { botSections } from "../../bot-items.mjs";
 import { isWaiting } from "../../bot-marker.mjs";
-import { useLocale } from "../../i18n";
+import { useLocale, comma } from "../../i18n";
 import { paths } from "../../routes.mjs";
 import { activeArea, activeItem, areaItems, areaPath, type Area } from "../../shell-nav.mjs";
 import { openCommandMenu } from "@/components/command/command-events";
@@ -85,7 +85,7 @@ function NavLeaf({ area, props, badge = 0 }: { area: "portfolio" | "routines"; p
   const current = activeArea(props.path) === area;
   const Icon = AREA_ICON[area];
   const label = t(AREA_LABEL[area]);
-  const spoken = badge > 0 ? `${label}，${badge} ${t("条待确认")}` : label;
+  const spoken = badge > 0 ? `${label}${comma()}${badge} ${t("条待确认")}` : label;
   return <SidebarMenuItem>
     <SidebarMenuButton asChild isActive={current} tooltip={spoken}>
       <Link to={areaPath(area, props.symbol)} aria-current={current ? "page" : undefined} aria-label={spoken}><Icon aria-hidden="true" /><span>{label}</span></Link>
@@ -112,7 +112,7 @@ function ChatSection({ props }: { props: ShellNavProps }) {
     </SidebarGroupAction>
     <SidebarMenu>
       {props.personal ? <>
-        {props.botsError && <li role="alert" className="px-2 py-1 text-caption text-muted-foreground">{t(props.botsError)}</li>}
+        {props.botsError && <li><span role="alert" className="block px-2 py-1 text-caption text-muted-foreground">{t(props.botsError)}</span></li>}
         {top && row(top)}
         {groups.map(group => <li key={group.name || "_"}>
           {group.name && state !== "collapsed" && <p className="px-2 pt-2 pb-0.5 text-caption text-muted-foreground">{group.name}</p>}
@@ -151,11 +151,12 @@ const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigat
 function PaletteButton() {
   const { t } = useLocale();
   const label = t("命令面板");
-  return <button type="button" aria-label={label} aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title={`${label} (${isMac ? "Cmd+K" : "Ctrl+K"})`}
+  // The accessible name carries the shortcut the button shows (WCAG 2.5.3, "label in name"): the visible 「Ctrl K」 / 「K」 is part of it.
+  return <button type="button" aria-label={`${label} ${isMac ? "Cmd" : "Ctrl"} K`} aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title={`${label} (${isMac ? "Cmd+K" : "Ctrl+K"})`}
     onClick={(event) => openCommandMenu(event.currentTarget)}
     className="inline-flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-caption text-muted-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
     <Search aria-hidden="true" className="size-3.5" />
-    <span aria-hidden="true" className="inline-flex items-center gap-0.5 group-data-[collapsible=icon]:hidden">{isMac ? <Command className="size-3" /> : "Ctrl"}<span>K</span></span>
+    <span aria-hidden="true" className="inline-flex items-center gap-0.5 group-data-[collapsible=icon]:hidden">{isMac ? <Command className="size-3" /> : "Ctrl"}{" "}<span>K</span></span>
   </button>;
 }
 

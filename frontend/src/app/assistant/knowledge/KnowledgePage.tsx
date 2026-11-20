@@ -13,7 +13,7 @@ import { uploadEvidence } from "../../../api/evidence-uploads";
 import { useLocale } from "../../../i18n";
 import { Dropzone } from "../../research/evidence/Dropzone";
 import { fill } from "../fill";
-import { useLoad } from "../use-load";
+import { useLoad } from "../../use-load";
 import { ChunksDrawer, type ChunkDetail } from "./ChunksDrawer";
 import { Candidates, DocsList, type Candidate } from "./DocsList";
 import { FIXED_IMPACT, FIXED_STARS, QUERY_MAX, SOURCES, SYMBOL_MAX, localDateTimeInput, parseLocalDateTime, retrievalArgs, retrievalText, uploadReady, type KnowledgeSource } from "./knowledge-form.mjs";

@@ -1,7 +1,7 @@
 import { StatTile } from "@/components/StatTile";
 import { StatusBadge } from "@/components/StatusBadge";
 import type { V2ModelEvaluationCohort } from "../../../types";
-import { useLocale } from "../../../i18n";
+import { useLocale, colon, comma } from "../../../i18n";
 import { BASELINE_EXPLAINER, BASELINE_NAME, cohortStatusPhrase, cohortView, modelStatusPhrase, timeModePhrase, type Bars } from "./scores-model.mjs";
 
 /** One metric of the comparison: the model's bar and the baseline's, both from zero on the same scale, with their numbers; the sentence is for a screen reader. */
@@ -13,7 +13,7 @@ function Metric({ label, model, baseline, bars }: { label: string; model: number
     <span aria-hidden="true" className="h-2 min-w-0 overflow-hidden rounded-full bg-sunken"><span className={`block h-full rounded-full ${tone}`} style={{ width: `${width ?? 0}%` }} /></span>
     <span className="text-right font-mono tabular-nums text-ink">{fixed(value)}</span>
   </div>;
-  return <div data-testid="score-compare" data-metric={label} role="img" aria-label={`${label}：${t("模型")} ${fixed(model)}，${t("同题基准")} ${BASELINE_NAME} ${fixed(baseline)}`} className="flex min-w-0 flex-col gap-1.5">
+  return <div data-testid="score-compare" data-metric={label} role="img" aria-label={`${label}${colon()}${t("模型")} ${fixed(model)}${comma()}${t("同题基准")} ${BASELINE_NAME} ${fixed(baseline)}`} className="flex min-w-0 flex-col gap-1.5">
     <p className="m-0 text-caption font-medium text-muted-foreground">{label}</p>
     {row(t("模型"), model, bars?.model, "bg-brand")}
     {row(`${t("同题基准")} ${BASELINE_NAME}`, baseline, bars?.baseline, "bg-muted-foreground")}

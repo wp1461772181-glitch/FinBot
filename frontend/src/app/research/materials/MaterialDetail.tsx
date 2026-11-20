@@ -175,12 +175,12 @@ export function MaterialDetail({ material, initialAnalysisId = null, onUpdated }
 
   return <section data-testid="material-detail" data-source-id={material.source_id} aria-label={`${material.title} ${t("详情")}`} className="flex min-w-0 flex-col gap-3">
     <header className="flex min-w-0 flex-col gap-1">
-      <p className="text-caption text-muted-foreground mb-[1em]">{t(material.source_type === "official_filing" ? "SEC 官方材料" : "用户上传材料")} · {material.symbol}</p>
+      <p className="text-caption text-muted-foreground">{t(material.source_type === "official_filing" ? "SEC 官方材料" : "用户上传材料")} · {material.symbol}</p>
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-3 gap-y-2">
-        <h2 data-testid="material-title" className="min-w-0 flex-1 text-title-s text-ink [overflow-wrap:anywhere] mb-[0.83em]">{material.title}</h2>
+        <h2 data-testid="material-title" className="min-w-0 flex-1 text-title-s text-ink [overflow-wrap:anywhere] mb-3">{material.title}</h2>
         {sourceLink && <Button asChild variant="outline" size="sm" className="max-sm:h-11"><a href={sourceLink} target="_blank" rel="noopener noreferrer">{t("打开来源")}<ExternalLink aria-hidden="true" /></a></Button>}
       </div>
-      <p className="text-caption text-muted-foreground mb-[1em]">{t("发布")} {formatDate(material.published_at, locale)} · {t("发现")} {formatDate(material.observed_at, locale)}</p>
+      <p className="text-caption text-muted-foreground">{t("发布")} {formatDate(material.published_at, locale)} · {t("发现")} {formatDate(material.observed_at, locale)}</p>
     </header>
     <div className="flex min-w-0 flex-col gap-3">
       <DetailTabs value={tab} label={t("材料详情")} panelId="material-panel" onChange={value => { if (value === "original") setCitation(null); setTab(value); }}
@@ -206,13 +206,13 @@ export function MaterialDetail({ material, initialAnalysisId = null, onUpdated }
             : defaultModel && <small data-testid="analysis-default-model" className="basis-full font-mono text-caption text-muted-foreground">{t("默认模型")} · {defaultModel}</small>}
           {profileError && <small className="basis-full text-caption text-muted-foreground">{profileError}</small>}
         </div>}
-        {busy && <p data-testid="analysis-job" role="status" className="flex items-center gap-2 text-small text-ink-2 mb-[1em]"><StatusBadge kind="progress">{t("分析中")}</StatusBadge>{job?.status === "queued" ? t("分析任务排队中…") : t("正在分析这份材料…")}</p>}
-        {job && (job.status === "failed" || job.status === "blocked_data") && <p role="status" className="text-small text-muted-foreground mb-[1em]">{t("最近一次分析尝试")}{job.status === "failed" ? t("失败") : t("暂不可执行")}（{translatePhrase(jobErrorPhrase(job.safe_error_code))}）。{t("如有既有成功版本，仍可在此查看。")}</p>}
+        {busy && <p data-testid="analysis-job" role="status" className="flex items-center gap-2 text-small text-ink-2"><StatusBadge kind="progress">{t("分析中")}</StatusBadge>{job?.status === "queued" ? t("分析任务排队中…") : t("正在分析这份材料…")}</p>}
+        {job && (job.status === "failed" || job.status === "blocked_data") && <p role="status" className="text-small text-muted-foreground">{t("最近一次分析尝试")}{job.status === "failed" ? t("失败") : t("暂不可执行")}（{translatePhrase(jobErrorPhrase(job.safe_error_code))}）。{t("如有既有成功版本，仍可在此查看。")}</p>}
         {analysis.kind === "loading" && <DelayedSkeleton><SkeletonCard /></DelayedSkeleton>}
         {analysis.kind === "error" && <ErrorBar message={analysis.message} />}
         {displayed && <AnalysisView analysis={displayed} onLocateCitation={locateCitation} />}
-        {locale === "en-US" && localization.kind === "loading" && <p role="status" className="text-caption text-muted-foreground mb-[1em]">{t("Translating saved AI analysis…")}</p>}
-        {locale === "en-US" && localization.kind === "error" && <p role="status" className="text-caption text-muted-foreground mb-[1em]">{t("English translation is temporarily unavailable; showing the saved original.")}</p>}
+        {locale === "en-US" && localization.kind === "loading" && <p role="status" className="text-caption text-muted-foreground">{t("Translating saved AI analysis…")}</p>}
+        {locale === "en-US" && localization.kind === "error" && <p role="status" className="text-caption text-muted-foreground">{t("English translation is temporarily unavailable; showing the saved original.")}</p>}
         {!selectedAnalysis && analysis.kind !== "loading" && canAnalyze && <EmptyState title={cachedInvalidOutput ? t("上次分析未通过校验") : t("这份材料还没有成功的分析版本")} description={cachedInvalidOutput ? t("这次失败结果被暂存了。重新分析会跳过该失败记录，再请求 DeepSeek；不会删除其他成功版本。") : t("分析会引用本次冻结的材料文本。保存后重新打开可直接查看，不会重复调用模型。")} className="rounded-md border border-dashed border-line" />}
         {!canAnalyze && material.source_type === "official_filing" && <EmptyState title={t("SEC 目录记录还没有可分析的正文")} description={t("读取 SEC 正文后才能运行分析；也可以在“原始材料”页直接打开来源网站阅读。")} className="rounded-md border border-dashed border-line">
           <Button type="button" size="sm" disabled={busy || originalFetch === "loading"} onClick={() => { void fetchOriginal(); }} className="mt-2">{originalFetch === "loading" ? t("正在读取 SEC 正文…") : t("读取 SEC 正文供 AI 分析")}</Button>

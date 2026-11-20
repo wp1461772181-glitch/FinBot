@@ -30,10 +30,3 @@ export function Parts({ parts }: { parts: Array<{ t: string } | { v: string }> }
   const { t } = useLocale();
   return <>{parts.map((part, index) => <span key={index}>{"t" in part ? t(part.t) : part.v}</span>)}</>;
 }
-
-export function ProbabilityStrip({ probabilities, label, compact = false }: { probabilities: Record<"bearish" | "neutral" | "bullish", number>; label: string; compact?: boolean }) {
-  const { t } = useLocale();
-  return <div className={`v2-probabilities ${compact ? "compact" : ""}`} aria-label={label}>
-    {(["bearish", "neutral", "bullish"] as const).map((key) => <span key={key}><small>{t(key === "bearish" ? "跌" : key === "neutral" ? "平" : "涨")}</small><b>{Math.round(probabilities[key] * 100)}%</b></span>)}
-  </div>;
-}

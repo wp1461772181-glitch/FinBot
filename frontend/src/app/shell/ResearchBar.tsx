@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 
 /**
  * Where the old top bar's company controls went (design P2.2 §3): the research pages still take the company from the shell, so a thin bar above them holds
@@ -23,7 +23,7 @@ export default function ResearchBar({ symbol, symbols, onSelectStock, watchInput
     <p className="text-small text-muted-foreground">{t("公司研究")}</p>
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" role="combobox" aria-expanded={open} aria-label={`${t("切换股票")}：${symbol}`} className="h-9 min-w-32 justify-between font-mono">
+        <Button type="button" variant="outline" role="combobox" aria-expanded={open} aria-label={`${t("切换股票")}${colon()}${symbol}`} className="h-9 min-w-32 justify-between font-mono">
           {symbol}<ChevronsUpDown aria-hidden="true" className="opacity-60" />
         </Button>
       </PopoverTrigger>

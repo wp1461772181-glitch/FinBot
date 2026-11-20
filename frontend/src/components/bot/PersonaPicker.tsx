@@ -2,7 +2,7 @@
 // and 恢复默认.  What is picked is kept in THIS browser only (D4: the backend's `look` check rejects extra keys, so nothing here is sent anywhere) and applies
 // at once to every avatar and line of the bot; it is not part of the profile form, so the form's save bar does not light up for it.
 import { useMemo } from "react";
-import { useLocale } from "../../i18n";
+import { useLocale, colon } from "../../i18n";
 import {
   AURA_VARIANTS, ARCHETYPES, EASINGS, TEMPO_STEPS, clearOverrides, derivePersona, personaBasis, readVolatility, tempoStepOf, trackedSymbol, writeOverrides,
   type Archetype, type Easing, type PersonaBot, type PersonaOverrides
@@ -55,8 +55,8 @@ export function PersonaPicker({ bot }: { bot: PersonaBot & { id: string; name: s
   const sourceLine = (() => {
     const was = basis.kind === "preset" ? t("这是 {name} 的预设。").replace("{name}", basis.name)
       : [t(RULE_TEXT[basis.rule]), basis.band ? t(BAND_TEXT[basis.band]) : ""].filter(Boolean).join(" · ");
-    if (basis.overridden) return `${t("你改过")} · ${t("原本")}：${was}`;
-    return basis.kind === "preset" ? was : `${t("自动推导")}：${was}`;
+    if (basis.overridden) return `${t("你改过")} · ${t("原本")}${colon()}${was}`;
+    return basis.kind === "preset" ? was : `${t("自动推导")}${colon()}${was}`;
   })();
 
   return (
@@ -73,7 +73,7 @@ export function PersonaPicker({ bot }: { bot: PersonaBot & { id: string; name: s
       <Segmented<string> name={`persona-aura-${bot.id}`} testid="persona-aura" legend={t("光环变体")} value={persona.auraVariant}
         onChange={(value) => pick({ auraVariant: value })} options={variants.map((value: string) => ({ value, label: t(VARIANT_NAMES[value] ?? value) }))} />
       <p data-testid="persona-source" data-kind={basis.overridden ? "override" : basis.kind} className="m-0 text-small text-ink">
-        <span className="font-medium">{t("来源")}：</span>{sourceLine}
+        <span className="font-medium">{t("来源")}{colon()}</span>{sourceLine}
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" data-testid="persona-reset" disabled={!basis.overridden} onClick={() => { clearOverrides(storage(), bot.id); }}
