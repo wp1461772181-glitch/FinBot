@@ -1,0 +1,3180 @@
+{
+ "_about": "Requests, answers and visible words recorded from the OLD 技能 / 记忆 / 新闻源 / 知识库 pages (the production build of HEAD af8b894 = ~/fe-scratch/p7-final-dist-ref, whose first-screen file list is byte-identical to a fresh build of af8b894; before P8.1 touched any page) on the same fake backend; the new pages must send the same requests. Recorded with $LEAD/tools/p81-record-baseline.mjs on 2026-11-19. Not to be edited.",
+ "skills": {
+  "create": {
+   "minimal": {
+    "input": {
+     "name": "  新技能一  ",
+     "description": "  说明一句  ",
+     "body": "步骤1\n步骤2",
+     "tools": [
+      0
+     ]
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills",
+      "query": "",
+      "body": "{\"name\":\"新技能一\",\"description\":\"说明一句\",\"body\":\"步骤1\\n步骤2\",\"allowed_tools\":[\"get_market_data\"],\"output_template\":null,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已保存。"
+    ],
+    "alert": [],
+    "editorOpen": 0,
+    "cardsAfter": [
+     "估值草稿",
+     "财报速读",
+     "新技能一",
+     "新闻去重",
+     "周日复盘"
+    ]
+   },
+   "withTemplate": {
+    "input": {
+     "name": "带模板",
+     "description": "d",
+     "body": "b",
+     "template": "## 要点\n## 风险",
+     "tools": [
+      2,
+      0
+     ]
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills",
+      "query": "",
+      "body": "{\"name\":\"带模板\",\"description\":\"d\",\"body\":\"b\",\"allowed_tools\":[\"read_filing\",\"get_market_data\"],\"output_template\":\"## 要点\\n## 风险\",\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已保存。"
+    ],
+    "alert": [],
+    "editorOpen": 0,
+    "cardsAfter": [
+     "估值草稿",
+     "财报速读",
+     "带模板",
+     "新闻去重",
+     "周日复盘"
+    ]
+   },
+   "allTools": {
+    "input": {
+     "name": "全部工具",
+     "description": "全部",
+     "body": "x",
+     "template": "  ",
+     "tools": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ]
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills",
+      "query": "",
+      "body": "{\"name\":\"全部工具\",\"description\":\"全部\",\"body\":\"x\",\"allowed_tools\":[\"get_market_data\",\"search_news\",\"read_filing\",\"query_portfolio\",\"save_material\"],\"output_template\":null,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已保存。"
+    ],
+    "alert": [],
+    "editorOpen": 0,
+    "cardsAfter": [
+     "估值草稿",
+     "财报速读",
+     "全部工具",
+     "新闻去重",
+     "周日复盘"
+    ]
+   },
+   "noTools": {
+    "input": {
+     "name": "没有工具",
+     "description": "无",
+     "body": "z",
+     "tools": []
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills",
+      "query": "",
+      "body": "{\"name\":\"没有工具\",\"description\":\"无\",\"body\":\"z\",\"allowed_tools\":[],\"output_template\":null,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已保存。"
+    ],
+    "alert": [],
+    "editorOpen": 0,
+    "cardsAfter": [
+     "估值草稿",
+     "财报速读",
+     "没有工具",
+     "新闻去重",
+     "周日复盘"
+    ]
+   }
+  },
+  "edit": {
+   "untouched": {
+    "opened": {
+     "label": "编辑技能",
+     "values": [
+      "周日复盘",
+      "检查持仓计划与本周财报判断",
+      "1. 读取持仓。\n2. 对照价格计划。\n3. 列出下周要关注的事项。",
+      ""
+     ],
+     "checked": [
+      true,
+      false,
+      false,
+      true,
+      false
+     ],
+     "note": true
+    },
+    "input": {
+     "name": "周日复盘",
+     "change": null
+    },
+    "sent": [
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000002",
+      "query": "",
+      "body": "{\"name\":\"周日复盘\",\"description\":\"检查持仓计划与本周财报判断\",\"body\":\"1. 读取持仓。\\n2. 对照价格计划。\\n3. 列出下周要关注的事项。\",\"allowed_tools\":[\"query_portfolio\",\"get_market_data\"],\"output_template\":null}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已保存。"
+    ]
+   },
+   "rename": {
+    "opened": {
+     "label": "编辑技能",
+     "values": [
+      "周日复盘",
+      "检查持仓计划与本周财报判断",
+      "1. 读取持仓。\n2. 对照价格计划。\n3. 列出下周要关注的事项。",
+      ""
+     ],
+     "checked": [
+      true,
+      false,
+      false,
+      true,
+      false
+     ],
+     "note": true
+    },
+    "input": {
+     "name": "周日复盘",
+     "change": {
+      "name": "周日复盘 v2",
+      "description": "改过的说明"
+     }
+    },
+    "sent": [
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000002",
+      "query": "",
+      "body": "{\"name\":\"周日复盘 v2\",\"description\":\"改过的说明\",\"body\":\"1. 读取持仓。\\n2. 对照价格计划。\\n3. 列出下周要关注的事项。\",\"allowed_tools\":[\"query_portfolio\",\"get_market_data\"],\"output_template\":null}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已保存。"
+    ]
+   },
+   "tools": {
+    "opened": {
+     "label": "编辑技能",
+     "values": [
+      "新闻去重",
+      "把同一事件的多条新闻合并成一条",
+      "按事件聚合新闻，保留最早来源。",
+      ""
+     ],
+     "checked": [
+      false,
+      true,
+      false,
+      false,
+      false
+     ],
+     "note": true
+    },
+    "input": {
+     "name": "新闻去重",
+     "change": {
+      "tools": [
+       0
+      ]
+     }
+    },
+    "sent": [
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000003",
+      "query": "",
+      "body": "{\"name\":\"新闻去重\",\"description\":\"把同一事件的多条新闻合并成一条\",\"body\":\"按事件聚合新闻，保留最早来源。\",\"allowed_tools\":[\"search_news\",\"get_market_data\"],\"output_template\":null}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已保存。"
+    ]
+   }
+  },
+  "draft": {
+   "opened": {
+    "note": "Agent 起草的草稿：核对后保存才会生效。",
+    "submit": "保存为技能",
+    "values": [
+     "估值草稿",
+     "未完成的草稿：用可比公司做粗估",
+     "（草稿）",
+     ""
+    ]
+   },
+   "sent": [
+    {
+     "method": "PATCH",
+     "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000004",
+     "query": "",
+     "body": "{\"name\":\"估值草稿\",\"description\":\"未完成的草稿：用可比公司做粗估\",\"body\":\"（草稿）\",\"allowed_tools\":[\"get_market_data\"],\"output_template\":null,\"save_draft\":true}",
+     "contentType": "application/json",
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "已保存。"
+   ],
+   "groupsAfter": [
+    "内置",
+    "我的 / 导入的"
+   ]
+  },
+  "toggle": {
+   "off": {
+    "name": "周日复盘",
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000002/enabled",
+      "query": "",
+      "body": "{\"enabled\":false}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "checkedAfter": false
+   },
+   "on": {
+    "name": "新闻去重",
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000003/enabled",
+      "query": "",
+      "body": "{\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "checkedAfter": true
+   },
+   "builtin": {
+    "name": "财报速读",
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000001/enabled",
+      "query": "",
+      "body": "{\"enabled\":false}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "checkedAfter": false
+   },
+   "draftHasSwitch": 0
+  },
+  "copy": {
+   "财报速读": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000001/copy",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已复制，可以在「我的」里编辑。"
+    ],
+    "cardsAfter": [
+     "估值草稿",
+     "财报速读",
+     "财报速读 副本",
+     "新闻去重",
+     "周日复盘"
+    ]
+   },
+   "周日复盘": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000002/copy",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已复制，可以在「我的」里编辑。"
+    ],
+    "cardsAfter": [
+     "估值草稿",
+     "财报速读",
+     "新闻去重",
+     "周日复盘",
+     "周日复盘 副本"
+    ]
+   }
+  },
+  "exportOp": {
+   "财报速读": {
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000001/export",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "downloads": [
+     "财报速读.md"
+    ]
+   },
+   "周日复盘": {
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000002/export",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "downloads": [
+     "周日复盘.md"
+    ]
+   }
+  },
+  "importOp": {
+   "initial": {
+    "importButtonsBeforePreview": 0,
+    "previewDisabled": true,
+    "maxLength": "20000",
+    "accept": ".md,text/markdown,text/plain"
+   },
+   "pasted": {
+    "markdown": "---\nname: 周报整理\ndescription: 把本周的新闻和材料整理成一页周报\ntools: search_news, get_market_data, save_material\n---\n1. 读取本周的新闻线索。\n2. 对照行情，列出值得注意的变化。\n3. 把周报存成材料。",
+    "preview": {
+     "text": [
+      "周报整理 · 把本周的新闻和材料整理成一页周报",
+      "这个技能能用这些工具：",
+      "search news",
+      "get market data",
+      "save material · 写操作",
+      "写操作：仍需确认卡"
+     ],
+     "sent": [
+      {
+       "method": "POST",
+       "path": "/agent-chat/skills/import/preview",
+       "query": "",
+       "body": "{\"markdown\":\"---\\nname: 周报整理\\ndescription: 把本周的新闻和材料整理成一页周报\\ntools: search_news, get_market_data, save_material\\n---\\n1. 读取本周的新闻线索。\\n2. 对照行情，列出值得注意的变化。\\n3. 把周报存成材料。\"}",
+       "contentType": "application/json",
+       "hasSession": true
+      }
+     ]
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills/import",
+      "query": "",
+      "body": "{\"markdown\":\"---\\nname: 周报整理\\ndescription: 把本周的新闻和材料整理成一页周报\\ntools: search_news, get_market_data, save_material\\n---\\n1. 读取本周的新闻线索。\\n2. 对照行情，列出值得注意的变化。\\n3. 把周报存成材料。\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已导入。"
+    ],
+    "cardsAfter": [
+     "估值草稿",
+     "财报速读",
+     "新闻去重",
+     "周报整理",
+     "周日复盘"
+    ]
+   },
+   "readOnly": {
+    "markdown": "---\nname: 只读周报\ndescription: 只读取，不写入\ntools: search_news\n---\n1. 读取新闻。",
+    "preview": {
+     "text": [
+      "只读周报 · 只读取，不写入",
+      "这个技能能用这些工具：",
+      "search news"
+     ],
+     "sent": [
+      {
+       "method": "POST",
+       "path": "/agent-chat/skills/import/preview",
+       "query": "",
+       "body": "{\"markdown\":\"---\\nname: 只读周报\\ndescription: 只读取，不写入\\ntools: search_news\\n---\\n1. 读取新闻。\"}",
+       "contentType": "application/json",
+       "hasSession": true
+      }
+     ]
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills/import",
+      "query": "",
+      "body": "{\"markdown\":\"---\\nname: 只读周报\\ndescription: 只读取，不写入\\ntools: search_news\\n---\\n1. 读取新闻。\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已导入。"
+    ],
+    "cardsAfter": [
+     "估值草稿",
+     "财报速读",
+     "新闻去重",
+     "只读周报",
+     "周日复盘"
+    ]
+   },
+   "file": {
+    "textareaMatchesFile": true,
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/skills/import/preview",
+      "query": "",
+      "body": "{\"markdown\":\"---\\nname: 周报整理\\ndescription: 把本周的新闻和材料整理成一页周报\\ntools: search_news, get_market_data, save_material\\n---\\n1. 读取本周的新闻线索。\\n2. 对照行情，列出值得注意的变化。\\n3. 把周报存成材料。\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ]
+   },
+   "afterEdit": {
+    "previewShown": 0
+   },
+   "refused": {
+    "alert": [
+     "文件格式不对：开头要有 name / description / tools。"
+    ],
+    "previewShown": 0
+   }
+  },
+  "del": {
+   "mine": {
+    "name": "周日复盘",
+    "buttons": [
+     "编辑",
+     "复制",
+     "导出",
+     "删除"
+    ],
+    "dialog": {
+     "title": "删除 周日复盘？",
+     "description": "删除后这个技能不能恢复。",
+     "buttons": [
+      "取消",
+      "删除"
+     ]
+    },
+    "sent": [
+     {
+      "method": "DELETE",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000002",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已删除。"
+    ],
+    "cardsAfter": [
+     "估值草稿",
+     "财报速读",
+     "新闻去重"
+    ]
+   },
+   "imported": {
+    "name": "新闻去重",
+    "buttons": [
+     "编辑",
+     "复制",
+     "导出",
+     "删除"
+    ],
+    "dialog": {
+     "title": "删除 新闻去重？",
+     "description": "删除后这个技能不能恢复。",
+     "buttons": [
+      "取消",
+      "删除"
+     ]
+    },
+    "sent": [
+     {
+      "method": "DELETE",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000003",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已删除。"
+    ],
+    "cardsAfter": [
+     "估值草稿",
+     "财报速读",
+     "周日复盘"
+    ]
+   },
+   "draft": {
+    "name": "估值草稿",
+    "buttons": [
+     "核对并保存",
+     "复制",
+     "导出",
+     "删除"
+    ],
+    "dialog": {
+     "title": "删除 估值草稿？",
+     "description": "删除后这个技能不能恢复。",
+     "buttons": [
+      "取消",
+      "删除"
+     ]
+    },
+    "sent": [
+     {
+      "method": "DELETE",
+      "path": "/agent-chat/skills/s3000000-0000-4000-8000-000000000004",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已删除。"
+    ],
+    "cardsAfter": [
+     "财报速读",
+     "新闻去重",
+     "周日复盘"
+    ]
+   },
+   "escSent": 0
+  },
+  "cards": [
+   {
+    "name": "估值草稿",
+    "badge": "草稿",
+    "version": "v1",
+    "tools": [
+     "get market data"
+    ],
+    "switch": false,
+    "buttons": [
+     "核对并保存",
+     "复制",
+     "导出",
+     "删除"
+    ]
+   },
+   {
+    "name": "财报速读",
+    "badge": "内置",
+    "version": "v1",
+    "tools": [
+     "read filing",
+     "get market data"
+    ],
+    "switch": true,
+    "buttons": [
+     "复制",
+     "导出"
+    ]
+   },
+   {
+    "name": "新闻去重",
+    "badge": "导入的",
+    "version": "v1",
+    "tools": [
+     "search news"
+    ],
+    "switch": true,
+    "buttons": [
+     "编辑",
+     "复制",
+     "导出",
+     "删除"
+    ]
+   },
+   {
+    "name": "周日复盘",
+    "badge": "我的",
+    "version": "v3",
+    "tools": [
+     "我的持仓",
+     "get market data"
+    ],
+    "switch": true,
+    "buttons": [
+     "编辑",
+     "复制",
+     "导出",
+     "删除"
+    ]
+   }
+  ],
+  "groups": [
+   "草稿",
+   "内置",
+   "我的 / 导入的"
+  ],
+  "draftNote": [
+   "Agent 起草的草稿：核对后保存才会生效。",
+   "v1",
+   "v1",
+   "v1",
+   "v3"
+  ],
+  "header": [
+   "技能是做事的步骤，不是代码。在 bot 对话里输入「/技能名」使用；技能只会减少可用工具，写操作照样要你确认。"
+  ],
+  "toolLabels": [
+   "get market data 只读",
+   "search news 只读",
+   "read filing 只读",
+   "我的持仓 只读",
+   "save material 写操作 · 写操作：仍需确认卡"
+  ],
+  "link": {
+   "draft": {
+    "editor": 1,
+    "note": [
+     "Agent 起草的草稿：核对后保存才会生效。",
+     "只读",
+     "只读",
+     "只读",
+     "只读",
+     "写操作 · 写操作：仍需确认卡"
+    ],
+    "status": [],
+    "hash": "#/assistant/skills/s3000000-0000-4000-8000-000000000004",
+    "hashAfterCancel": "#/assistant/skills"
+   },
+   "mine": {
+    "editor": 1,
+    "note": [
+     "只读",
+     "只读",
+     "只读",
+     "只读",
+     "写操作 · 写操作：仍需确认卡"
+    ],
+    "status": [],
+    "hash": "#/assistant/skills/s3000000-0000-4000-8000-000000000002",
+    "hashAfterCancel": "#/assistant/skills"
+   },
+   "builtin": {
+    "editor": 0,
+    "note": [],
+    "status": [],
+    "hash": "#/assistant/skills/s3000000-0000-4000-8000-000000000001"
+   },
+   "missing": {
+    "editor": 0,
+    "note": [],
+    "status": [
+     "这个技能不存在。"
+    ],
+    "hash": "#/assistant/skills/s3000000-0000-4000-8000-0000000000ff"
+   }
+  }
+ },
+ "memory": {
+  "add": {
+   "globalPref": {
+    "input": {
+     "scope": "",
+     "kind": "preference",
+     "text": "  金额   都用  亿美元 "
+    },
+    "buttonDisabled": false,
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/profile",
+      "query": "",
+      "body": "{\"kind\":\"preference\",\"text\":\"金额 都用 亿美元\",\"bot_id\":null}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "alert": [],
+    "inputAfter": "",
+    "itemsAfter": [
+     "长期持有美股科技股，偏好以季度为周期做决策。",
+     "回答先给结论，再给依据；数字要带出处。",
+     "涉及买卖时只给参考意见，不要替我下决定。",
+     "金额 都用 亿美元",
+     "新闻只保留与持仓和关注列表相关的。",
+     "AAPL 的服务业务比硬件更值得看。"
+    ]
+   },
+   "botInstruction": {
+    "input": {
+     "scope": "b0000000-0000-4000-8000-000000000003",
+     "kind": "instruction",
+     "text": "只谈 AAPL"
+    },
+    "buttonDisabled": false,
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/profile",
+      "query": "",
+      "body": "{\"kind\":\"instruction\",\"text\":\"只谈 AAPL\",\"bot_id\":\"b0000000-0000-4000-8000-000000000003\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "alert": [],
+    "inputAfter": "",
+    "itemsAfter": [
+     "长期持有美股科技股，偏好以季度为周期做决策。",
+     "回答先给结论，再给依据；数字要带出处。",
+     "涉及买卖时只给参考意见，不要替我下决定。",
+     "新闻只保留与持仓和关注列表相关的。",
+     "只谈 AAPL",
+     "AAPL 的服务业务比硬件更值得看。"
+    ]
+   },
+   "aboutMe": {
+    "input": {
+     "scope": "",
+     "kind": "about_me",
+     "text": "我在上海"
+    },
+    "buttonDisabled": false,
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/profile",
+      "query": "",
+      "body": "{\"kind\":\"about_me\",\"text\":\"我在上海\",\"bot_id\":null}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "alert": [],
+    "inputAfter": "",
+    "itemsAfter": [
+     "长期持有美股科技股，偏好以季度为周期做决策。",
+     "回答先给结论，再给依据；数字要带出处。",
+     "涉及买卖时只给参考意见，不要替我下决定。",
+     "我在上海",
+     "新闻只保留与持仓和关注列表相关的。",
+     "AAPL 的服务业务比硬件更值得看。"
+    ]
+   },
+   "tooLong": {
+    "input": {
+     "scope": "",
+     "kind": "preference",
+     "text": "长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长"
+    },
+    "buttonDisabled": false,
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/profile",
+      "query": "",
+      "body": "{\"kind\":\"preference\",\"text\":\"长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长\",\"bot_id\":null}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "alert": [],
+    "inputAfter": "",
+    "itemsAfter": [
+     "长期持有美股科技股，偏好以季度为周期做决策。",
+     "回答先给结论，再给依据；数字要带出处。",
+     "涉及买卖时只给参考意见，不要替我下决定。",
+     "长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长",
+     "新闻只保留与持仓和关注列表相关的。",
+     "AAPL 的服务业务比硬件更值得看。"
+    ]
+   },
+   "spacesOnly": {
+    "input": {
+     "scope": "",
+     "kind": "preference",
+     "text": "   "
+    },
+    "buttonDisabled": true,
+    "sent": [],
+    "alert": [],
+    "inputAfter": "   ",
+    "itemsAfter": [
+     "长期持有美股科技股，偏好以季度为周期做决策。",
+     "回答先给结论，再给依据；数字要带出处。",
+     "涉及买卖时只给参考意见，不要替我下决定。",
+     "新闻只保留与持仓和关注列表相关的。",
+     "AAPL 的服务业务比硬件更值得看。"
+    ]
+   }
+  },
+  "edit": {
+   "opened": {
+    "value": "回答先给结论，再给依据；数字要带出处。",
+    "focused": true,
+    "buttons": [
+     "保存",
+     "取消",
+     "删除"
+    ]
+   },
+   "enter": {
+    "how": "Enter",
+    "newText": "  新的写法  ",
+    "sent": [
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/profile/pf000000-0000-4000-8000-000000000002",
+      "query": "",
+      "body": "{\"text\":\"新的写法\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "editorStillOpen": 0,
+    "textsAfter": [
+     "长期持有美股科技股，偏好以季度为周期做决策。",
+     "新的写法",
+     "涉及买卖时只给参考意见，不要替我下决定。",
+     "新闻只保留与持仓和关注列表相关的。",
+     "AAPL 的服务业务比硬件更值得看。"
+    ]
+   },
+   "escape": {
+    "how": "Escape",
+    "newText": "不会保存",
+    "sent": [],
+    "editorStillOpen": 0,
+    "textsAfter": [
+     "长期持有美股科技股，偏好以季度为周期做决策。",
+     "回答先给结论，再给依据；数字要带出处。",
+     "涉及买卖时只给参考意见，不要替我下决定。",
+     "新闻只保留与持仓和关注列表相关的。",
+     "AAPL 的服务业务比硬件更值得看。"
+    ]
+   },
+   "button": {
+    "how": "button",
+    "newText": "按钮保存",
+    "sent": [
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/profile/pf000000-0000-4000-8000-000000000002",
+      "query": "",
+      "body": "{\"text\":\"按钮保存\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "editorStillOpen": 0,
+    "textsAfter": [
+     "长期持有美股科技股，偏好以季度为周期做决策。",
+     "按钮保存",
+     "涉及买卖时只给参考意见，不要替我下决定。",
+     "新闻只保留与持仓和关注列表相关的。",
+     "AAPL 的服务业务比硬件更值得看。"
+    ]
+   },
+   "blank": {
+    "how": "Enter",
+    "newText": "   ",
+    "sent": [],
+    "editorStillOpen": 1,
+    "textsAfter": [
+     "长期持有美股科技股，偏好以季度为周期做决策。",
+     "涉及买卖时只给参考意见，不要替我下决定。",
+     "新闻只保留与持仓和关注列表相关的。",
+     "AAPL 的服务业务比硬件更值得看。"
+    ]
+   }
+  },
+  "scope": {
+   "options": [
+    [
+     "",
+     "全局"
+    ],
+    [
+     "b0000000-0000-4000-8000-000000000001",
+     "FinBot"
+    ],
+    [
+     "b0000000-0000-4000-8000-000000000002",
+     "NewsBot"
+    ],
+    [
+     "b0000000-0000-4000-8000-000000000003",
+     "AppleBot"
+    ],
+    [
+     "b0000000-0000-4000-8000-000000000004",
+     "ReportBot"
+    ],
+    [
+     "b0000000-0000-4000-8000-000000000005",
+     "TeslaBot"
+    ]
+   ],
+   "toBot": {
+    "item": "回答先给结论",
+    "to": "b0000000-0000-4000-8000-000000000004",
+    "sent": [
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/profile/pf000000-0000-4000-8000-000000000002",
+      "query": "",
+      "body": "{\"bot_id\":\"b0000000-0000-4000-8000-000000000004\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "layersAfter": [
+     "全局 · 2",
+     "NewsBot · 1",
+     "AppleBot · 1",
+     "ReportBot · 1"
+    ]
+   },
+   "toGlobal": {
+    "item": "新闻只保留",
+    "to": "",
+    "sent": [
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/profile/pf000000-0000-4000-8000-000000000004",
+      "query": "",
+      "body": "{\"bot_id\":null}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "layersAfter": [
+     "全局 · 4",
+     "AppleBot · 1"
+    ]
+   },
+   "botToBot": {
+    "item": "AAPL 的服务业务",
+    "to": "b0000000-0000-4000-8000-000000000002",
+    "sent": [
+     {
+      "method": "PATCH",
+      "path": "/agent-chat/profile/pf000000-0000-4000-8000-000000000005",
+      "query": "",
+      "body": "{\"bot_id\":\"b0000000-0000-4000-8000-000000000002\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "layersAfter": [
+     "全局 · 3",
+     "NewsBot · 2"
+    ]
+   }
+  },
+  "confirm": {
+   "inferred": {
+    "item": "新闻只保留",
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/profile/pf000000-0000-4000-8000-000000000004/confirm",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "badgesAfter": [
+     "偏好",
+     "你说的"
+    ],
+    "hasConfirmAfter": 0
+   },
+   "inferred2": {
+    "item": "AAPL 的服务业务",
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/profile/pf000000-0000-4000-8000-000000000005/confirm",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "badgesAfter": [
+     "偏好",
+     "你说的"
+    ],
+    "hasConfirmAfter": 0
+   },
+   "countWithButton": 2
+  },
+  "del": {
+   "active": {
+    "dialog": {
+     "title": "删除这条记忆？",
+     "description": "之后的对话不再按它回答。",
+     "buttons": [
+      "取消",
+      "删除"
+     ]
+    },
+    "sent": [
+     {
+      "method": "DELETE",
+      "path": "/agent-chat/profile/pf000000-0000-4000-8000-000000000002",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "textsAfter": [
+     "长期持有美股科技股，偏好以季度为周期做决策。",
+     "涉及买卖时只给参考意见，不要替我下决定。",
+     "新闻只保留与持仓和关注列表相关的。",
+     "AAPL 的服务业务比硬件更值得看。",
+     ""
+    ]
+   },
+   "archived": {
+    "dialog": {
+     "title": "删除这条记忆？",
+     "description": "之后的对话不再按它回答。",
+     "buttons": [
+      "取消",
+      "删除"
+     ]
+    },
+    "sent": [
+     {
+      "method": "DELETE",
+      "path": "/agent-chat/profile/pf000000-0000-4000-8000-000000000006",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "textsAfter": [
+     "长期持有美股科技股，偏好以季度为周期做决策。",
+     "回答先给结论，再给依据；数字要带出处。",
+     "涉及买卖时只给参考意见，不要替我下决定。",
+     "新闻只保留与持仓和关注列表相关的。",
+     "AAPL 的服务业务比硬件更值得看。"
+    ]
+   }
+  },
+  "recall": {
+   "enter": {
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/agent-chat/recall",
+      "query": "?limit=20",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ]
+   },
+   "load": {
+    "paragraphs": [
+     "说「上次我们聊过……」时，Agent 会在这里找是哪一次对话、聊了什么。往事只是线索，不是证据：回答里的数字仍要重新取证。",
+     "每个 bot 只回想自己那条线；默认 bot「助理」能回想所有 bot 的。"
+    ],
+    "groups": [
+     {
+      "title": "FinBot·1",
+      "items": [
+       {
+        "badge": "摘要",
+        "title": "AAPL 服务收入与预测对比",
+        "date": "2026-11-13",
+        "summary": "对比了 AAPL 前两版预测，第 2 版下调了看跌概率。",
+        "button": "打开对话"
+       }
+      ]
+     },
+     {
+      "title": "AppleBot·1",
+      "items": [
+       {
+        "badge": "摘要",
+        "title": "AAPL 本季服务收入",
+        "date": "2026-11-12",
+        "summary": "问了服务收入与毛利率，引用了最新 10-Q。",
+        "button": "打开对话"
+       }
+      ]
+     },
+     {
+      "title": "未归属·1",
+      "items": [
+       {
+        "badge": "你的提问",
+        "title": "可信度星级是什么",
+        "date": "2026-11-08",
+        "summary": "解释了材料的可信度星级是用户评分，不是事实核查。",
+        "button": "打开对话"
+       }
+      ]
+     },
+     {
+      "title": "ReportBot·1",
+      "items": [
+       {
+        "badge": "摘要",
+        "title": "NVDA 10-Q 风险因素",
+        "date": "2026-11-02",
+        "summary": "读了 NVDA 最新 10-Q 的风险因素。",
+        "button": "打开对话"
+       }
+      ]
+     }
+    ],
+    "bots": [
+     [
+      "",
+      "全部 bot"
+     ],
+     [
+      "b0000000-0000-4000-8000-000000000001",
+      "FinBot"
+     ],
+     [
+      "b0000000-0000-4000-8000-000000000002",
+      "NewsBot"
+     ],
+     [
+      "b0000000-0000-4000-8000-000000000003",
+      "AppleBot"
+     ],
+     [
+      "b0000000-0000-4000-8000-000000000004",
+      "ReportBot"
+     ],
+     [
+      "b0000000-0000-4000-8000-000000000005",
+      "TeslaBot"
+     ]
+    ],
+    "placeholder": "搜索往事，例如 英伟达"
+   },
+   "typing": {
+    "sent": []
+   },
+   "submitButton": {
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/agent-chat/recall",
+      "query": "?q=%E8%8B%B1%E4%BC%9F%E8%BE%BE",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ]
+   },
+   "submitSameAgain": {
+    "sent": []
+   },
+   "submitEnter": {
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/agent-chat/recall",
+      "query": "?q=%E7%BE%8E%E8%81%94%E5%82%A8",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ]
+   },
+   "filterWithQuery": {
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/agent-chat/recall",
+      "query": "?q=%E7%BE%8E%E8%81%94%E5%82%A8&bot_id=b0000000-0000-4000-8000-000000000003",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ]
+   },
+   "clearedWithFilter": {
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/agent-chat/recall",
+      "query": "?limit=20&bot_id=b0000000-0000-4000-8000-000000000003",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ]
+   },
+   "filterCleared": {
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/agent-chat/recall",
+      "query": "?limit=20",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ]
+   },
+   "noMatch": {
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/agent-chat/recall",
+      "query": "?q=%E6%97%A0%E7%BB%93%E6%9E%9C%E8%AF%8D",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "texts": [
+     "说「上次我们聊过……」时，Agent 会在这里找是哪一次对话、聊了什么。往事只是线索，不是证据：回答里的数字仍要重新取证。",
+     "每个 bot 只回想自己那条线；默认 bot「助理」能回想所有 bot 的。",
+     "没有找到相关的往事。"
+    ]
+   },
+   "filterOnly": {
+    "sent": [
+     "?limit=20",
+     "?limit=20&bot_id=b0000000-0000-4000-8000-000000000003"
+    ]
+   }
+  },
+  "open": {
+   "otherBot": {
+    "title": "AAPL 本季服务收入",
+    "hash": "#/chat/b0000000-0000-4000-8000-000000000003",
+    "requests": [
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000003/messages?limit=20",
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000003/context?bot_id=b0000000-0000-4000-8000-000000000003",
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000003/messages?limit=1"
+    ]
+   },
+   "defaultBot": {
+    "title": "AAPL 服务收入与预测对比",
+    "hash": "#/chat",
+    "requests": [
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000001/messages?limit=20",
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000001/messages?limit=1",
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000001/messages?limit=20",
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000001/context?bot_id=b0000000-0000-4000-8000-000000000001",
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000001/messages?limit=1"
+    ]
+   },
+   "unowned": {
+    "title": "可信度星级是什么",
+    "hash": "#/chat",
+    "requests": [
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000011/messages?limit=20",
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000011/messages?limit=1",
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000001/messages?limit=20",
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000001/context?bot_id=b0000000-0000-4000-8000-000000000001",
+     "GET /agent-chat/conversations/c0000000-0000-4000-8000-000000000001/messages?limit=1"
+    ]
+   }
+  },
+  "load": {
+   "h1": "记忆",
+   "tabs": [
+    "画像",
+    "往事"
+   ],
+   "paragraphs": [
+    "在这里直接写下要 Agent 记住的事，或对 Agent 说「记住……」「以后都……」并在确认卡上点同意；说「忘掉……」即可撤回。Agent 也会从你自己说的话里推断偏好，标为“推断”，你可以在这里确认或删除。画像只是偏好，不是证据，也不授权任何操作。",
+    "全局：每个 bot 都用。本 bot：只有这个 bot 和默认 bot「助理」能读。可以在每条的“范围”里改。"
+   ],
+   "layers": [
+    {
+     "title": "全局·3",
+     "items": [
+      {
+       "badges": [
+        "关于我",
+        "你说的"
+       ],
+       "text": "长期持有美股科技股，偏好以季度为周期做决策。",
+       "quote": "“我主要持有美股科技，按季度看。”",
+       "buttons": [
+        "编辑",
+        "删除"
+       ],
+       "scope": ""
+      },
+      {
+       "badges": [
+        "偏好",
+        "你说的"
+       ],
+       "text": "回答先给结论，再给依据；数字要带出处。",
+       "quote": "“先说结论。”",
+       "buttons": [
+        "编辑",
+        "删除"
+       ],
+       "scope": ""
+      },
+      {
+       "badges": [
+        "长期指令",
+        "你写的"
+       ],
+       "text": "涉及买卖时只给参考意见，不要替我下决定。",
+       "quote": "“”",
+       "buttons": [
+        "编辑",
+        "删除"
+       ],
+       "scope": ""
+      }
+     ]
+    },
+    {
+     "title": "NewsBot·1",
+     "items": [
+      {
+       "badges": [
+        "偏好",
+        "推断"
+       ],
+       "text": "新闻只保留与持仓和关注列表相关的。",
+       "quote": "“别给我推和持仓无关的新闻。”",
+       "buttons": [
+        "编辑",
+        "确认",
+        "删除"
+       ],
+       "scope": "b0000000-0000-4000-8000-000000000002"
+      }
+     ]
+    },
+    {
+     "title": "AppleBot·1",
+     "items": [
+      {
+       "badges": [
+        "偏好",
+        "推断"
+       ],
+       "text": "AAPL 的服务业务比硬件更值得看。",
+       "quote": "“我更关心服务业务。”",
+       "buttons": [
+        "编辑",
+        "确认",
+        "删除"
+       ],
+       "scope": "b0000000-0000-4000-8000-000000000003"
+      }
+     ]
+    }
+   ],
+   "archived": "已归档 · 1偏好全局用简体中文回答，专有名词保留英文。删除"
+  },
+  "addForm": {
+   "kinds": [
+    [
+     "preference",
+     "偏好"
+    ],
+    [
+     "about_me",
+     "关于我"
+    ],
+    [
+     "instruction",
+     "长期指令"
+    ]
+   ],
+   "scopes": [
+    [
+     "",
+     "全局（所有 bot）"
+    ],
+    [
+     "b0000000-0000-4000-8000-000000000001",
+     "本 bot · FinBot"
+    ],
+    [
+     "b0000000-0000-4000-8000-000000000002",
+     "本 bot · NewsBot"
+    ],
+    [
+     "b0000000-0000-4000-8000-000000000003",
+     "本 bot · AppleBot"
+    ],
+    [
+     "b0000000-0000-4000-8000-000000000004",
+     "本 bot · ReportBot"
+    ],
+    [
+     "b0000000-0000-4000-8000-000000000005",
+     "本 bot · TeslaBot"
+    ]
+   ],
+   "placeholder": "例如：金额都用亿美元；我主要看半导体",
+   "addDisabled": true
+  },
+  "goChat": {
+   "button": 1
+  }
+ },
+ "news": {
+  "create": {
+   "defaults": {
+    "input": {
+     "id": "new-feed",
+     "url": "https://example.test/new.xml"
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources",
+      "query": "",
+      "body": "{\"id\":\"new-feed\",\"name\":\"new-feed\",\"kind\":\"rss\",\"url\":\"https://example.test/new.xml\",\"language\":\"zh-CN\",\"markets\":[\"US\"],\"tags\":[\"news\"],\"alternates\":[],\"rea_repair\":true,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "formOpen": 0,
+    "alert": [],
+    "rowsAfter": [
+     "RSS / Atom 已启用 健康 Markets Wire（示例） （ID: wire-markets） 抓取地址：https://example.test/",
+     "RSS / Atom 已启用 健康 Tech Daily（示例） （ID: tech-daily） 抓取地址：https://example.test/feed",
+     "HTTP JSON 已启用 健康 Earnings Feed（示例） （ID: earnings-feed） 抓取地址：https://example.test",
+     "HTTP HTML 已启用 降级 Chip Watch（示例） （ID: chip-watch） 抓取地址：https://example.test/feeds",
+     "RSS / Atom 已启用 异常 EV Weekly（示例） （ID: ev-weekly） 抓取地址：https://example.test/feeds/",
+     "RSS / Atom 已暂停 健康 旧博客（示例） （ID: old-blog） 抓取地址：https://example.test/feeds/old-blo",
+     "RSS / Atom 已启用 健康 new-feed （ID: new-feed） 抓取地址：https://example.test/new.xml · 市场"
+    ]
+   },
+   "everything": {
+    "input": {
+     "id": "  full-source  ",
+     "name": "  完整源  ",
+     "kind": "http_json",
+     "url": "  https://example.test/full.json  ",
+     "homepage": " https://example.test/ ",
+     "markets": "us, cn  hk，jp、sg",
+     "tags": "macro flash,，ai、 earnings",
+     "alternates": "https://a.test/x.xml, https://b.test/y.xml，https://c.test/z",
+     "rea": false,
+     "enabled": false
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources",
+      "query": "",
+      "body": "{\"id\":\"full-source\",\"name\":\"完整源\",\"kind\":\"http_json\",\"url\":\"https://example.test/full.json\",\"homepage\":\"https://example.test/\",\"language\":\"zh-CN\",\"markets\":[\"US\",\"CN\",\"HK\",\"JP\",\"SG\"],\"tags\":[\"macro\",\"flash\",\"ai\",\"earnings\"],\"alternates\":[\"https://a.test/x.xml\",\"https://b.test/y.xml\",\"https://c.test/z\"],\"rea_repair\":false,\"enabled\":false}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "formOpen": 0,
+    "alert": [],
+    "rowsAfter": [
+     "RSS / Atom 已启用 健康 Markets Wire（示例） （ID: wire-markets） 抓取地址：https://example.test/",
+     "RSS / Atom 已启用 健康 Tech Daily（示例） （ID: tech-daily） 抓取地址：https://example.test/feed",
+     "HTTP JSON 已启用 健康 Earnings Feed（示例） （ID: earnings-feed） 抓取地址：https://example.test",
+     "HTTP HTML 已启用 降级 Chip Watch（示例） （ID: chip-watch） 抓取地址：https://example.test/feeds",
+     "RSS / Atom 已启用 异常 EV Weekly（示例） （ID: ev-weekly） 抓取地址：https://example.test/feeds/",
+     "RSS / Atom 已暂停 健康 旧博客（示例） （ID: old-blog） 抓取地址：https://example.test/feeds/old-blo",
+     "HTTP JSON 已暂停 健康 完整源 （ID: full-source） 抓取地址：https://example.test/full.json · 市场："
+    ]
+   },
+   "html": {
+    "input": {
+     "id": "html.src_2",
+     "kind": "http_html",
+     "url": "HTTPS://example.test/list",
+     "markets": "",
+     "tags": "",
+     "rea": true
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources",
+      "query": "",
+      "body": "{\"id\":\"html.src_2\",\"name\":\"html.src_2\",\"kind\":\"http_html\",\"url\":\"HTTPS://example.test/list\",\"language\":\"zh-CN\",\"markets\":[],\"tags\":[],\"alternates\":[],\"rea_repair\":true,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "formOpen": 0,
+    "alert": [],
+    "rowsAfter": [
+     "RSS / Atom 已启用 健康 Markets Wire（示例） （ID: wire-markets） 抓取地址：https://example.test/",
+     "RSS / Atom 已启用 健康 Tech Daily（示例） （ID: tech-daily） 抓取地址：https://example.test/feed",
+     "HTTP JSON 已启用 健康 Earnings Feed（示例） （ID: earnings-feed） 抓取地址：https://example.test",
+     "HTTP HTML 已启用 降级 Chip Watch（示例） （ID: chip-watch） 抓取地址：https://example.test/feeds",
+     "RSS / Atom 已启用 异常 EV Weekly（示例） （ID: ev-weekly） 抓取地址：https://example.test/feeds/",
+     "RSS / Atom 已暂停 健康 旧博客（示例） （ID: old-blog） 抓取地址：https://example.test/feeds/old-blo",
+     "HTTP HTML 已启用 健康 html.src_2 （ID: html.src_2） 抓取地址：HTTPS://example.test/list · 支持"
+    ]
+   },
+   "overwrite": {
+    "input": {
+     "id": "wire-markets",
+     "name": "覆盖了现有的源",
+     "url": "https://example.test/over.xml"
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources",
+      "query": "",
+      "body": "{\"id\":\"wire-markets\",\"name\":\"覆盖了现有的源\",\"kind\":\"rss\",\"url\":\"https://example.test/over.xml\",\"language\":\"zh-CN\",\"markets\":[\"US\"],\"tags\":[\"news\"],\"alternates\":[],\"rea_repair\":true,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "formOpen": 0,
+    "alert": [],
+    "rowsAfter": [
+     "RSS / Atom 已启用 健康 覆盖了现有的源 （ID: wire-markets） 抓取地址：https://example.test/over.xml ",
+     "RSS / Atom 已启用 健康 Tech Daily（示例） （ID: tech-daily） 抓取地址：https://example.test/feed",
+     "HTTP JSON 已启用 健康 Earnings Feed（示例） （ID: earnings-feed） 抓取地址：https://example.test",
+     "HTTP HTML 已启用 降级 Chip Watch（示例） （ID: chip-watch） 抓取地址：https://example.test/feeds",
+     "RSS / Atom 已启用 异常 EV Weekly（示例） （ID: ev-weekly） 抓取地址：https://example.test/feeds/",
+     "RSS / Atom 已暂停 健康 旧博客（示例） （ID: old-blog） 抓取地址：https://example.test/feeds/old-blo"
+    ]
+   }
+  },
+  "createRefused": {
+   "idOne": {
+    "input": {
+     "id": "a",
+     "url": "https://example.test/x"
+    },
+    "sent": 0,
+    "alert": [
+     "请填写有效的新闻源 ID（2-80 位字母、数字、连字符或下划线，如 cls-telegraph）。"
+    ],
+    "formOpen": 1
+   },
+   "idSpace": {
+    "input": {
+     "id": "bad id",
+     "url": "https://example.test/x"
+    },
+    "sent": 0,
+    "alert": [
+     "请填写有效的新闻源 ID（2-80 位字母、数字、连字符或下划线，如 cls-telegraph）。"
+    ],
+    "formOpen": 1
+   },
+   "idEmpty": {
+    "input": {
+     "id": "",
+     "url": "https://example.test/x"
+    },
+    "sent": 0,
+    "alert": [
+     "请填写有效的新闻源 ID（2-80 位字母、数字、连字符或下划线，如 cls-telegraph）。"
+    ],
+    "formOpen": 1
+   },
+   "idLong": {
+    "input": {
+     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "url": "https://example.test/x"
+    },
+    "sent": 1,
+    "alert": [],
+    "formOpen": 0
+   },
+   "idChinese": {
+    "input": {
+     "id": "新闻源",
+     "url": "https://example.test/x"
+    },
+    "sent": 0,
+    "alert": [
+     "请填写有效的新闻源 ID（2-80 位字母、数字、连字符或下划线，如 cls-telegraph）。"
+    ],
+    "formOpen": 1
+   },
+   "urlFtp": {
+    "input": {
+     "id": "good-id",
+     "url": "ftp://example.test/x"
+    },
+    "sent": 0,
+    "alert": [
+     "抓取地址须以 http:// 或 https:// 开头。"
+    ],
+    "formOpen": 1
+   },
+   "urlEmpty": {
+    "input": {
+     "id": "good-id",
+     "url": ""
+    },
+    "sent": 0,
+    "alert": [
+     "抓取地址须以 http:// 或 https:// 开头。"
+    ],
+    "formOpen": 1
+   },
+   "urlSpaces": {
+    "input": {
+     "id": "good-id",
+     "url": "   "
+    },
+    "sent": 0,
+    "alert": [],
+    "formOpen": 1
+   }
+  },
+  "edit": {
+   "wire-markets": {
+    "opened": [
+     [
+      "wire-markets",
+      true
+     ],
+     [
+      "Markets Wire（示例）",
+      false
+     ],
+     [
+      "rss",
+      false
+     ],
+     [
+      "https://example.test/feeds/wire-markets.xml",
+      false
+     ],
+     [
+      "https://example.test/wire-markets",
+      false
+     ],
+     [
+      "US",
+      false
+     ],
+     [
+      "markets, macro",
+      false
+     ],
+     [
+      "",
+      false
+     ],
+     [
+      true,
+      false
+     ],
+     [
+      false,
+      false
+     ]
+    ],
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources",
+      "query": "",
+      "body": "{\"id\":\"wire-markets\",\"name\":\"Markets Wire（示例）\",\"kind\":\"rss\",\"url\":\"https://example.test/feeds/wire-markets.xml\",\"homepage\":\"https://example.test/wire-markets\",\"language\":\"en\",\"markets\":[\"US\"],\"tags\":[\"markets\",\"macro\"],\"alternates\":[],\"rea_repair\":false,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ]
+   },
+   "tech-daily": {
+    "opened": [
+     [
+      "tech-daily",
+      true
+     ],
+     [
+      "Tech Daily（示例）",
+      false
+     ],
+     [
+      "rss",
+      false
+     ],
+     [
+      "https://example.test/feeds/tech-daily.xml",
+      false
+     ],
+     [
+      "https://example.test/tech-daily",
+      false
+     ],
+     [
+      "US",
+      false
+     ],
+     [
+      "tech",
+      false
+     ],
+     [
+      "",
+      false
+     ],
+     [
+      true,
+      false
+     ],
+     [
+      false,
+      false
+     ]
+    ],
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources",
+      "query": "",
+      "body": "{\"id\":\"tech-daily\",\"name\":\"Tech Daily（示例）\",\"kind\":\"rss\",\"url\":\"https://example.test/feeds/tech-daily.xml\",\"homepage\":\"https://example.test/tech-daily\",\"language\":\"en\",\"markets\":[\"US\"],\"tags\":[\"tech\"],\"alternates\":[],\"rea_repair\":false,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ]
+   },
+   "earnings-feed": {
+    "opened": [
+     [
+      "earnings-feed",
+      true
+     ],
+     [
+      "Earnings Feed（示例）",
+      false
+     ],
+     [
+      "http_json",
+      false
+     ],
+     [
+      "https://example.test/feeds/earnings-feed.xml",
+      false
+     ],
+     [
+      "https://example.test/earnings-feed",
+      false
+     ],
+     [
+      "US",
+      false
+     ],
+     [
+      "earnings",
+      false
+     ],
+     [
+      "",
+      false
+     ],
+     [
+      true,
+      false
+     ],
+     [
+      false,
+      false
+     ]
+    ],
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources",
+      "query": "",
+      "body": "{\"id\":\"earnings-feed\",\"name\":\"Earnings Feed（示例）\",\"kind\":\"http_json\",\"url\":\"https://example.test/feeds/earnings-feed.xml\",\"homepage\":\"https://example.test/earnings-feed\",\"language\":\"en\",\"markets\":[\"US\"],\"tags\":[\"earnings\"],\"alternates\":[],\"rea_repair\":false,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ]
+   },
+   "chip-watch": {
+    "opened": [
+     [
+      "chip-watch",
+      true
+     ],
+     [
+      "Chip Watch（示例）",
+      false
+     ],
+     [
+      "http_html",
+      false
+     ],
+     [
+      "https://example.test/feeds/chip-watch.xml",
+      false
+     ],
+     [
+      "https://example.test/chip-watch",
+      false
+     ],
+     [
+      "US",
+      false
+     ],
+     [
+      "semiconductors",
+      false
+     ],
+     [
+      "",
+      false
+     ],
+     [
+      true,
+      false
+     ],
+     [
+      true,
+      false
+     ]
+    ],
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources",
+      "query": "",
+      "body": "{\"id\":\"chip-watch\",\"name\":\"Chip Watch（示例）\",\"kind\":\"http_html\",\"url\":\"https://example.test/feeds/chip-watch.xml\",\"homepage\":\"https://example.test/chip-watch\",\"language\":\"en\",\"markets\":[\"US\"],\"tags\":[\"semiconductors\"],\"alternates\":[],\"rea_repair\":true,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ]
+   },
+   "ev-weekly": {
+    "opened": [
+     [
+      "ev-weekly",
+      true
+     ],
+     [
+      "EV Weekly（示例）",
+      false
+     ],
+     [
+      "rss",
+      false
+     ],
+     [
+      "https://example.test/feeds/ev-weekly.xml",
+      false
+     ],
+     [
+      "https://example.test/ev-weekly",
+      false
+     ],
+     [
+      "US",
+      false
+     ],
+     [
+      "auto",
+      false
+     ],
+     [
+      "",
+      false
+     ],
+     [
+      true,
+      false
+     ],
+     [
+      false,
+      false
+     ]
+    ],
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources",
+      "query": "",
+      "body": "{\"id\":\"ev-weekly\",\"name\":\"EV Weekly（示例）\",\"kind\":\"rss\",\"url\":\"https://example.test/feeds/ev-weekly.xml\",\"homepage\":\"https://example.test/ev-weekly\",\"language\":\"en\",\"markets\":[\"US\"],\"tags\":[\"auto\"],\"alternates\":[],\"rea_repair\":false,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ]
+   },
+   "old-blog": {
+    "opened": [
+     [
+      "old-blog",
+      true
+     ],
+     [
+      "旧博客（示例）",
+      false
+     ],
+     [
+      "rss",
+      false
+     ],
+     [
+      "https://example.test/feeds/old-blog.xml",
+      false
+     ],
+     [
+      "https://example.test/old-blog",
+      false
+     ],
+     [
+      "US",
+      false
+     ],
+     [
+      "markets",
+      false
+     ],
+     [
+      "",
+      false
+     ],
+     [
+      false,
+      false
+     ],
+     [
+      false,
+      false
+     ]
+    ],
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources",
+      "query": "",
+      "body": "{\"id\":\"old-blog\",\"name\":\"旧博客（示例）\",\"kind\":\"rss\",\"url\":\"https://example.test/feeds/old-blog.xml\",\"homepage\":\"https://example.test/old-blog\",\"language\":\"zh\",\"markets\":[\"US\"],\"tags\":[\"markets\"],\"alternates\":[],\"rea_repair\":false,\"enabled\":false}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ]
+   },
+   "changed": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources",
+      "query": "",
+      "body": "{\"id\":\"chip-watch\",\"name\":\"芯片观察（改名）\",\"kind\":\"http_html\",\"url\":\"https://example.test/feeds/chip-watch.xml\",\"language\":\"en\",\"markets\":[\"US\",\"TW\"],\"tags\":[\"semis\"],\"alternates\":[\"https://alt.test/a.xml\"],\"rea_repair\":false,\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ]
+   }
+  },
+  "toggle": {
+   "pause": {
+    "id": "wire-markets",
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources/wire-markets/enabled",
+      "query": "",
+      "body": "{\"enabled\":false}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "rowAfter": [
+     "RSS / Atom",
+     "已暂停",
+     "健康"
+    ]
+   },
+   "enable": {
+    "id": "old-blog",
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources/old-blog/enabled",
+      "query": "",
+      "body": "{\"enabled\":true}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "rowAfter": [
+     "RSS / Atom",
+     "已启用",
+     "健康"
+    ]
+   }
+  },
+  "test": {
+   "wire-markets": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources/wire-markets/dry-run",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "shown": "测试抓取成功：共抓取 24 条，有效标准化 22 条。 · 美联储官员称降息节奏取决于数据（2026-11-12T09:30） · 芯片股盘前走强（2026-11-12T08:05）",
+    "links": [
+     [
+      "美联储官员称降息节奏取决于数据",
+      "https://example.test/news/fed-pace",
+      "_blank",
+      "noreferrer"
+     ],
+     [
+      "芯片股盘前走强",
+      "https://example.test/news/chips-pre",
+      "_blank",
+      "noreferrer"
+     ]
+    ]
+   },
+   "earnings-feed": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources/earnings-feed/dry-run",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "shown": "测试抓取成功：共抓取 8 条，有效标准化 8 条。 · AAPL 财报日程更新（2026-11-11T21:10）",
+    "links": [
+     [
+      "AAPL 财报日程更新",
+      "https://example.test/news/aapl-date",
+      "_blank",
+      "noreferrer"
+     ]
+    ]
+   },
+   "chip-watch": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources/chip-watch/dry-run",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "shown": "测试抓取成功：共抓取 12 条，有效标准化 3 条。",
+    "links": []
+   },
+   "ev-weekly": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources/ev-weekly/dry-run",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "shown": "测试抓取未通过：上游返回 503，暂时抓不到内容。",
+    "links": []
+   },
+   "old-blog": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources/old-blog/dry-run",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "shown": "测试抓取未通过：empty_feed",
+    "links": []
+   },
+   "tech-daily": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources/tech-daily/dry-run",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "shown": "测试抓取未通过：无有效条目",
+    "links": []
+   }
+  },
+  "repair": {
+   "buttonOn": [
+    "chip-watch）",
+    "ai-wire）",
+    "macro-wire）"
+   ],
+   "chip-watch": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources/chip-watch/repair",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "note": "HTTP HTML 已启用 健康 Chip Watch（示例） （ID: chip-watch） 抓取地址：https://example.test/feeds/chip-watch.xml · 市场：US · 标签：semiconductors · 支持 REA 自动诊断 REA 修复成功（抽样 2 条有效新闻） 暂停 测试抓取 编辑 REA 修复 删除",
+    "badgesAfter": [
+     "HTTP HTML",
+     "已启用",
+     "健康"
+    ]
+   },
+   "ai-wire": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources/ai-wire/repair",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "note": "RSS / Atom 已启用 降级 AI Wire（示例） （ID: ai-wire） 抓取地址：https://example.test/feeds/ai-wire.xml · 市场：US · 标签：ai · 支持 REA 自动诊断 最近错误：feed_moved REA 暂未自动修复：no_candidate_feed 暂停 测试抓取 编辑 REA 修复 删除",
+    "badgesAfter": [
+     "RSS / Atom",
+     "已启用",
+     "降级"
+    ]
+   },
+   "macro-wire": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/agent-chat/news-sources/macro-wire/repair",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "note": "HTTP JSON 已启用 异常 Macro Wire（示例） （ID: macro-wire） 抓取地址：https://example.test/feeds/macro-wire.xml · 市场：US · 标签：macro · 支持 REA 自动诊断 备用源：https://example.test/alt/macro.xml 最近错误：timeout REA 暂未自动修复：未发现可用备源 暂停 测试抓取 编辑 REA 修复 删除",
+    "badgesAfter": [
+     "HTTP JSON",
+     "已启用",
+     "异常"
+    ]
+   }
+  },
+  "del": {
+   "ev-weekly": {
+    "dialog": {
+     "title": "删除新闻源「EV Weekly（示例）」？",
+     "description": "删除后不再从这个源读取新闻，不能恢复。",
+     "buttons": [
+      "取消",
+      "删除"
+     ]
+    },
+    "sent": [
+     {
+      "method": "DELETE",
+      "path": "/agent-chat/news-sources/ev-weekly",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "rowsAfter": 5
+   },
+   "old-blog": {
+    "dialog": {
+     "title": "删除新闻源「旧博客（示例）」？",
+     "description": "删除后不再从这个源读取新闻，不能恢复。",
+     "buttons": [
+      "取消",
+      "删除"
+     ]
+    },
+    "sent": [
+     {
+      "method": "DELETE",
+      "path": "/agent-chat/news-sources/old-blog",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "rowsAfter": 5
+   }
+  },
+  "push": {
+   "128": {
+    "sent": [
+     {
+      "method": "PUT",
+      "path": "/agent-chat/news-sources/push-settings",
+      "query": "",
+      "body": "{\"summary_max_tokens\":128}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "valueAfter": "128"
+   },
+   "256": {
+    "sent": [
+     {
+      "method": "PUT",
+      "path": "/agent-chat/news-sources/push-settings",
+      "query": "",
+      "body": "{\"summary_max_tokens\":256}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "valueAfter": "256"
+   },
+   "512": {
+    "sent": [
+     {
+      "method": "PUT",
+      "path": "/agent-chat/news-sources/push-settings",
+      "query": "",
+      "body": "{\"summary_max_tokens\":512}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "valueAfter": "512"
+   }
+  },
+  "load": {
+   "h1": [
+    "新闻源"
+   ],
+   "intro": [
+    "配置公开新闻与快讯源（RSS / Atom / JSON / HTML）。Agent 查询最新动态或运行例行简报时优先检索已启用的配置源；无命中或全部停用时自动回退网页搜索。你也可以在对话里直接让 Agent 开启、停用或添加新闻源。"
+   ],
+   "rows": [
+    {
+     "text": "RSS / Atom 已启用 健康 Markets Wire（示例） （ID: wire-markets） 抓取地址：https://example.test/feeds/wire-markets.xml · 市场：US · 标签：markets, macro 暂停 测试抓取 编辑 删除",
+     "badges": [
+      "RSS / Atom",
+      "已启用",
+      "健康"
+     ],
+     "buttons": [
+      "暂停",
+      "测试抓取",
+      "编辑",
+      "删除"
+     ],
+     "links": [
+      "https://example.test/feeds/wire-markets.xml"
+     ]
+    },
+    {
+     "text": "RSS / Atom 已启用 健康 Tech Daily（示例） （ID: tech-daily） 抓取地址：https://example.test/feeds/tech-daily.xml · 市场：US · 标签：tech 暂停 测试抓取 编辑 删除",
+     "badges": [
+      "RSS / Atom",
+      "已启用",
+      "健康"
+     ],
+     "buttons": [
+      "暂停",
+      "测试抓取",
+      "编辑",
+      "删除"
+     ],
+     "links": [
+      "https://example.test/feeds/tech-daily.xml"
+     ]
+    },
+    {
+     "text": "HTTP JSON 已启用 健康 Earnings Feed（示例） （ID: earnings-feed） 抓取地址：https://example.test/feeds/earnings-feed.xml · 市场：US · 标签：earnings 暂停 测试抓取 编辑 删除",
+     "badges": [
+      "HTTP JSON",
+      "已启用",
+      "健康"
+     ],
+     "buttons": [
+      "暂停",
+      "测试抓取",
+      "编辑",
+      "删除"
+     ],
+     "links": [
+      "https://example.test/feeds/earnings-feed.xml"
+     ]
+    },
+    {
+     "text": "HTTP HTML 已启用 降级 Chip Watch（示例） （ID: chip-watch） 抓取地址：https://example.test/feeds/chip-watch.xml · 市场：US · 标签：semiconductors · 支持 REA 自动诊断 最近错误：parse_changed 暂停 测试抓取 编辑 REA 修复 删除",
+     "badges": [
+      "HTTP HTML",
+      "已启用",
+      "降级"
+     ],
+     "buttons": [
+      "暂停",
+      "测试抓取",
+      "编辑",
+      "REA 修复",
+      "删除"
+     ],
+     "links": [
+      "https://example.test/feeds/chip-watch.xml"
+     ]
+    },
+    {
+     "text": "RSS / Atom 已启用 异常 EV Weekly（示例） （ID: ev-weekly） 抓取地址：https://example.test/feeds/ev-weekly.xml · 市场：US · 标签：auto 最近错误：http_503 暂停 测试抓取 编辑 删除",
+     "badges": [
+      "RSS / Atom",
+      "已启用",
+      "异常"
+     ],
+     "buttons": [
+      "暂停",
+      "测试抓取",
+      "编辑",
+      "删除"
+     ],
+     "links": [
+      "https://example.test/feeds/ev-weekly.xml"
+     ]
+    },
+    {
+     "text": "RSS / Atom 已暂停 健康 旧博客（示例） （ID: old-blog） 抓取地址：https://example.test/feeds/old-blog.xml · 市场：US · 标签：markets 启用 测试抓取 编辑 删除",
+     "badges": [
+      "RSS / Atom",
+      "已暂停",
+      "健康"
+     ],
+     "buttons": [
+      "启用",
+      "测试抓取",
+      "编辑",
+      "删除"
+     ],
+     "links": [
+      "https://example.test/feeds/old-blog.xml"
+     ]
+    },
+    {
+     "text": "RSS / Atom 已启用 降级 AI Wire（示例） （ID: ai-wire） 抓取地址：https://example.test/feeds/ai-wire.xml · 市场：US · 标签：ai · 支持 REA 自动诊断 最近错误：feed_moved 暂停 测试抓取 编辑 REA 修复 删除",
+     "badges": [
+      "RSS / Atom",
+      "已启用",
+      "降级"
+     ],
+     "buttons": [
+      "暂停",
+      "测试抓取",
+      "编辑",
+      "REA 修复",
+      "删除"
+     ],
+     "links": [
+      "https://example.test/feeds/ai-wire.xml"
+     ]
+    },
+    {
+     "text": "HTTP JSON 已启用 异常 Macro Wire（示例） （ID: macro-wire） 抓取地址：https://example.test/feeds/macro-wire.xml · 市场：US · 标签：macro · 支持 REA 自动诊断 备用源：https://example.test/alt/macro.xml 最近错误：timeout 暂停 测试抓取 编辑 REA 修复 删除",
+     "badges": [
+      "HTTP JSON",
+      "已启用",
+      "异常"
+     ],
+     "buttons": [
+      "暂停",
+      "测试抓取",
+      "编辑",
+      "REA 修复",
+      "删除"
+     ],
+     "links": [
+      "https://example.test/feeds/macro-wire.xml"
+     ]
+    },
+    {
+     "text": "HTTP HTML 已启用 unknown Odd State（示例） （ID: odd-state） 抓取地址：https://example.test/feeds/odd-state.xml · 市场：US · 标签：odd 暂停 测试抓取 编辑 删除",
+     "badges": [
+      "HTTP HTML",
+      "已启用",
+      "unknown"
+     ],
+     "buttons": [
+      "暂停",
+      "测试抓取",
+      "编辑",
+      "删除"
+     ],
+     "links": [
+      "https://example.test/feeds/odd-state.xml"
+     ]
+    }
+   ],
+   "pushOptions": [
+    [
+     "128",
+     "短（128 tokens）"
+    ],
+    [
+     "256",
+     "中（256 tokens）"
+    ],
+    [
+     "512",
+     "长（512 tokens）"
+    ]
+   ],
+   "pushValue": "256"
+  },
+  "form": [
+   {
+    "label": "源 ID（英文标识）",
+    "type": "text",
+    "value": "",
+    "placeholder": "例如：cls-telegraph 或 wsj-markets-rss",
+    "maxLength": 80
+   },
+   {
+    "label": "名称",
+    "type": "text",
+    "value": "",
+    "placeholder": "例如：财联社电报 / Yahoo Finance",
+    "maxLength": 120
+   },
+   {
+    "label": "类型",
+    "type": "select-one",
+    "value": "rss",
+    "placeholder": null,
+    "maxLength": null
+   },
+   {
+    "label": "抓取地址（URL）",
+    "type": "url",
+    "value": "",
+    "placeholder": "https://finance.yahoo.com/news/rssindex",
+    "maxLength": null
+   },
+   {
+    "label": "站点主页（可选，供 REA 发现备用订阅源）",
+    "type": "url",
+    "value": "",
+    "placeholder": "https://finance.yahoo.com/news/",
+    "maxLength": null
+   },
+   {
+    "label": "市场（逗号分隔）",
+    "type": "text",
+    "value": "US",
+    "placeholder": "US, CN, HK",
+    "maxLength": null
+   },
+   {
+    "label": "标签（逗号分隔）",
+    "type": "text",
+    "value": "news",
+    "placeholder": "macro, flash, us-stocks",
+    "maxLength": null
+   },
+   {
+    "label": "备用地址（可选，逗号分隔）",
+    "type": "text",
+    "value": "",
+    "placeholder": "https://...",
+    "maxLength": null
+   },
+   {
+    "label": "立即启用",
+    "type": "checkbox",
+    "value": true,
+    "placeholder": null,
+    "maxLength": null
+   },
+   {
+    "label": "允许 REA 自动诊断修复",
+    "type": "checkbox",
+    "value": true,
+    "placeholder": null,
+    "maxLength": null
+   }
+  ],
+  "unknownHealth": {
+   "text": "HTTP HTML 已启用 unknown Odd State（示例） （ID: odd-state） 抓取地址：https://example.test/feeds/odd-state.xml · 市场：US · 标签：odd 暂停 测试抓取 编辑 删除",
+   "badges": [
+    "HTTP HTML",
+    "已启用",
+    "unknown"
+   ],
+   "buttons": [
+    "暂停",
+    "测试抓取",
+    "编辑",
+    "删除"
+   ],
+   "links": [
+    "https://example.test/feeds/odd-state.xml"
+   ]
+  }
+ },
+ "knowledge": {
+  "upload": {
+   "disabledBeforeFile": true,
+   "markdown": {
+    "input": {
+     "symbol": "aapl",
+     "title": "供应链报道",
+     "url": "https://example.test/report",
+     "published": "2026-11-10T09:30",
+     "reason": "一手采访",
+     "file": {
+      "name": "report.md",
+      "mimeType": "text/markdown"
+     }
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/uploaded-evidence/AAPL",
+      "query": "",
+      "body": null,
+      "fields": {
+       "file": {
+        "filename": "report.md",
+        "type": "text/markdown",
+        "size": 7
+       },
+       "title": "供应链报道",
+       "source_url": "https://example.test/report",
+       "published_at": "2026-11-10T01:30:00.000Z",
+       "credibility_stars": "3",
+       "credibility_reason": "一手采访",
+       "impact_severity": "medium"
+      },
+      "contentType": "multipart/form-data",
+      "hasSession": true
+     },
+     {
+      "method": "GET",
+      "path": "/knowledge/importable/upload",
+      "query": "?symbol=AAPL",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "上传已保存；请选择材料并导入知识库"
+    ],
+    "alert": [],
+    "sourceAfter": "upload",
+    "importableList": [
+     "AAPL 供应链报道（上传） AAPL",
+     "AAPL 渠道调研纪要（上传） AAPL"
+    ],
+    "symbolAfter": [
+     "AAPL",
+     "AAPL"
+    ]
+   },
+   "pdf": {
+    "input": {
+     "symbol": "NVDA",
+     "title": "PDF 材料",
+     "url": "https://example.test/p.pdf",
+     "published": "2026-01-02T00:00",
+     "reason": "交叉验证",
+     "file": {
+      "name": "deck.pdf",
+      "mimeType": "application/pdf"
+     }
+    },
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/uploaded-evidence/NVDA",
+      "query": "",
+      "body": null,
+      "fields": {
+       "file": {
+        "filename": "deck.pdf",
+        "type": "application/pdf",
+        "size": 13
+       },
+       "title": "PDF 材料",
+       "source_url": "https://example.test/p.pdf",
+       "published_at": "2026-01-01T16:00:00.000Z",
+       "credibility_stars": "3",
+       "credibility_reason": "交叉验证",
+       "impact_severity": "medium"
+      },
+      "contentType": "multipart/form-data",
+      "hasSession": true
+     },
+     {
+      "method": "GET",
+      "path": "/knowledge/importable/upload",
+      "query": "?symbol=NVDA",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "上传已保存；请选择材料并导入知识库"
+    ],
+    "alert": [],
+    "sourceAfter": "upload",
+    "importableList": [
+     "AAPL 供应链报道（上传） AAPL",
+     "AAPL 渠道调研纪要（上传） AAPL"
+    ],
+    "symbolAfter": [
+     "NVDA",
+     "NVDA"
+    ]
+   },
+   "invalidTime": {
+    "sent": 0,
+    "alert": [
+     "发布时间无效，请重新选择日期和时间重试"
+    ]
+   }
+  },
+  "importable": {
+   "faq": {
+    "label": "常见问题",
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/knowledge/importable/faq",
+      "query": "?symbol=MSFT",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "list": [
+     "产品 FAQ：可信度星级 faq",
+     "产品 FAQ：预测与证据 faq"
+    ],
+    "symbolEcho": "MSFT"
+   },
+   "upload": {
+    "label": "我的上传材料",
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/knowledge/importable/upload",
+      "query": "?symbol=MSFT",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "list": [
+     "AAPL 供应链报道（上传） AAPL",
+     "AAPL 渠道调研纪要（上传） AAPL"
+    ],
+    "symbolEcho": "MSFT"
+   },
+   "sec": {
+    "label": "已保存 / 已获取 SEC 摘录",
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/knowledge/importable/sec",
+      "query": "?symbol=MSFT",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "list": [
+     "AAPL 10-K 风险因素摘录 AAPL"
+    ],
+    "symbolEcho": "MSFT"
+   },
+   "analysis": {
+    "label": "已保存 AI 分析",
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/knowledge/importable/analysis",
+      "query": "?symbol=MSFT",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "list": [
+     "AAPL 服务业务分析（AI） AAPL"
+    ],
+    "symbolEcho": "MSFT"
+   }
+  },
+  "importOp": {
+   "importDisabledBefore": 1,
+   "two": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/knowledge/import",
+      "query": "",
+      "body": "{\"source_type\":\"upload\",\"source_ids\":[\"up-0002\",\"up-0001\"]}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "接收 2 份材料，生成 10 个块"
+    ],
+    "docs": [
+     "AAPL 10-Q（2026 财年第四季度） AAPL · sec · indexed · 42 块 2026-10-31T02:00:00Z · owner 重试 撤回",
+     "产品 FAQ：可信度星级 FAQ · faq · indexed · 6 块 2026-10-04T02:00:00Z · owner 重试 撤回",
+     "AAPL 渠道调研纪要（上传） AAPL · upload · pending · 5 块 2026-11-12T00:00:00.000Z · owner 重试 撤回",
+     "AAPL 供应链报道（上传） AAPL · upload · pending · 5 块 2026-11-12T00:00:00.000Z · owner 重试 撤回"
+    ],
+    "selectedAfter": 2
+   }
+  },
+  "index": {
+   "sent": [
+    {
+     "method": "POST",
+     "path": "/knowledge/index",
+     "query": "",
+     "body": "{\"max_tasks\":100}",
+     "contentType": "application/json",
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "索引完成 3，失败 1"
+   ]
+  },
+  "retrieval": {
+   "disabledEmpty": true,
+   "maxLength": "800",
+   "upload-AAPL": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/knowledge/retrieval-test",
+      "query": "",
+      "body": "{\"kind\":\"material\",\"keyword\":\"服务收入\",\"symbol\":\"AAPL\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已通过当前权限执行真实知识检索"
+    ],
+    "pre": "{\n  \"result\": {\n    \"ok\": true,\n    \"data\": [\n      {\n        \"title\": \"AAPL 10-Q（2026 财年第四季度）\",\n        \"snippet\": \"Services revenue grew year over year.\",\n        \"score\": 0.83\n      }\n    ]\n  },\n  \"citations\": [\n    {\n      \"index\": 1,\n      \"title\": \"AAPL 10-Q（2026 财年第四季度）\",\n      \"url\": \"https://example.test/docs/01\"\n    }\n  ]\n}"
+   },
+   "faq-AAPL": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/knowledge/retrieval-test",
+      "query": "",
+      "body": "{\"kind\":\"faq\",\"keyword\":\"服务收入\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已通过当前权限执行真实知识检索"
+    ],
+    "pre": "{\n  \"result\": {\n    \"ok\": true,\n    \"data\": [\n      {\n        \"title\": \"AAPL 10-Q（2026 财年第四季度）\",\n        \"snippet\": \"Services revenue grew year over year.\",\n        \"score\": 0.83\n      }\n    ]\n  },\n  \"citations\": [\n    {\n      \"index\": 1,\n      \"title\": \"AAPL 10-Q（2026 财年第四季度）\",\n      \"url\": \"https://example.test/docs/01\"\n    }\n  ]\n}"
+   },
+   "analysis-TSLA": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/knowledge/retrieval-test",
+      "query": "",
+      "body": "{\"kind\":\"analysis\",\"keyword\":\"服务收入\",\"symbol\":\"TSLA\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已通过当前权限执行真实知识检索"
+    ],
+    "pre": "{\n  \"result\": {\n    \"ok\": true,\n    \"data\": [\n      {\n        \"title\": \"AAPL 10-Q（2026 财年第四季度）\",\n        \"snippet\": \"Services revenue grew year over year.\",\n        \"score\": 0.83\n      }\n    ]\n  },\n  \"citations\": [\n    {\n      \"index\": 1,\n      \"title\": \"AAPL 10-Q（2026 财年第四季度）\",\n      \"url\": \"https://example.test/docs/01\"\n    }\n  ]\n}"
+   },
+   "sec-NVDA": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/knowledge/retrieval-test",
+      "query": "",
+      "body": "{\"kind\":\"material\",\"keyword\":\"服务收入\",\"symbol\":\"NVDA\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已通过当前权限执行真实知识检索"
+    ],
+    "pre": "{\n  \"result\": {\n    \"ok\": true,\n    \"data\": [\n      {\n        \"title\": \"AAPL 10-Q（2026 财年第四季度）\",\n        \"snippet\": \"Services revenue grew year over year.\",\n        \"score\": 0.83\n      }\n    ]\n  },\n  \"citations\": [\n    {\n      \"index\": 1,\n      \"title\": \"AAPL 10-Q（2026 财年第四季度）\",\n      \"url\": \"https://example.test/docs/01\"\n    }\n  ]\n}"
+   }
+  },
+  "chunks": {
+   "source": {
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/knowledge/documents/kd000000-0000-4000-8000-000000000001/chunks",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "drawer": "关闭 AAPL 10-Q（2026 财年第四季度） 打开原始来源 ↗ 保存的原文 文本块 · 3 1 · 第 1 节 · indexed 这是第 1 块的内容：AAPL 10-Q（2026 财年第四季度）。 2 · 正文 · indexed 这是第 2 块的内容：AAPL 10-Q（2026 财年第四季度）。 3 · 第 3 节 · indexed 这是第 3 块的内容：AAPL 10-Q（2026 财年第四季度）。",
+    "link": [
+     [
+      "打开原始来源 ↗",
+      "https://example.test/docs/01"
+     ]
+    ],
+    "summary": "保存的原文",
+    "role": "dialog",
+    "escClosed": false
+   },
+   "analysis": {
+    "sent": [
+     {
+      "method": "GET",
+      "path": "/knowledge/documents/kd000000-0000-4000-8000-000000000003/chunks",
+      "query": "",
+      "body": null,
+      "contentType": null,
+      "hasSession": true
+     }
+    ],
+    "drawer": "关闭 AAPL 服务业务分析（AI） 打开原始来源 ↗ 分析文本（含 AI 派生内容） 文本块 · 3 1 · 第 1 节 · indexed 这是第 1 块的内容：AAPL 服务业务分析（AI）。 2 · 正文 · indexed 这是第 2 块的内容：AAPL 服务业务分析（AI）。 3 · 第 3 节 · indexed 这是第 3 块的内容：AAPL 服务业务分析（AI）。",
+    "link": [
+     [
+      "打开原始来源 ↗",
+      "https://example.test/docs/03"
+     ]
+    ],
+    "summary": "分析文本（含 AI 派生内容）",
+    "role": "dialog",
+    "escClosed": false
+   }
+  },
+  "retry": {
+   "sent": [
+    {
+     "method": "POST",
+     "path": "/knowledge/documents/kd000000-0000-4000-8000-000000000001/retry",
+     "query": "",
+     "body": null,
+     "contentType": null,
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "已重新排入索引队列"
+   ]
+  },
+  "withdraw": {
+   "sent": [
+    {
+     "method": "POST",
+     "path": "/knowledge/documents/kd000000-0000-4000-8000-000000000001/withdraw",
+     "query": "",
+     "body": null,
+     "contentType": null,
+     "hasSession": true
+    }
+   ],
+   "status": [
+    "文档已软撤回"
+   ],
+   "rowAfter": [
+    "AAPL 10-Q（2026 财年第四季度） AAPL · sec · withdrawn · 42 块 2026-10-31T02:00:00Z · owner 重试 撤回",
+    "产品 FAQ：可信度星级 FAQ · faq · indexed · 6 块 2026-10-04T02:00:00Z · owner 重试 撤回",
+    "AAPL 服务业务分析（AI） AAPL · analysis · pending · 4 块 2026-11-10T02:00:00Z · owner 重试 撤回",
+    "旧上传：TSLA 交付报道 TSLA · upload · withdrawn · 9 块 观察时间未知 · owner 重试 撤回"
+   ],
+   "disabledAfter": true
+  },
+  "review": {
+   "reject": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/knowledge/candidates/kc000000-0000-4000-8000-000000000001/review",
+      "query": "",
+      "body": "{\"approved\":false,\"reviewer\":\"operator\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "候选已拒绝"
+    ],
+    "left": 1
+   },
+   "approve": {
+    "sent": [
+     {
+      "method": "POST",
+      "path": "/knowledge/candidates/kc000000-0000-4000-8000-000000000002/review",
+      "query": "",
+      "body": "{\"approved\":true,\"reviewer\":\"operator\"}",
+      "contentType": "application/json",
+      "hasSession": true
+     }
+    ],
+    "status": [
+     "已审核，已加入索引队列"
+    ],
+    "left": 0,
+    "emptyText": [
+     "没有待审核条目。"
+    ]
+   }
+  },
+  "load": {
+   "h1": "研究知识库",
+   "eyebrow": "FinBot / Knowledge",
+   "back": "返回模型设置",
+   "sections": [
+    {
+     "h2": "上传并导入材料",
+     "p": "支持 TXT、Markdown 和 PDF；上传内容先归当前会话所有，再导入与索引。"
+    },
+    {
+     "h2": "导入已有材料",
+     "p": "可导入当前会话拥有的上传、已获取的 SEC 摘录、FAQ，或已保存 AI 分析。未知 owner 的旧上传及分析不会公开。"
+    },
+    {
+     "h2": "索引队列",
+     "p": "本地运行需要 RAG_ENABLED=true；每次最多处理 100 个 pending 任务。"
+    },
+    {
+     "h2": "检索测试",
+     "p": "直接走当前 BGE/Milvus 检索路径，并应用当前会话的 owner scope。"
+    },
+    {
+     "h2": "文档 · 2",
+     "p": null
+    },
+    {
+     "h2": "待审核候选 · 0",
+     "p": "没有待审核条目。"
+    }
+   ],
+   "docs": [
+    "AAPL 10-Q（2026 财年第四季度） AAPL · sec · indexed · 42 块 2026-10-31T02:00:00Z · owner 重试 撤回",
+    "产品 FAQ：可信度星级 FAQ · faq · indexed · 6 块 2026-10-04T02:00:00Z · owner 重试 撤回"
+   ],
+   "source": "upload",
+   "symbolValues": [
+    "AAPL",
+    "AAPL"
+   ],
+   "uploadDisabled": true,
+   "publishedAt": "2026-11-13T10:00",
+   "accept": ".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf",
+   "sourceOptions": [
+    [
+     "faq",
+     "常见问题"
+    ],
+    [
+     "upload",
+     "我的上传材料"
+    ],
+    [
+     "sec",
+     "已保存 / 已获取 SEC 摘录"
+    ],
+    [
+     "analysis",
+     "已保存 AI 分析"
+    ]
+   ]
+  },
+  "load2": {
+   "docs": [
+    "AAPL 10-Q（2026 财年第四季度） AAPL · sec · indexed · 42 块 2026-10-31T02:00:00Z · owner 重试 撤回",
+    "产品 FAQ：可信度星级 FAQ · faq · indexed · 6 块 2026-10-04T02:00:00Z · owner 重试 撤回",
+    "AAPL 服务业务分析（AI） AAPL · analysis · pending · 4 块 2026-11-10T02:00:00Z · owner 重试 撤回",
+    "旧上传：TSLA 交付报道 TSLA · upload · withdrawn · 9 块 观察时间未知 · owner 重试 撤回"
+   ],
+   "withdrawDisabled": [
+    [
+     [
+      "AAPL 10-Q（2026 财年第四季度）AAPL · sec · indexed · 42 块2026-10-31T02:00:00Z · owner",
+      false
+     ],
+     [
+      "重试",
+      false
+     ],
+     [
+      "撤回",
+      false
+     ]
+    ],
+    [
+     [
+      "产品 FAQ：可信度星级FAQ · faq · indexed · 6 块2026-10-04T02:00:00Z · owner",
+      false
+     ],
+     [
+      "重试",
+      false
+     ],
+     [
+      "撤回",
+      false
+     ]
+    ],
+    [
+     [
+      "AAPL 服务业务分析（AI）AAPL · analysis · pending · 4 块2026-11-10T02:00:00Z · owner",
+      false
+     ],
+     [
+      "重试",
+      false
+     ],
+     [
+      "撤回",
+      false
+     ]
+    ],
+    [
+     [
+      "旧上传：TSLA 交付报道TSLA · upload · withdrawn · 9 块观察时间未知 · owner",
+      false
+     ],
+     [
+      "重试",
+      false
+     ],
+     [
+      "撤回",
+      true
+     ]
+    ]
+   ],
+   "candidates": [
+    "可信度星级代表什么？ 星级是用户对来源可信度的评分，不是事实核查。 可信度星级由上传者自己评分，用于排序，不代表系统核查过内容。 拒绝审核并排队索引",
+    "往事页签能当证据用吗？ 不能。往事只是找回对话的线索，数字仍要重新取证。 往事只是线索，不是证据：回答里的数字仍要重新取证。 拒绝审核并排队索引"
+   ],
+   "headings": [
+    "文档 · 4",
+    "待审核候选 · 2"
+   ]
+  }
+ }
+}

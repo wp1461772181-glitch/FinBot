@@ -8,10 +8,21 @@ import { MATERIALS, materialList, analysisVersion, materialOriginal, ANALYSIS_SE
 import { forecastList, forecastRoots, timeline, versionDetail, evaluations, monitorStatus, replayJob, REPLAY_JOB, workspace, job, revisionCandidates, JUDGMENTS } from "./forecasts.mjs";
 import { portfolioSummary, buildPortfolio } from "./portfolio.mjs";
 import { TASKS, RUNS, PROPOSALS, INBOX } from "./routines.mjs";
-import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS } from "./assistant.mjs";
+import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS, DRY_RUNS, REPAIRS, KNOWLEDGE_IMPORTABLE, knowledgeChunks, readSkillFile } from "./assistant.mjs";
 
 export function buildState() {
-  return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] } };
+  return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), settings: buildSettings() };
+}
+
+/** The 设置 pages' data as a mutable copy (P8.2): the write routes below change it and the reads answer from it.  `writes` keeps every write as the page sent it (the role table's own state is `modelRoles`).
+ *  `testFail` (a refusal code) makes 测试 answer 422; `discovery` is what 服务商可用模型 answers ("ok", "unsupported", "empty" or a refusal code). */
+function buildSettings() {
+  return { writes: [], catalog: structuredClone(MODEL_CATALOG), analysis: structuredClone(ANALYSIS_SETTINGS), telegram: structuredClone(TELEGRAM), pushover: structuredClone(PUSHOVER), testFail: null, discovery: "ok", counter: 0 };
+}
+
+/** The 助手 pages' data as a mutable copy (P8.1): the write routes below change it and the reads answer from it, so a save shows in the list.  `writes` keeps every write as the page sent it. */
+function buildAssistant() {
+  return { writes: [], skills: structuredClone(SKILLS.skills), news: structuredClone(NEWS), profile: structuredClone(PROFILE.items), recall: structuredClone(RECALL), docs: structuredClone(KNOWLEDGE_DOCS), candidates: [], counter: 0 };
 }
 
 /** The fields of a multipart/form-data body as the page sent them; a file part is described by its name, type and size. */
@@ -48,7 +59,7 @@ export function registerRoutes(route, reply) {
   // --- bots, models, queue -----------------------------------------------------------------------------
   route.get(`${A}/bots`, own(({ state }) => ({ bots: state.bots, default_bot_id: BOT.finbot })));
   route.get(`${A}/bot-templates`, own(() => BOT_TEMPLATES));
-  route.get(`${A}/model-catalog`, own(() => MODEL_CATALOG));
+  route.get(`${A}/model-catalog`, own(({ state }) => state.settings.catalog));
   route.get(`${A}/model-roles`, own(({ state }) => ({ roles: state.modelRoles })));
   // A save (P5.1): the fields it names replace the bot's, as the server does; the answer is the bot as it now stands.  The bodies are what the smoke checks read from view.mock.requests.
   route.patch(`${A}/bots/:id`, own(({ params, body, state }) => {
@@ -169,7 +180,7 @@ export function registerRoutes(route, reply) {
 
   // --- materials (V3) ----------------------------------------------------------------------------------
   route.get("/v3/materials", ({ query }) => materialList(query));
-  route.get("/v3/materials/analysis-settings", () => ANALYSIS_SETTINGS);
+  route.get("/v3/materials/analysis-settings", ({ state }) => state.settings.analysis);
   route.get("/v3/materials/:type/:id/analyses", ({ params }) => { const m = MATERIALS.find((x) => x.source_id === params.id); const no = m?.latest_analysis_id ? Number(m.latest_analysis_id.slice(-12)) : null;
     return { source_type: params.type, source_id: params.id, items: no ? [analysisVersion(no, { symbol: m.symbol })] : [] }; });
   route.get("/v3/materials/:type/:id/original", ({ params }) => materialOriginal(params.type, params.id));
@@ -277,22 +288,13 @@ export function registerRoutes(route, reply) {
 
   // --- the writes the in-app confirmations guard (P2.3): the deletes and the unbind.  Each answers ok; the portfolio one also drops the row. ---
   route.delete(`${A}/portfolio/transactions/:id`, own(({ params, state }) => { written(state, "DELETE", `/portfolio/transactions/${params.id}`, null); state.portfolio.transactions = state.portfolio.transactions.filter((t) => t.id !== params.id); return { ok: true, status: "deleted" }; }));
-  route.delete(`${A}/skills/:id`, own(() => ({ ok: true })));
-  route.delete(`${A}/profile/:id`, own(() => ({ ok: true })));
-  route.delete(`${A}/news-sources/:id`, own(() => ({ ok: true })));
   route.delete(`${A}/tasks/:id`, own(({ params, state }) => { routineWritten(state, "DELETE", `/tasks/${params.id}`, null); state.tasks = state.tasks.filter((t) => t.id !== params.id); return { ok: true }; }));
   route.delete(`${A}/bots/:id`, own(() => ({ ok: true })));
   route.delete(`${A}/bots/:id/telegram`, own(() => ({ ...BOT_TELEGRAM, configured: false, has_token: false, bound: false, shared: true })));
-  route.delete(`${A}/model-catalog/:name`, own(() => ({ ok: true })));
-  route.post(`${A}/telegram/unbind`, own(() => ({ ...TELEGRAM, bound: false, chat_id: null })));
 
   // --- assistant: news sources, skills, memory, settings cards -----------------------------------------
-  route.get(`${A}/news-sources`, own(() => NEWS));
-  route.get(`${A}/skills`, own(() => SKILLS));
-  route.get(`${A}/profile`, own(() => PROFILE));
-  route.get(`${A}/recall`, own(() => ({ items: RECALL })));
-  route.get(`${A}/telegram/status`, own(() => TELEGRAM));
-  route.get(`${A}/pushover/status`, own(() => PUSHOVER));
+  assistantRoutes(route, reply, own);
+  settingsRoutes(route, reply, own);
   // A bot's own Telegram: answered as bound and running unless a check set state.botTelegram[id] (the P5.1 steps check does: no token yet).  Saving a token, making a binding
   // code and the bind itself move that record on; `state.botTelegramBound[id] = true` is the message arriving from Telegram.
   route.get(`${A}/bots/:id/telegram`, own(({ params, state }) => {
@@ -316,6 +318,272 @@ export function registerRoutes(route, reply) {
     return { code: "482913", bot_username: "finbot_fixture_bot", link: null, expires_at: "2026-11-13T02:30:00.000Z" };
   }));
   route.get(`${A}/background-model`, own(() => ({ configured: true, has_key: true, provider: "siliconflow", model: "deepseek-ai/DeepSeek-V4-Flash", base_url: null, updated_at: null })));
-  route.get("/knowledge/documents", () => ({ items: KNOWLEDGE_DOCS }));
-  route.get("/knowledge/candidates", () => ({ items: [] }));
+}
+
+/** The 助手 routes (P8.1).  Reads answer from `state.assistant`; every write is kept as `{ method, path, body }` in `state.assistant.writes` and moves the state the way the server's answer says. */
+function assistantRoutes(route, reply, own) {
+  const A = "/agent-chat";
+  const kept = (state, method, path, body) => { state.assistant.writes.push({ method, path, body: body === undefined ? null : structuredClone(body) }); };
+  const id = (state, prefix) => `${prefix}-0000-4000-8000-${String(900 + ++state.assistant.counter).padStart(12, "0")}`;
+  const unknownSkill = () => reply.status(404, { detail: "unknown_skill" });
+
+  // --- skills
+  route.get(`${A}/skills`, own(({ state }) => ({ skills: state.assistant.skills, tools: SKILLS.tools })));
+  route.post(`${A}/skills`, own(({ body, state }) => {
+    kept(state, "POST", "/skills", body);
+    const skill = { id: id(state, "s3000000"), version: 1, origin: "mine", status: "active", builtin: false, updated_at: "2026-11-13T02:00:00.000Z", enabled: true, output_template: null, ...body };
+    state.assistant.skills.push(skill);
+    return { skill };
+  }));
+  // Import comes before the :id routes: "import" must not be read as a skill id.
+  route.post(`${A}/skills/import/preview`, own(({ body, state }) => {
+    kept(state, "POST", "/skills/import/preview", body);
+    const read = readSkillFile(body?.markdown);
+    return read.error ? reply.status(422, { detail: read.error }) : read;
+  }));
+  route.post(`${A}/skills/import`, own(({ body, state }) => {
+    kept(state, "POST", "/skills/import", body);
+    const read = readSkillFile(body?.markdown);
+    if (read.error) return reply.status(422, { detail: read.error });
+    if (state.assistant.skills.some((s) => s.name === read.skill.name)) return reply.status(422, { detail: "name_taken" });
+    const skill = { id: id(state, "s3000000"), version: 1, origin: "imported", status: "active", builtin: false, updated_at: "2026-11-13T02:00:00.000Z", enabled: true, ...read.skill };
+    state.assistant.skills.push(skill);
+    return { skill };
+  }));
+  route.patch(`${A}/skills/:id`, own(({ params, body, state }) => {
+    kept(state, "PATCH", `/skills/${params.id}`, body);
+    const skill = state.assistant.skills.find((s) => s.id === params.id);
+    if (!skill) return unknownSkill();
+    const { save_draft, ...fields } = body ?? {};
+    Object.assign(skill, fields, save_draft ? { status: "active" } : {}, { version: skill.version + 1 });
+    return { skill };
+  }));
+  route.post(`${A}/skills/:id/enabled`, own(({ params, body, state }) => {
+    kept(state, "POST", `/skills/${params.id}/enabled`, body);
+    const skill = state.assistant.skills.find((s) => s.id === params.id);
+    if (!skill) return unknownSkill();
+    skill.enabled = Boolean(body?.enabled);
+    return { skill };
+  }));
+  route.post(`${A}/skills/:id/copy`, own(({ params, state }) => {
+    kept(state, "POST", `/skills/${params.id}/copy`, null);
+    const from = state.assistant.skills.find((s) => s.id === params.id);
+    if (!from) return unknownSkill();
+    const skill = { ...structuredClone(from), id: id(state, "s3000000"), name: `${from.name} 副本`, origin: "mine", builtin: false, status: "active", version: 1 };
+    state.assistant.skills.push(skill);
+    return { skill };
+  }));
+  route.get(`${A}/skills/:id/export`, own(({ params, state }) => {
+    const skill = state.assistant.skills.find((s) => s.id === params.id);
+    return skill ? reply.text(`---\nname: ${skill.name}\ndescription: ${skill.description}\ntools: ${skill.allowed_tools.join(", ")}\n---\n${skill.body}\n`, "text/markdown; charset=utf-8") : unknownSkill();
+  }));
+  route.delete(`${A}/skills/:id`, own(({ params, state }) => { kept(state, "DELETE", `/skills/${params.id}`, null); state.assistant.skills = state.assistant.skills.filter((s) => s.id !== params.id); return { ok: true }; }));
+
+  // --- memory
+  route.get(`${A}/profile`, own(({ state }) => ({ items: state.assistant.profile, bots: PROFILE.bots })));
+  const botName = (botId) => PROFILE.bots.find((b) => b.id === botId)?.name ?? null;
+  route.post(`${A}/profile`, own(({ body, state }) => {
+    kept(state, "POST", "/profile", body);
+    const n = state.assistant.profile.length + 1;
+    const item = { id: id(state, "pf000000"), handle: `P${n}`, topic: null, origin: "manual", quote: "", status: "active", scope: body.bot_id ? "bot" : "global", bot_name: botName(body.bot_id), created_at: "2026-11-13T02:00:00.000Z", updated_at: "2026-11-13T02:00:00.000Z", last_used_at: null, ...body };
+    state.assistant.profile.push(item);
+    return { item };
+  }));
+  route.patch(`${A}/profile/:id`, own(({ params, body, state }) => {
+    kept(state, "PATCH", `/profile/${params.id}`, body);
+    const item = state.assistant.profile.find((i) => i.id === params.id);
+    if (!item) return reply.status(404, { detail: "profile_item_not_found" });
+    Object.assign(item, body);
+    if ("bot_id" in body) Object.assign(item, { scope: body.bot_id ? "bot" : "global", bot_name: botName(body.bot_id) });
+    return { item };
+  }));
+  route.post(`${A}/profile/:id/confirm`, own(({ params, state }) => {
+    kept(state, "POST", `/profile/${params.id}/confirm`, null);
+    const item = state.assistant.profile.find((i) => i.id === params.id);
+    if (!item) return reply.status(404, { detail: "profile_item_not_found" });
+    item.origin = "explicit";
+    return { item };
+  }));
+  route.delete(`${A}/profile/:id`, own(({ params, state }) => { kept(state, "DELETE", `/profile/${params.id}`, null); state.assistant.profile = state.assistant.profile.filter((i) => i.id !== params.id); return { ok: true }; }));
+  // The query is read for one thing only: a search for 无结果 finds nothing (the page's no-match sentence).  Which address was asked is what the checks read, from the request log.
+  route.get(`${A}/recall`, own(({ state, query }) => ({ items: String(query.get("q") ?? "").includes("无结果") ? [] : state.assistant.recall })));
+
+  // --- news sources
+  route.get(`${A}/news-sources`, own(({ state }) => state.assistant.news));
+  route.post(`${A}/news-sources`, own(({ body, state }) => {
+    kept(state, "POST", "/news-sources", body);
+    const sources = state.assistant.news.sources, at = sources.findIndex((s) => s.id === body.id);
+    const source = { health: "ok", consecutive_failures: 0, last_error: null, ...(at >= 0 ? sources[at] : {}), ...body };
+    if (at >= 0) sources[at] = source; else sources.push(source);
+    return { ok: true, source };
+  }));
+  route.put(`${A}/news-sources/push-settings`, own(({ body, state }) => {
+    kept(state, "PUT", "/news-sources/push-settings", body);
+    state.assistant.news.push.summary_max_tokens = body.summary_max_tokens;
+    return { ok: true, push: { summary_max_tokens: body.summary_max_tokens } };
+  }));
+  route.post(`${A}/news-sources/:id/enabled`, own(({ params, body, state }) => {
+    kept(state, "POST", `/news-sources/${params.id}/enabled`, body);
+    const source = state.assistant.news.sources.find((s) => s.id === params.id);
+    if (source) source.enabled = Boolean(body?.enabled);
+    return { ok: true, enabled: Boolean(body?.enabled) };
+  }));
+  route.post(`${A}/news-sources/:id/dry-run`, own(({ params, state }) => { kept(state, "POST", `/news-sources/${params.id}/dry-run`, null); return { source_id: params.id, ...(DRY_RUNS[params.id] ?? { ok: false }) }; }));
+  route.post(`${A}/news-sources/:id/repair`, own(({ params, state }) => {
+    kept(state, "POST", `/news-sources/${params.id}/repair`, null);
+    const answer = REPAIRS[params.id] ?? { ok: false };
+    const source = state.assistant.news.sources.find((s) => s.id === params.id);
+    if (answer.ok && source) Object.assign(source, { health: "ok", consecutive_failures: 0, last_error: null });
+    return answer;
+  }));
+  route.delete(`${A}/news-sources/:id`, own(({ params, state }) => { kept(state, "DELETE", `/news-sources/${params.id}`, null); state.assistant.news.sources = state.assistant.news.sources.filter((s) => s.id !== params.id); return { ok: true }; }));
+
+  // --- the knowledge library (owner endpoints without the /agent-chat prefix; the page sends the session header)
+  route.get("/knowledge/documents", ({ state }) => ({ items: state.assistant.docs }));
+  route.get("/knowledge/candidates", ({ state }) => ({ items: state.assistant.candidates }));
+  route.get("/knowledge/importable/:source", ({ params }) => ({ items: KNOWLEDGE_IMPORTABLE[params.source] ?? [] }));
+  route.post("/knowledge/import", ({ body, state }) => {
+    kept(state, "POST", "/knowledge/import", body);
+    for (const sourceId of body.source_ids) {
+      const row = (KNOWLEDGE_IMPORTABLE[body.source_type] ?? []).find((r) => r.id === sourceId);
+      if (row) state.assistant.docs.push({ id: id(state, "kd000000"), title: row.title, symbol: row.symbol, source_type: row.source_type, observed_at: "2026-11-12T00:00:00.000Z", available_at: "2026-11-12T00:00:00.000Z", status: "pending", active: true, owner_scope: "owner", chunks: 5 });
+    }
+    return { ok: true, accepted_sources: body.source_ids.length, chunks: body.source_ids.length * 5, needs_review: 0 };
+  });
+  route.post("/knowledge/index", ({ body, state }) => { kept(state, "POST", "/knowledge/index", body); return { ok: true, indexed: 3, failed: 1, idle: 0 }; });
+  route.post("/knowledge/retrieval-test", ({ body, state }) => {
+    kept(state, "POST", "/knowledge/retrieval-test", body);
+    return { result: { ok: true, data: [{ title: "AAPL 10-Q（2026 财年第四季度）", snippet: "Services revenue grew year over year.", score: 0.83 }] }, citations: [{ index: 1, title: "AAPL 10-Q（2026 财年第四季度）", url: "https://example.test/docs/01" }] };
+  });
+  route.get("/knowledge/documents/:id/chunks", ({ params, state }) => knowledgeChunks(params.id, state.assistant.docs) ?? reply.status(404, { detail: "document_not_found" }));
+  route.post("/knowledge/documents/:id/retry", ({ params, state }) => { kept(state, "POST", `/knowledge/documents/${params.id}/retry`, null); return { ok: true, queued_chunks: 3 }; });
+  route.post("/knowledge/documents/:id/withdraw", ({ params, state }) => {
+    kept(state, "POST", `/knowledge/documents/${params.id}/withdraw`, null);
+    const doc = state.assistant.docs.find((d) => d.id === params.id);
+    if (doc) Object.assign(doc, { active: false, status: "withdrawn" });
+    return { ok: true, status: "withdrawn" };
+  });
+  route.post("/knowledge/candidates/:id/review", ({ params, body, state }) => {
+    kept(state, "POST", `/knowledge/candidates/${params.id}/review`, body);
+    state.assistant.candidates = state.assistant.candidates.filter((c) => c.id !== params.id);
+    return { ok: true };
+  });
+}
+
+/** The 设置 routes (P8.2): the model catalog, the role table, the material-analysis default, Telegram and Pushover.  Reads answer from `state.settings` (and `state.modelRoles`); every write is kept as `{ method, path, body }` in `state.settings.writes` and moves the state the way the server's answer says.
+ *  No answer carries a key: the entries say only whether one is configured. */
+function settingsRoutes(route, reply, own) {
+  const A = "/agent-chat";
+  const kept = (state, method, path, body) => { state.settings.writes.push({ method, path, body: body === undefined ? null : structuredClone(body) }); };
+  const find = (state, name) => state.settings.catalog.models.find((m) => m.name === name);
+  const refuse = (status, detail) => reply.status(status, { detail });
+  const makeDefault = (catalog, name) => { for (const m of catalog.models) m.is_default = m.name === name; catalog.default = name; };
+
+  // --- the catalog
+  route.post(`${A}/model-catalog`, own(({ body, state }) => {
+    kept(state, "POST", "/model-catalog", body);
+    const catalog = state.settings.catalog;
+    if (find(state, body?.name)) return refuse(409, "model_exists");
+    const model = { name: body.name, display_name: body.display_name ?? "", provider: body.provider, model: body.model, base_url: body.base_url ?? null, origin: "server", key_source: body.key_env ? "env" : "vault", key_env: body.key_env ?? null,
+      key_status: "configured", is_default: false, migrated: false };
+    catalog.models.push(model);
+    if (body.is_default || !catalog.default) makeDefault(catalog, model.name);
+    return { model };
+  }));
+  // The two fixed addresses come before the :name ones: "test", "models" and "default" must not be read as a name.
+  route.post(`${A}/model-catalog/test`, own(({ body, state }) => {
+    kept(state, "POST", "/model-catalog/test", body);
+    return state.settings.testFail ? refuse(422, state.settings.testFail) : { ok: true };
+  }));
+  route.post(`${A}/model-catalog/models`, own(({ body, state }) => {
+    kept(state, "POST", "/model-catalog/models", body);
+    const mode = state.settings.discovery;
+    if (mode === "unsupported") return { status: "unsupported", ordering: "provider", models: [] };
+    if (mode === "empty") return { status: "ok", ordering: "provider", models: [] };
+    if (mode !== "ok") return refuse(422, mode);
+    return { status: "ok", ordering: "provider", models: ["alpha-1", "alpha-1-mini", "beta-2", "beta-2-thinking", "gamma-3", "delta-4"].map((id) => ({ id, name: id === "beta-2" ? "Beta 2" : id })) };
+  }));
+  route.put(`${A}/model-catalog/default`, own(({ body, state }) => {
+    kept(state, "PUT", "/model-catalog/default", body);
+    const model = find(state, body?.name);
+    if (!model) return refuse(404, "model_not_found");
+    makeDefault(state.settings.catalog, model.name);
+    return { model };
+  }));
+  route.patch(`${A}/model-catalog/:name`, own(({ params, body, state }) => {
+    kept(state, "PATCH", `/model-catalog/${params.name}`, body);
+    const catalog = state.settings.catalog, model = find(state, params.name);
+    if (!model) return refuse(404, "model_not_found");
+    if (model.origin !== "server") return refuse(422, "model_from_file");
+    const { name, is_default, api_key, key_env, ...fields } = body ?? {};
+    if (name && name !== model.name) {
+      if (find(state, name)) return refuse(409, "model_exists");
+      // A rename follows into the roles and the bots that name the model, as the server does.
+      for (const role of Object.keys(state.modelRoles)) if (state.modelRoles[role] === model.name) state.modelRoles[role] = name;
+      for (const bot of state.bots) if (bot.model === model.name) bot.model = name;
+      if (catalog.default === model.name) catalog.default = name;
+      model.name = name;
+    }
+    Object.assign(model, fields);
+    if (api_key) { model.key_source = "vault"; model.key_env = null; model.key_status = "configured"; }
+    if (key_env) { model.key_source = "env"; model.key_env = key_env; model.key_status = "configured"; }
+    if (is_default) makeDefault(catalog, model.name);
+    return { model };
+  }));
+  route.delete(`${A}/model-catalog/:name`, own(({ params, state }) => {
+    kept(state, "DELETE", `/model-catalog/${params.name}`, undefined);
+    const catalog = state.settings.catalog, at = catalog.models.findIndex((m) => m.name === params.name);
+    if (at < 0) return refuse(404, "model_not_found");
+    catalog.models.splice(at, 1);
+    if (catalog.default === params.name) catalog.default = catalog.models[0]?.name ?? null;
+    return { ok: true };
+  }));
+
+  // --- the roles and the material-analysis default
+  route.put(`${A}/model-roles/:role`, own(({ params, body, state }) => {
+    kept(state, "PUT", `/model-roles/${params.role}`, body);
+    state.modelRoles[params.role] = body?.model ?? null;
+    return { roles: state.modelRoles };
+  }));
+  route.put("/v3/materials/analysis-settings", ({ body, state }) => {
+    kept(state, "PUT", "/v3/materials/analysis-settings", body);
+    const model = find(state, body?.catalog_model);
+    if (!model) return refuse(404, "model_not_found");
+    state.settings.analysis = { source: "settings", provider: model.provider, base_url: model.base_url, model: model.model, has_api_key: true, api_key_last4: null };
+    return state.settings.analysis;
+  });
+  route.delete("/v3/materials/analysis-settings", ({ state }) => {
+    kept(state, "DELETE", "/v3/materials/analysis-settings", undefined);
+    state.settings.analysis = { source: "environment", provider: "deepseek", base_url: null, model: "deepseek-chat", has_api_key: false, api_key_last4: null };
+    return state.settings.analysis;
+  });
+
+  // --- Telegram (the shared bot) and Pushover.  A check that plays the message arriving from Telegram sets `state.settings.telegram` to the bound record.
+  route.get(`${A}/telegram/status`, own(({ state }) => state.settings.telegram));
+  route.post(`${A}/telegram/token`, own(({ body, state }) => {
+    kept(state, "POST", "/telegram/token", body);
+    state.settings.telegram = { configured: true, has_token: true, bound: false, bot_username: "finbot_fixture_bot", chat_id: null, bound_at: null, bind_code_active: false };
+    return state.settings.telegram;
+  }));
+  route.post(`${A}/telegram/bind`, own(({ state }) => {
+    kept(state, "POST", "/telegram/bind", undefined);
+    state.settings.telegram = { ...state.settings.telegram, bind_code_active: true };
+    return { code: "482913", bot_username: state.settings.telegram.bot_username };
+  }));
+  route.post(`${A}/telegram/unbind`, own(({ state }) => {
+    kept(state, "POST", "/telegram/unbind", undefined);
+    state.settings.telegram = { ...state.settings.telegram, bound: false, chat_id: null, bound_at: null, bind_code_active: false };
+    return state.settings.telegram;
+  }));
+  route.get(`${A}/pushover/status`, own(({ state }) => state.settings.pushover));
+  route.put(`${A}/pushover`, own(({ body, state }) => {
+    kept(state, "PUT", "/pushover", body);
+    state.settings.pushover = { configured: true, updated_at: "2026-11-13T02:00:00.000Z" };
+    return state.settings.pushover;
+  }));
+  route.delete(`${A}/pushover`, own(({ state }) => {
+    kept(state, "DELETE", "/pushover", undefined);
+    state.settings.pushover = { configured: false, updated_at: null };
+    return state.settings.pushover;
+  }));
 }

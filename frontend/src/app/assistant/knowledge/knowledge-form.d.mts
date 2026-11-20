@@ -1,0 +1,10 @@
+export type KnowledgeSource = "faq" | "upload" | "sec" | "analysis";
+export declare const SOURCES: ReadonlyArray<{ value: KnowledgeSource; label: string }>;
+export declare const QUERY_MAX: number; export declare const SYMBOL_MAX: number; export declare const DERIVED_PREFIX: string; export declare const FIXED_STARS: 3; export declare const FIXED_IMPACT: "medium";
+export declare function localDateTimeInput(date?: Date): string;
+export declare function parseLocalDateTime(value: string): Date | null;
+export declare function retrievalKind(source: KnowledgeSource): "faq" | "analysis" | "material";
+export declare function retrievalArgs(source: KnowledgeSource, query: string, symbol: string): ["faq" | "analysis" | "material", string, string | undefined];
+export declare function uploadReady(input: { file: File | null; title: string; url: string; reason: string }): boolean;
+export declare function isDerivedText(text: string): boolean;
+export declare function retrievalText(answer: { result: unknown; citations: unknown }): string;

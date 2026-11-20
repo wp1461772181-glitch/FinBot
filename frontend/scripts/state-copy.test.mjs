@@ -19,16 +19,10 @@ async function files(dir) {
   return out;
 }
 
-const CONFIRM_SITES = ["app/routines/use-task-actions.ts", "app/bot-settings/BotSettingsPage.tsx", "app/bot-settings/TelegramPanel.tsx", "app/settings/ModelCatalogCard.tsx", "SkillsPage.tsx", "PersonalPages.tsx", "app/portfolio/PortfolioPage.tsx", "app/settings/TelegramBindCard.tsx"].map((name) => path.join(root, name));
-
-// P3.1 moved the old chat page and settings page (legacy markup, copy untouched) into src/app/.  Their copy has gaps in the
-// English catalog that were always there (they were in the old-pages group this test never read), so the moved files stay out
-// of this scan, exactly as they were.  Each P3.2-P3.4 / P8.2 package takes its files off this list when it restyles them.
-const LEGACY_MOVED = new Set(["AppearanceCard", "ChatArchiveSettings", "MaterialAnalysisDefaultCard", "ModelCatalogCard", "PushoverCard", "SettingsPage", "TelegramBindCard"].map((name) => `app/settings/${name}.tsx`));
+const CONFIRM_SITES = ["app/routines/use-task-actions.ts", "app/bot-settings/BotSettingsPage.tsx", "app/bot-settings/TelegramPanel.tsx", "app/settings/models/ModelsPage.tsx", "app/assistant/skills/SkillsPage.tsx", "app/assistant/memory/ProfilePanel.tsx", "app/assistant/news/NewsPage.tsx", "app/portfolio/PortfolioPage.tsx", "app/settings/notifications/NotificationsPage.tsx"].map((name) => path.join(root, name));
 
 test("every t(\"…\") literal in the state components, the palette and the shell is in the English catalog", async () => {
-  const scanned = [...await files(path.join(root, "components/state")), ...await files(path.join(root, "components/command")), ...await files(path.join(root, "app"))]
-    .filter((file) => !LEGACY_MOVED.has(path.relative(root, file)));
+  const scanned = [...await files(path.join(root, "components/state")), ...await files(path.join(root, "components/command")), ...await files(path.join(root, "app"))];
   const missing = [];
   const phrases = (source) => [...source.matchAll(/\bt\(\s*"([^"\n]*[\u4e00-\u9fff][^"\n]*)"\s*\)/g)].map((match) => match[1]);
   for (const file of scanned) for (const phrase of phrases(await readFile(file, "utf8"))) if (!(phrase in english)) missing.push(`${path.relative(root, file)}: ${phrase}`);

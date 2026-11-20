@@ -20,7 +20,7 @@ const ALLOWED = {
   ]),
   DeepSeek: new Set([
     "forecast-model.mjs",             // the Jev branch note that names the brief provider
-    "MaterialAnalysisDefaultCard.tsx", // settings card for the default model of material analysis (was in AgentChatPanel.tsx until P3.1), not the forecast path
+    "RoleTable.tsx",                  // settings table row for the default model of material analysis (was MaterialAnalysisDefaultCard.tsx until P8.2), not the forecast path
     "model-profiles.mjs",             // provider catalogue
     "MaterialDetail.tsx",             // single-material analysis (was MaterialAnalysisDetail.tsx until P6.3), not the forecast path
   ]),

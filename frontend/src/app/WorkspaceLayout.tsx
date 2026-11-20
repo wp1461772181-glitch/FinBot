@@ -101,8 +101,9 @@ export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest"
       if (action.action === "select_stock") switchSymbol(action.symbol);
       if (action.action === "open_page") {
         // The page names the agent knows, renamed as they always were, then through the old-address list.
-        const name = ({ predictions: "forecast", sec: "evidence", knowledge: "admin" } as Record<string, string>)[action.page] ?? action.page;
-        navigate(normalizeHash(`#${name}`, { lastSymbol: preferredRef.current }) ?? paths.chat());
+        const name = ({ predictions: "forecast", sec: "evidence" } as Record<string, string>)[action.page] ?? action.page;
+        // The knowledge library is a page of its own (P8.1): the old-address list does not know #knowledge, so it is named here.
+        navigate(action.page === "knowledge" ? paths.assistant("knowledge") : normalizeHash(`#${name}`, { lastSymbol: preferredRef.current }) ?? paths.chat());
       }
     };
     window.addEventListener("market-evidence-agent:client-action", receive);

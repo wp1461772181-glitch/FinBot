@@ -19,9 +19,6 @@
 /* The chat route owns the viewport: no page scrollbar, no footer under the composer. */
 
 /* --- heading ------------------------------------------------------------------------------- */
-.agent-header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.agent-header-actions > span { font-size: 12px; color:var(--c-muted); padding: 0 4px; }
-.agent-header-actions .secondary-action { padding: 7px 12px; font-size: 12px; border-radius: 8px; }
 
 /* --- layout -------------------------------------------------------------------------------- */
 
@@ -45,8 +42,6 @@
 /* --- citations ----------------------------------------------------------------------------- */
 
 /* --- status line --------------------------------------------------------------------------- */
-.agent-chat-status { margin: 0; padding: 0 6px; color: var(--c-muted); font-size: 12px; line-height: 1.5; }
-.agent-chat-status.is-error { color: var(--c-warn); }
 
 /* --- composer ------------------------------------------------------------------------------ */
 
@@ -55,9 +50,6 @@
 /* --- login panel / archive banner (shared with the admin page) ---------------------------- */
 
 /* --- narrow screens ------------------------------------------------------------------------ */
-@media (max-width: 520px) {
-  .agent-header-actions > span { display: none; }
-}
 
 /* --- thinking panel and turn graph ---------------------------------------------------------- */
 /* The header shows the time the turn spent thinking; the graph below it is what the server
@@ -90,22 +82,12 @@
 .bot-focus-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border:1px solid var(--c-line); border-radius: 10px; }
 .bot-focus-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bot-focus-links { display: flex; gap: 10px; flex-shrink: 0; }
-.bot-warn { color: var(--c-warn); }
-
-.bot-tool { display: flex; align-items: center; gap: 6px; color:var(--c-ink); font-size: 12px; }
-.bot-tool small { color:var(--c-warn); }
 .bot-templates { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
 
 .catalog-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .catalog-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 10px 12px; border:1px solid var(--c-line); border-radius: 8px; }
 .catalog-list li > div { display: grid; min-width: 0; }
 .catalog-list small { color:var(--c-muted); font-size: 11px; overflow-wrap: anywhere; }
-.catalog-key { font-size: 11px; padding: 2px 8px; border-radius: 99px; }
-.catalog-key.is-ready { background:var(--c-tint); color:var(--c-accent); }
-.catalog-key.is-missing { background:rgba(200, 120, 40, .12); color:var(--c-warn); }
-.catalog-actions { grid-column: 1 / -1; display: flex; gap: 12px; }
-.catalog-card { cursor: default; }
-.catalog-card .catalog-actions { margin-top: auto; flex-wrap: wrap; }
 
 /* Fix 4: the bot page's 工作区 toggle in the header. */
 

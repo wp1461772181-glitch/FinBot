@@ -17,8 +17,6 @@ body { -webkit-font-smoothing: antialiased; }
 .bot-avatar { background:var(--me-surface-2); color:var(--me-ink); border:1px solid var(--me-line); font-size: 13px; }
 
 /* --- page heading: a thin bar, no rule ----------------------------------------------------------- */
-.agent-header-actions .secondary-action { border:1px solid var(--me-line); background:transparent; color:var(--me-muted); border-radius: 999px; min-height: 32px; padding: 0 12px; }
-.agent-header-actions .secondary-action:hover { color:var(--me-ink); background:var(--me-surface-2); }
 
 /* --- thread: one centred column, assistant as plain text, user as a soft pill -------------------- */
 
@@ -32,12 +30,9 @@ body { -webkit-font-smoothing: antialiased; }
 .primary-action { background:var(--me-invert); color:var(--me-invert-ink); border:0; border-radius: 999px; box-shadow:none; }
 .primary-action:hover:not(:disabled) { background:var(--me-invert); opacity: .86; transform: none; }
 .primary-action:disabled { opacity: .45; }
-.secondary-action { border-radius: 999px; }
 .bot-chip[aria-pressed="true"] { border-color:var(--me-ink); background:var(--me-surface-2); }
 
 /* The research pages share the surfaces, so they sit on the same neutral background. */
-.section-tabs button[aria-current="page"] { color:var(--me-ink); border-bottom-color:var(--me-ink); }
-.section-tabs.is-secondary button[aria-current="page"] { background:var(--me-surface-2); border-color:var(--me-line-strong); }
 
 /* --- FinBot bot faces: 4 silhouettes × 4 eye colours (components/bot/BotAvatar.tsx) ---------------------------------- */
 .bot-orb { flex: 0 0 auto; display: inline-block; line-height: 0; }

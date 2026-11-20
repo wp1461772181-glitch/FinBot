@@ -4,11 +4,12 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { INBOX, PROPOSALS } from "./fixtures/routines.mjs";
+import { IMPORT_SAMPLE } from "./fixtures/assistant.mjs";
 import { HEX_MATERIAL, MATERIALS, analysisId, materialId } from "./fixtures/materials.mjs";
 import { CASES as UPLOAD_CASES, VALID as UPLOAD_VALID } from "./fixtures/upload-cases.mjs";
 import { REVISE_FILING_ID, ROOT_IDS, evaluations, forecastRoots, revisionCandidates, versionDetail } from "./fixtures/forecasts.mjs";
@@ -53,6 +54,27 @@ async function pressNavItem(page, name) {
   await page.locator('[data-slot="sidebar"] a', { hasText: name }).first().click();
 }
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
+/** What holds the focus right now, in one short phrase (for a failure message: the actual value, not only "it was not there"). */
+const describeFocus = (page) => page.evaluate(() => {
+  const a = document.activeElement;
+  if (!a) return "nothing (document.activeElement is null)";
+  if (a === document.body) return "<body>";
+  const label = (a.getAttribute("aria-label") || a.textContent || "").trim().slice(0, 24);
+  return `<${a.tagName.toLowerCase()}${a.id ? `#${a.id}` : ""}${a.getAttribute("data-testid") ? ` data-testid=${a.getAttribute("data-testid")}` : ""}${a.getAttribute("role") ? ` role=${a.getAttribute("role")}` : ""}${label ? ` "${label}"` : ""}>`;
+});
+/**
+ * Wait until the focus is on the target, then say so; when it never arrives, say where it really was.
+ * Radix hands the focus back to the trigger a tick AFTER the layer has left the page (FocusScope's unmount runs in a setTimeout), so "the layer is detached" does not yet mean "the focus is back":
+ * reading `document.activeElement` in the same breath is a sample of one phase.  `target` is a Locator (the element itself) or a CSS selector (what the focused element must match).
+ */
+async function focusOn(page, target, what, timeout = 5000) {
+  const element = typeof target === "string" ? null : await target.elementHandle({ timeout });
+  try {
+    await page.waitForFunction(([selector, el]) => { const a = document.activeElement; return Boolean(a) && (el ? a === el : a.matches(selector)); }, [typeof target === "string" ? target : null, element], { timeout });
+  } catch {
+    throw new Error(`${what} (the focus stayed on ${await describeFocus(page)} for ${timeout} ms)`);
+  } finally { await element?.dispose(); }
+}
 
 // --- checks ----------------------------------------------------------------------------------------------
 async function everyPageOpens(ctx) {
@@ -124,12 +146,12 @@ async function themeToggles(ctx) {
   try {
     const { page } = view;
     await page.goto(`${ctx.server.url}#/settings/appearance`, { waitUntil: "load" });
-    await page.locator("select#theme").waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=appearance-theme-choice]").waitFor({ timeout: 10000 });
     const theme = () => page.evaluate(() => document.documentElement.dataset.theme);
     assert((await theme()) === "light", `expected light at start, got ${await theme()}`);
-    await page.locator("select#theme").selectOption("dark");
+    await page.locator("[data-testid=appearance-theme-choice] label[data-option=dark]").click();   // P8.2: the old select#theme is a row of choices
     await page.waitForFunction(() => document.documentElement.dataset.theme === "dark", null, { timeout: 5000 });
-    await page.locator("select#theme").selectOption("light");
+    await page.locator("[data-testid=appearance-theme-choice] label[data-option=light]").click();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "light", null, { timeout: 5000 });
     return "light -> dark -> light";
   } finally { await view.close(); }
@@ -455,21 +477,20 @@ async function updownSettingPersists(ctx) {
   try {
     const { page } = view;
     await page.goto(`${ctx.server.url}#/settings/appearance`, { waitUntil: "load" });
-    await page.locator("#updown").waitFor({ timeout: 10000 });
+    const choice = "[data-testid=appearance-updown-choice]";
+    await page.locator(choice).waitFor({ timeout: 10000 });
     const attr = () => page.evaluate(() => document.documentElement.dataset.updown);
     assert((await attr()) === "green-up", `expected green-up at start, got ${await attr()}`);
-    // Focus the trigger and open it from the keyboard (Enter), then pick the second item.
-    await page.locator("#updown").focus();
-    await page.keyboard.press("Enter");
-    await page.getByRole("option", { name: "红涨绿跌" }).waitFor({ timeout: 5000 });
-    await page.getByRole("option", { name: "红涨绿跌" }).click();
+    // P8.2: the choice is a row of radios; focus the picked one and move to the second with the arrow key.
+    await page.locator(`${choice} input:checked`).focus();
+    await page.keyboard.press("ArrowRight");
     await page.waitForFunction(() => document.documentElement.dataset.updown === "red-up", null, { timeout: 5000 });
     const stored = await page.evaluate(() => localStorage.getItem("market-evidence-agent:updown:v1"));
     assert(stored === "red-up", `localStorage should hold red-up, got ${stored}`);
     await page.reload({ waitUntil: "load" });
-    await page.locator("#updown").waitFor({ timeout: 10000 });
+    await page.locator(choice).waitFor({ timeout: 10000 });
     assert((await attr()) === "red-up", `after reload expected red-up, got ${await attr()}`);
-    const shown = (await page.locator("#updown").innerText()).trim();
+    const shown = (await page.locator(`${choice} label:has(input:checked)`).innerText()).trim();
     assert(shown === "红涨绿跌", `the control should show the stored choice, got "${shown}"`);
     return "pick red-up -> data-updown=red-up, saved, still red-up after reload, control shows it";
   } finally { await view.close(); }
@@ -525,12 +546,12 @@ async function legacyRedirects(ctx) {
     ["#routines", "#/routines", "[data-testid=routines-page]"],
     ["#briefs", "#/routines", "[data-testid=routines-page]"],
     ["#portfolio", "#/portfolio", "[data-testid=portfolio-table]"],
-    ["#news", "#/assistant/news", "main.personal-page h1"],
-    ["#skills", "#/assistant/skills", ".skill-group"],
-    ["#memory", "#/assistant/memory", "main.personal-page h1"],
+    ["#news", "#/assistant/news", "[data-testid=news-row]"],
+    ["#skills", "#/assistant/skills", "[data-testid=skill-card]"],
+    ["#memory", "#/assistant/memory", "[data-testid=memory-item]"],
     ["#me", "#/assistant/bots", "[data-testid=all-bots] [data-testid=bot-card]"],   // (P5.2: the page is the grid of all bots now; it was the 「我」 page with four links)
-    ["#admin", "#/settings/models", ".agent-admin h2"],
-    ["#settings", "#/settings/models", ".agent-admin h2"],
+    ["#admin", "#/settings/models", "[data-testid=settings-models]"],
+    ["#settings", "#/settings/models", "[data-testid=settings-models]"],
     ["#nonsense", "#/chat", "[data-testid=message]"],
     ["#/no/such/page", "#/chat", "[data-testid=message]"],
   ];
@@ -617,7 +638,7 @@ async function clientActions(ctx) {
     const { page } = view;
     const expected = [
       ["overview", "#/research/c/AAPL"], ["predictions", "#/research/forecasts"], ["materials", "#/research/materials"], ["sec", "#/research/evidence?symbol=AAPL"],
-      ["revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`], ["evaluation", "#/research/scores"], ["knowledge", "#/settings/models"], ["agent", "#/chat"],
+      ["revisions", `#/research/forecasts/${ROOT.aapl}?section=versions`], ["evaluation", "#/research/scores"], ["knowledge", "#/assistant/knowledge"], ["agent", "#/chat"],
     ];
     for (const [pageName, hash] of expected) {
       await dispatchAction(page, { action: "open_page", page: pageName });
@@ -821,7 +842,7 @@ async function routinesBadgeMatches(ctx) {
   } finally { await view.close(); }
 }
 
-/** Mode switch and sign-out exist once, in the account menu; the chat header, settings and the other pages have neither. */
+/** Mode switch and sign-out exist once, in the account menu; the chat header, settings and the other pages have neither (P8.2: the settings account page only shows the mode and says where the menu is). */
 async function modeSwitchSingleEntry(ctx) {
   const names = /切换模式|切换到访客只读|登出|登录个人/;
   const view = await openShell(ctx, "mode switch", "#/chat", { ready: "[data-testid=message]" });
@@ -837,7 +858,7 @@ async function modeSwitchSingleEntry(ctx) {
     await trigger.click();
     await page.getByRole("menuitem", { name: "切换到访客只读" }).waitFor();
     assert((await page.getByRole("menuitem", { name: "登出" }).count()) === 1 && (await page.getByRole("menuitem", { name: "登录个人" }).count()) === 0, "personal menu: expected 切换到访客只读 + 登出 only");
-    for (const hash of ["#/settings/models", "#/research", "#/assistant/memory"]) {
+    for (const hash of ["#/settings/models", "#/settings/account", "#/research", "#/assistant/memory"]) {
       await page.keyboard.press("Escape");
       await page.evaluate((h) => { location.hash = h; }, hash);
       await page.waitForFunction((h) => location.hash === h, hash);
@@ -856,7 +877,7 @@ async function modeSwitchSingleEntry(ctx) {
     await page.getByRole("menuitem", { name: "登出" }).click();
     await page.locator('[aria-labelledby="login-title"]').waitFor({ timeout: 10000 });
     assert((await page.evaluate((key) => localStorage.getItem(key), MODE_KEY)) === null, "the chosen mode survives a sign-out");
-    return "one trigger; personal menu = 切换到访客只读 + 登出; guest menu = 登录个人 + 登出; none on chat / settings / research / memory; sign-out reaches the login page";
+    return "one trigger; personal menu = 切换到访客只读 + 登出; guest menu = 登录个人 + 登出; none on chat / settings (models, account) / research / memory; sign-out reaches the login page";
   } finally { await view.close(); }
 }
 
@@ -919,7 +940,7 @@ async function guestReadonly(ctx) {
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached", timeout: 5000 });
     // What a guest can read: the research pages.
-    for (const [hash, ready] of [["#/research/forecasts", "[data-testid=forecast-home]"], ["#/research/materials", "[data-testid=material-title]"], ["#/research/replay", "[data-testid=replay-row]"], ["#/settings/appearance", "select#theme"]]) {
+    for (const [hash, ready] of [["#/research/forecasts", "[data-testid=forecast-home]"], ["#/research/materials", "[data-testid=material-title]"], ["#/research/replay", "[data-testid=replay-row]"], ["#/settings/appearance", "[data-testid=appearance-theme-choice]"]]) {
       await page.evaluate((h) => { location.hash = h; }, hash);
       await waitReady(page, { ready });
     }
@@ -1012,13 +1033,13 @@ async function mobileBarAndMore(ctx) {
   } finally { await view.close(); }
 }
 
-/** The old-UI restore still works inside the new shell: bare tags on three old pages keep the browser's margins; the sidebar's tags do not. */
+/** The old-UI restore still works inside the new shell: bare tags on the 全部 bot page (P8.2: the last page still inside the marker; the settings pages left it, as 技能 and 记忆 did in P8.1, and settings-no-legacy says so) keep the browser's margins; the sidebar's tags do not. */
 async function legacyRestoreInShell(ctx) {
-  const view = await openShell(ctx, "restore in shell", "#/settings/models", { ready: ".agent-admin h2" });
+  const view = await openShell(ctx, "restore in shell", "#/assistant/bots", { ready: "[data-testid=bot-card]" });
   try {
     const { page } = view;
     const bad = [];
-    for (const [hash, ready] of [["#/settings/models", ".agent-admin h2"], ["#/assistant/skills", ".skill-group"], ["#/assistant/memory", "main.personal-page h1"]]) {
+    for (const [hash, ready] of [["#/assistant/bots", "[data-testid=bot-card]"]]) {
       await page.evaluate((h) => { location.hash = h; }, hash);
       await waitReady(page, { ready });
       await settle(page, { pinTranscript: false });
@@ -1043,7 +1064,7 @@ async function legacyRestoreInShell(ctx) {
     if (sidebar.border !== "0px") bad.push(`sidebar <button> has a browser border`);
     if (sidebar.pMargin !== "0px") bad.push(`sidebar <p> has a margin`);
     assert(!bad.length, bad.join("\n      "));
-    return "3 old pages: browser margins back on bare <h2>/<p>; the sidebar's <ul>/<a>/<button>/<p> are plain preflight";
+    return "the 全部 bot page (the last one inside the marker): browser margins back on bare <h2>/<p>; the sidebar's <ul>/<a>/<button>/<p> are plain preflight";
   } finally { await view.close(); }
 }
 
@@ -1096,16 +1117,21 @@ async function noWindowConfirm(ctx) {
   const PF = /\/portfolio\/transactions\/[^/]+$/;
   const sites = [
     { name: "portfolio record", hash: "#/portfolio", ready: "[data-testid=portfolio-table]", trigger: (p) => p.locator("[data-testid=portfolio-ledger] [data-testid=record-delete]").first(), method: "DELETE", re: PF },
-    { name: "skill", hash: "#/assistant/skills", ready: ".skill-group", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/skills\/[^/]+$/ },
-    { name: "memory item", hash: "#/assistant/memory", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/profile\/[^/]+$/ },
-    { name: "news source", hash: "#/assistant/news", ready: "main.personal-page h1", trigger: (p) => p.locator("main button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/news-sources\/[^/]+$/ },
+    // the delete of a skill and of a news source is in the card's / row's 「…」 menu: open it, press 删除; the focus comes back to the menu's button (a memory item's 删除 is a button of its own row)
+    { name: "skill", hash: "#/assistant/skills", ready: "[data-testid=skill-card]", trigger: (p) => p.locator("[data-testid=skill-menu]").first(), method: "DELETE", re: /\/skills\/[^/]+$/,
+      activate: async (page, trigger) => { await trigger.click(); await page.locator("[data-testid=skill-delete]").click(); } },
+    { name: "memory item", hash: "#/assistant/memory", ready: "[data-testid=memory-item]", trigger: (p) => p.locator("[data-testid=memory-delete]").first(), method: "DELETE", re: /\/profile\/[^/]+$/ },
+    { name: "news source", hash: "#/assistant/news", ready: "[data-testid=news-row]", trigger: (p) => p.locator("[data-testid=news-menu]").first(), method: "DELETE", re: /\/news-sources\/[^/]+$/,
+      activate: async (page, trigger) => { await trigger.click(); await page.locator("[data-testid=news-delete]").click(); } },
     { name: "routine task", hash: "#/routines?tab=tasks", ready: "[data-testid=task-card]", trigger: (p) => p.locator("[data-testid=task-menu]").first(), method: "DELETE", re: /\/tasks\/[^/]+$/,
       // the delete is in the card's 「…」 menu: open it, press 删除; the focus comes back to the menu's button
       activate: async (page, trigger) => { await trigger.click(); await page.locator("[data-testid=task-delete]").click(); } },
     { name: "bot", hash: `#/chat/${BOT.applebot}/settings`, ready: "[data-testid=bot-settings-page]", trigger: (p) => p.getByRole("button", { name: "删除这个 bot" }), method: "DELETE", re: /\/bots\/[^/]+$/ },
     { name: "bot Telegram token", hash: `#/chat/${BOT.applebot}/settings`, ready: "[data-testid=bot-settings-page]", trigger: (p) => p.getByRole("button", { name: "换 token / 删除" }), method: "DELETE", re: /\/bots\/[^/]+\/telegram$/ },
-    { name: "catalog model", hash: "#/settings/models", ready: ".agent-admin h2", trigger: (p) => p.locator(".catalog-actions button", { hasText: /^删除$/ }).first(), method: "DELETE", re: /\/model-catalog\/[^/]+$/ },
-    { name: "Telegram unbind", hash: "#/settings/notifications", ready: ".agent-admin h2", trigger: (p) => p.getByRole("button", { name: "解除绑定" }), method: "POST", re: /\/telegram\/unbind$/ },
+    { name: "catalog model", hash: "#/settings/models", ready: "[data-testid=model-card]", trigger: (p) => p.locator("[data-testid=model-menu]").first(), method: "DELETE", re: /\/model-catalog\/[^/]+$/,
+      // the delete is in the card's 「…」 menu (P8.2): open it, press 删除
+      activate: async (page, trigger) => { await trigger.click(); await page.locator("[data-testid=model-delete]").click(); } },
+    { name: "Telegram unbind", hash: "#/settings/notifications", ready: "[data-testid=telegram-unbind]", trigger: (p) => p.getByRole("button", { name: "解除绑定" }), method: "POST", re: /\/telegram\/unbind$/ },
   ];
   const report = [];
   for (const site of sites) {
@@ -1763,14 +1789,14 @@ async function chatWriteConfirm(ctx) {
 }
 
 async function chatReadonlyArchive(ctx) {
-  const view = await openShell(ctx, "chat-readonly-archive", "#/settings/data", { ready: ".chat-archive-settings" });
+  const view = await openShell(ctx, "chat-readonly-archive", "#/settings/data", { ready: "[data-testid=archive-card]" });
   try {
     const { page } = view;
     const stamp = "2026-11-12T08:00:00.000Z";
     const archive = { marker: "market-evidence-agent-chat-archive", version: 1, created_at: stamp, updated_at: stamp,
       conversations: [{ id: "archived-1", created_at: stamp, updated_at: stamp, messages: [{ role: "user", content: "归档里的问题" }, { role: "assistant", content: "归档里的回答", status: "complete" }] }] };
-    await page.locator('.chat-archive-settings input[type="file"]').setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) });
-    await page.locator(".chat-archive-settings [role=status]", { hasText: "归档已打开" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=archive-file-input]").setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) });
+    await page.locator("[data-testid=archive-status]", { hasText: "归档已打开" }).waitFor({ timeout: 10000 });
     // A bot's line is a server conversation and ends the archive view when opened; the archive is read on the plain conversation page (no bot).
     await page.evaluate(() => { location.hash = "#/chat/history"; });
     await waitHash(page, "#/chat/history");
@@ -1861,22 +1887,24 @@ async function localeCatalogLoadsOnDemand(ctx) {
     const { page } = view;
     const catalogRequests = [];
     page.on("request", (request) => { if (/\/assets\/en-US-[^/]+\.js$/.test(new URL(request.url()).pathname)) catalogRequests.push(request.url()); });
-    await page.goto(`${ctx.server.url}#/settings/models`, { waitUntil: "load" });
-    await page.locator("select#locale").waitFor({ timeout: 10000 });
+    // P8.2: the language is a row of choices on the appearance page; its title (the h1 #settings-title) is the page's label 外观, which has a fixed English phrase.
+    const choose = (value) => page.locator(`[data-testid=appearance-locale-choice] label[data-option=${value}]`).click();
+    await page.goto(`${ctx.server.url}#/settings/appearance`, { waitUntil: "load" });
+    await page.locator("[data-testid=appearance-locale-choice]").waitFor({ timeout: 10000 });
     await settle(page);
     assert(catalogRequests.length === 0, `a Chinese session fetched the English catalog: ${catalogRequests[0]}`);
-    const title = page.locator("#agent-admin-title");
-    assert((await title.innerText()) === "模型连接设置", "the settings title is not Chinese at the start");
-    await page.locator("select#locale").selectOption("en-US");
-    await page.waitForFunction((text) => document.querySelector("#agent-admin-title")?.textContent === text, english["模型连接设置"], { timeout: 10000 });
+    const title = page.locator("#settings-title");
+    assert((await title.innerText()) === "外观", "the settings title is not Chinese at the start");
+    await choose("en-US");
+    await page.waitForFunction((text) => document.querySelector("#settings-title")?.textContent === text, english["外观"], { timeout: 10000 });
     assert(catalogRequests.length === 1, `switching to English fetched the catalog ${catalogRequests.length} times`);
     // A reload with English saved: the first draw is already English (the catalog is awaited before the first render).
     await page.reload({ waitUntil: "load" });
-    await page.waitForFunction((text) => document.querySelector("#agent-admin-title")?.textContent === text, english["模型连接设置"], { timeout: 10000 });
+    await page.waitForFunction((text) => document.querySelector("#settings-title")?.textContent === text, english["外观"], { timeout: 10000 });
     assert(catalogRequests.length === 2, `the English reload fetched the catalog ${catalogRequests.length - 1} more times`);
-    await page.locator("select#locale").selectOption("zh-CN");
-    await page.waitForFunction(() => document.querySelector("#agent-admin-title")?.textContent === "模型连接设置", null, { timeout: 10000 });
-    return `Chinese session: no request for the English chunk; switch: one request, title "${english["模型连接设置"]}"; reload in English: the title is English; back to 中文 works`;
+    await choose("zh-CN");
+    await page.waitForFunction(() => document.querySelector("#settings-title")?.textContent === "外观", null, { timeout: 10000 });
+    return `Chinese session: no request for the English chunk; switch: one request, title "${english["外观"]}"; reload in English: the title is English; back to 中文 works`;
   } finally { await view.close(); }
 }
 
@@ -2253,7 +2281,7 @@ async function chatPopoverKeyboard(ctx) {
       assert(await panel.evaluate((el) => el.contains(document.activeElement)), `${id}: focus did not move into the panel`);
       await page.keyboard.press("Escape");
       await panel.waitFor({ state: "detached", timeout: 5000 });
-      assert(await trigger.evaluate((el) => el === document.activeElement), `${id}: focus did not return to the button after Esc`);
+      await focusOn(page, trigger, `${id}: focus did not return to the button after Esc`);
     }
     // A press outside closes the model panel too.
     await page.locator("[data-testid=model-badge]").click();
@@ -4694,7 +4722,7 @@ async function motionOffEqualsReduced(ctx) {
     same.push(`${name} (${pictures[0].length} B)`);
   }
   // the settings page: everything but the strength control itself (its selected choice and its notes), element by element
-  const parts = ["label[for=theme]", "label[for=updown]", "label[for=locale]"];
+  const parts = ["[data-testid=appearance-theme]", "[data-testid=appearance-updown]", "[data-testid=appearance-locale]"];   // P8.2: the three cards of the appearance page (were the three labels of the old long page)
   const taken = [];
   for (const how of ["system", "off"]) {
     const view = await open(`motion-off-equals-reduced-${how}`, how, "#/settings/appearance");
@@ -7500,13 +7528,13 @@ async function replayPhoneLayer(ctx) {
     assert(back.marker === "kept" && back.folded === "false", "the detail element or its brief state was lost on the way back");
     await page.locator("[data-testid=replay-drawer-back]").click();
     await layer.waitFor({ state: "detached", timeout: 3000 });
-    assert((await page.evaluate(() => document.activeElement?.matches("[data-testid=replay-row][data-selected]"))) === true, "the focus did not return to the chosen row");
+    await focusOn(page, "[data-testid=replay-row][data-selected]", "the focus did not return to the chosen row", 3000);
     assert((await page.evaluate(() => document.body.style.overflow)) !== "hidden" && (await page.locator("[inert]").count()) === 0, "scroll lock or inert left behind");
     await page.locator("[data-testid=replay-row]").nth(1).click();
     await layer.waitFor({ timeout: 5000 });
     await page.keyboard.press("Escape");
     await layer.waitFor({ state: "detached", timeout: 3000 });
-    assert((await page.evaluate(() => document.activeElement?.matches("[data-testid=replay-row][data-selected]"))) === true, "Esc: the focus did not return");
+    await focusOn(page, "[data-testid=replay-row][data-selected]", "Esc: the focus did not return", 3000);
     const count = await page.locator("[data-slot=opinion-disclaimer]").count();
     assert(count === 1, `${count} disclaimers on the replay page`);
   } finally { await view.close(); }
@@ -7622,12 +7650,12 @@ async function researchNoLegacy(ctx) {
     await settle(failing.page);
     judge(`${errorHash} (list unreadable)`, await oldMarkCounts(failing.page));
     // the positive control: a page that is still old keeps its marker, so a selector that is broken (and would read 0 everywhere) cannot pass
-    await view.page.goto(`${ctx.server.url}#/settings/models`, { waitUntil: "load" });
-    await view.page.waitForSelector(".agent-admin h2", { timeout: 30000 });
-    assert((await view.page.locator("[data-legacy]").count()) >= 1, "the settings page lost its old-UI marker too");
+    await view.page.goto(`${ctx.server.url}#/assistant/bots`, { waitUntil: "load" });
+    await view.page.waitForSelector("[data-testid=bot-card]", { timeout: 30000 });
+    assert((await view.page.locator("[data-legacy]").count()) >= 1, "the 全部 bot page lost its old-UI marker too");   // P8.2: the settings pages are new markup; this page is the one left inside the marker
   } finally { await failing.close(); await view.close(); }
   assert(!bad.length, bad.join("; "));
-  return `${clean.length + 1} research-area addresses (watchlist, company and its tabs, forecast home, one forecast, judgment, the three evidence addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page opened and stopped on its error) hold no data-legacy element and no old workspace class; the settings page still holds the marker`;
+  return `${clean.length + 1} research-area addresses (watchlist, company and its tabs, forecast home, one forecast, judgment, the three evidence addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page opened and stopped on its error) hold no data-legacy element and no old workspace class; the 全部 bot page still holds the marker`;
 }
 
 // --- P7.1: the portfolio page ------------------------------------------------------------------------------------------------------
@@ -9075,6 +9103,2008 @@ async function routinesLaterEnglish(ctx) {
   return "English 「…」 menu: Skip / Later / Ignore; Later sends the baseline's later body (action: later); the sign-in dialog still reads Cancel";
 }
 
+// --- P8.1: the assistant's four pages (技能, 记忆, 新闻源, 知识库) ---------------------------------------------------------------------------
+// The baseline is what the OLD pages (the production build of af8b894) sent and showed on the same fixtures (fixtures/assistant-bodies-baseline.json, recorded before any page was touched):
+// the new pages must send the same requests, body for body.  Writes are read from the fake backend (`state.assistant.writes`; an upload from `state.materialPosts`), reads from its request log.
+const AS = JSON.parse(fs.readFileSync(new URL("./fixtures/assistant-bodies-baseline.json", import.meta.url), "utf8"));
+const asWrites = (view) => view.mock.state.assistant.writes;
+const asBody = (write) => (write.body === null ? null : JSON.stringify(write.body));
+/** The body the old page sent (as a string) for the first request of that method whose path ends as the pattern says. */
+const asOld = (entry, method, re) => entry.sent.find((r) => r.method === method && re.test(r.path))?.body ?? null;
+const asReads = (view, re) => view.mock.requests.filter((r) => r.method === "GET" && re.test(r.path)).map((r) => r.path + r.query);
+async function asOpen(ctx, label, hash, ready, { state, width = 1440, theme = "light", motion = false } = {}) {
+  const view = await newView(ctx.browser, { width, theme, label, unmatched, motion, ...(state ? { fixtureState: state } : {}) });
+  await view.context.addInitScript(() => { window.__downloads = []; const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { if (this.download) { window.__downloads.push(this.download); return; } return click.call(this); }; });
+  await view.page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+  await view.page.waitForSelector(ready, { state: "visible", timeout: 30000 });
+  await settle(view.page);
+  return view;
+}
+async function asWritesAfter(view, count, what) {
+  const end = Date.now() + 8000;
+  while (asWrites(view).length < count && Date.now() < end) await view.page.waitForTimeout(60);
+  if (asWrites(view).length < count) throw new Error(`${what}: no request went out`);
+  return asWrites(view);
+}
+/** Settle for a moment and say that nothing (more) went out. */
+async function asNoWrites(view, what, ms = 500) { await view.page.waitForTimeout(ms); assert(asWrites(view).length === 0, `${what}: ${asWrites(view).length} request(s) went out: ${JSON.stringify(asWrites(view).map((w) => `${w.method} ${w.path}`))}`); }
+const asToast = (page, text) => page.getByText(text, { exact: true }).first().waitFor({ timeout: 8000 });
+const asHere = (w, method, re, what) => { assert(w.method === method && re.test(w.path), `${what}: sent ${w.method} ${w.path}`); };
+/** Choose an item of a Radix select: open it, press the option. */
+async function asPick(page, trigger, name) { await trigger.click(); await page.getByRole("option", { name, exact: true }).click(); }
+/** Press Tab until the focus is on the element the selector names (a keyboard user's walk; fails when it is not reached). */
+async function asTabTo(page, selector, max = 40) {
+  for (let i = 0; i < max; i += 1) {
+    if (await page.evaluate((s) => !!document.activeElement?.matches(s), selector)) return;
+    await page.keyboard.press("Tab");
+  }
+  throw new Error(`the keyboard never reached ${selector}`);
+}
+const asOnly = (page, selector) => page.evaluate((s) => document.activeElement?.matches(s) ?? false, selector);
+const SK_CARD = "[data-testid=skill-card]", SK_DRAWER = "[data-testid=skill-drawer]", SK_IMPORT = "[data-testid=skill-import-drawer]";
+const skCard = (page, name) => page.locator(SK_CARD, { hasText: name }).first();
+const SK_ID = { builtin: "s3000000-0000-4000-8000-000000000001", mine: "s3000000-0000-4000-8000-000000000002", imported: "s3000000-0000-4000-8000-000000000003", draft: "s3000000-0000-4000-8000-000000000004" };
+async function skFill(page, c) {
+  const d = page.locator(SK_DRAWER);
+  if (c.name !== undefined) await d.locator("#skill-name").fill(c.name);
+  if (c.description !== undefined) await d.locator("#skill-description").fill(c.description);
+  if (c.body !== undefined) await d.locator("#skill-body").fill(c.body);
+  if (c.template !== undefined) await d.locator("#skill-template").fill(c.template);
+  for (const i of c.tools ?? []) await d.locator("[data-testid=skill-tool-list] li").nth(i).locator("button[role=checkbox]").click();
+}
+const skMenu = async (page, name, item) => { await skCard(page, name).locator("[data-testid=skill-menu]").click(); await page.locator(`[data-testid=${item}]`).click(); };
+
+async function skillsOps(ctx) {
+  const done = [];
+  // 1. 新建: four cases of the old editor, each the old body character for character (enabled: true, the template null when blank, tools in the order they were ticked)
+  const CASES = {
+    minimal: { name: "  新技能一  ", description: "  说明一句  ", body: "步骤1\n步骤2", tools: [0] },
+    withTemplate: { name: "带模板", description: "d", body: "b", template: "## 要点\n## 风险", tools: [2, 0] },
+    allTools: { name: "全部工具", description: "全部", body: "x", template: "  ", tools: [0, 1, 2, 3, 4] },
+    noTools: { name: "没有工具", description: "无", body: "z", tools: [] },
+  };
+  for (const [k, c] of Object.entries(CASES)) {
+    const view = await asOpen(ctx, `skills new ${k}`, "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=skill-new]").click(); await page.locator(SK_DRAWER).waitFor({ timeout: 8000 });
+      await skFill(page, c);
+      await page.locator("[data-testid=skill-save]").click();
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "POST", /\/skills$/, k);
+      assert(asBody(w) === asOld(AS.skills.create[k], "POST", /\/skills$/), `${k}: body\n  ${asBody(w)}\n  differs from the old one\n  ${asOld(AS.skills.create[k], "POST", /\/skills$/)}`);
+      assert(w.body.enabled === true, `${k}: a new skill was not created enabled`);
+      await page.locator(SK_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+      await asToast(page, "已保存。");
+      await skCard(page, c.name.trim()).waitFor({ timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  done.push("4 new skills");
+  // 2. 编辑 (the body has no `enabled`), and 3. a draft saved: 核对并保存 → 保存为技能 sends save_draft
+  for (const [k, name, change] of [["untouched", "周日复盘", null], ["rename", "周日复盘", { name: "周日复盘 v2", description: "改过的说明" }], ["tools", "新闻去重", { tools: [0] }]]) {
+    const view = await asOpen(ctx, `skills edit ${k}`, "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      await skCard(page, name).locator("[data-testid=skill-edit]").click(); await page.locator(SK_DRAWER).waitFor({ timeout: 8000 });
+      await page.waitForFunction(() => document.querySelector("#skill-name")?.value, null, { timeout: 5000 });
+      assert((await page.locator(SK_DRAWER).getAttribute("data-draft")) === "false", `${k}: an own skill's editor says it is a draft`);
+      if (change) await skFill(page, change);
+      await page.locator("[data-testid=skill-save]").click();
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "PATCH", /\/skills\/s3000000-0000-4000-8000-00000000000[23]$/, k);
+      assert(asBody(w) === asOld(AS.skills.edit[k], "PATCH", /\/skills\//), `${k}: body ${asBody(w)} differs from the old ${asOld(AS.skills.edit[k], "PATCH", /\/skills\//)}`);
+      assert(!("enabled" in w.body) && !("save_draft" in w.body), `${k}: the body carries enabled or save_draft`);
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "skills draft save", "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      const draft = skCard(page, "估值草稿");
+      assert((await draft.locator("[data-testid=skill-edit]").innerText()).trim() === "核对并保存", "the draft's main button is not 核对并保存");
+      await draft.locator("[data-testid=skill-edit]").click(); await page.locator(SK_DRAWER).waitFor({ timeout: 8000 });
+      assert((await page.locator("[data-testid=skill-save]").innerText()).trim() === "保存为技能", "a draft saves as 保存为技能");
+      await page.locator("[data-testid=skill-save]").click();
+      const [w] = await asWritesAfter(view, 1, "draft");
+      asHere(w, "PATCH", /\/skills\/s3000000-0000-4000-8000-000000000004$/, "draft");
+      assert(asBody(w) === asOld(AS.skills.draft, "PATCH", /\/skills\//) && w.body.save_draft === true, `draft: body ${asBody(w)}`);
+    } finally { await view.close(); }
+  }
+  done.push("3 edits + the draft (save_draft)");
+  // 4. 启用 / 停用: saved as it is flipped; only an active skill has the switch (a draft has none)
+  for (const [k, name] of [["off", "周日复盘"], ["on", "新闻去重"], ["builtin", "财报速读"]]) {
+    const view = await asOpen(ctx, `skills toggle ${k}`, "#/assistant/skills", SK_CARD);
+    try {
+      await skCard(view.page, name).locator("[data-testid=skill-switch]").click();
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "POST", /\/skills\/s3000000-0000-4000-8000-00000000000\d\/enabled$/, k);
+      assert(asBody(w) === asOld(AS.skills.toggle[k], "POST", /\/enabled$/), `${k}: body ${asBody(w)}`);
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "skills no switch", "#/assistant/skills", SK_CARD);
+    try {
+      assert((await skCard(view.page, "估值草稿").locator("[data-testid=skill-switch]").count()) === 0, "a draft has an on / off switch");
+      assert((await skCard(view.page, "周日复盘").locator("[data-testid=skill-switch]").count()) === 1, "an active skill has no switch");
+    } finally { await view.close(); }
+  }
+  done.push("switch both ways, none on a draft");
+  // 5. 复制 and 6. 导出 (the file is <name>.md)
+  {
+    const view = await asOpen(ctx, "skills copy", "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      await skMenu(page, "财报速读", "skill-copy");
+      const [w] = await asWritesAfter(view, 1, "copy");
+      asHere(w, "POST", /\/skills\/s3000000-0000-4000-8000-000000000001\/copy$/, "copy");
+      assert(w.body === null, "a copy sends a body");
+      await asToast(page, "已复制，可以在「我的」里编辑。");
+      await skCard(page, "财报速读 副本").waitFor({ timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  for (const name of ["财报速读", "周日复盘"]) {
+    const view = await asOpen(ctx, `skills export ${name}`, "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      await skMenu(page, name, "skill-export");
+      await page.waitForFunction(() => window.__downloads.length === 1, null, { timeout: 8000 });
+      assert((await page.evaluate(() => window.__downloads[0])) === `${name}.md`, `the file is called ${await page.evaluate(() => window.__downloads[0])}`);
+      assert(asReads(view, /\/skills\/[^/]+\/export$/).length === 1, "the export was not one GET");
+      assert(asWrites(view).length === 0, "an export wrote something");
+    } finally { await view.close(); }
+  }
+  done.push("copy, export (name.md)");
+  // 7. 导入预览 and 8. 确认导入: the old bodies; the text is sent as typed
+  {
+    const view = await asOpen(ctx, "skills import", "#/assistant/skills", SK_CARD);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=skill-import-open]").click(); await page.locator(SK_IMPORT).waitFor({ timeout: 8000 });
+      await page.locator("[data-testid=skill-import-text]").fill(AS.skills.importOp.pasted.markdown);
+      await page.locator("[data-testid=skill-import-preview]").click(); await page.locator("[data-testid=skill-preview]").waitFor({ timeout: 8000 });
+      const [preview] = await asWritesAfter(view, 1, "preview");
+      asHere(preview, "POST", /\/skills\/import\/preview$/, "preview");
+      assert(asBody(preview) === asOld(AS.skills.importOp.pasted.preview, "POST", /import\/preview$/), `preview body ${asBody(preview)}`);
+      await page.locator("[data-testid=skill-import-confirm]").click();
+      const w = await asWritesAfter(view, 2, "import");
+      asHere(w[1], "POST", /\/skills\/import$/, "import");
+      assert(asBody(w[1]) === asOld(AS.skills.importOp.pasted, "POST", /\/skills\/import$/), `import body ${asBody(w[1])}`);
+      await asToast(page, "已导入。");
+      await skCard(page, "周报整理").waitFor({ timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  done.push("import: preview, then import");
+  // 9. 删除 (press and hold): a built-in has neither 编辑 nor 删除; Esc sends nothing
+  {
+    const view = await asOpen(ctx, "skills delete", "#/assistant/skills", SK_CARD, { motion: true });
+    try {
+      const { page } = view;
+      const builtin = skCard(page, "财报速读");
+      assert((await builtin.locator("[data-testid=skill-edit]").count()) === 0, "a built-in skill has 编辑");
+      await builtin.locator("[data-testid=skill-menu]").click();
+      assert((await page.locator("[data-testid=skill-export]").count()) === 1 && (await page.locator("[data-testid=skill-copy]").count()) === 1 && (await page.locator("[data-testid=skill-delete]").count()) === 0, "a built-in skill's menu is not just 导出 and 复制");
+      await page.keyboard.press("Escape");
+      await skMenu(page, "周日复盘", "skill-delete");
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      assert((await dialogOf(page).locator('[data-slot="alert-dialog-title"]').innerText()).includes("周日复盘"), "the question does not name the skill");
+      await page.keyboard.press("Escape"); await dialogOf(page).waitFor({ state: "detached", timeout: 5000 });
+      await asNoWrites(view, "Esc");
+      await skMenu(page, "周日复盘", "skill-delete");
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'));
+      const [w] = await asWritesAfter(view, 1, "delete");
+      asHere(w, "DELETE", /\/skills\/s3000000-0000-4000-8000-000000000002$/, "delete");
+      await asToast(page, "已删除。");
+      await skCard(page, "周日复盘").waitFor({ state: "detached", timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  done.push("delete (hold); a built-in has no edit or delete");
+  return `9 operations: ${done.join("; ")}; every request equals the old page's`;
+}
+
+async function skillsImportPreviewListsWrites(ctx) {
+  const view = await asOpen(ctx, "skills import preview", "#/assistant/skills", SK_CARD);
+  try {
+    const { page } = view;
+    await page.locator("[data-testid=skill-import-open]").click(); await page.locator(SK_IMPORT).waitFor({ timeout: 8000 });
+    const confirmBtn = page.locator("[data-testid=skill-import-confirm]"), preview = page.locator("[data-testid=skill-import-preview]"), text = page.locator("[data-testid=skill-import-text]");
+    assert(await confirmBtn.isDisabled(), "导入 can be pressed before there is any preview");
+    assert(await preview.isDisabled(), "预览 can be pressed with an empty box");
+    await text.fill(AS.skills.importOp.pasted.markdown);
+    assert(await confirmBtn.isDisabled(), "导入 can be pressed with text but no preview");
+    await preview.click(); await page.locator("[data-testid=skill-preview]").waitFor({ timeout: 8000 });
+    assert(!(await confirmBtn.isDisabled()), "导入 cannot be pressed after the preview");
+    // everything the old preview said: the name and description, every tool, the write mark on the one that writes, the sentence
+    const old = AS.skills.importOp.pasted.preview.text;
+    assert(old[0].startsWith("周报整理") && (await page.locator("[data-testid=skill-preview-name]").innerText()).trim() === "周报整理", "the skill's name is not in the preview");
+    assert((await page.locator("[data-testid=skill-preview]").innerText()).includes("把本周的新闻和材料整理成一页周报"), "the description is not in the preview");
+    const tools = await page.locator("[data-testid=skill-preview] [data-testid=skill-tool]").evaluateAll((l) => l.map((e) => [e.getAttribute("data-tool"), e.getAttribute("data-write"), e.textContent.trim()]));
+    assert(tools.length === 3 && tools.map((t) => t[0]).join() === "search_news,get_market_data,save_material", `the tools: ${JSON.stringify(tools)}`);
+    assert(tools.filter((t) => t[1] === "true").map((t) => t[0]).join() === "save_material" && tools.find((t) => t[0] === "save_material")[2].includes("写操作"), `the write mark: ${JSON.stringify(tools)}`);
+    assert(tools.filter((t) => t[1] === "false").every((t) => !t[2].includes("写操作")), "a read tool is marked as a write");
+    assert((await page.locator("[data-testid=skill-preview-write-note]").innerText()).trim() === "写操作：仍需确认卡", "the sentence for a write is missing");
+    // a text changed afterwards withdraws the preview
+    await text.fill(`${AS.skills.importOp.pasted.markdown}\n4. 多一步`);
+    assert((await page.locator("[data-testid=skill-preview]").count()) === 0 && (await confirmBtn.isDisabled()), "the preview stayed after the text changed");
+    // a skill of read tools only: no write mark, no sentence
+    await text.fill(AS.skills.importOp.readOnly.markdown); await preview.click(); await page.locator("[data-testid=skill-preview]").waitFor({ timeout: 8000 });
+    assert((await page.locator("[data-testid=skill-preview] [data-write=true]").count()) === 0 && (await page.locator("[data-testid=skill-preview-write-note]").count()) === 0, "a read-only skill shows a write mark or the write sentence");
+    // a file is read into the box; a text that is not a skill is refused with the server's sentence and no preview
+    await page.locator("[data-testid=skill-import-file]").setInputFiles({ name: "skill.md", mimeType: "text/markdown", buffer: Buffer.from(AS.skills.importOp.pasted.markdown, "utf8") });
+    await page.waitForFunction((md) => document.querySelector("[data-testid=skill-import-text]").value === md, AS.skills.importOp.pasted.markdown, { timeout: 5000 });
+    assert((await page.locator("[data-testid=skill-preview]").count()) === 0, "a chosen file kept the old preview");
+    await text.fill("这不是技能文件"); await preview.click();
+    await page.locator(`${SK_IMPORT} [role=alert]`).waitFor({ timeout: 8000 });
+    assert((await page.locator(`${SK_IMPORT} [role=alert]`).first().innerText()).includes(AS.skills.importOp.refused.alert[0]), "the refusal sentence is not the old one");
+    assert((await page.locator("[data-testid=skill-preview]").count()) === 0 && (await confirmBtn.isDisabled()), "a refused text has a preview");
+    assert(asWrites(view).filter((w) => !/import\/preview$/.test(w.path)).length === 0, "something other than a preview was sent");
+    return "导入 stays disabled until a preview of this very text exists; the preview lists all 3 tools, marks save_material 写操作 with the sentence; editing withdraws it; a read-only skill has no mark; a file fills the box; a refusal says why";
+  } finally { await view.close(); }
+}
+
+async function skillsDraftLink(ctx) {
+  const notes = [];
+  const draftNote = AS.skills.draft.opened.note;
+  for (const [label, hash] of [["new address", `#/assistant/skills/${SK_ID.draft}`], ["old address #skills/<id>", `#skills/${SK_ID.draft}`]]) {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: `skill link ${label}`, unmatched });
+    try {
+      const { page } = view;
+      await page.goto(`${ctx.server.url}${hash}`, { waitUntil: "load" });
+      await page.locator(`${SK_DRAWER}[data-draft=true]`).waitFor({ timeout: 15000 });
+      await waitHash(page, `#/assistant/skills/${SK_ID.draft}`);
+      assert((await page.locator("[data-testid=skill-draft-note]").innerText()).trim() === draftNote, `${label}: the draft sentence is not "${draftNote}"`);
+      assert((await page.locator("#skill-name").inputValue()) === "估值草稿", `${label}: the drawer is not that draft's`);
+      assert((await page.locator("[data-testid=skill-save]").innerText()).trim() === "保存为技能", `${label}: not 保存为技能`);
+      await page.locator("[data-testid=skill-cancel]").click();
+      await page.locator(SK_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+      await waitHash(page, "#/assistant/skills");
+      assert((await page.locator("[data-testid=skill-group][data-group=drafts] [data-testid=skill-group-note]").innerText()).trim() === draftNote, `${label}: the sentence above the drafts is missing`);
+      notes.push(label);
+    } finally { await view.close(); }
+  }
+  // an own skill's link opens its editor (no draft sentence); a built-in's opens none and says nothing; a missing one says 这个技能不存在。
+  const own = await asOpen(ctx, "skill link own", `#/assistant/skills/${SK_ID.mine}`, `${SK_DRAWER}[data-draft=false]`);
+  try { assert((await own.page.locator("#skill-name").inputValue()) === "周日复盘" && (await own.page.locator("[data-testid=skill-draft-note]").count()) === 0, "an own skill's link did not open its editor"); notes.push("own skill"); } finally { await own.close(); }
+  const builtin = await asOpen(ctx, "skill link builtin", `#/assistant/skills/${SK_ID.builtin}`, SK_CARD);
+  try { await builtin.page.waitForTimeout(600); assert((await builtin.page.locator(SK_DRAWER).count()) === 0 && !(await builtin.page.locator("main").innerText()).includes("这个技能不存在。"), "a built-in's link opened a drawer or said it is missing"); notes.push("built-in: nothing"); } finally { await builtin.close(); }
+  const missing = await asOpen(ctx, "skill link missing", "#/assistant/skills/s3000000-0000-4000-8000-0000000000ff", SK_CARD);
+  try { await missing.page.getByText("这个技能不存在。").first().waitFor({ timeout: 8000 }); assert((await missing.page.locator(SK_DRAWER).count()) === 0, "a missing skill opened a drawer"); notes.push("missing: said"); } finally { await missing.close(); }
+  return `the new and the old (#skills/<id>) address open the draft's drawer with its sentence and 保存为技能, closing goes back to /assistant/skills; ${notes.slice(2).join(", ")}`;
+}
+
+async function skillsKeyboard(ctx) {
+  const view = await asOpen(ctx, "skills keyboard", "#/assistant/skills", SK_CARD);
+  try {
+    const { page } = view;
+    // 新建 → type → save, with the keyboard alone
+    await page.locator("[data-testid=skill-new]").focus(); await page.keyboard.press("Enter");
+    await page.locator(SK_DRAWER).waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => document.activeElement?.closest("[data-testid=skill-drawer]"), null, { timeout: 5000 });
+    await asTabTo(page, "#skill-name"); await page.keyboard.type("键盘技能");
+    await asTabTo(page, "#skill-description"); await page.keyboard.type("只用键盘建的");
+    await asTabTo(page, "#skill-body"); await page.keyboard.type("第一步");
+    await asTabTo(page, "#skill-template");
+    await asTabTo(page, "[data-testid=skill-tool-list] button[role=checkbox]"); await page.keyboard.press("Space");
+    await asTabTo(page, "[data-testid=skill-save]"); await page.keyboard.press("Enter");
+    const [w] = await asWritesAfter(view, 1, "keyboard save");
+    assert(asBody(w) === JSON.stringify({ name: "键盘技能", description: "只用键盘建的", body: "第一步", allowed_tools: ["get_market_data"], output_template: null, enabled: true }), `the keyboard-made skill sent ${asBody(w)}`);
+    await page.locator(SK_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+    await skCard(page, "键盘技能").waitFor({ timeout: 8000 });
+    // the card's 「…」 menu opens with Enter, Esc closes it and the focus is back on the button
+    const menu = skCard(page, "周日复盘").locator("[data-testid=skill-menu]");
+    await menu.focus(); await page.keyboard.press("Enter");
+    await page.getByRole("menuitem", { name: "导出" }).waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape");
+    await page.getByRole("menuitem", { name: "导出" }).waitFor({ state: "detached", timeout: 5000 });
+    await focusOn(page, menu, "the focus did not come back to 「…」");
+    // an editor opened with Enter: Esc closes it and the focus is back on 编辑
+    const edit = skCard(page, "周日复盘").locator("[data-testid=skill-edit]");
+    await edit.focus(); await page.keyboard.press("Enter"); await page.locator(SK_DRAWER).waitFor({ timeout: 8000 });
+    await page.keyboard.press("Escape"); await page.locator(SK_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "skill-edit", null, { timeout: 3000 });
+    assert(asWrites(view).length === 1, "Esc saved something");
+    return "新建 opened and saved from the keyboard (fields, a tool with Space, Enter on 保存); 「…」 opens with Enter and Esc returns the focus; the editor closes with Esc and the focus returns to 编辑";
+  } finally { await view.close(); }
+}
+
+const MEM_ITEM = "[data-testid=memory-item]";
+const memItem = (page, text) => page.locator(MEM_ITEM, { hasText: text }).first();
+const REC_READS = /\/recall$/;
+async function memoryOps(ctx) {
+  const done = [];
+  const B = AS.memory;
+  // 1. 添加: the old bodies (the text's blanks become one space; 全局 is bot_id null); a blank text cannot be added at all
+  for (const [k, scope, kind, text] of [["globalPref", "全局（所有 bot）", "偏好", "  金额   都用  亿美元 "], ["botInstruction", "本 bot · AppleBot", "长期指令", "只谈 AAPL"], ["aboutMe", "全局（所有 bot）", "关于我", "我在上海"]]) {
+    const view = await asOpen(ctx, `memory add ${k}`, "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      await asPick(page, page.locator("[data-testid=memory-add-scope]"), scope); await asPick(page, page.locator("[data-testid=memory-add-kind]"), kind);
+      await page.locator("[data-testid=memory-add-text]").fill(text);
+      await page.locator("[data-testid=memory-add-submit]").click();
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "POST", /\/profile$/, k);
+      assert(asBody(w) === asOld(B.add[k], "POST", /\/profile$/), `${k}: body ${asBody(w)} differs from the old ${asOld(B.add[k], "POST", /\/profile$/)}`);
+      await page.waitForFunction(() => document.querySelector("[data-testid=memory-add-text]").value === "", null, { timeout: 5000 });
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "memory add blank", "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=memory-add-text]").fill("   ");
+      assert(await page.locator("[data-testid=memory-add-submit]").isDisabled(), "a blank text can be added");
+      await page.locator("[data-testid=memory-add-text]").press("Enter");
+      await asNoWrites(view, "a blank add");
+      assert((await page.locator("[data-testid=memory-add-text]").getAttribute("maxlength")) === "200", "the box does not stop at 200");
+    } finally { await view.close(); }
+  }
+  done.push("3 adds (+ blank refused)");
+  // 2. 编辑: Enter saves, Esc leaves, a blank text is not saved and the box stays
+  for (const [k, how, typed] of [["enter", "Enter", "  新的写法  "], ["escape", "Escape", "不会保存"], ["button", "button", "按钮保存"], ["blank", "Enter", "   "]]) {
+    const view = await asOpen(ctx, `memory edit ${k}`, "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      await memItem(page, "回答先给结论").locator("[data-testid=memory-edit]").click();
+      const box = page.locator("[data-testid=memory-edit-input]"); await box.waitFor({ timeout: 5000 });
+      assert((await box.inputValue()) === B.edit.opened.value && await box.evaluate((e) => e === document.activeElement), `${k}: the box does not open with the text, focused`);
+      await box.fill(typed);
+      if (how === "button") await page.locator("[data-testid=memory-save]").click(); else await box.press(how);
+      if (k === "enter" || k === "button") {
+        const [w] = await asWritesAfter(view, 1, k);
+        asHere(w, "PATCH", /\/profile\/pf000000-0000-4000-8000-000000000002$/, k);
+        assert(asBody(w) === asOld(B.edit[k], "PATCH", /\/profile\//), `${k}: body ${asBody(w)}`);
+        await box.waitFor({ state: "detached", timeout: 5000 });
+      } else {
+        await asNoWrites(view, k);
+        const open = (await page.locator("[data-testid=memory-edit-input]").count()) === 1;
+        assert(open === (k === "blank"), `${k}: the box is ${open ? "still" : "no longer"} open`);
+      }
+    } finally { await view.close(); }
+  }
+  done.push("edit: Enter / 保存 save, Esc leaves, blank refused");
+  // 3. 范围 (saved as chosen), 4. 确认 (only an inferred item has it), 5. 删除 (hold; an archived one too)
+  for (const [k, item, to] of [["toBot", "回答先给结论", "ReportBot"], ["toGlobal", "新闻只保留", "全局"], ["botToBot", "AAPL 的服务业务", "NewsBot"]]) {
+    const view = await asOpen(ctx, `memory scope ${k}`, "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      await asPick(page, memItem(page, item).locator("[data-testid=memory-scope]"), to);
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "PATCH", /\/profile\/pf000000-0000-4000-8000-00000000000\d$/, k);
+      assert(asBody(w) === asOld(B.scope[k], "PATCH", /\/profile\//), `${k}: body ${asBody(w)} differs from the old ${asOld(B.scope[k], "PATCH", /\/profile\//)}`);
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "memory confirm", "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      assert((await page.locator("[data-testid=memory-confirm]").count()) === B.confirm.countWithButton, `${await page.locator("[data-testid=memory-confirm]").count()} items have 确认, the old page had ${B.confirm.countWithButton}`);
+      for (const el of await page.locator(MEM_ITEM).all()) assert(((await el.getAttribute("data-origin")) === "inferred") === ((await el.locator("[data-testid=memory-confirm]").count()) === 1), "确认 is not exactly on the inferred items");
+      await memItem(page, "新闻只保留").locator("[data-testid=memory-confirm]").click();
+      const [w] = await asWritesAfter(view, 1, "confirm");
+      asHere(w, "POST", /\/profile\/pf000000-0000-4000-8000-000000000004\/confirm$/, "confirm");
+      assert(w.body === null, "a confirm sends a body");
+      await page.waitForFunction(() => document.querySelectorAll("[data-testid=memory-confirm]").length === 1, null, { timeout: 5000 });
+    } finally { await view.close(); }
+  }
+  for (const [k, item, archived] of [["active", "回答先给结论", false], ["archived", "用简体中文回答", true]]) {
+    const view = await asOpen(ctx, `memory delete ${k}`, "#/assistant/memory", MEM_ITEM, { motion: true });
+    try {
+      const { page } = view;
+      if (archived) await page.locator("[data-testid=memory-archived] button").first().click();
+      const row = archived ? page.locator("[data-testid=memory-archived-item]", { hasText: item }) : memItem(page, item);
+      await (archived ? row.getByRole("button", { name: /^删除/ }) : row.locator("[data-testid=memory-delete]")).click();
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      const dialog = B.del[k].dialog;
+      assert((await dialogOf(page).locator('[data-slot="alert-dialog-title"]').innerText()).trim() === dialog.title && (await dialogOf(page).locator('[data-slot="alert-dialog-description"]').innerText()).trim() === dialog.description, `${k}: the question is not the old one`);
+      await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'));
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "DELETE", /\/profile\/pf000000-0000-4000-8000-00000000000[26]$/, k);
+    } finally { await view.close(); }
+  }
+  done.push("scope ×3 (bot_id / null), 确认 only on inferred, delete (hold; archived too)");
+  // 6. the tab is in the address; 往事 reads limit=20; 7. a search goes out when submitted, never while typing; 8. the bot filter; 9. 打开对话
+  {
+    const view = await asOpen(ctx, "memory recall", "#/assistant/memory", MEM_ITEM);
+    try {
+      const { page } = view;
+      const reads = () => asReads(view, REC_READS);
+      assert(reads().length === 0, "the profile tab read the past conversations");
+      await page.locator("[data-testid=tab-recall]").click();
+      await page.locator("[data-testid=recall-item]").first().waitFor({ timeout: 8000 });
+      await page.waitForFunction(() => location.hash.endsWith("?tab=recall"), null, { timeout: 5000 });
+      assert(reads().join() === `/agent-chat/recall${B.recall.enter.sent[0].query}`, `entering the tab read ${reads().join()}`);
+      const box = page.locator("[data-testid=recall-query]");
+      await box.pressSequentially("英伟达", { delay: 40 }); await page.waitForTimeout(700);
+      assert(reads().length === 1, `typing sent ${reads().length - 1} request(s)`);
+      await page.locator("[data-testid=recall-submit]").click(); await page.waitForTimeout(700);
+      assert(reads().length === 2 && reads()[1] === `/agent-chat/recall${B.recall.submitButton.sent[0].query}`, `the 搜索 button: ${reads().slice(1).join()}`);
+      await page.locator("[data-testid=recall-submit]").click(); await page.waitForTimeout(500);
+      assert(reads().length === 2, "the same search sent again (the old page did not)");
+      await box.fill("美联储"); await box.press("Enter"); await page.waitForTimeout(700);
+      assert(reads().length === 3 && reads()[2] === `/agent-chat/recall${B.recall.submitEnter.sent[0].query}`, `Enter in the box: ${reads().slice(2).join()}`);
+      await asPick(page, page.locator("[data-testid=recall-bot]"), "AppleBot"); await page.waitForTimeout(700);
+      assert(reads().length === 4 && reads()[3] === `/agent-chat/recall${B.recall.filterWithQuery.sent[0].query}`, `the bot filter with a word: ${reads().slice(3).join()}`);
+      await box.fill(""); await page.locator("[data-testid=recall-submit]").click(); await page.waitForTimeout(700);
+      assert(reads()[4] === `/agent-chat/recall${B.recall.clearedWithFilter.sent[0].query}`, `a cleared word with the filter: ${reads()[4]}`);
+      await asPick(page, page.locator("[data-testid=recall-bot]"), "全部 bot"); await page.waitForTimeout(700);
+      assert(reads()[5] === `/agent-chat/recall${B.recall.filterCleared.sent[0].query}`, `the filter cleared: ${reads()[5]}`);
+      await box.fill("无结果词"); await box.press("Enter");
+      await page.locator("[data-testid=recall-empty]").waitFor({ timeout: 8000 });
+      assert((await page.locator("[data-testid=recall-empty]").innerText()).includes("没有找到相关的往事。"), "the no-match sentence is missing");
+      // a refresh stays on the tab
+      await page.reload({ waitUntil: "load" });
+      await page.locator("[data-testid=recall-item]").first().waitFor({ timeout: 15000 });
+      assert((await page.locator("[data-testid=tab-recall]").getAttribute("aria-selected")) === "true", "a refresh left the 往事 tab");
+    } finally { await view.close(); }
+  }
+  for (const [k, title, hash] of [["otherBot", "AAPL 本季服务收入", `#/chat/${BOT.applebot}`], ["defaultBot", "AAPL 服务收入与预测对比", "#/chat"], ["unowned", "可信度星级是什么", "#/chat"]]) {
+    const view = await asOpen(ctx, `memory open ${k}`, "#/assistant/memory?tab=recall", "[data-testid=recall-item]");
+    try {
+      await view.page.locator("[data-testid=recall-item]", { hasText: title }).getByRole("button", { name: /^打开对话/ }).click();
+      await waitHash(view.page, hash, 15000);
+      assert(B.open[k].hash === hash, `the baseline says ${B.open[k].hash}`);
+    } finally { await view.close(); }
+  }
+  done.push("往事: tab in the address and kept on refresh; typing sends nothing; 搜索 / Enter send once; the filter; 打开对话 ×3");
+  return `9 operations: ${done.join("; ")}`;
+}
+
+async function memoryNotesOnce(ctx) {
+  const PROFILE = AS.memory.load.paragraphs[0], SCOPE = AS.memory.load.paragraphs[1], RECALL = AS.memory.recall.load.paragraphs[0];
+  const times = (text, note) => text.split(note).length - 1;
+  const profile = await asOpen(ctx, "memory notes profile", "#/assistant/memory", MEM_ITEM);
+  try {
+    const { page } = profile;
+    const text = await page.locator("main").innerText();
+    assert(times(text, PROFILE) === 1 && times(text, SCOPE) === 1, `the profile tab says its sentence ${times(text, PROFILE)} times (scope sentence ${times(text, SCOPE)})`);
+    assert(times(text, RECALL) === 0, "the past-conversations sentence is on the profile tab");
+    assert((await page.locator("[data-testid=memory-note-profile]").innerText()).trim() === PROFILE, "the profile sentence is not the old one, word for word");
+    // inferred: the mark 推断, 确认, the opinion colour; the rest: neither
+    const items = await page.locator(MEM_ITEM).evaluateAll((els) => els.map((e) => ({ origin: e.getAttribute("data-origin"), badge: e.querySelector("[data-testid=memory-origin]").textContent.trim(), tone: e.querySelector("[data-testid=memory-origin] [data-slot=status-badge]").getAttribute("data-kind"), confirm: !!e.querySelector("[data-testid=memory-confirm]"), quote: !!e.querySelector("[data-testid=memory-quote]") })));
+    const inferred = items.filter((i) => i.origin === "inferred");
+    assert(inferred.length === 2 && inferred.every((i) => i.badge === "推断" && i.confirm && i.tone === "opinion"), `inferred items: ${JSON.stringify(inferred)}`);
+    assert(items.filter((i) => i.origin !== "inferred").every((i) => !i.confirm && i.tone === "neutral" && i.badge !== "推断"), `the others: ${JSON.stringify(items.filter((i) => i.origin !== "inferred"))}`);
+    assert(items.find((i) => i.origin === "manual").quote === false && items.filter((i) => i.origin !== "manual").every((i) => i.quote), "an item with no quote draws an empty quote block (or one with a quote lacks it)");
+    const quote = await page.locator("[data-testid=memory-quote]").first().evaluate((e) => ({ cls: e.className, font: getComputedStyle(e).fontFamily }));
+    assert(/font-quote/.test(quote.cls) && /material-fact/.test(quote.cls), `the quote is not in the fact material: ${quote.cls}`);
+  } finally { await profile.close(); }
+  const recall = await asOpen(ctx, "memory notes recall", "#/assistant/memory?tab=recall", "[data-testid=recall-item]");
+  try {
+    const text = await recall.page.locator("main").innerText();
+    assert(times(text, RECALL) === 1, `the recall tab says its sentence ${times(text, RECALL)} times`);
+    assert(times(text, PROFILE) === 0, "the profile sentence is on the recall tab");
+    assert((await recall.page.locator("[data-testid=memory-note-recall]").innerText()).trim() === RECALL, "the recall sentence is not the old one, word for word");
+    assert(text.includes(AS.memory.recall.load.paragraphs[1]), "the second recall sentence is missing");
+  } finally { await recall.close(); }
+  return "each tab holds its own sentence exactly once, word for word as the old page; the other tab does not; the 2 inferred items have 推断 (opinion badge) and 确认, the 4 others neither; an empty quote is not drawn; quotes are fact material";
+}
+
+async function memoryKeyboard(ctx) {
+  const view = await asOpen(ctx, "memory keyboard", "#/assistant/memory", MEM_ITEM);
+  try {
+    const { page } = view;
+    // the tabs: arrows move the focus, Enter / Space opens (the company page's tab list)
+    await page.locator("[data-testid=tab-profile]").focus();
+    await page.keyboard.press("ArrowRight");
+    assert(await asOnly(page, "[data-testid=tab-recall]"), "ArrowRight did not move the focus to 往事");
+    assert(!(await page.evaluate(() => location.hash.includes("tab=recall"))), "an arrow key opened the tab");
+    await page.keyboard.press("Enter");
+    await page.locator("[data-testid=recall-item]").first().waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => location.hash.endsWith("?tab=recall"), null, { timeout: 5000 })
+      .catch(async () => { throw new Error(`[wait 1/5: the address after Enter on 往事] ?tab=recall never reached the address (it is ${await page.evaluate(() => location.hash)})`); });
+    await page.keyboard.press("ArrowLeft"); await page.keyboard.press("Space");
+    await page.locator(MEM_ITEM).first().waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => !location.hash.includes("tab="), null, { timeout: 5000 })
+      .catch(async () => { throw new Error(`[wait 2/5: the address after Space on 画像] tab= never left the address (it is ${await page.evaluate(() => location.hash)})`); });
+    // an item added from the keyboard: the add box, Enter
+    await page.locator("[data-testid=memory-add-text]").focus(); await page.keyboard.type("键盘加的一条"); await page.keyboard.press("Enter");
+    const [added] = await asWritesAfter(view, 1, "keyboard add");
+    assert(asBody(added) === JSON.stringify({ kind: "preference", text: "键盘加的一条", bot_id: null }), `the keyboard add sent ${asBody(added)}`);
+    // The request going out is not the add being done: the page takes the answer, reloads the list, THEN empties the box and puts the focus back in it (ProfilePanel `add`).
+    // Moving on at once lets that late focus() land on the box after the keyboard has already gone to 编辑 / after the edit box has mounted, and the focus wait below never sees its box.
+    // So wait for the observable end of the add: the box is empty and the new row is on the page.
+    await page.waitForFunction(() => document.querySelector("[data-testid=memory-add-text]")?.value === "", null, { timeout: 5000 })
+      .catch(async () => { throw new Error(`[the add being done (new wait, before wait 3/5)] the add box was never emptied after the keyboard add (it holds "${await page.locator("[data-testid=memory-add-text]").inputValue()}")`); });
+    await memItem(page, "键盘加的一条").waitFor({ timeout: 5000 });
+    // a row's text edited from the keyboard: 编辑 (Enter) → the box has the focus → Enter saves
+    const edit = memItem(page, "回答先给结论").locator("[data-testid=memory-edit]");
+    await edit.focus(); await page.keyboard.press("Enter");
+    await focusOn(page, "[data-testid=memory-edit-input]", "[wait 3/5: the first edit box] Enter on 编辑 did not put the focus in the edit box");
+    await page.keyboard.press("End"); await page.keyboard.type("（键盘）"); await page.keyboard.press("Enter");
+    const w = await asWritesAfter(view, 2, "keyboard edit");
+    assert(asBody(w[1]) === JSON.stringify({ text: "回答先给结论，再给依据；数字要带出处。（键盘）" }), `the keyboard edit sent ${asBody(w[1])}`);
+    // and left with Esc
+    await memItem(page, "回答先给结论").locator("[data-testid=memory-edit]").focus(); await page.keyboard.press("Enter");
+    await focusOn(page, "[data-testid=memory-edit-input]", "[wait 4/5: the second edit box] Enter on 编辑 did not put the focus in the edit box");
+    await page.keyboard.type("不要保存"); await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector("[data-testid=memory-edit-input]"), null, { timeout: 5000 })
+      .catch(() => { throw new Error("[wait 5/5: the edit box after Esc] the edit box was still on the page 5000 ms after Esc"); });
+    await page.waitForTimeout(400);
+    assert(asWrites(view).length === 2, "Esc saved the edit");
+    return "tabs by arrows + Enter / Space (the address follows); an item added with Enter in the box; a row edited (Enter saves) and left (Esc) from the keyboard";
+  } finally { await view.close(); }
+}
+
+const NW_ROW = "[data-testid=news-row]", NW_DRAWER = "[data-testid=news-drawer]";
+const nwRow = (page, id) => page.locator(NW_ROW, { has: page.locator("[data-testid=news-id]", { hasText: new RegExp(`^${id}$`) }) });
+const nwMenu = async (page, id, item) => { await nwRow(page, id).locator("[data-testid=news-menu]").click(); await page.locator(`[data-testid=${item}]`).click(); };
+const NW_STATE = () => stateWithNewsExtras();
+/** Fill the news drawer's text fields; the three tag boxes are emptied of their first values (US, news) and filled from text, the way the old text boxes were replaced. */
+async function nwFill(page, c) {
+  const d = page.locator(NW_DRAWER);
+  if (c.name !== undefined) await d.locator("#news-name").fill(c.name);
+  if (c.id !== undefined) await d.locator("#news-id").fill(c.id);
+  if (c.kind) await asPick(page, d.locator("#news-kind"), { rss: "RSS / Atom 订阅源", http_json: "HTTP JSON 接口", http_html: "HTTP HTML 列表页" }[c.kind]);
+  if (c.url !== undefined) await d.locator("#news-url").fill(c.url);
+  if (c.homepage !== undefined) await d.locator("#news-homepage").fill(c.homepage);
+  for (const [field, id] of [["markets", "#news-markets"], ["tags", "#news-tags"], ["alternates", "#news-alternates"]]) {
+    if (c[field] === undefined) continue;
+    const box = d.locator(`[data-testid=news-field-${field}]`);
+    while ((await box.locator('button[aria-label^="移除"]').count()) > 0) await box.locator('button[aria-label^="移除"]').first().click();
+    if (c[field]) { await d.locator(id).fill(c[field]); await d.locator(id).press("Enter"); }
+  }
+  for (const [flag, key] of [["enabled", "enabled"], ["rea", "rea"]]) {
+    if (c[flag] === undefined) continue;
+    const sw = d.locator(`[data-testid=news-field-${key}]`);
+    if (((await sw.getAttribute("data-state")) === "checked") !== c[flag]) await sw.click();
+  }
+}
+const nwSave = (page) => page.locator("[data-testid=news-save]").click();
+
+async function newsOps(ctx) {
+  const B = AS.news, done = [];
+  // 1. 新建 (the ID typed; a blank name is the ID) and 2. 编辑 (each source opened and saved untouched sends the old body; the ID box is locked)
+  {
+    const view = await asOpen(ctx, "news create", "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=news-new]").click(); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+      await nwFill(page, { id: "new-feed", url: "https://example.test/new.xml" });
+      await nwSave(page);
+      const [w] = await asWritesAfter(view, 1, "create");
+      asHere(w, "POST", /\/news-sources$/, "create");
+      assert(asBody(w) === asOld(B.create.defaults, "POST", /\/news-sources$/), `create: body ${asBody(w)} differs from the old ${asOld(B.create.defaults, "POST", /\/news-sources$/)}`);
+      await page.locator(NW_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+      await nwRow(page, "new-feed").waitFor({ timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  for (const id of ["wire-markets", "tech-daily", "earnings-feed", "chip-watch", "ev-weekly", "old-blog"]) {
+    const view = await asOpen(ctx, `news edit ${id}`, "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await nwMenu(page, id, "news-edit"); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+      await page.waitForFunction(() => document.querySelector("#news-name")?.value, null, { timeout: 5000 });
+      assert(await page.locator("#news-id").isDisabled(), `${id}: the ID of an existing source can be changed`);
+      await nwSave(page);
+      const [w] = await asWritesAfter(view, 1, id);
+      asHere(w, "POST", /\/news-sources$/, id);
+      assert(asBody(w) === asOld(B.edit[id], "POST", /\/news-sources$/), `${id}: body ${asBody(w)} differs from the old ${asOld(B.edit[id], "POST", /\/news-sources$/)}`);
+    } finally { await view.close(); }
+  }
+  done.push("new + 6 untouched edits");
+  // 3. 启用 / 暂停: the value that is not the current one
+  for (const [k, id] of [["pause", "wire-markets"], ["enable", "old-blog"]]) {
+    const view = await asOpen(ctx, `news toggle ${k}`, "#/assistant/news", NW_ROW);
+    try {
+      await nwRow(view.page, id).locator("[data-testid=news-switch]").click();
+      const [w] = await asWritesAfter(view, 1, k);
+      asHere(w, "POST", new RegExp(`/news-sources/${id}/enabled$`), k);
+      assert(asBody(w) === asOld(B.toggle[k], "POST", /\/enabled$/), `${k}: body ${asBody(w)}`);
+    } finally { await view.close(); }
+  }
+  done.push("switch both ways");
+  // 4. 测试抓取: the result opens under its row, in the old words; the row's operations wait for it
+  for (const id of ["wire-markets", "earnings-feed", "chip-watch", "ev-weekly", "old-blog", "tech-daily"]) {
+    const view = await asOpen(ctx, `news test ${id}`, "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await nwMenu(page, id, "news-test");
+      const result = nwRow(page, id).locator("[data-testid=news-test-result]"); await result.waitFor({ timeout: 8000 });
+      const [w] = await asWritesAfter(view, 1, id);
+      asHere(w, "POST", new RegExp(`/news-sources/${id}/dry-run$`), id);
+      assert(w.body === null, `${id}: the test sends a body`);
+      const shown = (await result.innerText()).replace(/\s+/g, " ").trim();
+      const old = B.test[id].shown.replace(/（(\d{4}-\d\d-\d\dT\d\d:\d\d)）/g, " $1").replace(/\s+/g, " ").replace(/ · /g, " ");
+      assert(shown.replace(/\s+/g, " ") === old.replace(/\s+/g, " "), `${id}: shows "${shown}", the old row showed "${old}"`);
+      const links = await result.locator("a").evaluateAll((a) => a.map((x) => [x.textContent, x.getAttribute("href"), x.target]));
+      assert(JSON.stringify(links.map((l) => [l[0], l[1]])) === JSON.stringify(B.test[id].links.map((l) => [l[0], l[1]])) && links.every((l) => l[2] === "_blank"), `${id}: the sample links ${JSON.stringify(links)}`);
+      assert((await nwRow(page, id).locator("[data-testid=news-test-result]").count()) === 1, `${id}: the result is not inside its row`);
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "news test busy", "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      view.mock.control.hold = (m, p) => m === "POST" && /dry-run$/.test(p);
+      await nwMenu(page, "wire-markets", "news-test");
+      await nwRow(page, "wire-markets").locator("[data-testid=news-probing]").waitFor({ timeout: 5000 });
+      assert(await nwRow(page, "wire-markets").locator("[data-testid=news-menu]").isDisabled() && await nwRow(page, "wire-markets").locator("[data-testid=news-switch]").isDisabled(), "the row's operations are not locked while the test runs");
+      assert(!(await nwRow(page, "tech-daily").locator("[data-testid=news-menu]").isDisabled()), "another row was locked too");
+    } finally { await view.close(); }
+  }
+  done.push("6 test fetches (success, reason, code only, nothing) in the old words, links external, the row locked meanwhile");
+  // 5. REA 修复: only where the source allows it; the three answers
+  {
+    const view = await asOpen(ctx, "news repair buttons", "#/assistant/news", NW_ROW, { state: NW_STATE() });
+    try {
+      const { page } = view;
+      const have = [];
+      for (const row of await page.locator(NW_ROW).all()) {
+        const id = (await row.locator("[data-testid=news-id]").innerText()).trim();
+        await row.locator("[data-testid=news-menu]").click();
+        if ((await page.locator("[data-testid=news-repair]").count()) === 1) have.push(id);
+        await page.keyboard.press("Escape"); await page.locator("[data-testid=news-test]").waitFor({ state: "detached", timeout: 3000 });
+        const rea = (await row.locator("[data-testid=news-rea]").count()) === 1;
+        assert(rea === have.includes(id), `${id}: 支持 REA 自动诊断 and the repair item disagree`);
+      }
+      assert(have.join() === B.repair.buttonOn.map((s) => s.replace("）", "")).join(), `REA 修复 is on ${have.join()}, the old page had it on ${B.repair.buttonOn.join()}`);
+    } finally { await view.close(); }
+  }
+  for (const id of ["chip-watch", "ai-wire", "macro-wire"]) {
+    const view = await asOpen(ctx, `news repair ${id}`, "#/assistant/news", NW_ROW, { state: NW_STATE() });
+    try {
+      const { page } = view;
+      await nwMenu(page, id, "news-repair");
+      const note = nwRow(page, id).locator("[data-testid=news-repair-note]"); await note.waitFor({ timeout: 8000 });
+      const [w] = await asWritesAfter(view, 1, id);
+      asHere(w, "POST", new RegExp(`/news-sources/${id}/repair$`), id);
+      assert(w.body === null, `${id}: the repair sends a body`);
+      const oldNote = B.repair[id].note.match(/REA (修复成功（抽样 \d+ 条有效新闻）|暂未自动修复：\S+)/)[0];
+      assert((await note.innerText()).trim() === oldNote, `${id}: says "${(await note.innerText()).trim()}", the old row said "${oldNote}"`);
+    } finally { await view.close(); }
+  }
+  done.push("REA 修复 only on the 3 repairable sources; success / code / no-code answers in the old words");
+  // 6. 删除 (hold)
+  {
+    const view = await asOpen(ctx, "news delete", "#/assistant/news", NW_ROW, { motion: true });
+    try {
+      const { page } = view;
+      await nwMenu(page, "ev-weekly", "news-delete");
+      await dialogOf(page).waitFor({ timeout: 5000 });
+      assert((await dialogOf(page).locator('[data-slot="alert-dialog-title"]').innerText()).trim() === B.del["ev-weekly"].dialog.title, "the question is not the old one");
+      await holdPointer(page, dialogOf(page).locator('[data-slot="hold-button"]'));
+      const [w] = await asWritesAfter(view, 1, "delete");
+      asHere(w, "DELETE", /\/news-sources\/ev-weekly$/, "delete");
+      await nwRow(page, "ev-weekly").waitFor({ state: "detached", timeout: 8000 });
+    } finally { await view.close(); }
+  }
+  // 7. the push summary length
+  for (const [value, label] of [["128", "短（128 tokens）"], ["512", "长（512 tokens）"], ["256", "中（256 tokens）"]]) {
+    const view = await asOpen(ctx, `news push ${value}`, "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      if (value === "256") { await asPick(page, page.locator("[data-testid=news-push]"), "短（128 tokens）"); await asWritesAfter(view, 1, "push first"); view.mock.state.assistant.writes.length = 0; }
+      await asPick(page, page.locator("[data-testid=news-push]"), label);
+      const [w] = await asWritesAfter(view, 1, `push ${value}`);
+      asHere(w, "PUT", /\/news-sources\/push-settings$/, value);
+      assert(asBody(w) === asOld(B.push[value], "PUT", /push-settings$/), `${value}: body ${asBody(w)}`);
+      assert((await page.locator("[data-testid=news-push]").innerText()).includes(label), "the select does not show the saved value");
+    } finally { await view.close(); }
+  }
+  done.push("delete (hold), push length 128 / 512 / 256");
+  return `7 operations: ${done.join("; ")}; every request equals the old page's`;
+}
+
+async function newsIdRule(ctx) {
+  const view = await asOpen(ctx, "news id rule", "#/assistant/news", NW_ROW);
+  try {
+    const { page } = view;
+    const d = page.locator(NW_DRAWER), id = () => d.locator("#news-id").inputValue(), err = () => d.locator("[data-testid=news-id-error]");
+    await page.locator("[data-testid=news-new]").click(); await d.waitFor({ timeout: 8000 });
+    // made from the name; fits the rule; follows the name until the ID is typed in; a taken one gets -2
+    await d.locator("#news-name").fill("Tech Daily Brief");
+    assert((await id()) === "tech-daily-brief" && /^[A-Za-z0-9._-]{2,80}$/.test(await id()), `the ID made of the name is "${await id()}"`);
+    await d.locator("#news-name").fill("Markets Wire（示例）"); assert((await id()) === "markets-wire-2" || (await id()) === "markets-wire", `the ID made of 'Markets Wire（示例）' is "${await id()}"`);
+    await d.locator("#news-name").fill("Tech Daily（示例）");
+    assert((await id()) === "tech-daily-2", `a name whose ID is taken gave "${await id()}", not tech-daily-2`);
+    // a Chinese-only name gives no ID and says so
+    await d.locator("#news-name").fill("财联社电报");
+    assert((await id()) === "" && (await err().innerText()).includes("请自己填一个 ID"), `a Chinese-only name: ID "${await id()}", message "${await err().count() ? await err().innerText() : ""}"`);
+    // typing in the ID box ends the following
+    await d.locator("#news-id").fill("my-own-id"); await d.locator("#news-name").fill("Another Name");
+    assert((await id()) === "my-own-id", "the ID still followed the name after the reader typed one");
+    // wrong IDs are said at once and nothing is sent
+    await d.locator("#news-url").fill("https://example.test/x.xml");
+    for (const bad of ["a", "bad id", "新闻源", "a/b"]) {
+      await d.locator("#news-id").fill(bad);
+      assert((await err().innerText()).trim() === AS.news.createRefused.idOne.alert[0], `"${bad}": the message is "${await err().count() ? await err().innerText() : ""}"`);
+      await nwSave(page); await asNoWrites(view, `ID "${bad}"`, 300);
+    }
+    // an ID that is already a source's is refused (the old page overwrote it quietly)
+    await d.locator("#news-id").fill("wire-markets");
+    assert((await err().innerText()).includes("已经有这个 ID 的新闻源了"), "a taken ID is not said");
+    await nwSave(page); await asNoWrites(view, "a taken ID", 400);
+    // the URL rule, and 81 typed characters stop at 80 (a legal ID, as in the old page)
+    await d.locator("#news-id").fill("good-id"); await d.locator("#news-url").fill("ftp://example.test/x");
+    await nwSave(page);
+    assert((await d.locator("[data-testid=news-url-error]").innerText()).trim() === AS.news.createRefused.urlFtp.alert[0], "the URL sentence is not the old one");
+    await asNoWrites(view, "a bad URL", 300);
+    await d.locator("#news-url").fill("https://example.test/x.xml");
+    await d.locator("#news-id").fill("x".repeat(81));
+    assert((await id()).length === 80, `81 typed characters gave ${(await id()).length}`);
+    await nwSave(page);
+    const [w] = await asWritesAfter(view, 1, "the legal 80-character ID");
+    assert(w.body.id === "x".repeat(80), "the 80-character ID was not sent");
+    // an existing source's ID box is locked
+    await page.locator(NW_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+    await nwMenu(page, "tech-daily", "news-edit"); await d.waitFor({ timeout: 8000 });
+    assert(await d.locator("#news-id").isDisabled(), "the ID of an existing source can be changed");
+    return "the ID follows the name (tech-daily-brief; -2 when taken; empty with the sentence for a Chinese name) until typed in; a, 'bad id', 新闻源, a/b, an existing ID and a bad URL are said at once and send nothing; 81 characters stop at 80; an existing source's ID is locked";
+  } finally { await view.close(); }
+}
+
+async function newsTagsBody(ctx) {
+  const B = AS.news, notes = [];
+  const create = async (k, c) => {
+    const view = await asOpen(ctx, `news tags ${k}`, "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=news-new]").click(); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+      await nwFill(page, c); await nwSave(page);
+      const [w] = await asWritesAfter(view, 1, k);
+      assert(asBody(w) === asOld(B.create[k], "POST", /\/news-sources$/), `${k}: body\n  ${asBody(w)}\n  differs from the old\n  ${asOld(B.create[k], "POST", /\/news-sources$/)}`);
+      assert(Array.isArray(w.body.markets) && Array.isArray(w.body.tags) && Array.isArray(w.body.alternates) && w.body.markets.every((m) => m === m.toUpperCase()), `${k}: the lists are not arrays or the markets are not in capitals`);
+      notes.push(k);
+    } finally { await view.close(); }
+  };
+  // markets in capitals, split from pasted text; the three lists are arrays; homepage only when filled; language zh-CN; name blank = the ID
+  await create("everything", { name: "完整源", id: "  full-source  ", kind: "http_json", url: "  https://example.test/full.json  ", homepage: " https://example.test/ ", markets: "us, cn  hk，jp、sg", tags: "macro flash,，ai、 earnings", alternates: "https://a.test/x.xml, https://b.test/y.xml，https://c.test/z", rea: false, enabled: false });
+  await create("html", { id: "html.src_2", kind: "http_html", url: "HTTPS://example.test/list", markets: "", tags: "", rea: true });
+  await create("defaults", { id: "new-feed", url: "https://example.test/new.xml" });
+  // editing: the old language kept (en), the homepage left out when emptied, the lists replaced
+  {
+    const view = await asOpen(ctx, "news tags edit", "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await nwMenu(page, "chip-watch", "news-edit"); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+      await page.waitForFunction(() => document.querySelector("#news-name")?.value, null, { timeout: 5000 });
+      await nwFill(page, { name: "芯片观察（改名）", markets: "us, tw", tags: "semis", alternates: "https://alt.test/a.xml", homepage: "", rea: false });
+      await nwSave(page);
+      const [w] = await asWritesAfter(view, 1, "edit");
+      assert(asBody(w) === asOld(B.edit.changed, "POST", /\/news-sources$/), `edit: body ${asBody(w)} differs from the old ${asOld(B.edit.changed, "POST", /\/news-sources$/)}`);
+      assert(w.body.language === "en" && !("homepage" in w.body), "edit: language is not kept or the emptied homepage is sent");
+      notes.push("edit (language en kept, homepage left out)");
+    } finally { await view.close(); }
+  }
+  // a pasted list becomes separate tags; a tag has its own remove button
+  {
+    const view = await asOpen(ctx, "news tags paste", "#/assistant/news", NW_ROW);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=news-new]").click(); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+      const box = page.locator("[data-testid=news-field-markets]");
+      await box.locator("input").evaluate((el) => { const data = new DataTransfer(); data.setData("text", "cn, hk"); el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true })); });
+      await page.waitForFunction(() => [...document.querySelectorAll("[data-testid=news-field-markets] [data-tag]")].map((e) => e.getAttribute("data-tag")).join() === "US,CN,HK", null, { timeout: 5000 });
+      notes.push("paste 'cn, hk' → CN, HK");
+    } finally { await view.close(); }
+  }
+  return `markets / tags / spare addresses typed or pasted into the tag boxes send the old arrays (markets in capitals), body for body: ${notes.join("; ")}`;
+}
+
+async function newsHealthNotColorOnly(ctx) {
+  const view = await asOpen(ctx, "news health", "#/assistant/news", NW_ROW, { state: NW_STATE() });
+  try {
+    const { page } = view;
+    const rows = await page.locator(NW_ROW).evaluateAll((els) => els.map((e) => ({ id: e.querySelector("[data-testid=news-id]").textContent.trim(), health: e.querySelector("[data-testid=news-health]").getAttribute("data-health"), text: e.querySelector("[data-testid=news-health]").textContent.trim(), dotHidden: e.querySelector("[data-testid=news-health] > span")?.getAttribute("aria-hidden"), error: e.querySelector("[data-testid=news-last-error]")?.textContent.trim() ?? null })));
+    assert(rows.length === 9, `${rows.length} rows, expected 9`);
+    const words = { ok: "健康", degraded: "降级", failed: "异常" };
+    for (const r of rows) {
+      assert(r.text.length > 0, `${r.id}: the health has no words`);
+      assert(r.text === (words[r.health] ?? r.health), `${r.id}: "${r.text}" for health ${r.health}`);
+      assert(r.dotHidden === "true", `${r.id}: the dot is not marked decoration`);
+    }
+    assert(rows.find((r) => r.id === "odd-state").text === "unknown", "a health value the page does not know is not shown as the server gave it");
+    const errs = Object.fromEntries(rows.filter((r) => r.error).map((r) => [r.id, r.error]));
+    assert(JSON.stringify(errs) === JSON.stringify({ "chip-watch": "最近错误 parse_changed", "ev-weekly": "最近错误 http_503", "ai-wire": "最近错误 feed_moved", "macro-wire": "最近错误 timeout" }), `the last errors: ${JSON.stringify(errs)}`);
+    return "all 9 rows say their health in words (健康 / 降级 / 异常, an unknown value as given), the dot is decoration; the 4 last errors are shown as the server gave them";
+  } finally { await view.close(); }
+}
+
+async function newsKeyboard(ctx) {
+  const view = await asOpen(ctx, "news keyboard", "#/assistant/news", NW_ROW);
+  try {
+    const { page } = view;
+    // a row's 「…」 menu with the keyboard: Enter opens, the arrows choose, Enter does it
+    const menu = nwRow(page, "tech-daily").locator("[data-testid=news-menu]");
+    await menu.focus(); await page.keyboard.press("Enter");
+    await page.getByRole("menuitem", { name: "测试抓取" }).waitFor({ timeout: 5000 });
+    await page.keyboard.press("ArrowDown"); 
+    await page.keyboard.press("Escape"); await page.getByRole("menuitem", { name: "测试抓取" }).waitFor({ state: "detached", timeout: 5000 });
+    await focusOn(page, menu, "Esc did not return the focus to 「…」");
+    await page.keyboard.press("Enter"); await page.getByRole("menuitem", { name: "测试抓取" }).waitFor({ timeout: 5000 });
+    await page.getByRole("menuitem", { name: "测试抓取" }).focus(); await page.keyboard.press("Enter");
+    const [t] = await asWritesAfter(view, 1, "keyboard test");
+    asHere(t, "POST", /\/news-sources\/tech-daily\/dry-run$/, "keyboard test");
+    // the new-source drawer, every field and all three tag boxes, then 保存
+    await page.locator("[data-testid=news-new]").focus(); await page.keyboard.press("Enter");
+    await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => document.activeElement?.closest("[data-testid=news-drawer]"), null, { timeout: 5000 });
+    await asTabTo(page, "#news-name"); await page.keyboard.type("Keyboard Feed");
+    await asTabTo(page, "#news-id");
+    await asTabTo(page, "#news-kind"); await page.keyboard.press("Enter"); await page.getByRole("option", { name: "HTTP JSON 接口", exact: true }).click();
+    await asTabTo(page, "#news-url"); await page.keyboard.type("https://example.test/kb.json");
+    await asTabTo(page, "#news-homepage"); await page.keyboard.type("https://example.test/");
+    await asTabTo(page, "#news-markets"); await page.keyboard.type("jp"); await page.keyboard.press("Enter");
+    await asTabTo(page, "#news-tags"); await page.keyboard.type("kb"); await page.keyboard.press("Enter");
+    await asTabTo(page, "#news-alternates"); await page.keyboard.type("https://alt.test/kb.json"); await page.keyboard.press("Enter");
+    await asTabTo(page, "#news-enabled"); await page.keyboard.press("Space");
+    await asTabTo(page, "[data-testid=news-save]"); await page.keyboard.press("Enter");
+    const w = await asWritesAfter(view, 2, "keyboard create");
+    assert(asBody(w[1]) === JSON.stringify({ id: "keyboard-feed", name: "Keyboard Feed", kind: "http_json", url: "https://example.test/kb.json", homepage: "https://example.test/", language: "zh-CN", markets: ["US", "JP"], tags: ["news", "kb"], alternates: ["https://alt.test/kb.json"], rea_repair: true, enabled: false }), `the keyboard-made source sent ${asBody(w[1])}`);
+    await page.locator(NW_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+    await nwRow(page, "keyboard-feed").waitFor({ timeout: 8000 });
+    // Esc closes a drawer and returns the focus to the button that opened it
+    await page.locator("[data-testid=news-new]").focus(); await page.keyboard.press("Enter"); await page.locator(NW_DRAWER).waitFor({ timeout: 8000 });
+    await page.keyboard.press("Escape"); await page.locator(NW_DRAWER).waitFor({ state: "detached", timeout: 8000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "news-new", null, { timeout: 3000 });
+    return "a row's 「…」 opens with Enter, Esc returns the focus, 测试抓取 runs from the menu; the new-source drawer is filled with the keyboard alone (name, kind list, URL, homepage, the three tag boxes, a switch) and saved with Enter; Esc closes a drawer and returns the focus";
+  } finally { await view.close(); }
+}
+
+const KN_DOC = "[data-testid=knowledge-doc]";
+const KN_STATE = () => stateWithKnowledgeCandidates();
+const knDoc = (page, text) => page.locator(KN_DOC, { hasText: text }).first();
+const SOURCE_LABEL = { faq: "常见问题", upload: "我的上传材料", sec: "已保存 / 已获取 SEC 摘录", analysis: "已保存 AI 分析" };
+const knUploads = (view) => (view.mock.state.materialPosts ?? []).filter((p) => p.kind === "upload");
+async function knFillUpload(page, c) {
+  await page.locator("#knowledge-upload-symbol").fill(c.symbol);
+  await page.locator("[data-testid=knowledge-upload-title]").fill(c.title);
+  await page.locator("[data-testid=knowledge-upload-url]").fill(c.url);
+  await page.locator("[data-testid=knowledge-upload-time]").fill(c.published);
+  await page.locator("[data-testid=knowledge-upload-reason]").fill(c.reason);
+  await page.locator("input[data-testid=upload-file]").setInputFiles({ name: c.file.name, mimeType: c.file.mimeType, buffer: Buffer.from(c.file.text, "utf8") });
+}
+async function knowledgeOps(ctx) {
+  const B = AS.knowledge, done = [];
+  // 1. 上传材料: the old multipart fields, with the fixed 3 stars and "medium"; the button waits for a file, title, link and reason; after it the source is 我的上传材料 and its material is loaded
+  const UP = {
+    markdown: { symbol: "aapl", title: "供应链报道", url: "https://example.test/report", published: "2026-11-10T09:30", reason: "一手采访", file: { name: "report.md", mimeType: "text/markdown", text: "# 报道\n正文" } },
+    pdf: { symbol: "NVDA", title: "PDF 材料", url: "https://example.test/p.pdf", published: "2026-01-02T00:00", reason: "交叉验证", file: { name: "deck.pdf", mimeType: "application/pdf", text: "%PDF-1.4 fake" } },
+  };
+  for (const [k, c] of Object.entries(UP)) {
+    const view = await asOpen(ctx, `knowledge upload ${k}`, "#/assistant/knowledge", KN_DOC);
+    try {
+      const { page } = view;
+      const submit = page.locator("[data-testid=knowledge-upload-submit]");
+      assert(await submit.isDisabled(), `${k}: 上传材料 can be pressed with nothing filled in`);
+      await knFillUpload(page, c);
+      assert(!(await submit.isDisabled()), `${k}: 上传材料 cannot be pressed with everything filled in`);
+      await submit.click();
+      await page.waitForFunction(() => document.querySelector("[data-testid=knowledge-importable]"), null, { timeout: 10000 });
+      const [post] = knUploads(view);
+      const old = B.upload[k].sent[0];
+      assert(post && post.path === `/uploaded-evidence/${old.path.split("/").pop()}` && post.session === true, `${k}: the upload went to ${post?.path}`);
+      assert(JSON.stringify(post.fields) === JSON.stringify(old.fields), `${k}: fields\n  ${JSON.stringify(post.fields)}\n  differ from the old\n  ${JSON.stringify(old.fields)}`);
+      assert(post.fields.credibility_stars === "3" && post.fields.impact_severity === "medium", `${k}: the fixed stars / impact are ${post.fields.credibility_stars} / ${post.fields.impact_severity}`);
+      assert(asReads(view, /\/knowledge\/importable\/upload$/).join() === `/knowledge/importable/upload${B.upload[k].sent[1].query}`, `${k}: the material read after it was ${asReads(view, /importable/).join()}`);
+      assert((await page.locator("#knowledge-source").innerText()).includes("我的上传材料"), `${k}: the source did not change to 我的上传材料`);
+      await asToast(page, "上传已保存；请选择材料并导入知识库");
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "knowledge upload time", "#/assistant/knowledge", KN_DOC);
+    try {
+      const { page } = view;
+      await knFillUpload(page, { ...UP.markdown, published: "" });
+      await page.locator("[data-testid=knowledge-upload-submit]").click();
+      await page.getByText(B.upload.invalidTime.alert[0].replace(/重试$/, ""), { exact: false }).first().waitFor({ timeout: 5000 });
+      assert(knUploads(view).length === 0, "an upload with no valid time went out");
+    } finally { await view.close(); }
+  }
+  done.push("upload ×2 (fields, 3 stars, medium) + invalid time");
+  // 2. 载入可选材料 for each source and code, 3. 导入所选 (the ids in the order ticked)
+  for (const src of ["faq", "upload", "sec", "analysis"]) {
+    const view = await asOpen(ctx, `knowledge load ${src}`, "#/assistant/knowledge", KN_DOC);
+    try {
+      const { page } = view;
+      await asPick(page, page.locator("#knowledge-source"), SOURCE_LABEL[src]);
+      await page.locator("#knowledge-import-symbol").fill("msft");
+      await page.locator("[data-testid=knowledge-load]").click();
+      await page.locator("[data-testid=knowledge-importable]").waitFor({ timeout: 8000 });
+      assert(asReads(view, /\/knowledge\/importable\//).join() === `/knowledge/importable/${src}${B.importable[src].sent[0].query}`, `${src}: read ${asReads(view, /importable/).join()}`);
+      assert((await page.locator("#knowledge-upload-symbol").inputValue()) === "MSFT", `${src}: the code is not shared by the two forms`);
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "knowledge import", "#/assistant/knowledge", KN_DOC);
+    try {
+      const { page } = view;
+      await page.locator("[data-testid=knowledge-load]").click(); await page.locator("[data-testid=knowledge-importable]").waitFor({ timeout: 8000 });
+      assert((await page.locator("[data-testid=knowledge-import]").isDisabled()), "导入所选 can be pressed with nothing ticked");
+      const boxes = page.locator("[data-testid=knowledge-importable-item]");
+      await boxes.nth(1).click(); await boxes.nth(0).click();
+      assert((await page.locator("[data-testid=knowledge-import]").innerText()).includes("2"), "the import button does not count the 2 ticked");
+      await page.locator("[data-testid=knowledge-import]").click();
+      const [w] = await asWritesAfter(view, 1, "import");
+      asHere(w, "POST", /\/knowledge\/import$/, "import");
+      assert(asBody(w) === asOld(B.importOp.two, "POST", /\/knowledge\/import$/), `import body ${asBody(w)}`);
+      await asToast(page, "接收 2 份材料，生成 10 个块");
+      await page.waitForFunction(() => document.querySelectorAll("[data-testid=knowledge-doc]").length === 4, null, { timeout: 8000 });
+      // nothing on the page promises that the import is searchable now: the status is the server's word
+      const text = await page.locator("main").innerText();
+      assert(!/已可检索|已生效|立即可检索|立即可用|可以检索了/.test(text), `the page promises searchability: ${text.match(/已可检索|已生效|立即可检索|立即可用|可以检索了/)}`);
+      assert((await knDoc(page, "AAPL 渠道调研纪要").locator("[data-testid=knowledge-doc-status]").innerText()).trim() === "pending", "the status of a new import is not shown as the server gave it (pending)");
+    } finally { await view.close(); }
+  }
+  done.push("4 sources × load, import in the ticked order, no promise of searchability");
+  // 4. 运行索引
+  {
+    const view = await asOpen(ctx, "knowledge index", "#/assistant/knowledge", KN_DOC);
+    try {
+      await view.page.locator("[data-testid=knowledge-index]").click();
+      const [w] = await asWritesAfter(view, 1, "index");
+      asHere(w, "POST", /\/knowledge\/index$/, "index");
+      assert(asBody(w) === asOld(B.index, "POST", /\/knowledge\/index$/), `index body ${asBody(w)}`);
+      await asToast(view.page, "索引完成 3，失败 1");
+    } finally { await view.close(); }
+  }
+  // 5. 检索测试: the kind comes from the source, 常见问题 sends no code; the two inputs are shown on the card itself
+  for (const [key, src, symbol] of [["upload-AAPL", "upload", "AAPL"], ["faq-AAPL", "faq", "AAPL"], ["analysis-TSLA", "analysis", "TSLA"], ["sec-NVDA", "sec", "NVDA"]]) {
+    const view = await asOpen(ctx, `knowledge retrieval ${key}`, "#/assistant/knowledge", KN_DOC);
+    try {
+      const { page } = view;
+      await asPick(page, page.locator("#knowledge-source"), SOURCE_LABEL[src]); await page.locator("#knowledge-import-symbol").fill(symbol);
+      assert((await page.locator("[data-testid=knowledge-retrieval-source]").innerText()).trim() === SOURCE_LABEL[src], `${key}: the retrieval card does not show its source`);
+      assert((await page.locator("[data-testid=knowledge-retrieval-symbol]").innerText()).trim() === (src === "faq" ? "不带代码" : symbol), `${key}: the retrieval card does not show its code`);
+      assert(await page.locator("[data-testid=knowledge-test]").isDisabled(), `${key}: 测试检索 can be pressed with no query`);
+      assert((await page.locator("[data-testid=knowledge-query]").getAttribute("maxlength")) === "800", "the query box does not stop at 800");
+      await page.locator("[data-testid=knowledge-query]").fill("服务收入");
+      await page.locator("[data-testid=knowledge-test]").click();
+      const [w] = await asWritesAfter(view, 1, key);
+      asHere(w, "POST", /\/knowledge\/retrieval-test$/, key);
+      assert(asBody(w) === asOld(B.retrieval[key], "POST", /retrieval-test$/), `${key}: body ${asBody(w)} differs from the old ${asOld(B.retrieval[key], "POST", /retrieval-test$/)}`);
+      await page.locator("[data-testid=knowledge-result]").waitFor({ timeout: 8000 });
+      assert((await page.locator("[data-testid=knowledge-result]").innerText()) === B.retrieval[key].pre, `${key}: the result is not the old JSON text`);
+      await asToast(page, "已通过当前权限执行真实知识检索");
+    } finally { await view.close(); }
+  }
+  done.push("index, retrieval ×4 (kind from the source; the two inputs shown on the card)");
+  // 6. a document's chunks; 7. 重试; 8. 撤回 (disabled once withdrawn)
+  {
+    const view = await asOpen(ctx, "knowledge docs", "#/assistant/knowledge", KN_DOC, { state: KN_STATE() });
+    try {
+      const { page } = view;
+      const rows = await page.locator(KN_DOC).evaluateAll((els) => els.map((e) => e.innerText.replace(/\s+/g, " ")));
+      const docs = view.mock.state.assistant.docs;
+      docs.forEach((d, i) => { for (const part of [d.title, d.symbol || "FAQ", d.source_type, d.status, `${d.chunks} 块`, d.observed_at || "观察时间未知", d.owner_scope]) assert(rows[i].includes(part), `row ${i} "${rows[i]}" lacks "${part}"`); });
+      const opener = knDoc(page, "AAPL 10-Q").locator("[data-testid=knowledge-doc-open]");
+      await opener.click(); await page.locator("[data-testid=knowledge-chunk]").first().waitFor({ timeout: 8000 });
+      assert(asReads(view, /\/chunks$/).join() === B.chunks.source.sent[0].path.replace(/^\/agent-chat/, ""), `the chunks read ${asReads(view, /chunks/).join()}`);
+      const drawer = page.locator("[data-testid=knowledge-drawer]");
+      const text = (await drawer.innerText()).replace(/\s+/g, " ");
+      assert(text.includes("AAPL 10-Q（2026 财年第四季度）") && text.includes("保存的原文") && text.includes("文本块 · 3") && text.includes("1 · 第 1 节 · indexed") && text.includes("2 · 正文 · indexed"), `the drawer: ${text}`);
+      assert((await drawer.locator("a").first().getAttribute("href")) === B.chunks.source.link[0][1], "the source link is not the old one");
+      await page.keyboard.press("Escape"); await drawer.waitFor({ state: "detached", timeout: 5000 });
+      await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "knowledge-doc-open" && document.activeElement.closest("[data-testid=knowledge-doc]").innerText.includes("AAPL 10-Q"), null, { timeout: 3000 });
+      // an AI analysis keeps its provenance label
+      await knDoc(page, "AAPL 服务业务分析").locator("[data-testid=knowledge-doc-open]").click(); await page.locator("[data-testid=knowledge-chunk]").first().waitFor({ timeout: 8000 });
+      assert((await drawer.locator("[data-testid=knowledge-source-label]").innerText()).trim() === "分析文本（含 AI 派生内容）", "an AI analysis's text is not labelled 分析文本（含 AI 派生内容）");
+      await page.keyboard.press("Escape"); await drawer.waitFor({ state: "detached", timeout: 5000 });
+      // 重试 and 撤回
+      await knDoc(page, "AAPL 10-Q").locator("[data-testid=knowledge-retry]").click();
+      let w = await asWritesAfter(view, 1, "retry");
+      asHere(w[0], "POST", /\/knowledge\/documents\/kd000000-0000-4000-8000-000000000001\/retry$/, "retry");
+      await asToast(page, "已重新排入索引队列");
+      await knDoc(page, "AAPL 10-Q").locator("[data-testid=knowledge-withdraw]").click();
+      w = await asWritesAfter(view, 2, "withdraw");
+      asHere(w[1], "POST", /\/knowledge\/documents\/kd000000-0000-4000-8000-000000000001\/withdraw$/, "withdraw");
+      await asToast(page, "文档已软撤回");
+      await page.waitForFunction(() => [...document.querySelectorAll("[data-testid=knowledge-doc]")].find((e) => e.innerText.includes("AAPL 10-Q")).querySelector("[data-testid=knowledge-withdraw]").disabled, null, { timeout: 8000 });
+      assert(await knDoc(page, "旧上传：TSLA").locator("[data-testid=knowledge-withdraw]").isDisabled(), "撤回 is enabled on a withdrawn document");
+      assert((await knDoc(page, "旧上传：TSLA").innerText()).includes("观察时间未知"), "a document with no observation time does not say 观察时间未知");
+    } finally { await view.close(); }
+  }
+  // 9. 拒绝 and 10. 审核并排队索引
+  {
+    const view = await asOpen(ctx, "knowledge review", "#/assistant/knowledge", "[data-testid=knowledge-candidate]", { state: KN_STATE() });
+    try {
+      const { page } = view;
+      const first = page.locator("[data-testid=knowledge-candidate]").first();
+      assert((await first.locator("blockquote").getAttribute("class")).includes("font-quote"), "a candidate's quote is not in the fact material");
+      await first.locator("[data-testid=knowledge-reject]").click();
+      let w = await asWritesAfter(view, 1, "reject");
+      asHere(w[0], "POST", /\/knowledge\/candidates\/kc000000-0000-4000-8000-000000000001\/review$/, "reject");
+      assert(asBody(w[0]) === asOld(B.review.reject, "POST", /review$/), `reject body ${asBody(w[0])}`);
+      await asToast(page, "候选已拒绝");
+      await page.waitForFunction(() => document.querySelectorAll("[data-testid=knowledge-candidate]").length === 1, null, { timeout: 8000 });
+      await page.locator("[data-testid=knowledge-approve]").click();
+      w = await asWritesAfter(view, 2, "approve");
+      assert(asBody(w[1]) === asOld(B.review.approve, "POST", /review$/) && w[1].body.approved === true, `approve body ${asBody(w[1])}`);
+      await asToast(page, "已审核，已加入索引队列");
+      await page.locator("[data-testid=knowledge-candidates-empty]").waitFor({ timeout: 8000 });
+      assert((await page.locator("[data-testid=knowledge-candidates-empty]").innerText()).includes("没有待审核条目。"), "the empty sentence for candidates is missing");
+    } finally { await view.close(); }
+  }
+  done.push("chunks (Esc closes, focus back on the row), retry, withdraw (then disabled), reject, approve");
+  return `10 operations: ${done.join("; ")}; every request equals the old page's`;
+}
+
+async function knowledgeEntries(ctx) {
+  const notes = [];
+  const sidebarActive = (page) => page.locator('[data-slot="sidebar"] a[aria-current=page]').allInnerTexts().then((a) => a.map((s) => s.trim()));
+  const landed = async (page, what) => {
+    await waitHash(page, "#/assistant/knowledge", 10000);
+    await page.locator("[data-testid=knowledge-page]").waitFor({ timeout: 15000 });
+    assert((await sidebarActive(page)).includes("知识库"), `${what}: the sidebar does not highlight 知识库 (${JSON.stringify(await sidebarActive(page))})`);
+    assert((await page.locator("[data-testid=settings-page]").count()) === 0, `${what}: the settings page is still on screen`);
+  };
+  // 1. the sidebar
+  const side = await openAt(ctx, "knowledge entry sidebar", "#/assistant/bots", { ready: "[data-testid=bot-card]" });
+  try { await side.page.locator('[data-slot="sidebar"] a', { hasText: "知识库" }).first().click(); await landed(side.page, "the sidebar"); notes.push("sidebar"); } finally { await side.close(); }
+  // 2. P8.2: the settings pages no longer have the button.  None of the five has, in its own content (the sidebar's 知识库 row is outside it), a button or a link named 知识库 or one that goes to /assistant/knowledge.
+  for (const section of ["models", "notifications", "appearance", "data", "account"]) {
+    const settings = await openAt(ctx, `knowledge entry settings ${section}`, `#/settings/${section}`, { ready: `[data-testid=settings-${section}]` });
+    try {
+      const { page } = settings;
+      await settle(page, { pinTranscript: false });
+      const area = page.locator(`[data-testid=settings-${section}]`);
+      assert((await area.count()) === 1 && (await area.locator("h1").count()) === 1, `${section}: the settings content area is not there (the check would read 0 of everything)`);
+      const found = await area.evaluate((el) => ({ buttons: [...el.querySelectorAll("button, a, [role=button], [role=link]")].filter((x) => /知识库/.test(x.textContent + (x.getAttribute("aria-label") ?? ""))).length, links: el.querySelectorAll('a[href*="/assistant/knowledge"]').length }));
+      assert(found.buttons === 0 && found.links === 0, `${section}: ${found.buttons} button/link named 知识库, ${found.links} link to /assistant/knowledge in the settings content`);
+    } finally { await settings.close(); }
+  }
+  notes.push("none of the five settings pages has a way to the library in its content");
+  // 3. the agent's open_page
+  const agent = await openAt(ctx, "knowledge entry agent", "#/chat", { ready: "[data-testid=message]" });
+  try { await dispatchAction(agent.page, { action: "open_page", page: "knowledge" }); await landed(agent.page, "open_page knowledge"); notes.push("open_page"); } finally { await agent.close(); }
+  // 4. the page is a page of its own: no way back to the model settings, no eyebrow
+  const page = await asOpen(ctx, "knowledge no back", "#/assistant/knowledge", KN_DOC);
+  try {
+    const text = await page.page.locator("main").innerText();
+    assert(!text.includes("返回模型设置") && !text.includes("FinBot / Knowledge"), "the page still has 返回模型设置 or the eyebrow");
+    assert((await page.page.locator("main h1").innerText()).trim() === "研究知识库", "the title is not 研究知识库");
+    notes.push("no 返回模型设置");
+  } finally { await page.close(); }
+  return `the sidebar and the agent's open_page (knowledge) land on #/assistant/knowledge with 知识库 highlighted and no settings page under it; ${notes.slice(-2).join("; ")}`;
+}
+
+async function knowledgeKeyboard(ctx) {
+  const view = await asOpen(ctx, "knowledge keyboard", "#/assistant/knowledge", KN_DOC, { state: KN_STATE() });
+  try {
+    const { page } = view;
+    // a document's chunks: Enter on the title opens the drawer (the focus goes in), Esc closes it and the focus returns to that row
+    const opener = knDoc(page, "AAPL 服务业务分析").locator("[data-testid=knowledge-doc-open]");
+    await opener.focus(); await page.keyboard.press("Enter");
+    await page.locator("[data-testid=knowledge-chunk]").first().waitFor({ timeout: 8000 });
+    assert(await page.evaluate(() => !!document.activeElement?.closest("[data-testid=knowledge-drawer]")), "the focus did not go into the drawer");
+    await page.keyboard.press("Escape"); await page.locator("[data-testid=knowledge-drawer]").waitFor({ state: "detached", timeout: 5000 });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "knowledge-doc-open" && document.activeElement.closest("[data-testid=knowledge-doc]").innerText.includes("AAPL 服务业务分析"), null, { timeout: 3000 });
+    // the retrieval test: type the query, Tab to the button, Enter
+    await page.locator("[data-testid=knowledge-query]").focus(); await page.keyboard.type("服务收入");
+    await asTabTo(page, "[data-testid=knowledge-test]"); await page.keyboard.press("Enter");
+    const [w] = await asWritesAfter(view, 1, "keyboard retrieval");
+    assert(asBody(w) === JSON.stringify({ kind: "material", keyword: "服务收入", symbol: "AAPL" }), `the keyboard retrieval sent ${asBody(w)}`);
+    await page.locator("[data-testid=knowledge-result]").waitFor({ timeout: 8000 });
+    // the source list opens with the keyboard and a choice is made with it
+    await page.locator("#knowledge-source").focus(); await page.keyboard.press("Enter");
+    await page.getByRole("option", { name: "常见问题", exact: true }).focus(); await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.querySelector("[data-testid=knowledge-retrieval-symbol]").textContent.trim() === "不带代码", null, { timeout: 5000 });
+    return "a document's chunks open with Enter (focus goes into the drawer) and Esc closes them with the focus back on that row; the retrieval test is typed and run from the keyboard; the source list is chosen with the keyboard and the retrieval card follows";
+  } finally { await view.close(); }
+}
+
+async function assistantNoLegacy(ctx) {
+  const OLD = [".personal-page", ".personal-card", ".personal-badge", ".personal-grid", ".memory-panel", ".memory-list", ".memory-layer", ".memory-layer-title", ".memory-line", ".memory-actions", ".memory-add", ".memory-edit", ".memory-scope", ".memory-search", ".memory-tabs", ".memory-quote", ".memory-archived", ".skill-group", ".skill-card", ".skill-tools", ".skill-editor", ".skill-import", ".skill-preview", ".skill-tool-list",
+    ".knowledge-admin", ".knowledge-import-card", ".knowledge-controls", ".knowledge-select-list", ".knowledge-list", ".knowledge-doc-row", ".knowledge-doc-main", ".knowledge-candidate", ".knowledge-drawer-backdrop", ".knowledge-chunk", ".knowledge-status", ".knowledge-error", ".knowledge-retrieval-result",
+    ".task-form", ".task-form-row", ".bot-tool", ".section-tabs", ".origin-inferred", ".secondary-action", ".primary-action", ".fine-print", ".workspace", ".workspace-heading", ".eyebrow"].join(", ");
+  const SCOPE = "main, [data-testid=skill-drawer], [data-testid=skill-import-drawer], [data-testid=news-drawer], [data-testid=knowledge-drawer]";
+  const check = async (page, what) => {
+    const found = await page.evaluate(({ old, scope }) => ({
+      legacy: document.querySelectorAll("[data-legacy]").length,
+      old: [...document.querySelectorAll(old)].filter((el) => el.closest(scope)).map((el) => el.className).length,
+      native: document.querySelectorAll(`:is(${scope}) select`).length,
+      small: [...document.querySelectorAll(`:is(${scope}) *`)].filter((el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && parseFloat(getComputedStyle(el).fontSize) < 12).length,
+    }), { old: OLD, scope: SCOPE });
+    assert(found.legacy === 0, `${what}: ${found.legacy} data-legacy element(s)`);
+    assert(found.old === 0, `${what}: ${found.old} element(s) with an old class`);
+    assert(found.native === 0, `${what}: ${found.native} native <select>`);
+    assert(found.small === 0, `${what}: ${found.small} text element(s) under 12px`);
+  };
+  const seen = [];
+  const run = async (label, hash, ready, steps, opts = {}) => {
+    const view = await asOpen(ctx, `no legacy ${label}`, hash, ready, opts);
+    try { await check(view.page, label); if (steps) await steps(view.page, (what) => check(view.page, `${label} · ${what}`)); seen.push(label); } finally { await view.close(); }
+  };
+  await run("技能", "#/assistant/skills", SK_CARD, async (page, again) => {
+    await page.locator("[data-testid=skill-new]").click(); await page.locator(SK_DRAWER).waitFor(); await again("编辑抽屉"); await page.keyboard.press("Escape"); await page.locator(SK_DRAWER).waitFor({ state: "detached" });
+    await page.locator("[data-testid=skill-import-open]").click(); await page.locator(SK_IMPORT).waitFor(); await page.locator("[data-testid=skill-import-text]").fill(IMPORT_SAMPLE); await page.locator("[data-testid=skill-import-preview]").click(); await page.locator("[data-testid=skill-preview]").waitFor(); await again("导入预览");
+  });
+  await run("技能 :skillId", `#/assistant/skills/${SK_ID.draft}`, `${SK_DRAWER}[data-draft=true]`);
+  await run("技能（空）", "#/assistant/skills", "[data-testid=skills-empty]", null, { state: stateAssistantEmpty() });
+  await run("记忆", "#/assistant/memory", MEM_ITEM, async (page, again) => { await page.locator("[data-testid=memory-archived] button").first().click(); await again("已归档展开"); await memItem(page, "回答先给结论").locator("[data-testid=memory-edit]").click(); await again("行内编辑"); });
+  await run("记忆 ?tab=recall", "#/assistant/memory?tab=recall", "[data-testid=recall-item]");
+  await run("记忆（空）", "#/assistant/memory", "[data-testid=memory-empty]", null, { state: stateAssistantEmpty() });
+  await run("新闻源", "#/assistant/news", NW_ROW, async (page, again) => {
+    await nwMenu(page, "wire-markets", "news-test"); await nwRow(page, "wire-markets").locator("[data-testid=news-test-result]").waitFor(); await again("测试结果展开");
+    await page.locator("[data-testid=news-new]").click(); await page.locator(NW_DRAWER).waitFor(); await again("新建抽屉");
+  });
+  await run("新闻源（空）", "#/assistant/news", "[data-testid=news-empty]", null, { state: stateAssistantEmpty() });
+  await run("知识库", "#/assistant/knowledge", KN_DOC, async (page, again) => { await knDoc(page, "AAPL 10-Q").locator("[data-testid=knowledge-doc-open]").click(); await page.locator("[data-testid=knowledge-chunk]").first().waitFor(); await again("分块抽屉"); }, { state: KN_STATE() });
+  await run("知识库（空）", "#/assistant/knowledge", "[data-testid=knowledge-docs-empty]", null, { state: stateAssistantEmpty() });
+  // the control: the 全部 bot page is still an old page (P8.2: the settings pages are new), so a selector that reads 0 everywhere is told apart from one that is broken
+  const control = await asOpen(ctx, "no legacy control", "#/assistant/bots", "[data-testid=bot-card]");
+  try { assert((await control.page.locator("[data-legacy]").count()) >= 1, "the 全部 bot page holds no data-legacy element (the selector is broken, not the pages clean)"); } finally { await control.close(); }
+  return `${seen.length} addresses / states (skills incl. :skillId and its two drawers, memory both tabs, news with a test result and the drawer, knowledge with the chunk drawer, each page empty): 0 data-legacy, 0 old classes, 0 native <select>, 0 text under 12px; the 全部 bot page still holds the marker`;
+}
+
+// --- P8.2: the settings pages ------------------------------------------------------------------------------------------------------------
+// The baseline is what the OLD settings page (HEAD d8a045e, one long page) sent and said on the same fixtures (fixtures/settings-bodies-baseline.json, recorded before any page was touched):
+// the new pages must send the same requests, body for body.  Writes are read from the fake backend (`state.settings.writes`); the keys typed are obvious fakes.
+const SB = JSON.parse(fs.readFileSync(new URL("./fixtures/settings-bodies-baseline.json", import.meta.url), "utf8"));
+const ST_KEY1 = "fake-key-for-smoke-01", ST_KEY2 = "fake-key-for-smoke-02", ST_TOKEN = "fake-token-for-smoke-01", ST_PUSH_USER = "fake-pushover-user-01", ST_PUSH_APP = "fake-pushover-app-01";
+const ST_SECTIONS = ["models", "notifications", "appearance", "data", "account"];
+const ST_LABELS = { models: "模型", notifications: "通知", appearance: "外观", data: "数据", account: "账户" };
+const stAll = (view) => view.mock.state.settings.writes;
+/** The writes of the page without the asks for the provider's model list (those are reads in spirit and come on their own timing; settings-model-discovery counts them). */
+const stWrites = (view) => stAll(view).filter((w) => w.path !== "/model-catalog/models");
+/** The writes of the baseline's `sent` list (GETs are reads, not writes): method, path and the body as the old page sent it. */
+const stOld = (sent) => sent.filter((r) => r.method !== "GET").map((r) => ({ method: r.method, path: r.path.replace(/^\/agent-chat/, ""), body: r.body }));
+/** The fake backend's writes `from` on, against what the old page sent: same count, same order, same method, path and body (character for character). */
+function stSame(view, old, what, from = 0) {
+  const got = stWrites(view).slice(from).map((w) => ({ method: w.method, path: w.path, body: w.body === null ? null : JSON.stringify(w.body) }));
+  assert(JSON.stringify(got) === JSON.stringify(stOld(old)), `${what}: sent ${JSON.stringify(got)}, the old page sent ${JSON.stringify(stOld(old))}`);
+}
+async function stWaitWrites(view, count, what) {
+  const end = Date.now() + 10000;
+  while (stWrites(view).length < count && Date.now() < end) await view.page.waitForTimeout(60);
+  assert(stWrites(view).length >= count, `${what}: ${stWrites(view).length} of ${count} request(s) went out`);
+  await view.page.waitForTimeout(150);
+}
+/** A settings sub page on the fake backend; `ready` is its body (the page has read what it shows). */
+async function stOpen(ctx, label, section, ready, { state, width = 1440, theme = "light", motion = false, identity = "personal", locale } = {}) {
+  const view = await newView(ctx.browser, { width, theme, label, unmatched, motion, identity, ...(locale ? { locale } : {}), ...(state ? { fixtureState: state } : {}) });
+  view.consoleTexts = [];
+  view.page.on("console", (m) => { view.consoleTexts.push(m.text()); });
+  await view.context.addInitScript(() => { window.__downloads = []; const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { if (this.download) { window.__downloads.push(this.download); return; } return click.call(this); }; });
+  await view.page.goto(`${ctx.server.url}#/settings/${section}`, { waitUntil: "load" });
+  await view.page.waitForSelector(ready, { state: "visible", timeout: 30000 });
+  await settle(view.page, { pinTranscript: false });
+  return view;
+}
+const ST_MODELS = "[data-testid=role-row]";
+const stCard = (page, name) => page.locator(`[data-testid=model-card][data-model="${name}"]`);
+const stDialog = (page) => page.locator("[data-testid=model-dialog]");
+/** Press-and-hold the in-app confirmation's button (the view keeps real motion). */
+async function stHold(page) {
+  const dlg = page.locator('[data-slot="alert-dialog-content"]'); await dlg.waitFor({ timeout: 10000 });
+  await holdPointer(page, dlg.locator('[data-slot="hold-button"]'), 1500);
+}
+async function stOpenAdd(page) { await page.locator("[data-testid=model-new]").click(); await stDialog(page).waitFor({ timeout: 10000 }); }
+async function stOpenEdit(page, name) { await stCard(page, name).locator("[data-testid=model-edit]").click(); await stDialog(page).waitFor({ timeout: 10000 }); }
+/** What the three add forms and the five edit forms of the baseline did to the dialog, done again through the new fields. */
+const ST_ADD = {
+  vault: async (page) => { await page.locator("#model-display").fill("  测试模型 A  "); await page.locator("#model-model").fill("  deepseek-chat  "); await page.locator("#model-key").fill(ST_KEY1); },
+  envDefault: async (page) => {
+    await page.locator("#model-display").fill("环境变量模型"); await asPick(page, page.locator("[data-testid=model-provider]"), "OpenRouter");
+    await page.locator("#model-model").fill("vendor/fixture-model"); await asPick(page, page.locator("[data-testid=model-key-mode]"), "读服务器的环境变量");
+    await page.locator("#model-key-env").fill("my_fixture_api_key"); await page.locator("[data-testid=model-default]").click();
+  },
+  custom: async (page) => {
+    await page.locator("#model-display").fill(""); await asPick(page, page.locator("[data-testid=model-provider]"), "自定义（OpenAI 兼容）");
+    await page.locator("#model-base-url").fill("  https://models.example.test/v1  "); await page.locator("#model-model").fill("m1"); await page.locator("#model-key").fill(ST_KEY1); await page.locator("#model-name").fill("My-Model");
+  },
+};
+const ST_EDIT = {
+  untouched: ["deepseek-flash", async () => {}],
+  rename: ["muse-ember", async (page) => { await page.locator("#model-name").fill("muse-ember-2"); }],
+  newKey: ["glm5.3-flash", async (page) => { await page.locator("#model-key").fill(ST_KEY2); }],
+  newProvider: ["deepseek-flash", async (page) => { await asPick(page, page.locator("[data-testid=model-provider]"), "OpenRouter"); await page.locator("#model-model").fill("vendor/moved"); await page.locator("#model-key").fill(ST_KEY2); }],
+  displayAndDefault: ["gpt-6.1-terra", async (page) => { await page.locator("#model-display").fill("GPT Terra（改名）"); await page.locator("[data-testid=model-default]").click(); }],
+};
+
+/** Five addresses, five pages: each shows only its own, the list beside it and the sidebar mark it, a reload stays on it, a phone can use the list, the old addresses land on 模型. */
+async function settingsFivePages(ctx) {
+  const BODY = (id) => `[data-testid=settings-${id}-body]`;
+  const notes = [];
+  for (const id of ST_SECTIONS) {
+    const view = await stOpen(ctx, `settings five ${id}`, id, BODY(id));
+    try {
+      const { page } = view;
+      for (const other of ST_SECTIONS.filter((x) => x !== id)) assert((await page.locator(BODY(other)).count()) === 0, `${id}: shows the content of ${other}`);
+      assert((await page.locator("h1").innerText()).trim() === ST_LABELS[id], `${id}: the title is "${await page.locator("h1").innerText()}"`);
+      const current = await page.locator("[data-testid=settings-subnav] [aria-current=page]").allInnerTexts();
+      assert(current.length === 1 && current[0].trim() === ST_LABELS[id], `${id}: the list beside the page marks ${JSON.stringify(current)}`);
+      const side = (await page.locator('[data-slot="sidebar"] a[aria-current=page]').allInnerTexts()).map((s) => s.trim());
+      assert(side.includes(ST_LABELS[id]), `${id}: the sidebar marks ${JSON.stringify(side)}`);
+      await page.reload({ waitUntil: "load" }); await page.waitForSelector(BODY(id), { state: "visible", timeout: 30000 });
+      assert((await page.evaluate(() => location.hash)) === `#/settings/${id}`, `${id}: a reload left the page`);
+      assert((await page.locator("[data-legacy]").count()) === 0, `${id}: inside the old-UI marker`);
+    } finally { await view.close(); }
+    notes.push(id);
+  }
+  // the list is one node in both shapes: below 1024 it is a row above the page, and it works
+  const phone = await stOpen(ctx, "settings five phone", "models", BODY("models"), { width: 390 });
+  try {
+    const { page } = phone;
+    assert((await page.locator("[data-testid=settings-subnav]").count()) === 1, "the list of sub pages is mounted more than once");
+    const box = await page.locator("[data-testid=settings-subnav]").boundingBox(), content = await page.locator("[data-testid=settings-models]").boundingBox();
+    assert(box.y + box.height <= content.y + 1, `on a phone the list is not above the page (${JSON.stringify(box)} / ${JSON.stringify(content)})`);
+    const small = await page.locator("[data-testid=settings-subnav] a").evaluateAll((a) => a.filter((x) => x.getBoundingClientRect().height < 44).length);
+    assert(small === 0, `${small} item(s) of the list are under 44px tall on a phone`);
+    await page.locator("[data-testid=settings-nav-account]").click();
+    await page.waitForSelector(BODY("account"), { timeout: 10000 });
+    assert((await page.evaluate(() => location.hash)) === "#/settings/account", "the phone's list did not go to 账户");
+    assert((await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)), "the page scrolls sideways on a phone");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    assert((await page.locator("[data-testid=settings-subnav]").count()) === 1, "the list is mounted twice after the width changed");
+    const wide = await page.locator("[data-testid=settings-subnav]").boundingBox();
+    const wideContent = await page.locator("[data-testid=settings-account]").boundingBox();
+    assert(wide.x + wide.width <= wideContent.x + 1 && wide.width < 260, `on a wide screen the list is not a narrow column beside the page (${JSON.stringify(wide)} / ${JSON.stringify(wideContent)})`);
+  } finally { await phone.close(); }
+  // the old addresses and an unknown one
+  for (const [from, to] of [["#admin", "#/settings/models"], ["#settings", "#/settings/models"]]) {
+    const view = await newView(ctx.browser, { width: 1440, theme: "light", label: `settings five ${from}`, unmatched });
+    try { await view.page.goto(`${ctx.server.url}${from}`, { waitUntil: "load" }); await view.page.waitForSelector(BODY("models"), { timeout: 30000 }); assert((await view.page.evaluate(() => location.hash)) === to, `${from} did not land on ${to}`); } finally { await view.close(); }
+  }
+  const unknown = await newView(ctx.browser, { width: 1440, theme: "light", label: "settings five unknown", unmatched });
+  try { await unknown.page.goto(`${ctx.server.url}#/settings/xyz`, { waitUntil: "load" }); await unknown.page.waitForSelector("[data-testid=message]", { timeout: 30000 }); assert((await unknown.page.locator("[data-testid=settings-page]").count()) === 0, "an unknown settings address shows a settings page"); } finally { await unknown.close(); }
+  return `${notes.length} addresses each show only their own page (title, list mark, sidebar mark, reload, no old-UI marker); the list is one node, above the page at 390 with items >= 44px, a narrow column at 1440; #admin and #settings land on 模型; #/settings/xyz still leaves for the chat`;
+}
+
+/** 测试并保存: the test goes first and the save only after it passed, both with the old bodies; a failed test sends no save, shows the server's own words and leaves the dialog; 取消测试 stops it; a form that cannot be sent has the button off. */
+async function settingsModelTestAndSave(ctx) {
+  // success
+  const ok = await stOpen(ctx, "settings model test ok", "models", ST_MODELS);
+  try {
+    const { page } = ok;
+    await stOpenAdd(page); await ST_ADD.vault(page);
+    await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? ""), null, { timeout: 15000 });
+    const before = stWrites(ok).length;
+    await page.locator("[data-testid=model-test-save]").click();
+    await stWaitWrites(ok, before + 2, "测试并保存");
+    const sent = stWrites(ok).slice(before);
+    assert(sent[0].path === "/model-catalog/test" && sent[1].path === "/model-catalog" && sent[1].method === "POST", `order: ${sent.map((w) => w.path)}`);
+    stSame(ok, SB.models.add.vault.sent, "测试并保存 (add)", before);
+    await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+    await page.locator("[data-testid=model-card]", { hasText: "测试模型 A" }).waitFor({ timeout: 10000 });
+    await asToast(page, "已测试并保存。用它的 bot 下一轮生效。");
+    assert(await page.evaluate(() => document.activeElement?.getAttribute("data-testid") === "model-new"), "the focus did not come back to 添加模型");
+  } finally { await ok.close(); }
+  // failure: the server's own words, no save, the dialog stays
+  for (const [key, code] of [["keyMissing", "model_key_missing"], ["unknownCode", "some_new_code"]]) {
+    const view = await stOpen(ctx, `settings model test fail ${key}`, "models", ST_MODELS);
+    try {
+      const { page } = view; view.mock.state.settings.testFail = code;
+      await stOpenEdit(page, "deepseek-flash");
+      await page.locator("[data-testid=model-test-save]").click();
+      await stDialog(page).locator("[data-slot=error-bar]").waitFor({ timeout: 10000 });
+      assert(stWrites(view).length === 1 && stWrites(view)[0].path === "/model-catalog/test", `a failed test sent ${JSON.stringify(stWrites(view).map((w) => `${w.method} ${w.path}`))}`);
+      const said = (await stDialog(page).locator("[data-slot=error-bar]").innerText()).trim();
+      assert(said === SB.models.fail[key].alert[0], `the reason is "${said}", the old page said "${SB.models.fail[key].alert[0]}"`);
+      assert((await stDialog(page).count()) === 1, "the dialog closed after a failed test");
+      await page.waitForTimeout(300);
+      assert(stWrites(view).length === 1, "something was saved after the failed test");
+    } finally { await view.close(); }
+  }
+  // cancel
+  const cancel = await stOpen(ctx, "settings model test cancel", "models", ST_MODELS);
+  try {
+    const { page } = cancel;
+    const posts = []; page.on("request", (r) => { if (r.method() === "POST" && /model-catalog(\/test)?$/.test(new URL(r.url()).pathname)) posts.push(new URL(r.url()).pathname); });
+    cancel.mock.control.hold = (method, path) => method === "POST" && /model-catalog\/test$/.test(path);
+    await stOpenEdit(page, "deepseek-flash");
+    await page.waitForTimeout(600);
+    const base = posts.length;
+    await page.locator("[data-testid=model-test-save]").click();
+    await page.waitForSelector("[data-testid=model-test-save][data-phase=loading]", { timeout: 5000 });
+    assert(await page.locator("[data-testid=model-cancel-test]").isEnabled(), "取消测试 is not usable while testing");
+    await page.locator("[data-testid=model-cancel-test]").click();
+    await page.waitForSelector("[data-testid=model-test-save][data-phase=idle]", { timeout: 5000 });
+    await page.waitForTimeout(500);
+    assert(posts.length - base === 1 && !posts.slice(base).some((p) => p.endsWith("/model-catalog")), `after the cancel: ${JSON.stringify(posts.slice(base))}`);
+    assert(stWrites(cancel).length === 0, "something was saved after the test was cancelled");
+    assert((await stDialog(page).count()) === 1 && (await stDialog(page).locator("[data-slot=error-bar]").count()) === 0, "the dialog is gone or shows an error after 取消测试");
+    assert(await page.locator("[data-testid=model-cancel-test]").isDisabled(), "取消测试 stays usable when nothing is running");
+  } finally { await cancel.close(); }
+  // a form that cannot be sent
+  const bad = await stOpen(ctx, "settings model test invalid", "models", ST_MODELS);
+  try {
+    const { page } = bad;
+    await stOpenAdd(page);
+    const off = () => page.locator("[data-testid=model-test-save]").isDisabled();
+    assert(await off(), "the button is on for an empty form");
+    await page.locator("#model-model").fill("x"); assert(await off() === SB.models.add.invalid.modelOnly, "the button is on with a Model ID but no key");
+    await page.locator("#model-key").fill(ST_KEY1); assert((await off()) === SB.models.add.invalid.withKey, "the button is off with a Model ID and a key");
+    await page.locator("#model-name").fill("muse-ember"); assert((await off()) === SB.models.add.invalid.takenName.disabled, "the button is on with a catalog name that is taken");
+    assert(stWrites(bad).length === 0, "a request went out from a form that cannot be sent");
+  } finally { await bad.close(); }
+  return "add: 测试 then 保存, bodies as the old page's, the dialog closes, the toast and the focus on 添加模型; a refused test: no save, the server's own sentence (and the fallback for an unknown code), dialog stays; 取消测试 sends no save; the button is off for an empty form, a missing key and a taken name";
+}
+
+/** Add (three forms), edit (five), 设为默认 and 删除 each send the old requests; a rename carries into the role table; the dialog's draft survives crossing 1024 both ways. */
+async function settingsModelCrud(ctx) {
+  const done = [];
+  for (const [k, fill] of Object.entries(ST_ADD)) {
+    const view = await stOpen(ctx, `settings model add ${k}`, "models", ST_MODELS);
+    try {
+      const { page } = view;
+      await stOpenAdd(page); await fill(page); await page.waitForTimeout(1000);
+      await page.locator("[data-testid=model-test-save]").click();
+      await stWaitWrites(view, 2, `add ${k}`); stSame(view, SB.models.add[k].sent, `add ${k}`);
+      await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+      const names = await page.locator("[data-testid=model-card] h3").allInnerTexts();
+      assert(JSON.stringify(names) === JSON.stringify(SB.models.add[k].cardsAfter), `add ${k}: the cards are ${JSON.stringify(names)}, the old page showed ${JSON.stringify(SB.models.add[k].cardsAfter)}`);
+      const marked = await page.locator("[data-testid=model-card][data-default] h3").allInnerTexts();
+      assert(JSON.stringify(marked) === JSON.stringify(SB.models.add[k].defaultAfter), `add ${k}: the default is ${JSON.stringify(marked)}`);
+    } finally { await view.close(); }
+    done.push(`add ${k}`);
+  }
+  for (const [k, [name, change]] of Object.entries(ST_EDIT)) {
+    const view = await stOpen(ctx, `settings model edit ${k}`, "models", ST_MODELS);
+    try {
+      const { page } = view;
+      await stOpenEdit(page, name); await change(page); await page.waitForTimeout(1000);
+      await page.locator("[data-testid=model-test-save]").click();
+      await stWaitWrites(view, 2, `edit ${k}`); stSame(view, SB.models.edit[k].sent, `edit ${k}`);
+      await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+      if (k === "rename") {
+        // the role table follows the rename (the old page showed 不指定 until it was reloaded)
+        const shown = (await page.locator("[data-testid=role-earnings]").innerText()).trim();
+        assert(shown === "Muse Ember", `after the rename the 财报判断 row shows "${shown}"`);
+      }
+    } finally { await view.close(); }
+    done.push(`edit ${k}`);
+  }
+  // 设为默认
+  const def = await stOpen(ctx, "settings model default", "models", ST_MODELS);
+  try {
+    const { page } = def;
+    const menus = await page.locator("[data-testid=model-card]").evaluateAll((c) => c.map((x) => [x.dataset.model, !!x.querySelector("[data-testid=model-menu]")]));
+    await stCard(page, "haiku-5.5").locator("[data-testid=model-menu]").click();
+    assert((await page.locator("[data-testid=model-set-default]").count()) === 0, "the default model's menu offers 设为默认");
+    await page.keyboard.press("Escape");
+    await stCard(page, "muse-ember").locator("[data-testid=model-menu]").click(); await page.locator("[data-testid=model-set-default]").click();
+    await stWaitWrites(def, 1, "设为默认"); stSame(def, SB.models.def.sent, "设为默认");
+    await asToast(page, "已设为默认模型。");
+    await page.waitForSelector("[data-testid=model-card][data-model=muse-ember][data-default]", { timeout: 10000 });
+    assert(menus.length === 5, `${menus.length} cards`);
+  } finally { await def.close(); }
+  done.push("default");
+  // 删除 by holding
+  const del = await stOpen(ctx, "settings model delete", "models", ST_MODELS, { motion: true });
+  try {
+    const { page } = del;
+    await stCard(page, "gpt-6.1-terra").locator("[data-testid=model-menu]").click(); await page.locator("[data-testid=model-delete]").click();
+    const dlg = page.locator('[data-slot="alert-dialog-content"]'); await dlg.waitFor({ timeout: 10000 });
+    assert((await dlg.locator('[data-slot="alert-dialog-title"]').innerText()).trim() === SB.models.del.dialog.title && (await dlg.locator('[data-slot="alert-dialog-description"]').innerText()).trim() === SB.models.del.dialog.description, "the delete question is not the old one");
+    await page.keyboard.press("Escape"); await dlg.waitFor({ state: "detached", timeout: 5000 });
+    assert(stWrites(del).length === 0, "Esc on the delete question sent a request");
+    await stCard(page, "gpt-6.1-terra").locator("[data-testid=model-menu]").click(); await page.locator("[data-testid=model-delete]").click();
+    await stHold(page);
+    await stWaitWrites(del, 1, "删除"); stSame(del, SB.models.del.sent, "删除");
+    await asToast(page, "已删除。");
+    await stCard(page, "gpt-6.1-terra").waitFor({ state: "detached", timeout: 10000 });
+  } finally { await del.close(); }
+  done.push("delete");
+  // the draft across the 1024 line
+  const cross = await stOpen(ctx, "settings model cross 1024", "models", ST_MODELS);
+  try {
+    const { page } = cross;
+    await stOpenAdd(page);
+    await page.locator("#model-display").fill("跨断点草稿"); await page.locator("#model-model").fill("draft-model"); await page.locator("#model-key").fill(ST_KEY1);
+    const read = () => page.evaluate(() => ({ display: document.querySelector("#model-display")?.value, model: document.querySelector("#model-model")?.value, key: document.querySelector("#model-key")?.value, name: document.querySelector("#model-name")?.value, dialogs: document.querySelectorAll("[data-testid=model-dialog]").length }));
+    const first = await read();
+    for (const width of [800, 1440, 600, 1300]) {
+      await page.setViewportSize({ width, height: 900 }); await page.waitForTimeout(500);
+      await page.locator("#model-display").waitFor({ timeout: 5000 });
+      const now = await read();
+      assert(JSON.stringify(now) === JSON.stringify(first), `at ${width}px the draft is ${JSON.stringify(now)}, it was ${JSON.stringify(first)}`);
+    }
+    assert(stWrites(cross).length === 0, "crossing the breakpoint sent something");
+  } finally { await cross.close(); }
+  done.push("draft across 1024 (800, 1440, 600, 1300)");
+  return done.join(", ");
+}
+
+/** 服务商可用模型: asked once on opening an entry that can be asked, again after the key is typed (delayed) and on 刷新, with the old bodies; at most five candidates, one fills Model ID; the refusals and the empty answers are said as the old page said them. */
+async function settingsModelDiscovery(ctx) {
+  const view = await stOpen(ctx, "settings model discovery", "models", ST_MODELS);
+  try {
+    const { page } = view;
+    await stOpenEdit(page, "deepseek-flash");
+    await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? ""), null, { timeout: 15000 });
+    const asked = () => view.mock.requests.filter((r) => r.method === "POST" && /model-catalog\/models$/.test(r.path)).length;
+    assert(asked() === SB.models.discovery.onOpen.sent.length, `opening asked ${asked()} time(s), the old page ${SB.models.discovery.onOpen.sent.length}`);
+    assert(JSON.stringify(stAll(view).map((w) => JSON.stringify(w.body))) === JSON.stringify(SB.models.discovery.onOpen.sent.map((r) => r.body)), "the body asked on opening differs from the old page's");
+    await page.locator("[data-testid=model-discovered]").click();
+    const options = await page.getByRole("option").allInnerTexts();
+    assert(options.length === 5 && options[2].trim() === "Beta 2 · beta-2", `the candidates are ${JSON.stringify(options)} (five at most; a name differing from the ID is shown with it)`);
+    await page.getByRole("option", { name: "alpha-1-mini", exact: true }).click();
+    assert((await page.locator("#model-model").inputValue()) === SB.models.discovery.picked.modelId, "the chosen candidate did not fill Model ID");
+    // typing a key: nothing at once, the status says it will follow, then one request
+    const n = asked();
+    await page.locator("#model-key").fill(ST_KEY2);
+    assert(asked() === n && /自动获取/.test(await page.locator("[data-testid=model-discovery-status]").innerText()), "typing a key asked at once or did not say it will follow");
+    await page.waitForTimeout(1300);
+    assert(asked() === n + 1, `after the key was typed the list was asked ${asked() - n} time(s)`);
+    const last = stAll(view).filter((w) => w.path === "/model-catalog/models").at(-1);
+    assert(JSON.stringify(last.body) === SB.models.discovery.afterKey.sent[0].body, `the body after typing a key was ${JSON.stringify(last.body)}`);
+    await page.locator("[data-testid=model-refresh]").click(); await page.waitForTimeout(500);
+    assert(asked() === n + 2, "刷新 did not ask once");
+    const refreshed = stAll(view).filter((w) => w.path === "/model-catalog/models").at(-1);
+    assert(JSON.stringify(refreshed.body) === SB.models.discovery.refresh.sent[0].body, `the body of 刷新 was ${JSON.stringify(refreshed.body)}`);
+  } finally { await view.close(); }
+  // the other answers
+  const says = [["unsupported", "unsupported"], ["empty", "empty"], ["model_discovery_auth_required", "model_discovery_auth_required"], ["model_discovery_access_denied", "model_discovery_access_denied"], ["model_discovery_rate_limited", "model_discovery_rate_limited"], ["model_discovery_timeout", "model_discovery_timeout"], ["some_other_code", "some_other_code"]];
+  for (const [mode, key] of says) {
+    const v = await stOpen(ctx, `settings model discovery ${mode}`, "models", ST_MODELS);
+    try {
+      const { page } = v; v.mock.state.settings.discovery = mode;
+      await stOpenEdit(page, "deepseek-flash");
+      const want = SB.models.discovery[key].status[0];
+      await page.waitForFunction((text) => (document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? "") === text, want, { timeout: 15000 }).catch(async () => { throw new Error(`${mode}: the status is "${await page.locator("[data-testid=model-discovery-status]").innerText()}", the old page said "${want}"`); });
+      assert(await page.locator("[data-testid=model-discovered]").isDisabled(), `${mode}: the candidate list is usable with no candidates`);
+    } finally { await v.close(); }
+  }
+  // a new entry: no key, no request; a keyless provider asks at once
+  const fresh = await stOpen(ctx, "settings model discovery add", "models", ST_MODELS);
+  try {
+    const { page } = fresh;
+    await stOpenAdd(page); await page.waitForTimeout(900);
+    assert(stAll(fresh).length === 0, "an add form with no key asked for models");
+    await asPick(page, page.locator("[data-testid=model-provider]"), "OpenRouter");
+    await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? ""), null, { timeout: 15000 });
+    assert(stAll(fresh).filter((w) => w.path === "/model-catalog/models").length === 1, "a keyless provider did not ask exactly once");
+  } finally { await fresh.close(); }
+  return "opening an entry with a stored key asks once (old body); a typed key asks once after the delay, 刷新 asks once; five candidates, one fills Model ID; unsupported / empty / four codes / an unknown code say what the old page said (the four codes show the generic sentence there too); an add form asks nothing until a key or a keyless provider";
+}
+
+/** A model that comes from the catalog file has no 编辑, 设为默认 or 删除 and says why; 对话默认 cannot be set to it; a missing key is said in words. */
+async function settingsModelConfigFile(ctx) {
+  const view = await stOpen(ctx, "settings model config file", "models", ST_MODELS, { state: stateModelsReadonly() });
+  try {
+    const { page } = view;
+    const files = page.locator("[data-testid=model-card][data-origin=file]");
+    assert((await files.count()) === 2, `${await files.count()} cards from the file, expected 2`);
+    for (let i = 0; i < 2; i += 1) {
+      const card = files.nth(i);
+      assert((await card.locator("button").count()) === 0, "a card from the file has a button");
+      assert((await card.locator("[data-testid=model-readonly-note]").innerText()).trim() === "服务器配置文件里的模型只能在服务器上改。", "a card from the file does not say why it has no buttons");
+    }
+    assert((await page.locator("[data-testid=model-card][data-origin=server] [data-testid=model-edit]").count()) === 5, "the models saved on the server lost their 编辑");
+    const note = (await page.locator("[data-testid=config-file-note]").innerText()).replace(/\s+/g, " ");
+    assert(note.includes("服务器配置文件里的模型只能在服务器上改。") && note.includes("配置文件有问题：1"), `the file note is "${note}"`);
+    const missing = (await page.locator("[data-testid=model-card][data-model=qwen-max] [data-testid=model-key-status]").innerText()).trim();
+    assert(missing === "缺 key" && (await page.locator("[data-testid=model-card][data-model=qwen-max]").innerText()).includes("QWEN_API_KEY"), `the model without a key says "${missing}"`);
+    // 对话默认: the ones from the file are shown and cannot be picked
+    await page.locator("[data-testid=role-chat]").click();
+    const items = await page.getByRole("option").evaluateAll((o) => o.map((x) => ({ text: x.textContent, disabled: x.getAttribute("aria-disabled") === "true" || x.hasAttribute("data-disabled") })));
+    assert(items.length === 7 && items.filter((x) => x.disabled).length === 2 && items.filter((x) => x.disabled).every((x) => /Kimi K3|Qwen Max/.test(x.text)), `the 对话默认 choices are ${JSON.stringify(items)}`);
+    await page.keyboard.press("Escape");
+    assert(stWrites(view).length === 0, "something was sent");
+    // a catalog whose default is a file entry still shows it
+    const state = stateModelsReadonly(); state.settings.catalog.default = "kimi-k3"; state.settings.catalog.models.forEach((m) => { m.is_default = m.name === "kimi-k3"; });
+    const second = await stOpen(ctx, "settings model config file default", "models", ST_MODELS, { state });
+    try { const shown = (await second.page.locator("[data-testid=role-chat]").innerText()).trim(); assert(shown.startsWith("Kimi K3"), `a default from the file is shown as "${shown}"`); } finally { await second.close(); }
+  } finally { await view.close(); }
+  return "2 file entries: no button, the old sentence on each, the file note with its problem count; 5 server entries keep 编辑; 缺 key said in words with the variable; 对话默认 lists the file entries disabled and shows one when it is the default";
+}
+
+/** The role table: five rows in one table, a choice is saved at once with the old body (back to 不指定 is null / DELETE), no save button, and the page reads the roles and the catalog once. */
+async function settingsRolesOneTable(ctx) {
+  const view = await stOpen(ctx, "settings roles", "models", ST_MODELS);
+  try {
+    const { page } = view;
+    const rows = await page.locator("[data-testid=roles-table] [data-testid=role-row]").evaluateAll((r) => r.map((x) => x.dataset.role));
+    assert(JSON.stringify(rows) === JSON.stringify(["chat", "earnings", "forecast", "judge", "analysis"]), `the rows are ${JSON.stringify(rows)}`);
+    const reads = (re) => view.mock.requests.filter((r) => r.method === "GET" && re.test(r.path)).length;
+    assert(reads(/model-roles$/) === 1 && reads(/model-catalog$/) === 1 && reads(/analysis-settings$/) === 1, `reads on entering: roles ${reads(/model-roles$/)}, catalog ${reads(/model-catalog$/)}, analysis ${reads(/analysis-settings$/)} (one each; the old page read 3, 2, 1)`);
+    assert((await page.locator("[data-testid=roles-card]").getByRole("button", { name: /保存|设为默认|恢复/ }).count()) === 0, "the table has a save button");
+    const options = [];
+    for (const r of ["earnings", "forecast", "judge"]) { await page.locator(`[data-testid=role-${r}]`).click(); await page.getByRole("option").first().waitFor({ timeout: 5000 }); const o = await page.getByRole("option").allInnerTexts(); await page.keyboard.press("Escape"); await page.getByRole("option").first().waitFor({ state: "detached", timeout: 5000 }); options.push(o.map((x) => x.trim())); }
+    SB.models.roleLabels.forEach((l, i) => assert(JSON.stringify(options[i]) === JSON.stringify(l.options), `row ${l.label} offers ${JSON.stringify(options[i])}, the old select offered ${JSON.stringify(l.options)}`));
+    for (const [i, role] of ["earnings", "forecast", "judge"].entries()) {
+      const before = stWrites(view).length;
+      await asPick(page, page.locator(`[data-testid=role-${role}]`), "DeepSeek Flash");
+      await stWaitWrites(view, before + 1, `${role} → DeepSeek Flash`); stSame(view, SB.roles.change[role].sent, `${role} chosen`, before);
+      await asToast(page, "已保存。");
+      const back = stWrites(view).length;
+      await asPick(page, page.locator(`[data-testid=role-${role}]`), SB.models.roleLabels[i].options[0]);
+      await stWaitWrites(view, back + 1, `${role} → 不指定`); stSame(view, SB.roles.back[role].sent, `${role} back to 不指定`, back);
+      assert(stWrites(view).at(-1).body.model === null, `${role}: 不指定 is not null`);
+    }
+    // 材料分析: a choice is saved at once; back to the system default is a DELETE
+    const a = stWrites(view).length;
+    await asPick(page, page.locator("[data-testid=role-analysis]"), "DeepSeek Flash · deepseek-ai/DeepSeek-V4-Flash");
+    await stWaitWrites(view, a + 1, "材料分析 → 模型"); stSame(view, SB.analysis.save.sent, "材料分析 chosen", a);
+    assert(stWrites(view).at(-1).method === "PUT", "材料分析 is not a PUT");
+    await asToast(page, "已保存。下一次材料分析将使用这个默认模型。");
+    const cur = (await page.locator("[data-testid=analysis-current]").innerText()).replace(/\s+/g, " ").trim();
+    assert(cur === "当前默认：siliconflow · deepseek-ai/DeepSeek-V4-Flash · API key 已保存", `the 当前默认 line is "${cur}"`);
+    const b = stWrites(view).length;
+    await asPick(page, page.locator("[data-testid=role-analysis]"), "系统默认（DeepSeek 环境配置）");
+    await stWaitWrites(view, b + 1, "材料分析 → 系统默认"); stSame(view, SB.analysis.reset.sent, "材料分析 back", b);
+    assert(stWrites(view).at(-1).method === "DELETE", "材料分析 back to the system default is not a DELETE");
+    // the chat default
+    const c = stWrites(view).length;
+    await asPick(page, page.locator("[data-testid=role-chat]"), "Muse Ember");
+    await stWaitWrites(view, c + 1, "对话默认"); stSame(view, SB.models.def.sent, "对话默认", c);
+  } finally { await view.close(); }
+  // the one with no model at all: three rows are not there, the material row says so
+  const empty = await stOpen(ctx, "settings roles empty", "models", "[data-testid=models-empty]", { state: stateModelsEmpty() });
+  try {
+    const { page } = empty;
+    const rows = await page.locator("[data-testid=role-row]").evaluateAll((r) => r.map((x) => x.dataset.role));
+    assert(JSON.stringify(rows) === JSON.stringify(["analysis"]), `with an empty catalog the rows are ${JSON.stringify(rows)}`);
+    assert((await page.locator("[data-testid=analysis-no-models]").innerText()).trim() === "模型目录里还没有可用的模型；请先在上方添加并测试一个。", "the empty-catalog sentence is missing");
+    assert((await page.locator("[data-testid=models-empty]").innerText()).includes("目录是空的：先添加一个模型，bot 才能回答。"), "the empty-catalog sentence of the catalog is missing");
+  } finally { await empty.close(); }
+  return "five rows in one table, no save button, one read of roles / catalog / analysis; each of 财报判断 / 预测 / 审查 sends the old PUT (back to 不指定 = null), 材料分析 PUT and DELETE, 对话默认 the old PUT default; an empty catalog keeps only the material row with the old sentence";
+}
+
+/** The shared Telegram bot in three steps: the step bar follows the server's state, the three writes send the old bodies, the token box is a password box that is empty once saved, the page asks again every 5 s only while a code made here is out and ends that by itself. */
+async function settingsTelegramThreeSteps(ctx) {
+  const GETS = (view) => view.mock.requests.filter((r) => r.method === "GET" && /\/telegram\/status$/.test(r.path)).length;
+  const states = (page) => page.locator("[data-testid=telegram-card] [data-step][data-state]").evaluateAll((l) => l.map((x) => x.dataset.state));
+  const view = await stOpen(ctx, "settings telegram steps", "notifications", "#telegram-token", { state: stateTelegramNoToken(), motion: true });
+  try {
+    const { page } = view;
+    // The page's own clock, from outside: when the code was made (the POST) and when each status read went out.  The 5 s rhythm is read off these two, not off a window opened "some time after the code".
+    const stamps = { code: null, reads: [] };
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (r.method() === "POST" && /\/telegram\/bind$/.test(path)) stamps.code = Date.now();
+      else if (r.method() === "GET" && /\/telegram\/status$/.test(path) && stamps.code !== null) stamps.reads.push(Date.now());
+    });
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["current", "todo", "todo"]), `step 1: ${JSON.stringify(await states(page))}`);
+    const box = await page.locator("#telegram-token").evaluate((i) => ({ type: i.type, max: i.maxLength }));
+    assert(box.type === "password" && box.max === SB.telegram.noToken.tokenInput.max, `the token box is ${JSON.stringify(box)}`);
+    assert(await page.locator("[data-testid=telegram-save-token]").isDisabled(), "保存 Token is on with an empty box");
+    await page.locator("#telegram-token").fill("   ");
+    assert(await page.locator("[data-testid=telegram-save-token]").isDisabled() === SB.telegram.blankDisabled, "保存 Token is on with blanks");
+    await page.locator("#telegram-token").fill(`  ${ST_TOKEN}  `);
+    await page.locator("[data-testid=telegram-save-token]").click();
+    await stWaitWrites(view, 1, "保存 Token"); stSame(view, SB.telegram.token.sent, "保存 Token");
+    await page.waitForSelector("[data-testid=telegram-make-code]", { timeout: 10000 });
+    assert((await page.locator("#telegram-token").count()) === 0, "the token box is still there after the save");
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["done", "current", "todo"]), `step 2: ${JSON.stringify(await states(page))}`);
+    assert((await page.locator("[data-testid=telegram-card]").innerText()).includes(ST_TOKEN) === false, "the token is on the page after the save");
+    await asToast(page, "Bot Token 已保存。");
+    // no code yet: nothing is polled
+    const quiet = GETS(view); await page.waitForTimeout(5600);
+    assert(GETS(view) === quiet, `the page read the status ${GETS(view) - quiet} time(s) before any code was made`);
+    // the code
+    await page.locator("[data-testid=telegram-make-code]").click();
+    await stWaitWrites(view, 2, "生成绑定码"); stSame(view, SB.telegram.bind.sent, "生成绑定码", 1);
+    await page.locator("[data-testid=telegram-waiting]").waitFor({ timeout: 10000 });
+    const code = (await page.locator("[data-testid=telegram-code-line]").innerText()).replace(/\s+/g, " ");
+    assert(code === SB.telegram.bind.code[0], `the code line is "${code}", the old page "${SB.telegram.bind.code[0]}"`);
+    assert((await page.locator("[data-testid=telegram-waiting]").innerText()).trim() === SB.telegram.bind.status[0], "the 30-minute sentence differs");
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["done", "done", "waiting"]), `step 3: ${JSON.stringify(await states(page))}`);
+    await page.waitForSelector("[data-testid=telegram-make-code][data-phase=idle]", { timeout: 5000 });
+    assert((await page.locator("[data-testid=telegram-make-code]").innerText()).trim() === "重新生成", "the button does not say 重新生成 once a code is out");
+    // waiting: one read every 5 s, counted from the moment the code was made (the POST), not from when this check got round to it: wait for two reads, then read the gaps
+    // (code -> 1st read, 1st -> 2nd).  Each is 5 s: never under 4 s (asking faster), and a read that takes over 9 s is asking that has stopped.  The stamps are taken outside the page, so a gap can come out a little short
+    // under load but never by seconds; "no read before 4 s" is also what the old 5.8 s window said, now without the machine's speed in it.
+    await until(() => stamps.reads.length >= 2, () => `while waiting the page read the status ${stamps.reads.length} time(s) in 20 s after the code (expected a read every 5 s)`, 20000);
+    const gaps = [stamps.reads[0] - stamps.code, stamps.reads[1] - stamps.reads[0]];
+    assert(gaps.every((g) => g >= 4000 && g <= 9000), `while waiting the status was read ${gaps.map((g) => `${(g / 1000).toFixed(1)} s`).join(" and ")} apart (code -> 1st read, 1st -> 2nd; expected 5 s each)`);
+    // the message arrives from Telegram: the page notices by itself and stops asking
+    view.mock.state.settings.telegram = { configured: true, has_token: true, bound: true, bot_username: "finbot_fixture_bot", chat_id: 100000001, bound_at: "2026-11-13T02:00:00.000Z", bind_code_active: false };
+    await page.waitForSelector("[data-testid=telegram-unbind]", { timeout: 9000 });
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["done", "done", "done"]), `bound: ${JSON.stringify(await states(page))}`);
+    const status = (await page.locator("[data-testid=telegram-status]").innerText()).trim();
+    assert(status === "已绑定 @finbot_fixture_bot (chat 100000001)", `the status line is "${status}"`);
+    const stopped = GETS(view); await page.waitForTimeout(5800);
+    assert(GETS(view) === stopped, `the page kept reading the status after the binding (${GETS(view) - stopped} more)`);
+    // 解除绑定: Esc sends nothing, holding sends the old request, the steps start over at the code
+    const n = stWrites(view).length;
+    await page.locator("[data-testid=telegram-unbind]").click();
+    const dlg = page.locator('[data-slot="alert-dialog-content"]'); await dlg.waitFor({ timeout: 10000 });
+    assert((await dlg.locator('[data-slot="alert-dialog-title"]').innerText()).trim() === SB.telegram.unbindDialog.title && (await dlg.locator('[data-slot="alert-dialog-description"]').innerText()).trim() === SB.telegram.unbindDialog.description, "the unbind question is not the old one");
+    await page.keyboard.press("Escape"); await dlg.waitFor({ state: "detached", timeout: 5000 });
+    assert(stWrites(view).length === n, "Esc on the unbind question sent a request");
+    await page.locator("[data-testid=telegram-unbind]").click(); await stHold(page);
+    await stWaitWrites(view, n + 1, "解除绑定"); stSame(view, SB.telegram.unbind.sent, "解除绑定", n);
+    await page.waitForSelector("[data-testid=telegram-make-code]", { timeout: 10000 });
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["done", "current", "todo"]), `after the unbind: ${JSON.stringify(await states(page))}`);
+  } finally { await view.close(); }
+  // leaving the page ends the asking
+  const leave = await stOpen(ctx, "settings telegram leave", "notifications", "[data-testid=telegram-make-code]", { state: stateTelegramUnbound() });
+  try {
+    const { page } = leave;
+    await page.locator("[data-testid=telegram-make-code]").click(); await page.locator("[data-testid=telegram-waiting]").waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=settings-nav-appearance]").click(); await page.waitForSelector("[data-testid=settings-appearance-body]", { timeout: 10000 });
+    const gone = GETS(leave); await page.waitForTimeout(5800);
+    assert(GETS(leave) === gone, `after leaving the page the status was read ${GETS(leave) - gone} more time(s)`);
+  } finally { await leave.close(); }
+  // a code the server still holds that this page no longer has (after a reload): step 3, the old 重新生成, no asking
+  const reloaded = await stOpen(ctx, "settings telegram reloaded", "notifications", "[data-testid=telegram-make-code]", { state: (() => { const s = stateTelegramUnbound(); s.settings.telegram.bind_code_active = true; return s; })() });
+  try {
+    const { page } = reloaded;
+    assert(JSON.stringify(await states(page)) === JSON.stringify(["done", "done", "waiting"]), `a live code, none held: ${JSON.stringify(await states(page))}`);
+    assert((await page.locator("[data-testid=telegram-make-code]").innerText()).trim() === "重新生成", "a live code with none held does not offer 重新生成");
+    const seen = GETS(reloaded); await page.waitForTimeout(5800);
+    assert(GETS(reloaded) === seen, "the page asks while it holds no code");
+  } finally { await reloaded.close(); }
+  return "step bar: current / done / waiting / all done from the server's state; token saved with the old body, box is a password box (256) and gone after the save; no asking before a code; one read per 5 s while waiting, stops when bound and after leaving; a live code with none held is step 3 with 重新生成 and no asking; unbind needs the hold (Esc sends nothing) and sends the old request";
+}
+
+/** Pushover: the two values go as typed minus the blanks, the button needs both, the boxes are empty after the save, 清除 sends the old DELETE. */
+async function settingsPushover(ctx) {
+  const view = await stOpen(ctx, "settings pushover", "notifications", "[data-testid=pushover-card]");
+  try {
+    const { page } = view;
+    const boxes = await page.locator("#pushover-user, #pushover-app").evaluateAll((l) => l.map((i) => ({ type: i.type, max: i.maxLength })));
+    assert(JSON.stringify(boxes) === JSON.stringify(SB.pushover.initial.inputs.map((i) => ({ type: i.type, max: i.max }))), `the boxes are ${JSON.stringify(boxes)}`);
+    assert((await page.locator("[data-testid=pushover-status]").innerText()).trim() === "尚未配置", "the status is not 尚未配置 at the start");
+    await page.locator("#pushover-user").fill("  "); await page.locator("#pushover-app").fill(ST_PUSH_APP);
+    assert((await page.locator("[data-testid=pushover-save]").isDisabled()) === SB.pushover.oneFilled.saveDisabled, "the button is on with one value");
+    await page.locator("#pushover-user").fill(`  ${ST_PUSH_USER}  `); await page.locator("#pushover-app").fill(`  ${ST_PUSH_APP}  `);
+    await page.locator("[data-testid=pushover-save]").click();
+    await stWaitWrites(view, 1, "保存 Pushover"); stSame(view, SB.pushover.save.sent, "保存 Pushover");
+    await asToast(page, "Pushover 已保存。");
+    await page.waitForFunction(() => document.querySelector("[data-testid=pushover-status]")?.textContent?.trim() === "已配置", null, { timeout: 10000 });
+    const values = await page.locator("#pushover-user, #pushover-app").evaluateAll((l) => l.map((i) => i.value));
+    assert(JSON.stringify(values) === JSON.stringify(SB.pushover.save.inputsAfter), `the boxes after the save: ${JSON.stringify(values)}`);
+    const labels = await page.locator("[data-testid=pushover-save], [data-testid=pushover-clear]").evaluateAll((l) => l.map((b) => b.textContent));
+    assert(labels.length === SB.pushover.save.buttons.length && SB.pushover.save.buttons.every((want, i) => labels[i].includes(want)), `the buttons after the save are ${JSON.stringify(labels)}, the old page ${JSON.stringify(SB.pushover.save.buttons)}`);
+    await page.locator("[data-testid=pushover-clear]").click();
+    await stWaitWrites(view, 2, "清除 Pushover"); stSame(view, SB.pushover.clear.sent, "清除 Pushover", 1);
+    assert(stWrites(view).at(-1).method === "DELETE", "清除 is not a DELETE");
+    await asToast(page, "Pushover 已清除。");
+    await page.waitForFunction(() => document.querySelector("[data-testid=pushover-status]")?.textContent?.trim() === "尚未配置", null, { timeout: 10000 });
+    // the clear asks nothing first (as the old page did)
+    assert((await page.locator('[data-slot="alert-dialog-content"]').count()) === 0, "清除 asks a question first");
+  } finally { await view.close(); }
+  return "two password boxes (64), the button needs both; PUT with both trimmed, boxes empty, 已配置; 清除 = DELETE with no question, 尚未配置";
+}
+
+/** No key, token or Pushover value is kept by the browser or shown again: after each save they are in no storage, no text, no box and no console line; no last four characters; every secret box is a password box. */
+async function settingsNoSecretInStorage(ctx) {
+  const SECRETS = [ST_KEY1, ST_KEY2, ST_TOKEN, ST_PUSH_USER, ST_PUSH_APP];
+  const state = stateTelegramNoToken(); state.settings.analysis.api_key_last4 = "9a1c";   // what a server may send: the page must not show it
+  const view = await stOpen(ctx, "settings no secret", "models", ST_MODELS, { state });
+  const scan = async (what) => {
+    const { page } = view;
+    const found = await page.evaluate((secrets) => {
+      const hit = (text) => secrets.filter((s) => text.includes(s));
+      const store = (s) => { try { return Object.entries(s).map(([k, v]) => `${k}=${v}`).join("\n"); } catch { return ""; } };
+      const inputs = [...document.querySelectorAll("input, textarea")].map((i) => i.value).join("\n");
+      return { local: hit(store(localStorage)), session: hit(store(sessionStorage)), text: hit(document.body.innerText), inputs: hit(inputs), hash: hit(location.href), cookie: hit(document.cookie), shown: /…\s*9a1c|9a1c/.test(document.body.innerText), tails: [...document.body.innerText.matchAll(/（…\w{4}）|\(…\w{4}\)/g)].length };
+    }, SECRETS);
+    const gotConsole = SECRETS.filter((s) => view.consoleTexts.some((t) => t.includes(s)));
+    assert(!found.local.length && !found.session.length, `${what}: a secret is in browser storage (${JSON.stringify(found)})`);
+    assert(!found.text.length && !found.inputs.length && !found.hash.length && !found.cookie.length, `${what}: a secret is on the page or in a box (${JSON.stringify(found)})`);
+    assert(!found.shown && found.tails === 0, `${what}: the page shows the last characters of a key`);
+    assert(!gotConsole.length, `${what}: a secret is in the console: ${gotConsole}`);
+  };
+  try {
+    const { page } = view;
+    // typed but not saved: the draft is only in the dialog's box
+    await stOpenAdd(page);
+    assert((await page.locator("#model-key").getAttribute("type")) === "password", "the model's API key box is not a password box");
+    await page.locator("#model-display").fill("密钥检查"); await page.locator("#model-model").fill("deepseek-chat"); await page.locator("#model-key").fill(ST_KEY1);
+    const during = await page.evaluate((s) => [localStorage, sessionStorage].map((st) => Object.entries(st).some(([k, v]) => `${k}=${v}`.includes(s))), ST_KEY1);
+    assert(!during[0] && !during[1], "the typed key is in a storage while the dialog is open");
+    await page.waitForTimeout(900);
+    await page.locator("[data-testid=model-test-save]").click(); await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+    await scan("after a new model");
+    assert((await page.locator("[data-testid=analysis-current]").innerText()).includes("API key 已保存") && !/9a1c/.test(await page.locator("[data-testid=analysis-current]").innerText()), "the material-analysis line shows the key's last characters or lost 「API key 已保存」");
+    await stOpenEdit(page, "glm5.3-flash");
+    assert((await page.locator("#model-key").inputValue()) === "", "an edit starts with the key box filled");
+    await page.locator("#model-key").fill(ST_KEY2); await page.waitForTimeout(900);
+    await page.locator("[data-testid=model-test-save]").click(); await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+    await scan("after a new key");
+    assert((await page.locator("[data-testid=model-card][data-model=\"glm5.3-flash\"]").innerText()).includes("已配置"), "the card does not say 已配置");
+    // Telegram
+    await page.locator("[data-testid=settings-nav-notifications]").click(); await page.waitForSelector("#telegram-token", { timeout: 10000 });
+    assert((await page.locator("#telegram-token").getAttribute("type")) === "password", "the token box is not a password box");
+    assert((await page.locator("#pushover-user").getAttribute("type")) === "password" && (await page.locator("#pushover-app").getAttribute("type")) === "password", "a Pushover box is not a password box");
+    await page.locator("#telegram-token").fill(ST_TOKEN); await page.locator("[data-testid=telegram-save-token]").click(); await page.waitForSelector("[data-testid=telegram-make-code]", { timeout: 10000 });
+    await scan("after the token");
+    // Pushover
+    await page.locator("#pushover-user").fill(ST_PUSH_USER); await page.locator("#pushover-app").fill(ST_PUSH_APP); await page.locator("[data-testid=pushover-save]").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=pushover-status]")?.textContent?.trim() === "已配置", null, { timeout: 10000 });
+    await scan("after Pushover");
+    // and a reload shows none of it again
+    await page.reload({ waitUntil: "load" }); await page.waitForSelector("[data-testid=pushover-card]", { timeout: 20000 }); await settle(page, { pinTranscript: false });
+    await scan("after a reload");
+    const secretBoxes = await page.evaluate(() => [...document.querySelectorAll("input")].filter((i) => /key|token|secret|pass/i.test(`${i.id} ${i.name} ${i.getAttribute("aria-label") ?? ""}`)).map((i) => i.type));
+    assert(secretBoxes.every((t) => t === "password"), `a secret-looking box is not a password box: ${JSON.stringify(secretBoxes)}`);
+  } finally { await view.close(); }
+  return "the typed key is in no storage even while the dialog is open; after a new model, a new key, the Telegram token and Pushover: no secret in localStorage, sessionStorage, the page text, any box, the address or the console; the server's last four characters (9a1c) are not shown; every secret box is a password box and starts empty";
+}
+
+/** Theme (3), language (2) and the up / down colours (2) take effect and are kept at once, writing the old keys and values, sending nothing; the arrow keys alone change them; a reload keeps them; English asks for its words once. */
+async function settingsAppearance(ctx) {
+  const dump = (page) => page.evaluate(() => ({ storage: Object.fromEntries(Object.entries(localStorage).filter(([k]) => /:(theme|updown|locale|motion):v1$/.test(k)).sort()), html: { theme: document.documentElement.dataset.theme ?? null, updown: document.documentElement.dataset.updown ?? null, motion: document.documentElement.dataset.motion ?? null, lang: document.documentElement.lang } }));
+  const same = (got, want, what) => assert(JSON.stringify(got) === JSON.stringify(want), `${what}: ${JSON.stringify(got)}, the old page left ${JSON.stringify(want)}`);
+  const writesOf = (view) => view.mock.requests.filter((r) => r.method !== "GET").length;
+  for (const choice of ["dark", "system", "light"]) {
+    const view = await stOpen(ctx, `settings appearance theme ${choice}`, "appearance", "[data-testid=appearance-theme-choice]");
+    try {
+      const { page } = view;
+      await page.locator(`[data-testid=appearance-theme-choice] label[data-option=${choice}]`).click(); await page.waitForTimeout(250);
+      const got = await dump(page);
+      same({ storage: got.storage, html: got.html }, { storage: SB.appearance.theme[choice].storage, html: SB.appearance.theme[choice].html }, `theme ${choice}`);
+      await page.reload({ waitUntil: "load" }); await page.waitForSelector("[data-testid=appearance-theme-choice]", { timeout: 20000 });
+      same(await dump(page), SB.appearance.theme[choice].afterReload, `theme ${choice} after a reload`);
+      assert((await page.locator("[data-testid=appearance-theme-choice] input:checked").getAttribute("value")) === choice, `after a reload the row does not show ${choice}`);
+      assert(writesOf(view) === 0, "a theme choice sent a request");
+    } finally { await view.close(); }
+  }
+  for (const [choice, label] of [["red-up", "红涨绿跌"], ["green-up", "绿涨红跌"]]) {
+    const view = await stOpen(ctx, `settings appearance updown ${choice}`, "appearance", "[data-testid=appearance-updown-choice]");
+    try {
+      const { page } = view;
+      const options = (await page.locator("[data-testid=appearance-updown-choice] label").allInnerTexts()).map((s) => s.trim());
+      same(options, SB.appearance.updown.options, "the up / down choices");
+      // (the old select did not fire for the choice already picked; a row of choices keeps the one pressed, so green-up is reached by leaving it first)
+      if (choice === "green-up") { await page.locator("[data-testid=appearance-updown-choice] label[data-option=red-up]").click(); await page.waitForTimeout(150); }
+      await page.locator(`[data-testid=appearance-updown-choice] label[data-option=${choice}]`).click(); await page.waitForTimeout(250);
+      const want = choice === "green-up" ? { storage: { ...SB.appearance.updown[choice].storage, "market-evidence-agent:updown:v1": "green-up" }, html: SB.appearance.updown[choice].html } : { storage: SB.appearance.updown[choice].storage, html: SB.appearance.updown[choice].html };
+      same(await dump(page), want, `updown ${choice}`);
+      await page.reload({ waitUntil: "load" }); await page.waitForSelector("[data-testid=appearance-updown-choice]", { timeout: 20000 });
+      same((await dump(page)).html, SB.appearance.updown[choice].afterReload.html, `updown ${choice} after a reload`);
+      assert(((await page.locator("[data-testid=appearance-updown-choice] label:has(input:checked)").innerText()).trim()) === label, `the row after a reload shows another choice than ${label}`);
+    } finally { await view.close(); }
+  }
+  // the language: English fetches its words once, the page is English at once and after a reload; back to 中文
+  const lang = await stOpen(ctx, "settings appearance locale", "appearance", "[data-testid=appearance-locale-choice]");
+  try {
+    const { page } = lang;
+    const chunks = []; page.on("request", (r) => { if (/\/assets\/en-US-[^/]+\.js$/.test(new URL(r.url()).pathname)) chunks.push(r.url()); });
+    await page.locator("[data-testid=appearance-locale-choice] label[data-option=en-US]").click(); await page.waitForFunction(() => document.documentElement.lang === "en-US", null, { timeout: 10000 });
+    same(await dump(page), { storage: SB.appearance.locale["en-US"].storage, html: SB.appearance.locale["en-US"].html }, "language English");
+    assert(chunks.length === SB.appearance.locale["en-US"].localeChunks, `English asked for its words ${chunks.length} time(s)`);
+    await page.waitForFunction(() => document.querySelector("h1")?.textContent?.trim() === "Appearance", null, { timeout: 10000 }).catch(async () => { throw new Error(`the title is "${await page.locator("h1").innerText()}", not English`); });
+    await page.reload({ waitUntil: "load" }); await page.waitForSelector("[data-testid=appearance-locale-choice]", { timeout: 20000 });
+    assert((await page.evaluate(() => document.documentElement.lang)) === "en-US", "a reload left English");
+    await page.locator("[data-testid=appearance-locale-choice] label[data-option=zh-CN]").click(); await page.waitForFunction(() => document.documentElement.lang === "zh-CN", null, { timeout: 10000 });
+    same(await dump(page), { storage: SB.appearance.locale["zh-CN"].storage, html: SB.appearance.locale["zh-CN"].html }, "language 中文");
+  } finally { await lang.close(); }
+  // only the arrow keys
+  const keys = await stOpen(ctx, "settings appearance keys", "appearance", "[data-testid=appearance-theme-choice]");
+  try {
+    const { page } = keys;
+    await page.locator("[data-testid=appearance-theme-choice] input:checked").focus();
+    await page.keyboard.press("ArrowRight"); await page.waitForFunction(() => document.documentElement.dataset.theme === "dark", null, { timeout: 5000 });
+    await page.keyboard.press("ArrowLeft"); await page.waitForFunction(() => document.documentElement.dataset.theme === "light", null, { timeout: 5000 });
+    await page.locator("[data-testid=appearance-updown-choice] input:checked").focus(); await page.keyboard.press("ArrowRight");
+    await page.waitForFunction(() => document.documentElement.dataset.updown === "red-up", null, { timeout: 5000 });
+    await page.locator("[data-testid=appearance-locale-choice] input:checked").focus(); await page.keyboard.press("ArrowRight");
+    await page.waitForFunction(() => document.documentElement.lang === "en-US", null, { timeout: 10000 });
+  } finally { await keys.close(); }
+  return "theme ×3, up / down ×2, language ×2: <html> attributes and the four stored keys equal the old page's, kept after a reload, no request; English fetches its chunk once; the arrow keys alone change all three";
+}
+
+/** The local archive: export names the old file, importing opens it read-only with the old words and the choice of conversation, 返回当前对话 works, a browser that cannot write a file says so, nothing goes to the server. */
+async function settingsArchive(ctx) {
+  const stamp = "2026-11-12T08:00:00.000Z";
+  const file = { marker: "market-evidence-agent-chat-archive", version: 1, created_at: stamp, updated_at: stamp, conversations: [{ id: "archived-1", created_at: stamp, updated_at: stamp, messages: [{ role: "user", content: "归档里的问题" }, { role: "assistant", content: "归档里的回答", status: "complete" }] }, { id: "archived-2", created_at: stamp, updated_at: "2026-11-11T08:00:00.000Z", messages: [{ role: "user", content: "第二个问题" }] }] };
+  const view = await stOpen(ctx, "settings archive", "data", "[data-testid=archive-card]");
+  try {
+    const { page } = view;
+    const buttons = (await page.locator("[data-testid=archive-card] button").allInnerTexts()).map((s) => s.trim());
+    assert(JSON.stringify(buttons) === JSON.stringify(SB.archive.initial.buttons), `the buttons are ${JSON.stringify(buttons)}`);
+    assert((await page.locator("[data-testid=archive-card]").innerText()).includes("归档仅供本地只读查看，不会作为模型上下文发送。"), "the archive sentence is missing");
+    assert((await page.locator("[data-testid=data-where]").innerText()).includes("消息和研究工具轨迹会保存到服务端；工具按权限读取资料并执行明确请求的系统任务。"), "the sentence on where the data goes is missing");
+    await page.locator("[data-testid=archive-export]").click(); await page.waitForTimeout(300);
+    assert(JSON.stringify(await page.evaluate(() => window.__downloads)) === JSON.stringify(SB.archive.export.downloads), `the export is named ${JSON.stringify(await page.evaluate(() => window.__downloads))}`);
+    assert((await page.locator("[data-testid=archive-file-input]").getAttribute("accept")) === SB.archive.import.fileInput.accept, "the file box takes other files than the old one");
+    await page.locator("[data-testid=archive-file-input]").setInputFiles({ name: "archive.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(file)) });
+    await page.locator("[data-testid=archive-view]").waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=archive-status]").innerText()).trim() === SB.archive.import.status[0], "the status after the import differs");
+    assert((await page.locator("[data-testid=archive-view]").innerText()).includes("本地归档只读查看；这些内容不会发送给模型，也不是已核验的服务端证据。"), "the read-only sentence is missing");
+    await page.locator("[data-testid=archive-pick]").click();
+    const options = (await page.getByRole("option").allInnerTexts()).map((s) => s.trim());
+    assert(JSON.stringify(options) === JSON.stringify(SB.archive.import.options), `the conversations are ${JSON.stringify(options)}, the old page ${JSON.stringify(SB.archive.import.options)}`);
+    await page.getByRole("option").nth(1).click();
+    assert((await page.locator("[data-testid=archive-pick]").innerText()).trim() === SB.archive.import.options[1], "the second conversation was not chosen");
+    await page.locator("[data-testid=archive-return]").click();
+    await page.locator("[data-testid=archive-view]").waitFor({ state: "detached", timeout: 5000 });
+    assert((await page.locator("[data-testid=archive-status]").innerText()).trim() === SB.archive.back.status[0], "the status after 返回当前对话 differs");
+    assert((await page.evaluate(() => location.hash)) === SB.archive.back.hash, "返回当前对话 left the page");
+    assert(view.mock.requests.filter((r) => r.method !== "GET").length === 0, "the archive sent a write");
+  } finally { await view.close(); }
+  const bad = await stOpen(ctx, "settings archive unsupported", "data", "[data-testid=archive-card]");
+  try {
+    const { page } = bad;
+    await page.evaluate(() => { delete window.showSaveFilePicker; });
+    await page.locator("[data-testid=archive-connect]").click();
+    await page.locator("[data-testid=archive-status]").waitFor({ timeout: 5000 });
+    assert((await page.locator("[data-testid=archive-status]").innerText()).trim() === SB.archive.unsupported.status[0], "a browser that cannot write a file does not say so in the old words");
+    await page.locator("[data-testid=archive-file-input]").setInputFiles({ name: "bad.json", mimeType: "application/json", buffer: Buffer.from("not json") });
+    await page.waitForFunction((text) => document.querySelector("[data-testid=archive-status]")?.textContent?.trim() === text, SB.archive.badFile.status[0], { timeout: 5000 });
+  } finally { await bad.close(); }
+  return "the three buttons and the export's file name as before; an imported file opens read-only with the old status, sentence and the two conversations (time · count), the second can be chosen, 返回当前对话 closes the view; no automatic file writing: the old sentence; a bad file: the old status; nothing sent";
+}
+
+/** 账户: the mode in words, where to switch and sign out (no button for either here), 关于: the version of package.json, the statement once in the whole settings area, the two third-party notices, a still picture. */
+async function settingsAbout(ctx) {
+  const pkg = JSON.parse(fs.readFileSync(path.resolve(flags.dist, "..", "package.json"), "utf8"));
+  const SENTENCE = "FinBot · 本地研究记录 · 研究判断可追溯到原始来源";
+  const view = await stOpen(ctx, "settings about", "account", "[data-testid=account-about]");
+  try {
+    const { page } = view;
+    assert((await page.locator("[data-testid=account-mode-name]").innerText()).trim() === "个人模式", "the mode is not 个人模式");
+    const content = page.locator("[data-testid=settings-account]");
+    const doers = await content.evaluate((el) => [...el.querySelectorAll("button, a, [role=button], [role=link], [role=menuitem]")].map((x) => x.textContent.trim()).filter((t) => /登出|切换|登录|退出|sign/i.test(t)));
+    assert(doers.length === 0, `the account page has a way to sign out / switch / sign in: ${JSON.stringify(doers)}`);
+    assert((await content.getByText("切换模式和登出都在侧栏底部的账户菜单里；手机上在「更多」里。").count()) === 1, "the pointer to the account menu is missing");
+    assert((await page.locator("[data-testid=account-version]").innerText()).trim() === pkg.version, `the version is "${await page.locator("[data-testid=account-version]").innerText()}", package.json says ${pkg.version}`);
+    const bloub = await page.locator("[data-testid=notice-bloub]").innerText(), fonts = await page.locator("[data-testid=notice-fonts]").innerText();
+    assert(/Bloub/.test(bloub) && /MIT/.test(bloub) && /Copyright \(c\) 2026 Jérémy Perret/.test(bloub), `the Bloub notice is "${bloub}"`);
+    assert(/Inter/.test(fonts) && /JetBrains Mono/.test(fonts) && /Source Serif 4/.test(fonts) && /OFL-1\.1/.test(fonts), `the fonts notice is "${fonts}"`);
+    const logo = await page.locator("[data-testid=account-logo]").evaluate((i) => ({ ok: i.complete && i.naturalWidth > 0, tag: i.tagName }));
+    assert(logo.ok && logo.tag === "IMG", `the picture is ${JSON.stringify(logo)}`);
+    assert((await page.locator("body").innerText()).split(SENTENCE).length - 1 === 1, "the statement is not on the account page exactly once");
+    for (const id of ST_SECTIONS.filter((x) => x !== "account")) {
+      await page.evaluate((h) => { location.hash = h; }, `#/settings/${id}`);
+      await page.waitForSelector(`[data-testid=settings-${id}-body]`, { timeout: 15000 }); await settle(page, { pinTranscript: false });
+      assert(!(await page.locator("body").innerText()).includes(SENTENCE), `the statement is also on the ${id} page`);
+    }
+  } finally { await view.close(); }
+  return `the mode in words, no sign-out / switch / sign-in control, the pointer to the account menu; version ${pkg.version} = package.json; Bloub (MIT, Copyright 2026 Jérémy Perret) and the three fonts (OFL-1.1) named; a still <img>; the statement once on 账户 and on none of the other four pages`;
+}
+
+/** A guest: 模型 and 通知 say to sign in and draw no form and send no owner request; 外观 and 数据 work; 账户 says 访客只读. */
+async function settingsGuest(ctx) {
+  const OWNER = /\/(model-catalog|model-roles|telegram|pushover)|analysis-settings/;
+  const view = await stOpen(ctx, "settings guest", "models", "[data-testid=settings-guest-note]", { identity: "guest" });
+  try {
+    const { page } = view;
+    assert((await page.locator("[data-testid=settings-guest-note]").innerText()).trim() === "登录个人聊天后才能配置模型：对话、bot 和定时任务都用服务器模型目录里的模型。", "the sign-in sentence on 模型 differs");
+    assert((await page.locator("[data-testid=model-card], [data-testid=roles-card], [data-testid=model-new]").count()) === 0, "a guest sees the catalog");
+    await page.evaluate(() => { location.hash = "#/settings/notifications"; });
+    await page.waitForSelector("[data-testid=settings-notifications] [data-testid=settings-guest-note]", { timeout: 15000 });
+    assert((await page.locator("[data-testid=settings-guest-note]").innerText()).includes("登录个人聊天后才能设置通知"), "the sign-in sentence on 通知 differs");
+    assert((await page.locator("[data-testid=telegram-card], [data-testid=pushover-card]").count()) === 0, "a guest sees the notification forms");
+    await settle(page, { pinTranscript: false });
+    const owner = view.mock.requests.filter((r) => OWNER.test(r.path));
+    assert(owner.length === 0, `a guest's settings pages sent owner requests: ${JSON.stringify(owner.map((r) => `${r.method} ${r.path}`))}`);
+    await page.evaluate(() => { location.hash = "#/settings/appearance"; });
+    await page.waitForSelector("[data-testid=appearance-theme-choice]", { timeout: 15000 });
+    await page.locator("[data-testid=appearance-theme-choice] label[data-option=dark]").click();
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "dark", null, { timeout: 5000 });
+    await page.evaluate(() => { location.hash = "#/settings/data"; });
+    await page.waitForSelector("[data-testid=archive-card]", { timeout: 15000 });
+    await page.evaluate(() => { location.hash = "#/settings/account"; });
+    await page.waitForSelector("[data-testid=account-mode-name]", { timeout: 15000 });
+    assert((await page.locator("[data-testid=account-mode-name]").innerText()).trim() === "访客只读", "a guest's mode is not 访客只读");
+    assert(view.mock.requests.filter((r) => OWNER.test(r.path)).length === 0, "an owner request went out later");
+  } finally { await view.close(); }
+  return "a guest: 模型 and 通知 show one sentence each (the old one for 模型), no form, no owner request; 外观 changes the theme; 数据 opens; 账户 says 访客只读";
+}
+
+/** The keyboard alone: the list of sub pages, the add dialog (filled, sent with Enter, Esc, focus back), a card's 「…」 menu, a role row, the first Telegram step. */
+async function settingsKeyboard(ctx) {
+  const view = await stOpen(ctx, "settings keyboard models", "models", ST_MODELS);
+  try {
+    const { page } = view;
+    await asTabTo(page, "[data-testid=settings-nav-appearance]"); await page.keyboard.press("Enter");
+    await page.waitForSelector("[data-testid=settings-appearance-body]", { timeout: 10000 });
+    await asTabTo(page, "[data-testid=settings-nav-models]"); await page.keyboard.press("Enter");
+    await page.waitForSelector(ST_MODELS, { timeout: 15000 });
+    // the dialog: opened with Enter, filled in field by field, sent with Enter, the focus back
+    await asTabTo(page, "[data-testid=model-new]"); await page.keyboard.press("Enter");
+    await stDialog(page).waitFor({ timeout: 10000 });
+    assert(await page.evaluate(() => document.activeElement?.id === "model-display"), "the focus did not go to the first field");
+    await page.keyboard.type("键盘模型");
+    await asTabTo(page, "#model-model"); await page.keyboard.type("deepseek-chat");
+    await asTabTo(page, "#model-key"); await page.keyboard.type(ST_KEY1);
+    await page.waitForTimeout(1000);
+    await page.keyboard.press("Enter");
+    await stWaitWrites(view, 2, "the dialog sent with Enter"); stSame(view, [{ method: "POST", path: "/agent-chat/model-catalog/test", body: JSON.stringify({ provider: "deepseek", base_url: "https://api.deepseek.com", model: "deepseek-chat", api_key: ST_KEY1 }) }, { method: "POST", path: "/agent-chat/model-catalog", body: JSON.stringify({ display_name: "键盘模型", provider: "deepseek", model: "deepseek-chat", base_url: "https://api.deepseek.com", api_key: ST_KEY1, name: "model" }) }], "the dialog filled and sent by the keyboard");
+    await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+    await focusOn(page, "[data-testid=model-new]", "the focus did not come back to 添加模型 after saving");
+    // Esc closes and gives the focus back
+    await page.keyboard.press("Enter"); await stDialog(page).waitFor({ timeout: 10000 });
+    await page.keyboard.press("Escape"); await stDialog(page).waitFor({ state: "detached", timeout: 5000 });
+    await focusOn(page, "[data-testid=model-new]", "the focus did not come back to 添加模型 after Esc");
+    // a card's 「…」 menu: Enter opens it, Esc closes it, the focus stays on the button
+    const menu = "[data-testid=model-card][data-model=muse-ember] [data-testid=model-menu]";
+    await asTabTo(page, menu); await page.keyboard.press("Enter");
+    await page.locator("[data-testid=model-set-default]").waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape"); await page.locator("[data-testid=model-set-default]").waitFor({ state: "detached", timeout: 5000 });
+    // (Radix hands the focus back after the menu has left the page: wait for that, do not read it in the same frame)
+    await focusOn(page, menu, "the focus left the menu's button after Esc");
+    // a role row: Enter opens the list, the arrows and Enter choose
+    const before = stWrites(view).length;
+    await asTabTo(page, "[data-testid=role-earnings]"); await page.keyboard.press("Enter");
+    await page.getByRole("option", { name: "DeepSeek Flash", exact: true }).focus(); await page.keyboard.press("Enter");
+    await stWaitWrites(view, before + 1, "a role chosen with the keyboard");
+    assert(JSON.stringify(stWrites(view).at(-1)) === JSON.stringify({ method: "PUT", path: "/model-roles/earnings", body: { model: "deepseek-flash" } }), `the role request was ${JSON.stringify(stWrites(view).at(-1))}`);
+  } finally { await view.close(); }
+  const tg = await stOpen(ctx, "settings keyboard telegram", "notifications", "#telegram-token", { state: stateTelegramNoToken() });
+  try {
+    const { page } = tg;
+    await asTabTo(page, "#telegram-token"); await page.keyboard.type(ST_TOKEN);
+    await asTabTo(page, "[data-testid=telegram-save-token]"); await page.keyboard.press("Enter");
+    await stWaitWrites(tg, 1, "step 1 by the keyboard");
+    assert(JSON.stringify(stWrites(tg)[0]) === JSON.stringify({ method: "POST", path: "/telegram/token", body: { bot_token: ST_TOKEN } }), `the token request was ${JSON.stringify(stWrites(tg)[0])}`);
+    await page.waitForSelector("[data-testid=telegram-make-code]", { timeout: 10000 });
+  } finally { await tg.close(); }
+  return "the list of sub pages by Tab and Enter; the add dialog opened, filled, sent with Enter (old bodies), the focus back on 添加模型; Esc closes it and returns the focus; a card's 「…」 menu opens and closes by key; a role is chosen from the keyboard; Telegram step 1 is done from the keyboard";
+}
+
+/** No Chinese is left in the English interface: the five pages, the dialog and the open lists (names the server or the fixtures give — models, the bot's username — are data, not copy). */
+async function settingsEnglish(ctx) {
+  // Ideographs only (a full-width colon is punctuation).  Two names are data, not copy, and the English sentences of the old pages keep them as they are: the default bot's name 「助理」 and Telegram's button 收到.
+  const CJK = /[\u3400-\u9fff]/;
+  const NAMES = /助理|收到|^中文$/g;
+  const bad = [];
+  const scan = async (page, what) => {
+    const found = await page.evaluate(() => {
+      const seen = [];
+      const walk = (root) => {
+        for (const el of root.querySelectorAll("*")) {
+          for (const n of el.childNodes) if (n.nodeType === 3 && n.textContent.trim()) seen.push(n.textContent.trim());
+          for (const a of ["placeholder", "aria-label", "title", "alt"]) if (el.getAttribute(a)) seen.push(el.getAttribute(a));
+        }
+      };
+      walk(document.querySelector("[data-testid=settings-page]") ?? document.body);
+      for (const layer of document.querySelectorAll("[data-radix-popper-content-wrapper], [role=dialog], [data-slot=dropdown-menu-content], [data-slot=select-content]")) walk(layer);
+      return seen;
+    });
+    for (const text of found) if (CJK.test(text.replace(NAMES, ""))) bad.push(`${what}: "${text.slice(0, 60)}"`);
+  };
+  const open = (label, section, ready, opts = {}) => stOpen(ctx, label, section, ready, { locale: "en-US", ...opts });
+  const models = await open("settings english models", "models", ST_MODELS);
+  try {
+    const { page } = models;
+    await scan(page, "models");
+    await stOpenEdit(page, "muse-ember"); await page.waitForTimeout(900); await scan(page, "model dialog (edit)");
+    await asPick(page, page.locator("[data-testid=model-provider]"), "Custom (OpenAI-compatible)"); await scan(page, "model dialog (custom)");
+    await page.locator("[data-testid=model-provider]").click(); await scan(page, "model dialog provider list"); await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+  } finally { await models.close(); }
+  const ro = await open("settings english readonly", "models", "[data-testid=model-readonly-note]", { state: stateModelsReadonly() });
+  try { await scan(ro.page, "models (catalog file)"); await ro.page.locator("[data-testid=role-chat]").click(); await scan(ro.page, "models (default list)"); } finally { await ro.close(); }
+  const empty = await open("settings english empty", "models", "[data-testid=models-empty]", { state: stateModelsEmpty() });
+  try { await scan(empty.page, "models (empty)"); } finally { await empty.close(); }
+  for (const [section, ready, state] of [["notifications", "[data-testid=telegram-unbind]", undefined], ["notifications", "#telegram-token", stateTelegramNoToken()], ["appearance", "[data-testid=appearance-theme-choice]", undefined], ["data", "[data-testid=archive-card]", undefined], ["account", "[data-testid=account-about]", undefined]]) {
+    const view = await open(`settings english ${section}`, section, ready, { ...(state ? { state } : {}) });
+    try { await scan(view.page, section + (state ? " (no token)" : "")); } finally { await view.close(); }
+  }
+  const guest = await open("settings english guest", "models", "[data-testid=settings-guest-note]", { identity: "guest" });
+  try { await scan(guest.page, "models (guest)"); await guest.page.evaluate(() => { location.hash = "#/settings/notifications"; }); await guest.page.waitForSelector("[data-testid=settings-notifications] [data-testid=settings-guest-note]", { timeout: 15000 }); await scan(guest.page, "notifications (guest)"); } finally { await guest.close(); }
+  assert(!bad.length, bad.join("; "));
+  return "no Chinese in the English interface: models (cards, roles table, dialog in edit and custom form, provider list), the catalog-file and empty states, notifications (with and without a token), appearance, data, account, and a guest's two sentences";
+}
+
+/** The five pages, the dialog open, a guest and an empty catalog hold no old-UI marker, no class of the old sheets this package deleted, no native <select>, no text under 12px; a page that is still old is the control. */
+async function settingsNoLegacy(ctx) {
+  const OLD = [".agent-admin", ".agent-header-actions", ".agent-settings-card", ".agent-chat-status", ".catalog-card", ".catalog-key", ".catalog-actions", ".profile-grid", ".profile-card", ".profile-add", ".profile-backdrop", ".profile-modal", ".profile-close", ".profile-note", ".model-discovery-row", ".chat-archive-settings", ".chat-archive-tools", ".chat-archive-banner", ".secondary-action", ".workspace-heading", ".bot-warn", ".is-ready", ".is-missing", ".is-error"].join(", ");
+  const SCOPE = "main, [data-testid=model-dialog]";
+  const check = async (page, what) => {
+    const found = await page.evaluate(({ old, scope }) => ({
+      legacy: document.querySelectorAll("[data-legacy]").length,
+      old: [...document.querySelectorAll(old)].filter((el) => el.closest(scope)).length,
+      native: document.querySelectorAll(`:is(${scope}) select`).length,
+      small: [...document.querySelectorAll(`:is(${scope}) *`)].filter((el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && parseFloat(getComputedStyle(el).fontSize) < 12).length,
+    }), { old: OLD, scope: SCOPE });
+    assert(found.legacy === 0, `${what}: ${found.legacy} data-legacy element(s)`);
+    assert(found.old === 0, `${what}: ${found.old} element(s) with a class of the old sheets`);
+    assert(found.native === 0, `${what}: ${found.native} native <select>`);
+    assert(found.small === 0, `${what}: ${found.small} text element(s) under 12px`);
+  };
+  const seen = [];
+  const run = async (label, section, ready, opts, steps) => {
+    const view = await stOpen(ctx, `settings no legacy ${label}`, section, ready, opts);
+    try { await check(view.page, label); if (steps) await steps(view.page, (what) => check(view.page, `${label} · ${what}`)); seen.push(label); } finally { await view.close(); }
+  };
+  await run("模型", "models", ST_MODELS, {}, async (page, again) => {
+    await stOpenAdd(page); await again("添加对话框"); await page.keyboard.press("Escape"); await stDialog(page).waitFor({ state: "detached", timeout: 5000 });
+    await stOpenEdit(page, "muse-ember"); await page.waitForTimeout(800); await again("编辑对话框"); await page.keyboard.press("Escape"); await stDialog(page).waitFor({ state: "detached", timeout: 5000 });
+  });
+  await run("模型（手机，抽屉）", "models", ST_MODELS, { width: 390 }, async (page, again) => { await stOpenAdd(page); await page.waitForTimeout(500); await again("添加抽屉"); });
+  await run("模型（配置文件）", "models", "[data-testid=model-readonly-note]", { state: stateModelsReadonly() });
+  await run("模型（空）", "models", "[data-testid=models-empty]", { state: stateModelsEmpty() });
+  await run("模型（访客）", "models", "[data-testid=settings-guest-note]", { identity: "guest" });
+  await run("通知", "notifications", "[data-testid=telegram-unbind]", {});
+  await run("通知（无 token）", "notifications", "#telegram-token", { state: stateTelegramNoToken() });
+  await run("外观", "appearance", "[data-slot=motion-level]", {});
+  await run("数据", "data", "[data-testid=archive-card]", {});
+  await run("账户", "account", "[data-testid=account-about]", {});
+  await run("账户（访客）", "account", "[data-testid=account-about]", { identity: "guest" });
+  // the control: the 全部 bot page is still an old page, so a selector that reads 0 everywhere is told apart from one that is broken
+  const control = await asOpen(ctx, "settings no legacy control", "#/assistant/bots", "[data-testid=bot-card]");
+  try { assert((await control.page.locator("[data-legacy]").count()) >= 1, "the 全部 bot page holds no data-legacy element (the selector is broken, not the pages clean)"); } finally { await control.close(); }
+  return `${seen.length} addresses / states (the five pages, both dialog shells, the catalog file, an empty catalog, a guest's three): 0 data-legacy, 0 old classes, 0 native <select>, 0 text under 12px; the 全部 bot page still holds the marker`;
+}
+
 const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
@@ -9280,7 +11310,7 @@ const CHECKS = [
   ["replay-phone-layer: across the 1024 breakpoint the detail element, the choice and the folded brief are kept; the phone's whole-screen layer is modal, Tab stays inside, 返回列表 / Esc close it; one disclaimer", replayPhoneLayer],
   ["monitor-four-states: 正常 / 延迟 / 异常 / 无记录 each have their badge kind, icon and colour token; the watchlist chip is the same component", monitorFourStates],
   ["monitor-dot-in-sidebar: a late or failing monitor puts a dot beside 研究 (sidebar and phone tab bar), a well one or no record nothing; read once on entering the research area, never from the chat page", monitorDotInSidebar],
-  ["research-no-legacy: every research-area route (the watchlist, company page and its tabs, forecast home and one forecast, judgment, evidence in its three addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page) holds no data-legacy element and no old workspace class; the settings page still holds the marker", researchNoLegacy],
+  ["research-no-legacy: every research-area route (the watchlist, company page and its tabs, forecast home and one forecast, judgment, evidence in its three addresses, materials, 模型成绩, 历史回放, 监控, the latest redirect page) holds no data-legacy element and no old workspace class; the 全部 bot page still holds the marker", researchNoLegacy],
   ["analysis-status-neutral: the check of a quote is plain text: no danger or action colour, no icon, no alert, not folded", analysisStatusNeutral],
   ["portfolio-record-body: 记一笔 sends the old body for every kind, every old rule still stops the form with its sentence, the kinds and their fields are the old ones", portfolioRecordBody],
   ["portfolio-cash-edit: 可用资金 edits in place; Enter and 保存 send the old body; a bad number is said; Esc and 取消 send nothing", portfolioCashEdit],
@@ -9314,6 +11344,39 @@ const CHECKS = [
   ["latest-redirect-states: a company with a forecast lands on that forecast (section=versions), one with none on the forecast home, an unreadable list stops on its error sentence and 回到预测首页 leads to the forecast home; in all three the document never holds a data-legacy element or an old class", latestRedirectStates],
   ["research-bare-controls: the plain buttons on the forecast, judgment, evidence and material pages (outside data-slot parts) show the pointer, and the links the browser's own rule underlined keep their line", researchBareControls],
   ["routines-later-english: the English 「…」 menu of a suggested write reads Skip / Later / Ignore, Later sends the old later body, the sign-in dialog still reads Cancel", routinesLaterEnglish],
+  // P8.1: the assistant's four pages
+  ["skills-ops: the nine skill operations (new ×4, edit ×3, the draft saved with save_draft, switch both ways, copy, export, import preview then import, delete by hold) send the old page's requests body for body; a built-in has no edit or delete; a draft has no switch", skillsOps],
+  ["skills-import-preview-lists-writes: 导入 cannot be pressed without a preview of the text in the box; the preview lists every tool and marks the write one with the sentence; editing withdraws it; a file fills the box; a refusal says why", skillsImportPreviewListsWrites],
+  ["skills-draft-link: #/assistant/skills/<draft> and the old #skills/<draft> open the draft's drawer with its sentence; a missing id says 这个技能不存在。; a built-in opens none; closing goes back to /assistant/skills", skillsDraftLink],
+  ["skills-keyboard: a skill made and saved with the keyboard alone, the card's 「…」 menu with Esc returning the focus, the editor closed with Esc and the focus back on 编辑", skillsKeyboard],
+  ["memory-ops: the nine memory operations (add ×3, edit with Enter / Esc, scope, 确认 only on inferred, delete by hold, the 往事 tab in the address, search only on submit, the bot filter, open a conversation) send the old requests; a refresh keeps the tab", memoryOps],
+  ["memory-notes-once: each tab's one sentence appears exactly once, word for word as the old page, and not on the other tab; inferred items carry 推断 and 确认, the others neither", memoryNotesOnce],
+  ["memory-keyboard: the tabs by arrow keys and Enter / Space, an item added with Enter, a row edited (Enter saves, Esc leaves) from the keyboard", memoryKeyboard],
+  ["news-ops: the seven news-source operations (new, edit ×6, switch both ways, test fetch ×6 opening under the row, REA repair only on repairable sources, delete by hold, the push length) send the old requests body for body", newsOps],
+  ["news-id-rule: the ID made of the name fits the rule, follows the name until typed in, gets -2 when taken, is empty (and said) for a Chinese name; wrong and taken IDs and a bad URL are said at once and send nothing; an existing source's ID is locked", newsIdRule],
+  ["news-tags-body: markets, tags and spare addresses entered in the tag boxes send the old arrays (markets in capitals); language, homepage and name are carried as the old form carried them", newsTagsBody],
+  ["news-health-not-color-only: every row says its health in words (an unknown value as given) and its last error as the server gave it; the dot is decoration", newsHealthNotColorOnly],
+  ["news-keyboard: a row's 「…」 menu and its test, the new-source drawer with all fields and the three tag boxes, saved with Enter; Esc closes the drawer and returns the focus", newsKeyboard],
+  ["knowledge-ops: the ten knowledge operations (upload with the fixed 3 stars and medium, load ×4, import, index, retrieval ×4, chunks, retry, withdraw, reject, approve) send the old requests; nothing promises that an import is searchable", knowledgeOps],
+  ["knowledge-entries: the sidebar and the agent's open_page (knowledge) land on #/assistant/knowledge with 知识库 highlighted; none of the five settings pages holds a button or link to the library in its content; no 返回模型设置", knowledgeEntries],
+  ["knowledge-keyboard: a document's chunks open and close from the keyboard with the focus returned to the row; the retrieval test and the source list are used with the keyboard alone", knowledgeKeyboard],
+  ["assistant-no-legacy: the four pages (each address and each opened drawer, each empty) hold no data-legacy element, no old class, no native <select>, no text under 12px; the 全部 bot page still holds the marker", assistantNoLegacy],
+  ["settings-five-pages: five addresses show five pages (title, list beside the page, sidebar mark, reload), none inside the old-UI marker; the list is one node, above the page at 390; #admin and #settings land on 模型", settingsFivePages],
+  ["settings-model-test-and-save: 测试 then 保存 with the old bodies, a refused test saves nothing and shows the server's own sentence, 取消测试 saves nothing, the button is off for a form that cannot be sent, the focus returns to 添加模型", settingsModelTestAndSave],
+  ["settings-model-crud: add ×3, edit ×5 (rename, new key, new provider, display name + default), 设为默认 and 删除 by hold send the old requests; a rename follows into the role table; the dialog's draft survives crossing 1024", settingsModelCrud],
+  ["settings-model-discovery: the provider's models are asked on opening, after a typed key and by 刷新 with the old bodies; five candidates, one fills Model ID; unsupported, empty and the refusals say what the old page said", settingsModelDiscovery],
+  ["settings-model-config-file: a model from the catalog file has no button and says why; 对话默认 cannot be set to it; a missing key is said in words", settingsModelConfigFile],
+  ["settings-roles-one-table: five roles in one table, each choice is saved at once with the old body (不指定 = null, 材料分析 back = DELETE), one read of the roles and the catalog", settingsRolesOneTable],
+  ["settings-telegram-three-steps: the step bar follows the server, the three writes send the old bodies, the token box is a password box and empty after the save, one read per 5 s only while a code made here is out, stopped when bound and after leaving, 解除绑定 needs the hold", settingsTelegramThreeSteps],
+  ["settings-pushover: both values trimmed with the old body, the button needs both, the boxes are empty after the save, 清除 sends DELETE", settingsPushover],
+  ["settings-no-secret-in-storage: after a model, a new key, the Telegram token and Pushover, no secret is in localStorage, sessionStorage, the page, a box, the address or the console; no last four characters; every secret box is a password box", settingsNoSecretInStorage],
+  ["settings-appearance: theme ×3, language ×2 and the up / down colours ×2 take effect and are kept at once with the old keys and values, no request, a reload keeps them, the arrow keys alone change them", settingsAppearance],
+  ["settings-archive: the export's file name, an import opens read-only with the old words and the choice of conversation, 返回当前对话, the old sentence when the browser cannot write a file, nothing sent", settingsArchive],
+  ["settings-about: 账户 says the mode and where the account menu is, has no sign-out / switch / sign-in control; the version is package.json's, the statement is on 账户 only, the two third-party notices are there", settingsAbout],
+  ["settings-guest: a guest sees one sign-in sentence on 模型 and on 通知 and no owner request is sent; 外观 and 数据 work; 账户 says 访客只读", settingsGuest],
+  ["settings-keyboard: the list of sub pages, the add dialog (filled, sent with Enter, Esc, focus back), a card's 「…」 menu, a role row and Telegram step 1 by the keyboard alone", settingsKeyboard],
+  ["settings-english: no Chinese in the English interface on the five pages, the dialog, the open lists and the empty / catalog-file / guest states", settingsEnglish],
+  ["settings-no-legacy: the five pages (dialog open in both shells, a catalog file, an empty catalog, a guest) hold no data-legacy element, no deleted old class, no native <select>, no text under 12px; the 全部 bot page still holds the marker", settingsNoLegacy],
 ];
 
 const selected = typeof flags.only === "string" ? CHECKS.filter(([name]) => name.includes(flags.only)) : CHECKS;

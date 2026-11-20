@@ -17,13 +17,3 @@ export function useBots(enabled: boolean) {
   useEffect(() => { void reload(); }, [reload]);
   return { bots, loaded, error, reload, defaultBot: bots.find(b => b.is_default) ?? null };
 }
-
-
-/** 新闻源: a newspaper, drawn as an SVG for the same reason as the routine icon. */
-export function NewsIcon() {
-  return <svg className="news-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="1.8"
-    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-    <path d="M4 5h13v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5Z" /><path d="M17 9h3v8a2 2 0 0 1-2 2h-1" />
-    <path d="M7.5 9h6M7.5 12.5h6M7.5 16h4" />
-  </svg>;
-}

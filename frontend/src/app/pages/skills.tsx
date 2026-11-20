@@ -1,5 +1,5 @@
 import { useParams } from "react-router";
-import { SkillsPage } from "../../SkillsPage";
+import { SkillsPage } from "../assistant/skills/SkillsPage";
 
 /** /assistant/skills and /assistant/skills/:skillId (a draft's link opens that skill's editor). */
 export function SkillsRoute() { return <SkillsPage skillId={useParams().skillId ?? null} />; }
