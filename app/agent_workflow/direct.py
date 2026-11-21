@@ -4037,7 +4037,8 @@ class Turn:
             if self.audit.get('absence_recheck_noted') and self.audit.get('absence_recheck_outcome') is None:self.audit['absence_recheck_outcome']='requeried'
             if self.audit.get('closing_complete_noted') and self.audit.get('closing_complete_outcome') is None:self.audit['closing_complete_outcome']='requeried'
             if self.audit.get('nudged') and self.audit.get('nudge_outcome') is None:self.audit['nudge_outcome']='recovered'
-            assistant={k:v for k,v in decision.items() if k in {'content','tool_calls','reasoning_content','reasoning_details'}}
+            # _anthropic_content: the blocks Anthropic returned (thinking included), sent back unchanged with the next step (anthropic_native).
+            assistant={k:v for k,v in decision.items() if k in {'content','tool_calls','reasoning_content','reasoning_details','_anthropic_content'}}
             self.protocol.append({'role':'assistant',**assistant})
             await self.emit({'event':'assistant_tool_request','protocol':{'calls':calls,**{k:v for k,v in assistant.items() if k.startswith('reasoning_')}}})
             batch_failed=False

@@ -310,7 +310,11 @@ def _reasoning_fields(entry: dict) -> dict:
     borrowed for it).  Nothing otherwise: an unknown provider keeps the browser's fallback."""
     if entry.get("provider") != "openrouter":
         from .agent_chat_provider import NATIVE_EFFORTS
-        tiers = NATIVE_EFFORTS.get(entry.get("provider"))
+        if entry.get("provider") == "anthropic":
+            from .anthropic_native import display_efforts
+            tiers = display_efforts(entry.get("model"))
+        else:
+            tiers = NATIVE_EFFORTS.get(entry.get("provider"))
         if tiers is None:
             return {}
         if not tiers:

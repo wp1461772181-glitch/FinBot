@@ -369,6 +369,8 @@ _FAILURE_NOTICES={
  "provider_invalid_key":"模型服务拒绝了这次请求：API key 无效。请到设置里检查后重试。",
  "provider_model_access_denied":"模型服务拒绝了这次请求：模型不可用或当前 key 无权访问。请到设置里检查后重试。",
  "provider_network_error":"连接模型服务失败，本轮没有完成。请稍后再试。",
+ "provider_refusal":"模型拒绝回答了这个问题（Anthropic 的安全分类器拦下了这次请求）。可以换个说法再问，或换一个模型。",
+ "provider_workspace_required":"这个 Anthropic key 没有绑定到某个工作区：请在后端设置 FINBOT_ANTHROPIC_WORKSPACE_ID（工作区 ID，wrkspc_ 开头），或换一个绑定了工作区的 key。",
  "chat_context_too_large":"这一轮没有完成：对话上下文超过了当前模型能处理的长度。再发一次不会解决；可以先发送「/压缩」压缩这条对话，或开一个新对话再问。",
  "pending_request_expired":"这张卡片已经过期，没有执行任何操作。请把你的选择直接打字发给我，或重新提出请求。",
  "pending_request_mismatch":"这张卡片已经不是当前待处理的那一张，没有执行任何操作。请按最新的卡片操作，或重新提出请求。",
