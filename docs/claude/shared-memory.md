@@ -1,7 +1,7 @@
 # FinBot 共享记忆（两台机器的 Claude 共用）
 
 > 用途：owner 的两台机器（Mac 本地、Muse 的 VM）上的 Claude Code 记忆默认不互通。本文件是**仓库内的共享 canonical**——只装稳定事实，经仓库根 `CLAUDE.md` 的 @ 引用在开工时自动加载。易变的状态（包进度、派工、待拍板项）不在这里，由操作员（Daniel）的工作区维护；本文件由操作员在事实变化时更新，任何一边的 Claude 发现与现实不符，先报 owner，不要自行改写本文件。
-> 最近更新：2026-11-17（操作员按 owner 新规替换协作分工一节）。
+> 最近更新：2026-11-21（新增前置硬编码审计一节；顺带修正 embedding 通道）。
 
 ## 产品定位
 
@@ -14,11 +14,18 @@
 - 三条核心准则在仓库根 `CLAUDE.md`（owner 2026-11-04 定），是全系统设计的最高依据，先于任何具体方案。
 - 「AI 回答 + 新闻」设计规则全文：`docs/finbot-design-rules.md`（含每条规则的出处与事故背景；基线为 2026-11-12 的 main 与 D-F 裁定，引用前注意基线日期）。
 
+## 前置硬编码审计（2026-11-21，owner 要求排查）
+
+- 背景事故：长期记忆曾误存一条普通提问（2026-11-16），根因是记忆兜底路径凭关键词表在提取模型无产出时逐字落库、无模型复核——`authorization.py` 的 `_STANDING_INSTRUCTION` 是子串匹配，「分别用」误中「别用」。该条已删，全库同类仅此一条。
+- 审计口径：内容在交给模型之前先被写死规则（正则、关键词表、阈值、子串校验）筛查，筛不过就丢弃、截断、改写或不调模型。Sonnet 只读审计结论：主清单语义判断类 17 条、授权安全类 7 条、纯技术类 26 条，另有边界情况 8 条。完整报告与大白话版在私有仓库 claude-sync 的 `progress/finbot-prehardcode-audit-2026-11-21.md` 与 `progress/finbot-prehardcode-audit-plain-2026-11-21.md`。
+- 共同模式：做得对的位置都留痕并告知模型（如 `truncation_events`）；问题集中在「被筛内容模型完全看不到、也不被告知」：首轮序数词整轮打回（M-1）、证据实体字面闸（M-3）、模型读调用的实体范围闸（M-4，FP11 放宽开关默认 off）、配置新闻子串硬匹配（S5）、网页研究时间窗与无日期页面丢弃（S1）、代码替模型选读哪一段（S2–S4）、知识沉淀 `_SECRET` 电话正则误报日期（A1）、写授权否定窗口误报「别忘了」（M-7）、记忆兜底词表（P-1）。
+- 修复范围与优先级待 owner 拍板，尚未立项。
+
 ## 生产拓扑（2026-11-13 时点）
 
 - 后端跑在**黑豹 X2 盒**（RK3566 小盒）：API + Telegram bridge + sentinel + 本地 PostgreSQL（权威数据源）；前端在 GitHub Pages。
 - 盒上源码不是 git 检出，发布走 **archive-swap**（整树替换 + 搬运 .env 与 data/ 运行时文件）。
-- RAG 已迁回盒上：pgvector 存 6,026 条向量，瘦后端 `finbot-rag-slim` 在盒 127.0.0.1:8766；embedding（BAAI/bge-m3）与 rerank（BAAI/bge-reranker-v2-m3）走 SiliconFlow API。瘦后端**没有增量索引**，新入库文档不会自动进向量库。
+- RAG 已迁回盒上：pgvector 存 6,026 条向量，瘦后端 `finbot-rag-slim` 在盒 127.0.0.1:8766；embedding（BAAI/bge-m3）2026-11-13 起走 OpenRouter（owner 拍板），rerank（BAAI/bge-reranker-v2-m3）走 SiliconFlow API。瘦后端**没有增量索引**，新入库文档不会自动进向量库。
 - Supabase 只剩 2026-11-03 迁移时的冻结回滚副本，生产不依赖它。
 
 ## 模型与核查（盒上 catalog，2026-11-13 时点）
