@@ -28,7 +28,7 @@
 
 ## 回滚
 
-- `FINBOT_ANTHROPIC_NATIVE=off`：`anthropic` 条目回到兼容接口（`https://api.anthropic.com/v1/chat/completions`，没填地址时用这个默认值），行为同上一分支；目录里的档位随之显示为不支持。
+- `FINBOT_ANTHROPIC_NATIVE=off`：`anthropic` 条目回到兼容接口（地址取 main 里 `PROVIDERS["anthropic"]`，即 `https://api.anthropic.com/v1/chat/completions`），行为同上一分支；目录里的档位随之显示为不支持。
 - 其他服务商的路径没有改动一个字节：测试对 openrouter、deepseek 在开关开/关两种状态下的请求体和请求头做了钉死对照。
 
 ## 错误码
