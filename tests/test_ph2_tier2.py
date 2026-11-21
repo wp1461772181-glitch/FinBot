@@ -486,3 +486,69 @@ def test_entity_card_report_reads_stored_messages_without_writing(monkeypatch, d
     assert [r["user_words"] for r in entity_card_report.load_records(days=1, limit=100)] == ["hi"]
     with SessionLocal() as db:
         assert db.query(AgentMessage).count() == before
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# 1b. S5 rework after acceptance: other companies' rows, ordering, stopwords
+# --------------------------------------------------------------------------------------------------------------------
+def test_news_rank_row_about_another_company_is_skipped_with_several_tickers(news_db, monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH2_NEWS_RANK", True)
+    _add("特斯拉三季度财报：交付量创新高", tickers=["TSLA"], key="tsla")
+    _add("苹果财报超预期", tickers=["AAPL"], key="aapl")
+    _add("微软财报：云业务增长", tickers=["MSFT", "TSLA"], key="msft")       # shares one code with the request: kept
+    _add("行业财报季前瞻", key="untagged")                                    # no code of its own: ranked, not dropped
+    res = engine_mod.search_configured_news(tickers=["AAPL", "MSFT"], query="财报")
+    assert sorted(i["url"].rsplit("/", 1)[-1] for i in res["items"]) == ["aapl", "msft", "untagged"]
+    assert res["items"][-1]["url"].endswith("untagged")
+
+
+def test_news_rank_row_about_another_company_single_ticker_does_not_take_a_slot(news_db, monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH2_NEWS_RANK", True)
+    _add("特斯拉三季度财报：交付量创新高", tickers=["TSLA"], key="tsla")
+    res = engine_mod.search_configured_news(tickers=["AAPL"], query="苹果 iPhone 销量 财报")
+    assert res["items"] == []
+
+
+def test_news_rank_row_about_another_company_off_is_unchanged(news_db, monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH2_NEWS_RANK", False)
+    _add("特斯拉三季度财报：交付量创新高", "AAPL supplier", tickers=["TSLA"], key="tsla")    # off: the old rule, a code in the text counts
+    res = engine_mod.search_configured_news(tickers=["AAPL"])
+    assert [i["url"].rsplit("/", 1)[-1] for i in res["items"]] == ["tsla"]
+
+
+def test_news_rank_asked_code_rows_come_before_word_only_rows(news_db, monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH2_NEWS_RANK", True)
+    for n in range(12):
+        _add(f"Apple update {n}", tickers=["AAPL"], minutes_ago=100 + n, key=f"a{n}")
+    for n in range(5):
+        _add(f"茅台三季报业绩稳健{n}", minutes_ago=1 + n, key=f"n{n}")       # newer, and three of the query's two-character pieces
+    res = engine_mod.search_configured_news(tickers=["AAPL"], query="苹果最新财报业绩怎么样", limit=10)
+    assert len(res["items"]) == 10 and all(i["url"].rsplit("/", 1)[-1].startswith("a") for i in res["items"])
+    assert "no_term_matched" not in res["meta"]
+
+
+def test_news_rank_query_word_that_is_the_asked_code_is_not_counted(news_db, monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH2_NEWS_RANK", True)
+    _add("Apple update", "nothing about the question", tickers=["AAPL"])
+    res = engine_mod.search_configured_news(tickers=["AAPL"], query="AAPL 并购")
+    assert res["items"][0]["match"] == "none" and res["meta"]["no_term_matched"] is True
+    assert res["items"][0]["matched_terms"] == ["AAPL"]
+
+
+def test_news_rank_generic_words_are_stopwords_and_a_single_word_best_hit_keeps_the_web_hint(news_db, monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH2_NEWS_RANK", True)
+    assert engine_mod._news_query_terms("苹果最近有什么消息") == ["苹果最近有什么消息", "苹果"]
+    _add("消息人士称某公司将并购", key="noise")
+    _add("苹果发布新品", key="one")
+    res = engine_mod.search_configured_news(query="苹果最近有什么消息")
+    assert [i["url"].rsplit("/", 1)[-1] for i in res["items"]] == ["one"]
+    assert res["meta"]["hint"] == "fallback_to_web_search_recommended"
+    _add("苹果有什么新品发布会", "苹果新品", key="two")
+    res = engine_mod.search_configured_news(query="苹果新品")
+    assert len(res["items"][0]["matched_terms"]) >= 2 and "hint" not in res["meta"]
+
+
+def test_news_rank_ticker_only_search_has_no_hint(news_db, monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH2_NEWS_RANK", True)
+    _add("NVDA shipments", tickers=["NVDA"])
+    assert "hint" not in engine_mod.search_configured_news(tickers=["NVDA"])["meta"]

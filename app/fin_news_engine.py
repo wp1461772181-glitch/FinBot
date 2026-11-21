@@ -1176,7 +1176,7 @@ def poll_once(
 # FINBOT_PH2_NEWS_RANK: a query is cut into words the way a person would read it.  A run of Chinese characters has no spaces, so it
 # is also cut into two-character pieces ("苹果最新财报" -> 苹果, 财报); the few filler words below are dropped first.  The
 # list is deliberately short; it only keeps "的", "最新" and the like from counting as a topic.
-_QUERY_STOPWORDS = ("什么", "怎么", "怎样", "如何", "最新", "的", "了", "吗", "呢", "吧", "啊")
+_QUERY_STOPWORDS = ("什么", "怎么", "怎样", "如何", "最新", "消息", "新闻", "最近", "近期", "情况", "表现", "的", "了", "吗", "呢", "吧", "啊")
 _CJK_RUN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 
 
@@ -1261,7 +1261,8 @@ def search_configured_news(
     query_terms = [tok.strip().lower() for tok in re.split(r"[\s,，、]+", str(query or "")) if tok.strip()]
     rank_mode = flag("FINBOT_PH2_NEWS_RANK", True)
     if rank_mode:
-        query_terms = _news_query_terms(query)
+        # A query word that is just a code the call also gave in ``tickers`` is not a second piece of evidence for that code.
+        query_terms = [t for t in _news_query_terms(query) if t.upper() not in wanted_tickers]
 
     with SessionLocal() as db:
         stmt = (
@@ -1295,6 +1296,10 @@ def search_configured_news(
         if rank_mode:
             # FINBOT_PH2_NEWS_RANK: a hit only raises the score; nothing is dropped for missing one.  The row keeps the list of
             # codes / keywords / query words it matched, so the model can judge how close it is.
+            if wanted_tickers and row_tickers and not row_tickers.intersection(wanted_tickers):
+                # The row says which company it is about and it is not one asked for: a structured fact that does not match (the
+                # same rule gate_row applies to a row's own symbol), not a matter of which words it contains.
+                continue
             hit_tickers = [t for t in wanted_tickers if t in row_tickers or t.lower() in haystack]
             hit_keywords = [kw for kw in wanted_keywords if kw in haystack]
             hit_query = [term for term in query_terms if term in haystack]
@@ -1336,10 +1341,16 @@ def search_configured_news(
             matched.sort(key=lambda x: x.get("published_at", ""), reverse=True)
             for m in matched:
                 m["match"] = "none"
+        else:
+            # Rows about the asked code come before rows that only share words, then more words matched, then score and time.
+            matched.sort(key=lambda x: (x["_ticker_hits"], x["_term_hits"], x.get("score", 0.0), x.get("published_at", "")), reverse=True)
+        best_term_hits = matched[0]["_term_hits"] if matched else 0
         for m in matched:
             m.pop("_term_hits", None)
             m.pop("_ticker_hits", None)
-    if not no_term_matched:
+    else:
+        best_term_hits = 0
+    if not rank_mode:
         matched.sort(key=lambda x: (x.get("score", 0.0), x.get("published_at", "")), reverse=True)
     top_items = matched[:bounded_limit]
     meta: dict[str, Any] = {
@@ -1347,9 +1358,13 @@ def search_configured_news(
         "total_matched": len(matched),
         "refreshed": refreshed,
     }
+    # meta is for the log: when a result has accepted rows, the turn hands the model only the rows (data), so the model-facing
+    # form of these two facts is the row's own ``match`` / ``matched_terms``, which the tool description explains.
     if no_term_matched:
         meta["no_term_matched"] = True
         meta["hint"] = "fallback_to_web_search_recommended"
+    elif rank_mode and not wanted_tickers and (wanted_keywords or query_terms) and best_term_hits == 1:
+        meta["hint"] = "fallback_to_web_search_recommended"      # no code anchors these rows and even the best one shares a single word
     if not top_items:
         meta["hint"] = "fallback_to_web_search_recommended"
 
