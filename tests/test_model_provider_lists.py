@@ -45,22 +45,46 @@ def test_new_providers_are_listed_and_get_no_reasoning_parameter():
     assert NEW <= set(PROVIDER_NAMES)
     from app.agent_chat_provider import NATIVE_EFFORTS, reasoning_options
     for provider in NEW:
-        assert NATIVE_EFFORTS[provider] == ()
+        if provider == "anthropic":
+            # The native Messages API sends the tier itself (anthropic_native.build_request); reasoning_options is the compatible
+            # endpoint's path (FINBOT_ANTHROPIC_NATIVE=off), which still sends nothing.
+            from app.anthropic_native import STATIC_EFFORTS
+            assert NATIVE_EFFORTS[provider] == STATIC_EFFORTS
+        else:
+            assert NATIVE_EFFORTS[provider] == ()
         assert reasoning_options(provider, "high") == {}
         assert thinking_disabled_options(provider) == {}
 
 
-def test_a_provider_that_sends_no_effort_says_it_takes_none():
+def _sends(provider, tier):
+    """Whether a request for this provider carries the tier.  Provider anthropic sends it as output_config.effort through the
+    native Messages API while FINBOT_ANTHROPIC_NATIVE is on, and nothing through the compatible endpoint when it is off."""
+    from app.agent_chat_provider import reasoning_options
+    if provider == "anthropic":
+        from app.anthropic_native import build_request, use_native
+        return use_native(provider) and "output_config" in build_request("claude-haiku-5-5", [{"role": "user", "content": "q"}], [], effort=tier)[0]
+    return bool(reasoning_options(provider, tier))
+
+
+def test_a_provider_that_sends_no_effort_says_it_takes_none(monkeypatch):
     """What the strength list offers must be what the request sends.  Every provider but OpenRouter (answered per model
     by OpenRouter's own list): one that sends nothing for any tier is declared as taking no effort, so the browser does
     not offer seven tiers that do nothing; one that sends something declares tiers.  A provider added to PROVIDER_NAMES
-    and left out of NATIVE_EFFORTS fails here."""
-    from app.agent_chat_provider import REASONING_EFFORTS, reasoning_options
+    and left out of NATIVE_EFFORTS fails here.  Provider anthropic is held to it with the native switch on AND off."""
+    from app.agent_chat_provider import REASONING_EFFORTS
     from app.agent_model_catalog import _reasoning_fields
-    for provider in set(PROVIDER_NAMES) - {"openrouter"}:
-        fields = _reasoning_fields({"provider": provider})
-        assert fields, f"{provider} has no entry in NATIVE_EFFORTS: the browser would offer every tier"
-        sends = any(reasoning_options(provider, tier) for tier in REASONING_EFFORTS)
-        assert fields["reasoning_supported"] is sends, provider
-        if not sends:
-            assert "supported_efforts" not in fields, provider
+    for switch in ("on", "off"):
+        monkeypatch.setenv("FINBOT_ANTHROPIC_NATIVE", switch)
+        for provider in set(PROVIDER_NAMES) - {"openrouter"}:
+            fields = _reasoning_fields({"provider": provider})
+            assert fields, f"{provider} has no entry in NATIVE_EFFORTS: the browser would offer every tier"
+            sends = any(_sends(provider, tier) for tier in REASONING_EFFORTS)
+            assert fields["reasoning_supported"] is sends, (provider, switch)
+            if not sends:
+                assert "supported_efforts" not in fields, (provider, switch)
+            elif provider == "anthropic":
+                assert all(_sends(provider, tier) for tier in fields["supported_efforts"]), "a listed tier must really be sent"
+    monkeypatch.setenv("FINBOT_ANTHROPIC_NATIVE", "off")
+    assert _reasoning_fields({"provider": "anthropic", "model": "claude-haiku-5-5"}) == {"reasoning_supported": False}
+    monkeypatch.setenv("FINBOT_ANTHROPIC_NATIVE", "on")
+    assert _reasoning_fields({"provider": "anthropic", "model": "claude-haiku-5-5"})["supported_efforts"] == ["low", "medium", "high", "xhigh", "max"]
