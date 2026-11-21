@@ -9,6 +9,12 @@ export const CATALOG = [
  {provider:"baidu",label:"百度千帆",baseUrl:"https://qianfan.baidubce.com/v2",suggestion:"请输入 Model ID"},
  {provider:"siliconflow",label:"SiliconFlow",baseUrl:"https://api.siliconflow.cn/v1",suggestion:"请输入 Model ID"},
  {provider:"openrouter",label:"OpenRouter",baseUrl:"https://openrouter.ai/api/v1",suggestion:"vendor/model"},
+ {provider:"anthropic",label:"Anthropic（Claude）",baseUrl:"https://api.anthropic.com/v1",suggestion:"claude-sonnet-5-5"},
+ {provider:"openai",label:"OpenAI",baseUrl:"https://api.openai.com/v1",suggestion:"gpt-5-mini"},
+ {provider:"gemini",label:"Google Gemini",baseUrl:"https://generativelanguage.googleapis.com/v1beta/openai",suggestion:"gemini-2.5-flash"},
+ {provider:"xai",label:"xAI（Grok）",baseUrl:"https://api.x.ai/v1",suggestion:"grok-4"},
+ {provider:"mistral",label:"Mistral",baseUrl:"https://api.mistral.ai/v1",suggestion:"mistral-large-latest"},
+ {provider:"groq",label:"Groq",baseUrl:"https://api.groq.com/openai/v1",suggestion:"llama-3.3-70b-versatile"},
  {provider:"custom",label:"自定义（OpenAI 兼容）",baseUrl:"",suggestion:"请输入 Model ID"},
 ];
 const DB="market-evidence-model-profiles", STORE="profiles", FILE="model-profiles.json", LIMIT=128*1024;

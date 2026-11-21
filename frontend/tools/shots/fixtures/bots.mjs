@@ -42,7 +42,7 @@ export const BOT_TEMPLATES = {
 };
 
 const model = (name, display_name, provider, id, extra = {}) => ({ name, display_name, provider, model: id, base_url: null, origin: "server", key_source: "vault", key_env: null,
-  key_status: "configured", is_default: false, migrated: false, ...extra });
+  key_status: "configured", key_hint: "sk-fixture-ab…c0de", is_default: false, migrated: false, ...extra });
 export const MODEL_CATALOG = {
   models: [
     model("haiku-5.5", "Haiku 5.5", "openrouter", "anthropic/claude-haiku-5.5", { is_default: true, supported_efforts: ["low", "medium", "high"], reasoning_supported: true }),

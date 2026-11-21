@@ -1,7 +1,7 @@
 // The add / edit dialog of a catalog model (P8.2, design 4.12): a dialog on a wide screen, a drawer below 1024, one body in both.  The draft (the fields, the candidates, the test) is held HERE, outside the two shells,
 // so crossing the breakpoint with the dialog open keeps what was typed.  A chunk of its own: the page only fetches it when 添加模型 / 编辑 is pressed.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { Eye, EyeOff, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/components/ui/drawer";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { StatefulButton, type ButtonPhase } from "@/components/state/StatefulBut
 import { addCatalogModel, discoverCatalogModels, testCatalogModel, updateCatalogModel } from "../../../api/catalog-admin";
 import { catalogName, entryMoved, entryProblem, probeFor, saveBody, type CatalogEntryDraft } from "../../../catalog-form.mjs";
 import { createModelDiscoveryScheduler } from "../../../model-discovery.mjs";
+import { ModelPicker } from "./ModelPicker";
 import { message } from "../../../bot-message";
 import { useLocale } from "../../../i18n";
 import { CATALOG } from "../../../model-profiles.mjs";
@@ -33,7 +34,7 @@ export default function ModelDialog({ initial, taken, onClose, onSaved, returnFo
   const wide = useWide();
   const [entry, setEntry] = useState<CatalogEntryDraft>(initial), [nameTouched, setNameTouched] = useState(Boolean(initial.editing));
   const [candidates, setCandidates] = useState<Array<{ id: string; name: string }>>([]), [discoveryStatus, setDiscoveryStatus] = useState("");
-  const [error, setError] = useState(""), [testing, setTesting] = useState(false), [phase, setPhase] = useState<ButtonPhase>("idle");
+  const [showKey, setShowKey] = useState(false), [error, setError] = useState(""), [testing, setTesting] = useState(false), [phase, setPhase] = useState<ButtonPhase>("idle");
   const testController = useRef<AbortController | null>(null), discovery = useRef<AbortController | null>(null), scheduler = useRef(createModelDiscoveryScheduler());
   const resetTimer = useRef<number | undefined>(undefined), content = useRef<HTMLDivElement>(null);
 
@@ -46,8 +47,8 @@ export default function ModelDialog({ initial, taken, onClose, onSaved, returnFo
     try {
       const result = await discoverCatalogModels(probe, controller.signal);
       if (controller.signal.aborted) return;
-      setCandidates(result.models.slice(0, 5));
-      setDiscoveryStatus(result.status === "unsupported" ? t("该服务商没有可用的模型列表接口，可手动填写 Model ID") : result.models.length ? t("选择列表中的模型填入 Model ID") : t("服务商暂未返回可用模型，可手动填写 Model ID"));
+      setCandidates(result.models);
+      setDiscoveryStatus(result.status === "unsupported" ? t("该服务商没有可用的模型列表接口，可手动填写 Model ID") : result.models.length ? t(result.truncated ? "模型太多，只列出最新的一部分；找不到的可手动填写 Model ID" : "选择列表中的模型填入 Model ID") : t("服务商暂未返回可用模型，可手动填写 Model ID"));
     } catch (err) {
       if (controller.signal.aborted) return;
       setCandidates([]);
@@ -103,6 +104,9 @@ export default function ModelDialog({ initial, taken, onClose, onSaved, returnFo
 
   const field = (id: string) => `model-${id}`;
   const provider = CATALOG.find((x) => x.provider === entry.provider);
+  // An edit shows the head and tail of the key kept on the server (key_hint); the whole key is never sent back.
+  const keyHint = entry.editing?.key_hint;
+  const keyPlaceholder = entry.editing && !moved && entry.editing.key_status === "configured" ? (keyHint ? t("当前：{key}，不改就留空").replace("{key}", keyHint) : t("不改就留空")) : "";
   const title = entry.editing ? t("编辑模型配置") : t("添加模型配置");
   const description = entry.editing ? t("模型配置") : t("添加一个已兼容的服务配置");
   const body = <div data-testid="model-form" className="flex min-h-0 flex-1 flex-col" onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && e.target instanceof HTMLInputElement && !problem && !testing) { e.preventDefault(); void testAndSave(); } }}>
@@ -120,10 +124,7 @@ export default function ModelDialog({ initial, taken, onClose, onSaved, returnFo
         <Input id={field("model")} data-testid="model-id" className="max-lg:h-11" disabled={testing} value={entry.model} maxLength={160} autoComplete="off" onChange={(e) => update({ model: e.target.value })} placeholder={t(provider?.suggestion ?? "请输入 Model ID")} /></Field>
       <Field><FieldLabel id={field("discovered-label")}>{t("服务商可用模型")}</FieldLabel>
         <div className="flex items-center gap-2">
-          <Select value="" disabled={testing || candidates.length === 0} onValueChange={(id) => { const item = candidates.find((x) => x.id === id); if (item) update({ model: item.id }); }}>
-            <SelectTrigger aria-labelledby={field("discovered-label")} data-testid="model-discovered" className="min-w-0 flex-1 max-lg:h-11"><SelectValue placeholder={t("选择列表中的模型填入 Model ID")} /></SelectTrigger>
-            <SelectContent>{candidates.map((item) => <SelectItem key={item.id} value={item.id}>{item.name === item.id ? item.id : `${item.name} · ${item.id}`}</SelectItem>)}</SelectContent>
-          </Select>
+          <ModelPicker candidates={candidates} current={entry.model} disabled={testing} labelledBy={field("discovered-label")} onPick={(id) => update({ model: id })} />
           <Button type="button" variant="outline" data-testid="model-refresh" className="max-lg:h-11" disabled={testing} onClick={() => void fetchModels(entry)}>{t("刷新")}</Button>
         </div>
         {discoveryStatus && <FieldDescription role="status" data-testid="model-discovery-status">{discoveryStatus}</FieldDescription>}</Field>
@@ -134,7 +135,8 @@ export default function ModelDialog({ initial, taken, onClose, onSaved, returnFo
         </Select></Field>
       {entry.key_mode === "vault"
         ? <Field><FieldLabel htmlFor={field("key")}>{t("API key")}</FieldLabel>
-          <Input id={field("key")} data-testid="model-key" className="max-lg:h-11" type="password" disabled={testing} value={entry.api_key} maxLength={2048} autoComplete="new-password" onChange={(e) => update({ api_key: e.target.value }, true)} placeholder={entry.editing && !moved && entry.editing.key_status === "configured" ? t("不改就留空") : ""} /></Field>
+          <div className="relative"><Input id={field("key")} data-testid="model-key" className="pr-11 max-lg:h-11" type={showKey ? "text" : "password"} disabled={testing} value={entry.api_key} maxLength={2048} autoComplete="new-password" autoCapitalize="off" spellCheck={false} onChange={(e) => update({ api_key: e.target.value }, true)} placeholder={keyPlaceholder} />
+            <Button type="button" variant="ghost" size="icon" data-testid="model-key-toggle" aria-label={t(showKey ? "隐藏 API key" : "显示 API key")} aria-pressed={showKey} className="absolute top-0 right-0 size-9 max-lg:size-11" onClick={() => setShowKey(!showKey)}>{showKey ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</Button></div></Field>
         : <Field><FieldLabel htmlFor={field("key-env")}>{t("环境变量名")}</FieldLabel>
           <Input id={field("key-env")} data-testid="model-key-env" className="max-lg:h-11" disabled={testing} value={entry.key_env} maxLength={64} autoComplete="off" onChange={(e) => update({ key_env: e.target.value.toUpperCase() }, true)} placeholder="DEEPSEEK_API_KEY" /></Field>}
       {moved && <p data-testid="model-moved-note" className="text-small text-ink">{t("换了服务或接口地址，需要重新填写 key。")}</p>}
