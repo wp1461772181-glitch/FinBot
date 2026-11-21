@@ -432,38 +432,50 @@ def stage_budget_bytes(name):
 def _stage_history(messages,budget_bytes):
     sources=assistant_message_sources(messages or [])
     source_by_text={v:k for k,v in sources.items()}
-    eligible=[]
-    for message in messages or []:
+    def size(item):return len(json.dumps(item,ensure_ascii=False).encode())
+    def head_tail(item,room):
+        """The entry cut to its head and tail so that it is at most ``room`` bytes; None when nothing fits."""
+        space=room-size({**item,'content':''})
+        for _ in range(4):
+            cut=truncation.cut_head_tail(item['content'],space) if space>0 else ''
+            if not cut:return None
+            candidate={**item,'content':cut};n=size(candidate)
+            if n<=room:return candidate
+            space-=n-room+8
+        return None
+    eligible=[];notes=[]
+    for index,message in enumerate(messages or []):
         if message.get('role') not in {'user','assistant','system'}:continue
         # The citation catalogue note is the newest entry and tens of KB on a long line: left in, it alone would fill a small view.
         # The resolver gets the same catalogue as its own payload field; the other two steps do not bind citations.
         if layers.is_catalogue_message(message):continue
         item={'role':message['role'],'content':str(message.get('content',''))}
         if message['role']=='assistant' and item['content'] in source_by_text:item['source']=source_by_text[item['content']]
-        eligible.append(item)
-    def size(item):return len(json.dumps(item,ensure_ascii=False).encode())
-    selected=[];used=0
-    for item in reversed(eligible):
+        # The layer-3 memory note is appended after the current question, so a newest-first walk would meet it first and a long one
+        # would take the turns' room.  It is not a turn: it gets its own share (a quarter of the budget, head and tail beyond that).
+        (notes if layers.is_memory_message(message) else eligible).append((index,item))
+    kept_notes=[];used=0;room=budget_bytes//4
+    for index,item in notes:
+        fitted=item if size(item)<=room-used else head_tail(item,room-used)
+        if fitted:kept_notes.append((index,fitted));used+=size(fitted)
+    selected=[]
+    for index,item in reversed(eligible):
         n=size(item)
         if used+n>budget_bytes:
             if not selected:
                 # The newest message alone is over the budget: its head and tail, when they fit at all.
-                room=budget_bytes-size({**item,'content':''})
-                for _ in range(4):
-                    cut=truncation.cut_head_tail(item['content'],room) if room>0 else ''
-                    if not cut:break
-                    candidate={**item,'content':cut};n=size(candidate)
-                    if n<=budget_bytes:selected.append(candidate);used+=n;break
-                    room-=n-budget_bytes+8
+                fitted=head_tail(item,budget_bytes-used)
+                if fitted:selected.append((index,fitted));used+=size(fitted)
             break
-        selected.append(item);used+=n
+        selected.append((index,item));used+=n
     omitted=len(eligible)-len(selected)
-    view=list(reversed(selected))
+    view=[item for _,item in sorted([*selected,*kept_notes],key=lambda pair:pair[0])]
     if omitted:view.insert(0,{'role':'system','content':'（更早的 %d 条对话消息没有在这里展开。）'%omitted})
-    original=sum(len(i['content']) for i in eligible);kept=sum(len(i['content']) for i in selected)
+    original=sum(len(i['content']) for _,i in [*eligible,*notes]);kept=sum(len(i['content']) for _,i in [*selected,*kept_notes])
     return json.dumps(view,ensure_ascii=False),omitted,original,kept
 def stage_history(messages,budget_bytes):
-    """One step's view of the conversation: the same entries as bounded_history without the citation catalogue note, the newest continuous run that fits ``budget_bytes``
+    """One step's view of the conversation: the same entries as bounded_history without the citation catalogue note, the newest continuous run of turns that fits ``budget_bytes``
+    (the layer-3 memory note keeps its place and takes at most a quarter of it)
     (the entry that does not fit ends the run, it is not skipped), a newest entry alone over the budget keeping its head and tail,
     and, when earlier messages are left out, a leading system entry that says how many.  Returns (json text, omitted messages)."""
     text,omitted,_,_=_stage_history(messages,budget_bytes)

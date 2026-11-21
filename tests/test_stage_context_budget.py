@@ -263,3 +263,27 @@ def test_the_newest_answer_keeps_its_items_and_citations_even_over_the_budget(mo
     assert cap.resolver['assistant_items'] == [full[-1]]
     assert [e['answers_back'] for e in cap.resolver['citation_catalogue']] == [1]
     assert cap.resolver['omitted'] == {'assistant_item_answers': 1, 'citation_answers': 1}
+
+
+def test_a_long_memory_note_takes_at_most_a_quarter_and_never_the_turns_room():
+    from app import agent_context as layers
+    note = {'role': 'user', 'content': layers.MEMORY_MARKER + ' ' + '忆' * 30000}
+    messages = [*long_conversation(60), note]
+    cap, turn = run(messages)
+    budget = stage_budget_bytes('FINBOT_STAGE_CLASSIFIER_HISTORY_KB')
+    entries = history_of(cap.intent['history'])
+    memory = [e for e in entries if e['content'].startswith(layers.MEMORY_MARKER)]
+    turns = [e for e in entries if e['role'] in {'user', 'assistant'} and not e['content'].startswith(layers.MEMORY_MARKER)]
+    # The note is still there, after the turns as before, cut to its share; the turns keep most of the view.
+    assert len(memory) == 1 and entries[-1] == memory[0]
+    assert len(json.dumps(memory[0], ensure_ascii=False).encode()) <= budget // 4
+    assert len(turns) > 5 and turns[-1] == {'role': 'user', 'content': '第二个是什么意思？'}
+    assert len(cap.intent['history'].encode()) <= budget + 200
+
+
+def test_a_short_memory_note_stays_whole_in_its_place():
+    from app import agent_context as layers
+    note = {'role': 'user', 'content': layers.MEMORY_MARKER + ' 用户关注英伟达。'}
+    messages = [{'role': 'user', 'content': '苹果营收？'}, {'role': 'assistant', 'content': '营收 100'}, {'role': 'user', 'content': '那利润呢？'}, note]
+    cap, turn = run(messages, )
+    assert cap.resolver['history'] == cap.intent['history'] == bounded_history(messages)
