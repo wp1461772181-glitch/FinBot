@@ -146,6 +146,33 @@ def test_p1_in_turn_the_classifier_says_remember_and_the_model_did_not_a_card_ri
     assert profile.list_items(OWNER_HASH) == []  # nothing is written before the press
 
 
+@pytest.mark.parametrize("reply", ["好的", "ok", "确认"])
+def test_p1_a_side_card_does_not_swallow_the_next_typed_line(owner, monkeypatch, reply):
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    first = _empty_extractor_turn(STANDING, "conv-ph1-side-next", "remember", answer="好的，之后都用亿元显示。")
+    card = first["pending_request"]
+    assert card and card.get("side") is True
+
+    def decider(messages, _schemas):
+        return {"content": json.dumps({"items": []})} if _is_extract(messages) else {"content": "收到，有需要再问我。"}
+    context = _context("conv-ph1-side-next", intent_recognizer=_route(), decider=decider)
+    from app.agent_workflow import direct
+    second = asyncio.run(direct.run_direct_turn(reply, context, emit=_quiet, state={"pending_request": card}))
+    assert second["audit"].get("write_outcome") != "typed_consent"
+    assert "请点确认卡" not in second["answer"] and "收到，有需要再问我。" in second["answer"]
+    assert profile.list_items(OWNER_HASH) == []  # typing never presses the card
+
+
+def test_p1_an_ordinary_card_still_answers_typed_consent_with_the_button_hint(owner, monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    first = _empty_extractor_turn(STANDING, "conv-ph1-side-plain", "remember", answer="好的，之后都用亿元显示。")
+    card = {k: v for k, v in first["pending_request"].items() if k != "side"}
+    context = _context("conv-ph1-side-plain", intent_recognizer=_route(), decider=lambda m, s: {"content": "不该被调用"})
+    from app.agent_workflow import direct
+    second = asyncio.run(direct.run_direct_turn("同意", context, emit=_quiet, state={"pending_request": card}))
+    assert second["audit"].get("write_outcome") == "typed_consent" and "请点确认卡" in second["answer"]
+
+
 @pytest.mark.parametrize("question", [QUESTION, "区别用什么指标衡量", "以后美联储降息对苹果有什么影响"])
 def test_p1_in_turn_a_wordlist_hit_alone_gives_no_card_no_row_and_leaves_background_reading_on(owner, monkeypatch, question):
     from app.agent_workflow import direct

@@ -3243,7 +3243,8 @@ class Turn:
     async def consent_reply(self):
         pending=self.state.get('pending_request');request_id=self.state.get('requested_pending_id')
         if not request_id:
-            if pending and pending.get('reason') in WRITE_CARD_REASONS and TYPED_CONSENT.fullmatch(self.original.strip()):
+            # A side card (a memory proposal beside a finished answer) waits on nothing: the next typed line is a new message.
+            if pending and not pending.get('side') and pending.get('reason') in WRITE_CARD_REASONS and TYPED_CONSENT.fullmatch(self.original.strip()):
                 # Only the card's button carries the server-minted capability, so typed words never run
                 # a write (page text could be typed the same way).  Saying so beats proposing the card again.
                 self.pending=pending;self.audit['write_outcome']='typed_consent'

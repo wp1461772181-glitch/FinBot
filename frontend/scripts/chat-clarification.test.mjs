@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeClarification, selectedClarification, selectedOptions, manualClarification, clarificationTitle, isActiveClarification, isSideCard } from '../src/chat-clarification.mjs';
+import { normalizeClarification, selectedClarification, selectedOptions, manualClarification, clarificationTitle, isActiveClarification, isSideCard, awaitsUser } from '../src/chat-clarification.mjs';
 
 test('selection card keeps request identity and rejects a forged choice', () => {
   const card = normalizeClarification({request_id:'11111111-1111-4111-8111-111111111111',reason:'symbol_suggestion',
@@ -129,4 +129,7 @@ test('a memory card beside a finished answer is pressable and is not a waiting c
  const ordinary={role:'assistant',status:'succeeded',clarification:normalizeClarification({...raw,display:{title:'确认'}})};
  assert.equal(isSideCard(ordinary),false);
  assert.equal(isActiveClarification([ordinary],0,false),false,'an ordinary card on a finished turn stays inactive');
+ assert.equal(awaitsUser(message),false,'a side card on a finished turn does not make the line waiting');
+ assert.equal(awaitsUser(ordinary),true,'an ordinary card still puts the ball in the user\'s court');
+ assert.equal(awaitsUser({...message,status:'waiting_for_input'}),true,'a waiting status still waits');
 });

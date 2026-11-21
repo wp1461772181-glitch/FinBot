@@ -75,7 +75,8 @@ export function isActiveClarification(messages,index,readOnly) {
   return !readOnly && index===messages.length-1 && message?.role==='assistant' && (WAITING_STATUSES.includes(message?.status) || isSideCard(message)) && Boolean(message.clarification);
 }
 
-/** An assistant message that ends a turn with the ball in the user's court: a waiting status, or a card to answer. */
+/** An assistant message that ends a turn with the ball in the user's court: a waiting status, or a card to answer.
+ *  A side card rides beside a finished answer and waits on nothing, so it alone does not make the turn waiting. */
 export function awaitsUser(message) {
-  return message?.role==='assistant' && (WAITING_STATUSES.includes(message.status) || Boolean(message.clarification));
+  return message?.role==='assistant' && (WAITING_STATUSES.includes(message.status) || (Boolean(message.clarification) && !isSideCard(message)));
 }
