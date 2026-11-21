@@ -6,7 +6,7 @@ import { listSkills, type Skill } from "../../api/skills-core";
 import { getChatMode } from "../../api/base";
 import { type Bot } from "../../api/bots";
 import { composerKeyAction } from "../../composer-keys.mjs";
-import { isActiveClarification } from "../../chat-clarification.mjs";
+import { isActiveClarification, isSideCard } from "../../chat-clarification.mjs";
 import { toolLabel } from "../../agent-tool-labels.mjs";
 import { announcement, isOffline, runningTool, turnSignal } from "../../turn-signals.mjs";
 import { useBackendDown } from "@/components/state/connectivity-store";
@@ -72,7 +72,7 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
   const slowRestore = useDelayedFlag(c.restoring, 1200);
   const stoppable = sending || slowRestore;
   // The bot is waiting on a card in the thread (S9): a strip above the input says so and takes the reader to it.  The input stays usable: a typed line goes out as an ordinary message.
-  const waitingCard = !c.archiveView && !c.restoring && c.verified && !sending && isActiveClarification(c.messages, c.messages.length - 1, false);
+  const waitingCard = !c.archiveView && !c.restoring && c.verified && !sending && isActiveClarification(c.messages, c.messages.length - 1, false) && !isSideCard(c.messages[c.messages.length - 1]);
   const waitingName = bot?.name ?? t("模型");
   // The one status line for screen readers (design 6.9): what the bot is doing, said when the phase changes; the avatar itself is hidden from them.
   const backendDown = useBackendDown().down;

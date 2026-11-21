@@ -9,6 +9,23 @@ from .sources import SourceDocument
 
 _ALLOWED={'product_faq','financial_claim','financial_prediction','other'}
 _SECRET=re.compile(r'(?i)(api[_ -]?key|password|secret|token|credential)\s*[:=]|\bsk-[A-Za-z0-9_-]{16,}\b|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b(?:\+?\d[\d .()-]{8,}\d)\b')
+# FINBOT_PH1_SECRET_MASK: the phone branch used to take any run of 10+ digits and separators (a date, a list of figures) for a
+# number. It now names what a phone number looks like; the label, sk- and e-mail branches are the old ones.
+_LABEL=r'(?i)(api[_ -]?key|password|secret|token|credential)\s*[:=]'
+_KEYS=r'\bsk-[A-Za-z0-9_-]{16,}\b|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}'
+_PHONE=('(?<![\\w+])\\+(?:\\d{10,15}(?!\\d)|(?=\\d{1,3}[ ()-])\\d(?:[ ()-]?\\d){7,14}(?!\\d))'  # +86 138 1234 5678, +1 (555) 123-4567; not +12345678 or +1.2345678
+        '|(?<!\\d)1[3-9]\\d{9}(?!\\d)'                                                        # 13812345678
+        '|\\(\\d{2,4}\\)[ -]?\\d{3,4}[ -]?\\d{3,4}(?!\\d)'                                      # (03) 9905 1234
+        '|(?<![\\w-])0[2-478]\\d{8}(?!\\d)'                                                     # 0412345678 (AU, no separators; not inside an ISIN)
+        '|(?<![\\d-])0\\d{1,3}[ -]\\d{3,4}[ -]?\\d{3,4}(?![\\d-])'                                # 010-1234 5678, 0412 345 678
+        '|(?<![\\d-])1[3-9]\\d[ -]\\d{4}[ -]\\d{4}(?![\\d-])'                                    # 138-1234-5678
+        '|(?<![\\d-])(?:1[ .-])?\\d{3}[ .-]\\d{3}[ .-]\\d{4}(?![\\d-])')                          # 555-123-4567, 1-800-555-1234, 555.123.4567
+_SECRET_LABEL=re.compile(_LABEL)
+_SECRET_FRAGMENT=re.compile('(?i)'+_KEYS+'|'+_PHONE)
+_SECRET_NARROW=re.compile(_LABEL+'|'+_KEYS+'|'+_PHONE)
+def _secret():
+    from ..agent_workflow.fp_flags import flag
+    return _SECRET_NARROW if flag('FINBOT_PH1_SECRET_MASK',True) else _SECRET
 def _norm(text): return ' '.join(unicodedata.normalize('NFKC',text).casefold().split())
 def _dedupe(scope,owner,question,answer,evidence_hash,valid_at):
     value='|'.join((scope,owner or '',_norm(question),_norm(answer),evidence_hash,valid_at.isoformat() if valid_at else ''))
@@ -43,7 +60,13 @@ def extract_once(operator, cursor: str|None, opted_in_conversations: list[dict],
     prepared=[]; counts={'processed':0,'candidates':0,'skipped':0,'cursor':cursor,'status':'complete','error_code':None}
     for marker,conv_id,owner,turn_id,messages in turns:
         evidence='\n'.join(f'{role}: {text}' for role,text in messages)
-        if _SECRET.search(evidence):
+        secret=_secret()
+        if secret is _SECRET_NARROW and not _SECRET_LABEL.search(evidence):
+            # Only self-contained fragments (a key, an address, a number): they are masked and the turn is read.
+            # A "password:" label is not one (its value sits outside the match), so that turn is still skipped.
+            messages=[(role,_SECRET_FRAGMENT.sub('[REDACTED]',text)) for role,text in messages]
+            evidence='\n'.join(f'{role}: {text}' for role,text in messages)
+        if secret.search(evidence):
             prepared.append((marker,conv_id,owner,turn_id,messages,evidence,None));counts['skipped']+=1;continue
         try:
             output=provider({'conversation_id':conv_id,'turn_id':turn_id,'messages':[{'role':r,'content':t} for r,t in messages]})
@@ -65,7 +88,7 @@ def extract_once(operator, cursor: str|None, opted_in_conversations: list[dict],
                     if not isinstance(item,dict):counts['skipped']+=1;continue
                     question=item.get('question');answer=item.get('answer');quote=item.get('evidence_quote');kind=item.get('candidate_kind','other');category=item.get('category','')
                     if (not all(isinstance(x,str) and x.strip() for x in (question,answer,quote,category)) or kind not in _ALLOWED or
-                        len(question)>500 or len(answer)>4000 or len(quote)>1000 or quote not in evidence or _SECRET.search(question+' '+answer+' '+quote) or kind=='user_preference'):
+                        len(question)>500 or len(answer)>4000 or len(quote)>1000 or quote not in evidence or _secret().search(question+' '+answer+' '+quote) or (secret is _SECRET_NARROW and '[REDACTED]' in question+answer+quote) or kind=='user_preference'):
                         counts['skipped']+=1;continue
                     valid_at=item.get('valid_at')
                     if valid_at:

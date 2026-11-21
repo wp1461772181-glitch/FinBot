@@ -195,7 +195,9 @@ def maybe_schedule(result: dict, context: Any, state: Mapping[str, Any]) -> str:
     if getattr(context, "unattended", False) is True:
         return "unattended"
 
-    if result.get("pending_request"):
+    pending = result.get("pending_request")
+    # A memory card that rides beside a finished answer (``side``) does not make the turn an unanswered one.
+    if pending and not (isinstance(pending, dict) and pending.get("side") is True):
         return "pending_request"
 
     status = result.get("status")

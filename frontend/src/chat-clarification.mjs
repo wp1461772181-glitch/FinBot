@@ -21,6 +21,8 @@ export function normalizeClarification(value) {
   if (value.display && typeof value.display==='object') {
     const display={};
     if(value.display.agent_suggestion===true) display.agent_suggestion=true;
+    // A card that rides beside an answer that is already complete (a memory proposal): it can be pressed, but nothing waits on it.
+    if(value.display.side===true) display.side=true;
     for (const key of ['title','saved_date','web_date','alternative']) if(typeof value.display[key]==='string') display[key]=value.display[key].slice(0,600);
     const publicLink=url=>{try{const p=new URL(url);return p.protocol==='https:'&&!p.username&&!p.password?p.href:undefined}catch{return undefined}};
     if(typeof value.display.url==='string') display.url=publicLink(value.display.url);
@@ -66,12 +68,15 @@ export function clarificationTitle(clarification) { return clarification?.displa
 
 export const WAITING_STATUSES=['waiting_for_input','waiting_for_user'];
 
+export function isSideCard(message) { return message?.clarification?.display?.side===true; }
+
 export function isActiveClarification(messages,index,readOnly) {
   const message=messages[index];
-  return !readOnly && index===messages.length-1 && message?.role==='assistant' && WAITING_STATUSES.includes(message?.status) && Boolean(message.clarification);
+  return !readOnly && index===messages.length-1 && message?.role==='assistant' && (WAITING_STATUSES.includes(message?.status) || isSideCard(message)) && Boolean(message.clarification);
 }
 
-/** An assistant message that ends a turn with the ball in the user's court: a waiting status, or a card to answer. */
+/** An assistant message that ends a turn with the ball in the user's court: a waiting status, or a card to answer.
+ *  A side card rides beside a finished answer and waits on nothing, so it alone does not make the turn waiting. */
 export function awaitsUser(message) {
-  return message?.role==='assistant' && (WAITING_STATUSES.includes(message.status) || Boolean(message.clarification));
+  return message?.role==='assistant' && (WAITING_STATUSES.includes(message.status) || (Boolean(message.clarification) && !isSideCard(message)));
 }

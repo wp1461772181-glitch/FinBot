@@ -209,7 +209,9 @@ def test_without_jev_a_snapped_paraphrase_is_kept_with_a_note_and_an_exact_quote
     assert extract.PROFILE_GATE_NOTE not in item["text"]
 
 
-def test_a_missed_remember_with_an_empty_extractor_is_saved_from_the_users_words(owner):
+def test_a_missed_remember_with_an_empty_extractor_is_saved_from_the_users_words(owner, monkeypatch):
+    # FINBOT_PH1_MEMORY_FALLBACK off: the old direct write (on: a confirmation card, see test_ph1_tier1.py).
+    monkeypatch.setenv("FINBOT_PH1_MEMORY_FALLBACK", "off")
     words = "记住我主要看半导体，金额默认用亿美元"
 
     def decider(messages, _schemas):
@@ -228,6 +230,7 @@ def test_a_missed_remember_with_an_empty_extractor_is_saved_from_the_users_words
 
 
 def test_an_empty_extractor_saves_an_explicit_instruction_and_authority_text_is_not_saved(owner, monkeypatch):
+    monkeypatch.setenv("FINBOT_PH1_MEMORY_FALLBACK", "off")  # on: Jev must allow it and the row is inferred (test_ph1_tier1.py)
     words = "记住我主要看半导体，金额默认用亿美元"
     added, judged = _extract(monkeypatch, words, [], gate.MemoryVerdict("ok", 0.99))
     assert added == 1 and judged == []

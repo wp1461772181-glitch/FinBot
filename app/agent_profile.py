@@ -23,6 +23,7 @@ from sqlalchemy import func, select, text as sql
 
 from .agent_chat_models import AgentBot, AgentMessage, AgentProfileItem
 from .database import SessionLocal
+from .agent_workflow.fp_flags import flag
 
 KINDS = ("preference", "about_me", "instruction")
 KIND_LABELS = {"preference": "偏好", "about_me": "关于我", "instruction": "长期指令"}
@@ -346,6 +347,10 @@ def _pick(rows, lines, budget: int) -> list[tuple]:
     return sorted(chosen, key=lambda r: (r.created_at or floor, str(r.id)))
 
 
+def _omitted_line(count: int) -> str:
+    return f"（另有 {count} 条记忆因长度限制未显示，可在记忆页查看。）"
+
+
 def render_block(owner_hash: str, bot_id: str | None = None, *, every_bot: bool = False) -> tuple[str | None, list[str]]:
     """The profile message of a turn and the ids it carries.  Global items and the turn's bot's own fill at
     most 30 lines and 2 KB; the default bot (``every_bot``) also gets the other bots' items, labelled with
@@ -366,10 +371,24 @@ def render_block(owner_hash: str, bot_id: str | None = None, *, every_bot: bool 
     if others:
         notes.append(OTHER_BOTS_NOTE)
     head = "\n".join(notes)
-    chosen = _pick(own, lines, MAX_BLOCK_BYTES - len(head.encode())) + _pick(others, lines, MAX_BLOCK_BYTES)
+    own_budget, other_budget = MAX_BLOCK_BYTES - len(head.encode()), MAX_BLOCK_BYTES
+    own_chosen, other_chosen = _pick(own, lines, own_budget), _pick(others, lines, other_budget)
+    omitted = len(own) + len(others) - len(own_chosen) - len(other_chosen)
+    omitted_line = ""
+    if omitted and flag("FINBOT_PH1_PROFILE_OMITTED_NOTE", True):
+        # Items that did not fit are said to be there: the model must not read a cut list as the whole memory.
+        # The line's bytes (at most the digits of every item) come out of the last layer's budget first.
+        reserve = len(_omitted_line(len(own) + len(others)).encode()) + 1
+        if others:
+            other_chosen = _pick(others, lines, other_budget - reserve)
+        else:
+            own_chosen = _pick(own, lines, own_budget - reserve)
+        omitted_line = _omitted_line(len(own) + len(others) - len(own_chosen) - len(other_chosen))
+    chosen = own_chosen + other_chosen
     if not chosen:
         return None, []
-    return head + "\n" + "\n".join(lines[r.id] for r in chosen), [str(r.id) for r in chosen]
+    body = head + "\n" + "\n".join(lines[r.id] for r in chosen)
+    return (body + "\n" + omitted_line if omitted_line else body), [str(r.id) for r in chosen]
 
 
 def touch_used(owner_hash: str, ids: list[str]) -> None:

@@ -9,8 +9,10 @@ threshold (0.85).  When Jev cannot answer (no key, cap, timeout) only a candidat
 exactly from the message is kept, as before 2026-10-28.  Kept candidates are stored as ``inferred``: they
 apply at once and the owner can confirm or delete them on the memory page.
 
-A turn in which the owner asked to remember something (``audit.profile_ask``) is not read here: that ask
-gets a card or a stated refusal in the turn itself, never a silent second write (2026-10-28, AppleBot).
+A turn in which a model took the owner's words for an ask to remember (``audit.remember_handled``: the classifier said
+so, the model called remember, or the turn made the card itself) is not read here: that ask gets a card or a stated
+refusal in the turn itself, never a silent second write (2026-10-28, AppleBot). A wordlist hit alone
+(``audit.profile_ask`` without ``remember_handled``) does not keep this reading out (FINBOT_PH1_MEMORY_FALLBACK).
 
 In a bot's turn each candidate proposes a layer: "global" or "bot" (this bot).  Anything else is dropped;
 outside a bot everything is global.  The call is told the bot's name and focus, a server setting.
@@ -140,7 +142,7 @@ def _annotate_unconfirmed(text: str) -> str:
     return body + PROFILE_GATE_NOTE
 
 
-def admitted(found: list[dict], message: str) -> list[dict]:
+def admitted(found: list[dict], message: str, api_key: str | None = None) -> list[dict]:
     """Candidates whose quote is the owner's words.
 
     Jev confirming one leaves the text as the model wrote it. When Jev disallows a quote that is
@@ -150,7 +152,7 @@ def admitted(found: list[dict], message: str) -> list[dict]:
     from . import jev_memory_gate as gate
     kept = []
     for item in found:
-        verdict = gate.judge(message, item["text"], item["quote"])
+        verdict = gate.judge(message, item["text"], item["quote"], api_key=api_key)
         exact = item.pop("exact", False)
         if verdict.allows() or (verdict.status != "ok" and exact):
             kept.append(item)
@@ -206,6 +208,43 @@ async def store_explicit_fallback(owner_hash: str, message: str, *, conversation
     return outcome.get("status") in {"added", "duplicate"}
 
 
+async def store_gated_fallback(owner_hash: str, message: str, *, conversation_id: str, turn_id: str,
+                               api_key: str | None = None) -> bool:
+    """FINBOT_PH1_MEMORY_FALLBACK: the fallback cue only earns a second look.
+
+    The candidate (the owner's own sentence) is written only when Jev allows it; no answer, a timeout or a
+    missing key do not allow it, and the exact-copy shortcut of ``admitted`` does not apply. The owner never
+    pressed anything, so the row is ``inferred``, not ``explicit``. False when nothing was written."""
+    item = explicit_memory_fallback(message)
+    if not item or not owner_hash:
+        return False
+    from . import jev_memory_gate as gate
+    verdict = await asyncio.to_thread(gate.judge, message, item["text"], item["quote"], api_key=api_key)
+    if not verdict.allows():
+        log.info("memory fallback not admitted conv=%s status=%s", conversation_id, verdict.status)
+        return False
+    try:
+        source = await asyncio.to_thread(profile.user_message_id, conversation_id, turn_id)
+        outcome = await asyncio.to_thread(
+            profile.add_item, owner_hash, origin="inferred", message=message, source_message_id=source, **item)
+    except profile.ProfileError as exc:
+        log.info("memory fallback dropped reason=%s", exc)
+        return False
+    return outcome.get("status") in {"added", "duplicate"}
+
+
+def remember_handled(audit: dict | None) -> bool:
+    """Whether the turn itself handled an ask to remember, so the background reading stays out (one ask, one channel).
+
+    FINBOT_PH1_MEMORY_FALLBACK on: only when a model took it for one (the classifier, or the model's own remember call).
+    A wordlist hit alone (``profile_ask`` without ``remember_handled``) leaves the background reading to run as usual."""
+    audit = audit or {}
+    from .agent_workflow.fp_flags import flag
+    if flag("FINBOT_PH1_MEMORY_FALLBACK", True):
+        return bool(audit.get("remember_handled"))
+    return bool(audit.get("profile_ask"))
+
+
 def worth_reading(message: str) -> bool:
     text = str(message or "").strip()
     return len(text) >= 4 and not text.startswith(_CONTROL_PREFIXES)
@@ -248,13 +287,20 @@ async def extract_from_turn(owner_hash: str, message: str, *, conversation_id: s
         content = None
     offered = _model_items(content)
     found: list[dict] = []
+    from .agent_workflow.fp_flags import flag
+    # FINBOT_PH1_MEMORY_FALLBACK: the key this turn's own model call used goes to the memory gate when that provider is
+    # OpenRouter (the gate's gateway); otherwise the gate looks for its own (environment, then the model settings).
+    jev_key = api_key if flag("FINBOT_PH1_MEMORY_FALLBACK", True) and provider == "openrouter" else None
     if offered:
         found = candidates(content, message, in_bot=bot is not None)
         if found:
-            found = await asyncio.to_thread(admitted, found, message)
+            found = await asyncio.to_thread(admitted, found, message, jev_key)
     # Empty, unusable, or timed out: keep the owner's own instruction. Items the quote floor
     # dropped are not "nothing" — those stay dropped.
     if not found and not offered:
+        if flag("FINBOT_PH1_MEMORY_FALLBACK", True):
+            return int(await store_gated_fallback(owner_hash, message, conversation_id=conversation_id, turn_id=turn_id,
+                                                  api_key=jev_key))
         return int(await store_explicit_fallback(owner_hash, message, conversation_id=conversation_id, turn_id=turn_id))
     if not found:
         return 0

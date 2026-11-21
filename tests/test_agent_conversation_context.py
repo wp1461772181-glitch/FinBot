@@ -54,7 +54,9 @@ def test_a_failing_resolver_with_history_does_not_stop_the_turn():
     assert [m['content'] for m in seen[0] if m['role']=='user'][-1]=='它同比怎么样？'
     assert not any(m['role']=='system' and m['content'].startswith('用户本轮原话') for m in seen[0])
 
-def test_a_reference_with_nothing_to_point_at_still_asks():
+def test_a_reference_with_nothing_to_point_at_still_asks(monkeypatch):
+    # FINBOT_PH1_FIRST_TURN_ORDINAL off: the first-turn ordinal word is answered by the fixed card.
+    monkeypatch.setenv('FINBOT_PH1_FIRST_TURN_ORDINAL','off')
     ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=lambda *_:{'content':'好的。'})
     result=asyncio.run(direct.run_direct_turn('解释第二个',ctx,emit=emit,messages=[{'role':'user','content':'解释第二个'}]))
     assert result['status']=='waiting_for_input'

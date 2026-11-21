@@ -642,9 +642,9 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      schedule_summary(cid,x_chat_session,provider=chosen.provider,model=chosen.model,
                       api_key=chosen.key(),base_url=chosen.base_url,window=chosen.window)
      if _is_owner(x_chat_session) and not payload.pending_request_id:
-      from .agent_profile_extract import schedule_extraction
+      from .agent_profile_extract import schedule_extraction,remember_handled
       schedule_extraction(owner_hash(x_chat_session),payload.message,conversation_id=cid,turn_id=turn,
-                          bot=bot,asked_to_remember=bool((event.get("audit") or {}).get("profile_ask")),
+                          bot=bot,asked_to_remember=remember_handled(event.get("audit")),
                           provider=chosen.provider,model=chosen.model,
                           api_key=chosen.key(),base_url=chosen.base_url)
      if restored:yield frame("citations",{"turn_id":turn,"items":_client_citations(restored)})

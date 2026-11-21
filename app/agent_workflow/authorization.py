@@ -38,7 +38,7 @@ VERBS={
 _STANDING_INSTRUCTION=re.compile(r'(?:以后|今后|往后|从现在起)?(?:都)?(?:别再|不要再|不再|别用|不要用)')
 _REMEMBER_REFUSED=re.compile(r'(?:不要|别|不用|无需|不必)(?:帮我)?(?:记住|记下|记)|do not remember|don.t remember',re.I)
 NEGATION=re.compile(r'(?:不要|别|勿|无需|不用|不能|不想|禁止|切勿|请勿|千万别|do not|don.t|never|without)[^，。；;.!?\n]{0,35}',re.I)
-_POLITE_NON_NEGATION=re.compile(r'不用(?:客气|担心|多说|慌|犹豫|管|急|在意|考虑|理会|查其他|看其他|管其他|确认)|别(?:客气|担心|急|管)|无需(?:向我)?确认|不需确认',re.I)
+_POLITE_NON_NEGATION=re.compile(r'不用(?:客气|担心|多说|慌|犹豫|管|急|在意|考虑|理会|查其他|看其他|管其他|确认)|别(?:客气|担心|急|管)|无需(?:向我)?确认|不需确认|(?:别|不要)(?:忘|漏)|千万别忘',re.I)
 
 # 改/删 alone is any edit: a routine change also names what it changes.
 _ROUTINE_NOUN=re.compile(r'例行|任务|定时|每小时|每天|每日|工作日|routine|schedule',re.I)

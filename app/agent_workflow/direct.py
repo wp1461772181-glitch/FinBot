@@ -714,6 +714,8 @@ def self_state_block(context):
         else:lines.append(SELF_PRIOR['unknown'])
         if state in {'shown','none','pending'}:lines.append(SELF_PRIOR_NOTE)
     return '\n'.join(lines),audit
+GATE_NOTE_ANCHOR='并用通俗话说明差异。'
+GATE_NOTE_ENTITY_SENTENCE='gate_note 含 requested_entity_missing 的网页没写出该公司，先判断是否相关，不相关别引用。'
 def evidence_instruction(text):
     """INSTRUCTION with the SW1 read sentences, the existence sentence and the SW1B sample sentence in place, per switch. Switch off: the constant's text, unchanged."""
     if flag('FINBOT_SW1_READ_WIDEN',True):
@@ -722,6 +724,9 @@ def evidence_instruction(text):
         text=text.replace(EXISTENCE_ANCHOR,EXISTENCE_ANCHOR+EXISTENCE_INSTRUCTION,1)
     if flag('FINBOT_SW1B_SAMPLE_AGGREGATE',True):
         text=text.replace(SAMPLE_ANCHOR,SAMPLE_ANCHOR+SAMPLE_AGGREGATE_SENTENCE,1)
+    # PH1 M-3: the note a web page gets when it never spells the company (FINBOT_PH1_WEB_ENTITY_SOFT) is explained where gate_note is.
+    if flag('FINBOT_PH1_WEB_ENTITY_SOFT',True):
+        text=text.replace(GATE_NOTE_ANCHOR,GATE_NOTE_ANCHOR+GATE_NOTE_ENTITY_SENTENCE,1)
     # SW2 K5: the self-state sentence follows the existence sentence when that one is in, else the exemption anchor.
     if flag('FINBOT_SW2_SELF_STATE_WORDING',True):
         if existence_knowledge_on():text=text.replace(EXISTENCE_INSTRUCTION,EXISTENCE_INSTRUCTION+SELF_STATE_SENTENCE,1)
@@ -975,7 +980,7 @@ class Turn:
         # A skill started for this turn (「/名字」 or a task's), or loaded with use_skill: it narrows the tools.
         self.active_skill=getattr(context,'active_skill',None)
         self.sets=[x for x in self.state.get('result_sets',[]) if x.get('owner')==context.owner_hash and x.get('conversation')==context.conversation_id and isinstance(x.get('rows'),list)][-6:]
-        self.pending=None;self.proposals=[];self.proposal_calls={};self.followup=False;self.refinement=False;self.seen=set();self.evidence_signatures=set();self.no_new=0;self.repeated_evidence=0
+        self.pending=None;self.side_card=False;self.proposals=[];self.proposal_calls={};self.followup=False;self.refinement=False;self.seen=set();self.evidence_signatures=set();self.no_new=0;self.repeated_evidence=0
         # model and reasoning_effort: which model and effort answered this turn (the bot's setting, else the environment default).
         self.audit={'tool_calls':0,'distinct_successful_calls':0,'retry_count':0,'decision_steps':0,'model_calls':0,'token_usage':0,'usage_mode':'actual','nodes':[],'stop_reason':None,'stages':{},
                     'model':context.model,'reasoning_effort':sent_effort(getattr(context,'reasoning_effort',None)) or 'default',
@@ -1211,7 +1216,9 @@ class Turn:
         prior=conversation[:-1] if conversation and conversation[-1].get('role')=='user' and conversation[-1].get('content')==self.original else conversation
         relevant=[m for m in prior if m.get('role')=='user']
         no_context=not relevant and not self.sets and not self.state.get('pending_request')
-        if no_context:
+        # FINBOT_PH1_FIRST_TURN_ORDINAL: an ordinal word ("最后一份财报", "last filing") with no earlier list is not proof
+        # that the user points at a list; the resolver reads the sentence and says what is meant.
+        if no_context and not flag('FINBOT_PH1_FIRST_TURN_ORDINAL',True):
             from .semantic import ordinal_positions
             try:ordinal=ordinal_positions(self.original,100)
             except ValueError:ordinal=[]
@@ -1525,6 +1532,9 @@ class Turn:
             # The owner's own words ask to remember: the card is the guard, so a classifier that missed the ask
             # does not leave the model without the tool (2026-10-28: AppleBot said 写记忆失败, no card).
             self.audit['profile_ask']=True
+            # PH1: whether a model (the classifier, here; the model's own remember call, below) took this for an ask to remember.
+            # The wordlist alone grants the tool but is not that: it decides neither the fallback card nor the background reading.
+            if 'remember' in routing.requested_actions:self.audit['remember_handled']=True
             if self.in_scope('remember') and not vetoed('remember',self.authorization_question):self.granted_actions.add('remember')
         # 每小时找一条新闻 is a routine the owner asked for; the card is the guard, as for remember.
         if self.owner and not self.unattended() and not self.original.startswith(CONTROL_PREFIXES):
@@ -2780,7 +2790,7 @@ class Turn:
         if not self.audit.get('profile_ask') or self.pending or self.proposals or self.resuming:return False
         if 'remember' in self.write_reasons or self.audit.get('remember_called') or not self.write_allowed('remember'):return False
         from ..agent_profile_extract import (EXTRACT_PROMPT,candidates,ExtractionRejected,_model_items,
-                                             store_explicit_fallback)
+                                             store_explicit_fallback,explicit_memory_fallback)
         words=self.user_words()
         payload={'message':words[:2000],'known':[]}
         if self.context.bot_id:payload['bot']={'name':self.context.bot_name or ''}
@@ -2798,7 +2808,18 @@ class Turn:
         except (ExtractionRejected,ValueError,HTTPException,RuntimeError,TimeoutError):
             found=[];content=None
         offered=_model_items(content)
-        if not found and not offered:
+        if not found and not offered and flag('FINBOT_PH1_MEMORY_FALLBACK',True):
+            # The wordlist cue is only a second look: the owner's own sentence goes onto a card they press, never to the
+            # store. The card rides beside the answer (side_card): the cue can be wrong, and the question still gets answered.
+            if not self.audit.get('remember_handled'):
+                # Two models read this turn and neither took it for an ask to remember: the wordlist does not overrule them.
+                self.audit['memory_fallback_skipped']='classifier_not_remember'
+                return False
+            fallback=explicit_memory_fallback(words)
+            self.audit['memory_fallback_card']=bool(fallback)
+            if not fallback:return False
+            found=[{**fallback,'scope':'global'}]
+        elif not found and not offered:
             saved=await store_explicit_fallback(self.context.owner_hash,words,
                                                 conversation_id=self.context.conversation_id or '',
                                                 turn_id=str(self.state.get('turn_id') or ''))
@@ -2811,6 +2832,13 @@ class Turn:
         if not outcome.get('ok') or not self.proposals:return False
         self.write_reasons.pop('remember',None)
         await self.confirm_proposals()
+        if self.pending:self.audit['remember_handled']=True   # this channel made the card: the background reading stays out
+        # FINBOT_PH1_MEMORY_FALLBACK: a memory card never takes the place of the answer (fallback or extractor-found alike); it rides beside it.
+        # `side` on the card (and its display, which is what the client receives) lets the claim check and the client treat the turn as answered.
+        self.side_card=bool(self.pending and flag('FINBOT_PH1_MEMORY_FALLBACK',True))
+        if self.side_card:
+            self.pending['side']=True
+            if isinstance(self.pending.get('display'),dict):self.pending['display']['side']=True
         return bool(self.pending)
 
     def remember_card_finish(self):
@@ -3215,7 +3243,8 @@ class Turn:
     async def consent_reply(self):
         pending=self.state.get('pending_request');request_id=self.state.get('requested_pending_id')
         if not request_id:
-            if pending and pending.get('reason') in WRITE_CARD_REASONS and TYPED_CONSENT.fullmatch(self.original.strip()):
+            # A side card (a memory proposal beside a finished answer) waits on nothing: the next typed line is a new message.
+            if pending and not pending.get('side') and pending.get('reason') in WRITE_CARD_REASONS and TYPED_CONSENT.fullmatch(self.original.strip()):
                 # Only the card's button carries the server-minted capability, so typed words never run
                 # a write (page text could be typed the same way).  Saying so beats proposing the card again.
                 self.pending=pending;self.audit['write_outcome']='typed_consent'
@@ -3451,7 +3480,7 @@ class Turn:
             has_configured_news = any(c.get('source_type')=='configured_news' or c.get('origin')=='configured_news' for c in self.citations)
             is_web = any(getattr(obs,'tool_name',None) in {'web_research','ingest_web_source'} or (isinstance(obs,dict) and (obs.get('name') in {'web_research','ingest_web_source'} or obs.get('route')=='public_web_research')) for obs in self.observations) or any(c.get('source_type')=='web' for c in self.citations)
             check_claims = not generated and (self.route=='A' or has_configured_news or not is_web)
-            require_citations = not generated and (self.route=='A' or has_configured_news or (bool(self.observations) and not is_web and not self.pending))
+            require_citations = not generated and (self.route=='A' or has_configured_news or (bool(self.observations) and not is_web and not (self.pending and not self.side_card)))
             state=self.system_state_text() if check_claims and not self.citations else ''
             # A state tool that was attempted but failed supplies no trusted state; the narration is
             # still held to the (empty) state, so a success it claims with an invented time is flagged.
@@ -3561,6 +3590,9 @@ class Turn:
             if marker in answer:answer=answer.replace(marker,'').strip()
         if not answer:answer='模型返回了无效工具协议，请重试。';reason='provider_protocol_invalid';status='failed'
 
+        if self.side_card and self.pending and self.pending.get('side'):
+            # The answer above is the model's: it may say 记住了. Nothing is stored until the card is pressed.
+            if '尚未保存' not in answer:answer=answer.rstrip()+'\n（这条记忆尚未保存：请核对下面的确认卡，确认后才会记住。）'
         if self.audit.get('memory_fallback'):
             self.audit['write_outcome']='executed'
             if '已按你的原话记下' not in answer:
@@ -3576,7 +3608,7 @@ class Turn:
             # The code stays in audit.write_outcome; the user gets words, never internal vocabulary.
             # A revision with nothing to offer already said why and what to do next.
             if not noted and not self.revision_notice:answer+='\n操作未执行：'+REFUSAL_WORDS.get(code,'这项操作没有执行')+'。下一步：'+next_step
-        if self.mapped_entity and not self.pending:
+        if self.mapped_entity and not (self.pending and not self.side_card):
             # (A card already names its target.)  After every check, and the server's words, not the model's: a wrong mapping has to stay visible to be corrected.
             line='按 {mention} = {title}（{symbol}）理解；如果不是这家公司，请告诉我。'.format(**self.mapped_entity)
             answer=answer[:30000-len(line)-2].rstrip()+'\n\n'+line
@@ -3611,7 +3643,7 @@ class Turn:
             status,output=verify_output(result,self.last_issues,len(self.citations));await self.trace.end(node,status=status,output=output)
         # S0 起不可达：修复回合、引用重绑（remap_citations / merge_repair）保留在下面但不再执行。
         return result
-        if result['reason'] not in REPAIRABLE or not (self.observations or self.system_state_text()) or self.pending or self.budget(soft=False):
+        if result['reason'] not in REPAIRABLE or not (self.observations or self.system_state_text()) or (self.pending and not self.side_card) or self.budget(soft=False):
             return result
         best=result;best_issues=list(self.last_issues);draft=answer;retry_note=False
         best_markers=len(re.findall(r'\[\d+\]',best['answer']))
@@ -3961,7 +3993,7 @@ class Turn:
                     continue
                 if self.audit.get('absence_recheck_noted') and self.audit.get('absence_recheck_outcome') is None:self.audit['absence_recheck_outcome']='kept'
                 if self.audit.get('closing_complete_noted') and self.audit.get('closing_complete_outcome') is None:self.audit['closing_complete_outcome']='kept'
-                if await self.recover_remember():return self.remember_card_finish()
+                if await self.recover_remember() and not self.side_card:return self.remember_card_finish()
                 return await self.finish_answer(content or '没有生成可用的回答。')
             if not isinstance(calls,list) or (not sw1d and len(calls)>12):stop='provider_protocol_invalid';break
             if sw1d and len(calls)>TOOL_CALL_STREAM_GUARD:stop='tool_call_batch_too_large';break
@@ -3983,7 +4015,7 @@ class Turn:
                 # Calls the model already decided on run to the hard cap; the soft cap only ends gathering.
                 if self.budget(soft=False):stop=self.budget(soft=False);break
                 function=call.get('function',{});name=function.get('name')
-                if name=='remember':self.audit['remember_called']=True;self.audit['profile_ask']=self.audit.get('profile_ask') or bool(self.owner)
+                if name=='remember':self.audit['remember_called']=True;self.audit['remember_handled']=True;self.audit['profile_ask']=self.audit.get('profile_ask') or bool(self.owner)
                 if name in definitions() and not self.in_scope(name):
                     # Outside this bot's tool scope: refused whatever the model or a page asked for.
                     self.audit['tool_calls']+=1;outcome=tools.error('tool_not_in_bot_scope');self.feedback.append({'name':name,**outcome})
@@ -4148,7 +4180,7 @@ class Turn:
                     if display.get('saved_date') and display.get('web_date'):description='库内日期：'+display['saved_date']+'；网页日期：'+display['web_date']+'。'+description
                     return self.finish(description,status='waiting_for_input',generated=True)
         stop=stop or self.audit['stop_reason'] or self.budget() or 'no_progress'
-        if await self.recover_remember():return self.remember_card_finish()
+        if await self.recover_remember() and not self.side_card:return self.remember_card_finish()
         # Finalization never receives tools, capabilities or rejected bodies.
         async with self.trace.step('closing') as node:
             closing=await self.closing_answer()
