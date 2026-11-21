@@ -10,7 +10,7 @@ import re
 import unicodedata
 from datetime import UTC, datetime
 from ..agent_web_research import METRIC_GROUPS
-from ..freshness import published_within
+from ..freshness import published_status, published_within
 from .fp_flags import flag
 
 
@@ -223,14 +223,25 @@ def gate_row(question: str, row: dict, *, symbol: str | None=None, company: str 
     if not period_match(requested,body+' '+str(row.get('report_period') or '')+' '+str(row.get('filed_at') or row.get('trading_date') or row.get('decision_at') or row.get('start_date') or '')+' '+str(row.get('end_date') or '')):
         outcome=miss('requested_period_missing')
         if outcome:return outcome
-    if days_back is not None and not published_within(row.get('published_at') or row.get('filed_at'),days_back,now or datetime.now(UTC)):
-        return _gate_outcome(False,'requested_time_window_missing',soft)
+    date_unknown=False
+    if days_back is not None:
+        if flag('FINBOT_PH2_WEB_DATE_SOFT',True) and web:
+            # A page with no readable date cannot be shown to be outside the window either: it stays, with a note, and the answer says
+            # its time is unknown. A readable date outside the window is still the user's constraint and still refuses the row.
+            when=published_status(row.get('published_at') or row.get('filed_at'),days_back,now or datetime.now(UTC))
+            if when=='out':return _gate_outcome(False,'requested_time_window_missing',soft)
+            if when=='unknown' and soft:date_unknown=True;soft_notes.append('publisher_date_unknown')
+        elif not published_within(row.get('published_at') or row.get('filed_at'),days_back,now or datetime.now(UTC)):
+            return _gate_outcome(False,'requested_time_window_missing',soft)
     query_without_url=re.sub(r'https://\S+',' ',question)
     from ..agent_web_research import _GENERIC_LATIN
     noise=set(_GENERIC_LATIN)|{'read','explain','summarize','summarise','verified','publication','dates','cite','citation','citations','briefly'}
     words=[t.casefold() for t in re.findall(r'[A-Za-z]{3,}',query_without_url) if t.casefold() not in noise]
-    if not needed and not(company or symbol) and words and not any(contains(t,body) for t in words):return _gate_outcome(False,'weak_question_coverage',soft)
+    if not needed and not(company or symbol) and words and not any(contains(t,body) for t in words):
+        outcome=_gate_outcome(False,'weak_question_coverage',soft)
+        return (True,outcome[1]+',publisher_date_unknown') if outcome[0] and date_unknown else outcome
     if entity_soft:return True,'soft:'+','.join(['requested_entity_missing',*dict.fromkeys(soft_notes)])
+    if date_unknown:return True,'soft:publisher_date_unknown'
     return True,'sufficient_evidence'
 
 
@@ -248,7 +259,11 @@ def deterministic_confidence_gate(question: str,result: dict,citations=None,veri
             reason=next((why for _,why in outcomes),'zero_evidence')
             if reason=='requested_time_window_missing' and any(not r.get('published_at') for r in rows):reason='publisher_date_unavailable'
             return False,reason
-    if requirements.get('days_back') and any(not published_within(r.get('published_at'),requirements['days_back'],datetime.now(UTC)) for r in rows):return False,'publisher_date_unavailable'
+    if requirements.get('days_back'):
+        if flag('FINBOT_PH2_WEB_DATE_SOFT',True):
+            # Only a readable date outside the window fails the whole read; a row with no date is noted by gate_row, not a failure here.
+            if any(published_status(r.get('published_at'),requirements['days_back'],datetime.now(UTC))=='out' for r in rows):return False,'publisher_date_unavailable'
+        elif any(not published_within(r.get('published_at'),requirements['days_back'],datetime.now(UTC)) for r in rows):return False,'publisher_date_unavailable'
     return True,'heuristic_coverage_pass'
 
 

@@ -17,7 +17,7 @@ import httpx
 from langchain_core.tools import tool
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
-from .freshness import published_within, window_days
+from .freshness import published_status, published_within, window_days
 
 def _body_limit(name,default):
     try:return max(32_000,min(10_000_000,int(os.getenv(name,default))))
@@ -529,6 +529,27 @@ def _empty_meta(reason: str, span: int | None, found: int, undated: int) -> dict
             "hint": "The search ran and found nothing usable; this is not a backend failure. Do not retry the same query unchanged."}
 
 
+def _apply_window_soft(sources: list[dict], span: int, now: datetime, inferred: bool) -> list[dict]:
+    """FINBOT_PH2_WEB_DATE_SOFT: what a time window does to fetched pages.
+
+    A page dated outside a span somebody gave is dropped (the user's own constraint). A page with no readable date is kept and
+    marked ``published_at_status: "unknown"``. When the span was only guessed from the query words nothing is dropped: a page dated
+    outside it is marked ``outside_inferred_window``. Pages that gave text stay first; inside them, dated-in-window, then undated, then outside.
+    """
+    kept: list[tuple[tuple[int, int], dict]] = []
+    for row in sources:
+        status = published_status(row.get("published_at"), span, now)
+        if status == "out" and not inferred:
+            continue
+        if status == "unknown":
+            row["published_at_status"] = "unknown"
+        elif status == "out":
+            row["outside_inferred_window"] = True
+        kept.append(((1 if row.get("fetch_error") else 0, {"in": 0, "unknown": 1, "out": 2}[status]), row))
+    kept.sort(key=lambda pair: pair[0])
+    return [row for _, row in kept]
+
+
 async def _research(query_or_url: str, days_back: int | None = None, max_results: int = 5, company: str | None = None) -> dict:
     from .agent_workflow.fp_flags import flag
 
@@ -549,11 +570,20 @@ async def _research(query_or_url: str, days_back: int | None = None, max_results
     # Time filtering is controlled by the model's validated days_back argument.
     # freshness.py remains the bounded parser fallback for legacy direct callers.
     span = days_back if days_back is not None else window_days(query_or_url)
-    if not is_url and span is not None:
+    # FINBOT_PH2_WEB_DATE_SOFT: only a span somebody gave (the model's days_back, or the classifier's) is a constraint. A span that
+    # window_days guessed from the query words is a hint for the order of the results (and is reported as such), never a cut.
+    date_soft = flag("FINBOT_PH2_WEB_DATE_SOFT", True)
+    inferred_window = date_soft and days_back is None and span is not None
+    cut_span = None if inferred_window else span
+    if not is_url and cut_span is not None:
         found = len(candidates)
         # A span the user named ("半个月内"): the search backend's range is only the nearest one that holds it,
         # so what is older than the span, or cannot be dated, is left out.
-        candidates = [item for item in candidates if item.get("published_at") is None or published_within(item.get("published_at"), span, fetched_at)]
+        if date_soft:
+            # A candidate with no readable date stays (it is marked and ordered after the dated ones below); one dated outside the span goes.
+            candidates = [item for item in candidates if published_status(item.get("published_at"), cut_span, fetched_at) != "out"]
+        else:
+            candidates = [item for item in candidates if item.get("published_at") is None or published_within(item.get("published_at"), span, fetched_at)]
         if not candidates:
             result = {"ok": True, "data": [], "source": "public web search and fetched page excerpts",
                       "as_of": fetched_at.isoformat(), "error_code": None}
@@ -616,7 +646,9 @@ async def _research(query_or_url: str, days_back: int | None = None, max_results
                + [source for source in sources if source.get("fetch_error")])[:max_results]
     before = len(sources)
     undated = sum(1 for row in sources if not isinstance(row.get("published_at"), str) or not row["published_at"].strip())
-    if span is not None:
+    if date_soft and span is not None:
+        sources = _apply_window_soft(sources, span, fetched_at, inferred_window)
+    elif span is not None:
         sources=[r for r in sources if published_within(r.get("published_at"),span,fetched_at)]
     if fp8_enabled:
         if sources and all(row.get("fetch_error") for row in sources):
@@ -631,9 +663,12 @@ async def _research(query_or_url: str, days_back: int | None = None, max_results
                         "as_of": fetched_at.isoformat(), "error_code": None, "status": "not_found",
                         "meta": _empty_meta(reason, span, before if reason == "date_window" else 0,
                                             undated if reason == "date_window" else 0)}
-    return {"ok": bool(sources), "data": sources,
-            "source": "public web search and fetched page excerpts" if not is_url else "public webpage excerpt",
-            "as_of": fetched_at.isoformat(), "error_code": None if sources else "web_research_unavailable"}
+    final = {"ok": bool(sources), "data": sources,
+             "source": "public web search and fetched page excerpts" if not is_url else "public webpage excerpt",
+             "as_of": fetched_at.isoformat(), "error_code": None if sources else "web_research_unavailable"}
+    if inferred_window and sources:
+        final["meta"] = {"window_source": "inferred_from_query", "applied_window_days": span}
+    return final
 
 
 @tool(args_schema=WebResearchArgs)

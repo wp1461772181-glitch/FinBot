@@ -75,6 +75,7 @@ def _row(name, published):
 
 
 def test_a_named_span_leaves_out_what_is_older_or_undated(monkeypatch):
+    monkeypatch.setenv("FINBOT_PH2_WEB_DATE_SOFT", "off")   # the old contract (an undated page is left out); the PH2 behaviour is in test_ph2_tier2.py
     web = _fake_search(monkeypatch, [_row("fresh", _fresh(3)), _row("old", _fresh(40)), _row("undated", None)])
     result = asyncio.run(web._research("美光 最近半个月 新闻"))
     assert [row["title"] for row in result["data"]] == ["fresh"]
@@ -83,6 +84,7 @@ def test_a_named_span_leaves_out_what_is_older_or_undated(monkeypatch):
 
 
 def test_nothing_inside_the_span_is_an_empty_answer_not_an_outage(monkeypatch):
+    monkeypatch.setenv("FINBOT_PH2_WEB_DATE_SOFT", "off")   # the old contract (an undated page is left out); the PH2 behaviour is in test_ph2_tier2.py
     web = _fake_search(monkeypatch, [_row("old", _fresh(40))])
     result = asyncio.run(web._research("美光 最近半个月 新闻"))
     assert result["ok"] is True and result["data"] == [] and result["error_code"] is None
@@ -90,7 +92,8 @@ def test_nothing_inside_the_span_is_an_empty_answer_not_an_outage(monkeypatch):
     assert (passed, reason) == (False, "zero_evidence")
 
 
-def test_a_recent_question_needs_dated_sources_whichever_word_asked_for_it():
+def test_a_recent_question_needs_dated_sources_whichever_word_asked_for_it(monkeypatch):
+    monkeypatch.setenv("FINBOT_PH2_WEB_DATE_SOFT", "off")   # the old contract (an undated page is left out); the PH2 behaviour is in test_ph2_tier2.py
     undated = {"ok": True, "source": "public web search and fetched page excerpts", "source_type": "web",
                "data": [{"title": "Micron news", "url": "https://example.com/a",
                          "excerpt": "Micron news with enough words to be an excerpt.", "published_at": None}]}

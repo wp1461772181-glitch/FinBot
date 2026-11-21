@@ -31,6 +31,7 @@ import xml.etree.ElementTree as ET
 import yaml
 from sqlalchemy import desc, select
 
+from .agent_workflow.fp_flags import flag
 from .agent_chat_models import AgentInboxItem, NewsItem, NewsPushLog
 from .database import Base, SessionLocal, engine
 
@@ -1172,6 +1173,32 @@ def poll_once(
     }
 
 
+# FINBOT_PH2_NEWS_RANK: a query is cut into words the way a person would read it.  A run of Chinese characters has no spaces, so it
+# is also cut into two-character pieces ("苹果最新财报" -> 苹果, 财报); the few filler words below are dropped first.  The
+# list is deliberately short; it only keeps "的", "最新" and the like from counting as a topic.
+_QUERY_STOPWORDS = ("什么", "怎么", "怎样", "如何", "最新", "的", "了", "吗", "呢", "吧", "啊")
+_CJK_RUN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
+
+
+def _news_query_terms(query: str | None) -> list[str]:
+    """Whitespace/comma words as before, plus bigrams of every Chinese run (stopwords removed). Order kept, duplicates dropped."""
+    terms: list[str] = []
+    for tok in re.split(r"[\s,，、]+", str(query or "")):
+        tok = tok.strip().lower()
+        if not tok:
+            continue
+        terms.append(tok)
+        for run in _CJK_RUN.findall(tok):
+            for sw in _QUERY_STOPWORDS:
+                run = run.replace(sw, " ")
+            for seg in run.split():
+                if len(seg) == 2:
+                    terms.append(seg)
+                elif len(seg) > 2:
+                    terms.extend(seg[i : i + 2] for i in range(len(seg) - 1))
+    return list(dict.fromkeys(terms))
+
+
 def search_configured_news(
     query: str | None = None,
     tickers: list[str] | None = None,
@@ -1232,6 +1259,9 @@ def search_configured_news(
     wanted_tickers = [str(t).strip().upper() for t in (tickers or []) if str(t).strip()]
     wanted_keywords = [str(k).strip().lower() for k in (keywords or []) if str(k).strip()]
     query_terms = [tok.strip().lower() for tok in re.split(r"[\s,，、]+", str(query or "")) if tok.strip()]
+    rank_mode = flag("FINBOT_PH2_NEWS_RANK", True)
+    if rank_mode:
+        query_terms = _news_query_terms(query)
 
     with SessionLocal() as db:
         stmt = (
@@ -1262,6 +1292,22 @@ def search_configured_news(
         row_tickers = {str(t).upper() for t in (row.tickers or [])}
 
         score = 0.5
+        if rank_mode:
+            # FINBOT_PH2_NEWS_RANK: a hit only raises the score; nothing is dropped for missing one.  The row keeps the list of
+            # codes / keywords / query words it matched, so the model can judge how close it is.
+            hit_tickers = [t for t in wanted_tickers if t in row_tickers or t.lower() in haystack]
+            hit_keywords = [kw for kw in wanted_keywords if kw in haystack]
+            hit_query = [term for term in query_terms if term in haystack]
+            score += min(0.3, 0.15 * len(hit_tickers)) + min(0.2, 0.1 * len(hit_keywords)) + min(0.2, 0.05 * len(hit_query))
+            has_filter = bool(wanted_tickers or wanted_keywords or query_terms)
+            if has_filter and not (hit_tickers or hit_keywords or hit_query):
+                continue
+            item_dict = _row_to_dict(row, score=min(0.99, score))
+            item_dict["matched_terms"] = list(dict.fromkeys(hit_tickers + hit_keywords + hit_query))
+            item_dict["_term_hits"] = len(hit_keywords) + len(hit_query)
+            item_dict["_ticker_hits"] = len(hit_tickers)
+            matched.append(item_dict)
+            continue
         if wanted_tickers:
             ticker_hits = sum(1 for t in wanted_tickers if t in row_tickers or t.lower() in haystack)
             if ticker_hits == 0:
@@ -1281,13 +1327,29 @@ def search_configured_news(
         item_dict = _row_to_dict(row, score=min(0.99, score))
         matched.append(item_dict)
 
-    matched.sort(key=lambda x: (x.get("score", 0.0), x.get("published_at", "")), reverse=True)
+    no_term_matched = False
+    if rank_mode:
+        # Codes were asked for together with words, and no row matched any word: the code's own newest rows come back, each marked
+        # match="none", so the model sees them with that reservation instead of an empty result.
+        if wanted_tickers and (wanted_keywords or query_terms) and matched and not any(m["_term_hits"] for m in matched):
+            no_term_matched = True
+            matched.sort(key=lambda x: x.get("published_at", ""), reverse=True)
+            for m in matched:
+                m["match"] = "none"
+        for m in matched:
+            m.pop("_term_hits", None)
+            m.pop("_ticker_hits", None)
+    if not no_term_matched:
+        matched.sort(key=lambda x: (x.get("score", 0.0), x.get("published_at", "")), reverse=True)
     top_items = matched[:bounded_limit]
     meta: dict[str, Any] = {
         "searched_sources": searched_sources,
         "total_matched": len(matched),
         "refreshed": refreshed,
     }
+    if no_term_matched:
+        meta["no_term_matched"] = True
+        meta["hint"] = "fallback_to_web_search_recommended"
     if not top_items:
         meta["hint"] = "fallback_to_web_search_recommended"
 
