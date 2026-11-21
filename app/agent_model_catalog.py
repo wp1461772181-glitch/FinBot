@@ -313,6 +313,9 @@ def _reasoning_fields(entry: dict) -> dict:
         if entry.get("provider") == "anthropic":
             from .anthropic_native import display_efforts
             tiers = display_efforts(entry.get("model"))
+        elif entry.get("provider") == "siliconflow":
+            from .agent_chat_provider import siliconflow_efforts
+            tiers = siliconflow_efforts(entry.get("model"))
         else:
             tiers = NATIVE_EFFORTS.get(entry.get("provider"))
         if tiers is None:
