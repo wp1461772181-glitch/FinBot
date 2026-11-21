@@ -174,10 +174,13 @@ def gate_row(question: str, row: dict, *, symbol: str | None=None, company: str 
             allowed_entities.extend(['Facebook'])
     entity_soft=False
     soft_notes:list[str]=[]
+    # FINBOT_PH2_WEB_DATE_SOFT: a soft miss (period, metric wording) is noted and the checks go on, so the freshness window and
+    # the unknown-date note are never skipped because an earlier soft check returned first.
+    accumulate=soft and flag('FINBOT_PH2_WEB_DATE_SOFT',True)
     def miss(reason):
-        """The outcome of a soft-able miss. With an entity that is only soft, a soft miss is noted and the checks go on (None)."""
+        """The outcome of a soft-able miss. When soft misses accumulate (or the entity is only soft), it is noted and the checks go on (None)."""
         outcome=_gate_outcome(False,reason,soft)
-        if entity_soft and outcome[0]:soft_notes.append(outcome[1][5:]);return None
+        if (entity_soft or accumulate) and outcome[0]:soft_notes.append(outcome[1][5:]);return None
         return outcome
     # Saved rows are verified by their query's symbol filter. Public pages must name the
     # entity in body text; a forged headline by itself is never sufficient.
@@ -242,8 +245,10 @@ def gate_row(question: str, row: dict, *, symbol: str | None=None, company: str 
     words=[t.casefold() for t in re.findall(r'[A-Za-z]{3,}',query_without_url) if t.casefold() not in noise]
     if not needed and not(company or symbol) and words and not any(contains(t,body) for t in words):
         outcome=_gate_outcome(False,'weak_question_coverage',soft)
+        if accumulate and outcome[0]:return True,'soft:'+','.join(dict.fromkeys(['weak_question_coverage',*soft_notes]))
         return (True,outcome[1]+',publisher_date_unknown') if outcome[0] and date_unknown else outcome
     if entity_soft:return True,'soft:'+','.join(['requested_entity_missing',*dict.fromkeys(soft_notes)])
+    if accumulate and soft_notes:return True,'soft:'+','.join(dict.fromkeys(soft_notes))
     if date_unknown:return True,'soft:publisher_date_unknown'
     return True,'sufficient_evidence'
 

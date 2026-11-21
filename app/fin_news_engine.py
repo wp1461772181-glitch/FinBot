@@ -1300,7 +1300,11 @@ def search_configured_news(
                 # The row says which company it is about and it is not one asked for: a structured fact that does not match (the
                 # same rule gate_row applies to a row's own symbol), not a matter of which words it contains.
                 continue
-            hit_tickers = [t for t in wanted_tickers if t in row_tickers or t.lower() in haystack]
+            # A code counts from the row's own tags, or from the text only as a whole, case-exact token: a lowercase substring
+            # would let short codes (F, T, ON, AI) match ordinary words and sort unrelated stories first.
+            text = f"{row.title or ''} {row.summary or ''}"
+            hit_tickers = [t for t in wanted_tickers if t in row_tickers
+                           or re.search(r"(?<![A-Za-z0-9])" + re.escape(t) + r"(?![A-Za-z0-9])", text)]
             hit_keywords = [kw for kw in wanted_keywords if kw in haystack]
             hit_query = [term for term in query_terms if term in haystack]
             score += min(0.3, 0.15 * len(hit_tickers)) + min(0.2, 0.1 * len(hit_keywords)) + min(0.2, 0.05 * len(hit_query))

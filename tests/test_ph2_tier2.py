@@ -235,6 +235,23 @@ def test_gate_row_undated_page_with_entity_soft_carries_both_notes(monkeypatch):
     assert ok and reason == "soft:requested_entity_missing,publisher_date_unknown"
 
 
+def test_gate_row_a_soft_metric_miss_does_not_skip_the_date_checks_when_on(monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH2_WEB_DATE_SOFT", True)
+    # The page does not mention revenue (a soft miss); the date checks still run after it.
+    assert gate_row("Apple revenue", _page(), company="Apple", days_back=7, soft=True) == \
+        (True, "soft:requested_metric_missing:revenue,publisher_date_unknown")
+    assert gate_row("Apple revenue", _page(published_at=_day(30)), company="Apple", days_back=7, soft=True) == \
+        (False, "requested_time_window_missing")
+    assert gate_row("Apple revenue", _page(published_at=_day(1)), company="Apple", days_back=7, soft=True) == \
+        (True, "soft:requested_metric_missing:revenue")
+
+
+def test_gate_row_a_soft_metric_miss_off_returns_first_as_before(monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH2_WEB_DATE_SOFT", False)
+    for row in (_page(), _page(published_at=_day(30))):
+        assert gate_row("Apple revenue", row, company="Apple", days_back=7, soft=True) == (True, "soft:requested_metric_missing:revenue")
+
+
 def test_gate_row_dated_outside_the_window_is_still_refused_when_on(monkeypatch):
     _switch(monkeypatch, "FINBOT_PH2_WEB_DATE_SOFT", True)
     assert gate_row("Apple news", _page(published_at=_day(30)), company="Apple", days_back=7, soft=True) == (False, "requested_time_window_missing")
@@ -500,6 +517,18 @@ def test_news_rank_row_about_another_company_is_skipped_with_several_tickers(new
     res = engine_mod.search_configured_news(tickers=["AAPL", "MSFT"], query="财报")
     assert sorted(i["url"].rsplit("/", 1)[-1] for i in res["items"]) == ["aapl", "msft", "untagged"]
     assert res["items"][-1]["url"].endswith("untagged")
+
+
+def test_news_rank_a_short_code_counts_only_as_a_whole_case_exact_token(news_db, monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH2_NEWS_RANK", True)
+    _add("Fund flows for the week before earnings", key="noise", minutes_ago=1)   # "f" as a substring, never the code F
+    _add("Ford (F) earnings beat estimates", key="ford-text", minutes_ago=5)     # the code written as a token
+    _add("Ford quarterly earnings", tickers=["F"], key="ford-tag", minutes_ago=9)
+    res = engine_mod.search_configured_news(tickers=["F"], query="earnings")
+    order = [i["url"].rsplit("/", 1)[-1] for i in res["items"]]
+    assert order[-1] == "noise" and set(order[:2]) == {"ford-text", "ford-tag"}
+    noise = next(i for i in res["items"] if i["url"].endswith("noise"))
+    assert "F" not in noise["matched_terms"]
 
 
 def test_news_rank_row_about_another_company_single_ticker_does_not_take_a_slot(news_db, monkeypatch):
