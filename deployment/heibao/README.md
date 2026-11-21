@@ -82,3 +82,11 @@ GitHub Actions 每 15 分钟（UTC cron `*/15 * * * *`）从公网访问 `${{ va
 - 配置 Telegram（可选）：仓库 Settings → Secrets and variables → Actions → New repository secret，添加 `WATCHDOG_TELEGRAM_BOT_TOKEN`（Bot 令牌）和 `WATCHDOG_TELEGRAM_CHAT_ID`（接收消息的 chat id）。建议用与盒子上 bridge 不同的 bot，且先给该 bot 发过消息。没配置时只靠失败邮件。
 - 限制：公开仓库连续 60 天没有提交时，GitHub 会自动停用定时工作流（会发邮件提示），需要在 Actions 页面手动重新启用，或推一次提交。
 - 手动试跑：Actions 页面选 Box watchdog，Run workflow。
+
+## 盒外副本（Mac）
+
+盒子上的备份和数据库在同一块存储上，盘坏了两者一起丢。owner 的 Mac 上有一个 launchd 任务
+`com.market-evidence-agent.backup`（脚本 `~/finbot-backup/backup.sh`，每天 20:00，Mac 睡着时醒来后补跑），
+经 ssh 从盒子的 `/opt/finbot/backups/db/` 拉最新的 `finbot-*.dump` 和 `pgvector-*.dump` 到仓库的
+`data/backups/`（已被 git 忽略），核对 sha256，各保留最近 7 份。日志在 `~/finbot-backup/backup.log`。
+这个脚本不在仓库里；它之前是每周 pg_dump 已冻结的 Supabase 副本，2026-11-21 改为从盒子拉取。
