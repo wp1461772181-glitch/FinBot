@@ -715,7 +715,7 @@ def self_state_block(context):
         if state in {'shown','none','pending'}:lines.append(SELF_PRIOR_NOTE)
     return '\n'.join(lines),audit
 GATE_NOTE_ANCHOR='并用通俗话说明差异。'
-GATE_NOTE_ENTITY_SENTENCE='gate_note 为 requested_entity_missing 的网页，标题和正文没有字面写出所问公司的名称或代码：先判断它是否真的在讲这家公司，不相关就不要引用。'
+GATE_NOTE_ENTITY_SENTENCE='gate_note 含 requested_entity_missing 的网页没写出该公司，先判断是否相关，不相关别引用。'
 def evidence_instruction(text):
     """INSTRUCTION with the SW1 read sentences, the existence sentence and the SW1B sample sentence in place, per switch. Switch off: the constant's text, unchanged."""
     if flag('FINBOT_SW1_READ_WIDEN',True):
@@ -2808,7 +2808,6 @@ class Turn:
         except (ExtractionRejected,ValueError,HTTPException,RuntimeError,TimeoutError):
             found=[];content=None
         offered=_model_items(content)
-        fallback_card=False
         if not found and not offered and flag('FINBOT_PH1_MEMORY_FALLBACK',True):
             # The wordlist cue is only a second look: the owner's own sentence goes onto a card they press, never to the
             # store. The card rides beside the answer (side_card): the cue can be wrong, and the question still gets answered.
@@ -2819,7 +2818,7 @@ class Turn:
             fallback=explicit_memory_fallback(words)
             self.audit['memory_fallback_card']=bool(fallback)
             if not fallback:return False
-            found=[{**fallback,'scope':'global'}];fallback_card=True
+            found=[{**fallback,'scope':'global'}]
         elif not found and not offered:
             saved=await store_explicit_fallback(self.context.owner_hash,words,
                                                 conversation_id=self.context.conversation_id or '',
@@ -2833,8 +2832,13 @@ class Turn:
         if not outcome.get('ok') or not self.proposals:return False
         self.write_reasons.pop('remember',None)
         await self.confirm_proposals()
-        self.side_card=bool(fallback_card and self.pending)
         if self.pending:self.audit['remember_handled']=True   # this channel made the card: the background reading stays out
+        # FINBOT_PH1_MEMORY_FALLBACK: a memory card never takes the place of the answer (fallback or extractor-found alike); it rides beside it.
+        # `side` on the card (and its display, which is what the client receives) lets the claim check and the client treat the turn as answered.
+        self.side_card=bool(self.pending and flag('FINBOT_PH1_MEMORY_FALLBACK',True))
+        if self.side_card:
+            self.pending['side']=True
+            if isinstance(self.pending.get('display'),dict):self.pending['display']['side']=True
         return bool(self.pending)
 
     def remember_card_finish(self):
@@ -3585,6 +3589,9 @@ class Turn:
             if marker in answer:answer=answer.replace(marker,'').strip()
         if not answer:answer='模型返回了无效工具协议，请重试。';reason='provider_protocol_invalid';status='failed'
 
+        if self.side_card and self.pending and self.pending.get('side'):
+            # The answer above is the model's: it may say 记住了. Nothing is stored until the card is pressed.
+            if '尚未保存' not in answer:answer=answer.rstrip()+'\n（这条记忆尚未保存：请核对下面的确认卡，确认后才会记住。）'
         if self.audit.get('memory_fallback'):
             self.audit['write_outcome']='executed'
             if '已按你的原话记下' not in answer:

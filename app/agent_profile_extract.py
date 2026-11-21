@@ -9,8 +9,10 @@ threshold (0.85).  When Jev cannot answer (no key, cap, timeout) only a candidat
 exactly from the message is kept, as before 2026-10-28.  Kept candidates are stored as ``inferred``: they
 apply at once and the owner can confirm or delete them on the memory page.
 
-A turn in which the owner asked to remember something (``audit.profile_ask``) is not read here: that ask
-gets a card or a stated refusal in the turn itself, never a silent second write (2026-10-28, AppleBot).
+A turn in which a model took the owner's words for an ask to remember (``audit.remember_handled``: the classifier said
+so, the model called remember, or the turn made the card itself) is not read here: that ask gets a card or a stated
+refusal in the turn itself, never a silent second write (2026-10-28, AppleBot). A wordlist hit alone
+(``audit.profile_ask`` without ``remember_handled``) does not keep this reading out (FINBOT_PH1_MEMORY_FALLBACK).
 
 In a bot's turn each candidate proposes a layer: "global" or "bot" (this bot).  Anything else is dropped;
 outside a bot everything is global.  The call is told the bot's name and focus, a server setting.

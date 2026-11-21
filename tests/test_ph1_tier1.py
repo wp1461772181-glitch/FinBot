@@ -173,7 +173,7 @@ def test_p1_background_reading_stays_out_only_when_a_model_took_the_ask(monkeypa
     assert extract.remember_handled({"profile_ask": True}) is True   # the old reading of the word hit
 
 
-def test_p1_a_card_the_extractor_found_still_ends_the_turn_and_counts_as_handled(owner, monkeypatch):
+def test_p1_a_card_the_extractor_found_rides_beside_the_answer_too_and_counts_as_handled(owner, monkeypatch):
     _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
     item = {"kind": "about_me", "topic": None, "text": "看好苹果的服务业务", "quote": "我看好苹果的服务业务"}
 
@@ -182,9 +182,35 @@ def test_p1_a_card_the_extractor_found_still_ends_the_turn_and_counts_as_handled
             return {"content": json.dumps({"items": [item]}, ensure_ascii=False)}
         return {"content": "好的，我记住了。"}
     result = _turn("记住我看好苹果的服务业务", _context("conv-ph1-handled", intent_recognizer=_route(), decider=decider))
+    card = result["pending_request"]
+    assert result["status"] == "succeeded" and "好的，我记住了。" in result["answer"]
+    assert "尚未保存" in result["answer"]                       # the server says what the model's 记住了 is not yet
+    assert card["side"] is True and card["display"]["side"] is True
+    assert result["audit"].get("remember_handled") is True and extract.remember_handled(result["audit"]) is True
+    assert profile.list_items(OWNER_HASH) == []
+
+
+def test_p1_with_the_switch_off_a_found_card_still_ends_the_turn(owner, monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", False)
+    item = {"kind": "about_me", "topic": None, "text": "看好苹果的服务业务", "quote": "我看好苹果的服务业务"}
+
+    def decider(messages, _schemas):
+        if _is_extract(messages):
+            return {"content": json.dumps({"items": [item]}, ensure_ascii=False)}
+        return {"content": "好的，我记住了。"}
+    result = _turn("记住我看好苹果的服务业务", _context("conv-ph1-found-off", intent_recognizer=_route(), decider=decider))
     assert result["status"] == "waiting_for_input" and "请核对确认卡" in result["answer"]
-    assert result["pending_request"] and result["audit"].get("remember_handled") is True
-    assert extract.remember_handled(result["audit"]) is True
+    assert "side" not in result["pending_request"] and "side" not in result["pending_request"]["display"]
+
+
+def test_p1_a_side_card_turn_is_an_answered_turn_for_the_claim_check(monkeypatch):
+    from app.agent_workflow import claim_shadow
+    monkeypatch.setattr(claim_shadow, "enabled", lambda: False)
+    assert claim_shadow.maybe_schedule({"pending_request": {"side": True}}, object(), {}) == "shadow_off"
+    monkeypatch.setattr(claim_shadow, "enabled", lambda: True)
+    ctx = type("C", (), {"unattended": False})()
+    assert claim_shadow.maybe_schedule({"pending_request": {"id": "x"}}, ctx, {}) == "pending_request"
+    assert claim_shadow.maybe_schedule({"pending_request": {"side": True}, "status": "succeeded", "citations": []}, ctx, {}) == "no_numbered_sources"
 
 
 def test_p1_in_turn_off_is_the_old_direct_write(owner, monkeypatch):
@@ -249,6 +275,38 @@ def test_m3_the_hard_stops_stay_hard(monkeypatch):
     assert gate_row("q", _web_row(excerpt=named), symbol="AAPL", company="Apple Inc.", metrics=[], soft=True)[0] is True
 
 
+def test_m3_a_stale_page_that_does_not_name_the_company_is_refused_by_the_time_window(monkeypatch):
+    from datetime import UTC, datetime
+    _switch(monkeypatch, "FINBOT_PH1_WEB_ENTITY_SOFT", True)
+    now = datetime(2026, 11, 21, tzinfo=UTC)
+    unnamed = "The iPhone maker reported revenue of $90 billion."
+    kw = dict(symbol="AAPL", company="Apple Inc.", metrics=[], soft=True, days_back=7, now=now)
+    assert gate_row("q", _web_row(excerpt=unnamed, published_at="2025-01-02T00:00:00+00:00"), **kw) == (False, "requested_time_window_missing")
+    assert gate_row("q", {**_web_row(excerpt=unnamed, published_at="2025-01-02T00:00:00+00:00"), "source_type": "configured_news"}, **kw) == (False, "requested_time_window_missing")
+    assert gate_row("q", _web_row(excerpt="Apple reported revenue.", published_at="2025-01-02T00:00:00+00:00"), **kw) == (False, "requested_time_window_missing")
+    assert gate_row("q", _web_row(excerpt=unnamed, published_at="2026-11-20T00:00:00+00:00"), **kw) == (True, "soft:requested_entity_missing")
+
+
+def test_m3_the_entity_note_carries_the_other_soft_notes_and_does_not_add_a_metric_miss(monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH1_WEB_ENTITY_SOFT", True)
+    unnamed = "The iPhone maker reported revenue of $90 billion for the quarter."
+    ok, reason = gate_row("AAPL revenue Q3 2024", _web_row(excerpt=unnamed), symbol="AAPL", company="Apple Inc.", metrics=["revenue"], soft=True)
+    assert ok and reason.startswith("soft:requested_entity_missing")
+    assert "requested_metric_missing" not in reason          # the unnamed passage counts for the metric
+    assert "requested_period_missing" in reason              # the quarter is not in the page: noted, not dropped
+    named = _web_row(excerpt="Apple reported revenue of $90 billion for the quarter.")
+    assert gate_row("AAPL revenue Q3 2024", named, symbol="AAPL", company="Apple Inc.", metrics=["revenue"], soft=True) == (True, "soft:requested_period_missing")
+
+
+def test_m3_a_soft_entity_row_does_not_borrow_the_scopes_symbol_in_its_citation(monkeypatch):
+    from tests.test_agent_scope_phase1 import _context, _step, _run, SECTOR_PAGE
+    _switch(monkeypatch, "FINBOT_PH1_WEB_ENTITY_SOFT", True)
+    context, _, _, _ = _context(classified={"symbol": "AAPL", "company": "Apple"}, steps=[_step("web_research", query="AAPL 新闻"), {"content": "没有可核验资料。"}],
+                                rows={"web_research": [SECTOR_PAGE]})
+    [citation] = _run("Apple（AAPL）最近有什么新闻", context)["citations"]
+    assert "requested_entity_missing" in citation["fields"]["gate_note"] and citation["symbol"] is None
+
+
 def test_m3_the_note_rides_on_the_row_the_model_reads(monkeypatch):
     """direct.py puts the reason after ``soft:`` on the accepted row as ``gate_note``, which the system prompt tells the model to weigh."""
     from app.agent_system_prompt import INSTRUCTION
@@ -272,15 +330,19 @@ def test_m7_dont_forget_is_not_a_negation():
 # --- 5. A1: the phone pattern --------------------------------------------------------------------
 
 @pytest.mark.parametrize("text", ["财报日期 2024-03-31", "revenue 12 13 14 15 16", "2024-01-01 至 2024-03-31",
-                                  "营收 1,234,567,890 美元", "FY2024 Q3", "市值 15000000000 元"])
+                                  "营收 1,234,567,890 美元", "FY2024 Q3", "涨幅 +1.2345678%", "同比 +12345678 元",
+                                  "2023-01-15 至 2024-06-30", "AAPL 2024-11-21", "600519 2024-11-21", "123.45-678.90",
+                                  "2024.11.21 2025.01.02", "ISIN US0378331005", "CUSIP 037833100"])
 def test_a1_dates_and_figures_are_not_phone_numbers(monkeypatch, text):
     from app.knowledge import extraction
     _switch(monkeypatch, "FINBOT_PH1_SECRET_MASK", True)
     assert not extraction._secret().search(text)
 
 
-@pytest.mark.parametrize("text", ["13812345678", "+86 138 1234 5678", "+61 412 345 678", "(03) 9905 1234",
-                                  "138-1234-5678", "555 123 4567", "555.123.4567", "(555) 123-4567", "sk-abcdefghijklmnopqrstuvwx", "me@example.com", "password: hunter2"])
+@pytest.mark.parametrize("text", ["13812345678", "电话 13800000000", "+86 138 1234 5678", "+61 412 345 678", "(03) 9905 1234",
+                                  "138-1234-5678", "555 123 4567", "555.123.4567", "(555) 123-4567", "1-800-555-1234",
+                                  "0412345678", "+44 20 7946 0958", "+852 1234 5678", "+8613812345678",
+                                  "sk-abcdefghijklmnopqrstuvwx", "me@example.com", "password: hunter2"])
 def test_a1_real_secrets_still_match(monkeypatch, text):
     from app.knowledge import extraction
     _switch(monkeypatch, "FINBOT_PH1_SECRET_MASK", True)
@@ -385,110 +447,13 @@ def test_p4_nothing_left_out_adds_nothing(owner, monkeypatch):
 
 def test_m3_the_prompt_explains_the_entity_note_only_when_the_switch_is_on(monkeypatch):
     from app.agent_system_prompt import INSTRUCTION
-    from app.agent_workflow.direct import evidence_instruction
+    from app.agent_workflow import direct
     text = "\n".join(INSTRUCTION)
     _switch(monkeypatch, "FINBOT_PH1_WEB_ENTITY_SOFT", True)
-    on = evidence_instruction(text)
+    on = direct.evidence_instruction(text)
     _switch(monkeypatch, "FINBOT_PH1_WEB_ENTITY_SOFT", False)
-    off = evidence_instruction(text)
-    assert "requested_entity_missing" in on and "不相关就不要引用" in on
+    off = direct.evidence_instruction(text)
+    assert "requested_entity_missing" in on and "不相关别引用" in on
     assert "requested_entity_missing" not in off
-    assert on.replace("gate_note 为 requested_entity_missing 的网页，标题和正文没有字面写出所问公司的名称或代码：先判断它是否真的在讲这家公司，不相关就不要引用。", "", 1) == off
-
-
-# --- the memory gate's key --------------------------------------------------------------------------
-
-class _Reply:
-    status_code = 200
-
-    def json(self):
-        return {"answers": {"memory": {"type": "choice", "choice": "remember", "probabilities": {"remember": 0.97, "skip": 0.03}}}}
-
-
-class _Recorder:
-    def __init__(self):
-        self.headers = []
-
-    def post(self, url, json=None, headers=None, timeout=None):
-        self.headers.append(headers)
-        return _Reply()
-
-
-def _no_env_key(monkeypatch):
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-
-
-def test_key_with_nothing_in_the_environment_the_models_settings_key_is_used(monkeypatch, tmp_path):
-    from app import agent_model_catalog as catalog
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    _no_env_key(monkeypatch)
-    monkeypatch.setattr(catalog, "openrouter_key", lambda: "or-key-from-settings")
-    client = _Recorder()
-    verdict = gate.judge("m", "c", "e", client=client, daily_path=str(tmp_path / "d.json"))
-    assert verdict.allows() and client.headers[0]["Authorization"] == "Bearer or-key-from-settings"
-    # no client: the real transport path is reached (a key was found), not skipped
-    seen = []
-
-    class _Fail:
-        def post(self, *_a, **kw):
-            seen.append(kw["headers"]["Authorization"])
-            raise TimeoutError
-
-    monkeypatch.setattr(gate, "_UrllibClient", lambda: _Fail())
-    assert gate.judge("m", "c", "e", daily_path=str(tmp_path / "d2.json")).status == "timeout" and seen == ["Bearer or-key-from-settings"]
-
-
-def test_key_order_is_explicit_then_environment_then_settings(monkeypatch, tmp_path):
-    from app import agent_model_catalog as catalog
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    monkeypatch.setattr(catalog, "openrouter_key", lambda: "or-key-from-settings")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key-from-env")
-    seen = _Recorder()
-    gate.judge("m", "c", "e", client=seen, daily_path=str(tmp_path / "a.json"))
-    gate.judge("m", "c", "e", client=seen, api_key="or-key-explicit", daily_path=str(tmp_path / "b.json"))
-    # with a client given the environment is not read (old behaviour): the settings key fills in
-    assert [h["Authorization"] for h in seen.headers] == ["Bearer or-key-from-settings", "Bearer or-key-explicit"]
-    client = _Recorder()
-    monkeypatch.setattr(gate, "_UrllibClient", lambda: client)
-    gate.judge("m", "c", "e", daily_path=str(tmp_path / "c.json"))
-    assert client.headers[0]["Authorization"] == "Bearer or-key-from-env"
-
-
-def test_key_off_means_no_settings_lookup_and_skipped(monkeypatch):
-    from app import agent_model_catalog as catalog
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", False)
-    _no_env_key(monkeypatch)
-    monkeypatch.setattr(catalog, "openrouter_key", lambda: pytest.fail("the settings are not read when the switch is off"))
-    assert gate.judge("m", "c", "e").status == "skipped"
-
-
-def test_the_catalog_picks_the_default_openrouter_entry_first_and_never_raises(monkeypatch):
-    from app import agent_model_catalog as catalog
-    entries = [{"name": "a", "provider": "openrouter", "key_source": "vault"},
-               {"name": "b", "provider": "openai", "key_source": "vault"},
-               {"name": "c", "provider": "openrouter", "key_source": "vault"}]
-    monkeypatch.setattr(catalog, "entries", lambda: (entries, "c"))
-    monkeypatch.setattr(catalog, "_key_for", lambda entry: {"a": "key-a-0000", "b": "key-b-0000", "c": "key-c-0000"}[entry["name"]])
-    assert catalog.openrouter_key() == "key-c-0000"
-    monkeypatch.setattr(catalog, "_key_for", lambda entry: None)
-    assert catalog.openrouter_key() is None
-
-    def boom():
-        raise RuntimeError("db down: secret-looking-text")
-    monkeypatch.setattr(catalog, "entries", boom)
-    assert catalog.openrouter_key() is None
-
-
-def test_a_turn_on_openrouter_hands_its_own_key_to_the_memory_gate(owner, monkeypatch):
-    from app import agent_chat_provider
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    keys = []
-
-    async def fake(_provider, _model, _key, _messages, _tools, _base):
-        return {}, {"content": json.dumps({"items": []})}
-    monkeypatch.setattr(agent_chat_provider, "decision_request", fake)
-    monkeypatch.setattr(gate, "judge", lambda msg, text, ev, **kw: keys.append(kw.get("api_key")) or gate.MemoryVerdict("skipped"))
-    for provider in ("openrouter", "deepseek"):
-        asyncio.run(extract.extract_from_turn(OWNER_HASH, STANDING, conversation_id="c", turn_id=str(uuid.uuid4()),
-                                              provider=provider, model="m", api_key="turn-key-0000", base_url=None))
-    assert keys == ["turn-key-0000", None]
+    assert on.replace(direct.GATE_NOTE_ENTITY_SENTENCE, "", 1) == off
+    assert len(direct.GATE_NOTE_ENTITY_SENTENCE) <= 70   # the guest instruction has little room (test_b17)

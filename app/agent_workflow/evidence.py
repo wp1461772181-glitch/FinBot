@@ -172,13 +172,22 @@ def gate_row(question: str, row: dict, *, symbol: str | None=None, company: str 
             allowed_entities.extend(['Alphabet'])
         elif 'meta' in c_lower:
             allowed_entities.extend(['Facebook'])
+    entity_soft=False
+    soft_notes:list[str]=[]
+    def miss(reason):
+        """The outcome of a soft-able miss. With an entity that is only soft, a soft miss is noted and the checks go on (None)."""
+        outcome=_gate_outcome(False,reason,soft)
+        if entity_soft and outcome[0]:soft_notes.append(outcome[1][5:]);return None
+        return outcome
     # Saved rows are verified by their query's symbol filter. Public pages must name the
     # entity in body text; a forged headline by itself is never sufficient.
     if web and (company or symbol) and not any(contains(x,body+' '+title) for x in allowed_entities):
         # FINBOT_PH1_WEB_ENTITY_SOFT: a page that never spells the company's name ("The iPhone maker", 苹果公司) may still be
         # about it. The row stays, with a note; a symbol the row itself carries (above) is a structured fact and stays hard.
-        if flag('FINBOT_PH1_WEB_ENTITY_SOFT',True) and soft:return True,'soft:requested_entity_missing'
-        return False,'requested_entity_missing'
+        # It is not an early return: the period, the metric and above all the freshness window (an explicit constraint of the
+        # user, never softened) are still checked, and their soft notes ride with this one.
+        if flag('FINBOT_PH1_WEB_ENTITY_SOFT',True) and soft:entity_soft=True
+        else:return False,'requested_entity_missing'
     if not web and symbol and not row.get('symbol') and not row.get('_verified_symbol') and not any(contains(x,body+' '+title) for x in allowed_entities):
         return False,'requested_entity_missing'
     needed=metrics if metrics is not None else [key for key,terms in METRIC_GROUPS.items() if any(contains(t,question) for t in terms)]
@@ -194,20 +203,26 @@ def gate_row(question: str, row: dict, *, symbol: str | None=None, company: str 
         if key=='forecast' and row.get('probabilities'):continue
         terms=METRIC_GROUPS.get(key,(key,))
         passages=re.split(r'[。！？\n]|(?<=[.!?])\s+',body)
-        relevant=[part for part in passages if any(contains(t,part) for t in terms) and (not web or not(company or symbol) or any(contains(x,part) for x in allowed_entities))]
+        relevant=[part for part in passages if any(contains(t,part) for t in terms) and (not web or not(company or symbol) or entity_soft or any(contains(x,part) for x in allowed_entities))]
         if not relevant:
             for i, part in enumerate(passages):
                 if any(contains(t,part) for t in terms):
                     prev = passages[i-1] if i > 0 else ''
                     nxt = passages[i+1] if i + 1 < len(passages) else ''
                     combined = prev + ' ' + part + ' ' + nxt
-                    if any(contains(x, combined) for x in allowed_entities) and not re.search(r'\b(?:Samsung|Google|Microsoft|Meta|Amazon|Intel|Nvidia|Tesla)\b', part, re.I):
+                    if (entity_soft or any(contains(x, combined) for x in allowed_entities)) and not re.search(r'\b(?:Samsung|Google|Microsoft|Meta|Amazon|Intel|Nvidia|Tesla)\b', part, re.I):
                         relevant.append(combined)
-        if not relevant:return _gate_outcome(False,'requested_metric_missing:'+key,soft)
-        if not any(period_match(period or question,part) for part in relevant):return _gate_outcome(False,'requested_period_missing',soft)
+        if not relevant:
+            outcome=miss('requested_metric_missing:'+key)
+            if outcome:return outcome
+            continue
+        if not any(period_match(period or question,part) for part in relevant):
+            outcome=miss('requested_period_missing')
+            if outcome:return outcome
     requested=period or question
     if not period_match(requested,body+' '+str(row.get('report_period') or '')+' '+str(row.get('filed_at') or row.get('trading_date') or row.get('decision_at') or row.get('start_date') or '')+' '+str(row.get('end_date') or '')):
-        return _gate_outcome(False,'requested_period_missing',soft)
+        outcome=miss('requested_period_missing')
+        if outcome:return outcome
     if days_back is not None and not published_within(row.get('published_at') or row.get('filed_at'),days_back,now or datetime.now(UTC)):
         return _gate_outcome(False,'requested_time_window_missing',soft)
     query_without_url=re.sub(r'https://\S+',' ',question)
@@ -215,6 +230,7 @@ def gate_row(question: str, row: dict, *, symbol: str | None=None, company: str 
     noise=set(_GENERIC_LATIN)|{'read','explain','summarize','summarise','verified','publication','dates','cite','citation','citations','briefly'}
     words=[t.casefold() for t in re.findall(r'[A-Za-z]{3,}',query_without_url) if t.casefold() not in noise]
     if not needed and not(company or symbol) and words and not any(contains(t,body) for t in words):return _gate_outcome(False,'weak_question_coverage',soft)
+    if entity_soft:return True,'soft:'+','.join(['requested_entity_missing',*dict.fromkeys(soft_notes)])
     return True,'sufficient_evidence'
 
 
@@ -530,7 +546,7 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
                 'published_at':row.get('published_at') or row.get('filed_at') or row.get('trading_date'),
                 'observed_at':row.get('fetched_at') or row.get('observed_at'),'quote':body[:QUOTE_DISPLAY_CHARS],
                 'trading_date':row.get('trading_date'),'source':row.get('source'),'fetched_at':row.get('fetched_at'),
-                'symbol':row.get('symbol') or scope.get('symbol'),'analysis_id':row.get('analysis_id'),'derived':kind=='ai_analysis','truncated':bool(row.get('truncated')),
+                'symbol':row.get('symbol') if 'requested_entity_missing' in str(row.get('gate_note') or '') else row.get('symbol') or scope.get('symbol'),'analysis_id':row.get('analysis_id'),'derived':kind=='ai_analysis','truncated':bool(row.get('truncated')),
                 'saved_text':row.get('saved_text'),
                 'fields':_citation_fields(row),'evidence_quotes':_evidence_quotes(row)})
             # The quote is what is shown; the checker reads the whole text (the page the excerpt was

@@ -96,7 +96,7 @@ def judge(message: str, candidate: str, evidence: str, *, client: Any | None = N
     """One candidate, one request, never retried.  Any failure is a verdict that does not allow a write."""
     if client is None and not api_key:
         api_key = os.getenv("OPENROUTER_API_KEY")
-    if not (api_key and str(api_key).strip()) and _catalog_key_on():
+    if client is None and not (api_key and str(api_key).strip()) and _catalog_key_on():
         # FINBOT_PH1_MEMORY_FALLBACK: the owner's OpenRouter key lives in the model settings, not necessarily in the environment.
         api_key = _catalog_key()
     if client is None and not (api_key and str(api_key).strip()):
