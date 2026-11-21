@@ -98,7 +98,13 @@ _YEAR = re.compile(r"(?:19|20)\d{2}")
 
 def _grounded(variant: str, query: str) -> bool:
     """A variant may rephrase, never add: no figure, ticker or year the question did not name."""
-    for pattern in (_FIGURE, _TICKER, _YEAR):
+    from app.agent_workflow.fp_flags import flag
+
+    # FINBOT_PH2_VARIANT_TICKER: the all-caps rule is not applied. The search itself is bound to the symbol it was asked for
+    # (every variant goes to the same ``function(symbol, query, ...)``), so a code written into a variant cannot pull in another
+    # company's documents; and the rule refused finance words that are also listed codes (AI, FCF). Figures and years stay.
+    patterns = (_FIGURE, _YEAR) if flag("FINBOT_PH2_VARIANT_TICKER", True) else (_FIGURE, _TICKER, _YEAR)
+    for pattern in patterns:
         allowed = set(pattern.findall(query))
         if any(item not in allowed for item in pattern.findall(variant)):
             return False

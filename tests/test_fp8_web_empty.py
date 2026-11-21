@@ -39,6 +39,7 @@ def test_post_fetch_window_empty(monkeypatch):
 
 
 def test_post_fetch_window_counts_undated(monkeypatch):
+    monkeypatch.setenv("FINBOT_PH2_WEB_DATE_SOFT", "off")   # the old contract (an undated page is left out); the PH2 behaviour is in test_ph2_tier2.py
     _install(monkeypatch, _rows(), [_date(30), None])
     result = asyncio.run(web._research('news', days_back=7))
     assert result['meta']['undated_left_out'] == 1

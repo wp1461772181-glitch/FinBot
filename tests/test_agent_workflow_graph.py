@@ -20,7 +20,8 @@ def test_gate_rejects_symbol_only_for_revenue_and_does_not_mutate_manifest():
     assert manifest == original
 
 
-def test_gate_checks_metric_period_entity_and_only_requires_dates_for_web_freshness():
+def test_gate_checks_metric_period_entity_and_only_requires_dates_for_web_freshness(monkeypatch):
+    monkeypatch.setenv("FINBOT_PH2_WEB_DATE_SOFT", "off")   # the old contract (an undated page is left out); the PH2 behaviour is in test_ph2_tier2.py
     q = "AAPL 2025 年营收是多少？"
     saved = {"ok": True, "source": "saved filing", "data": [{"title": "AAPL 2025 年营收", "excerpt": "AAPL 2025 年营收 revenue was $1bn", "source_url": "https://example.com"}]}
     assert deterministic_confidence_gate(q, saved)[0]
@@ -91,7 +92,8 @@ def test_web_news_gate_rejects_unrelated_fetched_bodies_even_with_dates():
     assert deterministic_confidence_gate(question, result) == (False, "requested_entity_missing")
 
 
-def test_web_news_still_requires_requested_metric_period_and_publisher_date():
+def test_web_news_still_requires_requested_metric_period_and_publisher_date(monkeypatch):
+    monkeypatch.setenv("FINBOT_PH2_WEB_DATE_SOFT", "off")   # the old contract (an undated page is left out); the PH2 behaviour is in test_ph2_tier2.py
     result = {"ok": True, "source": "public web search and fetched page excerpts", "data": [{
         "url": "https://example.com/amd", "title": "AMD company update",
         "excerpt": "AMD discussed new processors.",

@@ -74,7 +74,8 @@ def test_the_model_writes_the_variants_and_the_original_is_searched_first():
     assert len(variants) <= qu.MAX_VARIANTS
 
 
-def test_a_variant_may_not_add_a_ticker_a_figure_or_a_year():
+def test_a_variant_may_not_add_a_ticker_a_figure_or_a_year(monkeypatch):
+    monkeypatch.setenv("FINBOT_PH2_VARIANT_TICKER", "off")   # the old all-caps rule; with the switch on it is not applied (tests/test_ph2_tier2.py)
     kept = qu.clean_variants("AAPL 2024 年营收", [
         "AAPL revenue 2024",         # same names and numbers, different words: kept
         "MSFT 2024 revenue",         # a company the question never named: dropped
