@@ -9,6 +9,11 @@ on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
+    inputs:
+      test_notify:
+        description: "Send one test Telegram message (leaves the stored up/down state alone)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -62,10 +67,22 @@ jobs:
           RESULT: ${{ steps.probe.outputs.result }}
           TG_TOKEN: ${{ secrets.WATCHDOG_TELEGRAM_BOT_TOKEN }}
           TG_CHAT: ${{ secrets.WATCHDOG_TELEGRAM_CHAT_ID }}
+          TEST_NOTIFY: ${{ inputs.test_notify }}
         run: |
           prev=up
           if [ -f watchdog-state/state ]; then prev=$(cat watchdog-state/state); fi
           now_cn=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')
+          if [ "$TEST_NOTIFY" = "true" ]; then
+            # Manual check of the notification path: one message, the stored state is not touched, and a failure fails the run.
+            if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then echo "Telegram secrets not configured." >&2; exit 1; fi
+            text="FinBot 宕机探测的测试消息（${now_cn} 北京时间）：通知通道正常，盒子此刻探测结果为 ${RESULT}。"
+            printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TG_TOKEN" \
+              | curl -sS -K - --max-time 20 -o /dev/null --fail \
+                  --data-urlencode "chat_id=$TG_CHAT" --data-urlencode "text=$text" 2>/dev/null \
+              || { echo "Test Telegram send failed." >&2; exit 1; }
+            echo "Test Telegram message sent."
+            exit 0
+          fi
           text=""
           if [ "$RESULT" = "down" ] && [ "$prev" != "down" ]; then
             text="FinBot 盒子连续 3 次探测不到（${now_cn} 北京时间）。价格和财报提醒此刻不可用。"
