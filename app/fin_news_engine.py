@@ -1255,6 +1255,17 @@ def _bounded_refresh(source_ids: list[str], custom_path: str | Path | None) -> t
     return polled, ("refresh_failed" if not polled and res.get("errors") else None)
 
 
+def background_refresh(custom_path: str | Path | None = None) -> dict[str, Any]:
+    """One poll of every enabled source for the background loop (app/background.py).  Shares the refresh lock with the search's
+    own refresh, so a poll already under way is not doubled: it is reported as skipped."""
+    if not _REFRESH_LOCK.acquire(blocking=False):
+        return {"ok": True, "skipped": "refresh_in_progress", "polled_sources": [], "saved_count": 0, "errors": {}}
+    try:
+        return poll_once(None, force=False, custom_path=custom_path)
+    finally:
+        _REFRESH_LOCK.release()
+
+
 def search_configured_news(
     query: str | None = None,
     tickers: list[str] | None = None,
