@@ -45,6 +45,22 @@ def test_new_providers_are_listed_and_get_no_reasoning_parameter():
     assert NEW <= set(PROVIDER_NAMES)
     from app.agent_chat_provider import NATIVE_EFFORTS, reasoning_options
     for provider in NEW:
-        assert provider not in NATIVE_EFFORTS
+        assert NATIVE_EFFORTS[provider] == ()
         assert reasoning_options(provider, "high") == {}
         assert thinking_disabled_options(provider) == {}
+
+
+def test_a_provider_that_sends_no_effort_says_it_takes_none():
+    """What the strength list offers must be what the request sends.  Every provider but OpenRouter (answered per model
+    by OpenRouter's own list): one that sends nothing for any tier is declared as taking no effort, so the browser does
+    not offer seven tiers that do nothing; one that sends something declares tiers.  A provider added to PROVIDER_NAMES
+    and left out of NATIVE_EFFORTS fails here."""
+    from app.agent_chat_provider import REASONING_EFFORTS, reasoning_options
+    from app.agent_model_catalog import _reasoning_fields
+    for provider in set(PROVIDER_NAMES) - {"openrouter"}:
+        fields = _reasoning_fields({"provider": provider})
+        assert fields, f"{provider} has no entry in NATIVE_EFFORTS: the browser would offer every tier"
+        sends = any(reasoning_options(provider, tier) for tier in REASONING_EFFORTS)
+        assert fields["reasoning_supported"] is sends, provider
+        if not sends:
+            assert "supported_efforts" not in fields, provider

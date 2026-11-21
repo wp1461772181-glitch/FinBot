@@ -100,6 +100,11 @@ NATIVE_EFFORTS = {
     "zhipu": ("low", "high", "max"),           # GLM-5.3 / GLM-5.3-Flash; none, minimal, medium, xhigh fold onto these
     "deepseek": ("none", "high", "max"),       # none turns thinking off; medium is sent as high, low as low (folded)
     "siliconflow": (),                         # reasoning_options has no branch for it: nothing is sent
+    # Every other provider the model dialog offers: reasoning_options has no branch for it, so nothing is sent and the
+    # browser must say "takes no effort" instead of offering seven tiers that do nothing.  A bot's stored
+    # reasoning_effort is left as it is; the settings page only flags it as outside the model's tiers.
+    **{provider: () for provider in ("kimi", "minimax", "qwen", "doubao", "hunyuan", "baidu", "anthropic", "openai",
+                                     "gemini", "xai", "mistral", "groq", "custom")},
 }
 
 
