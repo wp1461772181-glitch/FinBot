@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.model_providers import (
+    INTERNATIONAL_PROVIDERS,
     PROVIDER_CATALOG,
     OpenAICompatibleProvider,
     thinking_disabled_options,
@@ -45,7 +46,8 @@ def test_every_analysis_provider_sends_a_disable_thinking_switch(provider):
 
     assert captured
     assert captured[0]["extra_body"] == thinking_disabled_options(provider)
-    assert captured[0]["extra_body"]
+    # The six international providers (added with the model dialog's list) are sent no reasoning parameter at all.
+    assert bool(captured[0]["extra_body"]) == (provider not in INTERNATIONAL_PROVIDERS)
 
 
 def test_thinking_switch_uses_the_provider_native_shape():
