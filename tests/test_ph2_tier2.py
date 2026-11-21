@@ -282,3 +282,60 @@ def test_tool_descriptions_explain_the_marks_only_while_on(monkeypatch):
            {n: d for n, d in off.items() if n not in {"search_configured_news", "web_research"}}
     assert "matched_terms" in PH2_NEWS_NOTE and 'match:"none"' in PH2_NEWS_NOTE
     assert "published_at_status" in PH2_WEB_NOTE and "publisher_date_unknown" in PH2_WEB_NOTE and "outside_inferred_window" in PH2_WEB_NOTE
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# 3. B-6: a rewritten search variant may add a stock code only if it is not a finance word (FINBOT_PH2_VARIANT_TICKER)
+# --------------------------------------------------------------------------------------------------------------------
+from app.knowledge import query_understanding as qu
+
+
+@pytest.fixture
+def sec_list(monkeypatch):
+    """A small SEC ticker list; the real one is a network read."""
+    from app.agent_workflow import entities
+    rows = [{"ticker": "AAPL", "title": "Apple Inc."}, {"ticker": "MSFT", "title": "MICROSOFT CORP"}, {"ticker": "NVDA", "title": "NVIDIA CORP"}]
+    monkeypatch.setattr(entities, "ticker_records", lambda: rows)
+
+
+def test_variant_finance_words_in_capitals_pass_when_on(monkeypatch, sec_list):
+    _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", True)
+    for variant in ("diluted EPS", "GAAP net income", "AI revenue", "ROE and FCF"):
+        assert qu._grounded(variant, "每股收益是多少"), variant
+    assert qu.clean_variants("每股收益是多少", ["diluted EPS", "GAAP net income"]) == ["每股收益是多少", "diluted EPS", "GAAP net income"]
+
+
+def test_variant_finance_words_off_are_refused_as_before(monkeypatch, sec_list):
+    _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", False)
+    for variant in ("diluted EPS", "GAAP net income", "AI revenue", "ROE and FCF"):
+        assert not qu._grounded(variant, "每股收益是多少"), variant
+
+
+def test_variant_new_sec_listed_code_is_still_refused_both_ways(monkeypatch, sec_list):
+    for on in (True, False):
+        _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", on)
+        assert not qu._grounded("MSFT revenue", "苹果的营收是多少")
+        assert not qu._grounded("AAPL diluted EPS", "每股收益是多少")
+
+
+def test_variant_code_the_query_already_names_passes_both_ways(monkeypatch, sec_list):
+    for on in (True, False):
+        _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", on)
+        assert qu._grounded("AAPL revenue", "AAPL 营收是多少")
+
+
+def test_variant_figure_and_year_rules_unchanged_when_on(monkeypatch, sec_list):
+    _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", True)
+    assert not qu._grounded("EPS 2024", "每股收益是多少")
+    assert not qu._grounded("EPS 12%", "每股收益是多少")
+    assert qu._grounded("EPS 2024", "2024 年每股收益")
+
+
+def test_variant_sec_list_unreadable_is_not_a_refusal_when_on(monkeypatch):
+    from app.agent_workflow import entities
+
+    def boom():
+        raise ValueError("entity_mapping_unavailable")
+    monkeypatch.setattr(entities, "ticker_records", boom)
+    _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", True)
+    assert qu._grounded("MSFT diluted EPS", "每股收益是多少")
