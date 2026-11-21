@@ -435,6 +435,9 @@ def _stage_history(messages,budget_bytes):
     eligible=[]
     for message in messages or []:
         if message.get('role') not in {'user','assistant','system'}:continue
+        # The citation catalogue note is the newest entry and tens of KB on a long line: left in, it alone would fill a small view.
+        # The resolver gets the same catalogue as its own payload field; the other two steps do not bind citations.
+        if layers.is_catalogue_message(message):continue
         item={'role':message['role'],'content':str(message.get('content',''))}
         if message['role']=='assistant' and item['content'] in source_by_text:item['source']=source_by_text[item['content']]
         eligible.append(item)
@@ -460,20 +463,22 @@ def _stage_history(messages,budget_bytes):
     original=sum(len(i['content']) for i in eligible);kept=sum(len(i['content']) for i in selected)
     return json.dumps(view,ensure_ascii=False),omitted,original,kept
 def stage_history(messages,budget_bytes):
-    """One step's view of the conversation: the same entries as bounded_history, the newest continuous run that fits ``budget_bytes``
+    """One step's view of the conversation: the same entries as bounded_history without the citation catalogue note, the newest continuous run that fits ``budget_bytes``
     (the entry that does not fit ends the run, it is not skipped), a newest entry alone over the budget keeping its head and tail,
     and, when earlier messages are left out, a leading system entry that says how many.  Returns (json text, omitted messages)."""
     text,omitted,_,_=_stage_history(messages,budget_bytes)
     return text,omitted
 def newest_answers_within(entries,key,budget_bytes,newest_first):
-    """Whole entries (one per answer) from the newest answer back until ``budget_bytes``; the entry that does not fit ends the run.
+    """Whole entries (one per answer) from the newest answer back until ``budget_bytes``; the entry that does not fit ends the run
+    (the newest one always stays).
     ``key`` orders the entries, ``newest_first`` says whether the largest key is the newest.
     Returns (kept entries in their original order, number of entries left out)."""
     order=sorted(range(len(entries)),key=lambda i:key(entries[i],i),reverse=newest_first)
     kept=set();used=0
     for i in order:
         n=len(json.dumps(entries[i],ensure_ascii=False).encode())
-        if used+n>budget_bytes:break
+        # The newest answer is the one a "第二条" most often points at: it stays even when it alone is over the budget.
+        if used+n>budget_bytes and kept:break
         kept.add(i);used+=n
     return [e for i,e in enumerate(entries) if i in kept],len(entries)-len(kept)
 RESOLVER_STAGE_NOTE=(' The history, assistant_items and citation_catalogue fields may hold only the most recent part of the conversation; omitted, when present, says how much earlier material was left out.'

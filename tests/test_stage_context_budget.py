@@ -230,3 +230,36 @@ def test_a_good_budget_value_is_used_and_never_exceeds_the_history_budget(monkey
     assert stage_budget_bytes('FINBOT_STAGE_CLASSIFIER_HISTORY_KB') == 8 * KB
     monkeypatch.setattr(direct.layers, 'HISTORY_BUDGET', 5 * KB)
     assert stage_budget_bytes('FINBOT_STAGE_RESOLVER_HISTORY_KB') == 5 * KB
+
+
+def test_the_citation_catalogue_note_is_not_part_of_a_step_view_and_does_not_eat_the_budget():
+    from app import agent_context as layers
+    note = {'role': 'user', 'content': layers.CATALOGUE_MARKER + ' …' + '目' * 40000}
+    messages = [*long_conversation(60)[:-1], {'role': 'user', 'content': '第二个是什么意思？'}, note]
+    cap, turn = run(messages, big_catalogue(4))
+    for view in (cap.resolver['history'], cap.intent['history'], json.loads(cap.answer[-1]['content'])['recent_conversation_reference_data']):
+        entries = history_of(view)
+        assert not any(e['content'].startswith(layers.CATALOGUE_MARKER) for e in entries)
+        # The view still holds the conversation itself: the question the user just asked is its last entry.
+        assert entries[-1] == {'role': 'user', 'content': '第二个是什么意思？'}
+    # The classifier's small view holds real turns, not one cut-down note.
+    assert sum(e['role'] in {'user', 'assistant'} for e in history_of(cap.intent['history'])) > 5
+    # The resolver still receives the catalogue as its own field.
+    assert cap.resolver['citation_catalogue']
+
+
+def test_the_newest_answer_keeps_its_items_and_citations_even_over_the_budget(monkeypatch):
+    monkeypatch.setenv('FINBOT_STAGE_RESOLVER_ITEMS_KB', '4')
+    monkeypatch.setenv('FINBOT_STAGE_RESOLVER_CITATIONS_KB', '4')
+    messages = [{'role': 'user', 'content': '列一下'}, {'role': 'assistant', 'content': numbered_answer(1, items=5)},
+                {'role': 'user', 'content': '再列一份长的'}, {'role': 'assistant', 'content': numbered_answer(2, items=120)},
+                {'role': 'user', 'content': '第二个是什么意思？'}]
+    huge = ({'turn_id': 't1', 'answers_back': 1, 'opening': '回答 1',
+             'sources': [{'ordinal': o, 'title': '标题' * 40, 'source_type': 'news', 'available': True} for o in range(1, 60)]},
+            {'turn_id': 't2', 'answers_back': 2, 'opening': '回答 2', 'sources': [{'ordinal': 1, 'title': '短', 'source_type': 'news', 'available': True}]})
+    cap, turn = run(messages, huge)
+    full = assistant_item_catalogue(messages[:-1])
+    assert len(json.dumps(full[-1], ensure_ascii=False).encode()) > 4 * KB
+    assert cap.resolver['assistant_items'] == [full[-1]]
+    assert [e['answers_back'] for e in cap.resolver['citation_catalogue']] == [1]
+    assert cap.resolver['omitted'] == {'assistant_item_answers': 1, 'citation_answers': 1}
