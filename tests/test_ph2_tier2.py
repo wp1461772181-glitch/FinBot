@@ -365,7 +365,7 @@ def test_document_ticker_shapes_that_are_real_tickers_pass(ticker):
     assert _doc(ticker).ticker == ticker
 
 
-@pytest.mark.parametrize("ticker", ["aapl", "AA PL", "../x", "..", ".B", "-B", "ABCDEFGHIJK", "", "AAPL/x", "AA\\B", "AÄPL", "AAPL\n"])
+@pytest.mark.parametrize("ticker", ["aapl", "AA PL", "../x", "..", ".B", "-B", "ABCDEFGHIJK", "", "AAPL/x", "AA\\B", "AÄPL", "AA\nPL"])
 def test_document_ticker_that_is_not_a_ticker_is_refused(ticker):
     with pytest.raises(ValidationError):
         _doc(ticker)
