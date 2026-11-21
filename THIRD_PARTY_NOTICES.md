@@ -6,3 +6,14 @@
 - 用途：bot 头像的动画引擎（`src/bot/`，原样 vendor；不含其 Vue 组件）；形状/颜色/表情/状态目录全量取自同一引擎源（8 / 12 / 16 / 14 + swirl）
 - 另借鉴（按 React 与本项目主题令牌重写，非复制）：定制面板的版式与选中态样式（`Customizer.vue`、`BotTile.vue`）→ `frontend/src/BloubCustomizer.tsx`、`grok.css` 的 `.bloub-*`；品牌标记与站点 favicon 为系统原版（三姿势 logo），不使用 bloub 素材
 - 许可：MIT License，Copyright (c) 2026 Jérémy Perret。完整许可文本见 `frontend/src/bloub/LICENSE`
+
+## 模型服务商 logo（`frontend/src/assets/provider-logos/`）
+
+- 来源：https://models.dev/logos/（项目 https://github.com/sst/models.dev，MIT License）；输入框的模型选择器用它们标示服务商和模型厂商，`generic.svg` 是同一来源的通用占位图标
+- 做法：文件原样复制成本地静态资源，运行时不访问 models.dev
+- 商标：各 logo 是其所属公司的商标，仅用于标示对应的服务商或模型，不表示与这些公司有任何合作或背书
+
+## Model Selector 组件（`frontend/src/components/ai-elements/model-selector.tsx`）
+
+- 来源：Vercel AI Elements（https://registry.ai-sdk.dev/model-selector.json，Apache License 2.0）
+- 改动：logo 改为本地文件、`ModelSelectorContent` 向内部的 `Command` 透传属性；`dialog.tsx`、`command.tsx` 沿用项目自己的版本
