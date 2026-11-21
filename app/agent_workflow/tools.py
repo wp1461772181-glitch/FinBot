@@ -1,6 +1,6 @@
 """Real service adapters; routing and natural-language argument inference do not live here."""
 from __future__ import annotations
-import asyncio,json,uuid
+import asyncio,json,os,uuid
 from datetime import UTC,datetime,timedelta
 from sqlalchemy import select,text,or_
 from ..database import SessionLocal
@@ -9,6 +9,7 @@ from ..agent_chat_store import owner_hash
 from ..agent_tool_catalog import definitions,validate
 from ..knowledge.runtime import research_context
 from .models import AgentWebSource
+from .fp_flags import flag
 
 
 def safe(value):return json.loads(json.dumps(value,default=str,ensure_ascii=False))
@@ -299,7 +300,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         return result([{'status':'remembered','text':value['item']['text'],'handle':value['item']['handle']}],'owner profile')
     if name=='search_configured_news':
         from .. import fin_news_engine as news
-        return await asyncio.to_thread(
+        call=asyncio.to_thread(
             news.search_configured_news,
             query=args.get('query'),
             tickers=args.get('tickers'),
@@ -310,6 +311,12 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
             limit=args.get('limit',10),
             refresh_first=bool(args.get('refresh_first',False)),
         )
+        if not flag('FINBOT_NEWS_REFRESH_BOUND',True):return await call
+        # Backstop above the refresh limit: one call may never hang the turn for minutes.
+        try:limit=max(1.0,float(os.environ.get('FINBOT_NEWS_SEARCH_TOOL_TIMEOUT_SECONDS') or 30))
+        except ValueError:limit=30.0
+        try:return await asyncio.wait_for(call,timeout=limit)
+        except TimeoutError:return error('tool_timeout')
     if name=='manage_news_source':
         from .. import fin_news_engine as news
         action=args['action'];source_id=args.get('source_id')
