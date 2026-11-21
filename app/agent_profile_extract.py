@@ -140,7 +140,7 @@ def _annotate_unconfirmed(text: str) -> str:
     return body + PROFILE_GATE_NOTE
 
 
-def admitted(found: list[dict], message: str) -> list[dict]:
+def admitted(found: list[dict], message: str, api_key: str | None = None) -> list[dict]:
     """Candidates whose quote is the owner's words.
 
     Jev confirming one leaves the text as the model wrote it. When Jev disallows a quote that is
@@ -150,7 +150,7 @@ def admitted(found: list[dict], message: str) -> list[dict]:
     from . import jev_memory_gate as gate
     kept = []
     for item in found:
-        verdict = gate.judge(message, item["text"], item["quote"])
+        verdict = gate.judge(message, item["text"], item["quote"], api_key=api_key)
         exact = item.pop("exact", False)
         if verdict.allows() or (verdict.status != "ok" and exact):
             kept.append(item)
@@ -206,7 +206,8 @@ async def store_explicit_fallback(owner_hash: str, message: str, *, conversation
     return outcome.get("status") in {"added", "duplicate"}
 
 
-async def store_gated_fallback(owner_hash: str, message: str, *, conversation_id: str, turn_id: str) -> bool:
+async def store_gated_fallback(owner_hash: str, message: str, *, conversation_id: str, turn_id: str,
+                               api_key: str | None = None) -> bool:
     """FINBOT_PH1_MEMORY_FALLBACK: the fallback cue only earns a second look.
 
     The candidate (the owner's own sentence) is written only when Jev allows it; no answer, a timeout or a
@@ -216,7 +217,7 @@ async def store_gated_fallback(owner_hash: str, message: str, *, conversation_id
     if not item or not owner_hash:
         return False
     from . import jev_memory_gate as gate
-    verdict = await asyncio.to_thread(gate.judge, message, item["text"], item["quote"])
+    verdict = await asyncio.to_thread(gate.judge, message, item["text"], item["quote"], api_key=api_key)
     if not verdict.allows():
         log.info("memory fallback not admitted conv=%s status=%s", conversation_id, verdict.status)
         return False
@@ -228,6 +229,18 @@ async def store_gated_fallback(owner_hash: str, message: str, *, conversation_id
         log.info("memory fallback dropped reason=%s", exc)
         return False
     return outcome.get("status") in {"added", "duplicate"}
+
+
+def remember_handled(audit: dict | None) -> bool:
+    """Whether the turn itself handled an ask to remember, so the background reading stays out (one ask, one channel).
+
+    FINBOT_PH1_MEMORY_FALLBACK on: only when a model took it for one (the classifier, or the model's own remember call).
+    A wordlist hit alone (``profile_ask`` without ``remember_handled``) leaves the background reading to run as usual."""
+    audit = audit or {}
+    from .agent_workflow.fp_flags import flag
+    if flag("FINBOT_PH1_MEMORY_FALLBACK", True):
+        return bool(audit.get("remember_handled"))
+    return bool(audit.get("profile_ask"))
 
 
 def worth_reading(message: str) -> bool:
@@ -272,16 +285,20 @@ async def extract_from_turn(owner_hash: str, message: str, *, conversation_id: s
         content = None
     offered = _model_items(content)
     found: list[dict] = []
+    from .agent_workflow.fp_flags import flag
+    # FINBOT_PH1_MEMORY_FALLBACK: the key this turn's own model call used goes to the memory gate when that provider is
+    # OpenRouter (the gate's gateway); otherwise the gate looks for its own (environment, then the model settings).
+    jev_key = api_key if flag("FINBOT_PH1_MEMORY_FALLBACK", True) and provider == "openrouter" else None
     if offered:
         found = candidates(content, message, in_bot=bot is not None)
         if found:
-            found = await asyncio.to_thread(admitted, found, message)
+            found = await asyncio.to_thread(admitted, found, message, jev_key)
     # Empty, unusable, or timed out: keep the owner's own instruction. Items the quote floor
     # dropped are not "nothing" — those stay dropped.
     if not found and not offered:
-        from .agent_workflow.fp_flags import flag
         if flag("FINBOT_PH1_MEMORY_FALLBACK", True):
-            return int(await store_gated_fallback(owner_hash, message, conversation_id=conversation_id, turn_id=turn_id))
+            return int(await store_gated_fallback(owner_hash, message, conversation_id=conversation_id, turn_id=turn_id,
+                                                  api_key=jev_key))
         return int(await store_explicit_fallback(owner_hash, message, conversation_id=conversation_id, turn_id=turn_id))
     if not found:
         return 0

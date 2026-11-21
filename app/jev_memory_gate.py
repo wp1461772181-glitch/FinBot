@@ -81,11 +81,24 @@ def payload(message: str, candidate: str, evidence: str) -> dict[str, Any]:
             "questions": {_QUESTION_ID: question}}
 
 
+def _catalog_key_on() -> bool:
+    from .agent_workflow.fp_flags import flag
+    return flag("FINBOT_PH1_MEMORY_FALLBACK", True)
+
+
+def _catalog_key() -> str | None:
+    from .agent_model_catalog import openrouter_key
+    return openrouter_key()
+
+
 def judge(message: str, candidate: str, evidence: str, *, client: Any | None = None,
           api_key: str | None = None, daily_path: str | None = None) -> MemoryVerdict:
     """One candidate, one request, never retried.  Any failure is a verdict that does not allow a write."""
     if client is None and not api_key:
         api_key = os.getenv("OPENROUTER_API_KEY")
+    if not (api_key and str(api_key).strip()) and _catalog_key_on():
+        # FINBOT_PH1_MEMORY_FALLBACK: the owner's OpenRouter key lives in the model settings, not necessarily in the environment.
+        api_key = _catalog_key()
     if client is None and not (api_key and str(api_key).strip()):
         return MemoryVerdict("skipped")
     if not _take_call(Path(daily_path or os.environ.get("MEMORY_JEV_DAILY_PATH") or "artifacts/memory-jev-daily.json"),

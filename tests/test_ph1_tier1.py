@@ -89,14 +89,10 @@ QUESTION = "苹果和微软分别用什么口径算营收"
 STANDING = "以后都用亿元显示"
 
 
-def test_p1_the_wordlist_no_longer_mistakes_a_compound_for_an_instruction(monkeypatch):
-    for text in (QUESTION, "用身份证识别用户", "区别用在哪里", "特别用心看财报"):
-        _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-        assert authorized("remember", text) is False
-    for text in ("以后别用万元", "别用万元，用亿元", "今后别再用万元"):
+def test_p1_the_wordlist_still_hands_the_remember_tool_over_on_a_compound_hit():
+    """分别用 / 区别用 hit 别用: the table is the old one. What changed is what a hit alone can cause (see below)."""
+    for text in (QUESTION, "区别用什么指标衡量"):
         assert authorized("remember", text) is True
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", False)
-    assert authorized("remember", QUESTION) is True  # the 2026-11-16 accident, as it was
 
 
 def test_p1_background_fallback_needs_jev_and_is_never_explicit(owner, monkeypatch):
@@ -115,10 +111,10 @@ def test_p1_background_fallback_without_a_yes_from_jev_writes_nothing(owner, mon
     assert added == 0 and judged == [STANDING] and profile.list_items(OWNER_HASH) == []
 
 
-def test_p1_the_question_is_not_stored_even_when_jev_would_say_yes(owner, monkeypatch):
+def test_p1_the_question_is_not_stored_when_jev_does_not_allow_it(owner, monkeypatch):
     _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    added, judged = _extract(monkeypatch, QUESTION, gate.MemoryVerdict("ok", 0.99))
-    assert added == 0 and judged == [] and profile.list_items(OWNER_HASH) == []
+    added, judged = _extract(monkeypatch, QUESTION, gate.MemoryVerdict("ok", 0.2))
+    assert added == 0 and judged == [QUESTION] and profile.list_items(OWNER_HASH) == []
 
 
 def test_p1_off_the_old_fallback_writes_the_sentence_as_explicit(owner, monkeypatch):
@@ -129,44 +125,55 @@ def test_p1_off_the_old_fallback_writes_the_sentence_as_explicit(owner, monkeypa
     assert item["origin"] == "explicit" and item["quote"] == QUESTION
 
 
-def _empty_extractor_turn(words, conversation):
+def _empty_extractor_turn(words, conversation, *actions, answer="好的。"):
     def decider(messages, _schemas):
         if _is_extract(messages):
             return {"content": json.dumps({"items": []})}
-        return {"content": "好的。"}
-    return _turn(words, _context(conversation, intent_recognizer=_route(), decider=decider))
+        return {"content": answer}
+    return _turn(words, _context(conversation, intent_recognizer=_route(*actions), decider=decider))
 
 
-def test_p1_in_turn_an_empty_extractor_leaves_a_card_not_a_row(owner, monkeypatch):
+def test_p1_in_turn_the_classifier_says_remember_and_the_model_did_not_a_card_rides_beside_the_answer(owner, monkeypatch):
     _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    result = _empty_extractor_turn(STANDING, "conv-ph1-on")
+    result = _empty_extractor_turn(STANDING, "conv-ph1-on", "remember", answer="好的，之后都用亿元显示。")
     card = result["pending_request"]
     assert card and card["display"]["title"] == "记住这条偏好"
     target = card["display"]["targets"][0]
     assert target["title"] == STANDING and target["quote"] == STANDING
+    assert "好的，之后都用亿元显示。" in result["answer"] and "请核对确认卡" not in result["answer"]
+    assert result["status"] == "succeeded"
     assert result["audit"].get("memory_fallback_card") is True and not result["audit"].get("memory_fallback")
     assert profile.list_items(OWNER_HASH) == []  # nothing is written before the press
 
 
-def test_p1_the_fallback_card_rides_beside_the_answer_it_never_replaces_it(owner, monkeypatch):
-    """A question that merely starts with 以后 is answered; the card is an offer next to the answer."""
+@pytest.mark.parametrize("question", [QUESTION, "区别用什么指标衡量", "以后美联储降息对苹果有什么影响"])
+def test_p1_in_turn_a_wordlist_hit_alone_gives_no_card_no_row_and_leaves_background_reading_on(owner, monkeypatch, question):
+    from app.agent_workflow import direct
     _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    question = "以后美联储降息对苹果有什么影响"
-    answered = "降息通常降低折现率，利好成长股估值，对苹果的影响主要来自融资成本和消费需求。"
+    answered = "这是对问题的正常回答。"
+    result = _empty_extractor_turn(question, "conv-ph1-word", answer=answered)
+    audit = result["audit"]
+    assert answered in result["answer"] and not result.get("pending_request") and profile.list_items(OWNER_HASH) == []
+    assert audit.get("profile_ask") is True and not audit.get("remember_handled")
+    assert audit.get("memory_fallback_skipped") == "classifier_not_remember"
+    assert extract.remember_handled(audit) is False       # the background reading is scheduled as usual
+    # the word still hands the tool over, as on 2026-10-28
+    context = _context("conv-ph1-grant", intent_recognizer=_route(), decider=lambda *_: {"content": "好"})
+    turn = direct.Turn(question, context, _quiet, [{"role": "user", "content": question}], {})
+    asyncio.run(turn.classify())
+    assert "remember" in turn.granted_actions
 
-    def decider(messages, _schemas):
-        if _is_extract(messages):
-            return {"content": json.dumps({"items": []})}
-        return {"content": answered}
-    result = _turn(question, _context("conv-ph1-side", intent_recognizer=_route(), decider=decider))
-    assert answered in result["answer"] and "请核对确认卡" not in result["answer"]
-    assert result["status"] == "succeeded"
-    assert result["pending_request"]["display"]["title"] == "记住这条偏好"
-    assert profile.list_items(OWNER_HASH) == []
+
+def test_p1_background_reading_stays_out_only_when_a_model_took_the_ask(monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    assert extract.remember_handled({"profile_ask": True, "remember_handled": True}) is True
+    assert extract.remember_handled({"profile_ask": True}) is False
+    assert extract.remember_handled({}) is False and extract.remember_handled(None) is False
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", False)
+    assert extract.remember_handled({"profile_ask": True}) is True   # the old reading of the word hit
 
 
-def test_p1_the_model_found_card_still_ends_the_turn_as_before(owner, monkeypatch):
-    """Only the fallback card is a side card; a card the extractor itself proposed keeps the old behaviour."""
+def test_p1_a_card_the_extractor_found_still_ends_the_turn_and_counts_as_handled(owner, monkeypatch):
     _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
     item = {"kind": "about_me", "topic": None, "text": "看好苹果的服务业务", "quote": "我看好苹果的服务业务"}
 
@@ -174,15 +181,10 @@ def test_p1_the_model_found_card_still_ends_the_turn_as_before(owner, monkeypatc
         if _is_extract(messages):
             return {"content": json.dumps({"items": [item]}, ensure_ascii=False)}
         return {"content": "好的，我记住了。"}
-    result = _turn("记住我看好苹果的服务业务", _context("conv-ph1-found", intent_recognizer=_route(), decider=decider))
+    result = _turn("记住我看好苹果的服务业务", _context("conv-ph1-handled", intent_recognizer=_route(), decider=decider))
     assert result["status"] == "waiting_for_input" and "请核对确认卡" in result["answer"]
-
-
-def test_p1_in_turn_a_question_with_the_old_false_hit_makes_neither_card_nor_row(owner, monkeypatch):
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    result = _empty_extractor_turn(QUESTION, "conv-ph1-q")
-    assert not result.get("pending_request") and profile.list_items(OWNER_HASH) == []
-    assert not result["audit"].get("profile_ask")
+    assert result["pending_request"] and result["audit"].get("remember_handled") is True
+    assert extract.remember_handled(result["audit"]) is True
 
 
 def test_p1_in_turn_off_is_the_old_direct_write(owner, monkeypatch):
@@ -191,14 +193,6 @@ def test_p1_in_turn_off_is_the_old_direct_write(owner, monkeypatch):
     assert not result.get("pending_request") and result["audit"].get("memory_fallback") is True
     [item] = profile.list_items(OWNER_HASH)
     assert item["origin"] == "explicit" and item["quote"] == STANDING
-
-
-def test_p1_remember_quote_keeps_picking_the_asking_sentence_of_a_long_message(monkeypatch):
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    long_words = "苹果和微软分别用什么口径算营收。" + "背景说明" * 60 + "。以后都用亿元显示。"
-    context = _context("conv-quote", intent_recognizer=_route(), decider=lambda *_: {"content": "好的。"})
-    turn = Turn(long_words, context, _quiet, [{"role": "user", "content": long_words}], {})
-    assert turn.remember_quote("模型改写的话") == "以后都用亿元显示。"
 
 
 # --- 2. M-1: first turn ordinal -------------------------------------------------------------------
@@ -400,3 +394,101 @@ def test_m3_the_prompt_explains_the_entity_note_only_when_the_switch_is_on(monke
     assert "requested_entity_missing" in on and "不相关就不要引用" in on
     assert "requested_entity_missing" not in off
     assert on.replace("gate_note 为 requested_entity_missing 的网页，标题和正文没有字面写出所问公司的名称或代码：先判断它是否真的在讲这家公司，不相关就不要引用。", "", 1) == off
+
+
+# --- the memory gate's key --------------------------------------------------------------------------
+
+class _Reply:
+    status_code = 200
+
+    def json(self):
+        return {"answers": {"memory": {"type": "choice", "choice": "remember", "probabilities": {"remember": 0.97, "skip": 0.03}}}}
+
+
+class _Recorder:
+    def __init__(self):
+        self.headers = []
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.headers.append(headers)
+        return _Reply()
+
+
+def _no_env_key(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+
+def test_key_with_nothing_in_the_environment_the_models_settings_key_is_used(monkeypatch, tmp_path):
+    from app import agent_model_catalog as catalog
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    _no_env_key(monkeypatch)
+    monkeypatch.setattr(catalog, "openrouter_key", lambda: "or-key-from-settings")
+    client = _Recorder()
+    verdict = gate.judge("m", "c", "e", client=client, daily_path=str(tmp_path / "d.json"))
+    assert verdict.allows() and client.headers[0]["Authorization"] == "Bearer or-key-from-settings"
+    # no client: the real transport path is reached (a key was found), not skipped
+    seen = []
+
+    class _Fail:
+        def post(self, *_a, **kw):
+            seen.append(kw["headers"]["Authorization"])
+            raise TimeoutError
+
+    monkeypatch.setattr(gate, "_UrllibClient", lambda: _Fail())
+    assert gate.judge("m", "c", "e", daily_path=str(tmp_path / "d2.json")).status == "timeout" and seen == ["Bearer or-key-from-settings"]
+
+
+def test_key_order_is_explicit_then_environment_then_settings(monkeypatch, tmp_path):
+    from app import agent_model_catalog as catalog
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    monkeypatch.setattr(catalog, "openrouter_key", lambda: "or-key-from-settings")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key-from-env")
+    seen = _Recorder()
+    gate.judge("m", "c", "e", client=seen, daily_path=str(tmp_path / "a.json"))
+    gate.judge("m", "c", "e", client=seen, api_key="or-key-explicit", daily_path=str(tmp_path / "b.json"))
+    # with a client given the environment is not read (old behaviour): the settings key fills in
+    assert [h["Authorization"] for h in seen.headers] == ["Bearer or-key-from-settings", "Bearer or-key-explicit"]
+    client = _Recorder()
+    monkeypatch.setattr(gate, "_UrllibClient", lambda: client)
+    gate.judge("m", "c", "e", daily_path=str(tmp_path / "c.json"))
+    assert client.headers[0]["Authorization"] == "Bearer or-key-from-env"
+
+
+def test_key_off_means_no_settings_lookup_and_skipped(monkeypatch):
+    from app import agent_model_catalog as catalog
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", False)
+    _no_env_key(monkeypatch)
+    monkeypatch.setattr(catalog, "openrouter_key", lambda: pytest.fail("the settings are not read when the switch is off"))
+    assert gate.judge("m", "c", "e").status == "skipped"
+
+
+def test_the_catalog_picks_the_default_openrouter_entry_first_and_never_raises(monkeypatch):
+    from app import agent_model_catalog as catalog
+    entries = [{"name": "a", "provider": "openrouter", "key_source": "vault"},
+               {"name": "b", "provider": "openai", "key_source": "vault"},
+               {"name": "c", "provider": "openrouter", "key_source": "vault"}]
+    monkeypatch.setattr(catalog, "entries", lambda: (entries, "c"))
+    monkeypatch.setattr(catalog, "_key_for", lambda entry: {"a": "key-a-0000", "b": "key-b-0000", "c": "key-c-0000"}[entry["name"]])
+    assert catalog.openrouter_key() == "key-c-0000"
+    monkeypatch.setattr(catalog, "_key_for", lambda entry: None)
+    assert catalog.openrouter_key() is None
+
+    def boom():
+        raise RuntimeError("db down: secret-looking-text")
+    monkeypatch.setattr(catalog, "entries", boom)
+    assert catalog.openrouter_key() is None
+
+
+def test_a_turn_on_openrouter_hands_its_own_key_to_the_memory_gate(owner, monkeypatch):
+    from app import agent_chat_provider
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    keys = []
+
+    async def fake(_provider, _model, _key, _messages, _tools, _base):
+        return {}, {"content": json.dumps({"items": []})}
+    monkeypatch.setattr(agent_chat_provider, "decision_request", fake)
+    monkeypatch.setattr(gate, "judge", lambda msg, text, ev, **kw: keys.append(kw.get("api_key")) or gate.MemoryVerdict("skipped"))
+    for provider in ("openrouter", "deepseek"):
+        asyncio.run(extract.extract_from_turn(OWNER_HASH, STANDING, conversation_id="c", turn_id=str(uuid.uuid4()),
+                                              provider=provider, model="m", api_key="turn-key-0000", base_url=None))
+    assert keys == ["turn-key-0000", None]

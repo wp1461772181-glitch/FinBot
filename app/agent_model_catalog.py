@@ -195,6 +195,23 @@ def _key_for(entry: dict) -> str | None:
     return value if 8 <= len(value) <= 2048 else None
 
 
+def openrouter_key() -> str | None:
+    """A usable key of an OpenRouter entry (the default entry first), in memory only; None when there is none.
+
+    For server-side checks that call OpenRouter on their own, when the environment holds no key of its own."""
+    try:
+        listed, default = entries()
+        ranked = sorted((item for item in listed if item.get("provider") == "openrouter"),
+                        key=lambda item: item["name"] != default)
+        for entry in ranked:
+            key = _key_for(entry)
+            if key:
+                return key
+    except Exception:  # nothing here may carry a key or break the caller
+        return None
+    return None
+
+
 def _key_status(entry: dict) -> str:
     return "configured" if _key_for(entry) else "missing"
 

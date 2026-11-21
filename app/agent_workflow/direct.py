@@ -1532,6 +1532,9 @@ class Turn:
             # The owner's own words ask to remember: the card is the guard, so a classifier that missed the ask
             # does not leave the model without the tool (2026-10-28: AppleBot said 写记忆失败, no card).
             self.audit['profile_ask']=True
+            # PH1: whether a model (the classifier, here; the model's own remember call, below) took this for an ask to remember.
+            # The wordlist alone grants the tool but is not that: it decides neither the fallback card nor the background reading.
+            if 'remember' in routing.requested_actions:self.audit['remember_handled']=True
             if self.in_scope('remember') and not vetoed('remember',self.authorization_question):self.granted_actions.add('remember')
         # 每小时找一条新闻 is a routine the owner asked for; the card is the guard, as for remember.
         if self.owner and not self.unattended() and not self.original.startswith(CONTROL_PREFIXES):
@@ -2809,6 +2812,10 @@ class Turn:
         if not found and not offered and flag('FINBOT_PH1_MEMORY_FALLBACK',True):
             # The wordlist cue is only a second look: the owner's own sentence goes onto a card they press, never to the
             # store. The card rides beside the answer (side_card): the cue can be wrong, and the question still gets answered.
+            if not self.audit.get('remember_handled'):
+                # Two models read this turn and neither took it for an ask to remember: the wordlist does not overrule them.
+                self.audit['memory_fallback_skipped']='classifier_not_remember'
+                return False
             fallback=explicit_memory_fallback(words)
             self.audit['memory_fallback_card']=bool(fallback)
             if not fallback:return False
@@ -2827,6 +2834,7 @@ class Turn:
         self.write_reasons.pop('remember',None)
         await self.confirm_proposals()
         self.side_card=bool(fallback_card and self.pending)
+        if self.pending:self.audit['remember_handled']=True   # this channel made the card: the background reading stays out
         return bool(self.pending)
 
     def remember_card_finish(self):
@@ -3999,7 +4007,7 @@ class Turn:
                 # Calls the model already decided on run to the hard cap; the soft cap only ends gathering.
                 if self.budget(soft=False):stop=self.budget(soft=False);break
                 function=call.get('function',{});name=function.get('name')
-                if name=='remember':self.audit['remember_called']=True;self.audit['profile_ask']=self.audit.get('profile_ask') or bool(self.owner)
+                if name=='remember':self.audit['remember_called']=True;self.audit['remember_handled']=True;self.audit['profile_ask']=self.audit.get('profile_ask') or bool(self.owner)
                 if name in definitions() and not self.in_scope(name):
                     # Outside this bot's tool scope: refused whatever the model or a page asked for.
                     self.audit['tool_calls']+=1;outcome=tools.error('tool_not_in_bot_scope');self.feedback.append({'name':name,**outcome})
