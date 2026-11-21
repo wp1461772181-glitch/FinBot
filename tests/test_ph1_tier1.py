@@ -148,6 +148,36 @@ def test_p1_in_turn_an_empty_extractor_leaves_a_card_not_a_row(owner, monkeypatc
     assert profile.list_items(OWNER_HASH) == []  # nothing is written before the press
 
 
+def test_p1_the_fallback_card_rides_beside_the_answer_it_never_replaces_it(owner, monkeypatch):
+    """A question that merely starts with 以后 is answered; the card is an offer next to the answer."""
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    question = "以后美联储降息对苹果有什么影响"
+    answered = "降息通常降低折现率，利好成长股估值，对苹果的影响主要来自融资成本和消费需求。"
+
+    def decider(messages, _schemas):
+        if _is_extract(messages):
+            return {"content": json.dumps({"items": []})}
+        return {"content": answered}
+    result = _turn(question, _context("conv-ph1-side", intent_recognizer=_route(), decider=decider))
+    assert answered in result["answer"] and "请核对确认卡" not in result["answer"]
+    assert result["status"] == "succeeded"
+    assert result["pending_request"]["display"]["title"] == "记住这条偏好"
+    assert profile.list_items(OWNER_HASH) == []
+
+
+def test_p1_the_model_found_card_still_ends_the_turn_as_before(owner, monkeypatch):
+    """Only the fallback card is a side card; a card the extractor itself proposed keeps the old behaviour."""
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    item = {"kind": "about_me", "topic": None, "text": "看好苹果的服务业务", "quote": "我看好苹果的服务业务"}
+
+    def decider(messages, _schemas):
+        if _is_extract(messages):
+            return {"content": json.dumps({"items": [item]}, ensure_ascii=False)}
+        return {"content": "好的，我记住了。"}
+    result = _turn("记住我看好苹果的服务业务", _context("conv-ph1-found", intent_recognizer=_route(), decider=decider))
+    assert result["status"] == "waiting_for_input" and "请核对确认卡" in result["answer"]
+
+
 def test_p1_in_turn_a_question_with_the_old_false_hit_makes_neither_card_nor_row(owner, monkeypatch):
     _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
     result = _empty_extractor_turn(QUESTION, "conv-ph1-q")
@@ -256,7 +286,7 @@ def test_a1_dates_and_figures_are_not_phone_numbers(monkeypatch, text):
 
 
 @pytest.mark.parametrize("text", ["13812345678", "+86 138 1234 5678", "+61 412 345 678", "(03) 9905 1234",
-                                  "138-1234-5678", "sk-abcdefghijklmnopqrstuvwx", "me@example.com", "password: hunter2"])
+                                  "138-1234-5678", "555 123 4567", "555.123.4567", "(555) 123-4567", "sk-abcdefghijklmnopqrstuvwx", "me@example.com", "password: hunter2"])
 def test_a1_real_secrets_still_match(monkeypatch, text):
     from app.knowledge import extraction
     _switch(monkeypatch, "FINBOT_PH1_SECRET_MASK", True)
@@ -355,3 +385,18 @@ def test_p4_nothing_left_out_adds_nothing(owner, monkeypatch):
     on = profile.render_block(OWNER_HASH)
     _switch(monkeypatch, "FINBOT_PH1_PROFILE_OMITTED_NOTE", False)
     assert profile.render_block(OWNER_HASH) == on and "未显示" not in on[0]
+
+
+# --- M-3 prompt: the note is explained where gate_note is -------------------------------------------
+
+def test_m3_the_prompt_explains_the_entity_note_only_when_the_switch_is_on(monkeypatch):
+    from app.agent_system_prompt import INSTRUCTION
+    from app.agent_workflow.direct import evidence_instruction
+    text = "\n".join(INSTRUCTION)
+    _switch(monkeypatch, "FINBOT_PH1_WEB_ENTITY_SOFT", True)
+    on = evidence_instruction(text)
+    _switch(monkeypatch, "FINBOT_PH1_WEB_ENTITY_SOFT", False)
+    off = evidence_instruction(text)
+    assert "requested_entity_missing" in on and "不相关就不要引用" in on
+    assert "requested_entity_missing" not in off
+    assert on.replace("gate_note 为 requested_entity_missing 的网页，标题和正文没有字面写出所问公司的名称或代码：先判断它是否真的在讲这家公司，不相关就不要引用。", "", 1) == off

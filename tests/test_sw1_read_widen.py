@@ -288,4 +288,6 @@ def test_the_instruction_carries_the_read_sentences_only_while_their_switches_ar
     monkeypatch.setenv('FINBOT_SW1B_SAMPLE_AGGREGATE', 'off')
     # SW2's self-state sentence (on by default) is a switch of its own; this check is SW1's alone.
     monkeypatch.setenv('FINBOT_SW2_SELF_STATE_WORDING', 'off')
+    # PH1 M-3's gate_note sentence (on by default) is likewise a switch of its own.
+    monkeypatch.setenv('FINBOT_PH1_WEB_ENTITY_SOFT', 'off')
     assert direct.evidence_instruction(text) == text and direct.EVIDENCE_OLD in text   # off: the constant's own text
