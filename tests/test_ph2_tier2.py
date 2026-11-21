@@ -339,3 +339,39 @@ def test_variant_sec_list_unreadable_is_not_a_refusal_when_on(monkeypatch):
     monkeypatch.setattr(entities, "ticker_records", boom)
     _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", True)
     assert qu._grounded("MSFT diluted EPS", "每股收益是多少")
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# 4. T12: the ticker of an event-extraction document (no switch; a format check, not a behaviour)
+# --------------------------------------------------------------------------------------------------------------------
+import hashlib
+
+from pydantic import ValidationError
+
+from app.event_extraction import DocumentInput
+
+_DOC_TEXT = "Revenue increased 6%."
+
+
+def _doc(ticker):
+    return DocumentInput.model_validate({
+        "document_id": "d1", "company": "Example Corp", "ticker": ticker, "source_url": "https://investor.example.com/q1",
+        "source_domain": "investor.example.com", "published_date": "2026-01-30", "title": "Results", "text": _DOC_TEXT,
+        "sha256": hashlib.sha256(_DOC_TEXT.encode()).hexdigest()})
+
+
+@pytest.mark.parametrize("ticker", ["AAPL", "BRK.B", "BF-B", "0700", "A", "ABCDEFGHIJ", "9988.HK"])
+def test_document_ticker_shapes_that_are_real_tickers_pass(ticker):
+    assert _doc(ticker).ticker == ticker
+
+
+@pytest.mark.parametrize("ticker", ["aapl", "AA PL", "../x", "..", ".B", "-B", "ABCDEFGHIJK", "", "AAPL/x", "AA\\B", "AÄPL", "AAPL\n"])
+def test_document_ticker_that_is_not_a_ticker_is_refused(ticker):
+    with pytest.raises(ValidationError):
+        _doc(ticker)
+
+
+def test_document_ticker_with_dot_and_dash_is_a_plain_json_value_in_the_cache_key():
+    from app.event_extraction import cache_key_for
+    keys = {cache_key_for(_doc(t), provider="p", model="m", prompt_version="v") for t in ("BRK.B", "BRK-B", "BRKB")}
+    assert len(keys) == 3

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date
@@ -55,6 +56,9 @@ HISTORICAL_CAPITAL_RETURN_REASON = (
 )
 
 
+_TICKER_FORMAT = re.compile(r"[A-Z0-9][A-Z0-9.\-]{0,9}")
+
+
 class EventExtractionError(ValueError):
     """An invalid input, model response, or corrupt cache value."""
 
@@ -92,8 +96,10 @@ class DocumentInput(BaseModel):
     @field_validator("ticker")
     @classmethod
     def ticker_must_be_uppercase_ascii(cls, value: str) -> str:
-        if not value.isascii() or not value.isalpha() or value != value.upper():
-            raise ValueError("ticker must contain uppercase ASCII letters")
+        # 1-10 characters of uppercase ASCII letters, digits, "." and "-", starting with a letter or a digit: BRK.B, BF-B and 0700 are
+        # tickers too. It only ever travels as a JSON value (cache key, metadata, comparisons), never as a path or a URL piece.
+        if not _TICKER_FORMAT.fullmatch(value):
+            raise ValueError("ticker must be 1-10 uppercase ASCII letters, digits, '.' or '-', starting with a letter or digit")
         return value
 
     @model_validator(mode="after")
