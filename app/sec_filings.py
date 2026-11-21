@@ -17,6 +17,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+import html as _html_module
 from html.parser import HTMLParser
 from pathlib import Path
 from threading import Lock
@@ -27,6 +28,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from .agent_workflow.fp_flags import flag
 from .database import engine
 from .models import SecFilingInventory
 from .services import normalize_symbol
@@ -64,6 +66,14 @@ _SAFE_SUBMISSIONS_PAGE = re.compile(r"^CIK\d{10}-submissions-\d{3}\.json$")
 # ``avgo-08022026x8kxex99.htm`` was reported as having no related exhibit and its
 # quarterly figures never reached the analysis.
 _EXHIBIT_99_1 = re.compile(r"(?i)ex(?:hibit)?[-_.]?99(?:[-_.]?0?1)?\.(?:htm|html|txt)$")
+# The official file type SEC publishes per document in <accession>-index-headers.html
+# (SGML header: <TYPE>EX-99.1 ... <FILENAME>q3fy27pr.htm).  File names are the filer's
+# choice ("q3fy27pr.htm"), the type is not.
+_EXHIBIT_TYPE_99_1 = re.compile(r"^EX-99\.0*1$")
+_EXHIBIT_TYPE_99 = re.compile(r"^EX-99$")
+_HEADER_DOCUMENT_TYPE = re.compile(r"<TYPE>\s*([^\s<]+)")
+_HEADER_DOCUMENT_FILENAME = re.compile(r"<FILENAME>\s*([^\s<]+)")
+_HEADER_DOCUMENT_SEQUENCE = re.compile(r"<SEQUENCE>\s*(\d+)")
 _PROCESS_RATE_LOCK = Lock()
 _NEXT_PROCESS_REQUEST_AT: float | None = None
 
@@ -300,15 +310,19 @@ class SecEdgarProvider:
         if not isinstance(items, list):
             raise SecFilingsError("SEC accession directory has no valid item list")
         names = [item.get("name") for item in items if isinstance(item, dict)]
-        candidates = sorted(
-            name for name in names
-            if isinstance(name, str) and _SAFE_PRIMARY_DOCUMENT.fullmatch(name) and _EXHIBIT_99_1.search(name)
-        )
-        if not candidates:
-            return None
-        if len(candidates) > 1:
-            raise SecFilingsError("SEC accession has multiple possible exhibit 99.1 documents")
-        document_name = candidates[0]
+        document_name = None
+        if flag("FINBOT_SEC_EXHIBIT_BY_TYPE", True):
+            document_name = self._exhibit_99_1_by_type(filing.accession_number, directory_url, names)
+        if document_name is None:
+            candidates = sorted(
+                name for name in names
+                if isinstance(name, str) and _SAFE_PRIMARY_DOCUMENT.fullmatch(name) and _EXHIBIT_99_1.search(name)
+            )
+            if not candidates:
+                return None
+            if len(candidates) > 1:
+                raise SecFilingsError("SEC accession has multiple possible exhibit 99.1 documents")
+            document_name = candidates[0]
         source_url = f"{directory_url}/{document_name}"
         raw = self._get_bytes(
             source_url,
@@ -321,6 +335,45 @@ class SecEdgarProvider:
             source_url=source_url,
             content=SecFilingContent.from_text(text),
         )
+
+    def _exhibit_99_1_by_type(self, accession_number: str, directory_url: str, names: list) -> str | None:
+        """File name of the EX-99.1 document by SEC's own file type, or None.
+
+        Best effort: a header that cannot be fetched or read, or one without an
+        EX-99.1 entry, returns None so the caller falls back to the file-name
+        pattern.  Several EX-99.1 entries (rare) resolve to the lowest SEQUENCE.
+        """
+        if not _SAFE_ACCESSION.fullmatch(accession_number or ""):
+            return None
+        try:
+            raw = self._get_bytes(
+                f"{directory_url}/{accession_number}-index-headers.html",
+                allowed_content_types=PRIMARY_DOCUMENT_CONTENT_TYPES,
+                reject_nul_bytes=True,
+            )
+        except Exception:
+            return None
+        listed = {name for name in names if isinstance(name, str)}
+        exact: list[tuple[int, str]] = []
+        bare: list[tuple[int, str]] = []
+        blocks = _html_module.unescape(raw.decode("utf-8", errors="replace")).split("<DOCUMENT>")[1:]
+        for position, block in enumerate(blocks):
+            doc_type = _HEADER_DOCUMENT_TYPE.search(block)
+            doc_name = _HEADER_DOCUMENT_FILENAME.search(block)
+            if not doc_type or not doc_name:
+                continue
+            name = doc_name.group(1).strip()
+            if not _SAFE_PRIMARY_DOCUMENT.fullmatch(name) or name not in listed:
+                continue
+            sequence = _HEADER_DOCUMENT_SEQUENCE.search(block)
+            order = (int(sequence.group(1)) if sequence else position + 1, name)
+            kind = doc_type.group(1).strip().upper()
+            if _EXHIBIT_TYPE_99_1.fullmatch(kind):
+                exact.append(order)
+            elif _EXHIBIT_TYPE_99.fullmatch(kind):
+                bare.append(order)
+        chosen = exact or bare
+        return min(chosen)[1] if chosen else None
 
     def fetch_primary_document(self, filing: SecFilingInventory) -> SecFilingContent:
         if not filing.primary_document.casefold().endswith((".htm", ".html", ".txt")):
@@ -484,8 +537,16 @@ def fetch_inventory_content(
     observed_at: datetime | None = None,
     content_observed_at_factory: Callable[[], datetime] | None = None,
     force_refresh: bool = False,
+    recheck_attachment: bool = False,
 ) -> tuple[SecFilingInventory, bool]:
     """Fetch one inventoried SEC document and preserve 8-K attachment provenance.
+
+    ``recheck_attachment`` re-runs only the Exhibit 99.1 lookup for an 8-K whose
+    earlier lookup ended ``not_found`` or ``unavailable`` while its primary
+    document is already saved.  A found exhibit replaces the saved text through
+    the normal path below; a still-missing one leaves the row exactly as it
+    was, and a failed lookup raises ``SecFilingsError`` with the row untouched.
+    Everything else behaves as without the flag.
 
     For an 8-K, the checked same-accession Exhibit 99.1 is preferred when it
     exists.  If no matching exhibit exists, the primary document remains a
@@ -505,6 +566,22 @@ def fetch_inventory_content(
     if filing is None:
         raise SecFilingNotFoundError("SEC filing is not in this symbol's inventory; scan it first")
     attachment_checked = filing.related_attachment_status in {"fetched", "not_found", "unavailable"}
+    if (
+        recheck_attachment
+        and not force_refresh
+        and filing.form == "8-K"
+        and filing.content_status == "fetched"
+        and filing.related_attachment_status in {"not_found", "unavailable"}
+    ):
+        base = provider or SecEdgarProvider()
+        fetch_exhibit = getattr(base, "fetch_exhibit_99_1", None)
+        if not callable(fetch_exhibit):
+            return filing, True
+        rechecked = fetch_exhibit(filing)  # SecFilingsError propagates; the row is untouched
+        if rechecked is None:
+            return filing, True
+        provider = _PrefetchedExhibitProvider(base, rechecked)
+        force_refresh = True
     if (
         not force_refresh
         and filing.content_status == "fetched"
@@ -587,6 +664,20 @@ def fetch_inventory_content(
     db.commit()
     db.refresh(filing)
     return filing, False
+
+
+class _PrefetchedExhibitProvider:
+    """Hands an already-fetched exhibit to the normal persist path (no second request)."""
+
+    def __init__(self, inner, exhibit) -> None:
+        self._inner = inner
+        self._exhibit = exhibit
+
+    def fetch_exhibit_99_1(self, filing):
+        return self._exhibit
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
 
 
 def review_inventory_filing(
