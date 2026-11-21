@@ -14,7 +14,7 @@ from app import agent_bots as bots
 from app import agent_model_catalog as catalog
 from app import agent_model_roles as roles
 from app.database import engine
-from tests.test_agent_bots import GUEST, H, KEY_A, KEY_B, OWNER_HASH, _keys_absent, owner  # noqa: F401  (fixture)
+from tests.test_agent_bots import GUEST, H, KEY_A, KEY_B, OWNER_HASH, _only_the_hint_of_a_key, owner  # noqa: F401  (fixture)
 
 
 def _bot(name_prefix, model):
@@ -34,7 +34,7 @@ def test_rename_moves_the_entry_its_bots_and_its_roles_together(owner, client):
     assert renamed.status_code == 200, renamed.text
     model = renamed.json()["model"]
     assert model["name"] == "haiku-5.5" and model["is_default"] is True and model["key_status"] == "configured"
-    _keys_absent(renamed.text)
+    _only_the_hint_of_a_key(renamed.text)
     listed = [m["name"] for m in client.get("/agent-chat/model-catalog", headers=H).json()["models"]]
     assert "haiku-5.5" in listed and "alpha" not in listed
     assert client.get("/agent-chat/model-catalog", headers=H).json()["default"] == "haiku-5.5"

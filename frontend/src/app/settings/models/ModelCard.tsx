@@ -9,7 +9,7 @@ import { useLocale } from "../../../i18n";
 import { CATALOG } from "../../../model-profiles.mjs";
 
 /**
- * One model of the server's catalog (design 4.12): its name, provider and model ID, whether its key is there (the words, never any part of the key), whether it is the default and where it comes from.
+ * One model of the server's catalog (design 4.12): its name, provider and model ID, whether its key is there (the words, plus the head and tail the server sends as key_hint; never the whole key), whether it is the default and where it comes from.
  * A model saved on the server has 编辑 and, in 「…」, 设为默认 and 删除.  A model that comes from the server's catalog file has none of them and says why.
  */
 export function ModelCard({ model, busy, onEdit, onDefault, onDelete }: { model: CatalogModel; busy: boolean; onEdit: (opener: HTMLElement | null) => void; onDefault: () => void; onDelete: (opener: HTMLElement | null) => void }) {
@@ -26,6 +26,7 @@ export function ModelCard({ model, busy, onEdit, onDefault, onDelete }: { model:
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted-foreground">
       <span data-testid="model-key-status" data-status={model.key_status}><StatusBadge kind={ready ? "success" : "failure"} className="h-5">{t(keyStatusLabel(model))}</StatusBadge></span>
       {model.key_source === "env" && model.key_env && <span>{t("环境变量")} <span className="font-mono">{model.key_env}</span></span>}
+      {model.key_source === "vault" && model.key_hint && <span data-testid="model-key-hint" className="font-mono">{model.key_hint}</span>}
       <span>· <span className="font-mono">{model.name}</span></span>
       <span data-testid="model-origin">· {t(mine ? "已保存" : "来自配置文件")}</span>
     </div>

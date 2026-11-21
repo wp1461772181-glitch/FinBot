@@ -10867,7 +10867,44 @@ async function settingsModelCrud(ctx) {
   return done.join(", ");
 }
 
-/** 服务商可用模型: asked once on opening an entry that can be asked, again after the key is typed (delayed) and on 刷新, with the old bodies; at most five candidates, one fills Model ID; the refusals and the empty answers are said as the old page said them. */
+/** The model dialog's three conveniences (2026-11-21): the API key box can show what was typed; the card and the edit box name the head and tail of the stored key (key_hint, never the whole key); the provider's models are one searchable list, none cut. */
+async function settingsModelKeyAndPicker(ctx) {
+  const view = await stOpen(ctx, "settings model key hint and picker", "models", ST_MODELS);
+  try {
+    const { page } = view;
+    assert((await stCard(page, "glm5.3-flash").locator("[data-testid=model-key-hint]").innerText()).trim() === "sk-fixture-ab…c0de", "the card does not show the key's head and tail");
+    await stOpenEdit(page, "glm5.3-flash");
+    const placeholder = (await page.locator("#model-key").getAttribute("placeholder")) ?? "";
+    assert(placeholder.includes("sk-fixture-ab…c0de") && placeholder.includes("不改就留空"), `the key box says "${placeholder}"`);
+    const toggle = page.locator("[data-testid=model-key-toggle]");
+    assert((await page.locator("#model-key").getAttribute("type")) === "password" && (await toggle.getAttribute("aria-pressed")) === "false", "the key box does not start hidden");
+    await page.locator("#model-key").fill(ST_KEY1);
+    await toggle.click();
+    assert((await page.locator("#model-key").getAttribute("type")) === "text" && (await page.locator("#model-key").inputValue()) === ST_KEY1 && (await toggle.getAttribute("aria-pressed")) === "true", "the toggle does not show the typed key");
+    await toggle.click();
+    assert((await page.locator("#model-key").getAttribute("type")) === "password", "the toggle does not hide the key again");
+    await page.keyboard.press("Escape"); await stDialog(page).waitFor({ state: "detached", timeout: 10000 });
+    // the list: open an entry that can be asked, search by id and by name
+    await stOpenEdit(page, "deepseek-flash");
+    await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? ""), null, { timeout: 15000 });
+    await page.locator("[data-testid=model-discovered]").click();
+    assert((await page.getByRole("option").count()) === 6, "the list does not show every model");
+    const search = page.locator("[data-testid=model-discovered-search]");
+    await search.fill("beta");
+    await page.waitForFunction(() => document.querySelectorAll("[role=option]").length === 2, null, { timeout: 5000 });
+    await search.fill("Beta 2");
+    assert((await page.locator("[role=option]").first().getAttribute("data-model-id")) === "beta-2", "searching by name did not find beta-2");
+    await search.fill("zzz-no-such-model");
+    assert((await page.getByText("没有匹配的模型").count()) === 1, "an empty search does not say so");
+    await search.fill("gamma");
+    await page.getByRole("option", { name: "gamma-3", exact: true }).click();
+    assert((await page.locator("#model-model").inputValue()) === "gamma-3", "the picked model did not fill Model ID");
+    assert(await stDialog(page).isVisible(), "searching and picking in the model list closed the dialog");
+  } finally { await view.close(); }
+  return "the card and the edit box show key_hint; the key box toggles between hidden and shown; the model list shows all six, filters by id and by name, says when nothing matches, and a pick fills Model ID";
+}
+
+/** 服务商可用模型: asked once on opening an entry that can be asked, again after the key is typed (delayed) and on 刷新, with the old bodies; every candidate listed and searchable, one fills Model ID; the refusals and the empty answers are said as the old page said them. */
 async function settingsModelDiscovery(ctx) {
   const view = await stOpen(ctx, "settings model discovery", "models", ST_MODELS);
   try {
@@ -10879,7 +10916,7 @@ async function settingsModelDiscovery(ctx) {
     assert(JSON.stringify(stAll(view).map((w) => JSON.stringify(w.body))) === JSON.stringify(SB.models.discovery.onOpen.sent.map((r) => r.body)), "the body asked on opening differs from the old page's");
     await page.locator("[data-testid=model-discovered]").click();
     const options = await page.getByRole("option").allInnerTexts();
-    assert(options.length === 5 && options[2].trim() === "Beta 2 · beta-2", `the candidates are ${JSON.stringify(options)} (five at most; a name differing from the ID is shown with it)`);
+    assert(options.length === 6 && options[2].trim() === "Beta 2 · beta-2", `the candidates are ${JSON.stringify(options)} (every one the provider returned, no cut at five; a name differing from the ID is shown with it)`);
     await page.getByRole("option", { name: "alpha-1-mini", exact: true }).click();
     assert((await page.locator("#model-model").inputValue()) === SB.models.discovery.picked.modelId, "the chosen candidate did not fill Model ID");
     // typing a key: nothing at once, the status says it will follow, then one request
@@ -10917,7 +10954,7 @@ async function settingsModelDiscovery(ctx) {
     await page.waitForFunction(() => /选择列表中的模型/.test(document.querySelector("[data-testid=model-discovery-status]")?.textContent ?? ""), null, { timeout: 15000 });
     assert(stAll(fresh).filter((w) => w.path === "/model-catalog/models").length === 1, "a keyless provider did not ask exactly once");
   } finally { await fresh.close(); }
-  return "opening an entry with a stored key asks once (old body); a typed key asks once after the delay, 刷新 asks once; five candidates, one fills Model ID; unsupported / empty / four codes / an unknown code say what the old page said (the four codes show the generic sentence there too); an add form asks nothing until a key or a keyless provider";
+  return "opening an entry with a stored key asks once (old body); a typed key asks once after the delay, 刷新 asks once; every candidate listed, one fills Model ID; unsupported / empty / four codes / an unknown code say what the old page said (the four codes show the generic sentence there too); an add form asks nothing until a key or a keyless provider";
 }
 
 /** A model that comes from the catalog file has no 编辑, 设为默认 or 删除 and says why; 对话默认 cannot be set to it; a missing key is said in words. */
@@ -11800,7 +11837,8 @@ const CHECKS = [
   ["settings-five-pages: five addresses show five pages (title, list beside the page, sidebar mark, reload), none inside the old-UI marker; the list is one node, above the page at 390; #admin and #settings land on 模型", settingsFivePages],
   ["settings-model-test-and-save: 测试 then 保存 with the old bodies, a refused test saves nothing and shows the server's own sentence, 取消测试 saves nothing, the button is off for a form that cannot be sent, the focus returns to 添加模型", settingsModelTestAndSave],
   ["settings-model-crud: add ×3, edit ×5 (rename, new key, new provider, display name + default), 设为默认 and 删除 by hold send the old requests; a rename follows into the role table; the dialog's draft survives crossing 1024", settingsModelCrud],
-  ["settings-model-discovery: the provider's models are asked on opening, after a typed key and by 刷新 with the old bodies; five candidates, one fills Model ID; unsupported, empty and the refusals say what the old page said", settingsModelDiscovery],
+  ["settings-model-discovery: the provider's models are asked on opening, after a typed key and by 刷新 with the old bodies; every candidate listed, one fills Model ID; unsupported, empty and the refusals say what the old page said", settingsModelDiscovery],
+  ["settings-model-key-and-picker: the card and the edit box show the head and tail of a stored key (key_hint), the API key box toggles between hidden and shown, and the provider's models are one searchable list with none cut", settingsModelKeyAndPicker],
   ["settings-model-config-file: a model from the catalog file has no button and says why; 对话默认 cannot be set to it; a missing key is said in words", settingsModelConfigFile],
   ["settings-roles-one-table: five roles in one table, each choice is saved at once with the old body (不指定 = null, 材料分析 back = DELETE), one read of the roles and the catalog", settingsRolesOneTable],
   ["settings-telegram-three-steps: the step bar follows the server, the three writes send the old bodies, the token box is a password box and empty after the save, one read per 5 s only while a code made here is out, stopped when bound and after leaving, 解除绑定 needs the hold", settingsTelegramThreeSteps],

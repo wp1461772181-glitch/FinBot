@@ -741,6 +741,7 @@ def test_focus_excerpt_does_not_filter_analysts_reuters_management_subjects():
 
 
 def test_research_named_span_leaves_out_undated_and_old_pages(monkeypatch):
+    monkeypatch.setenv("FINBOT_PH2_WEB_DATE_SOFT", "off")   # the old contract (an undated page is left out); the PH2 behaviour is in test_ph2_tier2.py
     import asyncio
     from datetime import datetime, timezone, timedelta
     import app.agent_web_research as web

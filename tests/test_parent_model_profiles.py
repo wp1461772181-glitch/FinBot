@@ -104,7 +104,7 @@ def test_hello_preserves_custom_prefix_and_appends_once(monkeypatch,prefix):
 
 def test_every_preset_can_make_hello_request_without_key_default(monkeypatch):
  from app.agent_chat_api import PROVIDER_NAMES,BASE_URLS
- assert {'deepseek','kimi','minimax','qwen','zhipu','doubao','hunyuan','baidu','siliconflow','openrouter','custom'}==set(PROVIDER_NAMES)
+ assert {'deepseek','kimi','minimax','qwen','zhipu','doubao','hunyuan','baidu','siliconflow','openrouter','anthropic','openai','gemini','xai','mistral','groq','custom'}==set(PROVIDER_NAMES)
  real_client=httpx.AsyncClient;seen=[]
  def capture(req):
   seen.append(req);return httpx.Response(200,json={'choices':[{'message':{'content':'hello'}}],'model':'user-model'})
@@ -113,7 +113,7 @@ def test_every_preset_can_make_hello_request_without_key_default(monkeypatch):
   for provider in set(PROVIDER_NAMES)-{'custom'}:
    d=body(None,provider=provider);d.pop('base_url')
    r=client.post('/agent-chat/hello',json=d);assert r.status_code==200,(provider,r.text)
- assert len(seen)==10
+ assert len(seen)==16
  assert all(r.headers['authorization']=='Bearer '+FAKE for r in seen)
 
 # Regression: the isolated demo can still rewire fixed providers without hitting paid network.

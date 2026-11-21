@@ -6,3 +6,5 @@ pymilvus==2.6.13
 huggingface_hub==0.36.0
 SQLAlchemy==2.0.45
 psycopg[binary]==3.2.12
+# Native Messages API for provider "anthropic" (app/anthropic_native.py); pure Python + jiter, which is already pinned.
+anthropic==2.12.0

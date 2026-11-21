@@ -102,7 +102,10 @@ def test_siliconflow_entries_take_no_effort_and_the_fields_say_so(owner, models)
 
 
 @pytest.mark.parametrize("provider,model", [("kimi", "kimi-k3"), ("qwen", "qwen3-max")])
-def test_providers_outside_the_table_keep_the_fallback(owner, models, provider, model):
+def test_providers_outside_the_table_keep_the_fallback(owner, models, monkeypatch, provider, model):
+    # Every provider the dialog offers is in the table now (it declares "no effort" when its request sends none); a provider
+    # that is not, here taken out of the table for the test, still gets no fields and the browser's fallback.
+    monkeypatch.delitem(chat.NATIVE_EFFORTS, provider)
     _entry("other", model, provider=provider)
     listed = _listed("other")
     assert "supported_efforts" not in listed and "reasoning_supported" not in listed
@@ -124,6 +127,11 @@ def test_native_table_is_what_the_request_really_sends():
         if not tiers:
             assert reasoning_options(provider, "high") == {}, provider
         for tier in tiers:
+            if provider == "anthropic":
+                # Native Messages API (anthropic_native): the tier travels in output_config.effort, not in reasoning_options.
+                from app.anthropic_native import build_request
+                assert build_request("claude-haiku-5-5", [{"role": "user", "content": "q"}], [], effort=tier)[0]["output_config"] == {"effort": tier}
+                continue
             assert reasoning_options(provider, tier) != {}, f"{provider} declares {tier} but the request drops it"
 
 

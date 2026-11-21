@@ -212,8 +212,11 @@ def openrouter_key() -> str | None:
     return None
 
 
-def _key_status(entry: dict) -> str:
-    return "configured" if _key_for(entry) else "missing"
+def key_hint(key: str) -> str:
+    """The head and tail of a stored key, enough for the owner to tell which one it is: the first 12 characters, an
+    ellipsis and the last 4 of a key of 20 or more characters; only the ellipsis and the last 4 of a shorter one.
+    The rest never leaves the server, and the hint itself is not logged."""
+    return f"{key[:12]}…{key[-4:]}" if len(key) >= 20 else f"…{key[-4:]}"
 
 
 # --- what OpenRouter says each model accepts for reasoning effort ----------------------------------------
@@ -307,7 +310,11 @@ def _reasoning_fields(entry: dict) -> dict:
     borrowed for it).  Nothing otherwise: an unknown provider keeps the browser's fallback."""
     if entry.get("provider") != "openrouter":
         from .agent_chat_provider import NATIVE_EFFORTS
-        tiers = NATIVE_EFFORTS.get(entry.get("provider"))
+        if entry.get("provider") == "anthropic":
+            from .anthropic_native import display_efforts
+            tiers = display_efforts(entry.get("model"))
+        else:
+            tiers = NATIVE_EFFORTS.get(entry.get("provider"))
         if tiers is None:
             return {}
         if not tiers:
@@ -323,11 +330,15 @@ def _reasoning_fields(entry: dict) -> dict:
 
 
 def public(entry: dict, default: str | None = None) -> dict:
-    """What the browser may see of an entry: never the key, nor any part of it."""
+    """What the browser may see of an entry: never the key, nor any part of it beyond ``key_hint`` (the head and
+    tail of a key kept on the server, worked out here from the decrypted key and sent for that entry only; an
+    entry that reads an environment variable has none)."""
+    key = _key_for(entry)
+    hint = {"key_hint": key_hint(key)} if key and entry["key_source"] == "vault" else {}
     return {"name": entry["name"], "display_name": entry["display_name"], "provider": entry["provider"],
             "model": entry["model"], "base_url": entry["base_url"], "origin": entry["origin"],
             "key_source": entry["key_source"], "key_env": entry.get("key_env"),
-            "key_status": _key_status(entry), "is_default": entry["name"] == default,
+            "key_status": "configured" if key else "missing", **hint, "is_default": entry["name"] == default,
             "migrated": bool(entry.get("migrated_from")), "context_window": window_of(entry),
             "context_window_set": bool(entry.get("context_window")), **_reasoning_fields(entry)}
 

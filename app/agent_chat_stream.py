@@ -7,7 +7,7 @@ from typing import Literal
 from starlette.background import BackgroundTask
 from pydantic import model_validator, BaseModel, ConfigDict, Field, SecretStr, field_validator
 from .agent_chat_provider import ProviderFailure
-from .agent_chat_api import REQUEST_SLOTS
+from .agent_chat_api import PROVIDER_PATTERN, REQUEST_SLOTS
 from .agent_tools import tool_schemas
 from .agent_workflow.graph import stream_workflow, mark_terminal_status
 from .agent_workflow.trace import WIRE_KEYS
@@ -293,7 +293,7 @@ class StreamRequest(BaseModel):
 
  # A bot's turn (bot_id) takes its model from the server's catalog: no provider, model or key comes from the
  # browser, and conversation_id, when sent, must be that bot's.  Without bot_id the browser sends all three.
- provider:str|None=Field(default=None,pattern="^(deepseek|kimi|minimax|qwen|zhipu|doubao|hunyuan|baidu|siliconflow|openrouter|custom)$"); base_url:str|None=Field(default=None,max_length=2048); model:str|None=Field(default=None,min_length=1,max_length=160,pattern=r"^[A-Za-z0-9._:/-]+$"); api_key:SecretStr|None=None; message:str=Field(min_length=1,max_length=4000); conversation_id:str|None=None; pending_request_id:str|None=Field(default=None,max_length=36); display_message:str|None=Field(default=None,max_length=120)
+ provider:str|None=Field(default=None,pattern=PROVIDER_PATTERN); base_url:str|None=Field(default=None,max_length=2048); model:str|None=Field(default=None,min_length=1,max_length=160,pattern=r"^[A-Za-z0-9._:/-]+$"); api_key:SecretStr|None=None; message:str=Field(min_length=1,max_length=4000); conversation_id:str|None=None; pending_request_id:str|None=Field(default=None,max_length=36); display_message:str|None=Field(default=None,max_length=120)
  bot_id:str|None=Field(default=None,max_length=36)
  # The owner's turn outside a bot (an older conversation): a catalog entry's name, "" for the catalog's default.
  # Like a bot's turn, no key comes from the browser (UX batch 3: the browser model profiles are gone).
@@ -369,6 +369,9 @@ _FAILURE_NOTICES={
  "provider_invalid_key":"模型服务拒绝了这次请求：API key 无效。请到设置里检查后重试。",
  "provider_model_access_denied":"模型服务拒绝了这次请求：模型不可用或当前 key 无权访问。请到设置里检查后重试。",
  "provider_network_error":"连接模型服务失败，本轮没有完成。请稍后再试。",
+ "provider_refusal":"模型拒绝回答了这个问题（Anthropic 的安全分类器拦下了这次请求）。可以换个说法再问，或换一个模型。",
+ "provider_sdk_missing":"服务器上没有安装 Anthropic 的 Python 包（anthropic）：请先安装，或把 FINBOT_ANTHROPIC_NATIVE 设为 off 暂时回到兼容接口。",
+ "provider_workspace_required":"这个 Anthropic key 没有绑定到某个工作区：请在后端设置 FINBOT_ANTHROPIC_WORKSPACE_ID（工作区 ID，wrkspc_ 开头），或换一个绑定了工作区的 key。",
  "chat_context_too_large":"这一轮没有完成：对话上下文超过了当前模型能处理的长度。再发一次不会解决；可以先发送「/压缩」压缩这条对话，或开一个新对话再问。",
  "pending_request_expired":"这张卡片已经过期，没有执行任何操作。请把你的选择直接打字发给我，或重新提出请求。",
  "pending_request_mismatch":"这张卡片已经不是当前待处理的那一张，没有执行任何操作。请按最新的卡片操作，或重新提出请求。",
@@ -1073,7 +1076,7 @@ class InboxStatusBody(BaseModel):
 
 
 class BackgroundModelBody(BaseModel):
-    provider: str = Field(pattern="^(deepseek|kimi|minimax|qwen|zhipu|doubao|hunyuan|baidu|siliconflow|openrouter|custom)$")
+    provider: str = Field(pattern=PROVIDER_PATTERN)
     model: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9._:/-]+$")
     base_url: str | None = Field(default=None, max_length=2048)
     # Optional on update: leaving it out keeps the saved key when provider, model and endpoint stay the same.

@@ -371,12 +371,26 @@ _EVIDENCE_CLASS: dict[str, str] = {
     'calculate_formula': 'derived',
 }
 
+# PH2: what the new row marks mean, said where the model reads about the tool (the guest instruction has no room left, test_b17).
+# Added only while the switch is on, so with it off the description is the old one word for word.
+PH2_NEWS_NOTE=(' Items are ranked, not filtered: matched_terms lists the codes, keywords and query words an item matched; an item that matched few of them'
+    ' may not be on the user\'s topic, so judge relevance yourself. match:"none" means no keyword or query word matched and the item is here only'
+    ' because it is about the asked ticker.')
+PH2_WEB_NOTE=(' A page marked published_at_status:"unknown" has no readable publication date (gate_note publisher_date_unknown): check its timeliness'
+    ' yourself, say in the answer that its publication time is unknown, and never present it as the latest news. outside_inferred_window:true'
+    ' means the page is dated outside a window that was only guessed from the query words, not one the user asked for.')
+
+def _ph2_description(name,description):
+    if name=='search_configured_news' and flag('FINBOT_PH2_NEWS_RANK',True):return description+PH2_NEWS_NOTE
+    if name=='web_research' and flag('FINBOT_PH2_WEB_DATE_SOFT',True):return description+PH2_WEB_NOTE
+    return description
+
 def definitions():
     from .agent_tools import TOOL_REGISTRY
-    result={name:ToolPolicy(name,tool.description,tool.args_schema,'read',True,name not in OWNER_ONLY,
+    result={name:ToolPolicy(name,_ph2_description(name,tool.description),tool.args_schema,'read',True,name not in OWNER_ONLY,
                             evidence_class=_EVIDENCE_CLASS.get(name,'public_page')) for name,tool in TOOL_REGISTRY.items()}
     for name,schema,level,description in EXTRA:
-        result[name]=ToolPolicy(name,description,schema,level,True,level!='costly' and name not in OWNER_ONLY,level in {'reversible','costly'},
+        result[name]=ToolPolicy(name,_ph2_description(name,description),schema,level,True,level!='costly' and name not in OWNER_ONLY,level in {'reversible','costly'},
                                 evidence_class=_EVIDENCE_CLASS.get(name,'public_page'))
     result['request_action']=ToolPolicy('request_action','Request owner approval for an agent-suggested operation that is NOT a user request. Arguments must match the target tool schema. No fetching or business writes before approval; at most one suggestion per turn.',RequestActionArgs,'card',True,False,evidence_class='system_state')
     return result

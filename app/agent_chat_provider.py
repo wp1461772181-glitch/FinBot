@@ -100,6 +100,14 @@ NATIVE_EFFORTS = {
     "zhipu": ("low", "high", "max"),           # GLM-5.3 / GLM-5.3-Flash; none, minimal, medium, xhigh fold onto these
     "deepseek": ("none", "high", "max"),       # none turns thinking off; medium is sent as high, low as low (folded)
     "siliconflow": (),                         # reasoning_options has no branch for it: nothing is sent
+    # Every other provider the model dialog offers: reasoning_options has no branch for it, so nothing is sent and the
+    # browser must say "takes no effort" instead of offering seven tiers that do nothing.  A bot's stored
+    # reasoning_effort is left as it is; the settings page only flags it as outside the model's tiers.
+    **{provider: () for provider in ("kimi", "minimax", "qwen", "doubao", "hunyuan", "baidu", "openai",
+                                     "gemini", "xai", "mistral", "groq", "custom")},
+    # Native Messages API (anthropic_native): output_config.effort, one-to-one.  The catalogue prefers what the Models API
+    # reports per model (anthropic_native.display_efforts); this is the table it falls back to.
+    "anthropic": ("low", "medium", "high", "xhigh", "max"),
 }
 
 
@@ -151,6 +159,9 @@ def endpoint(provider, base_url=None):
     base=base_url.rstrip("/")
     return base if base.endswith("/chat/completions") else base+"/chat/completions"
 async def decision_request(provider, model, api_key, messages, schemas, base_url=None, reasoning_effort=None):
+    if provider=="anthropic":
+        from . import anthropic_native
+        if anthropic_native.use_native(provider):return await anthropic_native.decision_request(model,api_key,messages,schemas,reasoning_effort)
     body={"model":model,"messages":messages,"max_tokens":MAX_OUTPUT_TOKENS,"stream":True}
     if schemas: body.update(tools=schemas,tool_choice="auto")
     if provider=="minimax":body["reasoning_split"]=True
@@ -301,6 +312,11 @@ async def _post(provider,key,body,base_url=None):
     except httpx.HTTPError as exc:raise HTTPException(502,'provider_network_error') from exc
 
 async def stream_answer(provider,model,api_key,messages,reasoning_collector=None,base_url=None):
+    if provider=='anthropic':
+        from . import anthropic_native
+        if anthropic_native.use_native(provider):
+            async for piece in anthropic_native.stream_answer(model,api_key,messages,reasoning_collector):yield piece
+            return
     body={'model':model,'messages':messages,'max_tokens':MAX_OUTPUT_TOKENS,'stream':True}
     if provider=='minimax':body['reasoning_split']=True
     body.update(reasoning_options(provider))

@@ -27,9 +27,18 @@ PROVIDERS = {
     "baidu": "https://qianfan.baidubce.com/v2/chat/completions",
     "siliconflow": "https://api.siliconflow.cn/v1/chat/completions",
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+    # OpenAI-compatible endpoints of the international providers.  No reasoning parameter is sent to any of them.
+    "anthropic": "https://api.anthropic.com/v1/chat/completions",
+    "openai": "https://api.openai.com/v1/chat/completions",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "xai": "https://api.x.ai/v1/chat/completions",
+    "mistral": "https://api.mistral.ai/v1/chat/completions",
+    "groq": "https://api.groq.com/openai/v1/chat/completions",
 }
-PROVIDER_NAMES = ("deepseek", "kimi", "minimax", "qwen", "zhipu", "doubao", "hunyuan", "baidu", "siliconflow", "openrouter", "custom")
-BASE_URLS = {"deepseek":"https://api.deepseek.com", "kimi":"https://api.moonshot.cn/v1", "minimax":"https://api.minimax.cn/v1", "qwen":"https://dashscope.aliyuncs.com/compatible-mode/v1", "zhipu":"https://open.bigmodel.cn/api/paas/v4", "doubao":"https://ark.cn-beijing.volces.com/api/v3", "hunyuan":"https://api.hunyuan.cloud.tencent.com/v1", "baidu":"https://qianfan.baidubce.com/v2", "siliconflow":"https://api.siliconflow.cn/v1", "openrouter":"https://openrouter.ai/api/v1"}
+PROVIDER_NAMES = ("deepseek", "kimi", "minimax", "qwen", "zhipu", "doubao", "hunyuan", "baidu", "siliconflow", "openrouter", "anthropic", "openai", "gemini", "xai", "mistral", "groq", "custom")
+# One pattern for every request model that names a provider (the chat and discovery bodies here, the stream's).
+PROVIDER_PATTERN = "^(" + "|".join(PROVIDER_NAMES) + ")$"
+BASE_URLS = {"deepseek":"https://api.deepseek.com", "kimi":"https://api.moonshot.cn/v1", "minimax":"https://api.minimax.cn/v1", "qwen":"https://dashscope.aliyuncs.com/compatible-mode/v1", "zhipu":"https://open.bigmodel.cn/api/paas/v4", "doubao":"https://ark.cn-beijing.volces.com/api/v3", "hunyuan":"https://api.hunyuan.cloud.tencent.com/v1", "baidu":"https://qianfan.baidubce.com/v2", "siliconflow":"https://api.siliconflow.cn/v1", "openrouter":"https://openrouter.ai/api/v1", "anthropic":"https://api.anthropic.com/v1", "openai":"https://api.openai.com/v1", "gemini":"https://generativelanguage.googleapis.com/v1beta/openai", "xai":"https://api.x.ai/v1", "mistral":"https://api.mistral.ai/v1", "groq":"https://api.groq.com/openai/v1"}
 REQUEST_SLOTS = asyncio.Semaphore(8)
 SYSTEM_PROMPT = "You are a general-purpose conversational assistant. You cannot access this website's project materials, databases, forecasts, or tools. Do not claim that you have read or cited them."
 
@@ -45,7 +54,7 @@ class ChatMessage(BaseModel):
         return value
 
 class ChatRequest(BaseModel):
-    provider: Literal["deepseek", "kimi", "minimax", "qwen", "zhipu", "doubao", "hunyuan", "baidu", "siliconflow", "openrouter", "custom"]
+    provider: str = Field(pattern=PROVIDER_PATTERN)
     base_url: str | None = Field(default=None, max_length=2048)
     model: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9._:/-]+$")
     api_key: SecretStr
@@ -170,7 +179,7 @@ class LocalModelTransport(httpx.AsyncBaseTransport):
     async def aclose(self):await self.inner.aclose()
 
 class ModelDiscoveryRequest(BaseModel):
-    provider: Literal["deepseek", "kimi", "minimax", "qwen", "zhipu", "doubao", "hunyuan", "baidu", "siliconflow", "openrouter", "custom"]
+    provider: str = Field(pattern=PROVIDER_PATTERN)
     base_url: str | None = Field(default=None, max_length=2048)
     api_key: SecretStr | None = None
 
@@ -300,6 +309,8 @@ async def chat(payload: ChatRequest):
     return await _limited_call(payload, [item.model_dump() for item in payload.messages], 800)
 
 MODEL_LIST_LIMIT = 8_000_000
+# The most models one discovery answer carries; a longer list is cut here and the answer says so (``truncated``).
+MODEL_RESULT_LIMIT = 1000
 MODEL_DISCOVERY_TIMEOUT = 20.0
 MODEL_DISCOVERY_UNSUPPORTED_PROVIDERS = {"minimax"}
 _NON_CHAT_WORDS = ("embed", "embedding", "rerank", "re-rank", "bge-", "image", "audio", "video", "speech-to-text", "text-to-speech", "transcription")
@@ -322,7 +333,7 @@ def _model_is_conversational(row: dict) -> bool:
     identity = " ".join(str(row.get(key, "")) for key in ("id", "name", "type")).lower()
     return not any(word in identity for word in _NON_CHAT_WORDS)
 
-def _normalize_models(payload: object) -> tuple[list[dict], str]:
+def _normalize_models(payload: object) -> tuple[list[dict], str, bool]:
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
         raise ValueError("incompatible")
     items = []
@@ -336,9 +347,9 @@ def _normalize_models(payload: object) -> tuple[list[dict], str]:
         valid_record_count += 1
         seen.add(identifier)
         if not _model_is_conversational(row): continue
-        label = row.get("name")
+        label = row.get("name") or row.get("display_name")  # Anthropic names a model ``display_name``
         item = {"id": identifier, "name": label.strip()[:160] if isinstance(label, str) and label.strip() else identifier, "_position": position}
-        timestamp = row.get("created", row.get("release_date", row.get("published_time")))
+        timestamp = row.get("created", row.get("created_at", row.get("release_date", row.get("published_time"))))
         if isinstance(timestamp, str):
             try: timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
             except ValueError: timestamp = None
@@ -352,8 +363,8 @@ def _normalize_models(payload: object) -> tuple[list[dict], str]:
     else:
         ordering = "upstream_order_unknown_recency"
     if payload["data"] and not valid_record_count: raise ValueError("incompatible")
-    result = [{key: value for key, value in row.items() if not key.startswith("_")} for row in items[:5]]
-    return result, ordering
+    result = [{key: value for key, value in row.items() if not key.startswith("_")} for row in items[:MODEL_RESULT_LIMIT]]
+    return result, ordering, len(items) > MODEL_RESULT_LIMIT
 
 @router.post("/models")
 async def discover_models(payload: ModelDiscoveryRequest):
@@ -365,8 +376,12 @@ async def discover_models(payload: ModelDiscoveryRequest):
         return {"status": "unsupported", "models": [], "ordering": "unknown"}
     if payload.provider in MODEL_DISCOVERY_UNSUPPORTED_PROVIDERS and base.rstrip("/") == BASE_URLS[payload.provider]:
         return {"status": "unsupported", "models": [], "ordering": "unknown"}
-    siliconflow_query = payload.provider == "siliconflow" and base.rstrip("/") == BASE_URLS["siliconflow"]
-    target = base.rstrip("/") + "/models" + ("?sub_type=chat" if siliconflow_query else "")
+    # Two providers' own model lists need a query: SiliconFlow only lists chat models with sub_type=chat, and
+    # Anthropic pages its list at 20 unless limit is raised (its documented maximum is 1000).
+    query = ""
+    if base.rstrip("/") == BASE_URLS.get(payload.provider):
+        query = {"siliconflow": "?sub_type=chat", "anthropic": "?limit=1000"}.get(payload.provider, "")
+    target = base.rstrip("/") + "/models" + query
     headers = {"Accept": "application/json"}
     if payload.api_key is not None:
         headers["Authorization"] = f"Bearer {payload.api_key.get_secret_value()}"
@@ -378,7 +393,7 @@ async def discover_models(payload: ModelDiscoveryRequest):
     try:
         try:
             async with asyncio.timeout(MODEL_DISCOVERY_TIMEOUT):
-                async with httpx.AsyncClient(timeout=httpx.Timeout(MODEL_DISCOVERY_TIMEOUT), follow_redirects=False, trust_env=False, transport=model_transport(base,allow_internal_query=siliconflow_query)) as client:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(MODEL_DISCOVERY_TIMEOUT), follow_redirects=False, trust_env=False, transport=model_transport(base,allow_internal_query=bool(query))) as client:
                     async with client.stream("GET", target, headers=headers) as response:
                         code = response.status_code
                         if 300 <= code < 400: raise HTTPException(502, "model_discovery_redirect_rejected")
@@ -393,9 +408,9 @@ async def discover_models(payload: ModelDiscoveryRequest):
                             if len(raw) > MODEL_LIST_LIMIT: raise HTTPException(502, "model_discovery_response_too_large")
             try: upstream = json.loads(raw)
             except (ValueError, TypeError) as exc: raise HTTPException(502, "model_discovery_incompatible_response") from exc
-            try: models, ordering = _normalize_models(upstream)
+            try: models, ordering, truncated = _normalize_models(upstream)
             except ValueError as exc: raise HTTPException(502, "model_discovery_incompatible_response") from exc
-            return {"status": "available" if models else "empty", "models": models, "ordering": ordering}
+            return {"status": "available" if models else "empty", "models": models, "ordering": ordering, "truncated": truncated}
         except (httpx.TimeoutException, TimeoutError) as exc:
             raise HTTPException(504, "model_discovery_timeout") from exc
         except httpx.HTTPError as exc:

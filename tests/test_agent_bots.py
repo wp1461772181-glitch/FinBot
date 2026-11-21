@@ -265,6 +265,13 @@ def _keys_absent(text):
         assert key not in text and key[-6:] not in text and key[:12] not in text
 
 
+def _only_the_hint_of_a_key(text):
+    """A catalog entry saved with a key may carry its key_hint (head and tail) and nothing more of the key."""
+    for key in (KEY_A, KEY_B):
+        text = text.replace(catalog.key_hint(key), "")
+    _keys_absent(text)
+
+
 def test_catalog_api_says_configured_or_missing_and_never_returns_a_key(owner, client, monkeypatch, caplog):
     caplog.set_level(logging.DEBUG)
     added = client.post("/agent-chat/model-catalog", headers=H, json={
@@ -290,7 +297,7 @@ def test_catalog_api_says_configured_or_missing_and_never_returns_a_key(owner, c
     report = "\n".join(catalog.startup_report())
     assert "alpha" in report and "usable" in report
     for response in (added, listed, bad):
-        _keys_absent(response.text)
+        _only_the_hint_of_a_key(response.text)
     _keys_absent(caplog.text)
     # The server's own secrets cannot be named as a model key.
     assert client.post("/agent-chat/model-catalog", headers=H, json={

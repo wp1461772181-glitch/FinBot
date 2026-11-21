@@ -8,7 +8,7 @@ export async function deleteCatalogModel(name:string):Promise<void>{ await botJs
  *  provider and endpoint) the entry's stored key.  Nothing is saved; nothing returned carries a key. */
 export type CatalogProbe = { name?: string; provider: string; model?: string; base_url?: string | null; api_key?: string; key_env?: string };
 export async function testCatalogModel(value:CatalogProbe,signal?:AbortSignal):Promise<void>{ await botJson("model-catalog/test",{method:"POST",body:value,signal},"连接失败，请检查服务、Model ID 和 key。"); }
-export async function discoverCatalogModels(value:CatalogProbe,signal?:AbortSignal):Promise<{status:string;ordering:string;models:Array<{id:string;name:string}>}>{ return await botJson("model-catalog/models",{method:"POST",body:value,signal},"暂时无法获取服务商模型列表。"); }
+export async function discoverCatalogModels(value:CatalogProbe,signal?:AbortSignal):Promise<{status:string;ordering:string;truncated?:boolean;models:Array<{id:string;name:string}>}>{ return await botJson("model-catalog/models",{method:"POST",body:value,signal},"暂时无法获取服务商模型列表。"); }
 export type ModelRoles = { roles: Record<string, string | null> };
 export async function getModelRoles(signal?:AbortSignal):Promise<ModelRoles>{ return await botJson("model-roles",{signal},"模型目录暂时无法读取。"); }
 export async function setModelRole(role:string,model:string|null):Promise<void>{ await botJson(`model-roles/${encodeURIComponent(role)}`,{method:"PUT",body:{model}},"保存失败。"); }

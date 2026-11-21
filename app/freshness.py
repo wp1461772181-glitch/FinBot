@@ -74,6 +74,26 @@ def published_within(published_at: object, days: int, now: datetime) -> bool:
     return now - timedelta(days=days) <= moment <= now
 
 
+def published_status(published_at: object, days: int, now: datetime) -> str:
+    """FINBOT_PH2_WEB_DATE_SOFT: where a source's date stands against a span.
+
+    ``"in"``: a readable date inside it. ``"out"``: a readable date outside it (older, or later than now).
+    ``"unknown"``: no readable date at all, so nothing is known against the span either way.
+    """
+    if isinstance(published_at, datetime):
+        moment = published_at
+    elif isinstance(published_at, str) and published_at.strip():
+        try:
+            moment = datetime.fromisoformat(published_at.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return "unknown"
+    else:
+        return "unknown"
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=now.tzinfo)
+    return "in" if now - timedelta(days=days) <= moment <= now else "out"
+
+
 def requested_years(text: str) -> set[str]:
     """The four-digit years written literally in the text; relative words are never interpreted."""
     return set(re.findall(r'(?<!\d)(?:19|20)\d{2}(?!\d)',text or ''))
