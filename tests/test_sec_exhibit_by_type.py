@@ -179,3 +179,40 @@ def test_recheck_with_nothing_new_or_a_failed_lookup_leaves_the_row_untouched(mo
                                     recheck_attachment=True)
         db.refresh(same)
         assert same.content_status == "fetched" and same.content_text == "Cover page only."
+
+
+@pytest.mark.parametrize("name", ["q3pr.pdf", "chart.jpg", "release.PDF"])
+def test_a_non_text_document_typed_ex_99_1_is_not_chosen(disposable_database, name):
+    with SessionLocal() as db:
+        opener, provider, filing, directory = _setup(db, ["primary.htm", name], [("8-K", "primary.htm"), ("EX-99.1", name)])
+        # No readable exhibit by type, none by name: the primary document stays in use and nothing is downloaded.
+        assert provider.fetch_exhibit_99_1(filing) is None
+        assert f"{directory}/{name}" not in [request for request in getattr(opener, "requested", [])]
+
+
+def test_a_text_ex_99_1_is_still_chosen_beside_a_pdf_copy(disposable_database):
+    with SessionLocal() as db:
+        _, provider, filing, _ = _setup(db, ["primary.htm", "q3pr.pdf", "q3pr.htm"],
+                                        [("8-K", "primary.htm"), ("EX-99.1", "q3pr.pdf"), ("EX-99.1", "q3pr.htm")])
+        assert provider.fetch_exhibit_99_1(filing).document_name == "q3pr.htm"
+
+
+def test_fetch_sec_answers_from_the_saved_text_when_the_exhibit_recheck_fails(disposable_database, monkeypatch):
+    from runpy import run_path
+    from types import SimpleNamespace
+    from app.agent_workflow import actions
+    run_path("scripts/migrate_agent_actions.py")["apply"]()
+    monkeypatch.setattr(actions, "owner_credential_matches", lambda value: value == "owner-session")
+    seen = []
+    saved = SimpleNamespace(id="11111111-1111-1111-1111-111111111111")
+
+    def fake_fetch(*, symbol, accession_number, db, force_refresh=False, recheck_attachment=False, **_):
+        seen.append(recheck_attachment)
+        if recheck_attachment:
+            raise SecFilingsError("SEC request failed; no filing data was saved")
+        return saved, True
+    monkeypatch.setattr(sec_filings, "fetch_inventory_content", fake_fetch)
+    done = actions.execute_action(credential="owner-session", request_key="fetch-recheck-1", action="fetch_sec",
+                                  payload={"symbol": "NVDA", "accession_number": "0001045810-26-000088"})
+    assert seen == [True, False]
+    assert done["ok"] is True and done["result"]["cached"] is True

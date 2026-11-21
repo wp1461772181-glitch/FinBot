@@ -365,6 +365,10 @@ class SecEdgarProvider:
             name = doc_name.group(1).strip()
             if not _SAFE_PRIMARY_DOCUMENT.fullmatch(name) or name not in listed:
                 continue
+            # Only a text exhibit can be read (the file-name pattern allowed the same three): a PDF or image typed
+            # EX-99.1 would make the download fail instead of leaving the primary document in use.
+            if not name.casefold().endswith((".htm", ".html", ".txt")):
+                continue
             sequence = _HEADER_DOCUMENT_SEQUENCE.search(block)
             order = (int(sequence.group(1)) if sequence else position + 1, name)
             kind = doc_type.group(1).strip().upper()
