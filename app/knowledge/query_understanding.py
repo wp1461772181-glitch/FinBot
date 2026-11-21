@@ -100,17 +100,13 @@ def _grounded(variant: str, query: str) -> bool:
     """A variant may rephrase, never add: no figure, ticker or year the question did not name."""
     from app.agent_workflow.fp_flags import flag
 
-    code_only = flag("FINBOT_PH2_VARIANT_TICKER", True)
-    for pattern in (_FIGURE, _TICKER, _YEAR):
+    # FINBOT_PH2_VARIANT_TICKER: the all-caps rule is not applied. The search itself is bound to the symbol it was asked for
+    # (every variant goes to the same ``function(symbol, query, ...)``), so a code written into a variant cannot pull in another
+    # company's documents; and the rule refused finance words that are also listed codes (AI, FCF). Figures and years stay.
+    patterns = (_FIGURE, _YEAR) if flag("FINBOT_PH2_VARIANT_TICKER", True) else (_FIGURE, _TICKER, _YEAR)
+    for pattern in patterns:
         allowed = set(pattern.findall(query))
-        found = pattern.findall(variant)
-        if pattern is _TICKER and code_only:
-            # FINBOT_PH2_VARIANT_TICKER: an all-caps word is a new stock code only when the SEC list has it as one; EPS, GAAP, ROE
-            # are finance words, and "diluted EPS" is a fair wording of 每股收益. When the list cannot be read the word is not refused.
-            from app.agent_workflow.entities import sec_title
-
-            found = [item for item in found if item not in allowed and sec_title(item)]
-        if any(item not in allowed for item in found):
+        if any(item not in allowed for item in pattern.findall(variant)):
             return False
     return True
 

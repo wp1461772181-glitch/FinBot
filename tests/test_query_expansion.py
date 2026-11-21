@@ -75,9 +75,7 @@ def test_the_model_writes_the_variants_and_the_original_is_searched_first():
 
 
 def test_a_variant_may_not_add_a_ticker_a_figure_or_a_year(monkeypatch):
-    # FINBOT_PH2_VARIANT_TICKER: a code counts as new only when the SEC list has it, so the list is given here (it is a network read).
-    from app.agent_workflow import entities
-    monkeypatch.setattr(entities, "ticker_records", lambda: [{"ticker": "AAPL", "title": "Apple Inc."}, {"ticker": "MSFT", "title": "MICROSOFT CORP"}])
+    monkeypatch.setenv("FINBOT_PH2_VARIANT_TICKER", "off")   # the old all-caps rule; with the switch on it is not applied (tests/test_ph2_tier2.py)
     kept = qu.clean_variants("AAPL 2024 年营收", [
         "AAPL revenue 2024",         # same names and numbers, different words: kept
         "MSFT 2024 revenue",         # a company the question never named: dropped

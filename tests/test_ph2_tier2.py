@@ -285,60 +285,49 @@ def test_tool_descriptions_explain_the_marks_only_while_on(monkeypatch):
 
 
 # --------------------------------------------------------------------------------------------------------------------
-# 3. B-6: a rewritten search variant may add a stock code only if it is not a finance word (FINBOT_PH2_VARIANT_TICKER)
+# 3. B-6: the all-caps rule for rewritten search variants is not applied (FINBOT_PH2_VARIANT_TICKER)
 # --------------------------------------------------------------------------------------------------------------------
 from app.knowledge import query_understanding as qu
 
 
-@pytest.fixture
-def sec_list(monkeypatch):
-    """A small SEC ticker list; the real one is a network read."""
-    from app.agent_workflow import entities
-    rows = [{"ticker": "AAPL", "title": "Apple Inc."}, {"ticker": "MSFT", "title": "MICROSOFT CORP"}, {"ticker": "NVDA", "title": "NVIDIA CORP"}]
-    monkeypatch.setattr(entities, "ticker_records", lambda: rows)
-
-
-def test_variant_finance_words_in_capitals_pass_when_on(monkeypatch, sec_list):
+def test_variant_all_caps_words_pass_when_on(monkeypatch):
     _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", True)
-    for variant in ("diluted EPS", "GAAP net income", "AI revenue", "ROE and FCF"):
+    for variant in ("diluted EPS", "GAAP net income", "AI revenue", "ROE and FCF", "NVIDIA AI chip revenue", "Apple free cash flow FCF", "MSFT"):
         assert qu._grounded(variant, "每股收益是多少"), variant
-    assert qu.clean_variants("每股收益是多少", ["diluted EPS", "GAAP net income"]) == ["每股收益是多少", "diluted EPS", "GAAP net income"]
+    assert qu.clean_variants("每股收益是多少", ["diluted EPS", "MSFT revenue"]) == ["每股收益是多少", "diluted EPS", "MSFT revenue"]
 
 
-def test_variant_finance_words_off_are_refused_as_before(monkeypatch, sec_list):
+def test_variant_all_caps_words_off_are_refused_as_before(monkeypatch):
     _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", False)
-    for variant in ("diluted EPS", "GAAP net income", "AI revenue", "ROE and FCF"):
+    for variant in ("diluted EPS", "GAAP net income", "AI revenue", "NVIDIA AI chip revenue", "Apple free cash flow FCF", "MSFT"):
         assert not qu._grounded(variant, "每股收益是多少"), variant
 
 
-def test_variant_new_sec_listed_code_is_still_refused_both_ways(monkeypatch, sec_list):
-    for on in (True, False):
-        _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", on)
-        assert not qu._grounded("MSFT revenue", "苹果的营收是多少")
-        assert not qu._grounded("AAPL diluted EPS", "每股收益是多少")
-
-
-def test_variant_code_the_query_already_names_passes_both_ways(monkeypatch, sec_list):
-    for on in (True, False):
-        _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", on)
-        assert qu._grounded("AAPL revenue", "AAPL 营收是多少")
-
-
-def test_variant_figure_and_year_rules_unchanged_when_on(monkeypatch, sec_list):
+def test_variant_figure_and_year_rules_unchanged_when_on(monkeypatch):
     _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", True)
     assert not qu._grounded("EPS 2024", "每股收益是多少")
     assert not qu._grounded("EPS 12%", "每股收益是多少")
     assert qu._grounded("EPS 2024", "2024 年每股收益")
 
 
-def test_variant_sec_list_unreadable_is_not_a_refusal_when_on(monkeypatch):
-    from app.agent_workflow import entities
-
-    def boom():
-        raise ValueError("entity_mapping_unavailable")
-    monkeypatch.setattr(entities, "ticker_records", boom)
+def test_variant_search_stays_bound_to_the_symbol_so_another_code_in_a_variant_pulls_nothing(monkeypatch):
+    """The premise of dropping the rule: every variant is searched with the same symbol, and the search filters by it."""
+    from app import agent_tools
     _switch(monkeypatch, "FINBOT_PH2_VARIANT_TICKER", True)
-    assert qu._grounded("MSFT diluted EPS", "每股收益是多少")
+    corpus = [{"id": "a1", "symbol": "AAPL"}, {"id": "m1", "symbol": "MSFT"}]
+    seen_symbols = []
+
+    async def lookup(symbol, query, limit, source_id=None):          # the real search functions take (symbol, query, limit)
+        seen_symbols.append((symbol, query))
+        return {"ok": True, "data": [r for r in corpus if r["symbol"] == symbol], "source": "knowledge", "as_of": None}
+
+    async def expander(_query):
+        return ["MSFT diluted EPS", "AI revenue"]
+    with qu.use_expander(expander):
+        found = asyncio.run(agent_tools._expanded_retrieval(lookup, "AAPL", "苹果每股收益", 5, None))
+    assert [q for _, q in seen_symbols] == ["苹果每股收益", "MSFT diluted EPS", "AI revenue"]      # the MSFT variant is searched ...
+    assert {s for s, _ in seen_symbols} == {"AAPL"}                                                  # ... still as AAPL
+    assert found["data"] == [{"id": "a1", "symbol": "AAPL"}]
 
 
 # --------------------------------------------------------------------------------------------------------------------
