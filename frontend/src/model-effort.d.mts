@@ -1,6 +1,6 @@
 export declare const EFFORT_LEVELS: readonly ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 export declare function effortLabel(value: string | null | undefined): string;
-export type CatalogEffortEntry = { name: string; display_name: string; model: string; key_status: string; supported_efforts?: string[] | null; reasoning_supported?: boolean };
+export type CatalogEffortEntry = { name: string; display_name: string; model: string; provider?: string; key_status: string; supported_efforts?: string[] | null; reasoning_supported?: boolean };
 export declare function effectiveEntry(catalog: { default: string | null; models: CatalogEffortEntry[] } | null | undefined, model: string | null | undefined): CatalogEffortEntry | null;
 export declare function effortSupport(entry: CatalogEffortEntry | null | undefined): { reasoning: boolean; levels: string[] };
 export declare function noEffort(entry: CatalogEffortEntry | null | undefined): boolean;
@@ -8,3 +8,16 @@ export declare function effortChoices(current: string | null | undefined, entry?
 export declare function modelChoices(catalog: { default: string | null; models: { name: string; display_name: string; model: string; key_status: string }[] }, current: string | null | undefined): { value: string | null; label: string; checked: boolean; keyMissing?: boolean }[];
 export declare function patchFor(kind: "model" | "effort", value: string | null): { model: string | null } | { reasoning_effort: string | null };
 export declare function badgeText(bot: { model: string | null; reasoning_effort: string | null }, t?: (text: string) => string): string;
+export declare const LOGO_KEYS: readonly string[];
+export type PickerEntry = CatalogEffortEntry;
+export declare function providerLogo(provider: string | null | undefined): string | null;
+export declare function entryLogo(entry: { provider?: string; model?: string } | null | undefined): string | null;
+export declare function providerLabel(provider: string | null | undefined): string | null;
+export type ModelRow = { value: string; name: string; model: string; logo: string | null; checked: boolean; keyMissing: boolean; thinking: boolean };
+export type ModelGroup = { provider: string; label: string | null; logo: string | null; items: ModelRow[] };
+export declare function modelSections(catalog: { default: string | null; models: PickerEntry[] }, current: string | null | undefined): { defaultChoice: { value: null; checked: boolean; defaultName: string | null }; groups: ModelGroup[] };
+export declare function effortHint(value: string | null | undefined): string;
+export declare function effortBars(value: string | null | undefined): number;
+export declare function effortTone(value: string | null | undefined): number;
+export declare function effortHigh(value: string | null | undefined): boolean;
+export declare function triggerView(bot: { model: string | null; reasoning_effort: string | null }, entry: PickerEntry | null | undefined): { name: string | null; logo: string | null; value: string | null; level: string; bars: number; tone: number; high: boolean };

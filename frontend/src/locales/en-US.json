@@ -2323,5 +2323,19 @@
   "gemini-2.5-flash": "gemini-2.5-flash",
   "grok-4": "grok-4",
   "mistral-large-latest": "mistral-large-latest",
-  "llama-3.3-70b-versatile": "llama-3.3-70b-versatile"
+  "llama-3.3-70b-versatile": "llama-3.3-70b-versatile",
+  "搜索模型或服务商…": "Search models or providers…",
+  "其他服务商": "Other providers",
+  "支持思考": "Supports reasoning",
+  "不指定，用模型自己的设置": "Not set; the model's own setting applies",
+  "不思考，直接回答": "No reasoning, answers directly",
+  "几乎不思考，最快": "Barely any reasoning, fastest",
+  "快，适合简单问答": "Fast, for simple questions",
+  "均衡，多数问题够用": "Balanced, enough for most questions",
+  "更细致，慢一些、贵一些": "More thorough, a little slower and dearer",
+  "深入推理，明显更慢更贵": "Deep reasoning, clearly slower and dearer",
+  "最深的推理，最慢最贵": "The deepest reasoning, slowest and dearest",
+  "↑↓ 选择　↵ 确认　Tab 到强度": "↑↓ choose   ↵ confirm   Tab to effort",
+  "极简": "Minimal",
+  "极高": "Very high"
 }

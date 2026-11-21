@@ -2153,32 +2153,96 @@ async function chatPopoverKeyboard(ctx) {
   const view = await openChat(ctx, "chat-popover-keyboard");
   try {
     const { page } = view;
+    // The model badge opens the model selector (a modal palette: [data-testid=model-picker]); the other two are the small pop panels.
     const panels = [["model-badge", "模型与推理强度"], ["context-meter", "上下文用量"], ["about-chat", "关于这条对话"]];
+    const panelOf = (id, label) => (id === "model-badge" ? page.locator("[data-testid=model-picker]") : page.locator(`[data-slot=pop-panel][aria-label="${label}"]`));
     for (const [id, label] of panels) {
       const trigger = page.locator(`[data-testid=${id}]`);
       await trigger.waitFor({ timeout: 10000 });
       await trigger.focus();
       await page.keyboard.press("Enter");
-      const panel = page.locator(`[data-slot=pop-panel][aria-label="${label}"]`);
+      const panel = panelOf(id, label);
       await panel.waitFor({ timeout: 5000 });
       assert(await panel.evaluate((el) => el.contains(document.activeElement)), `${id}: focus did not move into the panel`);
       await page.keyboard.press("Escape");
       await panel.waitFor({ state: "detached", timeout: 5000 });
       await focusOn(page, trigger, `${id}: focus did not return to the button after Esc`);
     }
-    // A press outside closes the model panel too.
+    // A press outside closes the model panel too (the selector is modal: its overlay takes the press, so press a corner of the page).
     await page.locator("[data-testid=model-badge]").click();
-    await page.locator("[data-slot=pop-panel]").waitFor({ timeout: 5000 });
-    await page.locator("[data-testid=chat-header] h1").click();
-    await page.locator("[data-slot=pop-panel]").waitFor({ state: "detached", timeout: 5000 });
-    // Reach the model choice by keyboard alone: Tab from the badge into the radio list and choose with Space.
+    await page.locator("[data-testid=model-picker]").waitFor({ timeout: 5000 });
+    await page.mouse.click(4, 4);
+    await page.locator("[data-testid=model-picker]").waitFor({ state: "detached", timeout: 5000 });
+    // Reach the strength choice by keyboard alone: Tab from the search box (where the selector opens) into the radio group.
     await page.locator("[data-testid=model-badge]").focus();
     await page.keyboard.press("Enter");
-    await page.locator("[data-slot=pop-panel] [role=radio]").first().waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=model-picker] [role=radio]").first().waitFor({ timeout: 10000 });
     await page.keyboard.press("Tab");
     assert(await page.evaluate(() => document.activeElement?.getAttribute("role") === "radio"), "Tab from the panel did not land on a choice");
     await page.keyboard.press("Escape");
     return "model badge, context ring and ⓘ: Enter opens with focus inside, Esc closes and returns focus, a press outside closes; the choices are Tab-reachable";
+  } finally { await view.close(); }
+}
+
+/** The composer's model selector: grouped and searchable, a model choice saves and leaves the panel open on that model's tiers, a strength choice saves and closes it, a refused save keeps it open with the reason and the badge as it was. */
+async function chatModelPicker(ctx) {
+  const view = await openChat(ctx, "chat-model-picker-flow");
+  try {
+    const { page, mock } = view;
+    const bot = () => mock.state.bots.find((b) => b.id === BOT.finbot);
+    const picker = page.locator("[data-testid=model-picker]");
+    const badge = page.locator("[data-testid=model-badge]");
+    await badge.waitFor({ timeout: 10000 });
+    assert(/Haiku/.test(await badge.innerText()), `the badge says ${JSON.stringify(await badge.innerText())}, not the model's display name`);
+    await badge.click();
+    await picker.waitFor({ timeout: 10000 });
+    await picker.locator("[cmdk-item]").first().waitFor({ timeout: 10000 });
+    const groups = (await picker.locator("[cmdk-group-heading]").allInnerTexts()).map((text) => text.trim());
+    assert(["OpenRouter", "SiliconFlow", "智谱 GLM"].every((name) => groups.includes(name)), `the groups are ${JSON.stringify(groups)}`);
+    assert(await picker.locator("img[src*='/assets/']").count() >= 4, "the rows carry no local logo images");
+    assert(!(await picker.locator("img[src^='http']").count()), "a logo is loaded from outside");
+    // Search narrows the list (by name, model id or provider).
+    const input = picker.locator("input");
+    await input.fill("glm");
+    await until(async () => (await picker.locator("[cmdk-item]").count()) === 1, "the search for glm did not leave one row");
+    await input.fill("");
+    await until(async () => (await picker.locator("[cmdk-item]").count()) >= 5, "clearing the search did not bring the list back");
+    // A model choice: saved, the panel stays open, the strength row is the new model's (every tier: 默认 + 7).
+    await picker.locator("[cmdk-item]", { hasText: "Muse Ember" }).click();
+    await until(() => bot().model === "muse-ember", `the model saved is ${bot().model}`);
+    await until(async () => (await picker.getByRole("radio").count()) === 8, "the strength row did not become the new model's");
+    assert(await picker.isVisible(), "choosing a model closed the panel");
+    // A strength choice: saved, the panel closes, the badge says both.
+    await picker.getByRole("radio", { name: "极高", exact: true }).click();
+    await picker.waitFor({ state: "detached", timeout: 5000 });
+    assert(bot().reasoning_effort === "xhigh", `the effort saved is ${bot().reasoning_effort}`);
+    const text = await badge.innerText();
+    assert(/Muse Ember/.test(text) && text.includes("极高"), `the badge says ${JSON.stringify(text)}`);
+    // Reopening starts the highlight on the current model, not on the row hovered last time; Tab from the strength row wraps
+    // back to the search box (the dialog's focus trap still sees it).
+    await badge.click();
+    await picker.waitFor({ timeout: 10000 });
+    await picker.locator("[cmdk-item][data-value=\"haiku-5.5\"]").hover();
+    await page.keyboard.press("Escape");
+    await picker.waitFor({ state: "detached", timeout: 5000 });
+    await badge.click();
+    await picker.waitFor({ timeout: 10000 });
+    await until(async () => (await picker.locator("[cmdk-item][data-selected=true]").getAttribute("data-value")) === "muse-ember", "reopening did not start the highlight on the current model");
+    await picker.getByRole("radio", { checked: true }).focus();
+    await page.keyboard.press("Tab");
+    assert(await picker.locator("input").evaluate((el) => el === document.activeElement), "Tab from the strength row did not wrap back to the search box");
+    await page.keyboard.press("Escape");
+    await picker.waitFor({ state: "detached", timeout: 5000 });
+    // A refused save keeps the panel open, says why, and leaves the badge and the record alone.
+    mock.control.fail = (method) => (method === "PATCH" ? 500 : 0);
+    await badge.click();
+    await picker.waitFor({ timeout: 10000 });
+    await picker.locator("[cmdk-item][data-value=\"haiku-5.5\"]").click();
+    await picker.locator("[role=alert]").waitFor({ timeout: 5000 });
+    assert(await picker.isVisible(), "a refused save closed the panel");
+    assert(bot().model === "muse-ember" && /Muse Ember/.test(await badge.innerText()), "a refused save changed the badge or the record");
+    mock.control.fail = null;
+    return `search, a model choice (panel stays, 8 tiers), a strength choice (saved: ${bot().model} / ${bot().reasoning_effort}, panel closes), a refused save (panel open with the reason, nothing changed)`;
   } finally { await view.close(); }
 }
 
@@ -11588,6 +11652,7 @@ const CHECKS = [
   ["stop-button: the send position becomes stop while an answer runs and stop is the old cancel", stopButton],
   ["copy-toast: copying shows a toast and adds no text to the thread", copyToast],
   ["chat-popover-keyboard: the composer panels and the header ⓘ open from the keyboard, Esc closes and returns focus", chatPopoverKeyboard],
+  ["chat-model-picker: the model selector is grouped and searchable; a model choice stays open, a strength choice closes, a refused save changes nothing", chatModelPicker],
   ["chat-question-rail: markers on the left edge, preview card, bookmark kept, click scrolls", chatQuestionRail],
   ["markdown-chunk: the renderer is prefetched at launch; a skeleton while it is late; plain text and 重试 when it fails", markdownChunk],
   ["citation-jump: a click on [2] opens the panel on 来源, scrolls to card 2 and marks it once", citationJump],

@@ -34,3 +34,6 @@ build/
 
 # Server model catalog (personal agent): only the example is committed.
 config/models.yaml
+
+# Local scratch of the superpowers workflow (mockups, brainstorming state)
+.superpowers/

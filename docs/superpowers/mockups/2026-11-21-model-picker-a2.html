@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A 版 · 加点质感</title>
+<style>
+  :root{
+    --page:#f5f5f4; --surface:#ffffff; --glass:rgb(255 255 255 / .78); --ink:#1c1917; --ink-2:#44403c; --muted:#57534e; --faint:#78716c;
+    --line:#e7e5e4; --line-strong:#d6d3d1; --accent:#2563eb; --accent-soft:#eff6ff; --hover:rgb(28 25 23 / .045);
+    --pop:0 18px 40px -12px rgb(28 25 23 / .22), 0 4px 12px rgb(28 25 23 / .06), 0 0 0 1px rgb(28 25 23 / .06);
+    --font:"Inter","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  .dark{
+    --page:#141210; --surface:#1f1c1a; --glass:rgb(32 29 27 / .78); --ink:#f0eeec; --ink-2:#c9c4bf; --muted:#a39d97; --faint:#857f79;
+    --line:#2e2a27; --line-strong:#3a3532; --accent:#93b4ff; --accent-soft:#1c2a4a; --hover:rgb(255 255 255 / .05);
+    --pop:0 18px 40px -12px rgb(0 0 0 / .6), 0 4px 12px rgb(0 0 0 / .3), 0 0 0 1px rgb(255 255 255 / .06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#ecebea;color:#1c1917;font:14px/22px var(--font);padding:28px 24px 60px}
+  h1{font-size:20px;line-height:28px;margin:0 0 4px;font-weight:600}
+  .sub{color:#57534e;margin:0 0 20px;font-size:13px;max-width:900px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px;align-items:start}
+  .variant{border:2px solid transparent;border-radius:20px;padding:12px;cursor:pointer}
+  .variant:hover{border-color:#d6d3d1}
+  .variant.selected{border-color:#2563eb}
+  .vhead{display:flex;gap:10px;align-items:baseline;margin:0 0 4px}
+  .vhead b{color:#2563eb}
+  .vdesc{color:#57534e;font-size:13px;line-height:20px;margin:0 0 12px;min-height:40px}
+  .scene{background:var(--page);color:var(--ink);border-radius:16px;padding:22px 18px 18px;position:relative;overflow:hidden}
+  .scene .bg{position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(600px 220px at 20% 0%, rgb(37 99 235 / .06), transparent 70%), radial-gradient(500px 200px at 90% 10%, rgb(217 119 87 / .06), transparent 70%)}
+  .scene>*{position:relative}
+  .scene-label{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
+
+  /* ---------- popover ---------- */
+  .pop{width:340px;background:var(--glass);backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);
+    border-radius:14px;box-shadow:var(--pop);padding:6px;margin:0 0 10px 6px;transform-origin:bottom left;animation:rise .18s cubic-bezier(.2,.8,.2,1)}
+  @keyframes rise{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+  .search{display:flex;align-items:center;gap:8px;padding:6px 8px 10px;margin:0 -6px 2px;border-bottom:1px solid var(--line);color:var(--faint);font-size:13px}
+  .search input{all:unset;flex:1;color:var(--ink);font-size:13px}
+  .search input::placeholder{color:var(--faint)}
+  kbd{font:500 10.5px/16px var(--mono);color:var(--faint);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 5px;background:var(--surface)}
+  .list{max-height:228px;overflow:auto;padding-right:2px}
+  .group{font-size:11px;letter-spacing:.04em;font-weight:500;color:var(--faint);padding:10px 8px 4px;display:flex;align-items:center;gap:6px}
+  .row{position:relative;display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:9px;cursor:pointer;transition:background .12s}
+  .row:hover{background:var(--hover)}
+  .row.on{background:var(--accent-soft)}
+  .row.on::before{content:"";position:absolute;left:-2px;top:9px;bottom:9px;width:3px;border-radius:3px;background:var(--accent)}
+  .tile{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;flex:none;background:var(--surface);box-shadow:0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0/.05)}
+  .tile svg{width:15px;height:15px}
+  .name{font-size:13.5px;font-weight:500;color:var(--ink);line-height:18px}
+  .meta{font-size:11.5px;color:var(--faint);line-height:16px;display:flex;gap:8px;align-items:center}
+  .meta .cap{display:inline-flex;align-items:center;gap:3px}
+  .meta svg{width:11px;height:11px}
+  .right{margin-left:auto;display:flex;align-items:center;gap:6px}
+  .pill{font-size:10.5px;line-height:16px;padding:0 6px;border-radius:999px;color:#b45309;background:rgb(245 158 11 / .12)}
+  .dark .pill{color:#fcd34d}
+  .tick{width:15px;height:15px;color:var(--accent)}
+  .hr{height:1px;background:var(--line);margin:6px -6px 4px}
+
+  /* effort */
+  .eff-head{display:flex;justify-content:space-between;align-items:center;padding:6px 8px 6px}
+  .eff-head span{font-size:11px;letter-spacing:.04em;font-weight:500;color:var(--faint)}
+  .eff-hint{font-size:11.5px;color:var(--muted);transition:opacity .15s}
+  .seg{position:relative;display:grid;grid-template-columns:repeat(4,1fr);background:var(--hover);border-radius:10px;padding:3px;margin:0 4px 4px}
+  .seg .thumb{position:absolute;top:3px;bottom:3px;left:3px;width:calc((100% - 6px)/4);border-radius:7px;background:var(--surface);
+    box-shadow:0 1px 2px rgb(0 0 0/.08),0 0 0 1px var(--line);transition:transform .28s cubic-bezier(.3,1.3,.5,1)}
+  .seg button{all:unset;position:relative;z-index:1;text-align:center;font-size:12.5px;line-height:28px;color:var(--muted);cursor:pointer;display:flex;justify-content:center;align-items:center;gap:6px}
+  .seg button.on{color:var(--ink);font-weight:600}
+  .bars{display:inline-flex;gap:1.5px;align-items:flex-end;height:10px}
+  .bars i{width:2.5px;border-radius:1px;background:currentColor;opacity:.22;transition:opacity .2s, background .2s}
+  .bars i:nth-child(1){height:4px}.bars i:nth-child(2){height:7px}.bars i:nth-child(3){height:10px}
+  .bars i.f{opacity:1}
+  .foot{display:flex;gap:12px;align-items:center;font-size:11px;color:var(--faint);padding:6px 8px 2px}
+
+  /* expressive variant extras */
+  .x .seg .thumb{background:linear-gradient(135deg, var(--surface), var(--surface))}
+  .x .seg[data-level="2"] .thumb{box-shadow:0 0 0 1px rgb(37 99 235 / .35), 0 4px 14px -4px rgb(37 99 235 / .45)}
+  .x .seg[data-level="3"] .thumb{box-shadow:0 0 0 1px rgb(124 58 237 / .45), 0 4px 18px -4px rgb(124 58 237 / .55)}
+  .x .seg[data-level="3"] button.on{background:linear-gradient(90deg,#2563eb,#7c3aed);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .x .seg[data-level="3"] button.on .bars i{background:#7c3aed}
+  .x .row.on{background:linear-gradient(90deg, var(--accent-soft), transparent 85%)}
+
+  /* composer */
+  .composer{background:var(--surface);border:1px solid var(--line-strong);border-radius:16px;box-shadow:0 1px 2px rgb(0 0 0/.04), 0 8px 24px -16px rgb(28 25 23 / .25)}
+  .draft{padding:12px 16px 4px;color:var(--faint);font-size:15px;line-height:26px;min-height:44px}
+  .bar{display:flex;align-items:center;justify-content:space-between;padding:0 8px 8px}
+  .trigger{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 10px 0 6px;border-radius:9px;color:var(--ink-2);font-size:12.5px;font-weight:500;cursor:pointer;transition:background .12s, box-shadow .12s}
+  .trigger:hover,.trigger.open{background:var(--hover)}
+  .trigger.open{box-shadow:0 0 0 1px var(--line-strong)}
+  .trigger .tile{width:20px;height:20px;border-radius:6px}
+  .trigger .tile svg{width:12px;height:12px}
+  .trigger .dot{width:3px;height:3px;border-radius:50%;background:var(--faint)}
+  .chev{width:12px;height:12px;color:var(--faint);transition:transform .2s}
+  .trigger.open .chev{transform:rotate(180deg)}
+  .x .trigger .lvl{background:linear-gradient(90deg,#2563eb,#7c3aed);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .ring{width:22px;height:22px;border-radius:50%;background:conic-gradient(var(--accent) 0 28%, var(--line) 28% 100%);-webkit-mask:radial-gradient(circle 8px,transparent 98%,#000);mask:radial-gradient(circle 8px,transparent 98%,#000)}
+  .send{width:32px;height:32px;border-radius:9px;background:var(--ink);color:var(--surface);display:grid;place-items:center}
+  .send svg{width:16px;height:16px}
+  .toolbar{display:flex;gap:8px;margin:0 0 16px}
+  .toolbar button{font:500 12px var(--font);border:1px solid #d6d3d1;background:#fff;border-radius:8px;padding:5px 10px;cursor:pointer}
+  .toolbar button.on{background:#1c1917;color:#fff;border-color:#1c1917}
+  .note{font-size:12px;color:#57534e;margin-top:14px;max-width:900px}
+</style>
+</head>
+<body>
+<h1>A 版加质感：两种力度</h1>
+<p class="sub">在 A 的结构上加：毛玻璃弹层 + 弹出动效、服务商图标瓷砖、每个模型下一行能力说明（上下文 / 思考 / 工具 / 看图）、强度分段按钮带滑块动画和档位竖条、键盘提示。<b>两版都可以点</b>：点强度、点模型、在搜索框打字（比如 opus），右上可切深色。</p>
+<div class="toolbar"><button id="lightBtn" class="on" onclick="theme(false)">浅色</button><button id="darkBtn" onclick="theme(true)">深色</button></div>
+
+<div class="grid">
+  <div class="variant option" data-choice="a-calm" onclick="toggleSelect(this)">
+    <div class="vhead"><b>A1</b><span>精致克制</span></div>
+    <p class="vdesc">质感来自细节：毛玻璃、柔和阴影、选中时左侧一条蓝色细线、滑块带一点回弹。颜色仍然只用现有的蓝色，安静耐看。</p>
+    <div class="scene"><div class="bg"></div><div class="mount" data-x="0"></div></div>
+  </div>
+  <div class="variant option" data-choice="a-bold" onclick="toggleSelect(this)">
+    <div class="vhead"><b>A2</b><span>更有表现力</span></div>
+    <p class="vdesc">在 A1 基础上：强度越高，滑块的光晕越亮，从蓝色过渡到紫色；「高」档文字是渐变色，输入框里的档位字也跟着变色。选中的模型行是渐隐的蓝底。</p>
+    <div class="scene x"><div class="bg"></div><div class="mount" data-x="1"></div></div>
+  </div>
+</div>
+<p class="note">说明：服务商图标为示意图形，实现时换成各家真实的单色图标；能力标记来自服务器已有的模型信息（拿不到的就不显示）。弹层在手机上会变成底部抽屉，内容相同。</p>
+
+<template id="tpl">
+  <div class="scene-label">点开时</div>
+  <div class="pop">
+    <div class="search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input placeholder="搜索模型或服务商…" oninput="filter(this)"><kbd>⌘K</kbd>
+    </div>
+    <div class="list"></div>
+    <div class="hr"></div>
+    <div class="eff-head"><span>思考强度</span><span class="eff-hint"></span></div>
+    <div class="seg" data-level="2"><div class="thumb"></div></div>
+    <div class="foot"><span><kbd>↑</kbd> <kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 确认</span><span><kbd>Tab</kbd> 到强度</span></div>
+  </div>
+  <div class="composer">
+    <div class="draft">给 AppleBot 发消息… · Enter 发送，Shift+Enter 换行</div>
+    <div class="bar">
+      <span class="trigger open"><span class="tile t-logo"></span><span class="t-name"></span><span class="dot"></span><span class="bars t-bars"><i></i><i></i><i></i></span><span class="lvl t-lvl"></span>
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 15-6-6-6 6"/></svg></span>
+      <span style="display:flex;gap:8px;align-items:center"><span class="ring"></span><span class="send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span></span>
+    </div>
+  </div>
+</template>
+
+<script>
+const ANTH='<svg viewBox="0 0 24 24" fill="#d97757"><path d="M12 2l1.6 7.2L20 6l-4.2 5.4L22 12l-6.2.6L20 18l-6.4-3.2L12 22l-1.6-7.2L4 18l4.2-5.4L2 12l6.2-.6L4 6l6.4 3.2z"/></svg>';
+const OR='<svg viewBox="0 0 24 24" fill="none" stroke="#6467f2" stroke-width="2.2" stroke-linecap="round"><path d="M3 12h6c3 0 4-6 8-6h4M17 2l4 4-4 4M9 12c3 0 4 6 8 6h4M17 14l4 4-4 4"/></svg>';
+const EMBER='<svg viewBox="0 0 24 24" fill="#c2410c"><path d="M12 2c1 4 6 6 6 12a6 6 0 0 1-12 0c0-3 2-5 3-6 0 2 1 3 2 3 0-4-1-6 1-9z"/></svg>';
+const I={ctx:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/></svg>',
+ think:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3 11.2V16h6v-1.8A6 6 0 0 0 12 3z"/></svg>',
+ tool:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-.5-.5-2.5z"/></svg>',
+ eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>'};
+const MODELS=[
+ {g:'Anthropic',logo:ANTH,name:'Claude Haiku 5.5',short:'Haiku 5.5',ctx:'200K',caps:['think','tool','eye']},
+ {g:'Anthropic',logo:ANTH,name:'Claude Sonnet 5.5',short:'Sonnet 5.5',ctx:'1M',caps:['think','tool','eye']},
+ {g:'Anthropic',logo:ANTH,name:'Claude Opus 5.5',short:'Opus 5.5',ctx:'1M',caps:['think','tool','eye']},
+ {g:'OpenRouter',logo:EMBER,name:'Muse Ember',short:'Muse Ember',ctx:'400K',caps:['think','tool']},
+ {g:'OpenRouter',logo:OR,name:'GPT-6.1 Terra',short:'GPT-6.1 Terra',ctx:'1M',caps:['tool'],missing:true},
+];
+const LEVELS=[{k:'默认',h:'不指定，用模型自己的设置'},{k:'低',h:'快，适合简单问答'},{k:'中',h:'均衡，多数问题够用'},{k:'高',h:'更细致，慢一些、贵一些'}];
+function mount(el){
+  el.appendChild(document.getElementById('tpl').content.cloneNode(true));
+  const st={m:0,l:2,q:''}; el._st=st;
+  const seg=el.querySelector('.seg');
+  LEVELS.forEach((lv,i)=>{const b=document.createElement('button');b.innerHTML=(i?'<span class="bars">'+[1,2,3].map(n=>'<i class="'+(n<=i?'f':'')+'"></i>').join('')+'</span>':'')+lv.k;
+    b.onclick=e=>{e.stopPropagation();st.l=i;render(el)};seg.appendChild(b)});
+  render(el);
+}
+function render(el){
+  const st=el._st, list=el.querySelector('.list'); list.innerHTML='';
+  let last='';
+  MODELS.forEach((m,i)=>{
+    if(st.q && !(m.name+m.g).toLowerCase().includes(st.q))return;
+    if(m.g!==last){last=m.g;const g=document.createElement('div');g.className='group';g.textContent=m.g;list.appendChild(g)}
+    const r=document.createElement('div');r.className='row'+(i===st.m?' on':'');
+    r.innerHTML='<span class="tile">'+m.logo+'</span><span><div class="name">'+m.name+'</div><div class="meta"><span class="cap">'+I.ctx+m.ctx+'</span>'+m.caps.map(c=>'<span class="cap">'+I[c]+'</span>').join('')+'</div></span>'+
+      '<span class="right">'+(m.missing?'<span class="pill">缺 key</span>':'')+(i===st.m?'<svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M5 12l5 5 9-10"/></svg>':'')+'</span>';
+    r.onclick=e=>{e.stopPropagation();st.m=i;render(el)}; list.appendChild(r);
+  });
+  if(!list.children.length){list.innerHTML='<div class="group" style="padding:16px 8px">没有匹配的模型</div>'}
+  const seg=el.querySelector('.seg'); seg.dataset.level=st.l;
+  seg.querySelector('.thumb').style.transform='translateX('+(st.l*100)+'%)';
+  [...seg.querySelectorAll('button')].forEach((b,i)=>b.classList.toggle('on',i===st.l));
+  el.querySelector('.eff-hint').textContent=LEVELS[st.l].h;
+  const m=MODELS[st.m];
+  el.querySelector('.t-logo').innerHTML=m.logo; el.querySelector('.t-name').textContent=m.short;
+  el.querySelector('.t-lvl').textContent=LEVELS[st.l].k;
+  [...el.querySelectorAll('.t-bars i')].forEach((b,i)=>b.classList.toggle('f',i<st.l));
+  el.querySelector('.t-bars').style.display=st.l?'':'none';
+}
+function filter(inp){const el=inp.closest('.mount');el._st.q=inp.value.trim().toLowerCase();render(el)}
+function theme(d){document.querySelectorAll('.scene').forEach(s=>s.classList.toggle('dark',d));lightBtn.classList.toggle('on',!d);darkBtn.classList.toggle('on',d)}
+document.querySelectorAll('.mount').forEach(mount);
+document.querySelectorAll('.pop input').forEach(i=>i.addEventListener('click',e=>e.stopPropagation()));
+</script>
+</body>
+</html>
