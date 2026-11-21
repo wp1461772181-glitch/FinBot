@@ -557,7 +557,7 @@ export const PAGES = [
   { name: "chat-slash-menu", hash: "#/chat", ready: "[data-testid=message]",
     before: async (page) => { await page.locator("#agent-draft").fill("/"); await page.locator("[data-testid=slash-menu] [role=option]").first().waitFor(); } },
   { name: "chat-model-picker", hash: "#/chat", ready: "[data-testid=message]",
-    before: async (page) => { await page.locator("[data-testid=model-badge]").click(); await page.locator('[data-slot=pop-panel] [role=radio]').first().waitFor(); } },
+    before: async (page) => { await page.locator("[data-testid=model-badge]").click(); await page.locator('[data-testid=model-picker] [role=radio]').first().waitFor(); } },
   // TeslaBot has not spoken yet in the fixtures: its line is empty, the composer is all there is to look at (the empty state's own design is P3.4).
   { name: "chat-empty-composer", hash: `#/chat/${BOT.teslabot}`, ready: "[data-testid=welcome]", before: async (page) => { await page.locator("#agent-draft").focus(); } },
   // P3.4: every row of the design's state table (4.2, 对话页的状态), one page each, named chat-state-<state>; then the confirmation cards in their kinds.

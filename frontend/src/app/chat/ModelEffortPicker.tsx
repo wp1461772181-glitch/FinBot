@@ -1,39 +1,53 @@
-import { useState, useEffect } from "react";
-import { Check, ChevronDown } from "lucide-react";
-import { PopPanel } from "@/components/PopPanel";
+import { lazy, useCallback, useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
+import { logoUrl } from "@/components/ai-elements/provider-logos";
+import { OptionalChunk } from "../../OptionalChunk";
 import { getModelCatalog, updateBot, type Bot, type ModelCatalog } from "../../api/bots";
 import { useLocale } from "../../i18n";
-import { badgeText, effectiveEntry, effortChoices, modelChoices, noEffort, patchFor } from "../../model-effort.mjs";
+import { effectiveEntry, patchFor, triggerView } from "../../model-effort.mjs";
+import "../../styles/model-picker.css";
 
-const optionClass = "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-body text-ink outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60";
-const headClass = "px-2 pb-1 pt-2 text-caption font-medium text-muted-foreground first:pt-0";
+// The panel (the command palette, the drawer, the strength control) is a chunk of its own, fetched when the badge is first pressed, hovered or focused.
+const loadPanel = () => import("./ModelEffortPanel");
+const ModelEffortPanel = lazy(loadPanel);
 
 /**
- * The model badge of the composer: the bot's model and reasoning effort, and on click the quick select.  A choice is saved at
- * once; a failed save keeps the panel open with the reason and the badge unchanged.  The owner decides: nothing is disabled,
- * and nothing switches on its own.  (Logic as before; the panel is now a dropdown above the badge, a sheet on a phone.)
+ * The model badge of the composer: the model's logo and name, the strength's bars and word, and on click the selector (a centred palette on a wide screen, a drawer on a phone).
+ * A choice is saved at once; a failed save keeps the panel open with the reason and the badge unchanged.  The owner decides: nothing is disabled, and nothing switches on its own.
+ * Choosing a model leaves the panel open (the strength row is the new model's now); choosing a strength closes it.
  */
 export function ModelEffortPicker({ bot, onBotChanged }: { bot: Bot; onBotChanged: () => void }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [shown, setShown] = useState<Bot>(bot);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const badge = useRef<HTMLButtonElement>(null);
   // The strength tiers follow the model the badge shows: the bot's own, or the server default when it has none.
   const entry = effectiveEntry(catalog, shown.model);
 
   // A reloaded bot (the list changed) is the truth again.
   useEffect(() => setShown(bot), [bot]);
 
+  // The badge draws the model's logo and name, which only the catalog knows: read it once the badge is there (a failure shows the id and is retried when the panel opens).
+  const readCatalog = useCallback(async (signal?: AbortSignal) => {
+    try { const next = await getModelCatalog(signal); if (!signal?.aborted) setCatalog(next); return true; }
+    catch { return false; }
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    void readCatalog(controller.signal);
+    return () => controller.abort();
+  }, [readCatalog]);
+
   async function toggle() {
     const next = !open;
-    setOpen(next);
     setError("");
-    if (next && !catalog) {
-      try { setCatalog(await getModelCatalog()); }
-      catch { setError(t("模型目录暂时无法读取。")); }
-    }
+    if (next) setMounted(true);
+    setOpen(next);
+    if (next && !catalog && !(await readCatalog())) setError(t("模型目录暂时无法读取。"));
   }
 
   async function choose(kind: "model" | "effort", value: string | null) {
@@ -54,40 +68,23 @@ export function ModelEffortPicker({ bot, onBotChanged }: { bot: Bot; onBotChange
     }
   }
 
+  const view = triggerView(shown, entry);
   return (
     <span className="relative inline-flex min-w-0" data-testid="model-badge-host">
-      <button type="button" data-testid="model-badge" aria-haspopup="dialog" aria-expanded={open}
-        title={t("快速切换模型与推理强度")} disabled={busy} onClick={() => void toggle()}
-        className="inline-flex h-8 max-lg:h-11 max-w-full min-w-0 items-center gap-1 rounded-sm px-2 text-caption text-muted-foreground outline-none hover:bg-accent hover:text-ink focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60">
-        <span className="truncate">{badgeText(shown, t)}</span><ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
+      <button type="button" ref={badge} data-testid="model-badge" aria-haspopup="dialog" aria-expanded={open} aria-label={`${t("模型")} · ${view.name ?? t("服务器默认模型")} · ${t(view.level)}`}
+        title={t("快速切换模型与推理强度")} disabled={busy} onClick={() => void toggle()} onPointerEnter={() => void loadPanel()} onFocus={() => void loadPanel()}
+        data-open={open || undefined} style={{ "--t": view.tone } as React.CSSProperties}
+        className="model-trigger inline-flex h-8 max-lg:h-11 max-w-full min-w-0 items-center gap-1.5 rounded-md pl-1.5 pr-2 text-caption font-medium text-ink-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 data-[open]:bg-accent">
+        <span className="picker-tile picker-tile-sm" aria-hidden="true"><img src={logoUrl(view.logo)} alt="" width={12} height={12} className="size-3 dark:invert" /></span>
+        <span className="truncate">{view.name ?? t("服务器默认模型")}</span>
+        <span aria-hidden="true" className="size-[3px] shrink-0 rounded-full bg-faint" />
+        {view.bars > 0 && <span className="effort-bars" aria-hidden="true">{[1, 2, 3].map((n) => <i key={n} data-on={n <= view.bars ? "true" : undefined} />)}</span>}
+        <span className="effort-gradient-text shrink-0" data-high={view.high ? "true" : undefined}>{t(view.level)}</span>
+        <ChevronDown className={`size-3 shrink-0 text-faint transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
-      <PopPanel open={open} onClose={() => setOpen(false)} label={t("模型与推理强度")}>
-        <p className={headClass}>{t("模型")}</p>
-        {!catalog ? (!error && <p className="px-2 py-1 text-small text-muted-foreground">{t("正在读取模型目录…")}</p>) : (
-          <div role="radiogroup" aria-label={t("模型")}>
-            {modelChoices(catalog, shown.model).map((choice) => (
-              <button key={`m:${choice.value ?? "default"}`} type="button" role="radio" aria-checked={choice.checked} className={optionClass} disabled={busy} onClick={() => void choose("model", choice.value)}>
-                <Check className={`size-4 shrink-0 ${choice.checked ? "" : "invisible"}`} aria-hidden="true" />
-                <span className="min-w-0 flex-1 truncate">{choice.value === null ? `${t("服务器默认模型")}${catalog.default ? ` (${catalog.default})` : ""}` : choice.label}</span>
-                {choice.keyMissing && <small className="text-caption text-muted-foreground">{t("缺 key")}</small>}
-              </button>
-            ))}
-          </div>
-        )}
-        <p className={headClass}>{t("推理强度")}</p>
-        {noEffort(entry) && <p className="px-2 py-1 text-small text-muted-foreground">{t("该模型不支持思考强度")}</p>}
-        <div role="radiogroup" aria-label={t("推理强度")}>
-          {effortChoices(shown.reasoning_effort, entry).map((choice) => (
-            <button key={`e:${choice.value ?? "default"}`} type="button" role="radio" aria-checked={choice.checked} className={optionClass} disabled={busy} onClick={() => void choose("effort", choice.value)}>
-              <Check className={`size-4 shrink-0 ${choice.checked ? "" : "invisible"}`} aria-hidden="true" />
-              <span className="min-w-0 flex-1">{t(choice.label)}</span>
-              {choice.unsupported && <small className="text-caption text-muted-foreground">{t("不在该模型的档位内")}</small>}
-            </button>
-          ))}
-        </div>
-        {error && <p role="alert" className="px-2 py-1 text-small text-danger">{error}</p>}
-        <p className="mt-2 border-t border-line px-2 pt-2 text-caption text-muted-foreground">{t("模型和 key 只在服务器上，浏览器不保存 key。")}</p>
-      </PopPanel>
+      {mounted && <OptionalChunk>
+        <ModelEffortPanel open={open} onOpenChange={(next) => { if (!next) setOpen(false); }} catalog={catalog} shown={shown} entry={entry} busy={busy} error={error} onChoose={(kind, value) => void choose(kind, value)} returnFocus={() => badge.current?.focus({ preventScroll: true })} />
+      </OptionalChunk>}
     </span>
   );
 }
