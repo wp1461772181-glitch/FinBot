@@ -51,8 +51,11 @@ BINDING_MODES = ("strip", "drop_block", "off")
 _WORKSPACE_ID = re.compile(r"^wrkspc_[A-Za-z0-9]{8,64}$")
 # Read by the SDK on its own, whatever is passed in: masked while a client is built / the SDK is imported.
 _SDK_ENV_MASKED = ("ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_LOG")
-# Instruction messages keep system authority; these carry third-party text (evidence, recalled conversations) and go in as user text.
-DATA_MESSAGE_PREFIXES = ("Accepted evidence DATA", "Past conversation recalls")
+# Only these fixed FinBot instructions (compared whole, never by prefix) are sent with system authority in the middle of a conversation.
+# Every other message that comes after the first user turn - the understanding hint (carries the user's words), status and
+# catalogue (tool errors, titles and previews of fetched documents), evidence, recalls, a nudge that quotes the model's draft -
+# can contain text someone else wrote, so it goes in as user text.  An allowlist, not a list of what to exclude.
+STRUCTURED_CALLS_NOTE = "Use native structured function calls. Never print tool protocol markup."   # direct.Turn.model's retry note
 _warned: set[str] = set()
 
 
@@ -265,14 +268,15 @@ def _push_user(out, blocks):
         out.append({"role": "user", "content": list(blocks)})
 
 
-def is_data_message(text: str) -> bool:
-    return text.startswith(DATA_MESSAGE_PREFIXES) or text.startswith(_digest_head())
-
-
 @functools.lru_cache(maxsize=1)
-def _digest_head() -> str:
+def trusted_notes() -> frozenset:
+    """The whole-string instructions that may be sent as ``role: "system"`` mid-conversation (see STRUCTURED_CALLS_NOTE)."""
     from .agent_workflow import direct
-    return direct.OMITTED_DIGEST_HEAD[:20]
+    return frozenset({direct.CITATION_V2_NOTE, direct.CLOSING_RETRY_NOTE, STRUCTURED_CALLS_NOTE})
+
+
+def is_trusted_note(text: str) -> bool:
+    return text in trusted_notes()
 
 
 def _no_result(call_id):
@@ -283,10 +287,10 @@ def convert_messages(messages, *, keep_thinking=False, system_role=False) -> tup
     """OpenAI-shaped messages -> (``system`` blocks, Messages API ``messages``).
 
     * The system messages before the first conversation message become the top-level ``system``.
-    * A system message that comes later is FinBot's own instruction (a note, a status, a nudge): with ``system_role`` it is
-      sent as ``role: "system"`` (the operator channel) where the API accepts one, i.e. right after a user turn and followed
-      by an assistant turn or nothing; consecutive ones are merged into one.  Where that is not possible it is a text block of
-      the user turn.  Evidence and recalled-conversation payloads are third-party text and always go in as user text.
+    * A system message that comes later is sent as ``role: "system"`` (the operator channel) only when it is one of FinBot's
+      fixed instruction strings (``trusted_notes``), with ``system_role``, right after a user turn and followed by an
+      assistant turn or nothing; consecutive ones are merged into one.  Anything else - and any of these where the API would
+      not accept one - is a text block of the user turn: such messages can carry the user's words, tool output or document text.
     * ``tool_calls`` -> ``tool_use``; the ``tool`` messages that answer one assistant turn -> ``tool_result`` blocks of
       ONE user message, before any text.  A call nobody answered gets an error result; a result nobody asked for is dropped.
     * Thinking blocks are left out unless ``keep_thinking``.
@@ -300,7 +304,7 @@ def convert_messages(messages, *, keep_thinking=False, system_role=False) -> tup
                 continue
             if leading:
                 system.append({"type": "text", "text": text})
-            elif system_role and not is_data_message(text) and out and out[-1]["role"] == "user":
+            elif system_role and is_trusted_note(text) and out and out[-1]["role"] == "user":
                 out[-1].setdefault("_system", []).append(text)
             else:
                 _push_user(out, [{"type": "text", "text": text}])
