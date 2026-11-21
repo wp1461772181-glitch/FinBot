@@ -11,6 +11,7 @@ import unicodedata
 from datetime import UTC, datetime
 from ..agent_web_research import METRIC_GROUPS
 from ..freshness import published_within
+from .fp_flags import flag
 
 
 def contains(term: str, text: str) -> bool:
@@ -174,6 +175,9 @@ def gate_row(question: str, row: dict, *, symbol: str | None=None, company: str 
     # Saved rows are verified by their query's symbol filter. Public pages must name the
     # entity in body text; a forged headline by itself is never sufficient.
     if web and (company or symbol) and not any(contains(x,body+' '+title) for x in allowed_entities):
+        # FINBOT_PH1_WEB_ENTITY_SOFT: a page that never spells the company's name ("The iPhone maker", 苹果公司) may still be
+        # about it. The row stays, with a note; a symbol the row itself carries (above) is a structured fact and stays hard.
+        if flag('FINBOT_PH1_WEB_ENTITY_SOFT',True) and soft:return True,'soft:requested_entity_missing'
         return False,'requested_entity_missing'
     if not web and symbol and not row.get('symbol') and not row.get('_verified_symbol') and not any(contains(x,body+' '+title) for x in allowed_entities):
         return False,'requested_entity_missing'

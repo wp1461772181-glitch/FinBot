@@ -206,6 +206,30 @@ async def store_explicit_fallback(owner_hash: str, message: str, *, conversation
     return outcome.get("status") in {"added", "duplicate"}
 
 
+async def store_gated_fallback(owner_hash: str, message: str, *, conversation_id: str, turn_id: str) -> bool:
+    """FINBOT_PH1_MEMORY_FALLBACK: the fallback cue only earns a second look.
+
+    The candidate (the owner's own sentence) is written only when Jev allows it; no answer, a timeout or a
+    missing key do not allow it, and the exact-copy shortcut of ``admitted`` does not apply. The owner never
+    pressed anything, so the row is ``inferred``, not ``explicit``. False when nothing was written."""
+    item = explicit_memory_fallback(message)
+    if not item or not owner_hash:
+        return False
+    from . import jev_memory_gate as gate
+    verdict = await asyncio.to_thread(gate.judge, message, item["text"], item["quote"])
+    if not verdict.allows():
+        log.info("memory fallback not admitted conv=%s status=%s", conversation_id, verdict.status)
+        return False
+    try:
+        source = await asyncio.to_thread(profile.user_message_id, conversation_id, turn_id)
+        outcome = await asyncio.to_thread(
+            profile.add_item, owner_hash, origin="inferred", message=message, source_message_id=source, **item)
+    except profile.ProfileError as exc:
+        log.info("memory fallback dropped reason=%s", exc)
+        return False
+    return outcome.get("status") in {"added", "duplicate"}
+
+
 def worth_reading(message: str) -> bool:
     text = str(message or "").strip()
     return len(text) >= 4 and not text.startswith(_CONTROL_PREFIXES)
@@ -255,6 +279,9 @@ async def extract_from_turn(owner_hash: str, message: str, *, conversation_id: s
     # Empty, unusable, or timed out: keep the owner's own instruction. Items the quote floor
     # dropped are not "nothing" — those stay dropped.
     if not found and not offered:
+        from .agent_workflow.fp_flags import flag
+        if flag("FINBOT_PH1_MEMORY_FALLBACK", True):
+            return int(await store_gated_fallback(owner_hash, message, conversation_id=conversation_id, turn_id=turn_id))
         return int(await store_explicit_fallback(owner_hash, message, conversation_id=conversation_id, turn_id=turn_id))
     if not found:
         return 0

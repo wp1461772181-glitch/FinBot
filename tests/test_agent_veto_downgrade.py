@@ -23,7 +23,7 @@ def run(monkeypatch,question,*,steps=(),owner=True,actions=('add_to_research_que
     async def emit(_):pass
     return asyncio.run(direct.run_direct_turn(question,ctx,emit=emit)),writes
 
-@pytest.mark.parametrize('question,quote',[('别忘了加入 AMD','别忘了加入 AMD'),("don't forget to add AMD to the queue","don't forget to add AMD to the queue")])
+@pytest.mark.parametrize('question,quote',[("don't forget to add AMD to the queue","don't forget to add AMD to the queue")])
 def test_a_granted_write_with_a_dont_forget_phrasing_makes_a_card_with_a_reminder(monkeypatch,question,quote):
     assert vetoed('add_to_research_queue',question) and vetoed_phrase('add_to_research_queue',question)==quote
     result,writes=run(monkeypatch,question,steps=[call('add_to_research_queue',{'symbol':'AMD'})])
@@ -32,6 +32,15 @@ def test_a_granted_write_with_a_dont_forget_phrasing_makes_a_card_with_a_reminde
     pending=result['pending_request']
     assert pending and pending['reason']=='write_confirmation'
     assert quote in pending['display']['alternative'] and pending['display']['alternative'].startswith('提醒：')
+
+def test_a_chinese_dont_forget_is_not_a_negation_at_all(monkeypatch):
+    # M-7: 别忘了 is a reminder to do the thing, not a refusal; the write is granted and the card carries no reminder.
+    assert not vetoed('add_to_research_queue','别忘了加入 AMD') and not vetoed_phrase('add_to_research_queue','别忘了加入 AMD')
+    result,writes=run(monkeypatch,'别忘了加入 AMD',steps=[call('add_to_research_queue',{'symbol':'AMD'})])
+    assert not writes
+    pending=result['pending_request']
+    assert pending and pending['reason']=='write_confirmation'
+    assert not (pending['display'].get('alternative') or '').startswith('提醒：')
 
 def test_a_model_suggestion_the_user_negated_stays_refused(monkeypatch):
     monkeypatch.setattr(direct,'owner_credential_matches',lambda _:True)

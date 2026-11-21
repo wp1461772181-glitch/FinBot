@@ -135,10 +135,21 @@ def test_a_carried_entity_still_binds_on_a_refinement_or_when_the_resolver_faile
     assert "scope_not_grounded" in " ".join(replies)
 
 
-def test_a_carried_entity_still_filters_pages_on_a_refinement():
+def test_a_carried_entity_still_filters_pages_on_a_refinement(monkeypatch):
+    # FINBOT_PH1_WEB_ENTITY_SOFT off: a page that never names the company is dropped (the old hard gate).
+    monkeypatch.setenv("FINBOT_PH1_WEB_ENTITY_SOFT", "off")
     context, _, _, _ = _context(steps=[_step("web_research", query="最近"), {"content": "没有可核验资料。"}],
                                 resolver=_rewrite("refinement", "AAPL 新闻，只看最近"), rows={"web_research": [SECTOR_PAGE]})
     assert _run("只看最近", context, messages=AAPL_TURN, state=AFTER_AAPL)["citations"] == []
+
+
+def test_a_carried_entity_marks_a_page_that_does_not_name_it_on_a_refinement(monkeypatch):
+    # On (default): the page reaches the model with a note and the model judges it.
+    monkeypatch.setenv("FINBOT_PH1_WEB_ENTITY_SOFT", "on")
+    context, _, _, _ = _context(steps=[_step("web_research", query="最近"), {"content": "没有可核验资料。"}],
+                                resolver=_rewrite("refinement", "AAPL 新闻，只看最近"), rows={"web_research": [SECTOR_PAGE]})
+    [citation] = _run("只看最近", context, messages=AAPL_TURN, state=AFTER_AAPL)["citations"]
+    assert citation["fields"]["gate_note"] == "requested_entity_missing"
 
 
 def test_a_rejected_rewrite_counts_as_a_failed_resolver():
@@ -148,11 +159,22 @@ def test_a_rejected_rewrite_counts_as_a_failed_resolver():
     assert ran == [] and "scope_not_grounded" in " ".join(replies)
 
 
-def test_a_named_company_still_filters_pages():
+def test_a_named_company_still_filters_pages(monkeypatch):
+    monkeypatch.setenv("FINBOT_PH1_WEB_ENTITY_SOFT", "off")
     context, _, _, _ = _context(classified={"symbol": "AAPL", "company": "Apple"}, steps=[_step("web_research", query="AAPL 新闻"), {"content": "没有可核验资料。"}],
                                 rows={"web_research": [SECTOR_PAGE]})
     result = _run("Apple（AAPL）最近有什么新闻", context)
     assert not result["pending_request"] and result["citations"] == []
+
+
+def test_a_named_company_marks_a_page_that_does_not_name_it(monkeypatch):
+    monkeypatch.setenv("FINBOT_PH1_WEB_ENTITY_SOFT", "on")
+    context, _, _, _ = _context(classified={"symbol": "AAPL", "company": "Apple"}, steps=[_step("web_research", query="AAPL 新闻"), {"content": "没有可核验资料。"}],
+                                rows={"web_research": [SECTOR_PAGE]})
+    result = _run("Apple（AAPL）最近有什么新闻", context)
+    assert not result["pending_request"]
+    [citation] = result["citations"]
+    assert citation["fields"]["gate_note"] == "requested_entity_missing"
 
 
 # --- 2. Discovered reads -------------------------------------------------------------------------------------------

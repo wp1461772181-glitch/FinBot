@@ -36,9 +36,14 @@ VERBS={
 }
 # "以后别再用万元" is a standing instruction, not a refusal: for remember these are the request itself.
 _STANDING_INSTRUCTION=re.compile(r'(?:以后|今后|往后|从现在起)?(?:都)?(?:别再|不要再|不再|别用|不要用)')
+# FINBOT_PH1_MEMORY_FALLBACK: 别用 inside a word (分别用, 区别用, 识别用户, 特别用心) is not an instruction.
+_STANDING_INSTRUCTION_WORD=re.compile(r'(?:以后|今后|往后|从现在起)?(?:都)?(?:别再|不要再|不再|(?<![分区特个差类性级识辨鉴告])别用|不要用)')
+def _ph1_memory():
+    from .fp_flags import flag
+    return flag('FINBOT_PH1_MEMORY_FALLBACK',True)
 _REMEMBER_REFUSED=re.compile(r'(?:不要|别|不用|无需|不必)(?:帮我)?(?:记住|记下|记)|do not remember|don.t remember',re.I)
 NEGATION=re.compile(r'(?:不要|别|勿|无需|不用|不能|不想|禁止|切勿|请勿|千万别|do not|don.t|never|without)[^，。；;.!?\n]{0,35}',re.I)
-_POLITE_NON_NEGATION=re.compile(r'不用(?:客气|担心|多说|慌|犹豫|管|急|在意|考虑|理会|查其他|看其他|管其他|确认)|别(?:客气|担心|急|管)|无需(?:向我)?确认|不需确认',re.I)
+_POLITE_NON_NEGATION=re.compile(r'不用(?:客气|担心|多说|慌|犹豫|管|急|在意|考虑|理会|查其他|看其他|管其他|确认)|别(?:客气|担心|急|管)|无需(?:向我)?确认|不需确认|(?:别|不要)(?:忘|漏)|千万别忘',re.I)
 
 # 改/删 alone is any edit: a routine change also names what it changes.
 _ROUTINE_NOUN=re.compile(r'例行|任务|定时|每小时|每天|每日|工作日|routine|schedule',re.I)
@@ -52,7 +57,7 @@ def authorized(name,words):
     pattern=VERBS.get(name)
     if not pattern:return False
     if name=='remember' and _REMEMBER_REFUSED.search(words):return False
-    if name=='remember' and _STANDING_INSTRUCTION.search(words):return True
+    if name=='remember' and (_STANDING_INSTRUCTION_WORD if _ph1_memory() else _STANDING_INSTRUCTION).search(words):return True
     # Token boundaries for English avoid authorizing "import" inside "important".
     verbs=re.compile('|'.join(r'(?<![A-Za-z])'+p+r'(?![A-Za-z])' if p.isascii() else p for p in pattern.split('|')),re.I)
     clean_words=_POLITE_NON_NEGATION.sub('',words)

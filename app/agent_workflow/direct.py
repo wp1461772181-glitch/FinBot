@@ -1211,7 +1211,9 @@ class Turn:
         prior=conversation[:-1] if conversation and conversation[-1].get('role')=='user' and conversation[-1].get('content')==self.original else conversation
         relevant=[m for m in prior if m.get('role')=='user']
         no_context=not relevant and not self.sets and not self.state.get('pending_request')
-        if no_context:
+        # FINBOT_PH1_FIRST_TURN_ORDINAL: an ordinal word ("最后一份财报", "last filing") with no earlier list is not proof
+        # that the user points at a list; the resolver reads the sentence and says what is meant.
+        if no_context and not flag('FINBOT_PH1_FIRST_TURN_ORDINAL',True):
             from .semantic import ordinal_positions
             try:ordinal=ordinal_positions(self.original,100)
             except ValueError:ordinal=[]
@@ -2780,7 +2782,7 @@ class Turn:
         if not self.audit.get('profile_ask') or self.pending or self.proposals or self.resuming:return False
         if 'remember' in self.write_reasons or self.audit.get('remember_called') or not self.write_allowed('remember'):return False
         from ..agent_profile_extract import (EXTRACT_PROMPT,candidates,ExtractionRejected,_model_items,
-                                             store_explicit_fallback)
+                                             store_explicit_fallback,explicit_memory_fallback)
         words=self.user_words()
         payload={'message':words[:2000],'known':[]}
         if self.context.bot_id:payload['bot']={'name':self.context.bot_name or ''}
@@ -2798,6 +2800,11 @@ class Turn:
         except (ExtractionRejected,ValueError,HTTPException,RuntimeError,TimeoutError):
             found=[];content=None
         offered=_model_items(content)
+        if not found and not offered and flag('FINBOT_PH1_MEMORY_FALLBACK',True):
+            # The wordlist cue is only a second look: the owner's own sentence goes onto a card they press, never to the store.
+            fallback=explicit_memory_fallback(words)
+            self.audit['memory_fallback_card']=bool(fallback)
+            found=[{**fallback,'scope':'global'}] if fallback else []
         if not found and not offered:
             saved=await store_explicit_fallback(self.context.owner_hash,words,
                                                 conversation_id=self.context.conversation_id or '',
