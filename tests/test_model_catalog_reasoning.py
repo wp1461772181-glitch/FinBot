@@ -102,7 +102,10 @@ def test_siliconflow_entries_take_no_effort_and_the_fields_say_so(owner, models)
 
 
 @pytest.mark.parametrize("provider,model", [("kimi", "kimi-k3"), ("qwen", "qwen3-max")])
-def test_providers_outside_the_table_keep_the_fallback(owner, models, provider, model):
+def test_providers_outside_the_table_keep_the_fallback(owner, models, monkeypatch, provider, model):
+    # Every provider the dialog offers is in the table now (it declares "no effort" when its request sends none); a provider
+    # that is not, here taken out of the table for the test, still gets no fields and the browser's fallback.
+    monkeypatch.delitem(chat.NATIVE_EFFORTS, provider)
     _entry("other", model, provider=provider)
     listed = _listed("other")
     assert "supported_efforts" not in listed and "reasoning_supported" not in listed

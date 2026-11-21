@@ -33,7 +33,7 @@ def body(**overrides):
     value.update(overrides)
     return value
 
-def test_discovery_orders_and_filters_before_selecting_five(mock_provider):
+def test_discovery_orders_and_filters_and_returns_every_model(mock_provider):
     capture, transport = mock_provider
     capture['payload'] = {'data': [
         {'id':'chat-old','created':10}, {'id':'chat-new','created':50},
@@ -43,7 +43,8 @@ def test_discovery_orders_and_filters_before_selecting_five(mock_provider):
     ]}
     response = client.post('/agent-chat/models', json=body())
     assert response.status_code == 200
-    assert [row['id'] for row in response.json()['models']] == ['chat-top','chat-second','chat-new','chat-mid','chat-fourth']
+    assert [row['id'] for row in response.json()['models']] == ['chat-top','chat-second','chat-new','chat-mid','chat-fourth','chat-old']
+    assert response.json()['truncated'] is False
     assert response.json()['ordering'] == 'provider_timestamp_desc'
     assert transport.request.url.path == '/models'
     assert transport.request.headers['authorization'] == 'Bearer synthetic-test-key'
@@ -159,3 +160,39 @@ def test_oversized_and_timeout_provider_responses_are_bounded(mock_provider):
     transport.response = timeout
     timed_out = client.post('/agent-chat/models', json=body())
     assert timed_out.status_code == 504 and timed_out.json()['detail'] == 'model_discovery_timeout'
+
+def test_discovery_returns_long_lists_in_full_and_says_when_it_cuts(mock_provider):
+    capture, _ = mock_provider
+    capture['payload'] = {'data':[{'id':f'vendor/model-{n}','created':n+1} for n in range(400)]}
+    result = client.post('/agent-chat/models', json=body(provider='openrouter',base_url='https://openrouter.ai/api/v1')).json()
+    assert len(result['models']) == 400 and result['truncated'] is False
+    capture['payload'] = {'data':[{'id':f'vendor/model-{n}','created':n+1} for n in range(1005)]}
+    result = client.post('/agent-chat/models', json=body(provider='openrouter',base_url='https://openrouter.ai/api/v1')).json()
+    assert len(result['models']) == 1000 and result['truncated'] is True
+    assert result['models'][0]['id'] == 'vendor/model-1004'  # the newest are the ones kept
+
+def test_anthropic_exact_preset_asks_for_a_full_page_and_reads_display_name(mock_provider):
+    capture, transport = mock_provider
+    capture['payload'] = {'data':[
+        {'type':'model','id':'claude-old','display_name':'Claude Old','created_at':'2026-01-01T00:00:00Z'},
+        {'type':'model','id':'claude-new','display_name':'Claude New','created_at':'2026-06-01T00:00:00Z'}], 'has_more': False}
+    response = client.post('/agent-chat/models', json=body(provider='anthropic',base_url='https://api.anthropic.com/v1'))
+    assert response.status_code == 200
+    assert transport.request.url.path == '/v1/models' and transport.request.url.query == b'limit=1000'
+    # The documented way to call it: the key as a Bearer token (anthropic-version is optional).
+    assert transport.request.headers['authorization'] == 'Bearer synthetic-test-key'
+    assert [(m['id'], m['name']) for m in response.json()['models']] == [('claude-new','Claude New'),('claude-old','Claude Old')]
+    assert response.json()['ordering'] == 'provider_timestamp_desc'
+    # An override endpoint gets no query, as with SiliconFlow.
+    client.post('/agent-chat/models', json=body(provider='custom',base_url='https://gateway.example.test/v1'))
+    assert transport.request.url.query == b''
+
+@pytest.mark.parametrize('provider', ['openai','gemini','xai','mistral','groq'])
+def test_new_providers_list_models_with_the_plain_bearer_request(mock_provider, provider):
+    from app.agent_chat_api import BASE_URLS
+    capture, transport = mock_provider
+    capture['payload'] = {'data':[{'id':'some-model'}]}
+    response = client.post('/agent-chat/models', json=body(provider=provider, base_url=None))
+    assert response.status_code == 200 and [m['id'] for m in response.json()['models']] == ['some-model']
+    assert str(transport.request.url) == BASE_URLS[provider] + '/models'
+    assert transport.request.headers['authorization'] == 'Bearer synthetic-test-key'

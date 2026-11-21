@@ -30,8 +30,17 @@ PROVIDER_CATALOG: dict[str, dict[str, str]] = {
     "baidu": {"label": "百度千帆", "base_url": "https://qianfan.baidubce.com/v2"},
     "siliconflow": {"label": "SiliconFlow", "base_url": "https://api.siliconflow.cn/v1"},
     "openrouter": {"label": "OpenRouter", "base_url": "https://openrouter.ai/api/v1"},
+    "anthropic": {"label": "Anthropic", "base_url": "https://api.anthropic.com/v1"},
+    "openai": {"label": "OpenAI", "base_url": "https://api.openai.com/v1"},
+    "gemini": {"label": "Google Gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"},
+    "xai": {"label": "xAI", "base_url": "https://api.x.ai/v1"},
+    "mistral": {"label": "Mistral", "base_url": "https://api.mistral.ai/v1"},
+    "groq": {"label": "Groq", "base_url": "https://api.groq.com/openai/v1"},
     "custom": {"label": "自定义", "base_url": ""},
 }
+
+# Added with the model dialog's provider list; none of them gets a reasoning parameter.
+INTERNATIONAL_PROVIDERS = frozenset({"anthropic", "openai", "gemini", "xai", "mistral", "groq"})
 
 MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._:/-]{1,160}$")
 
@@ -52,6 +61,8 @@ def thinking_disabled_options(provider: str) -> dict[str, Any]:
         return {"enable_thinking": False}
     if provider == "openrouter":
         return {"reasoning": {"enabled": False}}
+    if provider in INTERNATIONAL_PROVIDERS:
+        return {}  # no reasoning parameter is sent to these providers
     return {"thinking": {"type": "disabled"}}
 
 

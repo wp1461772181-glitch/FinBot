@@ -11,7 +11,9 @@ export type BotTemplate = { id: string; label: string; name: string; title: stri
 export type BotTool = { name: string; level: string; owner_only: boolean };
 export type BotFields = Partial<Pick<Bot, "name" | "title" | "description" | "focus" | "tool_scope" | "model" | "reasoning_effort" | "avatar" | "look" | "group" | "pinned" | "hidden" | "template" | "daily_notify_cap" | "skills">>;
 export type CatalogModel = { name: string; display_name: string; provider: string; model: string; base_url: string | null; origin: "file" | "server";
-  key_source: "vault" | "env"; key_env: string | null; key_status: "configured" | "missing"; is_default: boolean; migrated: boolean;
+  key_source: "vault" | "env"; key_env: string | null; key_status: "configured" | "missing";
+  /** The head and tail of a key kept on the server (vault entries with a readable key only); never the whole key. */
+  key_hint?: string; is_default: boolean; migrated: boolean;
   /** From the provider's model list (OpenRouter only).  Absent means unknown; supported_efforts null means every tier. */
   supported_efforts?: string[] | null; reasoning_supported?: boolean };
 export type ModelCatalog = { models: CatalogModel[]; default: string | null; config_file: { present: boolean; problems: string[] } };

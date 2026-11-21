@@ -7,7 +7,7 @@ from typing import Literal
 from starlette.background import BackgroundTask
 from pydantic import model_validator, BaseModel, ConfigDict, Field, SecretStr, field_validator
 from .agent_chat_provider import ProviderFailure
-from .agent_chat_api import REQUEST_SLOTS
+from .agent_chat_api import PROVIDER_PATTERN, REQUEST_SLOTS
 from .agent_tools import tool_schemas
 from .agent_workflow.graph import stream_workflow, mark_terminal_status
 from .agent_workflow.trace import WIRE_KEYS
@@ -293,7 +293,7 @@ class StreamRequest(BaseModel):
 
  # A bot's turn (bot_id) takes its model from the server's catalog: no provider, model or key comes from the
  # browser, and conversation_id, when sent, must be that bot's.  Without bot_id the browser sends all three.
- provider:str|None=Field(default=None,pattern="^(deepseek|kimi|minimax|qwen|zhipu|doubao|hunyuan|baidu|siliconflow|openrouter|custom)$"); base_url:str|None=Field(default=None,max_length=2048); model:str|None=Field(default=None,min_length=1,max_length=160,pattern=r"^[A-Za-z0-9._:/-]+$"); api_key:SecretStr|None=None; message:str=Field(min_length=1,max_length=4000); conversation_id:str|None=None; pending_request_id:str|None=Field(default=None,max_length=36); display_message:str|None=Field(default=None,max_length=120)
+ provider:str|None=Field(default=None,pattern=PROVIDER_PATTERN); base_url:str|None=Field(default=None,max_length=2048); model:str|None=Field(default=None,min_length=1,max_length=160,pattern=r"^[A-Za-z0-9._:/-]+$"); api_key:SecretStr|None=None; message:str=Field(min_length=1,max_length=4000); conversation_id:str|None=None; pending_request_id:str|None=Field(default=None,max_length=36); display_message:str|None=Field(default=None,max_length=120)
  bot_id:str|None=Field(default=None,max_length=36)
  # The owner's turn outside a bot (an older conversation): a catalog entry's name, "" for the catalog's default.
  # Like a bot's turn, no key comes from the browser (UX batch 3: the browser model profiles are gone).
@@ -1073,7 +1073,7 @@ class InboxStatusBody(BaseModel):
 
 
 class BackgroundModelBody(BaseModel):
-    provider: str = Field(pattern="^(deepseek|kimi|minimax|qwen|zhipu|doubao|hunyuan|baidu|siliconflow|openrouter|custom)$")
+    provider: str = Field(pattern=PROVIDER_PATTERN)
     model: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9._:/-]+$")
     base_url: str | None = Field(default=None, max_length=2048)
     # Optional on update: leaving it out keeps the saved key when provider, model and endpoint stay the same.
