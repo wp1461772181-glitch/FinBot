@@ -93,12 +93,24 @@ def test_zhipu_entries_take_the_tiers_its_api_accepts(owner, models):
     assert listed["supported_efforts"] == ["low", "high", "max"] and listed["reasoning_supported"] is True
 
 
-def test_siliconflow_entries_take_no_effort_and_the_fields_say_so(owner, models):
-    # Nothing is sent for SiliconFlow (reasoning_options has no branch for it): no tier list, and no effort offered.
+def test_siliconflow_entries_take_no_effort_and_the_fields_say_so(owner, models, monkeypatch):
+    # FINBOT_SF_EFFORT off: nothing is sent for SiliconFlow, so no tier list and no effort offered (the old contract).
+    monkeypatch.setenv("FINBOT_SF_EFFORT", "off")
     _entry("sf", "deepseek-ai/DeepSeek-V4-Flash", provider="siliconflow")
     listed = _listed("sf")
     assert listed["reasoning_supported"] is False and "supported_efforts" not in listed
     assert listed["key_status"] == "configured"
+
+
+def test_siliconflow_entries_list_the_tiers_their_model_takes(owner, models, monkeypatch):
+    # FINBOT_SF_EFFORT on: per model (test_siliconflow_effort.py has the request side).  DeepSeek-V4 takes high/max; a model
+    # outside both families still says it takes none.
+    monkeypatch.setenv("FINBOT_SF_EFFORT", "on")
+    _entry("sf", "deepseek-ai/DeepSeek-V4-Flash", provider="siliconflow")
+    _entry("sf-other", "moonshotai/Kimi-K2-Instruct", provider="siliconflow")
+    listed = _listed("sf")
+    assert listed["reasoning_supported"] is True and listed["supported_efforts"] == ["high", "max"]
+    assert _listed("sf-other")["reasoning_supported"] is False
 
 
 @pytest.mark.parametrize("provider,model", [("kimi", "kimi-k3"), ("qwen", "qwen3-max")])

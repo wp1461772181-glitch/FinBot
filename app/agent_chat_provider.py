@@ -3,6 +3,7 @@ import asyncio
 import json
 import httpx
 import os
+import re
 from contextlib import AsyncExitStack,asynccontextmanager
 from contextvars import ContextVar
 from fastapi import HTTPException
@@ -68,9 +69,54 @@ def sent_effort(effort: str | None = None) -> str | None:
     return value if value in _REASONING_EFFORTS else None
 
 
-def reasoning_options(provider: str, effort: str | None = None) -> dict:
+# SiliconFlow (docs.siliconflow.cn, chat-completions reference, 2026-11): the thinking control depends on the model.
+# Family "effort": reasoning_effort takes only "high" and "max" (the server folds low/medium onto high, xhigh onto max).
+# Family "budget": the hybrid models take enable_thinking (on/off) and thinking_budget (128-32768 tokens).
+# Any other model gets nothing, as before: the docs do not say an unknown field is ignored rather than refused.
+# DeepSeek-V3.1 is left out on purpose: its function calling needs enable_thinking off, and FinBot's decisions carry tools.
+_SF_EFFORT_MODEL = re.compile(r"^(deepseek-v4-(flash|pro)|glm-5\.2)$")
+_SF_BUDGET_MODEL = re.compile(r"^(qwen3-(8b|14b|32b|30b-a3b|235b-a22b)|deepseek-v3\.2(-exp)?|hunyuan-a13b-instruct|glm-4\.5v|glm-4\.6v|glm-5v-turbo)$")
+_SF_BUDGETS = {"low": 1024, "medium": 4096, "high": 16384, "max": 32768}
+
+
+def _siliconflow_family(model: str | None) -> str | None:
+    if not flag("FINBOT_SF_EFFORT", True):
+        return None
+    name = str(model or "").strip().lower().rsplit("/", 1)[-1]
+    if _SF_EFFORT_MODEL.match(name):
+        return "effort"
+    if _SF_BUDGET_MODEL.match(name):
+        return "budget"
+    return None
+
+
+def siliconflow_efforts(model: str | None) -> tuple[str, ...]:
+    """The tiers a SiliconFlow model really takes, as reasoning_options sends them (the strength list reads this)."""
+    family = _siliconflow_family(model)
+    if family == "effort":
+        return ("high", "max")
+    if family == "budget":
+        return ("none", "low", "medium", "high", "max")
+    return ()
+
+
+def reasoning_options(provider: str, effort: str | None = None, model: str | None = None) -> dict:
     value = sent_effort(effort)
     if value is None:
+        return {}
+    if provider == "siliconflow":
+        family = _siliconflow_family(model)
+        if family == "effort":
+            # Only the two tiers the model has are sent.  A lower tier (the environment default "low" of a bot that chose
+            # nothing, and the background calls) sends nothing and keeps the model's own default, as before this branch.
+            if value in ("xhigh", "max"):
+                return {"reasoning_effort": "max"}
+            return {"reasoning_effort": "high"} if value == "high" else {}
+        if family == "budget":
+            if value == "none":
+                return {"enable_thinking": False}
+            tier = {"minimal": "low", "xhigh": "max"}.get(value, value)
+            return {"enable_thinking": True, "thinking_budget": _SF_BUDGETS[tier]}
         return {}
     if provider == "deepseek":
         # DeepSeek's own levels are high and max.  low and medium keep their existing mapping (the server
@@ -99,7 +145,7 @@ def reasoning_options(provider: str, effort: str | None = None) -> dict:
 NATIVE_EFFORTS = {
     "zhipu": ("low", "high", "max"),           # GLM-5.3 / GLM-5.3-Flash; none, minimal, medium, xhigh fold onto these
     "deepseek": ("none", "high", "max"),       # none turns thinking off; medium is sent as high, low as low (folded)
-    "siliconflow": (),                         # reasoning_options has no branch for it: nothing is sent
+    "siliconflow": (),                         # per model: siliconflow_efforts(model) (the catalogue asks it); () without a model
     # Every other provider the model dialog offers: reasoning_options has no branch for it, so nothing is sent and the
     # browser must say "takes no effort" instead of offering seven tiers that do nothing.  A bot's stored
     # reasoning_effort is left as it is; the settings page only flags it as outside the model's tiers.
@@ -165,7 +211,7 @@ async def decision_request(provider, model, api_key, messages, schemas, base_url
     body={"model":model,"messages":messages,"max_tokens":MAX_OUTPUT_TOKENS,"stream":True}
     if schemas: body.update(tools=schemas,tool_choice="auto")
     if provider=="minimax":body["reasoning_split"]=True
-    body.update(reasoning_options(provider,reasoning_effort))
+    body.update(reasoning_options(provider,reasoning_effort,model))
     return await _post(provider,api_key,body,base_url)
 def _semantic_delta(delta):
     return (any(isinstance(delta.get(k),str) and delta[k] for k in ('content','reasoning_content'))
@@ -319,7 +365,7 @@ async def stream_answer(provider,model,api_key,messages,reasoning_collector=None
             return
     body={'model':model,'messages':messages,'max_tokens':MAX_OUTPUT_TOKENS,'stream':True}
     if provider=='minimax':body['reasoning_split']=True
-    body.update(reasoning_options(provider))
+    body.update(reasoning_options(provider,model=model))
     headers={'Authorization':f'Bearer {api_key}','Content-Type':'application/json'}
     if provider=='openrouter':headers['X-Title']='FinBot'
     try:
