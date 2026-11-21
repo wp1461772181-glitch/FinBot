@@ -22,7 +22,11 @@ def publication_time(value):
         try:parsed=datetime.fromisoformat(str(value or '').strip().replace('Z','+00:00'))
         except ValueError:raise ValueError('invalid_published_at')
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
-def error(code):return {'ok':False,'data':[],'error_code':code,'hint':'用 request_action 请求用户批准' if code=='write_tool_not_granted' else '请修正参数或选择已返回的来源；没有资料时可先联网查找。'}
+def error(code):
+    hint='请修正参数或选择已返回的来源；没有资料时可先联网查找。'
+    if code=='write_tool_not_granted':hint='用 request_action 请求用户批准'
+    elif code=='sec_form_outside_scope':hint='这一轮的范围只含 10-K/10-Q（财报），你点名的表格类型不在其中；要取该份申报请同时给出它的 accession_number。'
+    return {'ok':False,'data':[],'error_code':code,'hint':hint}
 
 
 async def search_knowledge(args,context):

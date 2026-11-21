@@ -227,8 +227,10 @@ def execute_action(*, credential: str, request_key: str, action: str,
         try:
             if action in {"fetch_sec", "refresh_sec"}:
                 from ..sec_filings import fetch_inventory_content
+                from .fp_flags import flag
                 filing, cached = fetch_inventory_content(symbol=symbol, accession_number=payload["accession_number"],
-                                                           db=db, force_refresh=action == "refresh_sec")
+                                                           db=db, force_refresh=action == "refresh_sec",
+                                                           recheck_attachment=action == "fetch_sec" and flag("FINBOT_SEC_EXHIBIT_BY_TYPE", True))
                 db.commit()
                 result = {"status": "succeeded", "source_id": str(filing.id), "cached": cached}
                 job_kind = job_id = None
