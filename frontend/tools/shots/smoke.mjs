@@ -10850,6 +10850,7 @@ async function settingsModelKeyAndPicker(ctx) {
     await search.fill("gamma");
     await page.getByRole("option", { name: "gamma-3", exact: true }).click();
     assert((await page.locator("#model-model").inputValue()) === "gamma-3", "the picked model did not fill Model ID");
+    assert(await stDialog(page).isVisible(), "searching and picking in the model list closed the dialog");
   } finally { await view.close(); }
   return "the card and the edit box show key_hint; the key box toggles between hidden and shown; the model list shows all six, filters by id and by name, says when nothing matches, and a pick fills Model ID";
 }

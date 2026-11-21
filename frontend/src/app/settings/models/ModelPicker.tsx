@@ -11,7 +11,9 @@ export type Candidate = { id: string; name: string };
 export function ModelPicker({ candidates, current, disabled, labelledBy, onPick }: { candidates: Candidate[]; current: string; disabled?: boolean; labelledBy: string; onPick: (id: string) => void }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
-  return <Popover open={open} onOpenChange={setOpen}>
+  // modal: the list is a portaled layer of its own above the (modal) model dialog; as a modal layer it takes the pointer, so a
+  // click in the search box or on a row is never an outside interaction that would close the dialog and drop the draft.
+  return <Popover open={open} onOpenChange={setOpen} modal>
     <PopoverTrigger asChild>
       <Button type="button" variant="outline" role="combobox" aria-expanded={open} aria-labelledby={labelledBy} data-testid="model-discovered" disabled={disabled || candidates.length === 0} className="min-w-0 flex-1 justify-between font-normal max-lg:h-11">
         <span className="truncate text-muted-foreground">{t("选择列表中的模型填入 Model ID")}</span><ChevronsUpDown aria-hidden="true" className="opacity-60" />
