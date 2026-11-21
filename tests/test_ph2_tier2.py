@@ -375,3 +375,125 @@ def test_document_ticker_with_dot_and_dash_is_a_plain_json_value_in_the_cache_ke
     from app.event_extraction import cache_key_for
     keys = {cache_key_for(_doc(t), provider="p", model="m", prompt_version="v") for t in ("BRK.B", "BRK-B", "BRKB")}
     assert len(keys) == 3
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# 5. M-12: count the company-confirmation card, change nothing (FINBOT_PH2_ENTITY_CARD_SHADOW)
+# --------------------------------------------------------------------------------------------------------------------
+import asyncio
+
+from app.agent_workflow import direct
+from app.agent_workflow.state import AgentRuntimeContext
+
+
+async def _emit(_):
+    pass
+
+
+def _card_turn(question, *, classifier, canonical=None):
+    seen = []
+
+    def decide(messages, tools):
+        seen.append(messages)
+        return {"content": "好的。"}
+    ctx = AgentRuntimeContext("custom", "test", "dummy", decider=decide, classifier=classifier,
+                              resolver=lambda _: {"relationship": "new", "canonical_question": canonical or question})
+    return asyncio.run(direct.run_direct_turn(question, ctx, emit=_emit, messages=None))
+
+
+@pytest.fixture
+def no_sec(monkeypatch):
+    from app.agent_workflow import entities
+    monkeypatch.setattr(entities, "resolve_ticker", lambda _: None)
+    monkeypatch.setattr(entities, "verified_pair", lambda *_: False)
+    monkeypatch.setattr(entities, "sec_title", lambda _: None)
+    monkeypatch.setattr(entities, "mapped_title", lambda *_: None)
+
+
+def _unbound_card(monkeypatch, on, question="最近有什么新闻？"):
+    _switch(monkeypatch, "FINBOT_PH2_ENTITY_CARD_SHADOW", on)
+    return _card_turn(question, classifier=lambda _: {"category": "D", "company": "Microsoft Corporation", "symbol": "MSFT"})
+
+
+def test_entity_card_is_recorded_with_its_reasons_when_on(monkeypatch, no_sec):
+    result = _unbound_card(monkeypatch, True)
+    assert result["status"] == "waiting_for_input" and result["pending_request"]["question"] == "请确认这次指代的公司。"
+    [record] = result["audit"]["entity_card_shadow"]
+    assert record["classifier"] == {"symbol": "MSFT", "company": "Microsoft Corporation"}
+    assert record["user_words"] == "最近有什么新闻？"
+    assert record["would_use"] == {"symbol": "MSFT", "company": "Microsoft Corporation"}
+    assert record["unbound"] == ["MSFT", "Microsoft Corporation"]
+    assert record["fallbacks"] == {
+        "resolve_ticker": "not_tried", "multi_entity": "fewer_than_two_symbols", "sec_pair": "mention_not_grounded",
+        "two_companies": "company_has_no_unique_sec_ticker", "symbol_anchor": "symbol_not_written_in_user_words",
+        "native_mapping": "no_name_without_latin_words"}
+
+
+def test_entity_card_user_words_are_cut_to_200_characters(monkeypatch, no_sec):
+    result = _unbound_card(monkeypatch, True, question="今天" * 150 + "有什么新闻？")
+    assert result["status"] == "waiting_for_input"
+    assert len(result["audit"]["entity_card_shadow"][0]["user_words"]) == 200
+
+
+def test_entity_card_off_records_nothing_and_asks_the_same_card(monkeypatch, no_sec):
+    on = _unbound_card(monkeypatch, True)
+    off = _unbound_card(monkeypatch, False)
+    assert "entity_card_shadow" not in off["audit"]
+    for key in ("status", "answer"):
+        assert on[key] == off[key], key
+    volatile = {"id", "expires_at"}      # a new card id and expiry each turn
+    assert {k: v for k, v in on["pending_request"].items() if k not in volatile} == {k: v for k, v in off["pending_request"].items() if k not in volatile}
+    assert {k: v for k, v in on["audit"].items() if k != "entity_card_shadow"}.keys() == off["audit"].keys()
+    assert on["audit"]["stages"]["resolver"] == off["audit"]["stages"]["resolver"]
+
+
+def test_entity_card_not_asked_records_nothing_either_way(monkeypatch, no_sec):
+    for on in (True, False):
+        _switch(monkeypatch, "FINBOT_PH2_ENTITY_CARD_SHADOW", on)
+        result = _card_turn("微软 MSFT 的营收", classifier=lambda _: {"category": "D", "symbol": "MSFT"},
+                            canonical="微软（MSFT）的营收是多少？")
+        assert result["pending_request"] is None and "entity_card_shadow" not in result["audit"]
+
+
+def test_entity_card_record_failure_is_swallowed():
+    from types import SimpleNamespace
+    fake = SimpleNamespace(scope={"symbol": "MSFT"}, original="hi", audit={})
+    assert direct.Turn.record_entity_card(fake, None, {}) is None      # entities=None cannot be iterated
+    assert "entity_card_shadow" not in fake.audit
+
+
+def test_entity_card_report_groups_by_classifier_entity_and_never_writes():
+    from scripts.entity_card_report import records_from_audit, render, summarize
+    msft = {"classifier": {"symbol": "MSFT", "company": "Microsoft Corporation"}, "user_words": "最近有什么新闻？",
+            "fallbacks": {"sec_pair": "mention_not_grounded"}, "would_use": {"symbol": "MSFT", "company": "Microsoft Corporation"}}
+    audits = [{"entity_card_shadow": [msft]}, {"entity_card_shadow": [{**msft, "user_words": "它的营收呢"}]},
+              {"entity_card_shadow": [{"classifier": {"symbol": "AAPL"}, "user_words": "苹果", "fallbacks": {"sec_pair": "company_or_symbol_missing"}}]},
+              {"other": 1}, None, {"entity_card_shadow": "bad"}]
+    records = [r for a in audits for r in records_from_audit(a)]
+    summary = summarize(records, samples=1)
+    assert summary["total"] == 3
+    first, second = summary["by_classifier_entity"]
+    assert (first["entity"], first["count"], first["samples"]) == ("MSFT / Microsoft Corporation", 2, ["最近有什么新闻？"])
+    assert first["fallback_reasons"] == {"sec_pair": {"mention_not_grounded": 2}}
+    assert (second["entity"], second["count"]) == ("AAPL", 1)
+    assert "3 次" in render(summary)
+
+
+def test_entity_card_report_reads_stored_messages_without_writing(monkeypatch, disposable_database):
+    import uuid
+    from app.agent_chat_models import AgentConversation, AgentMessage
+    from scripts import entity_card_report
+    Base.metadata.create_all(engine, tables=[AgentConversation.__table__, AgentMessage.__table__])
+    record = {"classifier": {"symbol": "MSFT"}, "user_words": "hi", "fallbacks": {}, "would_use": {"symbol": "MSFT"}}
+    with SessionLocal() as db:
+        cid = uuid.uuid4()
+        db.add(AgentConversation(id=cid, owner_hash="o"))
+        db.flush()
+        db.add(AgentMessage(conversation_id=cid, turn_id=uuid.uuid4(), sequence=1, role="assistant", content="x",
+                            tool_calls={"audit": {"entity_card_shadow": [record]}}))
+        db.add(AgentMessage(conversation_id=cid, turn_id=uuid.uuid4(), sequence=2, role="assistant", content="y", tool_calls={"audit": {}}))
+        db.commit()
+        before = db.query(AgentMessage).count()
+    assert [r["user_words"] for r in entity_card_report.load_records(days=1, limit=100)] == ["hi"]
+    with SessionLocal() as db:
+        assert db.query(AgentMessage).count() == before

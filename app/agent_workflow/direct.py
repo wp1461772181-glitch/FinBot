@@ -1319,9 +1319,11 @@ class Turn:
             # The owner's own setting is a grounded source of the company, like their words.
             company=self.audit['default_company'];trusted+=' '+company['symbol']+' '+(company.get('company') or '')
         entity_trusted=trusted+' '+self.question
+        tried={}   # FINBOT_PH2_ENTITY_CARD_SHADOW: why each way of grounding the company did not settle it (read only at the card below)
         if self.scope.get('company') and not self.scope.get('symbol') and normalized(self.scope['company']).casefold() not in normalized(entity_trusted).casefold():
             from .entities import resolve_ticker
             candidate=await asyncio.to_thread(resolve_ticker,self.scope['company'])
+            tried['resolve_ticker']='resolved' if candidate else 'no_unique_sec_match'
             if candidate:self.scope['symbol']=candidate
         entities=[v for k in ('symbol','company') if (v:=self.scope.get(k)) and not contains(normalized(v),normalized(entity_trusted))]
         if entities and self.state.get('previous_scope'):
@@ -1332,6 +1334,7 @@ class Turn:
             # A request about several companies names all of them; the classifier can only carry one
             # primary scope, so an unbound single `company` must not block a multi-ticker request.
             named=[str(v) for v in (self.scope.get('symbols') or []) if v]
+            tried['multi_entity']='fewer_than_two_symbols' if len(named)<2 else 'not_all_named_in_user_words'
             if len(named)>=2 and all(contains(v,entity_trusted) or contains(v,self.original) for v in named):
                 entities=[];self.audit['multi_entity_scope']=named
         if entities:
@@ -1344,6 +1347,7 @@ class Turn:
                 if normalized(part).casefold() not in normalized(entity_trusted).casefold():continue
                 if normalized(part).casefold()==symbol.casefold() or not re.search(r'[A-Za-z]',part) or await asyncio.to_thread(verified_pair,part,symbol):
                     grounded_mention=True;break
+            tried['sec_pair']='mention_not_grounded' if not grounded_mention else 'company_or_symbol_missing' if not (self.scope.get('company') and self.scope.get('symbol')) else 'company_symbol_not_sec_pair'
             if grounded_mention and await asyncio.to_thread(verified_pair,self.scope.get('company'),self.scope.get('symbol')):
                 entities=[];self.audit['entity_mapping_verified']=True
                 self.disclose_mapping(self.scope.get('company'))
@@ -1354,6 +1358,8 @@ class Turn:
             from .entities import resolve_ticker
             other=await asyncio.to_thread(resolve_ticker,self.scope['company'])
             mention=self.scope.get('company_mention') or ''
+            tried['two_companies']=('company_has_no_unique_sec_ticker' if not other else 'company_resolves_to_same_symbol' if other==self.scope['symbol']
+                else 'symbol_not_in_user_words' if not contains(self.scope['symbol'],entity_trusted) else 'mention_not_in_user_words')
             if other and other!=self.scope['symbol'] and contains(self.scope['symbol'],entity_trusted) and mention and normalized(mention).casefold() in normalized(entity_trusted).casefold():
                 self.scope['symbols']=[self.scope['symbol'],other];entities=[];self.audit['multi_entity_scope']=self.scope['symbols']
         if entities and self.scope.get('symbol'):
@@ -1362,13 +1368,16 @@ class Turn:
             # the stored company becomes SEC's official title, never the model's name form.
             symbol=str(self.scope['symbol'])
             others=[str(v) for v in (self.scope.get('symbols') or []) if v and str(v).casefold()!=symbol.casefold()]
+            tried['symbol_anchor']='other_symbols_listed' if others else 'symbol_not_written_in_user_words'
             if not others and re.search(r'(?<![A-Za-z0-9.])'+re.escape(symbol.upper())+r'(?![A-Za-z0-9])',normalized(entity_trusted)):
                 from .entities import issuer_words, sec_title
                 # Only a name with no Latin words gets anchored: a Latin company name that
                 # conflicts with the symbol's SEC title stays unbound (and is asked about),
                 # it is never silently overwritten.
-                if issuer_words(str(self.scope.get('company') or '')):title=None
-                else:title=await asyncio.to_thread(sec_title,symbol)
+                if issuer_words(str(self.scope.get('company') or '')):title=None;tried['symbol_anchor']='company_has_latin_name'
+                else:
+                    title=await asyncio.to_thread(sec_title,symbol)
+                    if not title:tried['symbol_anchor']='sec_does_not_list_symbol'
                 if title:
                     named=self.scope.get('company')
                     if named and not self.scope.get('company_mention') and normalized(named).casefold() in normalized(entity_trusted).casefold():
@@ -1381,6 +1390,7 @@ class Turn:
             symbol=str(self.scope['symbol'])
             others=[str(v) for v in (self.scope.get('symbols') or []) if v and str(v).casefold()!=symbol.casefold()]
             native=self.native_mention()
+            tried['native_mapping']='other_symbols_listed' if others else 'no_name_without_latin_words' if not native else 'name_contradicts_sec_title_or_symbol_unlisted'
             if native and not others:
                 from .entities import mapped_title
                 parts=re.split(r'[（(，,）):：\s]',str(self.scope.get('company_mention') or ''))
@@ -1390,6 +1400,7 @@ class Turn:
                     self.scope['company']=title;entities=[];self.audit['entity_mapping_accepted']='mapped'
                     self.disclose_mapping(title)
         if entities:
+            if flag('FINBOT_PH2_ENTITY_CARD_SHADOW',True):self.record_entity_card(entities,tried)
             self.reference_stage(False,'classifier_entity_unbound',skipped=self.reference_value is None)
             # The names the classifier meant and could not ground, each one a choice (first mention first, no repeats).
             choices=[]
@@ -1434,6 +1445,20 @@ class Turn:
         if (self.reference_value and self.reference_value.relationship!='new') and (set(SCOPE_ID.findall(canonical))-set(SCOPE_ID.findall(trusted)) or referenced_urls(canonical)-referenced_urls(trusted)):
             self.reference_stage(False,'reference_scope_unbound');self.resolver_failed=True
             self.question=self.original
+
+    def record_entity_card(self,entities,tried):
+        """FINBOT_PH2_ENTITY_CARD_SHADOW: one structured line in the audit each time the company-confirmation card is asked, so the owner can
+        see from real turns how often the card stands in for a company the user did name.  Counting only: it never changes the card, and
+        a failure here is swallowed.  ``would_use`` is what the turn would have read had the card not been asked."""
+        try:
+            fallbacks={'resolve_ticker':'not_tried','multi_entity':'not_tried','sec_pair':'not_tried','two_companies':'needs_symbol_and_company',
+                       'symbol_anchor':'no_symbol','native_mapping':'no_symbol',**tried}
+            record={'classifier':{k:str(self.scope.get(k))[:80] for k in ('symbol','company','company_mention') if self.scope.get(k)},
+                    'user_words':str(self.original or '')[:200],'unbound':[str(e)[:80] for e in entities][:4],'fallbacks':fallbacks,
+                    'would_use':{k:str(self.scope.get(k))[:80] for k in ('symbol','company') if self.scope.get(k)}}
+            records=self.audit.setdefault('entity_card_shadow',[])
+            if len(records)<5:records.append(record)
+        except Exception:pass
 
     def native_mention(self):
         """The company name with no Latin words that this turn's message, its rewrite or a verified referent contains."""
