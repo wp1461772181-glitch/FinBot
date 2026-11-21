@@ -82,3 +82,88 @@ export function badgeText(bot, t = (text) => text) {
   const model = bot.model ? bot.model : t("服务器默认模型");
   return `${t("模型")} · ${model} · ${t(effortLabel(bot.reasoning_effort))}`;
 }
+
+// ---- The picker's own view of the catalog (the composer's model selector): logos, provider groups, the trigger's parts.
+// Pure state mapping as above; nothing here changes what a choice saves.
+
+/** Logo files shipped with the app (src/assets/provider-logos/<key>.svg); "generic" is the stand-in for any provider without one. */
+export const LOGO_KEYS = ["anthropic", "openai", "google", "xai", "mistral", "groq", "deepseek", "openrouter", "moonshotai", "alibaba", "zhipuai", "siliconflow", "minimax", "meta", "nvidia", "perplexity", "cohere"];
+
+// The catalog's own provider names (app/agent_chat_api.py PROVIDER_NAMES) plus the first-party names a hand-written catalog file may use.
+const PROVIDER_LOGO = { deepseek: "deepseek", kimi: "moonshotai", moonshotai: "moonshotai", qwen: "alibaba", alibaba: "alibaba", zhipu: "zhipuai", zhipuai: "zhipuai", minimax: "minimax",
+  siliconflow: "siliconflow", openrouter: "openrouter", anthropic: "anthropic", openai: "openai", google: "google", xai: "xai", mistral: "mistral", groq: "groq" };
+// The vendor prefix of an OpenRouter model id (`anthropic/claude-…`); OpenRouter's own spellings differ from the logo keys in a few places.
+const VENDOR_LOGO = { anthropic: "anthropic", openai: "openai", google: "google", "x-ai": "xai", xai: "xai", mistralai: "mistral", mistral: "mistral", deepseek: "deepseek", "deepseek-ai": "deepseek",
+  moonshotai: "moonshotai", qwen: "alibaba", alibaba: "alibaba", "z-ai": "zhipuai", zhipuai: "zhipuai", "meta-llama": "meta", meta: "meta", minimax: "minimax", nvidia: "nvidia", perplexity: "perplexity", cohere: "cohere", groq: "groq" };
+const PROVIDER_LABELS = { deepseek: "DeepSeek", kimi: "Kimi", moonshotai: "Kimi", minimax: "MiniMax", qwen: "通义千问", alibaba: "通义千问", zhipu: "智谱 GLM", zhipuai: "智谱 GLM", doubao: "豆包", hunyuan: "腾讯混元",
+  baidu: "百度千帆", siliconflow: "SiliconFlow", openrouter: "OpenRouter", anthropic: "Anthropic", openai: "OpenAI", google: "Google", xai: "xAI", mistral: "Mistral", groq: "Groq" };
+
+/** The logo of a provider group (null: none, the generic mark is drawn). */
+export function providerLogo(provider) {
+  return PROVIDER_LOGO[String(provider ?? "").toLowerCase()] ?? null;
+}
+
+/** The logo of one catalog entry: an OpenRouter entry shows its model's vendor (by the id's prefix), any other the provider's own; null when there is none (the generic mark is drawn). */
+export function entryLogo(entry) {
+  if (!entry) return null;
+  if (String(entry.provider ?? "").toLowerCase() === "openrouter") {
+    const vendor = String(entry.model ?? "").split("/")[0].replace(/^~/, "").toLowerCase();
+    return VENDOR_LOGO[vendor] ?? null;
+  }
+  return providerLogo(entry.provider);
+}
+
+/** The group heading of a provider: its brand name (null for the catalog's own "custom" and an unknown one: the caller says 自定义 / 其他). */
+export function providerLabel(provider) {
+  return PROVIDER_LABELS[String(provider ?? "").toLowerCase()] ?? null;
+}
+
+/**
+ * The model list of the selector: the server-default row first, then the entries modelChoices keeps (configured, or the current one), grouped by provider
+ * in the order the catalog lists them.  Each row carries what the old flat list had (value, checked, keyMissing) plus the entry's own words for a richer row.
+ */
+export function modelSections(catalog, current) {
+  const choices = modelChoices(catalog, current);
+  const byName = new Map(catalog.models.map((entry) => [entry.name, entry]));
+  const groups = [];
+  for (const choice of choices.slice(1)) {
+    const entry = byName.get(choice.value);
+    const provider = String(entry?.provider ?? "");
+    let group = groups.find((item) => item.provider === provider);
+    if (!group) { group = { provider, label: providerLabel(provider), logo: providerLogo(provider), items: [] }; groups.push(group); }
+    group.items.push({ value: choice.value, name: entry?.display_name || choice.value, model: entry?.model ?? "", logo: entryLogo(entry), checked: choice.checked,
+      keyMissing: Boolean(choice.keyMissing), thinking: entry?.reasoning_supported === true });
+  }
+  return { defaultChoice: { value: null, checked: choices[0].checked, defaultName: catalog.default ?? null }, groups };
+}
+
+const EFFORT_HINTS = { none: "不思考，直接回答", minimal: "几乎不思考，最快", low: "快，适合简单问答", medium: "均衡，多数问题够用", high: "更细致，慢一些、贵一些",
+  xhigh: "深入推理，明显更慢更贵", max: "最深的推理，最慢最贵" };
+/** One line on what a tier means (Chinese; the page translates it).  null/undefined is the default. */
+export function effortHint(value) {
+  if (value === null || value === undefined) return "不指定，用模型自己的设置";
+  return EFFORT_HINTS[value] ?? "";
+}
+
+const BARS = { none: 0, minimal: 1, low: 1, medium: 2, high: 3, xhigh: 3, max: 3 };
+/** How many of the three small bars are filled for a tier (the default and an unknown value: none, and no bars are drawn for the default). */
+export function effortBars(value) {
+  return BARS[value] ?? 0;
+}
+
+/** 0..1: how strong the tier is, for the glow's colour (blue towards violet).  The default and "none" are 0; "max" is 1. */
+export function effortTone(value) {
+  const at = EFFORT_LEVELS.indexOf(value);
+  return at <= 0 ? 0 : Math.round((at / (EFFORT_LEVELS.length - 1)) * 100) / 100;
+}
+
+/** True for the top tiers, where the label is drawn in the gradient. */
+export function effortHigh(value) {
+  return value === "xhigh" || value === "max";
+}
+
+/** What the composer's button shows: the model's logo and short name (null name: the server default), the tier label and its bars.  `entry` is effectiveEntry(...). */
+export function triggerView(bot, entry) {
+  const value = bot.reasoning_effort ?? null;
+  return { name: bot.model ? (entry?.display_name || bot.model) : null, logo: entryLogo(entry), value, level: effortLabel(value), bars: value === null ? 0 : effortBars(value), tone: effortTone(value), high: effortHigh(value) };
+}

@@ -22,6 +22,7 @@ const ALLOWED = {
     "forecast-model.mjs",             // the Jev branch note that names the brief provider
     "RoleTable.tsx",                  // settings table row for the default model of material analysis (was MaterialAnalysisDefaultCard.tsx until P8.2), not the forecast path
     "model-profiles.mjs",             // provider catalogue
+    "model-effort.mjs",               // the composer's model selector: the provider's brand name as a group heading, not the forecast path
     "MaterialDetail.tsx",             // single-material analysis (was MaterialAnalysisDetail.tsx until P6.3), not the forecast path
   ]),
 };
