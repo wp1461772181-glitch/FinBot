@@ -60,20 +60,24 @@ def summarize(records: Iterable[Mapping], samples: int = 3) -> dict:
 
 
 def load_records(*, days: int, limit: int) -> list[dict]:
-    """Stored assistant messages from the last ``days`` days (newest ``limit`` rows) that carry card records. Reads only."""
+    """Card records of stored assistant messages from the last ``days`` days (newest ``limit`` messages). Reads only.
+
+    The filter and the cut run in SQL: only the ``audit.entity_card_shadow`` element of a message that has one comes back,
+    never the whole ``tool_calls`` (citations and protocol can be tens of KB per message), and rows stream in batches.
+    """
     from sqlalchemy import desc, select
 
     from app.agent_chat_models import AgentMessage
     from app.database import SessionLocal
 
     cutoff = datetime.now(UTC) - timedelta(days=days)
+    node = AgentMessage.tool_calls["audit"][AUDIT_KEY]
     found: list[dict] = []
     with SessionLocal() as db:
-        stmt = (select(AgentMessage.tool_calls).where(AgentMessage.role == "assistant", AgentMessage.created_at >= cutoff)
-                .order_by(desc(AgentMessage.created_at)).limit(limit))
-        for tool_calls in db.scalars(stmt):
-            audit = tool_calls.get("audit") if isinstance(tool_calls, Mapping) else None
-            found.extend(records_from_audit(audit))
+        stmt = (select(node.as_json()).where(AgentMessage.role == "assistant", AgentMessage.created_at >= cutoff, node.as_string().isnot(None))
+                .order_by(desc(AgentMessage.created_at)).limit(limit).execution_options(yield_per=200))
+        for value in db.scalars(stmt):
+            found.extend(item for item in records_from_audit({AUDIT_KEY: value}))
     return found
 
 

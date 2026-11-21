@@ -552,3 +552,50 @@ def test_news_rank_ticker_only_search_has_no_hint(news_db, monkeypatch):
     _switch(monkeypatch, "FINBOT_PH2_NEWS_RANK", True)
     _add("NVDA shipments", tickers=["NVDA"])
     assert "hint" not in engine_mod.search_configured_news(tickers=["NVDA"])["meta"]
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# 2b / 5b. rework after acceptance: S1 non-soft path, M-12 masking, SEC-list flag, report query
+# --------------------------------------------------------------------------------------------------------------------
+def test_gate_row_undated_page_without_soft_keeps_the_old_refusal_when_on(monkeypatch):
+    _switch(monkeypatch, "FINBOT_PH2_WEB_DATE_SOFT", True)
+    assert gate_row("Apple news", _page(), company="Apple", days_back=7) == (False, "requested_time_window_missing")
+    assert gate_row("Apple news", _page(published_at=_day(1)), company="Apple", days_back=7) == (True, "sufficient_evidence")
+
+
+def test_entity_card_user_words_are_masked_before_they_are_kept(monkeypatch, no_sec):
+    _switch(monkeypatch, "FINBOT_PH2_ENTITY_CARD_SHADOW", True)
+    question = "台积电的毛利率 sk-or-v1-abcdefSECRET1234567890 联系 me@example.com 13812345678 很长"
+    result = _card_turn(question, classifier=lambda _: {"category": "D", "company": "Taiwan Semiconductor", "symbol": "TSM"})
+    words = result["audit"]["entity_card_shadow"][0]["user_words"]
+    assert "sk-or-v1" not in words and "me@example.com" not in words and "13812345678" not in words
+    assert words.count("[REDACTED]") == 3 and words.startswith("台积电的毛利率")
+
+
+def test_entity_card_record_says_whether_the_sec_list_was_ever_read(monkeypatch, no_sec):
+    from app.agent_workflow import entities
+    _switch(monkeypatch, "FINBOT_PH2_ENTITY_CARD_SHADOW", True)
+    monkeypatch.setattr(entities, "_cache", None)
+    assert _unbound_card(monkeypatch, True)["audit"]["entity_card_shadow"][0]["sec_list_available"] is False
+    monkeypatch.setattr(entities, "_cache", [{"ticker": "MSFT", "title": "MICROSOFT CORP"}])
+    assert _unbound_card(monkeypatch, True)["audit"]["entity_card_shadow"][0]["sec_list_available"] is True
+
+
+def test_entity_card_report_query_returns_only_the_card_element(monkeypatch, disposable_database):
+    import uuid
+    from app.agent_chat_models import AgentConversation, AgentMessage
+    from scripts import entity_card_report
+    Base.metadata.create_all(engine, tables=[AgentConversation.__table__, AgentMessage.__table__])
+    big = {"citations": [{"quote": "x" * 5000}] * 50}
+    with SessionLocal() as db:
+        db.query(AgentMessage).delete()         # rows an earlier test left in the shared test database
+        cid = uuid.uuid4()
+        db.add(AgentConversation(id=cid, owner_hash="o"))
+        db.flush()
+        for seq, calls in enumerate([{"audit": {"entity_card_shadow": [{"user_words": "keep", "classifier": {"symbol": "X"}}]}, **big},
+                                     {"audit": {"other": 1}, **big}, {"citations": []}, None], start=1):
+            db.add(AgentMessage(conversation_id=cid, turn_id=uuid.uuid4(), sequence=seq, role="assistant", content="x", tool_calls=calls))
+        db.add(AgentMessage(conversation_id=cid, turn_id=uuid.uuid4(), sequence=9, role="user", content="u",
+                            tool_calls={"audit": {"entity_card_shadow": [{"user_words": "not an assistant row"}]}}))
+        db.commit()
+    assert [r["user_words"] for r in entity_card_report.load_records(days=1, limit=100)] == ["keep"]

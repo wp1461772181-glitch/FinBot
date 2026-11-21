@@ -230,7 +230,10 @@ def gate_row(question: str, row: dict, *, symbol: str | None=None, company: str 
             # its time is unknown. A readable date outside the window is still the user's constraint and still refuses the row.
             when=published_status(row.get('published_at') or row.get('filed_at'),days_back,now or datetime.now(UTC))
             if when=='out':return _gate_outcome(False,'requested_time_window_missing',soft)
-            if when=='unknown' and soft:date_unknown=True;soft_notes.append('publisher_date_unknown')
+            if when=='unknown':
+                # Only a caller that asks for soft outcomes can carry the note to the model; any other keeps the old refusal.
+                if not soft:return _gate_outcome(False,'requested_time_window_missing',soft)
+                date_unknown=True;soft_notes.append('publisher_date_unknown')
         elif not published_within(row.get('published_at') or row.get('filed_at'),days_back,now or datetime.now(UTC)):
             return _gate_outcome(False,'requested_time_window_missing',soft)
     query_without_url=re.sub(r'https://\S+',' ',question)

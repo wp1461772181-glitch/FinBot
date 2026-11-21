@@ -1453,8 +1453,14 @@ class Turn:
         try:
             fallbacks={'resolve_ticker':'not_tried','multi_entity':'not_tried','sec_pair':'not_tried','two_companies':'needs_symbol_and_company',
                        'symbol_anchor':'no_symbol','native_mapping':'no_symbol',**tried}
+            from . import entities as sec_entities
+            from ..knowledge.extraction import _SECRET_FRAGMENT
+            # The user's words are masked (keys, e-mail addresses, phone numbers) before they are cut: this record is printed by a report script.
+            words=_SECRET_FRAGMENT.sub('[REDACTED]',str(self.original or '')[:2000])[:200]
             record={'classifier':{k:str(self.scope.get(k))[:80] for k in ('symbol','company','company_mention') if self.scope.get(k)},
-                    'user_words':str(self.original or '')[:200],'unbound':[str(e)[:80] for e in entities][:4],'fallbacks':fallbacks,
+                    'user_words':words,'unbound':[str(e)[:80] for e in entities][:4],'fallbacks':fallbacks,
+                    # False: the SEC list was never read in this process, so "no match" above may only mean the list was unavailable.
+                    'sec_list_available':sec_entities._cache is not None,
                     'would_use':{k:str(self.scope.get(k))[:80] for k in ('symbol','company') if self.scope.get(k)}}
             records=self.audit.setdefault('entity_card_shadow',[])
             if len(records)<5:records.append(record)
