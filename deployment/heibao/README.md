@@ -90,3 +90,5 @@ GitHub Actions 每 15 分钟（UTC cron `*/15 * * * *`）从公网访问 `${{ va
 经 ssh 从盒子的 `/opt/finbot/backups/db/` 拉最新的 `finbot-*.dump` 和 `pgvector-*.dump` 到仓库的
 `data/backups/`（已被 git 忽略），核对 sha256，各保留最近 7 份。日志在 `~/finbot-backup/backup.log`。
 这个脚本不在仓库里；它之前是每周 pg_dump 已冻结的 Supabase 副本，2026-11-21 改为从盒子拉取。
+
+手动测试通知通道：在 Actions 里运行 Box watchdog 并勾选 `test_notify`，会发一条测试消息，不改变已记录的在线/宕机状态；发不出去时这次运行失败。
