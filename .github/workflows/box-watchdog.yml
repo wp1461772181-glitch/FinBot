@@ -1,0 +1,106 @@
+name: Box watchdog
+
+# External probe for the FinBot box (the on-box sentinel dies with the box).
+# Probes GET /health; 3 consecutive failures = down. Telegram goes out once per
+# outage (state kept in actions/cache), plus one "recovered" message. The run
+# itself fails while the box is down, so GitHub also emails the repo owner.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: box-watchdog
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+    steps:
+      - name: Restore previous state
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: watchdog-state
+          key: box-watchdog-state-none
+          restore-keys: box-watchdog-state-
+
+      - name: Probe /health (3 attempts, 15 s timeout, 60 s apart)
+        id: probe
+        env:
+          WATCHDOG_RETRY_SLEEP: "60"
+        run: |
+          if [ -z "$API_BASE_URL" ]; then
+            echo "VITE_API_BASE_URL repository variable is not configured." >&2
+            exit 2
+          fi
+          url="${API_BASE_URL%/}/health"
+          result=down
+          for attempt in 1 2 3; do
+            if code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$url" 2>/dev/null) && [ "$code" = "200" ]; then
+              result=up
+              echo "attempt $attempt: HTTP 200"
+              break
+            fi
+            echo "attempt $attempt: failed (http=${code:-none})"
+            if [ "$attempt" -lt 3 ]; then
+              sleep "${WATCHDOG_RETRY_SLEEP:-60}"
+            fi
+          done
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+
+      - name: Notify on state change
+        id: notify
+        env:
+          RESULT: ${{ steps.probe.outputs.result }}
+          TG_TOKEN: ${{ secrets.WATCHDOG_TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.WATCHDOG_TELEGRAM_CHAT_ID }}
+        run: |
+          prev=up
+          if [ -f watchdog-state/state ]; then prev=$(cat watchdog-state/state); fi
+          now_cn=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')
+          text=""
+          if [ "$RESULT" = "down" ] && [ "$prev" != "down" ]; then
+            text="FinBot 盒子连续 3 次探测不到（${now_cn} 北京时间）。价格和财报提醒此刻不可用。"
+          elif [ "$RESULT" = "up" ] && [ "$prev" = "down" ]; then
+            text="FinBot 盒子已恢复（${now_cn} 北京时间）。"
+          fi
+          if [ "$RESULT" != "$prev" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            mkdir -p watchdog-state
+            echo "$RESULT" > watchdog-state/state
+          fi
+          if [ -n "$text" ]; then
+            if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ]; then
+              # token goes through curl's config on stdin, never the command line
+              if printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TG_TOKEN" \
+                | curl -sS -K - --max-time 20 -o /dev/null --fail \
+                    --data-urlencode "chat_id=$TG_CHAT" --data-urlencode "text=$text" 2>/dev/null; then
+                echo "Telegram message sent."
+              else
+                echo "Telegram send failed (ignored)."
+              fi
+            else
+              echo "Telegram secrets not configured; skipping message."
+            fi
+          fi
+
+      - name: Save state
+        if: always() && steps.notify.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: watchdog-state
+          key: box-watchdog-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Fail run while the box is down
+        if: steps.probe.outputs.result == 'down'
+        run: |
+          echo "Box did not answer /health 3 times in a row." >&2
+          exit 1
