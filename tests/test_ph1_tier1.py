@@ -457,3 +457,105 @@ def test_m3_the_prompt_explains_the_entity_note_only_when_the_switch_is_on(monke
     assert "requested_entity_missing" not in off
     assert on.replace(direct.GATE_NOTE_ENTITY_SENTENCE, "", 1) == off
     assert len(direct.GATE_NOTE_ENTITY_SENTENCE) <= 70   # the guest instruction has little room (test_b17)
+
+
+# --- the memory gate's key --------------------------------------------------------------------------
+
+class _Reply:
+    status_code = 200
+
+    def json(self):
+        return {"answers": {"memory": {"type": "choice", "choice": "remember", "probabilities": {"remember": 0.97, "skip": 0.03}}}}
+
+
+class _Recorder:
+    def __init__(self):
+        self.headers = []
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.headers.append(headers)
+        return _Reply()
+
+
+def _no_env_key(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+
+def test_key_with_nothing_in_the_environment_the_models_settings_key_is_used(monkeypatch, tmp_path):
+    from app import agent_model_catalog as catalog
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    _no_env_key(monkeypatch)
+    monkeypatch.setattr(catalog, "openrouter_key", lambda: "or-key-from-settings")
+    client = _Recorder()
+    monkeypatch.setattr(gate, "_UrllibClient", lambda: client)   # no injected client: the real transport path, mocked at the door
+    verdict = gate.judge("m", "c", "e", daily_path=str(tmp_path / "d.json"))
+    assert verdict.allows() and client.headers[0]["Authorization"] == "Bearer or-key-from-settings"
+    # and it is a request, not a skip: with no client and no key anywhere, the answer would be "skipped"
+    monkeypatch.setattr(catalog, "openrouter_key", lambda: None)
+    assert gate.judge("m", "c", "e", daily_path=str(tmp_path / "e.json")).status == "skipped"
+
+
+def test_key_order_is_explicit_then_environment_then_settings(monkeypatch, tmp_path):
+    from app import agent_model_catalog as catalog
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    monkeypatch.setattr(catalog, "openrouter_key", lambda: "or-key-from-settings")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key-from-env")
+    client = _Recorder()
+    monkeypatch.setattr(gate, "_UrllibClient", lambda: client)
+    gate.judge("m", "c", "e", api_key="or-key-explicit", daily_path=str(tmp_path / "a.json"))
+    gate.judge("m", "c", "e", daily_path=str(tmp_path / "b.json"))
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    gate.judge("m", "c", "e", daily_path=str(tmp_path / "c.json"))
+    assert [h["Authorization"] for h in client.headers] == ["Bearer or-key-explicit", "Bearer or-key-from-env", "Bearer or-key-from-settings"]
+
+
+def test_an_injected_client_never_reads_the_models_settings(monkeypatch, tmp_path):
+    from app import agent_model_catalog as catalog
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    _no_env_key(monkeypatch)
+    monkeypatch.setattr(catalog, "openrouter_key", lambda: pytest.fail("the settings were read for an injected client"))
+    injected = _Recorder()
+    gate.judge("m", "c", "e", client=injected, daily_path=str(tmp_path / "a.json"))
+    gate.judge("m", "c", "e", client=injected, api_key="or-key-explicit", daily_path=str(tmp_path / "b.json"))
+    # the injected client brings its own credentials: only an explicit key is sent, never one from the settings
+    assert [h["Authorization"] for h in injected.headers] == ["Bearer None", "Bearer or-key-explicit"]
+
+
+def test_key_off_means_no_settings_lookup_and_skipped(monkeypatch):
+    from app import agent_model_catalog as catalog
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", False)
+    _no_env_key(monkeypatch)
+    monkeypatch.setattr(catalog, "openrouter_key", lambda: pytest.fail("the settings are not read when the switch is off"))
+    assert gate.judge("m", "c", "e").status == "skipped"
+
+
+def test_the_catalog_picks_the_default_openrouter_entry_first_and_never_raises(monkeypatch):
+    from app import agent_model_catalog as catalog
+    entries = [{"name": "a", "provider": "openrouter", "key_source": "vault"},
+               {"name": "b", "provider": "openai", "key_source": "vault"},
+               {"name": "c", "provider": "openrouter", "key_source": "vault"}]
+    monkeypatch.setattr(catalog, "entries", lambda: (entries, "c"))
+    monkeypatch.setattr(catalog, "_key_for", lambda entry: {"a": "key-a-0000", "b": "key-b-0000", "c": "key-c-0000"}[entry["name"]])
+    assert catalog.openrouter_key() == "key-c-0000"
+    monkeypatch.setattr(catalog, "_key_for", lambda entry: None)
+    assert catalog.openrouter_key() is None
+
+    def boom():
+        raise RuntimeError("db down: secret-looking-text")
+    monkeypatch.setattr(catalog, "entries", boom)
+    assert catalog.openrouter_key() is None
+
+
+def test_a_turn_on_openrouter_hands_its_own_key_to_the_memory_gate(owner, monkeypatch):
+    from app import agent_chat_provider
+    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
+    keys = []
+
+    async def fake(_provider, _model, _key, _messages, _tools, _base):
+        return {}, {"content": json.dumps({"items": []})}
+    monkeypatch.setattr(agent_chat_provider, "decision_request", fake)
+    monkeypatch.setattr(gate, "judge", lambda msg, text, ev, **kw: keys.append(kw.get("api_key")) or gate.MemoryVerdict("skipped"))
+    for provider in ("openrouter", "deepseek"):
+        asyncio.run(extract.extract_from_turn(OWNER_HASH, STANDING, conversation_id="c", turn_id=str(uuid.uuid4()),
+                                              provider=provider, model="m", api_key="turn-key-0000", base_url=None))
+    assert keys == ["turn-key-0000", None]
