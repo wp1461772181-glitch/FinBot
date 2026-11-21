@@ -56,6 +56,6 @@
 
 ## 留给实施方决定的
 
-- 毛玻璃、阴影、光晕的具体数值（参考效果图 `.superpowers/brainstorm/*/content/model-picker-a-v2.html` 里 A2 的写法）。
+- 毛玻璃、阴影、光晕的具体数值（参考效果图 `docs/superpowers/mockups/2026-11-21-model-picker-a2.html` 里 A2 的写法）。
 - 档位说明的具体措辞。
 - 模型行是否显示能力小图标（思考、工具、看图）：目录数据里有就显示，没有就不显示，不为它新增接口。
