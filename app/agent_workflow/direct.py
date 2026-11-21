@@ -1150,6 +1150,8 @@ class Turn:
                     effort={'reasoning_effort':self.context.reasoning_effort} if getattr(self.context,'reasoning_effort',None) else {}
                     return await decision_request(self.context.provider,self.context.model,self.context.api_key,messages,tool_schemas,self.context.base_url,**effort)
             except HTTPException as exc:
+                # A refusal is the model's answer, not a fault: which category (never the text) is worth keeping in the audit.
+                if getattr(exc,'detail',None)=='provider_refusal':self.audit['refusal']={'category':getattr(exc,'category',None)}
                 retried=not attempt and getattr(exc,'detail',None) in RETRYABLE_PROVIDER
                 if getattr(exc,'check',None) and flag('FINBOT_SW1D_TOOLCALL_CAP',True):self.record_provider_check(exc,retried)
                 if not retried:raise
@@ -1193,6 +1195,11 @@ class Turn:
             observability.end_generation(generation,output=message.get('content') if not message.get('tool_calls') else {'content':message.get('content'),'tool_calls':message.get('tool_calls')},
                                          usage=response.get('usage') if isinstance(response,dict) else None)
             mark_progress()
+            # Anthropic only: thinking blocks the API dropped or let through (beta report), counted by kind.
+            if isinstance(response,dict) and response.get('input_transformations'):
+                counts=self.audit.setdefault('input_transformations',{})
+                for item in response['input_transformations'][:50]:
+                    kind=str(item.get('type'))[:40] if isinstance(item,dict) else 'unknown';counts[kind]=counts.get(kind,0)+1
             usage=response.get('usage',{}) if isinstance(response,dict) else {}
             actual=usage.get('total_tokens')
             if not isinstance(actual,int):

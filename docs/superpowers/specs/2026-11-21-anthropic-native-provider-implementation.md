@@ -16,27 +16,45 @@
 | 控制项 | beta 头 `thinking-binding-controls-2026-08-01` + `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`：失效块被丢掉、不计费、请求成功；`"error"` 则一律 400。关闭 thinking 时带它会 400。 | prefix-checks#preserved-thinking-controls |
 | `refusal` | HTTP 200，`stop_reason: "refusal"`，`stop_details.category`（cyber / bio / frontier_llm / reasoning_extraction / general_harms 或 null）。 | SDK 类型 `RefusalStopDetails` |
 
-## 与设计说明不一致、实施时的取舍
+## 实施取舍（含 2026-11-21 验收返工后的最终口径）
 
-1. **系统消息不全部提到顶层 `system`。** 只有对话开始前的连续 system 消息进 `system`；之后出现的（本轮状态、证据、提示）留在原位置，作为 user 消息里的文本块。理由：(a) 工具循环里这些消息夹在 tool 结果之后，而 `role: "system"` 的消息在 Messages API 里只能放在少数位置；(b) 若把每步都在变的证据和状态提到顶层 `system`，等于每步改写 `system`，前缀检查和缓存都会失效。
-2. **每步都变的内容仍在第一条 system 里。** `direct.py` 的 `tool_messages` 在第一条 system 指令末尾写了「已调用工具 N 次，已接受证据 M 条」，每步都变，所以顶层 `system` 每步仍会变：提示词缓存基本只能命中 `tools` 这一段，thinking 块在下一步多半也算失效（交给 `drop_block` 处理）。**要让缓存真正生效，需要把这行状态挪到消息末尾的 system 消息里**——这是对 `direct.py` 提示词结构的改动，没有在这次一并做，见「遗留」。
-3. **thinking 回传的保留方式**：选「消息里带内部字段 `_anthropic_content`」，不选「按回合缓存原始块」。理由：`direct.py` 的工具循环（`self.protocol`）本来就按消息保存模型回复，且会按批次裁剪旧批次，字段跟着消息走，裁剪时自然一起丢；按回合缓存要另外维护与 `protocol` 同步的副本。代价：`direct.py` 里复制回复的字段白名单（原 4 个键）必须加上 `_anthropic_content`，否则会被丢掉——已加，并用测试钉住。字段与 `tool_calls` 的 id 对不上时（被裁剪或改过）自动退回「从 content/tool_calls 重建」，不带 thinking，保证不发出残缺块。
-4. **未选档位不发 `effort`**（设计说明如此），与其他服务商「没选档位就用环境默认 low」不同。Claude 的模型默认档位 Haiku/Opus 是 medium、Sonnet 是 high，分类类的小调用也会按这个档位思考。想统一成 low，可在 bot 上选档位，或改 `build_request` 一行。
-5. **`stream_answer` 没有 effort 参数**（现有签名如此），最终回答不带 `effort`，用模型默认档位。要让最终回答也按 bot 档位，需要给所有调用方加参数，这次没做。
-6. **workspace 头**：做成运维开关 `FINBOT_ANTHROPIC_WORKSPACE_ID`（格式 `wrkspc_…`，不合格式则忽略），没有做成每个模型条目上的字段——那要贯穿目录、`AgentRuntimeContext`、`decision_request` 签名，改动面大。缺头时错误码是 `provider_workspace_required`，并有中文提示。需要「不同 key 不同工作区」时再做成条目字段。
-7. **`thinking_binding` 的回滚开关**：`FINBOT_ANTHROPIC_THINKING_BINDING=off` 不发 beta 头和 `block_binding`（用 API 默认行为）。默认 `drop_block`，且只在请求里真的带着 thinking 块时才发（每轮第一步和最终回答都不带）。**这是整个方案里唯一没法离线验证的假设**：beta 头与字段在文档里标明 stable，但没有真实调用验证，冒烟脚本第 4、5 步专门测它。
+1. **缓存：只在最后一个工具定义上放一个显式断点，不用顶层自动缓存。** FinBot 每一步都改写第一条 system（「已调用工具 N 次」）和尾部消息，自动缓存把断点放在最后一个块上，每次都按 1.25 倍价格写入、几乎读不到，比不缓存还贵。工具列表是唯一稳定的前缀，所以断点放在它上面。**system 段目前仍不缓存**：要让它也命中，需要把 `direct.py` 里的状态行挪到消息末尾，这会影响所有服务商，是另一项工作，这次不做。
+2. **thinking：默认 `strip`。** `FINBOT_ANTHROPIC_THINKING_BINDING` 取值 `strip`（默认）、`drop_block`、`off`。主循环每一步都会改写前缀（状态行、证据、裁剪旧批次），上一步的 thinking 块在下一步都过不了前缀检查，所以带回去也换不来推理延续，只多了体积；而 5.5 模型在没设 `prefix_mismatch_behavior` 时「可能 400」，所以不能用「不发控制项但仍带块」当回滚。`strip` 在 `convert_messages` 里去掉历史里所有 thinking / redacted_thinking 块，且默认不再把原始块存进 `_anthropic_content`，不依赖任何 beta，官方明确允许整体不带。`drop_block` 带块并附 beta 头 `thinking-binding-controls-2026-08-01`，失效块被服务端丢掉；`off` 带块但不附控制项（只用于冒烟里观察 API 的反应）。写错取值按 `strip` 处理并告警一次。响应里的 `input_transformations` 随 `data` 返回，`direct.py` 按类型计数记入 audit（`audit.input_transformations`）。
+3. **中途出现的 system 消息：指令性消息保留 system 权限。** 与原兼容接口一致：FinBot 自己的提示、状态、目录、nudge 等，在位置合法时（跟在 user 或 tool_result 之后，并且是最后一条或后面跟着 assistant）合并成一条 `role: "system"` 发出；位置不合法的（例如紧跟在 assistant 纯文本后面）才退回 user 文本。**证据载荷（`Accepted evidence DATA`、被省略数字的摘要、`Past conversation recalls`）是第三方文本，一律按 user 文本发送**，放进它前面那条 user 消息，保证 system 后面永远不是 user。识别靠消息开头的固定文字，有测试用 `direct.py` 真实生成的消息核对；这些文字改了要同步 `anthropic_native.DATA_MESSAGE_PREFIXES`。只有 5.5 三个模型发 `role: "system"`，其他模型一律 user 文本。
+4. **空 key 在入口拒绝。** `api_key` 为 None、空或只有空白时直接抛 `provider_invalid_key`，不构造客户端：SDK 对 None 会去读 `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、profile 文件。
+5. **SDK 延迟 import。** `anthropic_native` 顶层不 import SDK；开关 off 时完全不碰它，目录展示也不需要它。没装 SDK 而开关 on 时，请求失败码是 `provider_sdk_missing`（带中文提示）。测试用子进程在 SDK 不可 import 的环境里验证三个模块都能导入。
+6. **档位口径。** 和其他服务商一致：bot 选了档位就发；没选则取 `AGENT_REASONING_EFFORT`（默认 low，写 `default` 则不发）；`none` / `minimal` 映射成 `low`。最终回答（`stream_answer`）同样按环境默认发。只发模型支持的档位（以 Models API 为准）。
+7. **静态回退表只属于 5.5 三个模型。** Models API 读不到时，`claude-haiku-5-5`、`claude-sonnet-5-5`、`claude-opus-5-5`（及无型号时的目录默认视图）按五档 + adaptive；其他 claude 模型不发 adaptive 也不发 effort。
+8. **SDK 会自己读的环境变量。** 构造客户端和首次 import 期间屏蔽 `ANTHROPIC_CUSTOM_HEADERS`、`ANTHROPIC_LOG`（之后恢复）；`open_telemetry={"traces": False}` 让 SDK 不再读 `ANTHROPIC_OPEN_TELEMETRY*`。设了这些变量会告警一次（只写变量名）。若 SDK 已被别处先 import，`ANTHROPIC_LOG` 在那次 import 时已生效，盒上不要设。
+9. **错误翻译只包住发送和读流。** `translate()` 只用于流迭代和 `get_final_message()`；`build_request` / `convert_messages` 里 FinBot 自己的 bug 原样抛出，不会被当成服务商错误重试。
+10. **`refusal`**：错误码 `provider_refusal`，不重试；`category` 记入 audit（`audit.refusal.category`）；界面文案「模型拒绝回答」。
+11. **workspace 头**：运维开关 `FINBOT_ANTHROPIC_WORKSPACE_ID`（`wrkspc_…`，格式不对告警一次并忽略），不做成条目字段（要改目录、运行上下文和函数签名）。缺头的错误码 `provider_workspace_required`。
+
+## 盒上部署步骤（archive-swap 不装依赖，必须先装包）
+
+换包**之前**，在盒子的 venv 里：
+
+```bash
+pip install anthropic==2.12.0 docstring_parser==0.18.0
+python -c "import anthropic; print(anthropic.__version__)"   # 必须成功，输出 2.12.0
+```
+
+之后再换整树。顺序反了的后果：没装 SDK 时 anthropic 条目的请求会失败（`provider_sdk_missing`）；这时把 `FINBOT_ANTHROPIC_NATIVE=off` 写进 `.env` 并重启，就回到兼容接口，目录和其他服务商不受影响。三个新环境变量已写进 `.env.example`。
+
+## 冒烟
+
+owner 用自己的 key，对三个模型各跑一遍：`scripts/anthropic_native_smoke.py --model claude-haiku-5-5`（再换 `claude-sonnet-5-5`、`claude-opus-5-5`）。需要关注的输出：第 3 步第二次调用的 `cache_read_input_tokens`（system 相同、问题不同）；第 4、5a 步的 `input_transformations`（失效块是否被丢）；5b 的结果（`off` 下 API 是 400 还是放行，决定「带块但不设控制项」是否安全，默认已不用它）；5c 必须成功；第 6 步 low 与 max 的输出量和耗时是否有差别。
 
 ## 回滚
 
-- `FINBOT_ANTHROPIC_NATIVE=off`：`anthropic` 条目回到兼容接口（地址取 main 里 `PROVIDERS["anthropic"]`，即 `https://api.anthropic.com/v1/chat/completions`），行为同上一分支；目录里的档位随之显示为不支持。
+- `FINBOT_ANTHROPIC_NATIVE=off`：`anthropic` 条目回到兼容接口（地址取 main 里 `PROVIDERS["anthropic"]`，即 `https://api.anthropic.com/v1/chat/completions`），行为同上一分支；目录显示「不支持思考强度」。
 - 其他服务商的路径没有改动一个字节：测试对 openrouter、deepseek 在开关开/关两种状态下的请求体和请求头做了钉死对照。
 
-## 错误码
+## 遗留与后续（只记录，未改）
 
-沿用现有命名；新增两个：`provider_refusal`（附 `category`，界面提示「模型拒绝回答」）、`provider_workspace_required`。SDK 重试设为 0，超时与看门狗仍由 FinBot 现有逻辑负责。
-
-## 遗留
-
-- `ANTHROPIC_CUSTOM_HEADERS` 环境变量会被 SDK 读入默认请求头（`ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、profile 文件已被显式参数屏蔽，有测试）。盒上不设这个变量即可；如要彻底屏蔽，需包一层清环境变量。
-- 每步变化的状态行（上文第 2 点）阻碍缓存命中，是缓存收益的最大单项，建议单独做。
-- `tools` 为空但历史里有 `tool_use` 的请求在 Messages API 上是否被接受未核实；FinBot 的收尾回答不带 protocol，目前不会出现。
+- **system 段缓存**：要命中需把 `direct.py` 里的状态行挪到消息末尾（影响所有服务商）。做完后可在最后一条 leading system 上加第二个显式断点。
+- **direct.py 改为只追加**（状态写在末尾的 `role: "system"` 消息、不移动旧文本、不裁剪旧批次）之后，`drop_block` 才有意义，thinking 才能真正跨步延续；此前 `strip` 与 `drop_block` 对模型效果相同。
+- **材料分析通道**（`app/model_providers.py`）是独立的 OpenAI SDK 通道，anthropic 在那里仍走兼容接口并带 `temperature: 0`；设计说明里「所有调用方都只经过这两个函数」不含它。不在本次范围。
+- **`stream_answer`** 目前 app 里没有调用方使用，它的档位口径只有测试覆盖。
+- **`MODEL_EGRESS_PROXY`** 在原生通道上对所有请求生效；现有通道只对填了地址的条目生效。对 owner 现有的 custom 条目口径一致。
+- 环境变量格式告警在首次使用时发出一次，不是进程启动时。

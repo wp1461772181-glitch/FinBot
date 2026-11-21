@@ -62,7 +62,7 @@ def _sends(provider, tier):
     from app.agent_chat_provider import reasoning_options
     if provider == "anthropic":
         from app.anthropic_native import build_request, use_native
-        return use_native(provider) and "output_config" in build_request("m", [{"role": "user", "content": "q"}], [], effort=tier)[0]
+        return use_native(provider) and "output_config" in build_request("claude-haiku-5-5", [{"role": "user", "content": "q"}], [], effort=tier)[0]
     return bool(reasoning_options(provider, tier))
 
 

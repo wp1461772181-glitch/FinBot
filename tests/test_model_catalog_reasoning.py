@@ -130,7 +130,7 @@ def test_native_table_is_what_the_request_really_sends():
             if provider == "anthropic":
                 # Native Messages API (anthropic_native): the tier travels in output_config.effort, not in reasoning_options.
                 from app.anthropic_native import build_request
-                assert build_request("m", [{"role": "user", "content": "q"}], [], effort=tier)[0]["output_config"] == {"effort": tier}
+                assert build_request("claude-haiku-5-5", [{"role": "user", "content": "q"}], [], effort=tier)[0]["output_config"] == {"effort": tier}
                 continue
             assert reasoning_options(provider, tier) != {}, f"{provider} declares {tier} but the request drops it"
 

@@ -158,7 +158,7 @@ def test_tool_definitions_use_input_schema_and_keep_order():
 def test_request_shape_adaptive_thinking_cache_and_no_sampling_parameters():
     params, betas = native.build_request(MODEL, [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}], [TOOL], effort="high")
     assert params["thinking"] == {"type": "adaptive", "display": "summarized"}
-    assert params["output_config"] == {"effort": "high"} and params["cache_control"] == {"type": "ephemeral"}
+    assert params["output_config"] == {"effort": "high"}
     assert params["tool_choice"] == {"type": "auto"} and params["max_tokens"] == provider.MAX_OUTPUT_TOKENS and betas == []
     assert not {"temperature", "top_p", "top_k", "stream"} & set(params)
 
@@ -192,6 +192,7 @@ def test_a_plain_answer_has_the_openai_shape_and_usage_counts_the_cache(monkeypa
 
 
 def test_tool_calls_come_back_in_order_with_anthropic_ids_and_thinking_summary(monkeypatch):
+    monkeypatch.setenv("FINBOT_ANTHROPIC_THINKING_BINDING", "drop_block")
     serve(monkeypatch, stream_of([("thinking", "plan it", SIG), ("text", "checking"), ("tool", "toolu_a", "query_financials", '{"symbol": "AAPL"}'),
                                   ("tool", "toolu_b", "calculate", '{"expression": "1+1"}')], stop="tool_use"))
     data, message = decide(schemas=[TOOL])
@@ -388,6 +389,7 @@ def _first_step(monkeypatch):
 
 
 def test_the_second_request_carries_the_first_steps_thinking_block_unchanged(monkeypatch):
+    monkeypatch.setenv("FINBOT_ANTHROPIC_THINKING_BINDING", "drop_block")
     server, first = _first_step(monkeypatch)
     assistant = {"role": "assistant", **{k: v for k, v in first.items() if k in {"content", "tool_calls", "reasoning_content", "_anthropic_content"}}}
     decide([{"role": "system", "content": "rules"}, {"role": "user", "content": "q"}, assistant,
@@ -405,7 +407,7 @@ def test_the_second_request_carries_the_first_steps_thinking_block_unchanged(mon
     assert "anthropic-beta" not in server.posts[0].headers and "block_binding" not in server.body(0)["thinking"]
 
 
-def test_the_binding_control_can_be_turned_off(monkeypatch):
+def test_the_binding_control_can_be_turned_off_while_thinking_is_still_sent(monkeypatch):
     monkeypatch.setenv("FINBOT_ANTHROPIC_THINKING_BINDING", "off")
     server, first = _first_step(monkeypatch)
     assistant = {"role": "assistant", **{k: v for k, v in first.items() if k in {"content", "tool_calls", "_anthropic_content"}}}
@@ -414,14 +416,16 @@ def test_the_binding_control_can_be_turned_off(monkeypatch):
     assert server.body(1)["messages"][1]["content"][0]["type"] == "thinking"
 
 
-def test_raw_blocks_that_no_longer_match_the_calls_are_rebuilt_without_thinking():
+def test_raw_blocks_that_no_longer_match_the_calls_are_rebuilt_without_thinking(monkeypatch):
+    monkeypatch.setenv("FINBOT_ANTHROPIC_THINKING_BINDING", "drop_block")
     stale = {"role": "assistant", "content": "x", "tool_calls": [{"id": "new", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
              "_anthropic_content": [{"type": "thinking", "thinking": "t", "signature": SIG}, {"type": "tool_use", "id": "old", "name": "f", "input": {}}]}
-    _, messages = native.convert_messages([{"role": "user", "content": "q"}, stale, {"role": "tool", "tool_call_id": "new", "content": "r"}])
+    _, messages = native.convert_messages([{"role": "user", "content": "q"}, stale, {"role": "tool", "tool_call_id": "new", "content": "r"}], keep_thinking=True)
     assert [b["type"] for b in messages[1]["content"]] == ["text", "tool_use"] and messages[1]["content"][1]["id"] == "new"
 
 
-def test_the_tool_loop_keeps_the_raw_blocks_between_steps():
+def test_the_tool_loop_keeps_the_raw_blocks_between_steps(monkeypatch):
+    monkeypatch.setenv("FINBOT_ANTHROPIC_THINKING_BINDING", "drop_block")
     """FinBot's own loop (direct.py) copies the model's reply into its protocol through a field list; the raw blocks must survive it."""
     from test_sw1b_closing_complete import call, text
     from test_sw1d_toolcall_cap import fixture_executor, run_with_decider
@@ -441,7 +445,7 @@ def test_the_tool_loop_keeps_the_raw_blocks_between_steps():
     second_step = seen[1]
     assistant = [m for m in second_step if m.get("role") == "assistant" and m.get("tool_calls")]
     assert len(assistant) == 1 and assistant[0]["_anthropic_content"] == step["_anthropic_content"]
-    _, converted = native.convert_messages(second_step)
+    _, converted = native.convert_messages(second_step, keep_thinking=True)
     sent = [m for m in converted if m["role"] == "assistant"][0]
     assert sent["content"][0] == {"type": "thinking", "thinking": "plan it", "signature": SIG}
 
@@ -477,7 +481,7 @@ def test_environment_credentials_and_base_url_are_never_consulted(monkeypatch):
 
 def test_the_egress_proxy_goes_to_the_sdk_http_client(monkeypatch):
     seen = []
-    monkeypatch.setattr(native.anthropic, "DefaultAsyncHttpxClient", lambda **kw: seen.append(kw) or httpx2.AsyncClient())
+    monkeypatch.setattr(anthropic, "DefaultAsyncHttpxClient", lambda **kw: seen.append(kw) or httpx2.AsyncClient())
     native._http_client()
     assert seen[-1] == {"trust_env": False, "follow_redirects": False}
     monkeypatch.setenv("MODEL_EGRESS_PROXY", "http://proxy.internal:3128")
@@ -610,3 +614,278 @@ def test_anthropic_is_a_known_provider():
 def test_refusal_has_a_user_notice():
     from app.agent_chat_stream import _FAILURE_NOTICES
     assert "拒绝" in _FAILURE_NOTICES["provider_refusal"] and "FINBOT_ANTHROPIC_WORKSPACE_ID" in _FAILURE_NOTICES["provider_workspace_required"]
+
+
+# ==== acceptance rework (Opus review, 2026-11-21) ===========================================================================
+
+def test_caching_is_one_explicit_breakpoint_on_the_last_tool_and_never_automatic():
+    other = {"type": "function", "function": {"name": "calculate", "parameters": {}}}
+    params, _ = native.build_request(MODEL, [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}], [TOOL, other])
+    assert "cache_control" not in params                                  # an automatic breakpoint would only ever write, never read
+    assert params["tools"][-1]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in params["tools"][0]
+    assert "cache_control" not in json.dumps(native.build_request(MODEL, [{"role": "user", "content": "q"}], [])[0])
+
+
+def test_thinking_is_stripped_from_the_history_by_default_and_nothing_is_stored(monkeypatch):
+    server = serve(monkeypatch, stream_of([("thinking", "plan it", SIG), ("text", "looking"), ("tool", "toolu_a", "query_financials", '{"symbol": "AAPL"}')], stop="tool_use"),
+                   stream_of([("text", "done")]))
+    _, first = decide([{"role": "user", "content": "q"}], schemas=[TOOL])
+    assert "_anthropic_content" not in first and first["reasoning_content"] == "plan it"
+    stored = {"role": "assistant", "content": "looking", "tool_calls": first["tool_calls"],
+              "_anthropic_content": [{"type": "thinking", "thinking": "plan it", "signature": SIG}, {"type": "redacted_thinking", "data": "x"},
+                                     {"type": "text", "text": "looking"}, {"type": "tool_use", "id": "toolu_a", "name": "query_financials", "input": {"symbol": "AAPL"}}]}
+    decide([{"role": "user", "content": "q"}, stored, {"role": "tool", "tool_call_id": "toolu_a", "content": "{}"}], schemas=[TOOL])
+    second = server.body(1)
+    assert [b["type"] for b in second["messages"][1]["content"]] == ["text", "tool_use"]
+    assert "block_binding" not in second["thinking"] and "anthropic-beta" not in server.posts[1].headers
+    assert "plan it" not in json.dumps(second) and SIG not in json.dumps(second)
+
+
+def test_the_binding_value_is_validated_and_a_typo_means_strip(monkeypatch, caplog):
+    native._warned.clear()
+    monkeypatch.setenv("FINBOT_ANTHROPIC_THINKING_BINDING", "drop-block")
+    with caplog.at_level(logging.WARNING, logger="app.anthropic_native"):
+        assert native.binding_mode() == "strip" and native.binding_mode() == "strip"
+    assert sum("FINBOT_ANTHROPIC_THINKING_BINDING" in r.getMessage() for r in caplog.records) == 1     # once
+    for value, expected in [("strip", "strip"), ("drop_block", "drop_block"), ("OFF", "off"), ("", "strip")]:
+        monkeypatch.setenv("FINBOT_ANTHROPIC_THINKING_BINDING", value)
+        assert native.binding_mode() == expected
+
+
+def test_the_apis_report_of_dropped_thinking_is_returned_and_counted_in_the_audit(monkeypatch):
+    monkeypatch.setenv("FINBOT_ANTHROPIC_THINKING_BINDING", "drop_block")
+    report = [{"type": "thinking_dropped", "path": "messages.1.content.0", "reason": "prefix_binding_mismatch"},
+              {"type": "thinking_mismatch_allowed", "path": "messages.1.content.1", "reason": "prefix_binding_mismatch"}]
+    body = stream_of([("text", "ok")]).replace(b'"stop_sequence": null}, "usage"', b'"stop_sequence": null}, "input_transformations": %s, "usage"' % json.dumps(report).encode())
+    server = serve(monkeypatch, stream_of([("thinking", "t", SIG), ("tool", "toolu_a", "query_financials", '{"symbol": "AAPL"}')], stop="tool_use"), body)
+    _, first = decide([{"role": "user", "content": "q"}], schemas=[TOOL])
+    assistant = {"role": "assistant", **{k: v for k, v in first.items() if k in {"content", "tool_calls", "_anthropic_content"}}}
+    data, _ = decide([{"role": "user", "content": "q"}, assistant, {"role": "tool", "tool_call_id": "toolu_a", "content": "{}"}], schemas=[TOOL])
+    assert "thinking-binding-controls-2026-08-01" in server.posts[1].headers["anthropic-beta"]    # only a request that sends thinking back is a beta request
+    assert [(t["type"], t["path"]) for t in data["input_transformations"]] == [("thinking_dropped", "messages.1.content.0"), ("thinking_mismatch_allowed", "messages.1.content.1")]
+    # direct.py counts them by kind in the turn's audit
+    import asyncio as aio
+    from test_sw1d_toolcall_cap import make_turn
+    from app.agent_workflow import direct
+
+    async def stub(*args, **kwargs):
+        return data, {"role": "assistant", "content": "ok"}
+    monkeypatch.setattr(direct, "decision_request", stub)
+    turn = make_turn()
+    aio.run(turn.model([{"role": "user", "content": "q"}], []))
+    assert turn.audit["input_transformations"] == {"thinking_dropped": 1, "thinking_mismatch_allowed": 1}
+
+
+def test_a_refusal_category_goes_into_the_audit_and_is_not_retried(monkeypatch):
+    import asyncio as aio
+    from test_sw1d_toolcall_cap import make_turn
+    from app.agent_workflow import direct
+    attempts = []
+
+    async def stub(*args, **kwargs):
+        attempts.append(1)
+        raise native.ProviderRefusal(stage="classification", category="cyber")
+    monkeypatch.setattr(direct, "decision_request", stub)
+    turn = make_turn()
+    with pytest.raises(HTTPException) as error:
+        aio.run(turn.model([{"role": "user", "content": "q"}], []))
+    assert error.value.detail == "provider_refusal" and len(attempts) == 1 and turn.audit["refusal"] == {"category": "cyber"}
+
+
+# ---- system messages inside the conversation --------------------------------------------------------------------------------
+
+CALL = lambda i: {"id": i, "type": "function", "function": {"name": "f", "arguments": "{}"}}
+
+
+def _legal(messages):
+    """The API's placement rules for a role "system" entry: never first, right after a user turn, followed by an assistant turn or nothing."""
+    for i, m in enumerate(messages):
+        if m["role"] == "system":
+            assert i > 0 and messages[i - 1]["role"] == "user", messages
+            assert i == len(messages) - 1 or messages[i + 1]["role"] == "assistant", messages
+    assert messages[0]["role"] == "user"
+
+
+LOOP = [{"role": "system", "content": "rules"}, {"role": "user", "content": "question"}, {"role": "system", "content": "understanding hint"},
+        {"role": "assistant", "content": "", "tool_calls": [CALL("t1")]}, {"role": "tool", "tool_call_id": "t1", "content": "{\"ok\": 1}"},
+        {"role": "system", "content": "Accepted evidence DATA (recent sources): [{\"x\": 1}]"},
+        {"role": "system", "content": "Tool statuses and validation errors: []"}, {"role": "system", "content": "Server result catalogue: []"}]
+
+
+def test_instruction_messages_keep_system_authority_where_the_api_accepts_one_and_evidence_is_user_text():
+    system, messages = native.convert_messages(LOOP, system_role=True)
+    _legal(messages)
+    assert system == [{"type": "text", "text": "rules"}]
+    assert [m["role"] for m in messages] == ["user", "system", "assistant", "user", "system"]
+    assert messages[1]["content"] == "understanding hint"
+    assert messages[3]["content"][0]["type"] == "tool_result"
+    assert messages[3]["content"][1] == {"type": "text", "text": "Accepted evidence DATA (recent sources): [{\"x\": 1}]"}   # third-party text stays user text
+    assert messages[4]["content"] == "Tool statuses and validation errors: []\n\nServer result catalogue: []"             # merged into one
+
+
+def test_a_model_without_mid_conversation_system_support_gets_every_note_as_user_text():
+    _, messages = native.convert_messages(LOOP, system_role=False)
+    assert all(m["role"] != "system" for m in messages)
+    assert [b["text"] for b in messages[-1]["content"] if b["type"] == "text"][-2:] == ["Tool statuses and validation errors: []", "Server result catalogue: []"]
+
+
+def test_a_note_in_an_illegal_place_falls_back_to_user_text():
+    messages_in = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "plain answer"}, {"role": "system", "content": "nudge: use a tool"}]
+    _, messages = native.convert_messages(messages_in, system_role=True)
+    _legal(messages)
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"] and messages[2]["content"] == [{"type": "text", "text": "nudge: use a tool"}]
+    # evidence that arrives while a note is waiting is added to the user turn before it, so the note is never followed by a user turn
+    _, messages = native.convert_messages([{"role": "user", "content": "q"}, {"role": "system", "content": "note"},
+                                          {"role": "system", "content": "Past conversation recalls (memory): []"}, {"role": "user", "content": "more"}], system_role=True)
+    _legal(messages)
+    assert [m["role"] for m in messages] == ["user", "system"] and [b["text"] for b in messages[0]["content"]] == ["q", "Past conversation recalls (memory): []", "more"]
+
+
+def test_unanswered_calls_with_notes_stay_legal():
+    _, messages = native.convert_messages([{"role": "user", "content": "q"}, {"role": "assistant", "content": "", "tool_calls": [CALL("a")]}, {"role": "system", "content": "note"}], system_role=True)
+    _legal(messages)
+    assert messages[-1]["role"] == "user" or messages[-1]["role"] == "system"
+
+
+def test_real_finbot_messages_are_classified_the_way_the_conversion_assumes():
+    from test_sw1d_toolcall_cap import make_turn
+    from app.agent_workflow import direct
+    turn = make_turn()
+    turn.recalls = []
+    assert native.is_data_message(turn.evidence_parts([])[0]) and native.is_data_message(turn.recall_payload())
+    assert native.is_data_message(direct.OMITTED_DIGEST_HEAD + "\n[1] x")
+    assert not native.is_data_message(turn.status_payload()) and not native.is_data_message(turn.catalogue_payload())
+    assert not native.is_data_message(direct.UNDERSTANDING_NOTE)
+
+
+def test_the_request_sends_a_system_role_only_to_the_models_that_take_one(monkeypatch):
+    params, _ = native.build_request(MODEL, LOOP, [TOOL])
+    assert [m["role"] for m in params["messages"]] == ["user", "system", "assistant", "user", "system"]
+    params, _ = native.build_request("claude-haiku-4-5", LOOP, [TOOL], caps={"adaptive": False, "efforts": ()})
+    assert all(m["role"] != "system" for m in params["messages"])
+
+
+def test_the_real_sdk_accepts_and_sends_the_system_role_entries(monkeypatch):
+    server = serve(monkeypatch, stream_of([("text", "ok")]))
+    decide(LOOP, schemas=[TOOL])
+    assert [m["role"] for m in server.body(0)["messages"]] == ["user", "system", "assistant", "user", "system"]
+
+
+# ---- the key ------------------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("key", [None, "", "   ", "\n"])
+def test_an_empty_key_is_refused_before_the_sdk_can_read_the_environment(monkeypatch, key):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-ENV-must-never-be-used")
+    server = serve(monkeypatch, stream_of([("text", "x")]), stream_of([("text", "x")]))
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(provider.decision_request("anthropic", MODEL, key, [{"role": "user", "content": "q"}], [], None, None))
+    assert error.value.detail == "provider_invalid_key" and error.value.status_code == 502
+    with pytest.raises(HTTPException) as error:
+        async def run():
+            return [p async for p in provider.stream_answer("anthropic", MODEL, key, [{"role": "user", "content": "q"}], None)]
+        asyncio.run(run())
+    assert error.value.detail == "provider_invalid_key"
+    assert server.requests == []
+    with pytest.raises(HTTPException):
+        native.make_client(key)
+
+
+# ---- the SDK is optional until it is used --------------------------------------------------------------------------------------
+
+def test_the_modules_import_without_the_sdk_installed():
+    import subprocess, sys
+    from pathlib import Path
+    code = ("import sys; sys.modules['anthropic'] = None; sys.modules['httpx2'] = None\n"
+            "import app.anthropic_native as n, app.agent_chat_provider, app.agent_model_catalog as c\n"
+            "assert 'anthropic' not in vars(n) and n.display_efforts('claude-haiku-5-5') == n.STATIC_EFFORTS\n"
+            "assert c._reasoning_fields({'provider': 'anthropic', 'model': 'claude-haiku-5-5'})['reasoning_supported'] is True\n"
+            "print('ok')")
+    result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parent.parent, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0 and result.stdout.strip().endswith("ok"), result.stderr[-800:]
+
+
+def test_without_the_sdk_off_still_reaches_anthropic_and_on_says_what_is_missing(monkeypatch):
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", None)
+    with pytest.raises(HTTPException) as error:
+        decide()
+    assert error.value.status_code == 502 and error.value.detail == "provider_sdk_missing"
+    monkeypatch.setenv("FINBOT_ANTHROPIC_NATIVE", "off")
+    sent = []
+
+    async def handler(request):
+        sent.append(request)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=b'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+    original = httpx.AsyncClient
+    monkeypatch.setattr(provider.httpx, "AsyncClient", lambda **kw: original(**{**kw, "transport": httpx.MockTransport(handler)}))
+    _, message = decide()
+    assert message["content"] == "hi" and str(sent[0].url) == "https://api.anthropic.com/v1/chat/completions"
+    from app.agent_model_catalog import _reasoning_fields
+    assert _reasoning_fields({"provider": "anthropic", "model": MODEL}) == {"reasoning_supported": False}
+
+
+# ---- what the SDK would read from the environment -----------------------------------------------------------------------------------
+
+def test_custom_headers_and_tracing_settings_in_the_environment_do_not_reach_the_request(monkeypatch, caplog):
+    native._warned.clear()
+    monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS", "anthropic-beta: evil-beta\nx-evil: 1")
+    monkeypatch.setenv("ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE", "content")
+    server = serve(monkeypatch, stream_of([("text", "ok")]), stream_of([("text", "ok")]))
+    with caplog.at_level(logging.WARNING, logger="app.anthropic_native"):
+        decide()
+        decide()
+    headers = server.posts[0].headers
+    assert "x-evil" not in headers and "evil-beta" not in headers.get("anthropic-beta", "")
+    assert "x-evil" not in server.requests[0].headers                       # not on the capabilities read either
+    warnings = [r.getMessage() for r in caplog.records if "ignored for provider anthropic" in r.getMessage()]
+    assert len(warnings) == 1 and "ANTHROPIC_CUSTOM_HEADERS" in warnings[0] and "evil" not in warnings[0]
+    import os
+    assert os.environ["ANTHROPIC_CUSTOM_HEADERS"].startswith("anthropic-beta")   # restored for whoever else reads it
+
+
+def test_a_malformed_workspace_id_is_reported_once_and_ignored(monkeypatch, caplog):
+    native._warned.clear()
+    monkeypatch.setenv("FINBOT_ANTHROPIC_WORKSPACE_ID", "workspace-123")
+    with caplog.at_level(logging.WARNING, logger="app.anthropic_native"):
+        assert native.workspace_id() is None and native.workspace_id() is None
+    assert sum("FINBOT_ANTHROPIC_WORKSPACE_ID" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_a_bug_in_building_the_request_is_not_reported_as_a_provider_failure(monkeypatch):
+    serve(monkeypatch, stream_of([("text", "x")]))
+    monkeypatch.setattr(native, "convert_messages", lambda *a, **k: (_ for _ in ()).throw(ValueError("our bug")))
+    with pytest.raises(ValueError, match="our bug"):
+        decide()
+
+
+# ---- effort follows the environment default like every other provider ----------------------------------------------------------------
+
+@pytest.mark.parametrize("effort,expected", [(None, "low"), ("none", "low"), ("minimal", "low"), ("low", "low"), ("medium", "medium"), ("xhigh", "xhigh"), ("max", "max")])
+def test_background_calls_and_legacy_tiers_send_low_and_a_chosen_tier_is_sent_as_it_is(monkeypatch, effort, expected):
+    server = serve(monkeypatch, stream_of([("text", "x")]))
+    decide(effort=effort)
+    assert server.body(0)["output_config"] == {"effort": expected}
+
+
+def test_the_environment_can_say_default_and_then_nothing_is_sent_unless_the_bot_chose(monkeypatch):
+    monkeypatch.setattr(provider, "REASONING_EFFORT", "default")
+    server = serve(monkeypatch, stream_of([("text", "a")]), stream_of([("text", "b")]), stream_of([("text", "c")]))
+    decide()
+    assert "output_config" not in server.body(0)
+    decide(effort="high")
+    assert server.body(1)["output_config"] == {"effort": "high"}
+    answer()
+    assert "output_config" not in server.body(2)
+
+
+def test_the_final_answer_carries_the_default_tier(monkeypatch):
+    server = serve(monkeypatch, stream_of([("text", "x")]))
+    answer()
+    assert server.body(0)["output_config"] == {"effort": "low"}
+
+
+def test_a_model_outside_the_55_family_is_not_assumed_to_take_thinking_or_effort(monkeypatch):
+    server = serve(monkeypatch, stream_of([("text", "x")], model="claude-haiku-4-5"), models=None)
+    decide(effort="high", model="claude-haiku-4-5")
+    body = server.body(0)
+    assert "thinking" not in body and "output_config" not in body
+    assert native.efforts_for("claude-haiku-4-5") == () and native.efforts_for(MODEL) == native.STATIC_EFFORTS and native.efforts_for(None) == native.STATIC_EFFORTS
