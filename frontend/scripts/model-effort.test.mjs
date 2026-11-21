@@ -303,7 +303,10 @@ test("the selector keeps its behaviour: the server default row, 缺 key, the mod
   // Nothing is disabled for being unsupported; only a save in flight holds the choices (aria-disabled keeps the focus where it is).
   assert.doesNotMatch(panel, /disabled=\{[^}]*unsupported/);
   // The strength row's keys never reach the list's cmdk (an arrow or Enter there would pick a model).
-  assert.match(panel, /onKeyDown=\{\(event\) => event\.stopPropagation\(\)\}/);
+  // Tab is let through, so the dialog's focus trap can wrap it back to the search box.
+  assert.match(panel, /onKeyDown=\{\(event\) => \{ if \(event\.key !== "Tab"\) event\.stopPropagation\(\); \}\}/);
+  // Every opening starts the list's highlight on the current model (the panel stays mounted between openings).
+  assert.match(panel, /useEffect\(\(\) => \{ if \(props\.open\) setHighlight\(props\.shown\.model \?\? DEFAULT_VALUE\); \}, \[props\.open, props\.shown\.model\]\)/);
   // Wide screen: the Model Selector dialog; narrow: a drawer.  Both carry a title for a screen reader.
   assert.match(panel, /<ModelSelectorContent title=\{title\}/);
   assert.match(panel, /<DrawerTitle className="sr-only">/);

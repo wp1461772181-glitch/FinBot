@@ -2218,6 +2218,21 @@ async function chatModelPicker(ctx) {
     assert(bot().reasoning_effort === "xhigh", `the effort saved is ${bot().reasoning_effort}`);
     const text = await badge.innerText();
     assert(/Muse Ember/.test(text) && text.includes("极高"), `the badge says ${JSON.stringify(text)}`);
+    // Reopening starts the highlight on the current model, not on the row hovered last time; Tab from the strength row wraps
+    // back to the search box (the dialog's focus trap still sees it).
+    await badge.click();
+    await picker.waitFor({ timeout: 10000 });
+    await picker.locator("[cmdk-item][data-value=\"haiku-5.5\"]").hover();
+    await page.keyboard.press("Escape");
+    await picker.waitFor({ state: "detached", timeout: 5000 });
+    await badge.click();
+    await picker.waitFor({ timeout: 10000 });
+    await until(async () => (await picker.locator("[cmdk-item][data-selected=true]").getAttribute("data-value")) === "muse-ember", "reopening did not start the highlight on the current model");
+    await picker.getByRole("radio", { checked: true }).focus();
+    await page.keyboard.press("Tab");
+    assert(await picker.locator("input").evaluate((el) => el === document.activeElement), "Tab from the strength row did not wrap back to the search box");
+    await page.keyboard.press("Escape");
+    await picker.waitFor({ state: "detached", timeout: 5000 });
     // A refused save keeps the panel open, says why, and leaves the badge and the record alone.
     mock.control.fail = (method) => (method === "PATCH" ? 500 : 0);
     await badge.click();

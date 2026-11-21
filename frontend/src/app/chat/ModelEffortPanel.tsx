@@ -35,6 +35,9 @@ export default function ModelEffortPanel(props: PanelProps) {
   const { t } = useLocale();
   const phone = useMatchMedia(PHONE_QUERY);
   const [highlight, setHighlight] = useState(props.shown.model ?? DEFAULT_VALUE);
+  // The panel stays mounted between openings (and across a switch of bot): every opening starts on the current model, never on
+  // the row last hovered, so Enter right away re-picks what is shown instead of saving a stale row.
+  useEffect(() => { if (props.open) setHighlight(props.shown.model ?? DEFAULT_VALUE); }, [props.open, props.shown.model]);
   const commandProps = { value: highlight, onValueChange: setHighlight, className: "bg-transparent rounded-[inherit]" };
   const title = t("模型与推理强度");
   const onCloseAutoFocus = (event: Event) => { event.preventDefault(); props.returnFocus(); };
@@ -134,7 +137,9 @@ function EffortControl({ shown, entry, busy, onChoose }: { shown: Bot; entry: Ca
     refs.current[to]?.focus();
   }
 
-  return <div className="border-t border-line px-3 pb-3 pt-2.5" onKeyDown={(event) => event.stopPropagation()}>
+  // The strength row's keys stay out of the model list (cmdk would move its highlight), but Tab goes on: the dialog's focus trap
+  // wraps it from here, the last tabbable stop, back to the search box.
+  return <div className="border-t border-line px-3 pb-3 pt-2.5" onKeyDown={(event) => { if (event.key !== "Tab") event.stopPropagation(); }}>
     <div className="flex items-baseline justify-between gap-3 px-1 pb-1.5">
       <span id="effort-label" className="shrink-0 text-caption font-medium text-faint">{t("推理强度")}</span>
       <span aria-live="polite" className={cn("min-w-0 truncate text-caption", current?.unsupported ? "text-action" : "text-muted-foreground")}>
