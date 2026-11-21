@@ -21,6 +21,7 @@ import json
 import os
 from pathlib import Path
 import re
+import threading
 import time
 from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
@@ -1199,6 +1200,72 @@ def _news_query_terms(query: str | None) -> list[str]:
     return list(dict.fromkeys(terms))
 
 
+# FINBOT_NEWS_REFRESH_BOUND: the refresh before a search may not hold the answer hostage.  poll_once walks every enabled source one
+# after another (each up to its own timeout, plus alternates), which on a poor network is minutes.  It now runs in a worker thread
+# the search waits on for a bounded time; a slow run keeps going in the background and still saves what it fetches.  One refresh at
+# a time: the module-level per-source state is not safe for two.
+_REFRESH_LOCK = threading.Lock()
+
+
+def _refresh_timeout_seconds() -> float:
+    try:
+        return max(1.0, float(os.environ.get("FINBOT_NEWS_REFRESH_TIMEOUT_SECONDS") or 15))
+    except ValueError:
+        return 15.0
+
+
+def _latest_fetched_at(source_ids: list[str]) -> str | None:
+    try:
+        with SessionLocal() as db:
+            latest = db.scalar(select(NewsItem.fetched_at).where(NewsItem.source_id.in_(source_ids)).order_by(desc(NewsItem.fetched_at)).limit(1))
+    except Exception:
+        return None
+    if isinstance(latest, datetime):
+        return (latest if latest.tzinfo else latest.replace(tzinfo=UTC)).isoformat()
+    return None
+
+
+def _bounded_refresh(source_ids: list[str], custom_path: str | Path | None) -> tuple[bool, str | None]:
+    """Run poll_once for at most the time limit.  Returns (refreshed, note); a note means the search goes on with the stored news."""
+    if not _REFRESH_LOCK.acquire(blocking=False):
+        return False, "refresh_in_progress"
+    box: dict[str, Any] = {}
+
+    def _work() -> None:
+        try:
+            box["res"] = poll_once(source_ids, force=False, custom_path=custom_path)
+        except Exception as exc:
+            box["exc"] = exc
+        finally:
+            _REFRESH_LOCK.release()
+
+    try:
+        worker = threading.Thread(target=_work, name="news-refresh", daemon=True)
+        worker.start()
+    except Exception:
+        _REFRESH_LOCK.release()
+        return False, "refresh_failed"
+    worker.join(_refresh_timeout_seconds())
+    if worker.is_alive():
+        return False, "refresh_timed_out"
+    if "exc" in box:
+        return False, "refresh_failed"
+    res = box.get("res") or {}
+    polled = bool(res.get("polled_sources"))
+    return polled, ("refresh_failed" if not polled and res.get("errors") else None)
+
+
+def background_refresh(custom_path: str | Path | None = None) -> dict[str, Any]:
+    """One poll of every enabled source for the background loop (app/background.py).  Shares the refresh lock with the search's
+    own refresh, so a poll already under way is not doubled: it is reported as skipped."""
+    if not _REFRESH_LOCK.acquire(blocking=False):
+        return {"ok": True, "skipped": "refresh_in_progress", "polled_sources": [], "saved_count": 0, "errors": {}}
+    try:
+        return poll_once(None, force=False, custom_path=custom_path)
+    finally:
+        _REFRESH_LOCK.release()
+
+
 def search_configured_news(
     query: str | None = None,
     tickers: list[str] | None = None,
@@ -1227,9 +1294,13 @@ def search_configured_news(
 
     bounded_limit = max(1, min(30, int(limit or 10)))
     refreshed = False
+    refresh_note: str | None = None
     if refresh_first and searched_sources:
-        poll_res = poll_once(searched_sources, force=False, custom_path=custom_path)
-        refreshed = bool(poll_res.get("polled_sources"))
+        if flag("FINBOT_NEWS_REFRESH_BOUND", True):
+            refreshed, refresh_note = _bounded_refresh(searched_sources, custom_path)
+        else:
+            poll_res = poll_once(searched_sources, force=False, custom_path=custom_path)
+            refreshed = bool(poll_res.get("polled_sources"))
 
     if not searched_sources:
         return {
@@ -1364,6 +1435,11 @@ def search_configured_news(
     }
     # meta is for the log: when a result has accepted rows, the turn hands the model only the rows (data), so the model-facing
     # form of these two facts is the row's own ``match`` / ``matched_terms``, which the tool description explains.
+    if refresh_note:
+        # FINBOT_NEWS_REFRESH_BOUND: the refresh did not finish; the search ran on what the library already holds.  The note and the
+        # newest fetch time are the model's to weigh (the tool description says what they mean).
+        meta["refresh_note"] = refresh_note
+        meta["latest_fetched_at"] = _latest_fetched_at(searched_sources)
     if no_term_matched:
         meta["no_term_matched"] = True
         meta["hint"] = "fallback_to_web_search_recommended"

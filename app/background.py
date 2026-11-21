@@ -14,6 +14,7 @@ import os
 log = logging.getLogger(__name__)
 ROUTINE_SECONDS = 300
 HOURLY_SECONDS = 3600
+NEWS_SECONDS = 900         # configured news sources; until this loop the library was only refreshed while a chat turn waited on it
 EARNINGS_SECONDS = 60      # picks up events the response-time task missed, due follow-ups, and anything left over from a restart
 
 
@@ -60,11 +61,25 @@ def run_earnings_monitor() -> None:
         log.info("earnings monitor: %s", done)
 
 
+def run_news_poll() -> None:
+    """FINBOT_NEWS_BACKGROUND_POLL (default on): keep the configured-news library current so a search rarely needs its own refresh."""
+    from .agent_workflow.fp_flags import flag
+
+    if not flag("FINBOT_NEWS_BACKGROUND_POLL", True):
+        return
+    from .fin_news_engine import background_refresh
+
+    done = background_refresh()
+    log.info("news poll: polled=%s saved=%s failed=%s skipped=%s", len(done.get("polled_sources") or []), done.get("saved_count"),
+             sorted(done.get("errors") or {}), done.get("skipped"))
+
+
 LOOPS = (
     ("routine-tasks", ROUTINE_SECONDS, run_routine_tasks),
     ("sec-monitor", HOURLY_SECONDS, run_sec_monitor),
     ("market-refresh", HOURLY_SECONDS, run_market_refresh),
     ("earnings-monitor", EARNINGS_SECONDS, run_earnings_monitor),
+    ("news-poll", NEWS_SECONDS, run_news_poll),
 )
 
 

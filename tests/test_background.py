@@ -30,4 +30,31 @@ def test_enabled_flag(monkeypatch):
 
 
 def test_default_intervals():
-    assert {n: i for n, i, _ in background.LOOPS} == {"routine-tasks": 300, "sec-monitor": 3600, "market-refresh": 3600, "earnings-monitor": 60}
+    assert {n: i for n, i, _ in background.LOOPS} == {"routine-tasks": 300, "sec-monitor": 3600, "market-refresh": 3600, "earnings-monitor": 60,
+                                                         "news-poll": 900}
+
+
+def test_news_poll_runs_one_refresh_and_the_switch_turns_it_off(monkeypatch):
+    from app import fin_news_engine as news
+    calls = []
+    monkeypatch.setattr(news, "background_refresh", lambda: calls.append(1) or {"polled_sources": ["a"], "saved_count": 3, "errors": {}})
+    monkeypatch.setenv("FINBOT_NEWS_BACKGROUND_POLL", "off")
+    background.run_news_poll()
+    assert calls == []
+    monkeypatch.setenv("FINBOT_NEWS_BACKGROUND_POLL", "on")
+    background.run_news_poll()
+    assert calls == [1]
+
+
+def test_background_refresh_is_skipped_while_another_refresh_runs(monkeypatch):
+    from app import fin_news_engine as news
+    polled = []
+    monkeypatch.setattr(news, "poll_once", lambda *a, **k: polled.append(1) or {"ok": True, "polled_sources": ["a"], "saved_count": 1, "errors": {}})
+    assert news._REFRESH_LOCK.acquire(blocking=False)
+    try:
+        assert news.background_refresh()["skipped"] == "refresh_in_progress" and polled == []
+    finally:
+        news._REFRESH_LOCK.release()
+    assert news.background_refresh()["polled_sources"] == ["a"] and polled == [1]
+    assert news._REFRESH_LOCK.acquire(blocking=False)
+    news._REFRESH_LOCK.release()

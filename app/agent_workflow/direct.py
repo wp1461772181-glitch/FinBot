@@ -2692,7 +2692,9 @@ class Turn:
             if isinstance(whole,str) and isinstance(excerpt,str):self.note_truncation(name+'.excerpt',len(whole),len(excerpt))
         rows=number_rows(name,accepted,self.citations,requirements)
         if name=='query_financials':self.note_figures(rows)
-        self.last_accepted={'ok':True,'data':rows,'source':outcome.get('source'),**({'coverage':coverage} if coverage is not None else {})}
+        # FINBOT_NEWS_REFRESH_BOUND: a refresh that did not finish is said to the model beside the rows (the other meta stays in the log).
+        refresh={k:v for k,v in (outcome.get('meta') or {}).items() if k in {'refresh_note','latest_fetched_at'}} if name=='search_configured_news' and isinstance(outcome.get('meta'),dict) and outcome['meta'].get('refresh_note') else None
+        self.last_accepted={'ok':True,'data':rows,'source':outcome.get('source'),**({'coverage':coverage} if coverage is not None else {}),**({'refresh':{'refreshed':False,**refresh}} if refresh else {})}
         self.observations.append({'name':name,'arguments':args,'result':self.last_accepted,'accepted_evidence':True})
         saved={'id':uuid.uuid4().hex,'owner':self.context.owner_hash,'conversation':self.context.conversation_id,
             'rows':accepted,'scope':{k:v for k,v in requirements.items() if v is not None},'tool':name,'created_at':datetime.now(UTC).isoformat()}

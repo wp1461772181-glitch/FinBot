@@ -380,8 +380,15 @@ PH2_WEB_NOTE=(' A page marked published_at_status:"unknown" has no readable publ
     ' yourself, say in the answer that its publication time is unknown, and never present it as the latest news. outside_inferred_window:true'
     ' means the page is dated outside a window that was only guessed from the query words, not one the user asked for.')
 
+# FINBOT_NEWS_REFRESH_BOUND: what the refresh marks in the result mean.  Added only while the switch is on.
+NEWS_REFRESH_NOTE=(' With refresh_first the refresh waits only briefly; a refresh.refresh_note (or meta.refresh_note) of refresh_timed_out, refresh_in_progress or refresh_failed means it did not'
+    ' finish and the items come from news already stored, whose newest fetch time is latest_fetched_at beside it: judge the freshness yourself and tell the user when it matters.')
+
 def _ph2_description(name,description):
-    if name=='search_configured_news' and flag('FINBOT_PH2_NEWS_RANK',True):return description+PH2_NEWS_NOTE
+    if name=='search_configured_news':
+        if flag('FINBOT_NEWS_REFRESH_BOUND',True):description+=NEWS_REFRESH_NOTE
+        if flag('FINBOT_PH2_NEWS_RANK',True):description+=PH2_NEWS_NOTE
+        return description
     if name=='web_research' and flag('FINBOT_PH2_WEB_DATE_SOFT',True):return description+PH2_WEB_NOTE
     return description
 
