@@ -158,6 +158,12 @@ class Reference(BaseModel):
     history_citations:list[HistoryCitationRef]=Field(default_factory=list,max_length=6,description='References to allowlisted sources in earlier answers, selected from citation_catalogue.')
     clarification_answers:list[Annotated[int,Field(ge=1,le=50)]]=Field(default_factory=list,max_length=8,description='Only for clarifying an earlier citation: select the candidate answers_back positions from citation_catalogue. Include the answer holding the requested source. The server renders their exact openings. Do not bind history_citations while clarifying.')
 
+CARRY_FLAG='FINBOT_FOLLOWUP_SOURCE_CARRY'
+class ReferenceCarry(Reference):
+    """Reference plus builds_on_answers; the one the resolver is given and validated against while FINBOT_FOLLOWUP_SOURCE_CARRY is on."""
+    model_config=ConfigDict(extra='forbid',title='Reference')
+    builds_on_answers:list[Annotated[int,Field(ge=1,le=50)]]=Field(default_factory=list,max_length=3,description='Positions (answers_back, as listed in citation_catalogue) of the earlier answers whose reported content this request continues: evaluating, explaining, comparing or extending what those answers already reported. Only answers_back values listed in citation_catalogue. Leave empty when the request turns to another company, period or topic that needs new evidence, and when relationship=clarify.')
+
 from ..agent_system_prompt import INSTRUCTION,SELF_STATE_SENTENCE,disclosure_note
 CLASSIFY_PROMPT=('Return classify_request. Decide by what the request needs, in this order:\n'
     'D — the user wants this product to do something: a write (import, save, fetch, scan, index, analyse, forecast, replay, revise, withdraw, initialise, translate, review, queue change), reading or changing system state such as the research queue, task status or a workspace page, an explicit request to search the public web, or a question about how to use this product.\n'
@@ -296,6 +302,7 @@ def v2_gate_text(answer,ordinals):
 def schema(name,description,model):return [{'type':'function','function':{'name':name,'description':description,'parameters':model.model_json_schema()}}]
 ROUTE_SCHEMA=schema('classify_request','Classify only: A evidence, B timeless finance/company explanation, C clearly unrelated to money and this product (when in doubt, A), D system action or compound workflow. Do not generate an answer. Include grounded structured retrieval fields for A. No planner.',Routing)
 REFERENCE_SCHEMA=schema('resolve_reference','Resolve USER references and return one self-contained canonical_question with the user\'s time made explicit. Earlier citation sources use history_citations, or clarification_answers for ambiguity; citation ordinals are not assistant-item positions. For other previous assistant items copy the exact item name and provide a referent. Never invent objects, IDs or operations.',Reference)
+REFERENCE_SCHEMA_CARRY=schema('resolve_reference','Resolve USER references and return one self-contained canonical_question with the user\'s time made explicit. Earlier citation sources use history_citations, or clarification_answers for ambiguity; citation ordinals are not assistant-item positions. For other previous assistant items copy the exact item name and provide a referent. Never invent objects, IDs or operations.',ReferenceCarry)
 REFERENCE_PROMPT=(
  'Resolve references and write the canonical question, not facts or write authority. '
  'Rewrite this turn\'s message as one self-contained, formal question or instruction in the user\'s language that makes sense without the conversation. '
@@ -341,12 +348,20 @@ RESOLVER_UNFINISHED_ANCHOR='canonical_question 始终用用户的口吻复述用
 RESOLVER_UNFINISHED_TEXT=('对话里后面跟着「（系统记录：……没有完成。）」或「（系统记录：……过程中断。）」的用户消息，是之前没有得到回答的请求，只作背景。'
  '这一轮的消息本身是完整的问题或指令时，canonical_question 只复述这一轮的消息，不要换成那条旧请求，也不要并入它的公司、指标或任务。'
  '只有这一轮的消息要求继续、重试、重新回答或修改那条旧请求（如「继续」「再试一次」「接着刚才的」「换成最近两年」），或者明确指着它说话时，才把那条旧请求写进 canonical_question。')
+CARRY_PROMPT_TEXT=(' builds_on_answers: use it when this request continues from what an earlier answer reported, that is, evaluates, explains, compares or extends content that answer already presented, '
+ 'so that the sources behind that answer are read back for this turn. List the answers_back positions of those answers as shown in citation_catalogue (1 is the most recent answer). '
+ 'It differs from history_citations: history_citations is for a user who points at a specific citation or source; builds_on_answers is for a user who carries on from an answer\'s content without mentioning any citation number. '
+ 'Either may be filled, both, or neither. '
+ 'Example: the latest answer reported one company\'s figures for one fiscal period from its sources, and the user asks whether this report is good or bad: builds_on_answers=[1]. '
+ 'Counter-example: the latest answer was about NVIDIA and the user asks \u201cwhat about AMD?\u201d: builds_on_answers=[], because evidence about another company has to be fetched. '
+ 'Leave it empty whenever the request turns to a different company, period or topic that needs new evidence, and always when relationship=clarify.')
 def resolver_prompt():
     """REFERENCE_PROMPT with the unfinished-request rule after its user-voice sentence (FINBOT_FP13E5_RESOLVER_UNFINISHED),
     and the period and premise rules after its data-dependent sentence (FINBOT_SW1_RESOLVER_RULES), each when its switch is on."""
     prompt=REFERENCE_PROMPT
     if flag('FINBOT_FP13E5_RESOLVER_UNFINISHED',True):prompt=prompt.replace(RESOLVER_UNFINISHED_ANCHOR,RESOLVER_UNFINISHED_ANCHOR+RESOLVER_UNFINISHED_TEXT,1)
     if flag('FINBOT_SW1_RESOLVER_RULES',True):prompt=prompt.replace(RESOLVER_ANCHOR,RESOLVER_ANCHOR+RESOLVER_RULE_TEXT,1)
+    if flag(CARRY_FLAG,True):prompt+=CARRY_PROMPT_TEXT
     return prompt
 def classify_prompt():
     """CLASSIFY_PROMPT with the premise sentence at its end, when the switch is on."""
@@ -1072,7 +1087,7 @@ class Turn:
         if flag('FINBOT_SW2_SELF_STATE',True):self.self_state_text,self.audit['self_state']=self_state_block(context)
         # Tool results from the model's own requests start here; the system's prefetch sits before it.
         self.model_feedback_from=0
-        self.reference_value=None;self.verified_referents=[];self.bound_history_citations=[]
+        self.reference_value=None;self.verified_referents=[];self.bound_history_citations=[];self.carry_note=None
         self.unfinished_rewrite=None    # FP13-E5 S2: the unfinished earlier request this rewrite came back to (a fact, never a change)
         self.granted_actions=set();self.write_reasons={}
         # Tool categories whose definitions ride on the model call (progressive disclosure), in load order;
@@ -1342,12 +1357,14 @@ class Turn:
         prompt=resolver_prompt()+(RESOLVER_STAGE_NOTE if stage_on else '')
         self.audit.setdefault('stage_prompt_bytes',{})['resolver']=len(prompt.encode())+len(json.dumps(payload,ensure_ascii=False).encode())
         value=None;failure=None
+        carry_on=flag(CARRY_FLAG,True)
         for attempt in range(2):
             try:
                 if self.context.resolver:raw=await injected(self.context.resolver,payload)
-                else:raw=parsed(await self.model([{'role':'system','content':prompt},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],REFERENCE_SCHEMA))
+                else:raw=parsed(await self.model([{'role':'system','content':prompt},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],REFERENCE_SCHEMA_CARRY if carry_on else REFERENCE_SCHEMA))
                 if isinstance(raw,str):raw=parsed({'content':raw})
-                value=Reference.model_validate(raw)
+                value=(ReferenceCarry if carry_on else Reference).model_validate(raw)
+                if carry_on and value.relationship=='clarify' and value.builds_on_answers:raise ValueError('clarification_cannot_bind_sources')
                 if value.relationship=='clarify' and value.clarification_answers:
                     if value.history_citations:raise ValueError('clarification_cannot_bind_sources')
                     value.choices=self.clarification_labels(value.clarification_answers)
@@ -1356,13 +1373,15 @@ class Turn:
                                     else "Which earlier answer's source do you mean?")
                 self.reference_value=value
                 self.bind_history_citations(value.history_citations)
+                if carry_on and value.builds_on_answers:self.bind_followup_sources(value.builds_on_answers)
                 self.verified_referents=validate_referents(value.referents,self.original,prior,self.sets)
                 break
             except Exception as exc:
-                self.bound_history_citations=[]
+                self.bound_history_citations=[];self.carry_note=None;self.audit.pop('followup_source_carry',None)
                 if not attempt:
                     self.audit['resolver_retries']=1
                     payload['correction']={'error':str(exc),'instruction':'Choose a listed item_id and source, or copy a short exact source label; do not paraphrase. Citation ordinals belong in history_citations, not assistant-item referents. For a citation clarification select catalogue answers_back positions in clarification_answers and leave history_citations empty.'}
+                    if carry_on:payload['correction']['instruction']+=' builds_on_answers must be empty when relationship=clarify.'
                     continue
                 self.reference_stage(False,str(exc));failure=str(exc);self.resolver_failed=True
                 # The tool loop reads the conversation itself, so a resolver that failed costs the hint,
@@ -2011,6 +2030,29 @@ class Turn:
         self.bound_history_citations=bound
         return bound
 
+    def bind_followup_sources(self,answers):
+        """FINBOT_FOLLOWUP_SOURCE_CARRY: the resolver said this request builds on those earlier answers, so every available,
+        non-derived source each one lists is bound (ordinal order), after what history_citations already bound.  A derived
+        source is not bound itself: its parents are in the same list.  Nothing here reads anything; recall_bound_citations does."""
+        catalogue={entry.get('answers_back'):entry for entry in self.context.history_citation_catalogue if isinstance(entry,dict)}
+        bound=list(self.bound_history_citations);seen={(b.get('turn_id'),b.get('ordinal')) for b in bound}
+        skipped=[];added=0;left_out=0
+        for offset in dict.fromkeys(answers):
+            entry=catalogue.get(offset)
+            if not entry:skipped.append({'answers_back':offset,'reason':'not_in_catalogue'});continue
+            sources=sorted((s for s in entry.get('sources',[]) if isinstance(s,dict) and type(s.get('ordinal')) is int
+                            and s.get('available',True) and not s.get('derived')),key=lambda s:s['ordinal'])
+            if not sources:skipped.append({'answers_back':offset,'reason':'no_available_sources'});continue
+            for source in sources:
+                key=(entry.get('turn_id'),source['ordinal'])
+                if key in seen:continue
+                seen.add(key)
+                if len(bound)>=HISTORY_BINDING_LIMIT:left_out+=1;continue
+                bound.append({'turn_id':entry.get('turn_id'),'ordinal':source['ordinal'],'answers_back':entry['answers_back'],'derived':False,'parents':[]});added+=1
+        self.audit['followup_source_carry']={'answers':list(answers),'bound':added,'left_out':left_out,'skipped_answers':skipped}
+        self.bound_history_citations=bound
+        return bound
+
     def prior_turns(self,max_bytes=None):
         """The conversation before this message as plain turns, newest kept first within the budget.
 
@@ -2124,6 +2166,7 @@ class Turn:
         hint={'resolved_question':self.question,
               'referents':[r.get('text') or r.get('mention') for r in self.verified_referents if r.get('text') or r.get('mention')][:6],
               'classifier_scope':{k:self.scope.get(k) for k in ('symbol','symbols','mode','company','metrics','period','form','financial_only','latest','days_back','max_results','requested_actions') if self.scope.get(k) not in (None,[],'',False)}}
+        if getattr(self,'carry_note',None):hint['carried_sources_note']=self.carry_note
         if self.audit.get('resolver_period_unfinished'):
             # SW1 §4.2: the model is told, as a fact, that the rewrite's period has not ended; original_words_note is overridden here.
             u=self.audit['resolver_period_unfinished']
@@ -4018,6 +4061,9 @@ class Turn:
     async def agent_loop(self):
         """The tool loop and the closing answer: shared by a new request and a resumed one."""
         recalled=await self.recall_bound_citations()
+        if recalled and (self.audit.get('followup_source_carry') or {}).get('bound'):
+            self.carry_note=('系统事实：这一轮是对上一条回答的追问。系统已把那条回答所依据的来源重新读进本轮，现有证据：'+self.evidence_sources()+
+                '。它们是供这次追问使用的来源；上一条回答的文字本身不是证据。')
         mode=str(self.scope.get('mode') or 'none').strip().lower()
         if self.route=='A' and not recalled:
             from .financials import xbrl_metrics_for
