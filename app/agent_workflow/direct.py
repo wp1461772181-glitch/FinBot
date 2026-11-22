@@ -2420,10 +2420,14 @@ class Turn:
         # for more only gets "ready" again (it already was), and the own pass then gathers one small step at a time at the high
         # effort -- in production four such rounds took a follow-up to 627 seconds.  The own pass is told to ask for everything
         # it still misses at once, and after that to write the answer.
-        note=OWN_PASS_AGAIN_NOTE if record.get('own_pass') else OWN_PASS_FIRST_NOTE
+        # The "write from what you hold" note follows only an own pass that did ask for more.  When the loop comes back for
+        # another reason (a nudge to use the tools, the compound-empty note, an absence re-check), that recovery note is the
+        # last word and nothing is added after it.
+        note=OWN_PASS_FIRST_NOTE if not record.get('own_pass') else OWN_PASS_AGAIN_NOTE if record.pop('own_asked_last',False) else None
         record['own_pass']=record.get('own_pass',0)+1;record['answered_at_own']+=1
-        own=await self.model([*self.tool_messages(),{'role':'system','content':note}],self.exposed_tools())
-        if isinstance(own,dict) and own.get('tool_calls'):record['own_tool_rounds']=record.get('own_tool_rounds',0)+1
+        own=await self.model([*self.tool_messages(),*([{'role':'system','content':note}] if note else [])],self.exposed_tools())
+        if isinstance(own,dict) and own.get('tool_calls'):
+            record['own_tool_rounds']=record.get('own_tool_rounds',0)+1;record['own_asked_last']=True
         return own
 
     async def closing_answer(self):

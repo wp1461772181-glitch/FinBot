@@ -102,3 +102,17 @@ def test_the_notes_are_only_on_the_own_pass_and_never_on_a_low_step_or_the_closi
     asyncio.run(t.decision())
     asyncio.run(t.decision(closing=True))
     assert all('note' not in c for c in calls)
+
+
+def test_a_recovery_round_after_an_own_pass_that_asked_for_nothing_gets_no_write_now_note(monkeypatch):
+    """The own pass answered with no tool; the loop then appended its own recovery note (a nudge to use the tools) and came back.
+    Nothing may be added after that note: the next own pass must be free to call the tools the nudge asks for."""
+    calls = script(monkeypatch, [DRAFT, ANSWER, TOOL_CALL, ANSWER])
+    t = turn('max')
+    assert asyncio.run(t.decision()) is ANSWER                # low ready -> own pass answers (first note)
+    t.protocol.append({'role': 'system', 'content': '请使用工具取证。'})   # what the loop's nudge does before `continue`
+    assert asyncio.run(t.decision()) is TOOL_CALL             # own pass again, with no note of ours
+    assert asyncio.run(t.decision()) is ANSWER                # it did ask for more: now it is told to write
+    assert [c.get('note') for c in calls] == [None, 'first', None, 'again']
+    assert [c['effort'] for c in calls] == ['low', None, None, None]
+    assert 'own_asked_last' not in t.audit['gather_effort']
