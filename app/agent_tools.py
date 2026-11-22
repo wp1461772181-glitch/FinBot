@@ -575,6 +575,11 @@ async def query_financials(symbol: str, metrics: list[str] | None = None, fiscal
 _FINANCIAL_FILINGS_SQL=("SELECT id, symbol, form, accession_number, filed_at, source_url, content_source_url, content_financials FROM sec_filing_inventory "
     "WHERE symbol=:symbol AND form IN ('10-K','10-Q','20-F') AND content_status='fetched' AND content_financials IS NOT NULL "
     "AND observed_at<=:cutoff AND filed_at<=CAST(:cutoff AS date)")
+# FINBOT_RELEASE_FIGURES: the 8-K earnings press release's figures for a period no periodic report covers yet (app/release_figures.py).
+_PRESS_RELEASE_SQL=("SELECT id, symbol, form, accession_number, filed_at, source_url, content_source_url, content_financials FROM sec_filing_inventory "
+    "WHERE symbol=:symbol AND form='8-K' AND content_status='fetched' AND content_financials IS NOT NULL "
+    "AND position('press_release_unaudited' in CAST(content_financials AS text))>0 "
+    "AND observed_at<=:cutoff AND filed_at<=CAST(:cutoff AS date) ORDER BY filed_at DESC, accession_number DESC LIMIT 3")
 _FINANCIAL_METRICS=("revenue","cost_of_revenue","gross_profit","operating_income","net_income","operating_cash_flow",
     "total_assets","cash_and_equivalents","total_liabilities","stockholders_equity")
 WIDEN_ROW_LIMIT=12   # rows a widening may add on top of limit (SW1 §2.2)
@@ -602,6 +607,7 @@ async def _financials_widened(symbol,metrics,fiscal_year,fiscal_period,form,late
         return await _query(_FINANCIAL_FILINGS_SQL+extra+f" ORDER BY filed_at DESC, accession_number DESC LIMIT {int(rows_cap)}",params)
     filings=await read(form)
     library=await _library_rows(symbol,cutoff)
+    press=await _query(_PRESS_RELEASE_SQL,base) if flag('FINBOT_RELEASE_FIGURES',True) else []
     by_key={}
     def remember(found):
         for filing in found:by_key.setdefault(filing_key(filing.get("form"),filing.get("filed_at")),filing)
@@ -614,6 +620,13 @@ async def _financials_widened(symbol,metrics,fiscal_year,fiscal_period,form,late
             everything=filings if not form else await read(None)
             remember(everything)
         return everything
+    if press:
+        # A release counts only while it is ahead of every periodic report.  Once a 10-Q/10-K reports its period (or a later
+        # one), that report is the source for the whole period: no leftover metric of the release, and no note saying the
+        # newest figures still come from an unaudited release.
+        reported=max((str(r["period_end"])[:10] for f in await unfiltered() for r in figure_rows(f)),default="")
+        press=[f for f in press if max((str(r["period_end"])[:10] for r in figure_rows(f)),default="")>reported]
+    remember(press)
     def figures(source,*,wanted=metrics,year=fiscal_year,period=fiscal_period,spans=None):
         found=[]
         for filing in source:
@@ -625,10 +638,17 @@ async def _financials_widened(symbol,metrics,fiscal_year,fiscal_period,form,late
         # The newest filing's figure for a period is the one kept: filings arrive newest first.
         kept=[]
         for row in rows:
-            key=(row["metric"],row["period_start"],row["period_end"])
+            key=(row["metric"],row["period_start"],row["period_end"],row["period_span"])
             if key not in seen:seen.add(key);kept.append(row)
         return kept
-    main=fresh(figures(filings))
+    def covered(source):
+        # What the periodic reports already state: a press-release figure for the same metric, period end and span gives way to it.
+        return {(r["metric"],str(r["period_end"])[:10],r["period_span"]) for f in source for r in figure_rows(f)}
+    def uncovered(rows,source):
+        have=covered(source)
+        return [r for r in rows if (r["metric"],str(r["period_end"])[:10],r["period_span"]) not in have]
+    press_rows=uncovered(figures(press),filings) if press and not form else []
+    main=fresh(press_rows+figures(filings))
     widened_form=False
     if form and not main:
         # W1: the form filter hid every figure asked for; read without it, and mark what came from there.
@@ -685,6 +705,11 @@ async def _financials_widened(symbol,metrics,fiscal_year,fiscal_period,form,late
         if key not in shown_keys and key not in read_keys:cut_keys.setdefault(key,None)
     for key in cut_keys:
         not_read.append({"form":key[0],"filed_at":key[1],"period":document_period(by_key[key]) if key in by_key else None,"why":"limit"})
+    if press and form:
+        # An explicit form filter is the caller's scope: a newer press release is named, not mixed in.
+        pending=uncovered([r for f in press for r in figure_rows(f)],await unfiltered())
+        for key in dict.fromkeys(filing_key(r["form"],r["filed_at"]) for r in pending):
+            not_read.append({"form":key[0],"filed_at":key[1],"period":document_period(by_key[key]) if key in by_key else None,"why":"form_filter"})
     not_read.sort(key=lambda n:n["filed_at"],reverse=True)
     shown_labels={r["period_label"] for r in final}
     periods_left_out=[]
@@ -698,6 +723,13 @@ async def _financials_widened(symbol,metrics,fiscal_year,fiscal_period,form,late
         for row in ranked:
             if row["period_label"] not in nearest:nearest.append(row["period_label"])
             if len(nearest)>=NEAREST_LIMIT:break
+    press_note=None
+    press_shown=[r for r in final if r.get("basis")=="press_release_unaudited"]
+    if press_shown:
+        top=max(press_shown,key=lambda r:(str(r["period_end"]),r["filed_at"]))
+        document=by_key.get(filing_key(top["form"],top["filed_at"]))
+        press_note={"form":top["form"],"filed_at":top["filed_at"],"period":(document_period(document) if document else None) or top["period_label"],
+                    "period_end":str(top["period_end"])[:10]}
     fresh_note=None
     if flag("FINBOT_SW1_FRESHNESS",True):
         saved=[item for item in library if item["content_status"]=="fetched" and item["has_xbrl"]]
@@ -708,12 +740,26 @@ async def _financials_widened(symbol,metrics,fiscal_year,fiscal_period,form,late
             latest_period=document_period(head);latest_end=str(cp["end"])[:10]
             next_label=next_period(cp.get("fiscal_year"),cp.get("fiscal_period"))
         fresh_note=freshness(library,saved,cutoff,latest_period=latest_period,latest_end=latest_end,next_period_label=next_label)
+        if press_note:
+            # The newest period's figures are on the table (from the release): the rhythm's "next period is not in the library" no longer holds.
+            said=(f"{press_note['period']}（截至 {press_note['period_end']}）的数字来自 {press_note['filed_at']} 提交的 8-K 业绩新闻稿，"
+                  "未经审计；正式季报入库后以季报为准。")
+            if fresh_note and fresh_note.get("kind")=="registered_not_saved":
+                fresh_note={**fresh_note,"note":fresh_note["note"]+said}
+            else:
+                fresh_note={"kind":"press_release_ahead","overdue":False,"note":(f"库内最新一期正式报告是 {latest_period}。" if latest_period else "")+said}
     coverage=coverage_receipt(filters={"latest":latest,"form":form,"fiscal_year":fiscal_year,"fiscal_period":fiscal_period,"limit":limit},
         filings_read=filings_read,not_read=not_read,widened=widened,rows_left_out=len(left_out),periods_left_out=periods_left_out,
-        library=library_summary(library),nearest_periods=nearest,q4_note=Q4_NOTE if q4 else None,freshness=fresh_note)
+        library=({**library_summary(library),"press_release":press_note} if press_note else library_summary(library)),nearest_periods=nearest,q4_note=Q4_NOTE if q4 else None,freshness=fresh_note)
     return {"ok":True,"data":[{k:_json(v) for k,v in r.items()} for r in final],"source":"sec_filing_inventory.content_financials (saved XBRL)",
             "as_of":final[0]["filed_at"] if final else None,"error_code":"no_reported_figures" if not final else None,
             "meta":{"coverage":coverage}}
+
+RELEASE_FIGURES_NOTE=(" Before a quarter's 10-Q/10-K is filed, the newest period's figures may come from the 8-K earnings press release: such rows carry"
+    " basis: press_release_unaudited, are unaudited, and the answer must say so. Once the periodic report for the same period is filed, its figures replace them.")
+if flag('FINBOT_RELEASE_FIGURES', True) and flag('FINBOT_SW1_READ_WIDEN', True):
+    # Read at import, like the schema it documents (and only on the path that reads the releases).
+    query_financials.description=query_financials.description+RELEASE_FIGURES_NOTE
 
 async def _sec_filings_widened(symbol,form,accession_number,source_id,filed_year,financial_only,latest,limit) -> dict:
     """SW1 item 1 for filing text: a form filter that hides every filing is widened once; the receipt lists the filings

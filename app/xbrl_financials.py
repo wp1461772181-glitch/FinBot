@@ -132,6 +132,10 @@ def as_payload(figures: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def block_from_stored(stored: Any) -> str:
     if not stored: return ""
     try:
-        return describe(stored)
+        # An 8-K may carry figures copied from its earnings press release (app/release_figures.py, basis
+        # press_release_unaudited).  They are not XBRL and must not be presented under the XBRL heading; the analysis
+        # window already holds the release they were copied from.
+        own = [f for f in stored if not (isinstance(f, dict) and f.get("basis") == "press_release_unaudited")]
+        return describe(own)
     except (TypeError, AttributeError):
         return ""
