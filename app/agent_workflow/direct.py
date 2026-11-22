@@ -141,6 +141,7 @@ def _extract_ticker_tokens(text: str) -> list[str]:
 
 # Most earlier-answer handles a turn binds and reads (the resolver's own list is capped at the same number).
 HISTORY_BINDING_LIMIT=6
+STAGE_EFFORT='low'   # FINBOT_STAGE_LOW_EFFORT: what the steps before the answer think at, when the bot's own effort is higher
 
 class HistoryCitationRef(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -1121,7 +1122,7 @@ class Turn:
         from ..knowledge.query_understanding import EXPANSION_PROMPT,parse_variants
         message=await self.model([{'role':'system','content':EXPANSION_PROMPT},
                                   {'role':'user','content':json.dumps({'question':query},ensure_ascii=False)}],[],
-                                 protocol_retries=0)
+                                 protocol_retries=0,**self.stage_kwargs())
         return parse_variants(message.get('content'))
 
     def in_scope(self,name):
@@ -1237,14 +1238,32 @@ class Turn:
         if soft and (elapsed>SOFT_TURN_SECONDS or self.audit['token_usage']>self.token_cap()):return 'turn_budget'
         return None
 
-    async def provider_request(self,messages,tool_schemas):
+    def stage_effort(self):
+        """FINBOT_STAGE_LOW_EFFORT: the steps before the answer (resolving a reference, classifying, writing search variants) are
+        small structured judgements, so they do not think at the bot's own high effort: at max one of them took over a minute.
+        The effort those steps send, or None to send what the bot's setting already sends (the bot set none, or one that is
+        not above STAGE_EFFORT).  The answering steps keep the bot's effort."""
+        from ..agent_chat_provider import REASONING_EFFORTS
+        own=getattr(self.context,'reasoning_effort',None)
+        if not flag('FINBOT_STAGE_LOW_EFFORT',True) or own not in REASONING_EFFORTS:return None
+        if REASONING_EFFORTS.index(own)<=REASONING_EFFORTS.index(STAGE_EFFORT):return None
+        self.audit['stage_effort']=STAGE_EFFORT
+        return STAGE_EFFORT
+
+    def stage_kwargs(self):
+        """The keyword a pre-answer model call adds: nothing when there is no override, so such a call is exactly the old one."""
+        effort=self.stage_effort()
+        return {'stage_effort':effort} if effort else {}
+
+    async def provider_request(self,messages,tool_schemas,stage_effort=None):
         # A truncated stream or an over-long reasoning trace is a property of one sampled response;
         # the same request asked again usually succeeds.  A rejected key or model never does.
         for attempt in range(2):
             try:
                 async with progress_watchdog(IDLE_SECONDS):
                     # The bot's own effort goes only when it set one: without it the call is exactly as before.
-                    effort={'reasoning_effort':self.context.reasoning_effort} if getattr(self.context,'reasoning_effort',None) else {}
+                    chosen=stage_effort or getattr(self.context,'reasoning_effort',None)
+                    effort={'reasoning_effort':chosen} if chosen else {}
                     return await decision_request(self.context.provider,self.context.model,self.context.api_key,messages,tool_schemas,self.context.base_url,**effort)
             except HTTPException as exc:
                 # A refusal is the model's answer, not a fault: which category (never the text) is worth keeping in the audit.
@@ -1272,7 +1291,7 @@ class Turn:
         # protocol half-guard (tool_messages measures against the same half).  Never below the old bound, never above the stream guard.
         return min(TOOL_CALL_STREAM_GUARD,max(LEGACY_STEP_CALLS,self._running_bytes()//2//PROTOCOL_COMPACT_CHARS))
 
-    async def model(self,messages,tool_schemas,*,protocol_retries=1):
+    async def model(self,messages,tool_schemas,*,protocol_retries=1,stage_effort=None):
         # The same knob as the door: a request that was accepted may grow by the tool results this
         # turn itself produces, and nothing more.
         size=len(json.dumps(messages,ensure_ascii=False).encode())+len(json.dumps(tool_schemas).encode())
@@ -1283,7 +1302,7 @@ class Turn:
             self.audit['model_calls']+=1
             generation=observability.start_generation(self.obs,name='model-call',model=self.context.model,role='agent',
                                                       input=messages,metadata={'provider':self.context.provider,'tools_offered':len(tool_schemas or [])})
-            try:response,message=await self.provider_request(messages,tool_schemas)
+            try:response,message=await (self.provider_request(messages,tool_schemas,stage_effort) if stage_effort else self.provider_request(messages,tool_schemas))
             except BaseException as exc:
                 label=exc.detail if isinstance(getattr(exc,'detail',None),str) else type(exc).__name__
                 # SW1D: a failed check is named after its code, so the trace shows which check failed (never the text).
@@ -1361,7 +1380,7 @@ class Turn:
         for attempt in range(2):
             try:
                 if self.context.resolver:raw=await injected(self.context.resolver,payload)
-                else:raw=parsed(await self.model([{'role':'system','content':prompt},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],REFERENCE_SCHEMA_CARRY if carry_on else REFERENCE_SCHEMA))
+                else:raw=parsed(await self.model([{'role':'system','content':prompt},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],REFERENCE_SCHEMA_CARRY if carry_on else REFERENCE_SCHEMA,**self.stage_kwargs()))
                 if isinstance(raw,str):raw=parsed({'content':raw})
                 value=(ReferenceCarry if carry_on else Reference).model_validate(raw)
                 if carry_on and value.relationship=='clarify' and value.builds_on_answers:raise ValueError('clarification_cannot_bind_sources')
@@ -1647,7 +1666,7 @@ class Turn:
             try:
                 if self.context.intent_recognizer:value=await injected(self.context.intent_recognizer,payload)
                 elif self.context.classifier:value=await injected(self.context.classifier,self.question)
-                else:value=parsed(await self.model(messages,ROUTE_SCHEMA))
+                else:value=parsed(await self.model(messages,ROUTE_SCHEMA,**self.stage_kwargs()))
                 if isinstance(value,str):
                     try:value=json.loads(value)
                     except ValueError:value={'category':value}
@@ -4475,4 +4494,6 @@ async def _guarded(turn):
         code=exc.detail if isinstance(exc,HTTPException) and isinstance(exc.detail,str) and re.fullmatch(r'[a-z_]{3,80}',exc.detail) else 'provider_protocol_invalid'
         if turn.observations:return turn.partial_failure(code)
         from ..agent_chat_stream import _failure_notice
-        return turn.finish(_failure_notice(HTTPException(502,code)),status='partially_succeeded' if turn.observations else 'failed',reason=code,generated=True)
+        # The provider's own failure is passed on as it is: it carries the upstream HTTP status the notice shows.
+        source=exc if isinstance(exc,HTTPException) and exc.detail==code else HTTPException(502,code)
+        return turn.finish(_failure_notice(source),status='partially_succeeded' if turn.observations else 'failed',reason=code,generated=True)

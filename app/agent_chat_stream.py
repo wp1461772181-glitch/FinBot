@@ -381,8 +381,22 @@ _FAILURE_NOTICES={
  "tool_call_batch_too_large":"这一轮没有完成：模型一步发出的工具调用超过了系统单次能接收的上限。原样再发通常结果相同；可以把问题拆成几部分再问。",
  "classification_invalid":"这一轮在理解你的问题时内部处理出错，没有生成回答。可以再发一次；如果连续出现，请换个问法。",
 }
+# FINBOT_FAILURE_NOTICES: the provider failures that used to fall through to the one generic sentence.  Each says what happened,
+# whether sending again can help, and where to look.  Nothing of the provider's own text is shown, only the HTTP status.
+_FAILURE_NOTICES_MORE={
+ "provider_model_unavailable_or_invalid_request":"模型服务不接受这次请求{status}，本轮没有完成。常见原因：模型名不对，或这个模型不支持当前的思考强度或参数。原样再发不会成功；请在输入框换一个模型或调低思考强度，或到「设置 → 模型」检查这个模型的配置。",
+ "provider_error":"模型服务这次出错了{status}，本轮没有完成。这类错误多为服务端的临时故障，可以再发一次；连续出现时请换一个模型。",
+ "provider_incompatible_response":"模型服务返回的内容格式和系统不兼容，本轮没有完成。可以再发一次；连续出现时请换一个模型。",
+ "provider_protocol_incompatible":"模型服务不接受这段对话里已有的工具调用或思考记录的格式，本轮没有完成。原样再发通常结果相同；请换一个模型，或开一段新对话。",
+ "provider_redirect_rejected":"模型服务的接口地址发生了跳转，系统没有跟随，本轮没有完成。请到「设置 → 模型」检查这个模型的接口地址。",
+}
 def _failure_notice(exc:Exception)->str:
  code=exc.detail if isinstance(exc,HTTPException) and isinstance(exc.detail,str) else ""
+ from .agent_workflow.fp_flags import flag
+ if code in _FAILURE_NOTICES_MORE and flag("FINBOT_FAILURE_NOTICES",True):
+  status=getattr(exc,"provider_status",None)
+  shown=f"（上游返回 HTTP {status}）" if type(status) is int and 100<=status<=599 else ""
+  return _FAILURE_NOTICES_MORE[code].format(status=shown)
  return _FAILURE_NOTICES.get(code,"这一轮没有完成，没有生成回答。可以再发一次；如果连续出现，请稍后再试或换个问法。")
 def _is_owner(credential:str|None)->bool:
  from .agent_chat_identity import owner_credential_matches
