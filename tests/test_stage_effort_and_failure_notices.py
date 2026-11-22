@@ -112,3 +112,21 @@ def test_codes_that_already_had_a_notice_keep_it_and_unknown_codes_stay_generic(
         assert _failure_notice(HTTPException(502, code)) == text
     assert _failure_notice(HTTPException(502, 'something_else')) == GENERIC
     assert _failure_notice(RuntimeError('boom')) == GENERIC
+
+
+def test_a_failed_turn_keeps_the_upstream_status_all_the_way_to_the_notice():
+    """The turn's own failure path (direct._guarded) must hand the provider's failure on, not a rebuilt one without its status."""
+    finished = {}
+
+    class FailingTurn:
+        observations = []
+        context = AgentRuntimeContext('anthropic', 'm', 'k', conversation_id='c')
+
+        async def run(self):
+            raise ProviderFailure('provider_error', stage='tool_decision', provider_status=503)
+
+        def finish(self, text, **kwargs):
+            finished.update(text=text, **kwargs)
+            return text
+    asyncio.run(direct._guarded(FailingTurn()))
+    assert '（上游返回 HTTP 503）' in finished['text'] and finished['status'] == 'failed' and finished['reason'] == 'provider_error'

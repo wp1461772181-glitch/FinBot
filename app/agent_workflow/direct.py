@@ -4494,4 +4494,6 @@ async def _guarded(turn):
         code=exc.detail if isinstance(exc,HTTPException) and isinstance(exc.detail,str) and re.fullmatch(r'[a-z_]{3,80}',exc.detail) else 'provider_protocol_invalid'
         if turn.observations:return turn.partial_failure(code)
         from ..agent_chat_stream import _failure_notice
-        return turn.finish(_failure_notice(HTTPException(502,code)),status='partially_succeeded' if turn.observations else 'failed',reason=code,generated=True)
+        # The provider's own failure is passed on as it is: it carries the upstream HTTP status the notice shows.
+        source=exc if isinstance(exc,HTTPException) and exc.detail==code else HTTPException(502,code)
+        return turn.finish(_failure_notice(source),status='partially_succeeded' if turn.observations else 'failed',reason=code,generated=True)
