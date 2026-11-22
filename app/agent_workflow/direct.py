@@ -1250,6 +1250,15 @@ class Turn:
         self.audit['stage_effort']=STAGE_EFFORT
         return STAGE_EFFORT
 
+    def gather_effort(self):
+        """FINBOT_GATHER_LOW_EFFORT: the effort of a tool-loop step that gathers evidence, or None when the bot's own effort is
+        used for every step (the switch is off, the bot set no effort, or one that is not above STAGE_EFFORT).  At max, steps
+        that only chose the next read took 47, 115 and 278 seconds and the turn did not finish; composing keeps the bot's effort."""
+        from ..agent_chat_provider import REASONING_EFFORTS
+        own=getattr(self.context,'reasoning_effort',None)
+        if not flag('FINBOT_GATHER_LOW_EFFORT',True) or own not in REASONING_EFFORTS:return None
+        return STAGE_EFFORT if REASONING_EFFORTS.index(own)>REASONING_EFFORTS.index(STAGE_EFFORT) else None
+
     def stage_kwargs(self):
         """The keyword a pre-answer model call adds: nothing when there is no override, so such a call is exactly the old one."""
         effort=self.stage_effort()
@@ -2393,7 +2402,18 @@ class Turn:
             else:value=await injected(callback,self.tool_messages(),tool_schemas)
             if isinstance(value,tuple):value=value[1]
             return value
-        return await self.model(messages,[]) if closing else await self.model(self.tool_messages(),self.exposed_tools())
+        if closing:return await self.model(messages,[])
+        gather=self.gather_effort()
+        if gather is None:return await self.model(self.tool_messages(),self.exposed_tools())
+        # FINBOT_GATHER_LOW_EFFORT: a step that only asks for evidence is taken at the low effort.  When the low step asks for no
+        # tool it has written a draft answer: the draft is dropped and the same step is asked again at the bot's own effort, tools
+        # still on offer, so the answer is written at that effort and a gap the low steps left can still be filled.
+        record=self.audit.setdefault('gather_effort',{'effort':gather,'steps':0,'answered_at_own':0})
+        record['steps']+=1
+        first=await self.model(self.tool_messages(),self.exposed_tools(),stage_effort=gather)
+        if not isinstance(first,dict) or first.get('tool_calls'):return first
+        record['answered_at_own']+=1
+        return await self.model(self.tool_messages(),self.exposed_tools())
 
     async def closing_answer(self):
         """The tool-free closing answer.  A reply that only writes a tool call is asked for once more."""
