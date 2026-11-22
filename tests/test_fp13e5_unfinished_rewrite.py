@@ -64,6 +64,7 @@ def test_k1_holds_with_the_sw1_rules_on_and_off(monkeypatch, sw1):
                                          ('off', BASE_RESOLVER_PROMPT_SW1_OFF_SHA)])
 def test_k2_switch_off_is_byte_identical_to_8640abf(monkeypatch, sw1, expected):
     monkeypatch.setenv(S1, 'off')
+    monkeypatch.setenv('FINBOT_FOLLOWUP_SOURCE_CARRY', 'off')  # a later, separately switched addition to the same prompt
     monkeypatch.setenv(SW1, sw1)
     prompt = resolver_prompt()
     assert sha(prompt) == expected, f'resolver_prompt() differs from {BASE} with SW1={sw1}'
