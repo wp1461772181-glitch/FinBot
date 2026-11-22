@@ -394,10 +394,14 @@ def test_the_periodic_report_for_the_same_period_replaces_the_release_rows():
         rows = financials(symbol=symbol, metrics=['revenue'], latest=True)['data']
         assert {r['form'] for r in rows} == {'10-Q'} and rows[0]['period_end'] == '2026-10-25' and rows[0]['period_start'] == '2026-07-27'
         assert not [r for r in rows if r.get('basis')]
-        # the balance sheet items the 10-Q fixture does not state are still the release's
+        # Once the 10-Q for that period is in the library the release gives way as a whole: a metric this 10-Q fixture
+        # does not state is not filled in from the release, and nothing says the newest figures still come from it.
         both = financials(symbol=symbol, metrics=['revenue', 'total_assets'], latest=True)
-        assert [r['form'] for r in both['data'] if r['metric'] == 'total_assets'][0] == '8-K'
-        assert both['meta']['coverage']['freshness']['kind'] != 'cadence'
+        assert not [r for r in both['data'] if r.get('basis') or r['form'] == '8-K']
+        coverage = both['meta']['coverage']
+        assert 'press_release' not in coverage['library']
+        assert (coverage.get('freshness') or {}).get('kind') != 'press_release_ahead'
+        assert '业绩新闻稿' not in json.dumps(coverage, ensure_ascii=False)
     finally:
         drop(ids + [release])
 
@@ -479,3 +483,14 @@ def test_periods_without_span_months_keep_their_old_labels_and_rows():
     row = figure_rows(filing)[0]
     assert 'basis' not in row and row['period_start'] == '2026-03-29' and row['title'] == 'ZZZZ 10-Q 2026-08-01 · 营业收入 FY2026 Q3'
     assert row['excerpt'].endswith('XBRL 披露值。')
+
+
+def test_release_figures_are_not_presented_as_the_filings_xbrl_block():
+    from app.xbrl_financials import block_from_stored
+    release = release_figures_of()
+    assert release and block_from_stored(release) == ''
+    # A periodic report's own figures still render as before, and a mixed list shows only the XBRL part.
+    xbrl = [figure('revenue', 'Revenue', [p('2026-04-27', '2026-07-26', 96_221_000_000, 2027, 'Q2')])]
+    block = block_from_stored(xbrl)
+    assert 'XBRL' in block and 'Revenue' in block
+    assert block_from_stored(xbrl + release) == block

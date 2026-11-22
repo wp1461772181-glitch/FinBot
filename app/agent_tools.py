@@ -611,7 +611,7 @@ async def _financials_widened(symbol,metrics,fiscal_year,fiscal_period,form,late
     by_key={}
     def remember(found):
         for filing in found:by_key.setdefault(filing_key(filing.get("form"),filing.get("filed_at")),filing)
-    remember(filings);remember(press)
+    remember(filings)
     everything=None
     async def unfiltered():
         # Read at most once: the form-widening and the Q4 level share it, and it is the filings list when no form is asked.
@@ -620,6 +620,13 @@ async def _financials_widened(symbol,metrics,fiscal_year,fiscal_period,form,late
             everything=filings if not form else await read(None)
             remember(everything)
         return everything
+    if press:
+        # A release counts only while it is ahead of every periodic report.  Once a 10-Q/10-K reports its period (or a later
+        # one), that report is the source for the whole period: no leftover metric of the release, and no note saying the
+        # newest figures still come from an unaudited release.
+        reported=max((str(r["period_end"])[:10] for f in await unfiltered() for r in figure_rows(f)),default="")
+        press=[f for f in press if max((str(r["period_end"])[:10] for r in figure_rows(f)),default="")>reported]
+    remember(press)
     def figures(source,*,wanted=metrics,year=fiscal_year,period=fiscal_period,spans=None):
         found=[]
         for filing in source:
