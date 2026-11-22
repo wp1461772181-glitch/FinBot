@@ -4062,8 +4062,8 @@ class Turn:
         """The tool loop and the closing answer: shared by a new request and a resumed one."""
         recalled=await self.recall_bound_citations()
         if recalled and (self.audit.get('followup_source_carry') or {}).get('bound'):
-            self.carry_note=('系统事实：这一轮是对上一条回答的追问。系统已把那条回答所依据的来源重新读进本轮，现有证据：'+self.evidence_sources()+
-                '。它们是供这次追问使用的来源；上一条回答的文字本身不是证据。')
+            self.carry_note=('系统事实：这一轮是接着之前的回答继续问的。系统已把那条回答所依据的来源重新读进本轮，现有证据：'+self.evidence_sources()+
+                '。它们是供这次追问使用的来源；之前回答的文字本身不是证据。')
         mode=str(self.scope.get('mode') or 'none').strip().lower()
         if self.route=='A' and not recalled:
             from .financials import xbrl_metrics_for
