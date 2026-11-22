@@ -33,6 +33,8 @@ RATIO_TERMS={
 }
 _QUALIFIERS=('最近一期','最新一期','全年','年度','季度','单季','本期','上期','合并','总','的')
 _SPANS=((80,100,'quarter'),(170,190,'ytd6'),(260,280,'ytd9'),(350,380,'annual'))
+# A press release gives no period start, only its length in months: the span is then read from that, never from a made-up start.
+_MONTH_SPANS={3:'quarter',6:'ytd6',9:'ytd9',12:'annual'}
 
 
 def _day(value):return date.fromisoformat(str(value)[:10]) if value else None
@@ -70,22 +72,29 @@ def period_label(period,*,document_end,dei_fiscal_year,dei_fiscal_period):
     offset=(int(dei_fiscal_year)-fiscal_year(document_end)) if dei_fiscal_year else 0
     year=fiscal_year(end)+offset
     quarter=((end.month-fye-1)%12)//3+1
-    if start is None:span='instant'
+    months=period.get('span_months') if start is None else None
+    if start is None:span=_MONTH_SPANS.get(months,'instant')
     else:
         days=(end-start).days
         span=next((name for low,high,name in _SPANS if low<=days<=high),'other')
     fiscal='FY' if span=='annual' or (span=='instant' and quarter==4) else f'Q{quarter}'
     dates=f'{start.isoformat()} 至 {end.isoformat()}' if start else ''
+    if start is None and months in _MONTH_SPANS:dates=f'截至 {end.isoformat()}，{months} 个月'
+    def tail(months_text):return '' if start is None else f'，{months_text}'
     if span=='annual':text=f'FY{year}（{dates}）'
-    elif span=='quarter':text=f'FY{year} Q{quarter}（{dates}，3 个月）'
-    elif span=='ytd6':text=f'FY{year} 上半年累计（{dates}，6 个月）'
-    elif span=='ytd9':text=f'FY{year} 前三季度累计（{dates}，9 个月）'
+    elif span=='quarter':text=f'FY{year} Q{quarter}（{dates}{tail("3 个月")}）'
+    elif span=='ytd6':text=f'FY{year} 上半年累计（{dates}{tail("6 个月")}）'
+    elif span=='ytd9':text=f'FY{year} 前三季度累计（{dates}{tail("9 个月")}）'
     elif span=='instant':text=f'截至 {end.isoformat()}（FY{year} '+('年末' if quarter==4 else f'Q{quarter} 末')+'，时点数）'
     else:text=dates
     return {'fiscal_year':year,'fiscal_period':fiscal,'span':span,'label':text}
 
 
+PRESS_RELEASE_BASIS='press_release_unaudited'
+
+
 def _excerpt(figure,period,label,filing):
+    if figure.get('basis')==PRESS_RELEASE_BASIS:return _press_excerpt(figure,period,label,filing)
     value=int(period['value']);unit=figure.get('unit') or period.get('unit') or 'USD'
     zh=METRIC_LABELS_ZH.get(figure.get('metric'),figure.get('label') or figure.get('metric'))
     amount=f'{value:,} {unit}'
@@ -93,6 +102,14 @@ def _excerpt(figure,period,label,filing):
     return (f"{zh}（{figure.get('label')}，{figure.get('concept')}）{label['label']}：{amount}。"
             f"来源：{filing.get('symbol')} {filing.get('form')}，档案号 {filing.get('accession_number')}，"
             f"{str(filing.get('filed_at'))[:10]} 提交，XBRL 披露值。")
+
+
+def _press_excerpt(figure,period,label,filing):
+    value=int(period['value'])
+    zh=METRIC_LABELS_ZH.get(figure.get('metric'),figure.get('label') or figure.get('metric'))
+    return (f"{zh}（{figure.get('label')}）{label['label']}：{value:,} USD，约 {value/1e8:,.2f} 亿美元，即 {value/1e6:,.0f} 百万美元。"
+            f"来源：{filing.get('symbol')} 8-K 业绩新闻稿（Exhibit 99.1），档案号 {filing.get('accession_number')}，"
+            f"{str(filing.get('filed_at'))[:10]} 提交。数字取自业绩新闻稿，未经审计；季报提交后以季报为准。")
 
 
 def figure_rows(filing,*,metrics=None,fiscal_year=None,fiscal_period=None):
@@ -113,6 +130,8 @@ def figure_rows(filing,*,metrics=None,fiscal_year=None,fiscal_period=None):
             if fiscal_year is not None and label['fiscal_year']!=fiscal_year:continue
             if fiscal_period is not None and (label['fiscal_period']!=fiscal_period or label['span'] not in {'annual','quarter'}):continue
             zh=METRIC_LABELS_ZH.get(figure.get('metric'),figure.get('label'))
+            press=figure.get('basis')==PRESS_RELEASE_BASIS
+            source_name=f"{filing.get('symbol')} 8-K 业绩新闻稿（未经审计） {str(filing.get('filed_at'))[:10]}" if press else f"{filing.get('symbol')} {filing.get('form')} {str(filing.get('filed_at'))[:10]}"
             rows.append({'source_id':str(filing.get('id')),'symbol':filing.get('symbol'),'form':filing.get('form'),
                 'accession_number':filing.get('accession_number'),'filed_at':str(filing.get('filed_at'))[:10],
                 'source_url':filing.get('content_source_url') or filing.get('source_url'),'metric':figure.get('metric'),
@@ -120,6 +139,6 @@ def figure_rows(filing,*,metrics=None,fiscal_year=None,fiscal_period=None):
                 'value':int(period['value']),'period_start':period.get('start'),'period_end':period.get('end'),
                 'fiscal_year':label['fiscal_year'],'fiscal_period':label['fiscal_period'],'period_span':label['span'],
                 'period_label':label['label'],'source_type':'reported_figure',
-                'title':f"{filing.get('symbol')} {filing.get('form')} {str(filing.get('filed_at'))[:10]} · {zh} {label['label'].split('（')[0]}",
-                'excerpt':_excerpt(figure,period,label,filing)})
+                'title':f"{source_name} · {zh} {label['label'].split('（')[0]}",
+                'excerpt':_excerpt(figure,period,label,filing),**({'basis':PRESS_RELEASE_BASIS} if press else {})})
     return rows

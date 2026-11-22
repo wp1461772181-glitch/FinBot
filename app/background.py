@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 ROUTINE_SECONDS = 300
 HOURLY_SECONDS = 3600
 NEWS_SECONDS = 900         # configured news sources; until this loop the library was only refreshed while a chat turn waited on it
+RELEASE_FIGURES_SECONDS = 600   # 8-K earnings-release figures for a quarter whose 10-Q/10-K is not filed yet
 EARNINGS_SECONDS = 60      # picks up events the response-time task missed, due follow-ups, and anything left over from a restart
 
 
@@ -74,12 +75,26 @@ def run_news_poll() -> None:
              sorted(done.get("errors") or {}), done.get("skipped"))
 
 
+def run_release_figures() -> None:
+    """FINBOT_RELEASE_FIGURES (default on): read the newest earnings press releases into query_financials' figures."""
+    from .agent_workflow.fp_flags import flag
+
+    if not flag("FINBOT_RELEASE_FIGURES", True):
+        return
+    from .release_figures import run_once
+
+    done = run_once()
+    if done["candidates"]:
+        log.info("release figures: %s", done)
+
+
 LOOPS = (
     ("routine-tasks", ROUTINE_SECONDS, run_routine_tasks),
     ("sec-monitor", HOURLY_SECONDS, run_sec_monitor),
     ("market-refresh", HOURLY_SECONDS, run_market_refresh),
     ("earnings-monitor", EARNINGS_SECONDS, run_earnings_monitor),
     ("news-poll", NEWS_SECONDS, run_news_poll),
+    ("release-figures", RELEASE_FIGURES_SECONDS, run_release_figures),
 )
 
 
