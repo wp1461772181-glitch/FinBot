@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from app.agent_workflow.direct import Turn
+from app.agent_workflow.direct import OWN_PASS_AGAIN_NOTE, OWN_PASS_FIRST_NOTE, Turn
 from app.agent_workflow.state import AgentRuntimeContext
 
 
@@ -24,7 +24,9 @@ def script(monkeypatch, replies):
     queue = list(replies)
 
     async def fake(self, messages, tool_schemas, *, protocol_retries=1, stage_effort=None):
-        calls.append({'effort': stage_effort, 'tools': bool(tool_schemas)})
+        last = messages[-1].get('content') if messages else ''
+        note = 'first' if last == OWN_PASS_FIRST_NOTE else 'again' if last == OWN_PASS_AGAIN_NOTE else None
+        calls.append({'effort': stage_effort, 'tools': bool(tool_schemas), **({'note': note} if note else {})})
         return queue.pop(0)
     monkeypatch.setattr(Turn, 'model', fake)
     return calls
@@ -47,8 +49,8 @@ def test_a_low_step_that_is_ready_to_answer_is_asked_again_at_the_bots_effort_wi
     calls = script(monkeypatch, [DRAFT, ANSWER])
     t = turn('max')
     assert asyncio.run(t.decision()) is ANSWER          # the low draft is dropped
-    assert calls == [{'effort': 'low', 'tools': True}, {'effort': None, 'tools': True}]
-    assert t.audit['gather_effort'] == {'effort': 'low', 'steps': 1, 'answered_at_own': 1}
+    assert calls == [{'effort': 'low', 'tools': True}, {'effort': None, 'tools': True, 'note': 'first'}]
+    assert t.audit['gather_effort'] == {'effort': 'low', 'steps': 1, 'answered_at_own': 1, 'own_pass': 1}
 
 
 def test_the_bots_own_pass_may_still_ask_for_more_evidence(monkeypatch):
@@ -79,3 +81,24 @@ def test_the_closing_answer_is_always_at_the_bots_effort_and_without_tools(monke
     t = turn('max')
     assert asyncio.run(t.decision(closing=True)) is ANSWER
     assert calls == [{'effort': None, 'tools': False}] and 'gather_effort' not in t.audit
+
+
+def test_after_the_own_pass_asked_for_more_the_next_steps_are_its_own_and_are_told_to_write(monkeypatch):
+    """The production follow-up: low says ready, the own pass asks for more, and from then on no step goes back to low."""
+    calls = script(monkeypatch, [TOOL_CALL, DRAFT, TOOL_CALL, ANSWER])
+    t = turn('max')
+    assert asyncio.run(t.decision()) is TOOL_CALL            # gathering, low
+    assert asyncio.run(t.decision()) is TOOL_CALL            # low is ready; the own pass asks for everything it misses
+    assert asyncio.run(t.decision()) is ANSWER               # straight to the own pass, told to write
+    assert calls == [{'effort': 'low', 'tools': True},
+                     {'effort': 'low', 'tools': True}, {'effort': None, 'tools': True, 'note': 'first'},
+                     {'effort': None, 'tools': True, 'note': 'again'}]
+    assert t.audit['gather_effort'] == {'effort': 'low', 'steps': 2, 'answered_at_own': 2, 'own_pass': 2, 'own_tool_rounds': 1}
+
+
+def test_the_notes_are_only_on_the_own_pass_and_never_on_a_low_step_or_the_closing_call(monkeypatch):
+    calls = script(monkeypatch, [TOOL_CALL, ANSWER])
+    t = turn('high')
+    asyncio.run(t.decision())
+    asyncio.run(t.decision(closing=True))
+    assert all('note' not in c for c in calls)
