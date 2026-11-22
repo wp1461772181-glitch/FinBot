@@ -1,0 +1,14 @@
+[Unit]
+Description=FinBot WeChat bridge (ClawBot / iLink)
+After=network-online.target finbot-api.service docker.service
+Wants=finbot-api.service
+[Service]
+WorkingDirectory=/opt/finbot/src
+EnvironmentFile=/opt/finbot/src/.env
+Environment=DB_POOL_SIZE=1 DB_MAX_OVERFLOW=1 WECHAT_BRIDGE_API_URL=http://127.0.0.1:8000
+ExecStart=/opt/finbot/venv/bin/python scripts/run_wechat_bridge.py
+Restart=always
+RestartSec=10
+MemoryMax=300M
+[Install]
+WantedBy=multi-user.target

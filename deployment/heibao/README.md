@@ -92,3 +92,12 @@ GitHub Actions 每 15 分钟（UTC cron `*/15 * * * *`）从公网访问 `${{ va
 这个脚本不在仓库里；它之前是每周 pg_dump 已冻结的 Supabase 副本，2026-11-21 改为从盒子拉取。
 
 手动测试通知通道：在 Actions 里运行 Box watchdog 并勾选 `test_notify`，会发一条测试消息，不改变已记录的在线/宕机状态；发不出去时这次运行失败。
+
+## 微信桥（ClawBot / iLink）
+
+`scripts/run_wechat_bridge.py` 把主人的微信消息转给 bot，答案发回微信。登录令牌在 `data/wechat-bridge.json`（0600，不进仓库，不打印）。
+
+- 首次：`python scripts/run_wechat_bridge.py login` 打印二维码链接，用要连接的微信号扫码；或 `import-probe <旧探测脚本的 state.json>` 沿用已有登录。
+- 服务：`deployment/heibao/finbot-wechat.service` 拷到 `/etc/systemd/system/`，`systemctl enable --now finbot-wechat`。
+- 同一个登录同一时间只能有一个进程在收消息；换新程序前先停旧的。
+- 登录失效（错误码 -14）时桥暂停一小时，并在 Telegram 里提醒；需要重新扫码。
