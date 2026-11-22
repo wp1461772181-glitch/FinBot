@@ -142,6 +142,9 @@ def _extract_ticker_tokens(text: str) -> list[str]:
 # Most earlier-answer handles a turn binds and reads (the resolver's own list is capped at the same number).
 HISTORY_BINDING_LIMIT=6
 STAGE_EFFORT='low'   # FINBOT_STAGE_LOW_EFFORT: what the steps before the answer think at, when the bot's own effort is higher
+# FINBOT_GATHER_LOW_EFFORT: what the bot's-own-effort pass is told (it is the pass that writes the answer; see Turn.decision).
+OWN_PASS_FIRST_NOTE='系统事实：前面的步骤已按较低的思考强度取过证；这一步用的是为这个 bot 设定的思考强度，用来写出回答。如果还缺资料或还需要计算，请在这一步一次要全，之后会请你直接写回答。'
+OWN_PASS_AGAIN_NOTE='系统事实：这一轮已经为补充资料多取过一次证。请用现有证据写出回答；只有确实缺一项关键事实时才再调用工具。'
 
 class HistoryCitationRef(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -2409,11 +2412,23 @@ class Turn:
         # tool it has written a draft answer: the draft is dropped and the same step is asked again at the bot's own effort, tools
         # still on offer, so the answer is written at that effort and a gap the low steps left can still be filled.
         record=self.audit.setdefault('gather_effort',{'effort':gather,'steps':0,'answered_at_own':0})
-        record['steps']+=1
-        first=await self.model(self.tool_messages(),self.exposed_tools(),stage_effort=gather)
-        if not isinstance(first,dict) or first.get('tool_calls'):return first
-        record['answered_at_own']+=1
-        return await self.model(self.tool_messages(),self.exposed_tools())
+        if not record.get('own_pass'):
+            record['steps']+=1
+            first=await self.model(self.tool_messages(),self.exposed_tools(),stage_effort=gather)
+            if not isinstance(first,dict) or first.get('tool_calls'):return first
+        # From the first "ready to answer" on, every step is the bot's own: going back to the low effort after the own pass asked
+        # for more only gets "ready" again (it already was), and the own pass then gathers one small step at a time at the high
+        # effort -- in production four such rounds took a follow-up to 627 seconds.  The own pass is told to ask for everything
+        # it still misses at once, and after that to write the answer.
+        # The "write from what you hold" note follows only an own pass that did ask for more.  When the loop comes back for
+        # another reason (a nudge to use the tools, the compound-empty note, an absence re-check), that recovery note is the
+        # last word and nothing is added after it.
+        note=OWN_PASS_FIRST_NOTE if not record.get('own_pass') else OWN_PASS_AGAIN_NOTE if record.pop('own_asked_last',False) else None
+        record['own_pass']=record.get('own_pass',0)+1;record['answered_at_own']+=1
+        own=await self.model([*self.tool_messages(),*([{'role':'system','content':note}] if note else [])],self.exposed_tools())
+        if isinstance(own,dict) and own.get('tool_calls'):
+            record['own_tool_rounds']=record.get('own_tool_rounds',0)+1;record['own_asked_last']=True
+        return own
 
     async def closing_answer(self):
         """The tool-free closing answer.  A reply that only writes a tool call is asked for once more."""
