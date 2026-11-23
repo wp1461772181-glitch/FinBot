@@ -28,7 +28,7 @@ def normalize(text: str) -> str:
 def run_checks(checks: Checks, *, answer: str, status: str) -> list[str]:
     """Return the names of the failed checks, in order; an empty list means the turn passed."""
     failed = []
-    if status != checks.status:
+    if checks.status != "any" and status != checks.status:
         failed.append("status")
     haystack = normalize(answer)
     for index, alternatives in enumerate(checks.include_any):

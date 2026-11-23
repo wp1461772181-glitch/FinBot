@@ -17,9 +17,9 @@ def test_loads_a_case_with_defaults(tmp_path):
     assert case.turns[0].text == "问题" and case.turns[0].checks == Checks()
 
 def test_checks_are_parsed_into_tuples(tmp_path):
-    checks = {"status": "complete", "include_any": [["1158.44", "115.8"], ["英伟达"]], "exclude": ["没有可核验"]}
+    checks = {"status": "succeeded", "include_any": [["1158.44", "115.8"], ["英伟达"]], "exclude": ["没有可核验"]}
     [case] = load_suite(_write(tmp_path, [_case(turns=[{"text": "q", "checks": checks}])]))
-    assert case.turns[0].checks == Checks("complete", (("1158.44", "115.8"), ("英伟达",)), ("没有可核验",))
+    assert case.turns[0].checks == Checks("succeeded", (("1158.44", "115.8"), ("英伟达",)), ("没有可核验",))
 
 def test_turn_without_checks_key_gets_defaults(tmp_path):
     [case] = load_suite(_write(tmp_path, [_case(turns=[{"text": "q"}])]))
