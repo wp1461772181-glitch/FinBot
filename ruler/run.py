@@ -96,6 +96,9 @@ def run_case(case: Case, *, ask, audit, catalog_model: str) -> list[TurnResult]:
 def _result(case, index, turn, status, reason, answer, tools, first_event_ms, first_delta_ms, total_ms,
             error, audit_fields) -> TurnResult:
     failed = run_checks(turn.checks, answer=answer, status=status)
+    # Checks(status="any") tolerates waiting_for_input, but a hard failure must never count as passed.
+    if status not in _NORMAL_STATUSES and "status" not in failed:
+        failed.append("status")
     return TurnResult(
         case_id=case.id, kind=case.kind, turn_index=index, passed=not failed, failed_checks=failed,
         status=status, reason=reason, first_event_ms=first_event_ms, first_delta_ms=first_delta_ms,

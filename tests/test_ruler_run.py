@@ -109,3 +109,11 @@ def test_report_and_compare_write_markdown(tmp_path, monkeypatch):
     assert (tmp_path / "r.md").read_text(encoding="utf-8").startswith("# 基线") and "haiku" in (tmp_path / "r.md").read_text(encoding="utf-8")
     assert ruler_run.main(["compare", "--base", str(tmp_path / "a"), "--new", str(tmp_path / "b"), "--title", "对比", "--out", str(tmp_path / "c.md")]) == 0
     assert "持平" in (tmp_path / "c.md").read_text(encoding="utf-8")
+
+def test_status_any_does_not_excuse_a_hard_failure():
+    c = Case("R02", "recall", "t", (Turn("记一下", Checks(status="any")), Turn("问", Checks(status="any"))))
+    results = ruler_run.run_case(c, audit=lambda cid: {}, catalog_model="", ask=lambda text, **kw: outcome(status="error"))
+    assert results[0].passed is False and results[0].failed_checks == ["status"]
+    def boom(text, **kw): raise RuntimeError("boom")
+    [res] = ruler_run.run_case(Case("R03", "recall", "t", (Turn("q", Checks(status="any")),)), ask=boom, audit=lambda cid: {}, catalog_model="")
+    assert res.passed is False and res.failed_checks == ["status"]
