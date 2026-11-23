@@ -117,3 +117,80 @@ def test_status_any_does_not_excuse_a_hard_failure():
     def boom(text, **kw): raise RuntimeError("boom")
     [res] = ruler_run.run_case(Case("R03", "recall", "t", (Turn("q", Checks(status="any")),)), ask=boom, audit=lambda cid: {}, catalog_model="")
     assert res.passed is False and res.failed_checks == ["status"]
+
+
+def _run_args(tmp_path, base):
+    return ["run", "--suite", str(_suite(tmp_path)), "--out", str(tmp_path / "o"), "--base", base]
+
+def _stub_api(monkeypatch):
+    monkeypatch.setattr(ruler_run, "owner_credential", lambda: "cred")
+    monkeypatch.setattr(ruler_run, "api_alive", lambda base: True)
+    monkeypatch.setattr(ruler_run, "ask", lambda base, cred, text, **kw: outcome())
+
+def test_guard_refuses_a_non_local_host(tmp_path, capsys):
+    assert ruler_run.main(_run_args(tmp_path, "https://example.com")) == 2
+    assert "example.com" in capsys.readouterr().err
+
+def test_guard_refuses_the_production_port_on_localhost(tmp_path, capsys):
+    assert ruler_run.main(_run_args(tmp_path, "http://127.0.0.1:8000")) == 2
+    assert "8000" in capsys.readouterr().err
+
+def test_guard_lets_a_local_shadow_port_through(tmp_path, monkeypatch):
+    _stub_api(monkeypatch)
+    assert ruler_run.main(_run_args(tmp_path, "http://localhost:9031")) == 0
+
+def test_guard_refuses_an_unparsable_base(tmp_path, capsys):
+    assert ruler_run.main(_run_args(tmp_path, "http://127.0.0.1:notaport")) == 2
+    assert "Traceback" not in capsys.readouterr().err
+
+def test_allow_production_passes_the_guard(tmp_path, monkeypatch):
+    _stub_api(monkeypatch)
+    assert ruler_run.main(_run_args(tmp_path, "http://127.0.0.1:8000") + ["--allow-production"]) == 0
+
+def test_repeated_meta_flags_are_all_kept(tmp_path, monkeypatch):
+    _stub_api(monkeypatch)
+    ruler_run.main(["run", "--suite", str(_suite(tmp_path)), "--out", str(tmp_path / "a")])
+    ruler_run.main(["run", "--suite", str(_suite(tmp_path)), "--out", str(tmp_path / "b")])
+    assert ruler_run.main(["report", "--results", str(tmp_path / "a"), "--title", "基线", "--out", str(tmp_path / "r.md"),
+                           "--meta", "模型=haiku", "--meta", "代码版本=abc123"]) == 0
+    text = (tmp_path / "r.md").read_text(encoding="utf-8")
+    assert "haiku" in text and "abc123" in text
+    assert ruler_run.main(["compare", "--base", str(tmp_path / "a"), "--new", str(tmp_path / "b"), "--title", "对比",
+                           "--out", str(tmp_path / "c.md"), "--meta", "模型=haiku", "--meta", "代码版本=abc123"]) == 0
+    text = (tmp_path / "c.md").read_text(encoding="utf-8")
+    assert "haiku" in text and "abc123" in text
+
+def test_meta_without_equals_is_an_error(tmp_path, monkeypatch, capsys):
+    _stub_api(monkeypatch)
+    ruler_run.main(["run", "--suite", str(_suite(tmp_path)), "--out", str(tmp_path / "a")])
+    assert ruler_run.main(["report", "--results", str(tmp_path / "a"), "--title", "t", "--out", str(tmp_path / "r.md"), "--meta", "模型haiku"]) == 2
+    assert "模型haiku" in capsys.readouterr().err
+
+def test_results_with_unicode_line_separators_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(ruler_run, "owner_credential", lambda: "cred")
+    monkeypatch.setattr(ruler_run, "api_alive", lambda base: True)
+    monkeypatch.setattr(ruler_run, "ask", lambda base, cred, text, **kw: outcome(answer="营收  1158.44 亿 结束\x85"))
+    assert ruler_run.main(["run", "--suite", str(_suite(tmp_path)), "--out", str(tmp_path / "a"), "--cases", "F01"]) == 0
+    assert ruler_run.main(["report", "--results", str(tmp_path / "a"), "--title", "t", "--out", str(tmp_path / "r.md")]) == 0
+    summary = ruler_run._load_summary(tmp_path / "a")
+    assert summary["turns"] == 1
+
+def test_empty_cases_filter_is_an_error(tmp_path, monkeypatch, capsys):
+    _stub_api(monkeypatch)
+    assert ruler_run.main(["run", "--suite", str(_suite(tmp_path)), "--out", str(tmp_path / "o"), "--cases", " , "]) == 2
+    assert not (tmp_path / "o" / "results.jsonl").exists()
+
+def test_malformed_results_row_is_a_message_not_a_traceback(tmp_path, monkeypatch, capsys):
+    _stub_api(monkeypatch)
+    ruler_run.main(["run", "--suite", str(_suite(tmp_path)), "--out", str(tmp_path / "a")])
+    rows = [json.loads(line) for line in (tmp_path / "a" / "results.jsonl").read_text(encoding="utf-8").split("\n") if line]
+    for name, mutate in (("missing", lambda r: r.pop("answer")), ("extra", lambda r: r.update(bogus=1))):
+        mutate(rows[0])
+        bad = tmp_path / name
+        bad.mkdir()
+        (bad / "results.jsonl").write_text(json.dumps(rows[0], ensure_ascii=False) + "\n", encoding="utf-8")
+        assert ruler_run.main(["report", "--results", str(bad), "--title", "t", "--out", str(tmp_path / "r.md")]) == 2
+        assert "results.jsonl" in capsys.readouterr().err
+        assert ruler_run.main(["compare", "--base", str(bad), "--new", str(tmp_path / "a"), "--title", "t", "--out", str(tmp_path / "c.md")]) == 2
+        capsys.readouterr()
+        rows[0] = json.loads((tmp_path / "a" / "results.jsonl").read_text(encoding="utf-8").split("\n")[0])

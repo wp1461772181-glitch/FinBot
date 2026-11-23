@@ -40,3 +40,35 @@ def test_status_any_accepts_every_status():
 def test_default_status_is_succeeded():
     assert Checks().status == "succeeded"
     assert run_checks(Checks(), answer="", status="waiting_for_input") == ["status"]
+
+
+def test_number_needles_respect_digit_boundaries():
+    c = Checks(include_any=(("13.4",),))
+    assert run_checks(c, answer="增长 13.4%", status="succeeded") == []
+    assert run_checks(c, answer="营收 113.4 亿", status="succeeded") == ["include_any[0]"]
+    assert run_checks(c, answer="营收 13.45 亿", status="succeeded") == ["include_any[0]"]
+    assert run_checks(c, answer="比率 0.13.4", status="succeeded") == ["include_any[0]"]
+
+
+def test_integer_needle_does_not_match_inside_a_decimal():
+    c = Checks(include_any=(("68",),))
+    assert run_checks(c, answer="警戒线是 68%", status="succeeded") == []
+    assert run_checks(c, answer="警戒线是68。", status="succeeded") == []
+    assert run_checks(c, answer="是 168", status="succeeded") == ["include_any[0]"]
+    assert run_checks(c, answer="是 68.5%", status="succeeded") == ["include_any[0]"]
+
+
+def test_text_needles_keep_substring_matching():
+    assert run_checks(Checks(include_any=(("aapl",), ("q3",))), answer="AAPL 的 FY2027Q3", status="succeeded") == []
+
+
+def test_full_dollar_figure_is_one_number():
+    c = Checks(include_any=(("115844",),))
+    assert run_checks(c, answer="营收 115,844 百万美元", status="succeeded") == []
+    assert run_checks(c, answer="营收 115,844,000,000 美元", status="succeeded") == ["include_any[0]"]
+
+
+def test_exclude_needles_use_the_same_boundaries():
+    c = Checks(exclude=("68",))
+    assert run_checks(c, answer="是 168", status="succeeded") == []
+    assert run_checks(c, answer="是 68%", status="succeeded") == ["exclude[0]"]

@@ -118,6 +118,10 @@ GitHub Actions 每 15 分钟（UTC cron `*/15 * * * *`）从公网访问 `${{ va
 - 影子 API 只读写 `finbot_ruler` 和它自己那份 `data/`，后台循环关闭，所以评测不会动线上的对话、记忆、发件箱和哨兵快照。
 - 影子库的地址写在 `/opt/finbot/ruler.env`（仅 root 可读），不打印。
 - 可用内存不足 800 MB 时 `up` 会拒绝。
+- 每次 `up` 都会重新整树复制源码（`rsync --delete`），所以 `ruler/` 要在每次 `up` 之后重新同步到 `/opt/finbot/ruler-src/ruler/`。
+- 影子 API 关闭了追踪（Langfuse），也不带哨兵令牌；它写的影子法官记录在 `/opt/finbot/ruler-src/judge-shadow`，不会写进线上目录。
+- 影子 API 与线上共用知识检索后端（只读，不会写入）。
+- `up` 如果中途失败，先跑 `down`，再重新 `up`。
 
 跑评测（把仓库里的 `ruler/` 同步到 `/opt/finbot/ruler-src/ruler/` 之后，在 `/opt/finbot/ruler-src` 下）：
 
@@ -128,6 +132,6 @@ set -a; . /opt/finbot/ruler.env; set +a; export RULER_DATABASE_URL="$DATABASE_UR
 /opt/finbot/venv/bin/python -m ruler.run compare --base <基线目录> --new <新结果目录> --title 标题 --out 对比.md
 ```
 
-- 运行器默认连 `127.0.0.1:9031`；目标是 8000 端口（线上）时会拒绝，除非带 `--allow-production`。
+- 运行器默认连 `127.0.0.1:9031`；目标不是本机（127.0.0.1、localhost、::1）或是 8000 端口（线上）时会拒绝，除非带 `--allow-production`。
 - `--cases F01,U03` 只跑指定的题。
 - 题库 `ruler/suites/baseline-v1.json` 由 `ruler/suites/make_baseline_v1.py` 生成；里面的标准数字取自生成当天的影子库，备份换了以后「最近一季」类的题要重新核对。

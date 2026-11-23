@@ -18,6 +18,7 @@ from ruler.report import render, render_comparison
 
 DEFAULT_BASE = "http://127.0.0.1:9031"
 PRODUCTION_PORT = 8000
+_LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 _NORMAL_STATUSES = ("succeeded", "waiting_for_input")
 _DB_ENV = "RULER_DATABASE_URL"
 _DB_CONNECT_TIMEOUT_SECONDS = 3
@@ -132,15 +133,26 @@ def _fail(message: str) -> int:
 
 
 def _command_run(args) -> int:
-    port = urlparse(args.base).port
-    if port == PRODUCTION_PORT and not args.allow_production:
-        return _fail(f"拒绝对生产端口 {PRODUCTION_PORT} 发问；确需如此请加 --allow-production")
+    if not args.allow_production:
+        try:
+            parsed = urlparse(args.base)
+            host, port = parsed.hostname, parsed.port
+        except ValueError:
+            return _fail(f"--base 无法解析: {args.base}")
+        if not host:
+            return _fail(f"--base 里没有主机名: {args.base}")
+        if host not in _LOCAL_HOSTS:
+            return _fail(f"拒绝对非本机主机 {host} 发问；确需如此请加 --allow-production")
+        if port == PRODUCTION_PORT:
+            return _fail(f"拒绝对生产端口 {PRODUCTION_PORT} 发问；确需如此请加 --allow-production")
     try:
         cases = load_suite(args.suite)
     except SuiteError as exc:
         return _fail(str(exc))
     if args.cases:
         wanted = [name.strip() for name in args.cases.split(",") if name.strip()]
+        if not wanted:
+            return _fail(f"--cases 里没有题号: {args.cases!r}")
         unknown = [name for name in wanted if name not in {case.id for case in cases}]
         if unknown:
             return _fail(f"题库里没有这些题号: {', '.join(unknown)}")
@@ -179,33 +191,46 @@ def ask_through(base: str, credential: str, text: str, **kwargs):
 
 def _load_summary(directory) -> dict:
     path = Path(directory) / "results.jsonl"
-    lines = path.read_text(encoding="utf-8").splitlines()
+    # Split on "\n" only: str.splitlines() also breaks on U+2028, U+2029 and U+0085, which may occur in an answer.
+    lines = path.read_text(encoding="utf-8").split("\n")
     return summarize([from_json(json.loads(line)) for line in lines if line.strip()])
 
 
 def _parse_meta(pairs: list[str]) -> dict[str, str]:
     meta = {}
     for pair in pairs:
-        key, _, value = pair.partition("=")
+        key, separator, value = pair.partition("=")
+        if not separator:
+            raise ValueError(f"--meta 要写成 名称=值，收到: {pair}")
         meta[key] = value
     return meta
 
 
 def _command_report(args) -> int:
     try:
+        meta = _parse_meta(args.meta)
+    except ValueError as exc:
+        return _fail(str(exc))
+    try:
         summary = _load_summary(args.results)
-    except (OSError, ValueError) as exc:
-        return _fail(f"读不了结果 {args.results}: {exc}")
-    Path(args.out).write_text(render(summary, title=args.title, meta=_parse_meta(args.meta)), encoding="utf-8")
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return _fail(f"读不了结果 {Path(args.results) / 'results.jsonl'}: {exc}")
+    Path(args.out).write_text(render(summary, title=args.title, meta=meta), encoding="utf-8")
     return 0
 
 
 def _command_compare(args) -> int:
     try:
-        base, new = _load_summary(args.base), _load_summary(args.new)
-    except (OSError, ValueError) as exc:
-        return _fail(f"读不了结果: {exc}")
-    text = render_comparison(base, new, title=args.title, meta=_parse_meta(args.meta))
+        meta = _parse_meta(args.meta)
+    except ValueError as exc:
+        return _fail(str(exc))
+    summaries = []
+    for directory in (args.base, args.new):
+        try:
+            summaries.append(_load_summary(directory))
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            return _fail(f"读不了结果 {Path(directory) / 'results.jsonl'}: {exc}")
+    text = render_comparison(summaries[0], summaries[1], title=args.title, meta=meta)
     Path(args.out).write_text(text, encoding="utf-8")
     return 0
 
@@ -227,14 +252,14 @@ def _build_parser() -> argparse.ArgumentParser:
     report.add_argument("--results", required=True)
     report.add_argument("--title", required=True)
     report.add_argument("--out", required=True)
-    report.add_argument("--meta", nargs="*", default=[])
+    report.add_argument("--meta", action="append", default=[], help="名称=值，可重复")
 
     compare = commands.add_parser("compare", help="render two runs side by side")
     compare.add_argument("--base", required=True)
     compare.add_argument("--new", required=True)
     compare.add_argument("--title", required=True)
     compare.add_argument("--out", required=True)
-    compare.add_argument("--meta", nargs="*", default=[])
+    compare.add_argument("--meta", action="append", default=[], help="名称=值，可重复")
     return parser
 
 
