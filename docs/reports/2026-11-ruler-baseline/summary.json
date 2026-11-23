@@ -1,0 +1,95 @@
+{
+  "turns": 86,
+  "cases": 60,
+  "pass_rate": 0.9651162790697675,
+  "failure_rate": 0.0,
+  "total_ms_p50": 11479,
+  "total_ms_p90": 21422,
+  "first_delta_ms_p50": 11268,
+  "first_delta_ms_p90": 21106,
+  "first_event_ms_p50": 673,
+  "tool_calls_mean": 1.755813953488372,
+  "calc_share": 0.41721854304635764,
+  "model_calls_mean": 3.764705882352941,
+  "token_usage_mean": 44755.15294117647,
+  "stop_reasons": {
+    "(none)": 85,
+    "zero_evidence": 1
+  },
+  "by_kind": {
+    "fact": {
+      "turns": 15,
+      "pass_rate": 1.0,
+      "total_ms_p50": 10057,
+      "total_ms_p90": 13578,
+      "first_delta_ms_p50": 9603,
+      "first_event_ms_p50": 724
+    },
+    "brief": {
+      "turns": 10,
+      "pass_rate": 0.9,
+      "total_ms_p50": 21736,
+      "total_ms_p90": 37695,
+      "first_delta_ms_p50": 21387,
+      "first_event_ms_p50": 667
+    },
+    "compare": {
+      "turns": 10,
+      "pass_rate": 1.0,
+      "total_ms_p50": 14594,
+      "total_ms_p90": 19794,
+      "first_delta_ms_p50": 14443,
+      "first_event_ms_p50": 665
+    },
+    "followup": {
+      "turns": 20,
+      "pass_rate": 1.0,
+      "total_ms_p50": 12575,
+      "total_ms_p90": 15398,
+      "first_delta_ms_p50": 12352,
+      "first_event_ms_p50": 666
+    },
+    "recall": {
+      "turns": 24,
+      "pass_rate": 0.9583333333333334,
+      "total_ms_p50": 10304,
+      "total_ms_p90": 19887,
+      "first_delta_ms_p50": 10037,
+      "first_event_ms_p50": 675
+    },
+    "general": {
+      "turns": 7,
+      "pass_rate": 0.8571428571428571,
+      "total_ms_p50": 7958,
+      "total_ms_p90": 10581,
+      "first_delta_ms_p50": 7887,
+      "first_event_ms_p50": 667
+    }
+  },
+  "failed": [
+    {
+      "case_id": "B09",
+      "turn_index": 0,
+      "status": "succeeded",
+      "failed_checks": [
+        "include_any[1]"
+      ]
+    },
+    {
+      "case_id": "R07",
+      "turn_index": 2,
+      "status": "succeeded",
+      "failed_checks": [
+        "include_any[0]"
+      ]
+    },
+    {
+      "case_id": "G07",
+      "turn_index": 0,
+      "status": "succeeded",
+      "failed_checks": [
+        "include_any[0]"
+      ]
+    }
+  ]
+}
