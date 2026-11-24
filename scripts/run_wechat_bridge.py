@@ -96,7 +96,8 @@ class _Progress:
         if kind == "checklist":
             self.kernel = True
             texts = [str(item.get("text", "")).strip() for item in data.get("items") or [] if isinstance(item, dict)]
-            if not self.checklist_sent and any(texts):
+            texts = [t for t in texts if t]
+            if not self.checklist_sent and texts:
                 self.checklist_sent = True
                 await self.send("我分几步来做：\n" + "\n".join(f"{i}. {t}" for i, t in enumerate(texts, 1)))
         elif kind == "narration":
@@ -181,6 +182,7 @@ class Bridge:
     async def _slow_note(self, uid: str, token: str | None, progress: _Progress) -> None:
         await asyncio.sleep(SLOW_NOTICE_AFTER)
         if not progress.kernel:  # a kernel turn already speaks for itself
+            progress.sentence_sent = True  # the note takes the turn's sentence slot
             await self.reply(uid, token, SLOW_TEXT)
 
     async def _ask_waiting(self, target: dict, uid: str, token: str | None, progress: _Progress):

@@ -424,3 +424,39 @@ def test_ask_agent_hands_events_over_as_they_arrive_and_returns_the_same_turn():
 
     assert run(go())[0] == "ok"
     assert got == [("narration", {"text": "先看"}), ("delta", {"text": "ok"})]
+
+
+def test_the_slow_note_takes_the_sentence_slot(monkeypatch):
+    monkeypatch.setattr(bridge, "SLOW_NOTICE_AFTER", 0.05)
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 0.1)
+    script = [(0.08, *_plan("财报")), (0, *_say("一句")), (0.1, *_say("又一句"))]
+    assert _sent(_kernel_ask(script)) == [bridge.SLOW_TEXT, "我分几步来做：\n1. 财报", "答案。"]
+
+
+def test_empty_checklist_items_are_dropped_before_numbering(monkeypatch):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 5)
+    script = [(0, "checklist", {"items": [{"text": "财报"}, {"text": "  "}, {"text": "估值"}]})]
+    assert _sent(_kernel_ask(script)) == ["我分几步来做：\n1. 财报\n2. 估值", "答案。"]
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_the_mark_timer_does_not_outlive_the_turn(monkeypatch, fails):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 0.05)
+    monkeypatch.setattr(bridge, "SLOW_NOTICE_AFTER", 5)
+
+    async def ask(bot_id, text, on_event=None):
+        await on_event("narration", {"text": "没发出去的一句"})
+        if fails:
+            raise RuntimeError("boom")
+        return "答案。", [], None
+
+    async def go():
+        b, il, _ = _make(ask)
+        await b.handle(_message())
+        await _drain(b)
+        done = len(il.sent)
+        await asyncio.sleep(0.15)
+        return done, len(il.sent)
+
+    done, later = run(go())
+    assert done == 1 and later == 1
