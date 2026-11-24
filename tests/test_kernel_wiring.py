@@ -248,12 +248,13 @@ def test_narration_and_checklist_frames_reach_the_client_and_the_stored_row(wiri
     wiring.model(steps)
     events = wiring.bot_turn()
     assert [d for n, d in events if n == "narration"] == [{"text": "先看财报"}]
-    assert [d for n, d in events if n == "checklist"] == [{"items": plan}]
+    closed = [{"text": "查财报", "status": "done"}, {"text": "写结论", "status": "done"}]
+    assert [d for n, d in events if n == "checklist"] == [{"items": plan}, {"items": closed}]   # shown, then closed with the answer
     names = [n for n, _ in events]
     assert names.index("narration") < names.index("tool_start") and not any(n == "error" for n in names)
     assert "".join(d["text"] for n, d in events if n == "delta") == "营收 1158 [1]"
     final = [kw for role, kw in wiring.rows() if role == "assistant"][-1]["tool_calls"]
-    assert final["narration"] == ["先看财报"] and final["checklist"] == plan and final["tier"] == "high"
+    assert final["narration"] == ["先看财报"] and final["checklist"] == closed and final["tier"] == "high"
     assert wiring.executed == [("query_financials", {"symbol": "AAPL"})]
 
 
@@ -276,13 +277,14 @@ def reload_history(wiring, rows):
 
 
 def test_history_reload_returns_narration_checklist_and_tier(wiring):
+    closed = [{"text": "查财报", "status": "done"}, {"text": "写结论", "status": "done"}]
     wiring.bot["engine"] = "v2"
     steps, plan = say_and_plan_turn()
     wiring.model(steps)
     wiring.bot_turn()
     rows = reload_rows(wiring)
     assistant = [m for m in reload_history(wiring, rows) if m["role"] == "assistant"][-1]
-    assert assistant["narration"] == ["先看财报"] and assistant["checklist"] == plan and assistant["tier"] == "high"
+    assert assistant["narration"] == ["先看财报"] and assistant["checklist"] == closed and assistant["tier"] == "high"
     # The kernel's own tools are in the rebuilt trace next to the catalog's, and nothing broke on their names.
     assert {t["name"] for t in assistant["tool_trace"]} == {"query_financials", "plan", "escalate"}
     assert all(t["status"] == "complete" for t in assistant["tool_trace"])
