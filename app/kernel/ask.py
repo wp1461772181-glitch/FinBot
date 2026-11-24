@@ -71,5 +71,9 @@ def settle(run, args: dict) -> dict:
     if run.carried:      # the conversation's own write card is still waiting: a question would replace it unpressed
         return {"ok": False, "data": [], "error_code": "write_card_waiting", "reason": WRITE_CARD_WAITING}
     run.question_card = card(*checked, run.question)
+    # The turn's skill rides on the card (kept by the server with the pending question), so the answer's turn can take it up again.
+    skill = (run.audit.get("skill") or {}).get("name")
+    if skill:
+        run.question_card["skill"] = skill
     run.audit["asked"] = True
     return {"ok": True, "data": [{"status": "waiting_for_input", "note": NOTE}]}

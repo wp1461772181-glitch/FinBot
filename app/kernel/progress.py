@@ -114,6 +114,7 @@ def close_checklist(run) -> bool:
 
 
 TOOL_PHRASES = {
+    "ask": "向你提问", "use_skill": "取技能步骤",
     "query_financials": "查财务数据", "query_stock_prices": "查历史行情", "query_market_quote": "查最新报价",
     "query_sec_filings": "查 SEC 备案", "search_knowledge": "翻资料库", "web_research": "上网搜索",
     "search_configured_news": "查新闻", "search_x": "搜 X", "calculate": "算数", "calculate_formula": "算数", "query_portfolio": "看持仓",

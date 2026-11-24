@@ -17,6 +17,7 @@ from .. import agent_model_roles as roles
 from .. import x_search
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_progress import mark_progress, progress_watchdog
+from .. import agent_skills
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
@@ -360,6 +361,18 @@ async def _answer_press(run: _Run, settled: press.Settled, state: dict) -> dict:
     return _result(run, settled.answer, "press")
 
 
+async def _skill_of_question(context, state: dict) -> dict | None:
+    """The skill that was in force when the question being answered was asked (the server kept its name on the card), if it is still enabled."""
+    name = (state.get("pending_request") or {}).get("skill")
+    if not isinstance(name, str) or not name or not owner_credential_matches(getattr(context, "identity_credential", "")):
+        return None
+    try:
+        return await asyncio.to_thread(agent_skills.active, getattr(context, "owner_hash", ""), name=name)
+    except Exception:
+        logger.exception("kernel skill lookup for an answer failed")
+        return None
+
+
 async def run_turn(question: str, context, emit, messages: list[dict] | None = None, state: dict | None = None) -> dict:
     state = state or {}
     history = list(messages or [])[1:]   # the first message is the endpoint's own system prompt
@@ -394,8 +407,10 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
                 run.question = (state.get("pending_request") or {}).get("original_question") or ""
             # The button's raw value is not the user's message, whichever card it was on.
             history = [m for m in history if not (m.get("role") == "user" and m.get("content") == raw)]
-        run.messages = prompt.build_messages(question, context, history, fact=fact)
         started = getattr(context, "active_skill", None)
+        if pressed and settled.reply is not None and not started:
+            started = await _skill_of_question(context, state)
+        run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started)
         if started and owner_credential_matches(getattr(context, "identity_credential", "")):
             run.audit["skill"] = {"name": started["name"], "version": started["version"]}
         run.user_text = _user_text(run.question, history)

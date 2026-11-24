@@ -61,7 +61,7 @@ export function SkillDrawer({ open, onOpenChange, skill, tools, save, returnFocu
         </Field>
         <FieldSet>
           <FieldLegend variant="label">{t("允许用的工具")}</FieldLegend>
-          <FieldDescription>{t("技能只会减少可用工具；写操作照样要你确认。")}</FieldDescription>
+          <FieldDescription>{t("技能里的工具清单只对旧流程的 bot 起限制作用；写操作照样要你确认。")}</FieldDescription>
           <ul className="m-0 flex list-none flex-col gap-1 p-0" data-testid="skill-tool-list">
             {tools.map(tool => {
               const write = isWriteLevel(tool.level), id = `skill-tool-${tool.name}`;

@@ -332,20 +332,21 @@ def _enabled(db, owner_hash: str) -> list[AgentSkill]:
     return sorted(rows, key=lambda r: (r.owner_hash != BUILTIN, r.name))
 
 
-def catalogue_block(owner_hash: str, usual: list[str] | None = None) -> str | None:
+def catalogue_block(owner_hash: str, usual: list[str] | None = None, head: str | None = None) -> str | None:
     """The one prompt line per enabled skill (the bot's usual ones first), under LIST_BYTES in UTF-8 however
     many there are: descriptions are shortened to fit and, past that, only names are listed."""
+    head = head or LIST_HEAD      # the kernel sends its own head: LIST_HEAD says a skill narrows the tools, which it does not there
     with SessionLocal() as db:
         rows = _enabled(db, owner_hash)
     if not rows:
         return None
     first = {str(i) for i in usual or []}
     rows.sort(key=lambda r: str(r.id) not in first)
-    budget = LIST_BYTES - len(LIST_HEAD.encode())
+    budget = LIST_BYTES - len(head.encode())
     for width in (60, 40, 24, 12, 0):
         lines = [f"- {r.name}" + (f"：{r.description[:width]}" if width else "") for r in rows]
         if len("\n".join(lines).encode()) + 1 <= budget:
-            return LIST_HEAD + "\n" + "\n".join(lines)
+            return head + "\n" + "\n".join(lines)
     lines, used = [], 0
     for row in rows:
         line = f"- {row.name}"
@@ -353,7 +354,7 @@ def catalogue_block(owner_hash: str, usual: list[str] | None = None) -> str | No
             break
         lines.append(line)
         used += len(line.encode()) + 1
-    return LIST_HEAD + "\n" + "\n".join(lines)
+    return head + "\n" + "\n".join(lines)
 
 
 def active(owner_hash: str, *, name: str | None = None, skill_id=None) -> dict | None:

@@ -15,14 +15,16 @@ from .agent_chat_store import create_conversation,verify_conversation,append_mes
 from .agent_chat_store import conversation_context
 from . import agent_context as layers
 from .agent_workflow.fp_flags import flag as fp_flag
+from .kernel.ask import ASK
 from .kernel.progress import PLAN
+from .kernel.skills import LIST_TEXT, USE_SKILL
 from .kernel.tiers import ESCALATE
 router=APIRouter(prefix="/agent-chat",tags=["agent-chat-stream"])
 LOCKS={}
 # Event-stream heartbeat: a comment frame (no event name) while a turn is quiet, so no read sits idle for long.
 HEARTBEAT_SECONDS=15
 HEARTBEAT_FRAME=": hb\n\n"
-KERNEL_OWN_TOOLS=frozenset({PLAN,ESCALATE})  # the kernel's own tools, kept out of the stored tool traces
+KERNEL_OWN_TOOLS=frozenset({PLAN,ESCALATE,ASK,USE_SKILL})  # the kernel's own tools (act stays: a write belongs in the record), kept out of the stored tool traces
 # Strong references to the detached cancelled-turn writes, so they are not collected before they finish.
 _BACKGROUND: set=set()
 # FP13: a turn sent with detach=true runs as a task that outlives its response; TURNS holds the running ones by conversation.
@@ -417,14 +419,20 @@ async def _profile_block(credential:str|None,bot:dict|None=None)->str|None:
   return block
  except Exception:
   return None
-async def _skills(credential:str|None,bot:dict|None,message:str):
+async def _turn_skills(credential,bot,message,pressed,kernel):
+ """(skill list, started skill, question) for a turn.  A kernel turn always gets the list (its system text and tools must not
+ change between a turn and its continuation); only a typed message can start a skill by slash.  The old engine is as it was."""
+ if not kernel:return (None,None,message) if pressed else await _skills(credential,bot,message)
+ block,active,question=await _skills(credential,bot,message,head=LIST_TEXT)
+ return (block,None,message) if pressed else (block,active,question)
+async def _skills(credential:str|None,bot:dict|None,message:str,head:str|None=None):
  """The owner's skill listing for this turn and the skill 「/名字」 starts (with the question left), if any.
  A skill is a convenience: a failure to read them never blocks a turn."""
  if not _is_owner(credential):return None,None,message
  from . import agent_skills as skills
  try:
   owner=owner_hash(credential);usual=await asyncio.to_thread(skills.bot_usual,owner,(bot or {}).get("bot_id"))
-  block=await asyncio.to_thread(skills.catalogue_block,owner,usual)
+  block=await asyncio.to_thread(skills.catalogue_block,owner,usual,head)
   active,question=await asyncio.to_thread(skills.slash,owner,message)
   return block,active,question
  except Exception:
@@ -568,7 +576,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    for group in layers.complete_turns(history_rows):
     messages.extend(layers.project_turn_history(group))
    messages.extend(layers.unfinished_messages(context.get("unfinished"),turn) if fp_flag("FINBOT_FP3_UNFINISHED_TURNS",True) else [])
-   skill_block,active_skill,question=await _skills(x_chat_session,bot,payload.message) if not payload.pending_request_id else (None,None,payload.message)
+   skill_block,active_skill,question=await _turn_skills(x_chat_session,bot,payload.message,bool(payload.pending_request_id),anchored)
    messages.append({"role":"user","content":question})
    memory_note=layers.summary_message(context.get("segments",[]))
    if memory_note:messages.append(memory_note)
