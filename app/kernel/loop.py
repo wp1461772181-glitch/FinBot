@@ -39,7 +39,8 @@ CAP_NOTE = "系统事实：已达到本轮的查询上限。请用现有资料�
 
 
 BACKUP_LINE = "\n\n（这条由备用模型「{name}」回答。）"
-BACKUP_NARRATION = "主模型没有回应，改用备用模型「{name}」继续。"
+BACKUP_NARRATION = "主模型这一步没有成功，改用备用模型「{name}」继续。"
+PRIVATE_KEYS = ("_anthropic_content",)    # what a native Anthropic reply keeps for itself (signed thinking): another model cannot take it
 
 
 @dataclass
@@ -67,7 +68,8 @@ class _Run:
     user_text: str
     schemas: list
     tool_names: frozenset
-    model: ModelUse | None = None      # the model in use: the context's own, until a failure hands the turn to the backup
+    model: ModelUse      # the model in use: the context's own, until a failure hands the turn to the backup
+    final_extra: dict = field(default_factory=dict)     # extra ``final_protocol`` keys of this turn
     fallback_used: str | None = None   # the backup's catalog name once the turn is on it
     ceiling: str = "high"
     question: str = ""      # this turn's user message, as typed
@@ -132,17 +134,22 @@ async def _switch_to_backup(run: _Run, failure: Exception) -> bool:
         return False
     if not found:
         return False
-    backup = ModelUse(found["provider"], found["model"], found["api_key"], found.get("base_url"), found["name"])
-    if backup.same_as(run.model):
-        return False
-    run.audit["fallback"] = {"from": run.model.label, "to": backup.name, "reason": _failure_code(failure)}
-    run.model = backup
-    run.fallback_used = backup.name
-    run.messages[:] = [{k: v for k, v in m.items() if not k.startswith("reasoning_")} if m.get("role") == "assistant" else m
-                       for m in run.messages]
-    sentence = BACKUP_NARRATION.format(name=backup.name)
-    run.narration.append(sentence)
-    await run.emit({"event": "narration", "text": sentence, "system": True})
+    try:
+        backup = ModelUse(found["provider"], found["model"], found["api_key"], found.get("base_url"), found["name"])
+        if backup.same_as(run.model):
+            return False
+        sentence = BACKUP_NARRATION.format(name=backup.name)
+        run.audit["fallback"] = {"from": run.model.label, "to": backup.name, "reason": _failure_code(failure)}
+        run.model = backup
+        run.fallback_used = backup.name
+        run.messages[:] = [{k: v for k, v in m.items() if not (k.startswith("reasoning_") or k in PRIVATE_KEYS)} if m.get("role") == "assistant" else m
+                           for m in run.messages]
+        run.narration.append(sentence)
+        await run.emit({"event": "narration", "text": sentence, "system": True})
+    except Exception as secondary:
+        # The provider's failure is what the turn reports; the switch's own trouble is only logged (never the key).
+        logger.error("kernel backup switch failed: %s", type(secondary).__name__)
+        raise failure from None
     return True
 
 
@@ -217,7 +224,7 @@ def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None
     run.audit["terminal_status"] = status
     run.audit["writes"] = run.writes
     return {"answer": answer, "citations": run.citations, "status": status,
-            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier, "narration": run.narration, "checklist": run.checklist, **({"fallback_model": run.fallback_used} if run.fallback_used else {})}, "pending_request": run.pending or run.carried,
+            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier, "narration": run.narration, "checklist": run.checklist, **run.final_extra}, "pending_request": run.pending or run.carried,
             "result_sets": [], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
 
 
@@ -286,6 +293,7 @@ async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_aga
         label = BACKUP_LINE.format(name=run.fallback_used)
         cleaned = f"{cleaned}{label}"
         await run.emit({"event": "delta", "text": label})
+        run.final_extra["fallback_model"] = run.fallback_used
     if progress.close_checklist(run):
         await run.emit({"event": "checklist", "items": [dict(entry) for entry in run.checklist]})
     return _result(run, cleaned, stop_reason)
@@ -329,8 +337,8 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
     pressed = press.read(question, state)
     tool_schemas = _tool_schemas(context)
     run = _Run(context=context, emit=emit, messages=[], user_text="", schemas=tool_schemas,
-               model=ModelUse(context.provider, context.model, context.api_key, context.base_url),
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
+               model=ModelUse(context.provider, context.model, context.api_key, context.base_url),
                ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)),
                question=question, turn_id=str(state.get("turn_id") or ""))
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):

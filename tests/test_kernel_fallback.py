@@ -10,11 +10,12 @@ import pytest
 
 import app.agent_chat_provider as provider
 from app import agent_model_catalog as catalog
+from app import anthropic_native
 from app import agent_model_roles as roles
 from app.agent_chat_models import AgentModelEntry, AgentModelRole
 from app.database import SessionLocal
 from app.kernel import loop
-from test_kernel_loop import TOKEN, call, env, kinds, make_context, step  # noqa: F401  (env is used by name)
+from test_kernel_loop import TOKEN, act_call, call, ctx, env, fake_consent, kinds, make_context, step  # noqa: F401  (env, fake_consent are used by name)
 from test_kernel_press import FakeCards, cards, pending_card, pressed, turn  # noqa: F401  (cards is used by name)
 from tests.test_agent_bots import KEY_A, OWNER_HASH, owner  # noqa: F401  (fixture)
 
@@ -126,14 +127,16 @@ def test_primary_failure_hands_over_to_the_backup(backup):
     assert [m["role"] for m in handed[-3:]] == ["assistant", "tool", "tool"]
     assert handed[-3]["tool_calls"] == two and not any(k.startswith("reasoning_") for m in handed for k in m)
     assert any(k.startswith("reasoning_") for k in fake.on("m")[1]["messages"][-3])      # the primary still had them
-    sentence = "主模型没有回应，改用备用模型「reserve」继续。"
+    sentence = "主模型这一步没有成功，改用备用模型「reserve」继续。"
     assert {"event": "narration", "text": sentence, "system": True} in events
     assert sentence in result["final_protocol"]["narration"]
     assert result["answer"] == "收入100" + LABEL and result["status"] == "succeeded"
     assert result["final_protocol"]["fallback_model"] == "reserve"
     assert result["audit"]["fallback"] == {"from": "anthropic/m", "to": "reserve", "reason": "provider_timeout"}
     assert [c["model"] for c in result["audit"]["calls"]] == ["anthropic/m", "reserve"]
-    assert "key" not in json.dumps(result["audit"]) and BACKUP["api_key"] not in json.dumps(result["audit"])
+    for secret in (BACKUP["api_key"], "k"):          # the fake backup's and the primary's actual keys
+        assert f'"{secret}"' not in json.dumps([result["audit"], result["final_protocol"], events])
+    assert BACKUP["api_key"] not in json.dumps(result)
 
 
 def test_backup_is_called_with_its_own_provider_key_and_base_url(backup):
@@ -250,3 +253,73 @@ def test_post_press_report_is_not_labelled(cards, backup):
     assert result["answer"] == "已执行：生成研究预测。" and result["audit"]["report"] == "fallback"
     assert "备用模型" not in result["answer"] and events[-1] == {"event": "delta", "text": "已执行：生成研究预测。"}
     assert result["audit"]["fallback"]["failed"] is True
+
+
+def test_signed_anthropic_thinking_is_dropped_but_the_calls_and_text_stay(backup):
+    calls = [call("c1", "query_financials", {"symbol": "AAPL"}), call("c2", "query_financials", {"symbol": "MSFT"})]
+    blocks = [{"type": "thinking", "thinking": "hm", "signature": "sig"}, {"type": "text", "text": "我先查一下"},
+              {"type": "tool_use", "id": "c1", "name": "query_financials", "input": {"symbol": "AAPL"}},
+              {"type": "tool_use", "id": "c2", "name": "query_financials", "input": {"symbol": "MSFT"}}]
+    first = {**step(text="我先查一下", calls=calls), "extra": {"_anthropic_content": blocks, "reasoning_content": "r"}}
+    fake = backup.scripted([first, timeout(), timeout()], [step(text="好")])
+    result, _ = run_turn()
+    assert any("_anthropic_content" in m for m in fake.on("m")[1]["messages"])
+    handed = fake.on(BACKUP["model"])[0]["messages"]
+    assert not any(k == "_anthropic_content" or k.startswith("reasoning_") for m in handed for k in m)
+    assert handed[-3]["tool_calls"] == calls and [m["tool_call_id"] for m in handed[-2:]] == ["c1", "c2"]
+    _, converted = anthropic_native.convert_messages(handed, keep_thinking=True)
+    uses = [b for m in converted if m["role"] == "assistant" for b in m["content"]]
+    assert [b["type"] for b in uses] == ["text", "tool_use", "tool_use"] and [b["id"] for b in uses[1:]] == ["c1", "c2"]
+    assert result["answer"] == "好" + LABEL
+
+
+def test_a_card_proposed_after_the_switch_is_minted_and_the_answer_is_labelled(backup, fake_consent):
+    backup.scripted([timeout(), timeout()], [step(calls=[act_call("c1", "forecast", {"symbol": "AAPL"})]), step(text="请核对卡片")])
+    result, events = run_turn(ctx())
+    assert len(fake_consent.proposed) == 1 and result["status"] == "waiting_for_input" and result["pending_request"]["id"] == "card-1"
+    assert result["answer"] == "请核对卡片" + LABEL and {"event": "delta", "text": LABEL} in events
+
+
+def test_the_closing_call_after_the_step_cap_can_be_the_backups(backup):
+    tools = [step(calls=[call(f"c{i}", "query_financials", {"symbol": "AAPL"})]) for i in range(loop.MAX_STEPS)]
+    fake = backup.scripted([*tools, timeout(), timeout()], [step(text="只能这样")])
+    result, events = run_turn()
+    assert result["audit"]["stop_reason"] == "step_cap" and result["answer"] == "只能这样" + LABEL
+    assert result["answer"].count("这条由备用模型") == 1 and [e["text"] for e in events if e["event"] == "delta"].count(LABEL) == 1
+    assert fake.calls[-1]["model"] == BACKUP["model"] and fake.calls[-1]["messages"][-1]["content"] == loop.CAP_NOTE
+
+
+def test_a_successful_post_press_turn_answered_by_the_backup_is_labelled(cards, backup):
+    backup.scripted([timeout(), timeout()], [step(text="预测已提交")])
+    card = pending_card(cards)
+    result, events = turn(f"confirm:{TOKEN}", pressed(card))
+    assert len(cards.costly) == 1 and result["status"] == "succeeded" and result["answer"] == "预测已提交" + LABEL
+    assert result["audit"]["write_outcome"] == "executed" and "report" not in result["audit"]
+    assert result["final_protocol"]["fallback_model"] == "reserve"
+
+
+def test_fallback_model_is_only_set_when_the_label_was_added(cards, backup):
+    backup.scripted([timeout(), timeout()], [timeout(), timeout()])
+    result, _ = turn(f"confirm:{TOKEN}", pressed(pending_card(cards)))
+    assert result["audit"]["report"] == "fallback" and "fallback_model" not in result["final_protocol"]
+
+
+def test_a_broken_switch_leaves_the_providers_failure_as_the_turns_error(backup):
+    backup.monkeypatch.setattr(loop.roles, "fallback_for", lambda owner_hash: {"provider": "x"})   # incomplete settings
+    fake = backup.scripted([timeout(), timeout()])
+    with pytest.raises(provider.ProviderFailure) as raised:
+        run_turn()
+    assert raised.value.detail == "provider_timeout" and len(fake.calls) == 2
+
+
+def test_a_narration_that_cannot_be_sent_leaves_the_providers_failure_as_the_turns_error(backup):
+    fake = backup.scripted([timeout(), timeout()], [step(text="不该到这里")])
+
+    async def emit(event):
+        if event.get("system"):
+            raise OSError("client went away")
+
+    history = [{"role": "system", "content": "endpoint"}, {"role": "user", "content": "问题"}]
+    with pytest.raises(provider.ProviderFailure) as raised:
+        asyncio.run(loop.run_turn("问题", make_context(), emit, history, {}))
+    assert raised.value.detail == "provider_timeout" and fake.on(BACKUP["model"]) == []
