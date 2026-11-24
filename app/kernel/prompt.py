@@ -1,6 +1,8 @@
 """The kernel's fixed system prompt and the message list a turn starts from."""
 from __future__ import annotations
 
+import re
+
 from ..agent_chat_identity import owner_credential_matches
 
 SAY_LINE = "- 每次调用工具时，在 say 里用一句话说明你发现了什么、接下来做什么，用户会实时看到这句话。切换到 high 档后，先用 plan 列出清单，再逐项去做；之后每次调用工具时在 item 里写上这是清单的第几项，勾由系统来打。"
@@ -34,6 +36,25 @@ SYSTEM = f"""你是 FinBot，用户的金融助手。说话像一个可靠的同
 - 目录里没有的操作现在做不了，直接说明。"""
 
 
+def _mark_end_of_history(body: list[dict], question_at: int) -> None:
+    """Mark the conversation message just before the question for the prompt cache: it is the end of the history the next turn
+    carries unchanged, whereas what follows the question (memory note, citation catalogue, notes) differs every turn."""
+    earlier = next((i for i in range(min(question_at, len(body)) - 1, -1, -1) if body[i].get("role") != "system"), None)
+    if earlier is not None:
+        body[earlier]["cache_point"] = True
+
+
+BACKUP_LABEL = re.compile(r"\n\n（这条由备用模型「[^」\n]*」回答。）\Z")   # the line the loop adds to an answer the backup model gave
+
+
+def _without_label(message: dict) -> dict:
+    """An earlier answer comes back as the assistant's own words: the system's label line is not among them."""
+    content = message.get("content")
+    if message.get("role") == "assistant" and isinstance(content, str):
+        return {**message, "content": BACKUP_LABEL.sub("", content)}
+    return message
+
+
 def build_messages(question: str, context, history: list[dict], *, fact: str | None = None) -> list[dict]:
     """System prompt (+ the bot's instruction and, for the owner only, the profile block), then the history.
 
@@ -45,13 +66,24 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
     if owner:
         blocks.append(getattr(context, "profile_block", None))
     system = "\n\n".join(block for block in blocks if block)
-    body = [dict(message) for message in history or []]
-    # The history can end with system-authored notes after the question, so look at the last user message.
+    body = [_without_label(dict(message)) for message in history or []]
+    # The history can end with notes after the question (the memory note and the citation catalogue, both user-role messages
+    # the system wrote), so the last user message is not necessarily the question.
     last = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "user"), None)
+    asked = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "user" and body[i].get("content") == question), None)
     if fact is not None:
         if last is not None and body[last].get("content") == question:
             del body[last]
+        if asked is None:   # the loop already took the button value out: the end is the card's own (last assistant) message
+            asked = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1) + 1
+        _mark_end_of_history(body, asked)
         return [{"role": "system", "content": system}, *body, {"role": "system", "content": fact}]
-    if not (last is not None and body[last].get("content") == question):
+    # The question is already there when a user message after the last assistant message equals it; an equal message before
+    # that assistant message is an earlier turn asking the same thing.
+    after = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1)
+    asked = asked if asked is not None and asked > after else None
+    if asked is None:
         body.append({"role": "user", "content": question})
+        asked = len(body) - 1
+    _mark_end_of_history(body, asked)
     return [{"role": "system", "content": system}, *body]

@@ -593,3 +593,56 @@ def test_post_press_text_has_the_not_again_line_and_no_button_name(cards, env):
     fake, card, result, events = confirm_turn(cards, env, [step(text="好")])
     fixed = fake.calls[0]["messages"][-1]["content"].partition("\n")[0]
     assert "已经执行的操作不要再提出一次。" in fixed and "同意" not in fixed
+
+
+def test_build_messages_marks_the_end_of_the_carried_history():
+    from app.kernel import prompt
+    history = [{"role": "user", "content": "一"}, {"role": "assistant", "content": "答一"}, {"role": "user", "content": "二"},
+               {"role": "assistant", "content": "答二"}, {"role": "user", "content": "现在"}, {"role": "user", "content": "记忆笔记"}]
+    original = [dict(m) for m in history]
+    messages = prompt.build_messages("现在", ctx(), history)
+    assert [m["content"] for m in messages if m.get("cache_point")] == ["答二"] and history == original
+    # no earlier message, or an earlier system message only: nothing is marked
+    assert not any(m.get("cache_point") for m in prompt.build_messages("你好", ctx(), []))
+    assert not any(m.get("cache_point") for m in prompt.build_messages("你好", ctx(), [{"role": "system", "content": "e"}, {"role": "user", "content": "你好"}]))
+    # the question is added when the history lacks it: the history's last message is then the end
+    assert [m["content"] for m in prompt.build_messages("新问", ctx(), history[:2]) if m.get("cache_point")] == ["答一"]
+
+
+def test_build_messages_with_a_fact_marks_the_message_before_it():
+    from app.kernel import prompt
+    raw = f"confirm:{TOKEN}"
+    history = [{"role": "user", "content": QUESTION}, {"role": "assistant", "content": "请核对"}, {"role": "user", "content": raw},
+               {"role": "system", "content": "摘要"}]
+    marked = [m["content"] for m in prompt.build_messages(raw, ctx(), history, fact="系统事实：甲") if m.get("cache_point")]
+    assert marked == ["请核对"]
+    # the loop removes the button value before it asks: the card's own message is still the end of the history
+    marked = [m["content"] for m in prompt.build_messages(raw, ctx(), [history[0], history[1]], fact="系统事实：甲") if m.get("cache_point")]
+    assert marked == ["请核对"]
+
+
+def _roles_and_texts(messages):
+    return [(m["role"], m["content"]) for m in messages[1:]]
+
+
+def test_build_messages_does_not_repeat_the_question_after_the_notes():
+    from app.kernel import prompt
+    history = [{"role": "assistant", "content": "答"}, {"role": "user", "content": "问"}, {"role": "user", "content": "记忆笔记"},
+               {"role": "user", "content": "引用目录"}]
+    messages = prompt.build_messages("问", ctx(), history)
+    assert _roles_and_texts(messages) == [("assistant", "答"), ("user", "问"), ("user", "记忆笔记"), ("user", "引用目录")]
+    assert [m["content"] for m in messages if m.get("cache_point")] == ["答"]
+
+
+def test_build_messages_adds_a_missing_question_once():
+    from app.kernel import prompt
+    messages = prompt.build_messages("问", ctx(), [{"role": "user", "content": "前"}, {"role": "assistant", "content": "答"}])
+    assert _roles_and_texts(messages) == [("user", "前"), ("assistant", "答"), ("user", "问")]
+
+
+def test_build_messages_adds_a_question_an_earlier_turn_also_asked():
+    from app.kernel import prompt
+    history = [{"role": "user", "content": "问"}, {"role": "assistant", "content": "答"}, {"role": "user", "content": "别的笔记"}]
+    messages = prompt.build_messages("问", ctx(), history)
+    assert _roles_and_texts(messages) == [("user", "问"), ("assistant", "答"), ("user", "别的笔记"), ("user", "问")]
+    assert [m["content"] for m in messages if m.get("cache_point")] == ["别的笔记"]

@@ -30,7 +30,7 @@ async def _direct_agent_turn(state: AgentWorkflowState, runtime: Runtime[AgentRu
         try: get_stream_writer()({"event": kind, **event})
         except RuntimeError: pass
     # The kernel runs only for engine "v2" with the flag on; a scheduled task (unattended) never gets it (stream_workflow).
-    if runtime.context.engine == "v2" and flag("FINBOT_KERNEL_V2", True):
+    if kernel_runs(runtime.context.engine):
         from ..kernel.loop import run_turn as run_kernel_turn
         result = await run_kernel_turn(state.get("question", ""), runtime.context, emit=publish,
                                        messages=state.get("messages", []), state=state)
@@ -95,6 +95,16 @@ def _engine(bot: dict, unattended: bool) -> str | None:
     if unattended:
         return None
     return bot.get("engine") or ("v2" if os.environ.get("FINBOT_KERNEL_DEFAULT") == "v2" else None)
+
+
+def kernel_runs(engine: str | None) -> bool:
+    """Whether a turn whose resolved engine is this runs on the kernel (what the graph asks)."""
+    return engine == "v2" and flag("FINBOT_KERNEL_V2", True)
+
+
+def kernel_turn(bot: dict | None, unattended: bool = False) -> bool:
+    """Whether a turn of this bot runs on the kernel: the one decision the graph and the endpoint share."""
+    return kernel_runs(_engine(bot or {}, unattended))
 
 
 async def stream_workflow(*, question: str, messages: list[dict], provider: str, model: str,

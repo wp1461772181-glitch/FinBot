@@ -335,15 +335,54 @@ def turn_tools(group: list[dict]) -> tuple[str, ...]:
     return tuple(names[:MAX_TOOL_MARKERS])
 
 
+ANCHOR_GRID = 64               # sequence numbers per cell of the grid the layer boundary moves on (kernel turns)
+
+
+ANCHORED_ROWS = 2000           # how many rows a kernel turn reads (tool rows cost sequence numbers, almost no layer bytes)
+
+
+def window_rows(rows: list[dict], upto: int, truncated: bool, grid: int) -> tuple[list[dict], bool]:
+    """The rows (oldest first) of a read that may have stopped short of the conversation's start, cut so that the
+    front of the window moves once per grid cell instead of once per turn: when the read was truncated and its
+    oldest row lies after the summary boundary, the rows before the first grid line go.  The second value says the
+    first complete turn of what is left is an anchor (a fixed line, never the arbitrary row the read stopped at)."""
+    if not (truncated and rows and rows[0]["sequence"] > upto + 1):
+        return rows, False
+    line = -(-rows[0]["sequence"] // grid) * grid
+    return [row for row in rows if row["sequence"] >= line], True
+
+
+def anchor_indexes(complete: list[list[dict]], upto: int, first_row: int | None, grid: int,
+                   front: bool = False) -> set[int]:
+    """Which of the complete turns (oldest first) are anchors of the grid.  The first turn after the summary
+    boundary is one when the fetched rows reach back to it; any other turn is one when the grid cell of its
+    first row differs from the previous complete turn's.  Sequence numbers only: an anchor never changes as
+    the conversation grows."""
+    found = set()
+    for i, group in enumerate(complete):
+        if i == 0:
+            if front or (first_row is not None and first_row <= upto + 1): found.add(0)
+        elif group[0]["sequence"] // grid != complete[i - 1][0]["sequence"] // grid:
+            found.add(i)
+    return found
+
+
 def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYTES, l2_bytes: int = L2_BYTES,
-               l3_bytes: int = L3_BYTES) -> dict:
+               l3_bytes: int = L3_BYTES, anchor_grid: int | None = None, anchor_front: bool = False) -> dict:
     """What the next turn carries of the turns before it, by layer.  ``rows`` are the stored messages
     (oldest first, each with ``sequence``), ``segments`` the summary segments made so far.
 
     Layer 1 is the newest complete turns that fit (as stored, tool batches included).  Layer 2 is the
     complete turns before them that no segment covers yet, the newest that fit as text; what does not
     fit is ``overflow``, the turns the next segment has to take over.  Layer 3 is the newest segments
-    that fit.  A conversation that fits layer 1 has nothing in the other two."""
+    that fit.  A conversation that fits layer 1 has nothing in the other two.
+
+    ``anchor_grid`` (kernel turns): without it the oldest turn of layer 1 changes every turn, which changes
+    the text at the layer boundary and everything after it.  With it, layer 1 and layer 2 each start at an
+    anchor (see ``anchor_indexes``), the earliest one from which the turns still fit; a turn that the rule
+    above would keep but that lies before that anchor goes to the layer below.  When no anchor fits, that
+    layer follows the rule above for this call.  ``anchor_front``: the first complete turn is an anchor (see
+    ``window_rows``)."""
     upto = segments[-1]["upto_sequence"] if segments else 0
     # A turn a summary version already covers is memory now: it is in no raw layer any more.
     complete = [g for g in complete_turns(rows) if g[0]["sequence"] > upto]
@@ -360,6 +399,7 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
         for group in complete if (entry := entries.get(str(group[0].get("turn_id")))))
     used = CATALOGUE_HEAD_BYTES if has_catalogue else 0
     recent_catalogue: list[dict] = []
+    recent_costs: list[int] = []        # newest first, like the loop
     for group in reversed(complete):
         entry = entries.get(str(group[0].get("turn_id")))
         projected = project_turn_history(group)
@@ -369,8 +409,16 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
             before = catalogue_bytes(recent_catalogue) if recent_catalogue else (CATALOGUE_HEAD_BYTES if has_catalogue else 0)
             cost += catalogue_bytes([*recent_catalogue, billed_entry]) - before
         if used + cost > l1_bytes: break
-        recent.insert(0, group); used += cost
+        recent.insert(0, group); used += cost; recent_costs.append(cost)
         if entry: recent_catalogue.append({**entry, "answers_back": len(recent)})
+    anchors = anchor_indexes(complete, upto, rows[0].get("sequence") if rows else None, anchor_grid,
+                              anchor_front) if anchor_grid else set()
+    if anchor_grid:
+        reach = len(complete) - len(recent)
+        start = min((i for i in anchors if i >= reach), default=None)
+        if start is not None and start > reach:
+            drop = start - reach        # the turns before the anchor go to layer 2
+            used -= sum(recent_costs[-drop:]); recent = recent[drop:]
     older = complete[:len(complete) - len(recent)]
     turns = [Turn(g[0]["sequence"], g[-1]["sequence"], g[0].get("content") or "", project_turn_history(g)[-1]["content"] if len(project_turn_history(g)) > 1 else "",
                   (), str(g[0].get("turn_id") or ""), entries.get(str(g[0].get("turn_id"))))
@@ -392,7 +440,12 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
         half.append(turn); used_half += cost
         if turn.catalogue:
             selected_catalogue.append({**turn.catalogue, "answers_back": len(recent) + len(half)})
-    half.reverse(); overflow = turns[:len(turns)-len(half)]
+    half.reverse()
+    if anchor_grid:
+        reach = len(turns) - len(half)
+        start = min((i for i in anchors if reach <= i < len(turns)), default=None)
+        if start is not None: half = half[start - reach:]
+    overflow = turns[:len(turns)-len(half)]
     catalogue=[]
     visible = [str(g[0].get("turn_id")) for g in reversed(recent)] + [t.turn_id for t in reversed(half)]
     for idx, tid in enumerate(visible, 1):

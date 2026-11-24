@@ -52,11 +52,15 @@ async def history(conversation_id: str, credential: str, limit_bytes=14000):
             if used+size>limit_bytes: break
             output[0:0]=[{"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,"status":m.status,"turn_id":str(m.turn_id)} for m in group]; used+=size
         return output
+CONTEXT_ROWS = 500       # how many of the newest rows a turn reads
+
+
 async def conversation_context(conversation_id: str, credential: str, *, window: int | None = None,
-                               l1_bytes: int | None = None, l2_bytes: int | None = None, l3_bytes: int | None = None):
+                               l1_bytes: int | None = None, l2_bytes: int | None = None, l3_bytes: int | None = None,
+                               anchored: bool = False):
     """What the next turn of this conversation carries of the turns before it, by layer (the rule is
     ``agent_context.layer_rows``; this reads the rows and the segments).  None when the conversation
-    is not this credential's."""
+    is not this credential's.  ``anchored`` (kernel turns) moves the layer boundary on a fixed grid."""
     if not await verify_conversation(conversation_id, credential):
         return None
     # The sizes follow the window of the model that will read them (the catalog's window; default 128k).
@@ -64,9 +68,10 @@ async def conversation_context(conversation_id: str, credential: str, *, window:
     l1_bytes, l2_bytes, l3_bytes = (given if given is not None else size
                                     for given, size in zip((l1_bytes, l2_bytes, l3_bytes), sizes))
     cid = uuid.UUID(conversation_id)
+    limit = layers.ANCHORED_ROWS if anchored else CONTEXT_ROWS
     async with Session() as s:
         rows = (await s.scalars(select(AgentMessage).where(AgentMessage.conversation_id == cid)
-                                .order_by(AgentMessage.sequence.desc()).limit(500))).all()
+                                .order_by(AgentMessage.sequence.desc()).limit(limit))).all()
         segments = (await s.scalars(select(AgentConversationSummary)
                                     .where(AgentConversationSummary.conversation_id == cid)
                                     .order_by(AgentConversationSummary.seq.asc()))).all()
@@ -74,7 +79,11 @@ async def conversation_context(conversation_id: str, credential: str, *, window:
                "status": m.status, "turn_id": m.turn_id, "sequence": m.sequence} for m in reversed(rows)]
     made = [{"seq": x.seq, "from_sequence": x.from_sequence, "upto_sequence": x.upto_sequence, "content": x.content}
             for x in segments]
-    return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes)
+    if not anchored:
+        return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes)
+    stored, front = layers.window_rows(stored, made[-1]["upto_sequence"] if made else 0, len(rows) >= limit, layers.ANCHOR_GRID)
+    return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes,
+                             anchor_grid=layers.ANCHOR_GRID, anchor_front=front)
 
 
 async def load_turn_citation(conversation_id: str, credential: str, turn_id: str, ordinal: int) -> dict:

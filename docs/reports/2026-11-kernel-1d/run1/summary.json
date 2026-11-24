@@ -1,0 +1,69 @@
+{
+  "turns": 86,
+  "cases": 60,
+  "pass_rate": 1.0,
+  "failure_rate": 0.0,
+  "total_ms_p50": 5028,
+  "total_ms_p90": 8186,
+  "first_delta_ms_p50": 4372,
+  "first_delta_ms_p90": 6982,
+  "first_event_ms_p50": 2518,
+  "tool_calls_mean": 1.1627906976744187,
+  "calc_share": 0.22,
+  "model_calls_mean": 2.011627906976744,
+  "token_usage_mean": 28474.593023255813,
+  "stop_reasons": {
+    "(none)": 86
+  },
+  "by_kind": {
+    "fact": {
+      "turns": 15,
+      "pass_rate": 1.0,
+      "total_ms_p50": 3872,
+      "total_ms_p90": 6253,
+      "first_delta_ms_p50": 3076,
+      "first_event_ms_p50": 2283
+    },
+    "brief": {
+      "turns": 10,
+      "pass_rate": 1.0,
+      "total_ms_p50": 7609,
+      "total_ms_p90": 8186,
+      "first_delta_ms_p50": 6004,
+      "first_event_ms_p50": 2576
+    },
+    "compare": {
+      "turns": 10,
+      "pass_rate": 1.0,
+      "total_ms_p50": 6476,
+      "total_ms_p90": 9042,
+      "first_delta_ms_p50": 5553,
+      "first_event_ms_p50": 2995
+    },
+    "followup": {
+      "turns": 20,
+      "pass_rate": 1.0,
+      "total_ms_p50": 5553,
+      "total_ms_p90": 9480,
+      "first_delta_ms_p50": 5388,
+      "first_event_ms_p50": 2781
+    },
+    "recall": {
+      "turns": 24,
+      "pass_rate": 1.0,
+      "total_ms_p50": 4098,
+      "total_ms_p90": 7422,
+      "first_delta_ms_p50": 3155,
+      "first_event_ms_p50": 2479
+    },
+    "general": {
+      "turns": 7,
+      "pass_rate": 1.0,
+      "total_ms_p50": 3763,
+      "total_ms_p90": 5000,
+      "first_delta_ms_p50": 1937,
+      "first_event_ms_p50": 1937
+    }
+  },
+  "failed": []
+}

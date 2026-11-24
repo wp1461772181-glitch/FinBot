@@ -283,6 +283,9 @@ def _no_result(call_id):
     return {"type": "tool_result", "tool_use_id": call_id, "content": "no result was recorded for this call", "is_error": True}
 
 
+CACHE_POINT = "_cache_point"   # private marker on a converted block: a message with ``"cache_point": True`` ended here
+
+
 def convert_messages(messages, *, keep_thinking=False, system_role=False) -> tuple[list[dict], list[dict]]:
     """OpenAI-shaped messages -> (``system`` blocks, Messages API ``messages``).
 
@@ -294,6 +297,7 @@ def convert_messages(messages, *, keep_thinking=False, system_role=False) -> tup
     * ``tool_calls`` -> ``tool_use``; the ``tool`` messages that answer one assistant turn -> ``tool_result`` blocks of
       ONE user message, before any text.  A call nobody answered gets an error result; a result nobody asked for is dropped.
     * Thinking blocks are left out unless ``keep_thinking``.
+    * A message with ``"cache_point": True`` leaves ``CACHE_POINT`` on the last block it contributed (``build_request`` uses and strips it).
     """
     system, out, leading = [], [], True
     for message in messages or []:
@@ -310,6 +314,7 @@ def convert_messages(messages, *, keep_thinking=False, system_role=False) -> tup
                 _push_user(out, [{"type": "text", "text": text}])
             continue
         leading = False
+        before = sum(len(m["content"]) for m in out)
         if role == "user":
             text = _text_of(message.get("content"))
             if text.strip():
@@ -330,6 +335,8 @@ def convert_messages(messages, *, keep_thinking=False, system_role=False) -> tup
             if text:
                 block["content"] = text
             _push_user(out, [block])
+        if message.get("cache_point") is True and role != "system" and sum(len(m["content"]) for m in out) > before:
+            out[-1]["content"][-1][CACHE_POINT] = True   # the last block this message contributed; build_request reads and removes it
     return system, _expand(_settle(out))
 
 
@@ -386,7 +393,8 @@ def build_request(model, messages, schemas, *, effort=None, caps=None, keep_thin
 
     ``keep_thinking`` None follows FINBOT_ANTHROPIC_THINKING_BINDING; True keeps the thinking blocks of the history under the
     drop_block control (unless the mode is ``off``); False strips them.  ``cache`` True adds a breakpoint on the last system block
-    and on the last block of the last message, for a caller whose prompt only grows between calls."""
+    and on the last block of the last message, for a caller whose prompt only grows between calls; a message marked
+    ``"cache_point": True`` also gets one on its own last block (the last such message only).  The key is never sent."""
     caps = caps if caps is not None else static_caps(model)
     keep = keeps_thinking() if keep_thinking is None else keep_thinking
     system, converted = convert_messages(messages, keep_thinking=keep, system_role=supports_system_role(model))
@@ -406,9 +414,16 @@ def build_request(model, messages, schemas, *, effort=None, caps=None, keep_thin
             betas.append(THINKING_BINDING_BETA)
     if effort in caps["efforts"]:
         params["output_config"] = {"effort": effort}
+    marked = [b for m in converted if isinstance(m["content"], list) for b in m["content"] if b.get(CACHE_POINT)]
+    for m in converted:
+        if isinstance(m["content"], list):
+            for b in m["content"]:
+                b.pop(CACHE_POINT, None)
     if cache:
         if system:
             system[-1]["cache_control"] = {"type": "ephemeral"}
+        if marked:   # the end of the history the next turn will carry; only the last mark counts (four breakpoints at most)
+            marked[-1]["cache_control"] = {"type": "ephemeral"}
         tail = [m for m in converted if isinstance(m["content"], list) and m["content"]]
         if tail:
             tail[-1]["content"][-1]["cache_control"] = {"type": "ephemeral"}
