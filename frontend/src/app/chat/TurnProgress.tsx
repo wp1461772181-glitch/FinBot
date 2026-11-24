@@ -48,7 +48,7 @@ export function TurnProgress({ m, model, running, status }: { m: AgentChatMessag
       <div className={barClass}><ThinkingSlot text={model.current ?? (status || t("思考中"))} seconds={bar.seconds} /></div>
     </div>;
   }
-  const pieces = foldedLine(model, bar.seconds, t);
+  const pieces = foldedLine(model, bar.kind === "none" ? undefined : bar.seconds, t);
   const hasBody = model.sentences.length > 0 || model.items.length > 0;
   const heading = pieces.join(" \u00B7 ");
   return <div data-testid="turn-progress" data-state={open ? "open" : "folded"} className="flex min-w-0 flex-col gap-1.5">

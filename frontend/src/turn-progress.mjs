@@ -32,12 +32,13 @@ export function progressModel({ narration, checklist, tier, toolTrace, running }
 }
 
 /**
- * The pieces of the one-line summary, in order, only the non-empty ones.  `t` translates each template (they carry {n}, {done}, {total}
+ * The pieces of the one-line summary, in order, only the non-empty ones (no `seconds`: no time piece, a time nobody measured is not said).  `t` translates each template (they carry {n}, {done}, {total}
  * placeholders, filled after translating); by default the source phrases stand.
  */
 export function foldedLine(model, seconds, t = (text) => text) {
   if (!model) return [];
-  const pieces = [t("已思考 {n} 秒").replace("{n}", String(seconds))];
+  const pieces = [];
+  if (seconds !== undefined && seconds !== null && seconds !== "") pieces.push(t("已思考 {n} 秒").replace("{n}", String(seconds)));
   if (model.lookupCount > 0) pieces.push(t("查了 {n} 次").replace("{n}", String(model.lookupCount)));
   if (model.items.length > 0) pieces.push(t("清单 {done}/{total} 项").replace("{done}", String(model.doneCount)).replace("{total}", String(model.items.length)));
   if (model.tierLabel) pieces.push(t(model.tierLabel));
