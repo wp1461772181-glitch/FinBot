@@ -4,7 +4,7 @@ export type SourceType = "official_filing" | "uploaded_media";
 export type SettingsSection = "models" | "notifications" | "appearance" | "data" | "account";
 export type AssistantSection = "bots" | "skills" | "memory" | "news" | "knowledge";
 /** The old section names the shell's highlight and tabs are written against. */
-export type BackstageTab = "answers" | "usage" | "operations" | "deliveries";
+export type BackstageTab = "answers" | "usage" | "operations" | "deliveries" | "duty";
 export type NavSection = "agent" | "bot" | "overview" | "forecast" | "revisions" | "evaluation" | "replay" | "evidence" | "materials" | "routines" | "portfolio" | "news" | "skills" | "memory" | "me" | "knowledge" | "admin" | "backstage";
 export type MaterialFocusParams = { symbol: string; source_type: SourceType; source_id: string | null; analysis_id: string | null };
 

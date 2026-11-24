@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app import channels, model_usage
 from app.agent_chat_models import (AgentBot, AgentConversation, AgentMessage, AgentTelegramMessage, ModelCall)
@@ -16,6 +16,7 @@ from app.agent_chat_store import owner_hash
 from app.agent_workflow import consent
 from app.agent_workflow.models import AgentConsent
 from app.database import Base, SessionLocal, engine
+from app.duty_log import DutyLog
 
 OWNER = "o" * 40
 OWNER_HASH = owner_hash(OWNER)
@@ -31,20 +32,21 @@ BUTTONS = (CONFIRM, AUTHORIZE, CHANGE, REPLY)
 HASHES = ("c4p4b1l1ty" + "h" * 54, "d1g3st" + "d" * 58)
 
 ENDPOINTS = ["/backstage/answers", f"/backstage/answers/{uuid.uuid4()}", "/backstage/usage", "/backstage/operations",
-             "/backstage/deliveries"]
+             "/backstage/deliveries", "/backstage/duty"]
 
 
 @pytest.fixture(autouse=True)
 def world(monkeypatch, disposable_database):
     Base.metadata.create_all(engine, tables=[AgentConversation.__table__, AgentMessage.__table__, AgentBot.__table__,
-                                             ModelCall.__table__, AgentConsent.__table__, AgentTelegramMessage.__table__])
+                                             ModelCall.__table__, AgentConsent.__table__, AgentTelegramMessage.__table__,
+                                             DutyLog.__table__])
     consent.ensure_columns()
     import app.agent_chat_identity as identity
     monkeypatch.setattr(identity, "owner_credential_matches", lambda value: value == OWNER)
     monkeypatch.setattr(consent, "owner_credential_matches", lambda value: value == OWNER)
     model_usage.flush(timeout=10)
     with SessionLocal() as db:
-        for model in (ModelCall, AgentConsent, AgentTelegramMessage, AgentMessage, AgentConversation, AgentBot):
+        for model in (DutyLog, ModelCall, AgentConsent, AgentTelegramMessage, AgentMessage, AgentConversation, AgentBot):
             db.query(model).delete()
         db.commit()
     yield
@@ -930,3 +932,63 @@ def test_a_damaged_timeline_entry_is_skipped_never_a_500(client, entry):
     assert response.status_code == 200
     body = response.json()
     assert body["ordered"] is True and sum(1 for e in body["events"] if e["kind"] == "model_call") == 2
+
+
+# --- duty ----------------------------------------------------------------------------------------------------------
+
+def question_id(turn_id):
+    with SessionLocal() as db:
+        return db.scalar(select(AgentMessage.id).where(AgentMessage.turn_id == turn_id, AgentMessage.role == "user"))
+
+
+def duty_row(alert_id, *, owner=OWNER_HASH, at=None, text="NVDA 单日下跌 6%\n第二行细节", outcome="decided", decision="record", turn_id=None, **fields):
+    with SessionLocal() as db:
+        db.add(DutyLog(owner_hash=owner, alert_id=alert_id, created_at=at or NOW, event={"alert_id": alert_id, "symbol": "NVDA", "kind": "drop", "text": text},
+                       mode=fields.pop("mode", "shadow"), outcome=outcome, decision=decision, turn_id=turn_id, **fields))
+        db.commit()
+
+
+def test_duty_list_item_the_mode_and_the_turn_that_opens_the_drawer(client, monkeypatch):
+    monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
+    cid = conversation(bot())
+    tid, mid = turn(cid, question="盯盘提醒 #7")
+    duty_row(7, decision="tell_now", reason="跌幅大", message="NVDA 大跌，注意", delivery="queued", turn_id=tid, mode="on", ms=1200, model_calls=2)
+    duty_row(8, owner=owner_hash(GUEST))
+    body = get(client, "/backstage/duty").json()
+    assert body["mode"] == "on" and body["next_before"] is None and len(body["items"]) == 1
+    item = body["items"][0]
+    assert (item["symbol"], item["kind"], item["what"]) == ("NVDA", "drop", "NVDA 单日下跌 6%")
+    assert (item["decision"], item["outcome"], item["mode"], item["delivery"]) == ("tell_now", "decided", "on", "queued")
+    assert (item["reason"], item["message"], item["ms"], item["model_calls"], item["alert_id"]) == ("跌幅大", "NVDA 大跌，注意", 1200, 2, 7)
+    assert item["turn_id"] == str(tid) and item["message_id"] == str(question_id(tid))
+    monkeypatch.setenv("FINBOT_DUTY_MODE", "junk")
+    assert get(client, "/backstage/duty").json()["mode"] == "shadow"
+
+
+def test_duty_row_without_a_turn_has_nothing_to_open(client):
+    duty_row(1, outcome="dropped", decision=None)
+    item = get(client, "/backstage/duty").json()["items"][0]
+    assert item["turn_id"] is None and item["message_id"] is None and item["decision"] is None
+
+
+def test_duty_filters_paging_and_validation(client):
+    for index in range(5):
+        duty_row(index, at=NOW - timedelta(minutes=index), decision="digest" if index % 2 else "ignore")
+    duty_row(9, at=NOW - timedelta(minutes=9), outcome="failed", decision=None)
+    first = get(client, "/backstage/duty", limit=2).json()
+    second = get(client, "/backstage/duty", limit=2, before=first["next_before"]).json()
+    third = get(client, "/backstage/duty", limit=2, before=second["next_before"]).json()
+    assert [i["alert_id"] for page in (first, second, third) for i in page["items"]] == [0, 1, 2, 3, 4, 9] and third["next_before"] is None
+    assert [i["alert_id"] for i in get(client, "/backstage/duty", decision="digest").json()["items"]] == [1, 3]
+    assert [i["alert_id"] for i in get(client, "/backstage/duty", outcome="failed").json()["items"]] == [9]
+    for bad in ({"decision": "sell"}, {"outcome": "x"}):
+        response = get(client, "/backstage/duty", **bad)
+        assert response.status_code == 400 and response.json() == {"detail": "invalid_filter"}
+    assert get(client, "/backstage/duty", before="nonsense").status_code == 400
+    assert get(client, "/backstage/duty", limit=0).status_code == 422
+    assert get(client, "/backstage/duty").headers["cache-control"] == "no-store"
+
+
+def test_duty_shows_no_card_button_value(client):
+    duty_row(1, text="alert " + CONFIRM, decision="tell_now", message="按 " + AUTHORIZE, reason=REPLY)
+    assert not any(value in get(client, "/backstage/duty").text for value in BUTTONS[:2] + (REPLY,))

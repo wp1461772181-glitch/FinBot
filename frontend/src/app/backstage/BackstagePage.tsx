@@ -4,11 +4,12 @@ import { backstageTab, paths } from "../../routes.mjs";
 import { CompanyTabs } from "../research/CompanyTabs";
 import { AnswersTab } from "./AnswersTab";
 import { DeliveriesTab } from "./DeliveriesTab";
+import { DutyTab } from "./DutyTab";
 import { OperationsTab } from "./OperationsTab";
 import { UsageTab } from "./UsageTab";
 
 /**
- * 后台 (#/backstage/<tab>): the owner's read-only look behind the assistant.  Four tabs in the address (回答, 用量, 操作记录, 提醒投递).  Nothing on this page writes: it has
+ * 后台 (#/backstage/<tab>): the owner's read-only look behind the assistant.  Five tabs in the address (回答, 用量, 操作记录, 提醒投递, 值班).  Nothing on this page writes: it has
  * no button that changes a record, and every request is a GET that the server answers only to the owner.
  */
 export function BackstagePage() {
@@ -25,11 +26,13 @@ export function BackstagePage() {
       { value: "usage", testId: "tab-usage", label: t("用量") },
       { value: "operations", testId: "tab-operations", label: t("操作记录") },
       { value: "deliveries", testId: "tab-deliveries", label: t("提醒投递") },
+      { value: "duty", testId: "tab-duty", label: t("值班") },
     ]}>
       {tab === "answers" && <AnswersTab />}
       {tab === "usage" && <UsageTab />}
       {tab === "operations" && <OperationsTab />}
       {tab === "deliveries" && <DeliveriesTab />}
+      {tab === "duty" && <DutyTab />}
     </CompanyTabs>
   </main>;
 }

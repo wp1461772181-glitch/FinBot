@@ -71,10 +71,12 @@ class Store:
             )
             return int(cur.lastrowid)
 
-    def pending(self, limit: int = 100) -> list[dict]:
+    def pending(self, limit: int = 100, event_type: str | None = None) -> list[dict]:
+        where, params = ("WHERE type = ?", (event_type,)) if event_type else ("", ())
         with self._conn() as conn:
-            rows = conn.execute("SELECT * FROM event_queue ORDER BY id LIMIT ?", (limit,)).fetchall()
-        return [{"id": r["id"], "type": r["type"], "payload": json.loads(r["payload"]), "attempts": r["attempts"]} for r in rows]
+            rows = conn.execute(f"SELECT * FROM event_queue {where} ORDER BY id LIMIT ?", (*params, limit)).fetchall()
+        return [{"id": r["id"], "type": r["type"], "payload": json.loads(r["payload"]), "attempts": r["attempts"],
+                 "created_at": r["created_at"]} for r in rows]
 
     def delete(self, event_id: int) -> None:
         with self._conn() as conn:

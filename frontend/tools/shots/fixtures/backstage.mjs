@@ -144,6 +144,28 @@ export const DELIVERIES = {
   next_before: null,
 };
 
+const duty = (n, fields) => ({ id: n, created_at: "2026-11-13T01:40:00+00:00", alert_id: 100 + n, symbol: "NVDA", kind: "price_move", what: "", mode: "shadow", outcome: "decided", decision: "record",
+  reason: null, message: null, delivery: null, turn_id: TURN(n), message_id: null, ms: 8200, model_calls: 3, ...fields });
+
+/** The duty log (/backstage/duty): one row of each decision and each way a wake-up can end; the first opens the full course sample in the drawer. */
+export const DUTY = {
+  mode: "shadow",
+  items: [
+    duty(1, { what: "NVDA 盘中下跌 6.2%，跌破 20 日均线", decision: "tell_now", reason: "跌幅大，并且你持有 NVDA。", message: "NVDA 盘中下跌 6.2%，已跌破 20 日均线；你的持仓约占组合的 14%。", message_id: DETAIL.message_id }),
+    duty(2, { created_at: "2026-11-13T01:10:00+00:00", symbol: "TSLA", what: "TSLA 上涨 3.1%", decision: "digest", reason: "幅度不大，留到晚上的简报里说。" }),
+    duty(3, { created_at: "2026-11-13T00:50:00+00:00", symbol: "AAPL", what: "AAPL 提交了 8-K", decision: "record", reason: "只是例行的董事会变动公告。" }),
+    duty(4, { created_at: "2026-11-12T23:20:00+00:00", symbol: "MSFT", what: "MSFT 成交量放大", decision: "ignore", reason: "没有新闻，也没有价格变化。" }),
+    duty(5, { created_at: "2026-11-12T22:00:00+00:00", what: "NVDA 单日下跌 5.5%", mode: "on", decision: "tell_now", reason: "跌幅大。", message: "NVDA 单日下跌 5.5%。", delivery: "queued" }),
+    duty(6, { created_at: "2026-11-12T21:30:00+00:00", what: "NVDA 再次下跌 5%", mode: "on", decision: "tell_now", reason: "又一次大跌。", message: "NVDA 再次下跌 5%。", delivery: "capped" }),
+    duty(7, { created_at: "2026-11-12T20:00:00+00:00", what: "AMZN 财报日期变动", mode: "on", decision: "tell_now", reason: "日期提前。", message: "AMZN 财报提前到周四。", delivery: "telegram_not_bound" }),
+    duty(8, { created_at: "2026-11-12T19:00:00+00:00", symbol: "GOOG", what: "GOOG 价格提醒", outcome: "failed", decision: null, reason: "模型超时（120 秒）。", turn_id: null }),
+    duty(9, { created_at: "2026-11-12T18:00:00+00:00", symbol: "META", what: "META 价格提醒", outcome: "no_decision", decision: null, reason: "模型没有给出决定。" }),
+    duty(10, { created_at: "2026-11-12T17:00:00+00:00", symbol: "AMD", what: "AMD 价格提醒", outcome: "dropped", decision: null, reason: "等待的提醒超过 50 条，这一条被丢弃。", turn_id: null }),
+    duty(11, { created_at: "2026-11-12T16:00:00+00:00", symbol: "INTC", what: "INTC 价格提醒", mode: "off", outcome: "skipped_off", decision: null, reason: "唤醒功能关着（FINBOT_DUTY_MODE=off），没有评判。", turn_id: null }),
+  ],
+  next_before: null,
+};
+
 /** The reads, with the page's switches (state.backstage: empty, fail). */
 export function backstageRoutes(route, reply, own) {
   const guarded = (answer) => own(({ state, query, params }) => {
@@ -171,6 +193,11 @@ export function backstageRoutes(route, reply, own) {
   route.get("/backstage/operations", guarded(({ state }) => {
     if (state.backstage?.empty) return { items: [], next_before: null };
     return state.backstage?.long ? { items: [{ ...OPERATIONS.items[0], id: "a5000000-0000-4000-8000-000000000009", title: LONG_TOKEN, targets: [{ title: LONG_TOKEN }] }, ...OPERATIONS.items], next_before: null } : OPERATIONS;
+  }));
+  route.get("/backstage/duty", guarded(({ state }) => {
+    if (state.backstage?.empty) return { mode: state.backstage.mode ?? "shadow", items: [], next_before: null };
+    const mode = state.backstage?.mode ?? DUTY.mode;
+    return state.backstage?.long ? { ...DUTY, mode, items: [duty(99, { what: LONG_TOKEN, reason: LONG_TOKEN, message: LONG_TOKEN, decision: "tell_now", symbol: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", message_id: DETAIL.message_id }), ...DUTY.items] } : { ...DUTY, mode };
   }));
   route.get("/backstage/deliveries", guarded(({ state }) => {
     if (state.backstage?.empty) return { items: [], next_before: null };

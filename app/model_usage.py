@@ -34,7 +34,7 @@ from .config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
-PURPOSES = ("chat", "summary", "profile", "judge", "forecast", "earnings", "material_analysis", "news", "routine",
+PURPOSES = ("chat", "summary", "profile", "judge", "forecast", "earnings", "material_analysis", "news", "routine", "duty",
             "query_expansion", "localization", "knowledge", "other")
 
 _TAGS: ContextVar[dict | None] = ContextVar("model_usage_tags", default=None)

@@ -259,6 +259,19 @@ async def start_background_loops() -> None:
         _background_tasks.extend(background.start())
 
 
+@app.on_event("startup")
+async def start_wake_worker() -> None:
+    """The one worker that judges the alerts the sentinel posts (``kernel.wake``); it runs whatever the wake mode is."""
+    from .kernel import wake
+    wake.start()
+
+
+@app.on_event("shutdown")
+async def stop_wake_worker() -> None:
+    from .kernel import wake
+    await wake.stop()
+
+
 @app.on_event("shutdown")
 async def stop_background_loops() -> None:
     from . import background

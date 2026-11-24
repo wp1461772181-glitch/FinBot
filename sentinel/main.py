@@ -21,11 +21,12 @@ from .store import Store
 logger = logging.getLogger("sentinel")
 
 INTERVAL = 60.0
-FAST_JOBS = {"escalation": 15.0, "filings": 30.0}  # the one-minute rule needs a finer tick than the other jobs
+FAST_JOBS = {"escalation": 15.0, "filings": 30.0, "events": 30.0}  # the one-minute rule needs a finer tick than the other jobs
 FAILURES_BEFORE_ALERT = 3
 BASELINE_MAX_AGE = 20 * 3600      # rebuilt about once a day
 MERGE_WINDOW = 5 * 60            # 3 symbols pushing within this window make a burst
 MERGE_MIN = 3
+ALERT_EVENT_MAX_AGE = 24 * 3600   # a wake-up for an alert older than this is useless
 SPLITS_MAX_AGE = 3600            # a split announced today must not wait for tomorrow's baseline
 
 
@@ -134,7 +135,7 @@ class Sentinel:
             down = sig.direction == "down" and held and sig.kind not in ("split", "plan_target")
             base = {"symbol": symbol, "kind": sig.kind, "direction": sig.direction, "held": held, "text": text,
                     "escalate": escalate, "weight_pct": weight, "price_move": False, "trigger": "",
-                    "event_date": None, "price": price,
+                    "event_date": None, "price": price, "prev_close": prev_close,
                     "earnings_unacked": down and self.store.earnings_alert_unacked(symbol),
                     "after_send": lambda deferred, alert_id: None, "rollback": lambda: None}
             return base | extra
@@ -275,6 +276,7 @@ class Sentinel:
     def _raise(self, snap: dict, alert: dict) -> None:
         alert_id = self.escalator.raise_alert(snap, alert)
         alert["after_send"](self.escalator.deferred(alert_id), alert_id)
+        self._announce(alert_id, alert)
 
     def _raise_merged(self, snap: dict, members: list[dict]) -> None:
         symbols = [m["symbol"] for m in members]
@@ -287,6 +289,33 @@ class Sentinel:
         deferred = self.escalator.deferred(alert_id)
         for m in members:
             m["after_send"](deferred, None)
+        self._announce(alert_id, merged)
+
+    def _announce(self, alert_id: int, alert: dict) -> None:
+        """Tell the API about an alert that is already stored and sent (`alert_posted`) so the agent can judge it.
+
+        Only queues the event: no HTTP in the alert path, so a down or slow API can never delay an alert.  The events
+        job (every 30 s, its own thread) delivers it and keeps it until the API accepts.  An update of a pending
+        night line queues again under the same alert id; the API judges an id once (a later stage may re-judge)."""
+        try:
+            self.store.enqueue("alert_posted", self.alert_payload(alert_id, alert))
+        except Exception as exc:
+            logger.warning("alert_posted for alert %s not queued: %s", alert_id, type(exc).__name__)
+
+    def alert_payload(self, alert_id: int, alert: dict) -> dict:
+        """What the sentinel knows about an alert; fields it does not have are left out, never invented."""
+        row = self.store.alert(alert_id) or {}
+        members = [m["symbol"] for m in alert.get("members") or [] if isinstance(m, dict) and m.get("symbol")]
+        payload = {"alert_id": alert_id, "symbol": alert["symbol"], "kind": alert.get("kind", ""), "text": alert["text"],
+                   "created_at": row.get("created_at"), "deferred": bool(row.get("deferred")),
+                   "escalate": bool(row.get("escalate", alert.get("escalate"))), "held": bool(alert.get("held")),
+                   "weight_pct": alert.get("weight_pct") or None, "price": alert.get("price"),
+                   "prev_close": alert.get("prev_close"), "trigger": alert.get("trigger") or None,
+                   "event_date": alert.get("event_date"), "members": members or None}
+        price, prev_close = alert.get("price"), alert.get("prev_close")
+        if price is not None and prev_close:
+            payload["move_pct"] = (price / prev_close - 1) * 100
+        return {k: v for k, v in payload.items() if v is not None}
 
     def check_signals(self) -> None:
         now = datetime.now(UTC)
@@ -328,16 +357,42 @@ class Sentinel:
             self.store.enqueue(event_type, payload)
 
     def resend_events(self) -> None:
+        """Drain the queue: `earnings_detected` first, always, then `alert_posted`, so one bad alert row never holds up
+        a filing.  An API answer of 4xx for an alert is final (dropped, logged); 5xx or no answer keeps the row and
+        moves on to the next one, but after 3 no-answers in a row the API is plainly down and the drain stops."""
         base = signals.api_base(self.config.get())
-        for event in self.store.pending():
+        for event in self.store.pending(event_type="earnings_detected"):
             try:
                 signals.post_event(base, event["type"], event["payload"])
-            except Exception:
+            except Exception as exc:
                 self.store.bump(event["id"])
-                return  # API still down: keep order, try next tick
+                if getattr(exc, "code", None) is None:
+                    return  # API unreachable: keep order, try next tick
+                break       # the API answered but refused: its alerts may still go through
             self.store.delete(event["id"])
-            if event["type"] == "earnings_detected":
-                self.filings.mark_delivered(event["payload"]["accession"], time.time())
+            self.filings.mark_delivered(event["payload"]["accession"], time.time())
+        silent = 0
+        for event in self.store.pending(event_type="alert_posted"):
+            alert_id = event["payload"].get("alert_id")
+            if time.time() - float(event.get("created_at") or 0) > ALERT_EVENT_MAX_AGE:
+                self.store.delete(event["id"])
+                logger.warning("alert_posted for alert %s dropped: older than 24 hours", alert_id)
+                continue
+            try:
+                signals.post_event(base, event["type"], event["payload"])
+            except Exception as exc:
+                code = getattr(exc, "code", None)
+                if isinstance(code, int) and 400 <= code < 500:
+                    self.store.delete(event["id"])
+                    logger.warning("alert_posted for alert %s dropped: the API refused it (HTTP %s)", alert_id, code)
+                    continue
+                self.store.bump(event["id"])
+                silent = silent + 1 if code is None else 0
+                if silent >= 3:
+                    return
+                continue
+            silent = 0
+            self.store.delete(event["id"])
 
     # --- threads -----------------------------------------------------------------
     def jobs(self) -> dict[str, Callable[[], None]]:

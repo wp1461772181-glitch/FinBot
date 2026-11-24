@@ -11,8 +11,11 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
+
+from . import duty_log  # noqa: F401  (registers the duty_log table before startup creates the tables)
 
 router = APIRouter(prefix="/agent-chat/internal/sentinel", tags=["sentinel-internal"])
 logger = logging.getLogger(__name__)
@@ -71,6 +74,20 @@ async def post_event(body: SentinelEvent, request: Request, background: Backgrou
             raise HTTPException(422, "invalid_event") from None
         background.add_task(earnings_monitor.tick)
         return {"type": body.type, **result}
+    if body.type == "alert_posted":
+        # The sentinel has already stored and sent this alert.  Validate, queue for the wake worker, answer at once: the kernel judges it
+        # later, once per alert id, and nothing it decides can hold the alert back.
+        from .kernel import wake
+        from .sentinel_bridge import owner_hash_from_login_config
+        owner = owner_hash_from_login_config()
+        if owner is None:
+            raise HTTPException(503, "no_owner")
+        try:
+            event = wake.clean_event(body.payload)
+        except ValueError:
+            raise HTTPException(422, "invalid_event") from None
+        await wake.submit(event, owner)
+        return JSONResponse({"accepted": True}, status_code=202)
     return {"accepted": True, "type": body.type}
 
 

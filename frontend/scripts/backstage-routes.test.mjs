@@ -7,7 +7,7 @@ import { skeletonKind } from "../src/skeleton-kind.mjs";
 import { navGroup } from "../src/workspace-sections.mjs";
 
 test("后台 has an address and one per tab", () => {
-  assert.deepEqual(BACKSTAGE_TABS, ["answers", "usage", "operations", "deliveries"]);
+  assert.deepEqual(BACKSTAGE_TABS, ["answers", "usage", "operations", "deliveries", "duty"]);
   assert.equal(PATTERNS.backstage, "/backstage");
   assert.equal(PATTERNS.backstageTab, "/backstage/:tab");
   assert.equal(paths.backstage(), "/backstage");

@@ -31,10 +31,10 @@ export function CompanyTabs<T extends string>({ tabs, value, onChange, label, ch
     buttons[next(index, buttons.length)]?.focus();
   };
   return <div className="flex flex-col gap-4">
-    <div ref={list} role="tablist" aria-label={label} onKeyDown={move} className="flex gap-1 border-b border-line">
+    <div ref={list} role="tablist" aria-label={label} onKeyDown={move} className="flex gap-1 overflow-x-auto border-b border-line">
       {tabs.map(tab => <button key={tab.value} type="button" role="tab" id={idOf(tab.value)} data-testid={tab.testId} aria-selected={tab.value === value} aria-controls="company-tab-panel"
         tabIndex={tab.value === value ? 0 : -1} onClick={() => onChange(tab.value)}
-        className={cn("-mb-px border-b-2 px-4 py-2 text-body outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+        className={cn("-mb-px whitespace-nowrap border-b-2 px-4 py-2 max-sm:px-3 text-body outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
           tab.value === value ? "border-brand font-medium text-ink" : "border-transparent text-muted-foreground hover:text-ink")}>{tab.label}</button>)}
     </div>
     <div role="tabpanel" id="company-tab-panel" aria-labelledby={idOf(value)} tabIndex={-1} className="outline-none">{children}</div>

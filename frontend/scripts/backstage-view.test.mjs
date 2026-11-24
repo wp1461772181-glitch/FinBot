@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
-  ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
+  ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyModeLine, dutyRow, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
   slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
 } from "../src/backstage-view.mjs";
-import { ANSWERS, DELIVERIES, DETAIL, DETAIL_INCOMPLETE, DETAIL_OLD, OPERATIONS, usageAnswer } from "../tools/shots/fixtures/backstage.mjs";
+import { ANSWERS, DELIVERIES, DETAIL, DUTY, DETAIL_INCOMPLETE, DETAIL_OLD, OPERATIONS, usageAnswer } from "../tools/shots/fixtures/backstage.mjs";
 
 const src = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
@@ -268,3 +268,23 @@ test("number cells never wrap, so long text beside them cannot squeeze them", ()
   assert.match(src("app/backstage/BackstageTable.tsx"), /font-mono tabular-nums whitespace-nowrap|whitespace-nowrap font-mono tabular-nums/);
 });
 
+
+test("duty: each decision and each way a wake-up ends has its word, and only a sent-or-not message says so", () => {
+  const rows = DUTY.items.map((item) => dutyRow(item, "UTC"));
+  assert.deepEqual(rows.map((row) => row.decision.label), ["告诉你", "攒进简报", "只记下", "不理会", "告诉你", "告诉你", "告诉你", "失败", "没有决定", "丢弃", "已关闭"]);
+  assert.deepEqual(rows.map((row) => row.delivery), ["", "", "", "", "已发出", "超过今天的上限，没发", "发送失败", "", "", "", ""]);
+  assert.deepEqual(rows.slice(0, 1).map((row) => [row.symbol, row.what, row.open, row.mode]), [["NVDA", "NVDA 盘中下跌 6.2%，跌破 20 日均线", DETAIL.message_id, "只观察"]]);
+  assert.equal(rows[4].mode, "已开启");
+  assert.equal(rows[10].mode, "已关闭");
+  assert.equal(rows[7].open, null, "a wake-up with no recorded turn has nothing to open");
+  assert.equal(rows[1].message, "");
+  assert.deepEqual(dutyRow({}, "UTC").decision, { label: "—", kind: "neutral" });
+});
+
+test("duty: the mode line says the mode in the owner's words, and an unknown mode says nothing", () => {
+  assert.equal(dutyModeLine("shadow"), "现在只观察：它会判断，但不会发消息给你。");
+  assert.equal(dutyModeLine("on"), "已开启：『告诉你』的会按你的通道设置发出。");
+  assert.equal(dutyModeLine("off"), "已关闭");
+  assert.equal(dutyModeLine("???"), "");
+  assert.equal(usageGroupLabel("purpose", { key: "duty", label: "duty" }), "值班");
+});
