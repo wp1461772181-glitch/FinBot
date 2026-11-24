@@ -547,7 +547,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
   if LOCKS.get(cid) is lock:LOCKS.pop(cid,None)
  async def events():
   # The thinking time is the wait from the request to the answer being ready.
-  started=time.monotonic();text_out=""; citation_sidecar=[]; terminal=False; genuine_calls=set(); tool_traces=[]; progress={}
+  started=time.monotonic();text_out=""; citation_sidecar=[]; terminal=False; genuine_calls=set(); tool_traces=[]; progress={}; settled=False
   pump_task=getter=None
   try:
    yield frame("conversation",{"conversation_id":cid,"turn_id":turn})
@@ -666,6 +666,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      if event.get("reason") in {"retrieval_unavailable","zero_evidence","web_page_excerpt_unavailable","missing_source_coverage","publisher_date_unavailable"} or str(event.get("reason","")).startswith(("requested_","weak_")):
       await asyncio.to_thread(_record_low_confidence,payload.message,cid,turn,owner_hash(x_chat_session),event["reason"])
      await append_message(cid,turn,"assistant",text_out,tool_calls=protocol,status="failed" if event.get("status")=="failed" else "complete")
+     settled=True
      await finish_conversation(cid,"active")
      if bot:
       # Briefs that waited while this turn was unfinished go into the line now, after it.
@@ -688,6 +689,9 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      yield frame("done",{"conversation_id":cid,"turn_id":turn,"status":event.get("status","complete"),"reason":event.get("reason"),"thinking_ms":thinking_ms,**v2_fields})
    if not terminal:raise HTTPException(502,"workflow_incomplete")
   except asyncio.CancelledError:
+   # The answer is already stored: a client that hangs up at the done frame cancelled nothing, and a second, "cancelled" copy of
+   # the answer would tell the next turn that this one never finished.
+   if settled:raise
    # The writes run in their own task: this one is being cancelled, and its awaits would be cancelled again (R-5 probe).
    task=asyncio.create_task(_record_cancelled(cid,turn,owner_hash(x_chat_session),text_out,citation_sidecar,*([progress] if progress else [])))
    _BACKGROUND.add(task); task.add_done_callback(_BACKGROUND.discard)

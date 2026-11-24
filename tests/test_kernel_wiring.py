@@ -391,3 +391,13 @@ def test_failed_turn_keeps_its_progress(wiring):
 def test_old_engine_cancelled_row_is_unchanged(wiring):
     unfinished_turn(wiring, [{"event": "delta", "text": "半截"}], "cancel")
     assert last_assistant(wiring)["tool_calls"] is None
+
+
+def test_hanging_up_at_the_done_frame_does_not_store_a_cancelled_copy(wiring):
+    """The ruler's client closes the stream as soon as it reads ``done``; the stored answer must stay the only one."""
+    wiring.bot["engine"] = "v2"
+    done = {"event": "done", "answer": "收入是 100。", "status": "succeeded", "citations": [], "audit": {"engine": "v2"},
+            "final_protocol": {"tier": "low", "narration": [], "checklist": []}}
+    unfinished_turn(wiring, [{"event": "delta", "text": "收入是 100。"}, done], "cancel")
+    answers = [kw for role, kw in wiring.rows() if role == "assistant"]
+    assert [row["status"] for row in answers] == ["complete"]
