@@ -8,10 +8,11 @@ import { MATERIALS, materialList, analysisVersion, materialOriginal, ANALYSIS_SE
 import { forecastList, forecastRoots, timeline, versionDetail, evaluations, monitorStatus, replayJob, REPLAY_JOB, workspace, job, revisionCandidates, JUDGMENTS } from "./forecasts.mjs";
 import { portfolioSummary, buildPortfolio } from "./portfolio.mjs";
 import { TASKS, RUNS, PROPOSALS, INBOX } from "./routines.mjs";
+import { backstageRoutes } from "./backstage.mjs";
 import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS, DRY_RUNS, REPAIRS, KNOWLEDGE_IMPORTABLE, knowledgeChunks, readSkillFile } from "./assistant.mjs";
 
 export function buildState() {
-  return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), settings: buildSettings() };
+  return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), settings: buildSettings(), backstage: {} };
 }
 
 /** The 设置 pages' data as a mutable copy (P8.2): the write routes below change it and the reads answer from it.  `writes` keeps every write as the page sent it (the role table's own state is `modelRoles`).
@@ -219,6 +220,9 @@ export function registerRoutes(route, reply) {
     return item;
   });
   route.get("/evidence-revisions/:symbol", ({ params }) => ({ symbol: params.symbol, revisions: [] }));
+
+  // --- 后台: the owner's read-only backstage (fixtures/backstage.mjs) ---------------------------------------------
+  backstageRoutes(route, reply, own);
 
   // --- portfolio, routines, inbox ----------------------------------------------------------------------
   route.get(`${A}/portfolio`, own(({ state }) => (state.portfolio.fail ? reply.status(500, { detail: "shots: forced failure" }) : portfolioSummary(state))));

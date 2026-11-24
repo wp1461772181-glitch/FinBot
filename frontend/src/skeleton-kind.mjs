@@ -12,7 +12,7 @@ export function skeletonKind(path) {
     if (second === "materials" || second === "forecasts" || second === "replay") return "table";
     return "cards";
   }
-  if (head === "portfolio") return "table";
+  if (head === "portfolio" || head === "backstage") return "table";
   if (head === "routines" || head === "assistant") return "rows";
   if (head === "settings") return "cards";
   return "rows";

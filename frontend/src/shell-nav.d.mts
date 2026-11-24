@@ -1,5 +1,5 @@
 import type { WorkspaceSection } from "./workspace-sections.mjs";
-export type Area = "chat" | "research" | "portfolio" | "routines" | "assistant" | "settings";
+export type Area = "chat" | "research" | "portfolio" | "routines" | "assistant" | "settings" | "backstage";
 export type NavSubItem = { id: string; label: string; owner?: boolean; sections?: WorkspaceSection[] };
 export const AREAS: Area[];
 export const RESEARCH_ITEMS: NavSubItem[];

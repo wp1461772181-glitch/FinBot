@@ -69,10 +69,12 @@ const researchPages: RouteObject[] = [
   { path: PATTERNS.monitor, ...page(() => import("./pages/monitor"), "MonitorRoute") },
 ];
 
-/** 持仓 (P7.1), 任务 (P7.2), the assistant's skills, memory, news sources, knowledge and 全部 bot pages (P8.1, P9.1) and the five settings pages (P8.2). */
+/** 持仓 (P7.1), 任务 (P7.2), 后台 (the owner's read-only backstage), the assistant's skills, memory, news sources, knowledge and 全部 bot pages (P8.1, P9.1) and the five settings pages (P8.2). */
 const personalPages: RouteObject[] = [
   { path: PATTERNS.portfolio, ...page(() => import("./pages/portfolio"), "PortfolioRoute") },
   { path: PATTERNS.routines, ...page(() => import("./pages/routines"), "RoutinesRoute") },
+  { path: PATTERNS.backstage, ...page(() => import("./pages/backstage"), "BackstageRoute") },
+  { path: PATTERNS.backstageTab, ...page(() => import("./pages/backstage"), "BackstageRoute") },
   { path: PATTERNS.assistantSkill, ...page(() => import("./pages/skills"), "SkillsRoute") },
   { path: PATTERNS.assistantSkills, ...page(() => import("./pages/skills"), "SkillsRoute") },
   { path: PATTERNS.assistantMemory, ...page(() => import("./pages/personal"), "MemoryRoute") },

@@ -352,6 +352,8 @@ async function openSkillEditor(page, name) {
   await page.waitForFunction(() => document.querySelector("#skill-name")?.value);
 }
 
+/** The fake backend's state for the 后台 page with switches set (fixtures/backstage.mjs: empty, fail). */
+export function stateWithBackstage(patch) { const state = buildState(); Object.assign(state.backstage, patch); return state; }
 export function stateWithPortfolio(patch) { const state = buildState(); Object.assign(state.portfolio, patch); return state; }
 
 // --- P6.3 pictures ---------------------------------------------------------------------------------------------------
@@ -798,6 +800,32 @@ export const PAGES = [
   { name: "portfolio-empty", hash: "#/portfolio", ready: "[data-testid=portfolio-empty]", view: () => ({ fixtureState: stateWithPortfolio({ empty: true, cash: "0.00" }) }) },
   { name: "portfolio-error", hash: "#/portfolio", ready: "[data-testid=portfolio-error]", view: () => ({ fixtureState: stateWithPortfolio({ fail: true }) }) },
   { name: "portfolio-red-up", hash: "#/portfolio", ready: portfolioLoaded, before: async (page) => { await redUp(page); await page.locator("[data-testid=pf-toggle]").first().click(); await page.locator("[data-testid=pf-panel]").waitFor({ timeout: 15000 }); } },
+  // 后台 (the owner's read-only backstage): the four tabs (a table on a desktop, stacked rows on a phone), a turn open in the drawer (a full course, an old-engine record, a turn that never
+  // finished), the usage grouped four ways with its missing prices, and each tab empty and failing.  `ready` is the table (or the empty / error block).
+  { name: "backstage-answers", hash: "#/backstage/answers", ready: "[data-testid=answers-table]" },
+  { name: "backstage-answers-slow", hash: "#/backstage/answers", ready: "[data-testid=answers-table]",
+    before: async (page) => { await page.locator("[data-testid=filter-slow]").check(); await page.locator("[data-testid=filter-high]").check(); await page.locator("[data-testid=answers-table]").waitFor({ timeout: 10000 }); } },
+  { name: "backstage-answer-detail", hash: "#/backstage/answers", ready: "[data-testid=answers-table]", element: "[data-testid=answer-drawer]",
+    before: async (page) => { await page.locator("[data-testid=answer-open]").nth(1).click(); await page.locator("[data-testid=timeline] [data-step=answer]").waitFor({ timeout: 10000 }); } },
+  { name: "backstage-answer-old-engine", hash: "#/backstage/answers", ready: "[data-testid=answers-table]", element: "[data-testid=answer-drawer]",
+    before: async (page) => { await page.locator("[data-testid=answer-open]").nth(4).click(); await page.locator("[data-testid=note-old_engine]").waitFor({ timeout: 10000 }); } },
+  { name: "backstage-answer-incomplete", hash: "#/backstage/answers", ready: "[data-testid=answers-table]", element: "[data-testid=answer-drawer]",
+    before: async (page) => { await page.locator("[data-testid=answer-open]").nth(3).click(); await page.locator("[data-testid=note-incomplete]").waitFor({ timeout: 10000 }); } },
+  { name: "backstage-answers-empty", hash: "#/backstage/answers", ready: "[data-testid=backstage-empty]", view: () => ({ fixtureState: stateWithBackstage({ empty: true }) }) },
+  { name: "backstage-answers-error", hash: "#/backstage/answers", ready: "[data-slot=error-bar]", view: () => ({ fixtureState: stateWithBackstage({ fail: true }) }) },
+  { name: "backstage-usage", hash: "#/backstage/usage", ready: "[data-testid=usage-table]" },
+  ...["model", "bot", "purpose"].map((group) => ({ name: `backstage-usage-${group}`, hash: "#/backstage/usage", ready: "[data-testid=usage-table]",
+    before: async (page) => { await page.locator(`[data-testid=usage-group] [data-option=${group}]`).click(); await page.waitForFunction((g) => document.querySelector("[data-testid=usage-table]")?.getAttribute("aria-label")?.includes(g), { model: "按模型", bot: "按 bot", purpose: "按用途" }[group], { timeout: 10000 }).catch(() => {}); await page.locator("[data-testid=usage-table]").waitFor({ timeout: 10000 }); } })),
+  { name: "backstage-usage-custom", hash: "#/backstage/usage", ready: "[data-testid=usage-table]",
+    before: async (page) => { await page.locator("[data-testid=usage-range] [data-option=custom]").click(); await page.locator("[data-testid=usage-from]").waitFor({ timeout: 10000 }); } },
+  { name: "backstage-usage-empty", hash: "#/backstage/usage", ready: "[data-testid=backstage-empty]", view: () => ({ fixtureState: stateWithBackstage({ empty: true }) }) },
+  { name: "backstage-usage-error", hash: "#/backstage/usage", ready: "[data-slot=error-bar]", view: () => ({ fixtureState: stateWithBackstage({ fail: true }) }) },
+  { name: "backstage-operations", hash: "#/backstage/operations", ready: "[data-testid=operations-table]" },
+  { name: "backstage-operations-empty", hash: "#/backstage/operations", ready: "[data-testid=backstage-empty]", view: () => ({ fixtureState: stateWithBackstage({ empty: true }) }) },
+  { name: "backstage-operations-error", hash: "#/backstage/operations", ready: "[data-slot=error-bar]", view: () => ({ fixtureState: stateWithBackstage({ fail: true }) }) },
+  { name: "backstage-deliveries", hash: "#/backstage/deliveries", ready: "[data-testid=deliveries-table]" },
+  { name: "backstage-deliveries-empty", hash: "#/backstage/deliveries", ready: "[data-testid=backstage-empty]", view: () => ({ fixtureState: stateWithBackstage({ empty: true }) }) },
+  { name: "backstage-deliveries-error", hash: "#/backstage/deliveries", ready: "[data-slot=error-bar]", view: () => ({ fixtureState: stateWithBackstage({ fail: true }) }) },
   { name: "routines", hash: "#/routines?tab=confirm", ready: routinesLoaded },
   // P7.2: the task page.  The three tabs, the drawer's four sections (a brief; and an alert with three price lines), a task that holds an old free-text price line, a proposal that expired,
   // and nothing waiting.  The default state has one live proposal and one live suggested write; `stateWithRoutines` adds the extra tasks, the expired proposal and a second suggestion.

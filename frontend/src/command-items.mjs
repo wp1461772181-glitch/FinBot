@@ -61,6 +61,7 @@ export function pageItems({ personal, symbol = "AAPL", t = (text) => text }) {
   add("研究", "监控状态", paths.monitor());
   add("持仓", "持仓", paths.portfolio());
   add("任务", "任务", paths.routines(), ["例行任务"]);
+  add("后台", "后台", paths.backstage(), ["回答记录", "用量", "花费", "操作记录", "提醒投递", "backstage"]);
   for (const item of areaItems("assistant", { personal: true })) add("助手", item.label, areaPath("assistant", symbol, item.id));
   for (const item of areaItems("settings", { personal })) add("设置", item.label, areaPath("settings", symbol, item.id));
   return personal ? rows : rows.filter((row) => !needsLogin(row.path));
