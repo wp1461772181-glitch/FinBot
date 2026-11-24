@@ -42,6 +42,8 @@ class _Run:
     schemas: list
     tool_names: frozenset
     ceiling: str = "high"
+    question: str = ""      # this turn's user message, as typed
+    turn_id: str = ""
     tier: str = "low"
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
@@ -191,6 +193,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
     run = _Run(context=context, emit=emit, messages=prompt.build_messages(question, context, history),
                user_text=_user_text(question, history), schemas=tool_schemas,
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
-               ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)))
+               ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)),
+               question=question, turn_id=str((state or {}).get("turn_id") or ""))
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):
         return await _loop(run)
