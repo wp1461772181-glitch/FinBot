@@ -102,7 +102,7 @@ up() {
   guard_live_paths
 
   systemd-run --quiet --unit="$UNIT" --description="FinBot ruler shadow API" \
-    -p WorkingDirectory="$SHADOW_SRC" -p MemoryMax=600M \
+    -p WorkingDirectory="$SHADOW_SRC" -p MemoryMax=1G \
     -p EnvironmentFile="$SHADOW_SRC/.env" -p EnvironmentFile="$SHADOW_ENV" \
     /opt/finbot/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port "$SHADOW_PORT"
   for _ in $(seq 1 40); do

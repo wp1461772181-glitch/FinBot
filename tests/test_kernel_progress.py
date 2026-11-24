@@ -215,7 +215,7 @@ def test_every_offered_tool_has_say_and_the_set_is_stable(env):
             assert list(properties)[:2] == ["say", "item"] and properties["say"]["description"] == SAY
             assert "say" not in schema["function"]["parameters"].get("required", [])
         names = [s["function"]["name"] for s in schemas]
-        assert names[-2:] == ["plan", "escalate"] and set(names[:-2]) <= set(loop.READ_TOOLS) and names[:-2]
+        assert names[-3:] == ["act", "plan", "escalate"] and set(names[:-3]) <= set(loop.READ_TOOLS) and names[:-3]
     assert fake.calls[0]["tools"] == fake.calls[1]["tools"]
 
 
