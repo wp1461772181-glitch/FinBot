@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select, text as sql
 
-from .agent_chat_models import AgentBot, AgentTelegramBind, AgentTelegramMessage
+from .agent_chat_models import AgentBot, AgentChannelPref, AgentTelegramBind, AgentTelegramMessage
 from .database import SessionLocal
 from .secret_box import CredentialEncryptionError, decrypt_secret, encrypt_secret
 
@@ -356,6 +356,13 @@ def ensure_columns() -> None:
         # UX batch 2 (P4): bind codes expire; a message names the bot's own Telegram bot it went through.
         connection.execute(sql("ALTER TABLE agent_telegram_bind ADD COLUMN IF NOT EXISTS bind_code_expires_at TIMESTAMPTZ"))
         connection.execute(sql("ALTER TABLE agent_telegram_messages ADD COLUMN IF NOT EXISTS telegram_bot_row_id UUID"))
+        # Stage 1e: the outbox is channel-neutral (app/channels.py); the owner's channel preference has its own table.
+        connection.execute(sql("ALTER TABLE agent_telegram_messages ADD COLUMN IF NOT EXISTS channel VARCHAR(16) NOT NULL DEFAULT 'telegram'"))
+        connection.execute(sql("ALTER TABLE agent_telegram_messages ADD COLUMN IF NOT EXISTS group_id UUID"))
+        connection.execute(sql("ALTER TABLE agent_telegram_messages ADD COLUMN IF NOT EXISTS acked_at TIMESTAMPTZ"))
+        connection.execute(sql("ALTER TABLE agent_telegram_messages ADD COLUMN IF NOT EXISTS failure VARCHAR(40)"))
+        connection.execute(sql("CREATE INDEX IF NOT EXISTS ix_agent_telegram_messages_group_id ON agent_telegram_messages (group_id)"))
+        AgentChannelPref.__table__.create(connection, checkfirst=True)
 
 
 def _day_start(now: datetime) -> datetime:
@@ -365,9 +372,14 @@ def _day_start(now: datetime) -> datetime:
 
 
 def sent_today(db, owner_hash: str, bot_id, now: datetime) -> int:
-    return int(db.scalar(select(func.count()).select_from(AgentTelegramMessage).where(
-        AgentTelegramMessage.owner_hash == owner_hash, AgentTelegramMessage.bot_id == bot_id,
-        AgentTelegramMessage.source.in_(COUNTED), AgentTelegramMessage.created_at >= _day_start(now))) or 0)
+    """Messages queued today, not rows: the rows of one message (a fan-out, a fail-over) share a group_id and
+    count once; a row without one is its own message."""
+    where = (AgentTelegramMessage.owner_hash == owner_hash, AgentTelegramMessage.bot_id == bot_id,
+             AgentTelegramMessage.source.in_(COUNTED), AgentTelegramMessage.created_at >= _day_start(now))
+    alone = db.scalar(select(func.count()).select_from(AgentTelegramMessage).where(
+        *where, AgentTelegramMessage.group_id.is_(None)))
+    grouped = db.scalar(select(func.count(func.distinct(AgentTelegramMessage.group_id))).where(*where))
+    return int(alone or 0) + int(grouped or 0)
 
 
 def _bound(db, owner_hash: str) -> bool:
@@ -384,27 +396,31 @@ def own_channel(db, owner_hash: str, bot_id):
 
 
 def enqueue(db, owner_hash: str, bot_id, text: str, *, source: str, now: datetime | None = None,
-            inbox_item_id=None) -> int:
-    """Queue one message of a bot for the bound chat (the one send path of notify and alerts).  Returns how
-    many it may still send today.  Raises NotifyError telegram_not_bound or notify_daily_cap."""
+            inbox_item_id=None, channels: list[str] | None = None) -> int:
+    """Queue one message of a bot for the owner (the one send path of notify and alerts): one row per channel
+    the owner's preference picks (``channels`` names them instead), Telegram only when none is stored.  Returns
+    how many it may still send today.  Raises NotifyError telegram_not_bound (no channel can take it) or
+    notify_daily_cap."""
+    from . import channels as outbox
     now = now or datetime.now(UTC)
     bot = db.get(AgentBot, uuid.UUID(str(bot_id))) if bot_id else None
     if bot is None or bot.owner_hash != owner_hash:
         raise NotifyError("unknown_bot")
     # A bot with its own bound Telegram bot sends there, without its name in front; any other bot goes
-    # through the shared one with 「【名字】」 (UX batch 2, P4).
-    channel = own_channel(db, owner_hash, bot.id)
-    if channel is None and not _bound(db, owner_hash):
+    # through the shared one with 「【名字】」 (UX batch 2, P4); WeChat has one bot for all, name in front.
+    chosen = outbox.targets(db, owner_hash, bot, channels)
+    if not chosen:
         raise NotifyError("telegram_not_bound")
     used = sent_today(db, owner_hash, bot.id, now)
     if source not in UNCAPPED and used >= bot.daily_notify_cap:
         raise NotifyError("notify_daily_cap")
-    if channel is not None:
-        text = text.removeprefix(f"【{bot.name}】\n")
-    db.add(AgentTelegramMessage(owner_hash=owner_hash, bot_id=bot.id, source=source, text=text[:MESSAGE_MAX_CHARS],
-                                status="pending", created_at=now,
-                                inbox_item_id=uuid.UUID(str(inbox_item_id)) if inbox_item_id else None,
-                                telegram_bot_row_id=channel.id if channel is not None else None))
+    group = uuid.uuid4() if len(chosen) > 1 else None
+    for name in chosen:
+        shaped, own_id = outbox.shape(db, owner_hash, bot, name, text)
+        db.add(AgentTelegramMessage(owner_hash=owner_hash, bot_id=bot.id, source=source, text=shaped[:MESSAGE_MAX_CHARS],
+                                    status="pending", created_at=now, channel=name, group_id=group,
+                                    inbox_item_id=uuid.UUID(str(inbox_item_id)) if inbox_item_id else None,
+                                    telegram_bot_row_id=own_id))
     db.flush()
     return bot.daily_notify_cap - used - 1
 
@@ -508,32 +524,19 @@ def notify(owner_hash: str, bot_id, text: str, evidence_ids: list[int], citation
 
 def pending_messages(owner_hash: str, limit: int = 20, telegram_bot_row_id=None) -> list[dict]:
     """Queued messages of one Telegram bot: the shared one (None) or a bot's own (its agent_telegram_bots id)."""
-    with SessionLocal() as db:
-        channel = (AgentTelegramMessage.telegram_bot_row_id.is_(None) if telegram_bot_row_id is None
-                   else AgentTelegramMessage.telegram_bot_row_id == uuid.UUID(str(telegram_bot_row_id)))
-        rows = db.scalars(select(AgentTelegramMessage).where(AgentTelegramMessage.owner_hash == owner_hash,
-                                                             AgentTelegramMessage.status == "pending", channel)
-                          .order_by(AgentTelegramMessage.created_at).limit(limit)).all()
-        return [{"id": str(r.id), "bot_id": str(r.bot_id) if r.bot_id else None, "text": r.text} for r in rows]
+    from . import channels
+    return channels.pending(owner_hash, "telegram", limit, telegram_bot_row_id)
 
 
 def mark_sent(message_id, telegram_message_id: int | None) -> None:
-    with SessionLocal() as db:
-        row = db.get(AgentTelegramMessage, uuid.UUID(str(message_id)))
-        if row is not None:
-            row.status, row.sent_at, row.telegram_message_id = "sent", datetime.now(UTC), telegram_message_id
-            db.commit()
+    from . import channels
+    channels.mark_sent(message_id, telegram_message_id)
 
 
 def mark_failed(message_id) -> None:
-    """One more failed attempt; after SEND_ATTEMPTS it stops being retried."""
-    with SessionLocal() as db:
-        row = db.get(AgentTelegramMessage, uuid.UUID(str(message_id)))
-        if row is not None:
-            row.attempts += 1
-            if row.attempts >= SEND_ATTEMPTS:
-                row.status = "failed"
-            db.commit()
+    """One more failed attempt; after SEND_ATTEMPTS it stops being retried (and goes to the next channel)."""
+    from . import channels
+    channels.mark_failed(message_id)
 
 
 def record_reply(owner_hash: str, bot_id, text: str, telegram_message_id: int | None, telegram_bot_row_id=None) -> None:
@@ -557,7 +560,7 @@ def route(owner_hash: str, text: str, reply_to_message_id: int | None = None) ->
             # Message ids are per chat: only the shared bot's messages are looked up here.
             row = db.scalars(select(AgentTelegramMessage).where(
                 AgentTelegramMessage.owner_hash == owner_hash,
-                AgentTelegramMessage.telegram_bot_row_id.is_(None),
+                AgentTelegramMessage.telegram_bot_row_id.is_(None), AgentTelegramMessage.channel == "telegram",
                 AgentTelegramMessage.telegram_message_id == int(reply_to_message_id))
                 .order_by(AgentTelegramMessage.created_at.desc()).limit(1)).first()
             bot = db.get(AgentBot, row.bot_id) if row is not None and row.bot_id else None

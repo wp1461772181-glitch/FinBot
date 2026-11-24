@@ -285,7 +285,8 @@ def _notify_stale(owner: str) -> None:
         from app.database import SessionLocal
         default = ensure_default_bot(owner)
         with SessionLocal() as db:
-            agent_telegram.enqueue(db, owner, str(default.id), STALE_ALERT, source="alert")
+            # About WeChat being down: it goes to Telegram whatever the preference says.
+            agent_telegram.enqueue(db, owner, str(default.id), STALE_ALERT, source="alert", channels=["telegram"])
             db.commit()
     except Exception as exc:  # noqa: BLE001
         _log("stale_notice_failed", error=type(exc).__name__)

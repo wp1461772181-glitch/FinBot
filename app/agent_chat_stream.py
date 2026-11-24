@@ -1399,6 +1399,42 @@ async def telegram_status_endpoint(x_chat_session: str | None = Header(default=N
     return await asyncio.to_thread(tg.status, owner_hash(credential))
 
 
+class ChannelPrefsBody(BaseModel):
+    channels: list[str] = Field(max_length=8)
+    mode: str = Field(max_length=16)
+
+
+@router.get("/channels")
+async def channels_endpoint(x_chat_session: str | None = Header(default=None)):
+    """Where proactive messages go (owner only): the stored preference and which channels can take one now."""
+    from . import channels as outbox
+    from .database import SessionLocal
+    credential = _owner_only(x_chat_session)
+
+    def read(owner: str) -> dict:
+        with SessionLocal() as db:
+            return {"prefs": outbox.prefs(db, owner),
+                    "available": {name: outbox.available(db, owner, name, None) for name in outbox.CHANNELS}}
+    return await asyncio.to_thread(read, owner_hash(credential))
+
+
+@router.put("/channels")
+async def set_channels_endpoint(body: ChannelPrefsBody, x_chat_session: str | None = Header(default=None)):
+    from . import channels as outbox
+    credential = _owner_only(x_chat_session)
+    try:
+        return await asyncio.to_thread(outbox.set_prefs, owner_hash(credential), body.channels, body.mode)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.get("/channels/deliveries")
+async def channel_deliveries_endpoint(limit: int = Query(default=50, ge=1, le=200), x_chat_session: str | None = Header(default=None)):
+    from . import channels as outbox
+    credential = _owner_only(x_chat_session)
+    return {"items": await asyncio.to_thread(outbox.deliveries, owner_hash(credential), limit)}
+
+
 @router.post("/telegram/token")
 async def telegram_token_endpoint(body: TelegramTokenBody, x_chat_session: str | None = Header(default=None)):
     from . import agent_telegram as tg
