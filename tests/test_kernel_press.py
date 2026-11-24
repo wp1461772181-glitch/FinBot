@@ -9,6 +9,8 @@ import threading
 
 import pytest
 
+import app.agent_chat_provider as provider
+
 from app.agent_workflow import consent, tools
 from app.kernel import loop, press
 from test_kernel_loop import FakeConsent, TOKEN, act_call, call, ctx, env, kinds, remember_args, script, step, stub_remember  # noqa: F401  (env is used by name)
@@ -357,11 +359,11 @@ def typed(cards, env, steps, text="同意"):
 
 
 def test_typed_consent_runs_nothing_and_the_model_is_told_a_card_waits(cards, env):
-    fake, card, result = typed(cards, env, [step(text="请点卡片上的「同意」。")])
+    fake, card, result = typed(cards, env, [step(text="请点卡片上的按钮。")])
     assert cards.executed == [] and cards.costly == [] and len(fake.calls) == 1
     note = fake.calls[0]["messages"][-1]
-    assert note == {"role": "system", "content": "系统事实：有一张确认卡「生成研究预测」还在等用户点按钮，打字不能代替点按钮。"
-                                                  "用户如果是想确认，请他点卡片上的「同意」；如果是在说别的事，照常回答。"}
+    assert note == {"role": "system", "content": "系统事实：有一张确认卡还在等用户点按钮，打字不能代替点按钮。"
+                                                  "用户如果是想确认，请他点卡片上的按钮；如果是在说别的事，照常回答。"}
     assert [m["content"] for m in fake.calls[0]["messages"] if m["role"] == "user"] == [QUESTION, "同意"]
 
 
@@ -500,3 +502,83 @@ def test_typed_confirm_with_a_pending_id_but_no_matching_card_executes_nothing(c
     result, _ = turn(f"confirm:{TOKEN}", {"requested_pending_id": "ghost", "pending_request": None})
     assert cards.executed == [] and cards.costly == [] and fake.calls == []
     assert result["audit"]["write_outcome"] == "stale_card"
+
+
+# --- final fix wave ---------------------------------------------------------------------------------------------------
+
+def foreign_card(cards, operation):
+    return pending_card(cards, [operation])
+
+
+@pytest.mark.parametrize("operation", [
+    {"name": "fetch_sec", "arguments": {"symbol": "AAPL"}, "grant_only": True},
+    {"name": "revise_forecast", "arguments": {"version_id": "v"}, "candidates": [{"source_id": "s"}]},
+    {"name": "ingest_web_source", "arguments": {"url": "https://example.com"}},
+])
+def test_a_card_the_kernel_did_not_make_executes_nothing_and_stays_pending(cards, env, operation):
+    fake = script(env, [])
+    card = foreign_card(cards, operation)
+    result, _ = turn(f"confirm:{TOKEN}", pressed(card))
+    assert cards.executed == [] and cards.costly == [] and fake.calls == []
+    assert result["answer"] == SENTENCES["unsupported"] and result["audit"]["write_outcome"] == "refused:unsupported_card"
+    assert result["status"] == "waiting_for_input" and result["pending_request"] == card
+
+
+def failing_model(env, failure):
+    async def broken(*args, **kwargs):
+        raise failure
+    env.monkeypatch.setattr(provider, "stream_decision", broken)
+
+
+def test_provider_failure_after_an_executed_press_still_reports(cards, env):
+    failing_model(env, provider.ProviderFailure("provider_error", stage="stream", retryable=False))
+    card = pending_card(cards)
+    result, events = turn(f"confirm:{TOKEN}", pressed(card))
+    assert result["answer"] == "已执行：生成研究预测。" and result["status"] == "succeeded" and result["pending_request"] is None
+    assert result["audit"]["report"] == "fallback" and result["audit"]["write_outcome"] == "executed" and len(cards.costly) == 1
+    assert events[-1] == {"event": "delta", "text": "已执行：生成研究预测。"}
+
+
+def test_empty_answer_after_an_executed_press_still_reports(cards, env):
+    script(env, [step(text=""), step(text="")])
+    card = pending_card(cards)
+    result, events = turn(f"confirm:{TOKEN}", pressed(card))
+    assert result["answer"] == "已执行：生成研究预测。" and result["status"] == "succeeded" and result["audit"]["report"] == "fallback"
+    assert len(cards.costly) == 1 and "answer_reset" in kinds(events)
+    assert events[-1] == {"event": "delta", "text": result["answer"]} and events[-2] == {"event": "answer_reset"}
+
+
+def test_a_failed_execution_fallback_says_why(cards, env):
+    cards.costly_result = {"ok": False, "error_code": "market_data_unavailable"}
+    script(env, [step(text=""), step(text="")])
+    card = pending_card(cards)
+    result, _ = turn(f"confirm:{TOKEN}", pressed(card))
+    assert result["answer"].startswith("操作没有成功：生成研究预测。") and consent.failure_reason("market_data_unavailable") in result["answer"]
+    assert result["audit"]["write_outcome"] == "failed"
+
+
+def test_a_non_ascii_token_is_refused_not_raised(cards, env):
+    script(env, [])
+    card = pending_card(cards)
+    result, _ = turn("confirm:é" + "é" * 40, pressed(card))
+    assert cards.executed == [] and result["audit"]["write_outcome"] == "refused:confirmation_parameter_mismatch"
+
+
+def test_remember_marks_the_turn_as_handled(cards, env):
+    stub_remember(env)
+    script(env, [step(calls=[act_call("c1", "remember", remember_args())]), step(text="好")])
+    result, _ = turn("请记住用中文", {}, messages=[{"role": "system", "content": "e"}, {"role": "user", "content": "请记住用中文"}])
+    assert result["audit"]["remember_handled"] is True
+
+
+def test_a_press_on_a_card_dropped_for_expiry_gets_the_expiry_sentence(cards, env):
+    script(env, [])
+    card = pending_card(cards)
+    result, _ = turn(f"confirm:{TOKEN}", {"requested_pending_id": card["id"], "pending_request": None})
+    assert "过期" in result["answer"] and cards.executed == []
+
+
+def test_post_press_text_has_the_not_again_line_and_no_button_name(cards, env):
+    fake, card, result, events = confirm_turn(cards, env, [step(text="好")])
+    fixed = fake.calls[0]["messages"][-1]["content"].partition("\n")[0]
+    assert "已经执行的操作不要再提出一次。" in fixed and "同意" not in fixed

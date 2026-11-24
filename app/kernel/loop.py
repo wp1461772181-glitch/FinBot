@@ -8,6 +8,7 @@ gate before the answer.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass, field
 
@@ -23,6 +24,7 @@ from .toolrun import run_step_tools
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
     "search_knowledge", "web_research", "search_configured_news", "calculate", "calculate_formula",
     "query_portfolio", "recall_conversations", "read_past_conversation", "read_history_citation")
+logger = logging.getLogger(__name__)
 MAX_STEPS = 12
 SOFT_SECONDS = 180
 IDLE_SECONDS = 300
@@ -234,6 +236,14 @@ async def _loop(run: _Run) -> dict:
     return await _finish(run, final, stop, may_ask_again=False)
 
 
+async def _report_fallback(run: _Run, sentence: str) -> dict:
+    await run.emit({"event": "answer_reset"})      # whatever was streamed (or the fixed failure text) is not the answer
+    run.pending = None
+    run.audit["report"] = "fallback"
+    await run.emit({"event": "delta", "text": sentence})
+    return _result(run, sentence, "press_report")
+
+
 async def _answer_press(run: _Run, settled: press.Settled, state: dict) -> dict:
     """A press that is answered in a sentence: no model call."""
     if settled.status == "waiting_for_input":
@@ -270,4 +280,14 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
         if note:
             run.messages.append({"role": "system", "content": note})
             run.carried = press.waiting_write_card(state)
-        return await _loop(run)
+        if not fact:
+            return await _loop(run)
+        # The write is done: whatever the model does next, the user is told what happened, so they do not ask for it twice.
+        try:
+            result = await _loop(run)
+        except Exception:
+            logger.exception("kernel turn after an executed press failed")
+            result = None
+        if result is None or result.get("reason") == "empty_answer":
+            return await _report_fallback(run, settled.report)
+        return result

@@ -279,7 +279,7 @@ UNDO = {
     "add_to_research_queue": "说「移出研究队列」即可撤回。",
     "remove_from_research_queue": "说「加回研究队列」即可恢复，材料和历史都还在。",
 }
-AWAITING_NOTE = "已放进确认卡。回答结束时卡片会交给用户，用户点了「同意」才执行。现在用一两句话告诉用户你准备做什么、请他核对卡片，不要说已经做了。"
+AWAITING_NOTE = "已放进确认卡。回答结束时卡片会交给用户，用户点了确认才执行。现在用一两句话告诉用户你准备做什么、请他核对卡片，不要说已经做了。"
 
 
 def _refusal(code: str) -> dict:
@@ -365,6 +365,8 @@ async def handle(run, args: dict) -> dict:
     line = {"operation": name if known else None, "tier": tier_of(name) if known else None, "outcome": "failed:tool_failed"}
     try:
         result, line["outcome"] = await _handle(run, name, args)
+        if name == "remember" and line["outcome"] in {"done", "proposed"}:
+            run.audit["remember_handled"] = True      # the background profile extractor stays out: one ask, one channel
         return result
     except Exception:
         logger.exception("kernel act crashed operation=%s", line["operation"])
@@ -390,6 +392,6 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
         return prepared, f"refused:{prepared.get('error_code') or 'refused'}"
     # Tier 1 runs at once only while nothing but the owner's own words has been seen this turn: once a read has come back, a
     # page or filing could be asking the model to remember something, so the operation goes onto the card like tier 2.
-    if prepared.tier == 1 and not getattr(run, "read_results", 0):
+    if prepared.tier == 1 and not run.read_results:
         return await _run_at_once(run, prepared)
     return _collect(run, prepared)
