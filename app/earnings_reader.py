@@ -195,7 +195,7 @@ async def _call_model(model: dict, system: str, user: str) -> str:
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     with purpose("earnings"):
         _data, message = await decision_request(model["provider"], model["model"], model["api_key"], messages, [],
-                                                model.get("base_url"))
+                                                model.get("base_url"), **({"catalog_name": model["name"]} if model.get("name") else {}))
     return str(message.get("content") or "")
 
 

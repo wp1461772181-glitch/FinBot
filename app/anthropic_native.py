@@ -662,10 +662,10 @@ def _calls_cap():
     return (_p.TOOL_CALL_STREAM_GUARD, "tool_call_batch_too_large") if flag("FINBOT_SW1D_TOOLCALL_CAP", True) else (12, "provider_incompatible_response")
 
 
-async def decision_request(model, api_key, messages, schemas, reasoning_effort=None):
+async def decision_request(model, api_key, messages, schemas, reasoning_effort=None, catalog_name=None):
     """Same contract as agent_chat_provider.decision_request: (data, message) in the OpenAI shape.
     ``data`` also carries ``input_transformations`` when the API reported any."""
-    with model_usage.measure("anthropic", model) as call:      # the ledger's recording point for this transport
+    with model_usage.measure("anthropic", model, catalog_name=catalog_name) as call:      # the ledger's recording point for this transport
         return await _decision_request(call, model, api_key, messages, schemas, reasoning_effort)
 
 
@@ -691,11 +691,11 @@ async def _decision_request(call, model, api_key, messages, schemas, reasoning_e
         raise HTTPException(504, "provider_timeout") from exc
 
 
-async def stream_decision(model, api_key, messages, schemas, reasoning_effort=None, *, on_text=None, keep_thinking=True, cache=True):
+async def stream_decision(model, api_key, messages, schemas, reasoning_effort=None, *, on_text=None, keep_thinking=True, cache=True, catalog_name=None):
     """decision_request that also awaits ``on_text(piece)`` for each piece of answer text as it arrives (thinking pieces are not
     passed on).  ``keep_thinking`` puts the raw blocks in ``message["_anthropic_content"]`` and keeps those of the history;
     ``cache`` marks the system prompt and the end of the conversation for the prompt cache."""
-    with model_usage.measure("anthropic", model, streamed=on_text is not None) as call:
+    with model_usage.measure("anthropic", model, streamed=on_text is not None, catalog_name=catalog_name) as call:
         return await _stream_decision(call, model, api_key, messages, schemas, reasoning_effort, on_text, keep_thinking, cache)
 
 
@@ -724,9 +724,9 @@ async def _stream_decision(call, model, api_key, messages, schemas, reasoning_ef
         raise HTTPException(504, "provider_timeout") from exc
 
 
-async def stream_answer(model, api_key, messages, reasoning_collector=None):
+async def stream_answer(model, api_key, messages, reasoning_collector=None, catalog_name=None):
     """Same contract as agent_chat_provider.stream_answer: yields the answer text; thinking summaries and usage go to the collector."""
-    with model_usage.measure("anthropic", model, streamed=True) as call:
+    with model_usage.measure("anthropic", model, streamed=True, catalog_name=catalog_name) as call:
         async for piece in _stream_answer(call, model, api_key, messages, reasoning_collector):
             yield piece
 

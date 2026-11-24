@@ -93,6 +93,24 @@ class _UrllibClient:
     """One-shot transport. HTTP error bodies are never read."""
 
     def post(self, url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: int):
+        # The ledger's recording point for this channel (the claim-support judge and the memory gate): a call that comes back
+        # with an HTTP error status is a failed row; the service reports no tokens.
+        import time
+        from . import model_usage
+        model, began = str(json.get("model") or DEFAULT_JEV_MODEL)[:160], time.monotonic()
+        with model_usage.purpose("judge"):
+            try:
+                response = self._post(url, json=json, headers=headers, timeout=timeout)
+            except BaseException as failure:
+                model_usage.record(provider="openrouter", model=model, ok=False, error=model_usage.error_code(failure),
+                                   ms=(time.monotonic() - began) * 1000)
+                raise
+            ok = 200 <= response.status_code <= 299 and not response.too_large
+            model_usage.record(provider="openrouter", model=model, ok=ok, ms=(time.monotonic() - began) * 1000,
+                               error=None if ok else ("too_large" if response.too_large else f"http_{response.status_code}"))
+        return response
+
+    def _post(self, url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: int):
         body = __import__("json").dumps(json, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         opener = urllib.request.build_opener(_NoRedirectHandler)

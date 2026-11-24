@@ -9,7 +9,6 @@ import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -32,14 +31,17 @@ USAGE = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
 @pytest.fixture(autouse=True)
 def table():
     ModelCall.__table__.create(engine, checkfirst=True)
+    model_usage.flush(timeout=10)
+    model_usage._skip_until = 0.0              # a pause after an earlier test's failed write must not leak into this one
+    model_usage._outage_logged = False
     yield
-    model_usage.flush()
+    model_usage.flush(timeout=10)
 
 
 def rows(**where):
     model_usage.flush()
     with SessionLocal() as db:
-        query = select(ModelCall).order_by(ModelCall.id)
+        query = select(ModelCall).order_by(ModelCall.created_at, ModelCall.id)
         for key, value in where.items():
             query = query.where(getattr(ModelCall, key) == value)
         return list(db.scalars(query))
@@ -58,12 +60,19 @@ class Attr:
 
 @pytest.mark.parametrize("usage, expected", [
     ({"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}, (100, 20, 0, 0)),
-    ({"prompt_tokens": 100, "completion_tokens": 20, "prompt_tokens_details": {"cached_tokens": 40}}, (100, 20, 40, 0)),
-    # Anthropic's own: input_tokens leaves out what the cache served or wrote; the ledger keeps the whole prompt, as the app does.
-    ({"input_tokens": 50, "output_tokens": 9, "cache_read_input_tokens": 30, "cache_creation_input_tokens": 10}, (90, 9, 30, 10)),
+    # OpenAI / Zhipu: the prompt is whole, the cached part is inside it; the ledger keeps the uncached input.
+    ({"prompt_tokens": 100, "completion_tokens": 20, "prompt_tokens_details": {"cached_tokens": 40}}, (60, 20, 40, 0)),
+    ({"prompt_tokens": 50, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 10}}, (40, 5, 10, 0)),
+    # OpenRouter also reports what was written to the cache.
+    ({"prompt_tokens": 100, "completion_tokens": 2, "prompt_tokens_details": {"cached_tokens": 20, "cache_write_tokens": 10}}, (70, 2, 20, 10)),
+    # DeepSeek / SiliconFlow: hit and miss counts at the top level.
+    ({"prompt_tokens": 100, "completion_tokens": 5, "prompt_cache_hit_tokens": 70, "prompt_cache_miss_tokens": 30}, (30, 5, 70, 0)),
+    ({"completion_tokens": 5, "prompt_cache_hit_tokens": 70, "prompt_cache_miss_tokens": 30}, (30, 5, 70, 0)),
+    # Anthropic's own: input_tokens already leaves out what the cache served or wrote.
+    ({"input_tokens": 50, "output_tokens": 9, "cache_read_input_tokens": 30, "cache_creation_input_tokens": 10}, (50, 9, 30, 10)),
     ({"input_tokens": 50, "output_tokens": 9}, (50, 9, 0, 0)),
-    # The shape the app normalises to (anthropic_native.usage_to_openai) and the kernel reads.
-    (USAGE, (100, 20, 30, 10)),
+    # The shape the app normalises to (anthropic_native.usage_to_openai) and the kernel reads: whole prompt plus the two cache fields.
+    (USAGE, (60, 20, 30, 10)),
     ({"total_tokens": 80}, (80, 0, 0, 0)),
     ({}, (0, 0, 0, 0)),
     (None, (0, 0, 0, 0)),
@@ -144,14 +153,67 @@ def test_a_database_failure_is_swallowed_and_logged_once(monkeypatch, caplog):
         def __exit__(self, *exc):
             return False
 
-    monkeypatch.setattr(model_usage, "SessionLocal", lambda: Broken())
-    monkeypatch.setattr(model_usage, "_failure_logged", False)
+    monkeypatch.setattr(model_usage, "_make_session", lambda: Broken())
+    monkeypatch.setattr(model_usage, "_skip_until", 0.0)
+    monkeypatch.setattr(model_usage, "_outage_logged", False)
     with caplog.at_level(logging.WARNING, logger="app.model_usage"):
         model_usage.record(provider="p", model="m", ok=True, ms=1)
+        model_usage.flush()
+        model_usage.record(provider="p", model="m", ok=True, ms=1)      # inside the 60 s pause: dropped, not tried
+        model_usage.flush()
+    assert len([r for r in caplog.records if "not written" in r.getMessage()]) == 1
+    assert SECRET not in caplog.text
+    assert model_usage.dropped_rows() >= 1
+
+
+def test_after_the_pause_the_next_write_is_tried_again_and_a_new_outage_logs_again(monkeypatch, caplog):
+    calls = []
+
+    class Broken:
+        def __enter__(self):
+            calls.append(1)
+            raise RuntimeError("down")
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(model_usage, "_make_session", lambda: Broken())
+    monkeypatch.setattr(model_usage, "_skip_until", 0.0)
+    monkeypatch.setattr(model_usage, "_outage_logged", False)
+    with caplog.at_level(logging.WARNING, logger="app.model_usage"):
         model_usage.record(provider="p", model="m", ok=True, ms=1)
         model_usage.flush()
-    assert len([r for r in caplog.records if r.name == "app.model_usage"]) == 1
-    assert SECRET not in caplog.text
+        monkeypatch.setattr(model_usage, "_skip_until", 0.0)            # the 60 s are over
+        model_usage.record(provider="p", model="m", ok=True, ms=1)
+        model_usage.flush()
+    assert len(calls) == 2
+    assert len([r for r in caplog.records if "not written" in r.getMessage()]) == 1     # still the same outage: logged once
+
+
+def test_a_call_returns_at_the_same_speed_with_the_database_down_and_with_the_queue_full(monkeypatch):
+    import time
+
+    def slow_and_broken():
+        time.sleep(3)
+        raise RuntimeError("down")
+
+    def timed():
+        fake_transport(monkeypatch, [respond(answer_body("好"))])
+        began = time.monotonic()
+        _, message = asyncio.run(provider.decision_request("siliconflow", "m", SECRET, [{"role": "user", "content": "q"}], []))
+        assert message["content"] == "好"
+        return time.monotonic() - began
+
+    monkeypatch.setattr(model_usage, "_skip_until", 0.0)
+    monkeypatch.setattr(model_usage, "_make_session", slow_and_broken)
+    down = timed()
+    assert down < 1.0                                                  # not the 3 s of the broken insert, nor a pool wait
+    monkeypatch.setattr(model_usage, "_MAX_PENDING", 0)                # the queue counts as full
+    before = model_usage.dropped_rows()
+    full = timed()
+    assert full < 1.0 and model_usage.dropped_rows() == before + 1
+    monkeypatch.undo()
+    model_usage.flush(timeout=10)             # the slow insert of the first call finishes inside the pause it starts
 
 
 def test_record_itself_never_raises_on_bad_input():
@@ -167,14 +229,14 @@ def test_measure_records_the_call_and_lets_the_failure_through():
         with model_usage.measure("p", marker, streamed=True):
             raise ValueError(f"boom {SECRET}")
     good, bad = rows(model=marker)
-    assert good.ok and good.error is None and good.input_tokens == 100 and good.cache_write_tokens == 10
+    assert good.ok and good.error is None and good.input_tokens == 60 and good.cache_write_tokens == 10
     assert not bad.ok and bad.error == "ValueError" and bad.streamed is True
 
 
 def test_error_codes_are_short_names_never_text():
     err = model_usage.error_code
     assert err(provider.ProviderFailure("provider_rate_or_quota_error", stage="x", provider_status=429)) == "provider_rate_or_quota_error"
-    assert err(asyncio.CancelledError()) == "CancelledError"
+    assert err(asyncio.CancelledError()) == "cancelled"
     assert err(RuntimeError(f"url with {SECRET}")) == "RuntimeError"
     assert err(type("APIStatusError", (Exception,), {"status_code": 503})(f"{SECRET}")) == "http_503"
     assert len(err(type("N" * 100, (Exception,), {})())) == 64
@@ -227,7 +289,7 @@ def test_a_plain_decision_is_one_row_with_its_tokens_and_no_key(monkeypatch):
     assert message["content"] == "好"
     (row,) = rows(owner_hash=owner)
     assert (row.purpose, row.provider, row.model, row.ok, row.attempt) == ("summary", "siliconflow", marker, True, 1)
-    assert (row.input_tokens, row.output_tokens, row.cache_read_tokens, row.cache_write_tokens) == (100, 20, 30, 10)
+    assert (row.input_tokens, row.output_tokens, row.cache_read_tokens, row.cache_write_tokens) == (60, 20, 30, 10)
     assert row.ms >= 0 and row.created_at.tzinfo is not None and row.streamed is False
 
 
@@ -297,7 +359,7 @@ def test_a_provider_that_fails_once_then_answers_is_two_rows_one_per_attempt(ker
     assert (first.attempt, first.ok, first.error) == (1, False, "provider_error")
     assert (second.attempt, second.ok, second.error) == (2, True, None)
     assert first.purpose == second.purpose == "chat" and str(first.turn_id) == str(second.turn_id) == turn
-    assert first.input_tokens == 0 and second.input_tokens == 100
+    assert first.input_tokens == 0 and second.input_tokens == 60
 
 
 def test_a_kernel_turn_with_two_model_calls_is_two_chat_rows_that_agree_with_the_kernel(kernel):
@@ -309,10 +371,10 @@ def test_a_kernel_turn_with_two_model_calls_is_two_chat_rows_that_agree_with_the
     assert [r.purpose for r in found] == ["chat", "chat"] and {str(r.turn_id) for r in found} == {turn}
     assert [r.attempt for r in found] == [1, 1]
     for row, line in zip(found, result["audit"]["calls"]):
-        # The ledger and the kernel read the same call the same way.
-        assert row.input_tokens + row.output_tokens == line["tokens"]
+        # The kernel's total counts the whole prompt, the ledger's input leaves the cache out: the four columns add up to it.
+        assert row.input_tokens + row.cache_read_tokens + row.cache_write_tokens + row.output_tokens == line["tokens"]
         assert (row.cache_read_tokens, row.cache_write_tokens) == (line["cache_read"], line["cache_write"])
-    assert sum(r.input_tokens + r.output_tokens for r in found) == result["audit"]["token_usage"]
+    assert sum(r.input_tokens + r.cache_read_tokens + r.cache_write_tokens + r.output_tokens for r in found) == result["audit"]["token_usage"]
     assert sum(r.cache_read_tokens for r in found) == result["audit"]["cache_read_tokens"]
 
 
@@ -322,13 +384,13 @@ def test_the_backup_model_is_recorded_under_its_own_catalog_name(kernel):
                                                                     "api_key": SECRET, "base_url": None})
     fake_transport(kernel, [respond(b"", 401), respond(answer_body("备用回答"))])
     context = SimpleNamespace(provider="siliconflow", model="m1", api_key=SECRET, base_url=None, reasoning_effort=None, tool_scope=None,
-                              bot_block=None, profile_block=None, identity_credential="x" * 64, owner_hash=owner)
+                              bot_block=None, profile_block=None, identity_credential="x" * 64, owner_hash=owner, catalog_name="primary-model")
 
     async def emit(event):
         pass
 
     async def main():
-        with model_usage.purpose("chat", owner_hash=owner, turn_id=turn, catalog_name="primary-model"):
+        with model_usage.purpose("chat", owner_hash=owner, turn_id=turn):
             return await loop.run_turn("问题", context, emit, [{"role": "system", "content": "s"}, {"role": "user", "content": "问题"}], {})
 
     asyncio.run(main())
@@ -359,7 +421,7 @@ def test_the_summariser_rows_are_tagged_summary(monkeypatch):
     with model_usage.purpose("chat", turn_id=str(uuid.uuid4())):
         assert asyncio.run(summary.summarize_pending(conversation, "credential", provider="siliconflow", model="m", api_key=SECRET, base_url=None))
     (row,) = rows(conversation_id=uuid.UUID(conversation))
-    assert row.purpose == "summary" and row.input_tokens == 100 and row.turn_id is not None
+    assert row.purpose == "summary" and row.input_tokens == 60 and row.turn_id is not None
     assert row.owner_hash == agent_chat_store.owner_hash("credential")
 
 
@@ -428,32 +490,76 @@ def test_the_openai_compatible_provider_and_knowledge_extraction_record_too():
 
 # --- prices and cost ----------------------------------------------------------------------------------------------
 
-def test_cost_needs_prices_and_never_guesses():
-    row = SimpleNamespace(input_tokens=1_000_000, output_tokens=500_000, cache_read_tokens=0, cache_write_tokens=0,
-                          created_at=datetime(2026, 11, 20, tzinfo=UTC))
+def row_of(plain=0, output=0, read=0, write=0):
+    return SimpleNamespace(input_tokens=plain, output_tokens=output, cache_read_tokens=read, cache_write_tokens=write)
+
+
+def test_cost_needs_input_and_output_prices_and_never_guesses():
     assert model_usage.price_of({"name": "a"}) is None
     assert model_usage.price_of({"price_input": 1.0}) is None                 # one side only: no figure
     prices = model_usage.price_of({"price_input": 1.0, "price_output": 4.0})
-    assert model_usage.cost(row, prices) == pytest.approx(3.0)
-    assert model_usage.cost(row, None) is None
+    assert model_usage.cost(row_of(1_000_000, 500_000), prices) == pytest.approx(3.0)
+    assert model_usage.cost(row_of(1_000_000, 500_000), None) is None
+    assert model_usage.missing_price(row_of(5), {"price_output": 1}) == "input"
+    assert model_usage.missing_price(row_of(5), {"price_input": 1}) == "output"
 
 
-def test_cache_tokens_are_part_of_the_prompt_and_priced_apart_when_a_price_is_set():
-    row = SimpleNamespace(input_tokens=1_000_000, output_tokens=0, cache_read_tokens=600_000, cache_write_tokens=100_000,
-                          created_at=datetime(2026, 11, 20, tzinfo=UTC))
-    plain = model_usage.price_of({"price_input": 2.0, "price_output": 4.0})
-    assert model_usage.cost(row, plain) == pytest.approx(2.0)                  # no cache price: the ordinary input price
-    priced = model_usage.price_of({"price_input": 2.0, "price_output": 4.0, "price_cache_read": 0.5, "price_cache_write": 2.5})
-    assert model_usage.cost(row, priced) == pytest.approx(300_000 * 2 / 1e6 + 600_000 * 0.5 / 1e6 + 100_000 * 2.5 / 1e6)
+def test_cache_tokens_are_priced_by_their_own_prices_and_never_by_the_input_price():
+    row = row_of(plain=400_000, output=10_000, read=600_000, write=100_000)
+    entry = {"price_input": 2.0, "price_output": 4.0}
+    assert model_usage.cost(row, model_usage.price_of(entry)) is None          # cache tokens, no cache price: unpriced
+    assert model_usage.missing_price(row, entry) == "cache_read"
+    only_read = {**entry, "price_cache_read": 0.5}
+    assert model_usage.cost(row, model_usage.price_of(only_read)) is None and model_usage.missing_price(row, only_read) == "cache_write"
+    full = {**only_read, "price_cache_write": 2.5}
+    assert model_usage.cost(row, model_usage.price_of(full)) == pytest.approx((400_000 * 2 + 10_000 * 4 + 600_000 * 0.5 + 100_000 * 2.5) / 1e6)
+    # A call without cache tokens does not need the cache prices.
+    assert model_usage.cost(row_of(plain=1_000_000), model_usage.price_of(entry)) == pytest.approx(2.0)
+    assert model_usage.missing_price(row_of(plain=1), entry) is None
 
 
-def test_a_price_set_after_a_call_does_not_apply_to_it():
-    before = SimpleNamespace(input_tokens=1_000_000, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0,
-                             created_at=datetime(2026, 11, 20, tzinfo=UTC))
-    after = SimpleNamespace(**{**vars(before), "created_at": datetime(2026, 11, 22, tzinfo=UTC)})
-    prices = model_usage.price_of({"price_input": 1.0, "price_output": 1.0, "price_since": datetime(2026, 11, 21, tzinfo=UTC)})
-    assert model_usage.cost(before, prices) is None
-    assert model_usage.cost(after, prices) == pytest.approx(1.0)
+def test_every_usage_shape_prices_the_same_way_through_parse_usage():
+    prices = model_usage.price_of({"price_input": 1.0, "price_output": 2.0, "price_cache_read": 0.1, "price_cache_write": 1.25})
+    shapes = [
+        {"input_tokens": 50, "output_tokens": 10, "cache_read_input_tokens": 30, "cache_creation_input_tokens": 20},
+        {"prompt_tokens": 100, "completion_tokens": 10, "cache_read_input_tokens": 30, "cache_creation_input_tokens": 20},
+        {"prompt_tokens": 100, "completion_tokens": 10, "prompt_tokens_details": {"cached_tokens": 30, "cache_write_tokens": 20}},
+    ]
+    costs = [model_usage.cost(model_usage.parse_usage(shape), prices) for shape in shapes]
+    assert costs[0] == pytest.approx((50 * 1 + 10 * 2 + 30 * 0.1 + 20 * 1.25) / 1e6)
+    assert costs == [pytest.approx(costs[0])] * 3
+    deepseek = model_usage.parse_usage({"prompt_tokens": 100, "completion_tokens": 10, "prompt_cache_hit_tokens": 70, "prompt_cache_miss_tokens": 30})
+    assert model_usage.cost(deepseek, prices) == pytest.approx((30 * 1 + 10 * 2 + 70 * 0.1) / 1e6)
+    assert model_usage.cost(deepseek, model_usage.price_of({"price_input": 1, "price_output": 2, "price_cache_read": 0.1})) == pytest.approx((30 + 20 + 7) / 1e6)
+
+
+def test_the_cost_is_fixed_when_the_row_is_written_and_a_later_price_edit_changes_only_later_rows(clean_catalog):
+    catalog.save_entry("fixed", display_name="fixed", provider="deepseek", model="m-fixed", api_key="k" * 12, create=True)
+    marker = f"m-{unique()}"
+    usage = {"prompt_tokens": 1_000_000, "completion_tokens": 0}
+
+    def call():
+        model_usage.record(provider="deepseek", model=marker, catalog_name="fixed", ok=True, ms=1, usage=usage)
+        model_usage.flush()
+
+    call()                                                                       # no price yet
+    catalog.save_entry("fixed", prices={"price_input": 1, "price_output": 2})
+    call()
+    catalog.save_entry("fixed", prices={"price_input": 3})                      # a typo fixed later
+    call()
+    catalog.save_entry("fixed", prices={"price_input": None})                   # a price removed later
+    call()
+    unpriced, first, second, removed = rows(model=marker)
+    assert (unpriced.cost_usd, first.cost_usd, removed.cost_usd) == (None, pytest.approx(1.0), None)
+    assert second.cost_usd == pytest.approx(3.0)
+    assert first.cost_usd == pytest.approx(1.0)                                  # still what it was
+
+
+def test_a_call_without_a_catalog_entry_has_no_cost(clean_catalog):
+    marker = f"m-{unique()}"
+    model_usage.record(provider="p", model=marker, ok=True, ms=1, usage={"prompt_tokens": 5})
+    model_usage.record(provider="p", model=marker, catalog_name="gone", ok=True, ms=1, usage={"prompt_tokens": 5})
+    assert [r.cost_usd for r in rows(model=marker)] == [None, None]
 
 
 @pytest.fixture
@@ -468,22 +574,19 @@ def clean_catalog():
         db.commit()
 
 
-def test_catalog_entries_carry_optional_prices_and_say_when_they_changed(clean_catalog):
+def test_catalog_entries_carry_optional_prices(clean_catalog):
     saved = catalog.save_entry("priced", display_name="priced", provider="deepseek", model="m-priced", api_key="k" * 12, create=True)
-    assert all(saved[key] is None for key in ("price_input", "price_output", "price_cache_read", "price_cache_write", "price_since"))
+    assert all(saved[key] is None for key in ("price_input", "price_output", "price_cache_read", "price_cache_write"))
+    assert "price_since" not in saved
     saved = catalog.save_entry("priced", prices={"price_input": 0.5, "price_output": 2})
     assert (saved["price_input"], saved["price_output"], saved["price_cache_read"]) == (0.5, 2.0, None)
-    first = saved["price_since"]
-    assert first
-    again = catalog.save_entry("priced", prices={"price_input": 0.5, "price_output": 2})
-    assert again["price_since"] == first                                       # nothing changed: the date stays
     changed = catalog.save_entry("priced", prices={"price_output": 3, "price_cache_read": 0.1})
     assert (changed["price_input"], changed["price_output"], changed["price_cache_read"]) == (0.5, 3.0, 0.1)
-    assert changed["price_since"] != first
     cleared = catalog.save_entry("priced", prices={"price_input": None, "price_output": None, "price_cache_read": None})
     assert cleared["price_input"] is None and model_usage.price_of(cleared) is None
+    catalog.save_entry("priced", prices={"price_input": 1, "price_output": 2})
     other = catalog.save_entry("priced", display_name="renamed only")          # an edit that sends no prices leaves them alone
-    assert other["price_since"] == cleared["price_since"]
+    assert (other["price_input"], other["price_output"]) == (1.0, 2.0)
 
 
 @pytest.mark.parametrize("bad", [-1, float("nan"), float("inf"), "x", 10 ** 7, True])
@@ -500,7 +603,7 @@ def test_a_rename_keeps_the_price_and_the_old_rows_keep_the_name_they_were_calle
     marker = f"m-{unique()}"
     model_usage.record(provider="deepseek", model=marker, catalog_name="before", ok=True, ms=1)
     renamed = catalog.save_entry("before", rename_to="after")
-    assert renamed["price_input"] == 1.0 and renamed["price_since"]
+    assert renamed["price_input"] == 1.0
     (row,) = rows(model=marker)
     assert row.catalog_name == "before"
 
@@ -632,13 +735,13 @@ def test_the_knowledge_extractor_records_its_call(monkeypatch):
 def test_the_price_columns_are_added_to_a_catalog_table_made_before_them(clean_catalog):
     from sqlalchemy import text
     with engine.begin() as connection:
-        for column in (*catalog.PRICE_KEYS, "price_since"):
+        for column in catalog.PRICE_KEYS:
             connection.execute(text(f"ALTER TABLE agent_model_catalog DROP COLUMN IF EXISTS {column}"))
     catalog.ensure_price_columns()
     catalog.ensure_price_columns()           # again: nothing to add, nothing breaks
     saved = catalog.save_entry("old", display_name="old", provider="deepseek", model="m-old", api_key="k" * 12, create=True,
                                prices={"price_input": 1, "price_output": 2})
-    assert saved["price_input"] == 1.0 and saved["price_since"]
+    assert saved["price_input"] == 1.0
 
 
 def test_the_catalog_api_takes_and_returns_prices_and_refuses_a_bad_one(clean_catalog, client, monkeypatch):
@@ -648,9 +751,9 @@ def test_the_catalog_api_takes_and_returns_prices_and_refuses_a_bad_one(clean_ca
     added = client.post("/agent-chat/model-catalog", headers=H, json=body)
     assert added.status_code == 200, added.text
     model = added.json()["model"]
-    assert (model["price_input"], model["price_output"], model["price_cache_read"]) == (0.5, 2.0, None) and model["price_since"]
+    assert (model["price_input"], model["price_output"], model["price_cache_read"]) == (0.5, 2.0, None)
     kept = client.patch("/agent-chat/model-catalog/apiprice", headers=H, json={"name": "apiprice", "display_name": "renamed"}).json()["model"]
-    assert kept["price_input"] == 0.5 and kept["price_since"] == model["price_since"]
+    assert kept["price_input"] == 0.5
     cleared = client.patch("/agent-chat/model-catalog/apiprice", headers=H, json={"name": "apiprice", "price_input": None, "price_output": None}).json()["model"]
     assert cleared["price_input"] is None and cleared["price_output"] is None
     bad = client.patch("/agent-chat/model-catalog/apiprice", headers=H, json={"name": "apiprice", "price_input": -3})
@@ -677,3 +780,149 @@ def test_the_old_engines_retry_is_a_second_attempt_row(monkeypatch):
     assert message["content"] == "好" and turn.audit["provider_retries"] == 1
     first, second = rows(owner_hash=owner)
     assert (first.attempt, first.ok, second.attempt, second.ok) == (1, False, 2, True)
+
+
+# --- fix round 1 ---------------------------------------------------------------------------------------------------
+
+def test_a_chat_turn_that_runs_the_judge_on_another_model_gives_two_rows_with_two_catalog_names(kernel):
+    from app.agent_workflow import claim_judge
+    owner, turn = unique(), str(uuid.uuid4())
+    fake_transport(kernel, [respond(tool_body("c1", "query_financials", {"symbol": "AAPL"})), respond(answer_body("{}")),
+                            respond(answer_body("收入 100 [1]"))])
+
+    async def invoke_with_judge(name, args, context, *, emit=None, page_chars=None):
+        await claim_judge._default_call({"provider": "siliconflow", "model": "judge-m", "api_key": SECRET, "name": "judge-glm"}, "s", "u")
+        return {"ok": True, "data": [{"id": "r1", "symbol": "AAPL", "source_type": "official_filing", "excerpt": "Revenue was 100."}], "source": "saved"}
+
+    kernel.setattr(tools, "invoke", invoke_with_judge)
+    context = SimpleNamespace(provider="siliconflow", model="chat-m", api_key=SECRET, base_url=None, reasoning_effort=None, tool_scope=None,
+                              bot_block=None, profile_block=None, identity_credential="x" * 64, owner_hash=owner, catalog_name="chat-model")
+
+    async def emit(event):
+        pass
+
+    async def main():
+        with model_usage.purpose("chat", owner_hash=owner, turn_id=turn):
+            return await loop.run_turn("问题", context, emit, [{"role": "system", "content": "s"}, {"role": "user", "content": "问题"}], {})
+
+    asyncio.run(main())
+    found = rows(owner_hash=owner)
+    assert [(r.purpose, r.model, r.catalog_name) for r in found] == [("chat", "chat-m", "chat-model"), ("judge", "judge-m", "judge-glm"),
+                                                                    ("chat", "chat-m", "chat-model")]
+    assert {str(r.turn_id) for r in found} == {turn}
+
+
+def test_a_nested_call_without_a_catalog_entry_carries_no_catalog_name():
+    marker, owner = f"m-{unique()}", unique()
+    with model_usage.purpose("chat", owner_hash=owner):
+        with model_usage.purpose("summary"):
+            model_usage.record(provider="p", model=marker, ok=True, ms=1)
+    assert rows(model=marker)[0].catalog_name is None
+
+
+def test_a_cancelled_streamed_turn_is_one_failed_row_with_its_turn(kernel):
+    owner, turn = unique(), str(uuid.uuid4())
+
+    async def slow_body():
+        yield b'data: {"choices":[{"delta":{"content":"a"},"finish_reason":null}]}\n\n'
+        await asyncio.sleep(30)
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=slow_body())
+
+    @asynccontextmanager
+    async def client(base_url):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            yield http
+
+    kernel.setattr(provider, "_decision_client", client)
+    context = SimpleNamespace(provider="siliconflow", model="m", api_key=SECRET, base_url=None, reasoning_effort=None, tool_scope=None,
+                              bot_block=None, profile_block=None, identity_credential="x" * 64, owner_hash=owner)
+
+    async def emit(event):
+        pass
+
+    async def main():
+        with model_usage.purpose("chat", owner_hash=owner, turn_id=turn):
+            task = asyncio.create_task(loop.run_turn("问题", context, emit, [{"role": "system", "content": "s"}, {"role": "user", "content": "问题"}], {}))
+            await asyncio.sleep(0.4)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(main())
+    (row,) = rows(owner_hash=owner)
+    assert (row.ok, row.error, str(row.turn_id), row.purpose) == (False, "cancelled", turn, "chat")
+
+
+def test_two_concurrent_turns_keep_their_own_turn_ids(kernel):
+    first_owner, second_owner = unique(), unique()
+    first_turn, second_turn = str(uuid.uuid4()), str(uuid.uuid4())
+    fake_transport(kernel, [respond(answer_body("甲")), respond(answer_body("乙"))])
+
+    def context(owner):
+        return SimpleNamespace(provider="siliconflow", model="m", api_key=SECRET, base_url=None, reasoning_effort=None, tool_scope=None,
+                               bot_block=None, profile_block=None, identity_credential="x" * 64, owner_hash=owner)
+
+    async def emit(event):
+        pass
+
+    async def one(owner, turn):
+        with model_usage.purpose("chat", owner_hash=owner, turn_id=turn):
+            await asyncio.sleep(0)
+            return await loop.run_turn("问题", context(owner), emit, [{"role": "system", "content": "s"}, {"role": "user", "content": "问题"}], {})
+
+    async def main():
+        await asyncio.gather(one(first_owner, first_turn), one(second_owner, second_turn))
+
+    asyncio.run(main())
+    (a,), (b,) = rows(owner_hash=first_owner), rows(owner_hash=second_owner)
+    assert str(a.turn_id) == first_turn and str(b.turn_id) == second_turn
+
+
+def test_the_jev_channel_is_recorded_as_judge_calls(monkeypatch):
+    from app import jev_claim_support as jev
+    owner = unique()
+    client = jev._UrllibClient()
+    replies = [jev._TransportResponse(200, b"{}"), jev._TransportResponse(503, b""), TimeoutError("slow " + SECRET)]
+
+    def fake_post(self, url, *, json, headers, timeout):
+        outcome = replies.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(jev._UrllibClient, "_post", fake_post)
+    with model_usage.purpose("chat", owner_hash=owner):
+        for _ in range(3):
+            try:
+                client.post("https://openrouter.test/decisions", json={"model": "typesafe/jev-1.13"}, headers={"Authorization": f"Bearer {SECRET}"}, timeout=5)
+            except TimeoutError:
+                pass
+    ok, bad, timeout = rows(owner_hash=owner)
+    assert [(r.purpose, r.ok, r.error) for r in (ok, bad, timeout)] == [("judge", True, None), ("judge", False, "http_503"), ("judge", False, "TimeoutError")]
+    assert SECRET not in str([getattr(r, c.name) for r in (ok, bad, timeout) for c in ModelCall.__table__.columns])
+
+
+def test_the_chat_endpoint_hands_the_catalog_name_of_the_turn_down(stream_fixture, monkeypatch):
+    import app.agent_chat_stream as stream
+    send, *_ = stream_fixture
+    seen = {}
+
+    async def workflow(**kwargs):
+        seen.update(kwargs)
+        yield {"event": "done", "status": "succeeded", "reason": None, "final_protocol": {}, "audit": {}, "citations": [], "route": "A", "trace": []}
+
+    monkeypatch.setattr(stream, "stream_workflow", workflow)
+    monkeypatch.setattr(stream, "_catalog_turn", lambda name, credential: {"name": "haiku-5.5", "provider": "siliconflow", "model": "m", "api_key": SECRET,
+                                                                           "base_url": None, "context_window": None})
+
+    async def go():
+        payload = stream.StreamRequest(catalog_model="haiku-5.5", message="hi")
+        response = await stream.stream_chat(payload, SimpleNamespace(), "x" * 40)
+        return [part async for part in response.body_iterator]
+
+    asyncio.run(go())
+    assert seen["catalog_name"] == "haiku-5.5"

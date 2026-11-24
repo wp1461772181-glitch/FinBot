@@ -65,7 +65,7 @@ def _default_call(model: dict, system: str, user: str) -> tuple[str, dict]:
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     with purpose("forecast"):
         data, message = asyncio.run(decision_request(model["provider"], model["model"], model["api_key"], messages, [],
-                                                     model.get("base_url")))
+                                                     model.get("base_url"), **({"catalog_name": model["name"]} if model.get("name") else {})))
     return str(message.get("content") or ""), data if isinstance(data, dict) else {}
 
 

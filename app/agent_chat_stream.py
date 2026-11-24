@@ -487,7 +487,7 @@ def _catalog_turn(name,credential):
  except catalog.CatalogError as exc:raise HTTPException(409,str(exc)) from None
 class _Model:
  """The provider settings of one turn, from the browser or from the catalog.  Its repr has no key."""
- def __init__(self,provider,model,api_key,base_url,window=None):self.provider=provider;self.model=model;self.base_url=base_url;self._key=api_key;self.window=window or layers.WINDOW_TOKENS
+ def __init__(self,provider,model,api_key,base_url,window=None,name=None):self.name=name;self.provider=provider;self.model=model;self.base_url=base_url;self._key=api_key;self.window=window or layers.WINDOW_TOKENS
  def key(self):return self._key
  def __repr__(self):return f"_Model({self.provider!r}, {self.model!r})"
 def _model_label(resolved,chosen):
@@ -515,11 +515,11 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
  bot=None;resolved=None
  if payload.bot_id:
   bot,resolved=await asyncio.to_thread(_bot_turn,payload,x_chat_session)
-  chosen=_Model(resolved["provider"],resolved["model"],resolved["api_key"],resolved["base_url"],resolved.get("context_window"))
+  chosen=_Model(resolved["provider"],resolved["model"],resolved["api_key"],resolved["base_url"],resolved.get("context_window"),resolved.get("name"))
   payload.conversation_id=bot["conversation_id"]
  elif payload.catalog_model is not None:
   resolved=await asyncio.to_thread(_catalog_turn,payload.catalog_model,x_chat_session)
-  chosen=_Model(resolved["provider"],resolved["model"],resolved["api_key"],resolved["base_url"],resolved.get("context_window"))
+  chosen=_Model(resolved["provider"],resolved["model"],resolved["api_key"],resolved["base_url"],resolved.get("context_window"),resolved.get("name"))
  else:
   if payload.api_key is None or len(payload.api_key.get_secret_value())<8: raise HTTPException(422,"invalid_agent_chat_request")
   chosen=_Model(payload.provider,payload.model,payload.api_key.get_secret_value(),payload.base_url)
@@ -592,12 +592,12 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    async def pump():
     try:
      # The model-call ledger: every call of this turn (both engines, the kernel's backup model, what the turn starts) is a `chat` row.
-     with model_usage.purpose("chat",owner_hash=owner_hash(x_chat_session),conversation_id=cid,turn_id=turn,bot_id=(bot or {}).get("bot_id"),catalog_name=(resolved or {}).get("name")):
+     with model_usage.purpose("chat",owner_hash=owner_hash(x_chat_session),conversation_id=cid,turn_id=turn,bot_id=(bot or {}).get("bot_id")):
       async for event in stream_workflow(question=question,messages=messages,skill_block=skill_block,active_skill=active_skill,provider=chosen.provider,model=chosen.model,
         api_key=chosen.key(),base_url=chosen.base_url,owner_hash=owner_hash(x_chat_session),
         conversation_id=cid,identity_credential=x_chat_session,turn_id=turn,pending_request_id=payload.pending_request_id,
         legacy_result_sets=legacy_result_sets,legacy_source_choices=legacy_source_choices,
-        history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window,self_state=self_state):
+        history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window,self_state=self_state,catalog_name=chosen.name):
        await queue.put(("event",event))
     except asyncio.CancelledError:
      raise
@@ -687,13 +687,13 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
       except Exception:pass
      from .agent_context_summary import schedule_summary
      schedule_summary(cid,x_chat_session,provider=chosen.provider,model=chosen.model,
-                      api_key=chosen.key(),base_url=chosen.base_url,window=chosen.window,anchored=anchored)
+                      api_key=chosen.key(),base_url=chosen.base_url,window=chosen.window,anchored=anchored,**({"catalog_name":chosen.name} if chosen.name else {}))
      if _is_owner(x_chat_session) and not payload.pending_request_id:
       from .agent_profile_extract import schedule_extraction,remember_handled
       schedule_extraction(owner_hash(x_chat_session),payload.message,conversation_id=cid,turn_id=turn,
                           bot=bot,asked_to_remember=remember_handled(event.get("audit")),
                           provider=chosen.provider,model=chosen.model,
-                          api_key=chosen.key(),base_url=chosen.base_url)
+                          api_key=chosen.key(),base_url=chosen.base_url,**({"catalog_name":chosen.name} if chosen.name else {}))
      if restored:yield frame("citations",{"turn_id":turn,"items":_client_citations(restored)})
      # WP0 step 8: no unverified_lines frame. The check no longer produces them (audit.legacy_review holds its verdicts),
      # and the replay projects the stored ones of older turns (legacy_projection).
@@ -950,7 +950,7 @@ async def _compact_now(conversation_id:str,credential:str,resolved:dict,focus:st
  try:
   result=await summary.compact_conversation(conversation_id,credential,provider=resolved["provider"],model=resolved["model"],
       api_key=resolved["api_key"],base_url=resolved["base_url"],window=resolved.get("context_window"),
-      focus=focus or "",manual=True,anchored=anchored)
+      focus=focus or "",manual=True,anchored=anchored,**({"catalog_name":resolved["name"]} if resolved.get("name") else {}))
  except asyncio.CancelledError:raise
  except Exception as exc:
   raise HTTPException(502,"compact_failed") from exc

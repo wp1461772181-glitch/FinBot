@@ -204,10 +204,11 @@ async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
         began = time.monotonic()
         try:
             # The ledger: this attempt is a row of its own, under the catalog name of the model that is answering (the backup's, once switched).
-            with model_usage.attempt(attempt + 1), model_usage.purpose("chat", catalog_name=use.name):
+            with model_usage.attempt(attempt + 1):
                 data, message = await provider.stream_decision(
                     use.provider, use.model, use.api_key, run.messages, tool_schemas, base_url=use.base_url,
-                    reasoning_effort=tiers.EFFORT[run.tier], on_text=on_text, keep_thinking=True, cache=True)
+                    reasoning_effort=tiers.EFFORT[run.tier], on_text=on_text, keep_thinking=True, cache=True,
+                    **({"catalog_name": use.name} if use.name else {}))
         except Exception as failure:
             # Whatever was streamed in this step is a cut-off: never leave it behind as the answer.
             if run.sent_text:
@@ -384,7 +385,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
     tool_schemas = _tool_schemas(context)
     run = _Run(context=context, emit=emit, messages=[], user_text="", schemas=tool_schemas,
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
-               model=ModelUse(context.provider, context.model, context.api_key, context.base_url),
+               model=ModelUse(context.provider, context.model, context.api_key, context.base_url, getattr(context, "catalog_name", None)),
                ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)),
                question=question, turn_id=str(state.get("turn_id") or ""),
                carried_sets=[x for x in state.get("result_sets") or [] if isinstance(x, dict) and x.get("owner") == context.owner_hash

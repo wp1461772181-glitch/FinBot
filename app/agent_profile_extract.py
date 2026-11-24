@@ -264,7 +264,7 @@ def _bot_hint(owner_hash: str, bot_id: str | None) -> dict | None:
 
 async def extract_from_turn(owner_hash: str, message: str, *, conversation_id: str, turn_id: str,
                             provider: str, model: str, api_key: str, base_url: str | None,
-                            bot_id: str | None = None) -> int:
+                            bot_id: str | None = None, catalog_name: str | None = None) -> int:
     """Store the inferred items of one turn's message, each in the layer it proposes (global or this
     turn's bot).  Returns how many were added."""
     if not worth_reading(message):
@@ -283,7 +283,8 @@ async def extract_from_turn(owner_hash: str, message: str, *, conversation_id: s
         from .model_usage import purpose
         async with asyncio.timeout(EXTRACT_TIMEOUT_SECONDS):
             with purpose("profile", owner_hash=owner_hash, conversation_id=conversation_id, turn_id=turn_id, bot_id=bot_id):
-                _response, decision = await decision_request(provider, model, api_key, messages, [], base_url)
+                _response, decision = await decision_request(provider, model, api_key, messages, [], base_url,
+                                                             **({"catalog_name": catalog_name} if catalog_name else {}))
         content = decision.get("content") if isinstance(decision, dict) else None
     except TimeoutError:
         content = None
@@ -335,7 +336,7 @@ async def _guarded(owner_hash: str, message: str, **kwargs) -> None:
 
 def schedule_extraction(owner_hash: str, message: str, *, conversation_id: str, turn_id: str, provider: str,
                         model: str, api_key: str, base_url: str | None = None, bot: dict | None = None,
-                        asked_to_remember: bool = False) -> None:
+                        asked_to_remember: bool = False, catalog_name: str | None = None) -> None:
     """Called when an owner's turn has succeeded.  Never raises and never waits; one task per conversation.
     Not when the turn itself handled an ask to remember (``asked_to_remember``): one ask, one channel."""
     try:
@@ -343,7 +344,7 @@ def schedule_extraction(owner_hash: str, message: str, *, conversation_id: str, 
             return
         task = asyncio.get_running_loop().create_task(_guarded(
             owner_hash, message, conversation_id=conversation_id, turn_id=turn_id, provider=provider,
-            model=model, api_key=api_key, base_url=base_url, bot_id=(bot or {}).get("bot_id")))
+            model=model, api_key=api_key, base_url=base_url, bot_id=(bot or {}).get("bot_id"), catalog_name=catalog_name))
         _RUNNING[conversation_id] = task
 
         def forget(done: asyncio.Task, key: str = conversation_id) -> None:

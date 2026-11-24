@@ -205,24 +205,27 @@ def endpoint(provider, base_url=None):
     if base_url is None: return PROVIDERS[provider]
     base=base_url.rstrip("/")
     return base if base.endswith("/chat/completions") else base+"/chat/completions"
-async def decision_request(provider, model, api_key, messages, schemas, base_url=None, reasoning_effort=None):
+def _named(catalog_name):
+    """The ledger's catalog name, passed on only when there is one (a caller or a test double that takes none is left alone)."""
+    return {"catalog_name":catalog_name} if catalog_name else {}
+async def decision_request(provider, model, api_key, messages, schemas, base_url=None, reasoning_effort=None, catalog_name=None):
     if provider=="anthropic":
         from . import anthropic_native
-        if anthropic_native.use_native(provider):return await anthropic_native.decision_request(model,api_key,messages,schemas,reasoning_effort)
+        if anthropic_native.use_native(provider):return await anthropic_native.decision_request(model,api_key,messages,schemas,reasoning_effort,**_named(catalog_name))
     if any(isinstance(m,dict) and "cache_point" in m for m in messages):messages=[{k:v for k,v in m.items() if k!="cache_point"} for m in messages]  # kernel-private mark
     body={"model":model,"messages":messages,"max_tokens":MAX_OUTPUT_TOKENS,"stream":True}
     if schemas: body.update(tools=schemas,tool_choice="auto")
     if provider=="minimax":body["reasoning_split"]=True
     body.update(reasoning_options(provider,reasoning_effort,model))
-    return await _post(provider,api_key,body,base_url)
-async def stream_decision(provider,model,api_key,messages,schemas,*,base_url=None,reasoning_effort=None,on_text=None,keep_thinking=True,cache=True):
+    return await _post(provider,api_key,body,base_url,**_named(catalog_name))
+async def stream_decision(provider,model,api_key,messages,schemas,*,base_url=None,reasoning_effort=None,on_text=None,keep_thinking=True,cache=True,catalog_name=None):
     """decision_request with the answer text reported through ``await on_text(piece)`` as it is generated (Anthropic native);
     other providers answer first and report the whole text once.  Same (data, message) return as decision_request."""
     if provider=="anthropic":
         from . import anthropic_native
         if anthropic_native.use_native(provider):
-            return await anthropic_native.stream_decision(model,api_key,messages,schemas,reasoning_effort,on_text=on_text,keep_thinking=keep_thinking,cache=cache)
-    data,message=await decision_request(provider,model,api_key,messages,schemas,base_url,reasoning_effort)
+            return await anthropic_native.stream_decision(model,api_key,messages,schemas,reasoning_effort,on_text=on_text,keep_thinking=keep_thinking,cache=cache,**_named(catalog_name))
+    data,message=await decision_request(provider,model,api_key,messages,schemas,base_url,reasoning_effort,**_named(catalog_name))
     if on_text is not None and isinstance(message,dict) and message.get("content"):await on_text(message["content"])
     return data,message
 def _semantic_delta(delta):
@@ -309,9 +312,9 @@ def _merge_delta(message, calls, delta, cap=12, over_cap_code='provider_incompat
                 container[key]+=value
 
 
-async def _post(provider,key,body,base_url=None):
+async def _post(provider,key,body,base_url=None,catalog_name=None):
     # The ledger's one recording point for the OpenAI-compatible transport: one row per request, whatever the caller then does.
-    with model_usage.measure(provider,body.get('model')) as call:
+    with model_usage.measure(provider,body.get('model'),catalog_name=catalog_name) as call:
         return await _post_request(provider,key,body,base_url,call)
 
 async def _post_request(provider,key,body,base_url,call):
@@ -375,13 +378,13 @@ async def _post_request(provider,key,body,base_url,call):
     except (httpx.TimeoutException,TimeoutError) as exc:raise HTTPException(504,'provider_timeout') from exc
     except httpx.HTTPError as exc:raise HTTPException(502,'provider_network_error') from exc
 
-async def stream_answer(provider,model,api_key,messages,reasoning_collector=None,base_url=None):
+async def stream_answer(provider,model,api_key,messages,reasoning_collector=None,base_url=None,catalog_name=None):
     if provider=='anthropic':
         from . import anthropic_native
         if anthropic_native.use_native(provider):
-            async for piece in anthropic_native.stream_answer(model,api_key,messages,reasoning_collector):yield piece
+            async for piece in anthropic_native.stream_answer(model,api_key,messages,reasoning_collector,**_named(catalog_name)):yield piece
             return
-    with model_usage.measure(provider,model,streamed=True) as call:
+    with model_usage.measure(provider,model,streamed=True,catalog_name=catalog_name) as call:
         async for piece in _stream_answer_request(provider,model,api_key,messages,reasoning_collector,base_url,call):yield piece
 
 async def _stream_answer_request(provider,model,api_key,messages,reasoning_collector,base_url,call):

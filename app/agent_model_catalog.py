@@ -26,7 +26,6 @@ import stat
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, date, datetime
 from pathlib import Path
 
 import httpx
@@ -94,17 +93,6 @@ def clean_price(value) -> float | None:
     return float(value)
 
 
-def _since(value) -> datetime | None:
-    if isinstance(value, str):
-        try:
-            value = datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    if isinstance(value, date) and not isinstance(value, datetime):
-        value = datetime(value.year, value.month, value.day)
-    return (value if value.tzinfo else value.replace(tzinfo=UTC)) if isinstance(value, datetime) else None
-
-
 def window_of(entry: dict) -> int:
     from .agent_context import DEFAULT_WINDOW_TOKENS
     return entry.get("context_window") or DEFAULT_WINDOW_TOKENS
@@ -170,7 +158,7 @@ def _read_file() -> tuple[list[dict], str | None, list[str]]:
                             "base_url": _endpoint(provider, item.get("base_url")),
                             "key_source": "env", "key_env": key_env, "ciphertext": None, "origin": "file",
                             "is_default": False, "context_window": clean_window(item.get("context_window")),
-                            **{key: clean_price(item.get(key)) for key in PRICE_KEYS}, "price_since": _since(item.get("price_since"))})
+                            **{key: clean_price(item.get(key)) for key in PRICE_KEYS}})
             seen.add(name)
         except CatalogError as exc:
             problems.append(f"{path.name} entry {position}: {exc}")
@@ -184,7 +172,7 @@ def _row_entry(row: AgentModelEntry) -> dict:
             "base_url": row.base_url, "key_source": row.key_source, "key_env": row.key_env,
             "ciphertext": row.ciphertext, "origin": "server", "is_default": bool(row.is_default),
             "migrated_from": row.migrated_from, "context_window": row.context_window,
-            **{key: getattr(row, key) for key in PRICE_KEYS}, "price_since": row.price_since}
+            **{key: getattr(row, key) for key in PRICE_KEYS}}
 
 
 def entries() -> tuple[list[dict], str | None]:
@@ -372,8 +360,7 @@ def public(entry: dict, default: str | None = None) -> dict:
             "key_status": "configured" if key else "missing", **hint, "is_default": entry["name"] == default,
             "migrated": bool(entry.get("migrated_from")), "context_window": window_of(entry),
             "context_window_set": bool(entry.get("context_window")), **_reasoning_fields(entry),
-            **{key: entry.get(key) for key in PRICE_KEYS},
-            "price_since": since.isoformat() if (since := _since(entry.get("price_since"))) else None}
+            **{key: entry.get(key) for key in PRICE_KEYS}}
 
 
 def list_public() -> dict:
@@ -474,8 +461,8 @@ def save_entry(name: str, *, display_name: str | None = None, provider: str | No
     ``rename_to`` (an existing entry only) gives it a new name: the bots and model roles that named the old one
     move to the new one in the same transaction, and the entry keeps its key, default flag, window and prices.
     ``prices`` maps ``price_input``, ``price_output``, ``price_cache_read`` and ``price_cache_write`` (USD per million
-    tokens) to a value, or to None to clear it; a key left out stays as it is.  ``price_since`` becomes now when any
-    of them changes (a call made before it is not priced).  Raises CatalogError(invalid_price)."""
+    tokens) to a value, or to None to clear it; a key left out stays as it is.  A call's cost is fixed when the call is
+    recorded, so a change here prices only later calls.  Raises CatalogError(invalid_price)."""
     if not NAME.fullmatch(name or ""):
         raise CatalogError("invalid_name")
     if any(item["name"] == name for item in _read_file()[0]):
@@ -520,11 +507,8 @@ def save_entry(name: str, *, display_name: str | None = None, provider: str | No
         row.provider, row.model, row.base_url = provider, model, endpoint
         if context_window is not None:
             row.context_window = context_window
-        changed = {key: value for key, value in new_prices.items() if value != getattr(row, key)}
-        for key, value in changed.items():
+        for key, value in new_prices.items():
             setattr(row, key, value)
-        if changed:
-            row.price_since = datetime.now(UTC)
         if api_key:
             try:
                 row.ciphertext = encrypt_secret(api_key)
@@ -541,6 +525,8 @@ def save_entry(name: str, *, display_name: str | None = None, provider: str | No
         if new_name is not None:
             _move_name(db, row, name, new_name)
         db.commit()
+    from . import model_usage
+    model_usage.forget_prices()      # the next ledger row reads the prices as they are now
     final = new_name or name
     listed, default = entries()
     return public(next(item for item in listed if item["name"] == final), default)
@@ -705,7 +691,6 @@ def ensure_price_columns() -> None:
     with engine.begin() as connection:
         for key in PRICE_KEYS:
             connection.execute(text(f"ALTER TABLE agent_model_catalog ADD COLUMN IF NOT EXISTS {key} DOUBLE PRECISION"))
-        connection.execute(text("ALTER TABLE agent_model_catalog ADD COLUMN IF NOT EXISTS price_since TIMESTAMP WITH TIME ZONE"))
 
 
 def ensure_window_column() -> None:

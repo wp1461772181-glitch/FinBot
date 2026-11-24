@@ -1282,6 +1282,7 @@ class Turn:
                     # The bot's own effort goes only when it set one: without it the call is exactly as before.
                     chosen=stage_effort or getattr(self.context,'reasoning_effort',None)
                     effort={'reasoning_effort':chosen} if chosen else {}
+                    if getattr(self.context,'catalog_name',None):effort['catalog_name']=self.context.catalog_name
                     with model_usage.attempt(attempt+1):     # the ledger: the retry is a row of its own
                         return await decision_request(self.context.provider,self.context.model,self.context.api_key,messages,tool_schemas,self.context.base_url,**effort)
             except HTTPException as exc:

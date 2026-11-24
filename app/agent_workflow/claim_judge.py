@@ -183,7 +183,8 @@ async def _default_call(model: Mapping[str, Any], system: str, user: str, *, rea
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     with purpose("judge"):
         return await decision_request(model["provider"], model["model"], model["api_key"], messages, [],
-                                      model.get("base_url"), reasoning_effort=reasoning_effort)
+                                      model.get("base_url"), reasoning_effort=reasoning_effort,
+                                      **({"catalog_name": model["name"]} if model.get("name") else {}))
 
 
 def _elapsed_ms(started: float) -> int:

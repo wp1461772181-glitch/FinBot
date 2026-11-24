@@ -260,13 +260,12 @@ class AgentModelEntry(Base):
     migrated_from: Mapped[str | None] = mapped_column(String(80), nullable=True)
     # The model's context window in tokens; NULL means the default (128k).  The history budget follows it.
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # Optional prices in USD per million tokens (NULL: not set; cost needs input and output).  ``price_since`` is when
-    # any of them last changed: a call made before it is not priced.  Added to older tables by ``ensure_price_columns``.
+    # Optional prices in USD per million tokens (NULL: not set; cost needs input and output).  A call's cost is worked out
+    # when its ledger row is written (model_usage), so an edit here changes only later rows.  Added to older tables by ``ensure_price_columns``.
     price_input: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_output: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_cache_read: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_cache_write: Mapped[float | None] = mapped_column(Float, nullable=True)
-    price_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -542,8 +541,10 @@ class ModelCall(Base):
     ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     error: Mapped[str | None] = mapped_column(String(64), nullable=True)             # a short code, never text
     ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)   # the whole prompt, cache included
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)   # the input NOT served from / written to the cache
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cache_read_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     streamed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)   # the answer text was passed on as it arrived
+    # USD, fixed when the row was written from the model's prices then; NULL: no price, or a cache price the call needs is not set.
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
