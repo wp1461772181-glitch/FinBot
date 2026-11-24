@@ -15,7 +15,7 @@ from ..agent_chat_identity import owner_credential_matches
 from ..agent_progress import progress_watchdog
 from ..agent_tool_catalog import schemas
 from ..agent_workflow.evidence import strip_invalid_markers
-from . import prompt, tiers
+from . import progress, prompt, tiers
 from .toolrun import run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
@@ -47,6 +47,8 @@ class _Run:
     citations: list = field(default_factory=list)
     sent_text: bool = False
     step_text: str = ""
+    narration: list = field(default_factory=list)
+    checklist: list = field(default_factory=list)
     audit: dict = field(default_factory=lambda: {
         "engine": "v2", "model_calls": 0, "decision_steps": 0, "tool_calls": 0, "token_usage": 0,
         "cache_read_tokens": 0, "cache_write_tokens": 0, "stop_reason": None})
@@ -56,8 +58,9 @@ def _tool_schemas(context) -> list[dict]:
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
     available = schemas(owner=owner, names=READ_TOOLS)
     scope = getattr(context, "tool_scope", None)
-    # The kernel's own tool goes last whatever the ceiling is, so the list is the same for the whole turn.
-    return [*(s for s in available if scope is None or s["function"]["name"] in scope), tiers.ESCALATE_SCHEMA]
+    # The kernel's own tools go last whatever the ceiling is, so the list is the same for the whole turn.
+    offered = [*(s for s in available if scope is None or s["function"]["name"] in scope), progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]
+    return [progress.with_say(s) for s in offered]
 
 
 def _user_text(question: str, history: list[dict]) -> str:
@@ -111,6 +114,10 @@ async def _tool_step(run: _Run, message: dict) -> None:
     """The model asked for tools: drop the text it streamed, announce the request, run the calls."""
     if run.sent_text:
         await run.emit({"event": "answer_reset"})
+    narration = progress.step_narration(message["tool_calls"], message.get("content"))
+    if narration:
+        run.narration.append(narration)
+        await run.emit({"event": "narration", "text": narration})
     reasoning = {k: v for k, v in message.items() if k.startswith("reasoning_")}
     await run.emit({"event": "assistant_tool_request", "protocol": {"calls": message["tool_calls"], **reasoning}})
     run.messages.extend(await run_step_tools(run, message["tool_calls"]))
@@ -123,7 +130,7 @@ def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None
     run.audit["escalated"] = run.tier != "low"
     run.audit["terminal_status"] = status
     return {"answer": answer, "citations": run.citations, "status": status,
-            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier}, "pending_request": None,
+            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier, "narration": run.narration, "checklist": run.checklist}, "pending_request": None,
             "result_sets": [], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
 
 

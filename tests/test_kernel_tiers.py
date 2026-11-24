@@ -94,10 +94,10 @@ def test_no_escalation_reports_low(env):
     assert result["final_protocol"]["tier"] == "low"
 
 
-def test_system_prompt_ends_the_how_to_section_with_the_fast_tier_line():
+def test_system_prompt_ends_the_how_to_section_with_the_fast_tier_and_say_lines():
     assert prompt.FAST_TIER_LINE in prompt.SYSTEM
     how, _, rest = prompt.SYSTEM.partition("\n\n怎么说话")
-    assert how.endswith(prompt.FAST_TIER_LINE) and rest
+    assert how.endswith(prompt.FAST_TIER_LINE + "\n" + prompt.SAY_LINE) and rest
 
 
 def run_direct(env):

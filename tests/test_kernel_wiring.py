@@ -233,3 +233,61 @@ def test_bridges_drop_text_before_a_reset():
     assert run_telegram_bridge.format_turn(sequence)[0] == "营收 1158"
     raw = "".join(frame(name, data) for name, data in sequence)
     assert run_wechat_bridge.parse_turn(raw)[0] == "营收 1158"
+
+
+def say_and_plan_turn():
+    plan = [{"text": "查财报", "status": "doing"}, {"text": "写结论", "status": "pending"}]
+    return [([], [call("c1", "query_financials", {"say": "先看财报", "symbol": "AAPL"}), call("c2", "plan", {"items": plan}),
+                  call("c3", "escalate", {"depth": "high"})]),
+            (["营收 1158 [1]"], [])], plan
+
+
+def test_narration_and_checklist_frames_reach_the_client_and_the_stored_row(wiring):
+    wiring.bot["engine"] = "v2"
+    steps, plan = say_and_plan_turn()
+    wiring.model(steps)
+    events = wiring.bot_turn()
+    assert [d for n, d in events if n == "narration"] == [{"text": "先看财报"}]
+    assert [d for n, d in events if n == "checklist"] == [{"items": plan}]
+    names = [n for n, _ in events]
+    assert names.index("narration") < names.index("tool_start") and not any(n == "error" for n in names)
+    assert "".join(d["text"] for n, d in events if n == "delta") == "营收 1158 [1]"
+    final = [kw for role, kw in wiring.rows() if role == "assistant"][-1]["tool_calls"]
+    assert final["narration"] == ["先看财报"] and final["checklist"] == plan and final["tier"] == "high"
+    assert wiring.executed == [("query_financials", {"symbol": "AAPL"})]
+
+
+def reload_rows(wiring):
+    """The turn as the store would hand it back to the history endpoint."""
+    rows = []
+    for args, kwargs in wiring.stored:
+        if len(args) >= 4 and args[2] in ("user", "assistant", "tool"):
+            rows.append({"role": args[2], "content": args[3], "status": kwargs.get("status", "complete"), "turn_id": args[1],
+                         "tool_calls": kwargs.get("tool_calls"), "tool_call_id": kwargs.get("tool_call_id")})
+    return rows
+
+
+def reload_history(wiring, rows):
+    async def page(*_args, **_kwargs):
+        return {"messages": rows, "has_more": False, "next_before": None}
+
+    wiring.monkeypatch.setattr(wiring.stream, "owned_message_page", page)
+    return asyncio.run(wiring.stream.get_messages("conversation", before=None, limit=20, x_chat_session="s" * 40))["messages"]
+
+
+def test_history_reload_returns_narration_checklist_and_tier(wiring):
+    wiring.bot["engine"] = "v2"
+    steps, plan = say_and_plan_turn()
+    wiring.model(steps)
+    wiring.bot_turn()
+    rows = reload_rows(wiring)
+    assistant = [m for m in reload_history(wiring, rows) if m["role"] == "assistant"][-1]
+    assert assistant["narration"] == ["先看财报"] and assistant["checklist"] == plan and assistant["tier"] == "high"
+    # The kernel's own tools are in the rebuilt trace next to the catalog's, and nothing broke on their names.
+    assert {t["name"] for t in assistant["tool_trace"]} == {"query_financials", "plan", "escalate"}
+    assert all(t["status"] == "complete" for t in assistant["tool_trace"])
+    # A row an older turn stored has none of the three and is returned without them.
+    old = [dict(row, tool_calls={"audit": {"terminal_status": "succeeded"}}) if row["role"] == "assistant" and row["content"] else row
+           for row in rows if row["role"] in ("user", "assistant") and not (row["tool_calls"] or {}).get("calls")]
+    shown = [m for m in reload_history(wiring, old) if m["role"] == "assistant"][-1]
+    assert not {"narration", "checklist", "tier"} & set(shown) and shown["content"] == "营收 1158 [1]"

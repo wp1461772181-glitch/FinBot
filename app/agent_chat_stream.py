@@ -616,6 +616,8 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      yield frame("tool_result",{key:event[key] for key in ("call_id","name","result")})
     elif kind=="tool_start":
      yield frame("tool_start",{key:event[key] for key in ("call_id","name","arguments")})
+    elif kind in("narration","checklist"):
+     yield frame(kind,{key:value for key,value in event.items() if key!="event"})
     elif kind=="client_action":
      yield frame("client_action",{key:value for key,value in event.items() if key!="event"})
     elif kind=="delta":
@@ -828,6 +830,8 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
    if isinstance(row.get("tool_calls"),dict):
     stored_protocol=row["tool_calls"]
     if isinstance(stored_protocol.get("trace"),list):item["trace"]=stored_protocol["trace"]
+    for key in("narration","checklist","tier"):
+     if stored_protocol.get(key):item[key]=stored_protocol[key]
     if stored_protocol.get("citation_protocol")=="v2":item["citation_protocol"]="v2";item["citation_nodes"]=stored_protocol.get("citation_nodes") or []
     # Older turns only know the audit's elapsed time; either one is what the reader counted.
     stored_audit=stored_protocol.get("audit")
