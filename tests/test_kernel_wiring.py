@@ -482,3 +482,37 @@ def test_propose_in_one_request_press_in_the_next(wiring):
     assert len(sent) == 1 and "confirm:" not in sent[0] and token not in sent[0] and "系统事实：用户在一张确认卡上点了按钮" in sent[0]
     user_rows = [args[3] for args, kwargs in wiring.stored if len(args) >= 4 and args[2] == "user"]
     assert user_rows == ["show AAPL prices", "同意"]            # what the endpoint stores for a press today: the button's label
+
+
+def record_context_calls(wiring):
+    seen = []
+
+    async def recorded(*args, **kwargs):
+        seen.append(kwargs.get("anchored"))
+        return {"l1_rows": []}
+
+    wiring.monkeypatch.setattr(wiring.stream, "conversation_context", recorded)
+    return seen
+
+
+def test_a_kernel_turn_asks_for_the_anchored_history(wiring):
+    wiring.bot["engine"] = "v2"
+    wiring.model([(["好"], [])])
+    seen = record_context_calls(wiring)
+    wiring.bot_turn()
+    assert seen == [True]
+
+
+def test_an_old_engine_turn_asks_for_the_plain_history(wiring):
+    seen = record_context_calls(wiring)
+    wiring.bot_turn()
+    wiring.catalog_turn()
+    assert seen == [False, False]
+
+
+def test_the_kernel_flag_off_means_the_plain_history(wiring):
+    wiring.bot["engine"] = "v2"
+    wiring.monkeypatch.setenv("FINBOT_KERNEL_V2", "0")
+    seen = record_context_calls(wiring)
+    wiring.bot_turn()
+    assert seen == [False]

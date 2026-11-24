@@ -9,7 +9,7 @@ from pydantic import model_validator, BaseModel, ConfigDict, Field, SecretStr, f
 from .agent_chat_provider import ProviderFailure
 from .agent_chat_api import PROVIDER_PATTERN, REQUEST_SLOTS
 from .agent_tools import tool_schemas
-from .agent_workflow.graph import stream_workflow, mark_terminal_status
+from .agent_workflow.graph import stream_workflow, mark_terminal_status, kernel_runs, _engine
 from .agent_workflow.trace import WIRE_KEYS
 from .agent_chat_store import create_conversation,verify_conversation,append_message,owned_message_page,history,finish_conversation,owner_hash
 from .agent_chat_store import conversation_context
@@ -555,7 +555,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    # the user saw on the button.
    shown=payload.display_message.strip() if payload.pending_request_id and payload.display_message else ""
    await append_message(cid,turn,"user",shown or payload.message)
-   context=await conversation_context(cid,x_chat_session,window=chosen.window) or {}
+   context=await conversation_context(cid,x_chat_session,window=chosen.window,anchored=kernel_runs(_engine(bot or {},False))) or {}
    # SW2 §3.1: read once at the turn start, shared by every model call of the turn (K9).
    self_state=await asyncio.to_thread(_self_state_inputs,cid,x_chat_session,turn,model_label) if fp_flag("FINBOT_SW2_SELF_STATE",True) else None
    history_rows=context.get("l1_rows",[])

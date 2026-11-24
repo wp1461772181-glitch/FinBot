@@ -53,10 +53,11 @@ async def history(conversation_id: str, credential: str, limit_bytes=14000):
             output[0:0]=[{"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,"status":m.status,"turn_id":str(m.turn_id)} for m in group]; used+=size
         return output
 async def conversation_context(conversation_id: str, credential: str, *, window: int | None = None,
-                               l1_bytes: int | None = None, l2_bytes: int | None = None, l3_bytes: int | None = None):
+                               l1_bytes: int | None = None, l2_bytes: int | None = None, l3_bytes: int | None = None,
+                               anchored: bool = False):
     """What the next turn of this conversation carries of the turns before it, by layer (the rule is
     ``agent_context.layer_rows``; this reads the rows and the segments).  None when the conversation
-    is not this credential's."""
+    is not this credential's.  ``anchored`` (kernel turns) moves the layer boundary on a fixed grid."""
     if not await verify_conversation(conversation_id, credential):
         return None
     # The sizes follow the window of the model that will read them (the catalog's window; default 128k).
@@ -74,7 +75,8 @@ async def conversation_context(conversation_id: str, credential: str, *, window:
                "status": m.status, "turn_id": m.turn_id, "sequence": m.sequence} for m in reversed(rows)]
     made = [{"seq": x.seq, "from_sequence": x.from_sequence, "upto_sequence": x.upto_sequence, "content": x.content}
             for x in segments]
-    return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes)
+    return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes,
+                            anchor_grid=layers.ANCHOR_GRID if anchored else None)
 
 
 async def load_turn_citation(conversation_id: str, credential: str, turn_id: str, ordinal: int) -> dict:
