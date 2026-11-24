@@ -641,3 +641,94 @@ def test_a_stale_login_is_recorded_in_the_state_file_and_cleared_by_the_next_pol
     bridge._clear_stale(state)
     wx.save_state(state)
     assert "stale_since" not in wx.load_state()
+
+
+# ---- review fixes: partial sends, loop survival, sweep isolation, wiring, pass cap ----
+
+class SecondChunkRejected(FakeIlink):
+    async def send_text(self, to_user, text, context_token=None):
+        self.sent.append((to_user, text, context_token))
+        return {"ret": 0} if len(self.sent) == 1 else {"ret": -2}
+
+
+def test_a_later_chunk_failing_leaves_the_row_sent_and_stops_sending(fake_channels, capsys):
+    ilink = SecondChunkRejected()
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row(text="数据。" * 1500)], ilink)
+    run(b.deliver_outbox())
+    assert len(ilink.sent) == 2   # chunk 1 out, chunk 2 rejected, the rest not tried
+    marks = [c for c in fake_channels.calls if c[0] in ("mark_sent", "mark_failed")]
+    assert marks == [("mark_sent", "r1")]
+    out = capsys.readouterr().out
+    assert "outbox_partial" in out and '"chunks_sent": 1' in out and "数据" not in out
+    fake_channels.rows = []   # the closed row is no longer served: nothing goes out on the next pass
+    run(b.deliver_outbox())
+    assert len(ilink.sent) == 2
+
+
+def test_a_failing_first_chunk_still_fails_the_row(fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row(text="数据。" * 1500)], FakeIlink(fail={"ret": -2}))
+    run(b.deliver_outbox())
+    assert len(ilink.sent) == 1
+    assert ("mark_failed", "r1", "send_failed") in fake_channels.calls
+    assert not [c for c in fake_channels.calls if c[0] == "mark_sent"]
+
+
+def test_a_failing_sweep_does_not_skip_delivery(fake_channels):
+    def boom(owner):
+        raise RuntimeError("db down")
+    fake_channels.expire_stuck = boom
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+    run(b.deliver_outbox())
+    assert ("mark_sent", "r1") in fake_channels.calls
+
+
+def test_the_outbox_loop_survives_a_failing_pass_and_failing_log(monkeypatch, fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [])
+    runs = []
+
+    async def deliver():
+        runs.append(1)
+        if len(runs) < 3:
+            raise RuntimeError("boom")
+        raise asyncio.CancelledError
+    b.deliver_outbox = deliver
+    monkeypatch.setattr(bridge, "OUTBOX_INTERVAL", 0)
+    monkeypatch.setattr(bridge, "_log", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("log broke")))
+
+    async def go():
+        with pytest.raises(asyncio.CancelledError):
+            await bridge._outbox_loop(b)
+    run(go())
+    assert len(runs) == 3
+
+
+def test_going_stale_pauses_what_the_delivery_pass_reads(monkeypatch, fake_channels):
+    monkeypatch.setattr(bridge, "_mark_stale", lambda state: None)
+    monkeypatch.setattr(bridge, "_notify_stale", lambda owner: None)
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+
+    async def go():
+        await bridge._enter_stale(b, "owner-hash")
+        await b.deliver_outbox()
+    run(go())
+    assert b.paused_until > 0 and ilink.sent == []
+
+
+def test_the_outbox_task_is_started_and_delivers(monkeypatch, fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+
+    async def go():
+        task = bridge._start_outbox(b)
+        await asyncio.sleep(0.05)
+        task.cancel()
+        return task
+    run(go())
+    assert ilink.sent and ("mark_sent", "r1") in fake_channels.calls
+
+
+def test_one_pass_stops_taking_rows_after_the_cap(monkeypatch, fake_channels):
+    ticks = iter([0, 0, 61, 61, 61])   # start, row 1 checked, row 2 over the cap
+    monkeypatch.setattr(bridge, "_monotonic", lambda: next(ticks))
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row("r1"), _row("r2"), _row("r3")])
+    run(b.deliver_outbox())
+    assert [c for c in fake_channels.calls if c[0] == "mark_sent"] == [("mark_sent", "r1")]
