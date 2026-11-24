@@ -1,5 +1,6 @@
 """The Telegram progress message: old-engine steps as before, the kernel's sentences and checklist stacked in it."""
 import asyncio
+import types
 
 from scripts import run_telegram_bridge as bridge
 
@@ -18,7 +19,8 @@ class _Rig:
 
         monkeypatch.setattr(bridge, "_send_text", send_text)
         monkeypatch.setattr(bridge, "_edit_text", edit_text)
-        monkeypatch.setattr(bridge.time, "monotonic", lambda: self.now)
+        # Only the bridge's own clock is faked; the event loop keeps the real one, so a trailing edit can really sleep.
+        monkeypatch.setattr(bridge, "time", types.SimpleNamespace(monotonic=lambda: self.now))
         self.progress = bridge._Progress(None, "tok", 1)
         asyncio.run(self.progress.start())
 
@@ -124,3 +126,85 @@ def test_body_under_3500_chars_drops_oldest_sentences(monkeypatch):
     assert len(body) <= 3500
     assert body.endswith("5" + "字" * 1000)
     assert "\n0" + "字" not in body
+
+
+def _in_one_loop(rig, monkeypatch, script):
+    """Run ``script(progress)`` inside a single event loop, so a pending trailing edit can fire; a short interval stands in for the real one."""
+    monkeypatch.setattr(bridge, "PROGRESS_MIN_INTERVAL", 0.02)
+
+    async def main():
+        rig.now += 100
+        await script(rig.progress)
+
+    asyncio.run(main())
+
+
+def test_trailing_edit_shows_checklist_that_followed_a_narration_closely(monkeypatch):
+    r = _Rig(monkeypatch)
+
+    async def script(progress):
+        await progress.on_event("narration", {"text": "先看财报"})
+        await progress.on_event("checklist", _items(("查财报", "doing")))     # 1 ms later, inside the window
+        assert r.edits == [f"{ACK}\n先看财报"]
+        await asyncio.sleep(0.1)
+
+    _in_one_loop(r, monkeypatch, script)
+    assert r.edits == [f"{ACK}\n先看财报", f"{ACK}\n◐ 1 查财报\n先看财报"]
+
+
+def test_throttled_updates_make_exactly_one_trailing_edit(monkeypatch):
+    r = _Rig(monkeypatch)
+
+    async def script(progress):
+        await progress.on_event("narration", {"text": "甲"})
+        await progress.on_event("narration", {"text": "乙"})
+        await progress.on_event("checklist", _items(("a", "doing")))
+        await progress.on_event("narration", {"text": "丙"})
+        await asyncio.sleep(0.15)
+
+    _in_one_loop(r, monkeypatch, script)
+    assert r.edits == [f"{ACK}\n甲", f"{ACK}\n◐ 1 a\n甲\n乙\n丙"]
+
+
+def test_finish_cancels_the_trailing_edit(monkeypatch):
+    r = _Rig(monkeypatch)
+
+    async def script(progress):
+        await progress.on_event("narration", {"text": "甲"})
+        await progress.on_event("narration", {"text": "乙"})
+        await progress.finish()
+        await asyncio.sleep(0.15)
+
+    _in_one_loop(r, monkeypatch, script)
+    assert r.edits == [f"{ACK}\n甲", DONE]
+
+
+def test_trailing_edit_failure_does_not_raise(monkeypatch):
+    r = _Rig(monkeypatch)
+
+    async def broken(client, token, chat_id, message_id, text):
+        if "乙" in text:
+            raise RuntimeError("telegram down")
+        r.edits.append(text)
+
+    async def script(progress):
+        await progress.on_event("narration", {"text": "甲"})
+        monkeypatch.setattr(bridge, "_edit_text", broken)
+        await progress.on_event("narration", {"text": "乙"})
+        await asyncio.sleep(0.1)
+        await progress.finish()
+
+    _in_one_loop(r, monkeypatch, script)
+    assert r.edits[-1] == DONE
+
+
+def test_old_engine_update_inside_the_window_is_still_dropped(monkeypatch):
+    r = _Rig(monkeypatch)
+
+    async def script(progress):
+        await progress.on_event("tool_start", {"name": "query_financials"})
+        await progress.on_event("tool_start", {"name": "search_news"})
+        await asyncio.sleep(0.1)
+
+    _in_one_loop(r, monkeypatch, script)
+    assert r.edits == [f"{ACK}\n正在调用：query_financials"]

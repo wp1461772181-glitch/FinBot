@@ -324,6 +324,7 @@ class _Progress:
         self.sentences: list[str] = []
         self.checklist: list[dict] = []
         self.kernel = False
+        self._trailing: asyncio.Task | None = None
 
     async def start(self) -> None:
         self.message_id = await _send_text(self.client, self.bot_token, self.chat_id, ACK_TEXT, markdown=False)
@@ -346,11 +347,31 @@ class _Progress:
             return
         now = time.monotonic()
         if now - self.last_edit < PROGRESS_MIN_INTERVAL:
-            return          # kernel state is kept; the next edit shows it
+            if self.kernel and (self._trailing is None or self._trailing.done()):
+                self._trailing = asyncio.ensure_future(self._trail())     # kernel state is kept and shown once the window has passed
+            return
         self.last_text, self.last_edit = text, now
         await _edit_text(self.client, self.bot_token, self.chat_id, self.message_id, text)
 
+    async def _trail(self) -> None:
+        """The one trailing edit: once the interval since the last edit has passed, show the state as it is then."""
+        try:
+            while True:
+                await asyncio.sleep(max(0.0, PROGRESS_MIN_INTERVAL - (time.monotonic() - self.last_edit)))
+                text = _kernel_body(self.sentences, self.checklist)
+                if text == self.last_text:
+                    return
+                self.last_text, self.last_edit = text, time.monotonic()
+                await _edit_text(self.client, self.bot_token, self.chat_id, self.message_id, text)
+                if _kernel_body(self.sentences, self.checklist) == self.last_text:
+                    return          # nothing arrived while the edit was out
+        except Exception:
+            pass                    # a progress edit that fails never reaches the turn
+
     async def finish(self) -> None:
+        if self._trailing is not None and not self._trailing.done():
+            self._trailing.cancel()
+            await asyncio.gather(self._trailing, return_exceptions=True)
         if self.message_id is not None:
             text = "\n".join([*_checklist_lines(self.checklist), DONE_TEXT]) if self.checklist else DONE_TEXT
             await _edit_text(self.client, self.bot_token, self.chat_id, self.message_id, text)
