@@ -42,5 +42,7 @@ export function foldedLine(model, seconds, t = (text) => text) {
   if (model.lookupCount > 0) pieces.push(t("查了 {n} 次").replace("{n}", String(model.lookupCount)));
   if (model.items.length > 0) pieces.push(t("清单 {done}/{total} 项").replace("{done}", String(model.doneCount)).replace("{total}", String(model.items.length)));
   if (model.tierLabel) pieces.push(t(model.tierLabel));
+  // Nothing measured and nothing looked up (a stopped turn read back): the line still says what it opens.
+  if (pieces.length === 0 && model.sentences.length > 0) pieces.push(t("说了 {n} 句").replace("{n}", String(model.sentences.length)));
   return pieces;
 }

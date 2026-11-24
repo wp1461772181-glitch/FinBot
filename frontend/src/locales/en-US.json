@@ -2342,5 +2342,6 @@
   "查了 {n} 次": "Looked up {n} times",
   "清单 {done}/{total} 项": "Checklist {done}/{total}",
   "中档": "Mid tier",
-  "高档": "High tier"
+  "高档": "High tier",
+  "说了 {n} 句": "{n} notes"
 }

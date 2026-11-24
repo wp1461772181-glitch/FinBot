@@ -63,6 +63,12 @@ test("foldedLine leaves the time out when no seconds are given", () => {
   assert.deepEqual(foldedLine(m, ""), ["查了 2 次", "清单 1/3 项", "中档"]);
 });
 
+test("foldedLine is never empty for a message that has sentences", () => {
+  const bare = progressModel({ narration: ["我去查。", "查到了。"], checklist: [], tier: "low", toolTrace: [], running: false });
+  assert.deepEqual(foldedLine(bare, undefined), ["说了 2 句"]);
+  assert.deepEqual(foldedLine(bare, "3.0"), ["已思考 3.0 秒"]);
+});
+
 test("foldedLine passes each template through the translator", () => {
   const t = (s) => `<${s}>`;
   assert.deepEqual(foldedLine(progressModel(base), "1.0", t), ["<已思考 {n} 秒>".replace("{n}", "1.0"), "<查了 {n} 次>".replace("{n}", "2"), "<清单 {done}/{total} 项>".replace("{done}", "1").replace("{total}", "3"), "<中档>"]);
