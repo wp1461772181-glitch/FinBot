@@ -15,6 +15,7 @@ from ..agent_progress import mark_progress, progress_watchdog
 from ..agent_tool_catalog import definitions, validate
 from ..agent_workflow import tools
 from ..agent_workflow.evidence import number_rows
+from . import tiers
 
 MAX_PARALLEL = 4
 TOOL_IDLE_SECONDS = 180
@@ -137,7 +138,10 @@ def _settle_read(run, item: _Call) -> None:
 
 def _settle_serial(run, item: _Call) -> None:
     """Calls the kernel runs itself, in call order, after every read is numbered."""
-    item.result = _calculate(run, item.name, item.args)
+    if item.name == tiers.ESCALATE:
+        item.result = tiers.escalate(run, item.args)
+    else:
+        item.result = _calculate(run, item.name, item.args)
 
 
 def _guard(settle, run, item: _Call) -> None:
@@ -163,6 +167,8 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     for item in items:
         if item.args is None:
             item.result = tools.error("invalid_arguments")
+        elif item.name == tiers.ESCALATE:
+            serial.append(item)       # the kernel's own tool: never goes through tools.invoke, makes no citation
         elif item.name not in run.tool_names or item.name not in definitions():
             item.result = tools.error("tool_not_in_bot_scope")
         elif item.name in _CALCULATIONS:

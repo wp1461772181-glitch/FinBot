@@ -15,7 +15,7 @@ from ..agent_chat_identity import owner_credential_matches
 from ..agent_progress import progress_watchdog
 from ..agent_tool_catalog import schemas
 from ..agent_workflow.evidence import strip_invalid_markers
-from . import prompt
+from . import prompt, tiers
 from .toolrun import run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
@@ -41,6 +41,8 @@ class _Run:
     user_text: str
     schemas: list
     tool_names: frozenset
+    ceiling: str = "high"
+    tier: str = "low"
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
     sent_text: bool = False
@@ -54,7 +56,8 @@ def _tool_schemas(context) -> list[dict]:
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
     available = schemas(owner=owner, names=READ_TOOLS)
     scope = getattr(context, "tool_scope", None)
-    return [s for s in available if scope is None or s["function"]["name"] in scope]
+    # The kernel's own tool goes last whatever the ceiling is, so the list is the same for the whole turn.
+    return [*(s for s in available if scope is None or s["function"]["name"] in scope), tiers.ESCALATE_SCHEMA]
 
 
 def _user_text(question: str, history: list[dict]) -> str:
@@ -86,7 +89,7 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
         try:
             data, message = await provider.stream_decision(
                 context.provider, context.model, context.api_key, run.messages, tool_schemas, base_url=context.base_url,
-                reasoning_effort=context.reasoning_effort, on_text=on_text, keep_thinking=True, cache=True)
+                reasoning_effort=tiers.EFFORT[run.tier], on_text=on_text, keep_thinking=True, cache=True)
         except Exception as failure:
             # Whatever was streamed in this step is a cut-off: never leave it behind as the answer.
             if run.sent_text:
@@ -116,9 +119,11 @@ async def _tool_step(run: _Run, message: dict) -> None:
 def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None = None) -> dict:
     status = "failed" if failure else "succeeded"
     run.audit["stop_reason"] = stop_reason
+    run.audit["tier"] = run.tier
+    run.audit["escalated"] = run.tier != "low"
     run.audit["terminal_status"] = status
     return {"answer": answer, "citations": run.citations, "status": status,
-            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {}, "pending_request": None,
+            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier}, "pending_request": None,
             "result_sets": [], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
 
 
@@ -171,6 +176,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
     tool_schemas = _tool_schemas(context)
     run = _Run(context=context, emit=emit, messages=prompt.build_messages(question, context, history),
                user_text=_user_text(question, history), schemas=tool_schemas,
-               tool_names=frozenset(s["function"]["name"] for s in tool_schemas))
+               tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
+               ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)))
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):
         return await _loop(run)

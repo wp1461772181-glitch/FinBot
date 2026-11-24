@@ -184,7 +184,7 @@ def test_tools_are_fixed_and_scoped(env):
     scope = frozenset({"query_financials", "web_research"})
     fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
     run(context=make_context(tool_scope=scope))
-    assert [set(c["tools"]) for c in fake.calls] == [set(scope), set(scope)]
+    assert [set(c["tools"]) for c in fake.calls] == [set(scope) | {"escalate"}] * 2
     env.monkeypatch.setattr(loop, "owner_credential_matches", lambda value: False)
     fake = script(env, [step(text="好")])
     run()
@@ -197,7 +197,7 @@ def test_no_write_tool_is_ever_offered(env):
         env.monkeypatch.setattr(loop, "owner_credential_matches", lambda value, owner=owner: owner)
         fake = script(env, [step(text="好")])
         run()
-        assert set(fake.calls[0]["tools"]) <= set(loop.READ_TOOLS)
+        assert set(fake.calls[0]["tools"]) <= set(loop.READ_TOOLS) | {"escalate"}
 
 
 def test_retryable_provider_failure_is_retried_once(env):
