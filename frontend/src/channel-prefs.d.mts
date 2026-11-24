@@ -1,0 +1,12 @@
+export type ChannelName = "telegram" | "wechat";
+export type ChannelPrefs = { channels: ChannelName[]; mode: "first" | "all" };
+export type ChannelOptionId = "telegram-only" | "wechat-first" | "both";
+export type ChannelOption = { id: ChannelOptionId; label: string; channels: ChannelName[]; mode: "first" | "all" };
+export type DeliveryItem = { id: number; group_id: string; bot_id: string | null; source: string; channel: string; status: "pending" | "sent" | "failed"; failure: string | null; created_at: string; sent_at: string | null; acked_at: string | null; text: string | null };
+export const CHANNEL_OPTIONS: ChannelOption[];
+export function optionForPrefs(prefs: ChannelPrefs | null | undefined): ChannelOptionId | "";
+export function prefsForOption(id: string): ChannelPrefs | null;
+export function rawOrderText(prefs: ChannelPrefs | null | undefined): string;
+export function fallbackWarning(optionId: string, available: Partial<Record<ChannelName, boolean>> | null | undefined): boolean;
+export function deliveryStatusText(item: Pick<DeliveryItem, "status" | "failure">, t?: (text: string) => string): string;
+export function deliveryRow(item: Pick<DeliveryItem, "channel" | "acked_at" | "text">): { channelLabel: string; acked: boolean; firstLine: string };

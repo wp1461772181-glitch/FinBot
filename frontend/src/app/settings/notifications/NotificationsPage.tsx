@@ -2,15 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { StatefulButton } from "@/components/state/StatefulButton";
 import { confirm } from "@/components/state/confirm";
 import { notify } from "@/components/state/notify";
 import { Stepper } from "@/components/Stepper";
 import { StatusBadge } from "@/components/StatusBadge";
-import { clearPushover, getPushover, getTelegramBind, savePushover, saveTelegramToken, startTelegramBind, unbindTelegram, type PushoverStatus, type TelegramBindStatus } from "../../../api/integrations";
+import { clearPushover, getChannelSettings, getPushover, listChannelDeliveries, saveChannelPrefs, getTelegramBind, savePushover, saveTelegramToken, startTelegramBind, unbindTelegram, type ChannelSettings, type PushoverStatus, type TelegramBindStatus } from "../../../api/integrations";
+import { CHANNEL_OPTIONS, deliveryRow, deliveryStatusText, fallbackWarning, optionForPrefs, prefsForOption, rawOrderText, type DeliveryItem } from "../../../channel-prefs.mjs";
 import { message } from "../../../bot-message";
-import { useLocale } from "../../../i18n";
+import { formatDateTime, useLocale } from "../../../i18n";
 import { useWorkspace } from "../../workspace";
 import { SettingsCard } from "../SettingsCard";
 import { SettingsGuestNote } from "../SettingsGuestNote";
@@ -26,6 +28,7 @@ export function NotificationsPage() {
   const { personal } = useWorkspace();
   if (!personal) return <SettingsGuestNote text={t("登录个人聊天后才能设置通知：Telegram 和 Pushover 都只对个人模式开放。")} />;
   return <div data-testid="settings-notifications-body" className="flex flex-col gap-5">
+    <ChannelsCard />
     <TelegramCard />
     <PushoverCard />
   </div>;
@@ -111,5 +114,55 @@ function PushoverCard() {
         onClick={() => void act(async () => { setSaved(await clearPushover()); notify.success(t("Pushover 已清除。"), { id: "settings:pushover" }); }, "操作失败，请重试。").catch(() => {})}>{t("清除 Pushover")}</Button>}
     </div>
     {failure && <ErrorBar message={failure} />}
+  </SettingsCard>;
+}
+
+const LOCAL_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+/** 主动消息发到哪里: one choice among three, saved the moment it is made, the state of each channel, and the last 20 messages sent proactively. */
+function ChannelsCard() {
+  const { t, locale } = useLocale();
+  const [settings, setSettings] = useState<ChannelSettings | null>(null), [deliveries, setDeliveries] = useState<DeliveryItem[] | null>(null), [readError, setReadError] = useState(""), [busy, setBusy] = useState(false), [failure, setFailure] = useState("");
+  const load = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const [next, items] = await Promise.all([getChannelSettings(signal), listChannelDeliveries(20, signal)]);
+      setSettings(next); setDeliveries(items); setReadError("");
+    } catch (err) { if (!signal?.aborted) setReadError(message(err, t("主动消息的设置暂时无法读取。"))); }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, [load]);
+  async function choose(id: string) {
+    const next = prefsForOption(id);
+    if (!next || busy) return;
+    setBusy(true); setFailure("");
+    try { const saved = await saveChannelPrefs(next); setSettings((current) => current && { ...current, prefs: saved }); notify.success(t("已保存。"), { id: "settings:channels" }); }
+    catch (err) { setFailure(message(err, t("保存失败，请重试。"))); } finally { setBusy(false); }
+  }
+  const selected = settings ? optionForPrefs(settings.prefs) : "";
+  const available = settings?.available;
+  return <SettingsCard id="channels" title={t("主动消息发到哪里")} testid="channels-card" description={t("bot 主动找你时（提醒、简报、通知）发到哪个聊天；选了就保存。")}>
+    {readError && <ErrorBar message={readError} onRetry={() => void load()} />}
+    {settings && <>
+      <Select value={selected} disabled={busy} onValueChange={(id) => void choose(id)}>
+        <SelectTrigger aria-label={t("主动消息发到哪里")} data-testid="channels-select" className="w-full max-w-md max-sm:h-11"><SelectValue placeholder={rawOrderText(settings.prefs)} /></SelectTrigger>
+        <SelectContent>{CHANNEL_OPTIONS.map((o) => <SelectItem key={o.id} value={o.id}>{t(o.label)}</SelectItem>)}</SelectContent>
+      </Select>
+      {!selected && <p data-testid="channels-raw" className="m-0 text-small text-muted-foreground">{t("当前设置不是上面三种之一：")}{rawOrderText(settings.prefs)}</p>}
+      {available && <p data-testid="channels-available" className="m-0 text-small text-ink-2">{t("微信")}{locale === "en-US" ? ": " : "："}{available.wechat ? t("已连接") : t("未连接")}{" · "}{t("Telegram")}{locale === "en-US" ? ": " : "："}{available.telegram ? t("已绑定") : t("未绑定")}</p>}
+      {fallbackWarning(selected, available) && <p data-testid="channels-warning" role="status" className="m-0 text-small text-ink">{t("微信还没有连接，消息会改发 Telegram。")}</p>}
+      {failure && <ErrorBar message={failure} />}
+      <div className="flex flex-col gap-2">
+        <h3 className="m-0 text-small font-medium text-ink">{t("最近的发送")}</h3>
+        {deliveries && deliveries.length === 0 && <p data-testid="channels-empty" className="m-0 text-small text-muted-foreground">{t("还没有主动消息。")}</p>}
+        {deliveries && deliveries.length > 0 && <ul data-testid="channels-deliveries" className="m-0 grid list-none divide-y divide-line p-0">
+          {deliveries.map((item) => {
+            const row = deliveryRow(item);
+            return <li key={item.id} data-testid="channels-delivery" data-status={item.status} className="flex min-w-0 flex-col gap-0.5 py-2 first:pt-0 last:pb-0">
+              <span className="text-small text-ink-2">{formatDateTime(item.created_at, locale, LOCAL_ZONE)} · {t(row.channelLabel)} · {deliveryStatusText(item, t)}{row.acked ? ` · ${t("你之后来过")}` : ""}</span>
+              {row.firstLine && <span className="truncate text-small text-ink">{row.firstLine}</span>}
+            </li>;
+          })}
+        </ul>}
+      </div>
+    </>}
   </SettingsCard>;
 }
