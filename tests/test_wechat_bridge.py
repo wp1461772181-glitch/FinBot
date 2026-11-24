@@ -24,6 +24,46 @@ class FakeIlink:
         return self.fail or {"ret": 0}
 
 
+class FakeChannels:
+    """Stands in for app.channels: records the calls, serves the queued rows."""
+
+    def __init__(self, rows=None):
+        self.rows = list(rows or [])
+        self.calls = []
+
+    def expire_stuck(self, owner):
+        self.calls.append(("expire_stuck", owner))
+        return 0
+
+    def pending(self, owner, channel, limit=20, telegram_bot_row_id=None):
+        self.calls.append(("pending", owner, channel))
+        return list(self.rows)
+
+    def mark_sent(self, message_id, external_id=None):
+        self.calls.append(("mark_sent", message_id))
+
+    def mark_failed(self, message_id, code="send_failed"):
+        self.calls.append(("mark_failed", message_id, code))
+
+    def mark_partial(self, message_id):
+        self.calls.append(("mark_partial", message_id))
+
+    def claim(self, message_id, now=None):
+        self.calls.append(("claim", message_id))
+
+    def acknowledge(self, owner, channel, now=None, seen_at=None):
+        self.calls.append(("acknowledge", owner, channel))
+        self.seen_at = seen_at
+        return 0
+
+
+@pytest.fixture(autouse=True)
+def fake_channels(monkeypatch):
+    fake = FakeChannels()
+    monkeypatch.setattr(bridge, "channels", fake)
+    return fake
+
+
 def _state():
     return wx.new_state(bot_token="secret-token", baseurl="https://ilinkai.weixin.qq.com", bot_id="bot@im.bot",
                         owner_user_id=OWNER_ID)
@@ -460,3 +500,256 @@ def test_the_mark_timer_does_not_outlive_the_turn(monkeypatch, fails):
 
     done, later = run(go())
     assert done == 1 and later == 1
+
+
+# ---- the outbox: proactive messages queued for this channel ----
+
+def _row(i="r1", text="提醒：INTC 急跌"):
+    return {"id": i, "bot_id": "bot-1", "text": text}
+
+
+def _outbox_bridge(fake_channels, rows, ilink=None, token="ctx-9"):
+    fake_channels.rows = rows
+    b, ilink, state = _make(None, ilink)
+    if token:
+        state["context_tokens"] = {OWNER_ID: token}
+    return b, ilink, state
+
+
+def test_a_pending_row_goes_to_the_owner_with_the_held_context_token(fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+    run(b.deliver_outbox())
+    assert ilink.sent == [(OWNER_ID, "提醒：INTC 急跌", "ctx-9")]
+    assert ("expire_stuck", "owner-hash") in fake_channels.calls
+    assert ("pending", "owner-hash", "wechat") in fake_channels.calls
+    assert ("mark_sent", "r1") in fake_channels.calls
+    # deliver first, sweep afterwards; the row's lease is refreshed just before it is sent
+    calls = fake_channels.calls
+    assert calls.index(("pending", "owner-hash", "wechat")) < calls.index(("claim", "r1")) < calls.index(("mark_sent", "r1")) \
+        < calls.index(("expire_stuck", "owner-hash"))
+
+
+def test_a_rejected_send_marks_a_failure(fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()], FakeIlink(fail={"ret": -2}))
+    run(b.deliver_outbox())
+    assert ("mark_failed", "r1", "send_failed") in fake_channels.calls
+    assert not [c for c in fake_channels.calls if c[0] == "mark_sent"]
+
+
+def test_a_long_text_is_sent_in_chunks_and_marked_sent_once(fake_channels):
+    long_text = "数据。" * 1500
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row(text=long_text)])
+    run(b.deliver_outbox())
+    assert len(ilink.sent) > 1 and all(t[0] == OWNER_ID for t in ilink.sent)
+    assert [c for c in fake_channels.calls if c[0] == "mark_sent"] == [("mark_sent", "r1")]
+
+
+def test_a_push_without_a_context_token_is_still_attempted(fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()], token=None)
+    run(b.deliver_outbox())
+    assert ilink.sent == [(OWNER_ID, "提醒：INTC 急跌", None)]
+
+
+def test_nothing_is_sent_while_the_login_is_stale(fake_channels):
+    import time
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+    b.paused_until = time.time() + 600
+    run(b.deliver_outbox())
+    assert ilink.sent == []
+    assert not [c for c in fake_channels.calls if c[0] in ("pending", "mark_sent", "mark_failed")]
+    assert ("expire_stuck", "owner-hash") in fake_channels.calls   # the rows are left to expire
+
+
+def test_an_exception_in_one_send_does_not_stop_the_next_row(fake_channels):
+    class Flaky(FakeIlink):
+        async def send_text(self, to_user, text, context_token=None):
+            if "坏" in text:
+                raise RuntimeError("boom")
+            return await super().send_text(to_user, text, context_token)
+
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row("r1", "坏消息"), _row("r2", "好消息")], Flaky())
+    run(b.deliver_outbox())
+    assert ("mark_failed", "r1", "send_failed") in fake_channels.calls
+    assert ("mark_sent", "r2") in fake_channels.calls
+
+
+def test_a_database_failure_in_the_pass_is_logged_not_raised(fake_channels):
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+    fake_channels.pending = boom
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+    run(b.deliver_outbox())   # does not raise
+    assert ilink.sent == []
+
+
+def test_the_recipient_is_always_the_login_owner(fake_channels):
+    row = _row()
+    row.update({"to": STRANGER_ID, "user_id": STRANGER_ID, "from_user_id": STRANGER_ID})
+    b, ilink, _ = _outbox_bridge(fake_channels, [row])
+    run(b.deliver_outbox())
+    assert [s[0] for s in ilink.sent] == [OWNER_ID]
+
+
+def test_the_log_has_the_row_id_and_code_never_the_text(fake_channels, capsys):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row(text="秘密内容XYZ")], FakeIlink(fail={"ret": -2}))
+    run(b.deliver_outbox())
+    out = capsys.readouterr().out
+    assert "outbox_failed" in out and "r1" in out
+    assert "秘密内容XYZ" not in out and "ctx-9" not in out and OWNER_ID not in out
+
+
+def test_an_owner_message_acknowledges_before_it_is_handled(fake_channels):
+    async def ask(bot_id, text, on_event=None):
+        return "好", [], "cid"
+
+    async def go():
+        b, ilink, state = _make(ask)
+        await b.handle(_message())
+        await _drain(b)
+
+    run(go())
+    assert fake_channels.calls[0] == ("acknowledge", "owner-hash", "wechat")
+
+
+def test_a_message_from_someone_else_does_not_acknowledge(fake_channels):
+    async def ask(bot_id, text, on_event=None):
+        raise AssertionError("no turn")
+
+    async def go():
+        b, ilink, state = _make(ask)
+        await b.handle(_message(sender=STRANGER_ID))
+
+    run(go())
+    assert not [c for c in fake_channels.calls if c[0] == "acknowledge"]
+
+
+def test_a_failing_acknowledgement_does_not_stop_the_message(fake_channels):
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+    fake_channels.acknowledge = boom
+    calls = []
+
+    async def ask(bot_id, text, on_event=None):
+        calls.append(text)
+        return "好", [], "cid"
+
+    async def go():
+        b, ilink, state = _make(ask)
+        await b.handle(_message())
+        await _drain(b)
+
+    run(go())
+    assert calls == ["英伟达财报怎么样"]
+
+
+def test_a_stale_login_is_recorded_in_the_state_file_and_cleared_by_the_next_poll(tmp_path, monkeypatch):
+    monkeypatch.setenv("WECHAT_STATE_PATH", str(tmp_path / "wx.json"))
+    state = _state()
+    bridge._mark_stale(state)
+    saved = wx.load_state()
+    assert isinstance(saved["stale_since"], float) and saved["owner_user_id"] == OWNER_ID
+    bridge._clear_stale(state)
+    wx.save_state(state)
+    assert "stale_since" not in wx.load_state()
+
+
+# ---- review fixes: partial sends, loop survival, sweep isolation, wiring, pass cap ----
+
+class SecondChunkRejected(FakeIlink):
+    async def send_text(self, to_user, text, context_token=None):
+        self.sent.append((to_user, text, context_token))
+        return {"ret": 0} if len(self.sent) == 1 else {"ret": -2}
+
+
+def test_a_later_chunk_failing_leaves_the_row_sent_and_stops_sending(fake_channels, capsys):
+    ilink = SecondChunkRejected()
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row(text="数据。" * 1500)], ilink)
+    run(b.deliver_outbox())
+    assert len(ilink.sent) == 2   # chunk 1 out, chunk 2 rejected, the rest not tried
+    marks = [c for c in fake_channels.calls if c[0] in ("mark_sent", "mark_failed", "mark_partial")]
+    assert marks == [("mark_partial", "r1")]
+    out = capsys.readouterr().out
+    assert "outbox_partial" in out and '"chunks_sent": 1' in out and "数据" not in out
+    fake_channels.rows = []   # the closed row is no longer served: nothing goes out on the next pass
+    run(b.deliver_outbox())
+    assert len(ilink.sent) == 2
+
+
+def test_a_failing_first_chunk_still_fails_the_row(fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row(text="数据。" * 1500)], FakeIlink(fail={"ret": -2}))
+    run(b.deliver_outbox())
+    assert len(ilink.sent) == 1
+    assert ("mark_failed", "r1", "send_failed") in fake_channels.calls
+    assert not [c for c in fake_channels.calls if c[0] == "mark_sent"]
+
+
+def test_a_failing_sweep_does_not_skip_delivery(fake_channels):
+    def boom(owner):
+        raise RuntimeError("db down")
+    fake_channels.expire_stuck = boom
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+    run(b.deliver_outbox())
+    assert ("mark_sent", "r1") in fake_channels.calls
+
+
+def test_the_outbox_loop_survives_a_failing_pass_and_failing_log(monkeypatch, fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [])
+    runs = []
+
+    async def deliver():
+        runs.append(1)
+        if len(runs) < 3:
+            raise RuntimeError("boom")
+        raise asyncio.CancelledError
+    b.deliver_outbox = deliver
+    monkeypatch.setattr(bridge, "OUTBOX_INTERVAL", 0)
+    monkeypatch.setattr(bridge, "_log", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("log broke")))
+
+    async def go():
+        with pytest.raises(asyncio.CancelledError):
+            await bridge._outbox_loop(b)
+    run(go())
+    assert len(runs) == 3
+
+
+def test_going_stale_pauses_what_the_delivery_pass_reads(monkeypatch, fake_channels):
+    monkeypatch.setattr(bridge, "_mark_stale", lambda state: None)
+    monkeypatch.setattr(bridge, "_notify_stale", lambda owner: None)
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+
+    async def go():
+        await bridge._enter_stale(b, "owner-hash")
+        await b.deliver_outbox()
+    run(go())
+    assert b.paused_until > 0 and ilink.sent == []
+
+
+def test_the_outbox_task_is_started_and_delivers(monkeypatch, fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+
+    async def go():
+        task = bridge._start_outbox(b)
+        await asyncio.sleep(0.05)
+        task.cancel()
+        return task
+    run(go())
+    assert ilink.sent and ("mark_sent", "r1") in fake_channels.calls
+
+
+def test_one_pass_stops_taking_rows_after_the_cap(monkeypatch, fake_channels):
+    ticks = iter([0, 0, 61, 61, 61])   # start, row 1 checked, row 2 over the cap
+    monkeypatch.setattr(bridge, "_monotonic", lambda: next(ticks))
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row("r1"), _row("r2"), _row("r3")])
+    run(b.deliver_outbox())
+    assert [c for c in fake_channels.calls if c[0] == "mark_sent"] == [("mark_sent", "r1")]
+
+
+def test_the_owner_message_acknowledges_up_to_its_own_time(fake_channels):
+    b, ilink, _ = _make(lambda *a, **k: None)
+    b.ask = None
+    msg = _message(items=[])
+    msg["create_time_ms"] = 1_780_000_000_000
+    run(b.handle(msg))
+    assert fake_channels.seen_at.timestamp() == 1_780_000_000
+    run(b.handle(_message(items=[])))                                   # no time on the message: when it was received
+    assert abs(fake_channels.seen_at.timestamp() - __import__("time").time()) < 30

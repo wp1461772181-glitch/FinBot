@@ -1,3 +1,4 @@
+import type { ChannelPrefs, DeliveryItem } from "../channel-prefs.mjs";
 import { ownerJson } from "./owner";
 
 export type BackgroundModel = { configured:boolean; has_key:boolean; provider?:string; model?:string; base_url?:string|null; revoked_at?:string|null; updated_at?:string|null };
@@ -32,3 +33,8 @@ export async function saveBotTelegramToken(botId:string,token:string):Promise<Bo
 export async function startBotTelegramBind(botId:string):Promise<{code:string;bot_username?:string|null;link?:string|null;expires_at:string}>{ return await ownerJson(botTelegram(botId,"/bind"),{method:"POST"},"生成绑定码失败。"); }
 export async function unbindBotTelegram(botId:string):Promise<BotTelegramStatus>{ return await ownerJson(botTelegram(botId,"/unbind"),{method:"POST"},"解绑失败。"); }
 export async function deleteBotTelegram(botId:string):Promise<BotTelegramStatus>{ return await ownerJson(botTelegram(botId),{method:"DELETE"},"删除失败。"); }
+// Where proactive messages go (owner only): the stored choice, which channels are connected, and the recent deliveries.
+export type ChannelSettings = { prefs: ChannelPrefs; available: { telegram: boolean; wechat: boolean } };
+export async function getChannelSettings(signal?:AbortSignal):Promise<ChannelSettings>{ return await ownerJson("channels",{signal},"主动消息的设置暂时无法读取。"); }
+export async function saveChannelPrefs(prefs:ChannelPrefs):Promise<ChannelPrefs>{ return await ownerJson("channels",{method:"PUT",body:prefs},"保存失败，请重试。"); }
+export async function listChannelDeliveries(limit=20,signal?:AbortSignal):Promise<DeliveryItem[]>{ return (await ownerJson<{items:DeliveryItem[]}>(`channels/deliveries?limit=${limit}`,{signal},"最近的发送记录暂时无法读取。")).items; }

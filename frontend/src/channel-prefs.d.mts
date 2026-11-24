@@ -1,0 +1,14 @@
+export type ChannelName = "telegram" | "wechat";
+export type ChannelPrefs = { channels: ChannelName[]; mode: "first" | "all" };
+export type ChannelOptionId = "telegram-only" | "wechat-first" | "both";
+export type ChannelOption = { id: ChannelOptionId; label: string; channels: ChannelName[]; mode: "first" | "all" };
+export type DeliveryItem = { id: string; group_id: string | null; bot_id: string | null; source: string; channel: string; status: "pending" | "sent" | "failed"; failure: string | null; created_at: string; sent_at: string | null; acked_at: string | null; text: string | null };
+export const CHANNEL_OPTIONS: ChannelOption[];
+export function optionForPrefs(prefs: ChannelPrefs | null | undefined): ChannelOptionId | "";
+export function prefsForOption(id: string): ChannelPrefs | null;
+export function rawOrderText(prefs: ChannelPrefs | null | undefined): string;
+export type ChannelState = "" | "none" | "wechat-falls-back" | "no-backup" | "only-telegram" | "only-wechat";
+export const CHANNEL_STATE_TEXT: Record<Exclude<ChannelState, "">, string>;
+export function channelState(optionId: string, available: Partial<Record<ChannelName, boolean>> | null | undefined): ChannelState;
+export function deliveryStatusText(item: Pick<DeliveryItem, "status" | "failure" | "created_at">, t?: (text: string) => string, now?: number | Date): string;
+export function deliveryRow(item: Pick<DeliveryItem, "status" | "sent_at" | "created_at" | "channel" | "acked_at" | "text">): { time: string; channelLabel: string; acked: boolean; firstLine: string };

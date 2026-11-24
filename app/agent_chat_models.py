@@ -352,6 +352,26 @@ class AgentTelegramMessage(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Stage 1e: the outbox is channel-neutral.  Added to older tables by ``agent_telegram.ensure_columns``.
+    # ``channel`` telegram | wechat; the rows of one message share ``group_id`` (NULL: the row is its own group);
+    # ``failure`` says why a row was closed (send_failed | expired | partial: sent, but only the first part); ``acked_at`` is when the
+    # owner next wrote on that channel after the row was sent.
+    channel: Mapped[str] = mapped_column(String(16), nullable=False, default="telegram", server_default="telegram")
+    group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failure: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # A bridge stamps the rows it takes (channels.pending); the sweep leaves a row alone for CLAIM_SECONDS after.
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentChannelPref(Base):
+    """Where the owner wants proactive messages (agent_channel_prefs): the channels in order, and whether a message
+    goes to the first available one (``first``) or to every available one (``all``).  No row: Telegram only."""
+    __tablename__ = "agent_channel_prefs"
+    owner_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    channels: Mapped[str] = mapped_column(Text, nullable=False)   # a JSON list
+    mode: Mapped[str] = mapped_column(String(8), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
 class AgentSkill(Base):
