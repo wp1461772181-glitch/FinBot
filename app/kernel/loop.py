@@ -17,17 +17,21 @@ from .. import agent_model_roles as roles
 from .. import x_search
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_progress import mark_progress, progress_watchdog
+from .. import agent_skills
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
-from . import act, press, progress, prompt, tiers
+from . import act, ask, press, progress, prompt, skills, tiers
 from .toolrun import run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
     "search_knowledge", "web_research", "search_configured_news", "search_x", "calculate", "calculate_formula",
-    "query_portfolio", "recall_conversations", "read_past_conversation", "read_history_citation")
+    "query_portfolio", "recall_conversations", "read_past_conversation", "read_history_citation",
+    "query_latest_forecast", "query_materials", "query_research_faq", "query_material_analysis", "search_material_analysis",
+    "query_alerts", "query_holdings_overview", "read_workspace", "query_system_status", "query_research_queue", "list_routines")
 logger = logging.getLogger(__name__)
 MAX_STEPS = 12
+MAX_SETS = 6          # as the old engine: the last six result sets of a conversation
 SOFT_SECONDS = 180
 IDLE_SECONDS = 300
 RETRY_WAIT_SECONDS = 1
@@ -78,9 +82,13 @@ class _Run:
     tier: str = "low"
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
+    web_rows: dict = field(default_factory=dict)      # url -> the raw row of a page this turn's web reads returned (what ``act`` may save)
+    carried_sets: list = field(default_factory=list)  # the conversation's earlier result sets (the graph state's ``result_sets``): pages earlier turns' reads returned
+    new_sets: list = field(default_factory=list)      # this turn's web reads, as result sets to carry on
     proposals: list = field(default_factory=list)     # tier-2/3 operations collected this turn, put on one card when it ends
     writes: list = field(default_factory=list)       # one audit line per act call
     read_results: int = 0            # read or calculation results received this turn: after the first, tier 1 goes onto the card
+    question_card: dict | None = None    # the card of this turn's ``ask``, given to the user when the turn ends
     pending: dict | None = None      # the card minted this turn
     carried: dict | None = None      # the conversation's own card, still waiting after this turn
     sent_text: bool = False
@@ -98,7 +106,9 @@ def _tool_schemas(context) -> list[dict]:
     available = schemas(owner=owner, names=[n for n in READ_TOOLS if n != "search_x" or x_search.configured()])
     scope = getattr(context, "tool_scope", None)
     # The kernel's own tools go last whatever the ceiling is, so the list is the same for the whole turn.
+    # A skill is offered to an owner who has any enabled (the endpoint puts their list on the context); a bot's scope does not take it away.
     offered = [*(s for s in available if scope is None or s["function"]["name"] in scope), *([act.ACT_SCHEMA] if owner else []),
+               ask.ASK_SCHEMA, *([skills.USE_SKILL_SCHEMA] if owner and getattr(context, "skill_block", None) else []),
                progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]
     return [progress.with_say(s) for s in offered]
 
@@ -233,7 +243,7 @@ async def _tool_step(run: _Run, message: dict) -> None:
 
 def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None = None) -> dict:
     status = "failed" if failure else "waiting_for_input" if run.pending or run.carried else "succeeded"
-    if run.pending:
+    if run.pending and not run.question_card:
         run.audit.setdefault("write_outcome", "proposed")     # a press's own outcome (executed, failed) stays the turn's word
     run.audit["stop_reason"] = stop_reason
     run.audit["tier"] = run.tier
@@ -242,7 +252,7 @@ def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None
     run.audit["writes"] = run.writes
     return {"answer": answer, "citations": run.citations, "status": status,
             "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier, "narration": run.narration, "checklist": run.checklist, **run.final_extra}, "pending_request": run.pending or run.carried,
-            "result_sets": [], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
+            "result_sets": [*run.carried_sets, *run.new_sets][-MAX_SETS:], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
 
 
 def _card_display(proposals: list) -> dict:
@@ -267,7 +277,8 @@ async def _mint_card(run: _Run) -> str:
     variants = [("保存并启用", None), ("存为草稿", "draft")] if all(p.operation["name"] == "save_skill" for p in proposals) else None
     try:
         run.pending = await asyncio.to_thread(consent.propose, context.identity_credential, context.conversation_id,
-                                              [p.operation for p in proposals], _card_display(proposals), question=run.question, variants=variants)
+                                              [p.operation for p in proposals], _card_display(proposals), question=run.question, variants=variants,
+                                              **({"options": proposals[0].options} if proposals[0].options is not None else {}))
     except consent.ConsentError as failure:
         reason = consent.failure_reason(str(getattr(failure, "code", None) or failure))
     except Exception:
@@ -303,6 +314,8 @@ async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_aga
             await run.emit({"event": "answer_reset"})
         await run.emit({"event": "delta", "text": cleaned})
     failed_card = await _mint_card(run)
+    if run.question_card:
+        run.pending = run.question_card
     if failed_card:
         cleaned = f"{cleaned}\n\n{failed_card}"
         await run.emit({"event": "delta", "text": f"\n\n{failed_card}"})
@@ -348,30 +361,60 @@ async def _answer_press(run: _Run, settled: press.Settled, state: dict) -> dict:
     return _result(run, settled.answer, "press")
 
 
+async def _skill_of_question(context, state: dict) -> dict | None:
+    """The skill that was in force when the question being answered was asked (the server kept its name on the card), if it is still enabled."""
+    name = (state.get("pending_request") or {}).get("skill")
+    if not isinstance(name, str) or not name or not owner_credential_matches(getattr(context, "identity_credential", "")):
+        return None
+    try:
+        return await asyncio.to_thread(agent_skills.active, getattr(context, "owner_hash", ""), name=name)
+    except Exception:
+        logger.exception("kernel skill lookup for an answer failed")
+        return None
+
+
 async def run_turn(question: str, context, emit, messages: list[dict] | None = None, state: dict | None = None) -> dict:
     state = state or {}
     history = list(messages or [])[1:]   # the first message is the endpoint's own system prompt
     pressed = press.read(question, state)
+    raw = question      # a card button's value, which never reaches the model
     tool_schemas = _tool_schemas(context)
     run = _Run(context=context, emit=emit, messages=[], user_text="", schemas=tool_schemas,
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                model=ModelUse(context.provider, context.model, context.api_key, context.base_url),
                ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)),
-               question=question, turn_id=str(state.get("turn_id") or ""))
+               question=question, turn_id=str(state.get("turn_id") or ""),
+               carried_sets=[x for x in state.get("result_sets") or [] if isinstance(x, dict) and x.get("owner") == context.owner_hash
+                             and x.get("conversation") == context.conversation_id and isinstance(x.get("rows"), list)][-MAX_SETS:])
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):
         fact = None
         if pressed:
             settled = await press.settle(run, pressed, state)
-            run.audit["write_outcome"] = settled.outcome
+            if settled.reply is None:      # an answer to a question is not a write: it leaves no write outcome
+                run.audit["write_outcome"] = settled.outcome
             if settled.answer is not None:
                 return await _answer_press(run, settled, state)
-            run.audit["write_request_id"] = pressed.request_id
-            fact = settled.fact
-            run.read_results = 1     # execution results are in front of the model: nothing it asks for now runs at once
-            # From here on the user's words are the card's original question, never the button's value.
-            run.question = (state.get("pending_request") or {}).get("original_question") or ""
-            history = [m for m in history if not (m.get("role") == "user" and m.get("content") == question)]
-        run.messages = prompt.build_messages(question, context, history, fact=fact)
+            if settled.reply is not None:
+                # An ordinary turn whose question is the option's text.  The model wrote that text, perhaps from a page it
+                # had read: like the turn after a write press, nothing runs at once in it.
+                question = run.question = settled.reply
+                run.read_results = 1
+            else:
+                run.audit["write_request_id"] = pressed.request_id
+                fact = settled.fact
+                run.read_results = 1     # execution results are in front of the model: nothing it asks for now runs at once
+                # From here on the user's words are the card's original question, never the button's value.
+                run.question = (state.get("pending_request") or {}).get("original_question") or ""
+            # The button's raw value is not the user's message, whichever card it was on.
+            history = [m for m in history if not (m.get("role") == "user" and m.get("content") == raw)]
+        started = getattr(context, "active_skill", None)
+        # The answer to a question the skill asked, pressed or typed (a channel without buttons can only type it), takes the
+        # skill up again.  A question card is not carried past the next turn, so this reaches that one turn only.
+        if not started and (settled.reply is not None if pressed else True):
+            started = await _skill_of_question(context, state)
+        run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started)
+        if started and owner_credential_matches(getattr(context, "identity_credential", "")):
+            run.audit["skill"] = {"name": started["name"], "version": started["version"]}
         run.user_text = _user_text(run.question, history)
         note = None if pressed else press.typed_note(state)
         if note:
@@ -386,5 +429,8 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
             logger.exception("kernel turn after an executed press failed")
             result = None
         if result is None or result.get("reason") == "empty_answer":
-            return await _report_fallback(run, settled.report)
+            return await _report_fallback(run, settled.report + (settled.note or ""))
+        if settled.note:      # where a saved page landed: a link written by code, not left to the model
+            await run.emit({"event": "delta", "text": settled.note})
+            result["answer"] += settled.note
         return result

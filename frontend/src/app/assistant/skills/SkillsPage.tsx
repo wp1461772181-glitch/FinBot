@@ -103,7 +103,7 @@ export function SkillsPage({ skillId = null }: { skillId?: string | null }) {
     <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
       <div className="flex min-w-0 flex-col gap-1">
         <h1 id="skills-title" className="text-title-m text-ink">{t("技能")}</h1>
-        <p data-testid="skills-intro" className="max-w-2xl text-small text-muted-foreground">{t("技能是做事的步骤，不是代码。在 bot 对话里输入「/技能名」使用；技能只会减少可用工具，写操作照样要你确认。")}</p>
+        <p data-testid="skills-intro" className="max-w-2xl text-small text-muted-foreground">{t("技能是做事的步骤，不是代码。在 bot 对话里输入「/技能名」使用；技能里的工具清单只对旧流程的 bot 起限制作用，写操作照样要你确认。")}</p>
       </div>
       <div className="flex items-center gap-2">
         <Button ref={importButton} type="button" variant="outline" data-testid="skill-import-open" className="max-sm:h-11" onClick={() => { opener.current = here(); setEditor(current => ({ ...current, open: false })); setImporting(true); }}><FileUp aria-hidden="true" />{t("导入")}</Button>

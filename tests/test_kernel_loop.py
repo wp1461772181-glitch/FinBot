@@ -187,7 +187,7 @@ def test_tools_are_fixed_and_scoped(env):
     scope = frozenset({"query_financials", "web_research"})
     fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
     run(context=make_context(tool_scope=scope))
-    assert [set(c["tools"]) for c in fake.calls] == [set(scope) | {"act", "plan", "escalate"}] * 2
+    assert [set(c["tools"]) for c in fake.calls] == [set(scope) | {"act", "ask", "plan", "escalate"}] * 2
     env.monkeypatch.setattr(loop, "owner_credential_matches", lambda value: False)
     fake = script(env, [step(text="好")])
     run()
@@ -200,7 +200,7 @@ def test_no_write_tool_is_ever_offered_except_act(env):
         env.monkeypatch.setattr(loop, "owner_credential_matches", lambda value, owner=owner: owner)
         fake = script(env, [step(text="好")])
         run()
-        assert set(fake.calls[0]["tools"]) <= set(loop.READ_TOOLS) | {"act", "plan", "escalate"}
+        assert set(fake.calls[0]["tools"]) <= set(loop.READ_TOOLS) | {"act", "ask", "plan", "escalate"}
         assert ("act" in fake.calls[0]["tools"]) is owner
 
 
@@ -511,13 +511,18 @@ class FakeConsent:
         self.proposed, self.executed, self.reversible = [], [], []
         self.propose_error = None
 
-    def propose(self, credential, conversation, operations, display, *, question="", variants=None):
+    def propose(self, credential, conversation, operations, display, *, question="", variants=None, options=None):
         if self.propose_error:
             raise self.propose_error
-        self.proposed.append({"operations": copy.deepcopy(operations), "display": display, "question": question, "variants": variants})
+        self.proposed.append({"operations": copy.deepcopy(operations), "display": display, "question": question, "variants": variants,
+                              "options": copy.deepcopy(options)})
         n = len(self.proposed)
-        return {"id": f"card-{n}", "reason": "write_confirmation", "display": display, "original_question": question,
+        card = {"id": f"card-{n}", "reason": "write_confirmation", "display": display, "original_question": question,
                 "choices": [{"label": "同意", "value": f"confirm:{TOKEN}"}, {"label": "取消", "value": f"cancel:card-{n}"}]}
+        if options:       # as consent.propose: the ticked card of a forecast revision
+            card.update(reason="choose_revision_sources", options=options, select={"min": 1, "max": len(options)},
+                        choices=[{"label": "用所选材料修订", "value": f"confirm:{TOKEN}"}, {"label": "取消", "value": f"cancel:card-{n}"}])
+        return card
 
     def execute(self, credential, conversation, token, operations, handler):
         self.executed.append((token, copy.deepcopy(operations)))
@@ -556,14 +561,14 @@ def tool_results(fake):
     return [json.loads(m["content"]) for c in fake.calls[-1:] for m in c["messages"] if m["role"] == "tool"]
 
 
-def test_tool_order_is_reads_act_plan_escalate_and_stable(env):
+def test_tool_order_is_reads_act_ask_plan_escalate_and_stable(env):
     fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
     run(context=ctx())
     names = fake.calls[0]["tools"]
     from app.agent_tool_catalog import schemas
     from app import x_search
     offered = [n for n in loop.READ_TOOLS if n != "search_x" or x_search.configured()]     # offered only where a token is set (tests/test_x_search.py)
-    assert names == [s["function"]["name"] for s in schemas(owner=True, names=offered)] + ["act", "plan", "escalate"]
+    assert names == [s["function"]["name"] for s in schemas(owner=True, names=offered)] + ["act", "ask", "plan", "escalate"]
     assert fake.calls[0]["tools"] == fake.calls[1]["tools"]
     schema = {s["function"]["name"]: s for s in loop._tool_schemas(ctx())}["act"]["function"]
     assert list(schema["parameters"]["properties"])[:2] == ["say", "item"] and "operation" in schema["parameters"]["properties"]
@@ -856,3 +861,128 @@ def test_every_model_call_of_a_turn_carries_the_same_single_mark(env):
     for c in fake.calls:
         marked = [i for i, m in enumerate(c["messages"]) if m.get("cache_point")]
         assert marked == [2] and c["messages"][2]["content"] == "答"
+
+
+# --- saving a web page: only one a read returned this turn ---------------------------------------------------------------
+
+PAGE = {"id": "w1", "url": "https://news.example.com/aapl-q1", "title": "苹果一季度财报解读", "excerpt": "Revenue grew 8 percent.",
+        "published_at": "2026-01-05T00:00:00+00:00", "fetched_at": "2026-01-06T00:00:00+00:00", "body_provenance": "page", "truncated": False}
+
+
+def web_env(env, monkeypatch):
+    async def invoke(name, args, context, *, emit=None, page_chars=None):
+        return {"ok": True, "data": [copy.deepcopy(PAGE)], "source": "web"}
+
+    monkeypatch.setattr(tools, "invoke", invoke)
+    monkeypatch.setattr(act, "_already_saved", lambda *a: None)
+
+
+def test_a_page_the_turn_searched_can_be_saved_through_a_card(env, fake_consent, monkeypatch):
+    web_env(env, monkeypatch)
+    fake = script(env, [step(calls=[call("c1", "web_research", {"query": "苹果 财报"})]),
+                        step(calls=[act_call("c2", "ingest_web_source", {"url": PAGE["url"], "symbol": "AAPL"})]), step(text="我准备把这篇存进资料库，请核对卡片")])
+    result, _ = run(context=ctx())
+    assert fake_consent.executed == [] and len(fake_consent.proposed) == 1
+    operation = fake_consent.proposed[0]["operations"][0]
+    display = fake_consent.proposed[0]["display"]
+    assert operation["name"] == "ingest_web_source" and operation["snapshot"]["url"] == PAGE["url"]
+    assert display["title"] == "保存网页" and display["targets"][0]["title"] == PAGE["title"] and display["url"] == PAGE["url"] and "资料库 · AAPL" in display["alternative"]
+    assert display["alternative"].endswith("代价：会把这个网页存入资料库和知识库。")
+    assert result["status"] == "waiting_for_input" and TOKEN not in json.dumps(fake.calls[-1]["messages"])
+
+
+def test_a_page_no_read_returned_is_refused_and_makes_no_card(env, fake_consent, monkeypatch):
+    web_env(env, monkeypatch)
+    fake = script(env, [step(calls=[call("c1", "web_research", {"query": "苹果"})]),
+                        step(calls=[act_call("c2", "ingest_web_source", {"url": "https://never.example.com/page", "symbol": "AAPL"})]), step(text="没能保存")])
+    result, _ = run(context=ctx())
+    (_, second) = [json.loads(m["content"]) for m in fake.calls[-1]["messages"] if m["role"] == "tool"]
+    assert second["error_code"] == "web_source_not_returned" and fake_consent.proposed == []
+    assert result["status"] == "succeeded" and result["audit"]["writes"] == [{"operation": "ingest_web_source", "tier": 3, "outcome": "refused:web_source_not_returned"}]
+
+
+def test_a_page_from_a_post_search_is_not_a_web_page(env, fake_consent, monkeypatch):
+    web_env(env, monkeypatch)
+    monkeypatch.setattr("app.x_search.configured", lambda: True)
+    fake = script(env, [step(calls=[call("c1", "search_x", {"query": "苹果"})]),
+                        step(calls=[act_call("c2", "ingest_web_source", {"url": PAGE["url"], "symbol": "AAPL"})]), step(text="不能保存")])
+    run(context=ctx())
+    assert fake_consent.proposed == []
+    assert [json.loads(m["content"]) for m in fake.calls[-1]["messages"] if m["role"] == "tool"][-1]["error_code"] == "web_source_not_returned"
+
+
+# --- own-state reads do not count for the tier-1 rule ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("read,counts", [("query_research_queue", False), ("list_routines", False), ("query_system_status", True),
+                                         ("query_financials", True), ("recall_conversations", True)])
+def test_only_reads_of_outside_or_remembered_text_send_a_tier_one_write_to_the_card(env, fake_consent, read, counts):
+    fake = script(env, [step(calls=[call("c1", read, {})]), step(calls=[act_call("c2", "remove_from_research_queue", {"symbol": "NVDA"})]), step(text="好")])
+    result, _ = run(context=ctx())
+    assert (len(fake_consent.proposed) == 1 and fake_consent.executed == []) == counts
+    assert (len(fake_consent.executed) == 1) == (not counts)
+    assert result["status"] == ("waiting_for_input" if counts else "succeeded")
+
+
+# --- a page found in one turn can be saved in a later one -------------------------------------------------------------------
+
+def state_after(result, **extra):
+    return {"result_sets": result["result_sets"], **extra}
+
+
+def run_with_state(state, question="存第一篇", context=None):
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    history = [{"role": "system", "content": "endpoint"}, {"role": "user", "content": question}]
+    return asyncio.run(loop.run_turn(question, context or ctx(), emit, history, state)), events
+
+
+def test_the_pages_a_turn_read_are_kept_for_the_conversation_and_found_in_the_next_turn(env, fake_consent, monkeypatch):
+    web_env(env, monkeypatch)
+    reads = []
+    inner = tools.invoke
+
+    async def counting(name, args, context, **kwargs):
+        reads.append(name)
+        return await inner(name, args, context, **kwargs)
+
+    monkeypatch.setattr(tools, "invoke", counting)
+    script(env, [step(calls=[call("c1", "web_research", {"query": "苹果"})]), step(text="找到一篇《苹果一季度财报解读》")])
+    first, _ = run(context=ctx())
+    (saved,) = first["result_sets"]
+    assert saved["owner"] == "o" and saved["conversation"] == "conv" and saved["tool"] == "web_research" and saved["rows"][0]["url"] == PAGE["url"]
+    fake = script(env, [step(calls=[act_call("c2", "ingest_web_source", {"url": PAGE["url"], "symbol": "AAPL"})]), step(text="请核对卡片")])
+    second, _ = run_with_state(state_after(first))
+    assert reads == ["web_research"]          # nothing was read again
+    assert len(fake_consent.proposed) == 1 and fake_consent.proposed[0]["operations"][0]["snapshot"]["url"] == PAGE["url"]
+    assert second["status"] == "waiting_for_input" and second["result_sets"] == first["result_sets"]
+
+
+def test_a_url_no_read_returned_is_still_refused_in_a_later_turn_and_other_conversations_sets_are_ignored(env, fake_consent, monkeypatch):
+    web_env(env, monkeypatch)
+    foreign = {"id": "s", "owner": "o", "conversation": "other", "tool": "web_research", "rows": [PAGE]}
+    other_owner = {"id": "t", "owner": "z", "conversation": "conv", "tool": "web_research", "rows": [PAGE]}
+    not_web = {"id": "u", "owner": "o", "conversation": "conv", "tool": "search_x", "rows": [PAGE]}
+    for sets, url in [([foreign, other_owner, not_web], PAGE["url"]), ([{**foreign, "conversation": "conv"}], "https://typed.example.com/p")]:
+        fake = script(env, [step(calls=[act_call("c1", "ingest_web_source", {"url": url, "symbol": "AAPL"})]), step(text="没能保存")])
+        result, _ = run_with_state({"result_sets": sets})
+        assert tool_results(fake)[0]["error_code"] == "web_source_not_returned" and fake_consent.proposed == []
+
+
+def test_this_turns_page_wins_over_an_earlier_set_and_the_stored_row_is_what_is_saved(env, fake_consent, monkeypatch):
+    web_env(env, monkeypatch)
+    old = {"id": "s", "owner": "o", "conversation": "conv", "tool": "web_research", "rows": [{**PAGE, "excerpt": "OLD TEXT", "title": "旧"}]}
+    script(env, [step(calls=[call("c1", "web_research", {"query": "苹果"})]), step(calls=[act_call("c2", "ingest_web_source", {"url": PAGE["url"], "symbol": "AAPL"})]), step(text="好")])
+    run_with_state({"result_sets": [old]})
+    op = fake_consent.proposed[0]["operations"][0]
+    assert op["snapshot"]["excerpt"] == PAGE["excerpt"] and "title" not in op["arguments"] and op["snapshot"]["title"] == PAGE["title"]
+
+
+def test_only_the_last_six_sets_are_kept(env, monkeypatch):
+    web_env(env, monkeypatch)
+    sets = [{"id": str(i), "owner": "o", "conversation": "conv", "tool": "web_research", "rows": [{"url": f"https://x.example.com/{i}"}]} for i in range(6)]
+    script(env, [step(calls=[call("c1", "web_research", {"query": "苹果"})]), step(text="好")])
+    result, _ = run_with_state({"result_sets": sets})
+    assert [s["id"] for s in result["result_sets"]][:5] == ["1", "2", "3", "4", "5"] and len(result["result_sets"]) == 6

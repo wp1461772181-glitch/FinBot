@@ -440,7 +440,7 @@ def test_kernel_offers_search_x_only_when_configured(monkeypatch, no_token):
     configured = [s["function"]["name"] for s in loop._tool_schemas(make_context())]
     assert configured.index("search_x") == names.index("search_configured_news") + 1
     assert [n for n in configured if n != "search_x"] == names
-    assert configured[-3:] == ["act", "plan", "escalate"]
+    assert configured[-4:] == ["act", "ask", "plan", "escalate"]
 
 
 def test_kernel_does_not_offer_it_to_a_guest_or_a_narrow_bot(monkeypatch, token):

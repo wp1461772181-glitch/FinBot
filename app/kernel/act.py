@@ -18,7 +18,8 @@ from .. import agent_profile as profile
 from .. import agent_tasks, portfolio
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_tool_catalog import definitions, validate
-from ..agent_workflow import consent, direct, sec_sources, tools
+from ..agent_workflow import consent, direct, sec_sources, tools, web_sources, workspace_tools
+from . import ask
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_rou
          "save_skill", "review_filing")
 TIER3 = ("forecast", "analyze", "translate_content", "start_historical_replay", "fetch_sec", "refresh_sec", "scan_official",
          "initialize_prices", "import", "import_sources", "index", "retry_document_index", "review_knowledge_candidate",
-         "withdraw_knowledge_document", "save_material_evidence")
+         "withdraw_knowledge_document", "save_material_evidence", "ingest_web_source", "revise_forecast")
 OPERATIONS = (*TIER1, *TIER2, *TIER3)
 
 SUMMARIES = {
@@ -58,7 +59,9 @@ SUMMARIES = {
     "retry_document_index": "重试一份失败文档的索引",
     "review_knowledge_candidate": "通过或拒绝一条知识候选",
     "withdraw_knowledge_document": "把一份知识文档从检索中撤回",
-    "save_material_evidence": "把用户贴的文字或材料存进资料库",
+    "save_material_evidence": "把用户自己贴的文字或材料存进资料库（联网搜到的网页用 ingest_web_source）",
+    "ingest_web_source": "把这段对话里联网搜到的一个网页或新闻存进资料库（正文由系统取，不用你提供；查格式时会列出可以存的网页）",
+    "revise_forecast": "用新材料修订一份已存的预测（材料由用户在卡片上勾选）",
 }
 
 _PAID_MODEL = {"analyze": "会调用付费模型分析这份材料。", "translate_content": "会调用付费模型翻译。"}
@@ -80,6 +83,8 @@ COST_NOTES = {
     "review_knowledge_candidate": "审核结果会写入知识库候选记录。",
     "withdraw_knowledge_document": "撤回后这份文档不再参与检索。",
     "save_material_evidence": "会把这段内容存入资料库和知识库。",
+    "ingest_web_source": "会把这个网页存入资料库和知识库。",
+    "revise_forecast": "会调用付费模型重新计算这份预测，生成新版本，旧版本保留。",
 }
 
 _HEADINGS = (("直接生效（可撤销）", TIER1), ("需要用户点确认卡", TIER2), ("需要用户点确认卡，并且花钱或不可撤销", TIER3))
@@ -123,9 +128,17 @@ class Prepared:
     operation: dict
     display: dict
     tier: int
+    options: list | None = None     # a forecast revision: the materials the user ticks on the card (the card is minted with them)
 
 
 _HINTS = {"unknown_operation": "没有这个操作。请从 act 工具描述里的目录中选一个 operation 名称重新调用。"}
+REVISION_ALONE = "预测修订要单独一张卡片（材料由用户在卡片上勾选）。先把这一轮已有的操作交给用户，等用户处理后再提出修订。"
+AFTER_REVISION = "这一轮已经有一份预测修订在卡片上，它要单独一张卡片。等用户处理完再提出别的操作。"
+REVISION_NOTE = "已放进材料勾选卡。回答结束时卡片会交给用户，由用户勾选要用的材料；材料你不能选，也不要说已经修订了。现在用一两句话请用户在卡片上勾选材料。"
+SAVE_TITLE = "保存网页"
+SYMBOL_QUESTION = "存到哪只股票的资料库？"
+SYMBOL_HINT = "用 ask 问用户存到哪只股票（给出 candidates 作选项，并加一项「只存知识库」），再带上 symbol 重新调用；用户选只存知识库时传 knowledge_only=true。"
+DESTINATION_TAIL = "。也可抓取最新 SEC 官方文件。"
 
 
 def _failure(code: str, **extra) -> dict:
@@ -211,6 +224,153 @@ async def _forget(run, args: dict) -> dict:
             "alternative": "忘掉后这条不再用于回答；记忆页里仍能看到它的归档记录。"}
 
 
+def _default_company(context) -> dict | None:
+    company = getattr(context, "default_company", None)
+    return company if isinstance(company, dict) and company.get("symbol") else None
+
+
+def _already_saved(owner_hash: str, url: str, content_hash: str, knowledge_only: bool) -> str | None:
+    """The id of the saved page this one repeats (same canonical URL or body), when saving it again would add nothing; blocking."""
+    from sqlalchemy import or_, select
+
+    from ..agent_workflow.models import AgentWebSource
+    from ..database import SessionLocal
+    with SessionLocal() as db:
+        existing = db.scalar(select(AgentWebSource).where(AgentWebSource.owner_hash == owner_hash,
+                                                          or_(AgentWebSource.source_url == web_sources.canonical_url(url), AgentWebSource.content_hash == content_hash)))
+        # A page saved before it could reach 资料库 (vector only) may still be filed there now.
+        return str(existing.id) if existing and (existing.uploaded_evidence_id or knowledge_only) else None
+
+
+WEB_READS = ("web_research", "search_configured_news")
+TITLE_CHARS = 100
+
+
+def _returned_page(run, url: str) -> dict | None:
+    """The stored row of a page a web read really returned in this conversation: this turn's first, then the earlier sets, newest first.
+
+    The model's URL is only the key; what is saved is the row (never text the model supplied)."""
+    page = (getattr(run, "web_rows", None) or {}).get(url)
+    if page:
+        return page
+    for saved in reversed(getattr(run, "carried_sets", None) or []):
+        if saved.get("tool") in WEB_READS:
+            found = next((r for r in saved.get("rows") or [] if isinstance(r, dict) and r.get("url") == url), None)
+            if found:
+                return found
+    return None
+
+
+PAGES_SHOWN = 20
+PAGES_HINT = ("只能保存这段对话里联网搜到过的网页。pages 是现在可以保存的（新的在前）；按用户说的那一条从里面选 url 重新调用，"
+              "对不上就问用户是哪一条。pages 为空时先联网搜，再保存。")
+
+
+def _savable_pages(run) -> list[dict]:
+    """What can be saved now, for the model to pick from: a later turn does not show it the URLs an earlier search returned."""
+    rows = list((getattr(run, "web_rows", None) or {}).values())
+    for saved in reversed(getattr(run, "carried_sets", None) or []):
+        if saved.get("tool") in WEB_READS:
+            rows.extend(r for r in saved.get("rows") or [] if isinstance(r, dict))
+    pages, seen = [], set()
+    for row in rows:
+        url = row.get("url")
+        if isinstance(url, str) and url and url not in seen:
+            seen.add(url)
+            pages.append({"title": " ".join(str(row.get("title") or "").split())[:TITLE_CHARS], "url": url, "published_at": row.get("published_at")})
+    return pages[:PAGES_SHOWN]
+
+
+def _not_returned(run) -> dict:
+    pages = _savable_pages(run)
+    if pages:       # page titles are text from outside: from here on nothing in this turn runs at once
+        run.read_results = getattr(run, "read_results", 0) + 1
+    return _failure("web_source_not_returned", pages=pages, hint=PAGES_HINT)
+
+
+def _symbol_required(context) -> dict:
+    """资料库 is per stock: with none to file the page under, the model asks the user (``ask``) before a card is made."""
+    seen = []
+    for symbol in [*(getattr(context, "watchlist", None) or ()), (_default_company(context) or {}).get("symbol")]:
+        if symbol and symbol not in seen:
+            seen.append(symbol)
+    return {"ok": False, "data": [], "error_code": "library_symbol_required", "candidates": seen[:8], "question": SYMBOL_QUESTION, "hint": SYMBOL_HINT}
+
+
+async def _ingest(run, args: dict, operation: dict, display: dict) -> dict | None:
+    """Fill the operation and the card of a web page to save; a tool-result dict instead when there is to be no card."""
+    context = run.context
+    company = _default_company(context) or {}
+    args = {**args, "company": args.get("company") or company.get("company"), "symbol": args.get("symbol") or company.get("symbol")}
+    page = _returned_page(run, args["url"])
+    if not page:
+        return _not_returned(run)      # before the stock is asked for: no question for a page that cannot be saved
+    if not args["symbol"] and not args.get("knowledge_only"):
+        return _symbol_required(context)
+    operation["arguments"] = copy.deepcopy(args)
+    try:
+        operation["snapshot"] = web_sources.freeze_snapshot(page)
+    except ValueError as failure:
+        code = str(failure)
+        return _failure(code if re.fullmatch(r"[a-z_]+", code) else "web_snapshot_unavailable")
+    operation["entity_aliases"] = []
+    operation["published_at"] = page.get("published_at")
+    published = web_sources.timestamp(page.get("published_at"))
+    destination = ("只存知识库检索，不进资料库" if args.get("knowledge_only") else f'存入 资料库 · {args["symbol"]} ＋ 知识库检索') + DESTINATION_TAIL
+    # The page chooses neither the card's headline nor more than one short line of it.
+    shown = " ".join(str(page.get("title") or "").split())[:TITLE_CHARS] or args["url"]
+    display.update(title=SAVE_TITLE, url=args["url"], web_date=page.get("published_at"), alternative=destination,
+                   targets=[{**({"symbol": args["symbol"]} if args["symbol"] else {}), "url": args["url"], "title": shown}])
+    if args.get("newer_than") is not None:
+        older = next((c for c in run.citations if c["ordinal"] == args["newer_than"] and c["source_type"] in {"official_filing", "saved_filing"}), None)
+        saved = web_sources.timestamp(older.get("published_at")) if older else None
+        if not published or not saved:
+            return _failure("comparison_date_unavailable")
+        display["saved_date"] = older["published_at"]
+        if published <= saved:
+            return {"ok": True, "data": [{"status": "not_newer", "saved_date": older["published_at"], "web_date": page.get("published_at"), "message": "无需入库"}]}
+        operation["condition"] = {"kind": "newer_than_saved", "saved_date": older["published_at"]}
+    existing = await asyncio.to_thread(_already_saved, context.owner_hash, args["url"], operation["snapshot"]["content_hash"], bool(args.get("knowledge_only")))
+    if existing:
+        return {"ok": True, "data": [{"status": "already_exists", "source_id": existing}]}
+    return None
+
+
+def _awaiting(prepared: Prepared) -> dict:
+    return {"ok": True, "data": [{"status": "awaiting_selection", "candidates": len(prepared.options), "note": REVISION_NOTE}]}
+
+
+async def _revision(run, args: dict) -> Prepared | dict:
+    """A forecast revision: the server lists the materials the window allows, the user ticks them on the card, the model picks none."""
+    if run.question_card:
+        return ask.refusal()
+    waiting = next((p for p in run.proposals if p.options is not None), None)
+    if waiting and waiting.operation["arguments"]["symbol"] == args["symbol"] and args.get("version_id") in (None, waiting.operation["arguments"]["version_id"]):
+        return _awaiting(waiting)      # the same call again: the answer to the first one
+    if run.proposals:
+        return _failure("revision_needs_its_own_card", hint=REVISION_ALONE)
+    context = run.context
+    plan = await asyncio.to_thread(workspace_tools.revision_plan, args["symbol"], args.get("version_id"), context, args.get("mentioned_sources") or [])
+    if plan["status"] != "ready":
+        # The notice is the whole story: why there is nothing to revise and what to do instead.
+        return {"ok": False, "data": [], "error_code": plan["status"], "reason": direct.revision_notice(plan),
+                "hint": "reason 是写给用户看的原因，如实转告用户；不要再提出这项修订。"}
+    shown = plan["candidates"][:direct.REVISION_CARD_LIMIT]
+    operation = {"name": "revise_forecast", "arguments": {"symbol": plan["symbol"], "version_id": plan["version_id"]},
+                 "revision": {k: plan[k] for k in ("version_no", "decision_at", "window_start", "window_end")},
+                 "candidates": [{k: c[k] for k in ("source_type", "source_id", "title", "kind", "published_at", "category")} for c in shown]}
+    decided = plan["decision_at"][:10]
+    more = f'共 {len(plan["candidates"])} 份，这里列出最新的 {len(shown)} 份。' if len(plan["candidates"]) > len(shown) else ""
+    named = "".join(f'\n你提到的{direct.material_words(m)}不在列表里：{m["reason_text"]}。' for m in plan.get("mentioned") or [] if not m.get("category"))
+    display = {"title": f'修正 {plan["symbol"]} 的预测（v{plan["version_no"]}，{decided} 作出）',
+               "targets": [{"symbol": plan["symbol"], "decision_date": decided}],
+               "alternative": (f'可选材料：预测后 7 天内（至 {plan["window_end"][:10]}）发布的新材料，或预测前 30 天内（{plan["window_start"][:10]} 起）发布、预测后才收录的材料。'
+                               + more + "勾选后点「用所选材料修订」：会用这些材料重新计算这份预测的概率，生成新版本，旧版本保留。" + named)}
+    options = [{"value": str(index), "label": c["title"], "detail": f"{c['kind']} · {c['published_at'][:10]} 发布 · {c['badge']}"}
+               for index, c in enumerate(shown, 1)]
+    return Prepared(operation=operation, display=display, tier=3, options=options)
+
+
 async def prepare(run, name: str, arguments) -> Prepared | dict:
     """Validate a call and build the frozen operation and the card.  Never writes; an error comes back as a tool-result dict."""
     if name not in OPERATIONS:
@@ -222,6 +382,8 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
     except Exception as failure:
         return _failure("invalid_arguments", arguments=_schema(name), problems=_problems(failure))
     context = run.context
+    if name == "revise_forecast":
+        return await _revision(run, args)
     operation = {"name": name, "arguments": copy.deepcopy(args)}
     title = direct.WRITE_TITLES.get(name, name)
 
@@ -248,7 +410,11 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
                            alternative=f'每次运行：{args["instruction"]}（可在「例行任务」页暂停、修改或删除）')
         elif name == "save_skill":
             display.update(title=f'{title} · {args["name"]}', targets=[{"kind": args["description"]}],
-                           alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能只会收窄可用工具，不授权写操作。')
+                           alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能不授权写操作；工具清单只对旧流程的 bot 生效。')
+        elif name == "ingest_web_source":
+            early = await _ingest(run, args, operation, display)
+            if early is not None:
+                return early
         elif name in {"update_routine", "delete_routine"}:
             task = await asyncio.to_thread(agent_tasks.get_task, context.owner_hash, args["routine_id"])
             if task is None:
@@ -291,13 +457,23 @@ def _code(failure: Exception) -> str:
     return str(getattr(failure, "code", None) or failure) or "write_service_failed"
 
 
-def execute_handler(context, *, variant: str | None = None, emit=None):
+def revision_operation(frozen: dict, picks) -> dict:
+    """A revision as it is executed: the ticked candidates of the frozen card, nothing else (the old engine's ``execute_approved_operation``)."""
+    chosen = [frozen["candidates"][p - 1] for p in picks or ()]
+    if not chosen:
+        raise ValueError("confirmation_parameter_mismatch")
+    return {**frozen, "arguments": {"version_id": frozen["arguments"]["version_id"],
+                                    "source_refs": [{"source_type": c["source_type"], "source_id": c["source_id"]} for c in chosen]}}
+
+
+def execute_handler(context, *, variant: str | None = None, emit=None, picks=None, ran: list | None = None):
     """What ``consent.execute`` calls for each frozen operation (in its worker thread): the reversible or the costly executor.
 
     ``variant`` is how the user approved a ``save_skill`` card (``draft``, or ``None`` for enabled); it is the press, not the
     frozen operation, that says so.  ``emit`` is the turn's (it belongs to the main event loop): the handler runs in a worker
     thread under its own ``asyncio.run``, so the events a write emits (client actions such as the research-queue sync) are
-    handed back to the main loop, which is free while ``consent.execute`` runs in ``to_thread``.
+    handed back to the main loop, which is free while ``consent.execute`` runs in ``to_thread``.  ``picks`` are the positions
+    the user ticked on a revision card (the press says which candidates; the frozen card only lists them).
     """
     main = asyncio.get_running_loop() if emit else None
 
@@ -305,6 +481,10 @@ def execute_handler(context, *, variant: str | None = None, emit=None):
         await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(emit(event), main))
 
     def handler(frozen, key):
+        if frozen["name"] == "revise_forecast":
+            frozen = revision_operation(frozen, picks)
+            if ran is not None:
+                ran.append(frozen["arguments"]["source_refs"])
         if definitions()[frozen["name"]].level == "reversible":
             extra = {"overrides": {"status": variant}} if frozen["name"] == "save_skill" else {}
             if emit:
@@ -348,10 +528,16 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
 
 
 def _collect(run, prepared: Prepared) -> tuple[dict, str]:
+    if run.question_card:      # the turn's one card is the question
+        return ask.refusal(), "refused:one_card_per_turn"
+    if (prepared.options is not None and run.proposals) or any(p.options is not None for p in run.proposals):
+        return _failure("revision_needs_its_own_card", hint=REVISION_ALONE if prepared.options is not None else AFTER_REVISION), "refused:revision_needs_its_own_card"
     if not any(p.operation == prepared.operation for p in run.proposals):
         if len(run.proposals) >= MAX_PROPOSALS:
             return _refusal("invalid_write_targets"), "refused:invalid_write_targets"
         run.proposals.append(prepared)
+    if prepared.options is not None:
+        return _awaiting(prepared), "proposed"
     return {"ok": True, "data": [{"status": "awaiting_confirmation", "title": prepared.display["title"], "note": AWAITING_NOTE}]}, "proposed"
 
 
@@ -386,10 +572,16 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
     if scope is not None and name not in scope:
         return _refusal("tool_not_in_bot_scope"), "refused:tool_not_in_bot_scope"
     if "arguments" not in args:
-        return {"ok": True, "data": [describe(name)]}, "lookup"
+        info = describe(name)
+        if name == "ingest_web_source":       # a later turn does not show the model the URLs an earlier search returned
+            info["pages"] = _savable_pages(run)
+            if info["pages"]:                 # page titles are text from outside: from here on nothing in this turn runs at once
+                run.read_results = getattr(run, "read_results", 0) + 1
+        return {"ok": True, "data": [info]}, "lookup"
     prepared = await prepare(run, name, args["arguments"])
     if isinstance(prepared, dict):
-        return prepared, f"refused:{prepared.get('error_code') or 'refused'}"
+        status = ((prepared.get("data") or [{}])[0] or {}).get("status")
+        return prepared, "proposed" if status == "awaiting_selection" else f"refused:{prepared.get('error_code') or status or 'refused'}"
     # Tier 1 runs at once only while nothing but the owner's own words has been seen this turn: once a read has come back, a
     # page or filing could be asking the model to remember something, so the operation goes onto the card like tier 2.
     if prepared.tier == 1 and not run.read_results:
