@@ -22,7 +22,7 @@ from .. import agent_skills
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
-from . import act, ask, press, progress, prompt, skills, tiers
+from . import act, ask, decide, press, progress, prompt, skills, tiers
 from .toolrun import mark_timeline, run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
@@ -90,6 +90,7 @@ class _Run:
     writes: list = field(default_factory=list)       # one audit line per act call
     read_results: int = 0            # read or calculation results received this turn: after the first, tier 1 goes onto the card
     question_card: dict | None = None    # the card of this turn's ``ask``, given to the user when the turn ends
+    wake: decide.WakeState | None = None  # a wake turn (``run_wake``): what it has decided; None for every other turn
     pending: dict | None = None      # the card minted this turn
     carried: dict | None = None      # the conversation's own card, still waiting after this turn
     sent_text: bool = False
@@ -111,6 +112,17 @@ def _tool_schemas(context) -> list[dict]:
     offered = [*(s for s in available if scope is None or s["function"]["name"] in scope), *([act.ACT_SCHEMA] if owner else []),
                ask.ASK_SCHEMA, *([skills.USE_SKILL_SCHEMA] if owner and getattr(context, "skill_block", None) else []),
                progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]
+    return [progress.with_say(s) for s in offered]
+
+
+def _wake_schemas(context) -> list[dict]:
+    """A wake turn's tools: the reads an owner's turn has (no ``search_x``: it costs per post and an unattended run does not
+    spend it), ``decide``, and the kernel's ``plan`` / ``escalate``.  No ``act``, no ``ask``, no ``use_skill``."""
+    owner = owner_credential_matches(getattr(context, "identity_credential", ""))
+    available = schemas(owner=owner, names=[n for n in READ_TOOLS if n != "search_x"])
+    scope = getattr(context, "tool_scope", None)
+    offered = [*(s for s in available if scope is None or s["function"]["name"] in scope),
+               decide.DECIDE_SCHEMA, progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]
     return [progress.with_say(s) for s in offered]
 
 
@@ -262,6 +274,14 @@ def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None
             "result_sets": [*run.carried_sets, *run.new_sets][-MAX_SETS:], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
 
 
+def _decided(run: _Run) -> dict:
+    """A wake turn that has called ``decide``: its answer is the decision in words; the decision itself is on the audit."""
+    chosen = run.wake.decision
+    run.audit["decision"] = dict(chosen)
+    text = f"{chosen['decision']}：{chosen['reason']}" + (f"\n\n{chosen['message']}" if chosen["message"] else "")
+    return _result(run, text, "decided")
+
+
 def _card_display(proposals: list) -> dict:
     """One card for everything proposed this turn: the old engine's way of merging several proposals."""
     if len(proposals) == 1:
@@ -347,6 +367,8 @@ async def _loop(run: _Run) -> dict:
             return await _finish(run, message, None, may_ask_again=True)
         run.messages.append(message)
         await _tool_step(run, message)
+        if run.wake is not None and run.wake.decision is not None:     # the first valid ``decide`` ends a wake turn: no more model calls
+            return _decided(run)
     run.messages.append({"role": "system", "content": CAP_NOTE})
     final = await _model_step(run, run.schemas)
     return await _finish(run, final, stop, may_ask_again=False)
@@ -441,3 +463,15 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
             await run.emit({"event": "delta", "text": settled.note})
             result["answer"] += settled.note
         return result
+
+
+async def run_wake(context, emit, messages: list[dict], *, turn_id: str) -> dict:
+    """One wake turn (``wake.wake``): the same append-only loop with the restricted tools and no history; it ends at the first valid
+    ``decide`` (``audit["decision"]``), or at an answer without one.  Nothing is streamed to anyone: ``emit`` is the caller's recorder."""
+    tool_schemas = _wake_schemas(context)
+    run = _Run(context=context, emit=emit, messages=messages, user_text="", schemas=tool_schemas,
+               tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
+               model=ModelUse(context.provider, context.model, context.api_key, context.base_url, getattr(context, "catalog_name", None)),
+               ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)), turn_id=turn_id, wake=decide.WakeState())
+    async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):
+        return await _loop(run)

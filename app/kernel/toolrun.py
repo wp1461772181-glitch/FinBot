@@ -19,7 +19,7 @@ from ..agent_progress import mark_progress, progress_watchdog
 from ..agent_tool_catalog import definitions, validate
 from ..agent_workflow import tools
 from ..agent_workflow.evidence import number_rows
-from . import act, ask, progress, skills, tiers
+from . import act, ask, decide, progress, skills, tiers
 
 MAX_PARALLEL = 4
 MAX_TIMELINE = 500     # entries of ``audit["timeline"]`` kept per turn
@@ -204,6 +204,8 @@ def _settle_serial(run, item: _Call) -> None:
         item.result = progress.settle_plan(run, item.args)
     elif item.name == ask.ASK:
         item.result = ask.settle(run, item.args)
+    elif item.name == decide.DECIDE:
+        item.result = decide.settle(run, item.args)
     else:
         item.result = _calculate(run, item.name, item.args)
 
@@ -276,6 +278,13 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     for item in items:
         if item.args is None:
             item.result = tools.error("invalid_arguments")
+        elif getattr(run, "wake", None) is not None and item.name in (act.ACT, ask.ASK):
+            item.result = tools.error("tool_not_in_bot_scope")      # a wake turn changes nothing and asks nobody
+        elif item.name == decide.DECIDE:
+            if item.name in run.tool_names:
+                own.append(item)      # offered to a wake turn only
+            else:
+                item.result = tools.error("tool_not_in_bot_scope")
         elif item.name in (tiers.ESCALATE, progress.PLAN):
             own.append(item)          # the kernel's own tools: never go through tools.invoke, make no citation
         elif item.name == ask.ASK:
