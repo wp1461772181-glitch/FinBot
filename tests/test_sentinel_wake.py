@@ -67,6 +67,7 @@ def posted(monkeypatch):
 def test_a_price_alert_is_posted_with_what_the_sentinel_knows(tmp_path, posted):
     s, _, _ = make(tmp_path)
     s._raise(SNAP, price_alert())
+    s.resend_events()
     assert len(posted) == 1 and posted[0][0] == "alert_posted"
     p = posted[0][1]
     assert p == {"alert_id": 1, "symbol": "AAPL", "kind": "daily", "text": "【盘中异动】AAPL 跌 4.4%", "created_at": DAY,
@@ -81,6 +82,7 @@ def test_a_plan_crossing_is_posted_without_the_price_move_fields(tmp_path, poste
     s._raise(SNAP, {"symbol": "AAPL", "kind": "plan_stop", "direction": "down", "held": True, "text": "AAPL 跌破止损 300",
                     "escalate": True, "weight_pct": None, "price_move": False, "trigger": "", "event_date": None,
                     "price": 299.0, "earnings_unacked": False, "after_send": lambda d, a: None})
+    s.resend_events()
     p = posted[0][1]
     assert p["kind"] == "plan_stop" and p["price"] == 299.0 and p["held"] is True
     for missing in ("weight_pct", "prev_close", "move_pct", "trigger", "event_date", "members"):
@@ -91,6 +93,7 @@ def test_a_merged_alert_is_posted_once_with_its_members(tmp_path, posted):
     s, _, _ = make(tmp_path)
     s._raise_merged(SNAP, [price_alert("A"), price_alert("B", held=False, escalate=False, weight_pct=None),
                            price_alert("C", weight_pct=3.0)])
+    s.resend_events()
     assert len(posted) == 1
     p = posted[0][1]
     assert p["kind"] == "merged" and p["members"] == ["A", "B", "C"] and p["held"] is True and p["escalate"] is True
@@ -102,6 +105,7 @@ def test_a_held_night_alert_is_posted_as_deferred(tmp_path, posted):
     s, notifier, _ = make(tmp_path, NIGHT)
     s._raise(SNAP, price_alert(weight_pct=4.0))               # a small holding: waits for the morning digest
     assert notifier.calls == []
+    s.resend_events()
     p = posted[0][1]
     assert p["deferred"] is True and p["alert_id"] == 1 and p["created_at"] == NIGHT
 
@@ -113,31 +117,60 @@ def test_an_update_of_a_pending_night_line_posts_again_with_the_same_alert_id(tm
         "AAPL", "2026-11-03", pending_alert_id=alert_id))
     s._raise(SNAP, pending)
     s._raise(SNAP, pending | {"text": "【盘中异动】AAPL 又跌"})
+    s.resend_events()
     assert [p["alert_id"] for _, p in posted] == [1, 1]       # the API judges an alert id once (a later stage may re-judge updates)
     assert posted[1][1]["text"] == "【盘中异动】AAPL 又跌"
 
 
-def test_api_down_queues_the_event_and_the_retry_resends_it(tmp_path, monkeypatch):
+def test_api_down_queues_the_event_and_the_drain_resends_it_once(tmp_path, monkeypatch):
     s, _, _ = make(tmp_path)
 
     def down(base, t, p):
         raise OSError("api down")
     monkeypatch.setattr(signals, "post_event", down)
     s._raise(SNAP, price_alert())
+    s.resend_events()                                          # still down: kept, not lost
     queued = s.store.pending()
     assert [e["type"] for e in queued] == ["alert_posted"] and queued[0]["payload"]["alert_id"] == 1
     sent = []
     monkeypatch.setattr(signals, "post_event", lambda base, t, p: sent.append((t, p)))
     s.resend_events()
+    s.resend_events()
     assert [t for t, _ in sent] == ["alert_posted"] and sent[0][1]["alert_id"] == 1 and s.store.pending() == []
 
 
-def test_even_a_failing_queue_never_breaks_the_alert(tmp_path, monkeypatch):
+def test_a_failing_queue_never_breaks_the_alert(tmp_path, monkeypatch):
     s, notifier, _ = make(tmp_path)
-    monkeypatch.setattr(signals, "post_event", lambda *a: (_ for _ in ()).throw(OSError("down")))
     monkeypatch.setattr(s.store, "enqueue", lambda *a: (_ for _ in ()).throw(RuntimeError("disk full")))
     s._raise(SNAP, price_alert())                             # must not raise
     assert [c[0] for c in notifier.calls][:1] == ["telegram_alert"]
+
+
+def test_with_the_api_unreachable_three_alerts_go_out_with_no_added_delay(tmp_path, monkeypatch):
+    """The alert path never makes an HTTP call: a post_event that would hang for 15 s is not even touched."""
+    s, notifier, _ = make(tmp_path)
+    clock, calls = [0.0], []
+
+    def hanging(base, t, p):
+        calls.append(t)
+        clock[0] += 15.0                                       # what an unreachable API costs per attempt
+        raise OSError("unreachable")
+    monkeypatch.setattr(signals, "post_event", hanging)
+    for symbol in ("A", "B", "C"):
+        s._raise(SNAP, price_alert(symbol))
+    assert clock[0] == 0.0 and calls == []
+    assert [c[0] for c in notifier.calls if c[0] == "telegram_alert"] == ["telegram_alert"] * 3
+    assert len(s.store.pending()) == 3
+    sent = []
+    monkeypatch.setattr(signals, "post_event", lambda base, t, p: sent.append(p["symbol"]))
+    s.resend_events()
+    s.resend_events()
+    assert sent == ["A", "B", "C"] and s.store.pending() == []
+
+
+def test_the_events_job_runs_at_least_every_30_seconds():
+    from sentinel.main import FAST_JOBS, INTERVAL
+    assert min(INTERVAL, FAST_JOBS.get("events", INTERVAL)) <= 30.0
 
 
 def _drive(s, clock):
@@ -150,17 +183,14 @@ def _drive(s, clock):
     s.escalator.tick(SNAP)
 
 
-def test_the_sentinels_own_sends_are_identical_with_and_without_the_posting(tmp_path, monkeypatch):
-    sent = []
-    monkeypatch.setattr(signals, "post_event", lambda base, t, p: sent.append((t, p)))
+def test_the_sentinels_own_sends_are_identical_with_and_without_the_posting(tmp_path):
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     with_post, n1, c1 = make(tmp_path / "a")
     without, n2, c2 = make(tmp_path / "b", post=False)
     _drive(with_post, c1)
-    posted_count = len(sent)
     _drive(without, c2)
-    assert posted_count == 5 and len(sent) == 5               # only the first run posted
+    assert len(with_post.store.pending()) == 5 and without.store.pending() == []
     assert n1.calls == n2.calls and len(n1.calls) > 3
     assert [(a["text"], a["deferred"], a["escalate"]) for a in with_post.store.alerts_where("1=1")] == \
            [(a["text"], a["deferred"], a["escalate"]) for a in without.store.alerts_where("1=1")]

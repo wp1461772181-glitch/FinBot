@@ -21,7 +21,7 @@ from .store import Store
 logger = logging.getLogger("sentinel")
 
 INTERVAL = 60.0
-FAST_JOBS = {"escalation": 15.0, "filings": 30.0}  # the one-minute rule needs a finer tick than the other jobs
+FAST_JOBS = {"escalation": 15.0, "filings": 30.0, "events": 30.0}  # the one-minute rule needs a finer tick than the other jobs
 FAILURES_BEFORE_ALERT = 3
 BASELINE_MAX_AGE = 20 * 3600      # rebuilt about once a day
 MERGE_WINDOW = 5 * 60            # 3 symbols pushing within this window make a burst
@@ -291,15 +291,15 @@ class Sentinel:
         self._announce(alert_id, merged)
 
     def _announce(self, alert_id: int, alert: dict) -> None:
-        """Tell the API about an alert that is already stored and sent, so the agent can judge it (`alert_posted`).
+        """Tell the API about an alert that is already stored and sent (`alert_posted`) so the agent can judge it.
 
-        Never delays or breaks the alert: any failure ends in the retry queue, and if even that fails it is only logged.
-        An update of a pending night line posts again under the same alert id; the API judges an id once (a later
-        stage may re-judge updates)."""
+        Only queues the event: no HTTP in the alert path, so a down or slow API can never delay an alert.  The events
+        job (every 30 s, its own thread) delivers it and keeps it until the API accepts.  An update of a pending
+        night line queues again under the same alert id; the API judges an id once (a later stage may re-judge)."""
         try:
-            self.post_event("alert_posted", self.alert_payload(alert_id, alert))
+            self.store.enqueue("alert_posted", self.alert_payload(alert_id, alert))
         except Exception as exc:
-            logger.warning("alert_posted for alert %s not sent or queued: %s", alert_id, type(exc).__name__)
+            logger.warning("alert_posted for alert %s not queued: %s", alert_id, type(exc).__name__)
 
     def alert_payload(self, alert_id: int, alert: dict) -> dict:
         """What the sentinel knows about an alert; fields it does not have are left out, never invented."""
