@@ -230,7 +230,7 @@ export function usageQuery({ from, to, group }) {
 }
 
 const PRICE_NAMES = { input: "输入价", output: "输出价", cache_read: "缓存读取价", cache_write: "缓存写入价" };
-const PURPOSES = { chat: "对话", summary: "摘要", profile: "画像", judge: "核查", forecast: "预测", earnings: "财报", material_analysis: "材料分析", news: "新闻", routine: "例行任务",
+const PURPOSES = { chat: "对话", summary: "摘要", profile: "画像", judge: "核查", forecast: "预测", earnings: "财报", material_analysis: "材料分析", news: "新闻", routine: "例行任务", duty: "值班",
   query_expansion: "查询扩展", localization: "翻译", knowledge: "知识库", other: "其他" };
 
 /** The name of a group: a purpose in words; a day, a model and a bot as the API labels them. */
@@ -319,5 +319,60 @@ export function deliveryRow(item, timeZone, w = ZH_WORDS) {
     status: deliveryStatus(item),
     acked: item?.acked_at ? formatTime(item.acked_at, timeZone) : item?.status === "sent" ? w.t("未确认") : DASH,
     text: text(item?.text),
+  };
+}
+
+// ---- 值班 ----------------------------------------------------------------------------------------------------------
+
+const DUTY_DECISIONS = {
+  tell_now: { label: "告诉你", kind: "action" },
+  digest: { label: "攒进简报", kind: "neutral" },
+  record: { label: "只记下", kind: "neutral" },
+  ignore: { label: "不理会", kind: "neutral" },
+};
+const DUTY_OUTCOMES = {
+  failed: { label: "失败", kind: "failure" },
+  no_decision: { label: "没有决定", kind: "neutral" },
+  dropped: { label: "丢弃", kind: "neutral" },
+  skipped_off: { label: "已关闭", kind: "neutral" },
+};
+const DUTY_MODES = { shadow: "只观察", on: "已开启", off: "已关闭" };
+const DUTY_MODE_LINES = {
+  shadow: "现在只观察：它会判断，但不会发消息给你。",
+  on: "已开启：『告诉你』的会按你的通道设置发出。",
+  off: "已关闭",
+};
+
+/** What the agent did with an alert: its decision when it made one, else how the wake-up ended. */
+export function dutyDecision(item) {
+  return DUTY_DECISIONS[item?.decision] ?? DUTY_OUTCOMES[item?.outcome] ?? { label: text(item?.outcome) || DASH, kind: "neutral" };
+}
+
+/** Whether a 「告诉你」 message went out: only said in mode 开启 (a mode that only observes sends nothing, and says so by its tag). */
+export function dutyDelivery(item) {
+  if (item?.decision !== "tell_now" || !item?.delivery) return "";
+  if (item.delivery === "queued") return "已发出";
+  if (item.delivery === "capped") return "超过今天的上限，没发";
+  return "发送失败";
+}
+
+/** The sentence at the top of the tab: the mode now, in plain words (an unknown mode says nothing rather than guess). */
+export function dutyModeLine(mode) {
+  return DUTY_MODE_LINES[mode] ?? "";
+}
+
+/** One line of the duty table.  `open` is the id the drawer takes (null when the turn left no record). */
+export function dutyRow(item, timeZone, w = ZH_WORDS) {
+  return {
+    id: String(item?.id ?? ""),
+    time: formatTime(item?.created_at, timeZone),
+    symbol: text(item?.symbol) || DASH,
+    what: text(item?.what) || DASH,
+    decision: dutyDecision(item ?? {}),
+    reason: text(item?.reason),
+    message: text(item?.message),
+    delivery: dutyDelivery(item),
+    mode: DUTY_MODES[item?.mode] ? w.t(DUTY_MODES[item.mode]) : DASH,
+    open: typeof item?.message_id === "string" && item.message_id ? item.message_id : null,
   };
 }

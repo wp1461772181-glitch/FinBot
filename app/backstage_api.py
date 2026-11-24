@@ -30,7 +30,7 @@ from .agent_chat_models import AgentBot, AgentConversation, AgentConversationTit
 from .agent_chat_store import owner_hash as hash_of
 from .agent_workflow.models import AgentConsent
 from .database import SessionLocal
-from .duty_log import DUTY_TITLE
+from .duty_log import DECISIONS, DUTY_TITLE, OUTCOMES, DutyLog
 from .model_usage import missing_price
 
 
@@ -768,3 +768,61 @@ def deliveries(x_chat_session: str | None = Header(default=None), limit: int = Q
     more, rows = len(rows) > limit, rows[:limit]
     next_before = _cursor(datetime.fromisoformat(rows[-1]["created_at"]), rows[-1]["id"]) if more else None
     return {"items": rows, "next_before": next_before}
+
+
+# --- duty ----------------------------------------------------------------------------------------------------------
+
+def _duty_cursor(created_at, identity) -> str:
+    return f"{(created_at.astimezone(UTC) - _EPOCH) // timedelta(microseconds=1)}.{identity}"
+
+
+def _parse_duty_cursor(value):
+    if not value:
+        return None
+    try:
+        micros, identity = value.split(".", 1)
+        return _EPOCH + timedelta(microseconds=int(micros)), int(identity)
+    except (ValueError, OverflowError):
+        raise HTTPException(400, "invalid_before") from None
+
+
+def _duty_item(row, opens) -> dict:
+    event = _dict(row.event)
+    text = event.get("text") if isinstance(event.get("text"), str) else ""
+    return {"id": row.id, "created_at": _iso(row.created_at), "alert_id": row.alert_id, "symbol": scrub(event.get("symbol")) if isinstance(event.get("symbol"), str) else None,
+            "kind": scrub(event.get("kind")) if isinstance(event.get("kind"), str) else None, "what": scrub(text.strip().split("\n", 1)[0]) if text.strip() else "",
+            "mode": row.mode, "outcome": row.outcome, "decision": row.decision, "reason": scrub(row.reason), "message": scrub(row.message), "delivery": row.delivery,
+            "turn_id": str(row.turn_id) if row.turn_id else None, "message_id": opens.get(row.turn_id), "ms": row.ms, "model_calls": row.model_calls}
+
+
+@router.get("/duty")
+def duty(x_chat_session: str | None = Header(default=None), decision: str | None = None, outcome: str | None = None,
+         before: str | None = None, limit: int = Query(default=50, ge=1, le=MAX_LIMIT)):
+    """Each time an alert woke the agent (``duty_log``), newest first: what the alert said, what it decided and why, the message when it
+    told you, whether that went out.  ``mode`` is what ``FINBOT_DUTY_MODE`` says now.  ``message_id`` opens the wake turn in ``/answers/{id}``."""
+    from .kernel import wake
+    owner = _owner(x_chat_session)
+    if (decision is not None and decision not in DECISIONS) or (outcome is not None and outcome not in OUTCOMES):
+        raise HTTPException(400, "invalid_filter")
+    cursor = _parse_duty_cursor(before)
+    D = DutyLog
+    query = select(D).where(D.owner_hash == owner)
+    if decision:
+        query = query.where(D.decision == decision)
+    if outcome:
+        query = query.where(D.outcome == outcome)
+    if cursor:
+        query = query.where(tuple_(D.created_at, D.id) < tuple_(cursor[0], cursor[1]))
+    with SessionLocal() as db:
+        rows = list(db.scalars(query.order_by(D.created_at.desc(), D.id.desc()).limit(limit + 1)))
+        more, rows = len(rows) > limit, rows[:limit]
+        turns = [row.turn_id for row in rows if row.turn_id]
+        opens = {}
+        if turns:
+            for turn_id, message_id in db.execute(select(AgentMessage.turn_id, AgentMessage.id).join(AgentConversation, AgentConversation.id == AgentMessage.conversation_id)
+                                                  .where(AgentMessage.turn_id.in_(turns), AgentMessage.role == "user", AgentConversation.owner_hash == owner)
+                                                  .order_by(AgentMessage.sequence.desc())):
+                opens[turn_id] = str(message_id)             # the earliest question of the turn wins (the order above is reversed)
+        items = [_duty_item(row, opens) for row in rows]
+        next_before = _duty_cursor(rows[-1].created_at, rows[-1].id) if more else None
+    return {"mode": wake.mode(), "items": items, "next_before": next_before}

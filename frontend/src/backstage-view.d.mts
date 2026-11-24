@@ -11,6 +11,7 @@ export type UsageRow = { key: string; label: string; calls: string; failed: stri
 export type OperationRow = { id: string; time: string; bot: string; what: string; detail: string; status: BadgeStatus; decided_at: string; result: string };
 export type DeliveryRow = { id: string; time: string; source: string; channel: string; status: BadgeStatus; acked: string; text: string };
 
+export type DutyRow = { id: string; time: string; symbol: string; what: string; decision: BadgeStatus; reason: string; message: string; delivery: string; mode: string; open: string | null };
 export type Words = { t: (phrase: string) => string; colon: string; comma: string; list: string; parens: (value: string) => string };
 export const ZH_WORDS: Readonly<Words>;
 export const ANSWER_FILTER_DEFAULTS: Readonly<AnswerFilters>;
@@ -39,3 +40,7 @@ export function usageTotalsRow(totals: unknown, w?: Words): UsageRow;
 export function operationStatus(item: { status?: unknown; expired?: unknown; decided_at?: unknown }): BadgeStatus;
 export function operationRow(item: unknown, timeZone?: string, w?: Words): OperationRow;
 export function deliveryRow(item: unknown, timeZone?: string, w?: Words): DeliveryRow;
+export function dutyDecision(item: unknown): BadgeStatus;
+export function dutyDelivery(item: unknown): string;
+export function dutyModeLine(mode: unknown): string;
+export function dutyRow(item: unknown, timeZone?: string, w?: Words): DutyRow;
