@@ -20,7 +20,7 @@ from ..agent_progress import mark_progress, progress_watchdog
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
-from . import act, press, progress, prompt, tiers
+from . import act, ask, press, progress, prompt, tiers
 from .toolrun import run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
@@ -83,6 +83,7 @@ class _Run:
     proposals: list = field(default_factory=list)     # tier-2/3 operations collected this turn, put on one card when it ends
     writes: list = field(default_factory=list)       # one audit line per act call
     read_results: int = 0            # read or calculation results received this turn: after the first, tier 1 goes onto the card
+    question_card: dict | None = None    # the card of this turn's ``ask``, given to the user when the turn ends
     pending: dict | None = None      # the card minted this turn
     carried: dict | None = None      # the conversation's own card, still waiting after this turn
     sent_text: bool = False
@@ -101,7 +102,7 @@ def _tool_schemas(context) -> list[dict]:
     scope = getattr(context, "tool_scope", None)
     # The kernel's own tools go last whatever the ceiling is, so the list is the same for the whole turn.
     offered = [*(s for s in available if scope is None or s["function"]["name"] in scope), *([act.ACT_SCHEMA] if owner else []),
-               progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]
+               ask.ASK_SCHEMA, progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]
     return [progress.with_say(s) for s in offered]
 
 
@@ -235,7 +236,7 @@ async def _tool_step(run: _Run, message: dict) -> None:
 
 def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None = None) -> dict:
     status = "failed" if failure else "waiting_for_input" if run.pending or run.carried else "succeeded"
-    if run.pending:
+    if run.pending and not run.question_card:
         run.audit.setdefault("write_outcome", "proposed")     # a press's own outcome (executed, failed) stays the turn's word
     run.audit["stop_reason"] = stop_reason
     run.audit["tier"] = run.tier
@@ -305,6 +306,8 @@ async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_aga
             await run.emit({"event": "answer_reset"})
         await run.emit({"event": "delta", "text": cleaned})
     failed_card = await _mint_card(run)
+    if run.question_card:
+        run.pending = run.question_card
     if failed_card:
         cleaned = f"{cleaned}\n\n{failed_card}"
         await run.emit({"event": "delta", "text": f"\n\n{failed_card}"})
@@ -354,6 +357,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
     state = state or {}
     history = list(messages or [])[1:]   # the first message is the endpoint's own system prompt
     pressed = press.read(question, state)
+    raw = question      # a card button's value, which never reaches the model
     tool_schemas = _tool_schemas(context)
     run = _Run(context=context, emit=emit, messages=[], user_text="", schemas=tool_schemas,
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
@@ -364,15 +368,21 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
         fact = None
         if pressed:
             settled = await press.settle(run, pressed, state)
-            run.audit["write_outcome"] = settled.outcome
+            if settled.reply is None:      # an answer to a question is not a write: it leaves no write outcome
+                run.audit["write_outcome"] = settled.outcome
             if settled.answer is not None:
                 return await _answer_press(run, settled, state)
-            run.audit["write_request_id"] = pressed.request_id
-            fact = settled.fact
-            run.read_results = 1     # execution results are in front of the model: nothing it asks for now runs at once
-            # From here on the user's words are the card's original question, never the button's value.
-            run.question = (state.get("pending_request") or {}).get("original_question") or ""
-            history = [m for m in history if not (m.get("role") == "user" and m.get("content") == question)]
+            if settled.reply is not None:
+                # An ordinary turn whose question is the option's text; nothing has been read yet.
+                question = run.question = settled.reply
+            else:
+                run.audit["write_request_id"] = pressed.request_id
+                fact = settled.fact
+                run.read_results = 1     # execution results are in front of the model: nothing it asks for now runs at once
+                # From here on the user's words are the card's original question, never the button's value.
+                run.question = (state.get("pending_request") or {}).get("original_question") or ""
+            # The button's raw value is not the user's message, whichever card it was on.
+            history = [m for m in history if not (m.get("role") == "user" and m.get("content") == raw)]
         run.messages = prompt.build_messages(question, context, history, fact=fact)
         run.user_text = _user_text(run.question, history)
         note = None if pressed else press.typed_note(state)

@@ -187,7 +187,7 @@ def test_tools_are_fixed_and_scoped(env):
     scope = frozenset({"query_financials", "web_research"})
     fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
     run(context=make_context(tool_scope=scope))
-    assert [set(c["tools"]) for c in fake.calls] == [set(scope) | {"act", "plan", "escalate"}] * 2
+    assert [set(c["tools"]) for c in fake.calls] == [set(scope) | {"act", "ask", "plan", "escalate"}] * 2
     env.monkeypatch.setattr(loop, "owner_credential_matches", lambda value: False)
     fake = script(env, [step(text="好")])
     run()
@@ -200,7 +200,7 @@ def test_no_write_tool_is_ever_offered_except_act(env):
         env.monkeypatch.setattr(loop, "owner_credential_matches", lambda value, owner=owner: owner)
         fake = script(env, [step(text="好")])
         run()
-        assert set(fake.calls[0]["tools"]) <= set(loop.READ_TOOLS) | {"act", "plan", "escalate"}
+        assert set(fake.calls[0]["tools"]) <= set(loop.READ_TOOLS) | {"act", "ask", "plan", "escalate"}
         assert ("act" in fake.calls[0]["tools"]) is owner
 
 
@@ -556,14 +556,14 @@ def tool_results(fake):
     return [json.loads(m["content"]) for c in fake.calls[-1:] for m in c["messages"] if m["role"] == "tool"]
 
 
-def test_tool_order_is_reads_act_plan_escalate_and_stable(env):
+def test_tool_order_is_reads_act_ask_plan_escalate_and_stable(env):
     fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
     run(context=ctx())
     names = fake.calls[0]["tools"]
     from app.agent_tool_catalog import schemas
     from app import x_search
     offered = [n for n in loop.READ_TOOLS if n != "search_x" or x_search.configured()]     # offered only where a token is set (tests/test_x_search.py)
-    assert names == [s["function"]["name"] for s in schemas(owner=True, names=offered)] + ["act", "plan", "escalate"]
+    assert names == [s["function"]["name"] for s in schemas(owner=True, names=offered)] + ["act", "ask", "plan", "escalate"]
     assert fake.calls[0]["tools"] == fake.calls[1]["tools"]
     schema = {s["function"]["name"]: s for s in loop._tool_schemas(ctx())}["act"]["function"]
     assert list(schema["parameters"]["properties"])[:2] == ["say", "item"] and "operation" in schema["parameters"]["properties"]

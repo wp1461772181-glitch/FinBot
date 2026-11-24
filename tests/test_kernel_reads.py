@@ -80,7 +80,7 @@ def test_every_new_read_is_in_read_tools_in_catalogue_order():
 def test_owner_is_offered_all_new_reads_before_the_kernels_own_tools(monkeypatch):
     names = offered(True, monkeypatch)
     assert all(n in names for n in NEW_READS)
-    assert names[-3:] == ["act", "plan", "escalate"] and all(names.index(n) < names.index("act") for n in NEW_READS)
+    assert names[-4:] == ["act", "ask", "plan", "escalate"] and all(names.index(n) < names.index("act") for n in NEW_READS)
     order = [s["function"]["name"] for s in schemas(owner=True)]
     assert [n for n in names if n in NEW_READS] == [n for n in order if n in NEW_READS]
 

@@ -19,6 +19,7 @@ from .. import agent_tasks, portfolio
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_tool_catalog import definitions, validate
 from ..agent_workflow import consent, direct, sec_sources, tools
+from . import ask
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +349,8 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
 
 
 def _collect(run, prepared: Prepared) -> tuple[dict, str]:
+    if run.question_card:      # the turn's one card is the question
+        return ask.refusal(), "refused:one_card_per_turn"
     if not any(p.operation == prepared.operation for p in run.proposals):
         if len(run.proposals) >= MAX_PROPOSALS:
             return _refusal("invalid_write_targets"), "refused:invalid_write_targets"

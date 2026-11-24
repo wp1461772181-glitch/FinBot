@@ -14,9 +14,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from ..agent_workflow import consent, direct
+from ..agent_workflow.fp_flags import flag
 from . import act
 
 WRITE_CARD = "write_confirmation"
+QUESTION_CARD = "missing_information"
 UNSUPPORTED = "这张卡片现在处理不了，请换用其他 bot。"
 CANCELLED = "已取消，没有执行任何操作。"
 CANCELLING = "已请求停止后续操作；当前已经开始的操作可能仍在完成。"
@@ -41,10 +43,11 @@ TYPED_NOTE = ("系统事实：你上一轮提出的操作已经放在一张确�
 
 @dataclass(frozen=True)
 class Press:
-    kind: str                # "confirm" | "cancel"
+    kind: str                # "confirm" | "cancel" | "reply" (an option of a question card)
     request_id: str
     token: str | None
     variant: str | None
+    reply: str | None = None     # with "reply": the option's text, the user's answer
 
 
 @dataclass
@@ -54,6 +57,7 @@ class Settled:
     status: str              # "succeeded", or "waiting_for_input" when the conversation's own card is still the pending one
     outcome: str             # "executed" | "cancelled" | "stale_card" | "refused:<code>" | "failed"
     report: str | None = None    # with a fact: the code-written sentence that tells the user the result if the model cannot
+    reply: str | None = None     # a pressed option of a question card: the turn goes on as an ordinary turn whose question is this text
 
 
 def card_title(card: dict) -> str:
@@ -125,6 +129,8 @@ def read(question: str, state: dict) -> Press | None:
         if ticked and waiting is not None and ticked not in (waiting.get("variants") or []):
             raise ValueError("confirmation_parameter_mismatch")
         return Press("confirm", request_id, token, ticked if ticked and waiting is not None else None)
+    if kind == "reply" and rest.strip() and waiting is not None and waiting.get("reason") == QUESTION_CARD:
+        return Press("reply", request_id, None, None, rest)
     if waiting is not None and waiting.get("reason") == WRITE_CARD:
         raise ValueError("confirmation_required")
     return Press("confirm", request_id, None, None)      # a button of a card this kernel does not own: settle refuses it
@@ -172,11 +178,22 @@ async def _pressed_another_card(run, press: Press, pending) -> Settled:
     return Settled(STALE, None, waiting, "stale_card")
 
 
+def _answered(run, press: Press, card: dict) -> Settled:
+    """An option pressed on a question card: the words are the user's answer.  An expired card still takes it (as the old engine does)."""
+    if expired(card):
+        if not flag("FINBOT_FP4_EXPIRED_CARD_REPLY", True):
+            raise ValueError("pending_request_expired")
+        run.audit["pending_request_expired_reply"] = True
+    return Settled(None, None, "succeeded", "replied", reply=press.reply)
+
+
 async def settle(run, press: Press, state: dict) -> Settled:
     context = run.context
     pending = state.get("pending_request") if isinstance(state.get("pending_request"), dict) else None
     if not pending or pending.get("id") != press.request_id:
         return await _pressed_another_card(run, press, pending)
+    if press.kind == "reply":
+        return _answered(run, press, pending)
     if pending.get("reason") != WRITE_CARD:
         return Settled(UNSUPPORTED, None, "waiting_for_input", "refused:unsupported_card")
     try:
