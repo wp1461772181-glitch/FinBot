@@ -26,10 +26,11 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 
 from . import channels
-from .agent_chat_models import AgentBot, AgentConversation, AgentMessage, ModelCall
+from .agent_chat_models import AgentBot, AgentConversation, AgentConversationTitle, AgentMessage, ModelCall
 from .agent_chat_store import owner_hash as hash_of
 from .agent_workflow.models import AgentConsent
 from .database import SessionLocal
+from .duty_log import DUTY_TITLE
 from .model_usage import missing_price
 
 
@@ -288,7 +289,7 @@ def cost_state(*, calls, ok_chat, expected, unpriced, ended_at, now, incomplete=
     return "unpriced" if unpriced else "priced"
 
 
-def _list_item(asked, final, bot_id, ledger, bots, now) -> dict:
+def _list_item(asked, final, bot_id, ledger, bots, now, source="chat") -> dict:
     """One turn: ``asked`` is its user row, ``final`` its last assistant row (None when there is none).  A tool round is not an answer:
     a turn that stopped at one (or never got one) is ``incomplete`` and its item carries the question's id."""
     incomplete = final is None or is_tool_round(final)
@@ -314,7 +315,7 @@ def _list_item(asked, final, bot_id, ledger, bots, now) -> dict:
         missing = []
     writes = [_dict(item).get("outcome") for item in _list(audit.get("writes")) if _dict(item).get("outcome")]
     shown = asked if incomplete else final
-    return {"message_id": str(shown.id), "conversation_id": str(asked.conversation_id), "bot_id": str(bot_id) if bot_id else None,
+    return {"message_id": str(shown.id), "conversation_id": str(asked.conversation_id), "source": source, "bot_id": str(bot_id) if bot_id else None,
             "bot_name": bots.get(str(bot_id)) if bot_id else None, "created_at": _iso(shown.created_at),
             "question": _question(asked.content)[:PREVIEW_CHARS], "answer": "" if incomplete else scrub(final.content or "")[:PREVIEW_CHARS],
             "engine": None if incomplete else _engine(record),
@@ -328,12 +329,13 @@ def _list_item(asked, final, bot_id, ledger, bots, now) -> dict:
 @router.get("/answers")
 def answers(x_chat_session: str | None = Header(default=None), bot_id: str | None = None,
             engine: str | None = Query(default=None), status: str | None = None, tier: str | None = None, slow: int = 0,
+            source: str | None = Query(default=None),
             q: str | None = Query(default=None, max_length=100), before: str | None = None,
             limit: int = Query(default=50, ge=1, le=MAX_LIMIT)):
     """The owner's turns, newest question first: one item per turn, from its stored rows and the model-call ledger.  A turn with no
     final assistant row (or only tool rounds) is ``incomplete``."""
     owner = _owner(x_chat_session)
-    if engine not in (None, "v1", "v2") or (status is not None and status not in STATUSES):
+    if engine not in (None, "v1", "v2") or (status is not None and status not in STATUSES) or source not in (None, "chat", "duty"):
         raise HTTPException(400, "invalid_filter")
     bot = _uuid_or_400(bot_id, "invalid_bot_id") if bot_id else None
     cursor = _parse_cursor(before)
@@ -341,10 +343,13 @@ def answers(x_chat_session: str | None = Header(default=None), bot_id: str | Non
     later, earlier = aliased(AgentMessage), aliased(AgentMessage)
     last_assistant = (select(later.id).where(later.turn_id == M.turn_id, later.conversation_id == M.conversation_id,
                                              later.role == "assistant").order_by(later.sequence.desc()).limit(1).correlate(M).scalar_subquery())
-    query = (select(M, F, C.bot_id).select_from(M).join(C, C.id == M.conversation_id).outerjoin(F, F.id == last_assistant)
+    # The wake turns (kernel.wake) live in one hidden, archived conversation of the owner's, titled DUTY_TITLE: the list leaves them out unless asked.
+    is_duty = and_(C.archived_at.is_not(None), exists().where(AgentConversationTitle.conversation_id == C.id, AgentConversationTitle.title == DUTY_TITLE))
+    query = (select(M, F, C.bot_id, is_duty).select_from(M).join(C, C.id == M.conversation_id).outerjoin(F, F.id == last_assistant)
              .where(C.owner_hash == owner, M.role == "user",
                     ~exists().where(earlier.turn_id == M.turn_id, earlier.conversation_id == M.conversation_id, earlier.role == "user",
                                     earlier.sequence < M.sequence)))
+    query = query.where(is_duty if source == "duty" else ~is_duty)
     if bot:
         query = query.where(C.bot_id == bot)
     if engine:
@@ -365,7 +370,7 @@ def answers(x_chat_session: str | None = Header(default=None), bot_id: str | Non
         more, rows = len(rows) > limit, rows[:limit]
         ledger = _ledger_by_turn(db, [row[0].turn_id for row in rows])
         bots = _bot_names(db, owner)
-        items = [_list_item(asked, final, bot_of, ledger.get(asked.turn_id), bots, now) for asked, final, bot_of in rows]
+        items = [_list_item(asked, final, bot_of, ledger.get(asked.turn_id), bots, now, "duty" if duty else "chat") for asked, final, bot_of, duty in rows]
         next_before = _cursor(rows[-1][0].created_at, rows[-1][0].id) if more else None
     threshold = None
     if slow:

@@ -16,6 +16,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base, SessionLocal
 
 MODES = ("off", "shadow", "on")
+DUTY_TITLE = "盯盘唤醒"        # the title of the owner's hidden conversation that keeps the wake turns
+DELIVERIES = ("queued", "capped")
 OUTCOMES = ("decided", "failed", "no_decision", "dropped", "skipped_off")
 DECISIONS = ("tell_now", "digest", "record", "ignore")
 REASON_MAX = 500
@@ -35,6 +37,7 @@ class DutyLog(Base):
     decision: Mapped[str | None] = mapped_column(String(10), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)                  # only for tell_now
+    delivery: Mapped[str | None] = mapped_column(String(32), nullable=True)          # tell_now in mode on: queued | capped | why nothing was queued
     delivery_group: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)     # the outbox group (mode on, tell_now)
     turn_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)            # opens the turn in the backstage; tags the ledger
     ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -44,7 +47,7 @@ class DutyLog(Base):
 def as_dict(row: DutyLog) -> dict:
     return {"id": row.id, "created_at": row.created_at.isoformat() if row.created_at else None, "owner_hash": row.owner_hash,
             "alert_id": row.alert_id, "event": row.event or {}, "mode": row.mode, "outcome": row.outcome, "decision": row.decision,
-            "reason": row.reason, "message": row.message, "delivery_group": str(row.delivery_group) if row.delivery_group else None,
+            "reason": row.reason, "message": row.message, "delivery": row.delivery, "delivery_group": str(row.delivery_group) if row.delivery_group else None,
             "turn_id": str(row.turn_id) if row.turn_id else None, "ms": row.ms, "model_calls": row.model_calls}
 
 
@@ -55,13 +58,13 @@ def get(owner_hash: str, alert_id: int) -> dict | None:
 
 
 def record(owner_hash: str, alert_id: int, *, event: dict, mode: str, outcome: str, decision: str | None = None,
-           reason: str | None = None, message: str | None = None, delivery_group=None, turn_id=None, ms: int = 0,
+           reason: str | None = None, message: str | None = None, delivery: str | None = None, delivery_group=None, turn_id=None, ms: int = 0,
            model_calls: int = 0) -> dict:
     """Write the alert's row and return it.  An alert id that already has a row keeps it: the first judgement stands."""
     if outcome not in OUTCOMES or (decision is not None and decision not in DECISIONS):
         raise ValueError("invalid_duty_row")
     row = DutyLog(owner_hash=owner_hash, alert_id=int(alert_id), event=event, mode=mode if mode in MODES else "shadow", outcome=outcome,
-                  decision=decision, reason=(reason or None) and reason[:REASON_MAX],
+                  decision=decision, delivery=delivery, reason=(reason or None) and reason[:REASON_MAX],
                   message=(message or None) if decision == "tell_now" and message else None,
                   delivery_group=delivery_group, turn_id=turn_id, ms=max(0, int(ms)), model_calls=max(0, int(model_calls)))
     if row.message:

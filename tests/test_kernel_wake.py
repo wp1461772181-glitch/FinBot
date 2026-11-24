@@ -45,7 +45,7 @@ def env(owner, monkeypatch):
         monkeypatch.setattr(module, "owner_credential_matches", lambda value: bool(value))
     monkeypatch.setattr(runner, "owner_credential", lambda: OWNER)
     monkeypatch.setattr(runner, "task_model", lambda owner_hash, name: dict(MODEL))
-    monkeypatch.setenv("FINBOT_WAKE_MODE", "shadow")
+    monkeypatch.setenv("FINBOT_DUTY_MODE", "shadow")
     invoked, tags = [], []
 
     async def fake_invoke(name, args, context, *, emit=None, page_chars=None):
@@ -279,16 +279,16 @@ def test_the_worker_survives_a_wake_that_raises(env):
 # --- the modes --------------------------------------------------------------------------------------------------------------
 
 def test_off_wakes_nothing_and_logs_skipped_off(env):
-    env.monkeypatch.setenv("FINBOT_WAKE_MODE", "off")
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "off")
     fake = script(env, [])
     row = judge()
     assert row["outcome"] == "skipped_off" and row["mode"] == "off" and row["turn_id"] is None and fake.calls == []
 
 
 def test_an_unknown_mode_is_shadow(env):
-    env.monkeypatch.setenv("FINBOT_WAKE_MODE", "loud")
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "loud")
     assert wake.mode() == "shadow"
-    env.monkeypatch.delenv("FINBOT_WAKE_MODE")
+    env.monkeypatch.delenv("FINBOT_DUTY_MODE")
     assert wake.mode() == "shadow"
 
 
@@ -301,7 +301,7 @@ def test_shadow_never_creates_an_outbox_row(env):
 
 @pytest.mark.parametrize("decision", ["digest", "record", "ignore"])
 def test_on_sends_nothing_for_the_other_three(env, decision):
-    env.monkeypatch.setenv("FINBOT_WAKE_MODE", "on")
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
     _bind()
     script(env, [step(calls=[call("d1", "decide", {"decision": decision, "reason": "不发"})])])
     judge()
@@ -309,19 +309,19 @@ def test_on_sends_nothing_for_the_other_three(env, decision):
 
 
 def test_on_sends_exactly_one_message_for_tell_now(env):
-    env.monkeypatch.setenv("FINBOT_WAKE_MODE", "on")
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
     _bind()
     script(env, [step(calls=[call("d1", "decide", TELL)])])
     row = judge()
     (sent,) = outbox()
-    assert row["mode"] == "on" and sent.source == "duty" and sent.status == "pending" and sent.channel == "telegram"
+    assert row["delivery"] == "queued" and row["mode"] == "on" and sent.source == "duty" and sent.status == "pending" and sent.channel == "telegram"
     assert TELL["message"] in sent.text and sent.text.startswith("【")
     assert row["delivery_group"] == str(sent.group_id)
 
 
-def test_on_respects_the_daily_cap_and_says_so(env):
+def test_a_notify_cap_of_zero_does_not_matter_to_duty_messages(env):
     from app import agent_bots as bots
-    env.monkeypatch.setenv("FINBOT_WAKE_MODE", "on")
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
     _bind()
     bot = bots.ensure_default_bot(OWNER_HASH)
     with SessionLocal() as db:
@@ -329,14 +329,14 @@ def test_on_respects_the_daily_cap_and_says_so(env):
         db.commit()
     script(env, [step(calls=[call("d1", "decide", TELL)])])
     row = judge()
-    assert row["decision"] == "tell_now" and row["delivery_group"] is None and "notify_daily_cap" in row["reason"] and outbox() == []
+    assert row["delivery"] == "queued" and len(outbox()) == 1
 
 
 def test_on_without_a_bound_channel_logs_the_decision_and_sends_nothing(env):
-    env.monkeypatch.setenv("FINBOT_WAKE_MODE", "on")
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
     script(env, [step(calls=[call("d1", "decide", TELL)])])
     row = judge()
-    assert row["decision"] == "tell_now" and row["delivery_group"] is None and "telegram_not_bound" in row["reason"] and outbox() == []
+    assert row["decision"] == "tell_now" and row["delivery_group"] is None and row["delivery"] == "telegram_not_bound" and outbox() == []
 
 
 # --- the ledger and the backstage ----------------------------------------------------------------------------------------------
@@ -430,3 +430,110 @@ def test_the_worker_starts_and_stops_with_the_api():
         assert task.done() and wake._STATE["task"] is None
 
     asyncio.run(go())
+
+
+# --- the duty messages' own daily count (fix round 1) ------------------------------------------------------------------------------
+
+def _tell(env, alert_id):
+    script(env, [step(calls=[call("d1", "decide", TELL)])])
+    return judge(event(alert_id))
+
+
+def test_four_duty_messages_hold_back_neither_notify_nor_a_routine_alert(env):
+    from app import agent_bots as bots
+    from app import agent_telegram as tg
+    from datetime import UTC, datetime
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
+    _bind()
+    for alert_id in range(1, 5):
+        assert _tell(env, alert_id)["delivery"] == "queued"
+    bot = bots.ensure_default_bot(OWNER_HASH)
+    with SessionLocal() as db:
+        assert tg.sent_today(db, OWNER_HASH, bot.id, datetime.now(UTC)) == 0       # duty rows are not in the bot's count
+        for source in ("notify", "alert", "notify", "alert", "notify"):          # the whole default cap of 5 is still there
+            tg.enqueue(db, OWNER_HASH, bot.id, "m", source=source)
+        db.commit()
+    assert len(outbox()) == 4
+
+
+def test_a_full_notify_cap_does_not_stop_a_duty_message(env):
+    from app import agent_bots as bots
+    from app import agent_telegram as tg
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
+    _bind()
+    bot = bots.ensure_default_bot(OWNER_HASH)
+    with SessionLocal() as db:
+        for _ in range(bot.daily_notify_cap):
+            tg.enqueue(db, OWNER_HASH, bot.id, "m", source="notify")
+        db.commit()
+    assert _tell(env, 1)["delivery"] == "queued" and len(outbox()) == 1
+
+
+def test_the_eleventh_duty_message_of_a_day_is_capped_and_not_sent(env):
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
+    _bind()
+    for alert_id in range(1, 11):
+        assert _tell(env, alert_id)["delivery"] == "queued"
+    row = _tell(env, 11)
+    assert row["outcome"] == "decided" and row["decision"] == "tell_now" and row["delivery"] == "capped" and row["delivery_group"] is None
+    assert row["message"] == TELL["message"] and len(outbox()) == 10
+
+
+def test_the_duty_cap_is_configurable(env):
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
+    env.monkeypatch.setenv("FINBOT_DUTY_DAILY_CAP", "1")
+    _bind()
+    assert _tell(env, 1)["delivery"] == "queued" and _tell(env, 2)["delivery"] == "capped"
+    env.monkeypatch.setenv("FINBOT_DUTY_DAILY_CAP", "junk")
+    assert wake.daily_cap() == 10
+
+
+def test_the_old_wake_mode_name_is_not_read(env):
+    env.monkeypatch.setenv("FINBOT_WAKE_MODE", "off")
+    assert wake.mode() == "shadow"
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "off")
+    assert wake.mode() == "off"
+
+
+def test_a_huge_alert_id_is_refused():
+    with pytest.raises(ValueError):
+        wake.clean_event({**event(), "alert_id": 2 ** 70})
+
+
+def test_the_turn_is_kept_out_of_the_recall_index_and_the_conversation_must_be_archived(env):
+    from app.agent_recall import TASK_POST_HEAD
+    script(env, [step(calls=[decide()])])
+    row = judge()
+    with SessionLocal() as db:
+        first = db.query(AgentMessage).filter(AgentMessage.turn_id == uuid.UUID(row["turn_id"]), AgentMessage.role == "user").one()
+        assert first.content.startswith(TASK_POST_HEAD)
+
+
+# --- the backstage list (fix round 1) ------------------------------------------------------------------------------------------------
+
+def test_the_answers_list_leaves_wake_turns_out_unless_asked(env):
+    from app import backstage_api
+    from app.agent_chat_models import AgentConversationTitle
+    script(env, [step(calls=[decide()])])
+    wake_row = judge()
+    with SessionLocal() as db:       # one ordinary turn of the owner's
+        chat = AgentConversation(owner_hash=OWNER_HASH)
+        db.add(chat)
+        db.flush()
+        turn = uuid.uuid4()
+        db.add_all([AgentMessage(conversation_id=chat.id, turn_id=turn, sequence=1, role="user", content="你好"),
+                    AgentMessage(conversation_id=chat.id, turn_id=turn, sequence=2, role="assistant", content="你好！",
+                                 tool_calls={"route": "K", "audit": {"terminal_status": "succeeded", "model_calls": 1}})])
+        db.commit()
+    def listed(**kw):
+        base = dict(x_chat_session=OWNER, bot_id=None, engine=None, status=None, tier=None, slow=0, source=None, q=None, before=None, limit=50)
+        return backstage_api.answers(**{**base, **kw})
+    default = listed()
+    assert [i["question"] for i in default["items"]] == ["你好"] and default["items"][0]["source"] == "chat"
+    duty = listed(source="duty")
+    assert len(duty["items"]) == 1 and duty["items"][0]["source"] == "duty" and "盯盘提醒 #1" in duty["items"][0]["question"]
+    assert listed(source="chat")["items"][0]["source"] == "chat"
+    with pytest.raises(Exception):
+        listed(source="other")
+    shown = backstage_api.answer(duty["items"][0]["message_id"], x_chat_session=OWNER)       # the detail still opens it
+    assert shown["turn_id"] == wake_row["turn_id"]

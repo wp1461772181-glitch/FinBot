@@ -6,7 +6,7 @@ loop with read tools, ``plan``/``escalate`` and ``decide`` only (``loop.run_wake
 ends with one of four decisions, a reason and, for ``tell_now``, the kernel's own message.  Every wake-up leaves one ``duty_log``
 row whatever happened.
 
-``FINBOT_WAKE_MODE``: ``off`` (nothing is woken; the alert is logged as ``skipped_off``), ``shadow`` (the default: judged and
+``FINBOT_DUTY_MODE``: ``off`` (nothing is woken; the alert is logged as ``skipped_off``), ``shadow`` (the default: judged and
 logged, nothing is sent), ``on`` (a ``tell_now`` message goes to the owner through the outbox, source ``duty``).
 
 The turn is kept as an ordinary stored turn (a question row, its tool rounds, a final answer row carrying the audit and timeline) in
@@ -35,7 +35,9 @@ MODES = ("off", "shadow", "on")
 DEFAULT_MODE = "shadow"
 QUEUE_MAX = 50
 WALL_SECONDS = 120
-DUTY_TITLE = "盯盘唤醒"
+DUTY_TITLE = duty_log.DUTY_TITLE
+DEFAULT_DAILY_CAP = 10
+MAX_ALERT_ID = 2**62
 TEXT_MAX = 2000
 VALUE_MAX = 300
 RECENT = 10
@@ -43,9 +45,17 @@ RECENT_TEXT = 300
 QUESTION_MAX = 1000
 
 
+def daily_cap() -> int:
+    """How many ``tell_now`` messages one UTC day may send (``FINBOT_DUTY_DAILY_CAP``, default 10): a count of its own, apart from the bot's notify cap."""
+    try:
+        return max(0, int(os.environ.get("FINBOT_DUTY_DAILY_CAP", DEFAULT_DAILY_CAP)))
+    except ValueError:
+        return DEFAULT_DAILY_CAP
+
+
 def mode() -> str:
     """The wake mode now (read on every wake, so a change of the environment needs no restart of the loop)."""
-    value = os.environ.get("FINBOT_WAKE_MODE", DEFAULT_MODE).strip().lower()
+    value = os.environ.get("FINBOT_DUTY_MODE", DEFAULT_MODE).strip().lower()
     return value if value in MODES else DEFAULT_MODE
 
 
@@ -69,7 +79,7 @@ def clean_event(payload) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("invalid_event")
     alert_id, symbol, text = payload.get("alert_id"), payload.get("symbol"), payload.get("text")
-    if isinstance(alert_id, bool) or not isinstance(alert_id, int) or alert_id < 0:
+    if isinstance(alert_id, bool) or not isinstance(alert_id, int) or alert_id < 0 or alert_id > MAX_ALERT_ID:
         raise ValueError("invalid_event")
     if not isinstance(symbol, str) or not symbol.strip() or not isinstance(text, str) or not text.strip():
         raise ValueError("invalid_event")
@@ -112,7 +122,7 @@ def _wake_conversation(owner: str, bot_id) -> str:
     from ..database import SessionLocal
     with SessionLocal() as db:
         found = db.scalar(select(AgentConversation.id).join(AgentConversationTitle, AgentConversationTitle.conversation_id == AgentConversation.id)
-                          .where(AgentConversation.owner_hash == owner, AgentConversationTitle.title == DUTY_TITLE)
+                          .where(AgentConversation.owner_hash == owner, AgentConversationTitle.title == DUTY_TITLE, AgentConversation.archived_at.is_not(None))
                           .order_by(AgentConversation.created_at).limit(1))
         if found is not None:
             return str(found)
@@ -141,7 +151,8 @@ class Recorder:
 
 
 def _question(event: dict) -> str:
-    head = f"盯盘提醒 #{event['alert_id']}"
+    from ..agent_recall import TASK_POST_HEAD       # keeps the alert text out of the past-conversation index, as routine posts are
+    head = f"{TASK_POST_HEAD}盯盘提醒 #{event['alert_id']}"
     return f"{head}（{event.get('kind') or '未分类'}）{event.get('symbol')}：{event['text']}"[:QUESTION_MAX]
 
 
@@ -169,9 +180,11 @@ def _store_turn(owner: str, cid: str, turn_id: str, event: dict, recorder: Recor
 
 # --- delivery (mode on) -----------------------------------------------------------------------------------------------
 
-def _deliver(owner: str, text: str) -> tuple[uuid.UUID | None, str | None]:
-    """Queue the kernel's message for the owner through the outbox (source ``duty``: the owner's channel preference and the bot's daily
-    cap apply).  Returns the outbox group and, when nothing was queued, the code that says why."""
+def _deliver(owner: str, text: str) -> tuple[uuid.UUID | None, str]:
+    """Queue the kernel's message for the owner through the outbox (source ``duty``, the owner's channel preference applies).  Duty messages
+    have a daily count of their own (``daily_cap``, per UTC day) and neither use up nor wait on the bot's notify cap.  Returns the outbox
+    group and ``"queued"``, or None and why nothing was queued (``capped``, ``telegram_not_bound``)."""
+    from sqlalchemy import func
     from .. import agent_bots as bots
     from .. import agent_telegram as telegram
     from ..agent_chat_models import AgentTelegramMessage
@@ -179,6 +192,11 @@ def _deliver(owner: str, text: str) -> tuple[uuid.UUID | None, str | None]:
     bot = bots.ensure_default_bot(owner)
     now = datetime.now(UTC)
     with SessionLocal() as db:
+        mine = (AgentTelegramMessage.owner_hash == owner, AgentTelegramMessage.source == "duty",
+                AgentTelegramMessage.created_at >= now.replace(hour=0, minute=0, second=0, microsecond=0))
+        sent = int(db.scalar(select(func.count(func.distinct(func.coalesce(AgentTelegramMessage.group_id, AgentTelegramMessage.id)))).where(*mine)) or 0)
+        if sent >= daily_cap():
+            return None, "capped"
         try:
             telegram.enqueue(db, owner, bot.id, telegram.render(bot.name, text), source="duty", now=now)
         except telegram.NotifyError as failure:
@@ -190,7 +208,7 @@ def _deliver(owner: str, text: str) -> tuple[uuid.UUID | None, str | None]:
         for row in rows:
             row.group_id = group         # one group per message, also when only one channel took it
         db.commit()
-    return group, None
+    return group, "queued"
 
 
 # --- the wake -----------------------------------------------------------------------------------------------------------
@@ -237,7 +255,7 @@ async def _judge(event: dict, owner: str, turn_id: str, recorder: Recorder, held
         bot_block=settings.get("block"), tool_scope=settings.get("tool_scope"), reasoning_effort=settings.get("reasoning_effort"),
         engine="v2", default_company=settings.get("default_company"), catalog_name=model.get("name"))
     messages = prompt.build_wake_messages(context, event, relation, told, outbox)
-    with model_usage.purpose("duty", owner_hash=owner, conversation_id=cid, turn_id=turn_id, job=str(event["alert_id"])):
+    with model_usage.purpose("duty", owner_hash=owner, conversation_id=cid, bot_id=bot.id, turn_id=turn_id, job=str(event["alert_id"])):
         return await loop.run_wake(context, recorder.emit, messages, turn_id=turn_id)
 
 
@@ -252,7 +270,7 @@ async def wake(event: dict, *, owner_hash: str) -> dict:
     current = mode()
     if current == "off":
         return await asyncio.to_thread(lambda: duty_log.record(owner_hash, alert_id, event=event, mode="off", outcome="skipped_off",
-                                                               reason="唤醒功能关着（FINBOT_WAKE_MODE=off），没有评判。"))
+                                                               reason="唤醒功能关着（FINBOT_DUTY_MODE=off），没有评判。"))
     began = time.monotonic()
     turn_id = str(uuid.uuid4())
     recorder, held, result, failure = Recorder(), {}, None, None
@@ -273,10 +291,9 @@ async def wake(event: dict, *, owner_hash: str) -> dict:
         fields = {"outcome": "no_decision", "reason": "模型没有调用 decide。" + (f"它的回答：{said[:300]}" if said and result.get("reason") != "empty_answer" else "")}
     if fields.get("decision") == "tell_now" and current == "on":
         group, why = await asyncio.to_thread(_deliver, owner_hash, fields["message"])
+        fields["delivery"] = why
         if group is not None:
             fields["delivery_group"] = group
-        else:
-            fields["reason"] = f"{fields['reason']}（没有发出：{why}）"
     answer = (result or {}).get("answer") or fields["reason"] or "没有结果。"
     protocol = {"route": "K", **((result or {}).get("final_protocol") or {}), "audit": audit or {"engine": "v2", "terminal_status": "failed", "model_calls": 0, "calls": []},
                 "citations": (result or {}).get("citations") or [], "unattended": True, "wake": True}
