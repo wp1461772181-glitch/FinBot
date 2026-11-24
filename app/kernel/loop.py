@@ -51,7 +51,7 @@ class _Run:
     checklist: list = field(default_factory=list)
     audit: dict = field(default_factory=lambda: {
         "engine": "v2", "model_calls": 0, "decision_steps": 0, "tool_calls": 0, "token_usage": 0,
-        "cache_read_tokens": 0, "cache_write_tokens": 0, "stop_reason": None})
+        "cache_read_tokens": 0, "cache_write_tokens": 0, "calls": [], "stop_reason": None})
 
 
 def _tool_schemas(context) -> list[dict]:
@@ -69,11 +69,15 @@ def _user_text(question: str, history: list[dict]) -> str:
     return "\n".join([*typed, question])
 
 
-def _add_usage(run: _Run, data: dict) -> None:
+def _add_usage(run: _Run, data: dict, began: float) -> None:
+    """Add one model call to the totals and keep its own line: which tier it ran at, how long, what the cache gave."""
     usage = (data or {}).get("usage") or {}
-    run.audit["token_usage"] += usage.get("total_tokens") or 0
-    run.audit["cache_read_tokens"] += usage.get("cache_read_input_tokens") or 0
-    run.audit["cache_write_tokens"] += usage.get("cache_creation_input_tokens") or 0
+    tokens, read, written = (usage.get(key) or 0 for key in ("total_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+    run.audit["token_usage"] += tokens
+    run.audit["cache_read_tokens"] += read
+    run.audit["cache_write_tokens"] += written
+    run.audit["calls"].append({"tier": run.tier, "ms": round((time.monotonic() - began) * 1000), "tokens": tokens,
+                               "cache_read": read, "cache_write": written})
 
 
 async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
@@ -89,6 +93,7 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
     run.sent_text = False
     run.step_text = ""
     for attempt in (0, 1):
+        began = time.monotonic()
         try:
             data, message = await provider.stream_decision(
                 context.provider, context.model, context.api_key, run.messages, tool_schemas, base_url=context.base_url,
@@ -106,7 +111,7 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
             continue
         run.audit["model_calls"] += 1
         run.audit["decision_steps"] += 1
-        _add_usage(run, data)
+        _add_usage(run, data, began)
         return message
 
 
