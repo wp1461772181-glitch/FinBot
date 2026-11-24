@@ -30,6 +30,7 @@ from app import agent_wechat as wx
 LOCAL_API = os.environ.get("WECHAT_BRIDGE_API_URL", "http://127.0.0.1:8000")
 CONNECT_TIMEOUT = 5.0
 SLOW_NOTICE_AFTER = 8.0
+PROGRESS_AFTER_SECONDS = 10  # a kernel turn still running at this mark gets one sentence
 BUSY_RETRY_DELAY = 3.0
 BUSY_WAIT_SECONDS = 1260  # a turn's hard cap is 1200 s
 STALE_PAUSE_SECONDS = 3600
@@ -57,6 +58,54 @@ class ConversationBusy(Exception):
 
 def _log(event: str, **fields) -> None:
     print(json.dumps({"t": time.strftime("%Y-%m-%d %H:%M:%S"), "event": event, **fields}, ensure_ascii=False), flush=True)
+
+
+class _Progress:
+    """The at-most-two extra messages of one kernel turn: the checklist once, one sentence at the mark.
+    WeChat cannot edit a message, so each of these is a new message.  Old-engine turns emit no such events."""
+
+    def __init__(self, send):
+        self.send = send  # async (text) -> None, never raises
+        self.kernel = False  # a checklist or sentence has been seen
+        self.checklist_sent = self.sentence_sent = self.mark_passed = False
+        self.newest = ""
+        self._timer: asyncio.Task | None = None
+
+    def start(self) -> None:
+        """Begin the turn's clock (call when the stream is actually being asked for)."""
+        self.stop()
+        self._timer = asyncio.create_task(self._mark())
+
+    def stop(self) -> None:
+        if self._timer:
+            self._timer.cancel()
+            self._timer = None
+
+    async def _mark(self) -> None:
+        await asyncio.sleep(PROGRESS_AFTER_SECONDS)
+        self.mark_passed = True
+        await self._sentence()
+
+    async def _sentence(self) -> None:
+        if self.sentence_sent or not self.newest:
+            return
+        self.sentence_sent = True
+        await self.send(self.newest)
+
+    async def on_event(self, kind: str, data: dict) -> None:
+        if kind == "checklist":
+            self.kernel = True
+            texts = [str(item.get("text", "")).strip() for item in data.get("items") or [] if isinstance(item, dict)]
+            if not self.checklist_sent and any(texts):
+                self.checklist_sent = True
+                await self.send("我分几步来做：\n" + "\n".join(f"{i}. {t}" for i, t in enumerate(texts, 1)))
+        elif kind == "narration":
+            self.kernel = True
+            text = str(data.get("text", "")).strip()
+            if text:
+                self.newest = text
+                if self.mark_passed:
+                    await self._sentence()
 
 
 class Bridge:
@@ -103,9 +152,10 @@ class Bridge:
 
     async def _turn(self, uid: str, token: str | None, target: dict) -> None:
         async with self.locks.setdefault(target["bot_id"], asyncio.Lock()):
-            slow = asyncio.create_task(self._slow_note(uid, token))
+            progress = _Progress(lambda text: self._send_progress(uid, token, text))
+            slow = asyncio.create_task(self._slow_note(uid, token, progress))
             try:
-                answer, cards = await self._ask_waiting(target, uid, token)
+                answer, cards = await self._ask_waiting(target, uid, token, progress)
             except BackendUnavailable:
                 answer, cards = BACKEND_DOWN_TEXT, []
             except ConversationBusy:
@@ -115,23 +165,33 @@ class Bridge:
                 answer, cards = "这次没有处理成功，稍后再发一次。", []
             finally:
                 slow.cancel()
+                progress.stop()
             prefix = f"【{target['bot_name']}】\n" if target.get("via") == "mention" else ""
             body = answer.strip() or ("完成。" if cards else "（这条回复没有内容。）")
             if cards:
                 body += "\n\n" + CARD_TEXT
             await self.reply(uid, token, prefix + body)
 
-    async def _slow_note(self, uid: str, token: str | None) -> None:
-        await asyncio.sleep(SLOW_NOTICE_AFTER)
-        await self.reply(uid, token, SLOW_TEXT)
+    async def _send_progress(self, uid: str, token: str | None, text: str) -> None:
+        try:
+            await self.reply(uid, token, text)
+        except Exception as exc:  # noqa: BLE001 - a lost progress message never stops the turn
+            _log("progress_failed", error=type(exc).__name__)
 
-    async def _ask_waiting(self, target: dict, uid: str, token: str | None):
+    async def _slow_note(self, uid: str, token: str | None, progress: _Progress) -> None:
+        await asyncio.sleep(SLOW_NOTICE_AFTER)
+        if not progress.kernel:  # a kernel turn already speaks for itself
+            await self.reply(uid, token, SLOW_TEXT)
+
+    async def _ask_waiting(self, target: dict, uid: str, token: str | None, progress: _Progress):
         started, told = time.monotonic(), False
         while True:
             try:
-                answer, cards, _cid = await self.ask(target["bot_id"], target["text"])
+                progress.start()  # the 10 s clock runs from the stream, not from waiting in line
+                answer, cards, _cid = await self.ask(target["bot_id"], target["text"], on_event=progress.on_event)
                 return answer, cards
             except ConversationBusy as busy:
+                progress.stop()
                 if busy.code != "conversation_busy" or time.monotonic() - started > BUSY_WAIT_SECONDS:
                     raise
                 if not told:
@@ -157,13 +217,14 @@ def parse_turn(raw: str):
     return chat_text("".join(parts), None), cards, cid
 
 
-async def ask_agent(http, credential: str, bot_id: str, text: str):
+async def ask_agent(http, credential: str, bot_id: str, text: str, on_event=None):
     """One turn of the bot through the local stream endpoint.  Returns (answer text, cards, conversation id)."""
     import codecs
 
     import httpx
+    from app.agent_telegram import sse_events
 
-    raw, decoder = "", codecs.getincrementaldecoder("utf-8")("replace")
+    raw, pending, decoder = "", "", codecs.getincrementaldecoder("utf-8")("replace")
     try:
         async with http.stream("POST", f"{LOCAL_API}/agent-chat/stream",
                                json={"bot_id": bot_id, "message": text[:MESSAGE_MAX_CHARS]},
@@ -178,7 +239,14 @@ async def ask_agent(http, credential: str, bot_id: str, text: str):
                 raise ConversationBusy(code)
             response.raise_for_status()
             async for chunk in response.aiter_bytes():
-                raw += decoder.decode(chunk)
+                piece = decoder.decode(chunk)
+                raw += piece
+                if on_event:
+                    pending += piece
+                    while "\n\n" in pending:
+                        block, pending = pending.split("\n\n", 1)
+                        for kind, data in sse_events(block + "\n\n"):
+                            await on_event(kind, data)
     except ConversationBusy:
         raise
     except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
@@ -245,8 +313,8 @@ async def run(dry_run: bool = False) -> int:
         return 1
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(60)) as http:
-        async def ask(bot_id, text):
-            return await ask_agent(http, credential, bot_id, text)
+        async def ask(bot_id, text, on_event=None):
+            return await ask_agent(http, credential, bot_id, text, on_event)
 
         bridge = Bridge(wx.Ilink(http, state), state, owner=owner, route=agent_telegram.route, ask=ask,
                         save=lambda: wx.save_state(state))
