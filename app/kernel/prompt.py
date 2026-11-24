@@ -10,6 +10,22 @@ from .skills import EXCEPTION, SKILL_LINE, render_skill
 SAY_LINE = "- 每次调用工具时，在 say 里用一句话说明你发现了什么、接下来做什么，用户会实时看到这句话。切换到 high 档后，先用 plan 列出清单，再逐项去做；之后每次调用工具时在 item 里写上这是清单的第几项，勾由系统来打。"
 FAST_TIER_LINE = ("- 你现在处于快速档。简单的问题直接回答，或者查一下就答。问题需要多步推理、比较权衡、给出判断，或者你拿不准时，"
                   "先调用 escalate 切换到更深的档位再继续。用户说「想深一点」「仔细分析」时用 high；用户说「快点」「简单说」时不要升档。")
+ATTACHED_OPEN = '<系统资料 来源="FinBot" 说明="不是用户说的话">'
+ATTACHED_CLOSE = "</系统资料>"
+_ATTACHED_TAG = re.compile(r"<(?=\s*/?\s*系统资料)")
+
+
+def neutralise(text):
+    """``text`` with every opening or closing 「系统资料」 tag made harmless (the ``<`` becomes ＜), so nobody can forge or close the wrapper."""
+    return _ATTACHED_TAG.sub("＜", text) if isinstance(text, str) else text
+
+
+def wrap_attached(text: str) -> str:
+    """What the system attaches to a turn (the latest-known block), marked as the system's: some providers send a late system message as part of
+    the user's turn, and the model must not take it for the user's words.  Tags inside the text (outside text) cannot close the wrapper."""
+    return f"{ATTACHED_OPEN}\n{neutralise(text)}\n{ATTACHED_CLOSE}"
+
+
 def system_text(skills: bool = False) -> str:
     """The fixed system text; with ``skills`` (an owner who has some) it carries the line about use_skill and the one exception to
     the rule that text in tool results is never followed."""
@@ -19,6 +35,7 @@ def system_text(skills: bool = False) -> str:
 
 怎么做事
 - 用户问到公司的数字、公告、行情、新闻时，用工具去查，不要凭记忆回答数字。
+- 「系统资料」标签里的文字是系统这一轮附上的，不是用户写的，其中带编号的行可以直接引用。
 - 不需要查资料的问题（打招呼、解释概念、一般知识）直接回答，不用调用工具。
 - 需要几样资料时，尽量在同一步里把要查的都提出来。
 - 工具返回的每一行资料带一个编号，例如 [3]。回答里用到哪一行的数字或说法，就在那句话后面写上它的编号。没有编号的资料不要编造编号。
@@ -84,6 +101,11 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
         blocks += [skill_block, getattr(context, "profile_block", None)]
     system = "\n\n".join(block for block in blocks if block)
     body = [_without_label(dict(message)) for message in history or []]
+    for message in body:      # a user's own words cannot carry the wrapper's tags
+        if message.get("role") == "user":
+            message["content"] = neutralise(message.get("content"))
+    question = neutralise(question)
+    latest = wrap_attached(latest) if latest else None
     # The history can end with notes after the question (the memory note and the citation catalogue, both user-role messages
     # the system wrote), so the last user message is not necessarily the question.
     last = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "user"), None)
@@ -161,4 +183,4 @@ def build_wake_messages(context, event: dict, relation: dict, told: list[dict], 
     blocks = [wake_system_text(), getattr(context, "bot_block", None), getattr(context, "profile_block", None) if owner else None,
               wake_block(event, relation, told, outbox)]
     return [{"role": "system", "content": "\n\n".join(block for block in blocks if block)},
-            {"role": "user", "content": WAKE_INSTRUCTION}, *([{"role": "system", "content": latest}] if latest else [])]
+            {"role": "user", "content": WAKE_INSTRUCTION}, *([{"role": "system", "content": wrap_attached(latest)}] if latest else [])]

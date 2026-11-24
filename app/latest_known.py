@@ -162,7 +162,15 @@ def start_known_refresh() -> None:
 
 
 def stop_known_refresh() -> None:
+    """关机时调用：停掉后台刷新线程（最多等 2 秒让它读完手头那一次），并忘掉缓存，之后的启动从头预热。"""
+    global _refresher
     _stop.set()
+    thread = _refresher
+    if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+        thread.join(timeout=2)
+    if thread is None or not thread.is_alive():
+        _refresher = None
+    forget_known()
 
 
 def _normalize(value: str) -> str | None:
@@ -360,7 +368,8 @@ def gather(symbols: list[str], *, now: datetime, deadline: float | None = None) 
             filing_rows = session.execute(
                 select(SecFilingInventory.form, SecFilingInventory.filed_at, SecFilingInventory.accepted_at,
                        SecFilingInventory.observed_at, SecFilingInventory.content_status,
-                       SecFilingInventory.content_kind, func.left(SecFilingInventory.content_excerpt, 6000))
+                       SecFilingInventory.content_kind, func.left(SecFilingInventory.content_excerpt, 6000),
+                       SecFilingInventory.source_url, SecFilingInventory.accession_number)
                 .where(SecFilingInventory.symbol == symbol, SecFilingInventory.review_status != "rejected")
                 .order_by(SecFilingInventory.filed_at.desc(), SecFilingInventory.accepted_at.desc().nulls_last(),
                           SecFilingInventory.observed_at.desc())
@@ -374,10 +383,12 @@ def gather(symbols: list[str], *, now: datetime, deadline: float | None = None) 
                 "kind": kind,
                 "fetched": status == "fetched",
                 "head": _head(excerpt, kind),
-            } for form, filed, accepted, observed, status, kind, excerpt in filing_rows]
+                "url": url,
+                "accession": accession,
+            } for form, filed, accepted, observed, status, kind, excerpt, url, accession in filing_rows]
 
             news_rows = session.execute(
-                select(NewsItem.title, NewsItem.source_name, NewsItem.published_at, NewsItem.time_inferred)
+                select(NewsItem.title, NewsItem.source_name, NewsItem.published_at, NewsItem.time_inferred, NewsItem.url)
                 .where(NewsItem.published_at >= now - NEWS_WINDOW, cast(NewsItem.tickers, JSONB).contains([symbol]))
                 # 来源写错成将来的时间也不能排到最前：按「发布时间」和「入库时间」里较早的那个排
                 .order_by(func.least(NewsItem.published_at, NewsItem.fetched_at).desc())
@@ -385,12 +396,12 @@ def gather(symbols: list[str], *, now: datetime, deadline: float | None = None) 
             ).all()
             news: list[dict] = []
             seen: set[str] = set()
-            for title, source, published, inferred in news_rows:
+            for title, source, published, inferred, link in news_rows:
                 key = _clean(title)
                 if not key or key in seen:
                     continue
                 seen.add(key)
-                news.append({"title": key, "source": _clean(source), "published_at": published, "inferred": bool(inferred)})
+                news.append({"title": key, "source": _clean(source), "published_at": published, "inferred": bool(inferred), "url": link})
                 if len(news) == MAX_NEWS:
                     break
 
@@ -499,19 +510,40 @@ def _price_line(price: dict, now: datetime) -> str:
     return _cap(f"  价格      {label} {price['value']:.2f}{tail}（{_stamp(price['at'], now)} 记录）")
 
 
-def _section(item: dict, now: datetime) -> list[str]:
+def _marked(line: str, row: dict, rows: list | None) -> str:
+    """With ``rows`` (a list to fill), the line is a citable row: its text is what the model sees, ``[#k]`` is where its citation number goes."""
+    if rows is None:
+        return line
+    row = {**row, "excerpt": " ".join(line.split()), "_k": len(rows) + 1}
+    rows.append(row)
+    return f"  [#{row['_k']}] " + line[2:]
+
+
+def _section(item: dict, now: datetime, rows: list | None = None) -> list[str]:
     symbol = item["symbol"]
     name = item.get("name") or ""
     name = _clean(name)
     lines = [f"关于 {name}（{symbol}）：" if name else f"关于 {symbol}："]
-    lines += [_filing_line(f, now) for f in item.get("filings", [])[:MAX_FILINGS]]
-    lines += [_news_line(n, now) for n in item.get("news", [])[:MAX_NEWS]]
+    for f in item.get("filings", [])[:MAX_FILINGS]:
+        stamp = f.get("accepted_at") or f.get("observed_at")
+        lines.append(_marked(_filing_line(f, now), {
+            "id": f"latest-known:{symbol}:filing:{f.get('accession') or f.get('form')}", "symbol": symbol, "title": f"{symbol} {_clean(f.get('form'))}",
+            "source_type": "official_filing", "source_url": f.get("url"), "url": f.get("url"), "source_name": "SEC EDGAR",
+            "published_at": stamp.isoformat() if stamp else None}, rows))
+    for n in item.get("news", [])[:MAX_NEWS]:
+        lines.append(_marked(_news_line(n, now), {
+            "id": f"latest-known:{symbol}:news:{n.get('url') or n['title']}", "symbol": symbol, "title": n["title"],
+            "source_type": "configured_news", "source_name": n.get("source") or None, "url": n.get("url"), "source_url": n.get("url"),
+            "published_at": n["published_at"].isoformat()}, rows))
     if item.get("price"):
-        lines.append(_price_line(item["price"], now))
+        price = item["price"]
+        lines.append(_marked(_price_line(price, now), {
+            "id": f"latest-known:{symbol}:price:{price['kind']}", "symbol": symbol, "title": f"{symbol} 最新价格",
+            "source_type": "market_data", "published_at": price["at"].isoformat() if price.get("at") else None}, rows))
     return lines
 
 
-def _render(items: list[dict], now: datetime, extra) -> tuple[str | None, list[str]]:
+def _render(items: list[dict], now: datetime, extra, rows: list | None = None) -> tuple[str | None, list[str]]:
     kept = [dict(item, filings=list(item.get("filings") or [])[:MAX_FILINGS], news=list(item.get("news") or [])[:MAX_NEWS])
             for item in items if item.get("filings") or item.get("news") or item.get("price")][:MAX_COMPANIES]
     if not kept:
@@ -519,7 +551,9 @@ def _render(items: list[dict], now: datetime, extra) -> tuple[str | None, list[s
     tail = [_cap(line) for line in extra] + [CLOSING_LINE]
 
     def assemble() -> str:
-        return "\n".join([HEADING] + [line for item in kept for line in _section(item, now)] + tail)
+        if rows is not None:
+            rows.clear()       # the rows of the layout that is finally kept
+        return "\n".join([HEADING] + [line for item in kept for line in _section(item, now, rows)] + tail)
 
     text = assemble()
     # 超长时先舍各家多出来的旧新闻、再舍旧公告（从最后一家往前），每家至少留一条公告、一条新闻和价格。
@@ -530,6 +564,8 @@ def _render(items: list[dict], now: datetime, extra) -> tuple[str | None, list[s
                 text = assemble()
     if len(text) > BLOCK_LIMIT:  # 三家、每行 ≤160 字时到不了这里；留作兜底
         text = text[: BLOCK_LIMIT - len(CLOSING_LINE) - 2] + "…\n" + CLOSING_LINE
+        if rows is not None:
+            rows[:] = [r for r in rows if f"[#{r['_k']}]" in text]
     return text, [item["symbol"] for item in kept]
 
 
@@ -563,7 +599,7 @@ def _owned_symbols(owner_hash: str) -> set[str]:
 
 
 def _build(text: str, previous: str | None, focus: str | None, owner_hash: str | None,
-           now: datetime) -> tuple[str | None, list[str]]:
+           now: datetime, rows: list | None = None) -> tuple[str | None, list[str]]:
     deadline = time.monotonic() + DEADLINE_SECONDS
     owned = _owned_symbols(owner_hash) if owner_hash else set()
     candidates = mentions(text, previous=previous, focus=focus, owned=owned)
@@ -585,7 +621,7 @@ def _build(text: str, previous: str | None, focus: str | None, owner_hash: str |
     if rest:
         extra.append("另提到：" + "、".join(f"{_display_name(s)}（{s}）" if _display_name(s) else s for s in rest)
                      + "（没有展开）")
-    return _render(items, now, extra)
+    return _render(items, now, extra, rows)
 
 
 # 读库只用这两个线程，不占应用默认线程池；两个都在忙就直接放弃这一块（不排队）。
@@ -605,8 +641,11 @@ def _warn(message: str, *args) -> None:
     logger.warning(message, *args)
 
 
-async def block_for(text, *, previous, focus, owner_hash, now=None) -> tuple[str | None, list[str]]:
-    """这一轮的「系统最新掌握」块和得到了块的代码。慢或出错就放弃这一块，一分钟最多记一行日志。"""
+async def block_for(text, *, previous, focus, owner_hash, now=None, rows=None) -> tuple[str | None, list[str]]:
+    """这一轮的「系统最新掌握」块和得到了块的代码。慢或出错就放弃这一块，一分钟最多记一行日志。
+
+    给了 ``rows``（一个列表）时，块里每条能当引用的行带一个 ``[#k]`` 记号，对应的行（字典，``_k`` 是 k）在成功返回后放进 ``rows``；
+    调用方给它们编号后把记号换成真正的引用号。失败或没有块时 ``rows`` 保持原样。"""
     global _busy
     when = now or datetime.now(UTC)
     with _busy_lock:
@@ -615,10 +654,12 @@ async def block_for(text, *, previous, focus, owner_hash, now=None) -> tuple[str
             return None, []
         _busy += 1
 
+    found_rows: list | None = [] if rows is not None else None
+
     def job():
         global _busy
         try:
-            return _build(text or "", previous, focus, owner_hash, when)
+            return _build(text or "", previous, focus, owner_hash, when, found_rows)
         finally:
             with _busy_lock:
                 _busy -= 1
@@ -631,7 +672,10 @@ async def block_for(text, *, previous, focus, owner_hash, now=None) -> tuple[str
         _warn("latest_known: skipped (%s: %s)", type(exc).__name__, exc)
         return None, []
     try:
-        return await asyncio.wait_for(future, timeout=BUDGET_SECONDS)
+        result = await asyncio.wait_for(future, timeout=BUDGET_SECONDS)
+        if rows is not None and result[0]:
+            rows.extend(found_rows)
+        return result
     except asyncio.TimeoutError:
         _warn("latest_known: gave up after %.1fs", BUDGET_SECONDS)
     except Exception as exc:

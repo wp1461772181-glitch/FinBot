@@ -791,17 +791,25 @@ def test_tier1_after_a_read_goes_onto_the_card(env, fake_consent):
     assert result["status"] == "waiting_for_input" and result["audit"]["writes"][0]["outcome"] == "proposed"
 
 
-def test_tier1_in_the_same_step_as_a_read_goes_onto_the_card(env, fake_consent):
+def test_tier1_in_the_same_step_as_a_read_still_runs_at_once(env, fake_consent):
+    # The read's result arrives in the same step: the model could not have seen it when it made the act call.
     stub_remember(env)
     script(env, [step(calls=[act_call("c1", "remember", remember_args()), call("c2", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
+    result, _ = run(context=ctx())
+    assert len(fake_consent.executed) == 1 and result["status"] == "succeeded"
+
+
+def test_tier1_in_a_step_after_a_read_goes_onto_the_card(env, fake_consent):
+    stub_remember(env)
+    script(env, [step(calls=[call("c2", "query_financials", {"symbol": "AAPL"})]), step(calls=[act_call("c1", "remember", remember_args())]), step(text="好")])
     result, _ = run(context=ctx())
     assert fake_consent.executed == [] and result["status"] == "waiting_for_input"
 
 
-def test_tier1_after_a_calculation_goes_onto_the_card(env, fake_consent):
+def test_tier1_after_a_calculation_of_an_earlier_step_goes_onto_the_card(env, fake_consent):
     stub_remember(env)
-    script(env, [step(calls=[call("c1", "calculate", {"expression": "a-b", "inputs": [{"name": "a", "value": "1", "source_ordinal": 1}, {"name": "b", "value": "1", "source_ordinal": 1}]}), act_call("c2", "remember", remember_args())]),
-                 step(text="好")])
+    script(env, [step(calls=[call("c1", "calculate", {"expression": "a-b", "inputs": [{"name": "a", "value": "1", "source_ordinal": 1}, {"name": "b", "value": "1", "source_ordinal": 1}]})]),
+                 step(calls=[act_call("c2", "remember", remember_args())]), step(text="好")])
     result, _ = run(context=ctx())
     assert fake_consent.executed == []
 
@@ -986,3 +994,19 @@ def test_only_the_last_six_sets_are_kept(env, monkeypatch):
     script(env, [step(calls=[call("c1", "web_research", {"query": "苹果"})]), step(text="好")])
     result, _ = run_with_state({"result_sets": sets})
     assert [s["id"] for s in result["result_sets"]][:5] == ["1", "2", "3", "4", "5"] and len(result["result_sets"]) == 6
+
+
+# --- a read that arrives in the same step as an act call was not in front of the model when it made that call ---------------
+
+def test_reads_in_the_same_step_as_a_tier_one_write_do_not_send_it_to_the_card(env, fake_consent):
+    script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"}), act_call("c2", "remove_from_research_queue", {"symbol": "NVDA"})]),
+                 step(text="好")])
+    result, _ = run(context=ctx())
+    assert len(fake_consent.executed) == 1 and len(fake_consent.proposed) == 1 and result["status"] == "succeeded"     # the card pressed at once
+
+
+def test_the_read_counts_from_the_next_step_on(env, fake_consent):
+    script(env, [step(calls=[act_call("c2", "remove_from_research_queue", {"symbol": "NVDA"}), call("c1", "query_financials", {"symbol": "AAPL"})]),
+                 step(calls=[act_call("c3", "remove_from_research_queue", {"symbol": "AMD"})]), step(text="好")])
+    run(context=ctx())
+    assert len(fake_consent.executed) == 1 and len(fake_consent.proposed) == 2     # the first pressed at once, the second left on a card

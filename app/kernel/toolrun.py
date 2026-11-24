@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import re
 import copy
 import json
 import time
@@ -90,6 +91,25 @@ def _number_evidence(run, name: str, outcome: dict) -> dict:
     if isinstance(outcome.get("meta"), dict):
         shown["meta"] = outcome["meta"]
     return shown
+
+
+_MARK = re.compile(r"\[#(\d+)\] ?")
+
+
+def number_attached(run, text: str, rows: list[dict]) -> str:
+    """The "latest known" block's lines as this turn's first citations, through the numbering the read results take: each row that
+    ``number_rows`` accepts gets its ordinal, and the block's ``[#k]`` marker becomes ``[ordinal]``.  A marker whose row was not accepted
+    (a news item without a real link) is removed, so no line shows a number that cites nothing."""
+    prepared = [copy.deepcopy(row) for row in rows if isinstance(row, dict) and isinstance(row.get("_k"), int)]
+    ordinals: dict[int, str] = {}
+    if prepared:
+        try:
+            for accepted in number_rows("latest_known", prepared, run.citations, {}):
+                ordinals[accepted["_k"]] = accepted["citation"]
+        except Exception:
+            logger.exception("latest-known citations could not be numbered")
+            ordinals = {}
+    return _MARK.sub(lambda m: f"{ordinals[int(m[1])]} " if int(m[1]) in ordinals else "", text)
 
 
 def _calculate(run, name: str, args: dict) -> dict:
@@ -322,7 +342,8 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         await run.emit({"event": "checklist", "items": [dict(entry) for entry in run.checklist]})
     await _fetch_all(run, reads)
     # A read's result (even a failed one) has come back: tier 1 no longer runs at once, unless it only showed the owner's own state.
-    run.read_results += sum(1 for item in reads if item.name not in _OWN_STATE_READS)
+    # It counts from the next step on: an ``act`` call of this very step was made before the model had seen it.
+    gained = sum(1 for item in reads if item.name not in _OWN_STATE_READS)
     for item in reads:
         if item.result is None:
             _guard(_settle_read, run, item)
@@ -336,9 +357,10 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             await _settle_skill(run, item)
         else:
             _guard(_settle_serial, run, item)
-            run.read_results += 1
+            gained += 1
         _done(run, item)
         mark_progress()
+    run.read_results += gained
     messages = []
     for item in items:
         _done(run, item)       # a call that was never run (bad arguments, not in scope) is settled too

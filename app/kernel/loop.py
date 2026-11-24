@@ -25,7 +25,7 @@ from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
 from . import act, ask, decide, press, progress, prompt, skills, tiers
-from .toolrun import mark_timeline, run_step_tools
+from .toolrun import mark_timeline, number_attached, run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
     "search_knowledge", "web_research", "search_configured_news", "search_x", "calculate", "calculate_formula",
@@ -420,8 +420,12 @@ def _previous_user_message(history: list[dict], question: str, *, original: bool
 async def _latest_block(run: "_Run", text: str, previous: str | None, focus: str | None, owner: bool) -> str | None:
     """The "latest known" block of this turn (``latest_known.block_for``: code writes it, no model call, bounded, never raises).  A failure of
     any kind means the turn goes on without it.  The companies it covers go on the audit and the timeline for the backstage."""
+    rows: list[dict] = []
     try:
-        found, symbols = await latest_known.block_for(text, previous=previous, focus=focus, owner_hash=getattr(run.context, "owner_hash", None) if owner else None)
+        found, symbols = await latest_known.block_for(text, previous=previous, focus=focus, rows=rows,
+                                                      owner_hash=getattr(run.context, "owner_hash", None) if owner else None)
+        if found:      # its lines are the turn's first citations: the model can answer from them without reading them again
+            found = number_attached(run, found, rows)
     except Exception:
         logger.exception("kernel latest-known block failed")
         return None

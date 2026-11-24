@@ -13,7 +13,7 @@ from sqlalchemy import delete
 from app import latest_known as lk
 from app.agent_chat_models import AgentResearchQueue, NewsItem, PortfolioTransaction
 from app.database import Base, SessionLocal, engine
-from app.models import MarketPrice, SecFilingInventory
+from app.models import MarketPrice, MarketPriceRevision, SecFilingInventory
 
 NOW = datetime(2026, 11, 23, 14, 43, tzinfo=UTC)  # 22:43 Beijing
 SYMBOLS = ("NVDA", "AMD", "AAPL", "MSFT", "TSLA", "INTC", "QCOM", "IT")
@@ -23,6 +23,7 @@ KNOWN = {"NVDA", "AMD", "AAPL", "MSFT", "TSLA", "INTC", "QCOM", "IT", "ON", "AI"
 
 def _wipe():
     with SessionLocal() as db:
+        db.execute(delete(MarketPriceRevision).where(MarketPriceRevision.symbol.in_(SYMBOLS)))     # they reference the bars below
         db.execute(delete(SecFilingInventory).where(SecFilingInventory.symbol.in_(SYMBOLS)))
         db.execute(delete(MarketPrice).where(MarketPrice.symbol.in_(SYMBOLS)))
         db.execute(delete(NewsItem).where(NewsItem.source_id == "lk-test"))
@@ -452,3 +453,37 @@ def test_future_stamped_news_does_not_sort_first_and_old_news_is_out(world):
         db.commit()
     [item] = lk.gather(["NVDA"], now=NOW)
     assert [n["title"] for n in item["news"]] == ["正常", "未来"]
+
+
+# --- every line can be a citation row -------------------------------------------------------------------------------------
+
+def test_with_a_rows_list_every_line_gets_a_marker_and_a_row(world):
+    _filing("NVDA", excerpt="EX-99.1 2 a.htm EX-99.1 Exhibit 99.1 NVIDIA Board Reinstates Jensen Huang")
+    _news(["NVDA"], "新新闻", NOW - timedelta(minutes=30))
+    _bar("NVDA", date(2026, 11, 23), 165.05)
+    rows: list = []
+    text, symbols = asyncio.run(lk.block_for("NVDA", previous=None, focus=None, owner_hash=None, now=NOW, rows=rows))
+    assert symbols == ["NVDA"] and [r["source_type"] for r in rows] == ["official_filing", "configured_news", "market_data"]
+    assert [r["_k"] for r in rows] == [1, 2, 3] and all(f"[#{k}]" in text for k in (1, 2, 3))
+    assert rows[0]["source_url"] == "https://www.sec.gov/x" and rows[1]["url"] == "https://example.com/n"
+    assert rows[0]["symbol"] == "NVDA" and rows[0]["excerpt"] and "[#" not in rows[0]["excerpt"]
+    plain = asyncio.run(lk.block_for("NVDA", previous=None, focus=None, owner_hash=None, now=NOW))[0]
+    assert "[#" not in plain
+
+
+def test_a_turn_with_nothing_to_show_leaves_rows_empty(world):
+    rows: list = []
+    assert asyncio.run(lk.block_for("你好", previous=None, focus=None, owner_hash=None, now=NOW, rows=rows)) == (None, []) and rows == []
+
+
+def test_stopping_the_refresher_ends_the_thread_and_forgets_the_set(world):
+    _filing("NVDA", excerpt="x")
+    assert lk._known_symbols()
+    lk.start_known_refresh()
+    thread = lk._refresher
+    assert thread is not None and thread.is_alive()
+    lk.stop_known_refresh()
+    assert not thread.is_alive() and lk._refresher is None and lk._known_symbols() == frozenset()
+    lk.start_known_refresh()           # a later start begins again
+    assert lk._refresher is not None and lk._refresher.is_alive()
+    lk.stop_known_refresh()

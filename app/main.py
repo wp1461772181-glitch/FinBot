@@ -266,6 +266,12 @@ def warm_latest_known() -> None:
     latest_known.start_known_refresh()
 
 
+@app.on_event("shutdown")
+def stop_latest_known() -> None:
+    from . import latest_known
+    latest_known.stop_known_refresh()
+
+
 @app.on_event("startup")
 async def start_wake_worker() -> None:
     """The one worker that judges the alerts the sentinel posts (``kernel.wake``); it runs whatever the wake mode is."""

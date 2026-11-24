@@ -555,10 +555,9 @@ def test_a_wake_turn_carries_the_alerts_company_block(env):
     row = judge(event(symbol="INTC", text="INTC 跌 6.1%，现价 21.5"))
     assert seen and seen[0]["focus"] == "INTC" and "INTC" in seen[0]["text"] and seen[0]["owner_hash"] == OWNER_HASH
     messages = fake.calls[0]["messages"]
-    assert messages[-1] == {"role": "system", "content": block} and messages[-2]["content"] == wake_instruction()
+    assert messages[-1] == {"role": "system", "content": prompt.wrap_attached(block)} and messages[-2]["content"] == wake_instruction()
     assert row["outcome"] == "decided"
-    stored = [m for m in messages if m["role"] == "system" and m["content"].startswith("系统最新掌握")]
-    assert len(stored) == 1
+    assert len([m for m in messages if m["role"] == "system" and m["content"].startswith(prompt.ATTACHED_OPEN)]) == 1
 
 
 def test_a_wake_turn_survives_a_failing_block(env):
