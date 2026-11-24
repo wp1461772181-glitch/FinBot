@@ -54,6 +54,36 @@ def test_clean_plan_tolerates_garbage():
     assert len(progress.clean_plan([{"text": "长" * 100}])[0]["text"]) == 60
 
 
+def test_plan_status_is_optional_and_described():
+    item = progress.PLAN_SCHEMA["function"]["parameters"]["properties"]["items"]["items"]
+    assert item["required"] == ["text"] and "status" in item["properties"]
+    assert "status 可以不填：新项默认 pending，没改动的项保持原来的状态；只有要把某项标成 failed 或 done 时才写。" in progress.PLAN_SCHEMA["function"]["description"]
+
+
+def test_clean_plan_keeps_previous_status_by_text():
+    previous = [{"text": "甲", "status": "done"}, {"text": "乙", "status": "doing"}]
+    assert progress.clean_plan([{"text": "甲"}, {"text": "乙"}, {"text": "丙"}], previous) == [
+        {"text": "甲", "status": "done"}, {"text": "乙", "status": "doing"}, {"text": "丙", "status": "pending"}]
+    assert progress.clean_plan([{"text": "甲", "status": "failed"}, {"text": "乙", "status": "bogus"}], previous) == [
+        {"text": "甲", "status": "failed"}, {"text": "乙", "status": "doing"}]
+    assert progress.clean_plan([{"text": "甲"}]) == [{"text": "甲", "status": "pending"}]
+
+
+def test_replan_without_statuses_keeps_ticks_and_shows_the_numbered_list(env):
+    first = [{"text": "甲", "status": "pending"}, {"text": "乙", "status": "pending"}]
+    again = [{"text": "甲"}, {"text": "乙"}, {"text": "丙"}]
+    fake = script(env, [step(calls=[call("c1", "plan", {"items": first})]),
+                        step(calls=[call("c2", "query_financials", {"item": 1, "symbol": "AAPL"})]),
+                        step(calls=[call("c3", "query_financials", {"item": 2, "symbol": "AAPL"})]),
+                        step(calls=[call("c4", "plan", {"items": again})]), step(text="好")])
+    result, events = run()
+    lists = [e["items"] for e in events if e["event"] == "checklist"]
+    assert lists[-2] == [{"text": "甲", "status": "done"}, {"text": "乙", "status": "doing"}, {"text": "丙", "status": "pending"}]
+    seen = json.loads(fake.calls[4]["messages"][-1]["content"])
+    assert seen == {"ok": True, "items": [{"n": 1, "text": "甲", "status": "done"}, {"n": 2, "text": "乙", "status": "doing"},
+                                          {"n": 3, "text": "丙", "status": "pending"}]}
+
+
 def test_first_say_of_a_step_becomes_narration_before_tool_start(env):
     script(env, [step(calls=[call("c1", "query_financials", {"say": "先看财报", "symbol": "AAPL"})]), step(text="好")])
     _, events = run()
@@ -109,7 +139,8 @@ def test_plan_emits_checklist_and_is_not_invoked_as_a_tool(env):
     checklist = next(e for e in events if e["event"] == "checklist")
     assert checklist["items"] == [{"text": "查财报", "status": "doing"}, {"text": "写结论", "status": "pending"}]
     assert kinds(events).index("checklist") < kinds(events).index("tool_result")
-    assert json.loads(fake.calls[1]["messages"][-1]["content"]) == {"ok": True, "items": 2}
+    assert json.loads(fake.calls[1]["messages"][-1]["content"]) == {
+        "ok": True, "items": [{"n": 1, "text": "查财报", "status": "doing"}, {"n": 2, "text": "写结论", "status": "pending"}]}
 
 
 def test_checklist_is_shown_before_the_reads_of_the_same_step_run(env):
@@ -314,11 +345,11 @@ def test_slow_step_says_what_it_waits_for(env):
 
     async def read(name, args, context, *, emit=None, page_chars=None):
         if name == "web_research":
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.3)
         return copy.deepcopy(tools_ok())
 
     env.monkeypatch.setattr(tools, "invoke", read)
-    env.monkeypatch.setattr(toolrun, "SLOW_SECONDS", 0.01)
+    env.monkeypatch.setattr(toolrun, "SLOW_SECONDS", 0.05)
     script(env, [step(calls=[call("c1", "web_research", {"say": "上网查", "query": "x"}), call("c2", "query_financials", {"symbol": "AAPL"})]),
                  step(calls=[call("c3", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
     result, events = run()
@@ -336,3 +367,20 @@ def test_fast_step_has_no_slow_sentence(env):
     script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
     _, events = run()
     assert not [e for e in events if e["event"] == "narration" and "还在等" in e["text"]]
+
+
+def test_slow_sentence_names_only_reads_that_have_started(env):
+    import asyncio
+
+    async def read(name, args, context, *, emit=None, page_chars=None):
+        await asyncio.sleep(0.3)
+        return copy.deepcopy(tools_ok())
+
+    env.monkeypatch.setattr(tools, "invoke", read)
+    env.monkeypatch.setattr(toolrun, "SLOW_SECONDS", 0.05)
+    env.monkeypatch.setattr(toolrun, "MAX_PARALLEL", 2)
+    names = ["query_financials", "web_research", "search_knowledge", "query_stock_prices", "query_market_quote"]
+    script(env, [step(calls=[call(f"c{i}", name, {"symbol": "AAPL"}) for i, name in enumerate(names)]), step(text="好")])
+    _, events = run()
+    slow = [e["text"] for e in events if e["event"] == "narration" and "还在等" in e["text"]]
+    assert slow == ["查财务数据、上网搜索还没回来，还在等。"]

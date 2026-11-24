@@ -19,13 +19,13 @@ PLAN_SCHEMA: dict = {
     "type": "function",
     "function": {
         "name": PLAN,
-        "description": "复杂任务（已切换到 high 档）开始时，把要做的事列成清单。之后清单要增、删、改时再带着完整清单调用一次；打勾不用你管，调用工具时在 item 里写第几项即可。简单任务不要用。",
+        "description": "复杂任务（已切换到 high 档）开始时，把要做的事列成清单。之后清单要增、删、改时再带着完整清单调用一次；打勾不用你管，调用工具时在 item 里写第几项即可。status 可以不填：新项默认 pending，没改动的项保持原来的状态；只有要把某项标成 failed 或 done 时才写。简单任务不要用。",
         "parameters": {
             "type": "object",
             "properties": {"items": {"type": "array", "items": {
                 "type": "object",
                 "properties": {"text": {"type": "string"}, "status": {"type": "string", "enum": list(STATUSES)}},
-                "required": ["text", "status"], "additionalProperties": False}}},
+                "required": ["text"], "additionalProperties": False}}},
             "required": ["items"], "additionalProperties": False,
         },
     },
@@ -62,20 +62,22 @@ def take_say(arguments: dict) -> tuple[str | None, dict]:
     return say, rest
 
 
-def clean_plan(items) -> list[dict]:
+def clean_plan(items, previous=()) -> list[dict]:
+    """The checklist as sent.  An item with no valid ``status`` keeps the one the item with the same text had in ``previous``, else ``pending``."""
+    before = {entry["text"]: entry["status"] for entry in previous}
     cleaned = []
     for item in items if isinstance(items, list) else []:
         text = _sentence(item.get("text"), PLAN_TEXT_MAX) if isinstance(item, dict) else None
         if text:
             status = item.get("status")
-            cleaned.append({"text": text, "status": status if status in STATUSES else "pending"})
+            cleaned.append({"text": text, "status": status if status in STATUSES else before.get(text, "pending")})
     return cleaned[:PLAN_MAX_ITEMS]
 
 
 def settle_plan(run, args: dict) -> dict:
-    """Handle one ``plan`` call: keep the latest checklist on the run; the result the model sees."""
-    run.checklist = clean_plan((args or {}).get("items"))
-    return {"ok": True, "items": len(run.checklist)}
+    """Handle one ``plan`` call: keep the latest checklist on the run; the result is the list as the kernel now holds it, numbered as ``item`` counts."""
+    run.checklist = clean_plan((args or {}).get("items"), run.checklist)
+    return {"ok": True, "items": [{"n": n, **entry} for n, entry in enumerate(run.checklist, 1)]}
 
 
 def mark_items(run, numbers: list[int]) -> bool:

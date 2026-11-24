@@ -35,6 +35,7 @@ class _Call:
     args: dict | None
     result: dict | None = None      # set once known; a call with a result needs no further work
     raw: dict | None = None         # a read's outcome before numbering
+    started: bool = False           # a read that holds a place under ``MAX_PARALLEL`` (not one still waiting for it)
 
 
 def _number_evidence(run, name: str, outcome: dict) -> dict:
@@ -112,6 +113,7 @@ async def _fetch(run, gate: asyncio.Semaphore, item: _Call) -> None:
     """One read, run apart from its siblings: whatever goes wrong becomes this call's own ``tool_failed``."""
     from ..knowledge.query_understanding import use_expander
     async with gate:
+        item.started = True
         try:
             async with progress_watchdog(TOOL_IDLE_SECONDS):
                 with use_expander(getattr(run.context, "query_expander", None)):
@@ -164,7 +166,7 @@ async def _fetch_all(run, reads: list[_Call]) -> None:
         if tasks:
             _, pending = await asyncio.wait(tasks, timeout=SLOW_SECONDS)
             if pending:
-                sentence = progress.slow_sentence([item.name for item, task in zip(reads, tasks) if task in pending])
+                sentence = progress.slow_sentence([item.name for item, task in zip(reads, tasks) if task in pending and item.started])
                 if sentence:
                     run.narration.append(sentence)
                     await run.emit({"event": "narration", "text": sentence, "system": True})
