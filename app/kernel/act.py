@@ -1,7 +1,9 @@
 """The kernel's one write tool, ``act``: which operations exist, in which tier, and how a call becomes a card.
 
-Pure preparation.  ``prepare`` validates a call and builds the frozen ``operation`` and the card ``display`` that
-``agent_workflow.consent`` understands; it writes nothing.  Scope and owner checks, and releasing a tier, belong to the loop.
+``prepare`` validates a call and builds the frozen ``operation`` and the card ``display`` that ``agent_workflow.consent``
+understands; it writes nothing.  ``handle`` is one ``act`` call as the loop sees it: the owner and scope checks, the
+lookup, a tier-1 operation run at once through consent, a tier-2/3 one collected onto the turn's card (``run.proposals``).
+The card itself is minted by the loop when the turn ends.
 """
 from __future__ import annotations
 
@@ -10,10 +12,15 @@ import copy
 import re
 from dataclasses import dataclass
 
+import logging
+
 from .. import agent_profile as profile
 from .. import agent_tasks, portfolio
+from ..agent_chat_identity import owner_credential_matches
 from ..agent_tool_catalog import definitions, validate
-from ..agent_workflow import direct, sec_sources, tools
+from ..agent_workflow import consent, direct, sec_sources, tools
+
+logger = logging.getLogger(__name__)
 
 ACT = "act"
 TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue")
@@ -231,3 +238,84 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
     if tier == 3:
         display["alternative"] = "\n".join(filter(None, [display.get("alternative"), f"代价：{COST_NOTES[name]}"]))
     return Prepared(operation=operation, display=display, tier=tier)
+
+
+MAX_PROPOSALS = 8
+UNDO = {
+    "remember": "之后说「忘掉……」或在记忆页删除即可撤回。",
+    "forget": "记忆页里仍有它的归档记录，可以恢复。",
+    "add_to_research_queue": "说「移出研究队列」即可撤回。",
+    "remove_from_research_queue": "说「加回研究队列」即可恢复，材料和历史都还在。",
+}
+AWAITING_NOTE = "已放进确认卡。回答结束时卡片会交给用户，用户点了「同意」才执行。现在用一两句话告诉用户你准备做什么、请他核对卡片，不要说已经做了。"
+
+
+def _refusal(code: str) -> dict:
+    refusal = {"ok": False, "data": [], "error_code": code}
+    return {**refusal, "reason": consent.failure_reason(code)} if code in consent.FAILURE_REASONS else refusal
+
+
+def _code(failure: Exception) -> str:
+    return str(getattr(failure, "code", None) or failure) or "write_service_failed"
+
+
+async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
+    """A tier-1 operation: a card minted and pressed in the same breath, so consent still freezes, locks and records it."""
+    context, operation = run.context, prepared.operation
+
+    def handler(frozen, key):
+        return asyncio.run(tools.execute_reversible(frozen, key, context))
+
+    try:
+        card = await asyncio.to_thread(consent.propose, context.identity_credential, context.conversation_id, [operation], prepared.display,
+                                       question=getattr(run, "question", "") or "")
+        token = next(choice["value"] for choice in card["choices"] if choice["label"] == "同意").split(":", 1)[1]
+        value = await asyncio.to_thread(consent.execute, context.identity_credential, context.conversation_id, token, [operation], handler)
+    except consent.ConsentError as failure:
+        code = _code(failure)
+        return _refusal(code), f"failed:{code}"
+    except Exception:
+        logger.exception("kernel act failed operation=%s", operation.get("name"))
+        return _refusal("write_service_failed"), "failed:write_service_failed"
+    facts = direct.execution_facts(value, [operation])[0]
+    title = prepared.display["title"]
+    if not value.get("ok", True):
+        code = str(facts.get("error_code") or "write_service_failed")
+        return {"ok": False, "data": [{**facts, "status": "failed", "title": title}]}, f"failed:{code}"
+    return {"ok": True, "data": [{**facts, "status": "done", "title": title, "undo": UNDO[operation["name"]]}]}, "done"
+
+
+def _collect(run, prepared: Prepared) -> tuple[dict, str]:
+    if not any(p.operation == prepared.operation for p in run.proposals):
+        if len(run.proposals) >= MAX_PROPOSALS:
+            return _refusal("invalid_write_targets"), "refused:invalid_write_targets"
+        run.proposals.append(prepared)
+    return {"ok": True, "data": [{"status": "awaiting_confirmation", "title": prepared.display["title"], "note": AWAITING_NOTE}]}, "proposed"
+
+
+async def handle(run, args: dict) -> dict:
+    """The tool result of one ``act`` call.  The model's operation arguments sit under ``arguments``, untouched."""
+    name = args.get("operation")
+    tier = tier_of(name) if name in OPERATIONS else None
+    result, outcome = await _handle(run, name, args)
+    run.writes.append({"operation": name if isinstance(name, str) else None, "tier": tier, "outcome": outcome})
+    return result
+
+
+async def _handle(run, name, args: dict) -> tuple[dict, str]:
+    if not isinstance(name, str) or name not in OPERATIONS:
+        return _failure("unknown_operation"), "refused:unknown_operation"
+    context = run.context
+    if not owner_credential_matches(getattr(context, "identity_credential", "")):
+        return _refusal("owner_login_required"), "refused:owner_login_required"
+    scope = getattr(context, "tool_scope", None)
+    if scope is not None and name not in scope:
+        return _refusal("tool_not_in_bot_scope"), "refused:tool_not_in_bot_scope"
+    if "arguments" not in args:
+        return {"ok": True, "data": [describe(name)]}, "lookup"
+    prepared = await prepare(run, name, args["arguments"])
+    if isinstance(prepared, dict):
+        return prepared, f"refused:{prepared.get('error_code') or 'refused'}"
+    if prepared.tier == 1:
+        return await _run_at_once(run, prepared)
+    return _collect(run, prepared)

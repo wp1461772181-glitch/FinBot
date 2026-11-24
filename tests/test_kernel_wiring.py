@@ -401,3 +401,36 @@ def test_hanging_up_at_the_done_frame_does_not_store_a_cancelled_copy(wiring):
     unfinished_turn(wiring, [{"event": "delta", "text": "收入是 100。"}, done], "cancel")
     answers = [kw for role, kw in wiring.rows() if role == "assistant"]
     assert [row["status"] for row in answers] == ["complete"]
+
+
+def test_a_proposed_card_reaches_the_client_and_the_stored_row(wiring):
+    from app.agent_workflow import consent
+
+    from app.kernel import act, loop, prompt
+
+    wiring.bot["engine"] = "v2"
+    for module in (act, loop, prompt):       # this stand-in turn's credential is the owner's
+        wiring.monkeypatch.setattr(module, "owner_credential_matches", lambda value: True)
+    proposed = []
+
+    def propose(credential, conversation, operations, display, *, question="", variants=None):
+        proposed.append((operations, display, question))
+        return {"id": "card-1", "reason": "write_confirmation", "display": display, "question": question,
+                "choices": [{"label": "同意", "value": "confirm:" + "T" * 43}, {"label": "取消", "value": "cancel:card-1"}]}
+
+    wiring.monkeypatch.setattr(consent, "propose", propose)
+    wiring.monkeypatch.setattr(consent, "execute", lambda *a, **k: pytest.fail("a card must not execute by itself"))
+    wiring.model([([], [call("c1", "act", {"operation": "forecast", "arguments": {"symbol": "AAPL"}})]), (["我准备生成 AAPL 的预测，请核对卡片"], [])])
+    events = wiring.bot_turn()
+    names = [name for name, _ in events]
+    assert names.index("clarification") < names.index("done")
+    card = next(data for name, data in events if name == "clarification")
+    assert card["request_id"] == "card-1" and card["reason"] == "write_confirmation" and card["display"]["title"] == "生成研究预测"
+    assert done_of(events)["status"] == "waiting_for_input"
+    assert [d["name"] for n, d in events if n == "tool_result"] == ["act"]
+    final = [kw for role, kw in wiring.rows() if role == "assistant"][-1]["tool_calls"]
+    assert final["clarification"]["request_id"] == "card-1" and final["clarification"]["display"]["title"] == "生成研究预测"
+    assert [t["name"] for t in final["tool_trace"]] == ["act"]          # a write stays visible in the record
+    stored = next(args[3] for args, kwargs in wiring.stored if len(args) >= 4 and args[2] == "assistant" and args[3])
+    assert stored == "我准备生成 AAPL 的预测，请核对卡片" and "T" * 43 not in json.dumps(final["audit"], default=str)
+    assert proposed[0][0][0]["name"] == "forecast" and proposed[0][2] == "show AAPL prices"

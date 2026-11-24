@@ -15,7 +15,7 @@ from ..agent_progress import mark_progress, progress_watchdog
 from ..agent_tool_catalog import definitions, validate
 from ..agent_workflow import tools
 from ..agent_workflow.evidence import number_rows
-from . import progress, tiers
+from . import act, progress, tiers
 
 MAX_PARALLEL = 4
 TOOL_IDLE_SECONDS = 180
@@ -24,7 +24,8 @@ RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts�
 # Results of these tools are the model's memory or a computation, not saved evidence: they are never numbered as rows.
 _UNNUMBERED = {"recall_conversations", "read_past_conversation"}
 _SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_news", "query_sec_filings": "official_filing"}
-# Run one at a time after every read has been numbered: they work on the citations the reads just registered.
+# Run one at a time after every read has been numbered, in call order: calculations work on the citations the reads just
+# registered, and an ``act`` call may rest on what this step's reads found.
 _CALCULATIONS = ("calculate", "calculate_formula")
 
 
@@ -158,6 +159,16 @@ def _guard(settle, run, item: _Call) -> None:
         item.result = tools.error("tool_failed")
 
 
+async def _settle_act(run, item: _Call) -> None:
+    """One ``act`` call.  It never goes through ``tools.invoke``; the model's operation arguments pass through untouched."""
+    try:
+        item.result = await act.handle(run, item.args)
+    except (TimeoutError, ConnectionError):
+        item.result = tools.error("tool_timeout")
+    except Exception:
+        item.result = tools.error("tool_failed")
+
+
 async def _fetch_all(run, reads: list[_Call]) -> None:
     """Run the reads at the same time; if some are still out after ``SLOW_SECONDS``, say what is awaited (once) and keep waiting."""
     gate = asyncio.Semaphore(MAX_PARALLEL)
@@ -197,6 +208,8 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             item.result = tools.error("invalid_arguments")
         elif item.name in (tiers.ESCALATE, progress.PLAN):
             own.append(item)          # the kernel's own tools: never go through tools.invoke, make no citation
+        elif item.name == act.ACT:
+            serial.append(item)       # the kernel's own, but it can take time and may rest on this step's reads: with the calculations
         elif item.name not in run.tool_names or item.name not in definitions():
             item.result = tools.error("tool_not_in_bot_scope")
         elif item.name in _CALCULATIONS:
@@ -225,7 +238,10 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         if item.result is None:
             _guard(_settle_read, run, item)
     for item in serial:
-        _guard(_settle_serial, run, item)
+        if item.name == act.ACT:
+            await _settle_act(run, item)
+        else:
+            _guard(_settle_serial, run, item)
         mark_progress()
     messages = []
     for item in items:
