@@ -1,24 +1,22 @@
 """The kernel turn: one append-only tool loop.
 
 A fixed system prompt and fixed tool definitions stay at the front; each model step and each tool result is appended
-after them, never edited, and the answer text is streamed out as the model writes it.  Read tools only, run one
-after another; no gate before the answer.
+after them, never edited, and the answer text is streamed out as the model writes it.  Read tools only, run
+concurrently by ``toolrun``; no gate before the answer.
 """
 from __future__ import annotations
 
 import asyncio
-import copy
-import json
 import time
 from dataclasses import dataclass, field
 
 from .. import agent_chat_provider as provider
 from ..agent_chat_identity import owner_credential_matches
-from ..agent_progress import mark_progress, progress_watchdog
-from ..agent_tool_catalog import definitions, schemas, validate
-from ..agent_workflow import tools
-from ..agent_workflow.evidence import number_rows, strip_invalid_markers
-from . import prompt
+from ..agent_progress import progress_watchdog
+from ..agent_tool_catalog import schemas
+from ..agent_workflow.evidence import strip_invalid_markers
+from . import progress, prompt, tiers
+from .toolrun import run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
     "search_knowledge", "web_research", "search_configured_news", "calculate", "calculate_formula",
@@ -26,18 +24,13 @@ READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_
 MAX_STEPS = 12
 SOFT_SECONDS = 180
 IDLE_SECONDS = 300
-TOOL_IDLE_SECONDS = 180
 RETRY_WAIT_SECONDS = 1
 # Mirrors the old turn's RETRYABLE_PROVIDER list minus provider_protocol_too_large (resending the same request cannot cure it).
 RETRYABLE_DETAILS = frozenset({"provider_incomplete_stream", "provider_incomplete_response", "provider_timeout",
                                "provider_network_error", "provider_error", "provider_incompatible_response"})
-RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts。只需改正其中 found 为 false 的输入，其余保持不变；不要把数值改写成更长的小数去试。closest_in_source 与 bindable_values 都只是不完整的候选。"
 EMPTY_NOTE = "系统事实：上一步没有给出回答。请现在直接回答用户，不要再调用工具。"
 EMPTY_ANSWER = "这次没能生成回答，请再发一次。"
 CAP_NOTE = "系统事实：已达到本轮的查询上限。请用现有资料直接回答，不要再调用工具；资料不足的部分明说。"
-# Results of these tools are the model's memory or a computation, not saved evidence: they are never numbered as rows.
-_UNNUMBERED = {"recall_conversations", "read_past_conversation"}
-_SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_news", "query_sec_filings": "official_filing"}
 
 
 @dataclass
@@ -48,20 +41,26 @@ class _Run:
     user_text: str
     schemas: list
     tool_names: frozenset
+    ceiling: str = "high"
+    tier: str = "low"
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
     sent_text: bool = False
     step_text: str = ""
+    narration: list = field(default_factory=list)
+    checklist: list = field(default_factory=list)
     audit: dict = field(default_factory=lambda: {
         "engine": "v2", "model_calls": 0, "decision_steps": 0, "tool_calls": 0, "token_usage": 0,
-        "cache_read_tokens": 0, "cache_write_tokens": 0, "stop_reason": None})
+        "cache_read_tokens": 0, "cache_write_tokens": 0, "calls": [], "stop_reason": None})
 
 
 def _tool_schemas(context) -> list[dict]:
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
     available = schemas(owner=owner, names=READ_TOOLS)
     scope = getattr(context, "tool_scope", None)
-    return [s for s in available if scope is None or s["function"]["name"] in scope]
+    # The kernel's own tools go last whatever the ceiling is, so the list is the same for the whole turn.
+    offered = [*(s for s in available if scope is None or s["function"]["name"] in scope), progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]
+    return [progress.with_say(s) for s in offered]
 
 
 def _user_text(question: str, history: list[dict]) -> str:
@@ -70,11 +69,15 @@ def _user_text(question: str, history: list[dict]) -> str:
     return "\n".join([*typed, question])
 
 
-def _add_usage(run: _Run, data: dict) -> None:
+def _add_usage(run: _Run, data: dict, began: float) -> None:
+    """Add one model call to the totals and keep its own line: which tier it ran at, how long, what the cache gave."""
     usage = (data or {}).get("usage") or {}
-    run.audit["token_usage"] += usage.get("total_tokens") or 0
-    run.audit["cache_read_tokens"] += usage.get("cache_read_input_tokens") or 0
-    run.audit["cache_write_tokens"] += usage.get("cache_creation_input_tokens") or 0
+    tokens, read, written = (usage.get(key) or 0 for key in ("total_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+    run.audit["token_usage"] += tokens
+    run.audit["cache_read_tokens"] += read
+    run.audit["cache_write_tokens"] += written
+    run.audit["calls"].append({"tier": run.tier, "ms": round((time.monotonic() - began) * 1000), "tokens": tokens,
+                               "cache_read": read, "cache_write": written})
 
 
 async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
@@ -90,10 +93,11 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
     run.sent_text = False
     run.step_text = ""
     for attempt in (0, 1):
+        began = time.monotonic()
         try:
             data, message = await provider.stream_decision(
                 context.provider, context.model, context.api_key, run.messages, tool_schemas, base_url=context.base_url,
-                reasoning_effort=context.reasoning_effort, on_text=on_text, keep_thinking=True, cache=True)
+                reasoning_effort=tiers.EFFORT[run.tier], on_text=on_text, keep_thinking=True, cache=True)
         except Exception as failure:
             # Whatever was streamed in this step is a cut-off: never leave it behind as the answer.
             if run.sent_text:
@@ -107,135 +111,31 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
             continue
         run.audit["model_calls"] += 1
         run.audit["decision_steps"] += 1
-        _add_usage(run, data)
+        _add_usage(run, data, began)
         return message
 
 
-def _number_evidence(run: _Run, name: str, outcome: dict) -> dict:
-    """The rows of an evidence tool, numbered into this turn's citations; the numbered rows are what the model sees."""
-    rows = outcome.get("data") if outcome.get("data") is not None else (outcome.get("items") or [])
-    rows = [rows] if not isinstance(rows, list) else rows
-    prepared = []
-    for original in rows:
-        if not isinstance(original, dict):
-            continue
-        row = copy.deepcopy(original)
-        row["_citations"] = [c for c in outcome.get("_citations", []) if row.get("id") and str(c.get("source_id", "")) == str(row["id"])]
-        if row.get("material_type"):
-            row.setdefault("source_type", row["material_type"])
-        if name in _SOURCE_TYPES:
-            row.setdefault("source_type", _SOURCE_TYPES[name])
-        prepared.append(row)
-    if not prepared:
-        return outcome
-    shown = {"ok": True, "data": number_rows(name, prepared, run.citations, {}), "source": outcome.get("source")}
-    if isinstance(outcome.get("meta"), dict):
-        shown["meta"] = outcome["meta"]
-    return shown
-
-
-def _calculate(run: _Run, name: str, args: dict) -> dict:
-    """``calculate`` / ``calculate_formula`` run in-process; a result is registered as a ``calculation`` citation."""
-    try:
-        if name == "calculate":
-            from ..agent_workflow.calculation import calculate
-            value = calculate(args, run.citations, run.user_text)
-            ordinal = len(run.citations) + 1
-            run.citations.append({"ordinal": ordinal, "source_type": "calculation", "derived": True, "title": "可复核计算",
-                                  "quote": json.dumps(value, ensure_ascii=False), "calculation": value})
-            return {"ok": True, "data": [{**value, "citation": f"[{ordinal}]"}]}
-        from ..agent_workflow.formula_replay import execute_calculate_formula
-        return execute_calculate_formula(args, run.citations)
-    except ValueError as exc:
-        # The reason is actionable (which input is unbound, which numbers the source holds): hand it back as it is.
-        code = getattr(exc, "code", None) or str(exc) or "invalid_calculation"
-        outcome = {"ok": False, "error_code": code}
-        if hasattr(exc, "hint"):
-            outcome["hint"] = exc.hint
-        if hasattr(exc, "receipts"):
-            outcome.update({"input_receipts": exc.receipts, "candidates_complete": False, "hint": RECEIPT_HINT})
-        if code == "calculation_input_unbound":
-            from ..agent_workflow.calculation import bindable_values
-            available = bindable_values(run.citations, args)
-            if available:
-                outcome["bindable_values"] = available
-        return outcome
-
-
-async def _execute(run: _Run, name: str, args: dict, emit) -> dict:
-    if name in ("calculate", "calculate_formula"):
-        return _calculate(run, name, args)
-    from ..knowledge.query_understanding import use_expander
-    with use_expander(getattr(run.context, "query_expander", None)):
-        outcome = await tools.invoke(name, args, run.context, emit=emit)
-    if not outcome.get("ok"):
-        return outcome
-    if name == "read_history_citation":
-        from ..agent_workflow.history_citations import bind_history_citation
-        return bind_history_citation(outcome, run.citations)
-    if name in _UNNUMBERED:
-        return outcome
-    return _number_evidence(run, name, outcome)
-
-
-def _valid_arguments(name: str, args: dict) -> dict | None:
-    """Only the in-process calculations are validated here; ``tools.invoke`` validates the others itself."""
-    if name not in ("calculate", "calculate_formula"):
-        return args
-    try:
-        return validate(name, args)
-    except ValueError:
-        return None
-
-
-async def _run_tool(run: _Run, call: dict) -> dict:
-    """One tool call.  Whatever goes wrong becomes a result the model can read; nothing here raises."""
-    from ..agent_chat_stream import bounded_tool_result
-    function = call.get("function") or {}
-    name = function.get("name") or ""
-    try:
-        args = json.loads(function.get("arguments") or "{}")
-        if not isinstance(args, dict):
-            raise ValueError("arguments must be an object")
-    except ValueError:
-        args = None
-    await run.emit({"event": "tool_start", "call_id": call["id"], "name": name, "arguments": args or {}})
-    run.audit["tool_calls"] += 1
-    if args is None:
-        result = tools.error("invalid_arguments")
-    elif name not in run.tool_names or name not in definitions():
-        result = tools.error("tool_not_in_bot_scope")
-    elif (args := _valid_arguments(name, args)) is None:
-        result = tools.error("invalid_arguments")
-    else:
-        try:
-            async with progress_watchdog(TOOL_IDLE_SECONDS):
-                result = await _execute(run, name, args, run.emit)
-        except (TimeoutError, ConnectionError):
-            result = tools.error("tool_timeout")
-        except Exception:
-            result = tools.error("tool_failed")
-        mark_progress()
-    await run.emit({"event": "tool_result", "call_id": call["id"], "name": name, "result": bounded_tool_result(result)})
-    return {"role": "tool", "tool_call_id": call["id"], "content": json.dumps(bounded_tool_result(result, whole_items=True), ensure_ascii=False, default=str)}
-
-
 async def _tool_step(run: _Run, message: dict) -> None:
-    """The model asked for tools: drop the text it streamed, announce the request, run the calls in order."""
+    """The model asked for tools: drop the text it streamed, announce the request, run the calls."""
     if run.sent_text:
         await run.emit({"event": "answer_reset"})
+    narration = progress.step_narration(message["tool_calls"], message.get("content"))
+    if narration:
+        run.narration.append(narration)
+        await run.emit({"event": "narration", "text": narration})
     reasoning = {k: v for k, v in message.items() if k.startswith("reasoning_")}
     await run.emit({"event": "assistant_tool_request", "protocol": {"calls": message["tool_calls"], **reasoning}})
-    for call in message["tool_calls"]:
-        run.messages.append(await _run_tool(run, call))
+    run.messages.extend(await run_step_tools(run, message["tool_calls"]))
 
 
 def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None = None) -> dict:
     status = "failed" if failure else "succeeded"
     run.audit["stop_reason"] = stop_reason
+    run.audit["tier"] = run.tier
+    run.audit["escalated"] = run.tier != "low"
     run.audit["terminal_status"] = status
     return {"answer": answer, "citations": run.citations, "status": status,
-            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {}, "pending_request": None,
+            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier, "narration": run.narration, "checklist": run.checklist}, "pending_request": None,
             "result_sets": [], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
 
 
@@ -288,6 +188,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
     tool_schemas = _tool_schemas(context)
     run = _Run(context=context, emit=emit, messages=prompt.build_messages(question, context, history),
                user_text=_user_text(question, history), schemas=tool_schemas,
-               tool_names=frozenset(s["function"]["name"] for s in tool_schemas))
+               tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
+               ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)))
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):
         return await _loop(run)
