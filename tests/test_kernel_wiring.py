@@ -293,3 +293,91 @@ def test_history_reload_returns_narration_checklist_and_tier(wiring):
            for row in rows if row["role"] in ("user", "assistant") and not (row["tool_calls"] or {}).get("calls")]
     shown = [m for m in reload_history(wiring, old) if m["role"] == "assistant"][-1]
     assert not {"narration", "checklist", "tier"} & set(shown) and shown["content"] == "营收 1158 [1]"
+
+
+PROGRESS = [{"event": "narration", "text": "先看财报"}, {"event": "narration", "text": "再比同行", "item": 1},
+            {"event": "checklist", "items": [{"text": "查财报", "status": "doing"}]},
+            {"event": "tier", "tier": "mid"},
+            {"event": "checklist", "items": [{"text": "查财报", "status": "done"}]},
+            {"event": "tier", "tier": "high"}]
+KEPT = {"narration": ["先看财报", "再比同行"], "checklist": [{"text": "查财报", "status": "done"}], "tier": "high"}
+
+
+class Unfinished(Exception):
+    pass
+
+
+def unfinished_turn(wiring, events, ending):
+    """Run a turn whose engine says ``events`` and then ``ending`` ('cancel' or 'fail'); returns the frames seen."""
+
+    async def fake_engine(**kwargs):
+        for event in events:
+            yield event
+        if ending == "fail":
+            raise Unfinished("the engine broke")
+        await asyncio.sleep(3600)
+
+    wiring.monkeypatch.setattr(wiring.stream, "stream_workflow", fake_engine)
+
+    async def run():
+        payload = StreamRequest(message="show AAPL prices", bot_id=wiring.bot["bot_id"])
+        request = Request({"type": "http", "method": "POST", "path": "/agent-chat/stream", "headers": []})
+        response = await wiring.stream.stream_chat(payload, request, "x" * 40)
+        seen = []
+
+        async def drain():
+            async for part in response.body_iterator:
+                seen.append(part)
+
+        task = asyncio.ensure_future(drain())
+        if ending == "cancel":
+            for _ in range(300):  # at most 3 s for the frame of every event to arrive
+                if "".join(seen).count("event: ") > len(events) or task.done():
+                    break
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.05)
+            task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await asyncio.gather(*list(wiring.stream._BACKGROUND), return_exceptions=True)
+        return frames("".join(part for part in seen if part.startswith("event: ")))
+
+    return asyncio.run(run())
+
+
+def last_assistant(wiring):
+    return [kw for role, kw in wiring.rows() if role == "assistant"][-1]
+
+
+def test_tier_frame_is_forwarded(wiring):
+    wiring.bot["engine"] = "v2"
+    steps, _ = say_and_plan_turn()
+    wiring.model(steps)
+    events = wiring.bot_turn()
+    assert [d for n, d in events if n == "tier"] == [{"tier": "high"}]
+
+
+def test_cancelled_turn_keeps_its_progress(wiring):
+    wiring.bot["engine"] = "v2"
+    unfinished_turn(wiring, PROGRESS, "cancel")
+    row = last_assistant(wiring)
+    assert row["status"] == "cancelled" and {k: row["tool_calls"][k] for k in KEPT} == KEPT
+    shown = [m for m in reload_history(wiring, reload_rows(wiring)) if m["role"] == "assistant"][-1]
+    assert {k: shown[k] for k in KEPT} == KEPT
+
+
+def test_failed_turn_keeps_its_progress(wiring):
+    wiring.bot["engine"] = "v2"
+    events = unfinished_turn(wiring, PROGRESS, "fail")
+    row = last_assistant(wiring)
+    assert row["status"] == "failed" and {k: row["tool_calls"][k] for k in KEPT} == KEPT
+    assert [d for n, d in events if n == "tier"] == [{"tier": "mid"}, {"tier": "high"}]
+    shown = [m for m in reload_history(wiring, reload_rows(wiring)) if m["role"] == "assistant"][-1]
+    assert {k: shown[k] for k in KEPT} == KEPT
+
+
+def test_old_engine_cancelled_row_is_unchanged(wiring):
+    unfinished_turn(wiring, [{"event": "delta", "text": "半截"}], "cancel")
+    assert last_assistant(wiring)["tool_calls"] is None

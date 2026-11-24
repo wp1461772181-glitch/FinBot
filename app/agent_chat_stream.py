@@ -484,9 +484,14 @@ def _model_label(resolved,chosen):
  the browser sent (resolved is None) is labelled as given."""
  if resolved is None:return f"{chosen.provider}/{chosen.model}"
  return f"{resolved['name']}（{chosen.provider}/{chosen.model}）"
-async def _record_cancelled(cid,turn,owner,text_out,citation_sidecar):
+def _unfinished_tool_calls(citation_sidecar,progress):
+ # What a cancelled or failed turn stores: its citations (when any) and the kernel's progress (when it emitted any).
+ stored={"citations":citation_sidecar} if citation_sidecar else {}
+ stored.update(progress)
+ return stored or None
+async def _record_cancelled(cid,turn,owner,text_out,citation_sidecar,progress):
  # The three writes of a cancelled turn, in order. Each is isolated, so one failure does not skip the rest.
- try: await append_message(cid,turn,"assistant",text_out,status="cancelled",tool_calls={"citations":citation_sidecar} if citation_sidecar else None)
+ try: await append_message(cid,turn,"assistant",text_out,status="cancelled",tool_calls=_unfinished_tool_calls(citation_sidecar,progress))
  except Exception: log.exception("cancelled turn: appending the partial answer failed (cid=%s turn=%s)",cid,turn)
  try: await finish_conversation(cid,"cancelled")
  except Exception: log.exception("cancelled turn: finishing the conversation failed (cid=%s)",cid)
@@ -539,7 +544,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
   if LOCKS.get(cid) is lock:LOCKS.pop(cid,None)
  async def events():
   # The thinking time is the wait from the request to the answer being ready.
-  started=time.monotonic();text_out=""; citation_sidecar=[]; terminal=False; genuine_calls=set(); tool_traces=[]
+  started=time.monotonic();text_out=""; citation_sidecar=[]; terminal=False; genuine_calls=set(); tool_traces=[]; progress={}
   pump_task=getter=None
   try:
    yield frame("conversation",{"conversation_id":cid,"turn_id":turn})
@@ -616,7 +621,10 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      yield frame("tool_result",{key:event[key] for key in ("call_id","name","result")})
     elif kind=="tool_start":
      yield frame("tool_start",{key:event[key] for key in ("call_id","name","arguments")})
-    elif kind in("narration","checklist"):
+    elif kind in("narration","checklist","tier"):
+     # What passes through is kept for a turn that ends without a final protocol (cancelled, failed).
+     if kind=="narration":progress.setdefault("narration",[]).append(event["text"])
+     else:progress[kind]=event["items"] if kind=="checklist" else event["tier"]
      yield frame(kind,{key:value for key,value in event.items() if key!="event"})
     elif kind=="client_action":
      yield frame("client_action",{key:value for key,value in event.items() if key!="event"})
@@ -677,7 +685,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    if not terminal:raise HTTPException(502,"workflow_incomplete")
   except asyncio.CancelledError:
    # The writes run in their own task: this one is being cancelled, and its awaits would be cancelled again (R-5 probe).
-   task=asyncio.create_task(_record_cancelled(cid,turn,owner_hash(x_chat_session),text_out,citation_sidecar))
+   task=asyncio.create_task(_record_cancelled(cid,turn,owner_hash(x_chat_session),text_out,citation_sidecar,progress))
    _BACKGROUND.add(task); task.add_done_callback(_BACKGROUND.discard)
    raise
   except Exception as exc:
@@ -686,7 +694,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
     # Nothing was written for the user: say what happened (and keep it in the history), not a blank bubble.
     text_out=_failure_notice(exc)
     yield frame("delta",{"text":text_out})
-   await append_message(cid,turn,"assistant",text_out,status="failed",tool_calls={"citations":citation_sidecar} if citation_sidecar else None)
+   await append_message(cid,turn,"assistant",text_out,status="failed",tool_calls=_unfinished_tool_calls(citation_sidecar,progress))
    await finish_conversation(cid,"failed")
    await mark_terminal_status(owner_hash(x_chat_session),cid,"failed",text_out)
    code=exc.detail if isinstance(exc,HTTPException) else "chat_failed"
