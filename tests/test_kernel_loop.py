@@ -286,3 +286,74 @@ def test_unbound_calculation_input_is_explained_to_the_model(env):
     shown = json.loads(fake.calls[2]["messages"][-1]["content"])
     assert shown["ok"] is False and shown["error_code"] == "calculation_input_unbound" and shown["input_receipts"]
     assert [c["source_type"] for c in result["citations"]] == ["official_filing"]
+
+
+def streamed_after_last_reset(events):
+    text = ""
+    for event in events:
+        if event["event"] == "answer_reset":
+            text = ""
+        elif event["event"] == "delta":
+            text += event["text"]
+    return text
+
+
+def test_stripped_marker_is_also_cleaned_in_the_stream(env):
+    script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="收入 100 [1]，另一个 [9]")])
+    result, events = run()
+    assert "[9]" not in result["answer"]
+    assert streamed_after_last_reset(events) == result["answer"]
+    assert kinds(events)[-2:] == ["answer_reset", "delta"]
+
+
+def test_clean_answer_adds_no_extra_reset(env):
+    script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="收入 100 [1]")])
+    result, events = run()
+    assert "answer_reset" not in kinds(events) and streamed_after_last_reset(events) == result["answer"]
+
+
+def test_empty_reply_gets_one_more_call(env):
+    fake = script(env, [step(text=""), step(text="补上的回答")])
+    result, _ = run()
+    assert result["status"] == "succeeded" and result["answer"] == "补上的回答"
+    assert fake.calls[1]["tools"] == [] and fake.calls[1]["messages"][-1] == {"role": "system", "content": loop.EMPTY_NOTE}
+    assert result["audit"]["model_calls"] == 2
+
+
+def test_empty_twice_fails_with_a_fixed_text(env):
+    script(env, [step(text="  "), step(text="")])
+    result, events = run()
+    assert result["status"] == "failed" and result["reason"] == "empty_answer"
+    assert result["answer"] == loop.EMPTY_ANSWER and result["audit"]["terminal_status"] == "failed"
+    assert streamed_after_last_reset(events) == loop.EMPTY_ANSWER
+
+
+def test_empty_cap_call_goes_straight_to_the_fixed_text(env):
+    steps = [step(calls=[call(f"c{i}", "query_financials", {"symbol": "AAPL"})]) for i in range(loop.MAX_STEPS)]
+    fake = script(env, steps + [step(text="")])
+    result, _ = run()
+    assert len(fake.calls) == loop.MAX_STEPS + 1
+    assert result["status"] == "failed" and result["answer"] == loop.EMPTY_ANSWER and result["audit"]["stop_reason"] == "step_cap"
+
+
+def test_tool_outside_the_offered_set_is_refused(env):
+    script(env, [step(calls=[call("c1", "create_routine", {"x": 1})]), step(text="好")])
+    result, events = run()
+    assert next(e for e in events if e["event"] == "tool_result")["result"]["error_code"] == "tool_not_in_bot_scope"
+    assert env.invoked == [] and result["status"] == "succeeded"
+
+
+def test_value_error_inside_a_tool_is_tool_failed(env):
+    async def broken(*args, **kwargs):
+        raise ValueError("inside the tool")
+
+    env.monkeypatch.setattr(tools, "invoke", broken)
+    script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
+    _, events = run()
+    assert next(e for e in events if e["event"] == "tool_result")["result"]["error_code"] == "tool_failed"
+
+
+def test_invalid_calculation_arguments_are_invalid_arguments(env):
+    script(env, [step(calls=[call("c1", "calculate", {"expression": "a"})]), step(text="好")])
+    _, events = run()
+    assert next(e for e in events if e["event"] == "tool_result")["result"]["error_code"] == "invalid_arguments"

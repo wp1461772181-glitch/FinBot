@@ -29,6 +29,8 @@ IDLE_SECONDS = 300
 TOOL_IDLE_SECONDS = 180
 RETRY_WAIT_SECONDS = 1
 RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts。只需改正其中 found 为 false 的输入，其余保持不变；不要把数值改写成更长的小数去试。closest_in_source 与 bindable_values 都只是不完整的候选。"
+EMPTY_NOTE = "系统事实：上一步没有给出回答。请现在直接回答用户。"
+EMPTY_ANSWER = "这次没能生成回答，请再发一次。"
 CAP_NOTE = "系统事实：已达到本轮的查询上限。请用现有资料直接回答；资料不足的部分明说。"
 # Results of these tools are the model's memory or a computation, not saved evidence: they are never numbered as rows.
 _UNNUMBERED = {"recall_conversations", "read_past_conversation"}
@@ -46,6 +48,7 @@ class _Run:
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
     sent_text: bool = False
+    step_text: str = ""
     audit: dict = field(default_factory=lambda: {
         "engine": "v2", "model_calls": 0, "decision_steps": 0, "tool_calls": 0, "token_usage": 0,
         "cache_read_tokens": 0, "cache_write_tokens": 0, "stop_reason": None})
@@ -78,9 +81,11 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
     async def on_text(piece: str) -> None:
         if piece:
             run.sent_text = True
+            run.step_text += piece
             await run.emit({"event": "delta", "text": piece})
 
     run.sent_text = False
+    run.step_text = ""
     for attempt in (0, 1):
         try:
             data, message = await provider.stream_decision(
@@ -92,6 +97,7 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
             if run.sent_text:
                 await run.emit({"event": "answer_reset"})
                 run.sent_text = False
+                run.step_text = ""
             await asyncio.sleep(RETRY_WAIT_SECONDS)
             continue
         run.audit["model_calls"] += 1
@@ -153,7 +159,7 @@ def _calculate(run: _Run, name: str, args: dict) -> dict:
 
 async def _execute(run: _Run, name: str, args: dict, emit) -> dict:
     if name in ("calculate", "calculate_formula"):
-        return _calculate(run, name, validate(name, args))
+        return _calculate(run, name, args)
     from ..knowledge.query_understanding import use_expander
     with use_expander(getattr(run.context, "query_expander", None)):
         outcome = await tools.invoke(name, args, run.context, emit=emit)
@@ -165,6 +171,16 @@ async def _execute(run: _Run, name: str, args: dict, emit) -> dict:
     if name in _UNNUMBERED:
         return outcome
     return _number_evidence(run, name, outcome)
+
+
+def _valid_arguments(name: str, args: dict) -> dict | None:
+    """Only the in-process calculations are validated here; ``tools.invoke`` validates the others itself."""
+    if name not in ("calculate", "calculate_formula"):
+        return args
+    try:
+        return validate(name, args)
+    except ValueError:
+        return None
 
 
 async def _run_tool(run: _Run, call: dict) -> dict:
@@ -184,14 +200,14 @@ async def _run_tool(run: _Run, call: dict) -> dict:
         result = tools.error("invalid_arguments")
     elif name not in run.tool_names or name not in definitions():
         result = tools.error("tool_not_in_bot_scope")
+    elif (args := _valid_arguments(name, args)) is None:
+        result = tools.error("invalid_arguments")
     else:
         try:
             async with progress_watchdog(TOOL_IDLE_SECONDS):
                 result = await _execute(run, name, args, run.emit)
         except (TimeoutError, ConnectionError):
             result = tools.error("tool_timeout")
-        except ValueError:
-            result = tools.error("invalid_arguments")
         except Exception:
             result = tools.error("tool_failed")
         mark_progress()
@@ -209,12 +225,37 @@ async def _tool_step(run: _Run, message: dict) -> None:
         run.messages.append(await _run_tool(run, call))
 
 
-def _result(run: _Run, answer: str, stop_reason: str | None) -> dict:
+def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None = None) -> dict:
+    status = "failed" if failure else "succeeded"
     run.audit["stop_reason"] = stop_reason
-    run.audit["terminal_status"] = "succeeded"
-    return {"answer": strip_invalid_markers(answer, run.citations), "citations": run.citations, "status": "succeeded",
-            "reason": None, "route": "K", "audit": run.audit, "final_protocol": {}, "pending_request": None,
+    run.audit["terminal_status"] = status
+    return {"answer": answer, "citations": run.citations, "status": status,
+            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {}, "pending_request": None,
             "result_sets": {}, "previous_category": None, "previous_scope": None, "unverified_lines": [], "streamed": True}
+
+
+async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_again: bool) -> dict:
+    """The step's text is the answer.  An empty one gets one more call (unless the cap call just failed to answer)."""
+    answer = message.get("content") or ""
+    if not answer.strip() and may_ask_again:
+        run.messages.append(message)
+        run.messages.append({"role": "system", "content": EMPTY_NOTE})
+        if run.sent_text:
+            await run.emit({"event": "answer_reset"})
+        message = await _model_step(run, [])
+        answer = message.get("content") or ""
+    if not answer.strip():
+        if run.sent_text:
+            await run.emit({"event": "answer_reset"})
+        await run.emit({"event": "delta", "text": EMPTY_ANSWER})
+        return _result(run, EMPTY_ANSWER, stop_reason, failure="empty_answer")
+    cleaned = strip_invalid_markers(answer, run.citations)
+    if cleaned != run.step_text:
+        # What the client holds is the streamed text; make it the cleaned answer.
+        if run.step_text:
+            await run.emit({"event": "answer_reset"})
+        await run.emit({"event": "delta", "text": cleaned})
+    return _result(run, cleaned, stop_reason)
 
 
 async def _loop(run: _Run) -> dict:
@@ -224,14 +265,13 @@ async def _loop(run: _Run) -> dict:
             stop = "time_cap"
             break
         message = await _model_step(run, run.schemas)
-        run.messages.append(message)
         if not message.get("tool_calls"):
-            return _result(run, message.get("content") or "", None)
+            return await _finish(run, message, None, may_ask_again=True)
+        run.messages.append(message)
         await _tool_step(run, message)
     run.messages.append({"role": "system", "content": CAP_NOTE})
     final = await _model_step(run, [])
-    run.messages.append(final)
-    return _result(run, final.get("content") or "", stop)
+    return await _finish(run, final, stop, may_ask_again=False)
 
 
 async def run_turn(question: str, context, emit, messages: list[dict] | None = None, state: dict | None = None) -> dict:
