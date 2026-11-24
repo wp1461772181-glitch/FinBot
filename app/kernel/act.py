@@ -125,8 +125,22 @@ class Prepared:
     tier: int
 
 
+_HINTS = {"unknown_operation": "没有这个操作。请从 act 工具描述里的目录中选一个 operation 名称重新调用。"}
+
+
 def _failure(code: str, **extra) -> dict:
-    return {**tools.error(code), **extra}
+    failure = tools.error(code)
+    if code in _HINTS:
+        failure["hint"] = _HINTS[code]
+    return {**failure, **extra}
+
+
+def _problems(failure: Exception) -> list[str]:
+    """Which field was wrong and why, from pydantic's error list; never the values the model sent."""
+    errors = getattr(failure, "errors", None)
+    if not callable(errors):
+        return [str(failure)[:200]]
+    return [f'{".".join(str(part) for part in item.get("loc", ())) or "arguments"}：{str(item.get("msg", ""))[:200]}' for item in errors()][:10]
 
 
 async def _targets(name: str, args: dict) -> list[dict]:
@@ -148,7 +162,25 @@ async def _targets(name: str, args: dict) -> list[dict]:
     for key in ("accession_number", "form", "days", "max_tasks", "decision_date"):
         if args.get(key):
             row[key] = args[key]
-    return [row] if row else [{"symbol": symbol}]
+    row.update(_record_row(name, args))
+    return [row] if row else []
+
+
+_RECORD_KINDS = {"analysis": "AI 分析", "forecast": "预测简报"}
+
+
+def _record_row(name: str, args: dict) -> dict:
+    """Operations that act on a record by id: no title lookup exists for these, so the card names the kind and the id's first 8 characters."""
+    if name in {"withdraw_knowledge_document", "retry_document_index"}:
+        return {"title": f'知识文档 {args["document_id"][:8]}'}
+    if name == "translate_content":
+        return {"title": f'{_RECORD_KINDS[args["kind"]]} {args["record_id"][:8]}'}
+    if name == "review_knowledge_candidate":
+        return {"title": f'知识候选 {args["candidate_id"][:8]}', "decision": "通过" if args["approved"] else "拒绝"}
+    if name == "import_sources":
+        kind = direct.SOURCE_KIND_TITLES.get(args["source_type"], args["source_type"])
+        return {"title": f'{len(args["source_ids"])} 份{kind}', "source_type": kind}
+    return {}
 
 
 def _quote(proposed, words: str) -> str:
@@ -187,8 +219,8 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
         args = validate(name, arguments)
-    except Exception:
-        return _failure("invalid_arguments", arguments=_schema(name))
+    except Exception as failure:
+        return _failure("invalid_arguments", arguments=_schema(name), problems=_problems(failure))
     context = run.context
     operation = {"name": name, "arguments": copy.deepcopy(args)}
     title = direct.WRITE_TITLES.get(name, name)

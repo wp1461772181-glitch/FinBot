@@ -176,3 +176,107 @@ def test_review_filing_names_the_document(monkeypatch):
     out = run(act.prepare(make_run(), "review_filing", {"source_id": UUID, "decision": "rejected"}))
     assert out.tier == 2
     assert out.display["targets"] == [{"title": "Apple 10-K", "source_type": "SEC 申报", "decision": "标记为不相关"}]
+
+
+# --- the fix round: card targets, the contract with the handlers, error detail ---------------------------------
+
+from app.agent_tool_catalog import validate
+
+U = "aaaaaaaa-1111-2222-3333-444444444444"
+MINIMAL = {
+    "remember": {"kind": "preference", "text": "用中文", "quote": "用中文"},
+    "forget": {"item_id": "#abcdef12"},
+    "add_to_research_queue": {"symbol": "AAPL"}, "remove_from_research_queue": {"symbol": "AAPL"},
+    "record_trade": {"kind": "buy", "symbol": "AAPL", "quantity": 1, "price": 10},
+    "set_available_funds": {"amount": 100},
+    "set_position_plan": {"symbol": "AAPL", "plan_text": "持有"},
+    "create_routine": {"name": "每日", "instruction": "看新闻", "schedule_kind": "daily"},
+    "update_routine": {"routine_id": UUID, "enabled": False}, "delete_routine": {"routine_id": UUID},
+    "save_skill": {"name": "s", "description": "d", "body": "b", "allowed_tools": ["calculate"]},
+    "review_filing": {"source_id": UUID, "decision": "accepted"},
+    "forecast": {"symbol": "AAPL"}, "analyze": {"symbol": "AAPL", "source_id": UUID},
+    "translate_content": {"kind": "analysis", "record_id": UUID},
+    "start_historical_replay": None,
+    "fetch_sec": {"symbol": "AAPL"}, "refresh_sec": {"symbol": "AAPL"}, "scan_official": {"symbol": "AAPL"},
+    "initialize_prices": None, "import": {"symbol": "AAPL", "source_id": UUID},
+    "import_sources": {"source_type": "faq", "source_ids": [UUID, U]}, "index": {},
+    "retry_document_index": {"document_id": UUID},
+    "review_knowledge_candidate": {"candidate_id": UUID, "approved": True},
+    "withdraw_knowledge_document": {"document_id": UUID},
+    "save_material_evidence": {"symbol": "AAPL", "title": "t", "source_url": "https://x.com/a", "published_at": "2026-01-01", "content": "c"},
+}
+
+
+def _minimal(name):
+    """Minimal valid arguments, found from the catalogue's own schema for the few that need dates or counts."""
+    given = MINIMAL[name]
+    if given is not None:
+        return given
+    required = definitions()[name].args_schema.model_json_schema().get("required", [])
+    fill = {"symbol": "AAPL", "decision_date": "2026-01-02", "days": 30}
+    return {key: fill[key] for key in required}
+
+
+@pytest.fixture
+def faked(monkeypatch):
+    monkeypatch.setattr(profile, "user_message_id", lambda *a: "m1")
+    monkeypatch.setattr(profile, "resolve_handle", lambda *a, **k: {"text": "用中文"})
+    monkeypatch.setattr(agent_tasks, "get_task", lambda *a: {"name": "每日", "schedule_kind": "daily", "schedule_time": "09:00"})
+    monkeypatch.setattr(direct, "source_display_title", lambda *a: "某材料")
+    monkeypatch.setattr(portfolio, "describe_write", lambda *a: {"title": "t", "targets": [{"symbol": "AAPL"}], "alternative": "a"})
+    monkeypatch.setattr(sec_sources, "prepare_filing", lambda name, args, financial_only=False: {
+        "name": name, "arguments": {**args, "accession_number": "0000320193-26-000001"},
+        "discovery": {"form": "10-K", "filed_at": "2026-01-02", "source_url": "https://sec.gov/x"}})
+
+
+@pytest.mark.parametrize("name", act.OPERATIONS)
+def test_every_prepared_operation_still_passes_its_handler_validation(name, faked):
+    out = run(act.prepare(make_run(question="用中文回答"), name, _minimal(name)))
+    assert isinstance(out, act.Prepared), out
+    assert validate(name, out.operation["arguments"])
+    assert all(any(row.values()) for row in out.display["targets"]), "an empty target row"
+
+
+def test_the_fallback_quote_is_a_valid_remember_quote(faked):
+    from app.agent_tool_catalog import RememberArgs
+    message = "字" * 300
+    out = run(act.prepare(make_run(question=message), "remember", {**MINIMAL["remember"], "quote": "不在其中"}))
+    quote = out.operation["arguments"]["quote"]
+    RememberArgs.model_validate(out.operation["arguments"])
+    assert profile.quote_in_message(quote, message)
+
+
+def test_fetch_sec_keeps_the_discovery_for_the_handler(faked):
+    out = run(act.prepare(make_run(), "fetch_sec", {"symbol": "AAPL"}))
+    assert out.operation["discovery"]["form"] == "10-K"
+
+
+@pytest.mark.parametrize("name,args,words", [
+    ("withdraw_knowledge_document", {"document_id": UUID}, ["知识文档 11111111"]),
+    ("retry_document_index", {"document_id": UUID}, ["知识文档 11111111"]),
+    ("translate_content", {"kind": "forecast", "record_id": UUID}, ["预测简报 11111111"]),
+    ("review_knowledge_candidate", {"candidate_id": UUID, "approved": False}, ["知识候选 11111111", "拒绝"]),
+    ("review_knowledge_candidate", {"candidate_id": UUID, "approved": True}, ["通过"]),
+    ("import_sources", {"source_type": "sec", "source_ids": [UUID, U, U]}, ["3 份SEC 申报"]),
+])
+def test_record_operations_name_their_target(name, args, words, faked):
+    row = run(act.prepare(make_run(), name, args)).display["targets"][0]
+    shown = " ".join(str(v) for v in row.values())
+    assert all(word in shown for word in words), row
+    assert "symbol" not in row
+
+
+def test_an_operation_with_nothing_to_show_has_no_target_rows(faked):
+    out = run(act.prepare(make_run(), "set_available_funds", {"amount": 1}))   # describe_write replaces the rows; check the base path below
+    assert out.display["targets"]
+    assert asyncio.run(act._targets("start_historical_replay", {})) == []
+
+
+def test_unknown_operation_hint_and_invalid_argument_problems():
+    out = run(act.prepare(make_run(), "nope", {}))
+    assert "目录" in out["hint"]
+    out = run(act.prepare(make_run(), "record_trade", {"kind": "buy", "symbol": "SECRET-VALUE-123456"}))
+    assert out["error_code"] == "invalid_arguments" and out["arguments"]
+    assert any(line.startswith("symbol") for line in out["problems"])
+    assert "SECRET-VALUE" not in " ".join(out["problems"])
+    assert run(act.prepare(make_run(), "record_trade", "x"))["problems"]
