@@ -197,6 +197,16 @@ def test_tool_rows_are_stored(wiring):
     assert rows[1][1]["tool_calls"]["calls"]
 
 
+def test_kernel_own_tools_are_not_stored_as_tool_traces(wiring):
+    wiring.bot["engine"] = "v2"
+    steps, _ = say_and_plan_turn()
+    wiring.model(steps)
+    events = wiring.bot_turn()
+    assert [d["name"] for n, d in events if n == "tool_result"] == ["query_financials", "plan", "escalate"]   # still forwarded
+    final = [kw for role, kw in wiring.rows() if role == "assistant"][-1]["tool_calls"]
+    assert [t["name"] for t in final["tool_trace"]] == ["query_financials"]
+
+
 def test_old_turn_runs_on_a_conversation_whose_last_turn_was_the_kernel(wiring):
     """The rollback case: engine switched off after kernel turns; the checkpointed state must still be readable."""
     wiring.bot["engine"] = "v2"
@@ -285,8 +295,8 @@ def test_history_reload_returns_narration_checklist_and_tier(wiring):
     rows = reload_rows(wiring)
     assistant = [m for m in reload_history(wiring, rows) if m["role"] == "assistant"][-1]
     assert assistant["narration"] == ["先看财报"] and assistant["checklist"] == closed and assistant["tier"] == "high"
-    # The kernel's own tools are in the rebuilt trace next to the catalog's, and nothing broke on their names.
-    assert {t["name"] for t in assistant["tool_trace"]} == {"query_financials", "plan", "escalate"}
+    # The kernel's own tools are not lookups: the rebuilt trace lists only the catalog's.
+    assert {t["name"] for t in assistant["tool_trace"]} == {"query_financials"}
     assert all(t["status"] == "complete" for t in assistant["tool_trace"])
     # A row an older turn stored has none of the three and is returned without them.
     old = [dict(row, tool_calls={"audit": {"terminal_status": "succeeded"}}) if row["role"] == "assistant" and row["content"] else row

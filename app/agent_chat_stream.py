@@ -15,11 +15,14 @@ from .agent_chat_store import create_conversation,verify_conversation,append_mes
 from .agent_chat_store import conversation_context
 from . import agent_context as layers
 from .agent_workflow.fp_flags import flag as fp_flag
+from .kernel.progress import PLAN
+from .kernel.tiers import ESCALATE
 router=APIRouter(prefix="/agent-chat",tags=["agent-chat-stream"])
 LOCKS={}
 # Event-stream heartbeat: a comment frame (no event name) while a turn is quiet, so no read sits idle for long.
 HEARTBEAT_SECONDS=15
 HEARTBEAT_FRAME=": hb\n\n"
+KERNEL_OWN_TOOLS=frozenset({PLAN,ESCALATE})  # the kernel's own tools, kept out of the stored tool traces
 # Strong references to the detached cancelled-turn writes, so they are not collected before they finish.
 _BACKGROUND: set=set()
 # FP13: a turn sent with detach=true runs as a task that outlives its response; TURNS holds the running ones by conversation.
@@ -613,11 +616,12 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      content=json.dumps(event["result"],ensure_ascii=False,separators=(",",":"))
      if event["call_id"] in genuine_calls:
       await append_message(cid,turn,"tool",content,tool_call_id=event["call_id"])
-     tool_traces.append({"call_id":event["call_id"],"name":event["name"],
-                         "status":"complete" if event["result"].get("ok") else "failed",
-                         "result":{"ok":event["result"].get("ok"),"error_code":event["result"].get("error_code"),
-                                   "count":len(event["result"].get("data") or []) if isinstance(event["result"].get("data"),list) else None,
-                                   "job_status":event["result"].get("job_status")}})
+     if event["name"] not in KERNEL_OWN_TOOLS:  # the kernel's own tools are not lookups: no stored trace, the frame still goes out
+      tool_traces.append({"call_id":event["call_id"],"name":event["name"],
+                          "status":"complete" if event["result"].get("ok") else "failed",
+                          "result":{"ok":event["result"].get("ok"),"error_code":event["result"].get("error_code"),
+                                    "count":len(event["result"].get("data") or []) if isinstance(event["result"].get("data"),list) else None,
+                                    "job_status":event["result"].get("job_status")}})
      yield frame("tool_result",{key:event[key] for key in ("call_id","name","result")})
     elif kind=="tool_start":
      yield frame("tool_start",{key:event[key] for key in ("call_id","name","arguments")})
@@ -811,7 +815,7 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
     # A call with no stored result was not necessarily a failure: proposals and cards answer through
     # the turn's clarification instead.  "submitted" says only that no tool result was recorded.
     traces.extend({"call_id":call.get("id"),"name":call.get("function",{}).get("name","tool"),"arguments":call.get("function",{}).get("arguments"),"status":"submitted"}
-                 for call in calls if call.get("id") not in known)
+                 for call in calls if call.get("id") not in known and call.get("function",{}).get("name") not in KERNEL_OWN_TOOLS)
   elif row.get("role")=="tool":
    trace_list=traces_by_turn.get(row["turn_id"],[])
    try:result=json.loads(row["content"])
