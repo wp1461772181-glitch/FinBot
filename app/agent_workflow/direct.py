@@ -1133,6 +1133,11 @@ class Turn:
         # more: only its tools and the basics that ask, cite, calculate or suggest stay.
         scope=getattr(self.context,'tool_scope',None)
         if scope is not None and name not in scope:return False
+        if name=='search_x':
+            from .. import x_search
+            if not x_search.configured():return False   # no token on this server: the tool does not exist for the model
+            # A scheduled task runs with nobody watching and every post it reads is billed to the owner.
+            if getattr(self.context,'unattended',False):return False
         skill=getattr(self,'active_skill',None)
         if skill:
             from ..agent_bots import ALWAYS_ON
@@ -2862,7 +2867,7 @@ class Turn:
                 if not row.get('excerpt'):
                     row['excerpt']=f"{row.get('title') or ''} — {row.get('summary') or ''}".strip(' —')
             elif name=='query_sec_filings':row.setdefault('source_type','official_filing')
-            if requirements.get('symbol') and name not in {'web_research','search_configured_news'} and not row.get('symbol'):row['_verified_symbol']=requirements['symbol']
+            if requirements.get('symbol') and name not in {'web_research','search_configured_news','search_x'} and not row.get('symbol'):row['_verified_symbol']=requirements['symbol']
             row_requirements={**requirements}
             if row.get('source_type') in {'web_news','configured_news'}:row_requirements['days_back']=self.scope.get('days_back')
             ok,reason=gate_row(self.question,row,**row_requirements,soft=True)
