@@ -124,6 +124,11 @@ def failure_outcome(exc):
         return {'ok':False,'error_code':known[code],'reason':failure_reason(known[code])}
     return {'ok':False,'error_code':'write_service_failed','reason':failure_reason('write_service_failed')}
 
+def ensure_columns():
+    """Add ``decided_at`` to an ``agent_consents`` table made before it existed (run at API startup; safe to repeat)."""
+    with engine.begin() as connection:
+        connection.execute(text('ALTER TABLE agent_consents ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ'))
+
 def digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 
 def propose(credential,conversation,operations,display,*,question='',now=None,options=None,variants=None):
@@ -190,7 +195,7 @@ def cancel(credential,conversation,request_id):
     lookup(credential,conversation,request_id)
     with SessionLocal() as db:
         row=db.scalar(select(AgentConsent).where(AgentConsent.id==uuid.UUID(request_id)).with_for_update())
-        if row.status=='proposed':row.status='cancelled'
+        if row.status=='proposed':row.status='cancelled';row.decided_at=datetime.now(UTC)
         elif row.status=='executing':row.status='cancelling'
         status=row.status;db.commit()
     return {'ok':True,'status':status}
@@ -211,8 +216,11 @@ def execute(credential,conversation,token,operations,handler,*,now=None):
                 if row.payload_digest!=digest(operations):raise ConsentError('confirmation_parameter_mismatch')
                 if row.status=='complete':return row.result
                 if row.status!='proposed':raise ConsentError('confirmation_consumed')
-                if row.expires_at<=(now or datetime.now(UTC)):raise ConsentError('confirmation_expired')
-                identity=str(row.id);frozen=json.loads(json.dumps(row.operations));row.status='executing';db.commit()
+                if row.expires_at<=(now or datetime.now(UTC)):
+                    # The card lapsed unanswered: only the time it was found so is recorded (its status stays as it was).
+                    if row.decided_at is None:row.decided_at=datetime.now(UTC);db.commit()
+                    raise ConsentError('confirmation_expired')
+                identity=str(row.id);frozen=json.loads(json.dumps(row.operations));row.status='executing';row.decided_at=datetime.now(UTC);db.commit()
                 outcomes=[];items=[];stopped=False
                 for index,operation in enumerate(frozen):
                     # Cancellation and the next durable claim linearize on this

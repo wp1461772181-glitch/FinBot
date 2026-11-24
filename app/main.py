@@ -33,6 +33,7 @@ from .manual_evidence import (
 from .local_model_profiles import router as local_model_profiles_router
 from .agent_chat_api import router as agent_chat_router
 from .agent_chat_stream import router as agent_chat_stream_router
+from .backstage_api import router as backstage_router
 from .knowledge.api import router as knowledge_router
 from .agent_chat_identity import router as agent_chat_identity_router
 from .agent_public_marks_api import router as agent_public_marks_router
@@ -121,6 +122,7 @@ else:
 app.include_router(agent_chat_router)
 app.include_router(local_model_profiles_router)
 app.include_router(agent_chat_stream_router)
+app.include_router(backstage_router)
 from .agent_bots_api import router as agent_bots_router
 app.include_router(agent_bots_router)
 from .portfolio_api import router as portfolio_router
@@ -207,6 +209,8 @@ def create_tables() -> None:
     from .agent_recall import safe_hook as _safe_hook
     from .agent_tasks import migrate_brief_channels
     ensure_telegram_columns()
+    from .agent_workflow.consent import ensure_columns as ensure_consent_columns
+    ensure_consent_columns()
     # UX batch 2 (P1): a saved web page names its 资料库 row.
     from .agent_workflow.web_sources import ensure_columns as ensure_web_source_columns
     ensure_web_source_columns()
