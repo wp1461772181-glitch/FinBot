@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import model_usage
+
 
 DEEPSEEK_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_DEEPSEEK_MODEL = "deepseek/deepseek-v4-flash"
@@ -78,17 +80,19 @@ class DeepSeekEventProvider:
     def extract(self, *, system_prompt: str, document_payload: str, model: str) -> ProviderResult:
         """Request a single JSON object, with thinking disabled to bound cost."""
         try:
-            response = self._client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": document_payload},
-                ],
-                response_format={"type": "json_object"},
-                extra_body={"reasoning": {"effort": "none"}},
-                temperature=0,
-                max_tokens=self._max_tokens,
-            )
+            with model_usage.measure("openrouter", model) as call:      # the ledger's recording point for this transport
+                response = self._client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": document_payload},
+                    ],
+                    response_format={"type": "json_object"},
+                    extra_body={"reasoning": {"effort": "none"}},
+                    temperature=0,
+                    max_tokens=self._max_tokens,
+                )
+                call.usage = getattr(response, "usage", None)
         except Exception as exc:  # The SDK exception may contain request details; do not expose it.
             status_code = getattr(exc, "status_code", None)
             if isinstance(status_code, int):

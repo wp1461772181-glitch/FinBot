@@ -20,6 +20,7 @@ from uuid import UUID
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from . import model_usage
 from .event_extraction import (
     DocumentInput,
     EventExtractionError,
@@ -123,6 +124,7 @@ def create_forecast_refresh_tables() -> None:
     ForecastRevisionEvidence.__table__.create(bind=engine, checkfirst=True)
 
 
+@model_usage.tagged("forecast")
 def run_forecast_refresh(
     *,
     symbol: str,

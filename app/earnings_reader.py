@@ -191,9 +191,11 @@ def model_for_owner(owner_hash: str | None) -> dict:
 
 async def _call_model(model: dict, system: str, user: str) -> str:
     from .agent_chat_provider import decision_request
+    from .model_usage import purpose
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    _data, message = await decision_request(model["provider"], model["model"], model["api_key"], messages, [],
-                                            model.get("base_url"))
+    with purpose("earnings"):
+        _data, message = await decision_request(model["provider"], model["model"], model["api_key"], messages, [],
+                                                model.get("base_url"))
     return str(message.get("content") or "")
 
 

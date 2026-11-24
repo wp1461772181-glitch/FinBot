@@ -173,7 +173,8 @@ async def summarize_pending(conversation_id: str, credential: str, *, provider: 
     """Make and append one segment if turns are waiting for one.  True when a segment was appended.
     The layer sizes are the ones the turns are sent with (the arguments exist for tests)."""
     from .agent_chat_provider import decision_request
-    from .agent_chat_store import append_summary, conversation_context
+    from .agent_chat_store import append_summary, conversation_context, owner_hash
+    from .model_usage import purpose
     context = await conversation_context(conversation_id, credential, l1_bytes=l1_bytes, l2_bytes=l2_bytes,
                                       **_view(anchored))
     if not context:
@@ -185,7 +186,8 @@ async def summarize_pending(conversation_id: str, credential: str, *, provider: 
     messages = [{"role": "system", "content": SUMMARY_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]
     async with asyncio.timeout(SUMMARY_TIMEOUT_SECONDS):
-        _response, decision = await decision_request(provider, model, api_key, messages, [], base_url)
+        with purpose("summary", owner_hash=owner_hash(credential), conversation_id=conversation_id):
+            _response, decision = await decision_request(provider, model, api_key, messages, [], base_url)
     source = "\n".join([*payload["earlier_segments"],
                         *(f"{item['user']}\n{item['assistant_start']}" for item in payload["turns"])])
     text = validate_summary(decision.get("content") if isinstance(decision, dict) else None, source)
@@ -363,7 +365,8 @@ async def compact_conversation(conversation_id: str, credential: str, *, provide
     was nothing to do or the model's answer was refused (then ``error`` holds the short reason code and the
     old summary is untouched).  A provider failure raises; nothing has been written by then."""
     from .agent_chat_provider import decision_request
-    from .agent_chat_store import append_summary, conversation_context
+    from .agent_chat_store import append_summary, conversation_context, owner_hash
+    from .model_usage import purpose
     focus = " ".join(str(focus or "").split())[:FOCUS_MAX_CHARS]
     if context is None:
         context = await conversation_context(conversation_id, credential, window=window, **_view(anchored))
@@ -382,7 +385,8 @@ async def compact_conversation(conversation_id: str, credential: str, *, provide
         messages = [{"role": "system", "content": ROLLING_PROMPT},
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]
         async with asyncio.timeout(SUMMARY_TIMEOUT_SECONDS * 2):
-            _response, decision = await decision_request(provider, model, api_key, messages, [], base_url)
+            with purpose("summary", owner_hash=owner_hash(credential), conversation_id=conversation_id):
+                _response, decision = await decision_request(provider, model, api_key, messages, [], base_url)
         allowed = {(t.turn_id, s["ordinal"]) for t in chunk for s in _turn_sources(t)}
         allowed |= {m for key in layers.ROLLING_SOURCED for m in map(_marker, (previous or {}).get(key, [])) if m}
         source = "\n".join([*(f"{item['user']}\n{item['assistant']}" for item in payload["turns"]),

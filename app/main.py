@@ -191,8 +191,9 @@ def create_tables() -> None:
     create_evidence_revision_tables()
     from .agent_chat_store import ensure_conversation_archive_column
     ensure_conversation_archive_column()
-    from .agent_model_catalog import ensure_window_column
+    from .agent_model_catalog import ensure_price_columns, ensure_window_column
     ensure_window_column()
+    ensure_price_columns()
     # Memory layers (second edition, stage B): a profile item's bot; NULL (every existing item) is global.
     from .agent_profile import ensure_bot_column as ensure_profile_bot_column
     ensure_profile_bot_column()

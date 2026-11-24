@@ -32,6 +32,7 @@ from .material_analysis_models import (
     MaterialAnalysisVersion,
 )
 from .material_analysis_schema import citation_verification, locate_material_analysis_citations, validate_material_analysis
+from . import model_usage
 from .model_providers import create_model_provider, normalize_provider_config
 from .models import SecFilingInventory, UploadedEvidence
 from .secret_box import CredentialEncryptionError, decrypt_secret, encrypt_secret, secret_last4
@@ -295,6 +296,7 @@ def _block_for_config(db: Session, job: MaterialAnalysisJob) -> dict[str, Any]:
     return {"status": "blocked_data", "job_id": str(job.id), "analysis_id": None}
 
 
+@model_usage.tagged("material_analysis")
 def run_material_analysis_once(
     *, session_factory: Callable[[], Session], provider: Any | None = None,
     provider_factory: ProviderFactory | None = None, job_id: UUID | None = None,

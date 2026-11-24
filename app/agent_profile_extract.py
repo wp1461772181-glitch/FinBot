@@ -280,8 +280,10 @@ async def extract_from_turn(owner_hash: str, message: str, *, conversation_id: s
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]
     content = None
     try:
+        from .model_usage import purpose
         async with asyncio.timeout(EXTRACT_TIMEOUT_SECONDS):
-            _response, decision = await decision_request(provider, model, api_key, messages, [], base_url)
+            with purpose("profile", owner_hash=owner_hash, conversation_id=conversation_id, turn_id=turn_id, bot_id=bot_id):
+                _response, decision = await decision_request(provider, model, api_key, messages, [], base_url)
         content = decision.get("content") if isinstance(decision, dict) else None
     except TimeoutError:
         content = None

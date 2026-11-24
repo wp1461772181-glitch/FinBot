@@ -15,7 +15,9 @@ export type CatalogModel = { name: string; display_name: string; provider: strin
   /** The head and tail of a key kept on the server (vault entries with a readable key only); never the whole key. */
   key_hint?: string; is_default: boolean; migrated: boolean;
   /** From the provider's model list (OpenRouter only).  Absent means unknown; supported_efforts null means every tier. */
-  supported_efforts?: string[] | null; reasoning_supported?: boolean };
+  supported_efforts?: string[] | null; reasoning_supported?: boolean;
+  /** Optional prices in USD per million tokens (null: not set); ``price_since`` is when one last changed. */
+  price_input?: number | null; price_output?: number | null; price_cache_read?: number | null; price_cache_write?: number | null; price_since?: string | null };
 export type ModelCatalog = { models: CatalogModel[]; default: string | null; config_file: { present: boolean; problems: string[] } };
 // The sentences of the server's refusal codes live in bot-errors.ts, a chunk of its own (1.25 kB gzipped): only a request that failed needs one, so the first screen does not carry them.
 async function botErrorText(code:string):Promise<string|undefined>{ try{ return (await import("./bot-errors")).BOT_ERRORS[code]; }catch{ return undefined; } }

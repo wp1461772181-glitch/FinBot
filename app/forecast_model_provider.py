@@ -61,9 +61,11 @@ class ForecastModelResult:
 def _default_call(model: dict, system: str, user: str) -> tuple[str, dict]:
     """One non-streaming-looking call through the shared provider code (the same path earnings_reader uses)."""
     from .agent_chat_provider import decision_request
+    from .model_usage import purpose
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    data, message = asyncio.run(decision_request(model["provider"], model["model"], model["api_key"], messages, [],
-                                                 model.get("base_url")))
+    with purpose("forecast"):
+        data, message = asyncio.run(decision_request(model["provider"], model["model"], model["api_key"], messages, [],
+                                                     model.get("base_url")))
     return str(message.get("content") or ""), data if isinstance(data, dict) else {}
 
 

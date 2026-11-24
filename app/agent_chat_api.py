@@ -220,6 +220,12 @@ class PinnedPublicTransport(httpx.AsyncBaseTransport):
     async def aclose(self): await self.inner.aclose()
 
 async def _call(payload: ChatRequest, messages: list[dict[str, str]], max_tokens: int) -> ChatResponse:
+    from . import model_usage      # the ledger's recording point for this direct call (the connection test and the plain chat)
+    with model_usage.measure(payload.provider, payload.model) as call:
+        return await _call_provider(payload, messages, max_tokens, call)
+
+
+async def _call_provider(payload: ChatRequest, messages: list[dict[str, str]], max_tokens: int, call) -> ChatResponse:
     headers = {"Authorization": f"Bearer {payload.api_key.get_secret_value()}", "Content-Type": "application/json"}
     if payload.provider == "openrouter":
         headers["X-Title"] = "FinBot"
@@ -278,6 +284,7 @@ async def _call(payload: ChatRequest, messages: list[dict[str, str]], max_tokens
         message=data["choices"][0]["message"]
         content = message.get("content")
         model = data.get("model")
+        call.usage = data.get("usage")
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         raise HTTPException(502, "provider_incompatible_response") from exc
     if (not isinstance(content, str) or not content.strip()) and max_tokens==64 and isinstance(message.get("reasoning_content"),str) and message["reasoning_content"].strip():

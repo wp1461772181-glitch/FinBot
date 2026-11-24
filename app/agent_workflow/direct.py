@@ -7,6 +7,7 @@ from typing import Annotated
 from pydantic import BaseModel,ConfigDict,Field
 from fastapi import HTTPException
 from ..agent_chat_provider import decision_request,decision_session,sent_effort,TOOL_CALL_STREAM_GUARD
+from .. import model_usage
 from ..agent_progress import progress_watchdog,mark_progress
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_tool_catalog import definitions,schemas,validate,ALWAYS_ON as DISCLOSED,TOOL_CATEGORIES,CATEGORY_OF
@@ -1281,7 +1282,8 @@ class Turn:
                     # The bot's own effort goes only when it set one: without it the call is exactly as before.
                     chosen=stage_effort or getattr(self.context,'reasoning_effort',None)
                     effort={'reasoning_effort':chosen} if chosen else {}
-                    return await decision_request(self.context.provider,self.context.model,self.context.api_key,messages,tool_schemas,self.context.base_url,**effort)
+                    with model_usage.attempt(attempt+1):     # the ledger: the retry is a row of its own
+                        return await decision_request(self.context.provider,self.context.model,self.context.api_key,messages,tool_schemas,self.context.base_url,**effort)
             except HTTPException as exc:
                 # A refusal is the model's answer, not a fault: which category (never the text) is worth keeping in the audit.
                 if getattr(exc,'detail',None)=='provider_refusal':self.audit['refusal']={'category':getattr(exc,'category',None)}

@@ -33,6 +33,7 @@ from contextlib import asynccontextmanager, contextmanager
 from fastapi import HTTPException
 
 from . import agent_chat_provider as _p
+from . import model_usage
 from .agent_progress import mark_progress, progress_watchdog
 from .agent_workflow.fp_flags import flag
 
@@ -664,6 +665,11 @@ def _calls_cap():
 async def decision_request(model, api_key, messages, schemas, reasoning_effort=None):
     """Same contract as agent_chat_provider.decision_request: (data, message) in the OpenAI shape.
     ``data`` also carries ``input_transformations`` when the API reported any."""
+    with model_usage.measure("anthropic", model) as call:      # the ledger's recording point for this transport
+        return await _decision_request(call, model, api_key, messages, schemas, reasoning_effort)
+
+
+async def _decision_request(call, model, api_key, messages, schemas, reasoning_effort):
     stage = "tool_decision" if schemas else "classification"
     cap, over = _calls_cap()
     try:
@@ -674,6 +680,7 @@ async def decision_request(model, api_key, messages, schemas, reasoning_effort=N
                     final = value
             if final is None:
                 raise HTTPException(502, "provider_incomplete_stream")
+            call.usage = usage_to_openai(final.usage)
             message, finish = message_from_final(final, stage=stage, calls_cap=cap, over_cap_code=over)
             mark_progress()
             data = {"choices": [{"message": message, "finish_reason": finish}], "usage": usage_to_openai(final.usage)}
@@ -688,6 +695,11 @@ async def stream_decision(model, api_key, messages, schemas, reasoning_effort=No
     """decision_request that also awaits ``on_text(piece)`` for each piece of answer text as it arrives (thinking pieces are not
     passed on).  ``keep_thinking`` puts the raw blocks in ``message["_anthropic_content"]`` and keeps those of the history;
     ``cache`` marks the system prompt and the end of the conversation for the prompt cache."""
+    with model_usage.measure("anthropic", model, streamed=on_text is not None) as call:
+        return await _stream_decision(call, model, api_key, messages, schemas, reasoning_effort, on_text, keep_thinking, cache)
+
+
+async def _stream_decision(call, model, api_key, messages, schemas, reasoning_effort, on_text, keep_thinking, cache):
     stage = "tool_decision" if schemas else "classification"
     cap, over = _calls_cap()
     try:
@@ -701,6 +713,7 @@ async def stream_decision(model, api_key, messages, schemas, reasoning_effort=No
                     final = value
             if final is None:
                 raise HTTPException(502, "provider_incomplete_stream")
+            call.usage = usage_to_openai(final.usage)
             message, finish = message_from_final(final, stage=stage, calls_cap=cap, over_cap_code=over, keep_thinking=keep_thinking)
             mark_progress()
             data = {"choices": [{"message": message, "finish_reason": finish}], "usage": usage_to_openai(final.usage)}
@@ -713,6 +726,12 @@ async def stream_decision(model, api_key, messages, schemas, reasoning_effort=No
 
 async def stream_answer(model, api_key, messages, reasoning_collector=None):
     """Same contract as agent_chat_provider.stream_answer: yields the answer text; thinking summaries and usage go to the collector."""
+    with model_usage.measure("anthropic", model, streamed=True) as call:
+        async for piece in _stream_answer(call, model, api_key, messages, reasoning_collector):
+            yield piece
+
+
+async def _stream_answer(call, model, api_key, messages, reasoning_collector):
     try:
         async with progress_watchdog(_p.PROVIDER_STREAM_SECONDS):
             final = None
@@ -728,6 +747,7 @@ async def stream_answer(model, api_key, messages, reasoning_collector=None):
                     final = value
             if final is None:
                 raise HTTPException(502, "provider_incomplete_stream")
+            call.usage = usage_to_openai(final.usage)
             message_from_final(final, stage="final_answer", calls_cap=0, over_cap_code="provider_incomplete_stream", allow_tools=False)
             if isinstance(reasoning_collector, dict):
                 reasoning_collector["_usage"] = usage_to_openai(final.usage)

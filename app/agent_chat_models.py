@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 
@@ -260,6 +260,13 @@ class AgentModelEntry(Base):
     migrated_from: Mapped[str | None] = mapped_column(String(80), nullable=True)
     # The model's context window in tokens; NULL means the default (128k).  The history budget follows it.
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Optional prices in USD per million tokens (NULL: not set; cost needs input and output).  ``price_since`` is when
+    # any of them last changed: a call made before it is not priced.  Added to older tables by ``ensure_price_columns``.
+    price_input: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_output: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_cache_read: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_cache_write: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -511,3 +518,32 @@ class EarningsHistory(Base):
     verdict: Mapped[str | None] = mapped_column(String(8), nullable=True)          # up | down | flat
     reader_version: Mapped[str] = mapped_column(String(40), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ModelCall(Base):
+    """The model-call ledger (model_usage): one row per attempt of every call the app makes to a model, tagged with what it
+    was for.  Never a key, a URL, a header or any text of the call: only who, what for, how long and how many tokens."""
+    __tablename__ = "model_calls"
+    __table_args__ = (Index("ix_model_calls_created_at", "created_at"),
+                      Index("ix_model_calls_owner_created", "owner_hash", "created_at"),
+                      Index("ix_model_calls_turn", "turn_id"))
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    owner_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False, default="other")
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    model: Mapped[str] = mapped_column(String(160), nullable=False, default="")      # the provider's model id
+    catalog_name: Mapped[str | None] = mapped_column(String(40), nullable=True)      # the catalog entry, as named at call time
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    bot_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    job: Mapped[str | None] = mapped_column(String(64), nullable=True)               # a background job's id or name
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    error: Mapped[str | None] = mapped_column(String(64), nullable=True)             # a short code, never text
+    ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)   # the whole prompt, cache included
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    streamed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)   # the answer text was passed on as it arrived

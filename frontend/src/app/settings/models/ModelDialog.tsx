@@ -27,6 +27,7 @@ const useWide = () => useSyncExternalStore(subscribeWide, () => window.matchMedi
 export const DISCOVERY_ERRORS: Record<string, string> = { model_discovery_auth_required: "请填写此服务商的 API key 后重试。", model_discovery_access_denied: "当前 API key 无权读取模型列表。",
   model_discovery_rate_limited: "模型目录请求被限流，请稍后重试。", model_discovery_timeout: "获取模型列表超时，请稍后重试。" };
 
+const PRICE_BOXES = [["price_input", "输入价格"], ["price_output", "输出价格"], ["price_cache_read", "缓存读取价格"], ["price_cache_write", "缓存写入价格"]] as const;
 type Props = { initial: CatalogEntryDraft; taken: string[]; onClose: () => void; onSaved: (entry: CatalogEntryDraft) => void; returnFocus: () => void };
 
 export default function ModelDialog({ initial, taken, onClose, onSaved, returnFocus }: Props) {
@@ -144,6 +145,15 @@ export default function ModelDialog({ initial, taken, onClose, onSaved, returnFo
         <Input id={field("name")} data-testid="model-name" className="max-lg:h-11" disabled={testing} value={entry.name} maxLength={40} autoComplete="off" onChange={(e) => { setNameTouched(true); setEntry({ ...entry, name: e.target.value.toLowerCase() }); }} />
         {entry.editing && entry.name !== entry.editing.name && <FieldDescription data-testid="model-rename-note">{t("改名会同时更新用它的 bot，以及财报判断模型、预测模型、审查模型的设置。")}</FieldDescription>}</Field>
       <div className="flex items-center gap-3"><Switch id={field("default")} data-testid="model-default" disabled={testing} checked={entry.is_default} onCheckedChange={(checked) => update({ is_default: checked })} /><label htmlFor={field("default")} className="text-small text-ink">{t("设为默认模型")}</label></div>
+      <fieldset data-testid="model-prices" className="flex flex-col gap-3" disabled={testing}>
+        <legend className="mb-1 text-small font-medium text-ink">{t("价格（可选）")}</legend>
+        <p className="text-small text-muted-foreground">{t("填了才会在后台算花费；不填只显示用量。")}</p>
+        <div className="grid grid-cols-2 gap-3">
+          {PRICE_BOXES.map(([name, label]) => <Field key={name}><FieldLabel htmlFor={field(name)}>{t(label)}</FieldLabel>
+            <Input id={field(name)} data-testid={field(name)} className="max-lg:h-11" type="number" inputMode="decimal" min={0} step="any" value={entry[name]} autoComplete="off" onChange={(e) => update({ [name]: e.target.value } as Partial<CatalogEntryDraft>)} /></Field>)}
+        </div>
+        <FieldDescription>{t("单位：美元 / 百万 token。缓存价格不填时按输入价格算。")}</FieldDescription>
+      </fieldset>
       <p className="text-small text-muted-foreground">{t("测试并保存会用当前填写的服务、Model ID 和 key 在服务器上发一次简短请求；成功后才保存，用它的 bot 下一轮生效。")}</p>
       {error && <ErrorBar message={error} />}
     </div>

@@ -14,6 +14,7 @@ from .agent_workflow.trace import WIRE_KEYS
 from .agent_chat_store import create_conversation,verify_conversation,append_message,owned_message_page,history,finish_conversation,owner_hash
 from .agent_chat_store import conversation_context
 from . import agent_context as layers
+from . import model_usage
 from .agent_workflow.fp_flags import flag as fp_flag
 from .kernel.ask import ASK
 from .kernel.progress import PLAN
@@ -590,12 +591,14 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    queue=asyncio.Queue(maxsize=1)
    async def pump():
     try:
-     async for event in stream_workflow(question=question,messages=messages,skill_block=skill_block,active_skill=active_skill,provider=chosen.provider,model=chosen.model,
-       api_key=chosen.key(),base_url=chosen.base_url,owner_hash=owner_hash(x_chat_session),
-       conversation_id=cid,identity_credential=x_chat_session,turn_id=turn,pending_request_id=payload.pending_request_id,
-       legacy_result_sets=legacy_result_sets,legacy_source_choices=legacy_source_choices,
-       history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window,self_state=self_state):
-      await queue.put(("event",event))
+     # The model-call ledger: every call of this turn (both engines, the kernel's backup model, what the turn starts) is a `chat` row.
+     with model_usage.purpose("chat",owner_hash=owner_hash(x_chat_session),conversation_id=cid,turn_id=turn,bot_id=(bot or {}).get("bot_id"),catalog_name=(resolved or {}).get("name")):
+      async for event in stream_workflow(question=question,messages=messages,skill_block=skill_block,active_skill=active_skill,provider=chosen.provider,model=chosen.model,
+        api_key=chosen.key(),base_url=chosen.base_url,owner_hash=owner_hash(x_chat_session),
+        conversation_id=cid,identity_credential=x_chat_session,turn_id=turn,pending_request_id=payload.pending_request_id,
+        legacy_result_sets=legacy_result_sets,legacy_source_choices=legacy_source_choices,
+        history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window,self_state=self_state):
+       await queue.put(("event",event))
     except asyncio.CancelledError:
      raise
     except Exception as exc:          # handed back unchanged: the consumer raises this same object

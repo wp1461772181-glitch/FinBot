@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from .. import agent_chat_provider as provider
 from .. import agent_model_roles as roles
+from .. import model_usage
 from .. import x_search
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_progress import mark_progress, progress_watchdog
@@ -202,9 +203,11 @@ async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
     for attempt in (0, 1):
         began = time.monotonic()
         try:
-            data, message = await provider.stream_decision(
-                use.provider, use.model, use.api_key, run.messages, tool_schemas, base_url=use.base_url,
-                reasoning_effort=tiers.EFFORT[run.tier], on_text=on_text, keep_thinking=True, cache=True)
+            # The ledger: this attempt is a row of its own, under the catalog name of the model that is answering (the backup's, once switched).
+            with model_usage.attempt(attempt + 1), model_usage.purpose("chat", catalog_name=use.name):
+                data, message = await provider.stream_decision(
+                    use.provider, use.model, use.api_key, run.messages, tool_schemas, base_url=use.base_url,
+                    reasoning_effort=tiers.EFFORT[run.tier], on_text=on_text, keep_thinking=True, cache=True)
         except Exception as failure:
             # Whatever was streamed in this step is a cut-off: never leave it behind as the answer.
             if run.sent_text:

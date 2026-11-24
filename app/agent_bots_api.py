@@ -63,6 +63,11 @@ class ModelEntryBody(BaseModel):
     key_env: str | None = Field(default=None, max_length=64)
     is_default: bool | None = None
     context_window: int | None = Field(default=None, ge=4_000, le=10_000_000)
+    # USD per million tokens.  Sent as null, a price is cleared; left out, it stays (the entry's own check refuses a bad value).
+    price_input: float | None = None
+    price_output: float | None = None
+    price_cache_read: float | None = None
+    price_cache_write: float | None = None
 
 
 class ModelProbeBody(BaseModel):
@@ -184,7 +189,8 @@ def _save(name: str, body: ModelEntryBody, create: bool) -> dict:
     return catalog.save_entry(name, display_name=body.display_name, provider=body.provider, model=body.model,
                               base_url=body.base_url, key_env=body.key_env, is_default=body.is_default,
                               context_window=body.context_window, api_key=body.api_key.get_secret_value() if body.api_key else None, create=create,
-                              rename_to=None if create else body.name)
+                              rename_to=None if create else body.name,
+                              prices=body.model_dump(include=set(catalog.PRICE_KEYS), exclude_unset=True))
 
 
 @router.post("/model-catalog")

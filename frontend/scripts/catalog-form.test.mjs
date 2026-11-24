@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { catalogName, entryMoved, entryProblem, probeFor, saveBody, siblingsToInert } from "../src/catalog-form.mjs";
+import { catalogName, entryMoved, entryProblem, parsePrice, probeFor, saveBody, siblingsToInert } from "../src/catalog-form.mjs";
 
 const blank = (patch = {}) => ({ name: "main", display_name: "", provider: "deepseek", model: "deepseek-chat", base_url: "https://api.deepseek.com",
   key_mode: "vault", api_key: "", key_env: "", is_default: false, editing: null, ...patch });
@@ -55,4 +55,17 @@ test("the modal's own ancestor is never made inert", () => {
   const modal = {}, nav = { contains: (x) => x === nav }, card = { contains: (x) => x === card || x === modal };
   assert.deepEqual(siblingsToInert({ children: [nav, card] }, modal), [nav]);
   assert.deepEqual(siblingsToInert(null, modal), []);
+});
+
+test("prices are optional numbers from 0 up; an edit sends all four (null clears), a new entry only the ones filled in", () => {
+  assert.equal(parsePrice(""), null);
+  assert.equal(parsePrice(" 0.25 "), 0.25);
+  assert.equal(parsePrice("0"), 0);
+  assert.ok(Number.isNaN(parsePrice("-1")) && Number.isNaN(parsePrice("abc")) && Number.isNaN(parsePrice("1e9")));
+  assert.equal(entryProblem(blank({ api_key: "sk-0123456789", price_input: "-1" })), "价格要填不小于 0 的数字，不填就不算花费。");
+  assert.equal(entryProblem(blank({ api_key: "sk-0123456789", price_input: "1", price_output: "4" })), "");
+  assert.equal("price_input" in saveBody(blank({ api_key: "sk-0123456789" })), false);
+  assert.deepEqual(Object.keys(saveBody(blank({ api_key: "sk-0123456789", price_output: "4" }))).filter((k) => k.startsWith("price")), ["price_output"]);
+  const edit = saveBody(blank({ editing: stored, price_input: "1", price_output: "", price_cache_read: "0.1", price_cache_write: "" }));
+  assert.deepEqual([edit.price_input, edit.price_output, edit.price_cache_read, edit.price_cache_write], [1, null, 0.1, null]);
 });
