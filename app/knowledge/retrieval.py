@@ -154,8 +154,25 @@ def _eligible_ann_ids(generation:str,scope_context,symbol:str|None,faq:bool,hist
         else: predicates.extend((KnowledgeDocument.active.is_(True),KnowledgeDocument.status=='active'))
         ids=[str(value) for value in session.scalars(select(KnowledgeChunk.id).join(KnowledgeDocument,KnowledgeDocument.id==KnowledgeChunk.document_id).where(*predicates)).all()]
     if len(ids)>5000: raise KnowledgeUnavailable('eligible knowledge set exceeds bounded ANN filter capacity','knowledge_candidate_set_too_large')
+    if not historical:
+        # Verifying a chunk reads its text and its source: done for every eligible chunk of a company with many filings it
+        # took about twenty seconds and several hundred megabytes per search.  The search needs only the ids; the rows are
+        # read and verified for the chunks it returns (see ``_Eligible.rows``), and an unverified chunk still never gets out.
+        return _Eligible(ids,lambda wanted:_current_rows(wanted,generation,scope_context,symbol,faq,historical=False,analysis=analysis))
+    # A historical read picks each source's latest snapshot before the search, so its candidates are verified up front as before.
     rows=_current_rows(ids,generation,scope_context,symbol,faq,historical=historical,analysis=analysis) if ids else []
     return {str(chunk.id):(chunk,doc) for chunk,doc in rows}
+
+class _Eligible:
+    """The ids the search may return, with their rows read and verified only when asked for."""
+    def __init__(self,ids,load):
+        self.ids=list(ids);self._known=set(self.ids);self._load=load
+    def __bool__(self): return bool(self.ids)
+    def __iter__(self): return iter(self.ids)
+    def __len__(self): return len(self.ids)
+    def rows(self,wanted):
+        wanted=[value for value in dict.fromkeys(str(x) for x in wanted) if value in self._known]
+        return {str(chunk.id):(chunk,doc) for chunk,doc in self._load(wanted)} if wanted else {}
 
 async def _retrieve(query:str, *, faq:bool, symbol:str|None=None, limit:int=5, analysis:bool=False, source_id:str|None=None):
     research_cap=getattr(current_research_context(),'max_citations_per_observation',None)
@@ -199,7 +216,7 @@ async def _retrieve(query:str, *, faq:bool, symbol:str|None=None, limit:int=5, a
     # Cosine calibration is meaningful only for dense retrieval. BM25 and RRF
     # use ranking order; a dense cutoff must never reject their candidates.
     ranked=[hit for hit in hits if strategy!='dense' or float(hit.get('distance',-1))>=runtime.threshold]
-    by_id=eligible
+    by_id=eligible if isinstance(eligible,dict) else await asyncio.to_thread(eligible.rows,[hit['id'] for hit in ranked])
     ordered=[by_id[str(hit['id'])] for hit in ranked if str(hit['id']) in by_id]
     if strategy=='hybrid_rerank' and ordered:
         try:
