@@ -26,6 +26,7 @@ FAILURES_BEFORE_ALERT = 3
 BASELINE_MAX_AGE = 20 * 3600      # rebuilt about once a day
 MERGE_WINDOW = 5 * 60            # 3 symbols pushing within this window make a burst
 MERGE_MIN = 3
+ALERT_EVENT_MAX_AGE = 24 * 3600   # a wake-up for an alert older than this is useless
 SPLITS_MAX_AGE = 3600            # a split announced today must not wait for tomorrow's baseline
 
 
@@ -307,7 +308,7 @@ class Sentinel:
         members = [m["symbol"] for m in alert.get("members") or [] if isinstance(m, dict) and m.get("symbol")]
         payload = {"alert_id": alert_id, "symbol": alert["symbol"], "kind": alert.get("kind", ""), "text": alert["text"],
                    "created_at": row.get("created_at"), "deferred": bool(row.get("deferred")),
-                   "escalate": bool(alert.get("escalate")), "held": bool(alert.get("held")),
+                   "escalate": bool(row.get("escalate", alert.get("escalate"))), "held": bool(alert.get("held")),
                    "weight_pct": alert.get("weight_pct") or None, "price": alert.get("price"),
                    "prev_close": alert.get("prev_close"), "trigger": alert.get("trigger") or None,
                    "event_date": alert.get("event_date"), "members": members or None}
@@ -356,16 +357,42 @@ class Sentinel:
             self.store.enqueue(event_type, payload)
 
     def resend_events(self) -> None:
+        """Drain the queue: `earnings_detected` first, always, then `alert_posted`, so one bad alert row never holds up
+        a filing.  An API answer of 4xx for an alert is final (dropped, logged); 5xx or no answer keeps the row and
+        moves on to the next one, but after 3 no-answers in a row the API is plainly down and the drain stops."""
         base = signals.api_base(self.config.get())
-        for event in self.store.pending():
+        for event in self.store.pending(event_type="earnings_detected"):
             try:
                 signals.post_event(base, event["type"], event["payload"])
-            except Exception:
+            except Exception as exc:
                 self.store.bump(event["id"])
-                return  # API still down: keep order, try next tick
+                if getattr(exc, "code", None) is None:
+                    return  # API unreachable: keep order, try next tick
+                break       # the API answered but refused: its alerts may still go through
             self.store.delete(event["id"])
-            if event["type"] == "earnings_detected":
-                self.filings.mark_delivered(event["payload"]["accession"], time.time())
+            self.filings.mark_delivered(event["payload"]["accession"], time.time())
+        silent = 0
+        for event in self.store.pending(event_type="alert_posted"):
+            alert_id = event["payload"].get("alert_id")
+            if time.time() - float(event.get("created_at") or 0) > ALERT_EVENT_MAX_AGE:
+                self.store.delete(event["id"])
+                logger.warning("alert_posted for alert %s dropped: older than 24 hours", alert_id)
+                continue
+            try:
+                signals.post_event(base, event["type"], event["payload"])
+            except Exception as exc:
+                code = getattr(exc, "code", None)
+                if isinstance(code, int) and 400 <= code < 500:
+                    self.store.delete(event["id"])
+                    logger.warning("alert_posted for alert %s dropped: the API refused it (HTTP %s)", alert_id, code)
+                    continue
+                self.store.bump(event["id"])
+                silent = silent + 1 if code is None else 0
+                if silent >= 3:
+                    return
+                continue
+            silent = 0
+            self.store.delete(event["id"])
 
     # --- threads -----------------------------------------------------------------
     def jobs(self) -> dict[str, Callable[[], None]]:

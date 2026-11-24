@@ -194,3 +194,68 @@ def test_the_sentinels_own_sends_are_identical_with_and_without_the_posting(tmp_
     assert n1.calls == n2.calls and len(n1.calls) > 3
     assert [(a["text"], a["deferred"], a["escalate"]) for a in with_post.store.alerts_where("1=1")] == \
            [(a["text"], a["deferred"], a["escalate"]) for a in without.store.alerts_where("1=1")]
+
+
+# --- the drain: one bad alert_posted never holds up earnings_detected ---------------------------------------------
+
+class Refused(Exception):
+    def __init__(self, code):
+        self.code = code
+
+
+def _earnings(s):
+    s.store.add_earnings({"accession": "0001", "symbol": "AAPL", "cik": "1", "held": 1, "filed": "2026-11-03",
+                          "accepted_at": 1.0, "primary_doc": "x.htm", "url": "u", "detected_at": 1.0, "seeded": 0})
+    s.store.enqueue("earnings_detected", {"accession": "0001", "symbol": "AAPL"})
+
+
+def test_earnings_queued_behind_a_422_and_a_timeout_is_delivered_in_the_same_drain(tmp_path, monkeypatch):
+    s, _, _ = make(tmp_path)
+    s.store.enqueue("alert_posted", {"alert_id": 1, "symbol": "A"})       # the API answers 422
+    s.store.enqueue("alert_posted", {"alert_id": 2, "symbol": "B"})       # no answer
+    _earnings(s)
+    sent = []
+
+    def api(base, t, p):
+        sent.append((t, p.get("alert_id") or p.get("accession")))
+        if t == "alert_posted":
+            raise Refused(422) if p["alert_id"] == 1 else TimeoutError("no answer")
+    monkeypatch.setattr(signals, "post_event", api)
+    s.resend_events()
+    assert sent[0] == ("earnings_detected", "0001")                       # earnings go first
+    assert s.store.earnings_rows("accession = ?", ("0001",))[0]["delivered_at"] is not None
+    left = s.store.pending()
+    assert [(e["type"], e["payload"]["alert_id"]) for e in left] == [("alert_posted", 2)]   # 422 dropped, timeout kept
+
+
+def test_a_5xx_keeps_the_row_and_the_drain_moves_on(tmp_path, monkeypatch):
+    s, _, _ = make(tmp_path)
+    for i in (1, 2):
+        s.store.enqueue("alert_posted", {"alert_id": i, "symbol": "A"})
+    sent = []
+
+    def api(base, t, p):
+        sent.append(p["alert_id"])
+        if p["alert_id"] == 1:
+            raise Refused(503)
+    monkeypatch.setattr(signals, "post_event", api)
+    s.resend_events()
+    assert sent == [1, 2] and [e["payload"]["alert_id"] for e in s.store.pending()] == [1]
+
+
+def test_a_stale_alert_posted_is_dropped_and_a_fresh_one_is_sent(tmp_path, monkeypatch):
+    s, _, _ = make(tmp_path)
+    old = s.store.enqueue("alert_posted", {"alert_id": 1, "symbol": "A"})
+    s.store.enqueue("alert_posted", {"alert_id": 2, "symbol": "B"})
+    with s.store._conn() as conn:
+        conn.execute("UPDATE event_queue SET created_at = created_at - 90000 WHERE id = ?", (old,))
+    sent = []
+    monkeypatch.setattr(signals, "post_event", lambda base, t, p: sent.append(p["alert_id"]))
+    s.resend_events()
+    assert sent == [2] and s.store.pending() == []
+
+
+def test_the_payload_escalate_is_the_stored_one_including_the_night_ring(tmp_path):
+    s, _, _ = make(tmp_path, NIGHT)
+    s._raise(SNAP, price_alert(kind="earnings_followup", escalate=False, bias="down", confidence="high"))  # rings at night
+    assert s.store.pending()[0]["payload"]["escalate"] is True
