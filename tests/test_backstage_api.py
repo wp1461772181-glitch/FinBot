@@ -82,7 +82,7 @@ def kernel_record(**extra):
 
 
 def turn(cid, question="特斯拉营收是多少", answer="营收 280 亿美元 [1]", *, record=None, status="complete", at=None,
-         steps=True, turn_id=None):
+         steps=True, turn_id=None, final=True):
     """A stored turn: the question, (for a kernel turn) one tool round, then the final answer.  Returns (turn_id, message_id)."""
     turn_id = turn_id or uuid.uuid4()
     at = at or NOW
@@ -99,12 +99,13 @@ def turn(cid, question="特斯拉营收是多少", answer="营收 280 亿美元 
                                                                               {"title": "Q1 revenue"}, {"title": "Q4 revenue"}]}),
                                      created_at=at))
             seq += 2
-        final = AgentMessage(conversation_id=cid, turn_id=turn_id, sequence=seq + 1, role="assistant", content=answer,
-                             tool_calls=record, status=status, created_at=at + timedelta(seconds=2))
-        rows.append(final)
+        final_row = AgentMessage(conversation_id=cid, turn_id=turn_id, sequence=seq + 1, role="assistant", content=answer,
+                                 tool_calls=record, status=status, created_at=at + timedelta(seconds=2))
+        if final:
+            rows.append(final_row)
         db.add_all(rows)
         db.commit()
-        return turn_id, final.id
+        return turn_id, (final_row.id if final else rows[0].id)
 
 
 def ledger(turn_id, cid, *, model="m-1", catalog="cat-1", ms=800, cost=0.01, ok=True, purpose="chat", attempt=1, at=None,
@@ -342,7 +343,7 @@ def test_detail_of_a_kernel_turn_with_a_tool_a_card_and_a_backup_model(client, m
     card = body["card"]
     assert card["request_id"] == request_id and card["title"] == "设置可用资金 · 12345.00"
     assert [c["label"] for c in card["choices"]] == ["同意", "换个操作", "取消", "回复"]
-    assert card["consent"]["status"] == "proposed" and card["consent"]["operations"] == [{"name": "set_available_funds", "tier": 2}]
+    assert card["consent"]["status"] == "proposed" and card["consent"]["expired"] is False and card["consent"]["operations"] == [{"name": "set_available_funds", "tier": 2}]
     assert body["langfuse_url"] is None
     for secret in (*BUTTONS, HASHES[0], HASHES[1], "k" * 64):
         assert secret not in response.text
@@ -404,10 +405,14 @@ def test_detail_404s(client):
     _, mid = turn(cid, record=None, steps=False)
     assert get(client, f"/backstage/answers/{mid}").status_code == 404        # not this owner's
     mine = conversation(bot())
-    _, user_row = turn(mine, record=None, steps=False)
+    _, final_id = turn(mine, record=None, steps=True)
     with SessionLocal() as db:
         question_id = db.execute(text("select id from agent_messages where conversation_id=:c and role='user'"), {"c": mine}).scalar()
-    assert get(client, f"/backstage/answers/{question_id}").status_code == 404   # only an answer has a course
+        round_id = db.execute(text("select id from agent_messages where conversation_id=:c and role='assistant' and content='' "
+                                   "order by sequence limit 1"), {"c": mine}).scalar()
+    opened = get(client, f"/backstage/answers/{question_id}")
+    assert opened.status_code == 200 and opened.json()["message_id"] == str(final_id)       # the question's id opens the same turn
+    assert get(client, f"/backstage/answers/{round_id}").status_code == 404          # a tool round is not an answer
 
 
 def test_no_stored_button_value_appears_in_any_response(client):
@@ -473,7 +478,8 @@ def test_usage_groups_totals_priced_and_unpriced_and_names_its_timezone(client):
     by_key = {g["key"]: g for g in body["groups"]}
     assert set(by_key) == {"cat-1", "cat-2", "raw-model"}
     assert by_key["cat-1"]["calls"] == 2 and by_key["cat-1"]["failed_calls"] == 1 and by_key["cat-1"]["cost_usd"] == pytest.approx(0.40)
-    assert by_key["cat-2"]["unpriced_calls"] == 1 and by_key["cat-2"]["cost_usd"] == 0
+    assert by_key["cat-2"]["unpriced_calls"] == 1 and by_key["cat-2"]["cost_usd"] is None
+    assert by_key["cat-2"]["missing_prices"] == ["cache_read", "cache_write", "input", "output"] and by_key["cat-1"]["missing_prices"] == []
     assert sum(g["calls"] for g in body["groups"]) == totals["calls"]
 
     days = get(client, "/backstage/usage", **{"from": "2026-11-01", "to": "2026-11-03", "group": "day"}).json()
@@ -546,7 +552,8 @@ def test_operations_list_never_shows_hashes_and_derives_expiry(client):
     card_row("proposed", created=NOW)
     response = get(client, "/backstage/operations")
     body = response.json()
-    assert [i["status"] for i in body["items"]] == ["proposed", "complete", "expired", "cancelled"]
+    assert [i["status"] for i in body["items"]] == ["proposed", "complete", "proposed", "cancelled"]
+    assert [i["expired"] for i in body["items"]] == [False, False, True, False]
     item = body["items"][1]
     assert item["id"] == str(done) and item["title"] == "确认以下操作" and item["targets"] == [{"symbol": "ANT", "title": "加入研究队列"}]
     assert item["operations"] == [{"name": "add_to_research_queue", "tier": 1}, {"name": "set_available_funds", "tier": 2}]
@@ -554,7 +561,7 @@ def test_operations_list_never_shows_hashes_and_derives_expiry(client):
     assert item["result"] == {"ok": True, "status": "complete", "outcomes": [{"ok": True, "error_code": None},
                                                                               {"ok": False, "error_code": "market_data_unavailable"}]}
     expired = body["items"][2]
-    assert expired["decided_at"].startswith((NOW - timedelta(minutes=20)).isoformat()[:19])     # it lapsed when its time ran out
+    assert expired["decided_at"] is None and expired["expired"] is True                    # nobody touched it: not "decided"
     for key in ("capability_hash", "payload_digest", "payload_digest", "operations_payload"):
         assert key not in response.text
     assert "secret_rows" not in response.text
@@ -650,3 +657,123 @@ def test_a_pressed_button_is_shown_as_what_it_was_not_as_its_value(client):
     turn(cid, "reply:好的，就这样", "收到", record=None, steps=False)
     items = get(client, "/backstage/answers").json()["items"]
     assert [i["question"] for i in items] == ["好的，就这样", "（卡片按钮）"]
+
+
+# --- fix round 1 -----------------------------------------------------------------------------------------------------
+
+def tool_round_row(cid, turn_id, sequence, at=None):
+    with SessionLocal() as db:
+        db.add(AgentMessage(conversation_id=cid, turn_id=turn_id, sequence=sequence, role="assistant", content="",
+                            tool_calls={"calls": [{"id": "call-9", "type": "function",
+                                                   "function": {"name": "query_financials", "arguments": "{\"symbol\": \"TSLA\"}"}}]},
+                            created_at=at or NOW))
+        db.commit()
+
+
+def test_a_crashed_turn_is_one_incomplete_item_and_never_an_answer(client):
+    b = bot()
+    cid = conversation(b)
+    base = NOW - timedelta(hours=1)
+    turn(cid, "normal", "fine", record=kernel_record(), at=base)
+    crashed, question_id = turn(cid, "crashed after a tool round", "", record=None, final=False, at=base + timedelta(minutes=1))
+    with SessionLocal() as db:
+        top = db.execute(text("select max(sequence) from agent_messages where conversation_id=:c"), {"c": cid}).scalar()
+    tool_round_row(cid, crashed, top + 1, at=base + timedelta(minutes=1))
+    nothing, nothing_id = turn(cid, "never answered", "", record=None, steps=False, final=False, at=base + timedelta(minutes=2))
+    items = get(client, "/backstage/answers").json()["items"]
+    assert [i["question"] for i in items] == ["never answered", "crashed after a tool round", "normal"]     # one item per turn
+    lost, died, fine = items
+    assert (lost["status"], died["status"], fine["status"]) == ("incomplete", "incomplete", "succeeded")
+    assert lost["message_id"] == str(nothing_id) and died["message_id"] == str(
+        db_first_assistant_or_user(crashed, question_id))
+    assert died["answer"] == "" and died["engine"] is None and died["tier"] is None
+    assert [i["question"] for i in get(client, "/backstage/answers", status="incomplete").json()["items"]] == [
+        "never answered", "crashed after a tool round"]
+    assert [i["question"] for i in get(client, "/backstage/answers", status="succeeded").json()["items"]] == ["normal"]
+    assert get(client, "/backstage/answers", status="failed").json()["items"] == []
+    assert [i["question"] for i in get(client, "/backstage/answers", engine="v1").json()["items"]] == []
+    detail = get(client, f"/backstage/answers/{died['message_id']}").json()
+    assert detail["status"] == "incomplete" and detail["partial"] is True and detail["answer"] == ""
+    assert detail["question"] == "crashed after a tool round" and {c["call_id"]: c["status"] for c in detail["tool_calls"]} == {"call-1": "complete", "call-9": "unfinished"}
+    assert get(client, f"/backstage/answers/{lost['message_id']}").json()["status"] == "incomplete"
+
+
+def db_first_assistant_or_user(turn_id, question_id):
+    return question_id           # a turn with no final row is listed by its question's id
+
+
+def test_a_kernel_turn_with_a_card_is_one_waiting_item(client):
+    request_id, record = card_record()
+    cid = conversation(bot())
+    _, mid = turn(cid, record=record, answer="请确认这张卡。")
+    items = get(client, "/backstage/answers").json()["items"]
+    assert len(items) == 1 and items[0]["message_id"] == str(mid)
+    assert items[0]["status"] == "waiting_for_input" and items[0]["write_outcomes"] == ["proposed"]
+    assert get(client, "/backstage/answers", status="incomplete").json()["items"] == []
+
+
+def test_a_nul_character_in_a_stored_record_does_not_break_the_filters(client):
+    cid = conversation(bot())
+    _, mid = turn(cid, "has nul", "answer", record=kernel_record(), at=NOW)
+    turn(cid, "other", "answer", record=kernel_record(), at=NOW - timedelta(minutes=1))
+    with SessionLocal() as db:
+        db.execute(text("update agent_messages set tool_calls = cast(:v as json) where id = :i"),
+                   {"v": '{"route": "K", "audit": {"terminal_status": "succeeded"}, "narration": ["a\\u0000b"]}', "i": mid})
+        db.commit()
+    for params in ({"engine": "v2"}, {"status": "succeeded"}, {"tier": "low"}, {"status": "incomplete"}):
+        assert get(client, "/backstage/answers", **params).status_code == 200, params
+    assert len(get(client, "/backstage/answers", engine="v2").json()["items"]) == 2
+
+
+def test_q_is_capped_and_wildcards_are_literal(client):
+    cid = conversation(bot())
+    turn(cid, "plain a_b", "x", record=None, steps=False, at=NOW)
+    turn(cid, "plain axb", "x", record=None, steps=False, at=NOW - timedelta(minutes=1))
+    assert [i["question"] for i in get(client, "/backstage/answers", q="a_b").json()["items"]] == ["plain a_b"]
+    assert get(client, "/backstage/answers", q="x" * 101).status_code == 422
+    assert get(client, "/backstage/answers", q="x" * 100).status_code == 200
+
+
+def test_the_list_cost_counts_only_chat_rows_against_the_audit(client):
+    cid = conversation(bot())
+    tid, _ = turn(cid, record=kernel_record())            # the audit says two chat calls
+    ledger(tid, cid, cost=0.01)
+    ledger(tid, cid, cost=0.01, purpose="judge")         # a judge row landed, the second chat row has not
+    model_usage.flush()
+    assert get(client, "/backstage/answers").json()["items"][0]["cost_usd"] is None
+    ledger(tid, cid, cost=0.01)
+    model_usage.flush()
+    assert get(client, "/backstage/answers").json()["items"][0]["cost_usd"] == pytest.approx(0.03)
+
+
+def test_usage_dates_out_of_bounds_are_422_not_500(client):
+    for params in ({"to": "9999-12-31"}, {"from": "0001-01-01"}, {"from": "1999-01-01", "to": "1999-01-02"}):
+        assert get(client, "/backstage/usage", **params).status_code == 422, params
+
+
+def test_usage_says_which_price_is_missing(client, monkeypatch):
+    from app import agent_model_catalog as catalog
+    monkeypatch.setattr(catalog, "entries", lambda: ([{"name": "cat-a", "price_input": 1.0, "price_output": 2.0, "price_cache_read": None,
+                                                        "price_cache_write": None}], None))
+    cid = conversation(bot())
+    ledger(uuid.uuid4(), cid, catalog="cat-a", cost=None, at=day(2026, 11, 1))        # has cache tokens, no cache-read price
+    ledger(uuid.uuid4(), cid, catalog="cat-b", cost=None, at=day(2026, 11, 1))        # no entry at all
+    model_usage.flush()
+    body = get(client, "/backstage/usage", **{"from": "2026-11-01", "to": "2026-11-01", "group": "model"}).json()
+    by_key = {g["key"]: g for g in body["groups"]}
+    assert by_key["cat-a"]["missing_prices"] == ["cache_read", "cache_write"]
+    assert by_key["cat-b"]["missing_prices"] == ["cache_read", "cache_write", "input", "output"]
+    assert body["totals"]["missing_prices"] == ["cache_read", "cache_write", "input", "output"] and body["totals"]["cost_usd"] is None
+
+
+def test_every_backstage_response_is_no_store(client):
+    for headers in (H, G):
+        for path in ENDPOINTS:
+            assert client.get(path, headers=headers).headers.get("cache-control") == "no-store", (path, headers)
+    assert client.get("/backstage/usage?group=weird", headers=H).headers.get("cache-control") == "no-store"
+    assert client.get("/backstage/answers?limit=0", headers=H).headers.get("cache-control") == "no-store"       # 422
+
+
+def test_the_legacy_access_key_header_is_not_the_owner(client):
+    for path in ENDPOINTS:
+        assert client.get(path, headers={"X-App-Access-Key": OWNER}).status_code == 403
