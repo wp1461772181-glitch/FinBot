@@ -4,14 +4,15 @@
 forecast's direction probabilities (forecast_model_provider).  ``judge`` is the claim judge (the review model,
 agent_workflow/claim_judge_pin); it has no catalog-default fallback: no row, or a row naming a model that has left
 the catalog, means the env / pinned judge.  For the other roles, no row, or a row naming a model that has since left
-the catalog, means the server's default model.  The table is made by ``Base.metadata.create_all`` at startup like the catalog's."""
+the catalog, means the server's default model.  ``fallback`` is the kernel's backup model: it has no default either
+(``fallback_for``: unset, or an entry that has left the catalog, means no backup).  The table is made by ``Base.metadata.create_all`` at startup like the catalog's."""
 from __future__ import annotations
 
 from . import agent_model_catalog as catalog
 from .agent_chat_models import AgentModelRole
 from .database import SessionLocal
 
-ROLES = ("earnings", "forecast", "judge")
+ROLES = ("earnings", "forecast", "judge", "fallback")
 
 
 class RoleError(ValueError):
@@ -65,6 +66,18 @@ def resolve(owner_hash: str | None, role: str) -> dict:
     """Provider settings (with the key, in memory only) for the role's model; the catalog default when
     the role is unset or its model is gone.  Raises catalog.CatalogError when nothing can be used."""
     return resolve_with_source(owner_hash, role)[0]
+
+
+def fallback_for(owner_hash: str | None) -> dict | None:
+    """Provider settings (with the key, in memory only) of the owner's backup model, or None: the role is unset, or
+    names an entry that has left the catalog or has no key.  Unlike the other roles nothing stands in for it."""
+    name = get(owner_hash, "fallback") if owner_hash else None
+    if not name or not catalog.exists(name):
+        return None
+    try:
+        return catalog.resolve(name)
+    except catalog.CatalogError:
+        return None
 
 
 def _newest_role_owner(role: str) -> str | None:

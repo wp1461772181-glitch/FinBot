@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 
 from .. import agent_chat_provider as provider
+from .. import agent_model_roles as roles
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_progress import progress_watchdog
 from ..agent_tool_catalog import schemas
@@ -37,6 +38,27 @@ EMPTY_ANSWER = "这次没能生成回答，请再发一次。"
 CAP_NOTE = "系统事实：已达到本轮的查询上限。请用现有资料直接回答，不要再调用工具；资料不足的部分明说。"
 
 
+BACKUP_LINE = "\n\n（这条由备用模型「{name}」回答。）"
+BACKUP_NARRATION = "主模型没有回应，改用备用模型「{name}」继续。"
+
+
+@dataclass
+class ModelUse:
+    """The model one turn is talking to.  ``name`` is its catalog entry (None for the context's own: not known by name)."""
+    provider: str
+    model: str
+    api_key: str = field(repr=False)
+    base_url: str | None = field(default=None, repr=False)
+    name: str | None = None
+
+    @property
+    def label(self) -> str:
+        return self.name or f"{self.provider}/{self.model}"
+
+    def same_as(self, other: "ModelUse") -> bool:
+        return (self.provider, self.model) == (other.provider, other.model)
+
+
 @dataclass
 class _Run:
     context: object
@@ -45,6 +67,8 @@ class _Run:
     user_text: str
     schemas: list
     tool_names: frozenset
+    model: ModelUse | None = None      # the model in use: the context's own, until a failure hands the turn to the backup
+    fallback_used: str | None = None   # the backup's catalog name once the turn is on it
     ceiling: str = "high"
     question: str = ""      # this turn's user message, as typed
     turn_id: str = ""
@@ -89,12 +113,55 @@ def _add_usage(run: _Run, data: dict, began: float) -> None:
     run.audit["cache_read_tokens"] += read
     run.audit["cache_write_tokens"] += written
     run.audit["calls"].append({"tier": run.tier, "ms": round((time.monotonic() - began) * 1000), "tokens": tokens,
-                               "cache_read": read, "cache_write": written})
+                               "cache_read": read, "cache_write": written, "model": run.model.label})
+
+
+def _failure_code(failure: Exception) -> str:
+    detail = getattr(failure, "detail", None)
+    return detail if isinstance(detail, str) and detail else type(failure).__name__
+
+
+async def _switch_to_backup(run: _Run, failure: Exception) -> bool:
+    """The model failed after its retry: move the turn to the owner's backup model, if there is one that differs.
+
+    The message list is rebuilt once: kept reasoning belongs to the model that wrote it.  Returns whether it switched."""
+    try:
+        found = await asyncio.to_thread(roles.fallback_for, getattr(run.context, "owner_hash", ""))
+    except Exception:
+        logger.exception("kernel backup model lookup failed")
+        return False
+    if not found:
+        return False
+    backup = ModelUse(found["provider"], found["model"], found["api_key"], found.get("base_url"), found["name"])
+    if backup.same_as(run.model):
+        return False
+    run.audit["fallback"] = {"from": run.model.label, "to": backup.name, "reason": _failure_code(failure)}
+    run.model = backup
+    run.fallback_used = backup.name
+    run.messages[:] = [{k: v for k, v in m.items() if not k.startswith("reasoning_")} if m.get("role") == "assistant" else m
+                       for m in run.messages]
+    sentence = BACKUP_NARRATION.format(name=backup.name)
+    run.narration.append(sentence)
+    await run.emit({"event": "narration", "text": sentence, "system": True})
+    return True
 
 
 async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
+    """One model call; when it fails after its retry, the same step is made again on the backup model."""
+    while True:
+        try:
+            return await _call_model(run, tool_schemas)
+        except Exception as failure:
+            if run.fallback_used:
+                run.audit["fallback"]["failed"] = True
+                raise
+            if not await _switch_to_backup(run, failure):
+                raise
+
+
+async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
     """One model call whose text is streamed out.  One retry on a retryable provider failure."""
-    context = run.context
+    use = run.model
 
     async def on_text(piece: str) -> None:
         if piece and isinstance(piece, str):
@@ -108,7 +175,7 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
         began = time.monotonic()
         try:
             data, message = await provider.stream_decision(
-                context.provider, context.model, context.api_key, run.messages, tool_schemas, base_url=context.base_url,
+                use.provider, use.model, use.api_key, run.messages, tool_schemas, base_url=use.base_url,
                 reasoning_effort=tiers.EFFORT[run.tier], on_text=on_text, keep_thinking=True, cache=True)
         except Exception as failure:
             # Whatever was streamed in this step is a cut-off: never leave it behind as the answer.
@@ -150,7 +217,7 @@ def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None
     run.audit["terminal_status"] = status
     run.audit["writes"] = run.writes
     return {"answer": answer, "citations": run.citations, "status": status,
-            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier, "narration": run.narration, "checklist": run.checklist}, "pending_request": run.pending or run.carried,
+            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier, "narration": run.narration, "checklist": run.checklist, **({"fallback_model": run.fallback_used} if run.fallback_used else {})}, "pending_request": run.pending or run.carried,
             "result_sets": [], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
 
 
@@ -215,6 +282,10 @@ async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_aga
     if failed_card:
         cleaned = f"{cleaned}\n\n{failed_card}"
         await run.emit({"event": "delta", "text": f"\n\n{failed_card}"})
+    if run.fallback_used:
+        label = BACKUP_LINE.format(name=run.fallback_used)
+        cleaned = f"{cleaned}{label}"
+        await run.emit({"event": "delta", "text": label})
     if progress.close_checklist(run):
         await run.emit({"event": "checklist", "items": [dict(entry) for entry in run.checklist]})
     return _result(run, cleaned, stop_reason)
@@ -258,6 +329,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
     pressed = press.read(question, state)
     tool_schemas = _tool_schemas(context)
     run = _Run(context=context, emit=emit, messages=[], user_text="", schemas=tool_schemas,
+               model=ModelUse(context.provider, context.model, context.api_key, context.base_url),
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)),
                question=question, turn_id=str(state.get("turn_id") or ""))
