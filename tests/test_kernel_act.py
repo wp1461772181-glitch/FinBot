@@ -40,7 +40,7 @@ def test_summaries_costs_and_tiers():
     assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 29
     assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "revise_forecast")] == [1, 2, 3, 3, 3]
     assert act.TIER1[0] == "remember" and act.TIER3[-2:] == ("ingest_web_source", "revise_forecast")
-    assert act.SUMMARIES["ingest_web_source"] == "把这一轮搜到的一个网页存进资料库"
+    assert act.SUMMARIES["ingest_web_source"].startswith("把这段对话里联网搜到的一个网页或新闻存进资料库")
     assert act.SUMMARIES["revise_forecast"] == "用新材料修订一份已存的预测（材料由用户在卡片上勾选）"
     assert act.COST_NOTES["ingest_web_source"] == "会把这个网页存入资料库和知识库。"
     assert act.COST_NOTES["revise_forecast"] == "会调用付费模型重新计算这份预测，生成新版本，旧版本保留。"
@@ -460,6 +460,16 @@ def test_a_refused_save_lists_the_pages_that_can_be_saved_so_a_later_turn_can_pi
     assert set(out["pages"][0]) == {"title", "url", "published_at"} and run_.read_results == 1    # titles are outside text
     empty = make_run(read_results=0)
     assert ingest(empty, symbol="AAPL")["pages"] == [] and empty.read_results == 0
+
+
+def test_the_lookup_of_saving_a_page_lists_the_pages_that_can_be_saved(web, monkeypatch):
+    monkeypatch.setattr(act, "owner_credential_matches", lambda credential: True)
+    run_ = make_run(web_rows={PAGE_URL: PAGE}, read_results=0, writes=[], audit={})
+    info = run(act.handle(run_, {"operation": "ingest_web_source"}))["data"][0]
+    assert [p["url"] for p in info["pages"]] == [PAGE_URL] and run_.read_results == 1 and "arguments" in info
+    empty = make_run(read_results=0, writes=[], audit={})
+    assert run(act.handle(empty, {"operation": "ingest_web_source"}))["data"][0]["pages"] == [] and empty.read_results == 0
+    assert "pages" not in run(act.handle(make_run(writes=[], audit={}), {"operation": "remember"}))["data"][0]
 
 
 def test_an_unreturned_page_is_refused_before_the_symbol_is_asked_for(web):

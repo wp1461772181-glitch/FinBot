@@ -59,8 +59,8 @@ SUMMARIES = {
     "retry_document_index": "重试一份失败文档的索引",
     "review_knowledge_candidate": "通过或拒绝一条知识候选",
     "withdraw_knowledge_document": "把一份知识文档从检索中撤回",
-    "save_material_evidence": "把用户贴的文字或材料存进资料库",
-    "ingest_web_source": "把这一轮搜到的一个网页存进资料库",
+    "save_material_evidence": "把用户自己贴的文字或材料存进资料库（联网搜到的网页用 ingest_web_source）",
+    "ingest_web_source": "把这段对话里联网搜到的一个网页或新闻存进资料库（正文由系统取，不用你提供；查格式时会列出可以存的网页）",
     "revise_forecast": "用新材料修订一份已存的预测（材料由用户在卡片上勾选）",
 }
 
@@ -572,7 +572,12 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
     if scope is not None and name not in scope:
         return _refusal("tool_not_in_bot_scope"), "refused:tool_not_in_bot_scope"
     if "arguments" not in args:
-        return {"ok": True, "data": [describe(name)]}, "lookup"
+        info = describe(name)
+        if name == "ingest_web_source":       # a later turn does not show the model the URLs an earlier search returned
+            info["pages"] = _savable_pages(run)
+            if info["pages"]:                 # page titles are text from outside: from here on nothing in this turn runs at once
+                run.read_results = getattr(run, "read_results", 0) + 1
+        return {"ok": True, "data": [info]}, "lookup"
     prepared = await prepare(run, name, args["arguments"])
     if isinstance(prepared, dict):
         status = ((prepared.get("data") or [{}])[0] or {}).get("status")
