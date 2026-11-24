@@ -207,3 +207,86 @@ def test_usage_is_passed_through(monkeypatch):
     assert data["usage"]["completion_tokens"] == 7
     assert data["usage"]["cache_read_input_tokens"] == 300
     assert data["usage"]["cache_creation_input_tokens"] == 40
+
+
+# --- a breakpoint at the end of the carried history ------------------------------------------------------------------
+
+def _marks(params):
+    """(message index, block index) of every message breakpoint, in order."""
+    return [(i, j) for i, m in enumerate(params["messages"]) for j, b in enumerate(m["content"]) if "cache_control" in b]
+
+
+def _count(params):
+    import json as _json
+    return _json.dumps(params).count("cache_control")
+
+
+HISTORY = [
+    {"role": "system", "content": "SYS"},
+    {"role": "user", "content": "第一问"},
+    {"role": "assistant", "content": "第一答", "cache_point": True},
+    {"role": "user", "content": "第二问"},
+    {"role": "user", "content": "记忆笔记"},
+]
+
+
+def test_marked_middle_message_gets_a_fourth_breakpoint():
+    params, _ = native.build_request(MODEL, HISTORY, SCHEMAS, cache=True)
+    assert _marks(params) == [(1, 0), (2, 1)]   # the marked answer, then the last block (question + note merged)
+    assert params["messages"][1]["content"][-1]["cache_control"] == CACHE
+    assert _count(params) == 4
+    assert "cache_point" not in str(params)
+
+
+def test_marked_last_message_has_one_breakpoint_there():
+    messages = [*HISTORY[:4], {**HISTORY[4], "cache_point": True}]
+    params, _ = native.build_request(MODEL, messages, SCHEMAS, cache=True)
+    assert _count(params) == 3 and "cache_point" not in str(params)
+    assert params["messages"][-1]["content"][-1]["cache_control"] == CACHE
+
+
+def test_only_the_last_marked_message_is_honoured():
+    messages = [{**m, "cache_point": True} if m["role"] != "system" and m["content"] in ("第一问", "第一答") else m for m in HISTORY]
+    params, _ = native.build_request(MODEL, messages, SCHEMAS, cache=True)
+    assert params["messages"][0]["content"][-1].get("cache_control") is None
+    assert params["messages"][1]["content"][-1]["cache_control"] == CACHE
+    assert _count(params) == 4 and "cache_point" not in str(params)
+
+
+def test_without_cache_the_mark_is_ignored_and_stripped():
+    params, _ = native.build_request(MODEL, HISTORY, SCHEMAS, cache=False)
+    assert _marks(params) == [] and "cache_point" not in str(params)
+    assert _count(params) == 1   # the tool list only
+
+
+def test_mark_lands_on_the_block_from_the_marked_message_when_messages_merge():
+    messages = [{"role": "system", "content": "SYS"}, {"role": "user", "content": "甲", "cache_point": True},
+                {"role": "user", "content": "乙"}, {"role": "user", "content": "丙"}]
+    params, _ = native.build_request(MODEL, messages, SCHEMAS, cache=True)
+    blocks = params["messages"][0]["content"]
+    assert [b["text"] for b in blocks] == ["甲", "乙", "丙"]
+    assert blocks[0]["cache_control"] == CACHE and blocks[1].get("cache_control") is None and blocks[2]["cache_control"] == CACHE
+    assert "cache_point" not in str(params)
+
+
+def test_a_marked_tool_result_is_marked_where_it_is_not_the_last_block():
+    messages = [{**m, "cache_point": True} if m.get("role") == "tool" else m for m in MESSAGES] + [{"role": "user", "content": "再问"}]
+    params, _ = native.build_request(MODEL, messages, SCHEMAS, cache=True)
+    result, question = params["messages"][2]["content"]
+    assert result["type"] == "tool_result" and result["cache_control"] == CACHE and question["cache_control"] == CACHE
+    assert "cache_point" not in str(params)
+    without = [{k: v for k, v in m.items() if k != "cache_point"} for m in messages]
+    assert "cache_control" not in native.build_request(MODEL, without, SCHEMAS, cache=True)[0]["messages"][2]["content"][0]
+
+
+def test_other_providers_never_see_the_private_key(monkeypatch):
+    sent = {}
+
+    async def fake_post(prov, api_key, body, base_url):
+        sent["body"] = body
+        return {"choices": [{"message": {"role": "assistant", "content": "x"}}]}, {"role": "assistant", "content": "x"}
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    asyncio.run(provider.decision_request("deepseek", "m", "k", HISTORY, SCHEMAS))
+    assert "cache_point" not in str(sent["body"]["messages"])
+    assert HISTORY[2]["cache_point"] is True   # the caller's list is not touched

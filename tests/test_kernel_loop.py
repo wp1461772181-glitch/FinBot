@@ -842,3 +842,15 @@ def test_an_unknown_operation_is_audited_as_none(env, fake_consent):
 
 def test_prompt_tells_the_model_a_read_turns_tier_1_into_a_card():
     assert "如果这一轮里你已经查过资料，这类操作也会放进确认卡。" in prompt.SYSTEM
+
+
+# --- the history-end cache mark ---------------------------------------------------------------------------------------
+
+def test_every_model_call_of_a_turn_carries_the_same_single_mark(env):
+    fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]),
+                        step(calls=[call("c2", "web_research", {"query": "x"})]), step(text="done")])
+    run("问题", messages=[{"role": "system", "content": "e"}, {"role": "user", "content": "前"}, {"role": "assistant", "content": "答"},
+                           {"role": "user", "content": "问题"}, {"role": "user", "content": "记忆笔记"}])
+    for c in fake.calls:
+        marked = [i for i, m in enumerate(c["messages"]) if m.get("cache_point")]
+        assert marked == [2] and c["messages"][2]["content"] == "答"

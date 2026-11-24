@@ -208,6 +208,7 @@ async def decision_request(provider, model, api_key, messages, schemas, base_url
     if provider=="anthropic":
         from . import anthropic_native
         if anthropic_native.use_native(provider):return await anthropic_native.decision_request(model,api_key,messages,schemas,reasoning_effort)
+    if any(isinstance(m,dict) and "cache_point" in m for m in messages):messages=[{k:v for k,v in m.items() if k!="cache_point"} for m in messages]  # kernel-private mark
     body={"model":model,"messages":messages,"max_tokens":MAX_OUTPUT_TOKENS,"stream":True}
     if schemas: body.update(tools=schemas,tool_choice="auto")
     if provider=="minimax":body["reasoning_split"]=True

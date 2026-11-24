@@ -34,6 +34,14 @@ SYSTEM = f"""你是 FinBot，用户的金融助手。说话像一个可靠的同
 - 目录里没有的操作现在做不了，直接说明。"""
 
 
+def _mark_end_of_history(body: list[dict], question_at: int) -> None:
+    """Mark the conversation message just before the question for the prompt cache: it is the end of the history the next turn
+    carries unchanged, whereas what follows the question (memory note, citation catalogue, notes) differs every turn."""
+    earlier = next((i for i in range(min(question_at, len(body)) - 1, -1, -1) if body[i].get("role") != "system"), None)
+    if earlier is not None:
+        body[earlier]["cache_point"] = True
+
+
 def build_messages(question: str, context, history: list[dict], *, fact: str | None = None) -> list[dict]:
     """System prompt (+ the bot's instruction and, for the owner only, the profile block), then the history.
 
@@ -48,10 +56,16 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
     body = [dict(message) for message in history or []]
     # The history can end with system-authored notes after the question, so look at the last user message.
     last = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "user"), None)
+    asked = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "user" and body[i].get("content") == question), None)
     if fact is not None:
         if last is not None and body[last].get("content") == question:
             del body[last]
+        if asked is None:   # the loop already took the button value out: the end is the card's own (last assistant) message
+            asked = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1) + 1
+        _mark_end_of_history(body, asked)
         return [{"role": "system", "content": system}, *body, {"role": "system", "content": fact}]
     if not (last is not None and body[last].get("content") == question):
         body.append({"role": "user", "content": question})
+        asked = len(body) - 1 if asked is None else asked
+    _mark_end_of_history(body, asked)
     return [{"role": "system", "content": system}, *body]
