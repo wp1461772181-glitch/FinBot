@@ -1,0 +1,94 @@
+{
+  "turns": 86,
+  "cases": 60,
+  "pass_rate": 0.9651162790697675,
+  "failure_rate": 0.0,
+  "total_ms_p50": 5190,
+  "total_ms_p90": 7998,
+  "first_delta_ms_p50": 4043,
+  "first_delta_ms_p90": 6632,
+  "first_event_ms_p50": 2660,
+  "tool_calls_mean": 1.0813953488372092,
+  "calc_share": 0.20430107526881722,
+  "model_calls_mean": 1.9518072289156627,
+  "token_usage_mean": 24976.85542168675,
+  "stop_reasons": {
+    "(none)": 86
+  },
+  "by_kind": {
+    "fact": {
+      "turns": 15,
+      "pass_rate": 1.0,
+      "total_ms_p50": 5381,
+      "total_ms_p90": 15156,
+      "first_delta_ms_p50": 5028,
+      "first_event_ms_p50": 2492
+    },
+    "brief": {
+      "turns": 10,
+      "pass_rate": 0.9,
+      "total_ms_p50": 7534,
+      "total_ms_p90": 9841,
+      "first_delta_ms_p50": 5875,
+      "first_event_ms_p50": 2792
+    },
+    "compare": {
+      "turns": 10,
+      "pass_rate": 1.0,
+      "total_ms_p50": 6137,
+      "total_ms_p90": 7349,
+      "first_delta_ms_p50": 5224,
+      "first_event_ms_p50": 2867
+    },
+    "followup": {
+      "turns": 20,
+      "pass_rate": 1.0,
+      "total_ms_p50": 5658,
+      "total_ms_p90": 6769,
+      "first_delta_ms_p50": 4467,
+      "first_event_ms_p50": 2665
+    },
+    "recall": {
+      "turns": 24,
+      "pass_rate": 0.9166666666666666,
+      "total_ms_p50": 3491,
+      "total_ms_p90": 5127,
+      "first_delta_ms_p50": 2931,
+      "first_event_ms_p50": 2484
+    },
+    "general": {
+      "turns": 7,
+      "pass_rate": 1.0,
+      "total_ms_p50": 3872,
+      "total_ms_p90": 5483,
+      "first_delta_ms_p50": 1742,
+      "first_event_ms_p50": 1742
+    }
+  },
+  "failed": [
+    {
+      "case_id": "B09",
+      "turn_index": 0,
+      "status": "succeeded",
+      "failed_checks": [
+        "include_any[0]"
+      ]
+    },
+    {
+      "case_id": "R03",
+      "turn_index": 2,
+      "status": "succeeded",
+      "failed_checks": [
+        "include_any[0]"
+      ]
+    },
+    {
+      "case_id": "R05",
+      "turn_index": 2,
+      "status": "succeeded",
+      "failed_checks": [
+        "include_any[0]"
+      ]
+    }
+  ]
+}
