@@ -6,6 +6,7 @@ object is used by attribute only (this module never imports ``loop``).
 """
 from __future__ import annotations
 
+import logging
 import asyncio
 import copy
 import json
@@ -36,6 +37,8 @@ _SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_ne
 # Run one at a time after every read has been numbered, in call order: calculations work on the citations the reads just
 # registered, and an ``act`` call may rest on what this step's reads found.
 _CALCULATIONS = ("calculate", "calculate_formula")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -131,6 +134,8 @@ async def _fetch(run, gate: asyncio.Semaphore, item: _Call) -> None:
         except (TimeoutError, ConnectionError):
             item.result = tools.error("tool_timeout")
         except Exception:
+            # The model only learns that the read failed; the cause has to be findable in the log.
+            logger.exception("kernel read %s failed", item.name)
             item.result = tools.error("tool_failed")
         mark_progress()
 

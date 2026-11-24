@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import hashlib,json
 from datetime import UTC,datetime
 from uuid import UUID
@@ -172,7 +173,9 @@ async def _retrieve(query:str, *, faq:bool, symbol:str|None=None, limit:int=5, a
     historical=bool(context and context.cutoff and cutoff<now)
     access='(scope == "public" and visibility == "public")'
     if context: access+=' or (scope == "private" and visibility == "private" and owner_hash == "'+_q(context.owner_hash)+'")'
-    try: eligible=_eligible_ann_ids(runtime.settings.generation,context,symbol,faq,historical,cutoff,analysis,source_id)
+    # A blocking database read of every eligible chunk (seconds for a company with many filings): off the event loop, so
+    # other reads, other turns and the stream's heartbeat keep running meanwhile.
+    try: eligible=await asyncio.to_thread(_eligible_ann_ids,runtime.settings.generation,context,symbol,faq,historical,cutoff,analysis,source_id)
     except KnowledgeUnavailable:raise
     except Exception as exc:raise KnowledgeUnavailable('knowledge authority database is unavailable') from exc
     if not eligible:return {'ok':True,'data':[],'source':'knowledge_chunks:research_faq' if faq else ('knowledge_documents:material_analysis_versions' if analysis else 'knowledge_documents:uploaded_evidence + sec_filing_inventory'),'as_of':None}

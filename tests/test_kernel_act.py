@@ -449,6 +449,19 @@ def test_a_page_an_earlier_turns_read_returned_can_be_saved(web):
     assert out.operation["snapshot"]["excerpt"] == "This turn's text."
 
 
+def test_a_refused_save_lists_the_pages_that_can_be_saved_so_a_later_turn_can_pick_one(web):
+    earlier = [{"id": "a", "tool": "web_research", "rows": [{**PAGE, "url": "https://a.example.com/1", "title": "旧\n的 " + "长" * 200}]},
+               {"id": "c", "tool": "search_x", "rows": [{**PAGE, "url": "https://x.com/u/1"}]}]
+    run_ = make_run(web_rows={PAGE_URL: PAGE}, carried_sets=earlier, read_results=0)
+    out = ingest(run_, symbol="AAPL", url="https://typed.example.com/never-returned")
+    assert out["error_code"] == "web_source_not_returned" and out["hint"] == act.PAGES_HINT
+    assert [p["url"] for p in out["pages"]] == [PAGE_URL, "https://a.example.com/1"]          # this turn first; a post on X is not a page
+    assert "\n" not in out["pages"][1]["title"] and len(out["pages"][1]["title"]) <= act.TITLE_CHARS
+    assert set(out["pages"][0]) == {"title", "url", "published_at"} and run_.read_results == 1    # titles are outside text
+    empty = make_run(read_results=0)
+    assert ingest(empty, symbol="AAPL")["pages"] == [] and empty.read_results == 0
+
+
 def test_an_unreturned_page_is_refused_before_the_symbol_is_asked_for(web):
     assert ingest(make_run())["error_code"] == "web_source_not_returned"
 

@@ -261,6 +261,33 @@ def _returned_page(run, url: str) -> dict | None:
     return None
 
 
+PAGES_SHOWN = 20
+PAGES_HINT = ("只能保存这段对话里联网搜到过的网页。pages 是现在可以保存的（新的在前）；按用户说的那一条从里面选 url 重新调用，"
+              "对不上就问用户是哪一条。pages 为空时先联网搜，再保存。")
+
+
+def _savable_pages(run) -> list[dict]:
+    """What can be saved now, for the model to pick from: a later turn does not show it the URLs an earlier search returned."""
+    rows = list((getattr(run, "web_rows", None) or {}).values())
+    for saved in reversed(getattr(run, "carried_sets", None) or []):
+        if saved.get("tool") in WEB_READS:
+            rows.extend(r for r in saved.get("rows") or [] if isinstance(r, dict))
+    pages, seen = [], set()
+    for row in rows:
+        url = row.get("url")
+        if isinstance(url, str) and url and url not in seen:
+            seen.add(url)
+            pages.append({"title": " ".join(str(row.get("title") or "").split())[:TITLE_CHARS], "url": url, "published_at": row.get("published_at")})
+    return pages[:PAGES_SHOWN]
+
+
+def _not_returned(run) -> dict:
+    pages = _savable_pages(run)
+    if pages:       # page titles are text from outside: from here on nothing in this turn runs at once
+        run.read_results = getattr(run, "read_results", 0) + 1
+    return _failure("web_source_not_returned", pages=pages, hint=PAGES_HINT)
+
+
 def _symbol_required(context) -> dict:
     """资料库 is per stock: with none to file the page under, the model asks the user (``ask``) before a card is made."""
     seen = []
@@ -277,7 +304,7 @@ async def _ingest(run, args: dict, operation: dict, display: dict) -> dict | Non
     args = {**args, "company": args.get("company") or company.get("company"), "symbol": args.get("symbol") or company.get("symbol")}
     page = _returned_page(run, args["url"])
     if not page:
-        return _failure("web_source_not_returned")      # before the stock is asked for: no question for a page that cannot be saved
+        return _not_returned(run)      # before the stock is asked for: no question for a page that cannot be saved
     if not args["symbol"] and not args.get("knowledge_only"):
         return _symbol_required(context)
     operation["arguments"] = copy.deepcopy(args)
@@ -383,7 +410,7 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
                            alternative=f'每次运行：{args["instruction"]}（可在「例行任务」页暂停、修改或删除）')
         elif name == "save_skill":
             display.update(title=f'{title} · {args["name"]}', targets=[{"kind": args["description"]}],
-                           alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能只会收窄可用工具，不授权写操作。')
+                           alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能不授权写操作；工具清单只对旧流程的 bot 生效。')
         elif name == "ingest_web_source":
             early = await _ingest(run, args, operation, display)
             if early is not None:
