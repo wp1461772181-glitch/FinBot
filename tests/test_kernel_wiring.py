@@ -85,14 +85,14 @@ class Wiring:
 
         self.monkeypatch.setattr(provider, "stream_decision", forbidden)
 
-    async def _send(self, **fields):
-        payload = StreamRequest(message="show AAPL prices", **fields)
+    async def _send(self, message="show AAPL prices", **fields):
+        payload = StreamRequest(message=message, **fields)
         request = Request({"type": "http", "method": "POST", "path": "/agent-chat/stream", "headers": []})
         response = await self.stream.stream_chat(payload, request, "x" * 40)
         return frames("".join([part async for part in response.body_iterator]))
 
-    def bot_turn(self):
-        return asyncio.run(self._send(bot_id=self.bot["bot_id"]))
+    def bot_turn(self, message="show AAPL prices", **fields):
+        return asyncio.run(self._send(message, bot_id=self.bot["bot_id"], **fields))
 
     def catalog_turn(self):
         return asyncio.run(self._send(catalog_model=""))
@@ -434,3 +434,51 @@ def test_a_proposed_card_reaches_the_client_and_the_stored_row(wiring):
     stored = next(args[3] for args, kwargs in wiring.stored if len(args) >= 4 and args[2] == "assistant" and args[3])
     assert stored == "我准备生成 AAPL 的预测，请核对卡片" and "T" * 43 not in json.dumps(final["audit"], default=str)
     assert proposed[0][0][0]["name"] == "forecast" and proposed[0][2] == "show AAPL prices"
+
+
+def test_propose_in_one_request_press_in_the_next(wiring):
+    """The card survives in the graph's own state between two requests; the press executes it and the turn carries on."""
+    import copy
+
+    from app.agent_workflow import consent, tools
+    from app.kernel import act, loop, prompt
+
+    wiring.bot["engine"] = "v2"
+    for module in (act, loop, prompt):
+        wiring.monkeypatch.setattr(module, "owner_credential_matches", lambda value: True)
+    token, saved, executed, models = "T" * 43, {}, [], []
+
+    def propose(credential, conversation, operations, display, *, question="", variants=None):
+        saved["card-1"] = {"id": "card-1", "operations": copy.deepcopy(operations), "display": display, "status": "proposed"}
+        return {"id": "card-1", "reason": "write_confirmation", "display": display, "original_question": question,
+                "choices": [{"label": "同意", "value": "confirm:" + token}, {"label": "取消", "value": "cancel:card-1"}]}
+
+    def execute(credential, conversation, tok, operations, handler):
+        assert tok == token and operations == saved["card-1"]["operations"]
+        outcomes = [handler(op, "card-1.0") for op in operations]
+        saved["card-1"]["status"] = "complete"
+        return {"ok": True, "data": outcomes, "status": "complete"}
+
+    wiring.monkeypatch.setattr(consent, "propose", propose)
+    wiring.monkeypatch.setattr(consent, "execute", execute)
+    wiring.monkeypatch.setattr(consent, "lookup", lambda credential, conversation, request_id: copy.deepcopy(saved[request_id]))
+    wiring.monkeypatch.setattr(tools, "execute_costly", lambda operation, key, context: executed.append(operation["name"]) or {"ok": True, "status": "queued", "job_id": "j1"})
+    wiring.model([([], [call("c1", "act", {"operation": "forecast", "arguments": {"symbol": "AAPL"}})]), (["请核对卡片"], [])])
+    first = wiring.bot_turn()
+    assert done_of(first)["status"] == "waiting_for_input" and executed == []
+
+    wiring.model([(["预测已提交"], [])])
+    inner, sent = wiring.script, []
+
+    async def spy(provider_name, model, api_key, messages, schemas, **kwargs):
+        sent.append(json.dumps(messages, ensure_ascii=False))
+        return await inner(provider_name, model, api_key, messages, schemas, **kwargs)
+
+    wiring.monkeypatch.setattr(provider, "stream_decision", spy)
+    second = wiring.bot_turn("confirm:" + token, pending_request_id="card-1", display_message="同意")
+    assert executed == ["forecast"]
+    assert [d["text"] for n, d in second if n == "delta"] == ["预测已提交"]
+    assert done_of(second)["status"] == "succeeded" and not any(n == "clarification" for n, _ in second)
+    assert len(sent) == 1 and "confirm:" not in sent[0] and token not in sent[0] and "系统事实：用户在确认卡" in sent[0]
+    user_rows = [args[3] for args, kwargs in wiring.stored if len(args) >= 4 and args[2] == "user"]
+    assert user_rows == ["show AAPL prices", "同意"]            # what the endpoint stores for a press today: the button's label

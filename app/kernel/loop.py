@@ -17,7 +17,7 @@ from ..agent_progress import progress_watchdog
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
-from . import act, progress, prompt, tiers
+from . import act, press, progress, prompt, tiers
 from .toolrun import run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
@@ -51,7 +51,8 @@ class _Run:
     citations: list = field(default_factory=list)
     proposals: list = field(default_factory=list)     # tier-2/3 operations collected this turn, put on one card when it ends
     writes: list = field(default_factory=list)       # one audit line per act call
-    pending: dict | None = None
+    pending: dict | None = None      # the card minted this turn
+    carried: dict | None = None      # the conversation's own card, still waiting after this turn
     sent_text: bool = False
     step_text: str = ""
     narration: list = field(default_factory=list)
@@ -137,16 +138,16 @@ async def _tool_step(run: _Run, message: dict) -> None:
 
 
 def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None = None) -> dict:
-    status = "failed" if failure else "waiting_for_input" if run.pending else "succeeded"
+    status = "failed" if failure else "waiting_for_input" if run.pending or run.carried else "succeeded"
     if run.pending:
-        run.audit["write_outcome"] = "proposed"
+        run.audit.setdefault("write_outcome", "proposed")     # a press's own outcome (executed, failed) stays the turn's word
     run.audit["stop_reason"] = stop_reason
     run.audit["tier"] = run.tier
     run.audit["escalated"] = run.tier != "low"
     run.audit["terminal_status"] = status
     run.audit["writes"] = run.writes
     return {"answer": answer, "citations": run.citations, "status": status,
-            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier, "narration": run.narration, "checklist": run.checklist}, "pending_request": run.pending,
+            "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier, "narration": run.narration, "checklist": run.checklist}, "pending_request": run.pending or run.carried,
             "result_sets": [], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
 
 
@@ -232,13 +233,39 @@ async def _loop(run: _Run) -> dict:
     return await _finish(run, final, stop, may_ask_again=False)
 
 
+async def _answer_press(run: _Run, settled: press.Settled, state: dict) -> dict:
+    """A press that is answered in a sentence: no model call."""
+    if settled.status == "waiting_for_input":
+        run.carried = state.get("pending_request")
+    await run.emit({"event": "delta", "text": settled.answer})
+    return _result(run, settled.answer, "press")
+
+
 async def run_turn(question: str, context, emit, messages: list[dict] | None = None, state: dict | None = None) -> dict:
+    state = state or {}
     history = list(messages or [])[1:]   # the first message is the endpoint's own system prompt
+    pressed = press.read(question, state)
     tool_schemas = _tool_schemas(context)
-    run = _Run(context=context, emit=emit, messages=prompt.build_messages(question, context, history),
-               user_text=_user_text(question, history), schemas=tool_schemas,
+    run = _Run(context=context, emit=emit, messages=[], user_text="", schemas=tool_schemas,
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)),
-               question=question, turn_id=str((state or {}).get("turn_id") or ""))
+               question=question, turn_id=str(state.get("turn_id") or ""))
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):
+        fact = None
+        if pressed:
+            settled = await press.settle(run, pressed, state)
+            run.audit["write_outcome"] = settled.outcome
+            if settled.answer is not None:
+                return await _answer_press(run, settled, state)
+            run.audit["write_request_id"] = pressed.request_id
+            fact = settled.fact
+            # From here on the user's words are the card's original question, never the button's value.
+            run.question = (state.get("pending_request") or {}).get("original_question") or ""
+            history = [m for m in history if not (m.get("role") == "user" and m.get("content") == question)]
+        run.messages = prompt.build_messages(question, context, history, fact=fact)
+        run.user_text = _user_text(run.question, history)
+        note = None if pressed else press.typed_note(state)
+        if note:
+            run.messages.append({"role": "system", "content": note})
+            run.carried = state["pending_request"]
         return await _loop(run)

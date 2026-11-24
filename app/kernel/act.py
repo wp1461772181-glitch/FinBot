@@ -291,12 +291,25 @@ def _code(failure: Exception) -> str:
     return str(getattr(failure, "code", None) or failure) or "write_service_failed"
 
 
+def execute_handler(context, *, variant: str | None = None):
+    """What ``consent.execute`` calls for each frozen operation (in its worker thread): the reversible or the costly executor.
+
+    ``variant`` is how the user approved a ``save_skill`` card (``draft``, or ``None`` for enabled); it is the press, not the
+    frozen operation, that says so.
+    """
+    def handler(frozen, key):
+        if definitions()[frozen["name"]].level == "reversible":
+            extra = {"overrides": {"status": variant}} if frozen["name"] == "save_skill" else {}
+            return asyncio.run(tools.execute_reversible(frozen, key, context, **extra))
+        return tools.execute_costly(frozen, key, context)
+
+    return handler
+
+
 async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
     """A tier-1 operation: a card minted and pressed in the same breath, so consent still freezes, locks and records it."""
     context, operation = run.context, prepared.operation
-
-    def handler(frozen, key):
-        return asyncio.run(tools.execute_reversible(frozen, key, context))
+    handler = execute_handler(context)
 
     try:
         card = await asyncio.to_thread(consent.propose, context.identity_credential, context.conversation_id, [operation], prepared.display,

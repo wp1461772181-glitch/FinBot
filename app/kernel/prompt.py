@@ -33,10 +33,11 @@ SYSTEM = f"""你是 FinBot，用户的金融助手。说话像一个可靠的同
 - 目录里没有的操作现在做不了，直接说明。"""
 
 
-def build_messages(question: str, context, history: list[dict]) -> list[dict]:
+def build_messages(question: str, context, history: list[dict], *, fact: str | None = None) -> list[dict]:
     """System prompt (+ the bot's instruction and, for the owner only, the profile block), then the history.
 
-    ``history`` may already end with the current question; it is added only when it is not there.
+    ``history`` may already end with the current question; it is added only when it is not there.  With ``fact`` the question
+    is a card button's raw value: it is dropped from the history, never added, and the fact (a system message) is the last message.
     """
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
     blocks = [SYSTEM, getattr(context, "bot_block", None)]
@@ -45,7 +46,11 @@ def build_messages(question: str, context, history: list[dict]) -> list[dict]:
     system = "\n\n".join(block for block in blocks if block)
     body = [dict(message) for message in history or []]
     # The history can end with system-authored notes after the question, so look at the last user message.
-    last = next((m for m in reversed(body) if m.get("role") == "user"), None)
-    if not (last and last.get("content") == question):
+    last = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "user"), None)
+    if fact is not None:
+        if last is not None and body[last].get("content") == question:
+            del body[last]
+        return [{"role": "system", "content": system}, *body, {"role": "system", "content": fact}]
+    if not (last is not None and body[last].get("content") == question):
         body.append({"role": "user", "content": question})
     return [{"role": "system", "content": system}, *body]
