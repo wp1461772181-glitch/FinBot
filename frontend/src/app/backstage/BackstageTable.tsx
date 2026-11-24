@@ -19,7 +19,7 @@ export type Column<Row> = { key: string; header: string; cell: (row: Row) => Rea
 export function BackstageTable<Row>({ label, columns, rows, rowKey, onOpen, testId, rowClass }: {
   label: string; columns: Column<Row>[]; rows: Row[]; rowKey: (row: Row) => string; onOpen?: (row: Row) => void; testId: string; rowClass?: (row: Row) => string | undefined;
 }) {
-  return <table data-testid={testId} aria-label={label} className="w-full min-w-0 border-collapse text-small max-sm:block">
+  return <table data-testid={testId} aria-label={label} className="w-full min-w-0 max-w-full border-collapse text-small max-sm:block">
     <thead className="max-sm:sr-only">
       <tr className="border-b border-line text-left text-caption text-muted-foreground">
         {columns.map(column => <th key={column.key} scope="col" className={cn("px-3 py-2 font-medium", column.className)}>{column.header}</th>)}
@@ -29,8 +29,8 @@ export function BackstageTable<Row>({ label, columns, rows, rowKey, onOpen, test
       {rows.map(row => <tr key={rowKey(row)} data-testid="backstage-row" onClick={onOpen ? () => onOpen(row) : undefined}
         className={cn("border-b border-line align-top max-sm:mb-2 max-sm:grid max-sm:grid-cols-2 max-sm:gap-x-4 max-sm:rounded-md max-sm:border max-sm:bg-surface max-sm:p-3", onOpen && "cursor-pointer hover:bg-sunken", rowClass?.(row))}>
         {columns.map(column => <td key={column.key} data-label={column.header}
-          className={cn("px-3 py-2 max-sm:flex max-sm:min-w-0 max-sm:flex-col max-sm:gap-0.5 max-sm:px-0 max-sm:py-1 max-sm:before:text-caption max-sm:before:text-muted-foreground max-sm:before:content-[attr(data-label)]", column.wide && "max-sm:col-span-2", column.className)}>
-          <span className="min-w-0">{column.cell(row)}</span>
+          className={cn("px-3 py-2 max-sm:flex max-sm:min-w-0 max-sm:flex-col max-sm:gap-0.5 max-sm:px-0 max-sm:py-1 max-sm:before:text-caption max-sm:before:text-muted-foreground max-sm:before:content-[attr(data-label)]", "min-w-0 [overflow-wrap:anywhere]", column.wide && "max-sm:col-span-2", column.className)}>
+          <span dir="auto" className="min-w-0">{column.cell(row)}</span>
         </td>)}
       </tr>)}
     </tbody>
@@ -47,7 +47,8 @@ export function Status({ status }: { status: BadgeStatus }) {
 export function CostText({ cost, className }: { cost: Cost; className?: string }) {
   const { t } = useLocale();
   if (cost.kind === "amount") return <span className={cn("font-mono tabular-nums", className)}>{cost.amount}</span>;
-  if (cost.kind === "unpriced") return <Link to={paths.settings("models")} title={t("去设置里给这个模型填价格")} className={cn("text-action underline-offset-2 hover:underline", className)}>{t("未设价格")}</Link>;
+  if (cost.kind === "pending") return <span title={t("这一轮的费用还在写入，稍后再看")} className={cn("text-muted-foreground", className)}>{t("记账中")}</span>;
+  if (cost.kind === "unpriced") return <Link to={paths.settings("models")} onClick={event => event.stopPropagation()} title={t("去设置里给这个模型填价格")} className={cn("text-action underline-offset-2 hover:underline", className)}>{t("未设价格")}</Link>;
   return <span className={cn("text-muted-foreground", className)}>—</span>;
 }
 

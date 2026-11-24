@@ -777,3 +777,108 @@ def test_every_backstage_response_is_no_store(client):
 def test_the_legacy_access_key_header_is_not_the_owner(client):
     for path in ENDPOINTS:
         assert client.get(path, headers={"X-App-Access-Key": OWNER}).status_code == 403
+
+
+# --- fix round 1: true time order, and the state of a turn's cost ----------------------------------------------------
+def with_timeline(entries, **extra):
+    record = kernel_record(**extra)
+    record["audit"]["timeline"] = entries
+    return record
+
+
+TIMELINE = [{"kind": "call", "at_ms": 300, "step": 1, "index": 0}, {"kind": "say", "at_ms": 310, "step": 1, "index": 0},
+            {"kind": "tool", "at_ms": 320, "step": 1, "call_id": "call-1", "name": "query_financials"},
+            {"kind": "tool_done", "at_ms": 900, "step": 1, "call_id": "call-1"}, {"kind": "call", "at_ms": 1700, "step": 2, "index": 1}]
+
+
+def test_the_detail_interleaves_its_events_by_the_timeline(client):
+    cid = conversation(bot())
+    tid, mid = turn(cid, record=with_timeline(TIMELINE))
+    ledger(tid, cid, ms=900, at=NOW)
+    ledger(tid, cid, ms=700, at=NOW + timedelta(seconds=1))
+    model_usage.flush()
+    body = get(client, f"/backstage/answers/{mid}").json()
+    assert body["ordered"] is True
+    assert [(e["kind"], e.get("index"), e.get("call_id"), e["at_ms"], e["step"]) for e in body["events"]] == [
+        ("model_call", 0, None, 300, 1), ("narration", 0, None, 310, 1), ("tool_call", None, "call-1", 320, 1),
+        ("tool_done", None, "call-1", 900, 1), ("model_call", 1, None, 1700, 2)]
+    assert len(body["model_calls"]) == 2 and len(body["narration"]) == 1 and body["tool_calls"][0]["call_id"] == "call-1"
+
+
+def test_a_failed_attempt_sits_before_the_call_that_followed_it_and_a_judge_row_goes_last(client):
+    cid = conversation(bot())
+    tid, mid = turn(cid, record=with_timeline(TIMELINE))
+    ledger(tid, cid, ok=False, error="http_500", at=NOW)
+    ledger(tid, cid, at=NOW + timedelta(seconds=1))
+    ledger(tid, cid, at=NOW + timedelta(seconds=2))
+    ledger(tid, cid, purpose="judge", model="j-1", catalog="judge-1", at=NOW + timedelta(seconds=3))
+    model_usage.flush()
+    body = get(client, f"/backstage/answers/{mid}").json()
+    refs = [e["index"] for e in body["events"] if e["kind"] == "model_call"]
+    assert [body["model_calls"][i]["purpose"] for i in refs] == ["chat", "chat", "chat", "judge"]
+    assert [body["model_calls"][i]["ok"] for i in refs][:2] == [False, True]
+    timed = [e["at_ms"] for e in body["events"] if e["at_ms"] is not None]
+    assert timed == sorted(timed) and sorted(refs) == list(range(4))
+    assert body["events"][0]["kind"] == "model_call" and body["events"][0]["at_ms"] is None      # the failed attempt has no time of its own
+
+
+def test_an_old_record_has_no_time_order_and_keeps_the_kind_order(client):
+    cid = conversation(bot())
+    tid, mid = turn(cid, record=kernel_record())
+    ledger(tid, cid)
+    ledger(tid, cid)
+    model_usage.flush()
+    body = get(client, f"/backstage/answers/{mid}").json()
+    assert body["ordered"] is False
+    assert [e["kind"] for e in body["events"]] == ["narration", "model_call", "model_call", "tool_call"]
+    assert all(e["at_ms"] is None for e in body["events"])
+    old = get(client, f"/backstage/answers/{turn(cid, record=None, steps=False)[1]}").json()
+    assert old["ordered"] is False and old["events"] == []
+
+
+def test_a_damaged_timeline_is_ignored_not_trusted(client):
+    cid = conversation(bot())
+    entries = ["x", None, {"kind": "tool", "at_ms": "soon"}, {"kind": "say", "at_ms": 5, "index": 99}, {"kind": "tool", "at_ms": 7, "call_id": "nope"}]
+    tid, mid = turn(cid, record=with_timeline(entries))
+    body = get(client, f"/backstage/answers/{mid}").json()
+    assert body["ordered"] is False and len(body["events"]) >= 1
+
+
+def test_cost_state_priced_unpriced_pending_none(client, monkeypatch):
+    from app import agent_model_catalog as catalog
+    monkeypatch.setattr(catalog, "entries", lambda: ([{"name": "cat-1", "price_input": 1.0, "price_output": 2.0, "price_cache_read": None,
+                                                        "price_cache_write": None}], None))
+    cid = conversation(bot())
+    old = NOW - timedelta(minutes=30)
+    priced, priced_msg = turn(cid, record=kernel_record(), at=old)
+    ledger(priced, cid, cost=0.01, at=old)
+    ledger(priced, cid, cost=0.02, at=old)
+    unpriced, unpriced_msg = turn(cid, record=kernel_record(), at=old + timedelta(minutes=1))
+    ledger(unpriced, cid, cost=0.01, at=old)
+    ledger(unpriced, cid, cost=None, at=old)
+    pending, pending_msg = turn(cid, record=kernel_record(), at=NOW)
+    ledger(pending, cid, cost=0.01, at=NOW)            # the audit says two calls; one row has landed and the turn just ended
+    stale, stale_msg = turn(cid, record=kernel_record(), at=old + timedelta(minutes=2))
+    ledger(stale, cid, cost=0.01, at=old)              # one row short, but two minutes have long passed: not "pending" any more
+    none, none_msg = turn(cid, record={"route": "K", "audit": {"engine": "v2", "model_calls": 0, "calls": []}}, at=old + timedelta(minutes=3), steps=False)
+    model_usage.flush()
+    items = {item["message_id"]: item for item in get(client, "/backstage/answers").json()["items"]}
+    states = {name: (items[str(mid)]["cost_state"], items[str(mid)]["missing_prices"]) for name, mid in
+              (("priced", priced_msg), ("unpriced", unpriced_msg), ("pending", pending_msg), ("stale", stale_msg), ("none", none_msg))}
+    assert states["priced"] == ("priced", [])
+    assert states["unpriced"] == ("unpriced", ["cache_read", "cache_write"])
+    assert states["pending"][0] == "pending"
+    assert states["stale"][0] == "unpriced"
+    assert states["none"] == ("none", [])
+    assert items[str(pending_msg)]["cost_usd"] is None
+    for name, mid in (("priced", priced_msg), ("unpriced", unpriced_msg), ("pending", pending_msg), ("none", none_msg)):
+        detail = get(client, f"/backstage/answers/{mid}").json()
+        assert (detail["cost_state"], detail["missing_prices"]) == states[name], name
+
+
+def test_a_turn_with_no_ledger_and_an_audit_is_pending_while_fresh_and_unpriced_once_old(client):
+    cid = conversation(bot())
+    turn(cid, record=kernel_record(), at=NOW)
+    turn(cid, record=kernel_record(), at=NOW - timedelta(hours=2))
+    items = get(client, "/backstage/answers").json()["items"]
+    assert [i["cost_state"] for i in items] == ["pending", "unpriced"]

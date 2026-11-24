@@ -59,6 +59,7 @@ STATUSES = ("failed", "cancelled", "succeeded", "waiting_for_input", "incomplete
 MIN_DAY, MAX_DAY = date(2000, 1, 1), date(2100, 12, 31)
 GROUPS = ("day", "model", "bot", "purpose")
 PREVIEW_CHARS = 200
+PENDING_WINDOW = timedelta(minutes=2)       # a turn that ended less than this ago may still have ledger rows on their way
 MAX_LIMIT = 200
 MAX_DAYS = 400
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -241,11 +242,48 @@ def _ledger_by_turn(db, turn_ids) -> dict:
     for turn_id, name in db.execute(select(L.turn_id, func.coalesce(L.catalog_name, L.model)).where(L.turn_id.in_(turn_ids))
                                     .group_by(L.turn_id, func.coalesce(L.catalog_name, L.model)).order_by(func.min(L.created_at))):
         names.setdefault(turn_id, []).append(name)
+    # What keeps a turn's unpriced calls unpriced: the catalog entry each one ran under, and whether it used cache tokens.
+    lacking = {}
+    for turn_id, name, read, write in db.execute(select(L.turn_id, L.catalog_name, func.bool_or(L.cache_read_tokens > 0), func.bool_or(L.cache_write_tokens > 0))
+                                                 .where(L.turn_id.in_(turn_ids), L.cost_usd.is_(None)).group_by(L.turn_id, L.catalog_name)):
+        lacking.setdefault(turn_id, []).append((name, bool(read), bool(write)))
     return {row[0]: {"calls": row[1], "tokens": int(row[2] or 0), "cache_read": int(row[3] or 0), "cache_write": int(row[4] or 0),
-                     "unpriced": row[5], "cost": row[6], "ok_chat_calls": row[7], "models": names.get(row[0], [])} for row in totals}
+                     "unpriced": row[5], "cost": row[6], "ok_chat_calls": row[7], "models": names.get(row[0], []),
+                     "lacking": lacking.get(row[0], [])} for row in totals}
 
 
-def _list_item(asked, final, bot_id, ledger, bots) -> dict:
+def _missing_names(lacking) -> list:
+    """The catalog prices (input, output, cache_read, cache_write) whose absence keeps these calls unpriced, as the entries are now."""
+    lacking = list(lacking)
+    if not lacking:
+        return []
+    from . import agent_model_catalog as catalog
+    try:
+        by_name = {item["name"]: item for item in catalog.entries()[0]}
+    except Exception:  # noqa: BLE001 - a catalog that cannot be read leaves the names out; the state still says unpriced
+        by_name = {}
+    found = set()
+    for name, read, write in lacking:
+        found |= _missing_prices(by_name.get(name), read, write)
+    return sorted(found)
+
+
+def _aware(value):
+    return value if value is None or value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def cost_state(*, calls, ok_chat, expected, unpriced, ended_at, now) -> str:
+    """``none`` (no model call), ``pending`` (the ledger has fewer chat rows than the audit counted and the turn ended under two minutes ago:
+    the rest are still being written), ``unpriced`` (a call had no price, or rows are missing for good), else ``priced``."""
+    if not calls and not expected:
+        return "none"
+    if ok_chat < expected:
+        ended = _aware(ended_at)
+        return "pending" if ended is not None and now - ended < PENDING_WINDOW else "unpriced"
+    return "unpriced" if unpriced else "priced"
+
+
+def _list_item(asked, final, bot_id, ledger, bots, now) -> dict:
     """One turn: ``asked`` is its user row, ``final`` its last assistant row (None when there is none).  A tool round is not an answer:
     a turn that stopped at one (or never got one) is ``incomplete`` and its item carries the question's id."""
     incomplete = final is None or is_tool_round(final)
@@ -258,12 +296,17 @@ def _list_item(asked, final, bot_id, ledger, bots) -> dict:
         models = ledger["models"]
         # Rows are written a moment after the turn: a cost is the turn's only when every call it made has landed and has a price.
         cost = ledger["cost"] if not ledger["unpriced"] and ledger["ok_chat_calls"] >= expected else None
+        state = cost_state(calls=calls, ok_chat=ledger["ok_chat_calls"], expected=expected, unpriced=ledger["unpriced"],
+                           ended_at=(final or asked).created_at, now=now)
+        missing = _missing_names(ledger["lacking"])
     else:
         calls = expected
         tokens = {"total": _number(audit.get("token_usage")) or 0, "cache_read": _number(audit.get("cache_read_tokens")) or 0,
                   "cache_write": _number(audit.get("cache_write_tokens")) or 0}
         models = list(dict.fromkeys(str(call["model"]) for call in audit_calls if call.get("model")))
         cost = None
+        state = cost_state(calls=0, ok_chat=0, expected=expected, unpriced=0, ended_at=(final or asked).created_at, now=now)
+        missing = []
     writes = [_dict(item).get("outcome") for item in _list(audit.get("writes")) if _dict(item).get("outcome")]
     shown = asked if incomplete else final
     return {"message_id": str(shown.id), "conversation_id": str(asked.conversation_id), "bot_id": str(bot_id) if bot_id else None,
@@ -272,7 +315,7 @@ def _list_item(asked, final, bot_id, ledger, bots) -> dict:
             "engine": None if incomplete else _engine(record),
             "status": "incomplete" if incomplete else derive_status(final.status, audit.get("terminal_status")),
             "tier": _tier(record), "models": scrub(models), "total_ms": _total_ms(record), "model_calls": calls, "tokens": tokens,
-            "cost_usd": cost,
+            "cost_usd": cost, "cost_state": state, "missing_prices": missing,
             "tool_count": _number(audit.get("tool_calls")) if _number(audit.get("tool_calls")) is not None else len(_list(record.get("tool_trace"))),
             "write_outcomes": writes, "write_outcome": audit.get("write_outcome")}
 
@@ -311,12 +354,13 @@ def answers(x_chat_session: str | None = Header(default=None), bot_id: str | Non
         query = query.where(or_(M.content.ilike(pattern, escape="\\"), F.content.ilike(pattern, escape="\\")))
     if cursor:
         query = query.where(tuple_(M.created_at, M.id) < tuple_(cursor[0], cursor[1]))
+    now = datetime.now(UTC)
     with SessionLocal() as db:
         rows = db.execute(query.order_by(M.created_at.desc(), M.id.desc()).limit(limit + 1)).all()
         more, rows = len(rows) > limit, rows[:limit]
         ledger = _ledger_by_turn(db, [row[0].turn_id for row in rows])
         bots = _bot_names(db, owner)
-        items = [_list_item(asked, final, bot_of, ledger.get(asked.turn_id), bots) for asked, final, bot_of in rows]
+        items = [_list_item(asked, final, bot_of, ledger.get(asked.turn_id), bots, now) for asked, final, bot_of in rows]
         next_before = _cursor(rows[-1][0].created_at, rows[-1][0].id) if more else None
     threshold = None
     if slow:
@@ -392,7 +436,7 @@ def _call_line(*, tier, model, catalog_name, purpose, ms, tokens, attempt, ok, e
 
 
 def _model_calls(db, turn_id, record):
-    """(lines, source): the ledger's rows of the turn when they are all there, else the audit's lines."""
+    """(lines, source, rows): the ledger's rows of the turn when they are all there, else the audit's lines; ``rows`` are all the ledger has."""
     audit_calls = [_dict(call) for call in _list(_dict(record.get("audit")).get("calls"))]
     rows = list(db.scalars(select(ModelCall).where(ModelCall.turn_id == turn_id).order_by(ModelCall.created_at, ModelCall.id)))
     chat_ok = [row for row in rows if row.purpose == "chat" and row.ok]
@@ -403,13 +447,67 @@ def _model_calls(db, turn_id, record):
                                     "cache_write": row.cache_write_tokens,
                                     "total": row.input_tokens + row.output_tokens + row.cache_read_tokens + row.cache_write_tokens},
                             attempt=row.attempt, ok=row.ok, error=row.error, cost=row.cost_usd, at=_iso(row.created_at)) for row in rows]
-        return lines, "ledger"
+        return lines, "ledger", rows
     if audit_calls:
         return [_call_line(tier=call.get("tier"), model=call.get("model"), catalog_name=None, purpose="chat", ms=call.get("ms"),
                            tokens={"input": None, "output": None, "cache_read": call.get("cache_read"), "cache_write": call.get("cache_write"),
                                    "total": call.get("tokens")}, attempt=None, ok=None, error=None, cost=None, at=None)
-                for call in audit_calls], "audit"
-    return [], "none"
+                for call in audit_calls], "audit", rows
+    return [], "none", rows
+
+
+def _model_positions(source, rows, audit_calls) -> dict:
+    """Which entry of ``model_calls`` each of the audit's calls (the kernel timeline's ``call`` index) is: by order among the chat rows that
+    succeeded, when they are as many as the audit's lines (the same match that gives a row its tier); by position when the lines are shown."""
+    if source == "audit":
+        return {i: i for i in range(len(audit_calls))}
+    if source != "ledger" or not audit_calls:
+        return {}
+    chat_ok = [position for position, row in enumerate(rows) if row.purpose == "chat" and row.ok]
+    return dict(enumerate(chat_ok)) if len(chat_ok) == len(audit_calls) else {}
+
+
+def _event(kind, at_ms=None, step=None, **ref) -> dict:
+    return {"kind": kind, "at_ms": at_ms, "step": step, **ref}
+
+
+def _events(record, narration, model_count, positions, tool_calls) -> tuple[bool, list]:
+    """The detail's events in the order they happened, as references into ``narration``, ``model_calls`` and ``tool_calls``.
+
+    With the kernel's ``audit.timeline`` they are interleaved by it (``ordered`` true; entries that do not point at anything are dropped; a
+    failed attempt, which the timeline does not know, sits before the call that followed it, and rows after the last call go last).  Without it
+    (an older record, or a damaged one) they keep the kind order: narration, model calls, tool calls."""
+    ids = [call.get("call_id") for call in tool_calls]
+    taken = set()
+    def number(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+    ordered, placed, mapped = [], set(), set(positions.values())
+    for entry in _list(_dict(record.get("audit")).get("timeline")):
+        entry = _dict(entry)
+        kind, at_ms, step = entry.get("kind"), number(entry.get("at_ms")), number(entry.get("step"))
+        if at_ms is None:
+            continue
+        if kind == "say" and number(entry.get("index")) is not None and entry["index"] < len(narration) and ("say", entry["index"]) not in taken:
+            taken.add(("say", entry["index"]))
+            ordered.append(_event("narration", at_ms, step, index=entry["index"]))
+        elif kind == "call" and entry.get("index") in positions and positions[entry["index"]] not in placed:
+            position = positions[entry["index"]]
+            for earlier in range(position):         # attempts the timeline does not know come before the call that followed them
+                if earlier not in mapped and earlier not in placed and earlier < model_count:
+                    placed.add(earlier)
+                    ordered.append(_event("model_call", index=earlier))
+            placed.add(position)
+            ordered.append(_event("model_call", at_ms, step, index=position))
+        elif kind in ("tool", "tool_done") and entry.get("call_id") in ids and (kind, entry["call_id"]) not in taken:
+            taken.add((kind, entry["call_id"]))
+            ordered.append(_event("tool_call" if kind == "tool" else "tool_done", at_ms, step, call_id=entry["call_id"]))
+    if not ordered:
+        return False, [*(_event("narration", index=i) for i in range(len(narration))), *(_event("model_call", index=i) for i in range(model_count)),
+                       *(_event("tool_call", call_id=i) for i in ids if i is not None)]
+    ordered += [_event("model_call", index=i) for i in range(model_count) if i not in placed]
+    ordered += [_event("narration", index=i) for i in range(len(narration)) if ("say", i) not in taken]
+    ordered += [_event("tool_call", call_id=i) for i in ids if i is not None and ("tool", i) not in taken]
+    return True, ordered
 
 
 def _kind(value) -> str:
@@ -496,22 +594,32 @@ def answer(message_id: str, x_chat_session: str | None = Header(default=None)):
         incomplete = final is None or is_tool_round(final)
         record = {} if incomplete else _record(final.tool_calls)
         audit = _dict(record.get("audit"))
-        calls, source = _model_calls(db, opened.turn_id, record)
+        calls, source, ledger_rows = _model_calls(db, opened.turn_id, record)
         card = _card(db, owner, record, now)
         bot_name = _bot_names(db, owner).get(str(bot_id)) if bot_id else None
+        audit_calls = _list(audit.get("calls"))
+        expected = _number(audit.get("model_calls")) or len(audit_calls)
+        lacking = [(row.catalog_name, row.cache_read_tokens > 0, row.cache_write_tokens > 0) for row in ledger_rows if row.cost_usd is None]
+        state = cost_state(calls=len(ledger_rows) or (expected if source == "audit" else 0), ok_chat=sum(1 for row in ledger_rows if row.purpose == "chat" and row.ok),
+                           expected=expected, unpriced=len(lacking), ended_at=(final or opened).created_at, now=now)
+        missing = _missing_names(lacking)
+        positions = _model_positions(source, ledger_rows, audit_calls)
     shown = asked_row if incomplete and asked_row is not None else final or opened
     engine = None if incomplete else _engine(record)
     citations = [{"ordinal": item.get("ordinal"), "title": scrub(item.get("title")), "url": scrub(item.get("url")),
                   "source_type": item.get("source_type")} for item in map(_dict, _list(record.get("citations"))) if item]
     fallback = audit.get("fallback")
+    narration = scrub([line for line in _list(record.get("narration")) if isinstance(line, str)])
+    tool_calls = _tool_calls(turn_rows, record)
+    ordered, events = _events(record, narration, len(calls), positions, tool_calls)
     return {"message_id": str(shown.id), "conversation_id": str(opened.conversation_id), "turn_id": str(opened.turn_id),
             "bot_id": str(bot_id) if bot_id else None, "bot_name": bot_name, "created_at": _iso(shown.created_at),
             "engine": engine, "partial": engine != "v2",
             "status": "incomplete" if incomplete else derive_status(final.status, audit.get("terminal_status")),
             "tier": _tier(record), "total_ms": _total_ms(record), "question": _question(asked_row.content if asked_row else ""),
-            "model_calls": calls, "model_calls_source": source,
-            "narration": scrub([line for line in _list(record.get("narration")) if isinstance(line, str)]),
-            "checklist": scrub(_list(record.get("checklist"))), "tool_calls": _tool_calls(turn_rows, record), "citations": citations,
+            "model_calls": calls, "model_calls_source": source, "cost_state": state, "missing_prices": missing,
+            "narration": narration, "ordered": ordered, "events": events,
+            "checklist": scrub(_list(record.get("checklist"))), "tool_calls": tool_calls, "citations": citations,
             "writes": scrub([item for item in _list(audit.get("writes")) if isinstance(item, dict)]),
             "write_outcome": audit.get("write_outcome"), "card": card, "answer": "" if incomplete else scrub(final.content or ""),
             "backup_model": scrub(fallback) if isinstance(fallback, dict) else None, "langfuse_url": _langfuse_url(record)}

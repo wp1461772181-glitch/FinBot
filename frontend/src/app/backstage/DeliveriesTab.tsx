@@ -12,12 +12,12 @@ export function DeliveriesTab() {
   const list = usePaged<DeliveryItem, Awaited<ReturnType<typeof listDeliveries>>>((before, signal) => listDeliveries(before, signal), "deliveries");
   const rows = list.items.map(item => deliveryRow(item, undefined, w));
   const columns: Column<DeliveryRow>[] = [
-    { key: "time", header: t("时间"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.time}</span> },
+    { key: "time", header: t("时间（本地时间）"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.time}</span> },
     { key: "source", header: t("来源"), cell: row => t(row.source) },
     { key: "channel", header: t("渠道"), cell: row => t(row.channel) },
-    { key: "text", header: t("内容"), className: "sm:w-[34%]", wide: true, cell: row => <span className="line-clamp-2 break-words text-ink">{row.text || "—"}</span> },
+    { key: "text", header: t("内容"), className: "sm:w-[34%]", wide: true, cell: row => <span className="line-clamp-2 [overflow-wrap:anywhere] text-ink">{row.text || "—"}</span> },
     { key: "status", header: t("状态"), cell: row => <Status status={row.status} /> },
-    { key: "acked", header: t("已确认"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.acked}</span> },
+    { key: "acked", header: t("已确认（本地时间）"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.acked}</span> },
   ];
   return <div data-testid="deliveries-tab" className="flex min-w-0 flex-col gap-3">
     <TabState loading={list.loading && rows.length === 0} error={list.error} empty={!list.loading && rows.length === 0} onRetry={() => void list.reload()}

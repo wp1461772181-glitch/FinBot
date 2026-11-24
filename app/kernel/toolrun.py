@@ -10,6 +10,7 @@ import logging
 import asyncio
 import copy
 import json
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,6 +22,7 @@ from ..agent_workflow.evidence import number_rows
 from . import act, ask, progress, skills, tiers
 
 MAX_PARALLEL = 4
+MAX_TIMELINE = 500     # entries of ``audit["timeline"]`` kept per turn
 TOOL_IDLE_SECONDS = 180
 SLOW_SECONDS = 10     # a step whose reads are still out after this long gets one plain sentence saying so
 RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts。只需改正其中 found 为 false 的输入，其余保持不变；不要把数值改写成更长的小数去试。closest_in_source 与 bindable_values 都只是不完整的候选。"
@@ -41,6 +43,21 @@ _CALCULATIONS = ("calculate", "calculate_formula")
 logger = logging.getLogger(__name__)
 
 
+def mark_timeline(run, kind: str, **fields) -> None:
+    """Add one entry to the turn's ordered record of what happened (``audit["timeline"]``): the kind, milliseconds since the turn began, the model
+    step it belongs to, and a reference (an index into narration or calls, or a call id).  No text and no arguments: those are kept elsewhere.
+    Only the backstage reads it, so a run without an audit, or a full list, is simply skipped."""
+    audit = getattr(run, "audit", None)
+    if not isinstance(audit, dict):
+        return
+    entries = audit.setdefault("timeline", [])
+    if len(entries) >= MAX_TIMELINE:
+        return
+    started = getattr(run, "started", None)
+    at = round((time.monotonic() - started) * 1000) if isinstance(started, (int, float)) else 0
+    entries.append({"kind": kind, "at_ms": max(0, at), "step": int(audit.get("decision_steps") or 0), **fields})
+
+
 @dataclass
 class _Call:
     id: str
@@ -49,6 +66,7 @@ class _Call:
     result: dict | None = None      # set once known; a call with a result needs no further work
     raw: dict | None = None         # a read's outcome before numbering
     started: bool = False           # a read that holds a place under ``MAX_PARALLEL`` (not one still waiting for it)
+    done: bool = False              # its ``tool_done`` is on the timeline
 
 
 def _number_evidence(run, name: str, outcome: dict) -> dict:
@@ -138,6 +156,14 @@ async def _fetch(run, gate: asyncio.Semaphore, item: _Call) -> None:
             logger.exception("kernel read %s failed", item.name)
             item.result = tools.error("tool_failed")
         mark_progress()
+        _done(run, item)       # the read is back (or failed): the time is when it finished, not when it was numbered
+
+
+def _done(run, item: _Call) -> None:
+    """Note on the timeline that this call's result is settled (once)."""
+    if not item.done:
+        item.done = True
+        mark_timeline(run, "tool_done", call_id=item.id)
 
 
 def _keep_pages(run, name: str, outcome: dict) -> None:
@@ -222,6 +248,7 @@ async def _fetch_all(run, reads: list[_Call]) -> None:
                 sentence = progress.slow_sentence([item.name for item, task in zip(reads, tasks) if task in pending and item.started])
                 if sentence:
                     run.narration.append(sentence)
+                    mark_timeline(run, "say", index=len(run.narration) - 1)
                     await run.emit({"event": "narration", "text": sentence, "system": True})
                 await asyncio.gather(*tasks)
     finally:
@@ -242,6 +269,7 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             if number:
                 numbers.append(number)
         items.append(_Call(call["id"], name, args))
+        mark_timeline(run, "tool", call_id=call["id"], name=name)
         await run.emit({"event": "tool_start", "call_id": call["id"], "name": name, "arguments": args or {}})
         run.audit["tool_calls"] += 1
     own, asks, reads, serial = [], [], [], []
@@ -275,6 +303,7 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     for item in own:
         tier = run.tier
         _guard(_settle_serial, run, item)
+        _done(run, item)
         if item.name == progress.PLAN and item.result.get("ok"):
             planned = True
         if item.name == tiers.ESCALATE and run.tier != tier:
@@ -290,6 +319,7 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             _guard(_settle_read, run, item)
     for item in asks:
         _guard(_settle_serial, run, item)
+        _done(run, item)
     for item in serial:
         if item.name == act.ACT:
             await _settle_act(run, item)
@@ -298,9 +328,11 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         else:
             _guard(_settle_serial, run, item)
             run.read_results += 1
+        _done(run, item)
         mark_progress()
     messages = []
     for item in items:
+        _done(run, item)       # a call that was never run (bad arguments, not in scope) is settled too
         await run.emit({"event": "tool_result", "call_id": item.id, "name": item.name, "result": bounded_tool_result(item.result)})
         messages.append({"role": "tool", "tool_call_id": item.id,
                          "content": json.dumps(bounded_tool_result(item.result, whole_items=True), ensure_ascii=False, default=str)})

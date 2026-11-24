@@ -1,11 +1,11 @@
 export type BadgeStatus = { label: string; kind: string };
-export type Cost = { kind: "amount" | "unpriced" | "none"; amount: string };
+export type Cost = { kind: "amount" | "unpriced" | "pending" | "none"; amount: string };
 export type AnswerFilters = { botId: string; engine: string; status: string; highTier: boolean; slow: boolean; q: string; before: string };
 export type AnswerRow = { id: string; time: string; bot: string; question: string; status: BadgeStatus; tier: string; time_taken: string; calls: string; tokens: string; cost: Cost; old_engine: boolean };
 export type TimelineStep = {
   kind: "question" | "narration" | "model" | "tool" | "card" | "card_result" | "answer";
   title: string; text?: string; tier?: string; purpose?: string; attempt?: number; ok?: boolean; error?: string; ms?: string; tokens?: string; cost?: Cost; time?: string;
-  name?: string; arguments?: string; state?: string | BadgeStatus | null; result?: string; targets?: string[]; choices?: string[];
+  offset?: string; done_offset?: string; name?: string; arguments?: string; state?: string | BadgeStatus | null; result?: string; targets?: string[]; choices?: string[];
 };
 export type UsageRow = { key: string; label: string; calls: string; failed: string; input: string; output: string; cache: string; p50: string; cost: Cost; missing: string[]; unpriced_calls: number };
 export type OperationRow = { id: string; time: string; bot: string; what: string; detail: string; status: BadgeStatus; decided_at: string; result: string };
@@ -21,7 +21,7 @@ export const USAGE_PRESETS: number[];
 export function formatMs(ms: unknown): string;
 export function formatTokens(count: unknown): string;
 export function formatUsd(value: unknown): string;
-export function costCell(cost: unknown, hadCalls: boolean): Cost;
+export function costCell(cost: unknown, hadCalls: boolean, state?: string): Cost;
 export function formatTime(value: unknown, timeZone?: string): string;
 export function tierLabel(tier: unknown): string;
 export function answerStatus(status: unknown): BadgeStatus;

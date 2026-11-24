@@ -9,7 +9,10 @@ const TURN = (n) => `a3000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 const item = (fields) => ({ message_id: M(1), conversation_id: CONVERSATION.finbot, bot_id: BOT.finbot, bot_name: "FinBot", created_at: "2026-11-13T01:50:02+00:00", question: "", answer: "",
   engine: "v2", status: "succeeded", tier: "low", models: ["haiku-5.5"], total_ms: 2500, model_calls: 2, tokens: { total: 1870, cache_read: 300, cache_write: 50 }, cost_usd: 0.0123,
-  tool_count: 1, write_outcomes: [], write_outcome: null, ...fields });
+  tool_count: 1, write_outcomes: [], write_outcome: null, cost_state: "priced", missing_prices: [], ...fields });
+
+/** A token with no space or break in it, about 300 characters (a pasted link, a hash): it must not widen any table. */
+export const LONG_TOKEN = `https://example.test/${"a1b2c3d4".repeat(37)}`;
 
 export const ANSWERS = {
   items: [
@@ -17,11 +20,11 @@ export const ANSWERS = {
     item({ message_id: M(2), created_at: "2026-11-13T01:20:11+00:00", question: "把 ANT 加入研究队列", answer: "我已提出这个操作，等你在卡片上确认。", status: "waiting_for_input", tier: "mid", models: ["haiku-5.5", "gpt-6.1-terra"],
       total_ms: 9800, model_calls: 3, tokens: { total: 9420, cache_read: 1200, cache_write: 400 }, cost_usd: 0.0841, write_outcomes: ["proposed"], write_outcome: "proposed" }),
     item({ message_id: M(3), created_at: "2026-11-12T14:05:40+00:00", bot_id: BOT.newsbot, bot_name: "NewsBot", question: "今天有什么值得关注的科技新闻？", answer: "", status: "failed", tier: "high", models: ["muse-ember"],
-      total_ms: 61500, model_calls: 4, tokens: { total: 31800, cache_read: 0, cache_write: 0 }, cost_usd: null, tool_count: 3 }),
+      total_ms: 61500, model_calls: 4, tokens: { total: 31800, cache_read: 0, cache_write: 0 }, cost_usd: null, tool_count: 3, cost_state: "unpriced", missing_prices: ["input", "output"] }),
     item({ message_id: Q(4), created_at: "2026-11-12T09:12:30+00:00", question: "对比一下 NVDA 和 AMD 最近的毛利率", answer: "", engine: null, status: "incomplete", tier: null, models: ["deepseek-flash"],
-      total_ms: null, model_calls: 1, tokens: { total: 640, cache_read: 0, cache_write: 0 }, cost_usd: null, tool_count: 0 }),
+      total_ms: null, model_calls: 1, tokens: { total: 640, cache_read: 0, cache_write: 0 }, cost_usd: null, tool_count: 0, cost_state: "pending" }),
     item({ message_id: M(5), created_at: "2026-11-10T03:30:00+00:00", question: "（旧流程）AAPL 的市盈率是多少？", answer: "按最近收盘价，AAPL 的市盈率约为 31 倍。", engine: "v1", tier: null, models: [],
-      total_ms: null, model_calls: 0, tokens: { total: 0, cache_read: 0, cache_write: 0 }, cost_usd: null, tool_count: 0 }),
+      total_ms: null, model_calls: 0, tokens: { total: 0, cache_read: 0, cache_write: 0 }, cost_usd: null, tool_count: 0, cost_state: "none" }),
   ],
   next_before: "1762737000000000.a2000000-0000-4000-8000-000000000005",
   slow_threshold_ms: null, slow_rule: null,
@@ -36,7 +39,13 @@ export const DETAIL = {
     { tier: "low", model: "m-2", catalog_name: "gpt-6.1-terra", purpose: "chat", ms: 3100, tokens: { input: 2200, output: 260, cache_read: 400, cache_write: 200, total: 3060 }, attempt: 2, ok: true, error: null, cost_usd: 0.0312, priced: true, at: "2026-11-13T01:20:15+00:00" },
     { tier: "mid", model: "m-3", catalog_name: "deepseek-flash", purpose: "chat", ms: 2600, tokens: { input: 2800, output: 280, cache_read: 0, cache_write: 0, total: 3080 }, attempt: 1, ok: true, error: null, cost_usd: null, priced: false, at: "2026-11-13T01:20:19+00:00" },
   ],
-  model_calls_source: "ledger",
+  model_calls_source: "ledger", cost_state: "unpriced", missing_prices: ["input", "output"],
+  ordered: true,
+  events: [
+    { kind: "model_call", at_ms: null, step: null, index: 0 }, { kind: "model_call", at_ms: 1700, step: 1, index: 1 }, { kind: "narration", at_ms: 1710, step: 1, index: 0 },
+    { kind: "tool_call", at_ms: 1720, step: 1, call_id: "call-1" }, { kind: "tool_call", at_ms: 1725, step: 1, call_id: "call-2" }, { kind: "tool_call", at_ms: 1730, step: 1, call_id: "call-3" },
+    { kind: "tool_done", at_ms: 2400, step: 1, call_id: "call-1" }, { kind: "tool_done", at_ms: 2500, step: 1, call_id: "call-2" },
+    { kind: "model_call", at_ms: 4400, step: 2, index: 2 }, { kind: "narration", at_ms: 4410, step: 2, index: 1 }],
   narration: ["我先看一下 ANT 是不是已经在研究队列里。", "不在队列里，我来提出加入的操作。"],
   checklist: [{ item: "查研究队列", state: "done" }, { item: "提出加入操作", state: "done" }],
   tool_calls: [
@@ -57,7 +66,7 @@ export const DETAIL = {
 /** A turn of the old engine: whatever it stored, partial. */
 export const DETAIL_OLD = {
   message_id: M(5), conversation_id: CONVERSATION.finbot, turn_id: TURN(5), bot_id: BOT.finbot, bot_name: "FinBot", created_at: "2026-11-10T03:30:00+00:00", engine: "v1", partial: true,
-  status: "succeeded", tier: null, total_ms: null, question: "（旧流程）AAPL 的市盈率是多少？", model_calls: [], model_calls_source: "none", narration: [], checklist: [], tool_calls: [], citations: [],
+  status: "succeeded", tier: null, total_ms: null, question: "（旧流程）AAPL 的市盈率是多少？", model_calls: [], model_calls_source: "none", cost_state: "none", missing_prices: [], ordered: false, events: [], narration: [], checklist: [], tool_calls: [], citations: [],
   writes: [], write_outcome: null, card: null, answer: "按最近收盘价，AAPL 的市盈率约为 31 倍。", backup_model: null, langfuse_url: null,
 };
 
@@ -66,7 +75,8 @@ export const DETAIL_INCOMPLETE = {
   message_id: Q(4), conversation_id: CONVERSATION.finbot, turn_id: TURN(4), bot_id: BOT.finbot, bot_name: "FinBot", created_at: "2026-11-12T09:12:30+00:00", engine: null, partial: true,
   status: "incomplete", tier: null, total_ms: null, question: "对比一下 NVDA 和 AMD 最近的毛利率",
   model_calls: [{ tier: null, model: "m-3", catalog_name: "deepseek-flash", purpose: "chat", ms: 5200, tokens: { input: 600, output: 40, cache_read: 0, cache_write: 0, total: 640 }, attempt: 1, ok: true, error: null, cost_usd: null, priced: false, at: "2026-11-12T09:12:33+00:00" }],
-  model_calls_source: "ledger", narration: [], checklist: [],
+  model_calls_source: "ledger", cost_state: "pending", missing_prices: [], ordered: false,
+  events: [{ kind: "model_call", at_ms: null, step: null, index: 0 }, { kind: "tool_call", at_ms: null, step: null, call_id: "call-1" }], narration: [], checklist: [],
   tool_calls: [{ call_id: "call-1", name: "query_financials", arguments: { symbol: "NVDA" }, status: "unfinished", result: null }],
   citations: [], writes: [], write_outcome: null, card: null, answer: "", backup_model: null, langfuse_url: null,
 };
@@ -145,9 +155,10 @@ export function backstageRoutes(route, reply, own) {
     const asked = (name) => query.get(name) || "";
     // The first page says there is more; the page after it holds one more row and ends (so the infinite scroll stops).
     if (asked("before")) return { items: [item({ message_id: M(6), created_at: "2026-11-09T09:00:00+00:00", question: "NVDA 下个季度的指引是多少？", answer: "管理层给的指引是营收约 540 亿美元。" })], next_before: null, slow_threshold_ms: null, slow_rule: null };
-    const items = ANSWERS.items.filter((row) => (!asked("status") || row.status === asked("status")) && (!asked("engine") || row.engine === asked("engine")) && (!asked("tier") || row.tier === asked("tier")));
+    const long = state.backstage?.long ? [item({ message_id: M(7), created_at: "2026-11-13T01:55:00+00:00", question: LONG_TOKEN, answer: LONG_TOKEN, bot_name: LONG_TOKEN.slice(0, 60) })] : [];
+    const items = [...long, ...ANSWERS.items].filter((row) => (!asked("status") || row.status === asked("status")) && (!asked("engine") || row.engine === asked("engine")) && (!asked("tier") || row.tier === asked("tier")));
     if (asked("slow")) return { items: items.filter((row) => (row.total_ms ?? 0) > 4000), next_before: null, slow_threshold_ms: 4000, slow_rule: "total_ms above the p90 of the turns in this page's window" };
-    return { ...ANSWERS, items, next_before: items.length === ANSWERS.items.length ? ANSWERS.next_before : null };
+    return { ...ANSWERS, items, next_before: items.length >= ANSWERS.items.length ? ANSWERS.next_before : null };
   }));
   route.get("/backstage/answers/:id", guarded(({ params }) => {
     const found = [DETAIL, DETAIL_OLD, DETAIL_INCOMPLETE].find((d) => d.message_id === params.id);
@@ -157,6 +168,12 @@ export function backstageRoutes(route, reply, own) {
     if (state.backstage?.empty) return { ...usageAnswer("day"), totals: { calls: 0, failed_calls: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, ms_p50: null, cost_usd: null, unpriced_calls: 0, missing_prices: [] }, groups: [] };
     return usageAnswer(query.get("group") || "day", query.get("from") || undefined, query.get("to") || undefined);
   }));
-  route.get("/backstage/operations", guarded(({ state }) => (state.backstage?.empty ? { items: [], next_before: null } : OPERATIONS)));
-  route.get("/backstage/deliveries", guarded(({ state }) => (state.backstage?.empty ? { items: [], next_before: null } : DELIVERIES)));
+  route.get("/backstage/operations", guarded(({ state }) => {
+    if (state.backstage?.empty) return { items: [], next_before: null };
+    return state.backstage?.long ? { items: [{ ...OPERATIONS.items[0], id: "a5000000-0000-4000-8000-000000000009", title: LONG_TOKEN, targets: [{ title: LONG_TOKEN }] }, ...OPERATIONS.items], next_before: null } : OPERATIONS;
+  }));
+  route.get("/backstage/deliveries", guarded(({ state }) => {
+    if (state.backstage?.empty) return { items: [], next_before: null };
+    return state.backstage?.long ? { items: [{ ...DELIVERIES.items[0], id: "a6000000-0000-4000-8000-000000000009", text: LONG_TOKEN }, ...DELIVERIES.items], next_before: null } : DELIVERIES;
+  }));
 }

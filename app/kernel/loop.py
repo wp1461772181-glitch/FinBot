@@ -23,7 +23,7 @@ from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
 from . import act, ask, press, progress, prompt, skills, tiers
-from .toolrun import run_step_tools
+from .toolrun import mark_timeline, run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
     "search_knowledge", "web_research", "search_configured_news", "search_x", "calculate", "calculate_formula",
@@ -129,6 +129,7 @@ def _add_usage(run: _Run, data: dict, began: float) -> None:
     run.audit["cache_write_tokens"] += written
     run.audit["calls"].append({"tier": run.tier, "ms": round((time.monotonic() - began) * 1000), "tokens": tokens,
                                "cache_read": read, "cache_write": written, "model": run.model.label})
+    mark_timeline(run, "call", index=len(run.audit["calls"]) - 1)
 
 
 def _failure_code(failure: Exception) -> str:
@@ -166,6 +167,7 @@ async def _switch_to_backup(run: _Run, failure: Exception) -> bool:
         run.messages[:] = [{k: v for k, v in m.items() if not (k.startswith("reasoning_") or k in PRIVATE_KEYS)} if m.get("role") == "assistant" else m
                            for m in run.messages]
         run.narration.append(sentence)
+        mark_timeline(run, "say", index=len(run.narration) - 1)
         await run.emit({"event": "narration", "text": sentence, "system": True})
     except Exception as secondary:
         # The provider's failure is what the turn reports; the switch's own trouble is only logged (never the key).
@@ -239,6 +241,7 @@ async def _tool_step(run: _Run, message: dict) -> None:
     sentence, item, system = progress.step_narration(message["tool_calls"], message.get("content"))
     if sentence:
         run.narration.append(sentence)
+        mark_timeline(run, "say", index=len(run.narration) - 1)
         await run.emit({"event": "narration", "text": sentence, **({"item": item} if item else {}), **({"system": True} if system else {})})
     reasoning = {k: v for k, v in message.items() if k.startswith("reasoning_")}
     await run.emit({"event": "assistant_tool_request", "protocol": {"calls": message["tool_calls"], **reasoning}})

@@ -21,14 +21,14 @@ export function usePaged<T, P extends Page<T>>(read: (before: string | null, sig
     controller.current = mine;
     busy.current = true;
     next.current = null;
-    setState(previous => ({ ...previous, loading: true, more: false, error: null, moreError: null }));
+    setState(previous => ({ ...previous, items: [], next: null, extra: null, loading: true, more: false, error: null, moreError: null }));   // the rows of the old filter go at once: never shown under the new one
     try {
       const page = await latest.current(null, mine.signal);
       if (mine.signal.aborted) return;
       next.current = page.next_before;
       setState({ items: page.items, next: page.next_before, loading: false, more: false, error: null, moreError: null, extra: page });
     } catch (error) {
-      if (!mine.signal.aborted) setState(previous => ({ ...previous, items: [], next: null, loading: false, error }));
+      if (!mine.signal.aborted) setState(previous => ({ ...previous, loading: false, error }));
     } finally {
       if (controller.current === mine) busy.current = false;
     }

@@ -12,11 +12,11 @@ export function OperationsTab() {
   const list = usePaged<OperationItem, Awaited<ReturnType<typeof listOperations>>>((before, signal) => listOperations(before, signal), "operations");
   const rows = list.items.map(item => operationRow(item, undefined, w));
   const columns: Column<OperationRow>[] = [
-    { key: "time", header: t("时间"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.time}</span> },
+    { key: "time", header: t("时间（本地时间）"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.time}</span> },
     { key: "bot", header: "bot", cell: row => row.bot },
     { key: "what", header: t("操作"), className: "sm:w-[34%]", wide: true, cell: row => <span className="flex min-w-0 flex-col gap-0.5"><span className="text-ink">{row.what}</span>{row.detail && <span className="text-caption text-muted-foreground">{row.detail}</span>}</span> },
     { key: "status", header: t("状态"), cell: row => <Status status={row.status} /> },
-    { key: "decided", header: t("处理时间"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.decided_at}</span> },
+    { key: "decided", header: t("处理时间（本地时间）"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.decided_at}</span> },
     { key: "result", header: t("结果"), cell: row => row.result },
   ];
   return <div data-testid="operations-tab" className="flex min-w-0 flex-col gap-3">

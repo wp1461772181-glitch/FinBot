@@ -40,10 +40,14 @@ export function formatUsd(value) {
 
 /**
  * The cost cell.  `amount` is a number; `unpriced` is a call (or calls) that used a model with no price set (the page says 「未设价格」, never a figure it made up);
- * `none` is no model call at all.  `hadCalls` says whether anything was called.
+ * `none` is no model call at all; `pending` is a turn whose ledger rows are still being written (记账中).  `hadCalls` says whether anything was called;
+ * `state` is the server's own `cost_state` when it gave one (an older answer has none and the page judges from the figure).
  */
-export function costCell(cost, hadCalls) {
+export function costCell(cost, hadCalls, state) {
+  if (state === "pending") return { kind: "pending", amount: "" };
   if (typeof cost === "number" && Number.isFinite(cost)) return { kind: "amount", amount: formatUsd(cost) };
+  if (state === "none") return { kind: "none", amount: "" };
+  if (state === "unpriced") return { kind: "unpriced", amount: "" };
   return { kind: hadCalls ? "unpriced" : "none", amount: "" };
 }
 
@@ -121,7 +125,7 @@ export function answerRow(item, timeZone, w = ZH_WORDS) {
     time_taken: formatMs(item?.total_ms),
     calls: calls > 0 ? String(calls) : DASH,
     tokens: total > 0 ? formatTokens(total) : DASH,
-    cost: costCell(item?.cost_usd, calls > 0 || total > 0),
+    cost: costCell(item?.cost_usd, calls > 0 || total > 0, item?.cost_state),
     old_engine: item?.engine === "v1",
   };
 }
@@ -131,8 +135,12 @@ export function answerNotes(detail, w = ZH_WORDS) {
   const notes = [];
   if (detail?.engine === "v1") notes.push({ kind: "old_engine", text: w.t("旧流程的记录，只有部分经过") });
   if (detail?.status === "incomplete") notes.push({ kind: "incomplete", text: w.t("这一轮没有答完，下面是它留下的记录") });
+  if (detail?.ordered === false && list(detail?.events).length > 1) notes.push({ kind: "unordered", text: w.t("这条记录没有时间顺序，按类别排列") });
   const backup = detail?.backup_model;
   if (isObject(backup) && (backup.from || backup.to)) notes.push({ kind: "backup", text: `${w.t("改用备用模型")}${w.colon}${backup.from ?? DASH} → ${backup.to ?? DASH}${backup.reason ? w.parens(backup.reason) : ""}` });
+  if (detail?.cost_state === "pending") notes.push({ kind: "pending", text: w.t("记账中：有些调用的费用还在写入，稍后再看") });
+  const lacking = list(detail?.missing_prices).map((name) => w.t(PRICE_NAMES[name] ?? text(name))).filter(Boolean);
+  if (detail?.cost_state === "unpriced" && lacking.length) notes.push({ kind: "unpriced", text: `${w.t("未设价格的调用缺")}${w.colon}${lacking.join(w.list)}` });
   return notes;
 }
 
@@ -160,17 +168,34 @@ export function detailTimeline(detail, timeZone, w = ZH_WORDS) {
   if (!isObject(detail)) return [];
   const steps = [];
   if (text(detail.question)) steps.push({ kind: "question", title: w.t("问题"), text: detail.question });
-  for (const line of list(detail.narration)) if (text(line)) steps.push({ kind: "narration", title: w.t("过程"), text: line });
-  for (const call of list(detail.model_calls)) {
-    if (!isObject(call)) continue;
+  const offsets = { offset: "", done_offset: "" };
+  const narrations = list(detail.narration).map((line) => (text(line) ? { kind: "narration", title: w.t("过程"), text: line, ...offsets } : null));
+  const models = list(detail.model_calls).map((call) => {
+    if (!isObject(call)) return null;
     const total = Number(call.tokens?.total) || 0;
-    steps.push({ kind: "model", title: text(call.catalog_name) || text(call.model) || w.t("未知模型"), tier: w.t(tierLabel(call.tier)), purpose: text(call.purpose), attempt: Number(call.attempt) || 1,
-      ok: call.ok !== false, error: text(call.error), ms: formatMs(call.ms), tokens: total > 0 ? formatTokens(total) : DASH, cost: costCell(call.cost_usd, total > 0), time: formatTime(call.at, timeZone) });
+    return { kind: "model", title: text(call.catalog_name) || text(call.model) || w.t("未知模型"), tier: w.t(tierLabel(call.tier)), purpose: text(call.purpose), attempt: Number(call.attempt) || 1,
+      ok: call.ok !== false, error: text(call.error), ms: formatMs(call.ms), tokens: total > 0 ? formatTokens(total) : DASH, cost: costCell(call.cost_usd, total > 0), time: formatTime(call.at, timeZone), ...offsets };
+  });
+  const tools = list(detail.tool_calls).map((call) => (isObject(call)
+    ? { kind: "tool", id: call.call_id, title: w.t(toolLabel(call.name)) || w.t("未知工具"), name: text(call.name), arguments: compactJson(call.arguments), state: text(call.status) || "unfinished", result: toolResultText(call.result, w), ...offsets }
+    : null));
+  const body = [];
+  const used = new Set();
+  const place = (step) => { if (step && !used.has(step)) { used.add(step); body.push(step); return step; } return null; };
+  const since = (ms) => (typeof ms === "number" && Number.isFinite(ms) && ms >= 0 ? `+${formatMs(ms)}` : "");
+  if (detail.ordered === true) {
+    for (const event of list(detail.events)) {
+      if (!isObject(event)) continue;
+      const done = event.kind === "tool_done";
+      const step = event.kind === "narration" ? narrations[event.index] : event.kind === "model_call" ? models[event.index]
+        : event.kind === "tool_call" || done ? tools.find((candidate) => candidate && candidate.id !== undefined && candidate.id === event.call_id) : null;
+      if (!step) continue;
+      if (done) step.done_offset = since(event.at_ms);
+      else if (place(step)) step.offset = since(event.at_ms);
+    }
   }
-  for (const call of list(detail.tool_calls)) {
-    if (!isObject(call)) continue;
-    steps.push({ kind: "tool", title: w.t(toolLabel(call.name)) || w.t("未知工具"), name: text(call.name), arguments: compactJson(call.arguments), state: text(call.status) || "unfinished", result: toolResultText(call.result, w) });
-  }
+  for (const group of [narrations, models, tools]) for (const step of group) place(step);
+  steps.push(...body.map(({ id, ...step }) => step));
   const card = detail.card;
   if (isObject(card)) {
     const consent = isObject(card.consent) ? card.consent : null;

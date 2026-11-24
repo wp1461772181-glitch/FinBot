@@ -33,6 +33,13 @@ test("cost: a number is a dollar figure; null with calls is 未设价格, never 
   assert.deepEqual(costCell(0, true), { kind: "amount", amount: "$0.00" });
   assert.deepEqual(costCell(null, true), { kind: "unpriced", amount: "" });
   assert.deepEqual(costCell(null, false), { kind: "none", amount: "" });
+  // The server's own word for the state wins: rows still being written are 记账中, never 未设价格.
+  assert.deepEqual(costCell(null, true, "pending"), { kind: "pending", amount: "" });
+  assert.deepEqual(costCell(0.01, true, "pending"), { kind: "pending", amount: "" }, "a partial sum of a turn still being booked is not its cost");
+  assert.deepEqual(costCell(null, true, "unpriced"), { kind: "unpriced", amount: "" });
+  assert.deepEqual(costCell(0.02, true, "unpriced"), { kind: "amount", amount: "$0.0200" });
+  assert.deepEqual(costCell(null, true, "none"), { kind: "none", amount: "" });
+  assert.deepEqual(costCell(0.5, true, "priced"), { kind: "amount", amount: "$0.50" });
   assert.equal(formatUsd(1234.5), "$1,234.50");
   assert.equal(formatUsd(0.00004), "$0.00004");
 });
@@ -59,8 +66,10 @@ test("answers tab: each sample row becomes the cells the table shows", () => {
   assert.equal(rows[1].tier, "中档");
   assert.equal(rows[2].tier, "高档");
   assert.deepEqual(rows[2].cost, { kind: "unpriced", amount: "" }, "cost null on a turn that called models: 未设价格");
+  assert.deepEqual(answerRow({ ...ANSWERS.items[2], cost_state: undefined }, "UTC").cost, { kind: "unpriced", amount: "" }, "an answer from before cost_state existed behaves as it did");
   assert.equal(rows[2].time_taken, "1 min 2 s");
   assert.equal(rows[3].status.label, "没有完成");
+  assert.deepEqual(rows[3].cost, { kind: "pending", amount: "" }, "the incomplete sample's ledger rows have not landed: 记账中");
   assert.equal(rows[3].tier, "—");
   assert.equal(rows[3].time_taken, "—");
   assert.equal(rows[4].old_engine, true, "an old-engine row says so");
@@ -79,11 +88,18 @@ test("slow rule text names the threshold; without a threshold it says nothing wa
   assert.equal(slowRuleText(null), "");
 });
 
-test("detail: a timeline in time order with the question, narration, model calls, tool calls, the card pressed, and the answer", () => {
+test("detail: an ordered record is interleaved by its events, each with its offset; the question, card, card result and answer frame it", () => {
   const steps = detailTimeline(DETAIL, "UTC");
-  assert.deepEqual(steps.map((s) => s.kind), ["question", "narration", "narration", "model", "model", "model", "tool", "tool", "tool", "card", "card_result", "answer"]);
-  const [, , , first, second, third] = steps;
+  assert.deepEqual(steps.map((s) => s.kind), ["question", "model", "model", "narration", "tool", "tool", "tool", "model", "narration", "card", "card_result", "answer"]);
+  const [, first, second, narration, tool1, , tool3, third] = steps;
   assert.equal(first.title, "haiku-5.5");
+  assert.equal(first.offset, "", "an attempt the timeline does not know has no time of its own");
+  assert.equal(second.offset, "+1.7 s");
+  assert.equal(narration.offset, "+1.7 s");
+  assert.equal(tool1.offset, "+1.7 s");
+  assert.equal(tool1.done_offset, "+2.4 s", "a tool shows when its result came back");
+  assert.equal(tool3.done_offset, "", "no tool_done: the call did not finish");
+  assert.equal(third.offset, "+4.4 s");
   assert.equal(first.tier, "低档");
   assert.equal(first.ok, false);
   assert.equal(first.error, "http_500");
@@ -107,12 +123,33 @@ test("detail: a timeline in time order with the question, narration, model calls
   assert.equal(steps.at(-1).text, "我已提出这个操作，等你在卡片上确认。");
 });
 
+test("detail without events (an old record, or one from before the field) keeps the kind order and shows no offsets", () => {
+  const { events, ordered, ...older } = DETAIL;
+  const steps = detailTimeline(older, "UTC");
+  assert.deepEqual(steps.map((s) => s.kind), ["question", "narration", "narration", "model", "model", "model", "tool", "tool", "tool", "card", "card_result", "answer"]);
+  assert.ok(steps.every((s) => !s.offset));
+  const unordered = detailTimeline({ ...DETAIL, ordered: false, events: [] }, "UTC");
+  assert.deepEqual(unordered.map((s) => s.kind), steps.map((s) => s.kind));
+});
+
+test("events that point at nothing are skipped and what they left out still shows", () => {
+  const steps = detailTimeline({ ...DETAIL, events: [{ kind: "narration", at_ms: 5, index: 99 }, { kind: "tool_done", at_ms: 6, call_id: "nope" }, { kind: "model_call", at_ms: 7, index: 2 }, "x", null] }, "UTC");
+  assert.deepEqual(steps.filter((s) => s.kind === "model").length, 3, "every model call is shown once");
+  assert.equal(steps.filter((s) => s.kind === "tool").length, 3);
+  assert.equal(steps.filter((s) => s.kind === "narration").length, 2);
+});
+
 test("detail notes: backup model, the old-engine line, an unfinished turn, the Langfuse link", () => {
-  assert.deepEqual(answerNotes(DETAIL).map((n) => n.text), ["改用备用模型：haiku-5.5 → gpt-6.1-terra（http_500）"]);
-  assert.equal(answerNotes(DETAIL).length, 1);
+  assert.deepEqual(answerNotes(DETAIL).map((n) => n.text), ["改用备用模型：haiku-5.5 → gpt-6.1-terra（http_500）", "未设价格的调用缺：输入价、输出价"]);
+  assert.equal(answerNotes({ ...DETAIL, cost_state: "priced" }).length, 1);
   assert.equal(answerNotes(DETAIL_OLD)[0].text, "旧流程的记录，只有部分经过");
   assert.equal(answerNotes(DETAIL_INCOMPLETE)[0].text, "这一轮没有答完，下面是它留下的记录");
   assert.equal(answerNotes(DETAIL).some((n) => n.kind === "langfuse"), false, "the link is its own field, not a note");
+  assert.equal(answerNotes({ ...DETAIL, ordered: false, events: [{}, {}] }).some((n) => n.text === "这条记录没有时间顺序，按类别排列"), true);
+  assert.equal(answerNotes({ ...DETAIL, ordered: false, events: [] }).some((n) => n.kind === "unordered"), false, "nothing to order, nothing to say");
+  assert.equal(answerNotes({ ...DETAIL, ordered: undefined }).some((n) => n.kind === "unordered"), false, "an answer from before the field is not accused of being unordered");
+  assert.equal(answerNotes({ ...DETAIL, cost_state: "pending" }).find((n) => n.kind === "pending").text, "记账中：有些调用的费用还在写入，稍后再看");
+  assert.equal(answerNotes({ ...DETAIL, cost_state: "unpriced", missing_prices: ["input", "cache_read"] }).find((n) => n.kind === "unpriced").text, "未设价格的调用缺：输入价、缓存读取价");
 });
 
 test("detail of an old-engine record is a short timeline, not an error", () => {
@@ -201,4 +238,16 @@ test("the page is wired in: route, owner-only navigation, a read-only page", () 
   const api = src("api/backstage.ts");
   assert.doesNotMatch(api, /method:\s*"(POST|PUT|PATCH|DELETE)"/, "no write is made from the page");
   for (const file of ["BackstagePage", "AnswersTab", "AnswerDrawer", "UsageTab", "OperationsTab", "DeliveriesTab"]) assert.doesNotMatch(src(`app/backstage/${file}.tsx`), /method:\s*"(POST|PUT|PATCH|DELETE)"|<form|type="submit"/, file);
+});
+
+test("free text cannot widen a table or the drawer, reads in its own direction, and the 未设价格 link does not open the row", () => {
+  const table = src("app/backstage/BackstageTable.tsx"), drawer = src("app/backstage/AnswerDrawer.tsx");
+  assert.match(table, /\[overflow-wrap:anywhere\]/);
+  assert.match(table, /<span dir="auto"/);
+  assert.match(table, /onClick=\{event => event\.stopPropagation\(\)\}/);
+  assert.match(drawer, /\[overflow-wrap:anywhere\]/);
+  assert.ok((drawer.match(/dir="auto"/g) ?? []).length >= 5);
+  assert.match(drawer, /load\.data\?\.id === id/, "a detail is shown only under the id it was asked for");
+  assert.match(src("app/backstage/UsageTab.tsx"), /load\.data\.group === group && load\.data\.from === range\.from && load\.data\.to === range\.to/, "usage numbers only under their own request");
+  assert.match(src("app/backstage/use-paged.ts"), /items: \[\], next: null, extra: null, loading: true/, "a new filter clears the old rows at once");
 });

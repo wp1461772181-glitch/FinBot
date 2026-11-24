@@ -38,7 +38,7 @@ export function AnswersTab() {
 
   const rows = list.items.map(item => answerRow(item, undefined, w));
   const columns: Column<AnswerRow>[] = [
-    { key: "time", header: t("时间"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.time}</span> },
+    { key: "time", header: t("时间（本地时间）"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.time}</span> },
     { key: "bot", header: "bot", cell: row => row.bot },
     { key: "question", header: t("问题"), className: "sm:w-[34%]", wide: true, cell: row => <span className="flex min-w-0 flex-col gap-1">
       <button type="button" data-testid="answer-open" onClick={event => { event.stopPropagation(); open(row.id); }} className="line-clamp-2 text-left text-ink underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">{row.question}</button>
