@@ -18,6 +18,8 @@ from ..agent_workflow.fp_flags import flag
 from . import act
 
 WRITE_CARD = "write_confirmation"
+REVISION_CARD = "choose_revision_sources"      # a forecast revision: the user ticks the materials, then presses
+WRITE_CARDS = (WRITE_CARD, REVISION_CARD)
 QUESTION_CARD = "missing_information"
 UNSUPPORTED = "这张卡片现在处理不了，请换用其他 bot。"
 CANCELLED = "已取消，没有执行任何操作。"
@@ -25,6 +27,7 @@ CANCELLING = "已请求停止后续操作；当前已经开始的操作可能仍
 ENDED = "操作已经结束，无法撤回已经完成的结果。"
 ALREADY_DONE = "这张确认卡已经执行过了，不会重复执行；结果见之前的回复。"
 ALREADY_CANCELLED = "这张卡片已经取消，没有执行。"
+NOTHING_TICKED = "请先在卡片上勾选要用的材料。"
 STALE = "这张卡片已经失效：之后有了新的消息，所以它没有执行。如果还需要，请重新提出这项操作。"
 # consent.failure_reason has no sentence for these two and would call an expired or used card a service error.
 REASONS = {"confirmation_expired": "这张确认卡已经过期（10 分钟内有效），没有执行任何操作。如果还需要，请重新提出这项操作。",
@@ -48,6 +51,7 @@ class Press:
     token: str | None
     variant: str | None
     reply: str | None = None     # with "reply": the option's text, the user's answer
+    ticked: str | None = None    # with "confirm" on a revision card: the positions the user ticked, "2.4"
 
 
 @dataclass
@@ -74,7 +78,7 @@ def expired(card: dict) -> bool:
 def waiting_write_card(state: dict) -> dict | None:
     """The write card the conversation is waiting on, if it can still be pressed."""
     card = (state or {}).get("pending_request")
-    if isinstance(card, dict) and card.get("reason") == WRITE_CARD and not card.get("side") and not expired(card):
+    if isinstance(card, dict) and card.get("reason") in WRITE_CARDS and not card.get("side") and not expired(card):
         return card
     return None
 
@@ -101,9 +105,9 @@ def _capped(value):
     return value
 
 
-def fact_message(title: str, facts: list, question: str, variant: str | None) -> str:
+def fact_message(title: str, facts: list, question: str, variant: str | None, materials: list | None = None) -> str:
     data = {"card": title[:TITLE_CHARS], "result": _capped(facts), "user_request": question[:QUESTION_CHARS],
-            **({"choice": variant} if variant else {})}
+            **({"choice": variant} if variant else {}), **({"materials": _capped(materials)} if materials else {})}
     return FACT + json.dumps(data, ensure_ascii=False, default=str)
 
 
@@ -121,17 +125,20 @@ def read(question: str, state: dict) -> Press | None:
         if kind != "authorize":
             return Press("cancel", request_id, None, None)
         choice = next((c["value"] for c in (waiting or {}).get("choices", []) if str(c.get("value", "")).startswith("confirm:")), None)
-        if waiting is not None and waiting.get("reason") == WRITE_CARD and not choice:
+        if waiting is not None and waiting.get("reason") in WRITE_CARDS and not choice:
             raise ValueError("confirmation_required")
         return Press("confirm", request_id, choice.split(":", 1)[1].partition(":")[0] if choice else None, None)
     if kind == "confirm":
         token, _, ticked = rest.partition(":")
+        if waiting is not None and waiting.get("reason") == REVISION_CARD:
+            # The suffix is the positions ticked, not a variant; whether they are valid is for ``settle`` to say.
+            return Press("confirm", request_id, token, None, None, ticked or None)
         if ticked and waiting is not None and ticked not in (waiting.get("variants") or []):
             raise ValueError("confirmation_parameter_mismatch")
         return Press("confirm", request_id, token, ticked if ticked and waiting is not None else None)
     if kind == "reply" and rest.strip() and waiting is not None and waiting.get("reason") == QUESTION_CARD:
         return Press("reply", request_id, None, None, rest)
-    if waiting is not None and waiting.get("reason") == WRITE_CARD:
+    if waiting is not None and waiting.get("reason") in WRITE_CARDS:
         raise ValueError("confirmation_required")
     return Press("confirm", request_id, None, None)      # a button of a card this kernel does not own: settle refuses it
 
@@ -152,6 +159,15 @@ def _reason(code: str) -> str:
 
 def _code(failure: Exception) -> str:
     return str(getattr(failure, "code", None) or failure)
+
+
+def _ours(op, revision: bool) -> bool:
+    """Whether an operation on a card is one this kernel makes: in the directory, and a revision only on its own ticked card."""
+    if not isinstance(op, dict) or op.get("grant_only") or op.get("name") not in act.OPERATIONS:
+        return False
+    if op["name"] == "revise_forecast" or "candidates" in op or revision:
+        return revision and op["name"] == "revise_forecast" and isinstance(op.get("candidates"), list) and isinstance(op.get("arguments"), dict)
+    return True
 
 
 def _refused(failure: Exception) -> Settled:
@@ -194,7 +210,7 @@ async def settle(run, press: Press, state: dict) -> Settled:
         return await _pressed_another_card(run, press, pending)
     if press.kind == "reply":
         return _answered(run, press, pending)
-    if pending.get("reason") != WRITE_CARD:
+    if pending.get("reason") not in WRITE_CARDS:
         return Settled(UNSUPPORTED, None, "waiting_for_input", "refused:unsupported_card")
     try:
         saved = await asyncio.to_thread(consent.lookup, context.identity_credential, context.conversation_id, press.request_id)
@@ -209,17 +225,26 @@ async def settle(run, press: Press, state: dict) -> Settled:
         return Settled(CANCELLED, None, "succeeded", "cancelled")
     if saved.get("status") in {"cancelled", "cancelling"}:
         return Settled(ALREADY_CANCELLED, None, "succeeded", "cancelled")
-    if any(not isinstance(op, dict) or op.get("grant_only") or "candidates" in op or op.get("name") not in act.OPERATIONS
-           for op in saved.get("operations") or []):
-        # Made by the old engine (a suggestion that grants a second card, a forecast revision): only a bot on that engine can run it.
+    revision = pending["reason"] == REVISION_CARD
+    if not (saved.get("operations") or []) or any(not _ours(op, revision) for op in saved["operations"]):
+        # Made by the old engine (a suggestion that grants a second card): only a bot on that engine can run it.
         return Settled(UNSUPPORTED, None, "waiting_for_input", "refused:unsupported_card")
     tokens = [str(c.get("value", "")).split(":", 2)[1] for c in pending.get("choices", []) if str(c.get("value", "")).startswith("confirm:")]
     if not press.token or not any(hmac.compare_digest(press.token.encode(), token.encode()) for token in tokens):
         return Settled(_reason("confirmation_parameter_mismatch"), None, "waiting_for_input", "refused:confirmation_parameter_mismatch")
     operations = saved["operations"]
+    picks = None
+    if revision:
+        try:
+            picks = direct.ticked_positions(press.ticked or "", pending)
+        except ValueError:
+            return Settled(NOTHING_TICKED, None, "waiting_for_input", "refused:nothing_ticked")
+        if len(operations) != 1 or max(picks) > len(operations[0]["candidates"]):
+            return Settled(NOTHING_TICKED, None, "waiting_for_input", "refused:nothing_ticked")
+        run.audit["revision_sources"] = len(picks)
     try:
         value = await asyncio.to_thread(consent.execute, context.identity_credential, context.conversation_id, press.token, operations,
-                                        act.execute_handler(context, variant=press.variant, emit=run.emit))
+                                        act.execute_handler(context, variant=press.variant, emit=run.emit, picks=picks))
     except asyncio.CancelledError:
         # A thread's started side effect cannot be killed; revoke the later items of the batch before propagating.
         try:
@@ -231,6 +256,7 @@ async def settle(run, press: Press, state: dict) -> Settled:
         return _refused(failure)
     facts = direct.execution_facts(value, operations)
     title = card_title(pending) or card_title(saved)
-    fact = fact_message(title, facts, str(pending.get("original_question") or ""), press.variant)
+    materials = [operations[0]["candidates"][p - 1]["title"] for p in picks] if picks else None
+    fact = fact_message(title, facts, str(pending.get("original_question") or ""), press.variant, materials)
     ok = bool(value.get("ok", True))
     return Settled(None, fact, "succeeded", "executed" if ok else "failed", report_sentence(title, facts, ok))

@@ -7,17 +7,19 @@ import pytest
 from app import agent_profile as profile
 from app import agent_tasks, portfolio
 from app.agent_tool_catalog import definitions
-from app.agent_workflow import direct, sec_sources
+from app.agent_workflow import direct, sec_sources, workspace_tools
 from app.kernel import act
 
-NOT_IN_SLICE = {"ingest_web_source", "revise_forecast"}
+NOT_IN_SLICE = set()      # every catalogue write is in the directory now
 UUID = "11111111-2222-3333-4444-555555555555"
 
 
 def make_run(**extra):
-    fields = {"identity_credential": "x" * 64, "owner_hash": "o", "conversation_id": "c", "bot_id": None, "bot_name": "", "tool_scope": None}
-    fields.update({k: extra.pop(k) for k in ("bot_id", "bot_name") if k in extra})
-    return SimpleNamespace(context=SimpleNamespace(**fields), **{"user_text": "", "question": "", "turn_id": "t", **extra})
+    fields = {"identity_credential": "x" * 64, "owner_hash": "o", "conversation_id": "c", "bot_id": None, "bot_name": "", "tool_scope": None,
+              "default_company": None, "watchlist": ()}
+    fields.update({k: extra.pop(k) for k in ("bot_id", "bot_name", "default_company", "watchlist") if k in extra})
+    return SimpleNamespace(context=SimpleNamespace(**fields), **{"user_text": "", "question": "", "turn_id": "t", "web_rows": {}, "citations": [],
+                                                                  "proposals": [], "question_card": None, **extra})
 
 
 def run(coro):
@@ -35,9 +37,13 @@ def test_every_operation_is_a_catalogue_write_and_every_write_is_listed():
 def test_summaries_costs_and_tiers():
     assert all(act.SUMMARIES[name] for name in act.OPERATIONS) and set(act.SUMMARIES) == set(act.OPERATIONS)
     assert set(act.COST_NOTES) == set(act.TIER3)
-    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 27
-    assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast")] == [1, 2, 3]
-    assert act.TIER1[0] == "remember" and act.TIER3[-1] == "save_material_evidence"
+    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 29
+    assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "revise_forecast")] == [1, 2, 3, 3, 3]
+    assert act.TIER1[0] == "remember" and act.TIER3[-2:] == ("ingest_web_source", "revise_forecast")
+    assert act.SUMMARIES["ingest_web_source"] == "把这一轮搜到的一个网页存进资料库"
+    assert act.SUMMARIES["revise_forecast"] == "用新材料修订一份已存的预测（材料由用户在卡片上勾选）"
+    assert act.COST_NOTES["ingest_web_source"] == "会把这个网页存入资料库和知识库。"
+    assert act.COST_NOTES["revise_forecast"] == "会调用付费模型重新计算这份预测，生成新版本，旧版本保留。"
 
 
 def test_act_schema_lists_each_operation_under_its_heading():
@@ -183,6 +189,10 @@ def test_review_filing_names_the_document(monkeypatch):
 from app.agent_tool_catalog import validate
 
 U = "aaaaaaaa-1111-2222-3333-444444444444"
+PAGE_URL = "https://news.example.com/aapl-q1"
+PAGE = {"url": PAGE_URL, "title": "苹果一季度财报解读", "excerpt": "Revenue grew 8 percent.", "published_at": "2026-01-05T00:00:00+00:00",
+        "fetched_at": "2026-01-06T00:00:00+00:00", "body_provenance": "page", "truncated": False}
+VERSION = "99999999-2222-3333-4444-555555555555"
 MINIMAL = {
     "remember": {"kind": "preference", "text": "用中文", "quote": "用中文"},
     "forget": {"item_id": "#abcdef12"},
@@ -204,6 +214,7 @@ MINIMAL = {
     "review_knowledge_candidate": {"candidate_id": UUID, "approved": True},
     "withdraw_knowledge_document": {"document_id": UUID},
     "save_material_evidence": {"symbol": "AAPL", "title": "t", "source_url": "https://x.com/a", "published_at": "2026-01-01", "content": "c"},
+    "ingest_web_source": {"url": PAGE_URL, "symbol": "AAPL"}, "revise_forecast": {"symbol": "AAPL"},
 }
 
 
@@ -217,8 +228,18 @@ def _minimal(name):
     return {key: fill[key] for key in required}
 
 
+def ready_plan(count=5):
+    return {"status": "ready", "symbol": "AAPL", "version_id": VERSION, "version_no": 2, "decision_at": "2026-01-02T15:00:00+00:00",
+            "window_start": "2025-12-03T15:00:00+00:00", "window_end": "2026-01-09T15:00:00+00:00", "target_end_date": "2026-02-01",
+            "candidates": [{"source_type": "uploaded_media", "source_id": f"{i:08d}-2222-3333-4444-555555555555", "title": f"材料{i}", "kind": "上传材料",
+                            "published_at": f"2026-01-0{i}T00:00:00+00:00", "category": "after", "badge": "预测后发布"} for i in range(1, count + 1)],
+            "excluded": [], "mentioned": []}
+
+
 @pytest.fixture
 def faked(monkeypatch):
+    monkeypatch.setattr(act, "_already_saved", lambda *a: None)
+    monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: ready_plan())
     monkeypatch.setattr(profile, "user_message_id", lambda *a: "m1")
     monkeypatch.setattr(profile, "resolve_handle", lambda *a, **k: {"text": "用中文"})
     monkeypatch.setattr(agent_tasks, "get_task", lambda *a: {"name": "每日", "schedule_kind": "daily", "schedule_time": "09:00"})
@@ -231,7 +252,7 @@ def faked(monkeypatch):
 
 @pytest.mark.parametrize("name", act.OPERATIONS)
 def test_every_prepared_operation_still_passes_its_handler_validation(name, faked):
-    out = run(act.prepare(make_run(question="用中文回答"), name, _minimal(name)))
+    out = run(act.prepare(make_run(question="用中文回答", web_rows={PAGE_URL: PAGE}), name, _minimal(name)))
     assert isinstance(out, act.Prepared), out
     assert validate(name, out.operation["arguments"])
     assert all(any(row.values()) for row in out.display["targets"]), "an empty target row"
@@ -280,3 +301,136 @@ def test_unknown_operation_hint_and_invalid_argument_problems():
     assert any(line.startswith("symbol") for line in out["problems"])
     assert "SECRET-VALUE" not in " ".join(out["problems"])
     assert run(act.prepare(make_run(), "record_trade", "x"))["problems"]
+
+
+# --- ingest_web_source ------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def web(monkeypatch):
+    monkeypatch.setattr(act, "_already_saved", lambda *a: None)
+
+
+def ingest(run_, **args):
+    return run(act.prepare(run_, "ingest_web_source", {"url": PAGE_URL, **args}))
+
+
+def test_ingest_of_a_page_no_read_returned_is_refused_and_makes_no_card(web):
+    out = ingest(make_run(web_rows={"https://other.example.com/x": PAGE}), symbol="AAPL")
+    assert isinstance(out, dict) and out["error_code"] == "web_source_not_returned"
+    assert ingest(make_run(), symbol="AAPL")["error_code"] == "web_source_not_returned"
+
+
+def test_ingest_card_shows_title_url_date_destination_and_cost(web):
+    out = ingest(make_run(web_rows={PAGE_URL: PAGE}), symbol="AAPL", company="Apple")
+    assert isinstance(out, act.Prepared) and out.tier == 3 and out.options is None
+    shown = out.display
+    assert shown["title"] == PAGE["title"] and shown["url"] == PAGE_URL and shown["web_date"] == PAGE["published_at"]
+    assert shown["targets"][0]["title"] == PAGE["title"]
+    assert shown["alternative"] == "存入 资料库 · AAPL ＋ 知识库检索。也可抓取最新 SEC 官方文件。\n代价：会把这个网页存入资料库和知识库。"
+    operation = out.operation
+    assert operation["name"] == "ingest_web_source" and operation["arguments"]["symbol"] == "AAPL" and operation["arguments"]["company"] == "Apple"
+    assert operation["snapshot"]["content_hash"] and operation["snapshot"]["url"] == PAGE_URL
+    assert operation["published_at"] == PAGE["published_at"] and operation["entity_aliases"] == []
+
+
+def test_ingest_knowledge_only_says_so_and_needs_no_symbol(web):
+    out = ingest(make_run(web_rows={PAGE_URL: PAGE}), knowledge_only=True)
+    assert out.display["alternative"].startswith("只存知识库检索，不进资料库。也可抓取最新 SEC 官方文件。")
+
+
+def test_ingest_symbol_comes_from_the_argument_then_the_bots_company(web):
+    run_ = make_run(web_rows={PAGE_URL: PAGE}, default_company={"symbol": "MSFT", "company": "Microsoft"})
+    out = ingest(run_)
+    assert out.operation["arguments"]["symbol"] == "MSFT" and out.operation["arguments"]["company"] == "Microsoft"
+    assert "资料库 · MSFT" in out.display["alternative"]
+    assert ingest(run_, symbol="NVDA").operation["arguments"]["symbol"] == "NVDA"
+
+
+def test_ingest_with_no_symbol_gets_the_old_refusal_with_candidates(web):
+    out = ingest(make_run(web_rows={PAGE_URL: PAGE}, watchlist=("AAPL", "NVDA", "AAPL")))
+    assert out["error_code"] == "library_symbol_required" and out["candidates"] == ["AAPL", "NVDA"]
+    assert out["question"] == "存到哪只股票的资料库？" and "knowledge_only=true" in out["hint"] and "ask_user" not in out["hint"]
+    assert ingest(make_run(web_rows={PAGE_URL: PAGE}))["candidates"] == []
+
+
+def test_ingest_of_an_already_saved_page_makes_no_card(monkeypatch):
+    seen = []
+    monkeypatch.setattr(act, "_already_saved", lambda owner, url, content_hash, knowledge_only: seen.append((owner, url, knowledge_only)) or "src-1")
+    out = ingest(make_run(web_rows={PAGE_URL: PAGE}), symbol="AAPL")
+    assert out == {"ok": True, "data": [{"status": "already_exists", "source_id": "src-1"}]} and seen == [("o", PAGE_URL, False)]
+
+
+def test_ingest_newer_than_compares_with_the_kernels_citations(web):
+    citations = [{"ordinal": 1, "source_type": "official_filing", "published_at": "2026-01-01T00:00:00+00:00"},
+                 {"ordinal": 2, "source_type": "web", "published_at": "2025-01-01T00:00:00+00:00"}]
+    out = ingest(make_run(web_rows={PAGE_URL: PAGE}, citations=citations), symbol="AAPL", newer_than=1)
+    assert out.operation["condition"] == {"kind": "newer_than_saved", "saved_date": "2026-01-01T00:00:00+00:00"}
+    assert out.display["saved_date"] == "2026-01-01T00:00:00+00:00"
+    older = [{**citations[0], "published_at": "2026-02-01T00:00:00+00:00"}]
+    out = ingest(make_run(web_rows={PAGE_URL: PAGE}, citations=older), symbol="AAPL", newer_than=1)
+    assert out["data"][0]["status"] == "not_newer"
+    assert ingest(make_run(web_rows={PAGE_URL: PAGE}, citations=citations), symbol="AAPL", newer_than=2)["error_code"] == "comparison_date_unavailable"
+    undated = {**PAGE, "published_at": None}
+    assert ingest(make_run(web_rows={PAGE_URL: undated}, citations=citations), symbol="AAPL", newer_than=1)["error_code"] == "comparison_date_unavailable"
+
+
+def test_ingest_of_a_page_that_cannot_be_frozen_is_a_refusal(web):
+    out = ingest(make_run(web_rows={PAGE_URL: {**PAGE, "excerpt": ""}}), symbol="AAPL")
+    assert out["error_code"] == "web_snapshot_unavailable"
+
+
+# --- revise_forecast --------------------------------------------------------------------------------------------
+
+def revise(run_=None, **args):
+    return run(act.prepare(run_ or make_run(), "revise_forecast", args))
+
+
+def test_a_ready_revision_is_a_proposal_with_options_and_the_frozen_candidates(monkeypatch):
+    seen = []
+    monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: seen.append(a) or ready_plan(12))
+    run_ = make_run()
+    out = revise(run_, symbol="AAPL", mentioned_sources=[{"source_type": "uploaded_media", "source_id": U}])
+    assert seen[0][0] == "AAPL" and seen[0][1] is None and seen[0][2] is run_.context and seen[0][3] == [{"source_type": "uploaded_media", "source_id": U}]
+    assert out.tier == 3 and len(out.options) == direct.REVISION_CARD_LIMIT == 10
+    assert out.options[0] == {"value": "1", "label": "材料1", "detail": "上传材料 · 2026-01-01 发布 · 预测后发布"}
+    assert [o["value"] for o in out.options] == [str(i) for i in range(1, 11)]
+    operation = out.operation
+    assert set(operation) == {"name", "arguments", "revision", "candidates"} and operation["name"] == "revise_forecast"
+    assert operation["arguments"] == {"symbol": "AAPL", "version_id": VERSION}
+    assert operation["revision"] == {"version_no": 2, "decision_at": "2026-01-02T15:00:00+00:00",
+                                     "window_start": "2025-12-03T15:00:00+00:00", "window_end": "2026-01-09T15:00:00+00:00"}
+    assert len(operation["candidates"]) == 10 and set(operation["candidates"][0]) == {"source_type", "source_id", "title", "kind", "published_at", "category"}
+    assert out.display["title"] == "修正 AAPL 的预测（v2，2026-01-02 作出）"
+    assert "共 12 份，这里列出最新的 10 份" in out.display["alternative"]
+
+
+def test_a_revision_that_is_not_ready_says_why_and_makes_no_card(monkeypatch):
+    plan = {"status": "target_expired", "symbol": "AAPL", "version_no": 2, "decision_at": "2026-01-02T15:00:00+00:00", "target_end_date": "2026-01-20"}
+    monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: plan)
+    out = revise(symbol="AAPL")
+    assert isinstance(out, dict) and out["ok"] is False and out["error_code"] == "target_expired"
+    assert out["reason"] == direct.revision_notice(plan) and "不能再修订" in out["reason"]
+
+
+def test_a_revision_names_its_symbol_and_the_model_cannot_name_materials(monkeypatch):
+    monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: pytest.fail("no plan is made for invalid arguments"))
+    assert revise(make_run())["error_code"] == "invalid_arguments"
+    assert revise(make_run(), symbol="AAPL", source_refs=[{"source_type": "uploaded_media", "source_id": U}])["error_code"] == "invalid_arguments"
+
+
+def test_a_revision_never_shares_a_card(monkeypatch):
+    monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: pytest.fail("no plan is made for a call that cannot have a card"))
+    sharing = make_run(proposals=[act.Prepared({"name": "forecast", "arguments": {}}, {"title": "t"}, 3)])
+    assert revise(sharing, symbol="AAPL")["error_code"] == "revision_needs_its_own_card"
+    asked = make_run(question_card={"id": "q"})
+    assert revise(asked, symbol="AAPL")["error_code"] == "one_card_per_turn"
+
+
+def test_a_proposal_after_a_revision_is_refused(monkeypatch):
+    monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: ready_plan())
+    run_ = make_run()
+    first = act._collect(run_, revise(run_, symbol="AAPL"))
+    assert first[1] == "proposed"
+    result, outcome = act._collect(run_, run(act.prepare(run_, "forecast", {"symbol": "NVDA"})))
+    assert result["error_code"] == "revision_needs_its_own_card" and outcome == "refused:revision_needs_its_own_card"
+    assert len(run_.proposals) == 1

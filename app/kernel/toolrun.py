@@ -24,6 +24,8 @@ RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts�
 # Results of these tools are the model's memory, a computation, or state about the system and the owner's own lists, not
 # saved evidence: they are never numbered as rows.  The last three mirror the old engine's ``admin_tools`` (direct.py).
 _UNNUMBERED = {"recall_conversations", "read_past_conversation", "query_system_status", "query_research_queue", "list_routines"}
+# The pages these reads return can be saved with ``act``; a post found on X is not a web page.
+_WEB_PAGE_READS = ("web_research", "search_configured_news")
 _SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_news", "query_sec_filings": "official_filing",
                 "search_x": "x_post"}
 # Run one at a time after every read has been numbered, in call order: calculations work on the citations the reads just
@@ -128,9 +130,19 @@ async def _fetch(run, gate: asyncio.Semaphore, item: _Call) -> None:
         mark_progress()
 
 
+def _keep_pages(run, outcome: dict) -> None:
+    """The raw rows of a web read, by URL, as ``act`` needs them to save one (before numbering adds anything to them)."""
+    rows = outcome.get("data") if outcome.get("data") is not None else (outcome.get("items") or [])
+    for row in rows if isinstance(rows, list) else [rows]:
+        if isinstance(row, dict) and isinstance(row.get("url"), str) and row["url"]:
+            run.web_rows[row["url"]] = copy.deepcopy(row)
+
+
 def _settle_read(run, item: _Call) -> None:
     """Number a finished read into the turn's citations.  Called in call order, never concurrently."""
     outcome = item.raw
+    if outcome.get("ok") and item.name in _WEB_PAGE_READS:
+        _keep_pages(run, outcome)
     if not outcome.get("ok"):
         item.result = outcome
     elif item.name == "read_history_citation":

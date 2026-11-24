@@ -28,9 +28,9 @@ def make_run(events):
     async def emit(event):
         events.append(event)
 
-    names = frozenset({"query_financials", "web_research", "calculate", "calculate_formula"})
+    names = frozenset({"query_financials", "web_research", "search_configured_news", "calculate", "calculate_formula"})
     return SimpleNamespace(context=SimpleNamespace(query_expander=None), emit=emit, user_text="", tool_names=names,
-                           citations=[], audit={"tool_calls": 0}, read_results=0)
+                           citations=[], audit={"tool_calls": 0}, read_results=0, web_rows={})
 
 
 def execute(calls, run=None):
@@ -156,3 +156,33 @@ def test_refusals_never_reach_the_tool(monkeypatch):
     _, messages, _ = execute([call("c1", "create_routine", {"x": 1}), bad_json])
     assert [json.loads(m["content"])["error_code"] for m in messages] == ["tool_not_in_bot_scope", "invalid_arguments"]
     assert seen == []
+
+
+def test_web_pages_a_read_returned_are_kept_raw_by_url(monkeypatch):
+    page = {"id": "w1", "url": "https://news.example.com/a", "title": "标题", "excerpt": "正文", "published_at": "2026-01-05"}
+    noted = {"id": "n1", "url": "https://news.example.com/b", "title": "另一篇", "excerpt": "正文二"}
+    post = {"id": "x1", "url": "https://x.com/u/status/1", "excerpt": "帖子"}
+
+    async def handler(name, args):
+        rows = {"web_research": [page, {"id": "w2", "title": "没有网址", "excerpt": "z"}], "search_configured_news": [noted], "search_x": [post]}[name]
+        return {"ok": True, "data": copy.deepcopy(rows), "source": "web"}
+
+    install(monkeypatch, handler)
+    run, messages, _ = execute([call("c1", "web_research", {"query": "a"}), call("c2", "search_configured_news", {"query": "a"})],
+                               run=make_run([]))
+    assert run.web_rows == {page["url"]: page, noted["url"]: noted}
+    assert "_citations" not in run.web_rows[page["url"]] and "ordinal" not in run.web_rows[page["url"]]
+
+
+def test_a_failed_read_and_search_x_keep_no_pages(monkeypatch):
+    async def handler(name, args):
+        if name == "web_research":
+            return {"ok": False, "error_code": "tool_failed"}
+        return {"ok": True, "data": [{"id": "x1", "url": "https://x.com/u/status/1", "excerpt": "帖子"}], "source": "x"}
+
+    install(monkeypatch, handler)
+    events = []
+    run = make_run(events)
+    run.tool_names = frozenset({"web_research", "search_x"})
+    execute([call("c1", "web_research", {"query": "a"}), call("c2", "search_x", {"query": "a"})], run=run)
+    assert run.web_rows == {}

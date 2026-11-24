@@ -80,6 +80,7 @@ class _Run:
     tier: str = "low"
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
+    web_rows: dict = field(default_factory=dict)      # url -> the raw row of a page this turn's web reads returned (what ``act`` may save)
     proposals: list = field(default_factory=list)     # tier-2/3 operations collected this turn, put on one card when it ends
     writes: list = field(default_factory=list)       # one audit line per act call
     read_results: int = 0            # read or calculation results received this turn: after the first, tier 1 goes onto the card
@@ -272,7 +273,8 @@ async def _mint_card(run: _Run) -> str:
     variants = [("保存并启用", None), ("存为草稿", "draft")] if all(p.operation["name"] == "save_skill" for p in proposals) else None
     try:
         run.pending = await asyncio.to_thread(consent.propose, context.identity_credential, context.conversation_id,
-                                              [p.operation for p in proposals], _card_display(proposals), question=run.question, variants=variants)
+                                              [p.operation for p in proposals], _card_display(proposals), question=run.question, variants=variants,
+                                              **({"options": proposals[0].options} if proposals[0].options is not None else {}))
     except consent.ConsentError as failure:
         reason = consent.failure_reason(str(getattr(failure, "code", None) or failure))
     except Exception:

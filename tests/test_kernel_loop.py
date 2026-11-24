@@ -511,13 +511,18 @@ class FakeConsent:
         self.proposed, self.executed, self.reversible = [], [], []
         self.propose_error = None
 
-    def propose(self, credential, conversation, operations, display, *, question="", variants=None):
+    def propose(self, credential, conversation, operations, display, *, question="", variants=None, options=None):
         if self.propose_error:
             raise self.propose_error
-        self.proposed.append({"operations": copy.deepcopy(operations), "display": display, "question": question, "variants": variants})
+        self.proposed.append({"operations": copy.deepcopy(operations), "display": display, "question": question, "variants": variants,
+                              "options": copy.deepcopy(options)})
         n = len(self.proposed)
-        return {"id": f"card-{n}", "reason": "write_confirmation", "display": display, "original_question": question,
+        card = {"id": f"card-{n}", "reason": "write_confirmation", "display": display, "original_question": question,
                 "choices": [{"label": "同意", "value": f"confirm:{TOKEN}"}, {"label": "取消", "value": f"cancel:card-{n}"}]}
+        if options:       # as consent.propose: the ticked card of a forecast revision
+            card.update(reason="choose_revision_sources", options=options, select={"min": 1, "max": len(options)},
+                        choices=[{"label": "用所选材料修订", "value": f"confirm:{TOKEN}"}, {"label": "取消", "value": f"cancel:card-{n}"}])
+        return card
 
     def execute(self, credential, conversation, token, operations, handler):
         self.executed.append((token, copy.deepcopy(operations)))
@@ -856,3 +861,51 @@ def test_every_model_call_of_a_turn_carries_the_same_single_mark(env):
     for c in fake.calls:
         marked = [i for i, m in enumerate(c["messages"]) if m.get("cache_point")]
         assert marked == [2] and c["messages"][2]["content"] == "答"
+
+
+# --- saving a web page: only one a read returned this turn ---------------------------------------------------------------
+
+PAGE = {"id": "w1", "url": "https://news.example.com/aapl-q1", "title": "苹果一季度财报解读", "excerpt": "Revenue grew 8 percent.",
+        "published_at": "2026-01-05T00:00:00+00:00", "fetched_at": "2026-01-06T00:00:00+00:00", "body_provenance": "page", "truncated": False}
+
+
+def web_env(env, monkeypatch):
+    async def invoke(name, args, context, *, emit=None, page_chars=None):
+        return {"ok": True, "data": [copy.deepcopy(PAGE)], "source": "web"}
+
+    monkeypatch.setattr(tools, "invoke", invoke)
+    monkeypatch.setattr(act, "_already_saved", lambda *a: None)
+
+
+def test_a_page_the_turn_searched_can_be_saved_through_a_card(env, fake_consent, monkeypatch):
+    web_env(env, monkeypatch)
+    fake = script(env, [step(calls=[call("c1", "web_research", {"query": "苹果 财报"})]),
+                        step(calls=[act_call("c2", "ingest_web_source", {"url": PAGE["url"], "symbol": "AAPL"})]), step(text="我准备把这篇存进资料库，请核对卡片")])
+    result, _ = run(context=ctx())
+    assert fake_consent.executed == [] and len(fake_consent.proposed) == 1
+    operation = fake_consent.proposed[0]["operations"][0]
+    display = fake_consent.proposed[0]["display"]
+    assert operation["name"] == "ingest_web_source" and operation["snapshot"]["url"] == PAGE["url"]
+    assert display["title"] == PAGE["title"] and display["url"] == PAGE["url"] and "资料库 · AAPL" in display["alternative"]
+    assert display["alternative"].endswith("代价：会把这个网页存入资料库和知识库。")
+    assert result["status"] == "waiting_for_input" and TOKEN not in json.dumps(fake.calls[-1]["messages"])
+
+
+def test_a_page_no_read_returned_is_refused_and_makes_no_card(env, fake_consent, monkeypatch):
+    web_env(env, monkeypatch)
+    fake = script(env, [step(calls=[call("c1", "web_research", {"query": "苹果"})]),
+                        step(calls=[act_call("c2", "ingest_web_source", {"url": "https://never.example.com/page", "symbol": "AAPL"})]), step(text="没能保存")])
+    result, _ = run(context=ctx())
+    (_, second) = [json.loads(m["content"]) for m in fake.calls[-1]["messages"] if m["role"] == "tool"]
+    assert second["error_code"] == "web_source_not_returned" and fake_consent.proposed == []
+    assert result["status"] == "succeeded" and result["audit"]["writes"] == [{"operation": "ingest_web_source", "tier": 3, "outcome": "refused:web_source_not_returned"}]
+
+
+def test_a_page_from_a_post_search_is_not_a_web_page(env, fake_consent, monkeypatch):
+    web_env(env, monkeypatch)
+    monkeypatch.setattr("app.x_search.configured", lambda: True)
+    fake = script(env, [step(calls=[call("c1", "search_x", {"query": "苹果"})]),
+                        step(calls=[act_call("c2", "ingest_web_source", {"url": PAGE["url"], "symbol": "AAPL"})]), step(text="不能保存")])
+    run(context=ctx())
+    assert fake_consent.proposed == []
+    assert [json.loads(m["content"]) for m in fake.calls[-1]["messages"] if m["role"] == "tool"][-1]["error_code"] == "web_source_not_returned"

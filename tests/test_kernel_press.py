@@ -34,8 +34,8 @@ class FakeCards(FakeConsent):
         super().__init__()
         self.saved, self.cancelled, self.execute_error, self.block = {}, [], None, None
 
-    def propose(self, credential, conversation, operations, display, *, question="", variants=None):
-        card = super().propose(credential, conversation, operations, display, question=question, variants=variants)
+    def propose(self, credential, conversation, operations, display, *, question="", variants=None, options=None):
+        card = super().propose(credential, conversation, operations, display, question=question, variants=variants, options=options)
         if variants:
             card["choices"] = [{"label": label, "value": f"confirm:{TOKEN}" + (f":{suffix}" if suffix else "")} for label, suffix in variants]
             card["variants"] = [suffix for _, suffix in variants if suffix]
@@ -524,7 +524,6 @@ def foreign_card(cards, operation):
 @pytest.mark.parametrize("operation", [
     {"name": "fetch_sec", "arguments": {"symbol": "AAPL"}, "grant_only": True},
     {"name": "revise_forecast", "arguments": {"version_id": "v"}, "candidates": [{"source_id": "s"}]},
-    {"name": "ingest_web_source", "arguments": {"url": "https://example.com"}},
 ])
 def test_a_card_the_kernel_did_not_make_executes_nothing_and_stays_pending(cards, env, operation):
     fake = script(env, [])
@@ -646,3 +645,142 @@ def test_build_messages_adds_a_question_an_earlier_turn_also_asked():
     messages = prompt.build_messages("问", ctx(), history)
     assert _roles_and_texts(messages) == [("user", "问"), ("assistant", "答"), ("user", "别的笔记"), ("user", "问")]
     assert [m["content"] for m in messages if m.get("cache_point")] == ["别的笔记"]
+
+
+# --- a forecast revision: the user ticks the materials on the card -----------------------------------------------------
+
+from app.agent_workflow import workspace_tools
+
+VERSION = "99999999-2222-3333-4444-555555555555"
+REVISION_WORDS = "用新材料修订 AAPL 的预测"
+
+
+def plan(count=5):
+    return {"status": "ready", "symbol": "AAPL", "version_id": VERSION, "version_no": 2, "decision_at": "2026-01-02T15:00:00+00:00",
+            "window_start": "2025-12-03T15:00:00+00:00", "window_end": "2026-01-09T15:00:00+00:00", "target_end_date": "2026-02-01",
+            "candidates": [{"source_type": "uploaded_media", "source_id": f"{i:08d}-2222-3333-4444-555555555555", "title": f"材料{i}", "kind": "上传材料",
+                            "published_at": f"2026-01-0{i}T00:00:00+00:00", "category": "after", "badge": "预测后发布"} for i in range(1, count + 1)],
+            "excluded": [], "mentioned": []}
+
+
+def revision_card(cards, env, count=5):
+    """The card the kernel makes for a revision: one turn of the model calling ``act`` with ``revise_forecast``."""
+    env.monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: plan(count))
+    fake = script(env, [step(calls=[act_call("c1", "revise_forecast", {"symbol": "AAPL"})]), step(text="请在卡片上勾选要用的材料。")])
+    result, _ = turn(REVISION_WORDS, {}, messages=[{"role": "system", "content": "endpoint"}, {"role": "user", "content": REVISION_WORDS}], context=ctx())
+    return fake, result
+
+
+def press_revision(cards, env, value, *, count=5, steps=None):
+    _, made = revision_card(cards, env, count)
+    card = made["pending_request"]
+    fake = script(env, steps if steps is not None else [step(text="修订已提交。")])
+    result, events = turn(value.replace("TOKEN", TOKEN), pressed(card))
+    return fake, card, result, events
+
+
+def test_a_revision_turn_ends_with_an_options_card_of_its_own(cards, env):
+    fake, result = revision_card(cards, env)
+    card = result["pending_request"]
+    assert result["status"] == "waiting_for_input" and card["reason"] == "choose_revision_sources"
+    assert [o["label"] for o in card["options"]] == [f"材料{i}" for i in range(1, 6)] and card["select"] == {"min": 1, "max": 5}
+    assert cards.proposed[0]["question"] == REVISION_WORDS and len(cards.proposed) == 1
+    (row,) = [json.loads(m["content"]) for m in fake.calls[-1]["messages"] if m["role"] == "tool"]
+    assert row["data"][0]["status"] == "awaiting_selection" and row["data"][0]["candidates"] == 5
+    sent = json.dumps(fake.calls[-1]["messages"], ensure_ascii=False)
+    assert TOKEN not in sent and "材料1" not in sent       # the model never sees, and so never picks, a material
+
+
+def test_ticking_two_of_five_executes_exactly_those_two(cards, env):
+    fake, card, result, events = press_revision(cards, env, f"confirm:TOKEN:2.4")
+    (operation, key), = cards.costly
+    refs = [{"source_type": "uploaded_media", "source_id": f"{i:08d}-2222-3333-4444-555555555555"} for i in (2, 4)]
+    assert operation["name"] == "revise_forecast" and operation["arguments"] == {"version_id": VERSION, "source_refs": refs}
+    assert len(cards.executed) == 1 and cards.executed[0][1][0]["arguments"] == {"symbol": "AAPL", "version_id": VERSION}   # the card itself is untouched
+    data = json.loads(fake.calls[0]["messages"][-1]["content"].partition("\n")[2])
+    assert data["materials"] == ["材料2", "材料4"] and data["user_request"] == REVISION_WORDS
+    sent = json.dumps(fake.calls[0]["messages"], ensure_ascii=False) + json.dumps(events, default=str) + json.dumps(result["audit"], default=str)
+    assert TOKEN not in sent and "confirm:" not in sent and "2.4" not in sent and "材料1" not in sent
+    assert result["audit"]["write_outcome"] == "executed" and result["audit"]["revision_sources"] == 2
+    assert result["status"] == "succeeded" and result["pending_request"] is None
+
+
+def test_the_same_press_twice_runs_once(cards, env):
+    _, made = revision_card(cards, env)
+    card = made["pending_request"]
+    script(env, [step(text="好")])
+    turn(f"confirm:{TOKEN}:1", pressed(card))
+    script(env, [step(text="好")])
+    result, _ = turn(f"confirm:{TOKEN}:1", pressed(card, pending=None))
+    assert len(cards.costly) == 1
+
+
+@pytest.mark.parametrize("value", ["confirm:TOKEN", "confirm:TOKEN:", "confirm:TOKEN:9", "confirm:TOKEN:0", "confirm:TOKEN:1.9", "confirm:TOKEN:1.1",
+                                   "confirm:TOKEN:a", "confirm:TOKEN:1..2", "confirm:TOKEN:-1"])
+def test_nothing_ticked_or_a_position_not_on_the_card_executes_nothing_and_keeps_the_card(cards, env, value):
+    fake, card, result, events = press_revision(cards, env, value, steps=[])
+    assert cards.executed == [] and cards.costly == [] and fake.calls == []
+    assert result["answer"] == "请先在卡片上勾选要用的材料。" and result["audit"]["write_outcome"] == "refused:nothing_ticked"
+    assert result["status"] == "waiting_for_input" and result["pending_request"] == card
+
+
+def test_a_press_on_a_revision_card_with_the_wrong_token_executes_nothing(cards, env):
+    fake, card, result, _ = press_revision(cards, env, "confirm:" + "z" * 43 + ":1", steps=[])
+    assert cards.executed == [] and cards.costly == [] and result["pending_request"] == card
+    assert result["audit"]["write_outcome"] == "refused:confirmation_parameter_mismatch"
+
+
+def test_read_takes_the_ticked_positions_on_a_revision_card_and_only_there(cards, env):
+    _, made = revision_card(cards, env)
+    card = made["pending_request"]
+    state = {"requested_pending_id": card["id"], "pending_request": card}
+    assert press.read(f"confirm:{TOKEN}:2.4", state) == press.Press("confirm", card["id"], TOKEN, None, None, "2.4")
+    assert press.read(f"confirm:{TOKEN}", state) == press.Press("confirm", card["id"], TOKEN, None)
+    assert press.read(f"cancel:{card['id']}", state).kind == "cancel"
+    with pytest.raises(ValueError, match="confirmation_required"):
+        press.read("reply:好", state)
+    write = pending_card(cards)
+    with pytest.raises(ValueError, match="confirmation_parameter_mismatch"):
+        press.read(f"confirm:{TOKEN}:1", pressed(write))
+
+
+def test_cancelling_a_revision_card_cancels_it(cards, env):
+    _, made = revision_card(cards, env)
+    card = made["pending_request"]
+    fake = script(env, [])
+    result, _ = turn(f"cancel:{card['id']}", pressed(card))
+    assert result["answer"] == SENTENCES["cancelled"] and cards.cancelled == [card["id"]] and cards.costly == [] and fake.calls == []
+
+
+def test_typed_words_never_execute_a_revision_card(cards, env):
+    _, made = revision_card(cards, env)
+    card = made["pending_request"]
+    fake = script(env, [step(text="请在卡片上勾选材料。")])
+    result, _ = turn("同意，用 1 和 2", {"pending_request": card})
+    assert cards.executed == [] and cards.costly == [] and result["pending_request"] == card
+    assert fake.calls[0]["messages"][-1]["content"].startswith(press.TYPED_NOTE)
+
+
+@pytest.mark.parametrize("operation", [
+    {"name": "revise_forecast", "arguments": {"version_id": VERSION}},                                  # no candidates: not the kernel's
+    {"name": "forecast", "arguments": {"symbol": "AAPL"}, "candidates": [{"source_id": "s"}]},         # candidates on another operation
+    {"name": "revise_forecast", "arguments": {"version_id": VERSION}, "candidates": "x"},
+    {"name": "revise_forecast", "arguments": {"version_id": VERSION}, "candidates": [{"source_id": "s"}], "grant_only": True},
+])
+def test_a_revision_card_whose_operation_is_not_a_kernel_revision_is_refused_and_kept(cards, env, operation):
+    card = cards.propose("x" * 64, "conv", [operation], {"title": "修正", "targets": []}, question=REVISION_WORDS,
+                         options=[{"value": "1", "label": "a", "detail": "d"}])
+    fake = script(env, [])
+    result, _ = turn(f"confirm:{TOKEN}:1", pressed(card))
+    assert cards.executed == [] and cards.costly == [] and fake.calls == []
+    assert result["answer"] == SENTENCES["unsupported"] and result["pending_request"] == card
+
+
+def test_a_position_beyond_the_frozen_candidates_executes_nothing(cards, env):
+    operation = {"name": "revise_forecast", "arguments": {"symbol": "AAPL", "version_id": VERSION}, "revision": {}, "candidates": [
+        {"source_type": "uploaded_media", "source_id": "s1", "title": "唯一", "kind": "k", "published_at": "2026-01-01", "category": "after"}]}
+    card = cards.propose("x" * 64, "conv", [operation], {"title": "修正", "targets": []}, question=REVISION_WORDS,
+                         options=[{"value": "1", "label": "a", "detail": "d"}, {"value": "2", "label": "b", "detail": "d"}])
+    script(env, [])
+    result, _ = turn(f"confirm:{TOKEN}:2", pressed(card))
+    assert cards.costly == [] and result["pending_request"] == card
