@@ -621,6 +621,9 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
     elif kind=="delta":
      text_out+=event["text"]
      yield frame("delta",{"text":event["text"]})
+    elif kind=="answer_reset":
+     text_out=""
+     yield frame("answer_reset",{})
     elif kind=="trace":
      yield frame("trace",{key:event.get(key) for key in WIRE_KEYS})
     elif kind=="status":

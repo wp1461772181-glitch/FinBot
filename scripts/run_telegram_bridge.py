@@ -620,6 +620,8 @@ def format_turn(events: list[tuple[str, dict]]):
             conversation_id = data.get("conversation_id")
         elif kind == "delta":
             answer_parts.append(str(data.get("text", "")))
+        elif kind == "answer_reset":
+            answer_parts.clear()
         elif kind == "clarification":
             # The stream names the card ``request_id`` (agent_chat_stream); the consent record calls it ``id``.
             card = dict(data)

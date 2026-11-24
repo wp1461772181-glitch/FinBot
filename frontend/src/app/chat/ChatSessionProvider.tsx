@@ -184,6 +184,7 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
         if (event.event === "done") {citationProtocol=event.data.citation_protocol==="v2"?"v2":undefined;citationNodes=Array.isArray(event.data.citation_nodes)?event.data.citation_nodes as NonNullable<AgentChatMessage["citation_nodes"]>:citationNodes;terminalStatus=String(event.data.status??"complete");reusedSources=(event.data.audit as {reused_sources?:boolean}|undefined)?.reused_sources===true;const thinking=Number(event.data.thinking_ms);if(Number.isFinite(thinking))thinkingMs=thinking;}
         if (event.event === "done" || event.event === "error") { sawTerminal = true; const cid = liveTurns.current.get(line)?.conversationId; if (cid) dropDetached(localStore(), cid); }
         if (event.event === "delta" && typeof event.data.text === "string") accumulated += event.data.text;
+        if (event.event === "answer_reset") accumulated = "";
         if (event.event === "error") throw new Error(String(event.data.code ?? "chat_failed"));
         apply(line,{messages:[...next, { role: "assistant", content: accumulated + localQueue, turn_id:turnId, tool_trace: [...tools], citations, citation_protocol: citationProtocol, citation_nodes: citationNodes, unverified_lines: unverified, clarification, trace, thinking_ms: thinkingMs, started_at: startedAt, status:terminalStatus, reused_sources:reusedSources, ...liveFields() }]});
         return true;

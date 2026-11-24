@@ -24,14 +24,20 @@ from .evidence import deterministic_confidence_gate
 
 
 async def _direct_agent_turn(state: AgentWorkflowState, runtime: Runtime[AgentRuntimeContext]) -> dict:
-    from .direct import run_direct_turn
     async def publish(event):
         event = dict(event)
         kind = event.pop("event")
         try: get_stream_writer()({"event": kind, **event})
         except RuntimeError: pass
-    result = await run_direct_turn(state.get("question", ""), runtime.context, emit=publish,
-                                   messages=state.get("messages", []), state=state)
+    # The kernel runs only for engine "v2" with the flag on; a scheduled task (unattended) never gets it (stream_workflow).
+    if runtime.context.engine == "v2" and flag("FINBOT_KERNEL_V2", True):
+        from ..kernel.loop import run_turn as run_kernel_turn
+        result = await run_kernel_turn(state.get("question", ""), runtime.context, emit=publish,
+                                       messages=state.get("messages", []), state=state)
+    else:
+        from .direct import run_direct_turn
+        result = await run_direct_turn(state.get("question", ""), runtime.context, emit=publish,
+                                       messages=state.get("messages", []), state=state)
     answer = result["answer"]
     # LLM claim judge, stage 2 (shadow): takes a snapshot and returns at once; never touches the answer.
     judge_schedule = None
@@ -55,7 +61,8 @@ async def _direct_agent_turn(state: AgentWorkflowState, runtime: Runtime[AgentRu
         await publish({"event":"clarification","request_id":pending["id"],"reason":pending["reason"],"choices":pending["choices"],"display":pending.get("display"),"question":pending.get("question"),
                        **({"options":pending["options"],"select":pending.get("select")} if pending.get("options") else {})})
     try:
-        get_stream_writer()({"event": "delta", "text": answer})
+        if not result.get("streamed"):  # the kernel has already streamed the answer text
+            get_stream_writer()({"event": "delta", "text": answer})
         get_stream_writer()({"event": "done", "status": result.get("status", "complete"), "reason": result.get("reason"),
                             "citations": result.get("citations", []), "answer": answer,
                             "pending_request": result.get("pending_request"), "trace": result.get("trace", []),
@@ -82,6 +89,14 @@ def layers_default_window() -> int:
     return WINDOW_TOKENS
 
 
+def _engine(bot: dict, unattended: bool) -> str | None:
+    """The bot's turn engine; when it has none (or there is no bot), FINBOT_KERNEL_DEFAULT (only the exact value "v2" counts).  A scheduled task never gets one."""
+    import os
+    if unattended:
+        return None
+    return bot.get("engine") or ("v2" if os.environ.get("FINBOT_KERNEL_DEFAULT") == "v2" else None)
+
+
 async def stream_workflow(*, question: str, messages: list[dict], provider: str, model: str,
                           api_key: str, base_url: str | None, owner_hash: str,
                           conversation_id: str, identity_credential: str = "", turn_id: str = "",
@@ -105,7 +120,7 @@ async def stream_workflow(*, question: str, messages: list[dict], provider: str,
         profile_block=profile_block, unattended=unattended, token_budget=token_budget, action_sink=action_sink,
         bot_id=bot.get("bot_id"), bot_name=bot.get("bot_name"), bot_is_default=bool(bot.get("is_default")),
         bot_block=bot.get("block"), tool_scope=bot.get("tool_scope"),
-        reasoning_effort=bot.get("reasoning_effort"),
+        reasoning_effort=bot.get("reasoning_effort"), engine=_engine(bot, unattended),
         default_company=bot.get("default_company"), skill_block=skill_block, active_skill=active_skill,
         context_window=context_window or layers_default_window(), self_state=self_state)
     thread = checkpoint_thread_id(owner_hash, conversation_id)

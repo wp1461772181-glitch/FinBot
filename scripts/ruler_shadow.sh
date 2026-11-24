@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Shadow environment for the ruler (evaluation harness) on the heibao box.  Run as root on the box.
 #
-#   ruler_shadow.sh up      restore the newest nightly backup into database finbot_ruler, copy the live source
+#   ruler_shadow.sh up [v2] restore the newest nightly backup into database finbot_ruler, copy the live source
 #                           tree (with its data/ and .env) to /opt/finbot/ruler-src, start a second API on :9031
-#   ruler_shadow.sh status  what exists and what is running
+#                           (with v2 the shadow API runs the kernel turn engine: FINBOT_KERNEL_DEFAULT=v2)
+#   ruler_shadow.sh status  what exists and what is running, and which engine
 #   ruler_shadow.sh down    stop the shadow API, drop finbot_ruler, remove the copy
 #
 # The shadow API reads and writes only finbot_ruler and its own copy of data/, with background loops off, so an
@@ -66,6 +67,8 @@ guard_live_paths() {
 }
 
 up() {
+  local engine="${1:-}"
+  case "$engine" in ""|v2) ;; *) die "usage: $0 up [v2]" ;; esac
   parse_url
   local free dump url shadow_url
   free="$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)"
@@ -91,6 +94,7 @@ up() {
     printf 'DATABASE_URL=%s\nBACKGROUND_LOOPS=false\nDB_POOL_SIZE=3\nDB_MAX_OVERFLOW=2\n' "$shadow_url"
     printf 'CLAIM_JUDGE_SHADOW_DIR=%s\n' "$SHADOW_SRC/judge-shadow"
     printf 'LANGFUSE_PUBLIC_KEY=\nLANGFUSE_SECRET_KEY=\nSENTINEL_TOKEN=\n'
+    if [ "$engine" = "v2" ]; then printf 'FINBOT_KERNEL_DEFAULT=v2\n'; fi
   ) > "$SHADOW_ENV"
   guard_live_paths
 
@@ -112,6 +116,7 @@ status() {
   if shadow_exists; then echo "database: $SHADOW_DB exists (from $(cat "$MARK" 2>/dev/null || echo unknown))"; else echo "database: $SHADOW_DB absent"; fi
   if api_running; then echo "api: running on :$SHADOW_PORT"; else echo "api: stopped"; fi
   [ -d "$SHADOW_SRC" ] && echo "source copy: $SHADOW_SRC" || echo "source copy: absent"
+  if grep -qx 'FINBOT_KERNEL_DEFAULT=v2' "$SHADOW_ENV" 2>/dev/null; then echo "engine: v2 (kernel)"; else echo "engine: default (existing turn)"; fi
 }
 
 down() {
@@ -125,8 +130,8 @@ down() {
 }
 
 case "${1:-}" in
-  up) up ;;
+  up) up "${2:-}" ;;
   status) status ;;
   down) down ;;
-  *) die "usage: $0 up|status|down" ;;
+  *) die "usage: $0 up [v2]|status|down" ;;
 esac
