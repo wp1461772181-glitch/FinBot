@@ -260,6 +260,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
                 return await _answer_press(run, settled, state)
             run.audit["write_request_id"] = pressed.request_id
             fact = settled.fact
+            run.read_results = 1     # execution results are in front of the model: nothing it asks for now runs at once
             # From here on the user's words are the card's original question, never the button's value.
             run.question = (state.get("pending_request") or {}).get("original_question") or ""
             history = [m for m in history if not (m.get("role") == "user" and m.get("content") == question)]
@@ -268,5 +269,5 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
         note = None if pressed else press.typed_note(state)
         if note:
             run.messages.append({"role": "system", "content": note})
-            run.carried = state["pending_request"]
+            run.carried = press.waiting_write_card(state)
         return await _loop(run)

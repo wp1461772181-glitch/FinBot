@@ -291,15 +291,24 @@ def _code(failure: Exception) -> str:
     return str(getattr(failure, "code", None) or failure) or "write_service_failed"
 
 
-def execute_handler(context, *, variant: str | None = None):
+def execute_handler(context, *, variant: str | None = None, emit=None):
     """What ``consent.execute`` calls for each frozen operation (in its worker thread): the reversible or the costly executor.
 
     ``variant`` is how the user approved a ``save_skill`` card (``draft``, or ``None`` for enabled); it is the press, not the
-    frozen operation, that says so.
+    frozen operation, that says so.  ``emit`` is the turn's (it belongs to the main event loop): the handler runs in a worker
+    thread under its own ``asyncio.run``, so the events a write emits (client actions such as the research-queue sync) are
+    handed back to the main loop, which is free while ``consent.execute`` runs in ``to_thread``.
     """
+    main = asyncio.get_running_loop() if emit else None
+
+    async def relay(event):
+        await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(emit(event), main))
+
     def handler(frozen, key):
         if definitions()[frozen["name"]].level == "reversible":
             extra = {"overrides": {"status": variant}} if frozen["name"] == "save_skill" else {}
+            if emit:
+                extra["emit"] = relay
             return asyncio.run(tools.execute_reversible(frozen, key, context, **extra))
         return tools.execute_costly(frozen, key, context)
 
@@ -311,7 +320,7 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
     context, operation = run.context, prepared.operation
     if operation.get("name") not in TIER1:
         return _refusal("unsupported_operation"), "refused:unsupported_operation"
-    handler = execute_handler(context)
+    handler = execute_handler(context, emit=getattr(run, "emit", None))
 
     try:
         card = await asyncio.to_thread(consent.propose, context.identity_credential, context.conversation_id, [operation], prepared.display,

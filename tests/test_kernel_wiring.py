@@ -479,6 +479,6 @@ def test_propose_in_one_request_press_in_the_next(wiring):
     assert executed == ["forecast"]
     assert [d["text"] for n, d in second if n == "delta"] == ["预测已提交"]
     assert done_of(second)["status"] == "succeeded" and not any(n == "clarification" for n, _ in second)
-    assert len(sent) == 1 and "confirm:" not in sent[0] and token not in sent[0] and "系统事实：用户在确认卡" in sent[0]
+    assert len(sent) == 1 and "confirm:" not in sent[0] and token not in sent[0] and "系统事实：用户在一张确认卡上点了按钮" in sent[0]
     user_rows = [args[3] for args, kwargs in wiring.stored if len(args) >= 4 and args[2] == "user"]
     assert user_rows == ["show AAPL prices", "同意"]            # what the endpoint stores for a press today: the button's label
