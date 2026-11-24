@@ -784,3 +784,54 @@ def test_a_position_beyond_the_frozen_candidates_executes_nothing(cards, env):
     script(env, [])
     result, _ = turn(f"confirm:{TOKEN}:2", pressed(card))
     assert cards.costly == [] and result["pending_request"] == card
+
+
+# --- the fix wave ------------------------------------------------------------------------------------------------------------
+
+def test_an_unexpected_failure_while_executing_says_the_result_is_unknown_and_spends_the_card(cards, env):
+    cards.execute_error = RuntimeError("database went away: postgres://user:secret@host")
+    fake = script(env, [])
+    card = pending_card(cards)
+    result, events = turn(f"confirm:{TOKEN}", pressed(card))
+    assert fake.calls == [] and cards.costly == []
+    assert result["answer"] == press.UNKNOWN_RESULT and "不要重复" in press.UNKNOWN_RESULT and "secret" not in json.dumps([result["answer"], events, result["audit"]], default=str)
+    assert result["status"] == "succeeded" and result["pending_request"] is None and result["audit"]["write_outcome"] == "failed:unknown_result"
+
+
+def test_materials_are_only_named_when_this_press_ran_the_write(cards, env):
+    _, made = revision_card(cards, env)
+    card = made["pending_request"]
+    script(env, [step(text="好")])
+    turn(f"confirm:{TOKEN}:1", pressed(card))
+    assert len(cards.costly) == 1
+    fake = script(env, [step(text="好")])
+    turn(f"confirm:{TOKEN}:3", pressed(card))             # the same card pressed again with other ticks: the stored result comes back
+    assert len(cards.costly) == 1
+    fact = fake.calls[0]["messages"][-1]["content"]
+    assert "materials" not in json.loads(fact.partition("\n")[2]) and "材料3" not in fact
+
+
+INGEST = {"name": "ingest_web_source", "arguments": {"url": "https://news.example.com/a", "symbol": "AAPL"}, "snapshot": {"url": "https://news.example.com/a"}}
+
+
+def test_a_saved_page_ends_the_answer_with_the_library_link(cards, env):
+    env.monkeypatch.setenv("FINBOT_WEB_URL", "https://app.example.com/")
+    cards.costly_result = {"ok": True, "data": [{"status": "created", "title": "标题", "symbol": "AAPL", "material_link": "#materials?symbol=AAPL&id=1"}]}
+    fake, card, result, events = confirm_turn(cards, env, [step(text="已保存。")], operations=(INGEST,), title="保存网页")
+    link = "\n\n在资料库查看：[资料库 · AAPL](https://app.example.com/#materials?symbol=AAPL&id=1)"
+    assert result["answer"] == "已保存。" + link and "".join(e["text"] for e in events if e["event"] == "delta").endswith(link)
+    assert TOKEN not in json.dumps(events, default=str)
+
+
+def test_the_library_link_is_kept_when_the_model_cannot_report(cards, env):
+    cards.costly_result = {"ok": True, "data": [{"status": "created", "symbol": "AAPL", "material_link": "#materials?id=1"}]}
+    fake = script(env, [step(text="")])
+    failing_model(env, provider.ProviderFailure("provider_error", stage="stream", retryable=False))
+    card = pending_card(cards, (INGEST,), title="保存网页")
+    result, _ = turn(f"confirm:{TOKEN}", pressed(card))
+    assert result["answer"].startswith("已执行：保存网页。") and result["answer"].endswith("在资料库查看：[资料库 · AAPL](#materials?id=1)")
+
+
+def test_a_write_that_saves_nothing_adds_no_link(cards, env):
+    fake, card, result, events = confirm_turn(cards, env, [step(text="预测已提交。")])
+    assert "在资料库查看" not in result["answer"]

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -17,6 +18,7 @@ from ..agent_workflow import consent, direct
 from ..agent_workflow.fp_flags import flag
 from . import act
 
+logger = logging.getLogger(__name__)
 WRITE_CARD = "write_confirmation"
 REVISION_CARD = "choose_revision_sources"      # a forecast revision: the user ticks the materials, then presses
 WRITE_CARDS = (WRITE_CARD, REVISION_CARD)
@@ -28,6 +30,9 @@ ENDED = "操作已经结束，无法撤回已经完成的结果。"
 ALREADY_DONE = "这张确认卡已经执行过了，不会重复执行；结果见之前的回复。"
 ALREADY_CANCELLED = "这张卡片已经取消，没有执行。"
 NOTHING_TICKED = "请先在卡片上勾选要用的材料。"
+EMPTY_REPLY = "这个选项是空的，没有收到答案。请直接打字回答。"
+UNKNOWN_RESULT = ("系统在执行这张卡片时出了问题，不确定这项操作有没有执行成功。这张卡片已经用掉了，不会自动重试；"
+                  "请先到相应的记录页（预测记录、资料库、持仓等）确认结果，确认没有再重新提出，不要重复点。")
 STALE = "这张卡片已经失效：之后有了新的消息，所以它没有执行。如果还需要，请重新提出这项操作。"
 # consent.failure_reason has no sentence for these two and would call an expired or used card a service error.
 REASONS = {"confirmation_expired": "这张确认卡已经过期（10 分钟内有效），没有执行任何操作。如果还需要，请重新提出这项操作。",
@@ -62,6 +67,7 @@ class Settled:
     outcome: str             # "executed" | "cancelled" | "stale_card" | "refused:<code>" | "failed"
     report: str | None = None    # with a fact: the code-written sentence that tells the user the result if the model cannot
     reply: str | None = None     # a pressed option of a question card: the turn goes on as an ordinary turn whose question is this text
+    note: str | None = None      # with a fact: text the code appends to the answer (where a saved page landed)
 
 
 def card_title(card: dict) -> str:
@@ -136,7 +142,7 @@ def read(question: str, state: dict) -> Press | None:
         if ticked and waiting is not None and ticked not in (waiting.get("variants") or []):
             raise ValueError("confirmation_parameter_mismatch")
         return Press("confirm", request_id, token, ticked if ticked and waiting is not None else None)
-    if kind == "reply" and rest.strip() and waiting is not None and waiting.get("reason") == QUESTION_CARD:
+    if kind == "reply" and waiting is not None and waiting.get("reason") == QUESTION_CARD:
         return Press("reply", request_id, None, None, rest)
     if waiting is not None and waiting.get("reason") in WRITE_CARDS:
         raise ValueError("confirmation_required")
@@ -196,6 +202,8 @@ async def _pressed_another_card(run, press: Press, pending) -> Settled:
 
 def _answered(run, press: Press, card: dict) -> Settled:
     """An option pressed on a question card: the words are the user's answer.  An expired card still takes it (as the old engine does)."""
+    if not (press.reply or "").strip():
+        return Settled(EMPTY_REPLY, None, "waiting_for_input", "refused:empty_answer")
     if expired(card):
         if not flag("FINBOT_FP4_EXPIRED_CARD_REPLY", True):
             raise ValueError("pending_request_expired")
@@ -242,9 +250,10 @@ async def settle(run, press: Press, state: dict) -> Settled:
         if len(operations) != 1 or max(picks) > len(operations[0]["candidates"]):
             return Settled(NOTHING_TICKED, None, "waiting_for_input", "refused:nothing_ticked")
         run.audit["revision_sources"] = len(picks)
+    ran: list = []      # what the handler really executed in this press (a stored result of an earlier press runs nothing)
     try:
         value = await asyncio.to_thread(consent.execute, context.identity_credential, context.conversation_id, press.token, operations,
-                                        act.execute_handler(context, variant=press.variant, emit=run.emit, picks=picks))
+                                        act.execute_handler(context, variant=press.variant, emit=run.emit, picks=picks, ran=ran))
     except asyncio.CancelledError:
         # A thread's started side effect cannot be killed; revoke the later items of the batch before propagating.
         try:
@@ -254,9 +263,19 @@ async def settle(run, press: Press, state: dict) -> Settled:
         raise
     except consent.ConsentError as failure:
         return _refused(failure)
-    facts = direct.execution_facts(value, operations)
+    except Exception:
+        # Whatever broke, the write may or may not have run: say so, keep the card spent, retry nothing.
+        logger.exception("kernel pressed card failed while executing request=%s", press.request_id)
+        return Settled(UNKNOWN_RESULT, None, "succeeded", "failed:unknown_result")
+    try:
+        facts = direct.execution_facts(value, operations)
+        note = direct.library_note(value) if value.get("ok", True) else ""
+    except Exception:
+        logger.exception("kernel pressed card facts failed request=%s", press.request_id)
+        facts, note = [{"status": "complete", "ok": bool(value.get("ok", True))}], ""
     title = card_title(pending) or card_title(saved)
-    materials = [operations[0]["candidates"][p - 1]["title"] for p in picks] if picks else None
+    used = {(r["source_type"], r["source_id"]) for refs in ran for r in refs}
+    materials = [c["title"] for c in operations[0]["candidates"] if (c["source_type"], c["source_id"]) in used] if revision and used else None
     fact = fact_message(title, facts, str(pending.get("original_question") or ""), press.variant, materials)
     ok = bool(value.get("ok", True))
-    return Settled(None, fact, "succeeded", "executed" if ok else "failed", report_sentence(title, facts, ok))
+    return Settled(None, fact, "succeeded", "executed" if ok else "failed", report_sentence(title, facts, ok), note=note or None)

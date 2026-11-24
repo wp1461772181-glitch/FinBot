@@ -30,6 +30,7 @@ READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_
     "query_alerts", "query_holdings_overview", "read_workspace", "query_system_status", "query_research_queue", "list_routines")
 logger = logging.getLogger(__name__)
 MAX_STEPS = 12
+MAX_SETS = 6          # as the old engine: the last six result sets of a conversation
 SOFT_SECONDS = 180
 IDLE_SECONDS = 300
 RETRY_WAIT_SECONDS = 1
@@ -81,6 +82,8 @@ class _Run:
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
     web_rows: dict = field(default_factory=dict)      # url -> the raw row of a page this turn's web reads returned (what ``act`` may save)
+    carried_sets: list = field(default_factory=list)  # the conversation's earlier result sets (the graph state's ``result_sets``): pages earlier turns' reads returned
+    new_sets: list = field(default_factory=list)      # this turn's web reads, as result sets to carry on
     proposals: list = field(default_factory=list)     # tier-2/3 operations collected this turn, put on one card when it ends
     writes: list = field(default_factory=list)       # one audit line per act call
     read_results: int = 0            # read or calculation results received this turn: after the first, tier 1 goes onto the card
@@ -248,7 +251,7 @@ def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None
     run.audit["writes"] = run.writes
     return {"answer": answer, "citations": run.citations, "status": status,
             "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {"tier": run.tier, "narration": run.narration, "checklist": run.checklist, **run.final_extra}, "pending_request": run.pending or run.carried,
-            "result_sets": [], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
+            "result_sets": [*run.carried_sets, *run.new_sets][-MAX_SETS:], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
 
 
 def _card_display(proposals: list) -> dict:
@@ -367,7 +370,9 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                model=ModelUse(context.provider, context.model, context.api_key, context.base_url),
                ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)),
-               question=question, turn_id=str(state.get("turn_id") or ""))
+               question=question, turn_id=str(state.get("turn_id") or ""),
+               carried_sets=[x for x in state.get("result_sets") or [] if isinstance(x, dict) and x.get("owner") == context.owner_hash
+                             and x.get("conversation") == context.conversation_id and isinstance(x.get("rows"), list)][-MAX_SETS:])
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):
         fact = None
         if pressed:
@@ -377,8 +382,10 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
             if settled.answer is not None:
                 return await _answer_press(run, settled, state)
             if settled.reply is not None:
-                # An ordinary turn whose question is the option's text; nothing has been read yet.
+                # An ordinary turn whose question is the option's text.  The model wrote that text, perhaps from a page it
+                # had read: like the turn after a write press, nothing runs at once in it.
                 question = run.question = settled.reply
+                run.read_results = 1
             else:
                 run.audit["write_request_id"] = pressed.request_id
                 fact = settled.fact
@@ -405,5 +412,8 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
             logger.exception("kernel turn after an executed press failed")
             result = None
         if result is None or result.get("reason") == "empty_answer":
-            return await _report_fallback(run, settled.report)
+            return await _report_fallback(run, settled.report + (settled.note or ""))
+        if settled.note:      # where a saved page landed: a link written by code, not left to the model
+            await run.emit({"event": "delta", "text": settled.note})
+            result["answer"] += settled.note
         return result

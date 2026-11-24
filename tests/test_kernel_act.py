@@ -19,7 +19,7 @@ def make_run(**extra):
               "default_company": None, "watchlist": ()}
     fields.update({k: extra.pop(k) for k in ("bot_id", "bot_name", "default_company", "watchlist") if k in extra})
     return SimpleNamespace(context=SimpleNamespace(**fields), **{"user_text": "", "question": "", "turn_id": "t", "web_rows": {}, "citations": [],
-                                                                  "proposals": [], "question_card": None, **extra})
+                                                                  "proposals": [], "question_card": None, "carried_sets": [], **extra})
 
 
 def run(coro):
@@ -324,7 +324,7 @@ def test_ingest_card_shows_title_url_date_destination_and_cost(web):
     out = ingest(make_run(web_rows={PAGE_URL: PAGE}), symbol="AAPL", company="Apple")
     assert isinstance(out, act.Prepared) and out.tier == 3 and out.options is None
     shown = out.display
-    assert shown["title"] == PAGE["title"] and shown["url"] == PAGE_URL and shown["web_date"] == PAGE["published_at"]
+    assert shown["title"] == "保存网页" and shown["url"] == PAGE_URL and shown["web_date"] == PAGE["published_at"]
     assert shown["targets"][0]["title"] == PAGE["title"]
     assert shown["alternative"] == "存入 资料库 · AAPL ＋ 知识库检索。也可抓取最新 SEC 官方文件。\n代价：会把这个网页存入资料库和知识库。"
     operation = out.operation
@@ -434,3 +434,41 @@ def test_a_proposal_after_a_revision_is_refused(monkeypatch):
     result, outcome = act._collect(run_, run(act.prepare(run_, "forecast", {"symbol": "NVDA"})))
     assert result["error_code"] == "revision_needs_its_own_card" and outcome == "refused:revision_needs_its_own_card"
     assert len(run_.proposals) == 1
+
+
+# --- the fix wave ------------------------------------------------------------------------------------------------------------
+
+def test_a_page_an_earlier_turns_read_returned_can_be_saved(web):
+    earlier = [{"id": "a", "tool": "web_research", "rows": [{**PAGE, "title": "旧的"}]}, {"id": "b", "tool": "search_configured_news", "rows": [PAGE]},
+               {"id": "c", "tool": "search_x", "rows": [{**PAGE, "url": "https://x.com/u/1"}]}]
+    out = ingest(make_run(carried_sets=earlier), symbol="AAPL")
+    assert isinstance(out, act.Prepared) and out.display["targets"][0]["title"] == PAGE["title"]       # the newest set wins
+    assert ingest(make_run(carried_sets=earlier), symbol="AAPL", url="https://x.com/u/1")["error_code"] == "web_source_not_returned"
+    this_turn = {**PAGE, "excerpt": "This turn's text."}
+    out = ingest(make_run(web_rows={PAGE_URL: this_turn}, carried_sets=earlier), symbol="AAPL")
+    assert out.operation["snapshot"]["excerpt"] == "This turn's text."
+
+
+def test_an_unreturned_page_is_refused_before_the_symbol_is_asked_for(web):
+    assert ingest(make_run())["error_code"] == "web_source_not_returned"
+
+
+def test_the_card_headline_is_fixed_and_the_page_title_is_one_capped_line(web):
+    nasty = {**PAGE, "title": "第一行\n第二行\t" + "长" * 300}
+    out = ingest(make_run(web_rows={PAGE_URL: nasty}), symbol="AAPL")
+    assert out.display["title"] == "保存网页"
+    shown = out.display["targets"][0]["title"]
+    assert "\n" not in shown and "\t" not in shown and shown.startswith("第一行 第二行 长") and len(shown) <= 100
+    assert out.operation["snapshot"]["title"] == nasty["title"]            # what is saved is the stored row, untouched
+    untitled = ingest(make_run(web_rows={PAGE_URL: {**PAGE, "title": None}}), symbol="AAPL")
+    assert untitled.display["targets"][0]["title"] == PAGE_URL
+
+
+def test_a_repeated_revision_call_gets_the_first_calls_answer(monkeypatch):
+    monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: ready_plan())
+    run_ = make_run()
+    first = run(act.prepare(run_, "revise_forecast", {"symbol": "AAPL"}))
+    assert act._collect(run_, first)[1] == "proposed"
+    again = run(act.prepare(run_, "revise_forecast", {"symbol": "AAPL"}))
+    assert again == {"ok": True, "data": [{"status": "awaiting_selection", "candidates": 5, "note": act.REVISION_NOTE}]}
+    assert run(act.prepare(run_, "revise_forecast", {"symbol": "NVDA"}))["error_code"] == "revision_needs_its_own_card"

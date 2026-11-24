@@ -29,8 +29,8 @@ def make_run(events):
         events.append(event)
 
     names = frozenset({"query_financials", "web_research", "search_configured_news", "calculate", "calculate_formula"})
-    return SimpleNamespace(context=SimpleNamespace(query_expander=None), emit=emit, user_text="", tool_names=names,
-                           citations=[], audit={"tool_calls": 0}, read_results=0, web_rows={})
+    return SimpleNamespace(context=SimpleNamespace(query_expander=None, owner_hash="o", conversation_id="c"), emit=emit, user_text="", tool_names=names,
+                           citations=[], audit={"tool_calls": 0}, read_results=0, web_rows={}, new_sets=[])
 
 
 def execute(calls, run=None):

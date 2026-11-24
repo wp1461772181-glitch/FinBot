@@ -116,4 +116,4 @@ def test_state_reads_are_shown_unnumbered(monkeypatch, name):
     run, shown = execute(monkeypatch, name)
     assert shown == RESULTS[name] and run.citations == []
     assert "citation" not in shown["data"][0]
-    assert run.read_results == 1      # still a read for the tier-1 rule
+    assert run.read_results == 0      # the owner's own data, not outside text: tier 1 still runs at once

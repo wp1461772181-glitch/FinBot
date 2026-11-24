@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from ..agent_progress import mark_progress, progress_watchdog
 from ..agent_tool_catalog import definitions, validate
@@ -26,6 +28,8 @@ RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts�
 _UNNUMBERED = {"recall_conversations", "read_past_conversation", "query_system_status", "query_research_queue", "list_routines"}
 # The pages these reads return can be saved with ``act``; a post found on X is not a web page.
 _WEB_PAGE_READS = ("web_research", "search_configured_news")
+# These return the owner's own data, not text from outside: they do not make a tier-1 write go onto a card.
+_OWN_STATE_READS = frozenset({"query_system_status", "query_research_queue", "list_routines"})
 _SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_news", "query_sec_filings": "official_filing",
                 "search_x": "x_post"}
 # Run one at a time after every read has been numbered, in call order: calculations work on the citations the reads just
@@ -130,19 +134,25 @@ async def _fetch(run, gate: asyncio.Semaphore, item: _Call) -> None:
         mark_progress()
 
 
-def _keep_pages(run, outcome: dict) -> None:
-    """The raw rows of a web read, by URL, as ``act`` needs them to save one (before numbering adds anything to them)."""
+def _keep_pages(run, name: str, outcome: dict) -> None:
+    """The raw rows of a web read, by URL, as ``act`` needs them to save one (before numbering adds anything to them).
+
+    They are also kept as one result set of the conversation (the old engine's ``result_sets``, which the graph stores
+    with the checkpoint), so "save the first one" works in the next message."""
     rows = outcome.get("data") if outcome.get("data") is not None else (outcome.get("items") or [])
-    for row in rows if isinstance(rows, list) else [rows]:
-        if isinstance(row, dict) and isinstance(row.get("url"), str) and row["url"]:
-            run.web_rows[row["url"]] = copy.deepcopy(row)
+    kept = [copy.deepcopy(row) for row in (rows if isinstance(rows, list) else [rows]) if isinstance(row, dict) and isinstance(row.get("url"), str) and row["url"]]
+    for row in kept:
+        run.web_rows[row["url"]] = row
+    if kept:
+        run.new_sets.append({"id": uuid.uuid4().hex, "owner": run.context.owner_hash, "conversation": run.context.conversation_id,
+                             "rows": copy.deepcopy(kept), "scope": {}, "tool": name, "created_at": datetime.now(UTC).isoformat()})
 
 
 def _settle_read(run, item: _Call) -> None:
     """Number a finished read into the turn's citations.  Called in call order, never concurrently."""
     outcome = item.raw
     if outcome.get("ok") and item.name in _WEB_PAGE_READS:
-        _keep_pages(run, outcome)
+        _keep_pages(run, item.name, outcome)
     if not outcome.get("ok"):
         item.result = outcome
     elif item.name == "read_history_citation":
@@ -228,12 +238,14 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         items.append(_Call(call["id"], name, args))
         await run.emit({"event": "tool_start", "call_id": call["id"], "name": name, "arguments": args or {}})
         run.audit["tool_calls"] += 1
-    own, reads, serial = [], [], []
+    own, asks, reads, serial = [], [], [], []
     for item in items:
         if item.args is None:
             item.result = tools.error("invalid_arguments")
-        elif item.name in (tiers.ESCALATE, progress.PLAN, ask.ASK):
+        elif item.name in (tiers.ESCALATE, progress.PLAN):
             own.append(item)          # the kernel's own tools: never go through tools.invoke, make no citation
+        elif item.name == ask.ASK:
+            asks.append(item)         # also its own, but settled after the reads of its step: the model has seen what they found
         elif item.name == act.ACT:
             serial.append(item)       # the kernel's own, but it can take time and may rest on this step's reads: with the calculations
         elif item.name == skills.USE_SKILL:
@@ -265,10 +277,13 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     if progress.mark_items(run, numbers) or planned:
         await run.emit({"event": "checklist", "items": [dict(entry) for entry in run.checklist]})
     await _fetch_all(run, reads)
-    run.read_results += len(reads)       # a read's result (even a failed one) has come back: tier 1 no longer runs at once
+    # A read's result (even a failed one) has come back: tier 1 no longer runs at once, unless it only showed the owner's own state.
+    run.read_results += sum(1 for item in reads if item.name not in _OWN_STATE_READS)
     for item in reads:
         if item.result is None:
             _guard(_settle_read, run, item)
+    for item in asks:
+        _guard(_settle_serial, run, item)
     for item in serial:
         if item.name == act.ACT:
             await _settle_act(run, item)

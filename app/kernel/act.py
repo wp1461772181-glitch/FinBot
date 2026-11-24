@@ -135,6 +135,7 @@ _HINTS = {"unknown_operation": "没有这个操作。请从 act 工具描述里�
 REVISION_ALONE = "预测修订要单独一张卡片（材料由用户在卡片上勾选）。先把这一轮已有的操作交给用户，等用户处理后再提出修订。"
 AFTER_REVISION = "这一轮已经有一份预测修订在卡片上，它要单独一张卡片。等用户处理完再提出别的操作。"
 REVISION_NOTE = "已放进材料勾选卡。回答结束时卡片会交给用户，由用户勾选要用的材料；材料你不能选，也不要说已经修订了。现在用一两句话请用户在卡片上勾选材料。"
+SAVE_TITLE = "保存网页"
 SYMBOL_QUESTION = "存到哪只股票的资料库？"
 SYMBOL_HINT = "用 ask 问用户存到哪只股票（给出 candidates 作选项，并加一项「只存知识库」），再带上 symbol 重新调用；用户选只存知识库时传 knowledge_only=true。"
 DESTINATION_TAIL = "。也可抓取最新 SEC 官方文件。"
@@ -241,6 +242,25 @@ def _already_saved(owner_hash: str, url: str, content_hash: str, knowledge_only:
         return str(existing.id) if existing and (existing.uploaded_evidence_id or knowledge_only) else None
 
 
+WEB_READS = ("web_research", "search_configured_news")
+TITLE_CHARS = 100
+
+
+def _returned_page(run, url: str) -> dict | None:
+    """The stored row of a page a web read really returned in this conversation: this turn's first, then the earlier sets, newest first.
+
+    The model's URL is only the key; what is saved is the row (never text the model supplied)."""
+    page = (getattr(run, "web_rows", None) or {}).get(url)
+    if page:
+        return page
+    for saved in reversed(getattr(run, "carried_sets", None) or []):
+        if saved.get("tool") in WEB_READS:
+            found = next((r for r in saved.get("rows") or [] if isinstance(r, dict) and r.get("url") == url), None)
+            if found:
+                return found
+    return None
+
+
 def _symbol_required(context) -> dict:
     """资料库 is per stock: with none to file the page under, the model asks the user (``ask``) before a card is made."""
     seen = []
@@ -255,12 +275,12 @@ async def _ingest(run, args: dict, operation: dict, display: dict) -> dict | Non
     context = run.context
     company = _default_company(context) or {}
     args = {**args, "company": args.get("company") or company.get("company"), "symbol": args.get("symbol") or company.get("symbol")}
+    page = _returned_page(run, args["url"])
+    if not page:
+        return _failure("web_source_not_returned")      # before the stock is asked for: no question for a page that cannot be saved
     if not args["symbol"] and not args.get("knowledge_only"):
         return _symbol_required(context)
     operation["arguments"] = copy.deepcopy(args)
-    page = (getattr(run, "web_rows", None) or {}).get(args["url"])
-    if not page:
-        return _failure("web_source_not_returned")
     try:
         operation["snapshot"] = web_sources.freeze_snapshot(page)
     except ValueError as failure:
@@ -270,8 +290,10 @@ async def _ingest(run, args: dict, operation: dict, display: dict) -> dict | Non
     operation["published_at"] = page.get("published_at")
     published = web_sources.timestamp(page.get("published_at"))
     destination = ("只存知识库检索，不进资料库" if args.get("knowledge_only") else f'存入 资料库 · {args["symbol"]} ＋ 知识库检索') + DESTINATION_TAIL
-    display.update(title=page.get("title") or args["url"], url=args["url"], web_date=page.get("published_at"), alternative=destination,
-                   targets=[{**({"symbol": args["symbol"]} if args["symbol"] else {}), "url": args["url"], "title": page.get("title") or args["url"]}])
+    # The page chooses neither the card's headline nor more than one short line of it.
+    shown = " ".join(str(page.get("title") or "").split())[:TITLE_CHARS] or args["url"]
+    display.update(title=SAVE_TITLE, url=args["url"], web_date=page.get("published_at"), alternative=destination,
+                   targets=[{**({"symbol": args["symbol"]} if args["symbol"] else {}), "url": args["url"], "title": shown}])
     if args.get("newer_than") is not None:
         older = next((c for c in run.citations if c["ordinal"] == args["newer_than"] and c["source_type"] in {"official_filing", "saved_filing"}), None)
         saved = web_sources.timestamp(older.get("published_at")) if older else None
@@ -287,10 +309,17 @@ async def _ingest(run, args: dict, operation: dict, display: dict) -> dict | Non
     return None
 
 
+def _awaiting(prepared: Prepared) -> dict:
+    return {"ok": True, "data": [{"status": "awaiting_selection", "candidates": len(prepared.options), "note": REVISION_NOTE}]}
+
+
 async def _revision(run, args: dict) -> Prepared | dict:
     """A forecast revision: the server lists the materials the window allows, the user ticks them on the card, the model picks none."""
     if run.question_card:
         return ask.refusal()
+    waiting = next((p for p in run.proposals if p.options is not None), None)
+    if waiting and waiting.operation["arguments"]["symbol"] == args["symbol"] and args.get("version_id") in (None, waiting.operation["arguments"]["version_id"]):
+        return _awaiting(waiting)      # the same call again: the answer to the first one
     if run.proposals:
         return _failure("revision_needs_its_own_card", hint=REVISION_ALONE)
     context = run.context
@@ -410,7 +439,7 @@ def revision_operation(frozen: dict, picks) -> dict:
                                     "source_refs": [{"source_type": c["source_type"], "source_id": c["source_id"]} for c in chosen]}}
 
 
-def execute_handler(context, *, variant: str | None = None, emit=None, picks=None):
+def execute_handler(context, *, variant: str | None = None, emit=None, picks=None, ran: list | None = None):
     """What ``consent.execute`` calls for each frozen operation (in its worker thread): the reversible or the costly executor.
 
     ``variant`` is how the user approved a ``save_skill`` card (``draft``, or ``None`` for enabled); it is the press, not the
@@ -427,6 +456,8 @@ def execute_handler(context, *, variant: str | None = None, emit=None, picks=Non
     def handler(frozen, key):
         if frozen["name"] == "revise_forecast":
             frozen = revision_operation(frozen, picks)
+            if ran is not None:
+                ran.append(frozen["arguments"]["source_refs"])
         if definitions()[frozen["name"]].level == "reversible":
             extra = {"overrides": {"status": variant}} if frozen["name"] == "save_skill" else {}
             if emit:
@@ -479,7 +510,7 @@ def _collect(run, prepared: Prepared) -> tuple[dict, str]:
             return _refusal("invalid_write_targets"), "refused:invalid_write_targets"
         run.proposals.append(prepared)
     if prepared.options is not None:
-        return {"ok": True, "data": [{"status": "awaiting_selection", "candidates": len(prepared.options), "note": REVISION_NOTE}]}, "proposed"
+        return _awaiting(prepared), "proposed"
     return {"ok": True, "data": [{"status": "awaiting_confirmation", "title": prepared.display["title"], "note": AWAITING_NOTE}]}, "proposed"
 
 
@@ -517,7 +548,8 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
         return {"ok": True, "data": [describe(name)]}, "lookup"
     prepared = await prepare(run, name, args["arguments"])
     if isinstance(prepared, dict):
-        return prepared, f"refused:{prepared.get('error_code') or 'refused'}"
+        status = ((prepared.get("data") or [{}])[0] or {}).get("status")
+        return prepared, "proposed" if status == "awaiting_selection" else f"refused:{prepared.get('error_code') or status or 'refused'}"
     # Tier 1 runs at once only while nothing but the owner's own words has been seen this turn: once a read has come back, a
     # page or filing could be asking the model to remember something, so the operation goes onto the card like tier 2.
     if prepared.tier == 1 and not run.read_results:

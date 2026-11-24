@@ -14,9 +14,12 @@ from ..agent_workflow import tools
 ASK = "ask"
 QUESTION_MAX = 400
 OPTIONS_MAX = 8
+OPTION_MAX = 80
 EXPIRES_MINUTES = 10
 ONE_CARD = "这一轮已经有一张卡片了。"
-NOTE = "问题已经作为卡片发给用户，这一轮到此结束。现在用一句话把问题对用户再说一遍，不要再调用工具。"
+NOTE = "问题已记下，这一轮结束时会作为卡片发给用户，用户回答后才继续。现在用一句话把问题对用户再说一遍，不要再调用工具：这一轮再查到的东西替用户答不了这个问题。"
+LONG_OPTION = "每个选项最多 80 个字，请把过长的选项改短后重新调用 ask。"
+WRITE_CARD_WAITING = "上一张确认卡还在等用户点按钮，提问会把它顶掉。先请用户处理那张卡片；如果用户是在说别的事，直接回答，不要提问。"
 
 ASK_SCHEMA: dict = {
     "type": "function",
@@ -47,12 +50,13 @@ def refusal() -> dict:
 
 
 def _checked(args: dict) -> tuple[str, list[str]] | None:
-    question, options = args.get("question"), args.get("options", [])
+    question, options = args.get("question"), args.get("options")
+    options = [] if options is None else options
     if not isinstance(question, str) or not question.strip() or len(question.strip()) > QUESTION_MAX:
         return None
     if not isinstance(options, list) or len(options) > OPTIONS_MAX or not all(isinstance(o, str) and o.strip() for o in options):
         return None
-    return question.strip(), [o.strip() for o in options]
+    return question.strip(), list(dict.fromkeys(o.strip() for o in options))
 
 
 def settle(run, args: dict) -> dict:
@@ -60,8 +64,12 @@ def settle(run, args: dict) -> dict:
     checked = _checked(args)
     if checked is None:
         return tools.error("invalid_arguments")
+    if any(len(option) > OPTION_MAX for option in checked[1]):
+        return {**tools.error("invalid_arguments"), "reason": LONG_OPTION}
     if run.question_card or run.proposals:
         return refusal()
+    if run.carried:      # the conversation's own write card is still waiting: a question would replace it unpressed
+        return {"ok": False, "data": [], "error_code": "write_card_waiting", "reason": WRITE_CARD_WAITING}
     run.question_card = card(*checked, run.question)
     run.audit["asked"] = True
     return {"ok": True, "data": [{"status": "waiting_for_input", "note": NOTE}]}
