@@ -167,7 +167,7 @@ def test_step_cap_forces_a_final_answer(env):
     fake = script(env, steps + [step(text="只能这样")])
     result, _ = run()
     assert len(fake.calls) == loop.MAX_STEPS + 1
-    assert fake.calls[-1]["tools"] == [] and all(c["tools"] for c in fake.calls[:-1])
+    assert fake.calls[-1]["tools"] == fake.calls[0]["tools"] and all(c["tools"] for c in fake.calls)
     assert result["answer"] == "只能这样" and result["audit"]["stop_reason"] == "step_cap"
     assert fake.calls[-1]["messages"][-1]["role"] == "system"
 
@@ -176,7 +176,8 @@ def test_time_cap_forces_a_final_answer(env):
     env.monkeypatch.setattr(loop, "SOFT_SECONDS", -1)
     fake = script(env, [step(text="直接答")])
     result, _ = run()
-    assert fake.calls[0]["tools"] == [] and result["audit"]["stop_reason"] == "time_cap"
+    assert fake.calls[0]["tools"] and result["audit"]["stop_reason"] == "time_cap"
+    assert fake.calls[0]["messages"][-1] == {"role": "system", "content": loop.CAP_NOTE}
 
 
 def test_tools_are_fixed_and_scoped(env):
@@ -318,7 +319,7 @@ def test_empty_reply_gets_one_more_call(env):
     fake = script(env, [step(text=""), step(text="补上的回答")])
     result, _ = run()
     assert result["status"] == "succeeded" and result["answer"] == "补上的回答"
-    assert fake.calls[1]["tools"] == [] and fake.calls[1]["messages"][-1] == {"role": "system", "content": loop.EMPTY_NOTE}
+    assert fake.calls[1]["tools"] == fake.calls[0]["tools"] and fake.calls[1]["messages"][-1] == {"role": "system", "content": loop.EMPTY_NOTE}
     assert result["audit"]["model_calls"] == 2
 
 
@@ -359,3 +360,109 @@ def test_invalid_calculation_arguments_are_invalid_arguments(env):
     script(env, [step(calls=[call("c1", "calculate", {"expression": "a"})]), step(text="好")])
     _, events = run()
     assert next(e for e in events if e["event"] == "tool_result")["result"]["error_code"] == "invalid_arguments"
+
+
+def failing_after(pieces, failures):
+    """A stream_decision that streams ``pieces`` and then raises, once per entry of ``failures``."""
+    queue = list(failures)
+
+    async def fake(provider_name, model, api_key, messages, schemas, **kwargs):
+        for piece in pieces:
+            await kwargs["on_text"](piece)
+        raise queue.pop(0)
+
+    return fake
+
+
+def test_final_failure_after_streamed_text_resets_the_answer(env):
+    env.monkeypatch.setattr(loop, "RETRY_WAIT_SECONDS", 0)
+    cases = [[provider.ProviderFailure("bad", stage="decision", retryable=False)],
+             [provider.ProviderFailure("http_5xx", stage="decision", retryable=True)] * 2,
+             [RuntimeError("boom")]]
+    for failures in cases:
+        env.monkeypatch.setattr(provider, "stream_decision", failing_after(["部分"], failures))
+        events = []
+
+        async def emit(event):
+            events.append(event)
+
+        with pytest.raises(Exception):
+            asyncio.run(loop.run_turn("问题", make_context(), emit, [{"role": "system", "content": "e"}], {}))
+        assert kinds(events)[-1] == "answer_reset" and streamed_after_last_reset(events) == ""
+
+
+def test_failure_without_streamed_text_emits_no_reset(env):
+    env.monkeypatch.setattr(provider, "stream_decision", failing_after([], [RuntimeError("boom")]))
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(loop.run_turn("问题", make_context(), emit, [{"role": "system", "content": "e"}], {}))
+    assert events == []
+
+
+def cap_steps():
+    return [step(calls=[call(f"c{i}", "query_financials", {"symbol": "AAPL"})]) for i in range(loop.MAX_STEPS)]
+
+
+def test_closing_call_with_text_and_tool_call_uses_the_text(env):
+    fake = script(env, cap_steps() + [step(text="只能这样", calls=[call("cx", "web_research", {"query": "x"})])])
+    result, events = run()
+    assert result["status"] == "succeeded" and result["answer"] == "只能这样"
+    assert len(env.invoked) == loop.MAX_STEPS and streamed_after_last_reset(events) == "只能这样"
+    assert "cx" not in json.dumps(events)
+    assert result["audit"]["stop_reason"] == "step_cap"
+
+
+def test_closing_call_with_only_a_tool_call_fails_with_the_fixed_text(env):
+    script(env, cap_steps() + [step(calls=[call("cx", "web_research", {"query": "x"})])])
+    result, events = run()
+    assert result["status"] == "failed" and result["reason"] == "empty_answer" and result["answer"] == loop.EMPTY_ANSWER
+    assert len(env.invoked) == loop.MAX_STEPS and streamed_after_last_reset(events) == loop.EMPTY_ANSWER
+
+
+def test_forced_call_after_empty_reply_with_only_a_tool_call_fails(env):
+    fake = script(env, [step(text=""), step(calls=[call("cx", "web_research", {"query": "x"})])])
+    result, _ = run()
+    assert result["status"] == "failed" and env.invoked == [] and len(fake.calls) == 2
+
+
+def test_closing_notes_tell_the_model_not_to_call_tools():
+    assert "不要再调用工具" in loop.CAP_NOTE and "不要再调用工具" in loop.EMPTY_NOTE
+
+
+def test_question_is_not_appended_again_after_trailing_system_notes(env):
+    fake = script(env, [step(text="a")])
+    history = [{"role": "system", "content": "e"}, {"role": "user", "content": "前"}, {"role": "assistant", "content": "答"},
+               {"role": "user", "content": "问题"}, {"role": "system", "content": "记忆摘要"}, {"role": "system", "content": "引用目录"}]
+    run("问题", messages=history)
+    sent = fake.calls[0]["messages"]
+    assert [m["role"] for m in sent] == ["system", "user", "assistant", "user", "system", "system"]
+    assert [m["content"] for m in sent].count("问题") == 1 and sent[-2]["content"] == "记忆摘要"
+
+
+def test_question_missing_from_history_is_appended_once_at_the_end(env):
+    fake = script(env, [step(text="a")])
+    run("问题", messages=[{"role": "system", "content": "e"}, {"role": "user", "content": "前"}, {"role": "system", "content": "记忆摘要"}])
+    sent = fake.calls[0]["messages"]
+    assert sent[-1] == {"role": "user", "content": "问题"} and [m["content"] for m in sent].count("问题") == 1
+
+
+def test_numbers_only_in_a_system_note_are_not_what_the_user_typed():
+    history = [{"role": "user", "content": "前一句 100"}, {"role": "system", "content": "摘要里有 7777"}]
+    text = loop._user_text("问题 40", history)
+    assert "100" in text and "40" in text and "7777" not in text
+
+
+def test_non_string_stream_pieces_are_ignored(env):
+    class Odd(Script):
+        async def __call__(self, *args, **kwargs):
+            await kwargs["on_text"](None)
+            await kwargs["on_text"](5)
+            return await super().__call__(*args, **kwargs)
+
+    env.monkeypatch.setattr(provider, "stream_decision", Odd([step(text="好")]))
+    result, events = run()
+    assert result["answer"] == "好" and streamed_after_last_reset(events) == "好"

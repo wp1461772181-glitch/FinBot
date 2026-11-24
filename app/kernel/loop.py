@@ -29,9 +29,9 @@ IDLE_SECONDS = 300
 TOOL_IDLE_SECONDS = 180
 RETRY_WAIT_SECONDS = 1
 RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts。只需改正其中 found 为 false 的输入，其余保持不变；不要把数值改写成更长的小数去试。closest_in_source 与 bindable_values 都只是不完整的候选。"
-EMPTY_NOTE = "系统事实：上一步没有给出回答。请现在直接回答用户。"
+EMPTY_NOTE = "系统事实：上一步没有给出回答。请现在直接回答用户，不要再调用工具。"
 EMPTY_ANSWER = "这次没能生成回答，请再发一次。"
-CAP_NOTE = "系统事实：已达到本轮的查询上限。请用现有资料直接回答；资料不足的部分明说。"
+CAP_NOTE = "系统事实：已达到本轮的查询上限。请用现有资料直接回答，不要再调用工具；资料不足的部分明说。"
 # Results of these tools are the model's memory or a computation, not saved evidence: they are never numbered as rows.
 _UNNUMBERED = {"recall_conversations", "read_past_conversation"}
 _SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_news", "query_sec_filings": "official_filing"}
@@ -79,7 +79,7 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
     context = run.context
 
     async def on_text(piece: str) -> None:
-        if piece:
+        if piece and isinstance(piece, str):
             run.sent_text = True
             run.step_text += piece
             await run.emit({"event": "delta", "text": piece})
@@ -91,13 +91,14 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
             data, message = await provider.stream_decision(
                 context.provider, context.model, context.api_key, run.messages, tool_schemas, base_url=context.base_url,
                 reasoning_effort=context.reasoning_effort, on_text=on_text, keep_thinking=True, cache=True)
-        except provider.ProviderFailure as failure:
-            if attempt or not failure.retryable:
-                raise
+        except Exception as failure:
+            # Whatever was streamed in this step is a cut-off: never leave it behind as the answer.
             if run.sent_text:
                 await run.emit({"event": "answer_reset"})
                 run.sent_text = False
                 run.step_text = ""
+            if attempt or not (isinstance(failure, provider.ProviderFailure) and failure.retryable):
+                raise
             await asyncio.sleep(RETRY_WAIT_SECONDS)
             continue
         run.audit["model_calls"] += 1
@@ -235,14 +236,18 @@ def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None
 
 
 async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_again: bool) -> dict:
-    """The step's text is the answer.  An empty one gets one more call (unless the cap call just failed to answer)."""
+    """The step's text is the answer.  An empty one gets one more call (unless the cap call just failed to answer).
+
+    A closing call is offered the same tools as every step (a valid request, a warm cache), but the system note tells the
+    model to answer; tool calls it makes anyway are not run and not kept, only its text counts.
+    """
     answer = message.get("content") or ""
     if not answer.strip() and may_ask_again:
         run.messages.append(message)
         run.messages.append({"role": "system", "content": EMPTY_NOTE})
         if run.sent_text:
             await run.emit({"event": "answer_reset"})
-        message = await _model_step(run, [])
+        message = await _model_step(run, run.schemas)
         answer = message.get("content") or ""
     if not answer.strip():
         if run.sent_text:
@@ -270,7 +275,7 @@ async def _loop(run: _Run) -> dict:
         run.messages.append(message)
         await _tool_step(run, message)
     run.messages.append({"role": "system", "content": CAP_NOTE})
-    final = await _model_step(run, [])
+    final = await _model_step(run, run.schemas)
     return await _finish(run, final, stop, may_ask_again=False)
 
 

@@ -33,7 +33,8 @@ def build_messages(question: str, context, history: list[dict]) -> list[dict]:
         blocks.append(getattr(context, "profile_block", None))
     system = "\n\n".join(block for block in blocks if block)
     body = [dict(message) for message in history or []]
-    last = body[-1] if body else None
-    if not (last and last.get("role") == "user" and last.get("content") == question):
+    # The history can end with system-authored notes after the question, so look at the last user message.
+    last = next((m for m in reversed(body) if m.get("role") == "user"), None)
+    if not (last and last.get("content") == question):
         body.append({"role": "user", "content": question})
     return [{"role": "system", "content": system}, *body]
