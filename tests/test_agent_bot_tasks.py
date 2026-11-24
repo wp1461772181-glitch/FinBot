@@ -322,9 +322,10 @@ def test_the_unattended_turn_gets_the_bots_memory_layer_scope_and_the_note(owner
         yield {"event": "done", "status": "complete", "citations": [], "final_protocol": {}, "audit": {}}
     monkeypatch.setattr(graph, "stream_workflow", stream_workflow)
     settings = bots.turn_settings(OWNER_HASH, apple["id"])
-    result = run(runner.run_unattended_turn(OWNER, "看看苹果。", {"provider": "deepseek", "model": "m", "api_key": KEY},
+    result = run(runner.run_unattended_turn(OWNER, "看看苹果。", {"name": "fast", "provider": "deepseek", "model": "m", "api_key": KEY},
                                             token_budget=1000, title="t", bot=settings, notes=["上次的结论：服务收入涨了"]))
     assert seen["bot"]["bot_id"] == apple["id"] and seen["unattended"] is True
+    assert seen["catalog_name"] == "fast"      # the ledger prices a routine's calls by the catalog entry it ran on
     assert "苹果我主要看服务收入" in seen["profile_block"]
     note = seen["messages"][-1]
     assert layers.is_memory_message(note) and "上次的结论：服务收入涨了" in note["content"]

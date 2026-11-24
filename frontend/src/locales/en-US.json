@@ -1118,7 +1118,7 @@
   "输出价格": "Output price",
   "缓存读取价格": "Cache read price",
   "缓存写入价格": "Cache write price",
-  "单位：美元 / 百万 token。缓存价格不填时按输入价格算。": "Unit: USD per million tokens. An empty cache price is counted at the input price.",
+  "单位：美元 / 百万 token。用到缓存的调用，缓存价格没填就不算花费（后台会写明缺哪项）。": "Unit: USD per million tokens. A call that used the cache gets no cost while that cache price is empty (the backstage says which price is missing).",
   "价格要填不小于 0 的数字，不填就不算花费。": "A price must be a number from 0 up; leave it empty to skip the cost.",
   "说明": "Instructions",
   "说明最多 4000 字。": "Instructions are at most 4000 characters.",

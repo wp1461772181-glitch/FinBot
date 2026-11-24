@@ -177,7 +177,7 @@ def _make_session():
     with _LOCK:
         if _engine is None:
             _engine = create_engine(DATABASE_URL, pool_size=1, max_overflow=0, pool_timeout=2, pool_pre_ping=True,
-                                    connect_args={"connect_timeout": 2})
+                                    connect_args={"connect_timeout": 2, "options": "-c statement_timeout=5000"})
     return Session(_engine, expire_on_commit=False)
 
 

@@ -36,6 +36,8 @@ def table():
     model_usage._outage_logged = False
     yield
     model_usage.flush(timeout=10)
+    model_usage._skip_until = 0.0              # and a pause this test caused must not leak into the next file
+    model_usage._outage_logged = False
 
 
 def rows(**where):

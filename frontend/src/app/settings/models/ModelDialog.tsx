@@ -152,7 +152,7 @@ export default function ModelDialog({ initial, taken, onClose, onSaved, returnFo
           {PRICE_BOXES.map(([name, label]) => <Field key={name}><FieldLabel htmlFor={field(name)}>{t(label)}</FieldLabel>
             <Input id={field(name)} data-testid={field(name)} className="max-lg:h-11" type="number" inputMode="decimal" min={0} step="any" value={entry[name]} autoComplete="off" onChange={(e) => update({ [name]: e.target.value } as Partial<CatalogEntryDraft>)} /></Field>)}
         </div>
-        <FieldDescription>{t("单位：美元 / 百万 token。缓存价格不填时按输入价格算。")}</FieldDescription>
+        <FieldDescription>{t("单位：美元 / 百万 token。用到缓存的调用，缓存价格没填就不算花费（后台会写明缺哪项）。")}</FieldDescription>
       </fieldset>
       <p className="text-small text-muted-foreground">{t("测试并保存会用当前填写的服务、Model ID 和 key 在服务器上发一次简短请求；成功后才保存，用它的 bot 下一轮生效。")}</p>
       {error && <ErrorBar message={error} />}

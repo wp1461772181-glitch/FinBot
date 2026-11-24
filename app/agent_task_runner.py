@@ -141,7 +141,8 @@ async def run_unattended_turn(credential: str, question: str, model: dict, *, to
                                                owner_hash=owner, conversation_id=cid, identity_credential=credential,
                                                turn_id=turn, profile_block=await _profile_block(credential, bot),
                                                unattended=True, token_budget=token_budget, action_sink=actions,
-                                               bot=bot, skill_block=skill_block, active_skill=active_skill):
+                                               bot=bot, skill_block=skill_block, active_skill=active_skill,
+                                               catalog_name=model.get("name")):
                 kind = event.get("event")
                 if kind == "assistant_tool_request":
                     await append_message(cid, turn, "assistant", "", tool_calls=event["protocol"])
