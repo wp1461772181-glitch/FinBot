@@ -54,7 +54,8 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
         blocks.append(getattr(context, "profile_block", None))
     system = "\n\n".join(block for block in blocks if block)
     body = [dict(message) for message in history or []]
-    # The history can end with system-authored notes after the question, so look at the last user message.
+    # The history can end with notes after the question (the memory note and the citation catalogue, both user-role messages
+    # the system wrote), so the last user message is not necessarily the question.
     last = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "user"), None)
     asked = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "user" and body[i].get("content") == question), None)
     if fact is not None:
@@ -64,8 +65,12 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
             asked = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1) + 1
         _mark_end_of_history(body, asked)
         return [{"role": "system", "content": system}, *body, {"role": "system", "content": fact}]
-    if not (last is not None and body[last].get("content") == question):
+    # The question is already there when a user message after the last assistant message equals it; an equal message before
+    # that assistant message is an earlier turn asking the same thing.
+    after = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1)
+    asked = asked if asked is not None and asked > after else None
+    if asked is None:
         body.append({"role": "user", "content": question})
-        asked = len(body) - 1 if asked is None else asked
+        asked = len(body) - 1
     _mark_end_of_history(body, asked)
     return [{"role": "system", "content": system}, *body]

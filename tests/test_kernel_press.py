@@ -619,3 +619,30 @@ def test_build_messages_with_a_fact_marks_the_message_before_it():
     # the loop removes the button value before it asks: the card's own message is still the end of the history
     marked = [m["content"] for m in prompt.build_messages(raw, ctx(), [history[0], history[1]], fact="系统事实：甲") if m.get("cache_point")]
     assert marked == ["请核对"]
+
+
+def _roles_and_texts(messages):
+    return [(m["role"], m["content"]) for m in messages[1:]]
+
+
+def test_build_messages_does_not_repeat_the_question_after_the_notes():
+    from app.kernel import prompt
+    history = [{"role": "assistant", "content": "答"}, {"role": "user", "content": "问"}, {"role": "user", "content": "记忆笔记"},
+               {"role": "user", "content": "引用目录"}]
+    messages = prompt.build_messages("问", ctx(), history)
+    assert _roles_and_texts(messages) == [("assistant", "答"), ("user", "问"), ("user", "记忆笔记"), ("user", "引用目录")]
+    assert [m["content"] for m in messages if m.get("cache_point")] == ["答"]
+
+
+def test_build_messages_adds_a_missing_question_once():
+    from app.kernel import prompt
+    messages = prompt.build_messages("问", ctx(), [{"role": "user", "content": "前"}, {"role": "assistant", "content": "答"}])
+    assert _roles_and_texts(messages) == [("user", "前"), ("assistant", "答"), ("user", "问")]
+
+
+def test_build_messages_adds_a_question_an_earlier_turn_also_asked():
+    from app.kernel import prompt
+    history = [{"role": "user", "content": "问"}, {"role": "assistant", "content": "答"}, {"role": "user", "content": "别的笔记"}]
+    messages = prompt.build_messages("问", ctx(), history)
+    assert _roles_and_texts(messages) == [("user", "问"), ("assistant", "答"), ("user", "别的笔记"), ("user", "问")]
+    assert [m["content"] for m in messages if m.get("cache_point")] == ["别的笔记"]

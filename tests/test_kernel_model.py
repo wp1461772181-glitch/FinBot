@@ -290,3 +290,34 @@ def test_other_providers_never_see_the_private_key(monkeypatch):
     asyncio.run(provider.decision_request("deepseek", "m", "k", HISTORY, SCHEMAS))
     assert "cache_point" not in str(sent["body"]["messages"])
     assert HISTORY[2]["cache_point"] is True   # the caller's list is not touched
+
+
+def test_a_turns_history_end_is_a_prefix_of_the_next_turns_request():
+    from app.kernel import prompt
+    ctx = SimpleNamespace(identity_credential="", bot_block=None, profile_block=None)
+    catalogue = {"role": "user", "content": "引用目录"}
+    q0, a0 = {"role": "user", "content": "问零"}, {"role": "assistant", "content": "答零"}
+    q1, a1, q2 = {"role": "user", "content": "问一"}, {"role": "assistant", "content": "答一"}, {"role": "user", "content": "问二"}
+    first = prompt.build_messages("问一", ctx, [q0, a0, q1, {"role": "user", "content": "记忆笔记一"}, catalogue])
+    second = prompt.build_messages("问二", ctx, [q0, a0, q1, a1, q2, {"role": "user", "content": "记忆笔记二"}, catalogue])
+    one, _ = native.build_request(MODEL, first, SCHEMAS, cache=True)
+    two, _ = native.build_request(MODEL, second, SCHEMAS, cache=True)
+    assert _count(one) <= 4 and _count(two) <= 4
+
+    def marked_at(params):
+        return next((i, j) for i, m in enumerate(params["messages"]) for j, b in enumerate(m["content"]) if "cache_control" in b and b is not None
+                    and m["role"] == "assistant")
+
+    # (a) turn N+1's breakpoint is on A_N's block
+    i2, j2 = marked_at(two)
+    assert two["messages"][i2]["content"][j2]["text"] == "答一"
+
+    def plain(value):   # cache_control is a marker, not part of what the cache matches on
+        import json as _json
+        return _json.loads(_json.dumps(value).replace(', "cache_control": {"type": "ephemeral"}', ""))
+
+    # (b) turn N's request up to and including its own history-end block is a prefix of turn N+1's request
+    i1, j1 = marked_at(one)
+    assert one["messages"][i1]["content"][j1]["text"] == "答零"
+    head = plain([*one["messages"][:i1], {**one["messages"][i1], "content": one["messages"][i1]["content"][:j1 + 1]}])
+    assert head == plain(two["messages"][:i1 + 1]) and plain(one["tools"]) == plain(two["tools"]) and one["system"] == two["system"]
