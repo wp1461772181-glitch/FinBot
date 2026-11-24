@@ -489,9 +489,9 @@ def _unfinished_tool_calls(citation_sidecar,progress):
  stored={"citations":citation_sidecar} if citation_sidecar else {}
  stored.update(progress)
  return stored or None
-async def _record_cancelled(cid,turn,owner,text_out,citation_sidecar,progress):
+async def _record_cancelled(cid,turn,owner,text_out,citation_sidecar,progress=None):
  # The three writes of a cancelled turn, in order. Each is isolated, so one failure does not skip the rest.
- try: await append_message(cid,turn,"assistant",text_out,status="cancelled",tool_calls=_unfinished_tool_calls(citation_sidecar,progress))
+ try: await append_message(cid,turn,"assistant",text_out,status="cancelled",tool_calls=_unfinished_tool_calls(citation_sidecar,progress or {}))
  except Exception: log.exception("cancelled turn: appending the partial answer failed (cid=%s turn=%s)",cid,turn)
  try: await finish_conversation(cid,"cancelled")
  except Exception: log.exception("cancelled turn: finishing the conversation failed (cid=%s)",cid)
@@ -685,7 +685,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    if not terminal:raise HTTPException(502,"workflow_incomplete")
   except asyncio.CancelledError:
    # The writes run in their own task: this one is being cancelled, and its awaits would be cancelled again (R-5 probe).
-   task=asyncio.create_task(_record_cancelled(cid,turn,owner_hash(x_chat_session),text_out,citation_sidecar,progress))
+   task=asyncio.create_task(_record_cancelled(cid,turn,owner_hash(x_chat_session),text_out,citation_sidecar,*([progress] if progress else [])))
    _BACKGROUND.add(task); task.add_done_callback(_BACKGROUND.discard)
    raise
   except Exception as exc:
