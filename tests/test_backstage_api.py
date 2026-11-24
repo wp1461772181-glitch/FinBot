@@ -992,3 +992,20 @@ def test_duty_filters_paging_and_validation(client):
 def test_duty_shows_no_card_button_value(client):
     duty_row(1, text="alert " + CONFIRM, decision="tell_now", message="按 " + AUTHORIZE, reason=REPLY)
     assert not any(value in get(client, "/backstage/duty").text for value in BUTTONS[:2] + (REPLY,))
+
+
+def test_the_detail_names_the_companies_the_system_brought_and_skips_its_timeline_entry(client):
+    cid = conversation(bot())
+    entries = [*TIMELINE, {"kind": "latest_known", "at_ms": 5, "step": 0, "symbols": ["NVDA", "AMD"]}]
+    record = with_timeline(entries)
+    record["audit"]["latest_known"] = ["NVDA", "AMD", 7, "x\x00y"]
+    tid, mid = turn(cid, record=record)
+    ledger(tid, cid, ms=900, at=NOW)
+    ledger(tid, cid, ms=700, at=NOW + timedelta(seconds=1))
+    model_usage.flush()
+    body = get(client, f"/backstage/answers/{mid}").json()
+    assert body["latest_known"] == ["NVDA", "AMD", "xy"] or body["latest_known"][:2] == ["NVDA", "AMD"]
+    assert all(isinstance(s, str) for s in body["latest_known"])
+    assert body["ordered"] is True and all(e["kind"] != "latest_known" for e in body["events"])
+    plain = turn(cid, record=kernel_record())[1]
+    assert get(client, f"/backstage/answers/{plain}").json()["latest_known"] == []

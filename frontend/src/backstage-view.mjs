@@ -139,6 +139,8 @@ export function answerNotes(detail, w = ZH_WORDS) {
   if (detail?.ordered === false && list(detail?.events).length > 1) notes.push({ kind: "unordered", text: w.t("这条记录没有时间顺序，按类别排列") });
   const backup = detail?.backup_model;
   if (isObject(backup) && (backup.from || backup.to)) notes.push({ kind: "backup", text: `${w.t("改用备用模型")}${w.colon}${backup.from ?? DASH} → ${backup.to ?? DASH}${backup.reason ? w.parens(backup.reason) : ""}` });
+  const brought = list(detail?.latest_known).filter((symbol) => typeof symbol === "string" && symbol);
+  if (brought.length) notes.push({ kind: "latest_known", text: `${w.t("系统带上了")}${w.colon}${brought.join(w.list)}` });
   if (detail?.cost_state === "unrecorded") notes.push({ kind: "unrecorded", text: w.t("这一轮没有记账（早于记账功能，或记账丢失）") });
   if (detail?.cost_state === "pending") notes.push({ kind: "pending", text: w.t("记账中：有些调用的费用还在写入，稍后再看") });
   const lacking = list(detail?.missing_prices).map((name) => w.t(PRICE_NAMES[name] ?? text(name))).filter(Boolean);

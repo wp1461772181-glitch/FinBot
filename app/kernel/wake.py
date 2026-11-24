@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from .. import duty_log, model_usage
+from .. import duty_log, latest_known, model_usage
 from . import loop, prompt
 
 logger = logging.getLogger(__name__)
@@ -254,9 +254,16 @@ async def _judge(event: dict, owner: str, turn_id: str, recorder: Recorder, held
         bot_id=settings.get("bot_id"), bot_name=settings.get("bot_name"), bot_is_default=bool(settings.get("is_default")),
         bot_block=settings.get("block"), tool_scope=settings.get("tool_scope"), reasoning_effort=settings.get("reasoning_effort"),
         engine="v2", default_company=settings.get("default_company"), catalog_name=model.get("name"))
-    messages = prompt.build_wake_messages(context, event, relation, told, outbox)
+    # The alert's company always gets its block (its own symbol as the focus; the other members of a group alert follow).
+    symbols = [s for s in (event.get("members") or []) if isinstance(s, str)]
+    block, shown = None, []
+    try:
+        block, shown = await latest_known.block_for(" ".join([event["symbol"], *symbols]), previous=None, focus=event["symbol"], owner_hash=owner)
+    except Exception:
+        logger.exception("wake latest-known block failed")
+    messages = prompt.build_wake_messages(context, event, relation, told, outbox, block)
     with model_usage.purpose("duty", owner_hash=owner, conversation_id=cid, bot_id=bot.id, turn_id=turn_id, job=str(event["alert_id"])):
-        return await loop.run_wake(context, recorder.emit, messages, turn_id=turn_id)
+        return await loop.run_wake(context, recorder.emit, messages, turn_id=turn_id, latest_symbols=shown if block else None)
 
 
 async def wake(event: dict, *, owner_hash: str) -> dict:

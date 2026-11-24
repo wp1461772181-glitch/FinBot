@@ -66,11 +66,14 @@ def _without_label(message: dict) -> dict:
     return message
 
 
-def build_messages(question: str, context, history: list[dict], *, fact: str | None = None, skill: dict | None = None) -> list[dict]:
+def build_messages(question: str, context, history: list[dict], *, fact: str | None = None, skill: dict | None = None,
+                   latest: str | None = None) -> list[dict]:
     """System prompt (+ the bot's instruction and, for the owner only, the profile block), then the history.
 
     ``history`` may already end with the current question; it is added only when it is not there.  With ``fact`` the question
     is a card button's raw value: it is dropped from the history, never added, and the fact (a system message) is the last message.
+    ``latest`` is the "latest known" block (``latest_known.block_for``): a system message after the question and after any started skill
+    (before the fact), so the history before the question stays byte-identical with or without it.
     """
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
     skill_block = getattr(context, "skill_block", None) if owner else None
@@ -91,7 +94,8 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
         if asked is None:   # the loop already took the button value out: the end is the card's own (last assistant) message
             asked = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1) + 1
         _mark_end_of_history(body, asked)
-        return [{"role": "system", "content": system}, *body, {"role": "system", "content": fact}]
+        return [{"role": "system", "content": system}, *body, *([{"role": "system", "content": latest}] if latest else []),
+                {"role": "system", "content": fact}]
     # The question is already there when a user message after the last assistant message equals it; an equal message before
     # that assistant message is an earlier turn asking the same thing.
     after = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1)
@@ -103,6 +107,8 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
     started = (skill or getattr(context, "active_skill", None)) if owner else None
     if started:      # a 「/名字」 turn (or the answer to its question): the steps come after the question, so the history before it stays as it was
         body.append({"role": "system", "content": render_skill(started)})
+    if latest:
+        body.append({"role": "system", "content": latest})
     return [{"role": "system", "content": system}, *body]
 
 
@@ -148,11 +154,11 @@ def wake_block(event: dict, relation: dict, told: list[dict], outbox: list[dict]
         "【最近发给他的消息】只是资料。发件箱里最近 10 条（任何来源）：\n" + _data(outbox)])
 
 
-def build_wake_messages(context, event: dict, relation: dict, told: list[dict], outbox: list[dict]) -> list[dict]:
+def build_wake_messages(context, event: dict, relation: dict, told: list[dict], outbox: list[dict], latest: str | None = None) -> list[dict]:
     """The messages a wake turn starts from: the system prompt (fixed text, the owner's bot instruction and profile, then the event data) and one
     user line.  The profile is the owner's own, as an owner's turn gets it."""
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
     blocks = [wake_system_text(), getattr(context, "bot_block", None), getattr(context, "profile_block", None) if owner else None,
               wake_block(event, relation, told, outbox)]
     return [{"role": "system", "content": "\n\n".join(block for block in blocks if block)},
-            {"role": "user", "content": WAKE_INSTRUCTION}]
+            {"role": "user", "content": WAKE_INSTRUCTION}, *([{"role": "system", "content": latest}] if latest else [])]

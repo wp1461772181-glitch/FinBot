@@ -19,6 +19,7 @@ from .. import x_search
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_progress import mark_progress, progress_watchdog
 from .. import agent_skills
+from .. import latest_known
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
@@ -402,6 +403,34 @@ async def _skill_of_question(context, state: dict) -> dict | None:
         return None
 
 
+def _previous_user_message(history: list[dict], question: str) -> str | None:
+    """The user message before this question: what a follow-up like 「那它的现金流呢」 refers back to.  The notes the endpoint puts after
+    the question are user-role too, so the search starts from the question itself when it is in the history."""
+    typed = [m for m in history if m.get("role") == "user" and isinstance(m.get("content"), str)]
+    at = next((i for i in range(len(typed) - 1, -1, -1) if typed[i]["content"] == question), None)
+    earlier = typed[:at] if at is not None else typed
+    return earlier[-1]["content"] if earlier else None
+
+
+async def _latest_block(run: "_Run", text: str, previous: str | None, focus: str | None, owner: bool) -> str | None:
+    """The "latest known" block of this turn (``latest_known.block_for``: code writes it, no model call, bounded, never raises).  A failure of
+    any kind means the turn goes on without it.  The companies it covers go on the audit and the timeline for the backstage."""
+    try:
+        found, symbols = await latest_known.block_for(text, previous=previous, focus=focus, owner_hash=getattr(run.context, "owner_hash", None) if owner else None)
+    except Exception:
+        logger.exception("kernel latest-known block failed")
+        return None
+    if not found:
+        return None
+    note_latest(run, symbols)
+    return found
+
+
+def note_latest(run: "_Run", symbols: list[str]) -> None:
+    run.audit["latest_known"] = list(symbols)
+    mark_timeline(run, "latest_known", symbols=list(symbols))
+
+
 async def run_turn(question: str, context, emit, messages: list[dict] | None = None, state: dict | None = None) -> dict:
     state = state or {}
     history = list(messages or [])[1:]   # the first message is the endpoint's own system prompt
@@ -441,7 +470,13 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
         # skill up again.  A question card is not carried past the next turn, so this reaches that one turn only.
         if not started and (settled.reply is not None if pressed else True):
             started = await _skill_of_question(context, state)
-        run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started)
+        # The companies the user's words (or the previous message, for a follow-up, or the bot's own company) point at: the card's original
+        # question for a card press and the option's text for a reply, never a button's raw value.
+        owner = owner_credential_matches(getattr(context, "identity_credential", ""))
+        company = getattr(context, "default_company", None)
+        latest = await _latest_block(run, run.question if fact else question, _previous_user_message(history, run.question if fact else question),
+                                     company.get("symbol") if isinstance(company, dict) else None, owner)
+        run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started, latest=latest)
         if started and owner_credential_matches(getattr(context, "identity_credential", "")):
             run.audit["skill"] = {"name": started["name"], "version": started["version"]}
         run.user_text = _user_text(run.question, history)
@@ -465,7 +500,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
         return result
 
 
-async def run_wake(context, emit, messages: list[dict], *, turn_id: str) -> dict:
+async def run_wake(context, emit, messages: list[dict], *, turn_id: str, latest_symbols: list[str] | None = None) -> dict:
     """One wake turn (``wake.wake``): the same append-only loop with the restricted tools and no history; it ends at the first valid
     ``decide`` (``audit["decision"]``), or at an answer without one.  Nothing is streamed to anyone: ``emit`` is the caller's recorder."""
     tool_schemas = _wake_schemas(context)
@@ -473,5 +508,7 @@ async def run_wake(context, emit, messages: list[dict], *, turn_id: str) -> dict
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                model=ModelUse(context.provider, context.model, context.api_key, context.base_url, getattr(context, "catalog_name", None)),
                ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)), turn_id=turn_id, wake=decide.WakeState())
+    if latest_symbols:
+        note_latest(run, latest_symbols)
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):
         return await _loop(run)

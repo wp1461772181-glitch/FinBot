@@ -634,7 +634,8 @@ def answer(message_id: str, x_chat_session: str | None = Header(default=None)):
             "checklist": scrub(_list(record.get("checklist"))), "tool_calls": tool_calls, "citations": citations,
             "writes": scrub([item for item in _list(audit.get("writes")) if isinstance(item, dict)]),
             "write_outcome": audit.get("write_outcome"), "card": card, "answer": "" if incomplete else scrub(final.content or ""),
-            "backup_model": scrub(fallback) if isinstance(fallback, dict) else None, "langfuse_url": _langfuse_url(record)}
+            "backup_model": scrub(fallback) if isinstance(fallback, dict) else None,
+            "latest_known": [scrub(symbol) for symbol in _list(audit.get("latest_known"))[:6] if isinstance(symbol, str)], "langfuse_url": _langfuse_url(record)}
 
 
 # --- usage ---------------------------------------------------------------------------------------------------------

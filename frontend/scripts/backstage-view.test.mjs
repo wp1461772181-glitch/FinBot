@@ -146,6 +146,8 @@ test("detail notes: backup model, the old-engine line, an unfinished turn, the L
   assert.equal(answerNotes({ ...DETAIL, cost_state: "priced" }).length, 1);
   assert.equal(answerNotes(DETAIL_OLD)[0].text, "旧流程的记录，只有部分经过");
   assert.equal(answerNotes(DETAIL_INCOMPLETE)[0].text, "这一轮没有答完，下面是它留下的记录");
+  assert.equal(answerNotes({ ...DETAIL, latest_known: ["NVDA", "AMD"] }).find((n) => n.kind === "latest_known").text, "系统带上了：NVDA、AMD");
+  assert.equal(answerNotes({ ...DETAIL, latest_known: [] }).some((n) => n.kind === "latest_known"), false);
   assert.equal(answerNotes(DETAIL).some((n) => n.kind === "langfuse"), false, "the link is its own field, not a note");
   assert.equal(answerNotes({ ...DETAIL, ordered: false, events: [{}, {}] }).some((n) => n.text === "这条记录没有时间顺序，按类别排列"), true);
   assert.equal(answerNotes({ ...DETAIL, ordered: false, events: [] }).some((n) => n.kind === "unordered"), false, "nothing to order, nothing to say");
