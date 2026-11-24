@@ -1004,7 +1004,7 @@ def test_the_detail_names_the_companies_the_system_brought_and_skips_its_timelin
     ledger(tid, cid, ms=700, at=NOW + timedelta(seconds=1))
     model_usage.flush()
     body = get(client, f"/backstage/answers/{mid}").json()
-    assert body["latest_known"] == ["NVDA", "AMD", "xy"] or body["latest_known"][:2] == ["NVDA", "AMD"]
+    assert body["latest_known"] == ["NVDA", "AMD", "x\x00y"]     # the non-string entry is dropped
     assert all(isinstance(s, str) for s in body["latest_known"])
     assert body["ordered"] is True and all(e["kind"] != "latest_known" for e in body["events"])
     plain = turn(cid, record=kernel_record())[1]

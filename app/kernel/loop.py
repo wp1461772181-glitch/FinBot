@@ -20,6 +20,7 @@ from ..agent_chat_identity import owner_credential_matches
 from ..agent_progress import mark_progress, progress_watchdog
 from .. import agent_skills
 from .. import latest_known
+from ..agent_context import is_catalogue_message, is_memory_message
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
@@ -403,13 +404,17 @@ async def _skill_of_question(context, state: dict) -> dict | None:
         return None
 
 
-def _previous_user_message(history: list[dict], question: str) -> str | None:
-    """The user message before this question: what a follow-up like 「那它的现金流呢」 refers back to.  The notes the endpoint puts after
-    the question are user-role too, so the search starts from the question itself when it is in the history."""
-    typed = [m for m in history if m.get("role") == "user" and isinstance(m.get("content"), str)]
-    at = next((i for i in range(len(typed) - 1, -1, -1) if typed[i]["content"] == question), None)
-    earlier = typed[:at] if at is not None else typed
-    return earlier[-1]["content"] if earlier else None
+def _previous_user_message(history: list[dict], question: str, *, original: bool = False) -> str | None:
+    """The user message before this question: what a follow-up like 「那它的现金流呢」 refers back to.  Only what the person typed counts
+    (never the endpoint's memory note or citation catalogue), and the question is located the way ``build_messages`` does: it is in the
+    history only when a user message equal to it follows the last assistant message; otherwise (a reply press, a card press) the previous
+    message is simply the last one the person typed.  After a card press ``original`` is true: the question is the card's own, asked
+    before the card, so it is the last matching user message wherever it stands."""
+    body = [m for m in history if not is_memory_message(m) and not is_catalogue_message(m)]
+    after = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1)
+    asked = next((i for i in range(len(body) - 1, -1 if original else after, -1) if body[i].get("role") == "user" and body[i].get("content") == question), None)
+    typed = [m["content"] for m in (body[:asked] if asked is not None else body) if m.get("role") == "user" and isinstance(m.get("content"), str)]
+    return typed[-1] if typed else None
 
 
 async def _latest_block(run: "_Run", text: str, previous: str | None, focus: str | None, owner: bool) -> str | None:
@@ -474,7 +479,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
         # question for a card press and the option's text for a reply, never a button's raw value.
         owner = owner_credential_matches(getattr(context, "identity_credential", ""))
         company = getattr(context, "default_company", None)
-        latest = await _latest_block(run, run.question if fact else question, _previous_user_message(history, run.question if fact else question),
+        latest = await _latest_block(run, run.question if fact else question, _previous_user_message(history, run.question if fact else question, original=bool(fact)),
                                      company.get("symbol") if isinstance(company, dict) else None, owner)
         run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started, latest=latest)
         if started and owner_credential_matches(getattr(context, "identity_credential", "")):

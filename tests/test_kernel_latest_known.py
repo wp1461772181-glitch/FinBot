@@ -160,3 +160,31 @@ def test_the_system_text_says_the_users_words_are_newest():
     sentence = next(line for line in text.splitlines() if "比你查到的资料更新" in line)
     assert sentence.count("。") == 1 and "更权威的来源核实" in sentence
 
+
+
+def test_a_repeated_question_takes_the_message_just_before_now(env, block):
+    script(env, [step("好的")])
+    history = [{"role": "system", "content": "endpoint"}, {"role": "user", "content": "英伟达怎么样"}, {"role": "assistant", "content": "a"},
+               {"role": "user", "content": "AMD 呢"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "继续"},
+               {"role": "assistant", "content": "c"}]
+    run("继续", messages=history)
+    assert block.calls[0]["previous"] == "继续"
+    block.calls.clear()
+    script(env, [step("好的")])
+    run("继续", messages=[*history, {"role": "user", "content": "继续"}])
+    assert block.calls[0]["previous"] == "继续"
+
+
+def test_a_reply_press_never_takes_a_memory_note_or_catalogue_as_previous(env, block):
+    from app.agent_context import CATALOGUE_MARKER, MEMORY_MARKER
+    env.monkeypatch.setattr(press, "read", lambda question, state: press.Press("reply", "rid", None, None, "是的"))
+
+    async def settle(run, pressed, state):
+        return press.Settled(None, None, "succeeded", "replied", reply="是的")
+
+    env.monkeypatch.setattr(press, "settle", settle)
+    script(env, [step("好的")])
+    history = [{"role": "system", "content": "endpoint"}, {"role": "user", "content": "英伟达怎么样"}, {"role": "assistant", "content": "要看财报吗"},
+               {"role": "user", "content": MEMORY_MARKER + " 用户持有 TSLA"}, {"role": "user", "content": CATALOGUE_MARKER + " [1] AMD"}]
+    run("reply:rid:0", messages=history)
+    assert block.calls[0]["previous"] == "英伟达怎么样"
