@@ -427,7 +427,7 @@ async def _handle_message(client, credential: str, owner: str, message: dict,
         return
     if not _from_owner(chat, message.get("from"), bound_chat, bound_user):
         return
-    await _acknowledge(owner)
+    await _acknowledge(owner, message)
     from app.agent_context_summary import parse_compact_command
     if bot_cmd and not parse_compact_command(text)[0]:
         if binding:
@@ -833,10 +833,20 @@ async def _expire_stuck(owner: str) -> None:
         print(f"Outbox expiry sweep failed: {_redact(exc)}", file=sys.stderr)
 
 
-async def _acknowledge(owner: str) -> None:
-    """The owner wrote on Telegram: what was sent here counts as seen.  Best effort."""
+def _seen_at(message: dict | None):
+    """When the owner's Telegram message was written (its own ``date``); the present when it carries none."""
+    from datetime import UTC, datetime
     try:
-        await asyncio.to_thread(channels.acknowledge, owner, "telegram")
+        return datetime.fromtimestamp(int((message or {}).get("date")), UTC)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return datetime.now(UTC)
+
+
+async def _acknowledge(owner: str, message: dict | None = None) -> None:
+    """The owner wrote on Telegram: what was sent here before their message counts as seen (a button press has no
+    date of its own: it counts from when it was received).  Best effort."""
+    try:
+        await asyncio.to_thread(channels.acknowledge, owner, "telegram", None, _seen_at(message))
     except Exception as exc:  # noqa: BLE001
         print(f"Outbox acknowledgement failed: {_redact(exc)}", file=sys.stderr)
 
@@ -845,7 +855,15 @@ async def _deliver_outbox(client, owner: str, bound_chat: int, tg, channel: dict
     """Send what the bots queued (notify_telegram, alerts) to the bound chat, the only recipient there is.
     Each sent message keeps its Telegram id, so a reply to it goes back to its bot.  With ``channel`` only the
     messages queued for that bot's own Telegram bot, through it."""
-    await _expire_stuck(owner)
+    try:
+        await _send_queued(client, owner, bound_chat, tg, channel)
+    finally:
+        # After delivery, so a row the producer stamped long ago is tried once before the sweep can close it
+        # (the sweep leaves rows just claimed alone); a failing delivery does not skip the sweep.
+        await _expire_stuck(owner)
+
+
+async def _send_queued(client, owner: str, bound_chat: int, tg, channel: dict | None) -> None:
     bot_token = channel["token"] if channel else _bot_token_for_send(owner, tg)
     if not bot_token:
         return
@@ -1071,7 +1089,7 @@ async def _handle_own_message(client, credential: str, owner: str, message: dict
         return
     if channel["chat_id"] is None or not _from_owner(chat, message.get("from"), channel["chat_id"], channel["user_id"]):
         return
-    await _acknowledge(owner)
+    await _acknowledge(owner, message)
     from app.agent_context_summary import parse_compact_command
     compact, focus = parse_compact_command(text)
     if compact:

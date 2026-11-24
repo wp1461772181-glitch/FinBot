@@ -23,9 +23,9 @@ from .database import SessionLocal
 CHANNELS = ("telegram", "wechat")
 MODES = ("first", "all")
 STUCK_SECONDS = 300
-CLAIM_SECONDS = 90       # a bridge that took a row this recently is still sending it: the sweep leaves it
+CLAIM_SECONDS = 180      # a bridge that took a row this recently is still sending it: the sweep leaves it
 ACK_DAYS = 7             # an acknowledgement reaches back this far, not into older history
-FAILURES = ("send_failed", "expired", "not_connected")
+FAILURES = ("send_failed", "expired", "partial")
 DEFAULT_PREFS = {"channels": ["telegram"], "mode": "first"}
 DELIVERY_TEXT_CHARS = 120
 
@@ -133,6 +133,27 @@ def mark_sent(message_id, external_id: int | None = None) -> None:
             db.commit()
 
 
+def claim(message_id, now: datetime | None = None) -> None:
+    """Re-stamp the lease of one pending row; a bridge calls it just before it starts sending that row."""
+    with SessionLocal() as db:
+        row = _locked(db, message_id)
+        if row is not None and row.status == "pending":
+            row.claimed_at = now or datetime.now(UTC)
+            db.commit()
+
+
+def mark_partial(message_id) -> None:
+    """Only the first part of a long message reached the channel: the row counts as sent (sending it again would
+    show the owner the same words twice there), says so (``failure="partial"``), and the full text goes to the
+    next channel the preference lists, if one is available and has no row in the message's group."""
+    with SessionLocal() as db:
+        row = _locked(db, message_id)
+        if row is not None and row.status == "pending":
+            row.status, row.failure, row.sent_at = "sent", "partial", datetime.now(UTC)
+            fail_over(db, row)
+            db.commit()
+
+
 def _close(db, row, code: str) -> None:
     row.status, row.failure = "failed", code if code in FAILURES else "send_failed"
     fail_over(db, row)
@@ -176,10 +197,20 @@ def fail_over(db, row) -> bool:
     return False
 
 
+def _delivered_elsewhere(db, row) -> bool:
+    if row.group_id is None:
+        return False
+    return db.scalar(select(AgentTelegramMessage.id).where(
+        AgentTelegramMessage.group_id == row.group_id, AgentTelegramMessage.id != row.id,
+        AgentTelegramMessage.status == "sent", AgentTelegramMessage.failure.is_(None)).limit(1)) is not None
+
+
 def expire_stuck(owner_hash: str, now: datetime | None = None) -> int:
     """Close every pending row of this owner older than ``STUCK_SECONDS`` that no bridge claimed in the last
-    ``CLAIM_SECONDS``, but only when it is re-queued on another channel; a row with nowhere to go stays pending
-    (its bridge sends it when it returns, or the next sweep finds a channel).  Returns how many were closed.
+    ``CLAIM_SECONDS``: when it is re-queued on another channel, or when its message already reached the owner on
+    another channel (a sibling row of its group is ``sent``, whole), so a bridge coming back hours later does not
+    send a duplicate.  A row with neither stays pending (its bridge sends it when it returns, or the next sweep
+    finds a channel).  Returns how many were closed.
     Rows are locked with SKIP LOCKED, so two bridges and the API calling at once never close or fail over the
     same row twice."""
     now = now or datetime.now(UTC)
@@ -193,23 +224,26 @@ def expire_stuck(owner_hash: str, now: datetime | None = None) -> int:
             .with_for_update(skip_locked=True)).all()
         closed = 0
         for row in rows:
-            if fail_over(db, row):
+            if _delivered_elsewhere(db, row) or fail_over(db, row):
                 row.status, row.failure = "failed", "expired"
                 closed += 1
         db.commit()
         return closed
 
 
-def acknowledge(owner_hash: str, channel: str, now: datetime | None = None) -> int:
+def acknowledge(owner_hash: str, channel: str, now: datetime | None = None, seen_at: datetime | None = None) -> int:
     """The owner wrote on this channel: its proactive rows sent in the last ``ACK_DAYS`` days and not yet
-    acknowledged are marked.  Replies and older history are left alone."""
-    now = now or datetime.now(UTC)
+    acknowledged are marked.  Replies and older history are left alone.  ``seen_at`` is when the owner's message
+    was written: only rows sent by then are marked (a backlog a restarted bridge sent after it is not), and it
+    is the time recorded."""
+    now = seen_at or now or datetime.now(UTC)
     with SessionLocal() as db:
         result = db.execute(update(AgentTelegramMessage).where(
             AgentTelegramMessage.owner_hash == owner_hash, AgentTelegramMessage.channel == channel,
             AgentTelegramMessage.status == "sent", AgentTelegramMessage.acked_at.is_(None),
             AgentTelegramMessage.source != "reply",
-            AgentTelegramMessage.sent_at >= now - timedelta(days=ACK_DAYS))
+            AgentTelegramMessage.sent_at >= now - timedelta(days=ACK_DAYS),
+            *([AgentTelegramMessage.sent_at <= seen_at] if seen_at is not None else []))
             .values(acked_at=now))
         db.commit()
         return int(result.rowcount or 0)

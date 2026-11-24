@@ -51,14 +51,14 @@ export function channelState(optionId, available) {
   return wechatDown ? "wechat-falls-back" : "no-backup";
 }
 
-const FAILURE_REASONS = { send_failed: "发送出错", expired: "超时没发", not_connected: "渠道未连接" };
+const FAILURE_REASONS = { send_failed: "发送出错", expired: "超时没发" };
 
 /**
  * 已发出 / 发送失败（原因） / 排队中.  `t` translates each phrase; the reason is left out when the server gave none this page knows.
  * A queued row older than a minute says how long it has waited (`now`: ms or Date, default the present).
  */
 export function deliveryStatusText(item, t = (text) => text, now = Date.now()) {
-  if (item?.status === "sent") return t("已发出");
+  if (item?.status === "sent") return item.failure === "partial" ? t("只发出了一部分") : t("已发出");
   if (item?.status === "failed") {
     const reason = Object.hasOwn(FAILURE_REASONS, item.failure ?? "") ? FAILURE_REASONS[item.failure] : "";
     return reason ? t("发送失败（{reason}）").replace("{reason}", t(reason)) : t("发送失败");

@@ -59,7 +59,10 @@ test("a delivery row's status text", () => {
   assert.equal(deliveryStatusText(row({ status: "pending", created_at: "bad" }), undefined, now), "排队中");
   assert.equal(deliveryStatusText(row({ status: "failed", failure: "send_failed" })), "发送失败（发送出错）");
   assert.equal(deliveryStatusText(row({ status: "failed", failure: "expired" })), "发送失败（超时没发）");
-  assert.equal(deliveryStatusText(row({ status: "failed", failure: "not_connected" })), "发送失败（渠道未连接）");
+  assert.equal(deliveryStatusText(row({ status: "failed", failure: "not_connected" })), "发送失败");
+  assert.equal(deliveryStatusText(row({ status: "sent", failure: "partial" })), "只发出了一部分");
+  assert.equal(deliveryStatusText(row({ status: "sent", failure: "partial" }), (s) => `<${s}>`), "<只发出了一部分>");
+  assert.equal(deliveryStatusText(row({ status: "sent", failure: null })), "已发出");
   assert.equal(deliveryStatusText(row({ status: "failed", failure: null })), "发送失败");
   assert.equal(deliveryStatusText(row({ status: "failed", failure: "weird" })), "发送失败");
   const upper = (s) => `<${s}>`;

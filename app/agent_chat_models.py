@@ -354,7 +354,7 @@ class AgentTelegramMessage(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Stage 1e: the outbox is channel-neutral.  Added to older tables by ``agent_telegram.ensure_columns``.
     # ``channel`` telegram | wechat; the rows of one message share ``group_id`` (NULL: the row is its own group);
-    # ``failure`` says why a row was closed (send_failed | expired | not_connected); ``acked_at`` is when the
+    # ``failure`` says why a row was closed (send_failed | expired | partial: sent, but only the first part); ``acked_at`` is when the
     # owner next wrote on that channel after the row was sent.
     channel: Mapped[str] = mapped_column(String(16), nullable=False, default="telegram", server_default="telegram")
     group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)

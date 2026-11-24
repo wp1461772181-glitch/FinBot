@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -44,7 +45,7 @@ BUSY_WAITING_TEXT = "这条对话线正在别处回答（比如网页），你�
 BUSY_GIVEUP_TEXT = "这个对话一直在别处回答，请稍后再发一次。"
 NON_TEXT_TEXT = "目前我只能读文字消息，请把内容打成文字发给我。"
 CARD_TEXT = "（这一步需要你确认，请到网页或 Telegram 里点确认。）"
-STALE_ALERT = "微信通道的登录失效了，需要重新扫码才能继续收发。我已暂停一小时再试，登录恢复前微信上的提醒不会送到。"
+STALE_ALERT = "微信通道的登录失效了，需要重新扫码才能继续收发。我已暂停一小时再试，登录恢复前，原本要发到微信的消息会改发 Telegram。"
 
 
 class BackendUnavailable(Exception):
@@ -125,28 +126,36 @@ class Bridge:
         self.paused_until = 0.0  # time.time() until which the login is stale: the poll and the outbox both wait
 
     async def deliver_outbox(self) -> None:
-        """One pass over the proactive messages queued for WeChat.  Never raises; a stale login only lets rows expire."""
+        """One pass over the proactive messages queued for WeChat: deliver, then sweep (so a row the producer stamped
+        long ago is tried once before the sweep can close it, and the sweep's claim check protects the rows just
+        tried).  Never raises; a stale login only lets rows expire."""
         try:
-            await asyncio.to_thread(channels.expire_stuck, self.owner)
-        except Exception as exc:  # noqa: BLE001 - a failing sweep must not skip delivery
-            _log("outbox_sweep_failed", error=type(exc).__name__)
-        try:
-            if time.time() < self.paused_until:
-                return
-            started = _monotonic()
-            for row in await asyncio.to_thread(channels.pending, self.owner, "wechat"):
-                if _monotonic() - started >= PASS_SECONDS:
-                    _log("outbox_pass_capped")
-                    break
-                await self._deliver_row(row)
+            if time.time() >= self.paused_until:
+                await self._deliver_pending()
         except Exception as exc:  # noqa: BLE001 - the bridge and the poll go on
             _log("outbox_pass_failed", error=type(exc).__name__)
+        try:
+            await asyncio.to_thread(channels.expire_stuck, self.owner)
+        except Exception as exc:  # noqa: BLE001
+            _log("outbox_sweep_failed", error=type(exc).__name__)
+
+    async def _deliver_pending(self) -> None:
+        started = _monotonic()
+        for row in await asyncio.to_thread(channels.pending, self.owner, "wechat"):
+            if _monotonic() - started >= PASS_SECONDS:
+                _log("outbox_pass_capped")
+                break
+            await self._deliver_row(row)
 
     async def _deliver_row(self, row: dict) -> None:
         """Send one row to the login's owner (never to an id from the row).  A failure of the first chunk fails the
         row (it is retried, then moves to the next channel); once any chunk is out the row counts as sent, because
         sending it again would show the owner the same words twice."""
         reason, sent, total = None, 0, 0
+        try:
+            await asyncio.to_thread(channels.claim, row["id"])   # a fresh lease for this row, whatever the pass has used
+        except Exception as exc:  # noqa: BLE001 - the pending() claim still stands
+            _log("outbox_claim_failed", id=row["id"], error=type(exc).__name__)
         try:
             to_user = self.state["owner_user_id"]
             token = (self.state.get("context_tokens") or {}).get(to_user)
@@ -166,15 +175,24 @@ class Bridge:
             else:
                 if reason:
                     _log("outbox_partial", id=row["id"], chunks_sent=sent, chunks_total=total, reason=reason)
+                    await asyncio.to_thread(channels.mark_partial, row["id"])
                 else:
                     _log("outbox_sent", id=row["id"])
-                await asyncio.to_thread(channels.mark_sent, row["id"])
+                    await asyncio.to_thread(channels.mark_sent, row["id"])
         except Exception as exc:  # noqa: BLE001
             _log("outbox_mark_failed", id=row["id"], error=type(exc).__name__)
 
-    async def _acknowledge(self) -> None:
+    async def _acknowledge(self, message: dict | None = None) -> None:
+        """The owner wrote: rows sent by the time of their message count as seen.  The message's own time when it
+        carries one (``create_time_ms``), else the time it was received."""
+        seen = None
         try:
-            await asyncio.to_thread(channels.acknowledge, self.owner, "wechat")
+            millis = (message or {}).get("create_time_ms")
+            seen = datetime.fromtimestamp(int(millis) / 1000, UTC) if millis else None
+        except (TypeError, ValueError, OverflowError, OSError):
+            seen = None
+        try:
+            await asyncio.to_thread(channels.acknowledge, self.owner, "wechat", None, seen or datetime.now(UTC))
         except Exception as exc:  # noqa: BLE001 - the message is handled either way
             _log("acknowledge_failed", error=type(exc).__name__)
 
@@ -197,7 +215,7 @@ class Bridge:
         if not wx.from_owner(message, self.state):
             _log("ignored_stranger")
             return
-        await self._acknowledge()
+        await self._acknowledge(message)
         uid, token = str(message.get("from_user_id")), message.get("context_token")
         if token:
             self.state.setdefault("context_tokens", {})[uid] = token

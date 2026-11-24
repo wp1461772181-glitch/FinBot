@@ -45,8 +45,15 @@ class FakeChannels:
     def mark_failed(self, message_id, code="send_failed"):
         self.calls.append(("mark_failed", message_id, code))
 
-    def acknowledge(self, owner, channel, now=None):
+    def mark_partial(self, message_id):
+        self.calls.append(("mark_partial", message_id))
+
+    def claim(self, message_id, now=None):
+        self.calls.append(("claim", message_id))
+
+    def acknowledge(self, owner, channel, now=None, seen_at=None):
         self.calls.append(("acknowledge", owner, channel))
+        self.seen_at = seen_at
         return 0
 
 
@@ -516,7 +523,10 @@ def test_a_pending_row_goes_to_the_owner_with_the_held_context_token(fake_channe
     assert ("expire_stuck", "owner-hash") in fake_channels.calls
     assert ("pending", "owner-hash", "wechat") in fake_channels.calls
     assert ("mark_sent", "r1") in fake_channels.calls
-    assert fake_channels.calls.index(("expire_stuck", "owner-hash")) < fake_channels.calls.index(("pending", "owner-hash", "wechat"))
+    # deliver first, sweep afterwards; the row's lease is refreshed just before it is sent
+    calls = fake_channels.calls
+    assert calls.index(("pending", "owner-hash", "wechat")) < calls.index(("claim", "r1")) < calls.index(("mark_sent", "r1")) \
+        < calls.index(("expire_stuck", "owner-hash"))
 
 
 def test_a_rejected_send_marks_a_failure(fake_channels):
@@ -656,8 +666,8 @@ def test_a_later_chunk_failing_leaves_the_row_sent_and_stops_sending(fake_channe
     b, ilink, _ = _outbox_bridge(fake_channels, [_row(text="数据。" * 1500)], ilink)
     run(b.deliver_outbox())
     assert len(ilink.sent) == 2   # chunk 1 out, chunk 2 rejected, the rest not tried
-    marks = [c for c in fake_channels.calls if c[0] in ("mark_sent", "mark_failed")]
-    assert marks == [("mark_sent", "r1")]
+    marks = [c for c in fake_channels.calls if c[0] in ("mark_sent", "mark_failed", "mark_partial")]
+    assert marks == [("mark_partial", "r1")]
     out = capsys.readouterr().out
     assert "outbox_partial" in out and '"chunks_sent": 1' in out and "数据" not in out
     fake_channels.rows = []   # the closed row is no longer served: nothing goes out on the next pass
@@ -732,3 +742,14 @@ def test_one_pass_stops_taking_rows_after_the_cap(monkeypatch, fake_channels):
     b, ilink, _ = _outbox_bridge(fake_channels, [_row("r1"), _row("r2"), _row("r3")])
     run(b.deliver_outbox())
     assert [c for c in fake_channels.calls if c[0] == "mark_sent"] == [("mark_sent", "r1")]
+
+
+def test_the_owner_message_acknowledges_up_to_its_own_time(fake_channels):
+    b, ilink, _ = _make(lambda *a, **k: None)
+    b.ask = None
+    msg = _message(items=[])
+    msg["create_time_ms"] = 1_780_000_000_000
+    run(b.handle(msg))
+    assert fake_channels.seen_at.timestamp() == 1_780_000_000
+    run(b.handle(_message(items=[])))                                   # no time on the message: when it was received
+    assert abs(fake_channels.seen_at.timestamp() - __import__("time").time()) < 30

@@ -276,8 +276,11 @@ def test_telegram_failures_through_the_old_entry_point_fail_over_too(chan):
 
 def test_a_failure_code_is_kept(chan):
     row = _plant("wechat", attempts=tg.SEND_ATTEMPTS - 1)
-    channels.mark_failed(row, "not_connected")
-    assert _rows(channel="wechat")[0].failure == "not_connected"
+    channels.mark_failed(row, "expired")
+    assert _rows(channel="wechat")[0].failure == "expired"
+    other = _plant("wechat", attempts=tg.SEND_ATTEMPTS - 1)
+    channels.mark_failed(other, "not_connected")                # no such code any more: the default one
+    assert {str(r.id): r.failure for r in _rows(channel="wechat")}[other] == "send_failed"
 
 
 def test_without_prefs_a_third_failure_just_closes_the_row(chan):
@@ -389,7 +392,7 @@ def test_a_bridge_that_claimed_a_row_and_died_lets_it_expire(chan):
     _plant("wechat", created=NOW)
     channels.pending(OWNER_HASH, "wechat", now=NOW + timedelta(seconds=400))
     assert channels.expire_stuck(OWNER_HASH, now=NOW + timedelta(seconds=450)) == 0      # claimed 50 s ago
-    assert channels.expire_stuck(OWNER_HASH, now=NOW + timedelta(seconds=500)) == 1      # lease over
+    assert channels.expire_stuck(OWNER_HASH, now=NOW + timedelta(seconds=400 + channels.CLAIM_SECONDS + 5)) == 1  # lease over
 
 
 def test_a_closed_row_cannot_be_marked_sent_even_if_it_was_expired(chan):
@@ -603,3 +606,89 @@ def test_a_stale_wechat_login_is_not_available(chan):
         assert channels.targets(db, OWNER_HASH, bot) == ["telegram"]       # no five-minute wait on a dead login
         chan.pop("stale_since")
         assert channels.targets(db, OWNER_HASH, bot) == ["wechat"]
+
+
+# --- final fix wave ---------------------------------------------------------------------------------
+
+def test_a_stuck_row_is_closed_without_fail_over_when_the_message_reached_the_owner_elsewhere(chan):
+    _bind()
+    chan.update(LOGIN)
+    channels.set_prefs(OWNER_HASH, ["telegram", "wechat"], "all")
+    _queue("【助理】\n甲", now=NOW)
+    [tg_row] = _rows(channel="telegram")
+    channels.mark_sent(tg_row.id, 5)
+    later = NOW + timedelta(minutes=10)
+    assert channels.expire_stuck(OWNER_HASH, now=later) == 1
+    rows = {r.channel: r for r in _rows()}
+    assert len(rows) == 2 and (rows["wechat"].status, rows["wechat"].failure) == ("failed", "expired")
+    assert channels.pending(OWNER_HASH, "wechat") == []
+
+
+def test_when_nothing_was_delivered_both_stuck_rows_stay_pending(chan):
+    _bind()
+    chan.update(LOGIN)
+    channels.set_prefs(OWNER_HASH, ["telegram", "wechat"], "all")
+    _queue("【助理】\n甲", now=NOW)
+    assert channels.expire_stuck(OWNER_HASH, now=NOW + timedelta(minutes=10)) == 0
+    assert sorted((r.channel, r.status) for r in _rows()) == [("telegram", "pending"), ("wechat", "pending")]
+
+
+def test_a_partly_sent_sibling_does_not_count_as_delivered(chan):
+    _bind()
+    chan.update(LOGIN)
+    channels.set_prefs(OWNER_HASH, ["wechat", "telegram"], "first")
+    _queue("【助理】\n甲", now=NOW)
+    [wx] = _rows(channel="wechat")
+    channels.mark_partial(wx.id)
+    assert channels.expire_stuck(OWNER_HASH, now=datetime.now(UTC) + timedelta(minutes=10)) == 0   # Telegram holds the full text
+    assert _rows(channel="telegram")[0].status == "pending"
+
+
+def test_mark_partial_keeps_the_row_sent_and_sends_the_full_text_on_the_next_channel(chan):
+    _bind()
+    chan.update(LOGIN)
+    channels.set_prefs(OWNER_HASH, ["wechat", "telegram"], "first")
+    _queue("【助理】\n很长的消息", now=NOW)
+    [wx] = _rows(channel="wechat")
+    channels.mark_partial(wx.id)
+    rows = {r.channel: r for r in _rows()}
+    assert (rows["wechat"].status, rows["wechat"].failure) == ("sent", "partial") and rows["wechat"].sent_at is not None
+    assert rows["telegram"].status == "pending" and rows["telegram"].text == "【助理】\n很长的消息"
+    assert rows["telegram"].group_id == rows["wechat"].group_id is not None
+    channels.mark_partial(wx.id)                                 # a second call on the closed row adds nothing
+    assert len(_rows()) == 2
+    item = {i["channel"]: i for i in channels.deliveries(OWNER_HASH)}["wechat"]
+    assert (item["status"], item["failure"]) == ("sent", "partial")
+    with SessionLocal() as db:
+        assert tg.sent_today(db, OWNER_HASH, _bot().id, NOW) == 1
+
+
+def test_mark_partial_without_another_channel_adds_no_row(chan):
+    _bind()
+    channels.set_prefs(OWNER_HASH, ["wechat"], "first")          # no other channel is listed
+    row = _plant("wechat")
+    channels.mark_partial(row)
+    [only] = _rows()
+    assert (only.status, only.failure) == ("sent", "partial")
+
+
+def test_claim_restamps_one_pending_row(chan):
+    row = _plant("wechat", created=NOW, claimed=NOW)
+    other = _plant("wechat", created=NOW, claimed=NOW)
+    stamp = NOW + timedelta(seconds=120)
+    channels.claim(row, now=stamp)
+    by = {str(r.id): r for r in _rows()}
+    assert by[row].claimed_at == stamp and by[other].claimed_at == NOW
+    closed = _plant("wechat", status="failed", failure="expired")
+    channels.claim(closed, now=stamp)
+    assert {str(r.id): r for r in _rows()}[closed].claimed_at is None
+    assert channels.CLAIM_SECONDS == 180
+
+
+def test_acknowledge_with_seen_at_skips_rows_sent_after_the_message(chan):
+    seen = NOW + timedelta(hours=1)
+    before = _plant("telegram", status="sent", sent=seen - timedelta(minutes=5))
+    after = _plant("telegram", status="sent", sent=seen + timedelta(minutes=5))
+    assert channels.acknowledge(OWNER_HASH, "telegram", seen_at=seen) == 1
+    by = {str(r.id): r for r in _rows()}
+    assert by[before].acked_at == seen and by[after].acked_at is None
