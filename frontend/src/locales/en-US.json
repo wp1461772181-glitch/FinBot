@@ -2337,5 +2337,10 @@
   "最深的推理，最慢最贵": "The deepest reasoning, slowest and dearest",
   "↑↓ 选择　↵ 确认　Tab 到强度": "↑↓ choose   ↵ confirm   Tab to effort",
   "极简": "Minimal",
-  "极高": "Very high"
+  "极高": "Very high",
+  "已思考 {n} 秒": "Thought for {n} s",
+  "查了 {n} 次": "Looked up {n} times",
+  "清单 {done}/{total} 项": "Checklist {done}/{total}",
+  "中档": "Mid tier",
+  "高档": "High tier"
 }
