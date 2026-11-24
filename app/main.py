@@ -260,6 +260,13 @@ async def start_background_loops() -> None:
 
 
 @app.on_event("startup")
+def warm_latest_known() -> None:
+    """The set of companies the 「最新掌握」 block can recognise is read once here and refreshed in the background."""
+    from . import latest_known
+    latest_known.start_known_refresh()
+
+
+@app.on_event("startup")
 async def start_wake_worker() -> None:
     """The one worker that judges the alerts the sentinel posts (``kernel.wake``); it runs whatever the wake mode is."""
     from .kernel import wake
