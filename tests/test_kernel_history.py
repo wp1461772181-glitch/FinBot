@@ -1,7 +1,15 @@
 """History for kernel turns: the boundary between the two history layers moves only on a fixed grid, so a long
 conversation's history is a stable prefix from one turn to the next (the cost of a turn is what is NOT repeated)."""
+import asyncio
+import importlib.util
+import json
 import random
+import subprocess
+import sys
+from pathlib import Path
 from uuid import UUID
+
+import pytest
 
 import app.agent_context as layers
 from app.agent_context import ANCHOR_GRID, layer_rows
@@ -62,15 +70,38 @@ def own_messages(rows, ends, n):
     return layers.project_turn_history(rows[first:ends[n - 1]])
 
 
+BASE_COMMIT = "0f83e07"       # the last commit before the grid: its agent_context.py is the rule every old-engine turn keeps
+
+
+def old_module():
+    try:
+        text = subprocess.run(["git", "show", f"{BASE_COMMIT}:app/agent_context.py"], cwd=Path(__file__).parent.parent,
+                              capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("git or the base commit is not available")
+    spec = importlib.util.spec_from_loader("app.agent_context_base", loader=None)
+    module = importlib.util.module_from_spec(spec)
+    module.__package__ = "app"
+    sys.modules[spec.name] = module            # the module's dataclass looks itself up here
+    try:
+        exec(compile(text, f"{BASE_COMMIT}:app/agent_context.py", "exec"), module.__dict__)
+    finally:
+        sys.modules.pop(spec.name, None)
+    return module
+
+
 def test_without_a_grid_nothing_changes():
-    rows, ends = build(80)
-    for n in (5, 30, 80):
-        sub = rows[:ends[n - 1]]
-        plain = layer_rows(sub, [], l1_bytes=L1, l2_bytes=L2, l3_bytes=L3)
-        assert plain == layer_rows(sub, [], l1_bytes=L1, l2_bytes=L2, l3_bytes=L3, anchor_grid=None)
-        # the old rule, spelled out: layer 1 is the newest complete turns that fit
-        assert plain["l1_turns"] == len(layers.complete_turns(plain["l1_rows"]))
-    assert "anchor_grid" in layer_rows.__code__.co_varnames[:layer_rows.__code__.co_argcount + layer_rows.__code__.co_kwonlyargcount]
+    old = old_module()
+    for seed in range(1, 11):
+        rows, ends = build(120, seed)
+        for n in (3, 20, 47, 80, 120):
+            sub = rows[:ends[n - 1]]
+            for segments in ([], [{"seq": 1, "from_sequence": 1, "upto_sequence": sub[len(sub) // 3]["sequence"], "content": "s"}]):
+                args = dict(l1_bytes=L1, l2_bytes=L2, l3_bytes=L3)
+                expected = old.layer_rows(sub, segments, **args)
+                # Turn is a different class in the old module: compare what it holds
+                for result in (layer_rows(sub, segments, **args), layer_rows(sub, segments, anchor_grid=None, **args)):
+                    assert repr(result) == repr(expected), (seed, n)
 
 
 def test_history_prefix_is_stable_between_anchor_moves():
@@ -117,18 +148,21 @@ def test_a_summary_moves_the_boundary_once():
     rows, ends = build(200)
     upto = rows[ends[99] - 1]["sequence"]                  # a summary covers the turns up to turn 100
     summary = [{"seq": 1, "from_sequence": 1, "upto_sequence": upto, "content": "s"}]
-    # two conversations that differ only in the summary: the one with it never keeps a covered turn, and from
-    # the turn the summary lands the prefix is stable again (it moves with the grid, not with the summary)
-    for n in range(101, 201):
-        context = context_at(rows, ends, n, ANCHOR_GRID, segments=summary)
-        assert context["summary_upto"] == upto
-        assert all(t.first_sequence > upto for t in context["half_turns"] + context["overflow"])
-    seen = [starts(context_at(rows, ends, n, ANCHOR_GRID, segments=summary)) for n in range(101, 201)]
-    changes = sum(a != b for a, b in zip(seen, seen[1:]))
-    assert changes <= (rows[ends[199] - 1]["sequence"] - upto) // ANCHOR_GRID + 2
-    # the turn the summary arrives on: the boundary moves once (the old text is replaced by the summary's)
-    before, after = context_at(rows, ends, 130, ANCHOR_GRID), context_at(rows, ends, 130, ANCHOR_GRID, segments=summary)
-    assert render(before) != render(after)
+
+    def view(n, landed):
+        return context_at(rows, ends, n, ANCHOR_GRID, segments=summary if landed else ())
+
+    def extends(n, landed):
+        return render(view(n, landed)) == render(view(n - 1, landed)) + own_messages(rows, ends, n)
+
+    # the summary lands on the turn k: before it the segment list is empty, from k on it is the one above
+    k = next(k for k in range(125, 190) if starts(view(k - 2, False)) == starts(view(k - 1, False))
+             and starts(view(k, True)) == starts(view(k + 1, True)))
+    assert extends(k - 1, False)                                          # just before: a pure extension
+    assert render(view(k, True)) != render(view(k - 1, False)) + own_messages(rows, ends, k)   # on it: it moves
+    assert not render(view(k, True))[:len(render(view(k - 1, False)))] == render(view(k - 1, False))
+    assert extends(k + 1, True)                                           # just after: a pure extension again
+    assert all(t.first_sequence > upto for t in view(k, True)["half_turns"] + view(k, True)["overflow"])
 
 
 def test_fallback_when_one_cell_is_larger_than_layer_one():
@@ -169,3 +203,94 @@ def test_only_the_newest_500_rows_are_fetched():
     summarised = layer_rows(rows[:ends[299]], [{"seq": 1, "from_sequence": 1, "upto_sequence": upto, "content": "s"}],
                             anchor_grid=ANCHOR_GRID, **huge)
     assert summarised["l1_rows"][0]["turn_id"] == str(UUID(int=11))
+
+
+def test_when_no_anchor_lies_in_layer_two_it_follows_the_old_rule_alone():
+    rows, ends = build(300)
+    tiny = 1500                                               # a few turns: shorter than the gap between two anchors
+    checked = 0
+    for n in range(60, 300, 7):
+        sub = rows[:ends[n - 1]]
+        context = layer_rows(sub, [], l1_bytes=L1, l2_bytes=tiny, l3_bytes=L3, anchor_grid=ANCHOR_GRID)
+        complete = layers.complete_turns(sub)
+        ids = [str(g[0]["turn_id"]) for g in complete]
+        l1_ids = [str(g[0]["turn_id"]) for g in layers.complete_turns(context["l1_rows"])]
+        first = ids.index(l1_ids[0])
+        assert first == 0 or complete[first][0]["sequence"] // ANCHOR_GRID != complete[first - 1][0]["sequence"] // ANCHOR_GRID
+        half = [t.turn_id for t in context["half_turns"]]
+        older = ids[:first]
+        assert sum(layers.half_size(t) for t in context["half_turns"]) <= tiny
+        assert half == older[len(older) - len(half):] and half            # the newest turns that fit, next to layer 1
+        starts_on = complete[ids.index(half[0])][0]["sequence"] // ANCHOR_GRID
+        previous = complete[ids.index(half[0]) - 1][0]["sequence"] // ANCHOR_GRID
+        checked += starts_on == previous                                  # layer 2 starts mid-cell: today's rule
+    assert checked >= 5
+
+
+# --- the summariser reads the same view the turn saw ----------------------------------------------------------
+
+class Store:
+    """What ``agent_chat_store`` offers the summariser: ``layer_rows`` over fixed rows, recording how it was asked."""
+
+    def __init__(self, rows):
+        self.rows, self.asked, self.appended = rows, [], []
+
+    async def conversation_context(self, conversation_id, credential, **kwargs):
+        self.asked.append(kwargs)
+        grid = ANCHOR_GRID if kwargs.get("anchored") else None
+        return layer_rows(self.rows, [], l1_bytes=L1, l2_bytes=L2, l3_bytes=L3, anchor_grid=grid)
+
+    async def append_summary(self, conversation_id, from_sequence, upto_sequence, content):
+        self.appended.append((from_sequence, upto_sequence))
+        return True
+
+    def install(self, monkeypatch):
+        import app.agent_chat_provider as provider
+        import app.agent_chat_store as store
+
+        async def model(*args, **kwargs):
+            return {}, {"content": json.dumps({"summary": "用户连续询问。"}, ensure_ascii=False)}
+
+        monkeypatch.setattr(store, "conversation_context", self.conversation_context)
+        monkeypatch.setattr(store, "append_summary", self.append_summary)
+        monkeypatch.setattr(provider, "decision_request", model)
+
+
+def anchored_only_overflow():
+    rows, ends = build(300)
+    sub = rows[:ends[79]]                                      # 80 turns: the grid leaves overflow the old rule does not
+    anchored = layer_rows(sub, [], l1_bytes=L1, l2_bytes=L2, l3_bytes=L3, anchor_grid=ANCHOR_GRID)
+    plain = layer_rows(sub, [], l1_bytes=L1, l2_bytes=L2, l3_bytes=L3)
+    assert anchored["overflow"] and not plain["overflow"] and layers.should_compact(anchored) and not layers.should_compact(plain)
+    return sub, anchored
+
+
+def test_the_summariser_takes_the_turns_the_grid_moved_out_of_both_layers(monkeypatch):
+    import app.agent_context_summary as summary
+    sub, anchored = anchored_only_overflow()
+    store = Store(sub)
+    store.install(monkeypatch)
+    done = asyncio.run(summary.summarize_pending("cid", "c", provider="p", model="m", api_key="k" * 12, base_url=None,
+                                                 l1_bytes=L1, l2_bytes=L2, anchored=True))
+    assert done and store.asked == [{"l1_bytes": L1, "l2_bytes": L2, "anchored": True}]
+    (first, last), = store.appended
+    kept = {str(g[0]["turn_id"]): g for g in layers.complete_turns(anchored["l1_rows"])}
+    l1_first = min(g[0]["sequence"] for g in (g for g in layers.complete_turns(sub) if str(g[0]["turn_id"]) in kept))
+    assert first == anchored["overflow"][0].first_sequence and last < l1_first      # never a turn layer 1 keeps
+    # the automatic compression is triggered by the anchored view too, and takes the same oldest turn
+    store.appended.clear()
+    result = asyncio.run(summary._guarded("cid", "c", provider="p", model="m", api_key="k" * 12, base_url=None,
+                                          anchored=True))
+    assert result is not None and store.asked[-1] == {"window": None, "anchored": True}
+
+
+def test_an_unanchored_conversation_is_asked_exactly_as_before(monkeypatch):
+    import app.agent_context_summary as summary
+    sub, _ = anchored_only_overflow()
+    store = Store(sub)
+    store.install(monkeypatch)
+    asyncio.run(summary.summarize_pending("cid", "c", provider="p", model="m", api_key="k" * 12, base_url=None,
+                                          l1_bytes=L1, l2_bytes=L2))
+    assert asyncio.run(summary._guarded("cid", "c", provider="p", model="m", api_key="k" * 12, base_url=None)) is None
+    asyncio.run(summary.compact_conversation("cid", "c", provider="p", model="m", api_key="k" * 12, base_url=None, manual=True))
+    assert store.asked == [{"l1_bytes": L1, "l2_bytes": L2}, {"window": None}, {"window": None}]

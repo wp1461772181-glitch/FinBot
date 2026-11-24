@@ -9,7 +9,7 @@ from pydantic import model_validator, BaseModel, ConfigDict, Field, SecretStr, f
 from .agent_chat_provider import ProviderFailure
 from .agent_chat_api import PROVIDER_PATTERN, REQUEST_SLOTS
 from .agent_tools import tool_schemas
-from .agent_workflow.graph import stream_workflow, mark_terminal_status, kernel_runs, _engine
+from .agent_workflow.graph import stream_workflow, mark_terminal_status, kernel_turn
 from .agent_workflow.trace import WIRE_KEYS
 from .agent_chat_store import create_conversation,verify_conversation,append_message,owned_message_page,history,finish_conversation,owner_hash
 from .agent_chat_store import conversation_context
@@ -555,7 +555,8 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
    # the user saw on the button.
    shown=payload.display_message.strip() if payload.pending_request_id and payload.display_message else ""
    await append_message(cid,turn,"user",shown or payload.message)
-   context=await conversation_context(cid,x_chat_session,window=chosen.window,anchored=kernel_runs(_engine(bot or {},False))) or {}
+   anchored=kernel_turn(bot)      # the history, and the summary made of it, are read the way the kernel reads them
+   context=await conversation_context(cid,x_chat_session,window=chosen.window,anchored=anchored) or {}
    # SW2 §3.1: read once at the turn start, shared by every model call of the turn (K9).
    self_state=await asyncio.to_thread(_self_state_inputs,cid,x_chat_session,turn,model_label) if fp_flag("FINBOT_SW2_SELF_STATE",True) else None
    history_rows=context.get("l1_rows",[])
@@ -675,7 +676,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
       except Exception:pass
      from .agent_context_summary import schedule_summary
      schedule_summary(cid,x_chat_session,provider=chosen.provider,model=chosen.model,
-                      api_key=chosen.key(),base_url=chosen.base_url,window=chosen.window)
+                      api_key=chosen.key(),base_url=chosen.base_url,window=chosen.window,anchored=anchored)
      if _is_owner(x_chat_session) and not payload.pending_request_id:
       from .agent_profile_extract import schedule_extraction,remember_handled
       schedule_extraction(owner_hash(x_chat_session),payload.message,conversation_id=cid,turn_id=turn,
@@ -785,6 +786,13 @@ def _window_of_bot(credential:str,bot_id:str|None)->int:
   return catalog.window_for(settings["model"]) if settings else layers.WINDOW_TOKENS
  except Exception:return layers.WINDOW_TOKENS
 
+def _anchored_of_bot(credential:str,bot_id:str|None)->bool:
+ """Whether a bot's line is read the kernel's way (the same decision its turns make)."""
+ if not bot_id or not _is_owner(credential):return kernel_turn({})
+ from . import agent_bots as bots
+ try:return kernel_turn(bots.turn_settings(owner_hash(credential),bot_id))
+ except Exception:return kernel_turn({})
+
 @router.get("/context")
 async def get_empty_context(bot_id:str|None=Query(default=None),x_chat_session:str|None=Header(default=None)):
     """The context of a conversation that has not started: only the fixed part."""
@@ -795,7 +803,7 @@ async def get_empty_context(bot_id:str|None=Query(default=None),x_chat_session:s
 async def get_conversation_context(conversation_id:str,bot_id:str|None=Query(default=None),x_chat_session:str|None=Header(default=None)):
  if not x_chat_session:raise HTTPException(404,"conversation_not_found")
  window=await asyncio.to_thread(_window_of_bot,x_chat_session,bot_id)
- context=await conversation_context(conversation_id,x_chat_session,window=window)
+ context=await conversation_context(conversation_id,x_chat_session,window=window,anchored=await asyncio.to_thread(_anchored_of_bot,x_chat_session,bot_id))
  if context is None:raise HTTPException(404,"conversation_not_found")
  return _context_report(context,window)
 
@@ -926,12 +934,12 @@ def compact_message(result: dict) -> str:
     return COMPACT_REASONS.get(result.get("reason"), "没有可压缩的内容。")
 
 
-async def _compact_now(conversation_id:str,credential:str,resolved:dict,focus:str)->dict:
+async def _compact_now(conversation_id:str,credential:str,resolved:dict,focus:str,anchored:bool=False)->dict:
  from . import agent_context_summary as summary
  try:
   result=await summary.compact_conversation(conversation_id,credential,provider=resolved["provider"],model=resolved["model"],
       api_key=resolved["api_key"],base_url=resolved["base_url"],window=resolved.get("context_window"),
-      focus=focus or "",manual=True)
+      focus=focus or "",manual=True,anchored=anchored)
  except asyncio.CancelledError:raise
  except Exception as exc:
   raise HTTPException(502,"compact_failed") from exc
@@ -947,8 +955,8 @@ async def compact_conversation_endpoint(conversation_id:str,body:CompactBody,x_c
   class _Payload:bot_id=body.bot_id;conversation_id=None
   settings,resolved=await asyncio.to_thread(_bot_turn,_Payload,x_chat_session)
   if settings["conversation_id"]!=conversation_id:raise HTTPException(409,"bot_conversation_mismatch")
- else:resolved=await asyncio.to_thread(_catalog_turn,None,x_chat_session)
- return await _compact_now(conversation_id,x_chat_session,resolved,body.focus or "")
+ else:settings=None;resolved=await asyncio.to_thread(_catalog_turn,None,x_chat_session)
+ return await _compact_now(conversation_id,x_chat_session,resolved,body.focus or "",kernel_turn(settings))
 
 @router.post("/bots/{bot_id}/compact")
 async def compact_bot_line_endpoint(bot_id:str,body:CompactBody,x_chat_session:str|None=Header(default=None)):
@@ -957,7 +965,7 @@ async def compact_bot_line_endpoint(bot_id:str,body:CompactBody,x_chat_session:s
  class _Payload:conversation_id=None
  _Payload.bot_id=bot_id
  settings,resolved=await asyncio.to_thread(_bot_turn,_Payload,x_chat_session)
- return await _compact_now(settings["conversation_id"],x_chat_session,resolved,body.focus or "")
+ return await _compact_now(settings["conversation_id"],x_chat_session,resolved,body.focus or "",kernel_turn(settings))
 
 
 class ResearchQueueBody(BaseModel):

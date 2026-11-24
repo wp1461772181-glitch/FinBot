@@ -98,8 +98,13 @@ def _engine(bot: dict, unattended: bool) -> str | None:
 
 
 def kernel_runs(engine: str | None) -> bool:
-    """Whether a turn with this engine runs on the kernel: the one decision the graph and the endpoint share."""
+    """Whether a turn whose resolved engine is this runs on the kernel (what the graph asks)."""
     return engine == "v2" and flag("FINBOT_KERNEL_V2", True)
+
+
+def kernel_turn(bot: dict | None, unattended: bool = False) -> bool:
+    """Whether a turn of this bot runs on the kernel: the one decision the graph and the endpoint share."""
+    return kernel_runs(_engine(bot or {}, unattended))
 
 
 async def stream_workflow(*, question: str, messages: list[dict], provider: str, model: str,

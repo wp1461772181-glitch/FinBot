@@ -516,3 +516,12 @@ def test_the_kernel_flag_off_means_the_plain_history(wiring):
     seen = record_context_calls(wiring)
     wiring.bot_turn()
     assert seen == [False]
+
+
+def test_a_turn_without_a_bot_follows_the_environment_default(wiring):
+    seen = record_context_calls(wiring)
+    wiring.monkeypatch.setenv("FINBOT_KERNEL_DEFAULT", "v2")
+    wiring.catalog_turn()
+    wiring.monkeypatch.delenv("FINBOT_KERNEL_DEFAULT")
+    wiring.catalog_turn()
+    assert seen == [True, False]

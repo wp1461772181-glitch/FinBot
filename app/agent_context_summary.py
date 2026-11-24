@@ -169,12 +169,13 @@ def validate_summary(raw, source: str) -> str:
 
 async def summarize_pending(conversation_id: str, credential: str, *, provider: str, model: str,
                             api_key: str, base_url: str | None, l1_bytes: int = layers.L1_BYTES,
-                            l2_bytes: int = layers.L2_BYTES) -> bool:
+                            l2_bytes: int = layers.L2_BYTES, anchored: bool = False) -> bool:
     """Make and append one segment if turns are waiting for one.  True when a segment was appended.
     The layer sizes are the ones the turns are sent with (the arguments exist for tests)."""
     from .agent_chat_provider import decision_request
     from .agent_chat_store import append_summary, conversation_context
-    context = await conversation_context(conversation_id, credential, l1_bytes=l1_bytes, l2_bytes=l2_bytes)
+    context = await conversation_context(conversation_id, credential, l1_bytes=l1_bytes, l2_bytes=l2_bytes,
+                                      **_view(anchored))
     if not context:
         return False
     batch = pending_batch(context["overflow"])
@@ -349,9 +350,15 @@ def select_for_compaction(context: dict, *, manual: bool) -> list[layers.Turn]:
     return chosen
 
 
+def _view(anchored: bool) -> dict:
+    """The extra argument of ``conversation_context`` for a kernel conversation; none for the others, so their
+    calls are exactly what they were."""
+    return {"anchored": True} if anchored else {}
+
+
 async def compact_conversation(conversation_id: str, credential: str, *, provider: str, model: str, api_key: str,
                                base_url: str | None, window: int | None = None, focus: str = "",
-                               manual: bool = False, context: dict | None = None) -> dict:
+                               manual: bool = False, context: dict | None = None, anchored: bool = False) -> dict:
     """Fold the oldest turns into the rolling summary.  Returns ``{"compacted": N, ...}``; N is 0 when there
     was nothing to do or the model's answer was refused (then ``error`` holds the short reason code and the
     old summary is untouched).  A provider failure raises; nothing has been written by then."""
@@ -359,7 +366,7 @@ async def compact_conversation(conversation_id: str, credential: str, *, provide
     from .agent_chat_store import append_summary, conversation_context
     focus = " ".join(str(focus or "").split())[:FOCUS_MAX_CHARS]
     if context is None:
-        context = await conversation_context(conversation_id, credential, window=window)
+        context = await conversation_context(conversation_id, credential, window=window, **_view(anchored))
     if not context:
         return {"compacted": 0, "reason": "no_conversation"}
     turns = select_for_compaction(context, manual=manual)
@@ -404,17 +411,17 @@ async def compact_conversation(conversation_id: str, credential: str, *, provide
 
 
 async def _guarded(conversation_id: str, credential: str, *, window: int | None = None, manual: bool = False,
-                   focus: str = "", **model_kwargs) -> dict | None:
+                   focus: str = "", anchored: bool = False, **model_kwargs) -> dict | None:
     """The background entry: compress when the history has reached the line (or on request).  Never raises."""
     try:
         context = None
         if not manual:
             from .agent_chat_store import conversation_context
-            context = await conversation_context(conversation_id, credential, window=window)
+            context = await conversation_context(conversation_id, credential, window=window, **_view(anchored))
             if not context or not layers.should_compact(context):
                 return None
         result = await compact_conversation(conversation_id, credential, window=window, focus=focus,
-                                            manual=manual, context=context, **model_kwargs)
+                                            manual=manual, context=context, anchored=anchored, **model_kwargs)
         if result.get("compacted"):
             log.info("conversation compacted conv=%s turns=%s", conversation_id, result["compacted"])
         elif result.get("error"):
@@ -428,7 +435,7 @@ async def _guarded(conversation_id: str, credential: str, *, window: int | None 
 
 
 def schedule_summary(conversation_id: str, credential: str, *, provider: str, model: str,
-                     api_key: str, base_url: str | None = None, window: int | None = None) -> None:
+                     api_key: str, base_url: str | None = None, window: int | None = None, anchored: bool = False) -> None:
     """Called when a turn has succeeded.  Never raises and never waits; at most one task per
     conversation.  The task compresses only if the history has reached the line."""
     try:
@@ -436,7 +443,7 @@ def schedule_summary(conversation_id: str, credential: str, *, provider: str, mo
             return
         task = asyncio.get_running_loop().create_task(_guarded(
             conversation_id, credential, provider=provider, model=model, api_key=api_key, base_url=base_url,
-            window=window))
+            window=window, anchored=anchored))
         _RUNNING[conversation_id] = task
 
         def forget(done: asyncio.Task, key: str = conversation_id) -> None:
