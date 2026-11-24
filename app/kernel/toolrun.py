@@ -28,8 +28,9 @@ RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts�
 _UNNUMBERED = {"recall_conversations", "read_past_conversation", "query_system_status", "query_research_queue", "list_routines"}
 # The pages these reads return can be saved with ``act``; a post found on X is not a web page.
 _WEB_PAGE_READS = ("web_research", "search_configured_news")
-# These return the owner's own data, not text from outside: they do not make a tier-1 write go onto a card.
-_OWN_STATE_READS = frozenset({"query_system_status", "query_research_queue", "list_routines"})
+# These return the owner's own data, not text from outside: they do not make a tier-1 write go onto a card.  The system
+# status is not one of them: job and document names and error text in it come from outside.
+_OWN_STATE_READS = frozenset({"query_research_queue", "list_routines"})
 _SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_news", "query_sec_filings": "official_filing",
                 "search_x": "x_post"}
 # Run one at a time after every read has been numbered, in call order: calculations work on the citations the reads just

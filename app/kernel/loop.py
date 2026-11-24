@@ -408,7 +408,9 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
             # The button's raw value is not the user's message, whichever card it was on.
             history = [m for m in history if not (m.get("role") == "user" and m.get("content") == raw)]
         started = getattr(context, "active_skill", None)
-        if pressed and settled.reply is not None and not started:
+        # The answer to a question the skill asked, pressed or typed (a channel without buttons can only type it), takes the
+        # skill up again.  A question card is not carried past the next turn, so this reaches that one turn only.
+        if not started and (settled.reply is not None if pressed else True):
             started = await _skill_of_question(context, state)
         run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started)
         if started and owner_credential_matches(getattr(context, "identity_credential", "")):

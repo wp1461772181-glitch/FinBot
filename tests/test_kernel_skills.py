@@ -288,6 +288,17 @@ def test_a_skill_that_asked_a_question_is_in_force_when_the_answer_arrives(saved
     assert "reply:" not in json.dumps(sent, ensure_ascii=False)
 
 
+def test_a_typed_answer_to_the_skills_question_takes_the_skill_up_again(saved, cards):
+    fake = script(saved, [step(calls=[call("c1", "ask", {"question": "哪一年？", "options": ["2024", "2023"]})]), step(text="哪一年？"), step(text="好")])
+    first, _ = run("苹果营收", with_skills(active_skill=dict(SKILL)))
+    messages = [{"role": "system", "content": "endpoint"}, {"role": "user", "content": "苹果营收"}, {"role": "assistant", "content": "哪一年？"},
+                {"role": "user", "content": "2024 年的"}]
+    result, _ = turn("2024 年的", {"pending_request": first["pending_request"]}, context=with_skills(), messages=messages)
+    sent = fake.calls[-1]["messages"]
+    assert sent[-1] == {"role": "system", "content": skills.render_skill(SKILL)} and sent[-2] == {"role": "user", "content": "2024 年的"}
+    assert result["audit"]["skill"] == {"name": "财报速读", "version": 3} and not result.get("pending_request")
+
+
 def test_an_ask_without_a_skill_leaves_the_card_as_it_was(env):
     script(env, [step(calls=[call("c1", "ask", {"question": "哪一年？"})]), step(text="哪一年？")])
     result, _ = run("苹果营收", with_skills())

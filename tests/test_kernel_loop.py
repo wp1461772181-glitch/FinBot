@@ -913,7 +913,7 @@ def test_a_page_from_a_post_search_is_not_a_web_page(env, fake_consent, monkeypa
 
 # --- own-state reads do not count for the tier-1 rule ---------------------------------------------------------------------
 
-@pytest.mark.parametrize("read,counts", [("query_research_queue", False), ("list_routines", False), ("query_system_status", False),
+@pytest.mark.parametrize("read,counts", [("query_research_queue", False), ("list_routines", False), ("query_system_status", True),
                                          ("query_financials", True), ("recall_conversations", True)])
 def test_only_reads_of_outside_or_remembered_text_send_a_tier_one_write_to_the_card(env, fake_consent, read, counts):
     fake = script(env, [step(calls=[call("c1", read, {})]), step(calls=[act_call("c2", "remove_from_research_queue", {"symbol": "NVDA"})]), step(text="好")])
