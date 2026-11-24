@@ -24,6 +24,39 @@ class FakeIlink:
         return self.fail or {"ret": 0}
 
 
+class FakeChannels:
+    """Stands in for app.channels: records the calls, serves the queued rows."""
+
+    def __init__(self, rows=None):
+        self.rows = list(rows or [])
+        self.calls = []
+
+    def expire_stuck(self, owner):
+        self.calls.append(("expire_stuck", owner))
+        return 0
+
+    def pending(self, owner, channel, limit=20, telegram_bot_row_id=None):
+        self.calls.append(("pending", owner, channel))
+        return list(self.rows)
+
+    def mark_sent(self, message_id, external_id=None):
+        self.calls.append(("mark_sent", message_id))
+
+    def mark_failed(self, message_id, code="send_failed"):
+        self.calls.append(("mark_failed", message_id, code))
+
+    def acknowledge(self, owner, channel, now=None):
+        self.calls.append(("acknowledge", owner, channel))
+        return 0
+
+
+@pytest.fixture(autouse=True)
+def fake_channels(monkeypatch):
+    fake = FakeChannels()
+    monkeypatch.setattr(bridge, "channels", fake)
+    return fake
+
+
 def _state():
     return wx.new_state(bot_token="secret-token", baseurl="https://ilinkai.weixin.qq.com", bot_id="bot@im.bot",
                         owner_user_id=OWNER_ID)
@@ -460,3 +493,140 @@ def test_the_mark_timer_does_not_outlive_the_turn(monkeypatch, fails):
 
     done, later = run(go())
     assert done == 1 and later == 1
+
+
+# ---- the outbox: proactive messages queued for this channel ----
+
+def _row(i="r1", text="提醒：INTC 急跌"):
+    return {"id": i, "bot_id": "bot-1", "text": text}
+
+
+def _outbox_bridge(fake_channels, rows, ilink=None, token="ctx-9"):
+    fake_channels.rows = rows
+    b, ilink, state = _make(None, ilink)
+    if token:
+        state["context_tokens"] = {OWNER_ID: token}
+    return b, ilink, state
+
+
+def test_a_pending_row_goes_to_the_owner_with_the_held_context_token(fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+    run(b.deliver_outbox())
+    assert ilink.sent == [(OWNER_ID, "提醒：INTC 急跌", "ctx-9")]
+    assert ("expire_stuck", "owner-hash") in fake_channels.calls
+    assert ("pending", "owner-hash", "wechat") in fake_channels.calls
+    assert ("mark_sent", "r1") in fake_channels.calls
+    assert fake_channels.calls.index(("expire_stuck", "owner-hash")) < fake_channels.calls.index(("pending", "owner-hash", "wechat"))
+
+
+def test_a_rejected_send_marks_a_failure(fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()], FakeIlink(fail={"ret": -2}))
+    run(b.deliver_outbox())
+    assert ("mark_failed", "r1", "send_failed") in fake_channels.calls
+    assert not [c for c in fake_channels.calls if c[0] == "mark_sent"]
+
+
+def test_a_long_text_is_sent_in_chunks_and_marked_sent_once(fake_channels):
+    long_text = "数据。" * 1500
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row(text=long_text)])
+    run(b.deliver_outbox())
+    assert len(ilink.sent) > 1 and all(t[0] == OWNER_ID for t in ilink.sent)
+    assert [c for c in fake_channels.calls if c[0] == "mark_sent"] == [("mark_sent", "r1")]
+
+
+def test_a_push_without_a_context_token_is_still_attempted(fake_channels):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()], token=None)
+    run(b.deliver_outbox())
+    assert ilink.sent == [(OWNER_ID, "提醒：INTC 急跌", None)]
+
+
+def test_nothing_is_sent_while_the_login_is_stale(fake_channels):
+    import time
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+    b.paused_until = time.time() + 600
+    run(b.deliver_outbox())
+    assert ilink.sent == []
+    assert not [c for c in fake_channels.calls if c[0] in ("pending", "mark_sent", "mark_failed")]
+    assert ("expire_stuck", "owner-hash") in fake_channels.calls   # the rows are left to expire
+
+
+def test_an_exception_in_one_send_does_not_stop_the_next_row(fake_channels):
+    class Flaky(FakeIlink):
+        async def send_text(self, to_user, text, context_token=None):
+            if "坏" in text:
+                raise RuntimeError("boom")
+            return await super().send_text(to_user, text, context_token)
+
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row("r1", "坏消息"), _row("r2", "好消息")], Flaky())
+    run(b.deliver_outbox())
+    assert ("mark_failed", "r1", "send_failed") in fake_channels.calls
+    assert ("mark_sent", "r2") in fake_channels.calls
+
+
+def test_a_database_failure_in_the_pass_is_logged_not_raised(fake_channels):
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+    fake_channels.pending = boom
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row()])
+    run(b.deliver_outbox())   # does not raise
+    assert ilink.sent == []
+
+
+def test_the_recipient_is_always_the_login_owner(fake_channels):
+    row = _row()
+    row.update({"to": STRANGER_ID, "user_id": STRANGER_ID, "from_user_id": STRANGER_ID})
+    b, ilink, _ = _outbox_bridge(fake_channels, [row])
+    run(b.deliver_outbox())
+    assert [s[0] for s in ilink.sent] == [OWNER_ID]
+
+
+def test_the_log_has_the_row_id_and_code_never_the_text(fake_channels, capsys):
+    b, ilink, _ = _outbox_bridge(fake_channels, [_row(text="秘密内容XYZ")], FakeIlink(fail={"ret": -2}))
+    run(b.deliver_outbox())
+    out = capsys.readouterr().out
+    assert "outbox_failed" in out and "r1" in out
+    assert "秘密内容XYZ" not in out and "ctx-9" not in out and OWNER_ID not in out
+
+
+def test_an_owner_message_acknowledges_before_it_is_handled(fake_channels):
+    async def ask(bot_id, text, on_event=None):
+        return "好", [], "cid"
+
+    async def go():
+        b, ilink, state = _make(ask)
+        await b.handle(_message())
+        await _drain(b)
+
+    run(go())
+    assert fake_channels.calls[0] == ("acknowledge", "owner-hash", "wechat")
+
+
+def test_a_message_from_someone_else_does_not_acknowledge(fake_channels):
+    async def ask(bot_id, text, on_event=None):
+        raise AssertionError("no turn")
+
+    async def go():
+        b, ilink, state = _make(ask)
+        await b.handle(_message(sender=STRANGER_ID))
+
+    run(go())
+    assert not [c for c in fake_channels.calls if c[0] == "acknowledge"]
+
+
+def test_a_failing_acknowledgement_does_not_stop_the_message(fake_channels):
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+    fake_channels.acknowledge = boom
+    calls = []
+
+    async def ask(bot_id, text, on_event=None):
+        calls.append(text)
+        return "好", [], "cid"
+
+    async def go():
+        b, ilink, state = _make(ask)
+        await b.handle(_message())
+        await _drain(b)
+
+    run(go())
+    assert calls == ["英伟达财报怎么样"]

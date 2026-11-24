@@ -26,6 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from app import agent_wechat as wx
+from app import channels
 
 LOCAL_API = os.environ.get("WECHAT_BRIDGE_API_URL", "http://127.0.0.1:8000")
 CONNECT_TIMEOUT = 5.0
@@ -34,6 +35,7 @@ PROGRESS_AFTER_SECONDS = 10  # a kernel turn still running at this mark gets one
 BUSY_RETRY_DELAY = 3.0
 BUSY_WAIT_SECONDS = 1260  # a turn's hard cap is 1200 s
 STALE_PAUSE_SECONDS = 3600
+OUTBOX_INTERVAL = 5  # seconds between delivery passes of the proactive-message outbox
 MESSAGE_MAX_CHARS = 4000
 SLOW_TEXT = "收到，我在查，稍等一下。"
 BACKEND_DOWN_TEXT = "后端暂时连不上，提醒不受影响。"
@@ -116,6 +118,46 @@ class Bridge:
         self.ilink, self.state, self.owner, self.route, self.ask, self.save = ilink, state, owner, route, ask, save
         self.locks: dict[str, asyncio.Lock] = {}
         self.tasks: set[asyncio.Task] = set()
+        self.paused_until = 0.0  # time.time() until which the login is stale: the poll and the outbox both wait
+
+    async def deliver_outbox(self) -> None:
+        """One pass over the proactive messages queued for WeChat.  Never raises; a stale login only lets rows expire."""
+        try:
+            await asyncio.to_thread(channels.expire_stuck, self.owner)
+            if time.time() < self.paused_until:
+                return
+            for row in await asyncio.to_thread(channels.pending, self.owner, "wechat"):
+                await self._deliver_row(row)
+        except Exception as exc:  # noqa: BLE001 - the bridge and the poll go on
+            _log("outbox_pass_failed", error=type(exc).__name__)
+
+    async def _deliver_row(self, row: dict) -> None:
+        """Send one row to the login's owner (never to an id from the row), all chunks or it counts as failed."""
+        reason = None
+        try:
+            to_user = self.state["owner_user_id"]
+            token = (self.state.get("context_tokens") or {}).get(to_user)
+            for chunk in wx.split_text(wx.plain_text(row["text"])):
+                reason = wx.send_result(await self.ilink.send_text(to_user, chunk, token))
+                if reason:
+                    break
+        except Exception as exc:  # noqa: BLE001 - one row's failure must not hold up the next
+            reason = type(exc).__name__
+        try:
+            if reason:
+                _log("outbox_failed", id=row["id"], reason=reason)
+                await asyncio.to_thread(channels.mark_failed, row["id"], "send_failed")
+            else:
+                _log("outbox_sent", id=row["id"])
+                await asyncio.to_thread(channels.mark_sent, row["id"])
+        except Exception as exc:  # noqa: BLE001
+            _log("outbox_mark_failed", id=row["id"], error=type(exc).__name__)
+
+    async def _acknowledge(self) -> None:
+        try:
+            await asyncio.to_thread(channels.acknowledge, self.owner, "wechat")
+        except Exception as exc:  # noqa: BLE001 - the message is handled either way
+            _log("acknowledge_failed", error=type(exc).__name__)
 
     async def reply(self, to_user: str, token: str | None, text: str) -> bool:
         ok = True
@@ -136,6 +178,7 @@ class Bridge:
         if not wx.from_owner(message, self.state):
             _log("ignored_stranger")
             return
+        await self._acknowledge()
         uid, token = str(message.get("from_user_id")), message.get("context_token")
         if token:
             self.state.setdefault("context_tokens", {})[uid] = token
@@ -292,6 +335,13 @@ def _notify_stale(owner: str) -> None:
         _log("stale_notice_failed", error=type(exc).__name__)
 
 
+async def _outbox_loop(bridge: Bridge) -> None:
+    """The delivery pass every OUTBOX_INTERVAL seconds, on its own task so a long poll cannot hold it up."""
+    while True:
+        await bridge.deliver_outbox()
+        await asyncio.sleep(OUTBOX_INTERVAL)
+
+
 async def run(dry_run: bool = False) -> int:
     from dotenv import load_dotenv
     load_dotenv(PROJECT_ROOT / ".env", override=False)
@@ -321,10 +371,11 @@ async def run(dry_run: bool = False) -> int:
 
         bridge = Bridge(wx.Ilink(http, state), state, owner=owner, route=agent_telegram.route, ask=ask,
                         save=lambda: wx.save_state(state))
-        failures, paused_until = 0, 0.0
+        failures = 0
         _log("bridge_start", bot=state.get("ilink_bot_id"))
+        outbox = asyncio.create_task(_outbox_loop(bridge))
         while True:
-            if time.time() < paused_until:
+            if time.time() < bridge.paused_until:
                 await asyncio.sleep(30)
                 continue
             try:
@@ -341,7 +392,7 @@ async def run(dry_run: bool = False) -> int:
             if status == "stale":
                 _log("session_stale", pause_s=STALE_PAUSE_SECONDS)
                 await asyncio.to_thread(_notify_stale, owner)
-                paused_until = time.time() + STALE_PAUSE_SECONDS
+                bridge.paused_until = time.time() + STALE_PAUSE_SECONDS
                 continue
             if status == "rejected":
                 _log("poll_rejected", **{k: response.get(k) for k in ("ret", "errcode", "errmsg")})

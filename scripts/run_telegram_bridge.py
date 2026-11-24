@@ -40,6 +40,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from app import channels
 from app.agent_telegram import split_for_telegram, tables_for_telegram
 from app.agent_workflow.fp_flags import flag
 
@@ -426,6 +427,7 @@ async def _handle_message(client, credential: str, owner: str, message: dict,
         return
     if not _from_owner(chat, message.get("from"), bound_chat, bound_user):
         return
+    await _acknowledge(owner)
     from app.agent_context_summary import parse_compact_command
     if bot_cmd and not parse_compact_command(text)[0]:
         if binding:
@@ -751,6 +753,7 @@ async def _handle_callback(client, callback: dict, pending: dict, owner: str, cr
         return
     if not _from_owner(chat, callback.get("from"), bound_chat, bound_user):
         return
+    await _acknowledge(owner)
 
     if tg is None:
         from app import agent_telegram as tg
@@ -822,10 +825,27 @@ async def _ack_by_reply(chat_id: int, reply_to) -> bool:
         return False
 
 
+async def _expire_stuck(owner: str) -> None:
+    """Close what no bridge took in time (it moves to the next channel).  Best effort: sending goes on without it."""
+    try:
+        await asyncio.to_thread(channels.expire_stuck, owner)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Outbox expiry sweep failed: {_redact(exc)}", file=sys.stderr)
+
+
+async def _acknowledge(owner: str) -> None:
+    """The owner wrote on Telegram: what was sent here counts as seen.  Best effort."""
+    try:
+        await asyncio.to_thread(channels.acknowledge, owner, "telegram")
+    except Exception as exc:  # noqa: BLE001
+        print(f"Outbox acknowledgement failed: {_redact(exc)}", file=sys.stderr)
+
+
 async def _deliver_outbox(client, owner: str, bound_chat: int, tg, channel: dict | None = None) -> None:
     """Send what the bots queued (notify_telegram, alerts) to the bound chat, the only recipient there is.
     Each sent message keeps its Telegram id, so a reply to it goes back to its bot.  With ``channel`` only the
     messages queued for that bot's own Telegram bot, through it."""
+    await _expire_stuck(owner)
     bot_token = channel["token"] if channel else _bot_token_for_send(owner, tg)
     if not bot_token:
         return
@@ -1051,6 +1071,7 @@ async def _handle_own_message(client, credential: str, owner: str, message: dict
         return
     if channel["chat_id"] is None or not _from_owner(chat, message.get("from"), channel["chat_id"], channel["user_id"]):
         return
+    await _acknowledge(owner)
     from app.agent_context_summary import parse_compact_command
     compact, focus = parse_compact_command(text)
     if compact:
