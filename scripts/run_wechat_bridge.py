@@ -320,6 +320,17 @@ def _owner_credential() -> str:
     return config[3]
 
 
+def _mark_stale(state: dict) -> None:
+    """Record when the login went stale, so the outbox sees WeChat as not connected (channels.available) and a
+    message with WeChat first does not wait out the sweep.  Cleared by the next good poll."""
+    state["stale_since"] = time.time()
+    wx.save_state(state)
+
+
+def _clear_stale(state: dict) -> None:
+    state.pop("stale_since", None)  # saved with the cursor at the end of the poll
+
+
 def _notify_stale(owner: str) -> None:
     """Tell the owner in Telegram that the WeChat login needs a new scan.  Best effort: the log has it either way."""
     try:
@@ -391,6 +402,7 @@ async def run(dry_run: bool = False) -> int:
             status = wx.poll_status(response)
             if status == "stale":
                 _log("session_stale", pause_s=STALE_PAUSE_SECONDS)
+                _mark_stale(state)
                 await asyncio.to_thread(_notify_stale, owner)
                 bridge.paused_until = time.time() + STALE_PAUSE_SECONDS
                 continue
@@ -398,6 +410,7 @@ async def run(dry_run: bool = False) -> int:
                 _log("poll_rejected", **{k: response.get(k) for k in ("ret", "errcode", "errmsg")})
                 await asyncio.sleep(5)
                 continue
+            _clear_stale(state)
             if response.get("get_updates_buf"):
                 state["get_updates_buf"] = response["get_updates_buf"]
             # The cursor is saved before the messages are handled: a crash then loses one message rather than

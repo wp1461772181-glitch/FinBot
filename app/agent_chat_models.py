@@ -360,6 +360,8 @@ class AgentTelegramMessage(Base):
     group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
     acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failure: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # A bridge stamps the rows it takes (channels.pending); the sweep leaves a row alone for CLAIM_SECONDS after.
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AgentChannelPref(Base):

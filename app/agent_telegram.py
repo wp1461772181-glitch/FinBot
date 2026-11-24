@@ -361,6 +361,7 @@ def ensure_columns() -> None:
         connection.execute(sql("ALTER TABLE agent_telegram_messages ADD COLUMN IF NOT EXISTS group_id UUID"))
         connection.execute(sql("ALTER TABLE agent_telegram_messages ADD COLUMN IF NOT EXISTS acked_at TIMESTAMPTZ"))
         connection.execute(sql("ALTER TABLE agent_telegram_messages ADD COLUMN IF NOT EXISTS failure VARCHAR(40)"))
+        connection.execute(sql("ALTER TABLE agent_telegram_messages ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ"))
         connection.execute(sql("CREATE INDEX IF NOT EXISTS ix_agent_telegram_messages_group_id ON agent_telegram_messages (group_id)"))
         AgentChannelPref.__table__.create(connection, checkfirst=True)
 

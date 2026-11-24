@@ -23,6 +23,8 @@ from .database import SessionLocal
 CHANNELS = ("telegram", "wechat")
 MODES = ("first", "all")
 STUCK_SECONDS = 300
+CLAIM_SECONDS = 90       # a bridge that took a row this recently is still sending it: the sweep leaves it
+ACK_DAYS = 7             # an acknowledgement reaches back this far, not into older history
 FAILURES = ("send_failed", "expired", "not_connected")
 DEFAULT_PREFS = {"channels": ["telegram"], "mode": "first"}
 DELIVERY_TEXT_CHARS = 120
@@ -67,7 +69,8 @@ def available(db, owner_hash: str, channel: str, bot) -> bool:
     if channel == "wechat":
         from . import agent_wechat
         state = agent_wechat.load_state()
-        return bool(state.get("bot_token")) and bool(state.get("owner_user_id"))
+        # ``stale_since`` is written by the bridge while the login needs a new scan, and cleared by its next good poll.
+        return bool(state.get("bot_token")) and bool(state.get("owner_user_id")) and not state.get("stale_since")
     return False
 
 
@@ -95,8 +98,11 @@ def shape(db, owner_hash: str, bot, channel: str, text: str) -> tuple[str, uuid.
     return text, None
 
 
-def pending(owner_hash: str, channel: str, limit: int = 20, telegram_bot_row_id=None) -> list[dict]:
-    """Queued messages of one channel, oldest first.  Telegram: the shared bot's (None) or a bot's own."""
+def pending(owner_hash: str, channel: str, limit: int = 20, telegram_bot_row_id=None,
+            now: datetime | None = None) -> list[dict]:
+    """Queued messages of one channel, oldest first.  Telegram: the shared bot's (None) or a bot's own.  The rows
+    returned are claimed (``claimed_at``): the sweep leaves them alone for ``CLAIM_SECONDS``, so a row a bridge is
+    sending is not closed and failed over under it.  A bridge that died stops claiming and its rows expire."""
     with SessionLocal() as db:
         query = select(AgentTelegramMessage).where(AgentTelegramMessage.owner_hash == owner_hash,
                                                    AgentTelegramMessage.status == "pending",
@@ -104,7 +110,11 @@ def pending(owner_hash: str, channel: str, limit: int = 20, telegram_bot_row_id=
         if channel == "telegram":
             query = query.where(AgentTelegramMessage.telegram_bot_row_id.is_(None) if telegram_bot_row_id is None
                                 else AgentTelegramMessage.telegram_bot_row_id == uuid.UUID(str(telegram_bot_row_id)))
-        rows = db.scalars(query.order_by(AgentTelegramMessage.created_at).limit(limit)).all()
+        rows = db.scalars(query.order_by(AgentTelegramMessage.created_at).limit(limit).with_for_update()).all()
+        stamp = now or datetime.now(UTC)
+        for row in rows:
+            row.claimed_at = stamp
+        db.commit()
         return [{"id": str(r.id), "bot_id": str(r.bot_id) if r.bot_id else None, "text": r.text} for r in rows]
 
 
@@ -114,11 +124,11 @@ def _locked(db, message_id):
 
 
 def mark_sent(message_id, external_id: int | None = None) -> None:
-    """The channel took the message.  A row the sweep closed as expired a moment before the send finished is
-    still recorded as sent (it was); a row closed for failed sends stays closed."""
+    """The channel took the message.  A closed row stays closed: the claim lease keeps the sweep off a row a bridge
+    is sending, so a closed row was not being sent."""
     with SessionLocal() as db:
         row = _locked(db, message_id)
-        if row is not None and (row.status == "pending" or (row.status == "failed" and row.failure == "expired")):
+        if row is not None and row.status == "pending":
             row.status, row.failure, row.sent_at, row.telegram_message_id = "sent", None, datetime.now(UTC), external_id
             db.commit()
 
@@ -167,28 +177,40 @@ def fail_over(db, row) -> bool:
 
 
 def expire_stuck(owner_hash: str, now: datetime | None = None) -> int:
-    """Close every pending row of this owner older than ``STUCK_SECONDS`` (its bridge is not taking it) and re-queue
-    each on the next channel.  Rows are locked with SKIP LOCKED, so two bridges and the API calling at once never
-    close or fail over the same row twice."""
-    cutoff = (now or datetime.now(UTC)) - timedelta(seconds=STUCK_SECONDS)
+    """Close every pending row of this owner older than ``STUCK_SECONDS`` that no bridge claimed in the last
+    ``CLAIM_SECONDS``, but only when it is re-queued on another channel; a row with nowhere to go stays pending
+    (its bridge sends it when it returns, or the next sweep finds a channel).  Returns how many were closed.
+    Rows are locked with SKIP LOCKED, so two bridges and the API calling at once never close or fail over the
+    same row twice."""
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(seconds=STUCK_SECONDS)
+    lease = now - timedelta(seconds=CLAIM_SECONDS)
     with SessionLocal() as db:
         rows = db.scalars(select(AgentTelegramMessage).where(
             AgentTelegramMessage.owner_hash == owner_hash, AgentTelegramMessage.status == "pending",
-            AgentTelegramMessage.created_at < cutoff).order_by(AgentTelegramMessage.created_at)
+            AgentTelegramMessage.created_at < cutoff,
+            (AgentTelegramMessage.claimed_at.is_(None)) | (AgentTelegramMessage.claimed_at <= lease)).order_by(AgentTelegramMessage.created_at)
             .with_for_update(skip_locked=True)).all()
+        closed = 0
         for row in rows:
-            _close(db, row, "expired")
+            if fail_over(db, row):
+                row.status, row.failure = "failed", "expired"
+                closed += 1
         db.commit()
-        return len(rows)
+        return closed
 
 
 def acknowledge(owner_hash: str, channel: str, now: datetime | None = None) -> int:
-    """The owner wrote on this channel: its sent, not yet acknowledged rows are marked."""
+    """The owner wrote on this channel: its proactive rows sent in the last ``ACK_DAYS`` days and not yet
+    acknowledged are marked.  Replies and older history are left alone."""
+    now = now or datetime.now(UTC)
     with SessionLocal() as db:
         result = db.execute(update(AgentTelegramMessage).where(
             AgentTelegramMessage.owner_hash == owner_hash, AgentTelegramMessage.channel == channel,
-            AgentTelegramMessage.status == "sent", AgentTelegramMessage.acked_at.is_(None))
-            .values(acked_at=now or datetime.now(UTC)))
+            AgentTelegramMessage.status == "sent", AgentTelegramMessage.acked_at.is_(None),
+            AgentTelegramMessage.source != "reply",
+            AgentTelegramMessage.sent_at >= now - timedelta(days=ACK_DAYS))
+            .values(acked_at=now))
         db.commit()
         return int(result.rowcount or 0)
 

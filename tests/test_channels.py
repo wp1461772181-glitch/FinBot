@@ -53,10 +53,12 @@ def _rows(**where):
         return rows
 
 
-def _plant(channel="telegram", *, status="pending", created=NOW, group=None, source="notify", text="m", attempts=0):
+def _plant(channel="telegram", *, status="pending", created=NOW, group=None, source="notify", text="m", attempts=0,
+           failure=None, claimed=None, sent=None):
     with SessionLocal() as db:
         row = AgentTelegramMessage(owner_hash=OWNER_HASH, bot_id=_bot().id, source=source, text=text, status=status,
-                                   channel=channel, group_id=group, created_at=created, attempts=attempts)
+                                   channel=channel, group_id=group, created_at=created, attempts=attempts,
+                                   failure=failure, claimed_at=claimed, sent_at=sent)
         db.add(row)
         db.commit()
         return str(row.id)
@@ -318,21 +320,82 @@ def test_expire_stuck_from_two_sessions_at_once_adds_one_row(chan):
 
 
 def test_expire_stuck_leaves_other_owners_and_replies_alone(chan):
-    stray = AgentTelegramMessage(owner_hash=OTHER_HASH, source="notify", text="x", status="pending", channel="telegram",
+    _bind()
+    chan.update(LOGIN)
+    channels.set_prefs(OWNER_HASH, ["wechat", "telegram"], "first")
+    stray = AgentTelegramMessage(owner_hash=OTHER_HASH, source="notify", text="x", status="pending", channel="wechat",
                                  created_at=NOW)
     with SessionLocal() as db:
         db.add(stray)
         db.commit()
     _plant("telegram", status="sent", source="reply", created=NOW)
     assert channels.expire_stuck(OWNER_HASH, now=NOW + timedelta(hours=1)) == 0
-    assert channels.expire_stuck(OTHER_HASH, now=NOW + timedelta(hours=1)) == 1
+    assert _rows(owner_hash=OTHER_HASH)[0].status == "pending"
 
 
-def test_a_message_sent_while_it_was_being_expired_is_recorded_as_sent(chan):
-    row = _plant("telegram", created=NOW)
-    channels.expire_stuck(OWNER_HASH, now=NOW + timedelta(hours=1))
+def test_a_stuck_row_with_nowhere_to_go_stays_pending(chan):
+    _bind()
+    old = NOW - timedelta(minutes=10)
+    row = _plant("telegram", created=old)                       # default prefs: Telegram only
+    assert channels.expire_stuck(OWNER_HASH, now=NOW) == 0
+    assert (_rows(channel="telegram")[0].status, _rows(channel="telegram")[0].failure) == ("pending", None)
+    assert [m["id"] for m in channels.pending(OWNER_HASH, "telegram")] == [row]
+    # WeChat first, Telegram not available: the stuck wechat row stays too
+    channels.set_prefs(OWNER_HASH, ["wechat", "telegram"], "first")
+    chan.update(LOGIN)
+    wx_row = _plant("wechat", created=old)
+    with SessionLocal() as db:
+        db.query(AgentTelegramBind).delete()
+        db.commit()
+    assert channels.expire_stuck(OWNER_HASH, now=NOW) == 0
+    assert {str(r.id): r.status for r in _rows(channel="wechat")}[wx_row] == "pending"
+    # once Telegram is available again the next sweep fails it over
+    _bind()
+    assert channels.expire_stuck(OWNER_HASH, now=NOW) == 1
+    assert {str(r.id): r.status for r in _rows(channel="wechat")}[wx_row] == "failed"
+
+
+def test_a_claimed_row_is_not_expired_until_the_lease_runs_out(chan):
+    _bind()
+    chan.update(LOGIN)
+    channels.set_prefs(OWNER_HASH, ["wechat", "telegram"], "first")
+    now = NOW + timedelta(minutes=10)
+    fresh = _plant("wechat", created=NOW, claimed=now - timedelta(seconds=10))
+    assert channels.expire_stuck(OWNER_HASH, now=now) == 0
+    assert _rows(channel="wechat")[0].status == "pending"
+    with SessionLocal() as db:
+        db.get(AgentTelegramMessage, uuid.UUID(fresh)).claimed_at = now - timedelta(minutes=5)
+        db.commit()
+    assert channels.expire_stuck(OWNER_HASH, now=now) == 1
+    assert _rows(channel="wechat")[0].status == "failed"
+
+
+def test_pending_claims_the_rows_it_returns_and_reclaims_on_each_call(chan):
+    _bind()
+    _plant("telegram", created=NOW)
+    first, second = NOW + timedelta(seconds=5), NOW + timedelta(seconds=40)
+    assert len(channels.pending(OWNER_HASH, "telegram", now=first)) == 1
+    assert _rows()[0].claimed_at == first
+    assert len(tg.pending_messages(OWNER_HASH)) == 1           # the Telegram entry point claims too
+    channels.pending(OWNER_HASH, "telegram", now=second)
+    assert _rows()[0].claimed_at == second
+    assert channels.pending(OWNER_HASH, "wechat", now=second) == []
+
+
+def test_a_bridge_that_claimed_a_row_and_died_lets_it_expire(chan):
+    _bind()
+    chan.update(LOGIN)
+    channels.set_prefs(OWNER_HASH, ["wechat", "telegram"], "first")
+    _plant("wechat", created=NOW)
+    channels.pending(OWNER_HASH, "wechat", now=NOW + timedelta(seconds=400))
+    assert channels.expire_stuck(OWNER_HASH, now=NOW + timedelta(seconds=450)) == 0      # claimed 50 s ago
+    assert channels.expire_stuck(OWNER_HASH, now=NOW + timedelta(seconds=500)) == 1      # lease over
+
+
+def test_a_closed_row_cannot_be_marked_sent_even_if_it_was_expired(chan):
+    row = _plant("telegram", status="failed", failure="expired")
     channels.mark_sent(row, 9)
-    assert _rows(channel="telegram")[0].status == "sent"
+    assert (_rows(channel="telegram")[0].status, _rows(channel="telegram")[0].failure) == ("failed", "expired")
 
 
 def test_a_row_closed_for_failures_cannot_be_marked_sent_afterwards(chan):
@@ -376,10 +439,10 @@ def test_fail_over_goes_only_to_a_listed_and_available_channel(chan):
 # --- acknowledgement and the delivery list ---------------------------------------------------------------
 
 def test_acknowledge_marks_only_that_channel(chan):
-    sent_tg = _plant("telegram", status="sent")
-    sent_wx = _plant("wechat", status="sent")
-    pending_wx = _plant("wechat", status="pending")
     ack = NOW + timedelta(minutes=5)
+    sent_tg = _plant("telegram", status="sent", sent=NOW)
+    sent_wx = _plant("wechat", status="sent", sent=NOW)
+    pending_wx = _plant("wechat", status="pending")
     assert channels.acknowledge(OWNER_HASH, "wechat", now=ack) == 1
     assert channels.acknowledge(OWNER_HASH, "wechat", now=ack + timedelta(minutes=1)) == 0   # already acked
     by = {str(r.id): r for r in _rows()}
@@ -387,6 +450,17 @@ def test_acknowledge_marks_only_that_channel(chan):
     assert by[sent_tg].acked_at is None and by[pending_wx].acked_at is None
     assert channels.acknowledge(OWNER_HASH, "telegram", now=ack) == 1
     assert channels.acknowledge(OTHER_HASH, "telegram", now=ack) == 0
+
+
+def test_acknowledge_skips_replies_and_does_not_backfill_old_history(chan):
+    ack = NOW + timedelta(days=10)
+    old = _plant("telegram", status="sent", sent=NOW)                                  # 10 days old
+    reply = _plant("telegram", status="sent", source="reply", sent=ack - timedelta(minutes=1))
+    recent = _plant("telegram", status="sent", sent=ack - timedelta(days=6))
+    assert channels.acknowledge(OWNER_HASH, "telegram", now=ack) == 1
+    by = {str(r.id): r for r in _rows()}
+    assert by[recent].acked_at == ack
+    assert by[old].acked_at is None and by[reply].acked_at is None
 
 
 def test_deliveries_lists_proactive_rows_newest_first_without_replies(chan):
@@ -515,3 +589,17 @@ def test_endpoint_deliveries(chan, client):
     _plant("telegram", status="sent", source="reply", created=NOW)
     body = client.get("/agent-chat/channels/deliveries?limit=10", headers=H).json()
     assert [(i["channel"], i["text"]) for i in body["items"]] == [("wechat", "hello")]
+
+
+def test_a_stale_wechat_login_is_not_available(chan):
+    _bind()
+    bot = _bot()
+    chan.update(LOGIN)
+    with SessionLocal() as db:
+        assert channels.available(db, OWNER_HASH, "wechat", bot) is True
+        chan["stale_since"] = 1_700_000_000.0
+        assert channels.available(db, OWNER_HASH, "wechat", bot) is False
+        channels.set_prefs(OWNER_HASH, ["wechat", "telegram"], "first")
+        assert channels.targets(db, OWNER_HASH, bot) == ["telegram"]       # no five-minute wait on a dead login
+        chan.pop("stale_since")
+        assert channels.targets(db, OWNER_HASH, bot) == ["wechat"]

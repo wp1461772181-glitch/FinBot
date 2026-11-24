@@ -630,3 +630,14 @@ def test_a_failing_acknowledgement_does_not_stop_the_message(fake_channels):
 
     run(go())
     assert calls == ["英伟达财报怎么样"]
+
+
+def test_a_stale_login_is_recorded_in_the_state_file_and_cleared_by_the_next_poll(tmp_path, monkeypatch):
+    monkeypatch.setenv("WECHAT_STATE_PATH", str(tmp_path / "wx.json"))
+    state = _state()
+    bridge._mark_stale(state)
+    saved = wx.load_state()
+    assert isinstance(saved["stale_since"], float) and saved["owner_user_id"] == OWNER_ID
+    bridge._clear_stale(state)
+    wx.save_state(state)
+    assert "stale_since" not in wx.load_state()
