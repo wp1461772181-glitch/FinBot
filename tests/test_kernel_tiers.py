@@ -98,8 +98,21 @@ def test_system_prompt_ends_the_how_to_section_with_the_fast_tier_and_say_lines(
     assert prompt.FAST_TIER_LINE in prompt.SYSTEM
     how, _, rest = prompt.SYSTEM.partition("\n\n怎么说话")
     assert how.endswith(prompt.FAST_TIER_LINE + "\n" + prompt.SAY_LINE) and rest
+    assert prompt.SAY_LINE.endswith("切换到 high 档后，先用 plan 列出清单，再逐项去做；之后每次调用工具时在 item 里写上这是清单的第几项，勾由系统来打。")
 
 
 def run_direct(env):
     script(env, [step(text="好")])
     return run()
+
+
+def test_tier_event_only_when_the_tier_rises(env):
+    script(env, [step(calls=[call("c1", "escalate", {"depth": "high"})]), step(calls=[call("c2", "escalate", {"depth": "high"})]), step(text="好")])
+    _, events = run(context=make_context(reasoning_effort="high"))
+    assert [e for e in events if e["event"] == "tier"] == [{"event": "tier", "tier": "high"}]
+    script(env, [step(calls=[call("c3", "escalate", {"depth": "high"})]), step(text="好")])
+    _, events = run(context=make_context(reasoning_effort="low"))
+    assert not [e for e in events if e["event"] == "tier"]
+    script(env, [step(calls=[call("c4", "escalate", {"depth": "mid"})]), step(calls=[call("c5", "escalate", {"depth": "high"})]), step(text="好")])
+    _, events = run(context=make_context(reasoning_effort="high"))
+    assert [e["tier"] for e in events if e["event"] == "tier"] == ["mid", "high"]

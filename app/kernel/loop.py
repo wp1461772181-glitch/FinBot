@@ -119,10 +119,10 @@ async def _tool_step(run: _Run, message: dict) -> None:
     """The model asked for tools: drop the text it streamed, announce the request, run the calls."""
     if run.sent_text:
         await run.emit({"event": "answer_reset"})
-    narration = progress.step_narration(message["tool_calls"], message.get("content"))
-    if narration:
-        run.narration.append(narration)
-        await run.emit({"event": "narration", "text": narration})
+    sentence, item, system = progress.step_narration(message["tool_calls"], message.get("content"))
+    if sentence:
+        run.narration.append(sentence)
+        await run.emit({"event": "narration", "text": sentence, **({"item": item} if item else {}), **({"system": True} if system else {})})
     reasoning = {k: v for k, v in message.items() if k.startswith("reasoning_")}
     await run.emit({"event": "assistant_tool_request", "protocol": {"calls": message["tool_calls"], **reasoning}})
     run.messages.extend(await run_step_tools(run, message["tool_calls"]))
@@ -164,6 +164,8 @@ async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_aga
         if run.step_text:
             await run.emit({"event": "answer_reset"})
         await run.emit({"event": "delta", "text": cleaned})
+    if progress.close_checklist(run):
+        await run.emit({"event": "checklist", "items": [dict(entry) for entry in run.checklist]})
     return _result(run, cleaned, stop_reason)
 
 

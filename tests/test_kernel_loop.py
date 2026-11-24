@@ -105,7 +105,7 @@ def test_direct_answer_streams_and_returns(env):
 def test_tool_then_answer(env):
     fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="收入 100 [1]")])
     result, events = run()
-    assert kinds(events) == ["assistant_tool_request", "tool_start", "tool_result", "delta"]
+    assert kinds(events) == ["narration", "assistant_tool_request", "tool_start", "tool_result", "delta"]   # the kernel's plain sentence
     last = fake.calls[1]["messages"][-2:]
     assert [m["role"] for m in fake.calls[1]["messages"][-2:]] == ["assistant", "tool"]
     assert last[0]["tool_calls"][0]["id"] == "c1" and last[1]["tool_call_id"] == "c1"

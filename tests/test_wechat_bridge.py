@@ -58,7 +58,7 @@ def run(coro):
 def test_owner_message_is_answered_with_the_message_context_token():
     calls = []
 
-    async def ask(bot_id, text):
+    async def ask(bot_id, text, on_event=None):
         calls.append((bot_id, text))
         return "营收 **同比增长**。", [], "cid-1"
 
@@ -75,7 +75,7 @@ def test_owner_message_is_answered_with_the_message_context_token():
 
 
 def test_stranger_and_bot_messages_are_ignored():
-    async def ask(bot_id, text):
+    async def ask(bot_id, text, on_event=None):
         raise AssertionError("must not run a turn")
 
     async def go():
@@ -89,7 +89,7 @@ def test_stranger_and_bot_messages_are_ignored():
 
 
 def test_mention_routes_to_that_bot_and_names_it():
-    async def ask(bot_id, text):
+    async def ask(bot_id, text, on_event=None):
         assert (bot_id, text) == ("bot-2", "看下 AMD")
         return "好的。", [], None
 
@@ -103,7 +103,7 @@ def test_mention_routes_to_that_bot_and_names_it():
 
 
 def test_non_text_message_gets_one_notice_and_no_turn():
-    async def ask(bot_id, text):
+    async def ask(bot_id, text, on_event=None):
         raise AssertionError("must not run a turn")
 
     async def go():
@@ -116,7 +116,7 @@ def test_non_text_message_gets_one_notice_and_no_turn():
 
 
 def test_card_answer_points_to_the_page():
-    async def ask(bot_id, text):
+    async def ask(bot_id, text, on_event=None):
         return "要把这笔交易记下吗？", [{"request_id": "r1"}], "cid"
 
     async def go():
@@ -130,7 +130,7 @@ def test_card_answer_points_to_the_page():
 
 
 def test_backend_down_is_said_plainly():
-    async def ask(bot_id, text):
+    async def ask(bot_id, text, on_event=None):
         raise bridge.BackendUnavailable()
 
     async def go():
@@ -146,7 +146,7 @@ def test_busy_conversation_waits_then_answers(monkeypatch):
     monkeypatch.setattr(bridge, "BUSY_RETRY_DELAY", 0.01)
     attempts = []
 
-    async def ask(bot_id, text):
+    async def ask(bot_id, text, on_event=None):
         attempts.append(1)
         if len(attempts) < 3:
             raise bridge.ConversationBusy()
@@ -165,7 +165,7 @@ def test_busy_conversation_waits_then_answers(monkeypatch):
 def test_slow_turn_sends_one_note_before_the_answer(monkeypatch):
     monkeypatch.setattr(bridge, "SLOW_NOTICE_AFTER", 0.02)
 
-    async def ask(bot_id, text):
+    async def ask(bot_id, text, on_event=None):
         await asyncio.sleep(0.1)
         return "好了。", [], None
 
@@ -181,7 +181,7 @@ def test_slow_turn_sends_one_note_before_the_answer(monkeypatch):
 def test_turns_of_one_bot_run_one_at_a_time():
     running, peak = [], []
 
-    async def ask(bot_id, text):
+    async def ask(bot_id, text, on_event=None):
         running.append(1)
         peak.append(len(running))
         await asyncio.sleep(0.03)
@@ -200,7 +200,7 @@ def test_turns_of_one_bot_run_one_at_a_time():
 
 
 def test_long_answer_is_split_and_every_part_carries_the_token():
-    async def ask(bot_id, text):
+    async def ask(bot_id, text, on_event=None):
         return "\n\n".join(f"第{i}段：" + "字" * 600 for i in range(8)), [], None
 
     async def go():
@@ -215,7 +215,7 @@ def test_long_answer_is_split_and_every_part_carries_the_token():
 
 
 def test_rejected_send_is_logged_not_raised(capsys):
-    async def ask(bot_id, text):
+    async def ask(bot_id, text, on_event=None):
         return "答案", [], None
 
     async def go():
@@ -271,3 +271,192 @@ def test_headers_carry_the_bot_token_only_on_posts():
     post = wx.ilink_headers("tok")
     assert post["Authorization"] == "Bearer tok" and post["AuthorizationType"] == "ilink_bot_token"
     assert "Authorization" not in wx.ilink_headers("tok", post=False)
+
+
+# ---- kernel progress: the checklist once, one sentence at the 10 s mark ----
+
+def _kernel_ask(script, answer="答案。"):
+    """A fake stream: ``script`` is a list of (seconds to wait, kind, data) played through ``on_event``."""
+    async def ask(bot_id, text, on_event=None):
+        for wait, kind, data in script:
+            await asyncio.sleep(wait)
+            await on_event(kind, data)
+        return answer, [], None
+    return ask
+
+
+def _sent(ask, ilink=None):
+    async def go():
+        b, il, _ = _make(ask, ilink)
+        await b.handle(_message())
+        await _drain(b)
+        return [text for _, text, _ in il.sent]
+    return run(go())
+
+
+def _say(text):
+    return ("narration", {"text": text})
+
+
+def _plan(*texts):
+    return ("checklist", {"items": [{"text": t, "status": "pending"} for t in texts]})
+
+
+def test_fast_turn_sends_only_the_answer(monkeypatch):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 0.3)
+    script = [(0, *_say("先看财报")), (0.01, *_say("再看估值"))]
+    assert _sent(_kernel_ask(script)) == ["答案。"]
+
+
+def test_slow_turn_sends_the_newest_sentence_once_at_the_mark(monkeypatch):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 0.1)
+    monkeypatch.setattr(bridge, "SLOW_NOTICE_AFTER", 5)
+    script = [(0, *_say("第一句")), (0.02, *_say("第二句")), (0.3, *_say("第三句")), (0.05, *_say("第四句"))]
+    assert _sent(_kernel_ask(script)) == ["第二句", "答案。"]
+
+
+def test_the_mark_fires_without_a_new_event(monkeypatch):
+    # one sentence, then a long silence: the sentence goes out at the mark, not at the next event
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 0.05)
+    monkeypatch.setattr(bridge, "SLOW_NOTICE_AFTER", 5)
+    seen = []
+
+    async def ask(bot_id, text, on_event=None):
+        await on_event("narration", {"text": "只有这一句"})
+        await asyncio.sleep(0.2)
+        seen.extend(ilink.sent)
+        return "答案。", [], None
+
+    ilink = FakeIlink()
+    assert _sent(ask, ilink) == ["只有这一句", "答案。"]
+    assert [text for _, text, _ in seen] == ["只有这一句"]
+
+
+def test_first_sentence_after_the_mark_is_sent_when_it_arrives(monkeypatch):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 0.05)
+    monkeypatch.setattr(bridge, "SLOW_NOTICE_AFTER", 5)
+    script = [(0.15, *_say("迟到的一句")), (0.01, *_say("再一句"))]
+    assert _sent(_kernel_ask(script)) == ["迟到的一句", "答案。"]
+
+
+def test_checklist_is_sent_once(monkeypatch):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 5)
+    script = [(0, *_plan("财报", "估值")), (0, *_plan("财报", "估值", "同行")), (0, *_plan("财报"))]
+    assert _sent(_kernel_ask(script)) == ["我分几步来做：\n1. 财报\n2. 估值", "答案。"]
+
+
+def test_checklist_and_sentence_make_two_extra_messages(monkeypatch):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 0.05)
+    monkeypatch.setattr(bridge, "SLOW_NOTICE_AFTER", 0.02)
+    script = [(0, *_plan("财报")), (0, *_say("在看")), (0.15, *_say("还在看"))]
+    assert _sent(_kernel_ask(script)) == ["我分几步来做：\n1. 财报", "在看", "答案。"]
+
+
+def test_progress_send_failure_does_not_stop_the_answer(monkeypatch):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 5)
+
+    class Flaky(FakeIlink):
+        async def send_text(self, to_user, text, context_token=None):
+            if text.startswith("我分几步"):
+                raise RuntimeError("down")
+            return await super().send_text(to_user, text, context_token)
+
+    assert _sent(_kernel_ask([(0, *_plan("财报"))]), Flaky()) == ["答案。"]
+
+
+def test_clock_starts_when_the_stream_starts_not_while_queued(monkeypatch):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 0.15)
+    monkeypatch.setattr(bridge, "BUSY_RETRY_DELAY", 0.01)
+    monkeypatch.setattr(bridge, "SLOW_NOTICE_AFTER", 5)
+    calls = []
+
+    async def ask(bot_id, text, on_event=None):
+        calls.append(1)
+        if len(calls) < 6:
+            await asyncio.sleep(0.04)
+            raise bridge.ConversationBusy()
+        await on_event("narration", {"text": "排队后的一句"})
+        await asyncio.sleep(0.05)
+        return "答案。", [], None
+
+    assert _sent(ask) == [bridge.BUSY_WAITING_TEXT, "答案。"]
+
+
+def test_parse_turn_ignores_kernel_events():
+    plain = ('event: conversation\ndata: {"conversation_id": "c1"}\n\n'
+             'event: delta\ndata: {"text": "你好"}\n\n')
+    noisy = ('event: checklist\ndata: {"items": []}\n\n' + plain
+             + 'event: narration\ndata: {"text": "在看"}\n\n')
+    assert bridge.parse_turn(noisy) == bridge.parse_turn(plain)
+    assert bridge.parse_turn(plain)[0] == "你好"
+
+
+def test_ask_agent_hands_events_over_as_they_arrive_and_returns_the_same_turn():
+    chunks = [b'event: narration\ndata: {"text": "\xe5\x85\x88', b'\xe7\x9c\x8b"}\n\nevent: delta\ndata: {"text": "ok"}\n\n']
+    got = []
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        async def aiter_bytes(self):
+            for chunk in chunks:
+                yield chunk
+
+    class Stream:
+        async def __aenter__(self):
+            return Response()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class Http:
+        def stream(self, *args, **kwargs):
+            return Stream()
+
+    async def on_event(kind, data):
+        got.append((kind, data))
+
+    async def go():
+        return await bridge.ask_agent(Http(), "cred", "bot-1", "hi", on_event)
+
+    assert run(go())[0] == "ok"
+    assert got == [("narration", {"text": "先看"}), ("delta", {"text": "ok"})]
+
+
+def test_the_slow_note_takes_the_sentence_slot(monkeypatch):
+    monkeypatch.setattr(bridge, "SLOW_NOTICE_AFTER", 0.05)
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 0.1)
+    script = [(0.08, *_plan("财报")), (0, *_say("一句")), (0.1, *_say("又一句"))]
+    assert _sent(_kernel_ask(script)) == [bridge.SLOW_TEXT, "我分几步来做：\n1. 财报", "答案。"]
+
+
+def test_empty_checklist_items_are_dropped_before_numbering(monkeypatch):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 5)
+    script = [(0, "checklist", {"items": [{"text": "财报"}, {"text": "  "}, {"text": "估值"}]})]
+    assert _sent(_kernel_ask(script)) == ["我分几步来做：\n1. 财报\n2. 估值", "答案。"]
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_the_mark_timer_does_not_outlive_the_turn(monkeypatch, fails):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 0.05)
+    monkeypatch.setattr(bridge, "SLOW_NOTICE_AFTER", 5)
+
+    async def ask(bot_id, text, on_event=None):
+        await on_event("narration", {"text": "没发出去的一句"})
+        if fails:
+            raise RuntimeError("boom")
+        return "答案。", [], None
+
+    async def go():
+        b, il, _ = _make(ask)
+        await b.handle(_message())
+        await _drain(b)
+        done = len(il.sent)
+        await asyncio.sleep(0.15)
+        return done, len(il.sent)
+
+    done, later = run(go())
+    assert done == 1 and later == 1

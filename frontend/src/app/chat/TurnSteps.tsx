@@ -33,13 +33,25 @@ function Chip({ chip }: { chip: StepChip }) {
  * persona; styles/bots-signature.css picks them by data-archetype on the chat page), what the turn is doing, the seconds since it started.
  * The rest of the bar does not depend on what is in it.
  */
-function ThinkingSlot({ text, seconds }: { text: string; seconds: string }) {
+export function ThinkingSlot({ text, seconds }: { text: string; seconds: string }) {
   const { t } = useLocale();
   return <span data-slot="thinking-slot" className="inline-flex items-center gap-1.5 pr-1 text-caption text-muted-foreground">
     <span aria-hidden="true" data-slot="think-trace" className="think-trace"><i /><i /><i /></span>
     <span>{text}</span>
     <span className="tabular-nums">{seconds} {t("秒")}</span>
   </span>;
+}
+
+/** The clock a running bar counts its seconds by: the time now, redrawn every 200 ms while `running`. */
+export function useNow(running: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [running]);
+  return now;
 }
 
 /**
@@ -49,13 +61,7 @@ function ThinkingSlot({ text, seconds }: { text: string; seconds: string }) {
  */
 export function TurnSteps({ m, i, running, status }: { m: AgentChatMessage; i: number; running: boolean; status: string }) {
   const { t } = useLocale(), panel = usePanel();
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!running) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), TICK_MS);
-    return () => window.clearInterval(timer);
-  }, [running]);
+  const now = useNow(running);
   const model = barModel({ trace: m.trace, thinkingMs: m.thinking_ms, startedAt: m.started_at, running, now });
   const tools = useMemo(() => (m.trace?.length ? [] : legacyToolChips(m.tool_trace)), [m.trace, m.tool_trace]);
   const open = () => panel.showProcess(turnKey(m, i));

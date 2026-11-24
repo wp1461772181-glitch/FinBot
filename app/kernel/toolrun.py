@@ -19,6 +19,7 @@ from . import progress, tiers
 
 MAX_PARALLEL = 4
 TOOL_IDLE_SECONDS = 180
+SLOW_SECONDS = 10     # a step whose reads are still out after this long gets one plain sentence saying so
 RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts。只需改正其中 found 为 false 的输入，其余保持不变；不要把数值改写成更长的小数去试。closest_in_source 与 bindable_values 都只是不完整的候选。"
 # Results of these tools are the model's memory or a computation, not saved evidence: they are never numbered as rows.
 _UNNUMBERED = {"recall_conversations", "read_past_conversation"}
@@ -34,6 +35,7 @@ class _Call:
     args: dict | None
     result: dict | None = None      # set once known; a call with a result needs no further work
     raw: dict | None = None         # a read's outcome before numbering
+    started: bool = False           # a read that holds a place under ``MAX_PARALLEL`` (not one still waiting for it)
 
 
 def _number_evidence(run, name: str, outcome: dict) -> dict:
@@ -111,6 +113,7 @@ async def _fetch(run, gate: asyncio.Semaphore, item: _Call) -> None:
     """One read, run apart from its siblings: whatever goes wrong becomes this call's own ``tool_failed``."""
     from ..knowledge.query_understanding import use_expander
     async with gate:
+        item.started = True
         try:
             async with progress_watchdog(TOOL_IDLE_SECONDS):
                 with use_expander(getattr(run.context, "query_expander", None)):
@@ -155,15 +158,36 @@ def _guard(settle, run, item: _Call) -> None:
         item.result = tools.error("tool_failed")
 
 
+async def _fetch_all(run, reads: list[_Call]) -> None:
+    """Run the reads at the same time; if some are still out after ``SLOW_SECONDS``, say what is awaited (once) and keep waiting."""
+    gate = asyncio.Semaphore(MAX_PARALLEL)
+    tasks = [asyncio.ensure_future(_fetch(run, gate, item)) for item in reads]
+    try:
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=SLOW_SECONDS)
+            if pending:
+                sentence = progress.slow_sentence([item.name for item, task in zip(reads, tasks) if task in pending and item.started])
+                if sentence:
+                    run.narration.append(sentence)
+                    await run.emit({"event": "narration", "text": sentence, "system": True})
+                await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            task.cancel()
+
+
 async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     """Execute one step's tool calls; return one tool message per call, in call order."""
     from ..agent_chat_stream import bounded_tool_result
     items = []
+    numbers = []
     for call in calls:
         name = (call.get("function") or {}).get("name") or ""
         args = _parse_arguments(call.get("function") or {})
         if args is not None:
-            args = progress.take_say(args)[1]     # the sentence was shown by the loop; the tool never sees it
+            _, number, args = progress.take_progress(args)     # the sentence was shown by the loop; the tool never sees say or item
+            if number:
+                numbers.append(number)
         items.append(_Call(call["id"], name, args))
         await run.emit({"event": "tool_start", "call_id": call["id"], "name": name, "arguments": args or {}})
         run.audit["tool_calls"] += 1
@@ -185,12 +209,18 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             reads.append(item)
     # The kernel's own calls take no time and read nothing: settle them first, so a checklist is on screen while the
     # reads are still out, not after the slowest of them.
+    planned = False
     for item in own:
+        tier = run.tier
         _guard(_settle_serial, run, item)
         if item.name == progress.PLAN and item.result.get("ok"):
-            await run.emit({"event": "checklist", "items": run.checklist})
-    gate = asyncio.Semaphore(MAX_PARALLEL)
-    await asyncio.gather(*(_fetch(run, gate, item) for item in reads))
+            planned = True
+        if item.name == tiers.ESCALATE and run.tier != tier:
+            await run.emit({"event": "tier", "tier": run.tier})
+    # One checklist event per step: after a plan and the ticks the step's labels ask for, before the reads.
+    if progress.mark_items(run, numbers) or planned:
+        await run.emit({"event": "checklist", "items": [dict(entry) for entry in run.checklist]})
+    await _fetch_all(run, reads)
     for item in reads:
         if item.result is None:
             _guard(_settle_read, run, item)

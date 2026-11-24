@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from ..agent_chat_identity import owner_credential_matches
 
-SAY_LINE = "- 每次调用工具时，在 say 里用一句话说明你发现了什么、接下来做什么，用户会实时看到这句话。切换到 high 档后，先用 plan 列出清单，再逐项去做。"
+SAY_LINE = "- 每次调用工具时，在 say 里用一句话说明你发现了什么、接下来做什么，用户会实时看到这句话。切换到 high 档后，先用 plan 列出清单，再逐项去做；之后每次调用工具时在 item 里写上这是清单的第几项，勾由系统来打。"
 FAST_TIER_LINE = ("- 你现在处于快速档。简单的问题直接回答，或者查一下就答。问题需要多步推理、比较权衡、给出判断，或者你拿不准时，"
                   "先调用 escalate 切换到更深的档位再继续。用户说「想深一点」「仔细分析」时用 high；用户说「快点」「简单说」时不要升档。")
 SYSTEM = f"""你是 FinBot，用户的金融助手。说话像一个可靠的同事：结论先说，不绕，不堆免责声明。

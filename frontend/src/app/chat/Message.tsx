@@ -17,6 +17,8 @@ import { AnswerBody } from "./AnswerBody";
 import { DoneLine } from "./DoneLine";
 import { TaskPostHead } from "./TaskPostHead";
 import { TurnSteps } from "./TurnSteps";
+import { TurnProgress } from "./TurnProgress";
+import { progressModel } from "../../turn-progress.mjs";
 import { useChat } from "./ChatSessionProvider";
 import { usePanel } from "./panel-context";
 import type { CopyState } from "./use-copy";
@@ -65,6 +67,7 @@ export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex,
   const copiedHere = copy.copied === i;
   const sourceCount = roundSources(m).length;
   const lineState = doneLineState(m, { streaming, ended });
+  const kernelProgress = progressModel({ narration: m.narration, checklist: m.checklist, tier: m.tier, toolTrace: m.tool_trace, running: last && c.state === "sending" });
   return <article {...common} data-tapped={tapped || undefined} onClick={() => setTapped(x => !x)} className="group/msg flex min-w-0 flex-col gap-2 rounded-md">
     {/* 1. head: small avatar, bot name, time */}
     <header className="flex items-center gap-2 text-caption text-muted-foreground">
@@ -73,7 +76,9 @@ export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex,
       {time && <time className="tabular-nums">{time}</time>}
     </header>
     {/* 2. process: the bar of steps, one line */}
-    <div onClick={(event) => event.stopPropagation()}><TurnSteps m={m} i={i} running={last && c.state === "sending"} status={c.state === "sending" ? c.status : ""} /></div>
+    <div onClick={(event) => event.stopPropagation()}>{kernelProgress
+      ? <TurnProgress m={m} model={kernelProgress} running={last && c.state === "sending"} status={c.state === "sending" ? c.status : ""} />
+      : <TurnSteps m={m} i={i} running={last && c.state === "sending"} status={c.state === "sending" ? c.status : ""} />}</div>
     {/* 3. text (4. public marks ride inside it as links) */}
     {m.content && <AnswerBody m={m} i={i} streaming={streaming} draftBox={draftBox} />}
     {/* 5. confirmation card: folds to a line once answered or past its time */}

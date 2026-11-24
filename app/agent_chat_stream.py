@@ -15,11 +15,14 @@ from .agent_chat_store import create_conversation,verify_conversation,append_mes
 from .agent_chat_store import conversation_context
 from . import agent_context as layers
 from .agent_workflow.fp_flags import flag as fp_flag
+from .kernel.progress import PLAN
+from .kernel.tiers import ESCALATE
 router=APIRouter(prefix="/agent-chat",tags=["agent-chat-stream"])
 LOCKS={}
 # Event-stream heartbeat: a comment frame (no event name) while a turn is quiet, so no read sits idle for long.
 HEARTBEAT_SECONDS=15
 HEARTBEAT_FRAME=": hb\n\n"
+KERNEL_OWN_TOOLS=frozenset({PLAN,ESCALATE})  # the kernel's own tools, kept out of the stored tool traces
 # Strong references to the detached cancelled-turn writes, so they are not collected before they finish.
 _BACKGROUND: set=set()
 # FP13: a turn sent with detach=true runs as a task that outlives its response; TURNS holds the running ones by conversation.
@@ -484,9 +487,14 @@ def _model_label(resolved,chosen):
  the browser sent (resolved is None) is labelled as given."""
  if resolved is None:return f"{chosen.provider}/{chosen.model}"
  return f"{resolved['name']}（{chosen.provider}/{chosen.model}）"
-async def _record_cancelled(cid,turn,owner,text_out,citation_sidecar):
+def _unfinished_tool_calls(citation_sidecar,progress):
+ # What a cancelled or failed turn stores: its citations (when any) and the kernel's progress (when it emitted any).
+ stored={"citations":citation_sidecar} if citation_sidecar else {}
+ stored.update(progress)
+ return stored or None
+async def _record_cancelled(cid,turn,owner,text_out,citation_sidecar,progress=None):
  # The three writes of a cancelled turn, in order. Each is isolated, so one failure does not skip the rest.
- try: await append_message(cid,turn,"assistant",text_out,status="cancelled",tool_calls={"citations":citation_sidecar} if citation_sidecar else None)
+ try: await append_message(cid,turn,"assistant",text_out,status="cancelled",tool_calls=_unfinished_tool_calls(citation_sidecar,progress or {}))
  except Exception: log.exception("cancelled turn: appending the partial answer failed (cid=%s turn=%s)",cid,turn)
  try: await finish_conversation(cid,"cancelled")
  except Exception: log.exception("cancelled turn: finishing the conversation failed (cid=%s)",cid)
@@ -539,7 +547,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
   if LOCKS.get(cid) is lock:LOCKS.pop(cid,None)
  async def events():
   # The thinking time is the wait from the request to the answer being ready.
-  started=time.monotonic();text_out=""; citation_sidecar=[]; terminal=False; genuine_calls=set(); tool_traces=[]
+  started=time.monotonic();text_out=""; citation_sidecar=[]; terminal=False; genuine_calls=set(); tool_traces=[]; progress={}; settled=False
   pump_task=getter=None
   try:
    yield frame("conversation",{"conversation_id":cid,"turn_id":turn})
@@ -608,15 +616,19 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      content=json.dumps(event["result"],ensure_ascii=False,separators=(",",":"))
      if event["call_id"] in genuine_calls:
       await append_message(cid,turn,"tool",content,tool_call_id=event["call_id"])
-     tool_traces.append({"call_id":event["call_id"],"name":event["name"],
-                         "status":"complete" if event["result"].get("ok") else "failed",
-                         "result":{"ok":event["result"].get("ok"),"error_code":event["result"].get("error_code"),
-                                   "count":len(event["result"].get("data") or []) if isinstance(event["result"].get("data"),list) else None,
-                                   "job_status":event["result"].get("job_status")}})
+     if event["name"] not in KERNEL_OWN_TOOLS:  # the kernel's own tools are not lookups: no stored trace, the frame still goes out
+      tool_traces.append({"call_id":event["call_id"],"name":event["name"],
+                          "status":"complete" if event["result"].get("ok") else "failed",
+                          "result":{"ok":event["result"].get("ok"),"error_code":event["result"].get("error_code"),
+                                    "count":len(event["result"].get("data") or []) if isinstance(event["result"].get("data"),list) else None,
+                                    "job_status":event["result"].get("job_status")}})
      yield frame("tool_result",{key:event[key] for key in ("call_id","name","result")})
     elif kind=="tool_start":
      yield frame("tool_start",{key:event[key] for key in ("call_id","name","arguments")})
-    elif kind in("narration","checklist"):
+    elif kind in("narration","checklist","tier"):
+     # What passes through is kept for a turn that ends without a final protocol (cancelled, failed).
+     if kind=="narration":progress.setdefault("narration",[]).append(event["text"])
+     else:progress[kind]=event["items"] if kind=="checklist" else event["tier"]
      yield frame(kind,{key:value for key,value in event.items() if key!="event"})
     elif kind=="client_action":
      yield frame("client_action",{key:value for key,value in event.items() if key!="event"})
@@ -654,6 +666,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      if event.get("reason") in {"retrieval_unavailable","zero_evidence","web_page_excerpt_unavailable","missing_source_coverage","publisher_date_unavailable"} or str(event.get("reason","")).startswith(("requested_","weak_")):
       await asyncio.to_thread(_record_low_confidence,payload.message,cid,turn,owner_hash(x_chat_session),event["reason"])
      await append_message(cid,turn,"assistant",text_out,tool_calls=protocol,status="failed" if event.get("status")=="failed" else "complete")
+     settled=True
      await finish_conversation(cid,"active")
      if bot:
       # Briefs that waited while this turn was unfinished go into the line now, after it.
@@ -676,8 +689,11 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
      yield frame("done",{"conversation_id":cid,"turn_id":turn,"status":event.get("status","complete"),"reason":event.get("reason"),"thinking_ms":thinking_ms,**v2_fields})
    if not terminal:raise HTTPException(502,"workflow_incomplete")
   except asyncio.CancelledError:
+   # The answer is already stored: a client that hangs up at the done frame cancelled nothing, and a second, "cancelled" copy of
+   # the answer would tell the next turn that this one never finished.
+   if settled:raise
    # The writes run in their own task: this one is being cancelled, and its awaits would be cancelled again (R-5 probe).
-   task=asyncio.create_task(_record_cancelled(cid,turn,owner_hash(x_chat_session),text_out,citation_sidecar))
+   task=asyncio.create_task(_record_cancelled(cid,turn,owner_hash(x_chat_session),text_out,citation_sidecar,*([progress] if progress else [])))
    _BACKGROUND.add(task); task.add_done_callback(_BACKGROUND.discard)
    raise
   except Exception as exc:
@@ -686,7 +702,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
     # Nothing was written for the user: say what happened (and keep it in the history), not a blank bubble.
     text_out=_failure_notice(exc)
     yield frame("delta",{"text":text_out})
-   await append_message(cid,turn,"assistant",text_out,status="failed",tool_calls={"citations":citation_sidecar} if citation_sidecar else None)
+   await append_message(cid,turn,"assistant",text_out,status="failed",tool_calls=_unfinished_tool_calls(citation_sidecar,progress))
    await finish_conversation(cid,"failed")
    await mark_terminal_status(owner_hash(x_chat_session),cid,"failed",text_out)
    code=exc.detail if isinstance(exc,HTTPException) else "chat_failed"
@@ -803,7 +819,7 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
     # A call with no stored result was not necessarily a failure: proposals and cards answer through
     # the turn's clarification instead.  "submitted" says only that no tool result was recorded.
     traces.extend({"call_id":call.get("id"),"name":call.get("function",{}).get("name","tool"),"arguments":call.get("function",{}).get("arguments"),"status":"submitted"}
-                 for call in calls if call.get("id") not in known)
+                 for call in calls if call.get("id") not in known and call.get("function",{}).get("name") not in KERNEL_OWN_TOOLS)
   elif row.get("role")=="tool":
    trace_list=traces_by_turn.get(row["turn_id"],[])
    try:result=json.loads(row["content"])
