@@ -28,6 +28,9 @@ SOFT_SECONDS = 180
 IDLE_SECONDS = 300
 TOOL_IDLE_SECONDS = 180
 RETRY_WAIT_SECONDS = 1
+# Mirrors the old turn's RETRYABLE_PROVIDER list minus provider_protocol_too_large (resending the same request cannot cure it).
+RETRYABLE_DETAILS = frozenset({"provider_incomplete_stream", "provider_incomplete_response", "provider_timeout",
+                               "provider_network_error", "provider_error", "provider_incompatible_response"})
 RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts。只需改正其中 found 为 false 的输入，其余保持不变；不要把数值改写成更长的小数去试。closest_in_source 与 bindable_values 都只是不完整的候选。"
 EMPTY_NOTE = "系统事实：上一步没有给出回答。请现在直接回答用户，不要再调用工具。"
 EMPTY_ANSWER = "这次没能生成回答，请再发一次。"
@@ -97,7 +100,8 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
                 await run.emit({"event": "answer_reset"})
                 run.sent_text = False
                 run.step_text = ""
-            if attempt or not (isinstance(failure, provider.ProviderFailure) and failure.retryable):
+            retryable = (isinstance(failure, provider.ProviderFailure) and failure.retryable) or getattr(failure, "detail", None) in RETRYABLE_DETAILS
+            if attempt or not retryable:
                 raise
             await asyncio.sleep(RETRY_WAIT_SECONDS)
             continue

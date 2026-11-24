@@ -466,3 +466,28 @@ def test_non_string_stream_pieces_are_ignored(env):
     env.monkeypatch.setattr(provider, "stream_decision", Odd([step(text="好")]))
     result, events = run()
     assert result["answer"] == "好" and streamed_after_last_reset(events) == "好"
+
+
+def test_http_exception_provider_timeout_is_retried_once(env):
+    from fastapi import HTTPException
+    env.monkeypatch.setattr(loop, "RETRY_WAIT_SECONDS", 0)
+    fake = script(env, [HTTPException(504, "provider_timeout"), step(text="好")])
+    result, _ = run()
+    assert result["status"] == "succeeded" and len(fake.calls) == 2
+    fake = script(env, [HTTPException(504, "provider_timeout"), HTTPException(504, "provider_timeout")])
+    with pytest.raises(HTTPException):
+        run()
+    assert len(fake.calls) == 2
+
+
+def test_too_large_and_unlisted_failures_are_not_retried(env):
+    from fastapi import HTTPException
+    env.monkeypatch.setattr(loop, "RETRY_WAIT_SECONDS", 0)
+    fake = script(env, [HTTPException(413, "provider_protocol_too_large"), step(text="好")])
+    with pytest.raises(HTTPException):
+        run()
+    assert len(fake.calls) == 1
+    fake = script(env, [provider.ProviderFailure("bad", stage="decision", retryable=False), step(text="好")])
+    with pytest.raises(provider.ProviderFailure):
+        run()
+    assert len(fake.calls) == 1
