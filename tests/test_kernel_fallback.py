@@ -119,10 +119,10 @@ def test_fallback_for_ignores_an_entry_that_left_the_catalog(two_models):
 
 def test_primary_failure_hands_over_to_the_backup(backup):
     two = [call("c1", "query_financials", {"symbol": "AAPL"}), call("c2", "query_financials", {"symbol": "MSFT"})]
-    fake = backup.scripted([with_reasoning(step(calls=two)), timeout(), timeout()], [step(pieces=["收入", "100"], text="收入100")])
+    fake = backup.scripted([with_reasoning(step(calls=two)), timeout()], [step(pieces=["收入", "100"], text="收入100")])
     result, events = run_turn()
     assert len(backup.invoked) == 2                          # each tool ran once
-    assert [c["model"] for c in fake.calls] == ["m", "m", "m", BACKUP["model"]]
+    assert [c["model"] for c in fake.calls] == ["m", "m", BACKUP["model"]]
     handed = fake.on(BACKUP["model"])[0]["messages"]
     assert [m["role"] for m in handed[-3:]] == ["assistant", "tool", "tool"]
     assert handed[-3]["tool_calls"] == two and not any(k.startswith("reasoning_") for m in handed for k in m)
@@ -140,7 +140,7 @@ def test_primary_failure_hands_over_to_the_backup(backup):
 
 
 def test_backup_is_called_with_its_own_provider_key_and_base_url(backup):
-    fake = backup.scripted([timeout(), timeout()], [step(text="好")])
+    fake = backup.scripted([timeout()], [step(text="好")])
     run_turn(make_context(reasoning_effort="high"))
     first, last = fake.calls[0], fake.calls[-1]
     assert (first["provider"], first["key"], first["base_url"]) == ("anthropic", "k", None)
@@ -175,7 +175,7 @@ def test_a_lookup_that_breaks_fails_as_today(backup):
 
 
 def test_backup_failing_too_fails_the_turn(backup):
-    ours = Script([timeout(), timeout()], [timeout(), timeout()])
+    ours = Script([timeout()], [timeout(), timeout()])
     backup.monkeypatch.setattr(provider, "stream_decision", ours)
     audits = []
     original = loop._Run
@@ -187,12 +187,12 @@ def test_backup_failing_too_fails_the_turn(backup):
     backup.monkeypatch.setattr(loop, "_Run", spy)
     with pytest.raises(provider.ProviderFailure) as raised:
         run_turn()
-    assert raised.value.detail == "provider_timeout" and len(ours.calls) == 4         # each model: its call and its one retry
+    assert raised.value.detail == "provider_timeout" and len(ours.calls) == 3         # the primary once (a timeout switches at once), the backup and its one retry
     assert audits[0].audit["fallback"] == {"from": "anthropic/m", "to": "reserve", "reason": "provider_timeout", "failed": True}
 
 
 def test_next_turn_starts_on_the_primary(backup):
-    fake = backup.scripted([timeout(), timeout(), step(text="主模型回答")], [step(text="备用回答")])
+    fake = backup.scripted([timeout(), step(text="主模型回答")], [step(text="备用回答")])
     first, _ = run_turn()
     second, events = run_turn()
     assert first["answer"].endswith(LABEL) and second["answer"] == "主模型回答"
@@ -201,9 +201,9 @@ def test_next_turn_starts_on_the_primary(backup):
 
 
 def test_the_backup_stays_for_the_rest_of_the_turn(backup):
-    fake = backup.scripted([timeout(), timeout()], [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="完")])
+    fake = backup.scripted([timeout()], [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="完")])
     result, _ = run_turn()
-    assert [c["model"] for c in fake.calls[2:]] == [BACKUP["model"], BACKUP["model"]] and result["answer"] == "完" + LABEL
+    assert [c["model"] for c in fake.calls[1:]] == [BACKUP["model"], BACKUP["model"]] and result["answer"] == "完" + LABEL
 
 
 def test_cancellation_is_not_a_failure(backup):
@@ -224,13 +224,13 @@ def test_partial_text_of_the_failed_step_is_reset_not_repeated(backup):
     cut = Cut([], [step(text="整句")])
     backup.monkeypatch.setattr(provider, "stream_decision", cut)
     result, events = run_turn()
-    assert kinds(events).count("answer_reset") == 2          # one per failed attempt
+    assert kinds(events).count("answer_reset") == 1
     tail = events[[i for i, e in enumerate(events) if e["event"] == "answer_reset"][-1] + 1:]
     assert "".join(e["text"] for e in tail if e["event"] == "delta") == result["answer"] == "整句" + LABEL
 
 
 def test_label_is_part_of_the_stored_answer(backup):
-    backup.scripted([timeout(), timeout()], [step(pieces=["看", "[9]"], text="看[9]")])    # a marker with no source is cleaned away
+    backup.scripted([timeout()], [step(pieces=["看", "[9]"], text="看[9]")])    # a marker with no source is cleaned away
     result, events = run_turn()
     after = events[[i for i, e in enumerate(events) if e["event"] == "answer_reset"][-1] + 1:] if "answer_reset" in kinds(events) else events
     assert "".join(e["text"] for e in after if e["event"] == "delta") == result["answer"]
@@ -239,14 +239,14 @@ def test_label_is_part_of_the_stored_answer(backup):
 
 
 def test_label_is_added_once_when_the_answer_streamed_clean(backup):
-    backup.scripted([timeout(), timeout()], [step(pieces=["好"], text="好")])
+    backup.scripted([timeout()], [step(pieces=["好"], text="好")])
     result, events = run_turn()
     assert [e["text"] for e in events if e["event"] == "delta"] == ["好", LABEL] and result["answer"] == "好" + LABEL
 
 
 def test_post_press_report_is_not_labelled(cards, backup):
     backup.monkeypatch.setattr(loop, "RETRY_WAIT_SECONDS", 0)
-    fake = Script([timeout(), timeout()], [timeout(), timeout()])
+    fake = Script([timeout()], [timeout(), timeout()])
     backup.monkeypatch.setattr(provider, "stream_decision", fake)
     card = pending_card(cards)
     result, events = turn(f"confirm:{TOKEN}", pressed(card))
@@ -261,7 +261,7 @@ def test_signed_anthropic_thinking_is_dropped_but_the_calls_and_text_stay(backup
               {"type": "tool_use", "id": "c1", "name": "query_financials", "input": {"symbol": "AAPL"}},
               {"type": "tool_use", "id": "c2", "name": "query_financials", "input": {"symbol": "MSFT"}}]
     first = {**step(text="我先查一下", calls=calls), "extra": {"_anthropic_content": blocks, "reasoning_content": "r"}}
-    fake = backup.scripted([first, timeout(), timeout()], [step(text="好")])
+    fake = backup.scripted([first, timeout()], [step(text="好")])
     result, _ = run_turn()
     assert any("_anthropic_content" in m for m in fake.on("m")[1]["messages"])
     handed = fake.on(BACKUP["model"])[0]["messages"]
@@ -274,7 +274,7 @@ def test_signed_anthropic_thinking_is_dropped_but_the_calls_and_text_stay(backup
 
 
 def test_a_card_proposed_after_the_switch_is_minted_and_the_answer_is_labelled(backup, fake_consent):
-    backup.scripted([timeout(), timeout()], [step(calls=[act_call("c1", "forecast", {"symbol": "AAPL"})]), step(text="请核对卡片")])
+    backup.scripted([timeout()], [step(calls=[act_call("c1", "forecast", {"symbol": "AAPL"})]), step(text="请核对卡片")])
     result, events = run_turn(ctx())
     assert len(fake_consent.proposed) == 1 and result["status"] == "waiting_for_input" and result["pending_request"]["id"] == "card-1"
     assert result["answer"] == "请核对卡片" + LABEL and {"event": "delta", "text": LABEL} in events
@@ -282,7 +282,7 @@ def test_a_card_proposed_after_the_switch_is_minted_and_the_answer_is_labelled(b
 
 def test_the_closing_call_after_the_step_cap_can_be_the_backups(backup):
     tools = [step(calls=[call(f"c{i}", "query_financials", {"symbol": "AAPL"})]) for i in range(loop.MAX_STEPS)]
-    fake = backup.scripted([*tools, timeout(), timeout()], [step(text="只能这样")])
+    fake = backup.scripted([*tools, timeout()], [step(text="只能这样")])
     result, events = run_turn()
     assert result["audit"]["stop_reason"] == "step_cap" and result["answer"] == "只能这样" + LABEL
     assert result["answer"].count("这条由备用模型") == 1 and [e["text"] for e in events if e["event"] == "delta"].count(LABEL) == 1
@@ -290,7 +290,7 @@ def test_the_closing_call_after_the_step_cap_can_be_the_backups(backup):
 
 
 def test_a_successful_post_press_turn_answered_by_the_backup_is_labelled(cards, backup):
-    backup.scripted([timeout(), timeout()], [step(text="预测已提交")])
+    backup.scripted([timeout()], [step(text="预测已提交")])
     card = pending_card(cards)
     result, events = turn(f"confirm:{TOKEN}", pressed(card))
     assert len(cards.costly) == 1 and result["status"] == "succeeded" and result["answer"] == "预测已提交" + LABEL
@@ -299,21 +299,21 @@ def test_a_successful_post_press_turn_answered_by_the_backup_is_labelled(cards, 
 
 
 def test_fallback_model_is_only_set_when_the_label_was_added(cards, backup):
-    backup.scripted([timeout(), timeout()], [timeout(), timeout()])
+    backup.scripted([timeout()], [timeout(), timeout()])
     result, _ = turn(f"confirm:{TOKEN}", pressed(pending_card(cards)))
     assert result["audit"]["report"] == "fallback" and "fallback_model" not in result["final_protocol"]
 
 
 def test_a_broken_switch_leaves_the_providers_failure_as_the_turns_error(backup):
     backup.monkeypatch.setattr(loop.roles, "fallback_for", lambda owner_hash: {"provider": "x"})   # incomplete settings
-    fake = backup.scripted([timeout(), timeout()])
+    fake = backup.scripted([timeout()])
     with pytest.raises(provider.ProviderFailure) as raised:
         run_turn()
-    assert raised.value.detail == "provider_timeout" and len(fake.calls) == 2
+    assert raised.value.detail == "provider_timeout" and len(fake.calls) == 1
 
 
 def test_a_narration_that_cannot_be_sent_leaves_the_providers_failure_as_the_turns_error(backup):
-    fake = backup.scripted([timeout(), timeout()], [step(text="不该到这里")])
+    fake = backup.scripted([timeout()], [step(text="不该到这里")])
 
     async def emit(event):
         if event.get("system"):
@@ -323,3 +323,59 @@ def test_a_narration_that_cannot_be_sent_leaves_the_providers_failure_as_the_tur
     with pytest.raises(provider.ProviderFailure) as raised:
         asyncio.run(loop.run_turn("问题", make_context(), emit, history, {}))
     assert raised.value.detail == "provider_timeout" and fake.on(BACKUP["model"]) == []
+
+
+# --- a hung primary reaches the backup ---------------------------------------------------------------------------
+
+def test_a_timeout_switches_at_once_without_retrying_the_primary(backup):
+    marks = []
+    backup.monkeypatch.setattr(loop, "mark_progress", lambda: marks.append(1))
+    fake = backup.scripted([timeout()], [step(text="好")])
+    result, _ = run_turn()
+    assert [c["model"] for c in fake.calls] == ["m", BACKUP["model"]]          # the primary exactly once
+    assert result["answer"] == "好" + LABEL and marks == [1]                    # a fresh idle budget at the switch
+
+
+def test_other_retryable_failures_still_get_their_retry_first(backup):
+    other = provider.ProviderFailure("provider_network_error", stage="decision", retryable=True)
+    fake = backup.scripted([other, other], [step(text="好")])
+    run_turn()
+    assert [c["model"] for c in fake.calls] == ["m", "m", BACKUP["model"]]
+
+
+def test_without_a_backup_a_timeout_is_retried_once(backup):
+    backup.monkeypatch.setattr(loop.roles, "fallback_for", lambda owner_hash: None)
+    fake = backup.scripted([timeout(), step(text="第二次好了")])
+    result, _ = run_turn()
+    assert [c["model"] for c in fake.calls] == ["m", "m"] and result["answer"] == "第二次好了"
+
+
+def test_the_switch_and_the_backup_failing_too_are_logged_without_secrets(backup, caplog):
+    backup.scripted([timeout()], [timeout(), timeout()])
+    with caplog.at_level("WARNING", logger="app.kernel.loop"):
+        with pytest.raises(provider.ProviderFailure):
+            run_turn()
+    lines = [r.getMessage() for r in caplog.records if r.name == "app.kernel.loop"]
+    assert any("switch" in line and "reserve" in line and "provider_timeout" in line for line in lines)
+    assert any("failed too" in line and "reserve" in line for line in lines)
+    assert not any(BACKUP["api_key"] in line or "backup.example" in line or "问题" in line for line in lines)
+
+
+def test_the_resolver_of_roles_has_no_default_for_the_backup(two_models):
+    with pytest.raises(roles.RoleError, match="role_has_no_default"):
+        roles.resolve_with_source(OWNER_HASH, "fallback")
+    with pytest.raises(roles.RoleError, match="role_has_no_default"):
+        roles.resolve(OWNER_HASH, "fallback")
+    assert roles.resolve_with_source(OWNER_HASH, "earnings")[1]["source"] == "server_default"
+
+
+def test_the_label_of_an_earlier_answer_is_not_sent_back_as_the_assistants_words():
+    from app.kernel import prompt
+    history = [{"role": "user", "content": "一"}, {"role": "assistant", "content": "答案一" + LABEL},
+               {"role": "user", "content": "二"}, {"role": "assistant", "content": "我们可以用备用模型「x」回答。（这条由备用模型「x」回答。）后面还有"},
+               {"role": "assistant", "content": "没有标签的回答"}]
+    sent = prompt.build_messages("三", make_context(), history)
+    assert [m["content"] for m in sent if m["role"] == "assistant"] == [
+        "答案一", "我们可以用备用模型「x」回答。（这条由备用模型「x」回答。）后面还有", "没有标签的回答"]
+    assert history[1]["content"].endswith(LABEL)                     # the caller's list is not changed
+    assert prompt.build_messages("三", make_context(), history) == sent       # the same every turn

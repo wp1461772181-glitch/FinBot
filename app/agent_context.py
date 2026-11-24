@@ -338,7 +338,22 @@ def turn_tools(group: list[dict]) -> tuple[str, ...]:
 ANCHOR_GRID = 64               # sequence numbers per cell of the grid the layer boundary moves on (kernel turns)
 
 
-def anchor_indexes(complete: list[list[dict]], upto: int, first_row: int | None, grid: int) -> set[int]:
+ANCHORED_ROWS = 2000           # how many rows a kernel turn reads (tool rows cost sequence numbers, almost no layer bytes)
+
+
+def window_rows(rows: list[dict], upto: int, truncated: bool, grid: int) -> tuple[list[dict], bool]:
+    """The rows (oldest first) of a read that may have stopped short of the conversation's start, cut so that the
+    front of the window moves once per grid cell instead of once per turn: when the read was truncated and its
+    oldest row lies after the summary boundary, the rows before the first grid line go.  The second value says the
+    first complete turn of what is left is an anchor (a fixed line, never the arbitrary row the read stopped at)."""
+    if not (truncated and rows and rows[0]["sequence"] > upto + 1):
+        return rows, False
+    line = -(-rows[0]["sequence"] // grid) * grid
+    return [row for row in rows if row["sequence"] >= line], True
+
+
+def anchor_indexes(complete: list[list[dict]], upto: int, first_row: int | None, grid: int,
+                   front: bool = False) -> set[int]:
     """Which of the complete turns (oldest first) are anchors of the grid.  The first turn after the summary
     boundary is one when the fetched rows reach back to it; any other turn is one when the grid cell of its
     first row differs from the previous complete turn's.  Sequence numbers only: an anchor never changes as
@@ -346,14 +361,14 @@ def anchor_indexes(complete: list[list[dict]], upto: int, first_row: int | None,
     found = set()
     for i, group in enumerate(complete):
         if i == 0:
-            if first_row is not None and first_row <= upto + 1: found.add(0)
+            if front or (first_row is not None and first_row <= upto + 1): found.add(0)
         elif group[0]["sequence"] // grid != complete[i - 1][0]["sequence"] // grid:
             found.add(i)
     return found
 
 
 def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYTES, l2_bytes: int = L2_BYTES,
-               l3_bytes: int = L3_BYTES, anchor_grid: int | None = None) -> dict:
+               l3_bytes: int = L3_BYTES, anchor_grid: int | None = None, anchor_front: bool = False) -> dict:
     """What the next turn carries of the turns before it, by layer.  ``rows`` are the stored messages
     (oldest first, each with ``sequence``), ``segments`` the summary segments made so far.
 
@@ -366,7 +381,8 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
     the text at the layer boundary and everything after it.  With it, layer 1 and layer 2 each start at an
     anchor (see ``anchor_indexes``), the earliest one from which the turns still fit; a turn that the rule
     above would keep but that lies before that anchor goes to the layer below.  When no anchor fits, that
-    layer follows the rule above for this call."""
+    layer follows the rule above for this call.  ``anchor_front``: the first complete turn is an anchor (see
+    ``window_rows``)."""
     upto = segments[-1]["upto_sequence"] if segments else 0
     # A turn a summary version already covers is memory now: it is in no raw layer any more.
     complete = [g for g in complete_turns(rows) if g[0]["sequence"] > upto]
@@ -395,7 +411,8 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
         if used + cost > l1_bytes: break
         recent.insert(0, group); used += cost; recent_costs.append(cost)
         if entry: recent_catalogue.append({**entry, "answers_back": len(recent)})
-    anchors = anchor_indexes(complete, upto, rows[0].get("sequence") if rows else None, anchor_grid) if anchor_grid else set()
+    anchors = anchor_indexes(complete, upto, rows[0].get("sequence") if rows else None, anchor_grid,
+                              anchor_front) if anchor_grid else set()
     if anchor_grid:
         reach = len(complete) - len(recent)
         start = min((i for i in anchors if i >= reach), default=None)

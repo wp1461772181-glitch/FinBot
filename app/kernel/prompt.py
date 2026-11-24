@@ -1,6 +1,8 @@
 """The kernel's fixed system prompt and the message list a turn starts from."""
 from __future__ import annotations
 
+import re
+
 from ..agent_chat_identity import owner_credential_matches
 
 SAY_LINE = "- 每次调用工具时，在 say 里用一句话说明你发现了什么、接下来做什么，用户会实时看到这句话。切换到 high 档后，先用 plan 列出清单，再逐项去做；之后每次调用工具时在 item 里写上这是清单的第几项，勾由系统来打。"
@@ -42,6 +44,17 @@ def _mark_end_of_history(body: list[dict], question_at: int) -> None:
         body[earlier]["cache_point"] = True
 
 
+BACKUP_LABEL = re.compile(r"\n\n（这条由备用模型「[^」\n]*」回答。）\Z")   # the line the loop adds to an answer the backup model gave
+
+
+def _without_label(message: dict) -> dict:
+    """An earlier answer comes back as the assistant's own words: the system's label line is not among them."""
+    content = message.get("content")
+    if message.get("role") == "assistant" and isinstance(content, str):
+        return {**message, "content": BACKUP_LABEL.sub("", content)}
+    return message
+
+
 def build_messages(question: str, context, history: list[dict], *, fact: str | None = None) -> list[dict]:
     """System prompt (+ the bot's instruction and, for the owner only, the profile block), then the history.
 
@@ -53,7 +66,7 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
     if owner:
         blocks.append(getattr(context, "profile_block", None))
     system = "\n\n".join(block for block in blocks if block)
-    body = [dict(message) for message in history or []]
+    body = [_without_label(dict(message)) for message in history or []]
     # The history can end with notes after the question (the memory note and the citation catalogue, both user-role messages
     # the system wrote), so the last user message is not necessarily the question.
     last = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "user"), None)

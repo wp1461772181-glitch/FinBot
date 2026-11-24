@@ -294,3 +294,105 @@ def test_an_unanchored_conversation_is_asked_exactly_as_before(monkeypatch):
     assert asyncio.run(summary._guarded("cid", "c", provider="p", model="m", api_key="k" * 12, base_url=None)) is None
     asyncio.run(summary.compact_conversation("cid", "c", provider="p", model="m", api_key="k" * 12, base_url=None, manual=True))
     assert store.asked == [{"l1_bytes": L1, "l2_bytes": L2}, {"window": None}, {"window": None}]
+
+
+# --- what the endpoint really reads: the newest N rows, not the whole conversation -----------------------------
+
+def build_fixed(turns, per_turn):
+    """``per_turn`` rows a turn: the question, tool batches (two rows each), the answer."""
+    rows, ends, seq = [], [], 0
+
+    def add(role, content, turn, **extra):
+        nonlocal seq
+        seq += 1
+        rows.append({"role": role, "content": content, "turn_id": str(UUID(int=turn)), "sequence": seq, "status": "complete",
+                     "tool_calls": extra.get("tool_calls"), "tool_call_id": extra.get("tool_call_id")})
+
+    for turn in range(1, turns + 1):
+        add("user", f"question {turn} " + "q" * (40 + turn % 97), turn)
+        for call in range((per_turn - 2) // 2):
+            add("assistant", "", turn, tool_calls={"calls": [{"id": f"c{turn}{call}", "function": {"name": "search_news"}}]})
+            add("tool", "x" * 300, turn, tool_call_id=f"c{turn}{call}")
+        add("assistant", f"answer {turn} " + "a" * (60 + turn % 131), turn)
+        ends.append(len(rows))
+    return rows, ends
+
+
+def fetched_context(rows, ends, n, *, limit, cut):
+    """``conversation_context`` as the store does it: the newest ``limit`` rows, then (anchored) the window cut."""
+    sub = rows[:ends[n - 1]]
+    fetched = sub[-limit:]
+    front = False
+    if cut:
+        fetched, front = layers.window_rows(fetched, 0, len(sub) >= limit, ANCHOR_GRID)
+    return layer_rows(fetched, [], l1_bytes=L1, l2_bytes=L2, l3_bytes=L3,
+                      anchor_grid=ANCHOR_GRID if cut else None, anchor_front=front)
+
+
+def breaks_and_moves(per_turn, *, limit, cut, turns=400):
+    rows, ends = build_fixed(turns, per_turn)
+    previous = fetched_context(rows, ends, 1, limit=limit, cut=cut)
+    moves = broken = 0
+    for n in range(2, turns + 1):
+        current = fetched_context(rows, ends, n, limit=limit, cut=cut)
+        if starts(current) != starts(previous):
+            moves += 1
+        elif render(current) != render(previous) + own_messages(rows, ends, n):
+            broken += 1
+        previous = current
+    return moves, broken, len(rows)
+
+
+@pytest.mark.parametrize("per_turn", [8, 14])
+def test_the_history_stays_a_stable_prefix_through_the_rows_the_store_reads(per_turn):
+    moves, broken, total = breaks_and_moves(per_turn, limit=layers.ANCHORED_ROWS, cut=True)
+    assert broken == 0
+    assert moves <= 2 * (total // ANCHOR_GRID) + 2        # a layer move and a window move per cell at most
+
+
+@pytest.mark.parametrize("per_turn", [8, 14])
+def test_the_old_slicing_breaks_the_prefix_every_turn(per_turn):
+    # no cut, 500 rows: the window's front drops one turn at a time once the conversation has more than 500 rows
+    moves, broken, total = breaks_and_moves(per_turn, limit=500, cut=False)
+    assert moves > 2 * (total // ANCHOR_GRID) + 2
+
+
+def test_the_cut_leaves_a_whole_grid_line_and_marks_the_front_an_anchor():
+    rows, ends = build_fixed(100, 8)
+    fetched = rows[300:]
+    cut, front = layers.window_rows(fetched, 0, True, ANCHOR_GRID)
+    assert front and cut[0]["sequence"] == 320 and cut == [r for r in fetched if r["sequence"] >= 320]
+    assert layers.window_rows(fetched, 0, False, ANCHOR_GRID) == (fetched, False)          # not truncated: untouched
+    assert layers.window_rows(rows, 0, True, ANCHOR_GRID) == (rows, False)                  # reaches the start
+
+
+def test_the_store_reads_500_rows_unanchored_and_more_anchored(monkeypatch):
+    import app.agent_chat_store as store
+    limits = []
+
+    class Result:
+        def all(self):
+            return []
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def scalars(self, statement):
+            limits.append(statement._limit_clause.value if statement._limit_clause is not None else None)
+            return Result()
+
+    async def yes(*args):
+        return True
+
+    monkeypatch.setattr(store, "Session", Session)
+    monkeypatch.setattr(store, "verify_conversation", yes)
+    cid = str(UUID(int=5))
+    asyncio.run(store.conversation_context(cid, "c"))
+    assert limits == [500, None]
+    limits.clear()
+    asyncio.run(store.conversation_context(cid, "c", anchored=True))
+    assert limits == [layers.ANCHORED_ROWS, None] and layers.ANCHORED_ROWS == 2000

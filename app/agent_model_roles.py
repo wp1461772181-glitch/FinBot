@@ -54,6 +54,8 @@ def resolve_with_source(owner_hash: str | None, role: str) -> tuple[dict, dict]:
     names a model that has left the catalog; the server default is used and ``role_model`` says which)."""
     if role not in ROLES:
         raise RoleError("unknown_role")
+    if role == "fallback":
+        raise RoleError("role_has_no_default")     # nothing stands in for a backup: ``fallback_for`` is its reader
     name = get(owner_hash, role) if owner_hash else None
     if name and catalog.exists(name):
         return catalog.resolve(name), {"source": "role", "role_model": name}

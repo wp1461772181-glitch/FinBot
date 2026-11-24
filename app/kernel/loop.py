@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from .. import agent_chat_provider as provider
 from .. import agent_model_roles as roles
 from ..agent_chat_identity import owner_credential_matches
-from ..agent_progress import progress_watchdog
+from ..agent_progress import mark_progress, progress_watchdog
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
@@ -123,15 +123,21 @@ def _failure_code(failure: Exception) -> str:
     return detail if isinstance(detail, str) and detail else type(failure).__name__
 
 
-async def _switch_to_backup(run: _Run, failure: Exception) -> bool:
-    """The model failed after its retry: move the turn to the owner's backup model, if there is one that differs.
-
-    The message list is rebuilt once: kept reasoning belongs to the model that wrote it.  Returns whether it switched."""
+async def _backup_for(run: _Run) -> dict | None:
+    """The owner's backup model settings, or None (a broken lookup counts as none)."""
     try:
         found = await asyncio.to_thread(roles.fallback_for, getattr(run.context, "owner_hash", ""))
     except Exception:
         logger.exception("kernel backup model lookup failed")
-        return False
+        return None
+    return found or None
+
+
+async def _switch_to_backup(run: _Run, failure: Exception) -> bool:
+    """The model failed after its retry: move the turn to the owner's backup model, if there is one that differs.
+
+    The message list is rebuilt once: kept reasoning belongs to the model that wrote it.  Returns whether it switched."""
+    found = await _backup_for(run)
     if not found:
         return False
     try:
@@ -140,8 +146,10 @@ async def _switch_to_backup(run: _Run, failure: Exception) -> bool:
             return False
         sentence = BACKUP_NARRATION.format(name=backup.name)
         run.audit["fallback"] = {"from": run.model.label, "to": backup.name, "reason": _failure_code(failure)}
+        logger.warning("kernel backup switch: from=%s to=%s reason=%s", run.model.label, backup.name, _failure_code(failure))
         run.model = backup
         run.fallback_used = backup.name
+        mark_progress()      # the backup gets a fresh idle budget
         run.messages[:] = [{k: v for k, v in m.items() if not (k.startswith("reasoning_") or k in PRIVATE_KEYS)} if m.get("role") == "assistant" else m
                            for m in run.messages]
         run.narration.append(sentence)
@@ -161,6 +169,7 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
         except Exception as failure:
             if run.fallback_used:
                 run.audit["fallback"]["failed"] = True
+                logger.warning("kernel backup model failed too: model=%s reason=%s", run.fallback_used, _failure_code(failure))
                 raise
             if not await _switch_to_backup(run, failure):
                 raise
@@ -193,6 +202,12 @@ async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
             retryable = (isinstance(failure, provider.ProviderFailure) and failure.retryable) or getattr(failure, "detail", None) in RETRYABLE_DETAILS
             if attempt or not retryable:
                 raise
+            # A call that hung for the whole request timeout is not tried again on the same model when a backup exists:
+            # a second wait would run into the turn's idle watchdog, which cancels instead of switching.
+            if _failure_code(failure) == "provider_timeout" and not run.fallback_used:
+                found = await _backup_for(run)
+                if found and (found.get("provider"), found.get("model")) != (use.provider, use.model):
+                    raise
             await asyncio.sleep(RETRY_WAIT_SECONDS)
             continue
         run.audit["model_calls"] += 1
