@@ -1,0 +1,166 @@
+"""1f-2 Task 2: every alert the sentinel raises is also told to the API as `alert_posted` (so the agent can judge it).
+Telling the API changes nothing the owner receives, and a down API only means the event waits in the retry queue."""
+from datetime import UTC, datetime, timedelta, timezone
+
+import pytest
+
+from sentinel import signals
+from sentinel.escalation import Escalator
+from sentinel.main import Sentinel
+from sentinel.store import Store
+
+BJ = timezone(timedelta(hours=8))
+DAY = datetime(2026, 11, 3, 10, 0, tzinfo=BJ).timestamp()
+NIGHT = datetime(2026, 11, 3, 3, 0, tzinfo=BJ).timestamp()
+SNAP = {"telegram": {"bot_token": "t", "chat_id": 1}, "pushover": {"user_key": "u", "app_token": "a"}}
+NOW = datetime(2026, 11, 3, 10, 0, tzinfo=UTC)
+
+
+class FakeNotifier:
+    def __init__(self):
+        self.calls = []
+
+    def telegram_alert(self, config, text, alert_id):
+        self.calls.append(("telegram_alert", config, text, alert_id))
+        return 1000 + len(self.calls)
+
+    def telegram_text(self, config, text):
+        self.calls.append(("telegram_text", config, text))
+        return True
+
+    def pushover_emergency(self, config, text):
+        self.calls.append(("pushover_emergency", config, text))
+        return f"receipt{len(self.calls)}"
+
+    def receipt_status(self, config, receipt):
+        return {"acknowledged": False}
+
+    def cancel_receipt(self, config, receipt):
+        self.calls.append(("cancel_receipt", config, receipt))
+
+
+def make(tmp_path, at=DAY, *, post=True):
+    s = Sentinel(config=signals.SnapshotConfig(tmp_path / "none.json"), store=Store(tmp_path / "s.db"))
+    notifier = FakeNotifier()
+    clock = [at]
+    s.escalator = Escalator(s.store, notifier, clock=lambda: clock[0])
+    if not post:
+        s._announce = lambda *a, **k: None
+    return s, notifier, clock
+
+
+def price_alert(symbol="AAPL", **extra):
+    base = {"symbol": symbol, "kind": "daily", "direction": "down", "held": True, "text": f"【盘中异动】{symbol} 跌 4.4%",
+            "escalate": True, "weight_pct": 12.5, "price_move": True, "trigger": "T0", "steps": 2,
+            "event_date": "2026-11-03", "price": 323.5, "prev_close": 338.32, "earnings_unacked": False,
+            "after_send": lambda deferred, alert_id: None, "rollback": lambda: None}
+    return base | extra
+
+
+@pytest.fixture
+def posted(monkeypatch):
+    sent = []
+    monkeypatch.setattr(signals, "post_event", lambda base, t, p: sent.append((t, p)))
+    return sent
+
+
+def test_a_price_alert_is_posted_with_what_the_sentinel_knows(tmp_path, posted):
+    s, _, _ = make(tmp_path)
+    s._raise(SNAP, price_alert())
+    assert len(posted) == 1 and posted[0][0] == "alert_posted"
+    p = posted[0][1]
+    assert p == {"alert_id": 1, "symbol": "AAPL", "kind": "daily", "text": "【盘中异动】AAPL 跌 4.4%", "created_at": DAY,
+                 "deferred": False, "escalate": True, "held": True, "weight_pct": 12.5, "price": 323.5,
+                 "prev_close": 338.32, "move_pct": pytest.approx((323.5 / 338.32 - 1) * 100), "trigger": "T0",
+                 "event_date": "2026-11-03"}
+    assert "sigma_level" not in p and "members" not in p      # the sentinel does not have them: omitted, never invented
+
+
+def test_a_plan_crossing_is_posted_without_the_price_move_fields(tmp_path, posted):
+    s, _, _ = make(tmp_path)
+    s._raise(SNAP, {"symbol": "AAPL", "kind": "plan_stop", "direction": "down", "held": True, "text": "AAPL 跌破止损 300",
+                    "escalate": True, "weight_pct": None, "price_move": False, "trigger": "", "event_date": None,
+                    "price": 299.0, "earnings_unacked": False, "after_send": lambda d, a: None})
+    p = posted[0][1]
+    assert p["kind"] == "plan_stop" and p["price"] == 299.0 and p["held"] is True
+    for missing in ("weight_pct", "prev_close", "move_pct", "trigger", "event_date", "members"):
+        assert missing not in p
+
+
+def test_a_merged_alert_is_posted_once_with_its_members(tmp_path, posted):
+    s, _, _ = make(tmp_path)
+    s._raise_merged(SNAP, [price_alert("A"), price_alert("B", held=False, escalate=False, weight_pct=None),
+                           price_alert("C", weight_pct=3.0)])
+    assert len(posted) == 1
+    p = posted[0][1]
+    assert p["kind"] == "merged" and p["members"] == ["A", "B", "C"] and p["held"] is True and p["escalate"] is True
+    assert p["weight_pct"] == 12.5 and p["trigger"] == "T0"
+    assert "price" not in p and "move_pct" not in p and "event_date" not in p
+
+
+def test_a_held_night_alert_is_posted_as_deferred(tmp_path, posted):
+    s, notifier, _ = make(tmp_path, NIGHT)
+    s._raise(SNAP, price_alert(weight_pct=4.0))               # a small holding: waits for the morning digest
+    assert notifier.calls == []
+    p = posted[0][1]
+    assert p["deferred"] is True and p["alert_id"] == 1 and p["created_at"] == NIGHT
+
+
+def test_an_update_of_a_pending_night_line_posts_again_with_the_same_alert_id(tmp_path, posted):
+    s, _, _ = make(tmp_path, NIGHT)
+    s.store.open_event("AAPL", "2026-11-03", first_ts=NIGHT, first_bucket="pre", price=323.5, r=-0.044, step=0.0113)
+    pending = price_alert(weight_pct=4.0, after_send=lambda deferred, alert_id: s.store.update_event(
+        "AAPL", "2026-11-03", pending_alert_id=alert_id))
+    s._raise(SNAP, pending)
+    s._raise(SNAP, pending | {"text": "【盘中异动】AAPL 又跌"})
+    assert [p["alert_id"] for _, p in posted] == [1, 1]       # the API judges an alert id once (a later stage may re-judge updates)
+    assert posted[1][1]["text"] == "【盘中异动】AAPL 又跌"
+
+
+def test_api_down_queues_the_event_and_the_retry_resends_it(tmp_path, monkeypatch):
+    s, _, _ = make(tmp_path)
+
+    def down(base, t, p):
+        raise OSError("api down")
+    monkeypatch.setattr(signals, "post_event", down)
+    s._raise(SNAP, price_alert())
+    queued = s.store.pending()
+    assert [e["type"] for e in queued] == ["alert_posted"] and queued[0]["payload"]["alert_id"] == 1
+    sent = []
+    monkeypatch.setattr(signals, "post_event", lambda base, t, p: sent.append((t, p)))
+    s.resend_events()
+    assert [t for t, _ in sent] == ["alert_posted"] and sent[0][1]["alert_id"] == 1 and s.store.pending() == []
+
+
+def test_even_a_failing_queue_never_breaks_the_alert(tmp_path, monkeypatch):
+    s, notifier, _ = make(tmp_path)
+    monkeypatch.setattr(signals, "post_event", lambda *a: (_ for _ in ()).throw(OSError("down")))
+    monkeypatch.setattr(s.store, "enqueue", lambda *a: (_ for _ in ()).throw(RuntimeError("disk full")))
+    s._raise(SNAP, price_alert())                             # must not raise
+    assert [c[0] for c in notifier.calls][:1] == ["telegram_alert"]
+
+
+def _drive(s, clock):
+    s._raise(SNAP, price_alert("AAPL"))
+    s._raise_merged(SNAP, [price_alert("A"), price_alert("B", escalate=False), price_alert("C")])
+    clock[0] = NIGHT
+    s._raise(SNAP, price_alert("NVDA", weight_pct=4.0))
+    s._raise(SNAP, price_alert("NVDA", weight_pct=4.0, text="update"))
+    s._raise(SNAP, price_alert("MSFT", kind="plan_stop", price_move=False, event_date=None))
+    s.escalator.tick(SNAP)
+
+
+def test_the_sentinels_own_sends_are_identical_with_and_without_the_posting(tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(signals, "post_event", lambda base, t, p: sent.append((t, p)))
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    with_post, n1, c1 = make(tmp_path / "a")
+    without, n2, c2 = make(tmp_path / "b", post=False)
+    _drive(with_post, c1)
+    posted_count = len(sent)
+    _drive(without, c2)
+    assert posted_count == 5 and len(sent) == 5               # only the first run posted
+    assert n1.calls == n2.calls and len(n1.calls) > 3
+    assert [(a["text"], a["deferred"], a["escalate"]) for a in with_post.store.alerts_where("1=1")] == \
+           [(a["text"], a["deferred"], a["escalate"]) for a in without.store.alerts_where("1=1")]

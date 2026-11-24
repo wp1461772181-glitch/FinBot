@@ -134,7 +134,7 @@ class Sentinel:
             down = sig.direction == "down" and held and sig.kind not in ("split", "plan_target")
             base = {"symbol": symbol, "kind": sig.kind, "direction": sig.direction, "held": held, "text": text,
                     "escalate": escalate, "weight_pct": weight, "price_move": False, "trigger": "",
-                    "event_date": None, "price": price,
+                    "event_date": None, "price": price, "prev_close": prev_close,
                     "earnings_unacked": down and self.store.earnings_alert_unacked(symbol),
                     "after_send": lambda deferred, alert_id: None, "rollback": lambda: None}
             return base | extra
@@ -275,6 +275,7 @@ class Sentinel:
     def _raise(self, snap: dict, alert: dict) -> None:
         alert_id = self.escalator.raise_alert(snap, alert)
         alert["after_send"](self.escalator.deferred(alert_id), alert_id)
+        self._announce(alert_id, alert)
 
     def _raise_merged(self, snap: dict, members: list[dict]) -> None:
         symbols = [m["symbol"] for m in members]
@@ -287,6 +288,33 @@ class Sentinel:
         deferred = self.escalator.deferred(alert_id)
         for m in members:
             m["after_send"](deferred, None)
+        self._announce(alert_id, merged)
+
+    def _announce(self, alert_id: int, alert: dict) -> None:
+        """Tell the API about an alert that is already stored and sent, so the agent can judge it (`alert_posted`).
+
+        Never delays or breaks the alert: any failure ends in the retry queue, and if even that fails it is only logged.
+        An update of a pending night line posts again under the same alert id; the API judges an id once (a later
+        stage may re-judge updates)."""
+        try:
+            self.post_event("alert_posted", self.alert_payload(alert_id, alert))
+        except Exception as exc:
+            logger.warning("alert_posted for alert %s not sent or queued: %s", alert_id, type(exc).__name__)
+
+    def alert_payload(self, alert_id: int, alert: dict) -> dict:
+        """What the sentinel knows about an alert; fields it does not have are left out, never invented."""
+        row = self.store.alert(alert_id) or {}
+        members = [m["symbol"] for m in alert.get("members") or [] if isinstance(m, dict) and m.get("symbol")]
+        payload = {"alert_id": alert_id, "symbol": alert["symbol"], "kind": alert.get("kind", ""), "text": alert["text"],
+                   "created_at": row.get("created_at"), "deferred": bool(row.get("deferred")),
+                   "escalate": bool(alert.get("escalate")), "held": bool(alert.get("held")),
+                   "weight_pct": alert.get("weight_pct") or None, "price": alert.get("price"),
+                   "prev_close": alert.get("prev_close"), "trigger": alert.get("trigger") or None,
+                   "event_date": alert.get("event_date"), "members": members or None}
+        price, prev_close = alert.get("price"), alert.get("prev_close")
+        if price is not None and prev_close:
+            payload["move_pct"] = (price / prev_close - 1) * 100
+        return {k: v for k, v in payload.items() if v is not None}
 
     def check_signals(self) -> None:
         now = datetime.now(UTC)
