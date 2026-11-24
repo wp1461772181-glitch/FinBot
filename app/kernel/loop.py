@@ -51,6 +51,7 @@ class _Run:
     citations: list = field(default_factory=list)
     proposals: list = field(default_factory=list)     # tier-2/3 operations collected this turn, put on one card when it ends
     writes: list = field(default_factory=list)       # one audit line per act call
+    read_results: int = 0            # read or calculation results received this turn: after the first, tier 1 goes onto the card
     pending: dict | None = None      # the card minted this turn
     carried: dict | None = None      # the conversation's own card, still waiting after this turn
     sent_text: bool = False

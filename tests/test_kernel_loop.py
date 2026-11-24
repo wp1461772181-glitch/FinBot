@@ -533,7 +533,7 @@ def fake_consent(env):
 
     async def reversible(operation, key, context, *, emit=None, overrides=None):
         fake.reversible.append((operation, key))
-        return {"ok": True, "data": [{"symbol": operation["arguments"]["symbol"], "status": "queued"}]}
+        return {"ok": True, "data": [{"symbol": operation["arguments"].get("symbol"), "status": "queued"}]}
 
     env.monkeypatch.setattr(tools, "execute_reversible", reversible)
     env.monkeypatch.setattr(agent_tasks, "get_task", lambda owner, task_id: {"name": "每日", "schedule_kind": "daily", "schedule_time": "09:00"})
@@ -669,16 +669,18 @@ def test_act_runs_after_the_reads_of_its_step(env, fake_consent):
         order.append(("read", name))
         return copy.deepcopy(OK_ROWS)
 
-    async def reversible(operation, key, context, *, emit=None, overrides=None):
-        order.append(("act", operation["name"]))
-        return {"ok": True, "data": [{}]}
+    real = act.prepare
+
+    async def prepare(run, name, arguments):
+        order.append(("act", name))
+        return await real(run, name, arguments)
 
     env.monkeypatch.setattr(tools, "invoke", invoke)
-    env.monkeypatch.setattr(tools, "execute_reversible", reversible)
-    script(env, [step(calls=[act_call("c1", "add_to_research_queue", {"symbol": "NVDA"}), call("c2", "query_financials", {"symbol": "AAPL"})]),
+    env.monkeypatch.setattr(act, "prepare", prepare)
+    script(env, [step(calls=[act_call("c1", "forecast", {"symbol": "NVDA"}), call("c2", "query_financials", {"symbol": "AAPL"})]),
                  step(text="好")])
     run(context=ctx())
-    assert order == [("read", "query_financials"), ("act", "add_to_research_queue")]
+    assert order == [("read", "query_financials"), ("act", "forecast")]
 
 
 def test_model_arguments_reach_the_operation_untouched(env, fake_consent):
@@ -752,3 +754,91 @@ def test_tier1_consent_failure_is_reported_not_raised(env, fake_consent):
     (row,) = tool_results(fake)
     assert row["ok"] is False and row["error_code"] == "confirmation_expired"
     assert result["audit"]["writes"][0]["outcome"] == "failed:confirmation_expired" and result["pending_request"] is None
+
+
+def remember_args():
+    return {"kind": "preference", "text": "用中文", "quote": "用中文", "scope": "global"}
+
+
+def stub_remember(env):
+    from app import agent_profile as profile
+    env.monkeypatch.setattr(profile, "user_message_id", lambda conversation, turn: "m1")
+
+
+def test_tier1_without_a_prior_read_runs_at_once_and_a_lookup_does_not_count(env, fake_consent):
+    stub_remember(env)
+    script(env, [step(calls=[act_call("c1", "remember"), act_call("c2", "remember", remember_args())]), step(text="好")])
+    result, _ = run(context=ctx())
+    assert len(fake_consent.executed) == 1 and result["pending_request"] is None
+    assert [w["outcome"] for w in result["audit"]["writes"]] == ["lookup", "done"]
+
+
+def test_tier1_after_a_read_goes_onto_the_card(env, fake_consent):
+    stub_remember(env)
+    fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]),
+                        step(calls=[act_call("c2", "remember", remember_args())]), step(text="请核对卡片")])
+    result, _ = run(context=ctx())
+    assert fake_consent.executed == [] and fake_consent.reversible == []
+    assert tool_results(fake)[-1]["data"][0]["status"] == "awaiting_confirmation"
+    assert [op["name"] for op in fake_consent.proposed[0]["operations"]] == ["remember"]
+    assert result["status"] == "waiting_for_input" and result["audit"]["writes"][0]["outcome"] == "proposed"
+
+
+def test_tier1_in_the_same_step_as_a_read_goes_onto_the_card(env, fake_consent):
+    stub_remember(env)
+    script(env, [step(calls=[act_call("c1", "remember", remember_args()), call("c2", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
+    result, _ = run(context=ctx())
+    assert fake_consent.executed == [] and result["status"] == "waiting_for_input"
+
+
+def test_tier1_after_a_calculation_goes_onto_the_card(env, fake_consent):
+    stub_remember(env)
+    script(env, [step(calls=[call("c1", "calculate", {"expression": "a-b", "inputs": [{"name": "a", "value": "1", "source_ordinal": 1}, {"name": "b", "value": "1", "source_ordinal": 1}]}), act_call("c2", "remember", remember_args())]),
+                 step(text="好")])
+    result, _ = run(context=ctx())
+    assert fake_consent.executed == []
+
+
+def test_a_name_that_is_not_tier_1_is_never_run_at_once(env, fake_consent):
+    async def forged(run, name, arguments):
+        return act.Prepared(operation={"name": "forecast", "arguments": {"symbol": "AAPL"}}, display={"title": "t", "targets": []}, tier=1)
+
+    env.monkeypatch.setattr(act, "prepare", forged)
+    script(env, [step(calls=[act_call("c1", "remember", {})]), step(text="好")])
+    result, _ = run(context=ctx())
+    assert fake_consent.executed == [] and result["audit"]["writes"][0]["outcome"] == "refused:unsupported_operation"
+
+
+def test_a_failure_after_the_write_still_reports_done(env, fake_consent):
+    def boom(value, operations=None):
+        raise RuntimeError("facts")
+
+    env.monkeypatch.setattr(act.direct, "execution_facts", boom)
+    fake = script(env, [step(calls=[act_call("c1", "add_to_research_queue", {"symbol": "NVDA"})]), step(text="好")])
+    result, _ = run(context=ctx())
+    (row,) = tool_results(fake)
+    assert row["ok"] is True and row["data"][0]["status"] == "done" and row["data"][0]["undo"]
+    assert result["audit"]["writes"] == [{"operation": "add_to_research_queue", "tier": 1, "outcome": "done"}]
+
+
+def test_an_exception_in_prepare_leaves_one_audit_line_and_an_error_result(env, fake_consent):
+    async def broken(run, name, arguments):
+        raise RuntimeError("db down")
+
+    env.monkeypatch.setattr(act, "prepare", broken)
+    fake = script(env, [step(calls=[act_call("c1", "forecast", {"symbol": "AAPL"})]), step(text="没成")])
+    result, _ = run(context=ctx())
+    (row,) = tool_results(fake)
+    assert row["ok"] is False and row["error_code"] == "tool_failed"
+    assert result["audit"]["writes"] == [{"operation": "forecast", "tier": 3, "outcome": "failed:tool_failed"}]
+    assert result["status"] == "succeeded"
+
+
+def test_an_unknown_operation_is_audited_as_none(env, fake_consent):
+    script(env, [step(calls=[act_call("c1", "rm -rf", {})]), step(text="好")])
+    result, _ = run(context=ctx())
+    assert result["audit"]["writes"] == [{"operation": None, "tier": None, "outcome": "refused:unknown_operation"}]
+
+
+def test_prompt_tells_the_model_a_read_turns_tier_1_into_a_card():
+    assert "如果这一轮里你已经查过资料，这类操作也会放进确认卡。" in prompt.SYSTEM

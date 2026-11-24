@@ -309,6 +309,8 @@ def execute_handler(context, *, variant: str | None = None):
 async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
     """A tier-1 operation: a card minted and pressed in the same breath, so consent still freezes, locks and records it."""
     context, operation = run.context, prepared.operation
+    if operation.get("name") not in TIER1:
+        return _refusal("unsupported_operation"), "refused:unsupported_operation"
     handler = execute_handler(context)
 
     try:
@@ -322,9 +324,15 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
     except Exception:
         logger.exception("kernel act failed operation=%s", operation.get("name"))
         return _refusal("write_service_failed"), "failed:write_service_failed"
-    facts = direct.execution_facts(value, [operation])[0]
+    # The write has been decided: whatever goes wrong while describing it, the result still says what happened.
     title = prepared.display["title"]
-    if not value.get("ok", True):
+    ok = bool(value.get("ok", True)) if isinstance(value, dict) else False
+    try:
+        facts = direct.execution_facts(value, [operation])[0]
+    except Exception:
+        logger.exception("kernel act facts failed operation=%s", operation.get("name"))
+        facts = {}
+    if not ok:
         code = str(facts.get("error_code") or "write_service_failed")
         return {"ok": False, "data": [{**facts, "status": "failed", "title": title}]}, f"failed:{code}"
     return {"ok": True, "data": [{**facts, "status": "done", "title": title, "undo": UNDO[operation["name"]]}]}, "done"
@@ -339,12 +347,22 @@ def _collect(run, prepared: Prepared) -> tuple[dict, str]:
 
 
 async def handle(run, args: dict) -> dict:
-    """The tool result of one ``act`` call.  The model's operation arguments sit under ``arguments``, untouched."""
+    """The tool result of one ``act`` call.  The model's operation arguments sit under ``arguments``, untouched.
+
+    Every call leaves exactly one line in ``run.writes``, whatever happens inside.
+    """
     name = args.get("operation")
-    tier = tier_of(name) if name in OPERATIONS else None
-    result, outcome = await _handle(run, name, args)
-    run.writes.append({"operation": name if isinstance(name, str) else None, "tier": tier, "outcome": outcome})
-    return result
+    known = isinstance(name, str) and name in OPERATIONS
+    line = {"operation": name if known else None, "tier": tier_of(name) if known else None, "outcome": "failed:tool_failed"}
+    try:
+        result, line["outcome"] = await _handle(run, name, args)
+        return result
+    except Exception:
+        logger.exception("kernel act crashed operation=%s", line["operation"])
+        line["outcome"] = "failed:tool_failed"
+        return _refusal("tool_failed")
+    finally:
+        run.writes.append(line)
 
 
 async def _handle(run, name, args: dict) -> tuple[dict, str]:
@@ -361,6 +379,8 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
     prepared = await prepare(run, name, args["arguments"])
     if isinstance(prepared, dict):
         return prepared, f"refused:{prepared.get('error_code') or 'refused'}"
-    if prepared.tier == 1:
+    # Tier 1 runs at once only while nothing but the owner's own words has been seen this turn: once a read has come back, a
+    # page or filing could be asking the model to remember something, so the operation goes onto the card like tier 2.
+    if prepared.tier == 1 and not getattr(run, "read_results", 0):
         return await _run_at_once(run, prepared)
     return _collect(run, prepared)

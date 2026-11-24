@@ -234,6 +234,7 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     if progress.mark_items(run, numbers) or planned:
         await run.emit({"event": "checklist", "items": [dict(entry) for entry in run.checklist]})
     await _fetch_all(run, reads)
+    run.read_results += len(reads)       # a read's result (even a failed one) has come back: tier 1 no longer runs at once
     for item in reads:
         if item.result is None:
             _guard(_settle_read, run, item)
@@ -242,6 +243,7 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             await _settle_act(run, item)
         else:
             _guard(_settle_serial, run, item)
+            run.read_results += 1
         mark_progress()
     messages = []
     for item in items:
