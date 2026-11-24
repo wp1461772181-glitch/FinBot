@@ -23,7 +23,8 @@ SLOW_SECONDS = 10     # a step whose reads are still out after this long gets on
 RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts。只需改正其中 found 为 false 的输入，其余保持不变；不要把数值改写成更长的小数去试。closest_in_source 与 bindable_values 都只是不完整的候选。"
 # Results of these tools are the model's memory or a computation, not saved evidence: they are never numbered as rows.
 _UNNUMBERED = {"recall_conversations", "read_past_conversation"}
-_SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_news", "query_sec_filings": "official_filing"}
+_SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_news", "query_sec_filings": "official_filing",
+                "search_x": "x_post"}
 # Run one at a time after every read has been numbered, in call order: calculations work on the citations the reads just
 # registered, and an ``act`` call may rest on what this step's reads found.
 _CALCULATIONS = ("calculate", "calculate_formula")

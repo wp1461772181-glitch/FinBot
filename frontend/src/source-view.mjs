@@ -9,6 +9,7 @@ const WEB_TYPES = ["web", "web_news"];
 const TYPE_LABELS = {
   web: "网页",
   web_news: "新闻网页",
+  x_post: "X 帖子",
   official_filing: "官方申报",
   saved_filing: "已保存申报",
   saved_ai_analysis: "已保存 AI 分析",

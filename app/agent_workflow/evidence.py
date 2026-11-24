@@ -553,14 +553,14 @@ def number_rows(name: str,rows: list[dict],citations: list[dict],scope: dict | N
                 'fields_available':fields_avail,
             })
             continue
-        body=str(row.get('excerpt') or row.get('answer') or row.get('summary') or json.dumps(row,ensure_ascii=False,default=str))
+        body=str(row.get('excerpt') or row.get('answer') or row.get('summary') or (row.get('text') if kind=='x_post' else None) or json.dumps(row,ensure_ascii=False,default=str))
         key=hashlib.sha256(json.dumps([kind,row.get('id'),row.get('source_id'),row.get('url'),body],sort_keys=True,default=str).encode()).hexdigest()
         old=next((c for c in citations if c.get('evidence_key')==key),None)
         if old: ordinal=old['ordinal']
         else:
             ordinal=len(citations)+1
             resolved_url=row.get('source_url') or row.get('content_source_url') or row.get('url')
-            origin=row.get('origin') or ('configured_news' if kind=='configured_news' else 'web' if kind in {'web','web_news'} else 'saved')
+            origin=row.get('origin') or ('configured_news' if kind=='configured_news' else 'web' if kind in {'web','web_news'} else 'x' if kind=='x_post' else 'saved')
             citations.append({'ordinal':ordinal,'evidence_key':key,'chunk_id':row.get('chunk_id'),'document_id':row.get('document_id'),
                 'source_id':str(row.get('source_id') or row.get('id') or ''),'question':row.get('question'),'source_type':kind,'origin':origin,'tool_arguments':row.get('tool_arguments'),
                 'title':str(row.get('title') or row.get('accession_number') or scope.get('company') or name)[:300],

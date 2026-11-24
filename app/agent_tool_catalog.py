@@ -196,6 +196,12 @@ class SearchConfiguredNewsArgs(Args):
     limit:int=Field(default=10,ge=1,le=30)
     refresh_first:bool=Field(default=False,description='Poll matching enabled sources once before searching (respects rate_limit).')
 
+class SearchXArgs(Args):
+    query:str=Field(min_length=1,max_length=300,description='X search syntax: words, "exact phrase", from:username, OR, -word, lang:en, cashtags like $NVDA.')
+    hours:int=Field(default=72,ge=1,le=168,description='How many hours back to look (at most 7 days).')
+    max_results:int=Field(default=20,ge=10,le=50,description='How many posts to read; each one costs money.')
+    sort:Literal['relevancy','recency']='relevancy'
+
 class ManageNewsSourceArgs(Args):
     action:Literal['list','dry_run','diagnose','upsert','set_enabled','set_alternate','repair']=Field(description='list: all sources and their health. dry_run: fetch a sample page. diagnose: health, failures, last error, repair eligibility. upsert: create or update (needs url). set_enabled: disable or re-enable (needs enabled). set_alternate: fallback URLs (alternates; switch_to_first to switch). repair: REA repair of a failing source.')
     source_id:str|None=Field(default=None,min_length=1,max_length=80,description='The source id; every action except list needs it.')
@@ -255,7 +261,7 @@ TOOL_CATEGORIES:dict[str,CategoryInfo]={c.name:c for c in (
  CategoryInfo('行情','股价、K 线与历史行情的读取和初始化',('query_stock_prices','query_market_quote','initialize_prices')),
  CategoryInfo('财报与SEC','SEC 申报、XBRL 财务数据、申报核验与抓取',('query_sec_filings','query_financials','review_filing','fetch_sec','refresh_sec','scan_official')),
  CategoryInfo('资料库','已存资料、知识库检索、入库、索引、分析与翻译',('query_materials','query_material_analysis','search_material_analysis','search_knowledge','save_material_evidence','ingest_web_source','import','import_sources','index','retry_document_index','withdraw_knowledge_document','review_knowledge_candidate','analyze','translate_content','test_retrieval_diagnostics')),
- CategoryInfo('新闻与网页','新闻搜索、网页检索和新闻源管理',('web_research','search_configured_news','manage_news_source','query_alerts')),
+ CategoryInfo('新闻与网页','新闻搜索、网页检索和新闻源管理',('web_research','search_configured_news','search_x','manage_news_source','query_alerts')),
  CategoryInfo('预测','已存预测的读取、新预测、修订与历史回放',('query_latest_forecast','forecast','revise_forecast','start_historical_replay')),
  CategoryInfo('持仓','持仓与账本、可用资金、持仓计划',('query_portfolio','query_holdings_overview','record_trade','set_available_funds','set_position_plan')),
  CategoryInfo('例行与通知','定时例行任务和 Telegram 通知',('create_routine','list_routines','update_routine','delete_routine','notify_telegram')),
@@ -341,9 +347,10 @@ EXTRA=(
  ('manage_news_source',ManageNewsSourceArgs,'read','Manage the configured news sources (RSS/JSON/HTML) with one action: list (health, defaults, watchlists, push settings), dry_run (fetch 1 sample page and check title, url, published_at), diagnose (health, consecutive failures, last error, REA repair eligibility, probe sample), upsert (create or update a source), set_enabled (disable or re-enable), set_alternate (fallback URLs, optionally switch to the first), repair (REA inspection/alternates for a failing source; rate-limited per source, major changes create an inline confirmation card). Owner only except list, dry_run and diagnose.'),
  ('load_tools',LoadToolsArgs,'skill','Load the full definitions of tool categories listed in the system prompt; they are available from your NEXT step. Load every category the question needs in one call. Only tools this bot and turn may use appear.'),
  ('search_configured_news',SearchConfiguredNewsArgs,'read','Search news items from enabled user-configured news sources only (RSS/JSON/HTML). Call this FIRST for recent market/macro/company news before falling back to web_research. Every returned item has a URL and still goes through citation and numeric gates.'),
+ ('search_x',SearchXArgs,'read','Search recent posts (the last 7 days at most) on X through its official API. Use it when the user asks what is being said on X, or when something may have been posted on X before it reached news or filings. Posts are unverified claims: say that it is from X, who posted it and when, and check anything that matters against official sources before stating it as fact. Query syntax: words, "exact phrase", from:username, OR, -word, lang:en, cashtags like $NVDA. Each returned post costs money, so ask for only as many as you need.'),
 )
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
-OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview'}
+OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x'}
 
 # Every base registry entry is read-only; write names come from catalogue levels.
 WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'})]

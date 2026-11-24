@@ -274,6 +274,15 @@ class AgentModelRole(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class XSearchUsage(Base):
+    """How many posts the owner's X searches have read on one UTC day (x_search_usage); X bills by post read, so
+    ``search_x`` checks this against its daily cap before it asks and adds what it got afterwards."""
+    __tablename__ = "x_search_usage"
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    owner_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    posts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class AgentPushoverConfig(Base):
     """The owner's Pushover user key and app token (Task 12), each encrypted with secret_box and never
     returned by any endpoint; the decrypted pair only goes into the sentinel's snapshot file (0600)."""

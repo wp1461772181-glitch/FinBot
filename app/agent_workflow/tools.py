@@ -321,6 +321,10 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         except ValueError:limit=30.0
         try:return await asyncio.wait_for(call,timeout=limit)
         except TimeoutError:return error('tool_timeout')
+    if name=='search_x':
+        from .. import x_search
+        if not is_owner:return error('owner_login_required')
+        return await x_search.search(args,owner_hash=context.owner_hash)
     if name=='manage_news_source':
         from .. import fin_news_engine as news
         action=args['action'];source_id=args.get('source_id')

@@ -2373,5 +2373,7 @@
   "Telegram 还没有绑定，微信发不出去时没有备用。": "Telegram is not bound yet, so there is no backup when WeChat cannot send.",
   "微信还没有连接，只会发到 Telegram。": "WeChat is not connected yet; messages will only go to Telegram.",
   "Telegram 还没有绑定，只会发到微信。": "Telegram is not bound yet; messages will only go to WeChat.",
-  "排队中（已等 {n} 分钟）": "Queued (waited {n} min)"
+  "排队中（已等 {n} 分钟）": "Queued (waited {n} min)",
+  "X 帖子搜索": "X post search",
+  "X 帖子": "X post"
 }

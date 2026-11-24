@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from .. import agent_chat_provider as provider
 from .. import agent_model_roles as roles
+from .. import x_search
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_progress import mark_progress, progress_watchdog
 from ..agent_tool_catalog import schemas
@@ -23,7 +24,7 @@ from . import act, press, progress, prompt, tiers
 from .toolrun import run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
-    "search_knowledge", "web_research", "search_configured_news", "calculate", "calculate_formula",
+    "search_knowledge", "web_research", "search_configured_news", "search_x", "calculate", "calculate_formula",
     "query_portfolio", "recall_conversations", "read_past_conversation", "read_history_citation")
 logger = logging.getLogger(__name__)
 MAX_STEPS = 12
@@ -93,7 +94,8 @@ class _Run:
 
 def _tool_schemas(context) -> list[dict]:
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
-    available = schemas(owner=owner, names=READ_TOOLS)
+    # search_x costs the owner money per post and needs his token: it is offered only where the server has one.
+    available = schemas(owner=owner, names=[n for n in READ_TOOLS if n != "search_x" or x_search.configured()])
     scope = getattr(context, "tool_scope", None)
     # The kernel's own tools go last whatever the ceiling is, so the list is the same for the whole turn.
     offered = [*(s for s in available if scope is None or s["function"]["name"] in scope), *([act.ACT_SCHEMA] if owner else []),
