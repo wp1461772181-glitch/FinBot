@@ -3,7 +3,7 @@
 
 const CHANNEL_NAMES = { telegram: "Telegram", wechat: "微信" };
 
-/** The three choices.  `label` and `hint` are source phrases. */
+/** The three choices.  `label` is a source phrase. */
 export const CHANNEL_OPTIONS = [
   { id: "telegram-only", label: "只发 Telegram", channels: ["telegram"], mode: "first" },
   { id: "wechat-first", label: "先发微信，发不出去再发 Telegram", channels: ["wechat", "telegram"], mode: "first" },
@@ -30,27 +30,47 @@ export function rawOrderText(prefs) {
   return `${names.join(" → ")} · ${prefs?.mode ?? ""}`;
 }
 
-/** True when the option's first channel is not available and another channel is there to take the message (the page then says 「微信还没有连接，消息会改发 Telegram。」). */
-export function fallbackWarning(optionId, available) {
+/** The sentence the page says under the choice for each state of the chosen option against the channels that are connected. */
+export const CHANNEL_STATE_TEXT = {
+  none: "所选渠道都没有连接，主动消息现在发不出去。",
+  "wechat-falls-back": "微信还没有连接，消息会改发 Telegram。",
+  "no-backup": "Telegram 还没有绑定，微信发不出去时没有备用。",
+  "only-telegram": "微信还没有连接，只会发到 Telegram。",
+  "only-wechat": "Telegram 还没有绑定，只会发到微信。",
+};
+
+/** Which of CHANNEL_STATE_TEXT applies to the chosen option, or "" when there is nothing to say (all fine, nothing chosen, or availability not read). */
+export function channelState(optionId, available) {
   const option = CHANNEL_OPTIONS.find((o) => o.id === optionId);
-  if (!option || !available || option.channels.length < 2) return false;
-  return available[option.channels[0]] === false;
+  if (!option || !available) return "";
+  const down = option.channels.filter((c) => available[c] === false);
+  if (down.length === 0) return "";
+  if (down.length === option.channels.length) return "none";
+  const wechatDown = down[0] === "wechat";
+  if (option.mode === "all") return wechatDown ? "only-telegram" : "only-wechat";
+  return wechatDown ? "wechat-falls-back" : "no-backup";
 }
 
 const FAILURE_REASONS = { send_failed: "发送出错", expired: "超时没发", not_connected: "渠道未连接" };
 
-/** 已发出 / 发送失败（原因） / 排队中.  `t` translates each phrase; the reason is left out when the server gave none this page knows. */
-export function deliveryStatusText(item, t = (text) => text) {
+/**
+ * 已发出 / 发送失败（原因） / 排队中.  `t` translates each phrase; the reason is left out when the server gave none this page knows.
+ * A queued row older than a minute says how long it has waited (`now`: ms or Date, default the present).
+ */
+export function deliveryStatusText(item, t = (text) => text, now = Date.now()) {
   if (item?.status === "sent") return t("已发出");
   if (item?.status === "failed") {
     const reason = Object.hasOwn(FAILURE_REASONS, item.failure ?? "") ? FAILURE_REASONS[item.failure] : "";
     return reason ? t("发送失败（{reason}）").replace("{reason}", t(reason)) : t("发送失败");
   }
+  const waited = Number(now) - Date.parse(item?.created_at);
+  if (waited > 60000) return t("排队中（已等 {n} 分钟）").replace("{n}", String(Math.floor(waited / 60000)));
   return t("排队中");
 }
 
-/** What a delivery line shows besides its time and status: the channel's name, whether the owner came back after it, the first line of the text. */
+/** What a delivery line shows besides its status: the time (sent time for a sent row, else creation), the channel's name, whether the owner came back after it, the first line of the text. */
 export function deliveryRow(item) {
   const firstLine = typeof item?.text === "string" ? (item.text.split("\n").map((line) => line.trim()).find((line) => line !== "") ?? "") : "";
-  return { channelLabel: CHANNEL_NAMES[item?.channel] ?? String(item?.channel ?? ""), acked: Boolean(item?.acked_at), firstLine };
+  const time = item?.status === "sent" && item.sent_at ? item.sent_at : item?.created_at;
+  return { time, channelLabel: CHANNEL_NAMES[item?.channel] ?? String(item?.channel ?? ""), acked: Boolean(item?.acked_at), firstLine };
 }

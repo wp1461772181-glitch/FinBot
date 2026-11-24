@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CHANNEL_OPTIONS, deliveryRow, deliveryStatusText, optionForPrefs, prefsForOption, rawOrderText, fallbackWarning } from "../src/channel-prefs.mjs";
+import { CHANNEL_OPTIONS, CHANNEL_STATE_TEXT, deliveryRow, deliveryStatusText, optionForPrefs, prefsForOption, rawOrderText, channelState } from "../src/channel-prefs.mjs";
 
 test("the three options map to prefs and back", () => {
   assert.deepEqual(CHANNEL_OPTIONS.map((o) => o.id), ["telegram-only", "wechat-first", "both"]);
@@ -25,20 +25,38 @@ test("a returned prefs object is not shared with the option table", () => {
   assert.deepEqual(prefsForOption("both").channels, ["wechat", "telegram"]);
 });
 
-test("the fallback warning shows only when the first channel is down and another channel exists", () => {
-  assert.equal(fallbackWarning("wechat-first", { wechat: false, telegram: true }), true);
-  assert.equal(fallbackWarning("both", { wechat: false, telegram: true }), true);
-  assert.equal(fallbackWarning("wechat-first", { wechat: true, telegram: false }), false);
-  assert.equal(fallbackWarning("telegram-only", { wechat: false, telegram: false }), false);
-  assert.equal(fallbackWarning("", { wechat: false, telegram: true }), false);
-  assert.equal(fallbackWarning("wechat-first", null), false);
+const UP = { wechat: true, telegram: true }, NO_WECHAT = { wechat: false, telegram: true }, NO_TELEGRAM = { wechat: true, telegram: false }, NONE = { wechat: false, telegram: false };
+
+test("channelState: every option against every availability", () => {
+  const table = {
+    "telegram-only": [UP, NO_WECHAT, NO_TELEGRAM, NONE].map((a) => [a, ["", "", "none", "none"][[UP, NO_WECHAT, NO_TELEGRAM, NONE].indexOf(a)]]),
+    "wechat-first": [[UP, ""], [NO_WECHAT, "wechat-falls-back"], [NO_TELEGRAM, "no-backup"], [NONE, "none"]],
+    both: [[UP, ""], [NO_WECHAT, "only-telegram"], [NO_TELEGRAM, "only-wechat"], [NONE, "none"]],
+  };
+  for (const [id, cases] of Object.entries(table)) for (const [available, want] of cases) assert.equal(channelState(id, available), want, `${id} ${JSON.stringify(available)}`);
+  assert.equal(channelState("", NONE), "");
+  assert.equal(channelState("both", null), "");
+  assert.equal(channelState("both", undefined), "");
+});
+
+test("channelState sentences", () => {
+  assert.equal(CHANNEL_STATE_TEXT.none, "所选渠道都没有连接，主动消息现在发不出去。");
+  assert.equal(CHANNEL_STATE_TEXT["wechat-falls-back"], "微信还没有连接，消息会改发 Telegram。");
+  assert.equal(CHANNEL_STATE_TEXT["no-backup"], "Telegram 还没有绑定，微信发不出去时没有备用。");
+  assert.equal(CHANNEL_STATE_TEXT["only-telegram"], "微信还没有连接，只会发到 Telegram。");
+  assert.equal(CHANNEL_STATE_TEXT["only-wechat"], "Telegram 还没有绑定，只会发到微信。");
 });
 
 const row = (over) => ({ id: 1, channel: "wechat", status: "sent", failure: null, created_at: "2026-11-24T01:02:03Z", acked_at: null, text: "第一行\n第二行", ...over });
 
 test("a delivery row's status text", () => {
   assert.equal(deliveryStatusText(row({ status: "sent" })), "已发出");
-  assert.equal(deliveryStatusText(row({ status: "pending" })), "排队中");
+  const now = Date.parse("2026-11-24T01:10:03Z");
+  assert.equal(deliveryStatusText(row({ status: "pending", created_at: "2026-11-24T01:09:30Z" }), undefined, now), "排队中");
+  assert.equal(deliveryStatusText(row({ status: "pending", created_at: "2026-11-24T01:09:03Z" }), undefined, now), "排队中");
+  assert.equal(deliveryStatusText(row({ status: "pending" }), undefined, now), "排队中（已等 8 分钟）");
+  assert.equal(deliveryStatusText(row({ status: "pending" }), (s) => `<${s}>`, now), "<排队中（已等 {n} 分钟）>".replace("{n}", "8"));
+  assert.equal(deliveryStatusText(row({ status: "pending", created_at: "bad" }), undefined, now), "排队中");
   assert.equal(deliveryStatusText(row({ status: "failed", failure: "send_failed" })), "发送失败（发送出错）");
   assert.equal(deliveryStatusText(row({ status: "failed", failure: "expired" })), "发送失败（超时没发）");
   assert.equal(deliveryStatusText(row({ status: "failed", failure: "not_connected" })), "发送失败（渠道未连接）");
@@ -55,6 +73,10 @@ test("a delivery row keeps the channel name, the ack and the first line of the t
   assert.equal(r.firstLine, "第一行");
   assert.equal(deliveryRow(row({ channel: "telegram" })).channelLabel, "Telegram");
   assert.equal(deliveryRow(row()).acked, false);
+  assert.equal(deliveryRow(row({ status: "sent", sent_at: "2026-11-24T01:05:00Z" })).time, "2026-11-24T01:05:00Z");
+  assert.equal(deliveryRow(row({ status: "sent", sent_at: null })).time, "2026-11-24T01:02:03Z");
+  assert.equal(deliveryRow(row({ status: "failed", sent_at: "2026-11-24T01:05:00Z" })).time, "2026-11-24T01:02:03Z");
+  assert.equal(deliveryRow(row({ status: "pending" })).time, "2026-11-24T01:02:03Z");
   assert.equal(deliveryRow(row({ text: "\n\n  开头空行  \n后面" })).firstLine, "开头空行");
   assert.equal(deliveryRow(row({ text: null })).firstLine, "");
 });
