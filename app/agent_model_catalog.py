@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import stat
@@ -77,6 +78,19 @@ def clean_window(value) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or not WINDOW_MIN <= value <= WINDOW_MAX:
         raise CatalogError("invalid_window")
     return value
+
+
+PRICE_KEYS = ("price_input", "price_output", "price_cache_read", "price_cache_write")
+PRICE_MAX = 100_000.0     # USD per million tokens: far above any real price, so a typo is refused
+
+
+def clean_price(value) -> float | None:
+    """A price in USD per million tokens, or None when none was given.  Raises CatalogError(invalid_price)."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= PRICE_MAX:
+        raise CatalogError("invalid_price")
+    return float(value)
 
 
 def window_of(entry: dict) -> int:
@@ -143,7 +157,8 @@ def _read_file() -> tuple[list[dict], str | None, list[str]]:
                             "provider": provider, "model": model,
                             "base_url": _endpoint(provider, item.get("base_url")),
                             "key_source": "env", "key_env": key_env, "ciphertext": None, "origin": "file",
-                            "is_default": False, "context_window": clean_window(item.get("context_window"))})
+                            "is_default": False, "context_window": clean_window(item.get("context_window")),
+                            **{key: clean_price(item.get(key)) for key in PRICE_KEYS}})
             seen.add(name)
         except CatalogError as exc:
             problems.append(f"{path.name} entry {position}: {exc}")
@@ -156,7 +171,8 @@ def _row_entry(row: AgentModelEntry) -> dict:
     return {"name": row.name, "display_name": row.display_name, "provider": row.provider, "model": row.model,
             "base_url": row.base_url, "key_source": row.key_source, "key_env": row.key_env,
             "ciphertext": row.ciphertext, "origin": "server", "is_default": bool(row.is_default),
-            "migrated_from": row.migrated_from, "context_window": row.context_window}
+            "migrated_from": row.migrated_from, "context_window": row.context_window,
+            **{key: getattr(row, key) for key in PRICE_KEYS}}
 
 
 def entries() -> tuple[list[dict], str | None]:
@@ -343,7 +359,8 @@ def public(entry: dict, default: str | None = None) -> dict:
             "key_source": entry["key_source"], "key_env": entry.get("key_env"),
             "key_status": "configured" if key else "missing", **hint, "is_default": entry["name"] == default,
             "migrated": bool(entry.get("migrated_from")), "context_window": window_of(entry),
-            "context_window_set": bool(entry.get("context_window")), **_reasoning_fields(entry)}
+            "context_window_set": bool(entry.get("context_window")), **_reasoning_fields(entry),
+            **{key: entry.get(key) for key in PRICE_KEYS}}
 
 
 def list_public() -> dict:
@@ -438,11 +455,14 @@ def code_referenced_names() -> dict[str, str]:
 def save_entry(name: str, *, display_name: str | None = None, provider: str | None = None, model: str | None = None,
                base_url: str | None = None, api_key: str | None = None, key_env: str | None = None,
                is_default: bool | None = None, create: bool = False, context_window: int | None = None,
-               rename_to: str | None = None) -> dict:
+               rename_to: str | None = None, prices: dict | None = None) -> dict:
     """Add (``create``) or change an owner entry.  The key comes as ``api_key`` (stored in the vault) or
     ``key_env`` (an environment variable name); a new provider or endpoint needs one of them again.
     ``rename_to`` (an existing entry only) gives it a new name: the bots and model roles that named the old one
-    move to the new one in the same transaction, and the entry keeps its key, default flag and window."""
+    move to the new one in the same transaction, and the entry keeps its key, default flag, window and prices.
+    ``prices`` maps ``price_input``, ``price_output``, ``price_cache_read`` and ``price_cache_write`` (USD per million
+    tokens) to a value, or to None to clear it; a key left out stays as it is.  A call's cost is fixed when the call is
+    recorded, so a change here prices only later calls.  Raises CatalogError(invalid_price)."""
     if not NAME.fullmatch(name or ""):
         raise CatalogError("invalid_name")
     if any(item["name"] == name for item in _read_file()[0]):
@@ -458,6 +478,7 @@ def save_entry(name: str, *, display_name: str | None = None, provider: str | No
     if api_key and key_env:
         raise CatalogError("one_key_source")
     context_window = clean_window(context_window)
+    new_prices = {key: clean_price(value) for key, value in (prices or {}).items() if key in PRICE_KEYS}
     with SessionLocal() as db:
         row = db.get(AgentModelEntry, name, with_for_update=True)
         if create and row is not None:
@@ -486,6 +507,8 @@ def save_entry(name: str, *, display_name: str | None = None, provider: str | No
         row.provider, row.model, row.base_url = provider, model, endpoint
         if context_window is not None:
             row.context_window = context_window
+        for key, value in new_prices.items():
+            setattr(row, key, value)
         if api_key:
             try:
                 row.ciphertext = encrypt_secret(api_key)
@@ -502,6 +525,8 @@ def save_entry(name: str, *, display_name: str | None = None, provider: str | No
         if new_name is not None:
             _move_name(db, row, name, new_name)
         db.commit()
+    from . import model_usage
+    model_usage.forget_prices()      # the next ledger row reads the prices as they are now
     final = new_name or name
     listed, default = entries()
     return public(next(item for item in listed if item["name"] == final), default)
@@ -657,6 +682,15 @@ def startup_report() -> list[str]:
 def log_startup_report() -> None:
     for line in startup_report():
         logger.info(line)
+
+
+def ensure_price_columns() -> None:
+    """Add the price columns to an existing catalog table (a fresh database gets them from the model)."""
+    from sqlalchemy import text
+    from .database import engine
+    with engine.begin() as connection:
+        for key in PRICE_KEYS:
+            connection.execute(text(f"ALTER TABLE agent_model_catalog ADD COLUMN IF NOT EXISTS {key} DOUBLE PRECISION"))
 
 
 def ensure_window_column() -> None:

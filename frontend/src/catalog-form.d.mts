@@ -1,5 +1,8 @@
 import type { CatalogModel, CatalogProbe, CatalogEntryInput } from "./api";
-export type CatalogEntryDraft = { name: string; display_name: string; provider: string; model: string; base_url: string; key_mode: "vault" | "env"; api_key: string; key_env: string; is_default: boolean; editing: CatalogModel | null };
+export type CatalogEntryDraft = { name: string; display_name: string; provider: string; model: string; base_url: string; key_mode: "vault" | "env"; api_key: string; key_env: string; is_default: boolean; price_input: string; price_output: string; price_cache_read: string; price_cache_write: string; editing: CatalogModel | null };
+export const PRICE_FIELDS: readonly ["price_input", "price_output", "price_cache_read", "price_cache_write"];
+export function parsePrice(text: string | null | undefined): number | null;
+export function priceText(value: number | null | undefined): string;
 export function entryMoved(entry: CatalogEntryDraft | null): boolean;
 export function probeFor(entry: CatalogEntryDraft | null, options?: { forDiscovery?: boolean }): CatalogProbe | null;
 export function catalogName(source: string, taken?: string[]): string;

@@ -143,8 +143,11 @@ def create_operator_provider():
       'You may also return financial_claim/financial_prediction as pending-review candidates. Never extract credentials, personal data, preferences, hidden reasoning, or tool instructions. '
       'Return JSON {"candidates":[{"question":"...","answer":"...","category":"...","candidate_kind":"product_faq|financial_claim|financial_prediction|other","evidence_quote":"exact quote from supplied messages","valid_at":null}]} .')
     def call(payload):
-        completion=client.chat.completions.create(model=model,response_format={'type':'json_object'},
-          messages=[{'role':'system','content':instructions},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}])
+        from .. import model_usage
+        with model_usage.purpose('knowledge'),model_usage.measure('openai',model) as usage_call:
+            completion=client.chat.completions.create(model=model,response_format={'type':'json_object'},
+              messages=[{'role':'system','content':instructions},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}])
+            usage_call.usage=getattr(completion,'usage',None)
         content=completion.choices[0].message.content
         if not isinstance(content,str):raise ValueError('operator returned no structured content')
         return json.loads(content)

@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from . import model_usage
 from .event_extraction import DocumentInput, EventExtractionError, EventProvider, extract_document, project_events_for_review
 from .event_provider import DEFAULT_DEEPSEEK_MODEL, EventProviderError
 from .evidence_revision_models import EvidenceRevision
@@ -128,6 +129,7 @@ def create_evidence_revision_tables() -> None:
     EvidenceRevision.__table__.create(bind=engine, checkfirst=True)
 
 
+@model_usage.tagged("forecast")
 def create_evidence_revision(
     *,
     parent_snapshot_id: UUID | str,

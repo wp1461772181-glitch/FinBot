@@ -12,6 +12,7 @@ from uuid import UUID
 from dotenv import load_dotenv
 
 from . import observability
+from . import model_usage
 from .event_provider import configured_deepseek_model, create_deepseek_provider_from_env
 from .forecast_v2 import ForecastDraft
 from .forecast_v2_models import ForecastJobV2
@@ -83,7 +84,8 @@ class AgentForecastProcessor(ResearchOnlyForecastProcessor):
             "processor_version": PROCESSOR_VERSION})
         self._trace = trace
         try:
-            draft = self._process(job)
+            with model_usage.purpose("forecast", job=str(getattr(job, "id", "") or "") or None):
+                draft = self._process(job)
         except BaseException as exc:
             observability.end_trace(trace, error=type(exc).__name__)
             raise

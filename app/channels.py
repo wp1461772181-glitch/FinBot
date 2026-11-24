@@ -249,12 +249,18 @@ def acknowledge(owner_hash: str, channel: str, now: datetime | None = None, seen
         return int(result.rowcount or 0)
 
 
-def deliveries(owner_hash: str, limit: int = 50) -> list[dict]:
-    """Proactive messages, newest first.  Replies the bridge sent are not messages of this list."""
+def deliveries(owner_hash: str, limit: int = 50, before: tuple | None = None) -> list[dict]:
+    """Proactive messages, newest first.  Replies the bridge sent are not messages of this list.
+    ``before`` is the ``(created_at, id)`` of the last row of the page already seen: the list goes on after it."""
     with SessionLocal() as db:
-        rows = db.scalars(select(AgentTelegramMessage).where(
+        query = select(AgentTelegramMessage).where(
             AgentTelegramMessage.owner_hash == owner_hash, AgentTelegramMessage.source != "reply")
-            .order_by(AgentTelegramMessage.created_at.desc(), AgentTelegramMessage.id).limit(max(1, int(limit)))).all()
+        if before is not None:       # the order is created_at descending, then id ascending
+            seen_at, seen_id = before
+            query = query.where((AgentTelegramMessage.created_at < seen_at) | (
+                (AgentTelegramMessage.created_at == seen_at) & (AgentTelegramMessage.id > seen_id)))
+        rows = db.scalars(query.order_by(AgentTelegramMessage.created_at.desc(), AgentTelegramMessage.id)
+                          .limit(max(1, int(limit)))).all()
 
         def stamp(value):
             return value.isoformat() if value is not None else None

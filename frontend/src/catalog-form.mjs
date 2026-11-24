@@ -30,11 +30,25 @@ export function catalogName(source, taken = []) {
   return `${stem}-${Date.now() % 1000}`;
 }
 
-/** What 测试并保存 sends to save the entry once the test passed (a key only when one was given). */
+/** The four optional prices of a model (USD per million tokens), in the order the form shows them. */
+export const PRICE_FIELDS = ["price_input", "price_output", "price_cache_read", "price_cache_write"];
+/** A price box's text as a number, null when it is empty, NaN when it is not a number from 0 up (the server refuses the same). */
+export function parsePrice(text) {
+  const value = String(text ?? "").trim();
+  if (!value) return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 100000 ? number : Number.NaN;
+}
+/** A stored price as the text of its box. */
+export const priceText = (value) => (value == null ? "" : String(value));
+
+/** What 测试并保存 sends to save the entry once the test passed (a key only when one was given).  An edit sends all four
+ *  prices (null clears one); a new entry sends the ones that were filled in. */
 export function saveBody(entry) {
   const key = entry.key_mode === "vault" ? (entry.api_key ? { api_key: entry.api_key } : {}) : (entry.key_env.trim() ? { key_env: entry.key_env.trim() } : {});
+  const prices = PRICE_FIELDS.map((field) => [field, parsePrice(entry[field])]).filter(([, value]) => entry.editing || value !== null);
   return { display_name: entry.display_name.trim() || undefined, provider: entry.provider, model: entry.model.trim(),
-    base_url: entry.base_url.trim() || null, ...key, ...(entry.is_default ? { is_default: true } : {}) };
+    base_url: entry.base_url.trim() || null, ...key, ...(entry.is_default ? { is_default: true } : {}), ...Object.fromEntries(prices) };
 }
 
 /** Why 测试并保存 cannot run yet, as a phrase, or "" when it can.  ``taken`` are the catalog names in use: an edit may keep
@@ -45,6 +59,7 @@ export function entryProblem(entry, taken = []) {
   if (!/^[a-z0-9][a-z0-9._-]{0,39}$/.test(entry.name)) return "名字只能用小写字母、数字和 ._-。";
   if (entry.name !== entry.editing?.name && taken.includes(entry.name)) return "已有同名模型。";
   if (entry.provider === "custom" && !entry.base_url.trim()) return "自定义服务必须填写 Base URL。";
+  if (PRICE_FIELDS.some((field) => Number.isNaN(parsePrice(entry[field])))) return "价格要填不小于 0 的数字，不填就不算花费。";
   if (!probeFor(entry)) return entryMoved(entry) ? "换了服务或接口地址，需要重新填写 key。" : "请填写 API key 或环境变量名。";
   return "";
 }

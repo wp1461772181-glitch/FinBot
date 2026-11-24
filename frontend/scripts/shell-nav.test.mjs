@@ -6,8 +6,8 @@ import { isResearchSection, navGroup } from "../src/workspace-sections.mjs";
 
 const ROOT = "6f1c2d3e-0000-4000-8000-0000000000aa";
 
-test("the six areas, and the sub-pages three of them carry", () => {
-  assert.deepEqual(AREAS, ["chat", "research", "portfolio", "routines", "assistant", "settings"]);
+test("the seven areas, and the sub-pages three of them carry", () => {
+  assert.deepEqual(AREAS, ["chat", "research", "portfolio", "routines", "assistant", "settings", "backstage"]);
   assert.deepEqual(RESEARCH_ITEMS.map((i) => i.id), ["watchlist", "forecasts", "materials", "evidence", "scores", "replay"]);
   assert.deepEqual(ASSISTANT_ITEMS.map((i) => i.id), ["bots", "skills", "memory", "news", "knowledge"]);
   assert.deepEqual(SETTINGS_ITEMS.map((i) => i.id), ["models", "notifications", "appearance", "data", "account"]);

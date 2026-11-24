@@ -42,7 +42,7 @@ export function AccountMenu({ personal, onModeChange, defaultOpen, focusOnMount 
 type IconType = ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
 
 /** An area with sub-pages, while the sidebar is collapsed to the icon bar: the same pages in a menu beside the icon. */
-export function CollapsedGroupMenu({ area, label, Icon, current, item, symbol, personal, defaultOpen }: { area: Exclude<Area, "chat" | "portfolio" | "routines">; label: string; Icon: IconType; current: boolean; item: string | null; symbol: string; personal: boolean; defaultOpen: boolean }) {
+export function CollapsedGroupMenu({ area, label, Icon, current, item, symbol, personal, defaultOpen }: { area: Exclude<Area, "chat" | "portfolio" | "routines" | "backstage">; label: string; Icon: IconType; current: boolean; item: string | null; symbol: string; personal: boolean; defaultOpen: boolean }) {
   const { t } = useLocale();
   return <DropdownMenu defaultOpen={defaultOpen}>
     <DropdownMenuTrigger asChild>

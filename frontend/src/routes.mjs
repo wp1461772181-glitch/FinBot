@@ -8,6 +8,7 @@
 //   /research/c/:symbol/latest        resolver: the symbol's newest forecast, then redirect (#revisions → ?section=versions)
 //   /research/evidence                the evidence centre without a version (the symbol comes from ?symbol=; ?upload=1 opens the upload dialog)
 //   /assistant/skills/:skillId        a skill's editor (drafts link to it)
+//   /backstage, /backstage/:tab       后台, the owner's read-only look behind the answers (tabs: answers, usage, operations, deliveries)
 
 const TICKER = /^[A-Z]{1,5}(?:[.-][A-Z]{1,2})?$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -18,6 +19,7 @@ export const ROUTINE_TABS = ["confirm", "tasks", "runs"];
 export const SETTINGS_SECTIONS = ["models", "notifications", "appearance", "data", "account"];
 export const ASSISTANT_SECTIONS = ["bots", "skills", "memory", "news", "knowledge"];
 export const SOURCE_TYPES = ["official_filing", "uploaded_media"];
+export const BACKSTAGE_TABS = ["answers", "usage", "operations", "deliveries"];
 
 /** Route patterns in react-router syntax, one per address the app answers.  The router builds its map from these. */
 export const PATTERNS = {
@@ -49,6 +51,8 @@ export const PATTERNS = {
   assistantNews: "/assistant/news",
   assistantKnowledge: "/assistant/knowledge",
   settings: "/settings/:section",
+  backstage: "/backstage",
+  backstageTab: "/backstage/:tab",
   devKit: "/dev/kit",
   devKitProbe: "/dev/kit/probe",
   devKitStates: "/dev/kit/states",
@@ -100,6 +104,8 @@ export const paths = {
   assistant: (section = "bots") => `/assistant/${ASSISTANT_SECTIONS.includes(section) ? section : "bots"}`,
   skill: (skillId) => `/assistant/skills/${seg(skillId)}`,
   settings: (section = "models") => `/settings/${SETTINGS_SECTIONS.includes(section) ? section : "models"}`,
+  /** 后台: without a tab (or an unknown one) the bare address, which opens the answers. */
+  backstage: (tab) => (BACKSTAGE_TABS.includes(tab) ? `/backstage/${tab}` : "/backstage"),
   devKit: ({ probe, states, data, bots } = {}) => (probe ? "/dev/kit/probe" : states ? "/dev/kit/states" : data ? "/dev/kit/data" : bots ? "/dev/kit/bots" : "/dev/kit"),
 };
 
@@ -125,6 +131,11 @@ export function isBotSettingsPath(path) {
 export function companyTab(params) {
   const tab = params.get("tab");
   return COMPANY_TABS.includes(tab) ? tab : "overview";
+}
+
+/** The tab a /backstage address names; anything unknown is the answers. */
+export function backstageTab(value) {
+  return BACKSTAGE_TABS.includes(value) ? value : "answers";
 }
 
 /** The tab of the routines address, or null when the address names none (P7.2 reads it; the address keeps it meanwhile). */
@@ -180,6 +191,7 @@ export function sectionOfPath(path) {
   if (head === "portfolio") return "portfolio";
   if (head === "routines") return "routines";
   if (head === "settings") return "admin";
+  if (head === "backstage") return "backstage";
   if (head === "assistant") {
     return second === "skills" ? "skills" : second === "memory" ? "memory" : second === "news" ? "news" : second === "knowledge" ? "knowledge" : "me";
   }
@@ -223,6 +235,7 @@ export function pathForSection(section, symbol) {
     case "me": return paths.assistant("bots");
     case "knowledge": return paths.assistant("knowledge");
     case "admin": return paths.settings();
+    case "backstage": return paths.backstage();
     default: return paths.chat();
   }
 }

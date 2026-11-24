@@ -34,6 +34,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, text as sql
 
 from . import agent_tasks as tasks
+from . import model_usage
 from .agent_chat_models import AgentTask
 from .database import SessionLocal, engine
 
@@ -134,23 +135,25 @@ async def run_unattended_turn(credential: str, question: str, model: dict, *, to
     if note:
         messages.append(note)
     try:
-        async for event in stream_workflow(question=question, messages=messages, provider=model["provider"],
-                                           model=model["model"], api_key=model["api_key"], base_url=model.get("base_url"),
-                                           owner_hash=owner, conversation_id=cid, identity_credential=credential,
-                                           turn_id=turn, profile_block=await _profile_block(credential, bot),
-                                           unattended=True, token_budget=token_budget, action_sink=actions,
-                                           bot=bot, skill_block=skill_block, active_skill=active_skill):
-            kind = event.get("event")
-            if kind == "assistant_tool_request":
-                await append_message(cid, turn, "assistant", "", tool_calls=event["protocol"])
-                genuine.update(call.get("id") for call in event["protocol"].get("calls", []) if isinstance(call, dict))
-            elif kind == "tool_result" and event.get("call_id") in genuine:
-                await append_message(cid, turn, "tool", json.dumps(event["result"], ensure_ascii=False, separators=(",", ":")),
-                                     tool_call_id=event["call_id"])
-            elif kind == "delta":
-                answer += event["text"]
-            elif kind == "done":
-                done = event
+        with model_usage.purpose("routine", owner_hash=owner, conversation_id=cid, turn_id=turn):
+            async for event in stream_workflow(question=question, messages=messages, provider=model["provider"],
+                                               model=model["model"], api_key=model["api_key"], base_url=model.get("base_url"),
+                                               owner_hash=owner, conversation_id=cid, identity_credential=credential,
+                                               turn_id=turn, profile_block=await _profile_block(credential, bot),
+                                               unattended=True, token_budget=token_budget, action_sink=actions,
+                                               bot=bot, skill_block=skill_block, active_skill=active_skill,
+                                               catalog_name=model.get("name")):
+                kind = event.get("event")
+                if kind == "assistant_tool_request":
+                    await append_message(cid, turn, "assistant", "", tool_calls=event["protocol"])
+                    genuine.update(call.get("id") for call in event["protocol"].get("calls", []) if isinstance(call, dict))
+                elif kind == "tool_result" and event.get("call_id") in genuine:
+                    await append_message(cid, turn, "tool", json.dumps(event["result"], ensure_ascii=False, separators=(",", ":")),
+                                         tool_call_id=event["call_id"])
+                elif kind == "delta":
+                    answer += event["text"]
+                elif kind == "done":
+                    done = event
     except Exception as exc:
         from fastapi import HTTPException
         code = exc.detail if isinstance(exc, HTTPException) and isinstance(exc.detail, str) else type(exc).__name__
@@ -448,9 +451,10 @@ async def run_brief(task_id, credential: str, *, now: datetime, missed: int = 1)
         return "skipped_no_model"
     used, result = 0, None
     for attempt in range(2):
-        result = await run_unattended_turn(credential, question, model,
-                                           title=f"{name} · {local:%m-%d %H:%M}", bot=settings, notes=notes,
-                                           **({"skill_id": skill_id} if skill_id else {}))
+        with model_usage.purpose("routine", owner_hash=owner, bot_id=bot_id, job=str(task_id)):
+            result = await run_unattended_turn(credential, question, model,
+                                               title=f"{name} · {local:%m-%d %H:%M}", bot=settings, notes=notes,
+                                               **({"skill_id": skill_id} if skill_id else {}))
         used += int((result.get("audit") or {}).get("token_usage") or 0)
         retry = (result["status"] == "failed" and retryable(result.get("reason")) and not result["actions"]
                  and not result.get("citations"))

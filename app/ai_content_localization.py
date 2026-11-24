@@ -50,6 +50,14 @@ def localize_ai_content(
     if locale != LOCALE:
         raise LocalizationError("Only English display translations are supported.", code="unsupported_locale", status_code=422)
 
+    from . import model_usage
+    with model_usage.purpose("localization", job=f"{content_kind}:{content_id}"[:64]):
+        return _localize_with_lock(db, content_kind=content_kind, content_id=content_id, locale=locale,
+                                   provider_factory=provider_factory)
+
+
+def _localize_with_lock(db: Session, *, content_kind: ContentKind, content_id: UUID, locale: str,
+                        provider_factory: Callable[[], DeepSeekEventProvider] | None) -> dict[str, Any]:
     lock_key = _advisory_lock_key(content_kind, content_id, locale)
     bind = db.get_bind()
     if bind.dialect.name == "postgresql":

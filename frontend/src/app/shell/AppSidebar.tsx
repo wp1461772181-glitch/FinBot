@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { Suspense, lazy, useEffect, useRef, useState, type ComponentType } from "react";
-import { CalendarClock, ChartLine, ChevronRight, ChevronsUpDown, Command, History, MessageSquare, Plus, Search, Settings, Sparkles, UserRound, Wallet } from "lucide-react";
+import { CalendarClock, ChartLine, ChevronRight, ClipboardList, ChevronsUpDown, Command, History, MessageSquare, Plus, Search, Settings, Sparkles, UserRound, Wallet } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupAction, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuAction, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem, SidebarRail, SidebarSeparator, SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
 import type { Bot } from "../../api/bots";
@@ -33,8 +33,8 @@ export type ShellNavProps = {
   onModeChange: ModeChange;
 };
 
-const AREA_ICON: Record<Exclude<Area, "chat">, ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>> = { research: ChartLine, portfolio: Wallet, routines: CalendarClock, assistant: Sparkles, settings: Settings };
-const AREA_LABEL: Record<Exclude<Area, "chat">, string> = { research: "研究", portfolio: "持仓", routines: "任务", assistant: "助手", settings: "设置" };
+const AREA_ICON: Record<Exclude<Area, "chat">, ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>> = { research: ChartLine, portfolio: Wallet, routines: CalendarClock, assistant: Sparkles, settings: Settings, backstage: ClipboardList };
+const AREA_LABEL: Record<Exclude<Area, "chat">, string> = { research: "研究", portfolio: "持仓", routines: "任务", assistant: "助手", settings: "设置", backstage: "后台" };
 
 /** An area with sub-pages (研究, 助手, 设置).  Expanded: the sub-pages open under it while it is the area the reader is in (or when asked to).  Collapsed to the icon bar: the same pages in a menu beside it. */
 function NavGroupItem({ area, props }: { area: "research" | "assistant" | "settings"; props: ShellNavProps }) {
@@ -78,8 +78,8 @@ function NavGroupItem({ area, props }: { area: "research" | "assistant" | "setti
   </SidebarMenuItem>;
 }
 
-/** An area that is one page (持仓, 任务). */
-function NavLeaf({ area, props, badge = 0 }: { area: "portfolio" | "routines"; props: ShellNavProps; badge?: number }) {
+/** An area that is one page (持仓, 任务, 后台). */
+function NavLeaf({ area, props, badge = 0 }: { area: "portfolio" | "routines" | "backstage"; props: ShellNavProps; badge?: number }) {
   const { t } = useLocale();
   const { state } = useSidebar();
   const current = activeArea(props.path) === area;
@@ -177,6 +177,7 @@ export function AppSidebar({ props }: { props: ShellNavProps }) {
           <NavGroupItem area="research" props={props} />
           {props.personal && <NavLeaf area="portfolio" props={props} />}
           {props.personal && <NavLeaf area="routines" props={props} badge={props.routinesCount} />}
+          {props.personal && <NavLeaf area="backstage" props={props} />}
         </SidebarMenu>
       </SidebarGroup>
       <SidebarSeparator />

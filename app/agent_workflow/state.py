@@ -28,6 +28,8 @@ class AgentRuntimeContext:
     model: str
     api_key: str = field(repr=False)
     base_url: str | None = field(default=None, repr=False)
+    # The catalog entry the turn's model came from (None: the browser sent its own settings); the ledger records it.
+    catalog_name: str | None = None
     owner_hash: str = ""
     conversation_id: str = ""
     classifier: object | None = field(default=None, repr=False, compare=False)

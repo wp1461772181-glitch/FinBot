@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from .agent_chat_api import PROVIDERS, BASE_URLS, PinnedPublicTransport, model_transport
 from .agent_progress import progress_watchdog, mark_progress
 from .agent_workflow.fp_flags import flag
+from . import model_usage
 
 _DECISION_SESSION=ContextVar('agent_decision_session',default=None)
 
@@ -204,24 +205,27 @@ def endpoint(provider, base_url=None):
     if base_url is None: return PROVIDERS[provider]
     base=base_url.rstrip("/")
     return base if base.endswith("/chat/completions") else base+"/chat/completions"
-async def decision_request(provider, model, api_key, messages, schemas, base_url=None, reasoning_effort=None):
+def _named(catalog_name):
+    """The ledger's catalog name, passed on only when there is one (a caller or a test double that takes none is left alone)."""
+    return {"catalog_name":catalog_name} if catalog_name else {}
+async def decision_request(provider, model, api_key, messages, schemas, base_url=None, reasoning_effort=None, catalog_name=None):
     if provider=="anthropic":
         from . import anthropic_native
-        if anthropic_native.use_native(provider):return await anthropic_native.decision_request(model,api_key,messages,schemas,reasoning_effort)
+        if anthropic_native.use_native(provider):return await anthropic_native.decision_request(model,api_key,messages,schemas,reasoning_effort,**_named(catalog_name))
     if any(isinstance(m,dict) and "cache_point" in m for m in messages):messages=[{k:v for k,v in m.items() if k!="cache_point"} for m in messages]  # kernel-private mark
     body={"model":model,"messages":messages,"max_tokens":MAX_OUTPUT_TOKENS,"stream":True}
     if schemas: body.update(tools=schemas,tool_choice="auto")
     if provider=="minimax":body["reasoning_split"]=True
     body.update(reasoning_options(provider,reasoning_effort,model))
-    return await _post(provider,api_key,body,base_url)
-async def stream_decision(provider,model,api_key,messages,schemas,*,base_url=None,reasoning_effort=None,on_text=None,keep_thinking=True,cache=True):
+    return await _post(provider,api_key,body,base_url,**_named(catalog_name))
+async def stream_decision(provider,model,api_key,messages,schemas,*,base_url=None,reasoning_effort=None,on_text=None,keep_thinking=True,cache=True,catalog_name=None):
     """decision_request with the answer text reported through ``await on_text(piece)`` as it is generated (Anthropic native);
     other providers answer first and report the whole text once.  Same (data, message) return as decision_request."""
     if provider=="anthropic":
         from . import anthropic_native
         if anthropic_native.use_native(provider):
-            return await anthropic_native.stream_decision(model,api_key,messages,schemas,reasoning_effort,on_text=on_text,keep_thinking=keep_thinking,cache=cache)
-    data,message=await decision_request(provider,model,api_key,messages,schemas,base_url,reasoning_effort)
+            return await anthropic_native.stream_decision(model,api_key,messages,schemas,reasoning_effort,on_text=on_text,keep_thinking=keep_thinking,cache=cache,**_named(catalog_name))
+    data,message=await decision_request(provider,model,api_key,messages,schemas,base_url,reasoning_effort,**_named(catalog_name))
     if on_text is not None and isinstance(message,dict) and message.get("content"):await on_text(message["content"])
     return data,message
 def _semantic_delta(delta):
@@ -308,7 +312,12 @@ def _merge_delta(message, calls, delta, cap=12, over_cap_code='provider_incompat
                 container[key]+=value
 
 
-async def _post(provider,key,body,base_url=None):
+async def _post(provider,key,body,base_url=None,catalog_name=None):
+    # The ledger's one recording point for the OpenAI-compatible transport: one row per request, whatever the caller then does.
+    with model_usage.measure(provider,body.get('model'),catalog_name=catalog_name) as call:
+        return await _post_request(provider,key,body,base_url,call)
+
+async def _post_request(provider,key,body,base_url,call):
     headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'}
     if provider=='openrouter':headers['X-Title']='FinBot'
     # SW1D: read once per request.  On, the parser accepts tool-call indexes below the stream guard; off, the 4290d8b bound (12).
@@ -325,7 +334,7 @@ async def _post(provider,key,body,base_url=None):
                     try:
                         async for event in _events(r):
                             number+=1
-                            if isinstance(event.get('usage'),dict):usage=event['usage']
+                            if isinstance(event.get('usage'),dict):usage=call.usage=event['usage']
                             if not event.get('choices'):continue
                             choice=event['choices'][0]
                             if finish is not None and _semantic_delta(choice['delta']):raise ResponseCheckFailed('provider_incompatible_response','post_finish_delta')
@@ -359,6 +368,7 @@ async def _post(provider,key,body,base_url=None):
                     try:
                         data=json.loads(b''.join(chunks));choice=data['choices'][0];message=choice['message']
                     except (ValueError,KeyError,IndexError,TypeError) as exc:raise ResponseCheckFailed('provider_incompatible_response','json_body') from exc
+                    call.usage=data.get('usage') if isinstance(data,dict) else None
                     if not isinstance(message,dict):raise ResponseCheckFailed('provider_incompatible_response','json_message_shape')
                     if choice.get('finish_reason')=='content_filter' or (choice.get('finish_reason')=='length' and (message.get('tool_calls') or not str(message.get('content') or '').strip())):
                         raise HTTPException(502,'provider_incomplete_response')
@@ -368,12 +378,16 @@ async def _post(provider,key,body,base_url=None):
     except (httpx.TimeoutException,TimeoutError) as exc:raise HTTPException(504,'provider_timeout') from exc
     except httpx.HTTPError as exc:raise HTTPException(502,'provider_network_error') from exc
 
-async def stream_answer(provider,model,api_key,messages,reasoning_collector=None,base_url=None):
+async def stream_answer(provider,model,api_key,messages,reasoning_collector=None,base_url=None,catalog_name=None):
     if provider=='anthropic':
         from . import anthropic_native
         if anthropic_native.use_native(provider):
-            async for piece in anthropic_native.stream_answer(model,api_key,messages,reasoning_collector):yield piece
+            async for piece in anthropic_native.stream_answer(model,api_key,messages,reasoning_collector,**_named(catalog_name)):yield piece
             return
+    with model_usage.measure(provider,model,streamed=True,catalog_name=catalog_name) as call:
+        async for piece in _stream_answer_request(provider,model,api_key,messages,reasoning_collector,base_url,call):yield piece
+
+async def _stream_answer_request(provider,model,api_key,messages,reasoning_collector,base_url,call):
     body={'model':model,'messages':messages,'max_tokens':MAX_OUTPUT_TOKENS,'stream':True}
     if provider=='minimax':body['reasoning_split']=True
     body.update(reasoning_options(provider,model=model))
@@ -388,7 +402,9 @@ async def stream_answer(provider,model,api_key,messages,reasoning_collector=None
                 message={};calls={};finished=False;number=0
                 async for event in _events(r):
                     number+=1
-                    if isinstance(reasoning_collector,dict) and isinstance(event.get('usage'),dict):reasoning_collector['_usage']=event['usage']
+                    if isinstance(event.get('usage'),dict):
+                        call.usage=event['usage']
+                        if isinstance(reasoning_collector,dict):reasoning_collector['_usage']=event['usage']
                     if not event.get('choices'):continue
                     choice=event['choices'][0];delta=choice['delta'];reason=choice.get('finish_reason')
                     if finished and _semantic_delta(delta):raise ResponseCheckFailed('provider_incompatible_response','post_finish_delta',event=number)

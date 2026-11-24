@@ -11,6 +11,7 @@ const LIBRARY_TABS = ["materials", "evidence"];
 export function navGroup(section) {
   if (section === "agent" || section === "bot") return "chat";
   if (section === "admin" || section === "knowledge") return "settings";
+  if (section === "backstage") return "backstage";
   if (section === "routines" || section === "portfolio" || section === "news" || section === "skills" || section === "memory") return section;
   if (section === "me") return "memory";
   if (LIBRARY_TABS.includes(section)) return "library";

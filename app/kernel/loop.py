@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from .. import agent_chat_provider as provider
 from .. import agent_model_roles as roles
+from .. import model_usage
 from .. import x_search
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_progress import mark_progress, progress_watchdog
@@ -22,7 +23,7 @@ from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
 from . import act, ask, press, progress, prompt, skills, tiers
-from .toolrun import run_step_tools
+from .toolrun import mark_timeline, run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
     "search_knowledge", "web_research", "search_configured_news", "search_x", "calculate", "calculate_formula",
@@ -128,6 +129,7 @@ def _add_usage(run: _Run, data: dict, began: float) -> None:
     run.audit["cache_write_tokens"] += written
     run.audit["calls"].append({"tier": run.tier, "ms": round((time.monotonic() - began) * 1000), "tokens": tokens,
                                "cache_read": read, "cache_write": written, "model": run.model.label})
+    mark_timeline(run, "call", index=len(run.audit["calls"]) - 1)
 
 
 def _failure_code(failure: Exception) -> str:
@@ -165,6 +167,7 @@ async def _switch_to_backup(run: _Run, failure: Exception) -> bool:
         run.messages[:] = [{k: v for k, v in m.items() if not (k.startswith("reasoning_") or k in PRIVATE_KEYS)} if m.get("role") == "assistant" else m
                            for m in run.messages]
         run.narration.append(sentence)
+        mark_timeline(run, "say", index=len(run.narration) - 1, step=run.audit["decision_steps"] + 1)     # said on the step whose call is made again
         await run.emit({"event": "narration", "text": sentence, "system": True})
     except Exception as secondary:
         # The provider's failure is what the turn reports; the switch's own trouble is only logged (never the key).
@@ -202,9 +205,12 @@ async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
     for attempt in (0, 1):
         began = time.monotonic()
         try:
-            data, message = await provider.stream_decision(
-                use.provider, use.model, use.api_key, run.messages, tool_schemas, base_url=use.base_url,
-                reasoning_effort=tiers.EFFORT[run.tier], on_text=on_text, keep_thinking=True, cache=True)
+            # The ledger: this attempt is a row of its own, under the catalog name of the model that is answering (the backup's, once switched).
+            with model_usage.attempt(attempt + 1):
+                data, message = await provider.stream_decision(
+                    use.provider, use.model, use.api_key, run.messages, tool_schemas, base_url=use.base_url,
+                    reasoning_effort=tiers.EFFORT[run.tier], on_text=on_text, keep_thinking=True, cache=True,
+                    **({"catalog_name": use.name} if use.name else {}))
         except Exception as failure:
             # Whatever was streamed in this step is a cut-off: never leave it behind as the answer.
             if run.sent_text:
@@ -235,6 +241,7 @@ async def _tool_step(run: _Run, message: dict) -> None:
     sentence, item, system = progress.step_narration(message["tool_calls"], message.get("content"))
     if sentence:
         run.narration.append(sentence)
+        mark_timeline(run, "say", index=len(run.narration) - 1)
         await run.emit({"event": "narration", "text": sentence, **({"item": item} if item else {}), **({"system": True} if system else {})})
     reasoning = {k: v for k, v in message.items() if k.startswith("reasoning_")}
     await run.emit({"event": "assistant_tool_request", "protocol": {"calls": message["tool_calls"], **reasoning}})
@@ -381,7 +388,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
     tool_schemas = _tool_schemas(context)
     run = _Run(context=context, emit=emit, messages=[], user_text="", schemas=tool_schemas,
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
-               model=ModelUse(context.provider, context.model, context.api_key, context.base_url),
+               model=ModelUse(context.provider, context.model, context.api_key, context.base_url, getattr(context, "catalog_name", None)),
                ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)),
                question=question, turn_id=str(state.get("turn_id") or ""),
                carried_sets=[x for x in state.get("result_sets") or [] if isinstance(x, dict) and x.get("owner") == context.owner_hash

@@ -32,7 +32,7 @@ def stream_fixture(monkeypatch):
         executed.append((name,args))
         return tool_results.get(name,{'ok':True,'data':[] if name=='search_knowledge' else [{'id':str(uuid4()),'symbol':args.get('symbol'),'close':250,'trading_date':'2026-10-14','fetched_at':'2026-10-15T00:00:00Z'}],'source':'fixture'})
     monkeypatch.setattr(tools,'invoke',execute)
-    async def decide(_provider,_model,_key,messages,schemas,base_url=None):
+    async def decide(_provider,_model,_key,messages,schemas,base_url=None,**_ledger):
         requests.append((messages,schemas,base_url));names={s['function']['name'] for s in schemas}
         if 'resolve_reference' in names:
             payload=json.loads(messages[-1]['content']);return {},{'content':json.dumps({'relationship':'new','canonical_question':payload['question']})}

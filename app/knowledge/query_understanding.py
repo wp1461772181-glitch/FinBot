@@ -142,7 +142,9 @@ async def query_variants(query: str) -> list[str]:
     expander = _EXPANDER.get()
     if expander is not None:
         try:
-            return clean_variants(query, await expander(query))
+            from .. import model_usage
+            with model_usage.purpose("query_expansion"):
+                return clean_variants(query, await expander(query))
         except Exception:  # a failed expansion is a missing variant, never a failed search
             pass
     return clean_variants(query, expanded_queries(query))

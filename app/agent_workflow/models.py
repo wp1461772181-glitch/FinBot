@@ -19,6 +19,8 @@ class AgentConsent(Base):
     status:Mapped[str]=mapped_column(String(24),default='proposed')
     result:Mapped[dict|None]=mapped_column(JSON,nullable=True)
     created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now())
+    # When the card was executed, cancelled, changed or found expired; NULL while it waits.  Added to older tables by ``consent.ensure_columns``.
+    decided_at:Mapped[datetime|None]=mapped_column(DateTime(timezone=True),nullable=True)
 
 class AgentWebSource(Base):
     __tablename__='agent_web_sources'

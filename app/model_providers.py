@@ -12,6 +12,8 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
+from . import model_usage
+
 from .event_provider import (
     EventProviderError,
     ProviderResult,
@@ -138,7 +140,9 @@ class OpenAICompatibleProvider:
         }
         request["extra_body"] = thinking_disabled_options(self.provider)
         try:
-            response = self._client.chat.completions.create(**request)
+            with model_usage.measure(self.provider, request["model"]) as call:      # the ledger's recording point for this transport
+                response = self._client.chat.completions.create(**request)
+                call.usage = getattr(response, "usage", None)
         except Exception as exc:
             status_code = getattr(exc, "status_code", None)
             if isinstance(status_code, int):

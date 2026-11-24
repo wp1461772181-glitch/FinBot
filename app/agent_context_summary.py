@@ -169,11 +169,12 @@ def validate_summary(raw, source: str) -> str:
 
 async def summarize_pending(conversation_id: str, credential: str, *, provider: str, model: str,
                             api_key: str, base_url: str | None, l1_bytes: int = layers.L1_BYTES,
-                            l2_bytes: int = layers.L2_BYTES, anchored: bool = False) -> bool:
+                            l2_bytes: int = layers.L2_BYTES, anchored: bool = False, catalog_name: str | None = None) -> bool:
     """Make and append one segment if turns are waiting for one.  True when a segment was appended.
     The layer sizes are the ones the turns are sent with (the arguments exist for tests)."""
     from .agent_chat_provider import decision_request
-    from .agent_chat_store import append_summary, conversation_context
+    from .agent_chat_store import append_summary, conversation_context, owner_hash
+    from .model_usage import purpose
     context = await conversation_context(conversation_id, credential, l1_bytes=l1_bytes, l2_bytes=l2_bytes,
                                       **_view(anchored))
     if not context:
@@ -185,7 +186,8 @@ async def summarize_pending(conversation_id: str, credential: str, *, provider: 
     messages = [{"role": "system", "content": SUMMARY_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]
     async with asyncio.timeout(SUMMARY_TIMEOUT_SECONDS):
-        _response, decision = await decision_request(provider, model, api_key, messages, [], base_url)
+        with purpose("summary", owner_hash=owner_hash(credential), conversation_id=conversation_id):
+            _response, decision = await decision_request(provider, model, api_key, messages, [], base_url, **_named(catalog_name))
     source = "\n".join([*payload["earlier_segments"],
                         *(f"{item['user']}\n{item['assistant_start']}" for item in payload["turns"])])
     text = validate_summary(decision.get("content") if isinstance(decision, dict) else None, source)
@@ -350,6 +352,11 @@ def select_for_compaction(context: dict, *, manual: bool) -> list[layers.Turn]:
     return chosen
 
 
+def _named(catalog_name: str | None) -> dict:
+    """The ledger's catalog name, passed on only when there is one."""
+    return {"catalog_name": catalog_name} if catalog_name else {}
+
+
 def _view(anchored: bool) -> dict:
     """The extra argument of ``conversation_context`` for a kernel conversation; none for the others, so their
     calls are exactly what they were."""
@@ -358,12 +365,14 @@ def _view(anchored: bool) -> dict:
 
 async def compact_conversation(conversation_id: str, credential: str, *, provider: str, model: str, api_key: str,
                                base_url: str | None, window: int | None = None, focus: str = "",
-                               manual: bool = False, context: dict | None = None, anchored: bool = False) -> dict:
+                               manual: bool = False, context: dict | None = None, anchored: bool = False,
+                               catalog_name: str | None = None) -> dict:
     """Fold the oldest turns into the rolling summary.  Returns ``{"compacted": N, ...}``; N is 0 when there
     was nothing to do or the model's answer was refused (then ``error`` holds the short reason code and the
     old summary is untouched).  A provider failure raises; nothing has been written by then."""
     from .agent_chat_provider import decision_request
-    from .agent_chat_store import append_summary, conversation_context
+    from .agent_chat_store import append_summary, conversation_context, owner_hash
+    from .model_usage import purpose
     focus = " ".join(str(focus or "").split())[:FOCUS_MAX_CHARS]
     if context is None:
         context = await conversation_context(conversation_id, credential, window=window, **_view(anchored))
@@ -382,7 +391,8 @@ async def compact_conversation(conversation_id: str, credential: str, *, provide
         messages = [{"role": "system", "content": ROLLING_PROMPT},
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]
         async with asyncio.timeout(SUMMARY_TIMEOUT_SECONDS * 2):
-            _response, decision = await decision_request(provider, model, api_key, messages, [], base_url)
+            with purpose("summary", owner_hash=owner_hash(credential), conversation_id=conversation_id):
+                _response, decision = await decision_request(provider, model, api_key, messages, [], base_url, **_named(catalog_name))
         allowed = {(t.turn_id, s["ordinal"]) for t in chunk for s in _turn_sources(t)}
         allowed |= {m for key in layers.ROLLING_SOURCED for m in map(_marker, (previous or {}).get(key, [])) if m}
         source = "\n".join([*(f"{item['user']}\n{item['assistant']}" for item in payload["turns"]),
@@ -435,7 +445,8 @@ async def _guarded(conversation_id: str, credential: str, *, window: int | None 
 
 
 def schedule_summary(conversation_id: str, credential: str, *, provider: str, model: str,
-                     api_key: str, base_url: str | None = None, window: int | None = None, anchored: bool = False) -> None:
+                     api_key: str, base_url: str | None = None, window: int | None = None, anchored: bool = False,
+                     catalog_name: str | None = None) -> None:
     """Called when a turn has succeeded.  Never raises and never waits; at most one task per
     conversation.  The task compresses only if the history has reached the line."""
     try:
@@ -443,7 +454,7 @@ def schedule_summary(conversation_id: str, credential: str, *, provider: str, mo
             return
         task = asyncio.get_running_loop().create_task(_guarded(
             conversation_id, credential, provider=provider, model=model, api_key=api_key, base_url=base_url,
-            window=window, anchored=anchored))
+            window=window, anchored=anchored, catalog_name=catalog_name))
         _RUNNING[conversation_id] = task
 
         def forget(done: asyncio.Task, key: str = conversation_id) -> None:

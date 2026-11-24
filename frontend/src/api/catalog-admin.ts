@@ -1,6 +1,8 @@
 import { type CatalogModel, botJson } from "./bots";
 
-export type CatalogEntryInput = { name?: string; display_name?: string; provider?: string; model?: string; base_url?: string | null; api_key?: string; key_env?: string; is_default?: boolean };
+export type CatalogEntryInput = { name?: string; display_name?: string; provider?: string; model?: string; base_url?: string | null; api_key?: string; key_env?: string; is_default?: boolean;
+  /** USD per million tokens; null clears a price, a missing key leaves it. */
+  price_input?: number | null; price_output?: number | null; price_cache_read?: number | null; price_cache_write?: number | null };
 export async function addCatalogModel(value:CatalogEntryInput):Promise<CatalogModel>{ return (await botJson<{model:CatalogModel}>("model-catalog",{method:"POST",body:value},"保存失败。")).model; }
 export async function updateCatalogModel(name:string,value:CatalogEntryInput):Promise<CatalogModel>{ return (await botJson<{model:CatalogModel}>(`model-catalog/${encodeURIComponent(name)}`,{method:"PATCH",body:value},"保存失败。")).model; }
 export async function deleteCatalogModel(name:string):Promise<void>{ await botJson(`model-catalog/${encodeURIComponent(name)}`,{method:"DELETE"},"删除失败。"); }

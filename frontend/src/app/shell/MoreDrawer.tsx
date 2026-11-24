@@ -49,6 +49,10 @@ export default function MoreDrawer({ open, onOpenChange, props }: { open: boolea
         <ul className="flex flex-col">
           {areaItems("assistant", { personal: props.personal }).map(item => <li key={item.id}><Link to={areaPath("assistant", props.symbol, item.id)} onClick={close} aria-current={props.path.startsWith("/assistant") && assistantItem === item.id ? "page" : undefined} className={rowClass}>{t(item.label)}</Link></li>)}
         </ul>
+        {props.personal && <>
+          <p className={sectionTitle}>{t("后台")}</p>
+          <ul className="flex flex-col"><li><Link to={paths.backstage()} onClick={close} aria-current={props.path.startsWith(paths.backstage()) ? "page" : undefined} className={rowClass}>{t("回答、用量与操作记录")}</Link></li></ul>
+        </>}
         <p className={sectionTitle}>{t("设置")}</p>
         <ul className="flex flex-col">
           {areaItems("settings").map(item => <li key={item.id}><Link to={areaPath("settings", props.symbol, item.id)} onClick={close} aria-current={props.path.startsWith("/settings") && assistantItem === item.id ? "page" : undefined} className={rowClass}>{t(item.label)}</Link></li>)}

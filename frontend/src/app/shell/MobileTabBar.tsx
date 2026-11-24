@@ -8,7 +8,7 @@ import { MonitorDot } from "./MonitorDot";
 
 const MoreDrawer = lazy(() => import("./MoreDrawer"));
 
-type Tab = { area: Exclude<Area, "assistant" | "settings">; label: string; icon: ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }> };
+type Tab = { area: Exclude<Area, "assistant" | "settings" | "backstage">; label: string; icon: ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }> };
 const TABS: Tab[] = [
   { area: "chat", label: "对话", icon: MessageSquare },
   { area: "research", label: "研究", icon: ChartLine },

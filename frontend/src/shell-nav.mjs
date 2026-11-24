@@ -9,7 +9,7 @@
 import { pathForSection, paths, sectionOfPath, splitPath } from "./routes.mjs";
 import { navGroup } from "./workspace-sections.mjs";
 
-export const AREAS = ["chat", "research", "portfolio", "routines", "assistant", "settings"];
+export const AREAS = ["chat", "research", "portfolio", "routines", "assistant", "settings", "backstage"];
 
 /** Research sub-pages.  `sections` are the old section names an address of the page maps to (the highlight reads them). */
 export const RESEARCH_ITEMS = [
@@ -59,6 +59,7 @@ export function areaPath(area, symbol, itemId) {
     case "routines": return paths.routines();
     case "assistant": return paths.assistant(itemId ?? "bots");
     case "settings": return paths.settings(itemId ?? "models");
+    case "backstage": return paths.backstage();
     default: return paths.chat();
   }
 }
@@ -76,7 +77,7 @@ export function activeArea(path) {
   const section = sectionOfPath(path);
   const group = navGroup(section);
   if (group === "chat") return "chat";
-  if (group === "portfolio" || group === "routines") return group;
+  if (group === "portfolio" || group === "routines" || group === "backstage") return group;
   if (section === "me" || group === "skills" || group === "memory" || group === "news") return "assistant";
   if (section === "knowledge") return "assistant";
   if (group === "settings") return "settings";
@@ -99,7 +100,7 @@ export function needsLogin(path) {
   const { pathname } = splitPath(path);
   const parts = pathname.split("/").filter(Boolean);
   const [head, second] = parts;
-  if (head === "portfolio" || head === "routines" || head === "assistant") return true;
+  if (head === "portfolio" || head === "routines" || head === "assistant" || head === "backstage") return true;
   // A bot's own line and its settings; /chat, /chat/history and a plain conversation stay readable as a guest.
   if (head === "chat" && second && second !== "history" && second !== "c") return true;
   return false;

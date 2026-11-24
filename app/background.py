@@ -11,6 +11,8 @@ import asyncio
 import logging
 import os
 
+from . import model_usage
+
 log = logging.getLogger(__name__)
 ROUTINE_SECONDS = 300
 HOURLY_SECONDS = 3600
@@ -101,7 +103,9 @@ LOOPS = (
 async def _loop(name: str, interval: float, job) -> None:
     while True:
         try:
-            await asyncio.to_thread(job)
+            # The model-call ledger: whatever this loop's work asks a model, the row names the loop (its own purpose replaces "other").
+            with model_usage.purpose("other", job=name):
+                await asyncio.to_thread(job)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - one broken loop must not affect the others
