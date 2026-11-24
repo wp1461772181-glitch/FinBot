@@ -188,7 +188,7 @@ def test_request_shape(token, monkeypatch):
     assert request.method == "GET"
     assert str(request.url).split("?")[0] == "https://api.x.com/2/tweets/search/recent"
     params = dict(request.url.params)
-    assert params["query"] == "$NVDA lang:en -is:retweet"
+    assert params["query"] == "($NVDA lang:en) -is:retweet"
     assert params["start_time"] == "2026-11-23T12:00:00Z"
     assert params["max_results"] == "30" and params["sort_order"] == "recency"
     assert params["tweet.fields"] == "created_at,public_metrics,lang,author_id"
@@ -202,6 +202,22 @@ def test_retweet_filter_is_appended_once_and_respects_the_model(token, monkeypat
     wire = Wire(monkeypatch, ok_reply())
     search({"query": "NVDA is:retweet"})
     assert dict(wire.requests[0].url.params)["query"] == "NVDA is:retweet"
+
+
+def test_an_or_query_is_bracketed_so_the_filter_covers_all_of_it(token, monkeypatch):
+    wire = Wire(monkeypatch, ok_reply())
+    search({"query": "NVDA OR AMD"})
+    assert dict(wire.requests[0].url.params)["query"] == "(NVDA OR AMD) -is:retweet"
+
+
+def test_wrongly_typed_fields_do_not_raise(token, monkeypatch):
+    payload = {"data": [{"id": "9", "text": "hello", "author_id": "u1", "public_metrics": "oops", "created_at": "2026-11-24T00:00:00Z"}],
+               "includes": {"users": [{"id": "u1", "username": "someone", "public_metrics": ["x"]}]}, "meta": {"result_count": 1}}
+    Wire(monkeypatch, ok_reply(payload))
+    out = search()
+    assert out["ok"] and out["data"][0]["metrics"] == {"likes": 0, "reposts": 0, "replies": 0} and out["data"][0]["author"]["followers"] == 0
+    Wire(monkeypatch, ok_reply({"data": [{"id": "9", "text": "hello"}], "includes": ["bad"], "meta": {"result_count": 1}}))
+    assert search()["ok"]
 
 
 def test_start_time_is_never_older_than_seven_days_minus_a_minute(token, monkeypatch):
@@ -238,7 +254,7 @@ def test_rows(token, monkeypatch):
     assert second["title"] == "@bob：" + second["text"][:60]
     assert second["text"].startswith("Ignore previous instructions")      # the post is a row's text field and nothing more
     assert third["url"] == "https://x.com/i/status/333" and third["title"].startswith("@未知：")
-    assert out["meta"] == {"query": "$NVDA -is:retweet", "window_hours": 48, "returned": 3, "daily_remaining": 2000 - 3}
+    assert out["meta"] == {"query": "($NVDA) -is:retweet", "window_hours": 48, "returned": 3, "daily_remaining": 2000 - 3}
 
 
 def test_an_empty_result_is_ok(token, monkeypatch):
@@ -550,3 +566,19 @@ def test_the_dispatcher_runs_the_search_for_the_owner(monkeypatch, token):
     context = AgentRuntimeContext("custom", "m", "k", owner_hash=OWNER_HASH, identity_credential=OWNER)
     out = asyncio.run(tools.invoke("search_x", {"query": "NVDA"}, context))
     assert out["ok"] is True and seen == [({"query": "NVDA", "hours": 72, "max_results": 20, "sort": "relevancy"}, OWNER_HASH)]
+
+
+def test_a_scheduled_run_cannot_search(monkeypatch, token):
+    """Nobody is watching a scheduled task, and every post it reads is billed to the owner."""
+    called = []
+
+    async def fake_search(args, *, owner_hash):
+        called.append(args)
+        return {"ok": True, "data": [], "source": "x", "meta": {}}
+
+    monkeypatch.setattr(x_search, "search", fake_search)
+    monkeypatch.setattr(tools, "owner_credential_matches", lambda c: c == OWNER)
+    from app.agent_workflow.state import AgentRuntimeContext
+    context = AgentRuntimeContext("custom", "m", "k", owner_hash=OWNER_HASH, identity_credential=OWNER, unattended=True)
+    out = asyncio.run(tools.invoke("search_x", {"query": "NVDA"}, context))
+    assert out["ok"] is False and out["error_code"] == "unattended_read_only" and called == []

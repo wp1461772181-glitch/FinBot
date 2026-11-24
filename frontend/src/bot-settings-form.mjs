@@ -95,7 +95,7 @@ export const withFocusTheme = (draft, theme) => ({ ...draft, focus: { ...draft.f
 
 // --- 工具: groups ---------------------------------------------------------------------------------------------------------------
 /** The tool list's `level` has no network value (read, reversible, costly, card, client, notify, skill): the two read-level tools that go out to the web are named here. */
-const WEB_TOOLS = new Set(["web_research", "search_configured_news"]);
+const WEB_TOOLS = new Set(["web_research", "search_configured_news", "search_x"]);
 export const TOOL_GROUPS = [
   { id: "read", label: "读取类" },
   { id: "web", label: "联网类" },

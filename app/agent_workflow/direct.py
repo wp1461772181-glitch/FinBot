@@ -1136,6 +1136,8 @@ class Turn:
         if name=='search_x':
             from .. import x_search
             if not x_search.configured():return False   # no token on this server: the tool does not exist for the model
+            # A scheduled task runs with nobody watching and every post it reads is billed to the owner.
+            if getattr(self.context,'unattended',False):return False
         skill=getattr(self,'active_skill',None)
         if skill:
             from ..agent_bots import ALWAYS_ON

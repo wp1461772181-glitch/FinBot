@@ -103,8 +103,15 @@ def _line(one_line: str, limit: int = 60) -> str:
     return re.sub(r"\s+", " ", one_line).strip()[:limit]
 
 
+def _count(value) -> int:
+    """A count from the API as an int; anything that is not one (a string, None, a nested object) is 0."""
+    return value if type(value) is int else 0
+
+
 def _rows(payload: dict) -> list[dict]:
-    users = {str(u.get("id")): u for u in (payload.get("includes") or {}).get("users") or [] if isinstance(u, dict)}
+    includes = payload.get("includes") if isinstance(payload.get("includes"), dict) else {}
+    listed = includes.get("users") if isinstance(includes.get("users"), list) else []
+    users = {str(u.get("id")): u for u in listed if isinstance(u, dict)}
     rows = []
     for post in payload.get("data") or []:
         if not isinstance(post, dict) or not post.get("id"):
@@ -112,18 +119,19 @@ def _rows(payload: dict) -> list[dict]:
         text = str(post.get("text") or "")
         user = users.get(str(post.get("author_id")))
         username = str(user.get("username")) if user and user.get("username") else None
-        metrics = post.get("public_metrics") or {}
-        followers = ((user or {}).get("public_metrics") or {}).get("followers_count") or 0
+        metrics = post.get("public_metrics") if isinstance(post.get("public_metrics"), dict) else {}
+        standing = (user or {}).get("public_metrics")
+        followers = _count((standing if isinstance(standing, dict) else {}).get("followers_count"))
         rows.append({
             "id": str(post["id"]), "source_type": "x_post",
             "title": f"@{username or '未知'}：{_line(text)}",
             "url": f"https://x.com/{username or 'i'}/status/{post['id']}",
             "published_at": post.get("created_at"),
             "author": {"username": username, "name": (user or {}).get("name"), "verified": bool((user or {}).get("verified")),
-                       "followers": int(followers)},
+                       "followers": followers},
             "text": text,
-            "metrics": {"likes": metrics.get("like_count") or 0, "reposts": metrics.get("retweet_count") or 0,
-                        "replies": metrics.get("reply_count") or 0},
+            "metrics": {"likes": _count(metrics.get("like_count")), "reposts": _count(metrics.get("retweet_count")),
+                        "replies": _count(metrics.get("reply_count"))},
             "note": NOTE,
         })
     return rows
@@ -165,7 +173,8 @@ async def search(args: dict, *, owner_hash: str) -> dict:
     hours = max(1, min(168, int(args.get("hours") or 72)))
     query = str(args["query"])
     if "is:retweet" not in query:
-        query += " -is:retweet"
+        # In X's grammar OR binds looser than a space: without the brackets ``a OR b -is:retweet`` keeps a's retweets (and bills them).
+        query = f"({query}) -is:retweet"
     start = max(now - timedelta(hours=hours), now - timedelta(days=7) + timedelta(minutes=1))
     params = {
         "query": query, "start_time": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
