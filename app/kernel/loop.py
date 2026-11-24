@@ -167,7 +167,7 @@ async def _switch_to_backup(run: _Run, failure: Exception) -> bool:
         run.messages[:] = [{k: v for k, v in m.items() if not (k.startswith("reasoning_") or k in PRIVATE_KEYS)} if m.get("role") == "assistant" else m
                            for m in run.messages]
         run.narration.append(sentence)
-        mark_timeline(run, "say", index=len(run.narration) - 1)
+        mark_timeline(run, "say", index=len(run.narration) - 1, step=run.audit["decision_steps"] + 1)     # said on the step whose call is made again
         await run.emit({"event": "narration", "text": sentence, "system": True})
     except Exception as secondary:
         # The provider's failure is what the turn reports; the switch's own trouble is only logged (never the key).

@@ -38,10 +38,10 @@ export function UsageTab() {
 
   const columns: Column<UsageRow>[] = [
     { key: "label", header: firstHeader, wide: true, cell: row => <span className={row.key === "total" ? "font-medium text-ink" : "text-ink"}>{row.label}</span> },
-    { key: "calls", header: t("调用"), cell: row => <span className="font-mono tabular-nums">{row.calls}</span> },
-    { key: "failed", header: t("失败"), cell: row => <span className="font-mono tabular-nums">{row.failed}</span> },
-    { key: "input", header: t("输入 token"), cell: row => <span className="font-mono tabular-nums">{row.input}</span> },
-    { key: "output", header: t("输出 token"), cell: row => <span className="font-mono tabular-nums">{row.output}</span> },
+    { key: "calls", header: t("调用"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.calls}</span> },
+    { key: "failed", header: t("失败"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.failed}</span> },
+    { key: "input", header: t("输入 token"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.input}</span> },
+    { key: "output", header: t("输出 token"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.output}</span> },
     { key: "cache", header: t("缓存读 / 写"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.cache}</span> },
     { key: "p50", header: t("耗时中位"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.p50}</span> },
     { key: "cost", header: t("费用"), cell: row => <span className="flex flex-col items-start gap-0.5">

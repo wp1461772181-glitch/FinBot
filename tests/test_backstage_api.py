@@ -358,7 +358,7 @@ def test_detail_falls_back_to_the_audit_when_the_ledger_has_not_landed(client):
     assert body["model_calls_source"] == "audit" and len(body["model_calls"]) == 2
     assert body["model_calls"][0] == {"tier": "low", "model": "vendor/m-1", "catalog_name": None, "purpose": "chat", "ms": 900,
                                       "tokens": {"input": None, "output": None, "cache_read": 50, "cache_write": 10, "total": 150},
-                                      "attempt": None, "ok": None, "error": None, "cost_usd": None, "priced": False, "at": None}
+                                      "attempt": None, "ok": None, "error": None, "cost_usd": None, "priced": False, "at": None, "recorded": False}
 
 
 def test_the_detail_tolerates_a_ledger_row_with_no_tier_match(client):
@@ -868,7 +868,7 @@ def test_cost_state_priced_unpriced_pending_none(client, monkeypatch):
     assert states["priced"] == ("priced", [])
     assert states["unpriced"] == ("unpriced", ["cache_read", "cache_write"])
     assert states["pending"][0] == "pending"
-    assert states["stale"][0] == "unpriced"
+    assert states["stale"] == ("unrecorded", [])       # rows are short for good: nothing says a price was missing
     assert states["none"] == ("none", [])
     assert items[str(pending_msg)]["cost_usd"] is None
     for name, mid in (("priced", priced_msg), ("unpriced", unpriced_msg), ("pending", pending_msg), ("none", none_msg)):
@@ -876,9 +876,57 @@ def test_cost_state_priced_unpriced_pending_none(client, monkeypatch):
         assert (detail["cost_state"], detail["missing_prices"]) == states[name], name
 
 
-def test_a_turn_with_no_ledger_and_an_audit_is_pending_while_fresh_and_unpriced_once_old(client):
+def test_a_turn_with_no_ledger_and_an_audit_is_pending_while_fresh_and_unrecorded_once_old(client):
     cid = conversation(bot())
     turn(cid, record=kernel_record(), at=NOW)
     turn(cid, record=kernel_record(), at=NOW - timedelta(hours=2))
     items = get(client, "/backstage/answers").json()["items"]
-    assert [i["cost_state"] for i in items] == ["pending", "unpriced"]
+    assert [i["cost_state"] for i in items] == ["pending", "unrecorded"]
+
+
+def test_unrecorded_is_not_unpriced_and_its_detail_lines_say_so(client):
+    cid = conversation(bot())
+    old = NOW - timedelta(hours=3)
+    tid, mid = turn(cid, record=kernel_record(), at=old)           # from before the ledger: the audit counted two calls, no row exists
+    body = get(client, f"/backstage/answers/{mid}").json()
+    assert (body["cost_state"], body["missing_prices"], body["model_calls_source"]) == ("unrecorded", [], "audit")
+    assert [c["recorded"] for c in body["model_calls"]] == [False, False]
+    tid2, mid2 = turn(cid, record=kernel_record(), at=old + timedelta(minutes=1))
+    ledger(tid2, cid, cost=None, at=old)
+    ledger(tid2, cid, cost=0.01, at=old)
+    model_usage.flush()
+    full = get(client, f"/backstage/answers/{mid2}").json()
+    assert full["cost_state"] == "unpriced" and [c["recorded"] for c in full["model_calls"]] == [True, True]
+
+
+def test_an_incomplete_turn_is_pending_while_fresh(client):
+    cid = conversation(bot())
+    tid, mid = turn(cid, final=False, steps=True, at=NOW)
+    ledger(tid, cid, cost=0.01, at=NOW)
+    model_usage.flush()
+    item = get(client, "/backstage/answers").json()["items"][0]
+    assert item["status"] == "incomplete" and item["cost_state"] == "pending"
+    assert get(client, f"/backstage/answers/{mid}").json()["cost_state"] == "pending"
+    old_tid, old_mid = turn(cid, final=False, steps=True, at=NOW - timedelta(hours=1))
+    ledger(old_tid, cid, cost=0.01, at=NOW - timedelta(hours=1))
+    model_usage.flush()
+    older = [i for i in get(client, "/backstage/answers").json()["items"] if i["message_id"] == str(old_mid)][0]
+    assert older["cost_state"] == "priced"
+
+
+@pytest.mark.parametrize("entry", [
+    {"kind": "call", "at_ms": 1, "step": 1, "index": [0]}, {"kind": "call", "at_ms": 1, "step": 1, "index": {"a": 1}},
+    {"kind": "say", "at_ms": 1, "index": [0]}, {"kind": "say", "at_ms": 1, "index": True},
+    {"kind": "tool", "at_ms": 1, "call_id": ["call-1"]}, {"kind": "tool_done", "at_ms": 1, "call_id": {"x": 1}},
+    {"kind": ["tool"], "at_ms": 1, "call_id": "call-1"}, {"kind": "tool", "at_ms": [1], "call_id": "call-1"},
+    {"kind": "tool", "at_ms": 1, "step": "x", "call_id": "call-1"}, {"kind": "tool", "at_ms": -5, "call_id": "call-1"}, 7, "x", None, [1]])
+def test_a_damaged_timeline_entry_is_skipped_never_a_500(client, entry):
+    cid = conversation(bot())
+    tid, mid = turn(cid, record=with_timeline([entry, *TIMELINE]))
+    ledger(tid, cid)
+    ledger(tid, cid)
+    model_usage.flush()
+    response = get(client, f"/backstage/answers/{mid}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ordered"] is True and sum(1 for e in body["events"] if e["kind"] == "model_call") == 2

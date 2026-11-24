@@ -32,7 +32,7 @@ function Step({ step }: { step: TimelineStep }) {
           {step.purpose && <span className="text-caption text-muted-foreground">{step.purpose}</span>}
           {(step.attempt ?? 1) > 1 && <span className="text-caption text-muted-foreground">{`${t("尝试次数")}${colon()}${step.attempt}`}</span>}
           {!step.ok && <span className="text-caption text-danger">{`${t("失败")}${colon()}${step.error || t("未知原因")}`}</span>}</p>
-        <Meta>{step.offset && <span className="font-mono tabular-nums">{step.offset}</span>}<span>{step.time}</span><span className="font-mono tabular-nums">{step.ms}</span>{step.tokens !== "—" && <span className="font-mono tabular-nums">{`${step.tokens} token`}</span>}{step.cost && step.cost.kind !== "none" && <CostText cost={step.cost} />}</Meta>
+        <Meta>{step.offset && <span className="font-mono tabular-nums">{step.offset}</span>}<span>{step.time}</span><span className="font-mono tabular-nums">{step.ms}</span>{step.tokens !== "—" && <span className="font-mono tabular-nums">{`${step.tokens} token`}</span>}{step.cost && step.cost.kind !== "none" && <CostText cost={step.cost} unrecordedLabel />}</Meta>
       </li>;
     case "tool":
       return <li data-step="tool" data-state={step.state} className={wrap}>

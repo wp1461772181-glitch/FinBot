@@ -22,7 +22,7 @@ export function BackstageTable<Row>({ label, columns, rows, rowKey, onOpen, test
   return <table data-testid={testId} aria-label={label} className="w-full min-w-0 max-w-full border-collapse text-small max-sm:block">
     <thead className="max-sm:sr-only">
       <tr className="border-b border-line text-left text-caption text-muted-foreground">
-        {columns.map(column => <th key={column.key} scope="col" className={cn("px-3 py-2 font-medium", column.className)}>{column.header}</th>)}
+        {columns.map(column => <th key={column.key} scope="col" className={cn("whitespace-nowrap px-3 py-2 font-medium", column.className)}>{column.header}</th>)}
       </tr>
     </thead>
     <tbody className="max-sm:block">
@@ -44,11 +44,12 @@ export function Status({ status }: { status: BadgeStatus }) {
 }
 
 /** A cost: the figure; 「未设价格」 for a call to a model with no price (never a made-up figure); a dash when nothing was called. */
-export function CostText({ cost, className }: { cost: Cost; className?: string }) {
+export function CostText({ cost, className, unrecordedLabel = false }: { cost: Cost; className?: string; unrecordedLabel?: boolean }) {
   const { t } = useLocale();
-  if (cost.kind === "amount") return <span className={cn("font-mono tabular-nums", className)}>{cost.amount}</span>;
-  if (cost.kind === "pending") return <span title={t("这一轮的费用还在写入，稍后再看")} className={cn("text-muted-foreground", className)}>{t("记账中")}</span>;
-  if (cost.kind === "unpriced") return <Link to={paths.settings("models")} onClick={event => event.stopPropagation()} title={t("去设置里给这个模型填价格")} className={cn("text-action underline-offset-2 hover:underline", className)}>{t("未设价格")}</Link>;
+  if (cost.kind === "amount") return <span className={cn("whitespace-nowrap font-mono tabular-nums", className)}>{cost.amount}</span>;
+  if (cost.kind === "unrecorded") return <span title={t("这一轮没有记账（早于记账功能，或记账丢失）")} className={cn("text-muted-foreground", className)}>{unrecordedLabel ? t("未记账") : "—"}</span>;
+  if (cost.kind === "pending") return <span title={t("这一轮的费用还在写入，稍后再看")} className={cn("whitespace-nowrap text-muted-foreground", className)}>{t("记账中")}</span>;
+  if (cost.kind === "unpriced") return <Link to={paths.settings("models")} onClick={event => event.stopPropagation()} title={t("去设置里给这个模型填价格")} className={cn("whitespace-nowrap text-action underline-offset-2 hover:underline", className)}>{t("未设价格")}</Link>;
   return <span className={cn("text-muted-foreground", className)}>—</span>;
 }
 

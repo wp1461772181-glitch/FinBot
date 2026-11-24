@@ -105,3 +105,22 @@ def test_a_failed_read_still_gets_its_tool_done(monkeypatch):
                           web_rows={}, new_sets=[], narration=[])
     asyncio.run(toolrun.run_step_tools(run, [call("c1", "query_financials", {"symbol": "A"})]))
     assert [(e["kind"], e["call_id"]) for e in run.audit["timeline"]] == [("tool", "c1"), ("tool_done", "c1")]
+
+
+def test_the_backup_switch_sentence_belongs_to_the_step_of_the_call_that_replaces_the_failed_one(monkeypatch):
+    import time
+    from app.kernel import loop as kernel_loop
+
+    async def found(run):
+        return {"provider": "openrouter", "model": "b", "api_key": "k", "base_url": None, "name": "reserve"}
+
+    monkeypatch.setattr(kernel_loop, "_backup_for", found)
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    run = SimpleNamespace(model=kernel_loop.ModelUse("anthropic", "m", "k"), narration=[], audit={"decision_steps": 2}, started=time.monotonic(), emit=emit,
+                          messages=[], fallback_used=None, context=SimpleNamespace(owner_hash="o"))
+    assert asyncio.run(kernel_loop._switch_to_backup(run, RuntimeError("x"))) is True
+    assert [(e["kind"], e["index"], e["step"]) for e in run.audit["timeline"]] == [("say", 0, 3)]

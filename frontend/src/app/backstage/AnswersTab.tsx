@@ -44,11 +44,11 @@ export function AnswersTab() {
       <button type="button" data-testid="answer-open" onClick={event => { event.stopPropagation(); open(row.id); }} className="line-clamp-2 text-left text-ink underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">{row.question}</button>
       {row.old_engine && <span className="text-caption text-muted-foreground">{t("旧流程的记录，只有部分经过")}</span>}
     </span> },
-    { key: "status", header: t("状态"), cell: row => <Status status={row.status} /> },
-    { key: "tier", header: t("档位"), cell: row => row.tier },
+    { key: "status", header: t("状态"), className: "whitespace-nowrap", cell: row => <Status status={row.status} /> },
+    { key: "tier", header: t("档位"), cell: row => <span className="whitespace-nowrap">{row.tier}</span> },
     { key: "time_taken", header: t("耗时"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.time_taken}</span> },
-    { key: "calls", header: t("调用"), cell: row => <span className="font-mono tabular-nums">{row.calls}</span> },
-    { key: "tokens", header: "token", cell: row => <span className="font-mono tabular-nums">{row.tokens}</span> },
+    { key: "calls", header: t("调用"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.calls}</span> },
+    { key: "tokens", header: "token", cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.tokens}</span> },
     { key: "cost", header: t("费用"), cell: row => <CostText cost={row.cost} /> },
   ];
   const slow = filters.slow ? slowRuleText(list.extra?.slow_threshold_ms, w) : "";

@@ -2487,5 +2487,7 @@
   "这一轮的费用还在写入，稍后再看": "This turn's cost is still being written; look again shortly",
   "这条记录没有时间顺序，按类别排列": "This record has no time order; events are grouped by kind",
   "记账中：有些调用的费用还在写入，稍后再看": "Booking: the cost of some calls is still being written; look again shortly",
-  "未设价格的调用缺": "Calls with no price set lack"
+  "未设价格的调用缺": "Calls with no price set lack",
+  "这一轮没有记账（早于记账功能，或记账丢失）": "This turn was not booked (it predates booking, or the booking was lost)",
+  "未记账": "Not booked"
 }

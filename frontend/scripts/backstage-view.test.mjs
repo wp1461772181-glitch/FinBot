@@ -40,6 +40,8 @@ test("cost: a number is a dollar figure; null with calls is 未设价格, never 
   assert.deepEqual(costCell(0.02, true, "unpriced"), { kind: "amount", amount: "$0.0200" });
   assert.deepEqual(costCell(null, true, "none"), { kind: "none", amount: "" });
   assert.deepEqual(costCell(0.5, true, "priced"), { kind: "amount", amount: "$0.50" });
+  // Nothing was booked (older than the ledger, or rows lost): not a missing price, so not 未设价格.
+  assert.deepEqual(costCell(null, true, "unrecorded"), { kind: "unrecorded", amount: "" });
   assert.equal(formatUsd(1234.5), "$1,234.50");
   assert.equal(formatUsd(0.00004), "$0.00004");
 });
@@ -251,3 +253,18 @@ test("free text cannot widen a table or the drawer, reads in its own direction, 
   assert.match(src("app/backstage/UsageTab.tsx"), /load\.data\.group === group && load\.data\.from === range\.from && load\.data\.to === range\.to/, "usage numbers only under their own request");
   assert.match(src("app/backstage/use-paged.ts"), /items: \[\], next: null, extra: null, loading: true/, "a new filter clears the old rows at once");
 });
+
+test("unrecorded: a list row and a detail line say nothing was booked, never 未设价格; the detail explains it", () => {
+  assert.deepEqual(answerRow({ ...ANSWERS.items[0], cost_usd: null, cost_state: "unrecorded" }, "UTC").cost, { kind: "unrecorded", amount: "" });
+  const lines = detailTimeline({ ...DETAIL_INCOMPLETE, model_calls: [{ ...DETAIL_INCOMPLETE.model_calls[0], recorded: false }, { ...DETAIL_INCOMPLETE.model_calls[0] }] }, "UTC").filter((s) => s.kind === "model");
+  assert.equal(lines[0].cost.kind, "unrecorded", "a call with no ledger row");
+  assert.equal(lines[1].cost.kind, "unpriced", "a call with a row and no price");
+  assert.equal(answerNotes({ ...DETAIL, cost_state: "unrecorded", missing_prices: [] }).find((n) => n.kind === "unrecorded").text, "这一轮没有记账（早于记账功能，或记账丢失）");
+  assert.equal(answerNotes({ ...DETAIL, cost_state: "unrecorded" }).some((n) => n.kind === "unpriced"), false);
+});
+
+test("number cells never wrap, so long text beside them cannot squeeze them", () => {
+  for (const file of ["AnswersTab", "UsageTab"]) assert.ok((src(`app/backstage/${file}.tsx`).match(/whitespace-nowrap/g) ?? []).length >= 5, file);
+  assert.match(src("app/backstage/BackstageTable.tsx"), /font-mono tabular-nums whitespace-nowrap|whitespace-nowrap font-mono tabular-nums/);
+});
+

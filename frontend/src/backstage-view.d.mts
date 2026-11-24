@@ -1,5 +1,5 @@
 export type BadgeStatus = { label: string; kind: string };
-export type Cost = { kind: "amount" | "unpriced" | "pending" | "none"; amount: string };
+export type Cost = { kind: "amount" | "unpriced" | "pending" | "unrecorded" | "none"; amount: string };
 export type AnswerFilters = { botId: string; engine: string; status: string; highTier: boolean; slow: boolean; q: string; before: string };
 export type AnswerRow = { id: string; time: string; bot: string; question: string; status: BadgeStatus; tier: string; time_taken: string; calls: string; tokens: string; cost: Cost; old_engine: boolean };
 export type TimelineStep = {
