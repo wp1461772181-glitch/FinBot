@@ -137,7 +137,7 @@ def _settle_read(run, item: _Call) -> None:
 
 
 def _settle_serial(run, item: _Call) -> None:
-    """Calls the kernel runs itself, in call order, after every read is numbered."""
+    """Calls the kernel runs itself, in call order: its own tools before the reads, calculations after every read is numbered."""
     if item.name == tiers.ESCALATE:
         item.result = tiers.escalate(run, item.args)
     elif item.name == progress.PLAN:
@@ -167,12 +167,12 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         items.append(_Call(call["id"], name, args))
         await run.emit({"event": "tool_start", "call_id": call["id"], "name": name, "arguments": args or {}})
         run.audit["tool_calls"] += 1
-    reads, serial = [], []
+    own, reads, serial = [], [], []
     for item in items:
         if item.args is None:
             item.result = tools.error("invalid_arguments")
         elif item.name in (tiers.ESCALATE, progress.PLAN):
-            serial.append(item)       # the kernel's own tools: never go through tools.invoke, make no citation
+            own.append(item)          # the kernel's own tools: never go through tools.invoke, make no citation
         elif item.name not in run.tool_names or item.name not in definitions():
             item.result = tools.error("tool_not_in_bot_scope")
         elif item.name in _CALCULATIONS:
@@ -183,6 +183,12 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             serial.append(item)
         else:
             reads.append(item)
+    # The kernel's own calls take no time and read nothing: settle them first, so a checklist is on screen while the
+    # reads are still out, not after the slowest of them.
+    for item in own:
+        _guard(_settle_serial, run, item)
+        if item.name == progress.PLAN and item.result.get("ok"):
+            await run.emit({"event": "checklist", "items": run.checklist})
     gate = asyncio.Semaphore(MAX_PARALLEL)
     await asyncio.gather(*(_fetch(run, gate, item) for item in reads))
     for item in reads:
@@ -190,8 +196,6 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             _guard(_settle_read, run, item)
     for item in serial:
         _guard(_settle_serial, run, item)
-        if item.name == progress.PLAN and item.result.get("ok"):
-            await run.emit({"event": "checklist", "items": run.checklist})
         mark_progress()
     messages = []
     for item in items:

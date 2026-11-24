@@ -102,6 +102,34 @@ def test_plan_emits_checklist_and_is_not_invoked_as_a_tool(env):
     assert json.loads(fake.calls[1]["messages"][-1]["content"]) == {"ok": True, "items": 2}
 
 
+def test_checklist_is_shown_before_the_reads_of_the_same_step_run(env):
+    seen = []
+
+    async def slow_read(name, args, context, *, emit=None, page_chars=None):
+        seen.append("read")
+        return copy.deepcopy(tools_ok())
+
+    env.monkeypatch.setattr(tools, "invoke", slow_read)
+    items = [{"text": "查财报", "status": "doing"}]
+    script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"}), call("c2", "plan", {"items": items})]), step(text="好")])
+    events = []
+
+    async def emit(event):
+        events.append(event)
+        if event["event"] == "checklist":
+            seen.append("checklist")
+
+    import asyncio
+    asyncio.run(loop.run_turn("问题", make_context(), emit, [{"role": "system", "content": "endpoint"}, {"role": "user", "content": "问题"}], {}))
+    assert seen == ["checklist", "read"]
+    assert [e["call_id"] for e in events if e["event"] == "tool_result"] == ["c1", "c2"]
+
+
+def tools_ok():
+    from tests.test_kernel_loop import OK_ROWS
+    return OK_ROWS
+
+
 def test_plan_updates_replace_the_list(env):
     first = [{"text": "甲", "status": "doing"}, {"text": "乙", "status": "pending"}]
     second = [{"text": "甲", "status": "done"}, {"text": "乙", "status": "doing"}]
