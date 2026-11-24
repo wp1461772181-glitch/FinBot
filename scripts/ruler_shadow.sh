@@ -93,6 +93,9 @@ up() {
   ( umask 077
     printf 'DATABASE_URL=%s\nBACKGROUND_LOOPS=false\nDB_POOL_SIZE=3\nDB_MAX_OVERFLOW=2\n' "$shadow_url"
     printf 'CLAIM_JUDGE_SHADOW_DIR=%s\n' "$SHADOW_SRC/judge-shadow"
+    # The claim judge calls a paid model once per settled turn on the owner's key; an evaluation run would make
+    # hundreds of those calls for records nobody reads.  Off here; the live service keeps its own setting.
+    printf 'CLAIM_JUDGE_SHADOW=off\n'
     printf 'LANGFUSE_PUBLIC_KEY=\nLANGFUSE_SECRET_KEY=\nSENTINEL_TOKEN=\n'
     if [ "$engine" = "v2" ]; then printf 'FINBOT_KERNEL_DEFAULT=v2\n'; fi
   ) > "$SHADOW_ENV"
