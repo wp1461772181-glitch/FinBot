@@ -31,6 +31,7 @@ async def main() -> None:
                 if not event or not raw: continue
                 data=json.loads(raw); events.append(event)
                 if event=="delta": answer.append(str(data.get("text","")))
+                elif event=="answer_reset": answer.clear()
             content="".join(answer)
             if events[-1:] != ["done"] or not content.startswith("DEMO MOCK:"):
                 raise SystemExit(f"{case['id']}: expected labelled complete mock answer; got {events[-3:]} {content!r}")

@@ -98,6 +98,8 @@ def test_direct_answer_streams_and_returns(env):
     assert result["status"] == "succeeded" and result["streamed"] is True
     assert result["audit"]["model_calls"] == 1 and result["audit"]["engine"] == "v2"
     assert result["route"] == "K" and result["citations"] == [] and result["reason"] is None
+    # Checkpointed by the graph and read by the old turn later: types it can read, meaning "nothing carried over".
+    assert result["previous_scope"] == {} and result["result_sets"] == [] and result["previous_category"] is None
 
 
 def test_tool_then_answer(env):

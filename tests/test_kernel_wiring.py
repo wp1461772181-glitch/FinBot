@@ -197,6 +197,19 @@ def test_tool_rows_are_stored(wiring):
     assert rows[1][1]["tool_calls"]["calls"]
 
 
+def test_old_turn_runs_on_a_conversation_whose_last_turn_was_the_kernel(wiring):
+    """The rollback case: engine switched off after kernel turns; the checkpointed state must still be readable."""
+    wiring.bot["engine"] = "v2"
+    wiring.model([(["好的"], [])])
+    assert done_of(wiring.bot_turn())["status"] == "succeeded"
+    wiring.bot["engine"] = None
+    wiring.kernel_must_not_run()
+    events = wiring.bot_turn()
+    assert wiring.old_calls
+    assert done_of(events)["status"] in ("complete", "succeeded")
+    assert not any(name == "error" for name, _ in events)
+
+
 def test_engine_validation():
     from app import agent_bots as bots
 

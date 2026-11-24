@@ -221,7 +221,13 @@ def choice_summary(choice):
 
 
 def summarise(events):
-    answer = ''.join(d.get('text') or '' for k, d in events if k == 'delta')
+    parts = []
+    for k, d in events:
+        if k == 'delta':
+            parts.append(d.get('text') or '')
+        elif k == 'answer_reset':
+            parts.clear()
+    answer = ''.join(parts)
     tools, results, citations, card, done, turn, conv = [], [], [], None, {}, None, None
     for kind, data in events:
         if kind == 'conversation':

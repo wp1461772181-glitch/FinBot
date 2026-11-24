@@ -66,7 +66,13 @@ def main():
     print("turn 2 · press", confirm.split(":", 1)[0])
     second = stream(session, {**config, "message": confirm, "conversation_id": conversation,
                               "pending_request_id": card["request_id"], "display_message": "同意"})
-    answer = "".join(data.get("text") or "" for kind, data in second if kind == "delta")
+    parts = []
+    for kind, data in second:
+        if kind == "delta":
+            parts.append(data.get("text") or "")
+        elif kind == "answer_reset":
+            parts.clear()
+    answer = "".join(parts)
     if not answer:
         answer = next((data.get("answer") or "" for kind, data in second if data.get("answer")), "")
     print("\n=== 用户看到的中文回答 ===")

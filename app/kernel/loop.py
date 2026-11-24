@@ -231,7 +231,7 @@ def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None
     run.audit["terminal_status"] = status
     return {"answer": answer, "citations": run.citations, "status": status,
             "reason": failure, "route": "K", "audit": run.audit, "final_protocol": {}, "pending_request": None,
-            "result_sets": {}, "previous_category": None, "previous_scope": None, "unverified_lines": [], "streamed": True}
+            "result_sets": [], "previous_category": None, "previous_scope": {}, "unverified_lines": [], "streamed": True}
 
 
 async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_again: bool) -> dict:
