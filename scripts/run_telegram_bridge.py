@@ -281,41 +281,79 @@ async def _keep_typing(client, bot_token: str, chat_id: int) -> None:
         pass
 
 
+_KERNEL_TOOLS = {"escalate", "plan"}
+_CHECK_MARKS = {"done": "☑", "doing": "◐", "pending": "☐", "failed": "☒"}
+_MAX_SENTENCES = 6
+_MAX_BODY_CHARS = 3500
+
+
 def _progress_text(kind: str, data: dict) -> str | None:
     """A progress line from a stream step event; None for events that are not steps."""
-    if kind == "tool_start" and data.get("name"):
+    if kind == "tool_start" and data.get("name") and data["name"] not in _KERNEL_TOOLS:
         return f"{ACK_TEXT}\n正在调用：{data['name']}"
     if kind == "status" and data.get("step"):
         return f"{ACK_TEXT}\n进展：{data['step']}"
     return None
 
 
+def _checklist_lines(checklist: list[dict]) -> list[str]:
+    return [f"{_CHECK_MARKS.get(item.get('status'), '☐')} {i} {item.get('text', '')}"
+            for i, item in enumerate(checklist, 1)]
+
+
+def _kernel_body(sentences: list[str], checklist: list[dict]) -> str:
+    """ACK, the checklist, then the newest sentences (at most 6, the oldest dropped first to stay under the cap)."""
+    head = [ACK_TEXT, *_checklist_lines(checklist)]
+    kept = sentences[-_MAX_SENTENCES:]
+    while True:
+        body = "\n".join(head + kept)
+        if len(body) <= _MAX_BODY_CHARS or not kept:
+            return body[:_MAX_BODY_CHARS]
+        kept = kept[1:]
+
+
 class _Progress:
-    """The placeholder message: sent at once, edited at most every PROGRESS_MIN_INTERVAL seconds."""
+    """The placeholder message: sent at once, edited at most every PROGRESS_MIN_INTERVAL seconds.
+    A kernel turn stacks its sentences and checklist in it; an old-engine turn shows the latest step line."""
 
     def __init__(self, client, bot_token: str, chat_id: int) -> None:
         self.client, self.bot_token, self.chat_id = client, bot_token, chat_id
         self.message_id: int | None = None
         self.last_text = ACK_TEXT
         self.last_edit = time.monotonic()
+        self.sentences: list[str] = []
+        self.checklist: list[dict] = []
+        self.kernel = False
 
     async def start(self) -> None:
         self.message_id = await _send_text(self.client, self.bot_token, self.chat_id, ACK_TEXT, markdown=False)
         self.last_edit = time.monotonic()
 
     async def on_event(self, kind: str, data: dict) -> None:
-        text = _progress_text(kind, data)
+        if kind == "narration" and data.get("text"):
+            self.kernel = True
+            self.sentences.append(str(data["text"]))
+            text = _kernel_body(self.sentences, self.checklist)
+        elif kind == "checklist" and isinstance(data.get("items"), list):
+            self.kernel = True
+            self.checklist = [i for i in data["items"] if isinstance(i, dict)]
+            text = _kernel_body(self.sentences, self.checklist)
+        elif self.kernel:
+            return
+        else:
+            text = _progress_text(kind, data)
         if text is None or text == self.last_text or self.message_id is None:
             return
         now = time.monotonic()
         if now - self.last_edit < PROGRESS_MIN_INTERVAL:
-            return
+            return          # kernel state is kept; the next edit shows it
         self.last_text, self.last_edit = text, now
         await _edit_text(self.client, self.bot_token, self.chat_id, self.message_id, text)
 
     async def finish(self) -> None:
         if self.message_id is not None:
-            await _edit_text(self.client, self.bot_token, self.chat_id, self.message_id, DONE_TEXT)
+            text = "\n".join([*_checklist_lines(self.checklist), DONE_TEXT]) if self.checklist else DONE_TEXT
+            await _edit_text(self.client, self.bot_token, self.chat_id, self.message_id, text)
 
 
 async def _get_updates(client, bot_token: str, offset: int, timeout: int) -> list | None:
