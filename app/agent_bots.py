@@ -100,7 +100,7 @@ def _stamp(value):
 def serialize(bot: AgentBot, last: dict | None = None, counts: dict | None = None) -> dict:
     return {"id": str(bot.id), "name": bot.name, "title": bot.title, "description": bot.description,
             "focus": bot.focus or {"companies": [], "theme": None}, "tool_scope": bot.tool_scope, "model": bot.model,
-            "reasoning_effort": bot.reasoning_effort,
+            "reasoning_effort": bot.reasoning_effort, "engine": bot.engine,
             "avatar": bot.avatar, "look": bot.avatar_look or None, "group": bot.group_name, "pinned": bot.pinned, "hidden": bot.hidden,
             "is_default": bot.is_default, "template": bot.template,
             "conversation_id": str(bot.conversation_id) if bot.conversation_id else None,
@@ -149,6 +149,7 @@ def ensure_columns() -> None:
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE agent_bots ADD COLUMN IF NOT EXISTS avatar_look JSON"))
         connection.execute(text("ALTER TABLE agent_bots ADD COLUMN IF NOT EXISTS reasoning_effort VARCHAR(16)"))
+        connection.execute(text("ALTER TABLE agent_bots ADD COLUMN IF NOT EXISTS engine VARCHAR(16)"))
 
 
 def _text(value, limit: int, code: str, *, required: bool = False) -> str:
@@ -221,6 +222,15 @@ def _reasoning_effort(value) -> str | None:
     return value
 
 
+def _engine(value) -> str | None:
+    """A bot's turn engine: None (the existing turn) or "v2" (the kernel).  Anything else is refused."""
+    if value is None:
+        return None
+    if value != "v2":
+        raise BotError("invalid_engine")
+    return value
+
+
 def _apply(bot: AgentBot, fields: dict) -> None:
     if "name" in fields:
         bot.name = _text(fields["name"], 40, "invalid_name", required=True)
@@ -236,6 +246,8 @@ def _apply(bot: AgentBot, fields: dict) -> None:
         bot.model = _model(fields["model"])
     if "reasoning_effort" in fields:
         bot.reasoning_effort = _reasoning_effort(fields["reasoning_effort"])
+    if "engine" in fields:
+        bot.engine = _engine(fields["engine"])
     if "avatar" in fields:
         bot.avatar = _avatar(fields["avatar"])
     if "look" in fields:
@@ -475,7 +487,7 @@ def turn_settings(owner_hash: str, bot_id) -> dict | None:
         company = default_company(bot)
         settings = {"bot_id": str(bot.id), "bot_name": bot.name, "is_default": bool(bot.is_default),
                     "conversation_id": str(bot.conversation_id),
-                    "model": bot.model, "reasoning_effort": bot.reasoning_effort, "description": bot.description, "theme": (bot.focus or {}).get("theme"),
+                    "model": bot.model, "reasoning_effort": bot.reasoning_effort, "engine": bot.engine, "description": bot.description, "theme": (bot.focus or {}).get("theme"),
                     "focus_companies": [c["symbol"] for c in (bot.focus or {}).get("companies") or []],
                     "tool_scope": expand_legacy(bot.tool_scope) | ALWAYS_ON if bot.tool_scope is not None else None,
                     "default_company": {**company, "source": "bot_settings", "bot_id": str(bot.id), "bot_name": bot.name}

@@ -117,6 +117,7 @@ export async function agentChatStream(config: AgentChatConfig | { bot_id: string
       if (!raw && chunk.startsWith(":")) { const note = chunk.slice(1).trim(); if (note === "detached") detachable = true; onNote?.(note); }
       if (!raw) continue; let data: Record<string, unknown>; try { data = JSON.parse(raw); } catch { throw new ApiError("服务返回了无效的聊天事件。"); }
       if (eventName === "delta" && typeof data.text === "string") answer += data.text;
+      if (eventName === "answer_reset") answer = "";
       const receivedEvent = eventName;
       const accepted = onEvent({ event: receivedEvent, data });
       if (accepted === false) { await reader.cancel().catch(() => {}); return answer; }

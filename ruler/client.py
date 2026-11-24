@@ -168,6 +168,10 @@ class _Turn:
                 if self.first_delta_ms is None:
                     self.first_delta_ms = self._elapsed_ms()
                 self._answer_parts.append(text)
+        elif event == "answer_reset":
+            # The streamed text is being discarded: what counts is the answer written after the last reset.
+            self._answer_parts.clear()
+            self.first_delta_ms = None
         elif event == "done":
             status = payload.get("status")
             if isinstance(status, str):

@@ -213,6 +213,16 @@ async def decision_request(provider, model, api_key, messages, schemas, base_url
     if provider=="minimax":body["reasoning_split"]=True
     body.update(reasoning_options(provider,reasoning_effort,model))
     return await _post(provider,api_key,body,base_url)
+async def stream_decision(provider,model,api_key,messages,schemas,*,base_url=None,reasoning_effort=None,on_text=None,keep_thinking=True,cache=True):
+    """decision_request with the answer text reported through ``await on_text(piece)`` as it is generated (Anthropic native);
+    other providers answer first and report the whole text once.  Same (data, message) return as decision_request."""
+    if provider=="anthropic":
+        from . import anthropic_native
+        if anthropic_native.use_native(provider):
+            return await anthropic_native.stream_decision(model,api_key,messages,schemas,reasoning_effort,on_text=on_text,keep_thinking=keep_thinking,cache=cache)
+    data,message=await decision_request(provider,model,api_key,messages,schemas,base_url,reasoning_effort)
+    if on_text is not None and isinstance(message,dict) and message.get("content"):await on_text(message["content"])
+    return data,message
 def _semantic_delta(delta):
     return (any(isinstance(delta.get(k),str) and delta[k] for k in ('content','reasoning_content'))
             or bool(delta.get('reasoning_details'))

@@ -39,6 +39,8 @@ class BotBody(BaseModel):
     model: str | None = Field(default=None, max_length=40)
     # null: the environment default; else one of the provider's reasoning tiers (validated in agent_bots).
     reasoning_effort: str | None = Field(default=None, max_length=16)
+    # null: the existing turn; "v2": the kernel (validated in agent_bots).
+    engine: str | None = Field(default=None, max_length=16)
     avatar: str | None = Field(default=None, max_length=16)
     # Bloub look {shape, color} (an old `expression` key is accepted and ignored); null clears it. Validated against the catalog in agent_bots._look.
     look: dict | None = None

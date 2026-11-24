@@ -91,6 +91,31 @@ def test_happy_path_collects_answer_ids_tools_and_times(server):
     assert outcome.first_delta_ms >= 40
 
 
+def test_answer_reset_drops_earlier_text_and_restarts_first_delta(server):
+    server.script = [
+        (0, sse("conversation", {"conversation_id": "c1", "turn_id": "t1"})),
+        (0, sse("delta", {"text": "我查一下"})),
+        (0, sse("answer_reset", {})),
+        (0.15, sse("delta", {"text": "营收 1158"})),
+        (0, sse("done", {"status": "complete", "reason": None, "thinking_ms": 0})),
+    ]
+    outcome = ask(server.base, "cred", "问题")
+    assert outcome.answer == "营收 1158"
+    assert outcome.first_delta_ms >= 150
+    assert outcome.first_event_ms < 150
+
+
+def test_stream_without_reset_is_unchanged(server):
+    server.script = [
+        (0, sse("conversation", {"conversation_id": "c1", "turn_id": "t1"})),
+        (0, sse("delta", {"text": "营收 "})),
+        (0, sse("delta", {"text": "1158"})),
+        (0, sse("done", {"status": "complete", "reason": None, "thinking_ms": 0})),
+    ]
+    outcome = ask(server.base, "cred", "问题")
+    assert outcome.answer == "营收 1158" and outcome.first_delta_ms is not None
+
+
 def test_request_carries_message_model_conversation_and_credential(server):
     server.script = [
         (0, sse("conversation", {"conversation_id": "c1", "turn_id": "t1"})),

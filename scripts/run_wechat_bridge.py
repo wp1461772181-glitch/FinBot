@@ -140,13 +140,28 @@ class Bridge:
                 await asyncio.sleep(BUSY_RETRY_DELAY)
 
 
+def parse_turn(raw: str):
+    """The answer text, the cards and the conversation id of one raw stream.  Text before an ``answer_reset`` is dropped."""
+    from app.agent_telegram import chat_text, sse_events
+
+    parts, cards, cid = [], [], None
+    for kind, data in sse_events(raw):
+        if kind == "conversation":
+            cid = data.get("conversation_id")
+        elif kind == "delta":
+            parts.append(str(data.get("text", "")))
+        elif kind == "answer_reset":
+            parts.clear()
+        elif kind == "clarification":
+            cards.append(data)
+    return chat_text("".join(parts), None), cards, cid
+
+
 async def ask_agent(http, credential: str, bot_id: str, text: str):
     """One turn of the bot through the local stream endpoint.  Returns (answer text, cards, conversation id)."""
     import codecs
 
     import httpx
-
-    from app.agent_telegram import chat_text, sse_events
 
     raw, decoder = "", codecs.getincrementaldecoder("utf-8")("replace")
     try:
@@ -168,15 +183,7 @@ async def ask_agent(http, credential: str, bot_id: str, text: str):
         raise
     except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
         raise BackendUnavailable() from exc
-    parts, cards, cid = [], [], None
-    for kind, data in sse_events(raw):
-        if kind == "conversation":
-            cid = data.get("conversation_id")
-        elif kind == "delta":
-            parts.append(str(data.get("text", "")))
-        elif kind == "clarification":
-            cards.append(data)
-    return chat_text("".join(parts), None), cards, cid
+    return parse_turn(raw)
 
 
 def _lock():

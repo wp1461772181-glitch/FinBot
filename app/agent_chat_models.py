@@ -223,6 +223,8 @@ class AgentBot(Base):
     # The bot's reasoning effort (a provider tier, agent_chat_provider.REASONING_EFFORTS); NULL: the environment default.
     # Added to older tables by ``agent_bots.ensure_columns``.
     reasoning_effort: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Which turn engine this bot runs: NULL the existing turn, "v2" the kernel (app/kernel).  Added to older tables by ``agent_bots.ensure_columns``.
+    engine: Mapped[str | None] = mapped_column(String(16), nullable=True)
     avatar: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     # The bloub look the owner picked, ``{"shape", "color"}`` (an older ``expression`` key is ignored); NULL: never customised (the frontend
     # derives a default from the bot id).  Added to older tables by ``agent_bots.ensure_columns``.

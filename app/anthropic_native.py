@@ -377,14 +377,19 @@ def has_thinking(messages) -> bool:
     return any(b.get("type") in {"thinking", "redacted_thinking"} for m in messages if m["role"] == "assistant" for b in m["content"])
 
 
-def build_request(model, messages, schemas, *, effort=None, caps=None) -> tuple[dict, list[str]]:
+def build_request(model, messages, schemas, *, effort=None, caps=None, keep_thinking=None, cache=False) -> tuple[dict, list[str]]:
     """The keyword arguments of one Messages API call and the beta headers it needs (usually none).  Pure.
 
     Caching: one explicit breakpoint on the last tool definition.  FinBot rewrites its system prompt and the tail of the
     conversation every step, so an automatic breakpoint on the last block would only ever write the cache (1.25x) and never
-    read it; the tool list is the one stable prefix."""
+    read it; the tool list is the one stable prefix.
+
+    ``keep_thinking`` None follows FINBOT_ANTHROPIC_THINKING_BINDING; True keeps the thinking blocks of the history under the
+    drop_block control (unless the mode is ``off``); False strips them.  ``cache`` True adds a breakpoint on the last system block
+    and on the last block of the last message, for a caller whose prompt only grows between calls."""
     caps = caps if caps is not None else static_caps(model)
-    system, converted = convert_messages(messages, keep_thinking=keeps_thinking(), system_role=supports_system_role(model))
+    keep = keeps_thinking() if keep_thinking is None else keep_thinking
+    system, converted = convert_messages(messages, keep_thinking=keep, system_role=supports_system_role(model))
     params: dict = {"model": model, "max_tokens": _p.MAX_OUTPUT_TOKENS, "messages": converted}
     if system:
         params["system"] = system
@@ -396,11 +401,17 @@ def build_request(model, messages, schemas, *, effort=None, caps=None) -> tuple[
     betas: list[str] = []
     if caps["adaptive"]:
         params["thinking"] = {"type": "adaptive", "display": "summarized"}
-        if has_thinking(converted) and binding_mode() == "drop_block":
+        if has_thinking(converted) and (binding_mode() == "drop_block" or (keep_thinking and binding_mode() != "off")):
             params["thinking"]["block_binding"] = {"prefix_mismatch_behavior": "drop_block"}
             betas.append(THINKING_BINDING_BETA)
     if effort in caps["efforts"]:
         params["output_config"] = {"effort": effort}
+    if cache:
+        if system:
+            system[-1]["cache_control"] = {"type": "ephemeral"}
+        tail = [m for m in converted if isinstance(m["content"], list) and m["content"]]
+        if tail:
+            tail[-1]["content"][-1]["cache_control"] = {"type": "ephemeral"}
     return params, betas
 
 
@@ -454,7 +465,7 @@ class ProviderRefusal(_p.ProviderFailure):
         self.category = category
 
 
-def message_from_final(final, *, stage, calls_cap, over_cap_code, allow_tools=True) -> tuple[dict, str]:
+def message_from_final(final, *, stage, calls_cap, over_cap_code, allow_tools=True, keep_thinking=None) -> tuple[dict, str]:
     """The OpenAI-shaped assistant message and finish reason of a finished stream.  Raises the code a failed check maps to."""
     reason = getattr(final, "stop_reason", None)
     if reason is None:
@@ -485,7 +496,7 @@ def message_from_final(final, *, stage, calls_cap, over_cap_code, allow_tools=Tr
         message["tool_calls"] = [{"id": u["id"], "type": "function", "function": {"name": u["name"], "arguments": json.dumps(u["input"], ensure_ascii=False)}} for u in uses]
     elif finish == "tool_calls":
         raise HTTPException(502, "provider_incomplete_stream")
-    if keeps_thinking():
+    if keeps_thinking() if keep_thinking is None else keep_thinking:
         message["_anthropic_content"] = blocks   # sent back with the next step (only in drop_block / off)
     return message, finish
 
@@ -584,14 +595,15 @@ def _require_key(api_key, stage):
         raise _p.ProviderFailure("provider_invalid_key", stage=stage)
 
 
-async def _stream(api_key, model, messages, schemas, effort, stage):
+async def _stream(api_key, model, messages, schemas, effort, stage, keep_thinking=None, cache=False):
     """Yield ('text', str) and ('thinking', str) as they arrive, then ('final', message).  Every event renews the progress clock.
     Only sending and reading are translated into provider codes; building the request is FinBot's own code and its bugs propagate."""
     _require_key(api_key, stage)
     _sdk()
     async with client_for(api_key) as client:
         caps = await read_caps(client, model)
-        params, betas = build_request(model, messages, schemas, effort=effort, caps=caps if caps is not None else static_caps(model))
+        params, betas = build_request(model, messages, schemas, effort=effort, caps=caps if caps is not None else static_caps(model),
+                                      keep_thinking=keep_thinking, cache=cache)
         manager = client.beta.messages.stream(betas=betas, **params) if betas else client.messages.stream(**params)
         seen = reasoning = 0
         try:
@@ -648,6 +660,33 @@ async def decision_request(model, api_key, messages, schemas, reasoning_effort=N
             if final is None:
                 raise HTTPException(502, "provider_incomplete_stream")
             message, finish = message_from_final(final, stage=stage, calls_cap=cap, over_cap_code=over)
+            mark_progress()
+            data = {"choices": [{"message": message, "finish_reason": finish}], "usage": usage_to_openai(final.usage)}
+            if transformed := transformations_of(final):
+                data["input_transformations"] = transformed
+            return data, message
+    except TimeoutError as exc:
+        raise HTTPException(504, "provider_timeout") from exc
+
+
+async def stream_decision(model, api_key, messages, schemas, reasoning_effort=None, *, on_text=None, keep_thinking=True, cache=True):
+    """decision_request that also awaits ``on_text(piece)`` for each piece of answer text as it arrives (thinking pieces are not
+    passed on).  ``keep_thinking`` puts the raw blocks in ``message["_anthropic_content"]`` and keeps those of the history;
+    ``cache`` marks the system prompt and the end of the conversation for the prompt cache."""
+    stage = "tool_decision" if schemas else "classification"
+    cap, over = _calls_cap()
+    try:
+        async with progress_watchdog(_p.PROVIDER_REQUEST_SECONDS):
+            final = None
+            async for kind, value in _stream(api_key, model, messages, schemas, request_effort(reasoning_effort), stage,
+                                             keep_thinking=keep_thinking, cache=cache):
+                if kind == "text" and on_text is not None:
+                    await on_text(value)
+                elif kind == "final":
+                    final = value
+            if final is None:
+                raise HTTPException(502, "provider_incomplete_stream")
+            message, finish = message_from_final(final, stage=stage, calls_cap=cap, over_cap_code=over, keep_thinking=keep_thinking)
             mark_progress()
             data = {"choices": [{"message": message, "finish_reason": finish}], "usage": usage_to_openai(final.usage)}
             if transformed := transformations_of(final):
