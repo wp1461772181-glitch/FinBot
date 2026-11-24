@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from ..agent_chat_identity import owner_credential_matches
+from .skills import SKILL_LINE
 
 SAY_LINE = "- 每次调用工具时，在 say 里用一句话说明你发现了什么、接下来做什么，用户会实时看到这句话。切换到 high 档后，先用 plan 列出清单，再逐项去做；之后每次调用工具时在 item 里写上这是清单的第几项，勾由系统来打。"
 FAST_TIER_LINE = ("- 你现在处于快速档。简单的问题直接回答，或者查一下就答。问题需要多步推理、比较权衡、给出判断，或者你拿不准时，"
@@ -63,9 +64,12 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
     is a card button's raw value: it is dropped from the history, never added, and the fact (a system message) is the last message.
     """
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
-    blocks = [SYSTEM, getattr(context, "bot_block", None)]
+    skill_block = getattr(context, "skill_block", None) if owner else None
+    # The skill list sits between the bot block and the profile block, and its one line of advice inside the fixed text: both
+    # are the same from turn to turn, so the prefix stays byte-identical.
+    blocks = [SYSTEM.replace("\n\n怎么说话", f"\n{SKILL_LINE}\n\n怎么说话", 1) if skill_block else SYSTEM, getattr(context, "bot_block", None)]
     if owner:
-        blocks.append(getattr(context, "profile_block", None))
+        blocks += [skill_block, getattr(context, "profile_block", None)]
     system = "\n\n".join(block for block in blocks if block)
     body = [_without_label(dict(message)) for message in history or []]
     # The history can end with notes after the question (the memory note and the citation catalogue, both user-role messages
@@ -87,4 +91,8 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
         body.append({"role": "user", "content": question})
         asked = len(body) - 1
     _mark_end_of_history(body, asked)
+    started = getattr(context, "active_skill", None) if owner else None
+    if started:      # a 「/名字」 turn: the skill's steps come after the question, so the history before it stays as it was
+        from ..agent_skills import render_active
+        body.append({"role": "system", "content": render_active(started)})
     return [{"role": "system", "content": system}, *body]

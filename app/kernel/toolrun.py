@@ -15,7 +15,7 @@ from ..agent_progress import mark_progress, progress_watchdog
 from ..agent_tool_catalog import definitions, validate
 from ..agent_workflow import tools
 from ..agent_workflow.evidence import number_rows
-from . import act, ask, progress, tiers
+from . import act, ask, progress, skills, tiers
 
 MAX_PARALLEL = 4
 TOOL_IDLE_SECONDS = 180
@@ -173,6 +173,16 @@ async def _settle_act(run, item: _Call) -> None:
         item.result = tools.error("tool_failed")
 
 
+async def _settle_skill(run, item: _Call) -> None:
+    """One ``use_skill`` call: the owner's saved text, read from the database; it is not evidence and not a read."""
+    try:
+        item.result = await skills.settle(run, item.args)
+    except (TimeoutError, ConnectionError):
+        item.result = tools.error("tool_timeout")
+    except Exception:
+        item.result = tools.error("tool_failed")
+
+
 async def _fetch_all(run, reads: list[_Call]) -> None:
     """Run the reads at the same time; if some are still out after ``SLOW_SECONDS``, say what is awaited (once) and keep waiting."""
     gate = asyncio.Semaphore(MAX_PARALLEL)
@@ -214,6 +224,11 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             own.append(item)          # the kernel's own tools: never go through tools.invoke, make no citation
         elif item.name == act.ACT:
             serial.append(item)       # the kernel's own, but it can take time and may rest on this step's reads: with the calculations
+        elif item.name == skills.USE_SKILL:
+            if item.name in run.tool_names:
+                serial.append(item)   # the kernel's own, read from the owner's saved skills; offered to an owner who has any
+            else:
+                item.result = tools.error("tool_not_in_bot_scope")
         elif item.name not in run.tool_names or item.name not in definitions():
             item.result = tools.error("tool_not_in_bot_scope")
         elif item.name in _CALCULATIONS:
@@ -245,6 +260,8 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     for item in serial:
         if item.name == act.ACT:
             await _settle_act(run, item)
+        elif item.name == skills.USE_SKILL:
+            await _settle_skill(run, item)
         else:
             _guard(_settle_serial, run, item)
             run.read_results += 1

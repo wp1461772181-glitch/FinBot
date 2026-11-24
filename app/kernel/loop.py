@@ -20,7 +20,7 @@ from ..agent_progress import mark_progress, progress_watchdog
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
-from . import act, ask, press, progress, prompt, tiers
+from . import act, ask, press, progress, prompt, skills, tiers
 from .toolrun import run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
@@ -101,8 +101,10 @@ def _tool_schemas(context) -> list[dict]:
     available = schemas(owner=owner, names=[n for n in READ_TOOLS if n != "search_x" or x_search.configured()])
     scope = getattr(context, "tool_scope", None)
     # The kernel's own tools go last whatever the ceiling is, so the list is the same for the whole turn.
+    # A skill is offered to an owner who has any enabled (the endpoint puts their list on the context); a bot's scope does not take it away.
     offered = [*(s for s in available if scope is None or s["function"]["name"] in scope), *([act.ACT_SCHEMA] if owner else []),
-               ask.ASK_SCHEMA, progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]
+               ask.ASK_SCHEMA, *([skills.USE_SKILL_SCHEMA] if owner and getattr(context, "skill_block", None) else []),
+               progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]
     return [progress.with_say(s) for s in offered]
 
 
@@ -384,6 +386,9 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
             # The button's raw value is not the user's message, whichever card it was on.
             history = [m for m in history if not (m.get("role") == "user" and m.get("content") == raw)]
         run.messages = prompt.build_messages(question, context, history, fact=fact)
+        started = getattr(context, "active_skill", None)
+        if started and owner_credential_matches(getattr(context, "identity_credential", "")):
+            run.audit["skill"] = {"name": started["name"], "version": started["version"]}
         run.user_text = _user_text(run.question, history)
         note = None if pressed else press.typed_note(state)
         if note:
