@@ -226,7 +226,7 @@ class Bridge:
         target = await asyncio.to_thread(self.route, self.owner, text, None)
         if not target.get("text"):
             return
-        _log("inbound", chars=len(text), bot=target.get("bot_name"), has_context_token=bool(token))
+        _log("inbound", chars=len(text), bot=target.get("bot_name"), has_context_token=bool(token), fields=sorted(str(k) for k in message)[:40])
         task = asyncio.create_task(self._turn(uid, token, target))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
