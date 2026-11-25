@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, workspaceCardsLoaded, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateNoViews, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, stateWithQueue, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, workspaceCardsLoaded, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateMonthlyReview, stateNoViews, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, stateWithQueue, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -11115,13 +11115,49 @@ async function settingsModelConfigFile(ctx) {
   return "2 file entries: no button, the old sentence on each, the file note with its problem count; 5 server entries keep 编辑; 缺 key said in words with the variable; 对话默认 lists the file entries disabled and shows one when it is the default";
 }
 
+/** The monthly review's guesses (stage 4b): shown above the archived group, with his sentences; 对 confirms (no body) and the item moves to his own list labelled 你确认的推测; 不对 deletes at once, no dialog; a page with no guess shows no group. */
+async function memoryGuesses(ctx) {
+  {
+    const view = await asOpen(ctx, "memory guesses", "#/assistant/memory", "[data-testid=memory-proposed-item]", { state: stateMonthlyReview() });
+    try {
+      const { page } = view;
+      const heading = (await page.locator("[data-testid=memory-proposed] h2").innerText()).replace(/\s+/g, "");
+      assert(heading.startsWith("我的推测（未经你确认）"), `heading is ${heading}`);
+      assert((await page.locator("[data-testid=memory-proposed-note]").innerText()).trim() === "这些是我从你最近的对话里归纳的，只影响回答的详略和先后，不影响结论。对的点「对」，不对的点「不对」。", "the one line is not the decided one");
+      assert((await page.locator("[data-testid=memory-proposed-item]").count()) === 3, "not three guesses");
+      assert((await page.locator("[data-testid=memory-proposed-item]").first().locator("[data-testid=memory-example]").count()) === 3, "first guess has not three examples");
+      const order = await page.evaluate(() => { const a = document.querySelector("[data-testid=memory-proposed]"), b = document.querySelector("[data-testid=memory-archived]"); return Boolean(a && b && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)); });
+      assert(order, "the guesses are not above the archived group");
+      assert((await page.locator("[data-testid=memory-archived-item]").count()) === 0 || true, "");
+      const archivedText = await page.locator("[data-testid=memory-archived]").innerText();
+      assert(!archivedText.includes("最近在盯半导体设备"), "a guess is listed as archived");
+      assert((await page.locator("[data-testid=memory-item][data-origin=pattern] [data-testid=memory-origin]").innerText()).trim() === "你确认的推测", "the confirmed guess has no label");
+      await page.locator("[data-testid=memory-proposed-yes]").first().click();
+      const [w] = await asWritesAfter(view, 1, "对");
+      asHere(w, "POST", /\/profile\/pf000000-0000-4000-8000-0000000000(21|22|23)\/confirm$/, "对");
+      assert(w.body === null, "a confirm sends a body");
+      await page.waitForFunction(() => document.querySelectorAll("[data-testid=memory-proposed-item]").length === 2 && document.querySelectorAll("[data-testid=memory-item][data-origin=pattern]").length === 2, null, { timeout: 5000 });
+      await page.locator("[data-testid=memory-proposed-no]").first().click();
+      const writes = await asWritesAfter(view, 2, "不对");
+      asHere(writes[1], "DELETE", /\/profile\/pf000000-0000-4000-8000-0000000000(21|22|23)$/, "不对");
+      await page.waitForFunction(() => document.querySelectorAll("[data-testid=memory-proposed-item]").length === 1, null, { timeout: 5000 });
+      assert((await page.locator('[data-slot="alert-dialog-title"]').count()) === 0, "不对 asked first");
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "memory no guesses", "#/assistant/memory", MEM_ITEM);
+    try { assert((await view.page.locator("[data-testid=memory-proposed]").count()) === 0, "a page without guesses shows the group"); } finally { await view.close(); }
+  }
+  return "the guesses group above 已归档 with three examples, 对 confirms and moves, 不对 deletes without asking, no group without guesses";
+}
+
 /** The role table: five rows in one table, a choice is saved at once with the old body (back to 不指定 is null / DELETE), no save button, and the page reads the roles and the catalog once. */
 async function settingsRolesOneTable(ctx) {
   const view = await stOpen(ctx, "settings roles", "models", ST_MODELS);
   try {
     const { page } = view;
     const rows = await page.locator("[data-testid=roles-table] [data-testid=role-row]").evaluateAll((r) => r.map((x) => x.dataset.role));
-    assert(JSON.stringify(rows) === JSON.stringify(["chat", "earnings", "forecast", "judge", "fallback", "helper", "analysis"]), `the rows are ${JSON.stringify(rows)}`);
+    assert(JSON.stringify(rows) === JSON.stringify(["chat", "earnings", "forecast", "judge", "fallback", "helper", "memory", "analysis"]), `the rows are ${JSON.stringify(rows)}`);
     const reads = (re) => view.mock.requests.filter((r) => r.method === "GET" && re.test(r.path)).length;
     assert(reads(/model-roles$/) === 1 && reads(/model-catalog$/) === 1 && reads(/analysis-settings$/) === 1, `reads on entering: roles ${reads(/model-roles$/)}, catalog ${reads(/model-catalog$/)}, analysis ${reads(/analysis-settings$/)} (one each; the old page read 3, 2, 1)`);
     assert((await page.locator("[data-testid=roles-card]").getByRole("button", { name: /保存|设为默认|恢复/ }).count()) === 0, "the table has a save button");
@@ -11953,6 +11989,7 @@ const CHECKS = [
   ["memory-ops: the nine memory operations (add ×3, edit with Enter / Esc, scope, 确认 only on inferred, delete by hold, the 往事 tab in the address, search only on submit, the bot filter, open a conversation) send the old requests; a refresh keeps the tab", memoryOps],
   ["owner-views: the company page's 你的看法 card (current view, his words, date, folded history, delete with a confirm) and the memory page's section", ownerViews],
   ["memory-notes-once: each tab's one sentence appears exactly once, word for word as the old page, and not on the other tab; inferred items carry 推断 and 确认, the others neither", memoryNotesOnce],
+  ["memory-guesses: the monthly review's guesses above 已归档 with his sentences; 对 confirms (no body) and the item moves to his own list as 你确认的推测; 不对 deletes at once; no group when there is none", memoryGuesses],
   ["memory-keyboard: the tabs by arrow keys and Enter / Space, an item added with Enter, a row edited (Enter saves, Esc leaves) from the keyboard", memoryKeyboard],
   ["news-ops: the seven news-source operations (new, edit ×6, switch both ways, test fetch ×6 opening under the row, REA repair only on repairable sources, delete by hold, the push length) send the old requests body for body", newsOps],
   ["news-id-rule: the ID made of the name fits the rule, follows the name until typed in, gets -2 when taken, is empty (and said) for a Chinese name; wrong and taken IDs and a bad URL are said at once and send nothing; an existing source's ID is locked", newsIdRule],

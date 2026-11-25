@@ -4,6 +4,8 @@ export function recallKindLabel(kind: string): string;
 export function profileGroups(items: ProfileItem[]): { active: ProfileItem[]; archived: ProfileItem[] };
 export type ProfileLayer = { key: string; label: string; bot: ProfileBot | null; items: ProfileItem[] };
 export function profileLayers(items: ProfileItem[], bots: ProfileBot[]): ProfileLayer[];
+export function proposedItems(items: ProfileItem[] | null | undefined): ProfileItem[];
+export function exampleLines(item: ProfileItem): { key: string; quote: string; date: string }[];
 export function layerLabel(item: ProfileItem): string;
 export function manualItemDraft(input: { kind?: string; text?: string; layer?: string | null }): { error: string; fields?: undefined } | { error?: undefined; fields: { kind: ProfileItem["kind"]; text: string; bot_id: string | null } };
 export function recallGroups(items: RecallItem[]): { key: string; label: string; items: RecallItem[] }[];

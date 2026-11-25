@@ -1,6 +1,7 @@
 import { ApiError, agentPath, ownerHeaders } from "./base";
 
-export type ProfileItem = { id:string; handle:string; kind:"preference"|"about_me"|"instruction"; topic:string|null; text:string; origin:"explicit"|"inferred"|"manual"; quote:string; status:"active"|"archived"; scope:"global"|"bot"; bot_id:string|null; bot_name:string|null; created_at:string|null; updated_at:string|null; last_used_at:string|null };
+export type ProfileItem = { id:string; handle:string; kind:"preference"|"about_me"|"instruction"; topic:string|null; text:string; origin:"explicit"|"inferred"|"manual"|"pattern"; quote:string; status:"active"|"archived"|"proposed"; examples?:ProfileExample[]|null; scope:"global"|"bot"; bot_id:string|null; bot_name:string|null; created_at:string|null; updated_at:string|null; last_used_at:string|null };
+export type ProfileExample = { message_id:string; quote:string; date:string|null };
 export type ProfileBot = { id:string; name:string; is_default:boolean };
 export type RecallItem = { conversation_id:string; title:string; date:string|null; summary:string; kind:"summary"|"questions"; link:string; bot_id:string|null; bot_name:string|null };
 
