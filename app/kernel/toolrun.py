@@ -20,6 +20,7 @@ from ..agent_progress import mark_progress, progress_watchdog
 from ..agent_tool_catalog import definitions, validate
 from ..agent_workflow import tools
 from ..agent_workflow.evidence import number_rows
+from .. import source_authority
 from . import act, ask, decide, progress, skills, tiers
 
 MAX_PARALLEL = 4
@@ -87,10 +88,26 @@ def _number_evidence(run, name: str, outcome: dict) -> dict:
         prepared.append(row)
     if not prepared:
         return outcome
-    shown = {"ok": True, "data": number_rows(name, prepared, run.citations, {}), "source": outcome.get("source")}
-    if isinstance(outcome.get("meta"), dict):
-        shown["meta"] = outcome["meta"]
+    numbered = number_rows(name, prepared, run.citations, {})
+    source_authority.rank(run.citations)
+    for row in numbered:
+        match = _MARK_ORDINAL.fullmatch(str(row.get("citation") or ""))
+        cited = match and 0 < int(match[1]) <= len(run.citations) and run.citations[int(match[1]) - 1]
+        if cited and cited.get("authority_label"):
+            row["来源等级"] = cited["authority_label"]
+    shown = {"ok": True, "data": numbered, "source": outcome.get("source")}
+    meta = {**outcome["meta"]} if isinstance(outcome.get("meta"), dict) else {}
+    meta.update(source_authority.freshness(numbered, _now()))
+    if meta:
+        shown["meta"] = meta
     return shown
+
+
+_MARK_ORDINAL = re.compile(r"\[(\d+)\]")
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
 
 
 HEADING_PREFIX = "  最新一季："
@@ -115,6 +132,7 @@ def _calculated(run, row: dict, ordinals: dict[int, str]) -> str | None:
     ordinal = len(run.citations) + 1
     run.citations.append({"ordinal": ordinal, "source_type": "calculation", "derived": True, "title": row.get("title") or "可复核计算",
                           "quote": json.dumps(value, ensure_ascii=False), "calculation": value, "symbol": row.get("symbol")})
+    source_authority.rank(run.citations)
     return f"[{ordinal}]"
 
 
@@ -141,6 +159,7 @@ def number_attached(run, text: str, rows: list[dict]) -> str:
         except Exception:
             logger.exception("latest-known citations could not be numbered")
             ordinals = {}
+        source_authority.rank(run.citations)
     def number(match):
         return f"{ordinals[int(match[1])]}{match[2]}" if int(match[1]) in ordinals else ""
     if HEADING_PREFIX not in text:
@@ -173,6 +192,7 @@ def _calculate(run, name: str, args: dict) -> dict:
             ordinal = len(run.citations) + 1
             run.citations.append({"ordinal": ordinal, "source_type": "calculation", "derived": True, "title": "可复核计算",
                                   "quote": json.dumps(value, ensure_ascii=False), "calculation": value})
+            source_authority.rank(run.citations)
             return {"ok": True, "data": [{**value, "citation": f"[{ordinal}]"}]}
         from ..agent_workflow.formula_replay import execute_calculate_formula
         return execute_calculate_formula(args, run.citations)
