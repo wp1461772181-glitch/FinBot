@@ -187,8 +187,20 @@ def row_bytes(row: dict) -> int:
     return json_bytes({"role": role, "content": row.get("content") or ""})
 
 
+def group_by_turn(rows: list, key=lambda row: row["turn_id"]) -> list[list]:
+    """Stored rows (oldest first) as one group per turn, in the order the turns began.  The rows of a turn are not always next to each
+    other: turns of one conversation can run at the same time (3c), and a message the owner sent while one worked is stored in
+    the middle of it.  Rows that are next to each other group as they always did."""
+    groups: dict = {}
+    for row in rows:
+        groups.setdefault(key(row), []).append(row)
+    return list(groups.values())
+
+
 def project_turn_history(group: list[dict]) -> list[dict]:
-    user = next((r for r in group if r.get("role") == "user"), None)
+    users = [r for r in group if r.get("role") == "user"]
+    # A turn that took in messages the owner sent while it worked answers all of them: his words, one after another.
+    user = {**users[0], "content": "\n".join((r.get("content") or "") for r in users)} if len(users) > 1 else (users[0] if users else None)
     answer = next((r for r in reversed(group) if r.get("role") == "assistant" and not (
         isinstance(r.get("tool_calls"), dict) and r["tool_calls"].get("calls"))), None)
     result = []
@@ -252,11 +264,7 @@ def is_catalogue_message(message: dict) -> bool:
 def complete_turns(rows: list[dict]) -> list[list[dict]]:
     """Stored messages (oldest first) grouped by turn; only turns that began with the user's message
     and ended with a complete answer.  A failed, cancelled or unanswered turn is in no layer."""
-    groups: list[list[dict]] = []
-    for row in rows:
-        if not groups or groups[-1][0]["turn_id"] != row["turn_id"]:
-            groups.append([])
-        groups[-1].append(row)
+    groups = group_by_turn(rows)
     return [g for g in groups
             if g[0]["role"] == "user" and g[-1]["role"] == "assistant" and g[-1].get("status") == "complete"]
 
@@ -275,11 +283,7 @@ def trailing_unfinished(rows: list[dict], upto: int = 0) -> list[dict]:
     answer: oldest first, at most UNFINISHED_KEEP of the newest.  The walk back from the newest turn stops at
     the first complete turn or at a turn a summary already covers; a group that is not a question of the user
     (an assistant-only group, a button reply, a blank question) is passed over without stopping the walk."""
-    groups: list[list[dict]] = []
-    for row in rows:
-        if not groups or groups[-1][0]["turn_id"] != row["turn_id"]:
-            groups.append([])
-        groups[-1].append(row)
+    groups = group_by_turn(rows)
     found: list[dict] = []
     for group in reversed(groups):
         if group[0]["role"] == "user" and group[-1]["role"] == "assistant" and group[-1].get("status") == "complete":

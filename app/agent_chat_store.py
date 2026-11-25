@@ -25,15 +25,27 @@ async def verify_conversation(conversation_id: str, credential: str)->bool:
     except ValueError:return False
     async with Session() as s:
         return await s.scalar(select(AgentConversation.id).where(AgentConversation.id==cid,AgentConversation.owner_hash==owner_hash(credential))) is not None
-async def append_message(conversation_id: str, turn_id: str, role: str, content: str, *, tool_calls=None, tool_call_id=None,status="complete"):
+async def append_message(conversation_id: str, turn_id: str, role: str, content: str, *, tool_calls=None, tool_call_id=None,status="complete",message_id: str | None = None):
+    """Store one row; returns its sequence.  ``message_id``: the row's id when the caller needs to name it before it is stored (the owner's
+    messages, which the answers say they answer)."""
     async with Session() as s:
         cid=uuid.UUID(conversation_id)
         seq=(await s.scalar(select(func.coalesce(func.max(AgentMessage.sequence),0)).where(AgentMessage.conversation_id==cid)))+1
-        s.add(AgentMessage(conversation_id=cid,turn_id=uuid.UUID(turn_id),sequence=seq,role=role,content=content,tool_calls=tool_calls,tool_call_id=tool_call_id,status=status))
+        s.add(AgentMessage(**({"id":uuid.UUID(message_id)} if message_id else {}),conversation_id=cid,turn_id=uuid.UUID(turn_id),sequence=seq,role=role,content=content,tool_calls=tool_calls,tool_call_id=tool_call_id,status=status))
         conv=await s.get(AgentConversation,cid)
         if conv: conv.updated_at=func.now()
         await s.commit()
     if role=="user":await _recall(recall.index_question,conversation_id,content)
+    return seq
+async def move_message(conversation_id: str, message_id: str, turn_id: str) -> bool:
+    """Put a stored row under another turn (the owner's message that a running turn took in: from then on it is part of that turn).
+    False when there is no such row in this conversation."""
+    async with Session() as s:
+        row=await s.get(AgentMessage,uuid.UUID(message_id))
+        if row is None or row.conversation_id!=uuid.UUID(conversation_id): return False
+        row.turn_id=uuid.UUID(turn_id)
+        await s.commit()
+        return True
 async def history(conversation_id: str, credential: str, limit_bytes=14000):
     if not await verify_conversation(conversation_id,credential): return None
     async with Session() as s:
@@ -41,10 +53,7 @@ async def history(conversation_id: str, credential: str, limit_bytes=14000):
         rows=list(reversed(rows))
         output=[]; used=0
         # Keep complete turns only; group by turn ID and include newest full groups.
-        groups=[]
-        for row in rows:
-            if not groups or groups[-1][0]!=row.turn_id: groups.append((row.turn_id,[]))
-            groups[-1][1].append(row)
+        groups=[(group[0].turn_id,group) for group in layers.group_by_turn(rows,key=lambda row:row.turn_id)]
         for _,group in reversed(groups):
             if not group or group[0].role != "user" or group[-1].role != "assistant" or group[-1].status != "complete":
                 continue
@@ -57,10 +66,12 @@ CONTEXT_ROWS = 500       # how many of the newest rows a turn reads
 
 async def conversation_context(conversation_id: str, credential: str, *, window: int | None = None,
                                l1_bytes: int | None = None, l2_bytes: int | None = None, l3_bytes: int | None = None,
-                               anchored: bool = False):
+                               anchored: bool = False, upto_sequence: int | None = None, exclude_turns=()):
     """What the next turn of this conversation carries of the turns before it, by layer (the rule is
     ``agent_context.layer_rows``; this reads the rows and the segments).  None when the conversation
-    is not this credential's.  ``anchored`` (kernel turns) moves the layer boundary on a fixed grid."""
+    is not this credential's.  ``anchored`` (kernel turns) moves the layer boundary on a fixed grid.
+    ``upto_sequence`` / ``exclude_turns``: the history as of a moment, without the rows of turns that were still running then
+    (a separate turn started from a message that arrived while another turn worked, 3c)."""
     if not await verify_conversation(conversation_id, credential):
         return None
     # The sizes follow the window of the model that will read them (the catalog's window; default 128k).
@@ -75,8 +86,10 @@ async def conversation_context(conversation_id: str, credential: str, *, window:
         segments = (await s.scalars(select(AgentConversationSummary)
                                     .where(AgentConversationSummary.conversation_id == cid)
                                     .order_by(AgentConversationSummary.seq.asc()))).all()
+    skip = {uuid.UUID(str(t)) for t in exclude_turns or ()}
     stored = [{"role": m.role, "content": m.content, "tool_calls": m.tool_calls, "tool_call_id": m.tool_call_id,
-               "status": m.status, "turn_id": m.turn_id, "sequence": m.sequence} for m in reversed(rows)]
+               "status": m.status, "turn_id": m.turn_id, "sequence": m.sequence} for m in reversed(rows)
+              if (upto_sequence is None or m.sequence <= upto_sequence) and m.turn_id not in skip]
     made = [{"seq": x.seq, "from_sequence": x.from_sequence, "upto_sequence": x.upto_sequence, "content": x.content}
             for x in segments]
     if not anchored:
@@ -165,10 +178,7 @@ async def append_summary(conversation_id: str, from_sequence: int, upto_sequence
 
 
 def _eligible_turn_groups(rows):
-    groups=[]
-    for row in rows:
-        if not groups or groups[-1][-1].turn_id!=row.turn_id: groups.append([])
-        groups[-1].append(row)
+    groups=layers.group_by_turn(rows,key=lambda row:row.turn_id)
     # A tool-request row is written complete before its tools run, so a turn that ends on one
     # is still running: its answer is not there yet and must not be restored half-finished.
     def tool_request(row):

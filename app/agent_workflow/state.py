@@ -72,6 +72,8 @@ class AgentRuntimeContext:
     # task's skill): {name, version, body, output_template, tools}.  Steps, never evidence or write authority.
     skill_block: str | None = field(default=None, repr=False, compare=False)
     active_skill: dict | None = field(default=None, repr=False, compare=False)
+    # 3c: the kernel turn's inbox (app/kernel/inbox.py): what the owner says while the turn works.  None: the turn takes none.
+    inbox: object | None = field(default=None, repr=False, compare=False)
 
 
 def checkpoint_thread_id(owner_hash: str, conversation_id: str) -> str:

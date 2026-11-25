@@ -71,14 +71,79 @@ def start_turn(owner: str, conversation_id: str, turn_id: str, text: str) -> Non
         db.commit()
 
 
+DEFAULT_CONCURRENT = 3
+
+
+def concurrent_limit() -> int:
+    """How many chat turns one owner has running at once (``FINBOT_CONCURRENT_WORK``, default 3); the next ones wait in line."""
+    try:
+        return max(1, int(os.environ.get("FINBOT_CONCURRENT_WORK", DEFAULT_CONCURRENT)))
+    except ValueError:
+        return DEFAULT_CONCURRENT
+
+
+def _count(db, owner: str, status: str) -> int:
+    return int(db.scalar(select(func.count()).select_from(AgentWork).where(AgentWork.owner_hash == owner, AgentWork.kind == CHAT_TURN,
+                                                                           AgentWork.status == status)) or 0)
+
+
+def _slot_lock(db, owner: str) -> None:
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"work-slots:{owner}"})
+
+
+def enter_turn(owner: str, conversation_id: str, turn_id: str, text_: str, limit: int | None = None) -> tuple[str, int]:
+    """Record a chat turn that wants to start: ``running`` when the owner has a free slot and nobody waits in front of it, else ``queued``
+    (first in, first out).  Returns (status, ahead): ahead is how many pieces of work are in front of a queued turn.  A repeat of the same
+    turn gives its present state."""
+    limit = limit or concurrent_limit()
+    with SessionLocal() as db:
+        _slot_lock(db, owner)
+        item = db.scalars(select(AgentWork).where(AgentWork.kind == CHAT_TURN, AgentWork.ref == str(turn_id))).first()
+        if item is not None:
+            return item.status, 0
+        running, queued = _count(db, owner, RUNNING), _count(db, owner, QUEUED)
+        status = RUNNING if running < limit and queued == 0 else QUEUED
+        db.add(AgentWork(kind=CHAT_TURN, ref=str(turn_id), owner_hash=owner, conversation_id=uuid.UUID(str(conversation_id)),
+                         summary=_head(text_), status=status))
+        db.commit()
+        return status, (0 if status == RUNNING else running + queued)
+
+
+def promote(turn_id: str, limit: int | None = None) -> tuple[bool, int]:
+    """A queued turn asks for its slot: (True, 0) once it is the oldest in line and a slot is free (it is running from then on);
+    otherwise (False, ahead).  A turn that is already running is (True, 0); one that is gone or ended is (False, 0)."""
+    limit = limit or concurrent_limit()
+    with SessionLocal() as db:
+        item = db.scalars(select(AgentWork).where(AgentWork.kind == CHAT_TURN, AgentWork.ref == str(turn_id))).first()
+        if item is None:
+            return False, 0
+        if item.status == RUNNING:
+            return True, 0
+        if item.status != QUEUED:
+            return False, 0
+        _slot_lock(db, item.owner_hash)
+        db.refresh(item)
+        if item.status != QUEUED:
+            return item.status == RUNNING, 0
+        running = _count(db, item.owner_hash, RUNNING)
+        older = int(db.scalar(select(func.count()).select_from(AgentWork).where(
+            AgentWork.owner_hash == item.owner_hash, AgentWork.kind == CHAT_TURN, AgentWork.status == QUEUED,
+            AgentWork.started_at < item.started_at)) or 0)
+        if running < limit and older == 0:
+            item.status, item.started_at = RUNNING, func.now()
+            db.commit()
+            return True, 0
+        return False, running + older
+
+
 def end_turn(turn_id: str, status: str, reason: str | None = None, *, reader_present: bool | None = None) -> bool:
-    """Close a running chat turn.  True when this call closed it; False when it was not running (already closed by the
+    """Close a running (or queued) chat turn.  True when this call closed it; False when it was not open (already closed by the
     turn's own end, or by the sweep) or was never recorded."""
     if status not in (DONE, FAILED, STOPPED):
         raise ValueError(f"a turn ends as done, failed or stopped, not {status!r}")
     with SessionLocal() as db:
         result = db.execute(update(AgentWork).where(AgentWork.kind == CHAT_TURN, AgentWork.ref == str(turn_id),
-                                                    AgentWork.status == RUNNING)
+                                                    AgentWork.status.in_((RUNNING, QUEUED)))
                             .values(status=status, reason=reason if status != DONE else None, reader_present=reader_present,
                                     ended_at=func.now()))
         db.commit()
@@ -100,13 +165,13 @@ def sweep_interrupted(now: datetime | None = None) -> int:
     # Single API process (the box runs one): a second worker's sweep would also close the first one's live turns.
     now = now or datetime.now(UTC)
     with SessionLocal() as db:
-        ids = db.scalars(select(AgentWork.id).where(AgentWork.kind == CHAT_TURN, AgentWork.status == RUNNING,
+        ids = db.scalars(select(AgentWork.id).where(AgentWork.kind == CHAT_TURN, AgentWork.status.in_((RUNNING, QUEUED)),
                                                     AgentWork.started_at <= now).order_by(AgentWork.started_at)).all()
     closed = 0
     for work_id in ids:
         try:
             with SessionLocal() as db:
-                row = db.execute(update(AgentWork).where(AgentWork.id == work_id, AgentWork.status == RUNNING)
+                row = db.execute(update(AgentWork).where(AgentWork.id == work_id, AgentWork.status.in_((RUNNING, QUEUED)))
                                  .values(status=FAILED, reason=RESTART_REASON, reader_present=None, ended_at=func.now())
                                  .returning(AgentWork.conversation_id, AgentWork.started_at, AgentWork.ref)).first()
                 if row is None:
@@ -319,10 +384,10 @@ def list_for(owner: str, *, now: datetime | None = None, limit: int = LIST_LIMIT
     items: list[dict] = []
     with SessionLocal() as db:
         for row in db.scalars(select(AgentWork).where(AgentWork.owner_hash == owner, AgentWork.kind == CHAT_TURN,
-                                                      (AgentWork.status == RUNNING) | (AgentWork.status.in_((FAILED, STOPPED)) & (AgentWork.started_at >= since)))
+                                                      (AgentWork.status.in_((RUNNING, QUEUED))) | (AgentWork.status.in_((FAILED, STOPPED)) & (AgentWork.started_at >= since)))
                               .order_by(AgentWork.started_at.desc()).limit(limit)):
             items.append(_item("chat", row.ref, f"回答：{row.summary}", row.status, started=row.started_at, ended=row.ended_at,
-                               failure=row.reason if row.status != RUNNING else None, conversation_id=row.conversation_id))
+                               failure=row.reason if row.status not in (RUNNING, QUEUED) else None, conversation_id=row.conversation_id))
         try:
             requests = db.execute(text("""SELECT * FROM agent_action_requests WHERE owner_hash=:owner AND job_id IS NOT NULL
                                           AND (created_at >= :since OR status='running') ORDER BY created_at DESC LIMIT 60"""),

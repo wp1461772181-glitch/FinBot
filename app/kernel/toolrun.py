@@ -22,6 +22,7 @@ from ..agent_workflow import tools
 from ..agent_workflow.evidence import number_rows
 from .. import source_authority
 from . import act, ask, decide, progress, skills, tiers
+from . import inbox as inboxes
 
 MAX_PARALLEL = 4
 MAX_TIMELINE = 500     # entries of ``audit["timeline"]`` kept per turn
@@ -366,7 +367,7 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         mark_timeline(run, "tool", call_id=call["id"], name=name)
         await run.emit({"event": "tool_start", "call_id": call["id"], "name": name, "arguments": args or {}})
         run.audit["tool_calls"] += 1
-    own, asks, reads, serial = [], [], [], []
+    own, asks, reads, serial, handles = [], [], [], [], []
     for item in items:
         if item.args is None:
             item.result = tools.error("invalid_arguments")
@@ -375,6 +376,11 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         elif item.name == decide.DECIDE:
             if item.name in run.tool_names:
                 own.append(item)      # offered to a wake turn only
+            else:
+                item.result = tools.error("tool_not_in_bot_scope")
+        elif item.name == inboxes.HANDLE:
+            if item.name in run.tool_names:
+                handles.append(item)  # the owner's messages sent while the turn works: settled first (a stop cancels the rest of the step)
             else:
                 item.result = tools.error("tool_not_in_bot_scope")
         elif item.name in (tiers.ESCALATE, progress.PLAN):
@@ -398,6 +404,19 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             serial.append(item)
         else:
             reads.append(item)
+    for item in handles:
+        try:
+            item.result = await inboxes.settle(run, item.args)
+        except Exception:
+            logger.exception("kernel handle_message failed")
+            item.result = tools.error("tool_failed")
+        _done(run, item)
+    if handles and run.inbox is not None and run.inbox.stopping:
+        # The owner said stop: nothing else this step asked for runs (no read, no write, no question).
+        for pending in (own, asks, reads, serial):
+            for item in pending:
+                item.result = {"ok": False, "data": [], "error_code": "turn_stopped"}
+            pending.clear()
     # The kernel's own calls take no time and read nothing: settle them first, so a checklist is on screen while the
     # reads are still out, not after the slowest of them.
     planned = False
