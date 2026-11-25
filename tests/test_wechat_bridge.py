@@ -218,10 +218,14 @@ def test_slow_turn_sends_one_note_before_the_answer(monkeypatch):
     assert [text for _, text, _ in run(go()).sent] == [bridge.SLOW_TEXT, "好了。"]
 
 
-def test_turns_of_one_bot_run_one_at_a_time():
-    running, peak = [], []
+def test_a_second_message_goes_to_the_api_while_the_first_runs_and_a_409_waits_in_line(monkeypatch):
+    monkeypatch.setattr(bridge, "BUSY_RETRY_DELAY", 0.01)
+    running, peak, refused = [], [], []
 
     async def ask(bot_id, text, on_event=None):
+        if text == "第二句" and not refused:
+            refused.append(1)                       # an engine that cannot take it answers 409
+            raise bridge.ConversationBusy()
         running.append(1)
         peak.append(len(running))
         await asyncio.sleep(0.03)
@@ -237,6 +241,98 @@ def test_turns_of_one_bot_run_one_at_a_time():
 
     sent = run(go()).sent
     assert max(peak) == 1 and [text for _, text, _ in sent] == ["第一句", "第二句"]
+
+
+class _Second:
+    """The first message blocks on a gate; the second is answered by ``second(on_event)``."""
+
+    def __init__(self, second):
+        self.gate = None
+        self.calls = []
+        self.second = second
+
+    async def ask(self, bot_id, text, on_event=None):
+        self.calls.append(text)
+        if text == "第一句":
+            await self.gate.wait()
+            return "答一", [], "c"
+        return await self.second(on_event)
+
+
+def _two(second):
+    async def go():
+        fake = _Second(second)
+        fake.gate = asyncio.Event()
+        b, ilink, _ = _make(fake.ask)
+        await b.handle(_message("第一句"))
+        await asyncio.sleep(0.02)
+        await b.handle(_message("第二句：" + "很长" * 30))
+        await asyncio.sleep(0.02)
+        during = [text for _, text, _ in ilink.sent]
+        fake.gate.set()
+        await _drain(b)
+        return fake, during, [text for _, text, _ in ilink.sent]
+
+    return run(go())
+
+
+async def _emit(on_event, *events):
+    for kind, data in events:
+        await on_event(kind, data)
+
+
+def test_second_message_is_posted_at_once_and_merged_gets_one_line():
+    async def second(on_event):
+        await _emit(on_event, ("received", {}), ("merged", {"into_turn": "t"}))
+        return "", [], None
+
+    fake, during, sent = _two(second)
+    assert len(fake.calls) == 2 and during == [bridge.RECEIVED_TEXT, bridge.MERGED_TEXT]   # before the first finished
+    assert sent == [bridge.RECEIVED_TEXT, bridge.MERGED_TEXT, "答一"]
+
+
+def test_stopped_says_stopped_and_the_stopped_answer_keeps_its_text():
+    async def second(on_event):
+        await _emit(on_event, ("received", {}), ("stopped", {}))
+        return "", [], None
+
+    _, _, sent = _two(second)
+    assert sent == [bridge.RECEIVED_TEXT, bridge.STOPPED_TEXT, "答一"]
+
+
+def test_separate_answer_is_its_own_message_with_a_one_line_quote():
+    async def second(on_event):
+        await _emit(on_event, ("received", {}), ("separate", {}))
+        return "答二", [], "c"
+
+    _, _, sent = _two(second)
+    assert sent[0] == bridge.RECEIVED_TEXT
+    quote = next(t for t in sent if t.endswith("答二"))
+    assert quote.startswith("回复：第二句：") and "\n\n答二" in quote and "…" in quote.split("\n")[0]
+
+
+def test_queued_is_told_with_the_count_then_answered():
+    async def second(on_event):
+        await _emit(on_event, ("received", {}), ("separate", {}), ("queued", {"ahead": 2}))
+        return "答二", [], "c"
+
+    _, _, sent = _two(second)
+    assert sent[:2] == [bridge.RECEIVED_TEXT, "排队中（前面 2 件）"] and any(t.endswith("答二") for t in sent)
+
+
+def test_a_separate_answer_keeps_the_two_extra_messages_limit(monkeypatch):
+    monkeypatch.setattr(bridge, "PROGRESS_AFTER_SECONDS", 0.01)
+
+    async def second(on_event):
+        await _emit(on_event, ("received", {}), ("separate", {}))
+        for i in range(5):
+            await _emit(on_event, ("checklist", {"items": [{"text": f"步{i}"}]}), ("narration", {"text": f"句{i}"}))
+            await asyncio.sleep(0.02)
+        return "答二", [], "c"
+
+    _, _, sent = _two(second)
+    extra = [t for t in sent if t not in (bridge.RECEIVED_TEXT, "答一") and not t.endswith("答二")]
+    assert len(extra) <= 2
 
 
 def test_long_answer_is_split_and_every_part_carries_the_token():
