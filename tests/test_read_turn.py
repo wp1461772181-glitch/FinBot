@@ -172,3 +172,57 @@ def test_the_memory_note_gets_the_sentence_only_in_a_kernel_turn():
 def is_memory(message):
     from app import agent_context as layers
     return layers.is_memory_message(message)
+
+
+# --- final-review fix wave -----------------------------------------------------------------------------------------------------
+
+def _turn_with(status, content="答到一半", users=("问",), protocol=None):
+    from app import agent_chat_store as store
+
+    async def run():
+        try:
+            cid = await store.create_conversation(OWNER)
+            for text in users:
+                await store.append_message(cid, _tid(1), "user", text)
+            if status is not None:
+                await store.append_message(cid, _tid(1), "assistant", content, status=status, tool_calls=protocol)
+            return cid
+        finally:
+            await store.engine.dispose()
+    return asyncio.run(run())
+
+
+@pytest.mark.parametrize("status", ["complete", "failed", "cancelled", "stopped", "running"])
+def test_the_answer_says_what_state_it_is_in(db, status):
+    cid = _turn_with(status)
+    got = _read(cid, OWNER, _tid(1))
+    assert got["answer_status"] == status and got["answer"] == "答到一半" and got["user_messages"] == ["问"]
+
+
+def test_a_turn_with_no_answer_yet_says_so(db):
+    cid = _turn_with(None)
+    got = _read(cid, OWNER, _tid(1))
+    assert got["answer"] is None and got["answer_status"] == "no_answer" and got["user_messages"] == ["问"]
+
+
+def test_the_description_says_what_a_status_other_than_complete_means():
+    from app.agent_tool_catalog import definitions
+    text = definitions()["read_turn"].description
+    assert "answer_status" in text and "cut off" in text and "failed" in text and "still being written" in text
+
+
+def test_a_scoped_bot_is_offered_read_turn_record_view_and_drop_view(owner_env):
+    from app import agent_bots
+    from app.kernel import loop
+    scope = agent_bots.expand_legacy(["web_research"]) | agent_bots.ALWAYS_ON
+    assert {"read_turn", "record_view", "drop_view"} <= agent_bots.ALWAYS_ON <= scope
+    from tests.test_kernel_loop import make_context
+    names = {s["function"]["name"] for s in loop._tool_schemas(make_context(tool_scope=scope))}
+    assert "read_turn" in names and "web_research" in names
+    from app.agent_tool_catalog import KERNEL_ONLY, legacy_definitions
+    assert {"read_turn", "record_view", "drop_view"} <= KERNEL_ONLY and not {"read_turn", "record_view", "drop_view"} & set(legacy_definitions())
+
+
+@pytest.fixture
+def owner_env(monkeypatch):
+    return monkeypatch
