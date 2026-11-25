@@ -941,3 +941,159 @@ def test_a_failure_in_the_archive_list_does_not_cost_the_block(sec, monkeypatch)
     monkeypatch.setattr(subjects, "note_asked", lambda s: (_ for _ in ()).throw(RuntimeError("db down")))
     text, symbols = owner_block("NVDA 怎么样")
     assert symbols == ["NVDA"] and "关于 英伟达（NVDA）" in text
+
+
+# ----------------------------------------------------------------------------------------------------------
+# 2d: the company's own guidance, from its newest earnings release, in the latest-quarter section
+# ----------------------------------------------------------------------------------------------------------
+
+from app.agent_chat_models import EarningsHistory  # noqa: E402
+
+GUIDED = {"revenue_low": 130.0, "revenue_high": 134.0, "gross_margin": 75.0, "eps": 1.2}
+RELEASE_ACCESSION = "0001045810-26-000300"
+
+
+def release_8k(symbol="NVDA", accession=RELEASE_ACCESSION, review="pending_review"):
+    with SessionLocal() as db:
+        db.add(SecFilingInventory(symbol=symbol, cik="0001045810", accession_number=accession, form="8-K", filed_at=date(2026, 11, 19),
+                                  accepted_at="2026-11-19T21:20:00.000Z", primary_document="q3.htm", source_url=f"https://www.sec.gov/{symbol}/{accession}.htm",
+                                  source="sec-edgar", review_status=review, observed_at=datetime(2026, 11, 19, 21, 30, tzinfo=UTC), content_status="not_fetched"))
+        db.commit()
+
+
+def history(guidance, accession=RELEASE_ACCESSION, released=datetime(2026, 11, 19, 21, 20, tzinfo=UTC), symbol="NVDA"):
+    with SessionLocal() as db:
+        db.add(EarningsHistory(symbol=symbol, quarter="2026Q3", accession=accession, released_at=released, guidance=guidance, actual={}, reader_version="t"))
+        db.commit()
+
+
+@pytest.fixture()
+def guided(nvda):
+    yield
+    with SessionLocal() as db:
+        db.execute(delete(EarningsHistory).where(EarningsHistory.symbol == "NVDA"))
+        db.commit()
+
+
+def guidance_line(text):
+    return next((line for line in text.split("\n") if "公司指引" in line), None)
+
+
+def test_the_latest_quarter_carries_the_companys_guidance_with_every_number_cited(guided):
+    release_8k()
+    history(GUIDED)
+    text, citations, raw, rows = numbered_block()
+    line = guidance_line(text)
+    assert line == next(l for l in facts_lines(text) if "公司指引" in l)
+    assert facts_lines(text)[-1] == line                                  # after the 2b lines
+    assert re.fullmatch(r"  公司指引（新闻稿，FY2027 Q4）：营收 1,300.00–1,340.00 亿美元\[\d+\]，毛利率约 75.0%\[\d+\]，每股收益约 1.20 美元\[\d+\]", line), line
+    assert len(line) <= lk.LINE_LIMIT and "[#" not in text
+    marks = [int(n) for n in re.findall(r"\[(\d+)\]", line)]
+    assert len(marks) == 3 and len(set(marks)) == 3
+    for n in marks:
+        c = citations[n - 1]
+        assert c["source_type"] == "official_filing" and c["url"].endswith(f"{RELEASE_ACCESSION}.htm") and c["authority"] == 1
+    assert "1300" in citations[marks[0] - 1]["figures"] and citations[marks[1] - 1]["figures"] == "75.0"
+    # nothing in the line stands without a citation: strip the marked groups and no digit is left but the period and the quarter's name
+    assert not re.findall(r"\d", re.sub(r"\[\d+\]|FY\d{4} Q\d|(?:营收|约)? ?[\d,.–]+ ?(?:亿美元|%|美元)(?=\[\d+\])", "", line))
+    assert uncited_numbers(text) == []
+
+
+def test_only_the_fields_the_release_gave_are_shown(guided):
+    release_8k()
+    history({"revenue_low": 130.0, "revenue_high": 134.0})
+    line = guidance_line(numbered_block()[0])
+    assert "营收 1,300.00–1,340.00 亿美元[" in line and "毛利率" not in line and "每股收益" not in line
+
+
+def test_a_range_turned_around_or_in_other_units_is_left_out_and_the_rest_stays(guided):
+    release_8k()
+    for bad in ({"revenue_low": 134.0, "revenue_high": 130.0, "gross_margin": 75.0},          # low above high
+                {"revenue_low": 1.3, "revenue_high": 134.0, "gross_margin": 75.0},            # one end in other units
+                {"revenue_low": 0.13, "revenue_high": 0.134, "gross_margin": 75.0},           # billions mistaken for tens of billions
+                {"revenue_low": 130.0, "revenue_high": 134.0, "gross_margin": 0.75}):         # a fraction, not percent
+        with SessionLocal() as db:
+            db.execute(delete(EarningsHistory).where(EarningsHistory.symbol == "NVDA"))
+            db.commit()
+        history(bad)
+        line = guidance_line(numbered_block()[0])
+        if bad["gross_margin"] == 0.75:
+            assert line is not None and "营收 1,300.00–1,340.00 亿美元[" in line and "毛利率" not in line, bad
+        else:
+            assert line is not None and "营收" not in line and "毛利率约 75.0%[" in line, bad
+
+
+def test_no_8k_row_means_no_guidance_line(guided):
+    history(GUIDED)
+    assert guidance_line(numbered_block()[0]) is None
+    release_8k(review="rejected")
+    assert guidance_line(numbered_block()[0]) is None
+
+
+def test_only_the_newest_release_counts_and_one_out_before_the_quarter_ended_is_not_shown(guided):
+    release_8k()
+    release_8k(accession="0001045810-26-000100")
+    history(GUIDED, accession="0001045810-26-000100", released=datetime(2026, 8, 20, tzinfo=UTC))
+    assert guidance_line(numbered_block()[0]) is None                       # the only release on record is a quarter old
+    history({"gross_margin": 74.0})                                         # the newer one gave a margin only: it is the one shown
+    line = guidance_line(numbered_block()[0])
+    assert "毛利率约 74.0%[" in line and "营收" not in line
+    with SessionLocal() as db:
+        db.execute(delete(EarningsHistory).where(EarningsHistory.symbol == "NVDA"))
+        db.commit()
+    history({}, released=datetime(2026, 11, 19, tzinfo=UTC))
+    assert guidance_line(numbered_block()[0]) is None                       # nothing given: the older one is not offered instead
+
+
+def test_a_release_whose_quarter_is_uncertain_says_only_the_next_quarter(guided):
+    release_8k()
+    history(GUIDED, released=datetime(2027, 3, 1, tzinfo=UTC))
+    line = guidance_line(numbered_block()[0])
+    assert line.startswith("  公司指引（新闻稿，2026-11-19 提交，指下一季）：营收") and "FY" not in line
+
+
+def test_the_guidance_line_is_the_first_dropped_when_space_is_short(guided, monkeypatch):
+    release_8k()
+    history(GUIDED)
+    items = lk.gather(["NVDA"], now=NOW)
+    assert items[0]["facts"]["guidance"]
+    full = lk.render(items, now=NOW)
+    without = lk.render([dict(items[0], facts={k: v for k, v in items[0]["facts"].items() if k != "guidance"})], now=NOW)
+    assert "公司指引" in full and "公司指引" not in without and "最新一季" in without
+    monkeypatch.setattr(lk, "BLOCK_LIMIT", len(without))
+    assert lk.render(items, now=NOW) == without                              # the 2b lines stay, only the guidance went
+    assert lk.BLOCK_LIMIT == len(without) and len(full) <= 2000
+
+
+def test_the_block_with_the_guidance_line_stays_within_its_limits(guided):
+    release_8k()
+    history(GUIDED)
+    text = numbered_block()[0]
+    assert len(text) <= lk.BLOCK_LIMIT and all(len(line) <= lk.LINE_LIMIT for line in text.split("\n")) and text.rstrip().endswith(lk.CLOSING_LINE)
+
+
+def test_the_guidance_is_read_in_one_query_inside_the_facts_read(guided):
+    from sqlalchemy import event
+    release_8k()
+    history(GUIDED)
+    seen = []
+    with SessionLocal() as db:
+        def count(conn, cursor, statement, *args):
+            seen.append(statement)
+        event.listen(db.get_bind(), "before_cursor_execute", count)
+        try:
+            got = cf.latest_guidance("NVDA", db=db)
+        finally:
+            event.remove(db.get_bind(), "before_cursor_execute", count)
+    assert got["revenue_low"] == 130.0 and got["source_url"].endswith(".htm") and len(seen) == 1
+
+
+def test_a_failing_guidance_read_costs_only_the_guidance_line(guided, monkeypatch):
+    release_8k()
+    history(GUIDED)
+    def broken(symbol, db=None):
+        raise RuntimeError("no guidance")
+    monkeypatch.setattr(cf, "latest_guidance", broken)
+    text = numbered_block()[0]
+    assert "公司指引" not in text and "营收 1,158.44 亿美元" in text and "净利润" in text
+

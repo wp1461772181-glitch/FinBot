@@ -393,10 +393,24 @@ def _read_facts(session, symbol: str, deadline: float | None = None) -> dict | N
     try:
         with session.begin_nested():
             session.execute(sql_text(f"SET LOCAL statement_timeout = {timeout_ms}"))
-            return company_facts.latest_quarter(symbol, db=session)
+            quarter = company_facts.latest_quarter(symbol, db=session)
     except Exception as exc:
         logger.info("latest_known: company facts of %s unreadable (%s: %s)", symbol, type(exc).__name__, exc)
         return None
+    if quarter is None:
+        return None
+    # The company's own guidance (one more read, same time budget): its failure or slowness costs only that line, never the quarter.
+    left = None if deadline is None else deadline - time.monotonic()
+    if left is None or left >= FACTS_MIN_SECONDS / 2:
+        try:
+            with session.begin_nested():
+                session.execute(sql_text(f"SET LOCAL statement_timeout = {timeout_ms if left is None else max(100, min(timeout_ms, int(left * 1000)))}"))
+                guidance = company_facts.latest_guidance(symbol, db=session)
+                if guidance:
+                    quarter["guidance"] = guidance
+        except Exception as exc:
+            logger.info("latest_known: guidance of %s unreadable (%s: %s)", symbol, type(exc).__name__, exc)
+    return quarter
 
 
 def gather(symbols: list[str], *, now: datetime, deadline: float | None = None, with_facts: bool = True) -> list[dict]:
@@ -765,7 +779,82 @@ def _facts_lines(quarter: dict | None, symbol: str, rows: list | None) -> list[s
     if cash is not None:
         head = f"  经营现金流 {_money(cash[1])}{mark(cash[0])}"
         lines.append(_fit(f"{head}{cites.derived_note(cash[2]) or '（单季）'}", head))
-    return lines[:6]
+    return lines[:6] + _guidance_lines(cites, quarter, revenue)
+
+
+_NEXT_PERIOD = {"Q1": ("Q2", 0), "Q2": ("Q3", 0), "Q3": ("Q4", 0), "Q4": ("Q1", 1)}
+_RELEASE_WINDOW = timedelta(days=75)
+
+
+def _guidance_period(guidance: dict, quarter: dict) -> str | None:
+    """「FY2027 Q4」: the quarter after the latest one, when the guidance came with that latest quarter's own release (out after its end, within
+    75 days of it); None when it is not certain, and the line then says only 「指下一季」 with the filing date."""
+    try:
+        released = datetime.fromisoformat(guidance["released_at"]).date()
+        end = date.fromisoformat(quarter["period_end"])
+        following, carry = _NEXT_PERIOD[quarter["fiscal_period"]]
+        if end <= released <= end + _RELEASE_WINDOW:
+            return f"FY{int(quarter['fiscal_year']) + carry} {following}"
+    except (KeyError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _guidance_line(cites: "_Cites", quarter: dict, revenue) -> str | None:
+    """「公司指引（新闻稿，FY2027 Q4）：营收 A–B 亿美元[n]，毛利率约 x%[n]，每股收益约 y 美元[n]」, every number with its own citation row (the 8-K's
+    address); only the fields the stored guidance has and that are fit to show.  A guidance out before the quarter ended is about a quarter
+    already reported: not shown.  A revenue range far from the latest quarter's revenue (a unit slip) is left out."""
+    guidance = quarter.get("guidance")
+    if not guidance or not guidance.get("source_url"):
+        return None
+    try:
+        released = datetime.fromisoformat(guidance["released_at"]).date()
+        if released < date.fromisoformat(quarter["period_end"]):
+            return None
+    except (KeyError, ValueError, TypeError):
+        return None
+    period = _guidance_period(guidance, quarter)
+    filed = (guidance.get("filed_at") or guidance["released_at"])[:10]
+    label = period or f"{filed} 提交，指下一季"
+    base = {"symbol": cites.symbol, "source_type": "official_filing", "source_url": guidance["source_url"], "url": guidance["source_url"],
+            "source_name": "SEC EDGAR", "published_at": guidance.get("accepted_at") or guidance["released_at"]}
+    where = f"（8-K 新闻稿，{filed} 提交，指下一季；毛利率和每股收益为非 GAAP 口径）"
+    parts = []
+
+    def add(name: str, wording: str, figures: str) -> str:
+        title = f"{cites.symbol} 公司指引·{name}"
+        k = cites.add({**base, "id": f"company-guidance:{guidance['accession_number']}:{name}", "title": title,
+                       "excerpt": f"{title} {wording}{where}", "_figures": figures})
+        return f"{wording}{cites.mark(k)}"
+
+    low, high = guidance.get("revenue_low"), guidance.get("revenue_high")
+    if low is not None and high is not None:
+        low_usd, high_usd = Decimal(str(low)) * 10 ** 9, Decimal(str(high)) * 10 ** 9
+        recent = revenue[1]
+        mid = (low_usd + high_usd) / 2
+        if recent and recent > 0 and not Decimal("0.2") <= mid / recent <= 5:
+            low = high = None
+        else:
+            low_text, high_text = _money(low_usd), _money(high_usd)
+            low_num, low_unit = low_text.rsplit(" ", 1)
+            high_num, high_unit = high_text.rsplit(" ", 1)
+            if low_unit == high_unit:
+                span = low_num if low_num == high_num else f"{low_num}–{high_num}"
+                parts.append(add("营收", f"营收 {span} {low_unit}", f"{_plain(low_usd)} {_plain(high_usd)}"))
+    if guidance.get("gross_margin") is not None:
+        margin = Decimal(str(guidance["gross_margin"])).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+        parts.append(add("毛利率", f"毛利率约 {margin}%", str(margin)))
+    if guidance.get("eps") is not None:
+        eps = Decimal(str(guidance["eps"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        parts.append(add("每股收益", f"每股收益约 {eps} 美元", str(eps)))
+    if not parts:
+        return None
+    return _fit(f"  公司指引（新闻稿，{label}）：{'，'.join(parts)}")
+
+
+def _guidance_lines(cites: "_Cites", quarter: dict, revenue) -> list[str]:
+    line = _guidance_line(cites, quarter, revenue)
+    return [line] if line else []
 
 
 def _marked(line: str, row: dict, rows: list | None) -> str:
@@ -819,6 +908,11 @@ def _render(items: list[dict], now: datetime, extra, rows: list | None = None) -
 
     text = assemble()
     # 超长时先舍各家最新一季的数字（从最后一家往前），再舍各家多出来的旧新闻、再舍旧公告（从最后一家往前），每家至少留一条公告、一条新闻和价格。
+    # 最先舍的是指引那一行（它在最新一季那段的最后）。
+    for item in reversed(kept):
+        if len(text) > BLOCK_LIMIT and item.get("facts") and item["facts"].get("guidance"):
+            item["facts"] = {k: v for k, v in item["facts"].items() if k != "guidance"}
+            text = assemble()
     for item in reversed(kept):
         if len(text) > BLOCK_LIMIT and item.get("facts"):
             item["facts"] = None

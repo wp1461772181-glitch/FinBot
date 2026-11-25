@@ -488,3 +488,64 @@ def latest_quarter(symbol: str, *, db=None) -> dict | None:
     finally:
         if db is None:
             session.close()
+
+
+# --- the company's own guidance --------------------------------------------------------------------------------
+
+_REVENUE_SPREAD = 2        # a guided range wider than this (high / low) is not a range a company gives: a unit slip, not shown
+
+
+def _finite(value):
+    """The value as a float if it is a real number (not a bool, not NaN or infinite), else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        return None
+    return number if number == number and abs(number) != float('inf') else None
+
+
+def _sane_guidance(raw: dict) -> dict:
+    """The figures of ``earnings_history.guidance`` that are fit to show.  The reader stores revenue in billions of USD, the margin in percent
+    and EPS in dollars (non-GAAP); a figure whose size says it came in other units, a range turned around or a lopsided one is left out."""
+    low, high = _finite(raw.get('revenue_low')), _finite(raw.get('revenue_high'))
+    margin, eps = _finite(raw.get('gross_margin')), _finite(raw.get('eps'))
+    found = {}
+    if low is not None and high is not None and 0 < low <= high <= low * _REVENUE_SPREAD:
+        found['revenue_low'], found['revenue_high'] = low, high
+    if margin is not None and 1 <= margin < 100:
+        found['gross_margin'] = margin
+    if eps is not None and abs(eps) < 1000:
+        found['eps'] = eps
+    return found
+
+
+def latest_guidance(symbol: str, *, db=None) -> dict | None:
+    """What the company's newest earnings release (the newest ``earnings_history`` row) guided for the next quarter: revenue range in billions
+    of USD, gross margin in percent, EPS in dollars (non-GAAP), with the 8-K's address and dates (joined by accession).  One read.
+    None when the company has no release on record, its 8-K is not in the filing inventory (or was rejected), or no figure of the guidance is fit to show;
+    an older release's guidance is never offered in place of a newer one's."""
+    from .agent_chat_models import EarningsHistory
+    symbol = (symbol or '').strip().upper()
+    session = db or SessionLocal()
+    try:
+        row = session.execute(
+            select(EarningsHistory.accession, EarningsHistory.released_at, EarningsHistory.guidance, SecFilingInventory.source_url,
+                   SecFilingInventory.accepted_at, SecFilingInventory.filed_at)
+            .outerjoin(SecFilingInventory, (SecFilingInventory.accession_number == EarningsHistory.accession)
+                       & (SecFilingInventory.symbol == EarningsHistory.symbol) & (SecFilingInventory.review_status != 'rejected'))
+            .where(EarningsHistory.symbol == symbol).order_by(EarningsHistory.released_at.desc()).limit(1)).first()
+        if row is None:
+            return None
+        accession, released_at, guidance, source_url, accepted_at, filed_at = row
+        if not source_url or not isinstance(guidance, dict):
+            return None
+        figures = _sane_guidance(guidance)
+        if not figures:
+            return None
+        return {'symbol': symbol, 'accession_number': accession, 'released_at': released_at.isoformat(), 'source_url': source_url,
+                'filed_at': filed_at.isoformat() if filed_at else None, 'accepted_at': str(accepted_at) if accepted_at else None, **figures}
+    finally:
+        if db is None:
+            session.close()
