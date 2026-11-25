@@ -109,6 +109,8 @@ def test_portfolio_error_returns_its_reason_and_no_card(monkeypatch):
 
 
 def test_create_routine_carries_the_bot(monkeypatch):
+    monkeypatch.setattr(agent_tasks, "preview_task", fake_preview)         # no database: the file passes alone
+    monkeypatch.setattr(direct, "skill_names", lambda owner: {})
     args = {"name": "每日", "instruction": "看新闻", "schedule_kind": "daily", "schedule_time": "09:00", "symbols": ["NVDA", "AAPL"]}
     out = run(act.prepare(make_run(bot_id="bot-1"), "create_routine", args))
     assert out.operation["bot_id"] == "bot-1" and out.tier == 2

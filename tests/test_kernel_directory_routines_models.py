@@ -218,7 +218,8 @@ def test_list_models_is_an_owner_only_own_state_read_with_a_phrase():
     assert definitions()["list_models"].level == "read" and "list_models" in OWNER_ONLY
     assert "list_models" in loop.READ_TOOLS and progress.TOOL_PHRASES["list_models"] == "看可用模型"
     assert "list_models" in toolrun._UNNUMBERED and "list_models" in toolrun._OWN_STATE_READS
-    assert any(s["function"]["name"] == "list_models" for s in schemas(owner=True))
+    assert any(s["function"]["name"] == "list_models" for s in schemas(owner=True, kernel=True))
+    assert not any(s["function"]["name"] == "list_models" for s in schemas(owner=True))      # the old engine is not offered it
     assert not any(s["function"]["name"] == "list_models" for s in schemas(owner=False))
 
 

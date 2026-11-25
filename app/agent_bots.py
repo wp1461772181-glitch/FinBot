@@ -386,7 +386,7 @@ def get_bot(owner_hash: str, bot_id) -> dict | None:
 
 def create_bot(owner_hash: str, fields: dict, *, dry_run: bool = False) -> dict:
     """Create a bot from the form (a template only filled the form) with its own new conversation.  ``dry_run`` runs every check
-    and returns the bot as it would be, writing nothing (the card of the ``create_bot`` operation)."""
+    and returns the bot as it would be, writing nothing but the system's own default bot if it is not there yet (as every page load does)."""
     ensure_default_bot(owner_hash)
     fields = {k: v for k, v in fields.items() if k not in {"is_default", "conversation_id", "id"}}
     with SessionLocal() as db:

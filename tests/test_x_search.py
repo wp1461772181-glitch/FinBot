@@ -58,7 +58,7 @@ SNAPSHOT = {
     "use_result_set": "0bb3f796bc79e4d1",
     "fetch_sec": "eca539fe2c9b09b6",
     "refresh_sec": "1d3dc49753c2c240",
-    "analyze": "a624c60d917a5ec9",
+    "analyze": "edbb36d26c217069",
     "import": "3895fcef28f84650",
     "index": "fa21f8d1868c738d",
     "forecast": "298108635c3832ab",
@@ -70,9 +70,9 @@ SNAPSHOT = {
     "withdraw_knowledge_document": "85a167fe0cb5ef14",
     "test_retrieval_diagnostics": "01058de454f8ec10",
     "remember": "1f3033eb8378b354",
-    "create_routine": "fef8c72d6c16aeec",
+    "create_routine": "ca594ad4f2389df3",
     "list_routines": "98efb93e9d529c20",
-    "update_routine": "480c6eb1b407a361",
+    "update_routine": "d6b5488d800cdea6",
     "delete_routine": "6c73906e6473591c",
     "recall_conversations": "4276330682fd4787",
     "read_past_conversation": "ab97755f3fa5bd5c",
@@ -86,7 +86,7 @@ SNAPSHOT = {
     "manage_news_source": "eac1f1c58bd8aafd",
     "load_tools": "67efef87dd2db2fb",
     "search_configured_news": "64f31a22a51c2911",
-    "request_action": "420b16bb097269f9",   # its WriteTool list grew with the settings operations of 3a
+    "request_action": "ea7b26d637ec4db8",
 }
 
 
@@ -368,15 +368,23 @@ def test_catalogue_entry():
 
 
 def test_other_tools_are_untouched():
-    from app.agent_tool_catalog import definitions
+    """What the old engine is offered is what it was before 3a: the kernel-only tools are not in it, and the tools 3a widened show their old schema."""
+    from app.agent_tool_catalog import legacy_definitions
     now = {n: hashlib.sha256((p.description + json.dumps(p.args_schema.model_json_schema(), sort_keys=True)).encode()).hexdigest()[:16]
-           for n, p in definitions().items()}
-    # search_x (24 Nov), list_models and the seven settings operations (stage 3a) are the additions; analyze, create_routine and update_routine were widened on purpose in 3a.
-    added = {"search_x", "list_models", "create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role", "set_channel_prefs"}
-    assert {n: h for n, h in now.items() if n not in added} == SNAPSHOT
-    names = list(definitions())
-    assert [n for n in names if n not in added] == list(SNAPSHOT) and names.index("list_models") == names.index("search_x") + 1
+           for n, p in legacy_definitions().items()}
+    assert {n: h for n, h in now.items() if n != "search_x"} == SNAPSHOT
+    names = list(legacy_definitions())
+    assert [n for n in names if n != "search_x"] == list(SNAPSHOT)
     assert names.index("search_x") == names.index("search_configured_news") + 1
+
+
+def test_the_kernel_sees_the_3a_additions_and_widenings():
+    from app.agent_tool_catalog import KERNEL_ONLY, definitions, legacy_definitions
+    full, old = definitions(), legacy_definitions()
+    assert set(full) - set(old) == set(KERNEL_ONLY) and len(KERNEL_ONLY) == 8
+    widened = {n for n in old if full[n].description != old[n].description or full[n].args_schema is not old[n].args_schema}
+    assert widened == {"analyze", "create_routine", "update_routine"}
+    assert list(full).index("list_models") == list(full).index("search_x") + 1
 
 
 def test_the_label_exists_in_the_frontend():

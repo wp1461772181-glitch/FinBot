@@ -454,6 +454,8 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
                 return {"ok": False, "data": [], "error_code": failure.code, "reason": failure.reason, "hint": failure.hint}
             if "fields" in shown:
                 operation["fields"] = shown.pop("fields")          # what the press writes, frozen with the card
+            if "expect" in shown:
+                operation["expect"] = shown.pop("expect")          # the old state the card shows: a press that finds it changed is refused
             display.update(shown)
         elif name == "create_routine":
             operation["bot_id"] = getattr(context, "bot_id", None)
@@ -485,6 +487,8 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
                 if changed is None:
                     return _failure("routine_not_found")
                 skills = await asyncio.to_thread(direct.skill_names, context.owner_hash)
+            if name == "update_routine":
+                operation["expect"] = await asyncio.to_thread(directory_ops.snapshot, context.owner_hash, name, args)
             display.update(title=f'{title} · {task["name"]}', targets=[{"kind": direct.routine_when(task)}],
                            alternative=direct.routine_changes(args, task, changed, skills) if name == "update_routine" else "删除后不再运行；已生成的简报会保留。")
         elif name == "analyze" and args.get("catalog_model"):
@@ -648,6 +652,8 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
         info = describe(name)
         if name in directory_ops.NAMES:       # the ids and names a call needs (the owner's own settings; never a key)
             info.update(await asyncio.to_thread(directory_ops.lookup, context.owner_hash, name))
+            if name == "manage_skill":        # an imported skill's name and description are text from outside
+                run.read_results = getattr(run, "read_results", 0) + 1
         if name == "ingest_web_source":       # a later turn does not show the model the URLs an earlier search returned
             info["pages"] = _savable_pages(run)
             if info["pages"]:                 # page titles are text from outside: from here on nothing in this turn runs at once

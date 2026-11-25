@@ -695,7 +695,7 @@ def entry_words(txn: Txn) -> str:
     return f"{txn.occurred_on.isoformat()} {what}"
 
 
-def _position_words(position) -> str:
+def position_words(position) -> str:
     if position is None or position.shares <= 0:
         return "没有持仓"
     return f"{number_text(position.shares)} 股（平均成本 {text(position.avg_cost)}）"
@@ -725,7 +725,7 @@ def describe_write(owner: str, name: str, args: dict) -> dict:
     if name == "delete_transaction":
         preview = preview_delete(owner, args.get("transaction_id"))
         txn = preview["txn"]
-        move = (f"{txn.symbol} 持仓：{_position_words(preview['position_before'])} → {_position_words(preview['position_after'])}。"
+        move = (f"{txn.symbol} 持仓：{position_words(preview['position_before'])} → {position_words(preview['position_after'])}。"
                 if txn.symbol else "")
         note = "".join(WARNING_TEXT[w] for w in preview["warnings"])
         return {"title": f"删除一笔记录 · {txn.symbol or KIND_LABEL[txn.kind]}", "targets": [{"symbol": txn.symbol, "kind": entry_words(txn)} if txn.symbol else {"kind": entry_words(txn)}],

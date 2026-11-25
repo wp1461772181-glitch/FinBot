@@ -10,10 +10,10 @@ from ..agent_chat_provider import decision_request,decision_session,sent_effort,
 from .. import model_usage
 from ..agent_progress import progress_watchdog,mark_progress
 from ..agent_chat_identity import owner_credential_matches
-from ..agent_tool_catalog import definitions,schemas,validate,ALWAYS_ON as DISCLOSED,TOOL_CATEGORIES,CATEGORY_OF
+from ..agent_tool_catalog import legacy_definitions as definitions,schemas,validate,ALWAYS_ON as DISCLOSED,TOOL_CATEGORIES,CATEGORY_OF
 from .. import agent_context as layers
 from .evidence import gate_row,number_rows,citation_errors,contains,HINT_REASONS,_MARKER
-from . import tools,consent,truncation,directory_ops
+from . import tools,consent,truncation
 from .. import observability
 from .authorization import vetoed,vetoed_phrase,authorized,routine_ask
 from .references import Referent,validate_referents,bounded_stage,normalized,assistant_message_sources,assistant_item_catalogue
@@ -533,8 +533,6 @@ WRITE_TITLES={
  'remember':'记住这条偏好','forget':'忘掉这条偏好','create_routine':'新建例行任务','update_routine':'修改例行任务','delete_routine':'删除例行任务','save_skill':'保存技能',
  'review_filing':'申报相关性核验',
  'record_trade':'记录持仓','set_available_funds':'设置可用资金','set_position_plan':'保存持仓计划',
- 'create_bot':'新建 bot','update_bot':'修改 bot','delete_transaction':'删除持仓记录','manage_skill':'管理技能',
- 'set_default_model':'设置默认模型','set_model_role':'设置后台模型','set_channel_prefs':'设置消息去向',
 }
 ROUTINE_WRITES=('create_routine','update_routine','delete_routine')
 
@@ -3031,13 +3029,6 @@ class Turn:
             skills=await asyncio.to_thread(skill_names,self.context.owner_hash)
             display.update(title=f'{title} · {args["name"]}',targets=[{'kind':routine_when(preview),**({'symbol':'、'.join(args['symbols'])} if args['symbols'] else {})}],
                            alternative=routine_created(preview,skills))
-        if name in directory_ops.NAMES:
-            # The owner's bots, ledger entries, skills and settings: the card says what changes, old → new, checked like the route would.
-            if directory_ops.own_card(operation) and self.proposals or any(directory_ops.own_card(op) for ops,_ in self.proposals for op in ops):return tools.error('delete_needs_its_own_card')
-            try:shown=await asyncio.to_thread(directory_ops.describe,self.context.owner_hash,name,args)
-            except directory_ops.Refusal as exc:return {'ok':False,'data':[],'error_code':exc.code,'reason':exc.reason,'hint':exc.hint}
-            if 'fields' in shown:operation['fields']=shown.pop('fields')
-            display.update(shown)
         if name=='save_skill':
             display.update(title=f'{title} · {args["name"]}',targets=[{'kind':args['description']}],
                            alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能只会收窄可用工具，不授权写操作。')

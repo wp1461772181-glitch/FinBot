@@ -568,7 +568,7 @@ def test_tool_order_is_reads_act_ask_plan_escalate_and_stable(env):
     from app.agent_tool_catalog import schemas
     from app import x_search
     offered = [n for n in loop.READ_TOOLS if n != "search_x" or x_search.configured()]     # offered only where a token is set (tests/test_x_search.py)
-    assert names == [s["function"]["name"] for s in schemas(owner=True, names=offered)] + ["act", "ask", "plan", "escalate"]
+    assert names == [s["function"]["name"] for s in schemas(owner=True, kernel=True, names=offered)] + ["act", "ask", "plan", "escalate"]
     assert fake.calls[0]["tools"] == fake.calls[1]["tools"]
     schema = {s["function"]["name"]: s for s in loop._tool_schemas(ctx())}["act"]["function"]
     assert list(schema["parameters"]["properties"])[:2] == ["say", "item"] and "operation" in schema["parameters"]["properties"]

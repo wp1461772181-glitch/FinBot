@@ -10,7 +10,7 @@ def test_catalogue_contains_executable_handlers_with_typed_permission_metadata()
         assert policy.args_schema and policy.description and policy.errors and policy.actionable_error
         assert policy.confirmation==(policy.level in {'reversible','costly'})
         assert not(policy.guest and policy.level=='costly')
-    assert {s['function']['name'] for s in schemas(owner=True,granted={n for n,p in policies.items() if p.level in {'reversible','costly'}})}==set(policies)
+    assert {s['function']['name'] for s in schemas(owner=True,kernel=True,granted={n for n,p in policies.items() if p.level in {'reversible','costly'}})}==set(policies)
     assert not {n for n,p in policies.items() if p.level in {'reversible','costly'}}&{s['function']['name'] for s in schemas(owner=True)}
     assert 'ingest_web_source' not in {s['function']['name'] for s in schemas(owner=False)}
 

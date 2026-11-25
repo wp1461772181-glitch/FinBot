@@ -8,6 +8,7 @@ service's own code with a reason in Chinese, raised before a card exists.  A car
 """
 from __future__ import annotations
 
+import json
 import re
 
 from .. import agent_bots as bots
@@ -28,6 +29,17 @@ ROLE_WORDS = {"earnings": ("财报判断", "财报发布后写判断的模型"),
 ROLE_DEFAULTS = {"judge": "配置里指定的法官", "fallback": "不设备用模型"}
 
 
+# What a card showed as the old state is frozen with it (``expect``); at the press the state is read again and a card whose old state is
+# no longer true is refused and left spent.  Every operation whose card shows an old value, and ``update_routine``, is checked this way.
+FRESH = (NAMES - {"create_bot"}) | {"update_routine"}
+STALE = "卡片发出后这项设置变了，没有执行；请让我重新出一张卡。"
+STALE_DELETE = "这笔记录或持仓在卡片发出后变了，没有删除；请让我重新出一张卡。"
+_BOT_STATE = ("name", "title", "description", "focus", "tool_scope", "model", "reasoning_effort", "pinned", "hidden", "skills")
+_SKILL_STATE = ("name", "description", "body", "output_template", "allowed_tools", "version", "enabled", "status")
+_ROUTINE_STATE = ("name", "kind", "instruction", "schedule_kind", "schedule_time", "every_value", "every_unit", "max_runs", "enabled", "channel",
+                  "skill_id", "config", "symbols", "scope")
+
+
 class Refusal(Exception):
     """The input was refused before any card: ``code`` is the service's own, ``reason`` is for the owner, ``hint`` for the model."""
 
@@ -36,6 +48,49 @@ class Refusal(Exception):
         self.code = code
         self.reason = reason or f"没有通过检查（{code}）。"
         self.hint = hint or self.reason
+
+
+def snapshot(owner: str, name: str, args: dict) -> dict:
+    """The state a card of ``name`` shows as the old one, as plain JSON: read when the card is made and read again at the press."""
+    if name == "update_bot":
+        bot = bots.get_bot(owner, args["bot_id"])
+        return {k: bot[k] for k in _BOT_STATE} if bot else {"gone": True}
+    if name == "manage_skill":
+        skill = skills.get_skill(owner, args["skill_id"])
+        return {k: skill[k] for k in _SKILL_STATE} if skill else {"gone": True}
+    if name == "set_default_model":
+        return {"default": _entries()[1]}
+    if name == "set_model_role":
+        return {"role": args["role"], "model": roles.get(owner, args["role"])}
+    if name == "set_channel_prefs":
+        with SessionLocal() as db:
+            return channels.prefs(db, owner)
+    if name == "delete_transaction":
+        try:
+            preview = portfolio.preview_delete(owner, args["transaction_id"])
+        except portfolio.PortfolioError as failure:
+            return {"gone": failure.code}
+        txn = preview["txn"]
+        return {"entry": [txn.id, portfolio.entry_words(txn)], "funds": [preview["funds_before"], preview["funds_after"]],
+                "position": [portfolio.position_words(preview["position_before"]), portfolio.position_words(preview["position_after"])]}
+    if name == "update_routine":
+        from .. import agent_tasks
+        task = agent_tasks.get_task(owner, args["routine_id"])
+        return {k: task.get(k) for k in _ROUTINE_STATE} if task else {"gone": True}
+    return {}
+
+
+def _plain(value):
+    return json.loads(json.dumps(value, default=str, sort_keys=True))
+
+
+def is_stale(name: str, args: dict, owner: str) -> bool:
+    """True when the old state frozen with the card (``args["_expect"]``) is no longer the state now."""
+    return _plain(snapshot(owner, name, args)) != _plain(args["_expect"])
+
+
+def stale_refusal(name: str) -> Refusal:
+    return Refusal("card_stale", STALE_DELETE if name == "delete_transaction" else STALE)
 
 
 def own_card(operation: dict) -> bool:
@@ -333,6 +388,8 @@ def _set_model_role_card(owner: str, args: dict) -> dict:
     by_name, default = _entries()
     label, what = ROLE_WORDS[role]
     text = f"{label}用的模型：{_role_model_words(role, current, by_name, default)} → {_role_model_words(role, name, by_name, default)}。这是{what}。"
+    if name and not catalog._key_for(by_name[name]):
+        text += "注意：这个模型还没有配置密钥，这项后台任务换过去之后会失败。"
     return {"title": f"设置后台模型 · {label}", "targets": [{"kind": what}], "alternative": text}
 
 
@@ -369,8 +426,15 @@ def _set_channel_prefs_card(owner: str, args: dict) -> dict:
 # --- the three jobs ----------------------------------------------------------------------------------------------------------
 
 def describe(owner: str, name: str, args: dict) -> dict:
-    """``{title, targets, alternative}`` of the card (and ``fields`` for a bot: what the press writes, frozen with the card).
-    Raises ``Refusal`` before any card; writes nothing."""
+    """``{title, targets, alternative}`` of the card, with ``fields`` for a bot (what the press writes) and ``expect`` (the old state the card
+    shows), both frozen with the card.  Raises ``Refusal`` before any card; writes nothing."""
+    shown = _describe(owner, name, args)
+    if name in FRESH:
+        shown["expect"] = snapshot(owner, name, args)
+    return shown
+
+
+def _describe(owner: str, name: str, args: dict) -> dict:
     if name == "create_bot":
         return _create_bot_card(owner, args)
     if name == "update_bot":

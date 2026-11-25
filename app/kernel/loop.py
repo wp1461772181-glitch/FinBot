@@ -107,7 +107,7 @@ class _Run:
 def _tool_schemas(context) -> list[dict]:
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
     # search_x costs the owner money per post and needs his token: it is offered only where the server has one.
-    available = schemas(owner=owner, names=[n for n in READ_TOOLS if n != "search_x" or x_search.configured()])
+    available = schemas(owner=owner, kernel=True, names=[n for n in READ_TOOLS if n != "search_x" or x_search.configured()])
     scope = getattr(context, "tool_scope", None)
     # The kernel's own tools go last whatever the ceiling is, so the list is the same for the whole turn.
     # A skill is offered to an owner who has any enabled (the endpoint puts their list on the context); a bot's scope does not take it away.
@@ -121,7 +121,7 @@ def _wake_schemas(context) -> list[dict]:
     """A wake turn's tools: the reads an owner's turn has (no ``search_x``: it costs per post and an unattended run does not
     spend it), ``decide``, and the kernel's ``plan`` / ``escalate``.  No ``act``, no ``ask``, no ``use_skill``."""
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
-    available = schemas(owner=owner, names=[n for n in READ_TOOLS if n != "search_x"])
+    available = schemas(owner=owner, kernel=True, names=[n for n in READ_TOOLS if n != "search_x"])
     scope = getattr(context, "tool_scope", None)
     offered = [*(s for s in available if scope is None or s["function"]["name"] in scope),
                decide.DECIDE_SCHEMA, progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]

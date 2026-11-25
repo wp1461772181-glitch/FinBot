@@ -337,10 +337,10 @@ TOOL_CATEGORIES:dict[str,CategoryInfo]={c.name:c for c in (
  CategoryInfo('资料库','已存资料、知识库检索、入库、索引、分析与翻译',('query_materials','query_material_analysis','search_material_analysis','search_knowledge','save_material_evidence','ingest_web_source','import','import_sources','index','retry_document_index','withdraw_knowledge_document','review_knowledge_candidate','analyze','translate_content','test_retrieval_diagnostics')),
  CategoryInfo('新闻与网页','新闻搜索、网页检索和新闻源管理',('web_research','search_configured_news','search_x','manage_news_source','query_alerts')),
  CategoryInfo('预测','已存预测的读取、新预测、修订与历史回放',('query_latest_forecast','forecast','revise_forecast','start_historical_replay')),
- CategoryInfo('持仓','持仓与账本、可用资金、持仓计划',('query_portfolio','query_holdings_overview','record_trade','set_available_funds','set_position_plan','delete_transaction')),
+ CategoryInfo('持仓','持仓与账本、可用资金、持仓计划',('query_portfolio','query_holdings_overview','record_trade','set_available_funds','set_position_plan')),
  CategoryInfo('例行与通知','定时例行任务和 Telegram 通知',('create_routine','list_routines','update_routine','delete_routine','notify_telegram')),
- CategoryInfo('记忆与技能','记住或忘记偏好、回看过去的对话、保存技能',('remember','forget','recall_conversations','read_past_conversation','save_skill','manage_skill')),
- CategoryInfo('工作区','工作区记录、系统状态、可用模型、研究队列与 FAQ、选股和打开页面',('read_workspace','query_system_status','list_models','query_research_queue','add_to_research_queue','remove_from_research_queue','query_research_faq','select_stock','open_page','create_bot','update_bot','set_default_model','set_model_role','set_channel_prefs')),
+ CategoryInfo('记忆与技能','记住或忘记偏好、回看过去的对话、保存技能',('remember','forget','recall_conversations','read_past_conversation','save_skill')),
+ CategoryInfo('工作区','工作区记录、系统状态、研究队列与 FAQ、选股和打开页面',('read_workspace','query_system_status','query_research_queue','add_to_research_queue','remove_from_research_queue','query_research_faq','select_stock','open_page')),
 )}
 CATEGORY_OF={tool:name for name,info in TOOL_CATEGORIES.items() for tool in info.tools}
 # Names that older bots and skills may still carry: they now mean the merged tool.
@@ -434,14 +434,17 @@ EXTRA=(
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
 OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs'}
 
+# Stage 3a: what only the kernel knows.  The old engine's classifier, its request_action schema, its tool list and its prompts stay as they
+# were before the branch (tests/test_x_search.py compares them): these names are not in them, and the three tools 3a widened show the old schema.
+KERNEL_ONLY=frozenset({'list_models','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs'})
 # Every base registry entry is read-only; write names come from catalogue levels.
-WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'})]
+WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'} and name not in KERNEL_ONLY)]
 class RequestActionArgs(Args):
     tool:WriteTool
     arguments:dict=Field(default_factory=dict)
     reason:str=Field(min_length=1,max_length=400)
 
-def write_tool_names():return {n for n,p in definitions().items() if p.level in {'reversible','costly'}}
+def write_tool_names():return {n for n,p in definitions().items() if p.level in {'reversible','costly'} and n not in KERNEL_ONLY}
 
 _EVIDENCE_CLASS: dict[str, str] = {
     'query_portfolio': 'owner_record',
@@ -504,10 +507,19 @@ class _ToolPoliciesProxy(dict):
 TOOL_POLICIES = _ToolPoliciesProxy()
 CATALOG = TOOL_POLICIES
 
-def schemas(*,owner:bool,granted=(),names=None):
-    """Definitions in the catalogue's fixed order (a stable prefix); ``names`` limits them to the disclosed tools."""
+def legacy_definitions():
+    """The catalogue as the old engine offers it: without the kernel-only tools, and the three tools 3a widened as they were before."""
+    from dataclasses import replace
+    from .agent_tool_catalog_legacy import LEGACY
+    full=definitions()
+    old={name:(schema,description) for name,schema,_,description in LEGACY}
+    return {n:(replace(p,args_schema=old[n][0],description=old[n][1]) if n in old else p) for n,p in full.items() if n not in KERNEL_ONLY}
+
+def schemas(*,owner:bool,granted=(),names=None,kernel=False):
+    """Definitions in the catalogue's fixed order (a stable prefix); ``names`` limits them to the disclosed tools.  The old engine's view
+    (the default) is ``legacy_definitions``; the kernel asks for its own with ``kernel=True``."""
     return [{'type':'function','function':{'name':p.name,'description':p.description,'parameters':p.args_schema.model_json_schema()}}
-        for p in definitions().values() if p.owner and(owner or p.guest) and (names is None or p.name in names) and (p.level not in {'reversible','costly'} or p.name in granted)]
+        for p in (definitions() if kernel else legacy_definitions()).values() if p.owner and(owner or p.guest) and (names is None or p.name in names) and (p.level not in {'reversible','costly'} or p.name in granted)]
 
 def validate(name,args):
     policy=definitions().get(name)

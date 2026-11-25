@@ -240,11 +240,117 @@ def test_the_press_applies_what_the_card_showed_not_what_is_said_later(owner):
     prepared = prepare("update_bot", arguments)
     arguments["tool_scope"].append("search_x")                      # the model's later text or arguments: not what was on the card
     arguments["focus_theme"] = "别的"
-    bots.update_bot(OWNER_HASH, made["id"], {"focus": {"companies": [{"symbol": "NVDA"}], "theme": "中途改的"}})   # the bot changes under the card
     assert press(prepared)["ok"]
     after = bots.get_bot(OWNER_HASH, made["id"])
     assert after["tool_scope"] == ["query_financials", "web_research"]
     assert after["focus"] == {"companies": [{"symbol": "AAPL", "name": "Apple"}], "theme": "云"}      # the focus of the card: its companies, with their names
+
+
+STALE = "卡片发出后这项设置变了，没有执行；请让我重新出一张卡。"
+STALE_DELETE = "这笔记录或持仓在卡片发出后变了，没有删除；请让我重新出一张卡。"
+
+
+def refused_press(prepared, sentence=STALE):
+    done = press(prepared)
+    results = json.dumps(done, ensure_ascii=False)
+    assert "card_stale" in results and sentence in results and '"ok": true' not in results.replace('"ok": true, "data": []', ""), done
+    return done
+
+
+def test_a_bot_that_changed_under_its_card_is_not_written(owner):
+    made = bots.create_bot(OWNER_HASH, {"name": "甲", "tool_scope": ["query_financials"], "focus": {"companies": [{"symbol": "AAPL"}], "theme": "手机"}})
+    prepared = prepare("update_bot", {"bot_id": made["id"], "focus_companies": ["MSFT"]})
+    bots.update_bot(OWNER_HASH, made["id"], {"focus": {"companies": [{"symbol": "AAPL"}], "theme": "中途改的主题"}})
+    refused_press(prepared)
+    assert bots.get_bot(OWNER_HASH, made["id"])["focus"] == {"companies": [{"symbol": "AAPL", "name": None}], "theme": "中途改的主题"}
+
+
+def test_a_ledger_that_changed_under_a_delete_card_is_not_written(owner):
+    portfolio.record_transaction(OWNER_HASH, {"kind": "deposit", "amount": 11000, "occurred_on": "2026-09-30"})
+    mine = buy("AAPL", 10, 10)
+    prepared = prepare("delete_transaction", {"transaction_id": mine})
+    assert "没有持仓" in prepared.display["alternative"]
+    buy("AAPL", 5, 20, on="2026-10-02")                              # the position the card said would be gone is not what it was
+    refused_press(prepared, STALE_DELETE)
+    with SessionLocal() as db:
+        assert db.query(PortfolioTransaction).count() == 3
+    again = prepare("delete_transaction", {"transaction_id": mine})  # a new card shows the new figures, and works
+    assert "AAPL 持仓：15 股" in again.display["alternative"] and press(again)["ok"]
+
+
+def test_a_delete_card_whose_entry_is_already_gone_is_not_run_twice(owner):
+    mine = buy()
+    prepared = prepare("delete_transaction", {"transaction_id": mine})
+    portfolio.delete_transaction(OWNER_HASH, mine)
+    refused_press(prepared, STALE_DELETE)
+
+
+def test_every_other_card_with_an_old_value_is_refused_when_that_value_moved(owner):
+    entry("alpha")
+    entry("beta")
+    entry("gamma")
+    catalog.set_default("alpha")
+    skill = make_skill()
+    # a skill edit
+    edit = prepare("manage_skill", {"action": "edit", "skill_id": skill["id"], "body": "新步骤"})
+    skills.update_skill(OWNER_HASH, skill["id"], {"body": "别人先改了"})
+    refused_press(edit)
+    assert skills.get_skill(OWNER_HASH, skill["id"])["body"] == "别人先改了"
+    # a skill switch and delete
+    off = prepare("manage_skill", {"action": "disable", "skill_id": skill["id"]})
+    skills.set_enabled(OWNER_HASH, skill["id"], False)
+    refused_press(off)
+    gone = prepare("manage_skill", {"action": "delete", "skill_id": skill["id"]})
+    skills.update_skill(OWNER_HASH, skill["id"], {"description": "又改了"})
+    refused_press(gone)
+    assert skills.get_skill(OWNER_HASH, skill["id"]) is not None
+    # the default model
+    default = prepare("set_default_model", {"name": "beta"})
+    catalog.set_default("gamma")
+    refused_press(default)
+    assert catalog.entries()[1] == "gamma"
+    # a role
+    role = prepare("set_model_role", {"role": "earnings", "model": "beta"})
+    roles.set_role(OWNER_HASH, "earnings", "alpha")
+    refused_press(role)
+    assert roles.get(OWNER_HASH, "earnings") == "alpha"
+    # channels
+    pref = prepare("set_channel_prefs", {"mode": "all", "channels": ["telegram", "wechat"]})
+    channels.set_prefs(OWNER_HASH, ["wechat"], "first")
+    refused_press(pref)
+    with SessionLocal() as db:
+        assert channels.prefs(db, OWNER_HASH) == {"channels": ["wechat"], "mode": "first"}
+
+
+def test_a_routine_that_changed_under_its_card_is_not_written(owner):
+    from app import agent_tasks as tasks
+    with SessionLocal() as db:
+        from app.agent_chat_models import AgentTask
+        db.query(AgentTask).delete()
+        db.commit()
+    task = tasks.create_task(OWNER_HASH, {"name": "晨报", "kind": "brief", "schedule_kind": "daily", "schedule_time": "09:00", "instruction": "看新闻"})
+    assert press(prepare("update_routine", {"routine_id": task["id"], "enabled": False}))["ok"]          # an unchanged routine: the press goes through
+    assert tasks.get_task(OWNER_HASH, task["id"])["enabled"] is False
+    card = prepare("update_routine", {"routine_id": task["id"], "enabled": True})
+    tasks.update_task(OWNER_HASH, task["id"], {"schedule_time": "13:00"})
+    refused_press(card)
+    assert tasks.get_task(OWNER_HASH, task["id"])["enabled"] is False
+
+
+def test_a_card_whose_old_value_is_still_true_goes_through(owner):
+    entry("alpha")
+    entry("beta")
+    catalog.set_default("alpha")
+    assert press(prepare("set_default_model", {"name": "beta"}))["ok"]
+
+
+def test_a_keyless_model_is_warned_on_a_role_card_and_the_skill_lookup_counts_as_a_read(owner):
+    entry("alpha")
+    entry("nokey", key=False)
+    assert "还没有配置密钥" in prepare("set_model_role", {"role": "judge", "model": "nokey"}).display["alternative"]
+    run_ = make_run()
+    run(act.handle(run_, {"operation": "manage_skill"}))
+    assert run_.read_results == 1
 
 
 def test_update_bot_refusals_make_no_card(owner):
@@ -553,41 +659,41 @@ def test_old_engine_has_no_way_to_grant_these_on_its_own_words():
         assert authorization.authorized(name, "把默认模型改成 beta，删掉那笔交易，修改机器人") is False
 
 
-# --- the old engine makes the same card ------------------------------------------------------------------------------
+# --- the old engine is as it was before the branch ---------------------------------------------------------------------------
 
-def old_engine_turn(question, context, **kwargs):
-    from app import agent_chat_store as store
-    from app.agent_workflow import direct
-
-    async def go():
-        async def quiet(_event):
-            pass
-        try:
-            return await direct.run_direct_turn(question, context, emit=quiet, **kwargs)
-        finally:
-            await store.engine.dispose()
-    return asyncio.run(go())
+# Hashes taken from a build of 56ad1ad (the commit before 3a) by this same test body run under pytest there (the suite's own environment).
+BEFORE_3A = {
+    "write_catalogue": "6514c3bd015eff4b", "request_action": "f59753c07da427fec2373e8cf46ce52f", "owner_tools": "7d46be034456c459",
+    "guest_tools": "d48a8773a6950809", "classifier_schema": "85e191bec3c40cf8", "categories": "afd78a6f6b43cbbf", "disclosure": "2d299a5460348da9",
+    "instruction": "3038930f4b86d970", "write_names": "b65b77ae086295de",
+}
 
 
-def old_engine_context(decider, actions=()):
-    from app.agent_workflow.state import AgentRuntimeContext
-    made = next((b for b in bots.list_bots(OWNER_HASH) if b["name"] == "FinBot"), None) or bots.create_bot(OWNER_HASH, {"name": "FinBot"})
-    return AgentRuntimeContext("custom", "test", "dummy", identity_credential=OWNER, owner_hash=OWNER_HASH, conversation_id=made["conversation_id"],
-                               bot_id=made["id"], bot_name=made["name"], decider=decider,
-                               resolver=lambda payload: {"relationship": "new", "canonical_question": payload["question"]},
-                               intent_recognizer=lambda _p: {"category": "D", "days_back": None, "requested_actions": list(actions)})
+def test_the_old_engines_classifier_request_action_tools_and_prompts_are_byte_identical_to_before_3a():
+    import hashlib
+    from app import agent_tool_catalog as c
+    from app.agent_system_prompt import INSTRUCTION, disclosure_note
+    from app.agent_workflow import direct, routing
+
+    def h(x):
+        return hashlib.sha256(json.dumps(x, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:16]
+    view = c.legacy_definitions()
+    every_write = {n for n, p in view.items() if p.level in {"reversible", "costly"}}
+    now = {"write_catalogue": h(direct.write_tool_catalogue()),
+           "request_action": h(view["request_action"].args_schema.model_json_schema()) + h(view["request_action"].description),
+           "owner_tools": h(c.schemas(owner=True, granted=every_write)), "guest_tools": h(c.schemas(owner=False)),
+           "classifier_schema": h(routing.Routing.model_json_schema()),
+           "categories": h({k: [v.summary, list(v.tools)] for k, v in c.TOOL_CATEGORIES.items()}),
+           "disclosure": h(disclosure_note(c.TOOL_CATEGORIES.values())), "instruction": h(list(INSTRUCTION)), "write_names": h(sorted(c.write_tool_names()))}
+    assert now == BEFORE_3A
+    for name in c.KERNEL_ONLY:
+        assert name not in view and name not in c.write_tool_names()
+        assert name not in {s["function"]["name"] for s in c.schemas(owner=True, granted=set(c.definitions()))}
+    kernel = {s["function"]["name"] for s in c.schemas(owner=True, kernel=True, names={"list_models"})}
+    assert kernel == {"list_models"}
 
 
-def test_the_old_engine_shows_the_same_card_and_the_press_makes_the_same_change(owner):
-    entry("alpha")
-    entry("beta")
-    catalog.set_default("alpha")
-    steps = iter([{"tool_calls": [{"id": "w", "function": {"name": "set_default_model", "arguments": json.dumps({"name": "beta"})}}]}, {"content": "请确认。"}])
-    waiting = old_engine_turn("把默认模型换成 beta", old_engine_context(lambda *_: next(steps), ["set_default_model"]))
-    shown = waiting["pending_request"]["display"]
-    assert shown["title"] == "设置默认对话模型 · Beta" and "Alpha（vendor/alpha） → Beta（vendor/beta）" in shown["alternative"]
-    assert catalog.entries()[1] == "alpha"
-    value = next(c["value"] for c in waiting["pending_request"]["choices"] if c["value"].startswith("confirm:"))
-    after = old_engine_context(lambda *_: {"content": "好了。"})
-    old_engine_turn(value, after, state={"pending_request": waiting["pending_request"], "requested_pending_id": waiting["pending_request"]["id"]})
-    assert catalog.entries()[1] == "beta"
+def test_the_old_engines_classifier_drops_the_new_operations():
+    from app.agent_workflow.routing import parse_route
+    route = parse_route(json.dumps({"category": "D", "days_back": None, "requested_actions": ["set_default_model", "record_trade", "delete_transaction"]}))
+    assert route.requested_actions == ["record_trade"]

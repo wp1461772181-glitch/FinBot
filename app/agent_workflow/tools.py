@@ -93,6 +93,8 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
         if name in {'create_bot','update_bot'}:args['_fields']=operation.get('fields')
+        # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
+        if operation.get('expect') is not None:args['_expect']=operation['expect']
         # The press, not the frozen operation, says whether a skill starts enabled or as a draft.
         if name=='save_skill':args['_status']=(overrides or {}).get('status') or 'active'
     except (ValueError,IndexError,KeyError,TypeError):return error('confirmation_required')
@@ -104,6 +106,10 @@ ROUTINE_FIELDS=('name','kind','instruction','schedule_kind','schedule_time','eve
 
 
 async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
+    if args.get('_expect') is not None and is_owner:
+        from . import directory_ops
+        if await asyncio.to_thread(directory_ops.is_stale,name,args,context.owner_hash):
+            stale=directory_ops.stale_refusal(name);return {'ok':False,'data':[],'error_code':stale.code,'reason':stale.reason,'hint':stale.reason}
     if name=='list_models':
         # The catalog and the roles as the owner may see them: names and whether a key is set, never a key, a hint of one or where it is kept.
         from .. import agent_model_catalog as catalog
