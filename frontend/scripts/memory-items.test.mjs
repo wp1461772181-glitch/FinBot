@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { originLabel, profileGroups, recallKindLabel } from "../src/memory-items.mjs";
+import { restoreFailText, originLabel, profileGroups, recallKindLabel } from "../src/memory-items.mjs";
 
 const item = (id, origin, status, created_at) => ({ id, origin, status, created_at, kind: "preference", text: id, quote: id });
 
@@ -92,4 +92,12 @@ test("settled items are tagged, the last-seen line and the archive note are quie
   assert.equal(seenLine({ last_seen_at: null }), "");
   assert.deepEqual(archiveNote({ archived_at: "2026-11-07T17:00:00Z", archived_reason: " 很久没出现 " }), { reason: "很久没出现", date: "11月8日 归档" });
   assert.deepEqual(archiveNote({ archived_at: null, archived_reason: null }), { reason: "", date: "" });
+});
+
+test("a restore refusal names its real reason: full only for profile_full, else the server's Chinese text", () => {
+  assert.equal(restoreFailText(409, "profile_full"), "这一层的记忆已满，先删掉一条再恢复。");
+  assert.equal(restoreFailText(409, "已有一条同类的记忆在用，先忘掉它再恢复"), "已有一条同类的记忆在用，先忘掉它再恢复");
+  assert.equal(restoreFailText(409, undefined), "恢复失败，请重试。");
+  assert.equal(restoreFailText(404, ""), "这条已不存在。");
+  assert.equal(restoreFailText(500, "boom"), "恢复失败，请重试。");
 });

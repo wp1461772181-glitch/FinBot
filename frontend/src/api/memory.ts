@@ -1,4 +1,5 @@
 import { ApiError, agentPath, ownerHeaders } from "./base";
+import { restoreFailText } from "../memory-items.mjs";
 
 export type ProfileItem = { id:string; handle:string; kind:"preference"|"about_me"|"instruction"; topic:string|null; text:string; origin:"explicit"|"inferred"|"manual"|"pattern"; quote:string; status:"active"|"archived"|"proposed"; examples?:ProfileExample[]|null; scope:"global"|"bot"; bot_id:string|null; bot_name:string|null; created_at:string|null; updated_at:string|null; last_used_at:string|null; last_seen_at?:string|null; archived_at?:string|null; archived_reason?:string|null; settled_at?:string|null; settled_label?:string };
 export type ProfileExample = { message_id:string; quote:string; date:string|null };
@@ -32,7 +33,10 @@ export async function confirmProfileItem(id:string,signal?:AbortSignal): Promise
 /** The owner brings an archived item back (no confirm step): active again and seen now; a guess he never confirmed returns to 我的推测. */
 export async function restoreProfileItem(id:string,signal?:AbortSignal): Promise<ProfileItem> {
   const response = await fetch(agentPath(`profile/${encodeURIComponent(id)}/restore`),{method:"POST",signal,cache:"no-store",headers:ownerHeaders()});
-  if(!response.ok) throw new ApiError(response.status===404?"这条已不存在。":response.status===409?"这一层的记忆已满，先删掉一条再恢复。":"恢复失败，请重试。",response.status);
+  if(!response.ok){
+    const payload=await response.json().catch(()=>null) as {detail?:unknown}|null;
+    throw new ApiError(restoreFailText(response.status,payload?.detail),response.status);
+  }
   return (await response.json() as {item:ProfileItem}).item;
 }
 export async function deleteProfileItem(id:string,signal?:AbortSignal): Promise<void> {

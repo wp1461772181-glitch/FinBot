@@ -237,6 +237,9 @@ def add_item(owner_hash: str, *, kind: str, text: str, quote: str, message: str,
             if origin in OWNER_ORIGINS:
                 same.last_seen_at = same.updated_at     # he said it again
             db.commit()
+            if origin == "inferred":
+                bump_seen(owner_hash, same.id, same.updated_at)     # the extractor read it again in his own message this turn
+            db.expire(same)
             return {"status": "duplicate", "item": serialize(same, names)}
         if topic:
             rivals = [r for r in active if r.kind == kind and r.topic == topic]

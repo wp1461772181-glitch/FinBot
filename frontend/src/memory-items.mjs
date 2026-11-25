@@ -81,3 +81,14 @@ export function recallGroups(items) {
   }
   return [...groups.values()];
 }
+
+/** What a refused 恢复 says.  409 is "full" only when the server's detail is `profile_full`; any other 409 carries the server's own Chinese
+ *  reason (a same-topic or same-text item is already in use), shown as given. */
+export function restoreFailText(status, detail) {
+  if (status === 404) return "这条已不存在。";
+  if (status === 409) {
+    if (detail === "profile_full") return "这一层的记忆已满，先删掉一条再恢复。";
+    if (typeof detail === "string" && /[\u4e00-\u9fff]/.test(detail)) return detail;
+  }
+  return "恢复失败，请重试。";
+}

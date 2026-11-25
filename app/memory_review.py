@@ -221,6 +221,8 @@ def run(owner_hash: str, now: datetime, last_run_at: datetime | None) -> dict:
         log.warning("memory review model call failed: %s", type(exc).__name__)
         return {"outcome": "failed", "reason": "整理记忆时模型没有返回结果。", "archived": archived}
     whole = _json_object(raw)
+    if whole is not None and "items" not in whole and "still_seen" not in whole:
+        return {"outcome": "failed", "reason": "模型回复里没有可用的内容", "archived": archived}
     offered = whole.get("items", []) if whole else None     # no ``items`` key means nothing new (a reply with only ``still_seen`` is a normal run)
     if not isinstance(offered, list):
         offered = None

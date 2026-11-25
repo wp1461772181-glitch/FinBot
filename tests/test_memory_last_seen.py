@@ -181,3 +181,24 @@ def test_a_reply_with_only_still_seen_is_a_normal_run_with_no_proposals_and_stil
     result = review.run(OWNER, NOW, SINCE)
     assert result["outcome"] == "done" and result["proposed"] == 0 and result["seen"] == 1
     assert _row(real).last_seen_at > OLD
+
+
+def test_a_json_reply_with_neither_items_nor_still_seen_is_a_failed_run_but_either_key_even_empty_is_normal(monkeypatch):
+    _twelve()
+    _model(monkeypatch, {"error": "rate limited"})
+    failed = review.run(OWNER, NOW, SINCE)
+    assert failed["outcome"] == "failed" and failed["reason"] == "模型回复里没有可用的内容"
+    for reply in ({"items": []}, {"still_seen": []}):
+        _model(monkeypatch, reply)
+        assert review.run(OWNER, NOW, SINCE)["outcome"] == "done"
+
+
+def test_the_per_turn_extractor_re_inferring_his_own_item_bumps_its_last_seen_and_keeps_his_origin():
+    first = profile.add_item(OWNER, kind="preference", text="喜欢先看结论", quote="先说结论", message="请先说结论", origin="explicit")["item"]
+    with SessionLocal() as db:
+        db.query(AgentProfileItem).update({"last_seen_at": OLD})
+        db.commit()
+    again = profile.add_item(OWNER, kind="preference", text="喜欢先看结论", quote="先说结论", message="还是先说结论", origin="inferred")
+    assert again["status"] == "duplicate" and again["item"]["id"] == first["id"]
+    assert _row(first["id"]).last_seen_at > datetime.now(UTC) - timedelta(minutes=5)
+    assert _row(first["id"]).origin == "explicit"
