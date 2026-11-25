@@ -54,9 +54,11 @@ test("bad input makes empty groups; a row without a symbol is skipped", () => {
   assert.deepEqual(viewGroups([{ symbol: "AAPL" }]).former.map(c => c.symbol), ["AAPL"]);
 });
 
-test("a view with no conversation was typed on the page", () => {
+test("a view with no conversation and its own text as its quote was typed on the page; other words in the quote are still shown as the basis", () => {
   assert.equal(typedOnPage({ conversation_id: null }), true);
   assert.equal(typedOnPage({}), true);
+  assert.equal(typedOnPage({ conversation_id: null, text: "估值太高", quote: "估值太高" }), true);
+  assert.equal(typedOnPage({ conversation_id: null, text: "估值太高", quote: "我觉得英伟达估值太高了" }), false);
   assert.equal(typedOnPage({ conversation_id: "c1" }), false);
   assert.equal(typedOnPage(null), false);
 });
@@ -114,4 +116,47 @@ test("the download is named finbot-memory-YYYYMMDD with the UTC date; anything b
   assert.equal(exportFilename("pdf", at), "finbot-memory-20261125.json");
   assert.match(exportFilename("md"), /^finbot-memory-\d{8}\.md$/);
   assert.match(exportFilename("md", "bad"), /^finbot-memory-\d{8}\.md$/);
+});
+
+import { watchRows } from "../src/memory-overview.mjs";
+
+const WATCH = {
+  plans: [{ symbol: "NVDA", plan_text: "财报后观察", add_price: null, stop_price: "105.00", target_price: 140, updated_at: "2026-11-16T03:00:00Z" }, { symbol: "AAPL", plan_text: "", add_price: "180.50", stop_price: null, target_price: null, updated_at: null }],
+  alert_routines: [
+    { id: "r1", name: "每日盯盘", enabled: true, scope: "research_queue", symbols: [], filings: true, news: false, price_lines: [{ symbol: "NVDA", above: 150 }, { symbol: "AAPL", below: 180 }], next_run_at: "2026-12-25T01:00:00Z", bot_id: null },
+    { id: "r2", name: "只看 TSLA", enabled: false, scope: "symbols", symbols: ["TSLA"], filings: false, news: true, price_lines: [], next_run_at: "2026-12-25T01:00:00Z", bot_id: "b1" },
+  ],
+  research_queue: ["NVDA", "AMD", "TSLA"],
+  default_rules_note: "另外，系统默认对你的持仓和研究队列盯价格异动、新公告（哨兵），这些默认规则现在还不能按你单独调整。",
+};
+
+test("plans list the prices they have in the price-line rows' number style; a missing price is left out, nothing is invented", () => {
+  const { plans } = watchRows(WATCH, "zh-CN", NOW);
+  assert.deepEqual(plans[0], { symbol: "NVDA", prices: [{ key: "stop_price", label: "止损价", value: "105" }, { key: "target_price", label: "目标价", value: "140" }], text: "财报后观察" });
+  assert.deepEqual(plans[1], { symbol: "AAPL", prices: [{ key: "add_price", label: "补仓价", value: "180.5" }], text: "" });
+});
+
+test("a routine says its scope, what it watches, and when it runs next in Beijing time; a paused one has no next run", () => {
+  const { routines } = watchRows(WATCH, "zh-CN", NOW);
+  assert.deepEqual(routines[0], { id: "r1", name: "每日盯盘", enabled: true, scope: "research_queue", scopeLabel: "研究队列", symbols: [], contents: [{ key: "filings", label: "新申报" }, { key: "price_lines", label: "价格线", detail: "NVDA>150, AAPL<180" }], next: "12月25日 09:00" });
+  assert.deepEqual(routines[1], { id: "r2", name: "只看 TSLA", enabled: false, scope: "symbols", scopeLabel: "指定公司", symbols: ["TSLA"], contents: [{ key: "news", label: "新闻线索" }], next: "" });
+  assert.equal(watchRows(WATCH, "en-US", NOW).routines[0].next, "12/25 09:00");
+  assert.equal(watchRows(WATCH, "zh-CN", new Date("2025-06-01T00:00:00Z")).routines[0].next, "2026年12月25日 09:00");
+});
+
+test("the queue and the note come through; a queue never saved is null; empty lists stay empty, never missing", () => {
+  const rows = watchRows(WATCH);
+  assert.deepEqual(rows.queue, ["NVDA", "AMD", "TSLA"]);
+  assert.equal(rows.note, WATCH.default_rules_note);
+  const none = watchRows({ plans: [], alert_routines: [], research_queue: null, default_rules_note: "" });
+  assert.deepEqual(none, { plans: [], routines: [], queue: null, note: "" });
+  assert.deepEqual(watchRows(null), { plans: [], routines: [], queue: null, note: "" });
+  assert.deepEqual(watchRows({ plans: "x", alert_routines: [null, 3] }).routines, []);
+});
+
+test("a routine with no date or an odd scope is kept as sent", () => {
+  const [one] = watchRows({ alert_routines: [{ id: "r", name: "n", enabled: true, scope: "everything", next_run_at: null }] }).routines;
+  assert.equal(one.next, "");
+  assert.equal(one.scopeLabel, "everything");
+  assert.deepEqual(one.contents, []);
 });

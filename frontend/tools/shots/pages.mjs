@@ -422,7 +422,7 @@ export function stateMemoryOverview() {
   const nvda = state.views.find((v) => v.symbol === "NVDA" && v.status === "active");
   nvda.review = structuredClone(OVERVIEW_REVIEW);
   const tsla = state.views.find((v) => v.symbol === "TSLA" && v.status === "active");
-  tsla.conversation_id = null;
+  Object.assign(tsla, { conversation_id: null, quote: tsla.text });
   const amd = state.views.find((v) => v.symbol === "AMD" && v.status === "active");
   Object.assign(amd, { status: "archived", status_label: "已归档", ended_at: "2026-11-22T01:00:00+00:00", archived_reason: "你已不持有、不在关注列表，也很久没提" });
   return state;
@@ -934,8 +934,8 @@ export const PAGES = [
   { name: "skills-empty", hash: "#/assistant/skills", ready: "[data-testid=skills-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
   // 你的看法: the memory page's section (the active view of three companies), and NVDA's company page with three versions (active, replaced, withdrawn): the card folded, and the history open.
   { name: "memory-views", hash: "#/assistant/memory", ready: "[data-testid=owner-view-item]", element: "[data-testid=owner-views]" },
-  { name: "memory-you", hash: "#/assistant/memory", ready: "[data-testid=memory-seen-block]", view: () => ({ fixtureState: stateMemoryOverview() }), before: async (page) => {
-      await page.locator("[data-testid=memory-seen-block] button").first().click(); await page.locator("[data-testid=memory-seen-text]").waitFor({ timeout: 10000 });
+  { name: "memory-you", hash: "#/assistant/memory", ready: "[data-testid=memory-block-fold]", view: () => ({ fixtureState: stateMemoryOverview() }), before: async (page) => {
+      await page.locator("[data-testid=memory-block-fold] button").first().click(); await page.locator("[data-testid=memory-block-text]").waitFor({ timeout: 10000 });
     } },
   { name: "memory-views-empty", hash: "#/assistant/memory", ready: "[data-testid=owner-views-empty]", element: "[data-testid=owner-views]", view: () => ({ fixtureState: stateNoViews() }) },
   { name: "company-view", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-text]", element: "[data-testid=owner-view]" },

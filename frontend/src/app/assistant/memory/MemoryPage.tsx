@@ -8,6 +8,8 @@ import { MemorySummary } from "./MemorySummary";
 import { OwnerViewsPanel } from "./OwnerViewsPanel";
 import { ProfilePanel } from "./ProfilePanel";
 import { RecallPanel } from "./RecallPanel";
+import { SeenBlockFold } from "./SeenBlockFold";
+import { WatchPanel } from "./WatchPanel";
 import { memoryTab } from "./memory-view.mjs";
 
 /**
@@ -19,11 +21,16 @@ function YouTab() {
   const data = overview.data;
   const failed = (part: string) => Boolean(data?.errors.includes(part));
   const reload = () => overview.reload();
+  // The order is the plan's: head, his views, the profile (its own load), what it watches, what the model reads.  When the whole read failed there is nothing to show for the parts that
+  // come from it (the bar above says so, with 重试); the profile section does not depend on it and stays.
+  const read = data !== null || overview.loading;
   return <div className="flex min-w-0 flex-col gap-6">
     {overview.error != null && <ErrorBar error={overview.error} onRetry={() => void overview.reload()} retrying={overview.loading} />}
     <MemorySummary counts={data?.counts ?? null} jobs={data?.jobs ?? null} countsFailed={failed("counts")} jobsFailed={failed("jobs")} loading={overview.loading} onReload={reload} />
-    <OwnerViewsPanel views={data?.views ?? null} failed={failed("views")} loading={overview.loading && !overview.error} onReload={reload} />
+    {read && <OwnerViewsPanel views={data?.views ?? null} failed={failed("views")} loading={overview.loading} onReload={reload} />}
     <ProfilePanel onChanged={() => void overview.reload()} />
+    {read && <WatchPanel watch={data?.watch ?? null} failed={failed("watch")} loading={overview.loading} onReload={reload} />}
+    {read && <SeenBlockFold text={data?.seen_block ?? null} failed={failed("seen_block")} loading={overview.loading} onReload={reload} />}
   </div>;
 }
 

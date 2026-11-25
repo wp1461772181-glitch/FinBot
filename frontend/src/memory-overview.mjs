@@ -2,7 +2,9 @@
 // GET /agent-chat/memory/overview; nothing here changes what the server sent, it only orders and words it.  Wording that carries a number or a date is made for the locale here;
 // fixed words go through the page's own t().
 
+import { formatPriceLines } from "./inbox-items.mjs";
 import { dayLabel, monthDay } from "./owner-views.mjs";
+import { plainNumber } from "./price-lines.mjs";
 
 const byNewest = (list) => (Array.isArray(list) ? list.filter((v) => v && typeof v === "object") : []).sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
 const count = (value) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
@@ -36,9 +38,14 @@ export function viewGroups(views) {
   return { current: shaped.filter((c) => c.current).sort(newest), former: shaped.filter((c) => !c.current).sort(newest) };
 }
 
-/** A view the owner typed on the page has no conversation behind it (the page shows 「在记忆页写的」 instead of a link or a quote). */
+/**
+ * A view the owner typed on the page has no conversation behind it and its quote is its own text (the page shows 「在记忆页写的」 instead of a link or a quote).  A view with no conversation
+ * but a quote of other words is not labelled so: its quote is shown, as it is the basis.
+ */
 export function typedOnPage(version) {
-  return Boolean(version) && typeof version === "object" && version.conversation_id == null;
+  if (!version || typeof version !== "object" || version.conversation_id != null) return false;
+  const quote = String(version.quote ?? "").trim();
+  return !quote || quote === String(version.text ?? "").trim();
 }
 
 /** What a refused view write says (the server's detail is a code).  `view_quote_too_short` is the one the owner can fix at once: 「至少写四个字」. */
@@ -97,4 +104,45 @@ export function jobOutcome(job, locale = "zh-CN") {
 export function exportFilename(format, now = new Date()) {
   const date = now instanceof Date && !Number.isNaN(now.valueOf()) ? now : new Date();
   return `finbot-memory-${date.toISOString().slice(0, 10).replaceAll("-", "")}.${format === "md" ? "md" : "json"}`;
+}
+
+// 它在帮你盯的 (the watch section): the three lists as the page shows them, made from `overview.watch`.  Nothing is dropped: a plan with only text, a paused routine, an empty list all stay (the
+// page says 「（没有）」 for an empty list).  A price is written the way the price-line rows write one (plainNumber); a date is the owner's Beijing day and time.
+const PLAN_PRICES = [["add_price", "补仓价"], ["stop_price", "止损价"], ["target_price", "目标价"]];
+const isObject = (value) => Boolean(value) && typeof value === "object";
+const hasValue = (value) => value != null && String(value).trim() !== "";
+
+function dateTimeText(value, locale, now) {
+  const day = dateText(value, locale, now);
+  if (!day) return "";
+  const parts = new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "Asia/Shanghai" }).formatToParts(new Date(value));
+  return `${day} ${parts.find((p) => p.type === "hour")?.value}:${parts.find((p) => p.type === "minute")?.value}`;
+}
+
+/**
+ * `{ plans, routines, queue, note }`.  A plan: `{ symbol, prices: [{ key, label, value }], text }` (a price that is missing is left out of `prices`).  A routine: `{ id, name, enabled, scope,
+ * scopeLabel, symbols, contents: [{ key, label, detail? }], next }` (`next` is "" when it is paused or has no date).  `queue` is the symbols, or null when it was never saved.
+ */
+export function watchRows(watch, locale = "zh-CN", now = new Date()) {
+  const w = isObject(watch) ? watch : {};
+  const plans = (Array.isArray(w.plans) ? w.plans : []).filter(isObject).map((plan) => ({
+    symbol: String(plan.symbol ?? ""),
+    prices: PLAN_PRICES.filter(([key]) => hasValue(plan[key])).map(([key, label]) => ({ key, label, value: plainNumber(plan[key]) })),
+    text: String(plan.plan_text ?? "").trim(),
+  }));
+  const routines = (Array.isArray(w.alert_routines) ? w.alert_routines : []).filter(isObject).map((routine) => {
+    const enabled = routine.enabled !== false;
+    const priceLines = formatPriceLines(routine.price_lines);
+    const contents = [];
+    if (routine.filings) contents.push({ key: "filings", label: "新申报" });
+    if (routine.news) contents.push({ key: "news", label: "新闻线索" });
+    if (priceLines) contents.push({ key: "price_lines", label: "价格线", detail: priceLines });
+    return {
+      id: String(routine.id ?? ""), name: String(routine.name ?? ""), enabled, scope: String(routine.scope ?? ""),
+      scopeLabel: routine.scope === "symbols" ? "指定公司" : routine.scope === "research_queue" ? "研究队列" : String(routine.scope ?? ""),
+      symbols: Array.isArray(routine.symbols) ? routine.symbols.map(String) : [], contents, next: enabled ? dateTimeText(routine.next_run_at, locale, now) : "",
+    };
+  });
+  const queue = Array.isArray(w.research_queue) ? w.research_queue.map(String) : null;
+  return { plans, routines, queue, note: String(w.default_rules_note ?? "").trim() };
 }
