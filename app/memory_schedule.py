@@ -22,8 +22,10 @@ from .database import SessionLocal
 
 log = logging.getLogger(__name__)
 
-JOBS: dict[str, str] = {"monthly_review": "app.memory_review:run"}
-JOB_TITLES = {"monthly_review": "每月整理记忆"}
+JOBS: dict[str, str] = {"monthly_review": "app.memory_review:run", "quarterly_settle": "app.memory_settle:run"}
+JOB_TITLES = {"monthly_review": "每月整理记忆", "quarterly_settle": "每季整理记忆"}
+ANCHORED = ("quarterly_settle",)        # due at the first calendar anchor after the last run, not a period after it
+DEFAULT_ANCHORS = "02-15,05-15,08-15,11-15"
 CLAIM_TTL = timedelta(minutes=30)       # a claim older than this is dead: its worker was cut off
 RETRY_AFTER = timedelta(hours=6)        # a failed run is tried again after this, never at every tick
 OUTCOMES = ("done", "skipped", "failed")
@@ -45,6 +47,33 @@ def review_days() -> int:
 
 def review_min_messages() -> int:
     return _int_env("FINBOT_MEMORY_REVIEW_MIN_MESSAGES", 40)
+
+
+def quarter_anchors() -> list[tuple[int, int]]:
+    """(month, day) pairs of ``FINBOT_MEMORY_QUARTER_ANCHORS`` (UTC dates, sorted); an entry that is not a real date is skipped."""
+    found = set()
+    for chunk in (os.getenv("FINBOT_MEMORY_QUARTER_ANCHORS", "").strip() or DEFAULT_ANCHORS).split(","):
+        try:
+            month, day = (int(x) for x in chunk.strip().split("-"))
+            datetime(2024, month, day)
+            found.add((month, day))
+        except ValueError:
+            continue
+    return sorted(found) or [(2, 15), (5, 15), (8, 15), (11, 15)]
+
+
+def next_anchor(after: datetime) -> datetime:
+    """The first anchor (00:00 UTC of its date) strictly after ``after``."""
+    after = after.astimezone(UTC) if after.tzinfo else after.replace(tzinfo=UTC)
+    for year in (after.year, after.year + 1):
+        for month, day in quarter_anchors():
+            try:
+                at = datetime(year, month, day, tzinfo=UTC)
+            except ValueError:      # 02-29 in a year without one
+                continue
+            if at > after:
+                return at
+    raise RuntimeError("no anchor found")
 
 
 def period(job: str) -> timedelta:
@@ -73,6 +102,8 @@ def _is_due(db, row: MemoryJob, now: datetime) -> bool:
     if row.retry_at is not None and now < row.retry_at:
         return False
     base = _base(row)
+    if row.job in ANCHORED:
+        return now >= next_anchor(base)
     if now >= base + period(row.job):
         return True
     return _count_messages(db, row.owner_hash, base) >= review_min_messages()
@@ -119,7 +150,7 @@ def next_due(job: str, owner_hash: str) -> datetime | None:
 
 
 def _next_due(row: MemoryJob) -> datetime:
-    at = _base(row) + period(row.job)
+    at = next_anchor(_base(row)) if row.job in ANCHORED else _base(row) + period(row.job)
     return max(at, row.retry_at) if row.retry_at is not None else at
 
 

@@ -179,7 +179,8 @@ def _message(stored: list[dict], counts: dict, new: int, archived: int) -> str:
     return "\n".join([lines[0], *lines[1:], TAIL, note + "。"])
 
 
-def _post(owner_hash: str, text: str, now: datetime) -> bool:
+def _post(owner_hash: str, text: str, now: datetime, *, what: str = JOB_NAME, marker: str = "memory_review",
+          notice: str = "每月整理：我对你的了解多了几条推测，打开对话或记忆页确认。") -> bool:
     """The message in the default bot's conversation, marked as the system's like a finished job's, and one channel notice (source
     ``memory``, one a day).  The notice is best effort: no channel, or already one today, leaves only the message."""
     from . import agent_bots, work
@@ -188,10 +189,10 @@ def _post(owner_hash: str, text: str, now: datetime) -> bool:
         line = db.get(AgentConversation, bot.conversation_id)
         if line is None:
             return False
-        work.post_system_message(db, line, JOB_NAME, text, {"memory_review": True, "audit": {}})
+        work.post_system_message(db, line, what, text, {marker: True, "audit": {}})
         try:
             with db.begin_nested():     # a notice that cannot be queued must not take the message with it
-                work._send_notice(db, owner_hash, line.id, "每月整理：我对你的了解多了几条推测，打开对话或记忆页确认。", now, source="memory", cap=1)
+                work._send_notice(db, owner_hash, line.id, notice, now, source="memory", cap=1)
         except Exception as exc:  # noqa: BLE001
             log.warning("memory review notice not queued: %s", type(exc).__name__)
         db.commit()
@@ -220,7 +221,7 @@ def run(owner_hash: str, now: datetime, last_run_at: datetime | None) -> dict:
         log.warning("memory review model call failed: %s", type(exc).__name__)
         return {"outcome": "failed", "reason": "整理记忆时模型没有返回结果。", "archived": archived}
     whole = _json_object(raw)
-    offered = whole.get("items") if whole else None
+    offered = whole.get("items", []) if whole else None     # no ``items`` key means nothing new (a reply with only ``still_seen`` is a normal run)
     if not isinstance(offered, list):
         offered = None
     if offered is None:

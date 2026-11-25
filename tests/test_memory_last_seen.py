@@ -172,3 +172,12 @@ def test_a_reply_without_still_seen_is_still_a_normal_review(monkeypatch):
     _model(monkeypatch, {"items": []})
     result = review.run(OWNER, NOW, SINCE)
     assert result["outcome"] == "done" and result["seen"] == 0 and result["seen_unverified"] == 0
+
+
+def test_a_reply_with_only_still_seen_is_a_normal_run_with_no_proposals_and_still_bumps(monkeypatch):
+    ids = _twelve()
+    real = _item("喜欢先看结论")
+    _model(monkeypatch, {"still_seen": [{"handle": profile.handle(real), "examples": [{"message_id": ids[2], "quote": "先说结论 2"}]}]})
+    result = review.run(OWNER, NOW, SINCE)
+    assert result["outcome"] == "done" and result["proposed"] == 0 and result["seen"] == 1
+    assert _row(real).last_seen_at > OLD

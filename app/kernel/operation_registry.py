@@ -68,7 +68,9 @@ OPERATION_REGISTRY: dict[tuple[str, str], dict] = {
     ("POST", "/agent-chat/profile"): _op("remember"),
     ("PATCH", "/agent-chat/profile/{item_id}"): _no("不开放改记忆文字：要改可先忘掉再记一条，直接改写会让「这是用户原话」失真"),
     ("POST", "/agent-chat/profile/{item_id}/confirm"): _no("把推断项确认为明示本来就是 owner 亲手点的动作，让模型代点会抹掉这个区别"),
+    ("POST", "/agent-chat/profile/{item_id}/restore"): _no("本人在页面上恢复"),
     ("DELETE", "/agent-chat/profile/{item_id}"): _op("forget"),
+    ("POST", "/agent-chat/views/{view_id}/restore"): _no("本人在页面上恢复"),
     ("DELETE", "/agent-chat/views/{view_id}"): _no("网页上本人删除一条历史，不开放给助手"),
     # 研究队列与例行任务
     ("PUT", "/agent-chat/research-queue"): _op("add_to_research_queue", "remove_from_research_queue"),

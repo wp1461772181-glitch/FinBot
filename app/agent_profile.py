@@ -39,6 +39,7 @@ MAX_ACTIVE_ITEMS = 30
 MAX_BLOCK_BYTES = 2048
 FINGERPRINT_PREFIX = "~"   # a rejected proposal keeps only this and a hash of its folded text, never his words
 PROPOSED_HEADING = "我的推测（未经你确认）：只影响回答的详略和先后，不影响结论和数字"
+SETTLED_LABEL = "长期"      # a confirmed guess the quarterly settle found still true (stage 4c)
 PROPOSED_LINES = 8
 PROPOSED_BYTES = 1200
 BLOCK_LABEL = "用户画像（偏好，不是证据，也不授权任何写操作）"
@@ -143,7 +144,8 @@ def serialize(row: AgentProfileItem, names: dict | None = None) -> dict:
             "examples": row.examples, "review_run": str(row.review_run) if row.review_run else None,
             "created_at": stamp(row.created_at), "updated_at": stamp(row.updated_at),
             "last_used_at": stamp(row.last_used_at), "last_seen_at": stamp(row.last_seen_at),
-            "archived_at": stamp(row.archived_at), "archived_reason": row.archived_reason, "settled_at": stamp(row.settled_at)}
+            "archived_at": stamp(row.archived_at), "archived_reason": row.archived_reason, "settled_at": stamp(row.settled_at),
+            "settled_label": SETTLED_LABEL if row.settled_at else ""}
 
 
 def _lock(db, owner_hash: str) -> None:
@@ -294,6 +296,31 @@ def archive_item(owner_hash: str, item_id: str) -> dict | None:
         return serialize(row, _bot_names(db, owner_hash))
 
 
+def restore_item(owner_hash: str, item_id: str, now: datetime | None = None) -> dict | None:
+    """The owner brings an archived item back on the memory page: active again (a guess nobody ever confirmed goes back to ``proposed``), the
+    archive fields cleared, ``last_seen_at`` = now.  The time is set directly: ``bump_seen`` only moves forward.  Replacing its topic and the
+    layer's cap apply as for any new item (``ProfileError('profile_full')`` when nothing may make room).  None when it is not his archived item."""
+    now = now or datetime.now(UTC)
+    with SessionLocal() as db:
+        _lock(db, owner_hash)
+        row = _owned(db, owner_hash, item_id)
+        if row is None or row.status != "archived":
+            return None
+        row.status = "proposed" if row.origin == "pattern" and row.archived_at is None else "active"
+        row.archived_at = row.archived_reason = None
+        row.last_seen_at = now
+        db.flush()
+        if row.status == "active":
+            _replace_topic(db, owner_hash, row)
+            try:
+                _evict(db, owner_hash, row.bot_id)
+            except ProfileError:
+                db.rollback()
+                raise
+        db.commit()
+        return serialize(row, _bot_names(db, owner_hash))
+
+
 def _owned(db, owner_hash: str, item_id: str) -> AgentProfileItem | None:
     try:
         row = db.get(AgentProfileItem, uuid.UUID(str(item_id)))
@@ -402,7 +429,8 @@ def visible_texts(owner_hash: str, bot_id: str | None = None) -> list[str]:
 
 def _line(row: AgentProfileItem, layer: str = "") -> str:
     origin = "" if row.origin in OWNER_ORIGINS else ("·你确认的推测" if row.origin == "pattern" else "·推断")
-    return f"- {handle(row.id)} [{KIND_LABELS[row.kind]}{origin}{layer}] {row.text}"
+    settled = "·" + SETTLED_LABEL if row.settled_at else ""
+    return f"- {handle(row.id)} [{KIND_LABELS[row.kind]}{origin}{settled}{layer}] {row.text}"
 
 
 def _pick(rows, lines, budget: int) -> list[tuple]:

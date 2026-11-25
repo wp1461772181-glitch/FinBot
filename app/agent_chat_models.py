@@ -502,9 +502,11 @@ class OwnerView(Base):
     source_message_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     turn_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
-    status: Mapped[str] = mapped_column(String(12), nullable=False, default="active")      # active | superseded | dropped
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="active")      # active | superseded | dropped | archived
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Stage 4c: why the quarterly settle archived it (status ``archived``); added to older tables by ``owner_views.ensure_archive_column``.
+    archived_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
 class MemoryJob(Base):
