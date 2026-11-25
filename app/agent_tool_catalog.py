@@ -200,6 +200,61 @@ class SaveSkillArgs(Args):
     body:str=Field(min_length=1,max_length=6000,description="The steps, written from what THIS turn actually did (its tool calls), in the owner's language.")
     allowed_tools:list[str]=Field(min_length=1,max_length=40,description='The catalog tools the steps use.')
     output_template:str|None=Field(default=None,max_length=2000)
+_UUID=r'^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'
+class _BotFields(Args):
+    """What ``POST``/``PATCH /bots`` take.  The route's own validation (``agent_bots``) decides what is valid, so a value it refuses is refused here with the same code."""
+    title:str|None=Field(default=None,max_length=60,description='One line saying what the bot is for.')
+    description:str|None=Field(default=None,max_length=4000,description="The bot's standing work instruction.")
+    focus_companies:list[str]|None=Field(default=None,max_length=20,description='Tickers the bot watches (AAPL); [] clears them. Exactly one makes it the default company of a question that names none.')
+    focus_theme:str|None=Field(default=None,max_length=200,description='A theme the bot watches; "" clears it.')
+    tool_scope:list[str]|None=Field(default=None,max_length=80,description='Only these tools (the always-on basics stay). Use all_tools to remove a restriction.')
+    all_tools:Literal[True]|None=Field(default=None,description='true: the bot may use every tool (no restriction).')
+    model:str|None=Field(default=None,max_length=40,description='A catalog model name with a key set (list_models). Use use_default_model to go back to the default.')
+    use_default_model:Literal[True]|None=Field(default=None,description="true: the bot follows the catalog's default model.")
+    reasoning_effort:str|None=Field(default=None,max_length=16,description='none, minimal, low, medium, high, xhigh or max. Use use_default_effort to go back to the default.')
+    use_default_effort:Literal[True]|None=Field(default=None,description='true: the bot follows the environment default effort.')
+    pinned:bool|None=None
+    hidden:bool|None=Field(default=None,description='Hide the bot from the list (never the default assistant).')
+    skills:list[str]|None=Field(default=None,max_length=20,description="The bot's usual skills (skill ids, enabled or built-in); [] clears them.")
+    @model_validator(mode='after')
+    def one_way_each(self):
+        for value,reset in (('tool_scope','all_tools'),('model','use_default_model'),('reasoning_effort','use_default_effort')):
+            if getattr(self,value) is not None and getattr(self,reset):raise ValueError(f'{value} and {reset} contradict each other')
+        return self
+class CreateBotArgs(_BotFields):
+    name:str=Field(min_length=1,max_length=40,description="The bot's name.")
+_BOT_FIELDS=('title','description','focus_companies','focus_theme','tool_scope','all_tools','model','use_default_model','reasoning_effort','use_default_effort','pinned','hidden','skills')
+class UpdateBotArgs(_BotFields):
+    bot_id:str=Field(pattern=_UUID,description='The bot to change: its id from the lookup of update_bot (call act with only operation update_bot).')
+    name:str|None=Field(default=None,min_length=1,max_length=40)
+    @model_validator(mode='after')
+    def changes_something(self):
+        if all(getattr(self,k) is None for k in ('name',*_BOT_FIELDS)):raise ValueError('nothing_to_change')
+        return self
+class DeleteTransactionArgs(Args):
+    transaction_id:str=Field(pattern=_UUID,description='The ledger entry to delete: its id from the lookup of delete_transaction (call act with only operation delete_transaction).')
+class ManageSkillArgs(Args):
+    action:Literal['enable','disable','edit','delete']
+    skill_id:str=Field(pattern=_UUID,description='The skill: its id from the lookup of manage_skill (call act with only operation manage_skill).')
+    name:str|None=Field(default=None,max_length=40)
+    description:str|None=Field(default=None,max_length=120)
+    body:str|None=Field(default=None,max_length=6000,description='The new steps.')
+    output_template:str|None=Field(default=None,max_length=2000)
+    allowed_tools:list[str]|None=Field(default=None,min_length=1,max_length=40,description='The catalog tools the steps use.')
+    @model_validator(mode='after')
+    def fields_only_for_edit(self):
+        given=[k for k in ('name','description','body','output_template','allowed_tools') if getattr(self,k) is not None]
+        if self.action=='edit' and not given:raise ValueError('nothing_to_change')
+        if self.action!='edit' and given:raise ValueError('only edit takes fields')
+        return self
+class SetDefaultModelArgs(Args):
+    name:str=Field(min_length=1,max_length=40,description='A catalog model name (list_models).')
+class SetModelRoleArgs(Args):
+    role:Literal['earnings','forecast','judge','fallback']=Field(description="earnings: the earnings-release reader; forecast: the forecast's probabilities; judge: the claim judge; fallback: the backup chat model.")
+    model:str|None=Field(default=None,max_length=40,description='A catalog model name (list_models); omit to go back to the default for that role.')
+class SetChannelPrefsArgs(Args):
+    mode:Literal['first','all']=Field(description='first: the first channel that can take a message; all: every one that can.')
+    channels:list[Literal['telegram','wechat']]=Field(min_length=1,max_length=2,description='In order of preference.')
 class NotifyArgs(Args):
     # No recipient: the server sends only to the owner's bound Telegram chat.
     text:str=Field(min_length=1,max_length=1500,description="What to tell the owner, in the owner's language. Every sentence with a figure or date carries this turn's evidence number [n].")
@@ -282,10 +337,10 @@ TOOL_CATEGORIES:dict[str,CategoryInfo]={c.name:c for c in (
  CategoryInfo('资料库','已存资料、知识库检索、入库、索引、分析与翻译',('query_materials','query_material_analysis','search_material_analysis','search_knowledge','save_material_evidence','ingest_web_source','import','import_sources','index','retry_document_index','withdraw_knowledge_document','review_knowledge_candidate','analyze','translate_content','test_retrieval_diagnostics')),
  CategoryInfo('新闻与网页','新闻搜索、网页检索和新闻源管理',('web_research','search_configured_news','search_x','manage_news_source','query_alerts')),
  CategoryInfo('预测','已存预测的读取、新预测、修订与历史回放',('query_latest_forecast','forecast','revise_forecast','start_historical_replay')),
- CategoryInfo('持仓','持仓与账本、可用资金、持仓计划',('query_portfolio','query_holdings_overview','record_trade','set_available_funds','set_position_plan')),
+ CategoryInfo('持仓','持仓与账本、可用资金、持仓计划',('query_portfolio','query_holdings_overview','record_trade','set_available_funds','set_position_plan','delete_transaction')),
  CategoryInfo('例行与通知','定时例行任务和 Telegram 通知',('create_routine','list_routines','update_routine','delete_routine','notify_telegram')),
- CategoryInfo('记忆与技能','记住或忘记偏好、回看过去的对话、保存技能',('remember','forget','recall_conversations','read_past_conversation','save_skill')),
- CategoryInfo('工作区','工作区记录、系统状态、可用模型、研究队列与 FAQ、选股和打开页面',('read_workspace','query_system_status','list_models','query_research_queue','add_to_research_queue','remove_from_research_queue','query_research_faq','select_stock','open_page')),
+ CategoryInfo('记忆与技能','记住或忘记偏好、回看过去的对话、保存技能',('remember','forget','recall_conversations','read_past_conversation','save_skill','manage_skill')),
+ CategoryInfo('工作区','工作区记录、系统状态、可用模型、研究队列与 FAQ、选股和打开页面',('read_workspace','query_system_status','list_models','query_research_queue','add_to_research_queue','remove_from_research_queue','query_research_faq','select_stock','open_page','create_bot','update_bot','set_default_model','set_model_role','set_channel_prefs')),
 )}
 CATEGORY_OF={tool:name for name,info in TOOL_CATEGORIES.items() for tool in info.tools}
 # Names that older bots and skills may still carry: they now mean the merged tool.
@@ -368,9 +423,16 @@ EXTRA=(
  ('search_configured_news',SearchConfiguredNewsArgs,'read','Search news items from enabled user-configured news sources only (RSS/JSON/HTML). Call this FIRST for recent market/macro/company news before falling back to web_research. Every returned item has a URL and still goes through citation and numeric gates.'),
  ('search_x',SearchXArgs,'read','Search recent posts (the last 7 days at most) on X through its official API. Use it when the user asks what is being said on X, or when something may have been posted on X before it reached news or filings. Posts are unverified claims: say that it is from X, who posted it and when, and check anything that matters against official sources before stating it as fact. Query syntax: words, "exact phrase", from:username, OR, -word, lang:en, cashtags like $NVDA. Each returned post costs money, so ask for only as many as you need.'),
  ('list_models',ListModelsArgs,'read','List the models of the catalog (name, provider, model id, whether a key is set; never the key), the default chat model, and the model each background role (earnings, forecast, judge, fallback) uses. Owner only. Call it before analyze with catalog_model, or when the user asks which models are available.'),
+ ('create_bot',CreateBotArgs,'reversible','Propose a new bot (a long-lived assistant with its own conversation) when the USER asks for one: name, title, instruction, companies it watches, the tools it may use, its model and effort, skills. Same checks as the bots page. Owner confirmation card listing what it will be. Deleting a bot is not offered.'),
+ ('update_bot',UpdateBotArgs,'reversible','Propose changing one bot (name, title, instruction, companies, tool scope, model, effort, pinned, hidden, usual skills) when the USER asks; pass only what changes. Call act with only operation update_bot first to get the bot ids. The card lists each change old to new and the tools added and removed. Owner confirmation card.'),
+ ('delete_transaction',DeleteTransactionArgs,'reversible','Propose deleting one mistaken entry of the owner\'s portfolio ledger when the USER asks (删掉那笔买入). Call act with only operation delete_transaction first to get recent entries and their ids. The card shows the entry and the position and cash after; an entry a later sell depends on is refused. It cannot be undone. Own card.'),
+ ('manage_skill',ManageSkillArgs,'reversible','Propose enabling, disabling, editing (name, description, steps, output template, allowed tools) or deleting one skill of the library when the USER asks. Call act with only operation manage_skill first to get the skill ids. Deleting cannot be undone and gets its own card. Owner confirmation card.'),
+ ('set_default_model',SetDefaultModelArgs,'reversible','Propose making a catalog model the default chat model when the USER asks (把默认模型换成 …). The card shows the old and the new one. Owner confirmation card; model keys are never handled here.'),
+ ('set_model_role',SetModelRoleArgs,'reversible','Propose which catalog model a background job uses (earnings, forecast, judge, fallback) when the USER asks; no model puts the role back to its default. Owner confirmation card.'),
+ ('set_channel_prefs',SetChannelPrefsArgs,'reversible','Propose where proactive messages (alerts, routine briefs, earnings notices) go from now on: Telegram, WeChat or both, and whether to use the first channel that works or all. The card says where they will go. Owner confirmation card.'),
 )
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
-OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models'}
+OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs'}
 
 # Every base registry entry is read-only; write names come from catalogue levels.
 WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'})]

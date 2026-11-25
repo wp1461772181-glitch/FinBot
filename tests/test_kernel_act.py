@@ -7,7 +7,7 @@ import pytest
 from app import agent_profile as profile
 from app import agent_tasks, portfolio
 from app.agent_tool_catalog import definitions
-from app.agent_workflow import direct, sec_sources, workspace_tools
+from app.agent_workflow import direct, directory_ops, sec_sources, workspace_tools
 from app.kernel import act
 
 NOT_IN_SLICE = set()      # every catalogue write is in the directory now
@@ -37,7 +37,7 @@ def test_every_operation_is_a_catalogue_write_and_every_write_is_listed():
 def test_summaries_costs_and_tiers():
     assert all(act.SUMMARIES[name] for name in act.OPERATIONS) and set(act.SUMMARIES) == set(act.OPERATIONS)
     assert set(act.COST_NOTES) == set(act.TIER3)
-    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 29
+    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 36
     assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "revise_forecast")] == [1, 2, 3, 3, 3]
     assert act.TIER1[0] == "remember" and act.TIER3[-2:] == ("ingest_web_source", "revise_forecast")
     assert act.SUMMARIES["ingest_web_source"].startswith("把这段对话里联网搜到的一个网页或新闻存进资料库")
@@ -217,6 +217,9 @@ MINIMAL = {
     "withdraw_knowledge_document": {"document_id": UUID},
     "save_material_evidence": {"symbol": "AAPL", "title": "t", "source_url": "https://x.com/a", "published_at": "2026-01-01", "content": "c"},
     "ingest_web_source": {"url": PAGE_URL, "symbol": "AAPL"}, "revise_forecast": {"symbol": "AAPL"},
+    "create_bot": {"name": "甲"}, "update_bot": {"bot_id": UUID, "pinned": True}, "delete_transaction": {"transaction_id": UUID},
+    "manage_skill": {"action": "disable", "skill_id": UUID}, "set_default_model": {"name": "m"}, "set_model_role": {"role": "judge"},
+    "set_channel_prefs": {"mode": "all", "channels": ["telegram"]},
 }
 
 
@@ -257,6 +260,7 @@ def faked(monkeypatch):
     monkeypatch.setattr(agent_tasks, "get_task", lambda *a: fake_preview("o", {}))
     monkeypatch.setattr(direct, "source_display_title", lambda *a: "某材料")
     monkeypatch.setattr(portfolio, "describe_write", lambda *a: {"title": "t", "targets": [{"symbol": "AAPL"}], "alternative": "a"})
+    monkeypatch.setattr(directory_ops, "describe", lambda owner, name, args: {"title": "t", "targets": [{"kind": "k"}], "alternative": "a"})
     monkeypatch.setattr(sec_sources, "prepare_filing", lambda name, args, financial_only=False: {
         "name": name, "arguments": {**args, "accession_number": "0000320193-26-000001"},
         "discovery": {"form": "10-K", "filed_at": "2026-01-02", "source_url": "https://sec.gov/x"}})

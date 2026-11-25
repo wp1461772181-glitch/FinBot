@@ -19,7 +19,7 @@ from .. import agent_tasks, portfolio
 from ..agent_chat_identity import owner_credential_matches
 from .. import agent_model_catalog as model_catalog
 from ..agent_tool_catalog import definitions, validate
-from ..agent_workflow import consent, direct, sec_sources, tools, web_sources, workspace_tools
+from ..agent_workflow import consent, direct, directory_ops, sec_sources, tools, web_sources, workspace_tools
 from . import ask
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 ACT = "act"
 TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue")
 TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_routine", "update_routine", "delete_routine",
-         "save_skill", "review_filing")
+         "save_skill", "review_filing", "create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role",
+         "set_channel_prefs")
 TIER3 = ("forecast", "analyze", "translate_content", "start_historical_replay", "fetch_sec", "refresh_sec", "scan_official",
          "initialize_prices", "import", "import_sources", "index", "retry_document_index", "review_knowledge_candidate",
          "withdraw_knowledge_document", "save_material_evidence", "ingest_web_source", "revise_forecast")
@@ -46,6 +47,13 @@ SUMMARIES = {
     "delete_routine": "删除一个例行任务",
     "save_skill": "把一套做法存成技能",
     "review_filing": "把一份 SEC 申报标记为相关或不相关",
+    "create_bot": "新建一个 bot（名称、职位、说明、关注公司、可用工具、模型、推理强度、常用技能；不含删除 bot）",
+    "update_bot": "修改一个 bot 的设置（名称、职位、说明、关注公司、可用工具、模型、推理强度、置顶、隐藏、常用技能）；卡片会列出工具的增减",
+    "delete_transaction": "删除持仓账本里一笔记错的记录（按 id；卡片显示删后的持仓和资金，不能撤销，单独一张卡）",
+    "manage_skill": "启用、停用、修改（名称、用途、步骤、输出格式、允许的工具）或删除一个技能（删除不能撤销，单独一张卡）",
+    "set_default_model": "把模型目录里的某个模型设为默认对话模型",
+    "set_model_role": "指定后台任务用哪个模型（财报判断、预测概率、声明法官、备用模型），或恢复默认",
+    "set_channel_prefs": "设置主动消息（盯盘提醒、例行简报、财报通知）发到哪里：Telegram、微信，或都发",
     "forecast": "生成一份新的研究预测",
     "analyze": "对一份已存材料做 AI 分析（可指定模型目录里的模型，可强制重新分析）",
     "translate_content": "把一份分析或预测简报译成英文",
@@ -145,6 +153,7 @@ class Prepared:
 _HINTS = {"unknown_operation": "没有这个操作。请从 act 工具描述里的目录中选一个 operation 名称重新调用。"}
 REVISION_ALONE = "预测修订要单独一张卡片（材料由用户在卡片上勾选）。先把这一轮已有的操作交给用户，等用户处理后再提出修订。"
 AFTER_REVISION = "这一轮已经有一份预测修订在卡片上，它要单独一张卡片。等用户处理完再提出别的操作。"
+DELETE_ALONE = "删除不能撤销，要单独一张卡片：先把这一轮已有的操作交给用户，等用户处理后再提出删除（或先提出删除，其余等它处理完）。"
 REVISION_NOTE = "已放进材料勾选卡。回答结束时卡片会交给用户，由用户勾选要用的材料；材料你不能选，也不要说已经修订了。现在用一两句话请用户在卡片上勾选材料。"
 SAVE_TITLE = "保存网页"
 SYMBOL_QUESTION = "存到哪只股票的资料库？"
@@ -438,6 +447,14 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
                 display.update(await asyncio.to_thread(portfolio.describe_write, context.owner_hash, name, args))
             except portfolio.PortfolioError as failure:
                 return {"ok": False, "data": [], "error_code": failure.code, "reason": failure.reason, "hint": failure.reason}
+        elif name in directory_ops.NAMES:
+            try:
+                shown = await asyncio.to_thread(directory_ops.describe, context.owner_hash, name, args)
+            except directory_ops.Refusal as failure:
+                return {"ok": False, "data": [], "error_code": failure.code, "reason": failure.reason, "hint": failure.hint}
+            if "fields" in shown:
+                operation["fields"] = shown.pop("fields")          # what the press writes, frozen with the card
+            display.update(shown)
         elif name == "create_routine":
             operation["bot_id"] = getattr(context, "bot_id", None)
             try:
@@ -587,6 +604,8 @@ def _collect(run, prepared: Prepared) -> tuple[dict, str]:
     if (prepared.options is not None and run.proposals) or any(p.options is not None for p in run.proposals):
         return _failure("revision_needs_its_own_card", hint=REVISION_ALONE if prepared.options is not None else AFTER_REVISION), "refused:revision_needs_its_own_card"
     if not any(p.operation == prepared.operation for p in run.proposals):
+        if run.proposals and (directory_ops.own_card(prepared.operation) or any(directory_ops.own_card(p.operation) for p in run.proposals)):
+            return _failure("delete_needs_its_own_card", hint=DELETE_ALONE), "refused:delete_needs_its_own_card"
         if len(run.proposals) >= MAX_PROPOSALS:
             return _refusal("invalid_write_targets"), "refused:invalid_write_targets"
         run.proposals.append(prepared)
@@ -627,6 +646,8 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
         return _refusal("tool_not_in_bot_scope"), "refused:tool_not_in_bot_scope"
     if "arguments" not in args:
         info = describe(name)
+        if name in directory_ops.NAMES:       # the ids and names a call needs (the owner's own settings; never a key)
+            info.update(await asyncio.to_thread(directory_ops.lookup, context.owner_hash, name))
         if name == "ingest_web_source":       # a later turn does not show the model the URLs an earlier search returned
             info["pages"] = _savable_pages(run)
             if info["pages"]:                 # page titles are text from outside: from here on nothing in this turn runs at once

@@ -94,13 +94,11 @@ def _fields(body: BotBody) -> dict:
 
 def _usable_model(name: str | None) -> None:
     """A bot's model must be a catalog entry whose key is configured (null: the catalog default).  Checked here,
-    where the owner's request comes in; agent_bots itself keeps only the name check."""
-    if not name:
-        return
-    if not catalog.exists(name):
-        raise HTTPException(422, "unknown_model")
-    if not catalog.configured(name):
-        raise HTTPException(422, "model_key_missing")
+    where the owner's request comes in (agent_bots.usable_model, which the ``create_bot`` card shares)."""
+    try:
+        bots.usable_model(name)
+    except bots.BotError as exc:
+        raise HTTPException(422, str(exc))
 
 
 # --- bots -----------------------------------------------------------------------------------------------

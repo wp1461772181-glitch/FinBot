@@ -554,10 +554,23 @@ def _move_name(db, row: AgentModelEntry, old: str, new: str) -> None:
                                                                              synchronize_session=False)
 
 
-def set_default(name: str) -> dict:
-    """Make ``name`` the default (an owner row).  A file default always wins and cannot be changed here."""
+def check_default(name: str) -> None:
+    """The refusals of ``set_default`` that come before it writes: a default fixed by the config file, an entry that is not there
+    or that the file owns.  Raises CatalogError; the route and the card of ``set_default_model`` share it."""
     if _read_file()[1]:
         raise CatalogError("default_from_file")
+    if not NAME.fullmatch(name or ""):
+        raise CatalogError("invalid_name")
+    listed = _read_file()[0]
+    if any(item["name"] == name for item in listed):
+        raise CatalogError("model_from_file")
+    if not exists(name):
+        raise CatalogError("model_not_found")
+
+
+def set_default(name: str) -> dict:
+    """Make ``name`` the default (an owner row).  A file default always wins and cannot be changed here."""
+    check_default(name)
     return save_entry(name, is_default=True)
 
 

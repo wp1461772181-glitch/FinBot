@@ -86,7 +86,7 @@ SNAPSHOT = {
     "manage_news_source": "eac1f1c58bd8aafd",
     "load_tools": "67efef87dd2db2fb",
     "search_configured_news": "64f31a22a51c2911",
-    "request_action": "ea7b26d637ec4db8",
+    "request_action": "420b16bb097269f9",   # its WriteTool list grew with the settings operations of 3a
 }
 
 
@@ -371,8 +371,8 @@ def test_other_tools_are_untouched():
     from app.agent_tool_catalog import definitions
     now = {n: hashlib.sha256((p.description + json.dumps(p.args_schema.model_json_schema(), sort_keys=True)).encode()).hexdigest()[:16]
            for n, p in definitions().items()}
-    # search_x (24 Nov) and list_models (stage 3a) are the additions; analyze, create_routine and update_routine were widened on purpose in 3a.
-    added = {"search_x", "list_models"}
+    # search_x (24 Nov), list_models and the seven settings operations (stage 3a) are the additions; analyze, create_routine and update_routine were widened on purpose in 3a.
+    added = {"search_x", "list_models", "create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role", "set_channel_prefs"}
     assert {n: h for n, h in now.items() if n not in added} == SNAPSHOT
     names = list(definitions())
     assert [n for n in names if n not in added] == list(SNAPSHOT) and names.index("list_models") == names.index("search_x") + 1

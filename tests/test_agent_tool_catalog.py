@@ -45,6 +45,10 @@ WRITE_ARGUMENTS={
  'record_trade':{'kind':'buy','symbol':'INTC','quantity':100,'price':80},
  'set_available_funds':{'amount':5000},
  'set_position_plan':{'symbol':'INTC','stop_price':70},
+ 'create_bot':{'name':'研究员'},'update_bot':{'bot_id':'11111111-1111-4111-8111-111111111111','pinned':True},
+ 'delete_transaction':{'transaction_id':'11111111-1111-4111-8111-111111111111'},
+ 'manage_skill':{'action':'disable','skill_id':'11111111-1111-4111-8111-111111111111'},
+ 'set_default_model':{'name':'alpha'},'set_model_role':{'role':'judge'},'set_channel_prefs':{'mode':'all','channels':['telegram']},
 }
 
 

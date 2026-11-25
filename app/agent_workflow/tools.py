@@ -91,6 +91,8 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if definitions()[name].level!='reversible':raise ValueError('invalid_action_tool')
         if name=='remember':args['_source_message_id']=operation.get('source_message_id');args['_bot_id']=operation.get('bot_id')
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
+        # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
+        if name in {'create_bot','update_bot'}:args['_fields']=operation.get('fields')
         # The press, not the frozen operation, says whether a skill starts enabled or as a draft.
         if name=='save_skill':args['_status']=(overrides or {}).get('status') or 'active'
     except (ValueError,IndexError,KeyError,TypeError):return error('confirmation_required')
@@ -284,7 +286,14 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         try:saved=await asyncio.to_thread(skills.save,context.owner_hash,fields,status=args.get('_status') or 'active')
         except skills.SkillError as exc:return error(str(exc))
         return result([{'status':'saved','id':saved['id'],'name':saved['name'],'skill_status':saved['status'],'link':'#skills/'+saved['id']}],'skill library')
-    if name in {'record_trade','set_available_funds','set_position_plan'}:
+    if name in {'create_bot','update_bot','manage_skill','set_default_model','set_model_role','set_channel_prefs'}:
+        # Only reached through execute_reversible: the owner pressed the card; each is the service function its HTTP route calls.
+        from . import directory_ops
+        if not is_owner:return error('owner_login_required')
+        try:data,source=await asyncio.to_thread(directory_ops.execute,name,args,context.owner_hash)
+        except directory_ops.Refusal as exc:return {'ok':False,'data':[],'error_code':exc.code,'reason':exc.reason,'hint':exc.hint}
+        return result([data],source)
+    if name in {'record_trade','set_available_funds','set_position_plan','delete_transaction'}:
         # Only reached through execute_reversible: the owner pressed the card, and the frozen operation matched.
         from .. import portfolio
         if not is_owner:return error('owner_login_required')

@@ -29,12 +29,17 @@ def all_roles(owner_hash: str) -> dict[str, str | None]:
     return {role: get(owner_hash, role) for role in ROLES}
 
 
-def set_role(owner_hash: str, role: str, model_name: str | None) -> str | None:
-    """Pick the model for a role; None goes back to the server default."""
+def check_role(role: str, model_name: str | None) -> None:
+    """The refusals of ``set_role`` (an unknown role, a model that is not in the catalog); the route and the card share them."""
     if role not in ROLES:
         raise RoleError("unknown_role")
     if model_name is not None and not catalog.exists(model_name):
         raise RoleError("unknown_model")
+
+
+def set_role(owner_hash: str, role: str, model_name: str | None) -> str | None:
+    """Pick the model for a role; None goes back to the server default."""
+    check_role(role, model_name)
     with SessionLocal() as db:
         row = db.get(AgentModelRole, (owner_hash, role))
         if model_name is None:
