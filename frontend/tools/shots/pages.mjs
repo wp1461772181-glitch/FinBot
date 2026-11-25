@@ -13,6 +13,7 @@ import { buildState } from "./fixtures/index.mjs";
 import { materialId } from "./fixtures/materials.mjs";
 import { EXTRA_INBOX, EXTRA_PROPOSALS, EXTRA_TASKS } from "./fixtures/routines.mjs";
 import { OWNER_VIEWS } from "./fixtures/views.mjs";
+import { OVERVIEW_REVIEW } from "./fixtures/overview.mjs";
 import { CONFIRMED_GUESS, SETTLE_ITEMS, EXTRA_SOURCES, IMPORT_SAMPLE, REVIEW_ITEMS, KNOWLEDGE_CANDIDATES, KNOWLEDGE_EXTRA_DOCS } from "./fixtures/assistant.mjs";
 
 import fs from "node:fs";
@@ -412,6 +413,18 @@ export function stateArchivedView({ blocked = false } = {}) {
   const third = { ...structuredClone(OWNER_VIEWS.find((v) => v.symbol === "NVDA" && v.status === "active")), status: "archived", status_label: "已归档", ended_at: "2026-11-22T01:00:00+00:00", archived_reason: "你已不持有、不在关注列表，也很久没提" };
   state.views.push(third);
   if (blocked) state.views.push({ ...structuredClone(third), id: "d0000000-0000-4000-8000-000000000099", status: "active", status_label: "", ended_at: null, archived_reason: null, created_at: "2026-11-23T01:00:00+00:00", text: "回调后可以重新看", quote: "回调以后我想重新看英伟达" });
+  return state;
+}
+/** 它眼中的你, full: two guesses waiting, one confirmed, archived items, NVDA's current view with a 回头看 that has a stray figure, TSLA's view typed on the page, AMD's only archived (so 以前的看法 shows). */
+export function stateMemoryOverview() {
+  const state = buildState();
+  state.assistant.profile.push(structuredClone(CONFIRMED_GUESS), ...structuredClone(REVIEW_ITEMS).slice(0, 2), ...structuredClone(SETTLE_ITEMS).slice(1));
+  const nvda = state.views.find((v) => v.symbol === "NVDA" && v.status === "active");
+  nvda.review = structuredClone(OVERVIEW_REVIEW);
+  const tsla = state.views.find((v) => v.symbol === "TSLA" && v.status === "active");
+  tsla.conversation_id = null;
+  const amd = state.views.find((v) => v.symbol === "AMD" && v.status === "active");
+  Object.assign(amd, { status: "archived", status_label: "已归档", ended_at: "2026-11-22T01:00:00+00:00", archived_reason: "你已不持有、不在关注列表，也很久没提" });
   return state;
 }
 /** No view of any company has been noted. */
@@ -921,6 +934,9 @@ export const PAGES = [
   { name: "skills-empty", hash: "#/assistant/skills", ready: "[data-testid=skills-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
   // 你的看法: the memory page's section (the active view of three companies), and NVDA's company page with three versions (active, replaced, withdrawn): the card folded, and the history open.
   { name: "memory-views", hash: "#/assistant/memory", ready: "[data-testid=owner-view-item]", element: "[data-testid=owner-views]" },
+  { name: "memory-you", hash: "#/assistant/memory", ready: "[data-testid=memory-seen-block]", view: () => ({ fixtureState: stateMemoryOverview() }), before: async (page) => {
+      await page.locator("[data-testid=memory-seen-block] button").first().click(); await page.locator("[data-testid=memory-seen-text]").waitFor({ timeout: 10000 });
+    } },
   { name: "memory-views-empty", hash: "#/assistant/memory", ready: "[data-testid=owner-views-empty]", element: "[data-testid=owner-views]", view: () => ({ fixtureState: stateNoViews() }) },
   { name: "company-view", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-text]", element: "[data-testid=owner-view]" },
   { name: "company-view-history", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-text]", element: "[data-testid=owner-view]", before: async (page) => {

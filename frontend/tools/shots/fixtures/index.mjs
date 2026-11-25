@@ -10,6 +10,7 @@ import { portfolioSummary, buildPortfolio } from "./portfolio.mjs";
 import { TASKS, RUNS, PROPOSALS, INBOX } from "./routines.mjs";
 import { backstageRoutes } from "./backstage.mjs";
 import { OWNER_VIEWS, activeViews, viewHistory } from "./views.mjs";
+import { memoryOverview } from "./overview.mjs";
 import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS, DRY_RUNS, REPAIRS, KNOWLEDGE_IMPORTABLE, knowledgeChunks, readSkillFile } from "./assistant.mjs";
 
 export function buildState() {
@@ -393,6 +394,32 @@ function assistantRoutes(route, reply, own) {
     if (!view) return reply.status(404, { detail: "view_not_found" });
     if (state.views.some((v) => v.symbol === view.symbol && v.status === "active")) return reply.status(409, { detail: "这家公司已有一条当前看法，先撤回它再恢复" });
     Object.assign(view, { status: "active", status_label: "", ended_at: null, archived_reason: null });
+    return { view };
+  }));
+  // --- 它眼中的你: the overview of everything kept, the two page writes for a view, and the two downloads
+  route.get(`${A}/memory/overview`, own(({ state }) => memoryOverview(state)));
+  route.get(`${A}/memory/export`, own(({ query, state }) => {
+    const format = query.get("format") ?? "json";
+    if (format !== "json" && format !== "md") return reply.status(422, { detail: "invalid_format" });
+    return format === "md" ? reply.text("# 它眼中的你\n", "text/markdown; charset=utf-8") : reply.text(JSON.stringify({ schema: "finbot-memory-export/1", ...memoryOverview(state) }, null, 2), "application/json; charset=utf-8");
+  }));
+  route.post(`${A}/views/:symbol`, own(({ params, body, state }) => {
+    kept(state, "POST", `/views/${params.symbol}`, body);
+    const symbol = params.symbol.toUpperCase(), text = String(body?.text ?? "").trim();
+    if (text.length < 4) return reply.status(422, { detail: "view_quote_too_short" });
+    const now = "2026-11-25T03:00:00+00:00";
+    const replaced = state.views.find((v) => v.symbol === symbol && v.status === "active");
+    if (replaced) Object.assign(replaced, { status: "superseded", status_label: "已更新", ended_at: now });
+    state.viewSeq = (state.viewSeq ?? 0) + 1;
+    const view = { id: `d0000000-0000-4000-8000-00000000${String(100 + state.viewSeq).padStart(4, "0")}`, symbol, text, quote: text, status: "active", status_label: "", archived_reason: null, source_message_id: null, conversation_id: null, turn_id: null, created_at: now, ended_at: null };
+    state.views.push(view);
+    return { status: replaced ? "replaced" : "recorded", view, replaced: Boolean(replaced) };
+  }));
+  route.post(`${A}/views/:symbol/drop`, own(({ params, state }) => {
+    kept(state, "POST", `/views/${params.symbol}/drop`, null);
+    const view = state.views.find((v) => v.symbol === params.symbol.toUpperCase() && v.status === "active");
+    if (!view) return reply.status(404, { detail: "view_not_found" });
+    Object.assign(view, { status: "dropped", status_label: "已撤回", ended_at: "2026-11-25T03:00:00+00:00" });
     return { view };
   }));
   route.delete(`${A}/views/:id`, own(({ params, state }) => {

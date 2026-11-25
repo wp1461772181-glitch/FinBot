@@ -14,13 +14,13 @@ import { actionMessage } from "./support";
 import { useRead } from "./use-read";
 
 /** The date a view was said: 「M月D日 说的」 in Chinese, "said M/D" in English. */
-function saidOn(value: string | null, locale: string, t: (text: string) => string): string {
+export function saidOn(value: string | null, locale: string, t: (text: string) => string): string {
   const day = dayLabel(value, locale);
   if (!day) return "";
   return locale === "en-US" ? `${t("说的")} ${day}` : `${day} ${t("说的")}`;
 }
 
-function Quote({ text, className = "" }: { text: string; className?: string }) {
+export function Quote({ text, className = "" }: { text: string; className?: string }) {
   const { t } = useLocale();
   if (!text.trim()) return null;
   return <div className={`flex min-w-0 flex-col gap-0.5 ${className}`}>
@@ -33,7 +33,7 @@ function Quote({ text, className = "" }: { text: string; className?: string }) {
  * 回头看: the quarterly look back at one version.  The review text is shown exactly as stored; the basis line is the code's own snapshot (a part with no data is left out);
  * the caution appears only when the system could not find some figure of the review in the data it gave, and names those figures so the owner can check them himself.
  */
-function LookBack({ version }: { version: OwnerViewVersion }) {
+export function LookBack({ version }: { version: OwnerViewVersion }) {
   const { t, locale } = useLocale();
   const review = reviewOf(version) as OwnerViewReview | null;
   if (!review) return null;
