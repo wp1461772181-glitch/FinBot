@@ -26,6 +26,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .agent_workflow.fp_flags import flag
@@ -482,7 +483,7 @@ def scan_sec_filings(
     for filing in discovered:
         if filing.accession_number in existing:
             continue
-        db.add(
+        row = (
             SecFilingInventory(
                 symbol=normalized_symbol,
                 cik=filing.cik,
@@ -510,6 +511,11 @@ def scan_sec_filings(
                 related_attachment_error=None,
             )
         )
+        try:  # another writer (the monitor, or a build) may have stored this accession since we looked: skip it, keep the rest
+            with db.begin_nested():
+                db.add(row)
+        except IntegrityError:
+            continue
         created += 1
     db.commit()
     saved = (
@@ -543,6 +549,7 @@ def fetch_inventory_content(
     force_refresh: bool = False,
     recheck_attachment: bool = False,
     refresh_facts: bool = True,
+    xbrl_errors: list | None = None,
 ) -> tuple[SecFilingInventory, bool]:
     """Fetch one inventoried SEC document and preserve 8-K attachment provenance.
 
@@ -662,7 +669,7 @@ def fetch_inventory_content(
     # cost us the text that was just fetched, so it stays optional.
     if filing.form in FACT_FORMS and filing.filed_at is not None:
         try:
-            figures = collect(active_provider, filing.cik, form=filing.form, filed_at=filing.filed_at)
+            figures = collect(active_provider, filing.cik, form=filing.form, filed_at=filing.filed_at, errors=xbrl_errors)
             filing.content_financials = as_payload(figures) or None
         except Exception:
             filing.content_financials = None
@@ -676,6 +683,23 @@ def fetch_inventory_content(
         refresh_quietly(symbol)
     db.refresh(filing)
     return filing, False
+
+
+def store_inventory_figures(*, symbol: str, accession_number: str, db: Session, provider: SecEdgarProvider | None = None,
+                            xbrl_errors: list | None = None) -> bool:
+    """Collect the XBRL figures of a filing whose body is already stored but whose figures are not (an earlier fetch met a rate limit);
+    the body is not fetched again.  True if figures are now stored."""
+    filing = (db.query(SecFilingInventory).filter(SecFilingInventory.symbol == _supported_symbol(symbol),
+                                                   SecFilingInventory.accession_number == accession_number).one_or_none())
+    if filing is None or filing.content_status != "fetched" or filing.form not in FACT_FORMS or filing.filed_at is None:
+        return False
+    figures = collect(provider or SecEdgarProvider(), filing.cik, form=filing.form, filed_at=filing.filed_at, errors=xbrl_errors)
+    payload = as_payload(figures) or None
+    if not payload:
+        return False
+    filing.content_financials = payload
+    db.commit()
+    return True
 
 
 class _PrefetchedExhibitProvider:

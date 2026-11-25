@@ -18,12 +18,14 @@ def max_active_symbols() -> int:
 
 
 def _subject_symbols(db, inspector) -> list[str]:
-    """Non-retired archive subjects: held first, then the research queue, then the most recently asked."""
+    """Non-retired archive subjects: held first, then the research queue, then the most recently asked.  One whose archive is being built
+    (queued or building) is left out until the build ends: the build scans it itself.  Subjects come before the persisted extras, so a full
+    list can push a symbol that only has a forecast job out of the monitor."""
     from .models import ArchiveSubject
     if ArchiveSubject.__tablename__ not in inspector.get_table_names():
         return []
     rows = db.execute(
-        select(ArchiveSubject.symbol).where(ArchiveSubject.retired_at.is_(None))
+        select(ArchiveSubject.symbol).where(ArchiveSubject.retired_at.is_(None), ArchiveSubject.build_status.not_in(('queued', 'building')))
         .order_by(ArchiveSubject.held.desc(), ArchiveSubject.queued.desc(), ArchiveSubject.asked_at.desc().nulls_last(), ArchiveSubject.symbol)
         .limit(max_active_symbols())).all()
     return [row[0] for row in rows]
