@@ -49,7 +49,8 @@ export async function getRoleTemplates(signal?: AbortSignal): Promise<RoleTempla
   if (!response.ok) throw new ApiError(response.status === 403 ? "登录个人聊天后才能使用模板。" : "模板暂时无法读取。", response.status);
   const data = await response.json().catch(() => null) as Partial<RoleTemplates> | null;
   if (!data || typeof data !== "object") throw new ApiError("模板暂时无法读取。", response.status);
-  return { templates: arr<RoleTemplate>(data.templates), applications: arr<RoleTemplateApplication>(data.applications), duty_mode: typeof data.duty_mode === "string" ? data.duty_mode : "" };
+  const templates = arr<RoleTemplate>(data.templates).map(one => ({ ...one, memory: arr<TemplateMemory>(one.memory), briefs: arr<TemplateBrief>(one.briefs), skills: arr<TemplateSkill>(one.skills).map(skill => ({ ...skill, allowed_tools: arr<string>(skill.allowed_tools) })), usual: arr<string>(one.usual), notes: arr<string>(one.notes).map(String) }));
+  return { templates, applications: arr<RoleTemplateApplication>(data.applications), duty_mode: typeof data.duty_mode === "string" ? data.duty_mode : "" };
 }
 
 async function write<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
