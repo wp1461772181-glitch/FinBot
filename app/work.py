@@ -8,6 +8,7 @@ startup runs the sweep (the bridges and the sentinel do not).
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -15,7 +16,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import Boolean, DateTime, String, Text, UniqueConstraint, Uuid, func, select, update
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .agent_chat_models import AgentConversation, AgentMessage
+from .agent_chat_models import AgentConversation, AgentMessage, AgentTelegramMessage
 from .database import Base, SessionLocal
 
 log = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ class AgentWork(Base):
     reader_present: Mapped[bool | None] = mapped_column(Boolean, nullable=True)   # at the end: was a client reading the answer?
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)   # the channel notice's claim: set once
     __table_args__ = (UniqueConstraint("kind", "ref", name="uq_agent_work_kind_ref"),)
 
 
@@ -89,6 +91,7 @@ def sweep_interrupted(now: datetime | None = None) -> int:
 
     The message is a turn of its own (assistant only, ``complete``).  The cut-off turn keeps ending at the user's row, so
     the next turn's history still reads it as an unanswered ("interrupted") turn, as before the sweep existed."""
+    # Single API process (the box runs one): a second worker's sweep would also close the first one's live turns.
     now = now or datetime.now(UTC)
     with SessionLocal() as db:
         ids = db.scalars(select(AgentWork.id).where(AgentWork.kind == CHAT_TURN, AgentWork.status == RUNNING,
@@ -118,3 +121,50 @@ def sweep_interrupted(now: datetime | None = None) -> int:
         except Exception:
             log.exception("sweeping the interrupted turn %s failed", work_id)
     return closed
+
+
+DEFAULT_DAILY_CAP = 10
+NOTICE_OUTCOMES = {DONE: "已经答完", FAILED: "没答完"}
+
+
+def daily_cap() -> int:
+    """How many work notices one day may send (``FINBOT_WORK_DAILY_CAP``, default 10): a count of its own, apart from the bot's notify cap."""
+    try:
+        return max(0, int(os.environ.get("FINBOT_WORK_DAILY_CAP", DEFAULT_DAILY_CAP)))
+    except ValueError:
+        return DEFAULT_DAILY_CAP
+
+
+def notify_if_unattended(turn_id: str) -> bool:
+    """One line to the owner's channel for a chat turn that ended while nobody was reading (done or failed; a turn the owner stopped
+    or whose reader was there is no news): what it was, the outcome, where to read it.  Never the answer.  The item is claimed
+    (``notified_at``) in the same transaction that queues the line, so a retry or a second worker sends nothing twice, and a line
+    the outbox cannot take (no channel, over the cap) leaves the claim undone.  Source ``work``: counted on its own, not against the bot's cap."""
+    from . import agent_bots, agent_telegram as telegram
+    with SessionLocal() as db:
+        item = db.scalars(select(AgentWork).where(AgentWork.kind == CHAT_TURN, AgentWork.ref == str(turn_id))).first()
+        if (item is None or item.status not in NOTICE_OUTCOMES or item.reader_present is not False or item.notified_at is not None):
+            return False
+        owner, summary, status, reason = item.owner_hash, item.summary, item.status, item.reason
+    bot = agent_bots.ensure_default_bot(owner)
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        claimed = db.execute(update(AgentWork).where(AgentWork.kind == CHAT_TURN, AgentWork.ref == str(turn_id), AgentWork.notified_at.is_(None))
+                             .values(notified_at=now)).rowcount
+        if not claimed:
+            db.rollback()
+            return False
+        today = db.scalar(select(func.count(func.distinct(func.coalesce(AgentTelegramMessage.group_id, AgentTelegramMessage.id))))
+                          .where(AgentTelegramMessage.owner_hash == owner, AgentTelegramMessage.source == "work",
+                                 AgentTelegramMessage.created_at >= telegram._day_start(now)))
+        if int(today or 0) >= daily_cap():
+            db.rollback()
+            return False
+        line = f"你问的「{summary}」{NOTICE_OUTCOMES[status]}" + (f"：{reason}" if status == FAILED and reason else "") + "。打开对话查看。"
+        try:
+            telegram.enqueue(db, owner, bot.id, telegram.render(bot.name, line), source="work", now=now)
+        except telegram.NotifyError:
+            db.rollback()
+            return False
+        db.commit()
+    return True

@@ -296,3 +296,184 @@ def test_the_stop_button_ends_a_detached_turn_as_stopped_with_the_reader_still_t
     _run(scenario())
     item = _only_item(cid)
     assert (item.status, item.reader_present, item.reason) == ("stopped", True, stream.WORK_STOPPED_REASON)
+
+
+# ---- Task 2: detached by default, the notice when nobody was reading, the turn time limit ----
+
+from app.agent_chat_models import AgentBot, AgentChannelPref, AgentTelegramMessage  # noqa: E402
+
+
+@pytest.fixture
+def outbox(monkeypatch):
+    """The tables a notice touches, emptied; Telegram counts as bound."""
+    for table in (AgentBot.__table__, AgentChannelPref.__table__, AgentTelegramMessage.__table__):
+        table.create(engine, checkfirst=True)
+    with SessionLocal() as db:
+        db.query(AgentTelegramMessage).delete()
+        db.commit()
+    import app.channels as channels
+    monkeypatch.setattr(channels, "available", lambda db, owner, channel, bot: channel == "telegram")
+    monkeypatch.delenv("FINBOT_WORK_DAILY_CAP", raising=False)
+
+
+def _notices():
+    with SessionLocal() as db:
+        return db.scalars(select(AgentTelegramMessage).where(AgentTelegramMessage.source == "work")).all()
+
+
+def _finished(status="done", reader=False, owner=OWNER, text="苹果的营收是多少", reason=None):
+    conversation, turn = _conversation_with_user_row(text)
+    work.start_turn(owner, conversation, turn, text)
+    work.end_turn(turn, status, reason, reader_present=reader)
+    return turn
+
+
+def test_one_notice_when_nobody_was_reading_and_never_a_second(outbox):
+    turn = _finished("done")
+    assert work.notify_if_unattended(turn) is True
+    assert work.notify_if_unattended(turn) is False  # a retry, a second worker: the item is claimed once
+    [notice] = _notices()
+    assert "苹果的营收是多少" in notice.text and "答完" in notice.text and "对话" in notice.text and len(notice.text) < 200
+    assert notice.owner_hash == OWNER
+
+
+def test_a_failed_turn_says_why_in_one_line(outbox):
+    turn = _finished("failed", reason="超过 20 分钟还没答完，已经停下")
+    assert work.notify_if_unattended(turn) is True
+    [notice] = _notices()
+    assert "没答完" in notice.text and "超过 20 分钟还没答完，已经停下" in notice.text and "\n\n" not in notice.text.split("\n", 1)[1]
+
+
+@pytest.mark.parametrize("status,reader", [("done", True), ("done", None), ("stopped", False), ("running", None)])
+def test_no_notice_when_the_reader_was_there_or_the_turn_was_stopped_or_still_runs(outbox, status, reader):
+    conversation, turn = _conversation_with_user_row()
+    work.start_turn(OWNER, conversation, turn, "q")
+    if status != "running":
+        work.end_turn(turn, status, "x" if status != "done" else None, reader_present=reader)
+    assert work.notify_if_unattended(turn) is False and _notices() == []
+
+
+def test_work_notices_have_their_own_daily_count_and_do_not_use_the_bots_cap(outbox, monkeypatch):
+    from app import agent_bots
+    bot = agent_bots.ensure_default_bot(OWNER)
+    with SessionLocal() as db:
+        db.get(AgentBot, bot.id).daily_notify_cap = 0
+        db.commit()
+    monkeypatch.setenv("FINBOT_WORK_DAILY_CAP", "2")
+    results = [work.notify_if_unattended(_finished("done")) for _ in range(3)]
+    assert results == [True, True, False] and len(_notices()) == 2
+    from app.agent_telegram import UNCAPPED
+    assert "work" in UNCAPPED
+
+
+def test_a_notice_that_cannot_be_queued_leaves_the_item_for_a_later_try(outbox, monkeypatch):
+    import app.channels as channels
+    turn = _finished("done")
+    monkeypatch.setattr(channels, "available", lambda *a: False)
+    assert work.notify_if_unattended(turn) is False and _notices() == []
+    monkeypatch.setattr(channels, "available", lambda db, owner, channel, bot: channel == "telegram")
+    assert work.notify_if_unattended(turn) is True and len(_notices()) == 1
+
+
+def test_detached_is_the_default_and_a_closed_page_gets_one_notice_and_one_stored_answer(stream_fixture, outbox, cid_t2, monkeypatch):
+    stored = stream_fixture[4]
+    _quiet(monkeypatch)
+    monkeypatch.delenv("FINBOT_FP13_DETACHED_TURNS", raising=False)
+    monkeypatch.setattr(stream, "_is_owner", lambda credential: True)
+    monkeypatch.setattr(stream, "owner_hash", lambda credential: OWNER)
+    gate = {}
+
+    async def workflow(**_):
+        yield {"event": "delta", "text": "partial"}
+        await gate["event"].wait()
+        yield _done()
+    monkeypatch.setattr(stream, "stream_workflow", workflow)
+
+    async def scenario():
+        gate["event"] = asyncio.Event()
+        response = await _start(cid_t2, detach=True)
+        body = response.body_iterator
+        first = await body.__anext__()
+        assert first.startswith(": detached")  # no env set: the flag defaults on
+        for _ in range(2):
+            await body.__anext__()
+        await body.aclose()  # the page is closed
+        task = stream.TURNS[cid_t2]["task"]
+        gate["event"].set()
+        await task
+        for pending in list(stream._BACKGROUND):
+            await asyncio.gather(pending, return_exceptions=True)
+    _run(scenario())
+    assert len([1 for args, kw in stored if len(args) > 2 and args[2] == "assistant" and kw.get("status") == "complete"]) == 1
+    [notice] = _notices()
+    assert "show AAPL prices" in notice.text and "答完" in notice.text
+
+
+def test_a_guest_turn_with_nobody_reading_sends_no_notice(stream_fixture, outbox, cid_t2, monkeypatch):
+    _quiet(monkeypatch)
+    monkeypatch.setattr(stream, "_is_owner", lambda credential: False)
+    gate = {}
+
+    async def workflow(**_):
+        yield {"event": "delta", "text": "partial"}
+        await gate["event"].wait()
+        yield _done()
+    monkeypatch.setattr(stream, "stream_workflow", workflow)
+
+    async def scenario():
+        gate["event"] = asyncio.Event()
+        body = (await _start(cid_t2, detach=True)).body_iterator
+        for _ in range(3):
+            await body.__anext__()
+        await body.aclose()
+        task = stream.TURNS[cid_t2]["task"]
+        gate["event"].set()
+        await task
+        for pending in list(stream._BACKGROUND):
+            await asyncio.gather(pending, return_exceptions=True)
+    _run(scenario())
+    assert _notices() == [] and _only_item(cid_t2).status == "done"
+
+
+@pytest.fixture
+def cid_t2():
+    return str(uuid.uuid4())
+
+
+@pytest.mark.parametrize("detach", [False, True])
+def test_a_turn_past_the_time_limit_is_stopped_failed_and_its_lock_released(stream_fixture, outbox, cid_t2, monkeypatch, detach):
+    stored = stream_fixture[4]
+    _quiet(monkeypatch)
+    monkeypatch.setattr(stream, "MAX_TURN_SECONDS", 0.3)
+    monkeypatch.setattr(stream, "HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setenv("FINBOT_FP13_DETACHED_TURNS", "on")
+    ran = {}
+
+    async def workflow(**_):
+        yield {"event": "delta", "text": "partial answer"}
+        try:
+            await asyncio.sleep(60)
+        finally:
+            ran["stopped"] = True
+        yield _done()
+    monkeypatch.setattr(stream, "stream_workflow", workflow)
+
+    async def scenario():
+        body = (await _start(cid_t2, detach=detach)).body_iterator
+        parts = [part async for part in body]
+        for pending in list(stream._BACKGROUND):
+            await asyncio.gather(pending, return_exceptions=True)
+        return "".join(parts)
+    wire = _run(scenario())
+    assert "event: error" in wire and "turn_timeout" in wire and "event: done" not in wire
+    item = _only_item(cid_t2)
+    assert item.status == "failed" and item.reason == stream.turn_timeout_reason()
+    assert cid_t2 not in stream.LOCKS and cid_t2 not in stream.TURNS and ran.get("stopped")
+    cancelled = [kw for args, kw in stored if len(args) > 2 and args[2] == "assistant" and kw.get("status") == "cancelled"]
+    assert len(cancelled) == 1 and {"finished": "cancelled"} in [kw for _, kw in stored]
+
+
+def test_the_time_limit_reason_counts_the_minutes_of_the_constant(monkeypatch):
+    assert stream.turn_timeout_reason() == "超过 20 分钟还没答完，已经停下"
+    monkeypatch.setattr(stream, "MAX_TURN_SECONDS", 600)
+    assert stream.turn_timeout_reason() == "超过 10 分钟还没答完，已经停下"
