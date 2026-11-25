@@ -361,3 +361,63 @@ async def earnings_judgment_endpoint(judgment_id: str, x_chat_session: str | Non
     if found is None:
         raise HTTPException(404, "judgment_not_found")
     return {"judgment": found}
+
+
+# --- role templates (stage 4f): a starting memory and starting settings, written through the same services as his own pages ---------
+
+class TemplateBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    bot_id: str | None = Field(default=None, max_length=64)
+    leave_out: list[str] = Field(default_factory=list, max_length=60)
+
+
+class UndoBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    leave_out: list[str] = Field(default_factory=list, max_length=80)
+
+
+_TEMPLATE_ERRORS = {"unknown_template": 404, "application_not_found": 404, "already_undone": 409, "unknown_bot": 422, "unknown_leave_out": 422}
+
+
+def _template_error(exc) -> HTTPException:
+    return HTTPException(_TEMPLATE_ERRORS.get(exc.code, 422), exc.code)
+
+
+@router.get("/role-templates")
+async def role_templates_endpoint(x_chat_session: str | None = Header(default=None)):
+    from . import role_templates as templates
+    from .kernel import wake
+    credential = _owner_only(x_chat_session)
+    mode = wake.mode()
+    return {"templates": templates.templates(mode), "applications": await asyncio.to_thread(templates.list_applications, owner_hash(credential)),
+            "duty_mode": mode}
+
+
+@router.post("/role-templates/{template}/preview")
+async def preview_role_template_endpoint(template: str, body: TemplateBody, x_chat_session: str | None = Header(default=None)):
+    from . import role_templates as templates
+    credential = _owner_only(x_chat_session)
+    try:
+        return await asyncio.to_thread(templates.preview, owner_hash(credential), template, body.bot_id, body.leave_out)
+    except templates.RoleTemplateError as exc:
+        raise _template_error(exc)
+
+
+@router.post("/role-templates/{template}/apply")
+async def apply_role_template_endpoint(template: str, body: TemplateBody, x_chat_session: str | None = Header(default=None)):
+    from . import role_templates as templates
+    credential = _owner_only(x_chat_session)
+    try:
+        return await asyncio.to_thread(templates.apply, owner_hash(credential), template, body.bot_id, body.leave_out)
+    except templates.RoleTemplateError as exc:
+        raise _template_error(exc)
+
+
+@router.post("/role-templates/applications/{application_id}/undo")
+async def undo_role_template_endpoint(application_id: str, body: UndoBody, x_chat_session: str | None = Header(default=None)):
+    from . import role_templates as templates
+    credential = _owner_only(x_chat_session)
+    try:
+        return await asyncio.to_thread(templates.undo, owner_hash(credential), application_id, body.leave_out)
+    except templates.RoleTemplateError as exc:
+        raise _template_error(exc)
