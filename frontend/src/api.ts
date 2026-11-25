@@ -17,6 +17,7 @@ export * from "./api/knowledge-docs";
 export * from "./api/market-data";
 export * from "./api/material-library";
 export * from "./api/memory";
+export * from "./api/owner-views";
 export * from "./api/news-sources";
 export * from "./api/owner";
 export * from "./api/portfolio-ledger";

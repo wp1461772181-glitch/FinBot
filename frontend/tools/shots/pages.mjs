@@ -392,6 +392,18 @@ export function stateAssistantEmpty() {
   state.assistant.news.sources = [];
   return state;
 }
+/** No view of any company has been noted. */
+export function stateNoViews() {
+  const state = buildState();
+  state.views = [];
+  return state;
+}
+/** NVDA has only history: the one view was withdrawn. */
+export function stateViewsOnlyHistory() {
+  const state = buildState();
+  state.views = state.views.filter((v) => v.symbol === "NVDA" && v.status !== "active");
+  return state;
+}
 /** The news page with three more sources: two that can be repaired (one repair fails with a code, one without) and one whose health value the page does not know. */
 export function stateWithNewsExtras() {
   const state = buildState();
@@ -885,6 +897,14 @@ export const PAGES = [
     } },
   { name: "skills-draft", hash: `#/assistant/skills/${DRAFT_SKILL}`, ready: `${SKILL_DRAWER}[data-draft=true] #skill-name`, element: SKILL_DRAWER, before: async (page) => { await page.waitForFunction(() => document.querySelector("#skill-name")?.value); } },
   { name: "skills-empty", hash: "#/assistant/skills", ready: "[data-testid=skills-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
+  // 你的看法: the memory page's section (the active view of three companies), and NVDA's company page with three versions (active, replaced, withdrawn): the card folded, and the history open.
+  { name: "memory-views", hash: "#/assistant/memory", ready: "[data-testid=owner-view-item]", element: "[data-testid=owner-views]" },
+  { name: "memory-views-empty", hash: "#/assistant/memory", ready: "[data-testid=owner-views-empty]", element: "[data-testid=owner-views]", view: () => ({ fixtureState: stateNoViews() }) },
+  { name: "company-view", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-text]", element: "[data-testid=owner-view]" },
+  { name: "company-view-history", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-text]", element: "[data-testid=owner-view]", before: async (page) => {
+      await page.locator("[data-testid=owner-view-history-toggle]").click(); await page.locator("[data-testid=owner-view-version]").first().waitFor({ timeout: 10000 });
+    } },
+  { name: "company-view-only-history", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-none]", element: "[data-testid=owner-view]", view: () => ({ fixtureState: stateViewsOnlyHistory() }) },
   { name: "memory-recall", hash: "#/assistant/memory?tab=recall", ready: "[data-testid=recall-item]" },
   { name: "memory-empty", hash: "#/assistant/memory", ready: "[data-testid=memory-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
   { name: "news-test-result", hash: "#/assistant/news", ready: "[data-testid=news-row]", before: async (page) => {

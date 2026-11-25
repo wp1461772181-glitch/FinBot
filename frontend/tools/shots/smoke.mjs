@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, workspaceCardsLoaded, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, stateWithQueue, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, workspaceCardsLoaded, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateNoViews, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, stateWithQueue, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -9995,6 +9995,51 @@ async function memoryOps(ctx) {
   return `9 operations: ${done.join("; ")}`;
 }
 
+/** 你的看法: the company page's card (current view, his words, the date, the folded history), the delete of one earlier version (a confirm that says it cannot be undone; one DELETE), the memory page's section with its link, and the empty states. */
+async function ownerViews(ctx) {
+  const view = await asOpen(ctx, "owner views company", "#/research/c/NVDA", "[data-testid=owner-view-text]", { motion: true });
+  try {
+    const { page } = view;
+    const card = page.locator("[data-testid=owner-view]");
+    assert((await page.locator("[data-testid=owner-view-text]").innerText()) === "估值太高，现在不想追", "the current view is not the active version");
+    assert((await card.locator("[data-testid=owner-view-date]").innerText()).trim() === "11月8日 说的", `the date: ${await card.locator("[data-testid=owner-view-date]").innerText()}`);
+    assert((await card.innerText()).includes("你的原话") && (await card.locator("[data-testid=owner-view-quote]").first().innerText()).includes("我改主意了"), "his own words are not shown under 你的原话");
+    assert(await page.locator("[data-testid=owner-view-version]").count() === 0, "the history is open before it is asked for");
+    await page.locator("[data-testid=owner-view-history-toggle]").click();
+    const rows = await page.locator("[data-testid=owner-view-version]").evaluateAll((els) => els.map((e) => ({ status: e.getAttribute("data-status"), text: e.innerText })));
+    assert(rows.length === 2 && rows[0].status === "superseded" && rows[0].text.includes("已更新") && rows[1].status === "dropped" && rows[1].text.includes("已撤回"), `history rows: ${JSON.stringify(rows)}`);
+    const del = page.locator("[data-testid=owner-view-delete]").first();
+    await del.click();
+    const dialog = dialogOf(page);
+    await dialog.waitFor({ state: "visible", timeout: 5000 });
+    const said = await dialog.innerText();
+    assert(said.includes("删除这条历史？") && said.includes("删除后无法恢复"), `the confirm says: ${said}`);
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "hidden", timeout: 5000 });
+    assert(count(view, "DELETE", /\/views\/[^/]+$/) === 0, "a view was deleted by pressing 删除 and cancelling");
+    await del.click(); await dialog.waitFor({ state: "visible", timeout: 5000 });
+    await holdPointer(page, dialog.locator("button", { hasText: "删除" }).last());
+    await page.waitForFunction(() => document.querySelectorAll("[data-testid=owner-view-version]").length === 1, null, { timeout: 8000 });
+    assert(count(view, "DELETE", /\/views\/[^/]+$/) === 1, "the hold did not send exactly one DELETE");
+  } finally { await view.close(); }
+  const memory = await asOpen(ctx, "owner views memory", "#/assistant/memory", "[data-testid=owner-view-item]");
+  try {
+    const { page } = memory;
+    const items = await page.locator("[data-testid=owner-view-item]").evaluateAll((els) => els.map((e) => ({ symbol: e.getAttribute("data-symbol"), href: e.querySelector("[data-testid=owner-view-link]")?.getAttribute("href"), quote: !!e.querySelector("[data-testid=owner-view-quote]") })));
+    assert(items.length === 3 && items.every((i) => i.quote && i.href?.endsWith(`/research/c/${i.symbol}`)), `the section: ${JSON.stringify(items)}`);
+  } finally { await memory.close(); }
+  const empty = await asOpen(ctx, "owner views empty", "#/assistant/memory", "[data-testid=owner-views-empty]", { state: stateNoViews() });
+  try {
+    assert((await empty.page.locator("[data-testid=owner-views-empty]").innerText()).includes("还没有记下对哪家公司的看法。在对话里说出你的看法，它会记下来。"), "the empty sentence is not the one in the brief");
+  } finally { await empty.close(); }
+  const none = await asOpen(ctx, "owner views none", "#/research/c/AAPL", "[data-testid=company-overview]");
+  try {
+    await none.page.waitForTimeout(500);
+    assert(await none.page.locator("[data-testid=owner-view]").count() === 0, "a company with no view and no history shows a card");
+  } finally { await none.close(); }
+  return "NVDA: the active view, his words, 11月8日 说的, the history folded, two earlier versions (已更新, 已撤回), delete asks 删除这条历史？ / 删除后无法恢复 and sends one DELETE after a hold (none after Esc); the memory page lists 3 views with company links; empty sentence; a company with none shows no card";
+}
+
 async function memoryNotesOnce(ctx) {
   const PROFILE = AS.memory.load.paragraphs[0], SCOPE = AS.memory.load.paragraphs[1], RECALL = AS.memory.recall.load.paragraphs[0];
   const times = (text, note) => text.split(note).length - 1;
@@ -11906,6 +11951,7 @@ const CHECKS = [
   ["skills-draft-link: #/assistant/skills/<draft> and the old #skills/<draft> open the draft's drawer with its sentence; a missing id says 这个技能不存在。; a built-in opens none; closing goes back to /assistant/skills", skillsDraftLink],
   ["skills-keyboard: a skill made and saved with the keyboard alone, the card's 「…」 menu with Esc returning the focus, the editor closed with Esc and the focus back on 编辑", skillsKeyboard],
   ["memory-ops: the nine memory operations (add ×3, edit with Enter / Esc, scope, 确认 only on inferred, delete by hold, the 往事 tab in the address, search only on submit, the bot filter, open a conversation) send the old requests; a refresh keeps the tab", memoryOps],
+  ["owner-views: the company page's 你的看法 card (current view, his words, date, folded history, delete with a confirm) and the memory page's section", ownerViews],
   ["memory-notes-once: each tab's one sentence appears exactly once, word for word as the old page, and not on the other tab; inferred items carry 推断 and 确认, the others neither", memoryNotesOnce],
   ["memory-keyboard: the tabs by arrow keys and Enter / Space, an item added with Enter, a row edited (Enter saves, Esc leaves) from the keyboard", memoryKeyboard],
   ["news-ops: the seven news-source operations (new, edit ×6, switch both ways, test fetch ×6 opening under the row, REA repair only on repairable sources, delete by hold, the push length) send the old requests body for body", newsOps],

@@ -27,6 +27,7 @@ import { appHref } from "../../legacy-routes.mjs";
 import { paths } from "../../routes.mjs";
 import { useWorkspace } from "../workspace";
 import { actionMessage } from "./support";
+import { OwnerViewCard } from "./OwnerViewCard";
 import { useRead, type Read } from "./use-read";
 
 const day = (value: string | null | undefined) => {
@@ -114,7 +115,7 @@ export function CompanyOverview({ symbol, prices, reloadPrices }: { symbol: stri
     filings: filings.kind === "ready" ? filings.value.filings.length : null,
   });
   if (empty) {
-    return <div data-testid="company-empty"><EmptyState title={locale === "en-US" ? `No data for ${symbol} yet` : `还没有 ${symbol} 的任何数据`} description={t("没有行情、预测、材料和官方申报。可以先初始化一年行情，再去材料库扫描 SEC 或创建预测。")} className="rounded-md border border-line bg-surface">
+    return <div data-testid="company-empty" className="flex flex-col gap-4"><OwnerViewCard symbol={symbol} /><EmptyState title={locale === "en-US" ? `No data for ${symbol} yet` : `还没有 ${symbol} 的任何数据`} description={t("没有行情、预测、材料和官方申报。可以先初始化一年行情，再去材料库扫描 SEC 或创建预测。")} className="rounded-md border border-line bg-surface">
       <InitPrices symbol={symbol} onDone={reloadPrices} />
     </EmptyState></div>;
   }
@@ -122,6 +123,7 @@ export function CompanyOverview({ symbol, prices, reloadPrices }: { symbol: stri
   const latestFilings = filings.kind === "ready" ? [...filings.value.filings].sort((a, b) => b.filed_at.localeCompare(a.filed_at)).slice(0, 5) : [];
   const lastSuccess = monitor.kind === "ready" ? monitor.value.last_success?.completed_at : null;
   return <div data-testid="company-overview" className="flex flex-col gap-4">
+    <OwnerViewCard symbol={symbol} />
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label={t("当前研究状态")}>
       <StatTile label={t("独立预测数")} value={forecasts.kind === "ready" ? own.length : "—"} footnote={jobs ? `${jobs} ${t("项任务处理中")}` : t("按当前预测记录统计")} />
       <StatTile label={t("材料总数")} value={dash(materials.kind === "ready" ? materials.value.total : null)} footnote={t("已保存官方和上传材料")} />
