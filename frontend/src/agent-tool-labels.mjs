@@ -54,6 +54,7 @@ export const TOOL_LABELS = {
   create_routine: "新建例行任务",
   list_routines: "查看例行任务",
   list_models: "查看可用模型",
+  list_work: "查看手上的事",
   create_bot: "新建 bot",
   update_bot: "修改 bot",
   delete_transaction: "删除持仓记录",
