@@ -37,7 +37,7 @@ def test_every_operation_is_a_catalogue_write_and_every_write_is_listed():
 def test_summaries_costs_and_tiers():
     assert all(act.SUMMARIES[name] for name in act.OPERATIONS) and set(act.SUMMARIES) == set(act.OPERATIONS)
     assert set(act.COST_NOTES) == set(act.TIER3)
-    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 38
+    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 40
     assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "revise_forecast")] == [1, 2, 3, 3, 3]
     assert act.TIER1[0] == "remember" and act.TIER3[-2:] == ("ingest_web_source", "revise_forecast")
     assert act.SUMMARIES["ingest_web_source"].startswith("把这段对话里联网搜到的一个网页或新闻存进资料库")
@@ -222,6 +222,7 @@ MINIMAL = {
     "create_bot": {"name": "甲"}, "update_bot": {"bot_id": UUID, "pinned": True}, "delete_transaction": {"transaction_id": UUID},
     "manage_skill": {"action": "disable", "skill_id": UUID}, "set_default_model": {"name": "m"}, "set_model_role": {"role": "judge"},
     "set_channel_prefs": {"mode": "all", "channels": ["telegram"]},
+    "apply_role_template": {"template": "定投"}, "undo_role_template": {},
     "record_view": {"symbol": "AAPL", "text": "看好", "quote": "用中文回答"}, "drop_view": {"symbol": "AAPL"},
 }
 

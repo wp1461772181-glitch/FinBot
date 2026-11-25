@@ -190,6 +190,15 @@ def _template(template_id) -> dict:
     return template
 
 
+def resolve_template(value) -> str:
+    """The id of the template he named, by id or by its Chinese label (the model hears 「短线」, the routes say the id)."""
+    word = str(value or "").strip()
+    for template_id, template in TEMPLATES.items():
+        if word in (template_id, template["label"]):
+            return template_id
+    raise RoleTemplateError("unknown_template")
+
+
 def _left_out(template: dict, leave_out) -> set[str]:
     """The keys he unticked.  A key the template does not have is refused, not ignored (a typo must not write what he meant to leave out)."""
     valid = ({m["key"] for m in template["memory"]} | {b["key"] for b in template["briefs"]} | {s["key"] for s in template["skills"]}
