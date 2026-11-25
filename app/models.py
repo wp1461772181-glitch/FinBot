@@ -429,3 +429,23 @@ class CompanyRatio(Base):
     current_value: Mapped[object | None] = mapped_column(Numeric(38, 4), nullable=True)
     base_value: Mapped[object | None] = mapped_column(Numeric(38, 4), nullable=True)
     built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ArchiveSubject(Base):
+    """A company the system keeps an archive for: the owner's holdings, the research queue, and companies he asked about (app/archive_subjects.py).
+    ``last_active_at`` is when it last had a reason (held, queued or asked); a subject without one for 90 days is retired, its filings stay."""
+
+    __tablename__ = "archive_subjects"
+
+    symbol: Mapped[str] = mapped_column(String(12), primary_key=True)
+    held: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    queued: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    asked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_active_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    build_status: Mapped[str] = mapped_column(String(10), nullable=False, default="never")
+    build_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    build_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    build_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    filings_added: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -542,6 +542,7 @@ def fetch_inventory_content(
     content_observed_at_factory: Callable[[], datetime] | None = None,
     force_refresh: bool = False,
     recheck_attachment: bool = False,
+    refresh_facts: bool = True,
 ) -> tuple[SecFilingInventory, bool]:
     """Fetch one inventoried SEC document and preserve 8-K attachment provenance.
 
@@ -668,7 +669,8 @@ def fetch_inventory_content(
     stored_figures = bool(filing.content_financials)
     symbol = filing.symbol
     db.commit()
-    if stored_figures:
+    if stored_figures and refresh_facts:
+        # (a caller that fetches many filings in a row passes refresh_facts=False and refreshes the symbol once at the end)
         # After the commit and in a session of its own: this transaction is not held, and a refresh problem is swallowed (and logged) there.
         from .company_facts import refresh_quietly
         refresh_quietly(symbol)

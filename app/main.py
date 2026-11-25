@@ -285,6 +285,19 @@ async def stop_wake_worker() -> None:
     await wake.stop()
 
 
+@app.on_event("startup")
+async def start_archive_worker() -> None:
+    """The one worker that builds a new company's archive from SEC filings (``archive_subjects``); idle until something is queued."""
+    from . import archive_subjects
+    archive_subjects.start()
+
+
+@app.on_event("shutdown")
+async def stop_archive_worker() -> None:
+    from . import archive_subjects
+    await archive_subjects.stop()
+
+
 @app.on_event("shutdown")
 async def stop_background_loops() -> None:
     from . import background

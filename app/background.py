@@ -95,6 +95,15 @@ def run_company_facts() -> None:
     """Every symbol with saved figures, one transaction each.  The loop runs its job when it starts, so this is also the once-at-startup pass."""
     from .company_facts import refresh_all
 
+    try:  # the owner's holdings and research queue decide which companies the archive keeps (a problem here never stops the facts sweep)
+        from .archive_subjects import sync_owner_subjects
+        from .sentinel_bridge import owner_hash_from_login_config
+
+        owner = owner_hash_from_login_config()
+        if owner:
+            log.info("archive subjects: %s", sync_owner_subjects(owner))
+    except Exception:  # noqa: BLE001
+        log.exception("archive subjects sync failed")
     done = refresh_all()
     log.info("company facts: symbols=%s facts=%s ratios=%s errors=%s", done["symbols"], done["facts"], done["ratios"], sorted(done["errors"]))
 

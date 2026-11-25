@@ -47,6 +47,8 @@ os.environ["PERSONAL_CHAT_LOGIN_PATH"] = os.path.join(
 # Keep the suite hermetic on CI where neither MODEL_CREDENTIAL_KEY nor
 # APP_API_ACCESS_KEY is present.
 os.environ.setdefault("MODEL_CREDENTIAL_KEY", "pytest-model-credential-key-0123456789abcdef")
+# The archive build worker could reach SEC: no test starts it through the app; its own tests switch it on with a faked build.
+os.environ["FINBOT_ARCHIVE_BUILDS"] = "off"
 
 # These imports must remain after DATABASE_URL is set so every application
 # module and test shares the disposable database engine.
