@@ -18,6 +18,7 @@ ROUTINE_SECONDS = 300
 HOURLY_SECONDS = 3600
 NEWS_SECONDS = 900         # configured news sources; until this loop the library was only refreshed while a chat turn waited on it
 RELEASE_FIGURES_SECONDS = 600   # 8-K earnings-release figures for a quarter whose 10-Q/10-K is not filed yet
+COMPANY_FACTS_SECONDS = 6 * 3600   # rebuild every company's code-built facts (the hooks do it per symbol as filings are stored; this catches the rest)
 EARNINGS_SECONDS = 60      # picks up events the response-time task missed, due follow-ups, and anything left over from a restart
 
 
@@ -90,6 +91,14 @@ def run_release_figures() -> None:
         log.info("release figures: %s", done)
 
 
+def run_company_facts() -> None:
+    """Every symbol with saved figures, one transaction each.  The loop runs its job when it starts, so this is also the once-at-startup pass."""
+    from .company_facts import refresh_all
+
+    done = refresh_all()
+    log.info("company facts: symbols=%s facts=%s ratios=%s errors=%s", done["symbols"], done["facts"], done["ratios"], sorted(done["errors"]))
+
+
 LOOPS = (
     ("routine-tasks", ROUTINE_SECONDS, run_routine_tasks),
     ("sec-monitor", HOURLY_SECONDS, run_sec_monitor),
@@ -97,6 +106,7 @@ LOOPS = (
     ("earnings-monitor", EARNINGS_SECONDS, run_earnings_monitor),
     ("news-poll", NEWS_SECONDS, run_news_poll),
     ("release-figures", RELEASE_FIGURES_SECONDS, run_release_figures),
+    ("company-facts", COMPANY_FACTS_SECONDS, run_company_facts),
 )
 
 

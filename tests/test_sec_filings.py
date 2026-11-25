@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 import app.sec_filings as sec_filings
 from app.database import SessionLocal
@@ -693,3 +693,54 @@ def test_a_primary_document_larger_than_the_json_cap_is_still_fetched():
 
     assert fetched.content_status == "fetched"
     assert fetched.content_length and fetched.content_length > sec_filings.MAX_FILING_BYTES
+
+
+def _fetch_the_10q(monkeypatch, refresh):
+    from app import company_facts
+    create_sec_filing_inventory_table()
+    _clear_inventory()
+    opener, _ = _responses()
+    provider = _provider(opener)
+    monkeypatch.setattr(sec_filings, "collect", lambda *args, **kwargs: ["figures"])
+    monkeypatch.setattr(sec_filings, "as_payload", lambda figures: [{"metric": "revenue"}])
+    monkeypatch.setattr(company_facts, "refresh", refresh)
+    with SessionLocal() as db:
+        rows, _, _ = scan_sec_filings(symbol="AAPL", db=db, provider=provider)
+        filing = next(row for row in rows if row.form == "10-Q")
+        fetched, _ = fetch_inventory_content(symbol="AAPL", accession_number=filing.accession_number, db=db, provider=provider)
+        return fetched, db.in_transaction()
+
+
+def test_a_stored_10q_with_figures_refreshes_that_symbols_company_facts_after_the_commit(monkeypatch):
+    seen = []
+    def refresh(symbol, *, db=None):
+        with SessionLocal() as other:      # a session of its own sees the figures only if the fetch had committed them
+            seen.append((symbol, db, other.execute(text("SELECT content_financials IS NOT NULL FROM sec_filing_inventory WHERE symbol = :s AND form = '10-Q'"), {"s": symbol}).scalar()))
+    fetched, holding = _fetch_the_10q(monkeypatch, refresh)
+    assert seen == [("AAPL", None, True)] and fetched.content_financials == [{"metric": "revenue"}]
+
+
+def test_a_company_facts_failure_does_not_fail_the_fetch_and_is_logged_once(monkeypatch, caplog):
+    def refresh(symbol, *, db=None):
+        raise RuntimeError("facts are down")
+    with caplog.at_level("WARNING", logger="app.company_facts"):
+        fetched, _ = _fetch_the_10q(monkeypatch, refresh)
+    assert fetched.content_status == "fetched" and fetched.content_financials == [{"metric": "revenue"}]
+    assert [r.getMessage() for r in caplog.records if "company facts refresh" in r.getMessage()] == ["company facts refresh of AAPL failed (RuntimeError: facts are down)"]
+
+
+def test_a_filing_without_figures_does_not_trigger_a_refresh(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sec_filings, "collect", lambda *args, **kwargs: [])
+    monkeypatch.setattr(sec_filings, "as_payload", lambda figures: [])
+    from app import company_facts
+    monkeypatch.setattr(company_facts, "refresh", lambda symbol, *, db=None: calls.append(symbol))
+    create_sec_filing_inventory_table()
+    _clear_inventory()
+    opener, _ = _responses()
+    provider = _provider(opener)
+    with SessionLocal() as db:
+        rows, _, _ = scan_sec_filings(symbol="AAPL", db=db, provider=provider)
+        filing = next(row for row in rows if row.form == "10-Q")
+        fetch_inventory_content(symbol="AAPL", accession_number=filing.accession_number, db=db, provider=provider)
+    assert calls == []

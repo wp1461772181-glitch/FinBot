@@ -1,6 +1,7 @@
 """The 「系统最新掌握」 block: who the owner's words mention, what the database holds for them, how it is laid out."""
 import asyncio
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -487,3 +488,184 @@ def test_stopping_the_refresher_ends_the_thread_and_forgets_the_set(world):
     lk.start_known_refresh()           # a later start begins again
     assert lk._refresher is not None and lk._refresher.is_alive()
     lk.stop_known_refresh()
+
+
+# --- the latest quarter's numbers (2b) --------------------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from app import company_facts as cf  # noqa: E402
+from app.agent_workflow.calculation import agrees_at_recorded_precision, calculate, source_numbers  # noqa: E402
+from app.agent_workflow.evidence import citation_check_text  # noqa: E402
+from app.kernel.toolrun import number_attached  # noqa: E402
+from app.models import CompanyFact, CompanyRatio  # noqa: E402
+from tests.sw1_filings import drop, figure, new_symbol, p, seed  # noqa: E402
+from tests.test_company_facts import flow, press  # noqa: E402
+
+M = 1_000_000
+
+
+def nvda_facts_filings(prior_net_income=31_910):
+    """NVDA's third quarter of fiscal 2027 (ends 2026-10-25) from its press release; the 10-Qs hold the quarters it is compared with and the
+    six-month cash flow the nine-month figure is reduced by."""
+    q3_last_year = [flow('revenue', [p('2025-07-28', '2025-10-26', 57_006 * M, 2026, 'Q3')]),
+                    flow('gross_profit', [p('2025-07-28', '2025-10-26', 41_849 * M, 2026, 'Q3')]),
+                    flow('net_income', [p('2025-07-28', '2025-10-26', prior_net_income * M, 2026, 'Q3')])]
+    q2 = [flow('revenue', [p('2026-04-27', '2026-07-26', 96_200 * M, 2027, 'Q2')]),
+          flow('operating_cash_flow', [p('2026-01-26', '2026-07-26', 81_747 * M, 2027, 'Q2')])]
+    release = [press('revenue', '2026-10-25', 115_844 * M, 3, 2027, 'Q3'), press('gross_profit', '2026-10-25', 86_676 * M, 3, 2027, 'Q3'),
+               press('net_income', '2026-10-25', 65_287 * M, 3, 2027, 'Q3'), press('operating_cash_flow', '2026-10-25', 130_000 * M, 9, 2027, 'Q3')]
+    return [{'form': '10-Q', 'filed': date(2025, 11, 21), 'figures': q3_last_year},
+            {'form': '10-Q', 'filed': date(2026, 8, 26), 'figures': q2},
+            {'form': '8-K', 'filed': date(2026, 11, 17), 'figures': release}]
+
+
+@pytest.fixture()
+def nvda(world):
+    ids = seed("NVDA", nvda_facts_filings())
+    cf.refresh("NVDA")
+    lk.refresh_known()
+    yield
+    drop(ids)
+    with SessionLocal() as db:
+        for model in (CompanyFact, CompanyRatio):
+            db.execute(delete(model).where(model.symbol == "NVDA"))
+        db.commit()
+
+
+def numbered_block(text="NVDA 怎么样"):
+    rows: list = []
+    block, symbols = asyncio.run(lk.block_for(text, previous=None, focus=None, owner_hash=None, now=NOW, rows=rows))
+    run = SimpleNamespace(citations=[], user_text=text)
+    return number_attached(run, block, rows), run.citations, block, rows
+
+
+def facts_lines(block):
+    lines = block.split("\n")
+    start = next(i for i, line in enumerate(lines) if "最新一季" in line)
+    return lines[start:next(i for i in range(start, len(lines)) if lines[i].startswith("（以上"))]
+
+
+def test_the_block_shows_the_latest_quarter_with_every_figure_numbered(nvda):
+    text, citations, raw, rows = numbered_block()
+    section = facts_lines(text)
+    assert section[0] == "  最新一季：FY2027 Q3（截至 2026-10-25，新闻稿未经审计）" and len(section) == 6
+    assert all(len(line) <= lk.LINE_LIMIT for line in text.split("\n")) and len(text) <= lk.BLOCK_LIMIT and "[#" not in text
+    joined = "\n".join(section)
+    for wanted in ("营收 1,158.44 亿美元", "环比 +20.4%", "上一季 962.00 亿美元", "同比 +103.2%", "去年同期 570.06 亿美元", "毛利率 74.8%",
+                   "毛利 866.76 亿美元", "净利润 652.87 亿美元", "同比 +104.6%", "经营现金流 482.53 亿美元", "由前九个月累计 1,300.00 亿美元"):
+        assert wanted in joined, wanted
+    by = {c["ordinal"]: c for c in citations}
+    shown = sorted({int(n) for n in re.findall(r"\[(\d+)\]", joined)})
+    assert shown and all(n in by for n in shown)
+    stated = [c for c in citations if c["source_type"] == "official_filing" and "latest-known" not in str(c.get("source_id"))]
+    assert stated and all(c["source_url"].startswith("https://www.sec.gov/NVDA/") for c in stated)
+    derived = [c for c in citations if c["source_type"] == "calculation"]
+    assert len(derived) >= 5
+    for c in derived:
+        assert c["derived"] is True and c["parents"] if "parents" in c else c["calculation"]["parents"]
+        parents = c["calculation"]["parents"]
+        assert parents and all(0 < n < c["ordinal"] and n in by for n in parents)
+        # the stored calculation replays from its parents exactly as a model-made one does
+        again = calculate({"expression": c["calculation"]["expression"], "inputs": c["calculation"]["inputs"], "decimals": 8}, citations, None)
+        assert agrees_at_recorded_precision(again["value"], c["calculation"]["value"])
+
+
+def test_a_derived_figure_names_its_parents_in_the_text_and_in_the_citation(nvda):
+    text, citations, _, _ = numbered_block()
+    by = {c["ordinal"]: c for c in citations}
+    growth = next(line for line in facts_lines(text) if "环比" in line)
+    ordinal = int(re.search(r"环比 \+20\.4%\[(\d+)\]", growth)[1])
+    calc = by[ordinal]["calculation"]
+    assert calc["expression"] == "(a - b) / b * 100" and calc["value"] == "20.4"
+    assert f"由[{calc['parents'][0]}]、[{calc['parents'][1]}]算出" in growth
+    assert [by[n]["source_type"] for n in calc["parents"]] == ["official_filing", "official_filing"]
+    cash = next(line for line in facts_lines(text) if "经营现金流" in line)
+    parent_numbers = [int(n) for n in re.findall(r"\[(\d+)\]", cash)]
+    own = by[parent_numbers[0]]
+    assert own["source_type"] == "calculation" and own["calculation"]["expression"] == "a - b" and own["calculation"]["parents"] == sorted(parent_numbers[1:])
+
+
+def test_no_figure_in_the_facts_section_is_missing_from_the_citations(nvda):
+    text, citations, _, _ = numbered_block()
+    pool = set()
+    for c in citations:
+        pool |= source_numbers(citation_check_text(c) + " " + c.get("title", ""))
+    section = facts_lines(text)
+    body = "\n".join(section[1:])
+    body = re.sub(r"\[\d+\]", "", body)
+    from decimal import Decimal
+    for amount, unit in re.findall(r"(-?[\d,]+\.\d+) (亿|万)美元", body):
+        value = Decimal(amount.replace(",", "")) * (10 ** 8 if unit == "亿" else 10 ** 4)
+        assert value in pool, (amount, unit)
+    for percent in re.findall(r"([+-]?\d+\.\d)%", body):
+        assert Decimal(percent) in pool or Decimal(percent.lstrip("+")) in pool, percent
+    assert "2026-10-25" in next(c for c in citations if "营收" in c.get("title", "") and c["source_type"] == "official_filing")["quote"]
+
+
+def test_a_change_a_percentage_would_mislead_is_told_in_words(world):
+    symbol = new_symbol()
+    ids = seed(symbol, nvda_facts_filings(prior_net_income=-31_910))
+    try:
+        cf.refresh(symbol)
+        lines = lk._facts_lines(cf.latest_quarter(symbol), symbol, None)
+        income = next(line for line in lines if "净利润" in line)
+        assert "同比 由亏转盈" in income and "去年同期 -319.10 亿美元" in income and "%" not in income
+        assert all("[#" not in line for line in lines)
+    finally:
+        drop(ids)
+        with SessionLocal() as db:
+            for model in (CompanyFact, CompanyRatio):
+                db.execute(delete(model).where(model.symbol == symbol))
+            db.commit()
+
+
+def test_a_company_with_figures_but_no_quarter_with_revenue_gets_no_section(world):
+    symbol = new_symbol()
+    ids = seed(symbol, [{"form": "10-Q", "filed": date(2026, 8, 26), "figures": [flow("net_income", [p("2026-04-27", "2026-07-26", 5 * M, 2027, "Q2")])]}])
+    try:
+        cf.refresh(symbol)
+        assert cf.latest_quarter(symbol) is None
+        items = lk.gather([symbol], now=NOW)
+        assert items and items[0]["facts"] is None
+        assert "最新一季" not in lk.render(items, now=NOW)
+    finally:
+        drop(ids)
+        with SessionLocal() as db:
+            db.execute(delete(CompanyFact).where(CompanyFact.symbol == symbol))
+            db.commit()
+
+
+def test_failed_rows_are_never_shown(nvda):
+    with SessionLocal() as db:
+        db.execute(CompanyFact.__table__.update().where(CompanyFact.symbol == "NVDA", CompanyFact.metric == "gross_profit").values(status="check_failed"))
+        db.execute(CompanyRatio.__table__.update().where(CompanyRatio.symbol == "NVDA", CompanyRatio.name == "gross_margin").values(status="check_failed"))
+        db.commit()
+    text = numbered_block()[0]
+    assert "毛利" not in text and "营收 1,158.44 亿美元" in text
+
+
+def test_the_facts_section_is_dropped_first_when_the_block_is_too_long(nvda, monkeypatch):
+    items = lk.gather(["NVDA"], now=NOW)
+    assert items and items[0]["facts"]
+    full = lk.render(items, now=NOW)
+    bare = lk.render([dict(items[0], facts=None)], now=NOW)
+    assert "最新一季" in full and len(full) > len(bare) + 200
+    monkeypatch.setattr(lk, "BLOCK_LIMIT", len(bare) + 3)
+    shorter = lk.render(items, now=NOW)
+    assert shorter == bare            # every filing, news and price line is still there; only the numbers went
+
+
+def test_a_plain_render_has_no_markers_and_the_same_figures(nvda):
+    items = lk.gather(["NVDA"], now=NOW)
+    plain = lk.render(items, now=NOW)
+    assert "[#" not in plain and "营收 1,158.44 亿美元，环比 +20.4%" in plain and "由[" not in plain
+
+
+def test_an_unnumbered_parent_leaves_the_derived_figure_without_a_number(nvda):
+    rows: list = []
+    block, _ = asyncio.run(lk.block_for("NVDA", previous=None, focus=None, owner_hash=None, now=NOW, rows=rows))
+    revenue = next(r for r in rows if r.get("source_type") == "official_filing" and r["title"].endswith("营收") and "单季" in r["title"] and "1,158.44" in r["excerpt"])
+    rows = [r for r in rows if r["_k"] != revenue["_k"]]
+    text = number_attached(SimpleNamespace(citations=[], user_text=""), block, rows)
+    assert "环比 +20.4%（上一季" in text and "[#" not in text

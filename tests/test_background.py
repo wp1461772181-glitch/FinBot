@@ -31,7 +31,7 @@ def test_enabled_flag(monkeypatch):
 
 def test_default_intervals():
     assert {n: i for n, i, _ in background.LOOPS} == {"routine-tasks": 300, "sec-monitor": 3600, "market-refresh": 3600, "earnings-monitor": 60,
-                                                         "news-poll": 900, "release-figures": 600}
+                                                         "news-poll": 900, "release-figures": 600, "company-facts": 21600}
 
 
 def test_news_poll_runs_one_refresh_and_the_switch_turns_it_off(monkeypatch):
@@ -58,3 +58,11 @@ def test_background_refresh_is_skipped_while_another_refresh_runs(monkeypatch):
     assert news.background_refresh()["polled_sources"] == ["a"] and polled == [1]
     assert news._REFRESH_LOCK.acquire(blocking=False)
     news._REFRESH_LOCK.release()
+
+
+def test_the_company_facts_sweep_refreshes_every_symbol_and_logs_one_line(monkeypatch, caplog):
+    from app import company_facts
+    monkeypatch.setattr(company_facts, "refresh_all", lambda: {"symbols": 3, "facts": 40, "ratios": 20, "check_failures": [], "errors": {"XYZ": "boom"}})
+    with caplog.at_level("INFO", logger="app.background"):
+        background.run_company_facts()
+    assert [r.getMessage() for r in caplog.records if "company facts" in r.getMessage()] == ["company facts: symbols=3 facts=40 ratios=20 errors=['XYZ']"]

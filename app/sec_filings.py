@@ -665,7 +665,13 @@ def fetch_inventory_content(
             filing.content_financials = as_payload(figures) or None
         except Exception:
             filing.content_financials = None
+    stored_figures = bool(filing.content_financials)
+    symbol = filing.symbol
     db.commit()
+    if stored_figures:
+        # After the commit and in a session of its own: this transaction is not held, and a refresh problem is swallowed (and logged) there.
+        from .company_facts import refresh_quietly
+        refresh_quietly(symbol)
     db.refresh(filing)
     return filing, False
 

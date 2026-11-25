@@ -391,6 +391,14 @@ def refresh(symbol: str, *, db=None) -> dict:
             session.close()
 
 
+def refresh_quietly(symbol: str) -> None:
+    """The hook the stores call after their own commit: a refresh in its own session, whose failure is logged (one line) and never reaches the caller."""
+    try:
+        refresh(symbol)
+    except Exception as exc:  # noqa: BLE001 - a refresh problem must never fail the fetch or the store that triggered it
+        log.warning('company facts refresh of %s failed (%s: %s)', symbol, type(exc).__name__, str(exc)[:200])
+
+
 def refresh_all(*, limit: int | None = None) -> dict:
     """Refresh every symbol that has saved figures; one symbol failing is logged and does not stop the rest."""
     with SessionLocal() as db:
@@ -426,7 +434,7 @@ def _number(value):
 def _fact_dict(f):
     return {'id': str(f.id), 'metric': f.metric, 'value': _number(f.value), 'unit': f.unit, 'period_start': f.period_start.isoformat() if f.period_start else None,
             'period_end': f.period_end.isoformat(), 'span': f.span, 'fiscal_year': f.fiscal_year, 'fiscal_period': f.fiscal_period, 'kind': f.kind,
-            'basis': f.basis, 'accession_number': f.accession_number, 'form': f.form, 'filed_at': f.filed_at.isoformat() if f.filed_at else None,
+            'basis': f.basis, 'status': f.status, 'accession_number': f.accession_number, 'form': f.form, 'filed_at': f.filed_at.isoformat() if f.filed_at else None,
             'source_url': f.source_url, 'concept': f.concept, 'formula': f.formula, 'parents': list(f.parents or [])}
 
 
@@ -453,7 +461,8 @@ def latest_quarter(symbol: str, *, db=None) -> dict | None:
             CompanyRatio.symbol == symbol, CompanyRatio.period_end == top.period_end, CompanyRatio.span == 'quarter',
             CompanyRatio.status.in_(('ok', 'not_meaningful'))).order_by(CompanyRatio.name)))
         known = {str(f.id) for f in quarter} | {str(r.id) for r in own_ratios}
-        comparison_facts, comparison_ratios, wanted = {}, {}, [p for r in own_ratios for p in r.parents]
+        comparison_facts, comparison_ratios = {}, {}
+        wanted = [p for r in own_ratios for p in r.parents] + [p for f in quarter for p in (f.parents or [])]
         while wanted:
             identity = wanted.pop()
             if identity in known:
@@ -463,6 +472,7 @@ def latest_quarter(symbol: str, *, db=None) -> dict | None:
             ratio = None if fact else session.get(CompanyRatio, uuid.UUID(identity))
             if fact:
                 comparison_facts[identity] = fact
+                wanted += list(fact.parents or [])      # a derived figure's own parents, so every figure shown can be traced to a stated one
             elif ratio and ratio.status != 'check_failed':
                 comparison_ratios[identity] = ratio
                 wanted += list(ratio.parents or [])

@@ -93,23 +93,57 @@ def _number_evidence(run, name: str, outcome: dict) -> dict:
     return shown
 
 
-_MARK = re.compile(r"\[#(\d+)\] ?")
+_MARK = re.compile(r"\[#(\d+)\]( ?)")
+
+
+def _calculated(run, row: dict, ordinals: dict[int, str]) -> str | None:
+    """A derived figure of the block as a citation of the shape ``calculate`` makes (``source_type: calculation``, ``derived``, ``parents`` =
+    the citation numbers of its inputs), made by the same function, so the answer checks accept it as they accept a calculation the model ran.
+    ``None`` (and no citation) when an input was not numbered or the calculation does not give the value the block shows."""
+    from ..agent_workflow.calculation import calculate
+    spec = row["_calc"]
+    inputs = []
+    for item in spec["inputs"]:
+        text = ordinals.get(item["k"])
+        if not text:
+            return None
+        inputs.append({"name": item["name"], "value": item["value"], "source_ordinal": int(text.strip("[]"))})
+    try:
+        value = calculate({"expression": spec["expression"], "inputs": inputs, "decimals": spec["decimals"]}, run.citations, run.user_text)
+    except Exception:
+        return None
+    if value.get("value") != spec["value"]:
+        return None
+    ordinal = len(run.citations) + 1
+    run.citations.append({"ordinal": ordinal, "source_type": "calculation", "derived": True, "title": row.get("title") or "可复核计算",
+                          "quote": json.dumps(value, ensure_ascii=False), "calculation": value, "symbol": row.get("symbol")})
+    return f"[{ordinal}]"
 
 
 def number_attached(run, text: str, rows: list[dict]) -> str:
     """The "latest known" block's lines as this turn's first citations, through the numbering the read results take: each row that
     ``number_rows`` accepts gets its ordinal, and the block's ``[#k]`` marker becomes ``[ordinal]``.  A marker whose row was not accepted
-    (a news item without a real link) is removed, so no line shows a number that cites nothing."""
+    (a news item without a real link) is removed, so no line shows a number that cites nothing.
+
+    A row with ``_calc`` is a figure the code derived from other rows of the block: once its inputs are numbered it becomes a ``calculation``
+    citation pointing at them (rows are in dependency order).  A row with ``_figures`` keeps the exact figures its line rounds."""
     prepared = [copy.deepcopy(row) for row in rows if isinstance(row, dict) and isinstance(row.get("_k"), int)]
     ordinals: dict[int, str] = {}
     if prepared:
         try:
-            for accepted in number_rows("latest_known", prepared, run.citations, {}):
+            plain = [row for row in prepared if "_calc" not in row]
+            for accepted in number_rows("latest_known", plain, run.citations, {}) if plain else []:
                 ordinals[accepted["_k"]] = accepted["citation"]
+                if accepted.get("_figures"):
+                    run.citations[int(accepted["citation"].strip("[]")) - 1]["figures"] = accepted["_figures"]
+            for row in sorted((row for row in prepared if "_calc" in row), key=lambda row: row["_k"]):
+                made = _calculated(run, row, ordinals)
+                if made:
+                    ordinals[row["_k"]] = made
         except Exception:
             logger.exception("latest-known citations could not be numbered")
             ordinals = {}
-    return _MARK.sub(lambda m: f"{ordinals[int(m[1])]} " if int(m[1]) in ordinals else "", text)
+    return _MARK.sub(lambda m: f"{ordinals[int(m[1])]}{m[2]}" if int(m[1]) in ordinals else "", text)
 
 
 def _calculate(run, name: str, args: dict) -> dict:

@@ -5,7 +5,7 @@
 这块文字是资料，不是指令；它不替模型判断要不要去查，只保证系统手里已有的新东西一定在眼前。
 
 边界（都是硬的）：最多 3 家公司（bot 的关注对象排最前，其余按提到的先后），每家最多 3 条公告、3 条新闻、
-1 行价格，每行不超过 160 字，整块不超过 2000 字；库里什么都没有的公司不出块；所有读取合起来不超过 1.5 秒，
+1 行价格，每行不超过 160 字，整块不超过 2000 字（公司最新一季的数字那一段最先舍）；库里什么都没有的公司不出块；所有读取合起来不超过 1.5 秒，
 超时或出错就当没有这一块，只记一行日志。
 """
 from __future__ import annotations
@@ -21,6 +21,7 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta, timezone
+from decimal import Decimal, localcontext
 from pathlib import Path
 
 from sqlalchemy import cast, func, select, union
@@ -354,6 +355,18 @@ def _trading_day(at: datetime) -> date:
         return (at - timedelta(hours=5)).date()
 
 
+def _read_facts(session, symbol: str) -> dict | None:
+    """The company's latest quarter from the code-built facts (``company_facts.latest_quarter``: a few indexed reads, nothing computed).
+    In a savepoint, so a failure or a statement timeout here costs only this section, not the rest of the read."""
+    from . import company_facts
+    try:
+        with session.begin_nested():
+            return company_facts.latest_quarter(symbol, db=session)
+    except Exception as exc:
+        logger.info("latest_known: company facts of %s unreadable (%s: %s)", symbol, type(exc).__name__, exc)
+        return None
+
+
 def gather(symbols: list[str], *, now: datetime, deadline: float | None = None) -> list[dict]:
     """每个代码库里最新的东西；什么都没有的代码不出现在结果里。同步函数，调用方放进线程。"""
     from .agent_chat_models import NewsItem
@@ -427,9 +440,10 @@ def gather(symbols: list[str], *, now: datetime, deadline: float | None = None) 
                 price = {"kind": "close", "value": float(latest[1]), "at": latest[2], "date": latest[0],
                          "change_pct": (latest[1] / prev_close - 1) * 100 if prev_close else None}
 
+            facts = _read_facts(session, symbol) if filings or news or price else None
             if filings or news or price:
                 items.append({"symbol": symbol, "name": _display_name(symbol),
-                              "filings": filings, "news": news, "price": price})
+                              "filings": filings, "news": news, "price": price, "facts": facts})
     return items
 
 
@@ -510,6 +524,216 @@ def _price_line(price: dict, now: datetime) -> str:
     return _cap(f"  价格      {label} {price['value']:.2f}{tail}（{_stamp(price['at'], now)} 记录）")
 
 
+# ----------------------------------------------------------------------------------------------------------
+# 公司最新一季的数字（company_facts 里代码算好的，这里只排版；不在回合里算任何新东西）
+# ----------------------------------------------------------------------------------------------------------
+
+_METRIC_CN = {"revenue": "营收", "gross_profit": "毛利", "operating_income": "营业利润", "net_income": "净利润",
+              "operating_cash_flow": "经营现金流", "cost_of_revenue": "营业成本"}
+_SPAN_CN = {"quarter": "单季", "ytd6": "前六个月累计", "ytd9": "前九个月累计", "annual": "全年"}
+_PART_SPAN = {"q1": "quarter", "ytd6": "ytd6", "ytd9": "ytd9", "annual": "annual"}
+_CHANGE_WORDS = {"turned_profit": "由亏转盈", "turned_loss": "由盈转亏", "loss_widened": "亏损扩大", "loss_narrowed": "亏损收窄",
+                 "loss_unchanged": "亏损持平", "from_zero": "基数为零，不算百分比"}
+UNAUDITED = "新闻稿未经审计"
+
+
+def _money(value) -> str:
+    amount = Decimal(str(value))
+    if abs(amount) >= 10 ** 8:
+        return f"{amount / Decimal(10 ** 8):,.2f} 亿美元"
+    return f"{amount / Decimal(10 ** 4):,.2f} 万美元"
+
+
+def _plain(value) -> str:
+    return format(Decimal(str(value)), "f")
+
+
+def _evaluate(kind: str, a: Decimal, b: Decimal) -> str:
+    """The calculation exactly as ``calculation.calculate`` does it for the same expression (so the block's number is the citation's number)."""
+    with localcontext() as ctx:
+        ctx.prec = 50
+        if kind == "sub":
+            return str((a - b).quantize(Decimal(1)))
+        value = (a - b) / b * 100 if kind == "growth" else a / b * 100
+        return str(value.quantize(Decimal("0.1")))
+
+
+_CALC = {"sub": ("a - b", 0), "growth": ("(a - b) / b * 100", 1), "share": ("a / b * 100", 1)}
+
+
+class _Cites:
+    """The numbers of one company's facts section: every figure shown is a row of the block, a stated one (filing figure with its source)
+    or a derived one (a calculation over rows of the block).  With ``rows`` None nothing is registered and no marker is written."""
+
+    def __init__(self, symbol: str, quarter: dict, rows: list | None):
+        self.symbol, self.rows, self.count = symbol, rows, 0
+        self.facts = {f["id"]: f for f in quarter["facts"] + quarter["comparison_facts"]}
+        self.done: dict = {}
+
+    def add(self, row: dict) -> int:
+        if self.rows is None:
+            self.count += 1
+            return self.count
+        self.rows.append({**row, "_k": len(self.rows) + 1})
+        return len(self.rows)
+
+    def mark(self, k) -> str:
+        return f"[#{k}]" if self.rows is not None and k else ""
+
+    def period(self, f: dict) -> str:
+        note = f"，{UNAUDITED}" if f["basis"] != "reported" else ""
+        return f"FY{f['fiscal_year']} {f['fiscal_period']} {_SPAN_CN.get(f['span'], '')}（截至 {f['period_end']}{note}）"
+
+    def fact(self, fid: str):
+        """``(k, value, fact)`` of a stated or derived USD figure that is fit to show, else None."""
+        if fid in self.done:
+            return self.done[fid]
+        self.done[fid] = None
+        f = self.facts.get(fid)
+        if not f or f.get("status", "ok") != "ok" or f["unit"] != "USD" or f["metric"] not in _METRIC_CN:
+            return None
+        value = Decimal(str(f["value"]))
+        title = f"{self.symbol} {self.period(f)}{_METRIC_CN[f['metric']]}"
+        if f["kind"] == "stated":
+            if not f.get("source_url") or not f.get("form"):
+                return None
+            filed = f"，{f['form']} {f['filed_at']} 提交" if f.get("filed_at") else f"，{f['form']}"
+            k = self.add({"id": f"company-fact:{f['id']}", "symbol": self.symbol, "title": title, "source_type": "official_filing",
+                          "source_url": f["source_url"], "url": f["source_url"], "source_name": "SEC EDGAR", "published_at": f.get("filed_at"),
+                          "excerpt": f"{title} {_money(value)}{filed}", "_figures": _plain(value)})
+        else:
+            names = [part.strip() for part in (f.get("formula") or "").split(" - ")]
+            parents = [self.facts.get(p) for p in f.get("parents") or []]
+            if len(names) != 2 or any(n not in _PART_SPAN for n in names) or len(parents) != 2 or not all(parents):
+                return None
+            by_span = {p["span"]: p for p in parents}
+            if len(by_span) != 2 or any(_PART_SPAN[n] not in by_span for n in names):
+                return None
+            big, small = by_span[_PART_SPAN[names[0]]], by_span[_PART_SPAN[names[1]]]
+            got = self.calc(f"{title}（由{_SPAN_CN[big['span']]}减{_SPAN_CN[small['span']]}算出）", "sub", [big["id"], small["id"]])
+            if got is None or Decimal(got[1]) != value:
+                return None
+            self.done[fid] = (got[0], value, f)
+            return self.done[fid]
+        self.done[fid] = (k, value, f)
+        return self.done[fid]
+
+    def calc(self, title: str, kind: str, parent_ids: list):
+        """``(k, text)`` of a calculation over two facts (a, b), or None when one of them cannot be shown."""
+        found = [self.fact(p) for p in parent_ids]
+        if any(x is None for x in found):
+            return None
+        a, b = found
+        if kind != "sub" and b[1] == 0:
+            return None
+        text = _evaluate(kind, a[1], b[1])
+        expression, decimals = _CALC[kind]
+        k = self.add({"id": f"company-fact:{self.symbol}:calc:{kind}:{a[2]['id']}:{b[2]['id']}", "symbol": self.symbol, "title": title,
+                      "source_type": "calculation", "_calc": {
+                          "expression": expression, "decimals": decimals, "value": text,
+                          "inputs": [{"name": "a", "k": a[0], "value": _plain(a[1])}, {"name": "b", "k": b[0], "value": _plain(b[1])}]}})
+        return k, text
+
+    def derived_note(self, f: dict) -> str:
+        """「（单季，由前九个月累计 … 减前六个月累计 … 算出）」 for a quarter the code derived."""
+        if f["kind"] != "derived":
+            return ""
+        names = [part.strip() for part in (f.get("formula") or "").split(" - ")]
+        pieces = []
+        for name, pid in zip(names, f.get("parents") or []):
+            got = self.fact(pid)
+            if got is None:
+                return ""
+            pieces.append(f"{_SPAN_CN.get(_PART_SPAN.get(name, ''), name)} {_money(got[1])}{self.mark(got[0])}")
+        return f"（单季，由{'减'.join(pieces)}算出）" if len(pieces) == 2 else ""
+
+    def growth(self, ratio: dict | None, word: str, base_word: str) -> tuple[str, str] | None:
+        """``(core, note)``: 「同比 +94.0%[3]」 and 「（去年同期 … ，由 [1]、[2] 算出）」; a change a percentage would mislead is told in words."""
+        if not ratio or ratio.get("status") not in ("ok", "not_meaningful") or len(ratio["parents"]) != 2:
+            return None
+        facts = [self.facts.get(p) for p in ratio["parents"]]
+        if not all(facts):
+            return None
+        now = next((f for f in facts if f["period_end"] == ratio["period_end"]), None)
+        before = next((f for f in facts if f is not now), None)
+        if now is None or before is None:
+            return None
+        title = f"{self.symbol} {self.period(now)}{_METRIC_CN[now['metric']]}{word}"
+        if ratio["status"] == "ok":
+            got = self.calc(title, "growth", [now["id"], before["id"]])
+            if got is None or ratio["value"] is None or abs(Decimal(got[1]) - Decimal(str(ratio["value"])) * 100) > Decimal("0.051"):
+                return None
+            k, text = got
+            a, b = self.fact(now["id"]), self.fact(before["id"])
+            core = f"{word} {Decimal(text):+.1f}%{self.mark(k)}"
+            how = f"，由{self.mark(a[0])}、{self.mark(b[0])}算出" if self.rows is not None else ""
+            return core, f"（{base_word} {_money(b[1])}{self.mark(b[0])}{how}）"
+        words = _CHANGE_WORDS.get(ratio.get("change_kind") or "")
+        b = self.fact(before["id"])
+        if not words or b is None:
+            return None
+        return f"{word} {words}", f"（{base_word} {_money(b[1])}{self.mark(b[0])}）"
+
+
+def _fit(*variants: str) -> str | None:
+    """The first wording of a line that fits the line limit (longest first); the last one is cut if none does."""
+    wordings = [v for v in variants if v]
+    for wording in wordings:
+        if len(_cap(wording)) == len(wording) and len(wording) <= LINE_LIMIT:
+            return wording
+    return _cap(wordings[-1]) if wordings else None
+
+
+def _facts_lines(quarter: dict | None, symbol: str, rows: list | None) -> list[str]:
+    """At most six lines: the quarter's heading, then revenue (with quarter-on-quarter), revenue year-on-year, gross margin, net income and
+    operating cash flow, each as far as the code-built facts hold it.  A company without a quarter with revenue gets nothing."""
+    if not quarter:
+        return []
+    cites = _Cites(symbol, quarter, rows)
+    mark = cites.mark
+    top = {f["metric"]: f for f in quarter["facts"] if f["span"] == "quarter" and f["period_end"] == quarter["period_end"]}
+    ratios = {r["name"]: r for r in quarter["ratios"]}
+    revenue = cites.fact(top["revenue"]["id"]) if "revenue" in top else None
+    if revenue is None:
+        return []
+    note = f"，{UNAUDITED}" if quarter.get("basis") != "reported" else ""
+    lines = [_cap(f"  最新一季：{quarter['fiscal_label']}（截至 {quarter['period_end']}{note}）")]
+
+    def with_growth(head: str, got, derived: str = "") -> list[str]:
+        core, how = got if got else ("", "")
+        lead = f"{head}{derived}"
+        return [f"{lead}{'，' + core if core else ''}{how}", f"{lead}{'，' + core if core else ''}", f"{head}{'，' + core if core else ''}", head]
+
+    head = f"  营收 {_money(revenue[1])}{mark(revenue[0])}"
+    qoq = cites.growth(ratios.get("revenue_qoq"), "环比", "上一季")
+    lines.append(_fit(*with_growth(head, qoq, cites.derived_note(revenue[2]))))
+    yoy = cites.growth(ratios.get("revenue_yoy"), "同比", "去年同期")
+    if yoy:
+        lines.append(_fit(f"  营收{yoy[0]}{yoy[1]}", f"  营收{yoy[0]}"))
+
+    margin = ratios.get("gross_margin")
+    if margin and margin.get("status") == "ok" and margin.get("value") is not None and len(margin["parents"]) == 2:
+        parents = [cites.facts.get(p) for p in margin["parents"]]
+        profit = next((p for p in parents if p and p["metric"] == "gross_profit"), None)
+        base = next((p for p in parents if p and p["metric"] == "revenue"), None)
+        got = cites.calc(f"{symbol} FY{quarter['fiscal_year']} {quarter['fiscal_period']} 毛利率", "share", [profit["id"], base["id"]]) if profit and base else None
+        if got and abs(Decimal(got[1]) - Decimal(str(margin["value"])) * 100) <= Decimal("0.051"):
+            gross = cites.fact(profit["id"])
+            lines.append(_fit(f"  毛利率 {Decimal(got[1]):.1f}%{mark(got[0])}（毛利 {_money(gross[1])}{mark(gross[0])} ÷ 营收{mark(revenue[0])}）",
+                              f"  毛利率 {Decimal(got[1]):.1f}%{mark(got[0])}"))
+
+    income = cites.fact(top["net_income"]["id"]) if "net_income" in top else None
+    if income is not None:
+        head = f"  净利润 {_money(income[1])}{mark(income[0])}"
+        got = cites.growth(ratios.get("net_income_yoy"), "同比", "去年同期")
+        lines.append(_fit(*with_growth(head, got, cites.derived_note(income[2]))))
+    cash = cites.fact(top["operating_cash_flow"]["id"]) if "operating_cash_flow" in top else None
+    if cash is not None:
+        head = f"  经营现金流 {_money(cash[1])}{mark(cash[0])}"
+        lines.append(_fit(f"{head}{cites.derived_note(cash[2]) or '（单季）'}", head))
+    return lines[:6]
+
+
 def _marked(line: str, row: dict, rows: list | None) -> str:
     """With ``rows`` (a list to fill), the line is a citable row: its text is what the model sees, ``[#k]`` is where its citation number goes."""
     if rows is None:
@@ -540,6 +764,7 @@ def _section(item: dict, now: datetime, rows: list | None = None) -> list[str]:
         lines.append(_marked(_price_line(price, now), {
             "id": f"latest-known:{symbol}:price:{price['kind']}", "symbol": symbol, "title": f"{symbol} 最新价格",
             "source_type": "market_data", "published_at": price["at"].isoformat() if price.get("at") else None}, rows))
+    lines += _facts_lines(item.get("facts"), symbol, rows)
     return lines
 
 
@@ -556,7 +781,11 @@ def _render(items: list[dict], now: datetime, extra, rows: list | None = None) -
         return "\n".join([HEADING] + [line for item in kept for line in _section(item, now, rows)] + tail)
 
     text = assemble()
-    # 超长时先舍各家多出来的旧新闻、再舍旧公告（从最后一家往前），每家至少留一条公告、一条新闻和价格。
+    # 超长时先舍各家最新一季的数字（从最后一家往前），再舍各家多出来的旧新闻、再舍旧公告（从最后一家往前），每家至少留一条公告、一条新闻和价格。
+    for item in reversed(kept):
+        if len(text) > BLOCK_LIMIT and item.get("facts"):
+            item["facts"] = None
+            text = assemble()
     for key, keep in (("news", 2), ("filings", 2), ("news", 1), ("filings", 1)):
         for item in reversed(kept):
             while len(text) > BLOCK_LIMIT and len(item[key]) > keep:
