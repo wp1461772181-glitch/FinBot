@@ -115,7 +115,7 @@ def test_nested_purposes_override_only_the_fields_they_set():
 
 def test_an_unknown_purpose_name_is_other_and_the_names_are_the_agreed_ones():
     assert model_usage.PURPOSES == ("chat", "summary", "profile", "judge", "forecast", "earnings", "material_analysis",
-                                    "news", "routine", "duty", "query_expansion", "localization", "knowledge", "helper", "other")
+                                    "news", "routine", "duty", "query_expansion", "localization", "knowledge", "helper", "memory", "other")
     marker = f"m-{unique()}"
     with model_usage.purpose("nonsense"):
         model_usage.record(provider="p", model=marker, ok=True, ms=1)

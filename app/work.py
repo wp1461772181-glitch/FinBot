@@ -429,8 +429,35 @@ def list_for(owner: str, *, now: datetime | None = None, limit: int = LIST_LIMIT
         else:
             items.append(_item("routine", task["id"], title, QUEUED, next_run=nxt))
     items.extend(_archive_items(owner, now, since))
+    items.extend(_memory_items(owner, now))
     items.sort(key=lambda item: item["started_at"] or _iso(now), reverse=True)
     return items[:max(1, int(limit))]
+
+
+def _memory_items(owner: str, now: datetime) -> list[dict]:
+    """One item per memory job (app.memory_schedule): queued until its first run, then the last outcome; always with the next due time."""
+    from . import memory_schedule as schedule
+    from .agent_chat_models import MemoryJob
+    try:
+        with SessionLocal() as db:
+            rows = list(db.scalars(select(MemoryJob).where(MemoryJob.owner_hash == owner)))
+    except Exception:  # noqa: BLE001 - the table is made at startup; without it there is no calendar to show
+        _log_once(("memory", "list"), "reading the memory calendar failed")
+        return []
+    found = []
+    for row in rows:
+        if row.job not in schedule.JOBS:
+            continue
+        title, nxt = schedule.JOB_TITLES.get(row.job, "整理记忆"), schedule._next_due(row)
+        if row.claimed_at is not None and now - row.claimed_at < schedule.CLAIM_TTL:
+            found.append(_item("memory", row.job, title, RUNNING, started=row.claimed_at))
+        elif row.last_outcome == "failed":
+            found.append(_item("memory", row.job, title, FAILED, started=row.finished_at, ended=row.finished_at, next_run=nxt, failure=row.last_reason or "这次整理没有成功"))
+        elif row.last_outcome is None:
+            found.append(_item("memory", row.job, title, QUEUED, next_run=nxt))
+        else:
+            found.append(_item("memory", row.job, title, DONE, started=row.finished_at, ended=row.finished_at, next_run=nxt))
+    return found
 
 
 def _archive_items(owner: str, now: datetime, since: datetime) -> list[dict]:

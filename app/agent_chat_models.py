@@ -497,6 +497,22 @@ class OwnerView(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class MemoryJob(Base):
+    """The calendar of the memory jobs (app/memory_schedule.py): one row per (job, owner) with when it last ran and who holds it now.
+    ``claimed_at``/``claimed_by`` are the lock two workers race for; a claim older than 30 minutes is dead (a restart cut it off)."""
+    __tablename__ = "memory_jobs"
+    job: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)     # the last run that counts (done or skipped)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)    # the last time any run ended
+    last_outcome: Mapped[str | None] = mapped_column(String(12), nullable=True)                      # done | skipped | failed
+    last_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)       # after a failure: not before this
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+
 class EarningsEvent(Base):
     """One earnings 8-K (Item 2.02) the sentinel found, and where its two messages stand.  The follow-up timer
     is ``followup_due_at``; both it and the statuses live here so a restart picks up what is unsent."""
