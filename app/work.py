@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Boolean, DateTime, String, Text, UniqueConstraint, Uuid, func, select, update
+from sqlalchemy import text, Boolean, DateTime, String, Text, UniqueConstraint, Uuid, func, select, update
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .agent_chat_models import AgentConversation, AgentMessage, AgentTelegramMessage
@@ -89,8 +89,7 @@ def sweep_interrupted(now: datetime | None = None) -> int:
     assistant message.  Claiming a row (running to failed) and writing its message are one transaction, so a second worker or
     a second pass never posts twice, and a failed write leaves the row running for the next start.
 
-    The message is a turn of its own (assistant only, ``complete``).  The cut-off turn keeps ending at the user's row, so
-    the next turn's history still reads it as an unanswered ("interrupted") turn, as before the sweep existed."""
+    The message is the cut-off turn's own assistant row, status ``failed`` (an ordinary failed turn for every reader)."""
     # Single API process (the box runs one): a second worker's sweep would also close the first one's live turns.
     now = now or datetime.now(UTC)
     with SessionLocal() as db:
@@ -102,18 +101,32 @@ def sweep_interrupted(now: datetime | None = None) -> int:
             with SessionLocal() as db:
                 row = db.execute(update(AgentWork).where(AgentWork.id == work_id, AgentWork.status == RUNNING)
                                  .values(status=FAILED, reason=RESTART_REASON, reader_present=None, ended_at=func.now())
-                                 .returning(AgentWork.conversation_id, AgentWork.started_at)).first()
+                                 .returning(AgentWork.conversation_id, AgentWork.started_at, AgentWork.ref)).first()
                 if row is None:
                     db.rollback()
                     continue
-                conversation_id, started_at = row
+                conversation_id, started_at, ref = row
                 line = (db.query(AgentConversation).filter(AgentConversation.id == conversation_id).with_for_update().first()
                         if conversation_id is not None else None)
                 if line is not None:
+                    turn = uuid.UUID(ref)
+                    rows = db.scalars(select(AgentMessage).where(AgentMessage.conversation_id == line.id, AgentMessage.turn_id == turn)
+                                      .order_by(AgentMessage.sequence)).all()
+                    if rows and rows[-1].role == "assistant" and rows[-1].status in ("complete", "failed", "cancelled") \
+                            and not (isinstance(rows[-1].tool_calls, dict) and rows[-1].tool_calls.get("calls")):
+                        # The turn's own answer was stored (a crash between it and the item's end): the turn finished, say nothing.
+                        final = rows[-1].status
+                        db.execute(update(AgentWork).where(AgentWork.id == work_id)
+                                   .values(status={"complete": DONE, "cancelled": STOPPED}.get(final, FAILED),
+                                           reason=None if final == "complete" else RESTART_REASON))
+                        db.commit()
+                        continue
                     sequence = db.scalar(select(func.coalesce(func.max(AgentMessage.sequence), 0))
                                          .where(AgentMessage.conversation_id == line.id))
-                    db.add(AgentMessage(conversation_id=line.id, turn_id=uuid.uuid4(), sequence=sequence + 1, role="assistant",
-                                        content=interrupted_message(started_at), status="complete",
+                    # The message is the cut-off turn's own answer row (failed), after whatever the turn had stored: to every reader it is
+                    # one ordinary failed turn (the web list, the history, the next turn's unfinished note, the line's busy check).
+                    db.add(AgentMessage(conversation_id=line.id, turn_id=turn, sequence=sequence + 1, role="assistant",
+                                        content=interrupted_message(started_at), status="failed",
                                         tool_calls={"work_interrupted": {"work_id": str(work_id)}, "audit": {}}))
                     line.updated_at = func.now()
                 db.commit()
@@ -140,13 +153,12 @@ def notify_if_unattended(turn_id: str) -> bool:
     or whose reader was there is no news): what it was, the outcome, where to read it.  Never the answer.  The item is claimed
     (``notified_at``) in the same transaction that queues the line, so a retry or a second worker sends nothing twice, and a line
     the outbox cannot take (no channel, over the cap) leaves the claim undone.  Source ``work``: counted on its own, not against the bot's cap."""
-    from . import agent_bots, agent_telegram as telegram
+    from . import agent_telegram as telegram
     with SessionLocal() as db:
         item = db.scalars(select(AgentWork).where(AgentWork.kind == CHAT_TURN, AgentWork.ref == str(turn_id))).first()
         if (item is None or item.status not in NOTICE_OUTCOMES or item.reader_present is not False or item.notified_at is not None):
             return False
-        owner, summary, status, reason = item.owner_hash, item.summary, item.status, item.reason
-    bot = agent_bots.ensure_default_bot(owner)
+        owner, summary, status, reason, conversation_id = item.owner_hash, item.summary, item.status, item.reason, item.conversation_id
     now = datetime.now(UTC)
     with SessionLocal() as db:
         claimed = db.execute(update(AgentWork).where(AgentWork.kind == CHAT_TURN, AgentWork.ref == str(turn_id), AgentWork.notified_at.is_(None))
@@ -154,6 +166,9 @@ def notify_if_unattended(turn_id: str) -> bool:
         if not claimed:
             db.rollback()
             return False
+        # One notice at a time per owner, so two turns ending together cannot both pass the count.
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"work-notice:{owner}"})
+        bot = _notice_bot(db, owner, conversation_id)
         today = db.scalar(select(func.count(func.distinct(func.coalesce(AgentTelegramMessage.group_id, AgentTelegramMessage.id))))
                           .where(AgentTelegramMessage.owner_hash == owner, AgentTelegramMessage.source == "work",
                                  AgentTelegramMessage.created_at >= telegram._day_start(now)))
@@ -168,3 +183,14 @@ def notify_if_unattended(turn_id: str) -> bool:
             return False
         db.commit()
     return True
+
+
+def _notice_bot(db, owner: str, conversation_id):
+    """The bot whose line the turn was on (so the notice carries its name), else the owner's default bot."""
+    from . import agent_bots
+    from .agent_chat_models import AgentBot
+    line = db.get(AgentConversation, conversation_id) if conversation_id is not None else None
+    bot = db.get(AgentBot, line.bot_id) if line is not None and line.bot_id is not None else None
+    if bot is not None and bot.owner_hash == owner:
+        return bot
+    return db.get(AgentBot, agent_bots.ensure_default_bot(owner).id)

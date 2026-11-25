@@ -84,7 +84,7 @@ def test_sweep_fails_the_cut_off_turn_and_leaves_one_message_in_its_conversation
     item = _item(turn)
     assert (item.status, item.reason) == ("failed", work.RESTART_REASON) and item.ended_at is not None
     rows = _rows(conversation)
-    assert [r.role for r in rows] == ["user", "assistant"] and rows[1].turn_id != rows[0].turn_id and rows[1].status == "complete"
+    assert [r.role for r in rows] == ["user", "assistant"] and rows[1].turn_id == rows[0].turn_id and rows[1].status == "failed"
     assert rows[1].content == work.interrupted_message(started)
     assert rows[1].content.startswith("上一轮在 ") and rows[1].content.endswith("被系统重启打断了，没有答完；要我接着做吗？")
     # a second pass (a second worker, another restart) posts nothing more
@@ -115,22 +115,51 @@ def test_a_failed_message_write_leaves_the_turn_running_for_the_next_start(monke
     assert _item(turn).status == "running" and len(_rows(conversation)) == 1
 
 
-def test_the_next_turns_history_reads_the_swept_turn_as_unfinished_exactly_as_before():
+def _stored(conversation):
+    return [{"turn_id": str(r.turn_id), "sequence": r.sequence, "role": r.role, "content": r.content, "status": r.status,
+             "tool_calls": r.tool_calls} for r in _rows(conversation)]
+
+
+def test_every_reader_sees_the_swept_turn_as_one_ordinary_failed_turn():
     conversation, turn = _conversation_with_user_row("英伟达的营收")
     work.start_turn(OWNER, conversation, turn, "英伟达的营收")
-
-    def stored():
-        return [{"turn_id": str(r.turn_id), "sequence": r.sequence, "role": r.role, "content": r.content, "status": r.status}
-                for r in _rows(conversation)]
-    before = layers.trailing_unfinished(stored())
+    with SessionLocal() as db:  # the partial record the turn had stored before the restart stays as it was
+        db.add(AgentMessage(conversation_id=uuid.UUID(conversation), turn_id=uuid.UUID(turn), sequence=2, role="assistant", content="",
+                            tool_calls={"calls": [{"id": "c1"}]}, status="complete"))
+        db.add(AgentMessage(conversation_id=uuid.UUID(conversation), turn_id=uuid.UUID(turn), sequence=3, role="tool", content="{}",
+                            tool_call_id="c1", status="complete"))
+        db.commit()
     work.sweep_interrupted(datetime.now(UTC) + timedelta(seconds=1))
-    after = layers.trailing_unfinished(stored())
+    rows = _rows(conversation)
+    assert [(r.role, r.sequence) for r in rows] == [("user", 1), ("assistant", 2), ("tool", 3), ("assistant", 4)]
+    assert {r.turn_id for r in rows} == {rows[0].turn_id} and rows[3].status == "failed"
+    stored = _stored(conversation)
 
-    assert before == after == [{"turn_id": turn, "content": "英伟达的营收", "state": "interrupted"}]
-    assert layers.complete_turns(stored()) == []  # the message is in no layer of the model's history
+    # the web list (owned_message_page, through eligible groups): the question and the message are shown
+    from app.agent_chat_store import _eligible_turn_groups
+    groups = _eligible_turn_groups(_rows(conversation))
+    assert len(groups) == 1 and groups[0][-1].content.startswith("上一轮在 ")
+    # the next turn's history: unfinished and failed, exactly as a failed turn is carried; in no complete layer
+    assert layers.trailing_unfinished(stored) == [{"turn_id": turn, "content": "英伟达的营收", "state": "failed"}]
+    assert layers.complete_turns(stored) == []
+    # the line is not busy (it ended)
     from app.agent_tasks import line_busy
     with SessionLocal() as db:
         assert line_busy(db, uuid.UUID(conversation), datetime.now(UTC)) is False
+    # the backstage reads the turn's last assistant row: failed, like the exception path's
+    from app.backstage_api import derive_status
+    assert derive_status("failed", True) == "failed"
+
+
+def test_a_turn_whose_answer_was_stored_before_the_crash_is_closed_without_a_message():
+    conversation, turn = _conversation_with_user_row()
+    work.start_turn(OWNER, conversation, turn, "q")
+    with SessionLocal() as db:
+        db.add(AgentMessage(conversation_id=uuid.UUID(conversation), turn_id=uuid.UUID(turn), sequence=2, role="assistant",
+                            content="答案", status="complete"))
+        db.commit()
+    assert work.sweep_interrupted(datetime.now(UTC) + timedelta(seconds=1)) == 0
+    assert _item(turn).status == "done" and len(_rows(conversation)) == 2
 
 
 def test_the_api_startup_runs_the_sweep_once(monkeypatch):
@@ -469,11 +498,160 @@ def test_a_turn_past_the_time_limit_is_stopped_failed_and_its_lock_released(stre
     item = _only_item(cid_t2)
     assert item.status == "failed" and item.reason == stream.turn_timeout_reason()
     assert cid_t2 not in stream.LOCKS and cid_t2 not in stream.TURNS and ran.get("stopped")
-    cancelled = [kw for args, kw in stored if len(args) > 2 and args[2] == "assistant" and kw.get("status") == "cancelled"]
-    assert len(cancelled) == 1 and {"finished": "cancelled"} in [kw for _, kw in stored]
+    failed_rows = [(args, kw) for args, kw in stored if len(args) > 2 and args[2] == "assistant" and kw.get("status") == "failed"]
+    assert len(failed_rows) == 1 and not [1 for args, kw in stored if kw.get("status") == "cancelled"]
+    text = failed_rows[0][0][3]
+    assert text == "partial answer\n\n（超过 1 分钟还没答完，已经停下。）".replace("1 分钟", f"{max(1, round(stream.MAX_TURN_SECONDS / 60))} 分钟")
+    assert {"finished": "failed"} in [kw for _, kw in stored]
+    assert "（超过" in wire
 
 
 def test_the_time_limit_reason_counts_the_minutes_of_the_constant(monkeypatch):
     assert stream.turn_timeout_reason() == "超过 20 分钟还没答完，已经停下"
     monkeypatch.setattr(stream, "MAX_TURN_SECONDS", 600)
     assert stream.turn_timeout_reason() == "超过 10 分钟还没答完，已经停下"
+
+
+def _timeout_setup(monkeypatch, limit=0.3):
+    _quiet(monkeypatch)
+    monkeypatch.setattr(stream, "MAX_TURN_SECONDS", limit)
+    monkeypatch.setattr(stream, "HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setenv("FINBOT_FP13_DETACHED_TURNS", "on")
+
+
+def test_a_timed_out_turn_with_no_partial_answer_stores_the_sentence_alone(stream_fixture, outbox, cid_t2, monkeypatch):
+    stored = stream_fixture[4]
+    _timeout_setup(monkeypatch)
+
+    async def workflow(**_):
+        await asyncio.sleep(60)
+        yield _done()
+    monkeypatch.setattr(stream, "stream_workflow", workflow)
+
+    async def scenario():
+        await _drain_detached(cid_t2)
+    _run(scenario())
+    rows = [(args[3], kw) for args, kw in stored if len(args) > 2 and args[2] == "assistant"]
+    assert rows[-1][0] == f"（{stream.turn_timeout_reason()}。）" and rows[-1][1]["status"] == "failed"
+
+
+async def _drain_detached(cid):
+    body = (await _start(cid, detach=True)).body_iterator
+    parts = [part async for part in body]
+    for pending in list(stream._BACKGROUND):
+        await asyncio.gather(pending, return_exceptions=True)
+    return "".join(parts)
+
+
+def test_a_pump_that_always_has_an_event_ready_still_hits_the_limit(stream_fixture, outbox, cid_t2, monkeypatch):
+    _timeout_setup(monkeypatch, 0.3)
+
+    async def workflow(**_):
+        while True:
+            yield {"event": "narration", "text": "…"}
+            await asyncio.sleep(0)
+    monkeypatch.setattr(stream, "stream_workflow", workflow)
+    wire = _run(_drain_detached(cid_t2))
+    assert "turn_timeout" in wire and _only_item(cid_t2).status == "failed"
+
+
+def test_a_stop_during_the_timeout_writes_still_ends_the_item_failed_with_the_reason(stream_fixture, outbox, cid_t2, monkeypatch):
+    stored = stream_fixture[4]
+    _timeout_setup(monkeypatch)
+    real_append = stream.append_message
+
+    async def slow_append(*args, **kwargs):
+        if len(args) > 2 and args[2] == "assistant" and kwargs.get("status") == "failed":
+            await asyncio.sleep(0.4)
+        return await real_append(*args, **kwargs)
+    monkeypatch.setattr(stream, "append_message", slow_append)
+
+    async def workflow(**_):
+        yield {"event": "delta", "text": "partial"}
+        await asyncio.sleep(60)
+        yield _done()
+    monkeypatch.setattr(stream, "stream_workflow", workflow)
+
+    # drive by hand: wait for the limit, then stop while the slow write is in flight
+    async def hand():
+        response = await _start(cid_t2, detach=True)
+        body = response.body_iterator
+        task = stream.TURNS[cid_t2]["task"]
+        for _ in range(3):
+            await body.__anext__()
+        await asyncio.sleep(0.45)      # past the 0.3 s limit: the slow failed-row write is in flight
+        task.cancel()                  # the stop button
+        await asyncio.gather(task, return_exceptions=True)
+        for pending in list(stream._BACKGROUND):
+            await asyncio.gather(pending, return_exceptions=True)
+        await asyncio.sleep(0.2)
+        for pending in list(stream._BACKGROUND):
+            await asyncio.gather(pending, return_exceptions=True)
+    _run(hand())
+    item = _only_item(cid_t2)
+    assert item.status == "failed" and item.reason == stream.turn_timeout_reason()
+    assert [kw for args, kw in stored if len(args) > 2 and args[2] == "assistant" and kw.get("status") == "failed"]
+
+
+def test_a_stop_while_the_done_path_ends_the_item_does_not_lose_the_end_or_the_notice(stream_fixture, outbox, cid_t2, monkeypatch):
+    _quiet(monkeypatch)
+    monkeypatch.setenv("FINBOT_FP13_DETACHED_TURNS", "on")
+    monkeypatch.setattr(stream, "_is_owner", lambda credential: True)
+    monkeypatch.setattr(stream, "owner_hash", lambda credential: OWNER)
+    real_end = work.end_turn
+
+    def slow_end(*args, **kwargs):
+        import time
+        time.sleep(0.3)
+        return real_end(*args, **kwargs)
+    monkeypatch.setattr(work, "end_turn", slow_end)
+
+    async def workflow(**_):
+        yield {"event": "delta", "text": "partial"}
+        yield _done()
+    monkeypatch.setattr(stream, "stream_workflow", workflow)
+
+    async def hand():
+        body = (await _start(cid_t2, detach=True)).body_iterator
+        task = stream.TURNS[cid_t2]["task"]
+        await body.__anext__()
+        await body.aclose()            # nobody reading
+        await asyncio.sleep(0.1)       # the done path is inside its slow end_turn
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0.5)
+        for pending in list(stream._BACKGROUND):
+            await asyncio.gather(pending, return_exceptions=True)
+    _run(hand())
+    item = _only_item(cid_t2)
+    assert item.status in ("done", "stopped") and item.status != "running" and item.ended_at is not None
+
+
+def test_a_cancel_during_start_turn_leaves_no_running_row(stream_fixture, outbox, cid_t2, monkeypatch):
+    _quiet(monkeypatch)
+    monkeypatch.setenv("FINBOT_FP13_DETACHED_TURNS", "on")
+    real_start = work.start_turn
+
+    def slow_start(*args, **kwargs):
+        import time
+        time.sleep(0.3)
+        return real_start(*args, **kwargs)
+    monkeypatch.setattr(work, "start_turn", slow_start)
+
+    async def workflow(**_):
+        await asyncio.sleep(60)
+        yield _done()
+    monkeypatch.setattr(stream, "stream_workflow", workflow)
+
+    async def hand():
+        body = (await _start(cid_t2, detach=True)).body_iterator
+        task = stream.TURNS[cid_t2]["task"]
+        await body.__anext__()
+        await asyncio.sleep(0.1)       # inside the slow insert
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0.6)
+        for pending in list(stream._BACKGROUND):
+            await asyncio.gather(pending, return_exceptions=True)
+    _run(hand())
+    assert _only_item(cid_t2).status == "stopped"
