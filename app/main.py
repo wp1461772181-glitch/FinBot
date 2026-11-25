@@ -179,6 +179,7 @@ def create_tables() -> None:
             raise RuntimeError("PUBLIC_API_MODE requires a valid personal chat login configuration")
         if not allowed_origins or "*" in allowed_origins:
             raise RuntimeError("PUBLIC_API_MODE requires exact CORS_ALLOWED_ORIGINS; wildcard origins are not allowed")
+    from . import work  # registers agent_work with the metadata the next call creates
     # V2 schema changes are applied only by its explicit, locked migration.
     # Keep the longstanding startup behavior for legacy tables alone.
     Base.metadata.create_all(
@@ -232,6 +233,9 @@ def create_tables() -> None:
     safe_hook(backfill_recall)
     from .fin_news_engine import ensure_news_tables
     safe_hook(ensure_news_tables)
+    # The turns a restart cut off are closed here (after every column they read exists), before anything is served.
+    # Only the API's startup runs this: the bridges and the sentinel are other processes.
+    safe_hook(work.sweep_interrupted)
     with SessionLocal() as session:
         seed_faq(session)
         session.commit()
