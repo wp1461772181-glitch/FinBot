@@ -140,7 +140,7 @@ def test_the_figures_a_model_may_compute_from_the_input_are_not_marked():
     assert view_review.check_figures("两个月前（9月26日）说的，11月25日回看，约 60 天", sent) == []     # dates and spans of time are not figures
     assert view_review.check_figures("收入和净利润差了 251 亿美元", sent) == []                          # a difference of two input figures
     assert view_review.check_figures("现在是当时的 1.5 倍", sent) == []
-    assert view_review.check_figures("现在 170 美元，毛利率 74%，营收 123 亿美元", sent) == ["170", "74%", "123 亿"]
+    assert view_review.check_figures("现在 170 美元，毛利率 90%，营收 123 亿美元", sent) == ["170", "90%", "123 亿"]
     assert view_review.check_figures("没有任何数字，说的是 FY2026 Q3 和 2026 年", sent) == []
 
 
