@@ -1,4 +1,4 @@
-export type ExternalSource = { kind: "routine"; name: string; time: string | null } | { kind: "external"; name: null; time: null };
+export type ExternalSource = { kind: "routine" | "job"; name: string; time: string | null } | { kind: "external"; name: null; time: null };
 export function externalSource(userContent: unknown): ExternalSource;
 export function newTurnIds(before: { turn_id?: string }[] | undefined, after: { turn_id?: string }[] | undefined): string[];
 export function firstOfTurns(messages: { turn_id?: string }[] | undefined, turnIds: Iterable<string> | undefined): Map<number, string>;

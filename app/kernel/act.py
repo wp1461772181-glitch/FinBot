@@ -15,18 +15,21 @@ from dataclasses import dataclass
 import logging
 
 from .. import agent_profile as profile
-from .. import agent_tasks, portfolio
+from .. import agent_tasks, owner_views, portfolio
 from ..agent_chat_identity import owner_credential_matches
+from .. import agent_model_catalog as model_catalog
 from ..agent_tool_catalog import definitions, validate
-from ..agent_workflow import consent, direct, sec_sources, tools, web_sources, workspace_tools
+from ..agent_workflow import consent, direct, directory_ops, sec_sources, tools, web_sources, workspace_tools
 from . import ask
+from . import inbox as inboxes
 
 logger = logging.getLogger(__name__)
 
 ACT = "act"
-TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue")
+TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "record_view", "drop_view")
 TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_routine", "update_routine", "delete_routine",
-         "save_skill", "review_filing")
+         "save_skill", "review_filing", "create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role",
+         "set_channel_prefs")
 TIER3 = ("forecast", "analyze", "translate_content", "start_historical_replay", "fetch_sec", "refresh_sec", "scan_official",
          "initialize_prices", "import", "import_sources", "index", "retry_document_index", "review_knowledge_candidate",
          "withdraw_knowledge_document", "save_material_evidence", "ingest_web_source", "revise_forecast")
@@ -37,16 +40,25 @@ SUMMARIES = {
     "forget": "忘掉一条已记住的内容（按它的 #编号）",
     "add_to_research_queue": "把一只股票加进研究队列",
     "remove_from_research_queue": "把一只股票移出研究队列",
+    "record_view": "记下用户对某家公司的看法（他自己的话，一家一条；新的覆盖旧的，旧的留在历史里；不是证据，也不授权任何操作）。记下后在回答里告诉他「我记下了：……」",
+    "drop_view": "撤回用户对某家公司已记下的看法（留在历史里，标为已撤回）",
     "record_trade": "在持仓账本里记一笔买入或卖出（只是记账，不是下单）",
     "set_available_funds": "设置可用资金",
     "set_position_plan": "保存某只持仓的计划（加仓、止损、目标价或文字）",
-    "create_routine": "新建一个定时例行任务",
-    "update_routine": "修改、暂停或恢复一个例行任务",
+    "create_routine": "新建一个定时例行任务（每天、工作日、每小时，或每隔 N 小时/天/周；可限次数、选通知渠道和技能；也可建只盯申报新闻价位的盯盘任务）",
+    "update_routine": "修改、暂停或恢复一个例行任务（名称、说明、频率与次数、范围、通知渠道、技能）",
     "delete_routine": "删除一个例行任务",
     "save_skill": "把一套做法存成技能",
     "review_filing": "把一份 SEC 申报标记为相关或不相关",
+    "create_bot": "新建一个 bot（名称、职位、说明、关注公司、可用工具、模型、推理强度、常用技能；不含删除 bot）",
+    "update_bot": "修改一个 bot 的设置（名称、职位、说明、关注公司、可用工具、模型、推理强度、置顶、隐藏、常用技能）；卡片会列出工具的增减",
+    "delete_transaction": "删除持仓账本里一笔记错的记录（按 id；卡片显示删后的持仓和资金，不能撤销，单独一张卡）",
+    "manage_skill": "启用、停用、修改（名称、用途、步骤、输出格式、允许的工具）或删除一个技能（删除不能撤销，单独一张卡）",
+    "set_default_model": "把模型目录里的某个模型设为默认对话模型",
+    "set_model_role": "指定后台任务用哪个模型（财报判断、预测概率、声明法官、备用模型、小助手——替回答跑腿查资料的模型，不设就用当前对话模型），或恢复默认",
+    "set_channel_prefs": "设置主动消息（盯盘提醒、例行简报、财报通知）发到哪里：Telegram、微信，或都发",
     "forecast": "生成一份新的研究预测",
-    "analyze": "对一份已存材料做 AI 分析",
+    "analyze": "对一份已存材料做 AI 分析（可指定模型目录里的模型，可强制重新分析）",
     "translate_content": "把一份分析或预测简报译成英文",
     "start_historical_replay": "对过去某个决策日做一次历史回放",
     "fetch_sec": "拉取一份 SEC 申报原文",
@@ -86,6 +98,16 @@ COST_NOTES = {
     "ingest_web_source": "会把这个网页存入资料库和知识库。",
     "revise_forecast": "会调用付费模型重新计算这份预测，生成新版本，旧版本保留。",
 }
+
+def cost_note(name: str, args: dict) -> str:
+    """The card's cost line: the fixed note of the operation, and for an analysis which model runs it and whether it runs again."""
+    if name != "analyze":
+        return COST_NOTES[name]
+    chosen = args.get("catalog_model")
+    entry = next((e for e in model_catalog.entries()[0] if e["name"] == chosen), None) if chosen else None
+    model = f"会调用付费模型「{entry['display_name'] or entry['name']}」（{entry['model']}）分析这份材料。" if entry else "会用默认的分析模型（付费）分析这份材料。"
+    return model + ("即使这份材料已有分析，也会重新生成一份。" if args.get("force") else "")
+
 
 _HEADINGS = (("直接生效（可撤销）", TIER1), ("需要用户点确认卡", TIER2), ("需要用户点确认卡，并且花钱或不可撤销", TIER3))
 _INTRO = "所有会改数据的操作都从这里做。只带 operation 调用会返回它的参数格式；带上 arguments 才是真的提出操作。"
@@ -134,6 +156,7 @@ class Prepared:
 _HINTS = {"unknown_operation": "没有这个操作。请从 act 工具描述里的目录中选一个 operation 名称重新调用。"}
 REVISION_ALONE = "预测修订要单独一张卡片（材料由用户在卡片上勾选）。先把这一轮已有的操作交给用户，等用户处理后再提出修订。"
 AFTER_REVISION = "这一轮已经有一份预测修订在卡片上，它要单独一张卡片。等用户处理完再提出别的操作。"
+DELETE_ALONE = "删除不能撤销，要单独一张卡片：先把这一轮已有的操作交给用户，等用户处理后再提出删除（或先提出删除，其余等它处理完）。"
 REVISION_NOTE = "已放进材料勾选卡。回答结束时卡片会交给用户，由用户勾选要用的材料；材料你不能选，也不要说已经修订了。现在用一两句话请用户在卡片上勾选材料。"
 SAVE_TITLE = "保存网页"
 SYMBOL_QUESTION = "存到哪只股票的资料库？"
@@ -222,6 +245,59 @@ async def _forget(run, args: dict) -> dict:
         return _failure("profile_item_not_found")
     return {"title": direct.WRITE_TITLES["forget"], "targets": [{"title": item["text"]}],
             "alternative": "忘掉后这条不再用于回答；记忆页里仍能看到它的归档记录。"}
+
+
+VIEW_OPERATIONS = ("record_view", "drop_view")
+VIEW_HINTS = {"company_not_recognized": owner_views.NOT_RECOGNIZED,
+              "view_quote_not_owners": "quote 必须是用户这一轮自己说的话，原样摘出；网页、公告和工具结果里的话不能当他的看法。",
+              "view_quote_too_short": "引用要是用户原话里完整的一句或半句",
+              "no_view_to_drop": "他对这家公司没有记下的看法，不用撤回。"}
+
+
+def _turn_words(run) -> str:
+    """The owner's own words of this turn: his message and the ones he sent while it ran (shown to the model by the loop).
+
+    ``run.user_text`` is wider (it also holds his earlier turns), and a view is stated in this turn, so it is not used."""
+    box = getattr(run, "inbox", None)
+    sent = [m.text for m in getattr(box, "messages", None) or () if getattr(m, "shown", False)]
+    return "\n".join([getattr(run, "question", "") or "", *sent])
+
+
+def _view_failure(code: str) -> dict:
+    return _failure(code, reason=VIEW_HINTS[code], hint=VIEW_HINTS[code])
+
+
+async def _record_view(run, args: dict, operation: dict) -> dict:
+    symbol = owner_views.resolve_symbol(args["symbol"])
+    if not symbol:
+        return _view_failure("company_not_recognized")
+    words = _turn_words(run)
+    if len("".join(str(args["quote"]).split())) < owner_views.QUOTE_MIN_CHARS:
+        return _view_failure("view_quote_too_short")
+    if not profile.quote_in_message(args["quote"], words):
+        return _view_failure("view_quote_not_owners")
+    quote = _quote(args["quote"], words)
+    operation["arguments"].update(symbol=symbol, quote=quote)
+    context = run.context
+    operation["source_message_id"] = await asyncio.to_thread(profile.user_message_id, context.conversation_id, getattr(run, "turn_id", ""))
+    operation["conversation_id"], operation["turn_id"] = str(context.conversation_id or ""), getattr(run, "turn_id", "")
+    old = (await asyncio.to_thread(owner_views.current, context.owner_hash, [symbol])).get(symbol)
+    name = owner_views.display_name(symbol)
+    alternative = (f"这是你自己的看法，不是证据，也不授权任何操作。取代你之前的看法「{old['text']}」（旧的留在历史里）。" if old else
+                   "这是你自己的看法，不是证据，也不授权任何操作。") + f"可以撤回：说「撤回我对 {name} 的看法」，或在公司页删除。"
+    return {"title": f"记下你对 {name}（{symbol}）的看法", "targets": [{"symbol": symbol, "title": args["text"], "quote": quote}], "alternative": alternative}
+
+
+async def _drop_view(run, args: dict, operation: dict) -> dict:
+    symbol = owner_views.resolve_symbol(args["symbol"])
+    if not symbol:
+        return _view_failure("company_not_recognized")
+    old = (await asyncio.to_thread(owner_views.current, run.context.owner_hash, [symbol])).get(symbol)
+    if not old:
+        return _view_failure("no_view_to_drop")
+    operation["arguments"]["symbol"] = symbol
+    return {"title": f"撤回你对 {owner_views.display_name(symbol)}（{symbol}）的看法", "targets": [{"symbol": symbol, "title": old["text"]}],
+            "alternative": "撤回后它不再出现在回答的背景里；仍留在这家公司的历史里，标为已撤回。"}
 
 
 def _default_company(context) -> dict | None:
@@ -371,6 +447,31 @@ async def _revision(run, args: dict) -> Prepared | dict:
     return Prepared(operation=operation, display=display, tier=3, options=options)
 
 
+_TASK_REASONS = {
+    "invalid_every": "间隔不合规：schedule_kind 要是 every，并给 every_value 和 every_unit（hours 1-720、days 1-365、weeks 1-52）。",
+    "invalid_max_runs": "max_runs 要在 1-1000 之间（0 表示不限次数）。",
+    "invalid_instruction": "简报型例行任务要有 instruction（不超过 2000 字）；只盯申报、新闻、价位线的用 kind=alerts。",
+    "invalid_schedule": "频率不合规：schedule_kind 用 daily、weekdays、hourly 或 every，schedule_time 用 HH:MM。",
+    "invalid_symbols": "股票代码不合规，或范围选了 symbols 却没给代码。",
+    "invalid_channel": "channel 只能是 inbox 或 telegram。",
+    "invalid_config": "config 格式不对：{filings, news, price_lines:[{symbol, above/below}]}。",
+    "unknown_skill": "没有这个技能（或不能用）；技能 id 要是用户已有且可用的。",
+    "too_many_tasks": "例行任务已经有 20 个，先删掉不用的再新建。",
+}
+
+
+def _task_refusal(failure: Exception) -> dict:
+    """The route's own refusal of a routine, with the same code, and what to change."""
+    code = str(failure)
+    reason = _TASK_REASONS.get(code)
+    return {**_failure(code), **({"reason": reason, "hint": reason} if reason else {})}
+
+
+def _usable_model(name: str) -> None:
+    """A catalog model that exists and has a key; ``CatalogError`` (model_not_found, model_key_missing) otherwise.  The key is not kept."""
+    model_catalog.resolve(name)
+
+
 async def prepare(run, name: str, arguments) -> Prepared | dict:
     """Validate a call and build the frozen operation and the card.  Never writes; an error comes back as a tool-result dict."""
     if name not in OPERATIONS:
@@ -393,6 +494,10 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
         display = await _forget(run, args)
         if "error_code" in display:
             return display
+    elif name in VIEW_OPERATIONS:
+        display = await (_record_view if name == "record_view" else _drop_view)(run, args, operation)
+        if "error_code" in display:
+            return display
     else:
         if name == "scan_official" and args.get("days"):
             title = f'回补 {args["days"]} 天官方申报'
@@ -402,12 +507,26 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
                 display.update(await asyncio.to_thread(portfolio.describe_write, context.owner_hash, name, args))
             except portfolio.PortfolioError as failure:
                 return {"ok": False, "data": [], "error_code": failure.code, "reason": failure.reason, "hint": failure.reason}
+        elif name in directory_ops.NAMES:
+            try:
+                shown = await asyncio.to_thread(directory_ops.describe, context.owner_hash, name, args)
+            except directory_ops.Refusal as failure:
+                return {"ok": False, "data": [], "error_code": failure.code, "reason": failure.reason, "hint": failure.hint}
+            if "fields" in shown:
+                operation["fields"] = shown.pop("fields")          # what the press writes, frozen with the card
+            if "expect" in shown:
+                operation["expect"] = shown.pop("expect")          # the old state the card shows: a press that finds it changed is refused
+            display.update(shown)
         elif name == "create_routine":
             operation["bot_id"] = getattr(context, "bot_id", None)
+            try:
+                preview = await asyncio.to_thread(agent_tasks.preview_task, context.owner_hash, direct.routine_fields(args))
+            except agent_tasks.TaskError as failure:
+                return _task_refusal(failure)
+            skills = await asyncio.to_thread(direct.skill_names, context.owner_hash)
             display.update(title=f'{title} · {args["name"]}',
-                           targets=[{"kind": direct.routine_when({"schedule_kind": args["schedule_kind"], "schedule_time": args["schedule_time"]}),
-                                     **({"symbol": "、".join(args["symbols"])} if args["symbols"] else {})}],
-                           alternative=f'每次运行：{args["instruction"]}（可在「例行任务」页暂停、修改或删除）')
+                           targets=[{"kind": direct.routine_when(preview), **({"symbol": "、".join(args["symbols"])} if args["symbols"] else {})}],
+                           alternative=direct.routine_created(preview, skills))
         elif name == "save_skill":
             display.update(title=f'{title} · {args["name"]}', targets=[{"kind": args["description"]}],
                            alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能不授权写操作；工具清单只对旧流程的 bot 生效。')
@@ -419,8 +538,24 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
             task = await asyncio.to_thread(agent_tasks.get_task, context.owner_hash, args["routine_id"])
             if task is None:
                 return _failure("routine_not_found")
+            changed = skills = None
+            if name == "update_routine":       # the route's own checks, before a card exists
+                try:
+                    changed = await asyncio.to_thread(agent_tasks.preview_task, context.owner_hash, direct.routine_fields(args), args["routine_id"])
+                except agent_tasks.TaskError as failure:
+                    return _task_refusal(failure)
+                if changed is None:
+                    return _failure("routine_not_found")
+                skills = await asyncio.to_thread(direct.skill_names, context.owner_hash)
+            if name == "update_routine":
+                operation["expect"] = await asyncio.to_thread(directory_ops.snapshot, context.owner_hash, name, args)
             display.update(title=f'{title} · {task["name"]}', targets=[{"kind": direct.routine_when(task)}],
-                           alternative=direct.routine_changes(args, task) if name == "update_routine" else "删除后不再运行；已生成的简报会保留。")
+                           alternative=direct.routine_changes(args, task, changed, skills) if name == "update_routine" else "删除后不再运行；已生成的简报会保留。")
+        elif name == "analyze" and args.get("catalog_model"):
+            try:
+                await asyncio.to_thread(_usable_model, args["catalog_model"])
+            except model_catalog.CatalogError as failure:
+                return _failure(str(failure), hint="用 list_models 看有哪些模型可用，换一个名字重新提出。")
         elif name in {"fetch_sec", "refresh_sec"}:
             try:
                 operation = await asyncio.to_thread(sec_sources.prepare_filing, name, args, financial_only=False)
@@ -434,7 +569,7 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
 
     tier = tier_of(name)
     if tier == 3:
-        display["alternative"] = "\n".join(filter(None, [display.get("alternative"), f"代价：{COST_NOTES[name]}"]))
+        display["alternative"] = "\n".join(filter(None, [display.get("alternative"), f"代价：{await asyncio.to_thread(cost_note, name, args)}"]))
     return Prepared(operation=operation, display=display, tier=tier)
 
 
@@ -444,6 +579,8 @@ UNDO = {
     "forget": "记忆页里仍有它的归档记录，可以恢复。",
     "add_to_research_queue": "说「移出研究队列」即可撤回。",
     "remove_from_research_queue": "说「加回研究队列」即可恢复，材料和历史都还在。",
+    "record_view": "要撤回，说『撤回我对 {company} 的看法』。",
+    "drop_view": "它仍在这家公司的历史里（标为已撤回）；想恢复就把看法再说一遍。",
 }
 AWAITING_NOTE = "已放进确认卡。回答结束时卡片会交给用户，用户点了确认才执行。现在用一两句话告诉用户你准备做什么、请他核对卡片，不要说已经做了。"
 
@@ -524,15 +661,22 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
     if not ok:
         code = str(facts.get("error_code") or "write_service_failed")
         return {"ok": False, "data": [{**facts, "status": "failed", "title": title}]}, f"failed:{code}"
-    return {"ok": True, "data": [{**facts, "status": "done", "title": title, "undo": UNDO[operation["name"]]}]}, "done"
+    undo = UNDO[operation["name"]].replace("{company}", owner_views.display_name(operation["arguments"].get("symbol", "")))
+    recorded = {"recorded": operation["arguments"]["text"]} if operation["name"] == "record_view" else {}
+    return {"ok": True, "data": [{**facts, **recorded, "status": "done", "title": title, "undo": undo}]}, "done"
 
 
 def _collect(run, prepared: Prepared) -> tuple[dict, str]:
+    if inboxes.other_card_since(getattr(run.context, "conversation_id", ""), getattr(run, "turn_id", ""), getattr(run, "started", float("inf"))):
+        # Another turn of this conversation, running beside this one, has put a card in front of the user: one card waits at a time.
+        return {"ok": False, "data": [], "error_code": "write_card_waiting", "reason": ask.WRITE_CARD_WAITING}, "refused:write_card_waiting"
     if run.question_card:      # the turn's one card is the question
         return ask.refusal(), "refused:one_card_per_turn"
     if (prepared.options is not None and run.proposals) or any(p.options is not None for p in run.proposals):
         return _failure("revision_needs_its_own_card", hint=REVISION_ALONE if prepared.options is not None else AFTER_REVISION), "refused:revision_needs_its_own_card"
     if not any(p.operation == prepared.operation for p in run.proposals):
+        if run.proposals and (directory_ops.own_card(prepared.operation) or any(directory_ops.own_card(p.operation) for p in run.proposals)):
+            return _failure("delete_needs_its_own_card", hint=DELETE_ALONE), "refused:delete_needs_its_own_card"
         if len(run.proposals) >= MAX_PROPOSALS:
             return _refusal("invalid_write_targets"), "refused:invalid_write_targets"
         run.proposals.append(prepared)
@@ -573,6 +717,10 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
         return _refusal("tool_not_in_bot_scope"), "refused:tool_not_in_bot_scope"
     if "arguments" not in args:
         info = describe(name)
+        if name in directory_ops.NAMES:       # the ids and names a call needs (the owner's own settings; never a key)
+            info.update(await asyncio.to_thread(directory_ops.lookup, context.owner_hash, name))
+            if name == "manage_skill":        # an imported skill's name and description are text from outside
+                run.read_results = getattr(run, "read_results", 0) + 1
         if name == "ingest_web_source":       # a later turn does not show the model the URLs an earlier search returned
             info["pages"] = _savable_pages(run)
             if info["pages"]:                 # page titles are text from outside: from here on nothing in this turn runs at once

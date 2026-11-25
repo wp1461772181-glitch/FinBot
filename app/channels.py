@@ -45,10 +45,15 @@ def prefs(db, owner_hash: str) -> dict:
     return {"channels": wanted, "mode": row.mode if row.mode in MODES else DEFAULT_PREFS["mode"]}
 
 
-def set_prefs(owner_hash: str, channels: list[str], mode: str) -> dict:
+def check_prefs(channels: list[str], mode: str) -> None:
+    """What a preference may be (one or more known channels, none twice, a known mode); ValueError(invalid_channels) otherwise."""
     if (not isinstance(channels, (list, tuple)) or not channels or any(c not in CHANNELS for c in channels)
             or len(set(channels)) != len(channels) or mode not in MODES):
         raise ValueError("invalid_channels")
+
+
+def set_prefs(owner_hash: str, channels: list[str], mode: str) -> dict:
+    check_prefs(channels, mode)
     stored = json.dumps(list(channels))
     with SessionLocal() as db:
         row = db.get(AgentChannelPref, owner_hash)

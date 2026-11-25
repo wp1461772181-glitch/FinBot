@@ -201,17 +201,22 @@ def create_skill(owner_hash: str, fields: dict, *, origin: str = "mine", status:
         return serialize(row)
 
 
+def _edited(db, owner_hash: str, row: AgentSkill, fields: dict) -> tuple[dict, bool]:
+    """The values an edit of ``row`` would leave, after every check of it, and whether the content changes (a new version)."""
+    merged = {key: fields.get(key, getattr(row, key)) for key in ("name", "description", "body", "output_template", "allowed_tools")}
+    values = _validate(merged)
+    if _name_taken(db, owner_hash, values["name"], row.id):
+        raise SkillError("name_taken")
+    return values, any(getattr(row, key) != value for key, value in values.items())
+
+
 def update_skill(owner_hash: str, skill_id, fields: dict) -> dict | None:
     """Edit one of the owner's skills (a built-in is copied first).  Saving a draft makes it a skill."""
     with SessionLocal() as db:
         row = _owned(db, owner_hash, skill_id)
         if row is None:
             return None
-        merged = {key: fields.get(key, getattr(row, key)) for key in ("name", "description", "body", "output_template", "allowed_tools")}
-        values = _validate(merged)
-        if _name_taken(db, owner_hash, values["name"], row.id):
-            raise SkillError("name_taken")
-        content_changed = any(getattr(row, key) != value for key, value in values.items())
+        values, content_changed = _edited(db, owner_hash, row, fields)
         for key, value in values.items():
             setattr(row, key, value)
         if content_changed:
@@ -223,6 +228,24 @@ def update_skill(owner_hash: str, skill_id, fields: dict) -> dict | None:
         db.commit()
         db.refresh(row)
         return serialize(row)
+
+
+def preview_update(owner_hash: str, skill_id, fields: dict) -> tuple[dict, dict] | None:
+    """The skill before and after an edit, with every check of ``update_skill`` and nothing written; None when it is not the owner's own."""
+    with SessionLocal() as db:
+        row = _owned(db, owner_hash, skill_id)
+        if row is None:
+            return None
+        before = serialize(row)
+        values, content_changed = _edited(db, owner_hash, row, fields)
+        return before, {**before, **values, "version": before["version"] + (1 if content_changed else 0)}
+
+
+def get_skill(owner_hash: str, skill_id) -> dict | None:
+    """One skill the owner can use (built-in or their own), or None."""
+    with SessionLocal() as db:
+        row = _owned(db, owner_hash, skill_id, builtin_ok=True)
+        return serialize(row) if row else None
 
 
 def set_enabled(owner_hash: str, skill_id, enabled: bool) -> dict | None:

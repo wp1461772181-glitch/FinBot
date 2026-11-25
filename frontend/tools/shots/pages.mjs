@@ -7,7 +7,7 @@
 //   widths: the widths the page is photographed at when the run asks for them (default: all of them).
 import { BOT, CONVERSATION, ROOT, VERSION, JUDGMENT, HAND_MARKER, HOLD_MARKER, LOGIN_CODE } from "./fixtures/ids.mjs";
 import { ROOT_IDS } from "./fixtures/forecasts.mjs";
-import { freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
+import { freshWriteCard, interjectionTurns, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
 import { buildState } from "./fixtures/index.mjs";
 import { materialId } from "./fixtures/materials.mjs";
@@ -173,6 +173,23 @@ export async function handTurn(page, { text, lead = "", botId = BOT.finbot, conv
   if (lead) await hand.push(index, "delta", { text: lead });
   return hand;
 }
+
+// --- 3c: speaking while it works ---------------------------------------------------------------------------------------
+export const INTERJECT = { botId: BOT.teslabot, conversationId: CONVERSATION.teslabot, first: "t9000000-0000-4000-8000-0000000000e1", second: "t9000000-0000-4000-8000-0000000000e2", message: "m9000000-0000-4000-8000-0000000000e2" };
+/** The first answer is being written (hand-fed request 0) on the 特斯拉 line, which has a short history. */
+export async function interjectStart(page) {
+  await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, BOT.teslabot);
+  await page.locator("h1", { hasText: "TeslaBot" }).waitFor();
+  return handTurn(page, { text: "NVDA 最近一季营收是多少", lead: "NVDA 最近一季营收约 ", botId: INTERJECT.botId, conversationId: INTERJECT.conversationId, turnId: INTERJECT.first });
+}
+/** Type a second message into the open composer while the first answer is being written (hand-fed request `index`); the composer is enabled meanwhile. */
+export async function interjectSay(page, hand, text, index = 1) {
+  await page.locator("#agent-draft:not([disabled])").waitFor();
+  await page.locator("#agent-draft").fill(`${HAND_MARKER} ${text}`);
+  await clickSend(page);
+  await hand.opened(index);
+}
+export const interjectDone = (hand, index, turnId, status = "complete") => hand.push(index, "done", { status, turn_id: turnId, thinking_ms: 900, citations: [], citation_protocol: null });
 
 /** End a hand-fed turn with a card: the card event, then `done` as waiting_for_input, then the stream closes. */
 export async function endWithCard(hand, index, card, turnId = "t9000000-0000-4000-8000-0000000000d1") {
@@ -359,6 +376,8 @@ async function noSideScroll(page) {
 }
 /** The fake backend's state for the 后台 page with switches set (fixtures/backstage.mjs: empty, fail). */
 export function stateWithBackstage(patch) { const state = buildState(); Object.assign(state.backstage, patch); return state; }
+/** The 特斯拉 line's history as the server keeps it after messages were sent during answers (fixtures/chat.mjs interjectionTurns): merged, stopped, and two answers that ran side by side. */
+export function stateWithInterjections() { const state = buildState(); state.chat.conversations.set(CONVERSATION.teslabot, interjectionTurns()); return state; }
 export function stateWithPortfolio(patch) { const state = buildState(); Object.assign(state.portfolio, patch); return state; }
 
 // --- P6.3 pictures ---------------------------------------------------------------------------------------------------
@@ -371,6 +390,18 @@ export function stateAssistantEmpty() {
   const state = buildState();
   Object.assign(state.assistant, { skills: [], profile: [], recall: [], docs: [], candidates: [] });
   state.assistant.news.sources = [];
+  return state;
+}
+/** No view of any company has been noted. */
+export function stateNoViews() {
+  const state = buildState();
+  state.views = [];
+  return state;
+}
+/** NVDA has only history: the one view was withdrawn. */
+export function stateViewsOnlyHistory() {
+  const state = buildState();
+  state.views = state.views.filter((v) => v.symbol === "NVDA" && v.status !== "active");
   return state;
 }
 /** The news page with three more sources: two that can be repaired (one repair fails with a code, one without) and one whose health value the page does not know. */
@@ -816,6 +847,8 @@ export const PAGES = [
     before: async (page) => { await page.locator("[data-testid=answer-open]").nth(4).click(); await page.locator("[data-testid=note-old_engine]").waitFor({ timeout: 10000 }); } },
   { name: "backstage-answer-incomplete", hash: "#/backstage/answers", ready: "[data-testid=answers-table]", element: "[data-testid=answer-drawer]",
     before: async (page) => { await page.locator("[data-testid=answer-open]").nth(3).click(); await page.locator("[data-testid=note-incomplete]").waitFor({ timeout: 10000 }); } },
+  { name: "backstage-answer-helpers", hash: "#/backstage/answers", ready: "[data-testid=answers-table]", element: "[data-testid=answer-drawer]", view: () => ({ fixtureState: stateWithBackstage({ helpers: true }) }),
+    before: async (page) => { await page.locator("[data-testid=answer-open]").nth(1).click(); await page.locator("[data-testid=helpers]").waitFor({ timeout: 10000 }); } },
   { name: "backstage-answers-empty", hash: "#/backstage/answers", ready: "[data-testid=backstage-empty]", view: () => ({ fixtureState: stateWithBackstage({ empty: true }) }) },
   { name: "backstage-answers-error", hash: "#/backstage/answers", ready: "[data-slot=error-bar]", view: () => ({ fixtureState: stateWithBackstage({ fail: true }) }) },
   // A token about 300 characters long with no break in it, in a question, a card title and a reminder: the page must not scroll sideways (the picture is taken after the check).
@@ -864,6 +897,14 @@ export const PAGES = [
     } },
   { name: "skills-draft", hash: `#/assistant/skills/${DRAFT_SKILL}`, ready: `${SKILL_DRAWER}[data-draft=true] #skill-name`, element: SKILL_DRAWER, before: async (page) => { await page.waitForFunction(() => document.querySelector("#skill-name")?.value); } },
   { name: "skills-empty", hash: "#/assistant/skills", ready: "[data-testid=skills-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
+  // 你的看法: the memory page's section (the active view of three companies), and NVDA's company page with three versions (active, replaced, withdrawn): the card folded, and the history open.
+  { name: "memory-views", hash: "#/assistant/memory", ready: "[data-testid=owner-view-item]", element: "[data-testid=owner-views]" },
+  { name: "memory-views-empty", hash: "#/assistant/memory", ready: "[data-testid=owner-views-empty]", element: "[data-testid=owner-views]", view: () => ({ fixtureState: stateNoViews() }) },
+  { name: "company-view", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-text]", element: "[data-testid=owner-view]" },
+  { name: "company-view-history", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-text]", element: "[data-testid=owner-view]", before: async (page) => {
+      await page.locator("[data-testid=owner-view-history-toggle]").click(); await page.locator("[data-testid=owner-view-version]").first().waitFor({ timeout: 10000 });
+    } },
+  { name: "company-view-only-history", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-none]", element: "[data-testid=owner-view]", view: () => ({ fixtureState: stateViewsOnlyHistory() }) },
   { name: "memory-recall", hash: "#/assistant/memory?tab=recall", ready: "[data-testid=recall-item]" },
   { name: "memory-empty", hash: "#/assistant/memory", ready: "[data-testid=memory-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
   { name: "news-test-result", hash: "#/assistant/news", ready: "[data-testid=news-row]", before: async (page) => {
@@ -1036,6 +1077,36 @@ export const PAGES = [
       await page.locator("[data-testid=new-bot-preview][data-archetype=sentinel]").waitFor();
       await page.locator("[data-testid=new-bot-preview] [data-slot=bot-avatar][data-archetype=sentinel]").waitFor();
     } },
+  // 回答中接着说 (3c): the composer stays open; the message shows 已收到, then what became of it.
+  { name: "chat-interject-received", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { const hand = await interjectStart(page); await interjectSay(page, hand, "顺便把 AMD 也比一下");
+      await hand.push(1, "received", { message_id: INTERJECT.message }); await page.locator("[data-testid=delivery-note][data-kind=received]").waitFor(); } },
+  { name: "chat-interject-merged", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { const hand = await interjectStart(page); await interjectSay(page, hand, "顺便把 AMD 也比一下");
+      await hand.push(1, "received", { message_id: INTERJECT.message }); await hand.push(1, "merged", { into_turn: INTERJECT.first }); await hand.close(1);
+      await hand.push(0, "delta", { text: "440 亿美元；AMD 约 70 亿美元。" }); await interjectDone(hand, 0, INTERJECT.first); await hand.close(0);
+      await page.locator("[data-testid=delivery-note][data-kind=merged]").waitFor(); await page.locator("[data-testid=reply-quote]").waitFor(); } },
+  { name: "chat-interject-separate", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { const hand = await interjectStart(page); await interjectSay(page, hand, "另外，帮我记一下我买了 10 股 TSLA");
+      await hand.push(1, "received", { message_id: INTERJECT.message }); await hand.push(1, "separate", { turn_id: INTERJECT.second });
+      await hand.push(1, "conversation", { conversation_id: INTERJECT.conversationId, turn_id: INTERJECT.second, bot_id: INTERJECT.botId }); await hand.push(1, "delta", { text: "好的，我先按 10 股 TSLA 准备记录，" });
+      await page.locator("[data-testid=delivery-note][data-kind=separate]").waitFor(); await page.locator("[data-testid=message][data-role=assistant]", { hasText: "TSLA 准备记录" }).waitFor(); } },
+  { name: "chat-interject-queued", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { const hand = await interjectStart(page); await interjectSay(page, hand, "再查一下 AMD 的毛利率");
+      await hand.push(1, "received", { message_id: INTERJECT.message }); await hand.push(1, "separate", { turn_id: INTERJECT.second });
+      await hand.push(1, "conversation", { conversation_id: INTERJECT.conversationId, turn_id: INTERJECT.second, bot_id: INTERJECT.botId }); await hand.push(1, "queued", { ahead: 3 });
+      await page.locator("[data-testid=delivery-note][data-kind=queued]").waitFor(); await page.locator("[data-testid=queued-note]").waitFor(); } },
+  { name: "chat-interject-stopped", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { const hand = await interjectStart(page); await interjectSay(page, hand, "算了不用了");
+      await hand.push(1, "received", { message_id: INTERJECT.message }); await hand.push(1, "stopped", {}); await hand.close(1);
+      await hand.push(0, "answer_paused", {}); await hand.push(0, "answer_reset", {}); await hand.push(0, "delta", { text: "NVDA 最近一季营收约 \n\n好的，不做了。" }); await hand.push(0, "stopped", {}); await interjectDone(hand, 0, INTERJECT.first, "stopped"); await hand.close(0);
+      await page.locator("[data-testid=stopped-note][data-by=message]").waitFor(); await page.locator("[data-testid=delivery-note][data-kind=stopped]").waitFor(); } },
+  { name: "chat-interject-paused", hash: "#/chat", ready: "[data-testid=message]",
+    before: async (page) => { const hand = await interjectStart(page); await interjectSay(page, hand, "顺便把 AMD 也比一下");
+      await hand.push(1, "received", { message_id: INTERJECT.message }); await hand.push(0, "answer_paused", {}); await page.locator("[data-testid=paused-note]").waitFor(); } },
+  // 重新打开：the same things read back from what the server stored (reply_to on each answer, an id on each message).
+  { name: "chat-interject-reloaded", hash: `#/chat/${BOT.teslabot}`, ready: "[data-testid=message]", view: () => ({ fixtureState: stateWithInterjections() }),
+    before: async (page) => { await page.locator("[data-testid=delivery-note][data-kind=merged]").waitFor(); await page.locator("[data-testid=reply-quote]").first().waitFor(); } },
   { name: "new-bot-error", hash: "#/chat", ready: "[data-testid=message]", widths: [1440],
     before: async (page, { width }) => {
       await openNewBotDialog(page, width);

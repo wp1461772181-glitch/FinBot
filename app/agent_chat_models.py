@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, func, text as sql_text
 from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 
@@ -61,6 +61,9 @@ class AgentConversationSummary(Base):
     from_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     upto_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # The turns this segment covers, by id (whole turns: turns that ran together overlap in their row numbers, so a range of rows is not a set of
+    # turns).  None for a segment made before: it covers the turns whose first row lies up to ``upto_sequence``.
+    turn_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -473,6 +476,25 @@ class PortfolioPlan(Base):
     stop_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8), nullable=True)
     target_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class OwnerView(Base):
+    """The owner's own view of one company, in his words.  One version is ``active`` per (owner, symbol); a newer one marks the old
+    ``superseded``, ``drop_view`` marks it ``dropped`` and nothing is deleted by the model.  Not evidence, and it authorizes nothing."""
+    __tablename__ = "owner_views"
+    __table_args__ = (Index("uq_owner_views_active", "owner_hash", "symbol", unique=True, postgresql_where=sql_text("status = 'active'")),
+                      Index("ix_owner_views_owner_symbol", "owner_hash", "symbol"))
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(12), nullable=False)
+    text: Mapped[str] = mapped_column(String(200), nullable=False)
+    quote: Mapped[str] = mapped_column(String(400), nullable=False)
+    source_message_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="active")      # active | superseded | dropped
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class EarningsEvent(Base):

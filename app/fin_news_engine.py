@@ -13,9 +13,10 @@ Implements:
 from __future__ import annotations
 
 import copy
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from email.utils import parsedate_to_datetime
 import hashlib
+import hmac
 import html
 import json
 import os
@@ -25,6 +26,7 @@ import threading
 import time
 from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
+from zoneinfo import ZoneInfo
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
@@ -106,6 +108,10 @@ DEFAULT_BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKi
 SEC_COMPLIANT_UA = "MarketEvidenceAgent/1.0 (research@finbot.local)"
 
 
+# Built-in sources whose naive (zone-less) publish times are not UTC.
+_BUILTIN_NORMALIZE_TIMEZONES = {"jin10-flash": "Asia/Shanghai"}
+
+
 def default_config_dict() -> dict[str, Any]:
     return {
         "version": 1,
@@ -136,7 +142,7 @@ def default_config_dict() -> dict[str, Any]:
                     "items_jsonpath": "$",
                     "url_template": "https://flash.jin10.com/detail/{id}",
                 },
-                "normalize": {"time_format": "auto"},
+                "normalize": {"time_format": "auto", "timezone": "Asia/Shanghai"},
                 "filters": {"include_keywords": [], "exclude_keywords": ["广告", "推广"]},
                 "rate_limit": {"min_interval_seconds": 60},
                 "rea_repair": True,
@@ -282,6 +288,11 @@ def validate_config(raw: dict[str, Any], *, strict_tokens: bool = False) -> dict
         default_ua = SEC_COMPLIANT_UA if "sec.gov" in parsed_url.netloc.lower() else DEFAULT_BROWSER_UA
         fetch.setdefault("headers", {"User-Agent": default_ua})
         normalize = src.get("normalize") if isinstance(src.get("normalize"), dict) else {"time_format": "auto"}
+        # A stored copy of a built-in source may predate its declared time zone; fill it in
+        # without overriding one the owner set.
+        builtin_tz = _BUILTIN_NORMALIZE_TIMEZONES.get(src_id)
+        if builtin_tz and not str(normalize.get("timezone") or "").strip():
+            normalize = {**normalize, "timezone": builtin_tz}
         filters = src.get("filters") if isinstance(src.get("filters"), dict) else {}
         filters.setdefault("include_keywords", [])
         filters.setdefault("exclude_keywords", [])
@@ -388,9 +399,25 @@ def _strip_html(value: str) -> str:
     return " ".join(cleaned.split()).strip()
 
 
-def _parse_datetime(raw: Any, fetched_at: datetime) -> tuple[datetime, bool]:
+def _naive_zone(tz: Any) -> tzinfo:
+    """Resolve a declared zone (name or tzinfo) for naive times; anything unusable means UTC."""
+    if isinstance(tz, tzinfo):
+        return tz
+    name = str(tz or "").strip()
+    if not name or name.upper() == "UTC":
+        return UTC
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return UTC
+
+
+def _parse_datetime(raw: Any, fetched_at: datetime, tz: Any = None) -> tuple[datetime, bool]:
+    """Parse a source time to UTC. ``tz`` is the zone of zone-less times only (default UTC);
+    times that carry their own offset and epoch numbers ignore it."""
+    zone = _naive_zone(tz)
     if isinstance(raw, datetime):
-        dt = raw if raw.tzinfo else raw.replace(tzinfo=UTC)
+        dt = raw if raw.tzinfo else raw.replace(tzinfo=zone)
         return dt.astimezone(UTC), False
     if isinstance(raw, (int, float)):
         ts = float(raw)
@@ -407,22 +434,22 @@ def _parse_datetime(raw: Any, fetched_at: datetime) -> tuple[datetime, bool]:
     try:
         iso_text = text.replace("Z", "+00:00")
         dt = datetime.fromisoformat(iso_text)
-        dt = dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=zone)
         return dt.astimezone(UTC), False
     except Exception:
         pass
     # Try RFC 2822 (RSS pubDate)
     try:
         dt = parsedate_to_datetime(text)
-        dt = dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=zone)
         return dt.astimezone(UTC), False
     except Exception:
         pass
     # Try common date/time patterns
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d"):
         try:
-            dt = datetime.strptime(text[:19], fmt).replace(tzinfo=UTC)
-            return dt, False
+            dt = datetime.strptime(text[:19], fmt).replace(tzinfo=zone)
+            return dt.astimezone(UTC), False
         except Exception:
             continue
     return fetched_at, True
@@ -939,7 +966,10 @@ def normalize_item(
     if include_kw and not any(kw.lower() in combined_text.lower() for kw in include_kw):
         return None
 
-    published_at, time_inferred = _parse_datetime(raw_item.get("published_at"), now)
+    normalize_cfg = source.get("normalize") if isinstance(source.get("normalize"), dict) else {}
+    published_at, time_inferred = _parse_datetime(
+        raw_item.get("published_at"), now, normalize_cfg.get("timezone")
+    )
 
     wl_tickers: list[str] = []
     wl_keywords: list[str] = []
@@ -2046,6 +2076,7 @@ def handle_inline_confirmation_action(
     *,
     owner_hash: str | None = None,
     action_token: str | None = None,
+    require_token: bool = False,
 ) -> dict[str, Any]:
     """Transition an inline confirmation item (`pending_confirm -> confirmed | skipped | expired`)
     without requiring the user to open the chat first (§6.B).
@@ -2054,8 +2085,15 @@ def handle_inline_confirmation_action(
     - the inbox item UUID (`id`)
     - the routine `task_id` UUID
     - the 6-char `short_code` (from `CONFIRM <short_code>`)
+
+    ``require_token`` is for a caller that proves nothing but the card itself (the notification-side route in ``app/main.py``): the
+    card's own ``action_token`` must then be given and must match, and a card that is missing, someone else's or has no token looks
+    the same as a wrong token (``invalid_action_token``).  Callers that have authenticated the owner (the /agent-chat routes, the
+    Telegram bridge) leave it off.
     """
     ensure_news_tables()
+    if require_token and not (isinstance(action_token, str) and action_token.strip()):
+        raise PermissionError("invalid_action_token")
     normalized_action = str(action or "confirm").strip().lower()
     if normalized_action not in {"confirm", "skip", "later", "expire"}:
         raise ValueError("invalid_confirmation_action")
@@ -2088,15 +2126,16 @@ def handle_inline_confirmation_action(
                     row = candidate
                     break
 
-        if row is None:
-            raise LookupError("confirmation_not_found")
-        if owner_hash and row.owner_hash not in {owner_hash, "owner"}:
-            raise LookupError("confirmation_not_found")
+        if row is None or (owner_hash and row.owner_hash not in {owner_hash, "owner"}):
+            raise (PermissionError("invalid_action_token") if require_token else LookupError("confirmation_not_found"))
 
         payload = copy.deepcopy(row.payload if isinstance(row.payload, dict) else {})
         current_state = str(payload.get("confirmation_state") or ("confirmed" if row.status == "done" else "pending_confirm"))
 
-        if action_token and payload.get("action_token") and action_token != payload.get("action_token"):
+        stored_token = payload.get("action_token")
+        if require_token and not (stored_token and hmac.compare_digest(str(action_token), str(stored_token))):
+            raise PermissionError("invalid_action_token")
+        if action_token and stored_token and action_token != stored_token:
             raise PermissionError("invalid_action_token")
 
         # Check expiration

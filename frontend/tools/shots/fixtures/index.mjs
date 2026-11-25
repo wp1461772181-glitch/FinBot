@@ -9,10 +9,11 @@ import { forecastList, forecastRoots, timeline, versionDetail, evaluations, moni
 import { portfolioSummary, buildPortfolio } from "./portfolio.mjs";
 import { TASKS, RUNS, PROPOSALS, INBOX } from "./routines.mjs";
 import { backstageRoutes } from "./backstage.mjs";
+import { OWNER_VIEWS, activeViews, viewHistory } from "./views.mjs";
 import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS, DRY_RUNS, REPAIRS, KNOWLEDGE_IMPORTABLE, knowledgeChunks, readSkillFile } from "./assistant.mjs";
 
 export function buildState() {
-  return { bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), settings: buildSettings(), backstage: {} };
+  return { views: structuredClone(OWNER_VIEWS), bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), settings: buildSettings(), backstage: {} };
 }
 
 /** The 设置 pages' data as a mutable copy (P8.2): the write routes below change it and the reads answer from it.  `writes` keeps every write as the page sent it (the role table's own state is `modelRoles`).
@@ -382,6 +383,16 @@ function assistantRoutes(route, reply, own) {
     return skill ? reply.text(`---\nname: ${skill.name}\ndescription: ${skill.description}\ntools: ${skill.allowed_tools.join(", ")}\n---\n${skill.body}\n`, "text/markdown; charset=utf-8") : unknownSkill();
   }));
   route.delete(`${A}/skills/:id`, own(({ params, state }) => { kept(state, "DELETE", `/skills/${params.id}`, null); state.assistant.skills = state.assistant.skills.filter((s) => s.id !== params.id); return { ok: true }; }));
+
+  // --- 你的看法 (the owner's views of companies): the memory page lists the active ones, a company page reads its history, 删除 removes one version
+  route.get(`${A}/views`, own(({ state }) => ({ views: activeViews(state.views) })));
+  route.get(`${A}/views/:symbol/history`, own(({ params, state }) => ({ symbol: params.symbol.toUpperCase(), versions: viewHistory(state.views, params.symbol.toUpperCase()) })));
+  route.delete(`${A}/views/:id`, own(({ params, state }) => {
+    const found = state.views.some((v) => v.id === params.id);
+    if (!found) return reply.status(404, { detail: "view_not_found" });
+    state.views = state.views.filter((v) => v.id !== params.id);
+    return { deleted: true };
+  }));
 
   // --- memory
   route.get(`${A}/profile`, own(({ state }) => ({ items: state.assistant.profile, bots: PROFILE.bots })));

@@ -73,14 +73,17 @@ def reported_figures(payload: dict, *, form: str, filed_at: date, limit: int = M
 
 
 def collect(provider, cik: str, *, form: str, filed_at: date,
-            concepts: Iterable[str] | None = None) -> list[dict[str, Any]]:
-    """Fetch every metric this filing reported.  Network failures yield no figures."""
+            concepts: Iterable[str] | None = None, errors: list | None = None) -> list[dict[str, Any]]:
+    """Fetch every metric this filing reported.  Network failures yield no figures; a caller that wants to know what failed passes ``errors``
+    (a list the exceptions are appended to, a missing concept included) and decides which of them matter."""
     findings: list[dict[str, Any]] = []
     for metric in (concepts or CONCEPTS):
         for concept in CONCEPTS.get(metric, ()):
             try:
                 payload = provider.company_concept(cik, concept)
-            except Exception:  # noqa: BLE001 - a missing concept is not an error
+            except Exception as exc:  # noqa: BLE001 - a missing concept is not an error
+                if errors is not None:
+                    errors.append(exc)
                 continue
             figures = reported_figures(payload, form=form, filed_at=filed_at)
             if not figures: continue

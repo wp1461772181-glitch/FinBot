@@ -25,15 +25,40 @@ async def verify_conversation(conversation_id: str, credential: str)->bool:
     except ValueError:return False
     async with Session() as s:
         return await s.scalar(select(AgentConversation.id).where(AgentConversation.id==cid,AgentConversation.owner_hash==owner_hash(credential))) is not None
-async def append_message(conversation_id: str, turn_id: str, role: str, content: str, *, tool_calls=None, tool_call_id=None,status="complete"):
+async def append_message(conversation_id: str, turn_id: str, role: str, content: str, *, tool_calls=None, tool_call_id=None,status="complete",message_id: str | None = None):
+    """Store one row; returns its sequence.  ``message_id``: the row's id when the caller needs to name it before it is stored (the owner's
+    messages, which the answers say they answer)."""
     async with Session() as s:
         cid=uuid.UUID(conversation_id)
         seq=(await s.scalar(select(func.coalesce(func.max(AgentMessage.sequence),0)).where(AgentMessage.conversation_id==cid)))+1
-        s.add(AgentMessage(conversation_id=cid,turn_id=uuid.UUID(turn_id),sequence=seq,role=role,content=content,tool_calls=tool_calls,tool_call_id=tool_call_id,status=status))
+        s.add(AgentMessage(**({"id":uuid.UUID(message_id)} if message_id else {}),conversation_id=cid,turn_id=uuid.UUID(turn_id),sequence=seq,role=role,content=content,tool_calls=tool_calls,tool_call_id=tool_call_id,status=status))
         conv=await s.get(AgentConversation,cid)
         if conv: conv.updated_at=func.now()
         await s.commit()
     if role=="user":await _recall(recall.index_question,conversation_id,content)
+    return seq
+async def message_texts(conversation_id: str, ids) -> dict:
+    """The user messages of this conversation with these ids, id -> text (what an answer on this page quotes from an earlier page)."""
+    try:cid=uuid.UUID(str(conversation_id))
+    except ValueError:return {}
+    wanted = []
+    for item in ids:
+        try:wanted.append(uuid.UUID(str(item)))
+        except ValueError:pass
+    if not wanted:return {}
+    async with Session() as s:
+        rows=(await s.execute(select(AgentMessage.id,AgentMessage.content).where(AgentMessage.conversation_id==cid,
+              AgentMessage.role=="user",AgentMessage.id.in_(wanted)))).all()
+    return {str(i):content for i,content in rows}
+async def move_message(conversation_id: str, message_id: str, turn_id: str) -> bool:
+    """Put a stored row under another turn (the owner's message that a running turn took in: from then on it is part of that turn).
+    False when there is no such row in this conversation."""
+    async with Session() as s:
+        row=await s.get(AgentMessage,uuid.UUID(message_id))
+        if row is None or row.conversation_id!=uuid.UUID(conversation_id): return False
+        row.turn_id=uuid.UUID(turn_id)
+        await s.commit()
+        return True
 async def history(conversation_id: str, credential: str, limit_bytes=14000):
     if not await verify_conversation(conversation_id,credential): return None
     async with Session() as s:
@@ -41,26 +66,25 @@ async def history(conversation_id: str, credential: str, limit_bytes=14000):
         rows=list(reversed(rows))
         output=[]; used=0
         # Keep complete turns only; group by turn ID and include newest full groups.
-        groups=[]
-        for row in rows:
-            if not groups or groups[-1][0]!=row.turn_id: groups.append((row.turn_id,[]))
-            groups[-1][1].append(row)
+        groups=[(group[0].turn_id,group) for group in layers.group_by_turn(rows,key=lambda row:row.turn_id)]
         for _,group in reversed(groups):
             if not group or group[0].role != "user" or group[-1].role != "assistant" or group[-1].status != "complete":
                 continue
             size=sum(_message_bytes(m) for m in group)
             if used+size>limit_bytes: break
-            output[0:0]=[{"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,"status":m.status,"turn_id":str(m.turn_id)} for m in group]; used+=size
+            output[0:0]=[{"id":str(m.id),"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,"status":m.status,"turn_id":str(m.turn_id)} for m in group]; used+=size
         return output
 CONTEXT_ROWS = 500       # how many of the newest rows a turn reads
 
 
 async def conversation_context(conversation_id: str, credential: str, *, window: int | None = None,
                                l1_bytes: int | None = None, l2_bytes: int | None = None, l3_bytes: int | None = None,
-                               anchored: bool = False):
+                               anchored: bool = False, upto_sequence: int | None = None, exclude_turns=()):
     """What the next turn of this conversation carries of the turns before it, by layer (the rule is
     ``agent_context.layer_rows``; this reads the rows and the segments).  None when the conversation
-    is not this credential's.  ``anchored`` (kernel turns) moves the layer boundary on a fixed grid."""
+    is not this credential's.  ``anchored`` (kernel turns) moves the layer boundary on a fixed grid.
+    ``upto_sequence`` / ``exclude_turns``: the history as of a moment, without the rows of turns that were still running then
+    (a separate turn started from a message that arrived while another turn worked, 3c)."""
     if not await verify_conversation(conversation_id, credential):
         return None
     # The sizes follow the window of the model that will read them (the catalog's window; default 128k).
@@ -75,9 +99,12 @@ async def conversation_context(conversation_id: str, credential: str, *, window:
         segments = (await s.scalars(select(AgentConversationSummary)
                                     .where(AgentConversationSummary.conversation_id == cid)
                                     .order_by(AgentConversationSummary.seq.asc()))).all()
-    stored = [{"role": m.role, "content": m.content, "tool_calls": m.tool_calls, "tool_call_id": m.tool_call_id,
-               "status": m.status, "turn_id": m.turn_id, "sequence": m.sequence} for m in reversed(rows)]
-    made = [{"seq": x.seq, "from_sequence": x.from_sequence, "upto_sequence": x.upto_sequence, "content": x.content}
+    skip = {uuid.UUID(str(t)) for t in exclude_turns or ()}
+    stored = [{"id": str(m.id), "role": m.role, "content": m.content, "tool_calls": m.tool_calls, "tool_call_id": m.tool_call_id,
+               "status": m.status, "turn_id": m.turn_id, "sequence": m.sequence} for m in reversed(rows)
+              if (upto_sequence is None or m.sequence <= upto_sequence) and m.turn_id not in skip]
+    made = [{"seq": x.seq, "from_sequence": x.from_sequence, "upto_sequence": x.upto_sequence, "content": x.content,
+             "turn_ids": [str(t) for t in x.turn_ids] if x.turn_ids else None}
             for x in segments]
     if not anchored:
         return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes)
@@ -118,6 +145,50 @@ async def load_turn_citation(conversation_id: str, credential: str, turn_id: str
     return {"ok": True, "citation": dict(matches[0]), "origin": {"turn_id": str(tid), "ordinal": ordinal}}
 
 
+READ_TURN_CHARS = 12000
+
+
+def _cut_text(text: str) -> tuple[str, bool]:
+    """A stored text for ``read_turn``: whole, or its first 12,000 characters and a mark saying how long it was."""
+    text = text or ""
+    if len(text) <= READ_TURN_CHARS: return text, False
+    return text[:READ_TURN_CHARS] + f"\n…（已截断，原文共 {len(text)} 字）", True
+
+
+async def read_turn(conversation_id: str, credential: str, turn_id: str) -> dict | None:
+    """One earlier turn of this conversation as it was said: the owner's message(s) of the turn in order, its final answer, its time and the
+    turns just before and after.  None when the conversation is not this credential's or has no such turn."""
+    try:
+        cid, tid = uuid.UUID(str(conversation_id)), uuid.UUID(str(turn_id))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    async with Session() as s:
+        owned = await s.scalar(select(AgentConversation.id).where(AgentConversation.id == cid, AgentConversation.owner_hash == owner_hash(credential)))
+        if owned is None: return None
+        rows = (await s.scalars(select(AgentMessage).where(AgentMessage.conversation_id == cid, AgentMessage.role.in_(("user", "assistant")))
+                                .order_by(AgentMessage.sequence))).all()
+    first: dict = {}
+    for m in rows:
+        first.setdefault(m.turn_id, m.sequence)
+    if tid not in first: return None
+    order = sorted(first, key=first.get)
+    at = order.index(tid)
+    mine = [m for m in rows if m.turn_id == tid]
+    users = [m for m in mine if m.role == "user"]
+    final = next((m for m in reversed(mine) if m.role == "assistant" and (m.content or "").strip()
+                  and not (isinstance(m.tool_calls, dict) and m.tool_calls.get("calls"))), None)
+    named = layers.reply_to_of({"tool_calls": final.tool_calls} if final is not None else None)
+    if named:     # the answer names the messages it answered; a message it did not answer is not part of this turn's story
+        answered = [m for m in users if str(m.id) in named]
+        users = answered or users
+    texts = [_cut_text(m.content) for m in users]
+    answer = _cut_text(final.content) if final is not None else (None, False)
+    stamp = (users[0] if users else mine[0]).created_at
+    return {"turn_id": str(tid), "time": stamp.isoformat() if stamp else None, "user_messages": [t for t, _ in texts], "answer": answer[0], "answer_status": (final.status or "complete") if final is not None else "no_answer",
+            "cut": any(c for _, c in texts) or answer[1], "previous_turn_id": str(order[at - 1]) if at else None,
+            "next_turn_id": str(order[at + 1]) if at + 1 < len(order) else None}
+
+
 async def citation_remembered(conversation_id: str, credential: str, turn_id: str, ordinal: int) -> bool:
     """Whether a {turn_id, ordinal} may be fetched although the turn is no longer in the visible catalogue:
     the newest rolling summary names it as a source, or the turn lies inside what the summary covers."""
@@ -142,7 +213,7 @@ async def citation_remembered(conversation_id: str, credential: str, turn_id: st
     return last is not None and last <= latest.upto_sequence
 
 
-async def append_summary(conversation_id: str, from_sequence: int, upto_sequence: int, content: str) -> bool:
+async def append_summary(conversation_id: str, from_sequence: int, upto_sequence: int, content: str, turn_ids=None) -> bool:
     """Append the next summary segment.  False when it would not move the covered range forward
     (another task got there first) or when the segment number was taken in the meantime."""
     cid = uuid.UUID(conversation_id)
@@ -153,7 +224,8 @@ async def append_summary(conversation_id: str, from_sequence: int, upto_sequence
         if last is not None and upto_sequence <= last.upto_sequence:
             return False
         s.add(AgentConversationSummary(conversation_id=cid, seq=(last.seq if last else 0) + 1,
-                                       from_sequence=from_sequence, upto_sequence=upto_sequence, content=content))
+                                       from_sequence=from_sequence, upto_sequence=upto_sequence, content=content,
+                                       turn_ids=[str(t) for t in turn_ids] if turn_ids else None))
         seq=(last.seq if last else 0) + 1
         try:
             await s.commit()
@@ -165,10 +237,7 @@ async def append_summary(conversation_id: str, from_sequence: int, upto_sequence
 
 
 def _eligible_turn_groups(rows):
-    groups=[]
-    for row in rows:
-        if not groups or groups[-1][-1].turn_id!=row.turn_id: groups.append([])
-        groups[-1].append(row)
+    groups=layers.group_by_turn(rows,key=lambda row:row.turn_id)
     # A tool-request row is written complete before its tools run, so a turn that ends on one
     # is still running: its answer is not there yet and must not be restored half-finished.
     def tool_request(row):
@@ -187,14 +256,22 @@ def _select_message_page(groups, before_sequence=None, limit_turns=20):
     is bounded by whole turns so a restored answer always carries its own tool rows;
     before_sequence is the exclusive cursor returned as next_before.
     """
+    # Turns that ran together overlap in their rows.  A page is a set of whole turns taken in the order they were answered (the order of
+    # the model's history too), so the cursor is a position in that order: every turn left for the next page ends before it.
+    groups=sorted(groups,key=lambda group:group[-1].sequence)
     if before_sequence is not None:
         groups=[group for group in groups if group[-1].sequence < before_sequence]
     if limit_turns is None:
-        selected=groups
+        selected,rest=groups,[]
     else:
-        selected=groups[-max(1,min(100,int(limit_turns))):]
-    has_more=len(groups)>len(selected)
-    next_before=selected[0][0].sequence if has_more and selected else None
+        keep=max(1,min(100,int(limit_turns)))
+        selected,rest=groups[-keep:],groups[:-keep]
+    has_more=bool(rest)
+    next_before=None
+    if has_more and selected:
+        # The first row of the oldest turn on the page, as always, when everything left ends before it; else (a turn left behind
+        # overlaps it) the last row of that turn, which every turn left ends before.
+        next_before=selected[0][0].sequence if selected[0][0].sequence > max(group[-1].sequence for group in rest) else selected[0][-1].sequence
     return selected,has_more,next_before
 
 
@@ -210,7 +287,7 @@ async def owned_message_page(conversation_id: str, credential: str, *, before_se
                   .where(AgentConversationSummary.conversation_id==uuid.UUID(conversation_id))
                   .order_by(AgentConversationSummary.seq.asc()))).all()
     selected,has_more,next_before=_select_message_page(_eligible_turn_groups(rows),before_sequence,limit_turns)
-    return {"messages":[{"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,
+    return {"messages":[{**({"id":str(m.id)} if getattr(m,"id",None) else {}),"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,
                          "status":m.status,"turn_id":str(m.turn_id)} for group in selected for m in group],
             "has_more":has_more,"next_before":next_before,
             "compactions":compaction_notices(rows,versions)}
@@ -250,6 +327,8 @@ def ensure_conversation_archive_column() -> None:
         # The bot whose line a conversation is (agent_bots); NULL until the default bot adopts it.
         connection.execute(text("ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS bot_id UUID"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_agent_conversations_bot_id ON agent_conversations (bot_id)"))
+        # The turns a summary covers, by id (3c: turns that ran together overlap in their rows).  Older segments keep NULL and read by range.
+        connection.execute(text("ALTER TABLE IF EXISTS agent_conversation_summaries ADD COLUMN IF NOT EXISTS turn_ids JSON"))
 
 
 async def set_conversation_archived(credential: str, conversation_id: str, archived: bool) -> bool:

@@ -158,7 +158,7 @@ def test_pause_and_reschedule_by_card_then_press(owner):
     card = first["pending_request"]
     assert card and card["display"]["title"] == "修改例行任务 · 每小时新闻"
     assert card["display"]["targets"] == [{"kind": "每小时第 05 分"}]
-    assert "改为每天 09:00" in card["display"]["alternative"] and "暂停" in card["display"]["alternative"]
+    assert "频率：每小时第 05 分 → 每天 09:00" in card["display"]["alternative"] and "状态：运行中 → 暂停" in card["display"]["alternative"]
     assert tasks.get_task(OWNER_HASH, task["id"])["enabled"] is True  # nothing before the press
 
     # The 例行任务 page sees the card while it waits, with the bot it came from.

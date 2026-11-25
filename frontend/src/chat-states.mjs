@@ -1,15 +1,15 @@
 // What the chat page's state rows need to decide (design 4.2, 对话页的状态), apart from how they look: where an outside message came from, which
 // failures send the reader to the settings, what 重试 resends, and which lines finished in the background since the last look.
-import { isTaskPostHead, parseTaskPostHead } from "./task-posts.mjs";
+import { isTaskPostHead, parseTaskPostHead, taskPostKind } from "./task-posts.mjs";
 
 /**
- * Where a turn written from outside this tab came from, read off its user row.  The server marks nothing but a routine's result (its row is the
- * task head), so that is the only source that can be named; anything else (Telegram included) is an outside message and says so.
+ * Where a turn written from outside this tab came from, read off its user row.  The server marks a routine's result and the end of a card's job (their row is the
+ * task head), so those are the only sources that can be named; anything else (Telegram included) is an outside message and says so.
  */
 export function externalSource(userContent) {
   if (!isTaskPostHead(userContent)) return { kind: "external", name: null, time: null };
   const head = parseTaskPostHead(userContent);
-  return head.name ? { kind: "routine", name: head.name, time: head.time } : { kind: "external", name: null, time: null };
+  return head.name ? { kind: taskPostKind(userContent), name: head.name, time: head.time } : { kind: "external", name: null, time: null };
 }
 
 /** The turn ids in `after` that `before` did not have: what a poll brought in. */

@@ -5,6 +5,7 @@ import { botIdOfLine, externalSource, failureNeedsSettings, firstOfTurns, newTur
 test("a routine's result names the task and its time; everything else is just an outside message", () => {
   assert.deepEqual(externalSource("【例行任务结果】「盘前新闻速览」2026-11-13 08:30"), { kind: "routine", name: "盘前新闻速览", time: "2026-11-13 08:30" });
   assert.deepEqual(externalSource("【例行任务结果】「盘前新闻速览」"), { kind: "routine", name: "盘前新闻速览", time: null });
+  assert.deepEqual(externalSource("【任务结果】「预测 AAPL」（系统自动贴入，不是所有者说的话）"), { kind: "job", name: "预测 AAPL", time: null });
   assert.deepEqual(externalSource("【例行任务结果】没有名字"), { kind: "external", name: null, time: null });
   assert.deepEqual(externalSource("帮我看一下 TSLA"), { kind: "external", name: null, time: null });
   assert.deepEqual(externalSource(undefined), { kind: "external", name: null, time: null });

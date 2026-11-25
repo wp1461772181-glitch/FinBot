@@ -5,6 +5,7 @@ import { chatTurnPreviews } from "../../chat-thread.mjs";
 import { bottomScrollTop, isFollowing, keepPositionAfterPrepend, showJumpToBottom } from "../../chat-scroll.mjs";
 import { noticesAfter } from "../../context-usage.mjs";
 import { externalSource, firstOfTurns } from "../../chat-states.mjs";
+import { awaitingAnswer, deliveries, replyQuote } from "../../chat-interject.mjs";
 import { OptionalChunk } from "../../OptionalChunk";
 import type { Bot } from "../../api/bots";
 import { useLocale } from "../../i18n";
@@ -26,7 +27,7 @@ const EmptyChat = lazy(() => import("./EmptyChat"));
 function ExternalDivider({ content }: { content: string }) {
   const { t } = useLocale();
   const source = externalSource(content);
-  const text = source.kind === "routine" ? `${t("例行任务")}「${source.name}」${source.time ? ` · ${source.time}` : ""}` : t("外部消息");
+  const text = source.kind !== "external" ? `${t(source.kind === "job" ? "任务" : "例行任务")}「${source.name}」${source.time ? ` · ${source.time}` : ""}` : t("外部消息");
   return <div data-testid="external-divider" data-source={source.kind} role="separator" aria-label={text} className="flex items-center gap-3 text-caption text-muted-foreground">
     <span className="h-px flex-1 bg-line" aria-hidden="true" /><span>{text}</span><span className="h-px flex-1 bg-line" aria-hidden="true" />
   </div>;
@@ -126,6 +127,8 @@ function ThreadBody({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObject<H
   const lastIndex = c.messages.length - 1;
   const externalStarts = firstOfTurns(c.messages, c.externalTurns);
   const awayStarts = firstOfTurns(c.messages, c.awayTurns);
+  // 3c: what became of the messages sent while a turn answered, which messages still wait for an answer of their own, and what each answer answers.
+  const marks = deliveries(c.messages), waiting = awaitingAnswer(c.messages, c.state === "sending");
   return <div className="relative flex min-h-0 flex-1 flex-col">
     <section ref={transcriptRef} data-testid="transcript" data-entry={entry && entry.motion !== "rise" ? entry.motion : undefined} style={entry ? { "--handoff-dir": entry.dir } as CSSProperties : undefined} aria-live="polite" aria-label={t("对话")} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 lg:px-6"
       onScroll={e => { if (e.currentTarget.scrollTop < 32) void loadEarlierAtTop(); }}>
@@ -141,13 +144,13 @@ function ThreadBody({ bot, draftBox }: { bot?: Bot | null; draftBox: RefObject<H
           <div data-testid="thread" className="flex min-w-0 flex-col gap-7 lg:col-start-2 lg:row-start-1">{c.messages.map((m, i) => <Fragment key={i}>
             {externalStarts.has(i) && <ExternalDivider content={m.role === "user" ? m.content : ""} />}
             {awayStarts.has(i) && <AwayDivider />}
-            <Message m={m} i={i} last={i === lastIndex} bot={bot} streaming={i === lastIndex && c.state === "sending"} copy={copy} draftBox={draftBox}
+            <Message m={m} i={i} last={i === lastIndex} bot={bot} streaming={Boolean(m.live)} copy={copy} draftBox={draftBox} mark={marks[i]} quote={m.role === "assistant" ? replyQuote(c.messages, i) : null}
               turnIndex={m.role === "user" ? turnPreviews.findIndex(turn => turn.userIndex === i) : undefined} onFeedback={() => setFeedbackTick(x => x + 1)}
               ended={settled?.index === i ? settled.outcome : null}
               entry={entry?.delay(i)} />
+            {waiting.has(i) && <PendingAnswer bot={bot} status={c.status} queuedAhead={m.queue_ahead} />}
             {m.role === "assistant" && noticesAfter(c.notices, m.turn_id).map(notice => <CompactionDivider key={`compaction-${notice.id}`} turns={notice.turns} focus={notice.focus} summary={notice.summary} />)}
           </Fragment>)}
-            {c.state === "sending" && c.messages.at(-1)?.role === "user" && <PendingAnswer bot={bot} status={c.status} />}
             {c.state !== "sending" && !c.archiveView && c.background && <BackgroundTurn bot={bot} />}
           </div>
         </div>}

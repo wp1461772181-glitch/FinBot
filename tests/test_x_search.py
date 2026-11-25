@@ -368,13 +368,23 @@ def test_catalogue_entry():
 
 
 def test_other_tools_are_untouched():
-    from app.agent_tool_catalog import definitions
+    """What the old engine is offered is what it was before 3a: the kernel-only tools are not in it, and the tools 3a widened show their old schema."""
+    from app.agent_tool_catalog import legacy_definitions
     now = {n: hashlib.sha256((p.description + json.dumps(p.args_schema.model_json_schema(), sort_keys=True)).encode()).hexdigest()[:16]
-           for n, p in definitions().items()}
+           for n, p in legacy_definitions().items()}
     assert {n: h for n, h in now.items() if n != "search_x"} == SNAPSHOT
-    names = list(definitions())
+    names = list(legacy_definitions())
     assert [n for n in names if n != "search_x"] == list(SNAPSHOT)
     assert names.index("search_x") == names.index("search_configured_news") + 1
+
+
+def test_the_kernel_sees_the_3a_additions_and_widenings():
+    from app.agent_tool_catalog import KERNEL_ONLY, definitions, legacy_definitions
+    full, old = definitions(), legacy_definitions()
+    assert set(full) - set(old) == set(KERNEL_ONLY) and len(KERNEL_ONLY) == 12
+    widened = {n for n in old if full[n].description != old[n].description or full[n].args_schema is not old[n].args_schema}
+    assert widened == {"analyze", "create_routine", "update_routine"}
+    assert list(full).index("list_models") == list(full).index("search_x") + 1
 
 
 def test_the_label_exists_in_the_frontend():

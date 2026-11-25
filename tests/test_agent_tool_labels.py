@@ -28,5 +28,8 @@ def test_every_catalogue_tool_has_a_display_name():
 def test_no_display_name_is_left_behind_by_a_removed_tool():
     from app.agent_tool_catalog import definitions
 
-    stale = sorted(labelled_tools() - set(definitions()))
+    from app.kernel import helper
+
+    kernel_own = {helper.DELEGATE}     # the kernel's own tools that the backstage names; not in the catalogue
+    stale = sorted(labelled_tools() - set(definitions()) - kernel_own)
     assert not stale, f"labels for tools that no longer exist: {stale}"

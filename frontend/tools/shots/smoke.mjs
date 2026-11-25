@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, workspaceCardsLoaded, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, stateWithQueue, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, workspaceCardsLoaded, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateNoViews, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, stateWithQueue, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -1576,6 +1576,73 @@ async function chatCancel(ctx) {
     assert(await hand.aborted(0), "the request was not aborted");
     assert((await page.locator("[data-testid=stop]").count()) === 0, "the cancel button is still there");
     return "partial text kept, 已停止 shown on the message, no status line, request aborted, composer usable";
+  } finally { await view.close(); }
+}
+
+/** 3c: the box stays open while an answer is written; what a message sent meanwhile shows (received, merged, its own answer beside the first, queued), and the stop button stops one answer. */
+async function chatInterject(ctx) {
+  const view = await openChat(ctx, "chat-interject");
+  try {
+    const { page } = view;
+    const first = "t9000000-0000-4000-8000-0000000000e1", second = "t9000000-0000-4000-8000-0000000000e2";
+    const hand = await handFed(page);
+    const say = async (text, index) => { await page.locator("#agent-draft").fill(`${HAND_MARKER} ${text}`); await page.locator("[data-testid=send]").click(); if (index !== undefined) await hand.opened(index); };
+    await say("NVDA 营收", 0);
+    await hand.push(0, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: first, bot_id: BOT.finbot });
+    await hand.push(0, "delta", { text: "NVDA 营收约 " });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "NVDA 营收约" }).waitFor({ timeout: 10000 });
+    // 1. the box is open while it answers; stop and send sit side by side
+    assert(await page.locator("#agent-draft").isEnabled(), "the box is closed while an answer is written");
+    assert((await page.locator("[data-testid=stop]").count()) === 1 && (await page.locator("[data-testid=send]").count()) === 1, "stop and send are not both there");
+    // 2. a message sent meanwhile is added at once; the server's receipt makes it 已收到; a merge says so and the answer then quotes both
+    await say("顺便比 AMD", 1);
+    await page.locator("[data-testid=message][data-role=user]", { hasText: "顺便比 AMD" }).waitFor({ timeout: 10000 });
+    await hand.push(1, "received", { message_id: "m9000000-0000-4000-8000-0000000000e2" });
+    await page.locator("[data-testid=delivery-note][data-kind=received]", { hasText: "已收到" }).waitFor({ timeout: 10000 });
+    await hand.push(1, "merged", { into_turn: first }); await hand.close(1);
+    await page.locator("[data-testid=delivery-note][data-kind=merged]", { hasText: "已并入回答" }).waitFor({ timeout: 10000 });
+    assert(await page.locator("#agent-draft").isEnabled() && (await page.locator("[data-testid=stop]").count()) === 1, "the first answer stopped being live when the message was taken in");
+    const order = await page.locator("[data-testid=thread] > [data-testid=message]").evaluateAll(list => list.map(el => `${el.getAttribute("data-role")}:${el.getAttribute("data-role") === "user" && (el.textContent || "").includes("顺便比 AMD") ? "merged" : ""}`));
+    assert(order.join(",").endsWith("user:,user:merged,assistant:"), `the merged message is not above the answer it joined: ${order.join(",")}`);
+    await hand.push(0, "delta", { text: "440 亿，AMD 70 亿。" }); await hand.push(0, "done", { status: "complete", turn_id: first, thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(0);
+    await page.locator("[data-testid=reply-quote]", { hasText: /NVDA 营收 \/ \[hand-fed\] 顺便比 AMD/ }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=stop]").waitFor({ state: "detached", timeout: 10000 });
+    // 3. a message that gets its own answer: two answers in progress at once; the stop button stops the newest one only
+    await say("另外记一下 TSLA", 2);
+    await hand.push(2, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: "t9000000-0000-4000-8000-0000000000e3", bot_id: BOT.finbot });
+    await hand.push(2, "delta", { text: "第一个回答在写，" });
+    await say("再看 AMD 毛利", 3);
+    await hand.push(3, "received", { message_id: "m9000000-0000-4000-8000-0000000000e4" }); await hand.push(3, "separate", { turn_id: second });
+    await hand.push(3, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: second, bot_id: BOT.finbot }); await hand.push(3, "delta", { text: "第二个回答也在写，" });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "第二个回答也在写" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "第一个回答在写" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=stop]").click();
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "第二个回答也在写" }).locator("[data-testid=stopped-note]").waitFor({ timeout: 10000 });
+    assert(await hand.aborted(3) && !(await hand.aborted(2)), "the stop button did not stop exactly the newest answer");
+    await hand.push(2, "delta", { text: "写完了。" });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "第一个回答在写，写完了。" }).waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=stop]").count()) === 1, "the other answer is still running: the stop button must stay");
+    await hand.push(2, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000e3", thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(2);
+    await page.locator("[data-testid=stop]").waitFor({ state: "detached", timeout: 10000 });
+    // 4. a turn that cannot take messages while it runs (409): the message comes back to the box with a note, and the running turn is untouched
+    await say("又一件事", 4);
+    await hand.push(4, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: "t9000000-0000-4000-8000-0000000000e5", bot_id: BOT.finbot }); await hand.push(4, "delta", { text: "第五个回答，" });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "第五个回答" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill(`${BUSY_MARKER} 忙时插话`); await page.locator("[data-testid=send]").click();
+    await page.locator("[data-testid=send-note]").waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "忙时插话" }).count()) === 0, "the refused message stayed in the thread");
+    assert((await page.locator("#agent-draft").inputValue()).includes("忙时插话"), "the refused message did not come back to the box");
+    assert(!(await hand.aborted(4)), "the running turn was touched");
+    await hand.push(4, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000e5", thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(4);
+    await page.locator("[data-testid=stop]").waitFor({ state: "detached", timeout: 10000 });
+    // 5. a message the server takes in although this tab thought nothing ran (a turn started elsewhere): it is labelled, and no empty answer is left
+    const answers = await page.locator("[data-testid=message][data-role=assistant]").count();
+    await say("别处开始的那一轮", 5);
+    await hand.push(5, "received", { message_id: "m9000000-0000-4000-8000-0000000000e6" }); await hand.push(5, "merged", { into_turn: "t-elsewhere" }); await hand.close(5);
+    await page.locator("[data-testid=delivery-note][data-kind=merged]", { hasText: "已并入回答" }).nth(1).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=stop]").waitFor({ state: "detached", timeout: 10000 });
+    assert((await page.locator("[data-testid=message][data-role=assistant]").count()) === answers, "an empty answer bubble was left");
+    return "box open while answering; 已收到, 已并入回答 above its answer and a quote on the answer; two answers side by side, stop stops the newest only; a refused message returns to the box";
   } finally { await view.close(); }
 }
 
@@ -9928,6 +9995,51 @@ async function memoryOps(ctx) {
   return `9 operations: ${done.join("; ")}`;
 }
 
+/** 你的看法: the company page's card (current view, his words, the date, the folded history), the delete of one earlier version (a confirm that says it cannot be undone; one DELETE), the memory page's section with its link, and the empty states. */
+async function ownerViews(ctx) {
+  const view = await asOpen(ctx, "owner views company", "#/research/c/NVDA", "[data-testid=owner-view-text]", { motion: true });
+  try {
+    const { page } = view;
+    const card = page.locator("[data-testid=owner-view]");
+    assert((await page.locator("[data-testid=owner-view-text]").innerText()) === "估值太高，现在不想追", "the current view is not the active version");
+    assert((await card.locator("[data-testid=owner-view-date]").innerText()).trim() === "11月8日 说的", `the date: ${await card.locator("[data-testid=owner-view-date]").innerText()}`);
+    assert((await card.innerText()).includes("你的原话") && (await card.locator("[data-testid=owner-view-quote]").first().innerText()).includes("我改主意了"), "his own words are not shown under 你的原话");
+    assert(await page.locator("[data-testid=owner-view-version]").count() === 0, "the history is open before it is asked for");
+    await page.locator("[data-testid=owner-view-history-toggle]").click();
+    const rows = await page.locator("[data-testid=owner-view-version]").evaluateAll((els) => els.map((e) => ({ status: e.getAttribute("data-status"), text: e.innerText })));
+    assert(rows.length === 2 && rows[0].status === "superseded" && rows[0].text.includes("已更新") && rows[1].status === "dropped" && rows[1].text.includes("已撤回"), `history rows: ${JSON.stringify(rows)}`);
+    const del = page.locator("[data-testid=owner-view-delete]").first();
+    await del.click();
+    const dialog = dialogOf(page);
+    await dialog.waitFor({ state: "visible", timeout: 5000 });
+    const said = await dialog.innerText();
+    assert(said.includes("删除这条历史？") && said.includes("删除后无法恢复"), `the confirm says: ${said}`);
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "hidden", timeout: 5000 });
+    assert(count(view, "DELETE", /\/views\/[^/]+$/) === 0, "a view was deleted by pressing 删除 and cancelling");
+    await del.click(); await dialog.waitFor({ state: "visible", timeout: 5000 });
+    await holdPointer(page, dialog.locator("button", { hasText: "删除" }).last());
+    await page.waitForFunction(() => document.querySelectorAll("[data-testid=owner-view-version]").length === 1, null, { timeout: 8000 });
+    assert(count(view, "DELETE", /\/views\/[^/]+$/) === 1, "the hold did not send exactly one DELETE");
+  } finally { await view.close(); }
+  const memory = await asOpen(ctx, "owner views memory", "#/assistant/memory", "[data-testid=owner-view-item]");
+  try {
+    const { page } = memory;
+    const items = await page.locator("[data-testid=owner-view-item]").evaluateAll((els) => els.map((e) => ({ symbol: e.getAttribute("data-symbol"), href: e.querySelector("[data-testid=owner-view-link]")?.getAttribute("href"), quote: !!e.querySelector("[data-testid=owner-view-quote]") })));
+    assert(items.length === 3 && items.every((i) => i.quote && i.href?.endsWith(`/research/c/${i.symbol}`)), `the section: ${JSON.stringify(items)}`);
+  } finally { await memory.close(); }
+  const empty = await asOpen(ctx, "owner views empty", "#/assistant/memory", "[data-testid=owner-views-empty]", { state: stateNoViews() });
+  try {
+    assert((await empty.page.locator("[data-testid=owner-views-empty]").innerText()).includes("还没有记下对哪家公司的看法。在对话里说出你的看法，它会记下来。"), "the empty sentence is not the one in the brief");
+  } finally { await empty.close(); }
+  const none = await asOpen(ctx, "owner views none", "#/research/c/AAPL", "[data-testid=company-overview]");
+  try {
+    await none.page.waitForTimeout(500);
+    assert(await none.page.locator("[data-testid=owner-view]").count() === 0, "a company with no view and no history shows a card");
+  } finally { await none.close(); }
+  return "NVDA: the active view, his words, 11月8日 说的, the history folded, two earlier versions (已更新, 已撤回), delete asks 删除这条历史？ / 删除后无法恢复 and sends one DELETE after a hold (none after Esc); the memory page lists 3 views with company links; empty sentence; a company with none shows no card";
+}
+
 async function memoryNotesOnce(ctx) {
   const PROFILE = AS.memory.load.paragraphs[0], SCOPE = AS.memory.load.paragraphs[1], RECALL = AS.memory.recall.load.paragraphs[0];
   const times = (text, note) => text.split(note).length - 1;
@@ -11009,7 +11121,7 @@ async function settingsRolesOneTable(ctx) {
   try {
     const { page } = view;
     const rows = await page.locator("[data-testid=roles-table] [data-testid=role-row]").evaluateAll((r) => r.map((x) => x.dataset.role));
-    assert(JSON.stringify(rows) === JSON.stringify(["chat", "earnings", "forecast", "judge", "analysis"]), `the rows are ${JSON.stringify(rows)}`);
+    assert(JSON.stringify(rows) === JSON.stringify(["chat", "earnings", "forecast", "judge", "fallback", "helper", "analysis"]), `the rows are ${JSON.stringify(rows)}`);
     const reads = (re) => view.mock.requests.filter((r) => r.method === "GET" && re.test(r.path)).length;
     assert(reads(/model-roles$/) === 1 && reads(/model-catalog$/) === 1 && reads(/analysis-settings$/) === 1, `reads on entering: roles ${reads(/model-roles$/)}, catalog ${reads(/model-catalog$/)}, analysis ${reads(/analysis-settings$/)} (one each; the old page read 3, 2, 1)`);
     assert((await page.locator("[data-testid=roles-card]").getByRole("button", { name: /保存|设为默认|恢复/ }).count()) === 0, "the table has a save button");
@@ -11587,6 +11699,7 @@ const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
   ["chat-cancel: cancel before the stream ends: 已停止 shown, the generated text kept, composer usable", chatCancel],
+  ["chat-interject: the box stays open while an answer is written; 已收到 / 已并入 / its own answer / the stop button stops one answer / a refused message returns to the box", chatInterject],
   ["chat-background-line: the stream of the bot left behind finishes in the background; the row marks it; the whole answer on return", chatBackgroundLine],
   ["chat-clarification: a turn ending in a card; the pick goes out as the next turn with its request id", chatClarification],
   ["chat-write-confirm: 确认执行 sends the request id; 先不要 sends no confirmation", chatWriteConfirm],
@@ -11838,6 +11951,7 @@ const CHECKS = [
   ["skills-draft-link: #/assistant/skills/<draft> and the old #skills/<draft> open the draft's drawer with its sentence; a missing id says 这个技能不存在。; a built-in opens none; closing goes back to /assistant/skills", skillsDraftLink],
   ["skills-keyboard: a skill made and saved with the keyboard alone, the card's 「…」 menu with Esc returning the focus, the editor closed with Esc and the focus back on 编辑", skillsKeyboard],
   ["memory-ops: the nine memory operations (add ×3, edit with Enter / Esc, scope, 确认 only on inferred, delete by hold, the 往事 tab in the address, search only on submit, the bot filter, open a conversation) send the old requests; a refresh keeps the tab", memoryOps],
+  ["owner-views: the company page's 你的看法 card (current view, his words, date, folded history, delete with a confirm) and the memory page's section", ownerViews],
   ["memory-notes-once: each tab's one sentence appears exactly once, word for word as the old page, and not on the other tab; inferred items carry 推断 and 确认, the others neither", memoryNotesOnce],
   ["memory-keyboard: the tabs by arrow keys and Enter / Space, an item added with Enter, a row edited (Enter saves, Esc leaves) from the keyboard", memoryKeyboard],
   ["news-ops: the seven news-source operations (new, edit ×6, switch both ways, test fetch ×6 opening under the row, REA repair only on repairable sources, delete by hold, the push length) send the old requests body for body", newsOps],

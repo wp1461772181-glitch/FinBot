@@ -9,6 +9,7 @@ import { useLocale } from "../../i18n";
 import { chatContext } from "../../agentChatLifecycle.js";
 import { createLineStore, lineKey, loadDraft, saveDraft } from "../../chat-lines.mjs";
 import { planTailSync, pollDelay } from "../../chat-sync.mjs";
+import { addUser, createStreamSet, moveMerged, patchByKey, removeByKey, upsertAnswer, withdrawAnswer, type StreamHandle } from "../../chat-interject.mjs";
 import { arrivalSplit, backgroundExpired, completeTurnsOnly, dropDetached, loadDetached, markDetachedGone, resumePlan, restoredBeforeSend, saveDetached, streamBreak, type Background } from "../../chat-detached.mjs";
 import { parseCompactCommand, type CompactionNotice } from "../../context-usage.mjs";
 import { restoreConversationAfterPersistence, restoreConversationSafely } from "../../chat-session.mjs";
@@ -24,7 +25,7 @@ import type { LiveMessage, SentRequest } from "./live-message";
 type State = "idle" | "testing" | "ready" | "sending" | "restoring" | "error";
 
 type FileHandle = { name: string; getFile: () => Promise<File>; createWritable: () => Promise<{ write: (value: string) => Promise<void>; close: () => Promise<void> }> };
-type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void>; lineStatus: { running: string[]; unseen: string[]; waiting: string[] }; freshExternal: boolean; ackExternal: () => void; externalTurns: string[]; retry: () => Promise<void>; notices: CompactionNotice[]; compactNow: (focus:string)=>Promise<void>; background: Background | null; cancelBackground: () => Promise<void>; awayTurns: string[] };
+type ChatSession = { conversationId:string|null; verified: boolean; state: State; status: string; restoring:boolean; messages: AgentChatMessage[]; historyHasMore:boolean; loadingEarlier:boolean; loadEarlier:()=>Promise<void>; draft: string; setDraft: (v: string) => void; send: (e: FormEvent) => Promise<void>; choose:(value:string,requestId:string)=>Promise<void>; chooseOptions:(values:string[],requestId:string)=>Promise<void>; replyToCard:(value:string,requestId:string)=>Promise<void>; cancel: () => void; clear: () => void; openConversation:(id:string,created?:string)=>Promise<void>; archive: ChatArchive | null; archiveView: ArchiveConversation | null; fileName: string; archiveStatus: string; connectFile: () => Promise<void>; disconnectFile: () => void; exportArchive: () => void; importArchive: (file: File) => Promise<void>; selectArchive: (id:string) => void; returnLive: () => void; bot: Bot | null; selectBot: (bot: Bot | null) => Promise<void>; lineStatus: { running: string[]; unseen: string[]; waiting: string[] }; freshExternal: boolean; ackExternal: () => void; externalTurns: string[]; retry: () => Promise<void>; notices: CompactionNotice[]; compactNow: (focus:string)=>Promise<void>; background: Background | null; cancelBackground: () => Promise<void>; awayTurns: string[]; sendNote: string };
 const Context = createContext<ChatSession | null>(null);
 
 export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
@@ -47,7 +48,7 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   const lifecycle = { get current() { return lines.current.get(lineRef.current).lifecycle; } };
   // FP13-c: the turn a line left running on the server (the banner), the turns this page did not watch finish (by conversation), and per-turn send bookkeeping.
   const [background,setBackground]=useState<Background|null>(null), [awayByConv,setAwayByConv]=useState<Record<string,string[]>>({});
-  const liveTurns = useRef(new Map<string, {detachable: boolean; turnId?: string; conversationId: string | null}>()), presync = useRef(false);
+  const streams = useRef(createStreamSet()), keySeq = useRef(0), presync = useRef(false), [sendNote, setSendNote] = useState("");
   const localStore = () => { try { return window.localStorage; } catch { return undefined; } };
   // Write a line's state; only the viewed line mirrors it into the React state, so a background answer cannot touch the page.
   function apply(line:string, patch:{messages?:AgentChatMessage[];state?:State;status?:string;conversationId?:string|null;historyHasMore?:boolean;historyBefore?:number|null;restoring?:boolean;draft?:string;loaded?:boolean;background?:Background|null}) {
@@ -55,8 +56,8 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
     if (lineRef.current === line) { if (patch.messages !== undefined) { setMessages(patch.messages); latestMessages.current = patch.messages; } if (patch.state !== undefined) setState(patch.state); if (patch.status !== undefined) setStatus(patch.status); if (patch.conversationId !== undefined) setConversationId(patch.conversationId); if (patch.historyHasMore !== undefined) setHistoryHasMore(patch.historyHasMore); if (patch.historyBefore !== undefined) setHistoryBefore(patch.historyBefore); if (patch.restoring !== undefined) setRestoring(patch.restoring); if (patch.draft !== undefined) setDraftState(patch.draft); if (patch.background !== undefined) setBackground(patch.background); }
     bump(n => n + 1);
   }
-  const setDraft = (text:string) => { setDraftState(text); lines.current.update(lineRef.current, { draft: text }); saveDraft(lineRef.current, text); };
-  useEffect(() => () => { for (const [, s] of lines.current.all()) s.lifecycle.invalidate(); }, []);
+  const setDraft = (text:string) => { setDraftState(text); setSendNote(""); lines.current.update(lineRef.current, { draft: text }); saveDraft(lineRef.current, text); };
+  useEffect(() => () => { for (const [line, s] of lines.current.all()) { s.lifecycle.invalidate(); streams.current.killExtras(line); } }, []);
   useEffect(() => { const line="local", lc=lines.current.get(line).lifecycle, controller=new AbortController(), id=lc.begin(controller); apply(line,{restoring:true,state:"restoring"}); void restoreConversationSafely(lc,id,controller.signal,signal=>restoreAgentChat(undefined,signal),saved=>{if(!saved.conversationId)clearAgentConversation();else{localId.current=saved.conversationId;createdAt.current=saved.createdAt??new Date().toISOString();try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,localId.current)}catch{}}apply(line,{conversationId:saved.conversationId,messages:saved.messages.filter(m=>m.role==="user"||m.role==="assistant"),historyHasMore:saved.hasMore,historyBefore:saved.nextBefore,state:"idle",loaded:true});if(saved.conversationId)resumeLine(line,saved.conversationId,saved.messages.filter(m=>m.role==="user"||m.role==="assistant"))}).catch(() => { if (lc.isCurrent(id)) apply(line,{status:t("历史记录暂时无法加载；可稍后重试。"),state:"idle"}); }).finally(()=>{if(lc.isCurrent(id))apply(line,{restoring:false})}); return () => { controller.abort(); earlierController.current?.abort(); lc.finish(id); }; }, []);
   const latestMessages=useRef(messages);latestMessages.current=messages;
   // Turns pulled in from outside this tab since the user last interacted: the main avatar shows its notification until then.
@@ -124,6 +125,12 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
     if (last?.role === "user") return [...items, { role: "assistant", content: "", status: "cancelled" }];
     return items;
   };
+  // The stop button stopped this answer (it may be one of two running side by side): it is marked stopped in place, or made if nothing had come yet.
+  const stopAnswer = (items: AgentChatMessage[], userKey: string, key: string): AgentChatMessage[] => {
+    items = patchByKey(items, userKey, { queue_ahead: undefined });
+    const found: AgentChatMessage = items.find(m => m.role === "assistant" && m.client_key === key) ?? { role: "assistant", content: "", client_key: key, user_key: userKey };
+    return upsertAnswer(items, userKey, { ...found, status: "cancelled", live: false, paused: false, queued_ahead: undefined, tool_trace: found.tool_trace?.map(x => x.status === "running" ? { ...x, status: "cancelled" } : x), trace: found.trace ? cancelRunning(found.trace, "cancelled") : found.trace });
+  };
   function translate(s: string) { return t(s); }
   async function send(e: FormEvent) {
     e.preventDefault();
@@ -157,19 +164,50 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
     await sendContent(reply.message,reply.pendingRequestId);
   }
   async function sendContent(content:string,pendingRequestId?:string,label?:string,base?:AgentChatMessage[]) {
-    if (!(verified||botRef.current) || loadingEarlierRef.current || !content || state === "sending" || state === "testing") return;
+    const line = lineRef.current, current = lines.current.get(line);
+    // 3c: a plain message sent while a turn of this line is answering is an interjection: it goes out at once as a request of its own, and the server
+    // says what became of it (taken into the running answer, its own answer, or it stopped the answer).  A card's answer or a retry is not one.
+    const interject = current.state === "sending" && !pendingRequestId && !base;
+    if (!(verified||botRef.current) || loadingEarlierRef.current || !content || current.state === "testing" || (current.state === "sending" && !interject)) return;
+    setSendNote("");
     // FP13-c: a line with a turn still running on the server first pulls in what has finished (one sync at a time; a second send returns here).
-    const syncLine = lineRef.current;
-    if (lines.current.get(syncLine).background) { if (presync.current) return; presync.current = true; try { await syncBeforeSend(syncLine); } finally { presync.current = false; } }
-    let context: AgentChatMessage[]; const history = base ?? latestMessages.current; try { context = chatContext(history, { role: "user", content }); } catch (error) { setStatus(t(error instanceof Error ? error.message : "消息过长，请缩短后重试。")); return; }
-    const line = lineRef.current, lc = lines.current.get(line).lifecycle;
-    const next = [...history, { role: "user" as const, content: label||content }]; lastRequests.current.set(line, { content, pendingRequestId, label }); saveDraft(line, ""); const before = latestMessages.current; apply(line, { messages: next, draft: "", state: "sending", status: "" }); liveTurns.current.set(line, { detachable: false, conversationId: lines.current.get(line).conversationId }); const turnBot = botRef.current, tested = turnBot ? { bot_id: turnBot.id } : { catalog_model: "" }, controller = new AbortController(), id = lc.begin(controller);
-    let detachable = false, sawTerminal = false; let localQueue = ""; let accumulated = ""; let turnId: string|undefined; let citations: NonNullable<AgentChatMessage["citations"]> = []; let citationProtocol: string|undefined; let citationNodes: NonNullable<AgentChatMessage["citation_nodes"]> = []; let clarification:AgentChatMessage["clarification"]; let cardAt:number|undefined; let terminalStatus="complete"; let reusedSources=false; let unverified: ReturnType<typeof normalizeUnverified> = []; const tools: NonNullable<AgentChatMessage["tool_trace"]> = []; let trace: FlowNode[] = []; let thinkingMs: number|undefined; const narration: string[] = []; let checklist: NonNullable<AgentChatMessage["checklist"]>|undefined; let tier: string|undefined; const startedAt = Date.now(); const liveFields = (): Partial<LiveMessage> => (cardAt ? { card_at: cardAt } : {}); const kernelFields = (): Partial<AgentChatMessage> => ({ ...(narration.length ? { narration: [...narration] } : {}), ...(checklist ? { checklist } : {}), ...(tier ? { tier } : {}) });
+    if (!interject && lines.current.get(line).background) { if (presync.current) return; presync.current = true; try { await syncBeforeSend(line); } finally { presync.current = false; } }
+    let context: AgentChatMessage[]; const history = base ?? (interject ? lines.current.get(line).messages : latestMessages.current); try { context = chatContext(history, { role: "user", content }); } catch (error) { setStatus(t(error instanceof Error ? error.message : "消息过长，请缩短后重试。")); return; }
+    const lc = lines.current.get(line).lifecycle, n = ++keySeq.current, userKey = `u${n}`, answerKey = `a${n}`;
+    const next = addUser(history, { key: userKey, content: label||content, interject, answerKey: interject ? undefined : answerKey });
+    if (!interject) lastRequests.current.set(line, { content, pendingRequestId, label });
+    saveDraft(line, ""); const before = latestMessages.current; apply(line, { messages: next, draft: "", state: "sending", ...(interject ? {} : { status: "" }) });
+    const turnBot = botRef.current, tested = turnBot ? { bot_id: turnBot.id } : { catalog_model: "" }, controller = new AbortController(), id = interject ? 0 : lc.begin(controller);
+    // This request, as the line's stop button and the sync see it.  An interjection writes no answer until the server says `separate` (or `queued`).
+    const handle: StreamHandle = { key: answerKey, userKey, main: !interject, answer: !interject, dead: false, controller, conversationId: lines.current.get(line).conversationId, detachable: false };
+    streams.current.add(line, handle);
+    const alive = () => !handle.dead && (interject || lc.isCurrent(id));
+    const edit = (change: (items: AgentChatMessage[]) => AgentChatMessage[]) => apply(line, { messages: change(lines.current.get(line).messages) });
+    const leave = () => { streams.current.remove(line, handle); return streams.current.count(line) === 0; };
+    const restoreDraft = () => { if (!lines.current.get(line).draft) { apply(line, { draft: content }); saveDraft(line, content); } };
+    let detachable = false, sawTerminal = false, answering = !interject, gotReceipt = false; let localQueue = ""; let accumulated = ""; let turnId: string|undefined; let citations: NonNullable<AgentChatMessage["citations"]> = []; let citationProtocol: string|undefined; let citationNodes: NonNullable<AgentChatMessage["citation_nodes"]> = []; let clarification:AgentChatMessage["clarification"]; let cardAt:number|undefined; let terminalStatus="complete"; let reusedSources=false; let unverified: ReturnType<typeof normalizeUnverified> = []; const tools: NonNullable<AgentChatMessage["tool_trace"]> = []; let trace: FlowNode[] = []; let thinkingMs: number|undefined; const narration: string[] = []; let checklist: NonNullable<AgentChatMessage["checklist"]>|undefined; let tier: string|undefined; let paused = false, queuedAhead: number|undefined, stoppedByMessage = false; const startedAt = Date.now(); const liveFields = (): Partial<LiveMessage> => (cardAt ? { card_at: cardAt } : {}); const kernelFields = (): Partial<AgentChatMessage> => ({ ...(narration.length ? { narration: [...narration] } : {}), ...(checklist ? { checklist } : {}), ...(tier ? { tier } : {}) });
+    const answer = (open: boolean): AgentChatMessage => ({ role: "assistant", content: accumulated + localQueue, turn_id:turnId, tool_trace: [...tools], citations, citation_protocol: citationProtocol, citation_nodes: citationNodes, unverified_lines: unverified, clarification, trace, thinking_ms: thinkingMs, started_at: startedAt, ...kernelFields(), status:terminalStatus, reused_sources:reusedSources, ...liveFields(), client_key: answerKey, user_key: userKey, live: open, ...(paused ? { paused: true } : {}), ...(queuedAhead ? { queued_ahead: queuedAhead } : {}), ...(stoppedByMessage ? { stopped_by_message: true } : {}) });
     try {
       await agentChatStream(tested, content, turnBot ? null : conversationId, controller.signal, (event: AgentChatEvent) => {
-        if (!lc.isCurrent(id)) return false;
+        if (!alive()) return false;
         if (event.event === "conversation" && typeof event.data.conversation_id === "string") {if(typeof event.data.turn_id==="string")turnId=event.data.turn_id;const cid=event.data.conversation_id;if(lineRef.current===line&&cid!==conversationId){const created=new Date().toISOString();localId.current=cid;createdAt.current=created;selectAgentConversation(cid,created)}apply(line,{conversationId:cid});}
-        if (event.event === "conversation" && typeof event.data.conversation_id === "string") { const cid=String(event.data.conversation_id); apply(line,{background:null}); const live=liveTurns.current.get(line); if(live){live.turnId=turnId;live.conversationId=cid;} if(detachable&&turnId) saveDetached(localStore(),cid,{turnId,question:(label||content).slice(0,4000),at:startedAt}); }
+        if (event.event === "conversation" && typeof event.data.conversation_id === "string") { const cid=String(event.data.conversation_id); apply(line,{background:null}); handle.turnId=turnId; handle.conversationId=cid; if(detachable&&turnId&&!interject) saveDetached(localStore(),cid,{turnId,question:(label||content).slice(0,4000),at:startedAt}); }
+        // 3c: what became of a message sent while a turn was answering.
+        if (event.event === "received") {
+          // The server treats this as a message sent to a turn that is running (started elsewhere: Telegram, another tab, before a reload) even when this tab thought none was: no answer of its own until it says `separate` or `queued`.
+          gotReceipt = true; answering = false; handle.answer = false;
+          edit(m => withdrawAnswer(patchByKey(m, userKey, { delivery: "received", ...(typeof event.data.message_id === "string" ? { id: event.data.message_id } : {}) }), userKey, answerKey));
+        }
+        if (event.event === "merged") {
+          sawTerminal = true; const into = String(event.data.into_turn ?? ""), target = streams.current.all(line).find(h => h.turnId === into);
+          // It goes where it arrived: above the answer it joined (the stored order), so that answer, and a card on it, stays the last message.
+          edit(m => moveMerged(patchByKey(m, userKey, { delivery: "merged", into_turn: into }), userKey, { intoTurn: into, targetUserKey: target?.userKey }));
+        }
+        if (event.event === "separate") { answering = true; handle.answer = true; if (typeof event.data.turn_id === "string") turnId = event.data.turn_id; handle.turnId = turnId; edit(m => patchByKey(m, userKey, { delivery: "separate", answer_key: answerKey })); }
+        if (event.event === "queued") { const ahead = Number(event.data.ahead); if (Number.isFinite(ahead) && ahead > 0) { queuedAhead = ahead; if (!answering) { answering = true; handle.answer = true; } edit(m => patchByKey(m, userKey, { queue_ahead: ahead, answer_key: answerKey })); } }
+        else if (queuedAhead && !["conversation", "received", "separate"].includes(event.event)) { queuedAhead = undefined; edit(m => patchByKey(m, userKey, { queue_ahead: undefined })); }
+        if (event.event === "stopped") { if (answering) { stoppedByMessage = true; terminalStatus = "cancelled"; paused = false; } else { sawTerminal = true; edit(m => patchByKey(m, userKey, { delivery: "stopped" })); } }
+        if (event.event === "answer_paused") paused = true;
         if (event.event === "client_action") {
           const applied=dispatchAgentAction(event.data, window);
           if (applied && event.data.action === "show_queue") localQueue=`\n\n${t("研究队列")}: ${(watchlistSnapshot() ?? []).join(", ") || "—"}`;
@@ -185,38 +223,73 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
         if (event.event === "unverified_lines") unverified = normalizeUnverified(event.data.items);
         if (event.event === "clarification") { clarification=normalizeClarification(event.data)??undefined; cardAt=clarification?Date.now():undefined; }
         if (event.event === "trace") trace = upsertNode(trace, event.data);
-        if (event.event === "done") {citationProtocol=event.data.citation_protocol==="v2"?"v2":undefined;citationNodes=Array.isArray(event.data.citation_nodes)?event.data.citation_nodes as NonNullable<AgentChatMessage["citation_nodes"]>:citationNodes;terminalStatus=String(event.data.status??"complete");reusedSources=(event.data.audit as {reused_sources?:boolean}|undefined)?.reused_sources===true;const thinking=Number(event.data.thinking_ms);if(Number.isFinite(thinking))thinkingMs=thinking;}
-        if (event.event === "done" || event.event === "error") { sawTerminal = true; const cid = liveTurns.current.get(line)?.conversationId; if (cid) dropDetached(localStore(), cid); }
-        if (event.event === "delta" && typeof event.data.text === "string") accumulated += event.data.text;
-        if (event.event === "answer_reset") accumulated = "";
+        if (event.event === "done") {citationProtocol=event.data.citation_protocol==="v2"?"v2":undefined;citationNodes=Array.isArray(event.data.citation_nodes)?event.data.citation_nodes as NonNullable<AgentChatMessage["citation_nodes"]>:citationNodes;terminalStatus=String(event.data.status??"complete");if(terminalStatus==="stopped"){terminalStatus="cancelled";stoppedByMessage=true;}paused=false;reusedSources=(event.data.audit as {reused_sources?:boolean}|undefined)?.reused_sources===true;const thinking=Number(event.data.thinking_ms);if(Number.isFinite(thinking))thinkingMs=thinking;}
+        if (event.event === "done" || event.event === "error") { sawTerminal = true; const cid = handle.conversationId; if (cid && handle.main) dropDetached(localStore(), cid); }
+        if (event.event === "delta" && typeof event.data.text === "string") { accumulated += event.data.text; paused = false; }
+        if (event.event === "answer_reset") { accumulated = ""; paused = false; }
         if (event.event === "error") throw new Error(String(event.data.code ?? "chat_failed"));
-        apply(line,{messages:[...next, { role: "assistant", content: accumulated + localQueue, turn_id:turnId, tool_trace: [...tools], citations, citation_protocol: citationProtocol, citation_nodes: citationNodes, unverified_lines: unverified, clarification, trace, thinking_ms: thinkingMs, started_at: startedAt, ...kernelFields(), status:terminalStatus, reused_sources:reusedSources, ...liveFields() }]});
+        if (answering) edit(m => upsertAnswer(m, userKey, answer(true)));
         return true;
-      },pendingRequestId,label,(note)=>{ if (note === "detached") { detachable = true; const live=liveTurns.current.get(line); if(live) live.detachable=true; } });
-      if (!lc.isCurrent(id)) return; apply(line,{messages:[...next, { role: "assistant", content: accumulated + localQueue, turn_id:turnId, tool_trace: [...tools], citations, citation_protocol: citationProtocol, citation_nodes: citationNodes, unverified_lines: unverified, clarification, trace, thinking_ms: thinkingMs, started_at: startedAt, ...kernelFields(), status:terminalStatus, reused_sources:reusedSources, ...liveFields() }],status:"",state:"ready"});
+      },pendingRequestId,label,(note)=>{ if (note === "detached") { detachable = true; handle.detachable = true; } });
+      if (!alive()) return;
+      const idle = leave();
+      edit(m => answering ? upsertAnswer(m, userKey, answer(false)) : m);
+      if (idle) apply(line,{status:"",state:"ready"});
     }
-    catch (error) { if (!lc.isCurrent(id)) return;
+    catch (error) { if (!alive()) return;
+      const aborted = error instanceof DOMException && error.name === "AbortError"; paused = false;
       // FP13-c (§3.6): the server refused the send as busy, before anything was written.  The list goes back to what it was, the text back to the box.
       if (error instanceof ApiError && error.status === 409 && error.message === "conversation_busy") {
-        const priorBackground = lines.current.get(line).background, known = lines.current.get(line).conversationId;
+        if (interject) {
+          // A turn that cannot take messages while it runs (the old engine, a guest's): the message was not sent.  It comes out of the thread and back to the box.
+          const idle = leave(); edit(m => removeByKey(m, userKey)); restoreDraft(); setSendNote(t("上一条还在回答，这条没有发出去；答完后再发。"));
+          if (idle) apply(line,{state:"ready",status:""});
+          return;
+        }
+        const priorBackground = lines.current.get(line).background, known = lines.current.get(line).conversationId; leave();
         apply(line,{messages: before, state:"ready", status:""});
         if (!pendingRequestId && !label && !base) { apply(line,{draft:content}); saveDraft(line, content); }
         apply(line,{background:{conversationId: known, turnId: priorBackground?.turnId ?? null, reason:"busy", at: Date.now()}});
         return;
       }
+      // Waiting in the queue when the request broke: it did not start (the server may still run it; after a reload its stored state says).  No stale 排队中.
+      if (queuedAhead && !aborted) { const idle = leave(); edit(m => patchByKey(withdrawAnswer(m, userKey, answerKey), userKey, { queue_ahead: undefined, delivery: "unstarted" })); if (idle) apply(line,{state:"ready",status:""}); return; }
+      // 3c: a message that never got an answer of its own and whose request broke: before the server had it, it was not sent (back to the box); after, it stays (the server has it).
+      if ((interject || gotReceipt) && !answering) {
+        const idle = leave();
+        if (!gotReceipt && !aborted) { edit(m => removeByKey(m, userKey)); restoreDraft(); setSendNote(errorReason(error, translate)); }
+        if (idle) apply(line,{state:"ready",status:""});
+        return;
+      }
       // FP13-c (§3.2): a broken stream of a detached turn is a background turn, or an ended one; anything else falls through unchanged.
-      const cid = liveTurns.current.get(line)?.conversationId ?? lines.current.get(line).conversationId, turnNow = liveTurns.current.get(line)?.turnId ?? null;
-      const kind = streamBreak({ aborted: error instanceof DOMException && error.name === "AbortError", detachable, sawTerminal, closed: error instanceof ApiError && error.message === "provider_incomplete_stream" });
-      if (kind === "detached") { apply(line,{messages: next, state:"ready", status:"", background:{conversationId: cid, turnId: turnNow, reason:"dropped", at: Date.now()}}); return; }
-      if (kind === "ended") { if (cid) markDetachedGone(localStore(), cid); apply(line,{messages: next, state:"ready", status: t("这一轮在服务器上结束了，但这里没有收到回答；已保存的结果会自动出现在对话里。")}); return; }
-      const stopped=error instanceof DOMException && error.name==="AbortError"; const failure={ code:error instanceof Error?error.message:"", network:error instanceof TypeError, message:error instanceof Error ? errorReason(error, translate) : translate("发送失败，请重试") }; const stoppedTools=tools.map(x => x.status === "running" ? { ...x, status: "cancelled" } : x); apply(line,{messages:[...next, { role:"assistant",content:accumulated,status:stopped?"cancelled":"failed",tool_trace:stoppedTools,trace:cancelRunning(trace,stopped?"cancelled":"failed"),thinking_ms:thinkingMs??Date.now()-startedAt, ...kernelFields(), ...(stopped?{}:{ failure }) }],state:stopped?"ready":"error",status:stopped?"":failure.message}); }
-    finally { lc.finish(id); }
+      const cid = handle.conversationId ?? lines.current.get(line).conversationId, turnNow = handle.turnId ?? null;
+      const kind = streamBreak({ aborted, detachable, sawTerminal, closed: error instanceof ApiError && error.message === "provider_incomplete_stream" });
+      if (kind === "detached") { const idle = leave(); edit(m => withdrawAnswer(m, userKey, answerKey)); apply(line,{...(idle ? {state:"ready", status:"", background:{conversationId: cid, turnId: turnNow, reason:"dropped", at: Date.now()}} : {})}); return; }
+      if (kind === "ended") { if (cid) markDetachedGone(localStore(), cid); const idle = leave(); edit(m => withdrawAnswer(m, userKey, answerKey)); apply(line,{...(idle ? {state:"ready", status: t("这一轮在服务器上结束了，但这里没有收到回答；已保存的结果会自动出现在对话里。")} : {})}); return; }
+      const stopped=aborted; const failure={ code:error instanceof Error?error.message:"", network:error instanceof TypeError, message:error instanceof Error ? errorReason(error, translate) : translate("发送失败，请重试") }; const stoppedTools=tools.map(x => x.status === "running" ? { ...x, status: "cancelled" } : x); const idle = leave();
+      edit(m => upsertAnswer(m, userKey, { ...answer(false), content:accumulated, status:stopped?"cancelled":"failed",tool_trace:stoppedTools,trace:cancelRunning(trace,stopped?"cancelled":"failed"),thinking_ms:thinkingMs??Date.now()-startedAt, ...(stopped?{}:{ failure }) } as AgentChatMessage));
+      if (idle) apply(line,{state:stopped?"ready":"error",status:stopped?"":failure.message}); }
+    finally { if (!interject) lc.finish(id); leave(); }
   }
-  const cancel = () => { const line = lineRef.current, wasSending = state === "sending"; const live = liveTurns.current.get(line), liveCid = live?.conversationId ?? lines.current.get(line).conversationId; if (wasSending && live?.detachable && liveCid) void stopDetached(line, liveCid, live.turnId); lifecycle.current.invalidate(); apply(line, { ...(wasSending ? { messages: cancelledMessages(latestMessages.current) } : {}), restoring: false, state: verified ? "ready" : "idle", status: "" }); };
+  // The stop button stops one turn: the newest that is writing an answer.  Messages sent meanwhile that have no answer of their own are not turns to stop.
+  const cancel = () => {
+    const line = lineRef.current, current = lines.current.get(line), target = current.state === "sending" ? streams.current.stopTarget(line) : null;
+    if (!target) {
+      // Nothing is writing (a slow restore, or only messages waiting to hear what became of them): let go of whatever is open.
+      const wasSending = state === "sending"; streams.current.killExtras(line); lifecycle.current.invalidate();
+      apply(line, { ...(wasSending ? { messages: cancelledMessages(latestMessages.current) } : {}), restoring: false, state: verified ? "ready" : "idle", status: "" }); return;
+    }
+    target.dead = true; target.controller.abort(); if (target.main) lifecycle.current.invalidate();
+    const cid = target.conversationId ?? current.conversationId;
+    if (target.detachable && cid) void stopDetached(line, cid, target.turnId);
+    streams.current.remove(line, target);
+    const idle = streams.current.count(line) === 0;
+    apply(line, { messages: stopAnswer(current.messages, target.userKey, target.key), ...(idle ? { restoring: false, state: verified ? "ready" : "idle", status: "" } : {}) });
+  };
   async function openConversation(id:string, created?:string){
     earlierController.current?.abort();loadingEarlierRef.current=false;setLoadingEarlier(false);
     const previous=latestMessages.current;let lastUser=-1;for(let i=previous.length-1;i>=0;i--)if(previous[i].role==="user"){lastUser=i;break;}const completed=state==="sending"?previous.slice(0,Math.max(0,lastUser)):previous;
-    const line=lineRef.current, lc=lines.current.get(line).lifecycle, controller=new AbortController(), token=lc.begin(controller);apply(line,{restoring:true,state:"restoring",status:""});
+    const line=lineRef.current, lc=lines.current.get(line).lifecycle, controller=new AbortController();streams.current.killExtras(line);const token=lc.begin(controller);apply(line,{restoring:true,state:"restoring",status:""});
     try{await restoreConversationAfterPersistence(lc,token,controller.signal,()=>handle.current&&completed.length?persistConversation(completed):Promise.resolve(),signal=>restoreAgentChat(id,signal,true),saved=>{const restoredId=saved.conversationId??id,chosenCreatedAt=created??saved.createdAt??new Date().toISOString();const display=saved.messages.filter(m=>m.role==="user"||m.role==="assistant");if(lineRef.current===line){selectAgentConversation(restoredId,chosenCreatedAt);localId.current=restoredId;createdAt.current=chosenCreatedAt;try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,restoredId)}catch{}setArchiveView(null);setImportedReadOnly(false);}apply(line,{conversationId:restoredId,messages:display,historyHasMore:saved.hasMore,historyBefore:saved.nextBefore,state:verified?"ready":"idle",loaded:true});resumeLine(line,restoredId,display)})}
     catch(error){if(lc.isCurrent(token)&&!(error instanceof DOMException&&error.name==="AbortError")){apply(line,{status:t("无法恢复服务端聊天记录。"),state:verified?"ready":"idle"});}}
     finally{if(lc.isCurrent(token)){lc.finish(token);apply(line,{restoring:false})}}
@@ -238,7 +311,7 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
       if(earlierController.current===controller){earlierController.current=null;loadingEarlierRef.current=false;setLoadingEarlier(false);}
     }
   }
-  const clearLine = (keepDraft:boolean) => { const line=lineRef.current; earlierController.current?.abort();loadingEarlierRef.current=false;setLoadingEarlier(false); const previous=latestMessages.current;let lastUser=-1;for(let i=previous.length-1;i>=0;i--)if(previous[i].role==="user"){lastUser=i;break;}const completed=state==="sending"?previous.slice(0,Math.max(0,lastUser)):previous;if(handle.current&&completed.length)void persistConversation(completed); lifecycle.current.invalidate();setArchiveView(null);if(importedReadOnly){setImportedReadOnly(false);setArchive(archiveRef.current);}clearAgentConversation(); if(!keepDraft)saveDraft(line,""); localId.current=crypto.randomUUID();createdAt.current=new Date().toISOString();try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,localId.current);}catch{}apply(line,{restoring:false,conversationId:null,messages:[],historyHasMore:false,historyBefore:null,...(keepDraft?{}:{draft:""}),state:verified ? "ready" : "idle",status:"",loaded:true}); };
+  const clearLine = (keepDraft:boolean) => { const line=lineRef.current; earlierController.current?.abort();loadingEarlierRef.current=false;setLoadingEarlier(false); const previous=latestMessages.current;let lastUser=-1;for(let i=previous.length-1;i>=0;i--)if(previous[i].role==="user"){lastUser=i;break;}const completed=state==="sending"?previous.slice(0,Math.max(0,lastUser)):previous;if(handle.current&&completed.length)void persistConversation(completed); lifecycle.current.invalidate();streams.current.killExtras(line);setArchiveView(null);if(importedReadOnly){setImportedReadOnly(false);setArchive(archiveRef.current);}clearAgentConversation(); if(!keepDraft)saveDraft(line,""); localId.current=crypto.randomUUID();createdAt.current=new Date().toISOString();try{window.localStorage.setItem(`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,localId.current);}catch{}apply(line,{restoring:false,conversationId:null,messages:[],historyHasMore:false,historyBefore:null,...(keepDraft?{}:{draft:""}),state:verified ? "ready" : "idle",status:"",loaded:true}); };
   const clear = () => clearLine(false);
   async function selectBot(next:Bot|null){
     const prev=lineRef.current, line=lineKey(next,null), switched=prev!==line;botRef.current=next;setBot(next);
@@ -283,13 +356,13 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   async function stopDetached(line:string, cid:string, turnId:string|undefined) {
     const result = await cancelAgentTurn(cid, turnId ?? null);
     if (result.cancelled) { dropDetached(localStore(), cid); return; }
-    const cur = lines.current.get(line), last = cur.messages.at(-1);
-    const placeholder = cur.state !== "sending" && last?.role === "assistant" && last.status === "cancelled" && (turnId ? last.turn_id === turnId : true);
+    const cur = lines.current.get(line), at = turnId ? cur.messages.map(m => m.role === "assistant" && m.turn_id === turnId).lastIndexOf(true) : cur.messages.length - 1, last = cur.messages[at];
+    const placeholder = (turnId || cur.state !== "sending") && last?.role === "assistant" && last.status === "cancelled";
     const gone = result.reason === "no_running_turn" || result.reason === "turn_mismatch";
     if (gone) markDetachedGone(localStore(), cid);
     if (!placeholder) return;
-    if (result.reason === "unreachable") { apply(line, { messages: cur.messages.slice(0, -1), background: { conversationId: cid, turnId: turnId ?? null, reason: "stop_unreachable", at: Date.now() } }); return; }
-    if (gone) apply(line, { messages: cur.messages.slice(0, -1), status: t("这一轮在停止前已经答完，结果会自动出现在这里。") });
+    if (result.reason === "unreachable") { apply(line, { messages: cur.messages.filter((_, i) => i !== at), background: { conversationId: cid, turnId: turnId ?? null, reason: "stop_unreachable", at: Date.now() } }); return; }
+    if (gone) apply(line, { messages: cur.messages.filter((_, i) => i !== at), status: t("这一轮在停止前已经答完，结果会自动出现在这里。") });
   }
   // The banner's stop button (§3.3): asks the server to stop the background turn and reports what it said.
   async function cancelBackground() {
@@ -310,7 +383,7 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
     if (plan.kind === "expired") apply(line, { status: t("后台那一轮一直没有结果出现，可能已被中断；需要的话可以再发一次。") });
   }
   const visibleMessages=archiveView?archiveView.messages as AgentChatMessage[]:messages;
-  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,lineStatus:{running:lines.current.running(),unseen:lines.current.unseen(),waiting:lines.current.waiting()},archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot , freshExternal, ackExternal: () => setFreshExternal(false), externalTurns, retry, notices, compactNow, background, cancelBackground, awayTurns }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ conversationId,verified:verified||Boolean(bot), state, status, restoring,messages:visibleMessages, historyHasMore, loadingEarlier, loadEarlier, draft, setDraft, send, choose, chooseOptions, replyToCard, cancel, clear,openConversation,lineStatus:{running:lines.current.running(),unseen:lines.current.unseen(),waiting:lines.current.waiting()},archive,archiveView,fileName,archiveStatus,connectFile,disconnectFile,exportArchive,importArchive,selectArchive,returnLive,bot,selectBot , freshExternal, ackExternal: () => setFreshExternal(false), externalTurns, retry, notices, compactNow, background, cancelBackground, awayTurns, sendNote }}>{children}</Context.Provider>;
 }
 function readLocalConversationId(){try{const key=`market-evidence-agent:local-chat-id:${getChatMode()}:v1`,existing=window.localStorage.getItem(key);if(existing&&/^[\w-]{1,80}$/.test(existing))return existing;const id=crypto.randomUUID();window.localStorage.setItem(key,id);return id;}catch{return crypto.randomUUID();}}
 function archiveMessages(messages:AgentChatMessage[]){return messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role as "user"|"assistant",content:m.content,...(m.status?{status:m.status as "failed"|"cancelled"}:{}),...(m.role==="assistant"&&m.citations?{citations:m.citations}:{}),...(m.role==="assistant"&&m.unverified_lines?.length?{unverified_lines:m.unverified_lines}:{}),...(m.role==="assistant"&&m.tool_trace?{tool_trace:m.tool_trace.map(x=>({call_id:x.call_id,name:x.name,arguments:x.arguments,result:x.result,status:x.status as "running"|"complete"|"not_found"|"failed"|"cancelled"}))}:{})}));}

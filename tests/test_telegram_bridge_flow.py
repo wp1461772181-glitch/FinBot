@@ -270,21 +270,26 @@ def test_long_turn_does_not_block_other_bot_callback_or_outbox(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_same_bot_second_message_queued(monkeypatch):
+def test_same_bot_second_message_is_posted_at_once_and_a_409_queues_it(monkeypatch):
     wire = _Wire(monkeypatch)
     log = []
 
     async def scenario():
         gate = asyncio.Event()
+        refused = []
 
         async def ask_agent(client, credential, bot_id, text, on_event=None, **kw):
             log.append(("start", text))
             if text == "第一条":
                 await gate.wait()
+            elif not refused:
+                refused.append(1)               # an engine that cannot take a second message answers 409
+                raise bridge.ConversationBusy()
             log.append(("end", text))
             return f"答:{text}", [], "c-1"
 
         monkeypatch.setattr(bridge, "_ask_agent", ask_agent)
+        monkeypatch.setattr(bridge, "BUSY_RETRY_DELAY", 0.01)
         runner = bridge.TurnRunner()
         monkeypatch.setattr(bridge, "_RUNNER", runner)
         telegram = _Telegram()
@@ -293,10 +298,10 @@ def test_same_bot_second_message_queued(monkeypatch):
             await bridge._handle_message(None, "cred", "owner", msg, OWNER_ID, OWNER_ID, {}, telegram)
             await asyncio.sleep(0.02)
         assert bridge.QUEUED_TEXT in [t for _, t in wire.sends]     # told at once
-        assert log == [("start", "第一条")]                          # but not started yet
+        assert log == [("start", "第一条"), ("start", "第二条")]     # posted at once, refused, now waiting its turn
         gate.set()
         await runner.wait_idle()
-        assert log == [("start", "第一条"), ("end", "第一条"), ("start", "第二条"), ("end", "第二条")]
+        assert log == [("start", "第一条"), ("start", "第二条"), ("end", "第一条"), ("start", "第二条"), ("end", "第二条")]
 
     asyncio.run(scenario())
 

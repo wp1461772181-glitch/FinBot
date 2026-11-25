@@ -1,14 +1,38 @@
 """Bounded runtime ticker discovery shared by refresh and SEC monitors."""
+import os
+
 from sqlalchemy import inspect, select
 
 from .forecast_jobs import DEFAULT_STOCKS
 from .symbols import normalize_market_symbol
 
-MAX_ACTIVE_SYMBOLS = 40
+MAX_ACTIVE_SYMBOLS = 80   # the default of FINBOT_ACTIVE_SYMBOLS_MAX
+
+
+def max_active_symbols() -> int:
+    """How many symbols the hourly monitors cover at most (``FINBOT_ACTIVE_SYMBOLS_MAX``, default 80; read on every call)."""
+    try:
+        return max(1, int(os.environ.get("FINBOT_ACTIVE_SYMBOLS_MAX", MAX_ACTIVE_SYMBOLS)))
+    except ValueError:
+        return MAX_ACTIVE_SYMBOLS
+
+
+def _subject_symbols(db, inspector) -> list[str]:
+    """Non-retired archive subjects: held first, then the research queue, then the most recently asked.  One whose archive is being built
+    (queued or building) is left out until the build ends: the build scans it itself.  Subjects come before the persisted extras, so a full
+    list can push a symbol that only has a forecast job out of the monitor."""
+    from .models import ArchiveSubject
+    if ArchiveSubject.__tablename__ not in inspector.get_table_names():
+        return []
+    rows = db.execute(
+        select(ArchiveSubject.symbol).where(ArchiveSubject.retired_at.is_(None), ArchiveSubject.build_status.not_in(('queued', 'building')))
+        .order_by(ArchiveSubject.held.desc(), ArchiveSubject.queued.desc(), ArchiveSubject.asked_at.desc().nulls_last(), ArchiveSubject.symbol)
+        .limit(max_active_symbols())).all()
+    return [row[0] for row in rows]
 
 
 def active_symbols(db, *, extra_models=()) -> tuple[str, ...]:
-    """Defaults first, then stable validated persisted symbols, capped at 40."""
+    """Defaults first, then the archive subjects (held, queued, recently asked), then stable validated persisted symbols; capped (``max_active_symbols``)."""
     values = set(DEFAULT_STOCKS)
     candidates = set()
     inspector = inspect(db.get_bind())
@@ -26,4 +50,10 @@ def active_symbols(db, *, extra_models=()) -> tuple[str, ...]:
             continue
         if normalized not in values:
             extras.add(normalized)
-    return tuple(sorted(values) + sorted(extras)[: MAX_ACTIVE_SYMBOLS - len(values)])
+    ordered = sorted(values)
+    seen = set(ordered)
+    for symbol in [*_subject_symbols(db, inspector), *sorted(extras)]:
+        if symbol not in seen:
+            seen.add(symbol)
+            ordered.append(symbol)
+    return tuple(ordered[:max(len(values), max_active_symbols())])

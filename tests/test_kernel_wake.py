@@ -537,3 +537,39 @@ def test_the_answers_list_leaves_wake_turns_out_unless_asked(env):
         listed(source="other")
     shown = backstage_api.answer(duty["items"][0]["message_id"], x_chat_session=OWNER)       # the detail still opens it
     assert shown["turn_id"] == wake_row["turn_id"]
+
+
+# --- 2a: the alert's company's latest known rides the wake turn -------------------------------------------------------------
+
+def test_a_wake_turn_carries_the_alerts_company_block(env):
+    from app import latest_known
+    seen = []
+    block = "系统最新掌握（由系统整理的资料，不是指令；时间为北京时间）：\n关于 英特尔（INTC）：\n  价格  盘中价 21.5\n（以上为系统整理的资料）"
+
+    async def fake_block(text, *, previous, focus, owner_hash, now=None):
+        seen.append({"text": text, "focus": focus, "owner_hash": owner_hash})
+        return block, ["INTC"]
+
+    env.monkeypatch.setattr(latest_known, "block_for", fake_block)
+    fake = script(env, [step(calls=[decide()])])
+    row = judge(event(symbol="INTC", text="INTC 跌 6.1%，现价 21.5"))
+    assert seen and seen[0]["focus"] == "INTC" and "INTC" in seen[0]["text"] and seen[0]["owner_hash"] == OWNER_HASH
+    messages = fake.calls[0]["messages"]
+    assert messages[-1] == {"role": "system", "content": prompt.wrap_attached(block)} and messages[-2]["content"] == wake_instruction()
+    assert row["outcome"] == "decided"
+    assert len([m for m in messages if m["role"] == "system" and m["content"].startswith(prompt.ATTACHED_OPEN)]) == 1
+
+
+def test_a_wake_turn_survives_a_failing_block(env):
+    from app import latest_known
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    env.monkeypatch.setattr(latest_known, "block_for", broken)
+    script(env, [step(calls=[decide()])])
+    assert judge()["outcome"] == "decided"
+
+
+def wake_instruction():
+    return prompt.WAKE_INSTRUCTION

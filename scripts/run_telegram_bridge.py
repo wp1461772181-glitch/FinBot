@@ -183,6 +183,11 @@ BUSY_RETRIES = 5
 ACK_TEXT = "收到，正在处理……"
 QUEUED_TEXT = "收到，排在上一条后面。"
 DONE_TEXT = "处理完成，回答见下一条。"
+# 3c: a message that arrives while an answer is running goes to the API at once; these are what the owner is told.
+RECEIVED_TEXT = "收到。"
+MERGED_TEXT = "已并入上一个回答。"
+STOPPED_TEXT = "已停下。"
+QUOTE_CHARS = 30
 BACKEND_DOWN_TEXT = "后端暂时连不上，提醒不受影响。"
 BUSY_GIVEUP_TEXT = "这个对话正在别处回答中，请稍后再发一次。"
 # FP13-b: a busy conversation (the web page is answering) is waited for, up to this long (a turn's hard cap is 1200 s).
@@ -235,6 +240,20 @@ class TurnRunner:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def spawn(self, coro) -> None:
+        """Run ``coro`` beside the queue (an interjection: it is not behind the running turn); wait_idle waits for it."""
+        async def guarded():
+            try:
+                await coro
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"Bridge turn error: {_redact(exc)}", file=sys.stderr)
+
+        task = asyncio.create_task(guarded())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
     async def _drain(self, key: str) -> None:
         queue = self._queues[key]
         try:
@@ -269,6 +288,19 @@ async def _run_turn(client, credential: str, owner: str, chat_id: int, pending_c
     async def queued():
         token = channel["token"] if channel else _bot_token_for_send(owner, tg)
         await _send_text(client, token, chat_id, QUEUED_TEXT, markdown=False)
+
+    if not press and _RUNNER.busy(bot_id):
+        # 3c: the bot is answering something.  The new message goes to the API at once; the backend merges it,
+        # stops the turn or answers it on its own.  An engine that answers 409 gets the old waiting in line.
+        async def interject():
+            try:
+                await _bot_turn(client, credential, owner, chat_id, pending_cards, tg, bot_id, bot_name, text,
+                                channel, interject=True)
+            except ConversationBusy:
+                await _RUNNER.submit(bot_id, job, queued)
+
+        _RUNNER.spawn(interject())
+        return
 
     await _RUNNER.submit(bot_id, job, queued)
 
@@ -369,12 +401,12 @@ class _Progress:
         except Exception:
             pass                    # a progress edit that fails never reaches the turn
 
-    async def finish(self) -> None:
+    async def finish(self, final: str | None = None) -> None:
         if self._trailing is not None and not self._trailing.done():
             self._trailing.cancel()
             await asyncio.gather(self._trailing, return_exceptions=True)
         if self.message_id is not None:
-            text = "\n".join([*_checklist_lines(self.checklist), DONE_TEXT]) if self.checklist else DONE_TEXT
+            text = final or ("\n".join([*_checklist_lines(self.checklist), DONE_TEXT]) if self.checklist else DONE_TEXT)
             await _edit_text(self.client, self.bot_token, self.chat_id, self.message_id, text)
 
 
@@ -493,7 +525,7 @@ async def _compact_command(client, credential: str, owner: str, chat_id: int, tg
 
 async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pending_cards: dict, tg,
                     bot_id: str, bot_name: str, text: str, channel: dict | None = None, *,
-                    feedback: bool = False, **press):
+                    feedback: bool = False, interject: bool = False, **press):
     """One turn of a bot, sent back as its chat message(s); ``press`` carries a card press (its conversation,
     card id and the button's label).  ``channel`` is the bot's own Telegram bot (UX batch 2, P4): the answer goes
     out through it, without the name in front, since that chat is the bot's alone.  ``feedback`` adds the
@@ -509,23 +541,57 @@ async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pendin
     async def on_busy():
         await _send_text(client, bot_token, bound_chat, BUSY_WAITING_TEXT, markdown=False)
 
+    seen = {"received": False, "merged": False, "stopped": False, "separate": False, "queued": None}
+
+    async def on_event(kind: str, data: dict) -> None:
+        # 3c: what the backend did with a message that arrived while another answer was running.
+        if kind in ("received", "merged", "stopped", "separate"):
+            seen[kind] = True
+        if kind == "received":
+            await _send_text(client, bot_token, bound_chat, RECEIVED_TEXT, markdown=False)
+        elif kind == "queued":
+            seen["queued"] = data.get("ahead")
+            await _send_text(client, bot_token, bound_chat, f"排队中（前面 {data.get('ahead', 0)} 件）", markdown=False)
+        if progress:
+            await progress.on_event(kind, data)
+
     try:
         try:
             if not press and len(text) > MESSAGE_MAX_CHARS:
                 await _send_text(client, bot_token, bound_chat, OVERLONG_NOTICE.format(
                     total=len(text), limit=MESSAGE_MAX_CHARS, dropped=len(text) - MESSAGE_MAX_CHARS), markdown=False)
-            answer, cards, cid = await _ask_with_retry(client, credential, bot_id, text,
-                                                       on_event=progress.on_event if progress else None,
-                                                       on_busy=on_busy, **press)
+            if interject:
+                # No waiting here: a 409 goes back to the caller, which queues the message the old way.
+                answer, cards, cid = await _ask_agent(client, credential, bot_id, text, on_event=on_event)
+            else:
+                answer, cards, cid = await _ask_with_retry(client, credential, bot_id, text,
+                                                           on_event=on_event if progress else None,
+                                                           on_busy=on_busy, **press)
         except BackendUnavailable:
             await _send_text(client, bot_token, bound_chat, BACKEND_DOWN_TEXT, markdown=False)
             return
         except ConversationBusy:
+            if interject:
+                raise
             await _send_text(client, bot_token, bound_chat, BUSY_GIVEUP_TEXT, markdown=False)
             return
     finally:
         if typing:
             typing.cancel()
+    # 3c: this message was handed to a running turn.  Merged or stopped, it has no answer of its own: one short line.
+    if seen["received"] and not answer.strip() and (seen["merged"] or seen["stopped"]):
+        line = MERGED_TEXT if seen["merged"] else STOPPED_TEXT
+        if progress:
+            await progress.finish(line)
+        else:
+            await _send_text(client, bot_token, bound_chat, line, markdown=False)
+        return
+    quote = ""
+    if seen["received"]:
+        first = " ".join(text.split())
+        quote = "回复：" + (first[:QUOTE_CHARS] + "…" if len(first) > QUOTE_CHARS else first) + "\n\n"
+    if seen["stopped"] and not seen["received"] and not answer.strip():
+        answer = STOPPED_TEXT       # the stopped turn said nothing before it stopped
     keyboard = _make_keyboard(cards, pending_cards, cid, credential, bot_id, bot_name) if cid else None
     # Only a ticking card (``options``) has a web form Telegram lacks; a card with no choices has nothing to
     # answer on either side, and a typed reply works on both, so the note would mislead there.
@@ -538,7 +604,7 @@ async def _bot_turn(client, credential: str, owner: str, bound_chat: int, pendin
             answer = tables_for_telegram(answer)
         except Exception as exc:  # noqa: BLE001
             print(f"Telegram table conversion failed: {_redact(exc)}", file=sys.stderr)
-    answer = ("" if channel else f"【{bot_name}】\n") + (answer.strip() or ("完成。" if keyboard else "（这条回复没有内容。）"))
+    answer = ("" if channel else f"【{bot_name}】\n") + quote + (answer.strip() or ("完成。" if keyboard else "（这条回复没有内容。）"))
     chunks = (split_for_telegram(answer, ANSWER_MAX_CHARS) if flag("FINBOT_FP12_TG_SPLIT", True)
               else [answer[i:i+ANSWER_MAX_CHARS] for i in range(0, len(answer), ANSWER_MAX_CHARS)])
     for i, chunk in enumerate(chunks):

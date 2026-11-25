@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 from app import agent_profile as profile
-from app import agent_tasks, portfolio
+from app import agent_tasks, owner_views, portfolio
 from app.agent_tool_catalog import definitions
-from app.agent_workflow import direct, sec_sources, workspace_tools
+from app.agent_workflow import direct, directory_ops, sec_sources, workspace_tools
 from app.kernel import act
 
 NOT_IN_SLICE = set()      # every catalogue write is in the directory now
@@ -37,7 +37,7 @@ def test_every_operation_is_a_catalogue_write_and_every_write_is_listed():
 def test_summaries_costs_and_tiers():
     assert all(act.SUMMARIES[name] for name in act.OPERATIONS) and set(act.SUMMARIES) == set(act.OPERATIONS)
     assert set(act.COST_NOTES) == set(act.TIER3)
-    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 29
+    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 38
     assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "revise_forecast")] == [1, 2, 3, 3, 3]
     assert act.TIER1[0] == "remember" and act.TIER3[-2:] == ("ingest_web_source", "revise_forecast")
     assert act.SUMMARIES["ingest_web_source"].startswith("把这段对话里联网搜到的一个网页或新闻存进资料库")
@@ -109,6 +109,8 @@ def test_portfolio_error_returns_its_reason_and_no_card(monkeypatch):
 
 
 def test_create_routine_carries_the_bot(monkeypatch):
+    monkeypatch.setattr(agent_tasks, "preview_task", fake_preview)         # no database: the file passes alone
+    monkeypatch.setattr(direct, "skill_names", lambda owner: {})
     args = {"name": "每日", "instruction": "看新闻", "schedule_kind": "daily", "schedule_time": "09:00", "symbols": ["NVDA", "AAPL"]}
     out = run(act.prepare(make_run(bot_id="bot-1"), "create_routine", args))
     assert out.operation["bot_id"] == "bot-1" and out.tier == 2
@@ -153,10 +155,12 @@ def test_routine_changes_and_deletes_need_an_existing_routine(monkeypatch):
     monkeypatch.setattr(agent_tasks, "get_task", lambda owner, task_id: None)
     assert run(act.prepare(make_run(), "update_routine", {"routine_id": UUID, "enabled": False}))["error_code"] == "routine_not_found"
     assert run(act.prepare(make_run(), "delete_routine", {"routine_id": UUID}))["error_code"] == "routine_not_found"
-    task = {"name": "每日", "schedule_kind": "daily", "schedule_time": "09:00"}
+    task = fake_preview("o", {})
     monkeypatch.setattr(agent_tasks, "get_task", lambda owner, task_id: task)
+    monkeypatch.setattr(agent_tasks, "preview_task", fake_preview)
+    monkeypatch.setattr(direct, "skill_names", lambda owner: {})
     out = run(act.prepare(make_run(), "update_routine", {"routine_id": UUID, "enabled": False}))
-    assert out.display["title"] == "修改例行任务 · 每日" and out.display["alternative"] == "暂停"
+    assert out.display["title"] == "修改例行任务 · 每日" and out.display["alternative"] == "状态：运行中 → 暂停"
     out = run(act.prepare(make_run(), "delete_routine", {"routine_id": UUID}))
     assert out.display["alternative"] == "删除后不再运行；已生成的简报会保留。"
 
@@ -215,6 +219,10 @@ MINIMAL = {
     "withdraw_knowledge_document": {"document_id": UUID},
     "save_material_evidence": {"symbol": "AAPL", "title": "t", "source_url": "https://x.com/a", "published_at": "2026-01-01", "content": "c"},
     "ingest_web_source": {"url": PAGE_URL, "symbol": "AAPL"}, "revise_forecast": {"symbol": "AAPL"},
+    "create_bot": {"name": "甲"}, "update_bot": {"bot_id": UUID, "pinned": True}, "delete_transaction": {"transaction_id": UUID},
+    "manage_skill": {"action": "disable", "skill_id": UUID}, "set_default_model": {"name": "m"}, "set_model_role": {"role": "judge"},
+    "set_channel_prefs": {"mode": "all", "channels": ["telegram"]},
+    "record_view": {"symbol": "AAPL", "text": "看好", "quote": "用中文回答"}, "drop_view": {"symbol": "AAPL"},
 }
 
 
@@ -236,15 +244,27 @@ def ready_plan(count=5):
             "excluded": [], "mentioned": []}
 
 
+def fake_preview(owner, fields, task_id=None):
+    """``agent_tasks.preview_task`` without a database: a saved daily brief with the fields laid over it."""
+    saved = {"name": "每日", "kind": "brief", "schedule_kind": "daily", "schedule_time": "09:00", "instruction": "看新闻", "enabled": True,
+             "channel": "inbox", "symbols": [], "scope": "research_queue", "config": {}, "skill_id": None, "every_value": None,
+             "every_unit": None, "max_runs": None}
+    return {**saved, **fields}
+
+
 @pytest.fixture
 def faked(monkeypatch):
+    monkeypatch.setattr(agent_tasks, "preview_task", fake_preview)
+    monkeypatch.setattr(direct, "skill_names", lambda owner: {})
     monkeypatch.setattr(act, "_already_saved", lambda *a: None)
     monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: ready_plan())
     monkeypatch.setattr(profile, "user_message_id", lambda *a: "m1")
+    monkeypatch.setattr(owner_views, "current", lambda owner, symbols: {"AAPL": {"text": "看好"}})
     monkeypatch.setattr(profile, "resolve_handle", lambda *a, **k: {"text": "用中文"})
-    monkeypatch.setattr(agent_tasks, "get_task", lambda *a: {"name": "每日", "schedule_kind": "daily", "schedule_time": "09:00"})
+    monkeypatch.setattr(agent_tasks, "get_task", lambda *a: fake_preview("o", {}))
     monkeypatch.setattr(direct, "source_display_title", lambda *a: "某材料")
     monkeypatch.setattr(portfolio, "describe_write", lambda *a: {"title": "t", "targets": [{"symbol": "AAPL"}], "alternative": "a"})
+    monkeypatch.setattr(directory_ops, "describe", lambda owner, name, args: {"title": "t", "targets": [{"kind": "k"}], "alternative": "a"})
     monkeypatch.setattr(sec_sources, "prepare_filing", lambda name, args, financial_only=False: {
         "name": name, "arguments": {**args, "accession_number": "0000320193-26-000001"},
         "discovery": {"form": "10-K", "filed_at": "2026-01-02", "source_url": "https://sec.gov/x"}})

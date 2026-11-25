@@ -61,8 +61,8 @@ def _patch_store(monkeypatch, context, appended):
     async def conversation_context(conversation_id, credential, **_k):
         return context
 
-    async def append_summary(conversation_id, from_sequence, upto_sequence, content):
-        appended.append((conversation_id, from_sequence, upto_sequence, content))
+    async def append_summary(conversation_id, from_sequence, upto_sequence, content, turn_ids=None):
+        appended.append((conversation_id, from_sequence, upto_sequence, content, turn_ids))
         return True
 
     monkeypatch.setattr(store, "conversation_context", conversation_context)
@@ -92,7 +92,7 @@ def test_the_segment_is_appended_for_exactly_the_turns_it_summarized(monkeypatch
     done = asyncio.run(summary.summarize_pending("cid", "credential", provider="deepseek", model="m",
                                                  api_key=KEY, base_url=None))
     assert done is True
-    assert appended == [("cid", batch[0].first_sequence, batch[-1].last_sequence, "用户连续询问苹果 AAPL 的营收。")]
+    assert appended == [("cid", batch[0].first_sequence, batch[-1].last_sequence, "用户连续询问苹果 AAPL 的营收。", [t.turn_id for t in batch])]      # by turn id: the segment names the turns it covers
     sent = json.loads(calls[0]["messages"][1]["content"])
     assert sent["earlier_segments"] == ["更早的一段"] and len(sent["turns"]) == len(batch)
     assert calls[0]["schemas"] == [] and calls[0]["messages"][0]["content"] == summary.SUMMARY_PROMPT

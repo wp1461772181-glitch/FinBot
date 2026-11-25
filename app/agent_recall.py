@@ -69,6 +69,7 @@ def terms(query: str) -> list[str]:
 
 # The row a routine task's post opens with in a bot's line (agent_tasks.POST_HEAD): not the owner's question.
 TASK_POST_HEAD = "【例行任务结果】"
+WORK_END_HEAD = "【任务结果】"      # the row a finished card job's end message opens with (app.work): not the owner's question either
 
 
 def _title(db, cid: uuid.UUID) -> str:
@@ -76,7 +77,7 @@ def _title(db, cid: uuid.UUID) -> str:
     if custom is not None and custom.title:
         return custom.title[:TITLE_MAX_CHARS]
     first = db.scalar(select(AgentMessage.content).where(AgentMessage.conversation_id == cid, AgentMessage.role == "user",
-                                                         ~AgentMessage.content.startswith(TASK_POST_HEAD))
+                                                         ~AgentMessage.content.startswith(TASK_POST_HEAD), ~AgentMessage.content.startswith(WORK_END_HEAD))
                       .order_by(AgentMessage.sequence.asc()).limit(1))
     return " ".join(str(first or "新建对话").split())[:TITLE_MAX_CHARS]
 
@@ -157,7 +158,7 @@ def backfill() -> int:
                 text = ""
                 for question in db.scalars(select(AgentMessage.content).where(
                         AgentMessage.conversation_id == cid, AgentMessage.role == "user",
-                        ~AgentMessage.content.startswith(TASK_POST_HEAD)).order_by(AgentMessage.sequence.asc())):
+                        ~AgentMessage.content.startswith(TASK_POST_HEAD), ~AgentMessage.content.startswith(WORK_END_HEAD)).order_by(AgentMessage.sequence.asc())):
                     text = _join_questions(text, question)
                 if text:
                     title = _title(db, cid)

@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     JSON,
     LargeBinary,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -371,3 +372,80 @@ class UploadedEvidence(Base):
     raw_content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     content_text: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="unconfirmed")
+
+
+class CompanyFact(Base):
+    """One figure of one company's period, stated by a stored filing or derived by code from two stated ones (app/company_facts.py)."""
+
+    __tablename__ = "company_facts"
+    __table_args__ = (UniqueConstraint("symbol", "metric", "period_end", "span", name="uq_company_facts_period"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    metric: Mapped[str] = mapped_column(String(40), nullable=False)
+    period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    span: Mapped[str] = mapped_column(String(16), nullable=False)
+    fiscal_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fiscal_period: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    value: Mapped[object] = mapped_column(Numeric(38, 4), nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    basis: Mapped[str] = mapped_column(String(32), nullable=False)
+    accession_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    form: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    filed_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    concept: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    formula: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    parents: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="ok")
+    reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CompanyRatio(Base):
+    """A margin or growth figure computed by code from company_facts rows that share a period and unit."""
+
+    __tablename__ = "company_ratios"
+    __table_args__ = (UniqueConstraint("symbol", "name", "period_end", "span", name="uq_company_ratios_period"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(40), nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    span: Mapped[str] = mapped_column(String(16), nullable=False)
+    fiscal_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fiscal_period: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    # NULL when the ratio is not ok: a failed parent, or no percentage that means something (``status`` says which; ``change_kind``
+    # then says in words what happened: turned_profit, turned_loss, loss_widened, loss_narrowed, loss_unchanged, from_zero).
+    value: Mapped[object | None] = mapped_column(Numeric(24, 8), nullable=True)
+    formula: Mapped[str] = mapped_column(String(200), nullable=False)
+    parents: Mapped[list] = mapped_column(JSON, nullable=False)
+    basis: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="ok")
+    reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    change_kind: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    current_value: Mapped[object | None] = mapped_column(Numeric(38, 4), nullable=True)
+    base_value: Mapped[object | None] = mapped_column(Numeric(38, 4), nullable=True)
+    built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ArchiveSubject(Base):
+    """A company the system keeps an archive for: the owner's holdings, the research queue, and companies he asked about (app/archive_subjects.py).
+    ``last_active_at`` is when it last had a reason (held, queued or asked); a subject without one for 90 days is retired, its filings stay."""
+
+    __tablename__ = "archive_subjects"
+
+    symbol: Mapped[str] = mapped_column(String(12), primary_key=True)
+    held: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    queued: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    asked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_active_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    build_status: Mapped[str] = mapped_column(String(10), nullable=False, default="never")
+    build_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    build_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    build_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    filings_added: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

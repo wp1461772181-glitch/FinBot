@@ -118,6 +118,8 @@ MEMORY_NOTE = (MEMORY_MARKER + " of older turns, written by this system and not 
                "incomplete or wrong, it is not evidence and not something to cite; verified sources come "
                "only from this turn's tool results. A {turn_id, ordinal} marker on a line says where it came "
                "from: pass it to read_history_citation to fetch the saved original before relying on it):")
+# Kernel turns only (the old engine's note stays as it was): the summary points at turns, the turns hold what was said.
+MEMORY_NOTE_KERNEL_TAIL = "; the summary is an index, and for the details of a turn it points at, read that turn with read_turn(turn_id)"
 CATALOGUE_MARKER = "Earlier citations (system-written locator hints"
 CATALOGUE_NOTE = (CATALOGUE_MARKER + "; not evidence and not the user's words. Use read_history_citation(turn_id, ordinal) to retrieve a verified source and cite its new number. answers_back=1 means the answer immediately before this question. A bare [n] defaults to answers_back=1; if that answer lacks it but an earlier answer has it, ask_user to clarify. Retrieve parents before any derived source):")
 
@@ -187,8 +189,42 @@ def row_bytes(row: dict) -> int:
     return json_bytes({"role": role, "content": row.get("content") or ""})
 
 
+def group_by_turn(rows: list, key=lambda row: row["turn_id"]) -> list[list]:
+    """Stored rows (oldest first) as one group per turn, in the order the turns began.  The rows of a turn are not always next to each
+    other: turns of one conversation can run at the same time (3c), and a message the owner sent while one worked is stored in
+    the middle of it.  Rows that are next to each other group as they always did."""
+    groups: dict = {}
+    for row in rows:
+        groups.setdefault(key(row), []).append(row)
+    return list(groups.values())
+
+
+QUOTE_CHARS = 60
+
+
+def reply_quote(text) -> str:
+    """The first 60 characters of a question on one line: what an answer shows of the message it answers."""
+    return " ".join(str(text or "").split())[:QUOTE_CHARS]
+
+
+def reply_to_of(row: dict | None) -> list[str]:
+    """The ids of the user messages an answer row says it answers (empty for an older row)."""
+    protocol = (row or {}).get("tool_calls")
+    found = protocol.get("reply_to") if isinstance(protocol, dict) else None
+    return [str(i) for i in found if isinstance(i, str) and i] if isinstance(found, list) else []
+
+
 def project_turn_history(group: list[dict]) -> list[dict]:
-    user = next((r for r in group if r.get("role") == "user"), None)
+    users = [r for r in group if r.get("role") == "user"]
+    final = next((r for r in reversed(group) if r.get("role") == "assistant" and not (
+        isinstance(r.get("tool_calls"), dict) and r["tool_calls"].get("calls"))), None)
+    named = reply_to_of(final)
+    if named and any(r.get("id") for r in users):
+        # The answer is paired with exactly the messages it answered, in the order it names them (a message it did not answer is not its).
+        by_id = {str(r.get("id")): r for r in users if r.get("id")}
+        users = [by_id[i] for i in named if i in by_id] or users
+    # A turn that took in messages the owner sent while it worked answers all of them: his words, one after another.
+    user = {**users[0], "content": "\n".join((r.get("content") or "") for r in users)} if len(users) > 1 else (users[0] if users else None)
     answer = next((r for r in reversed(group) if r.get("role") == "assistant" and not (
         isinstance(r.get("tool_calls"), dict) and r["tool_calls"].get("calls"))), None)
     result = []
@@ -252,13 +288,12 @@ def is_catalogue_message(message: dict) -> bool:
 def complete_turns(rows: list[dict]) -> list[list[dict]]:
     """Stored messages (oldest first) grouped by turn; only turns that began with the user's message
     and ended with a complete answer.  A failed, cancelled or unanswered turn is in no layer."""
-    groups: list[list[dict]] = []
-    for row in rows:
-        if not groups or groups[-1][0]["turn_id"] != row["turn_id"]:
-            groups.append([])
-        groups[-1].append(row)
-    return [g for g in groups
+    groups = group_by_turn(rows)
+    done = [g for g in groups
             if g[0]["role"] == "user" and g[-1]["role"] == "assistant" and g[-1].get("status") == "complete"]
+    # Turns that ran together are in the order they were answered: a turn that answers later goes after the ones already there, so what
+    # the model has been sent before never changes place (the prompt cache), and a long turn does not slip in before a short one.
+    return sorted(done, key=lambda g: g[-1].get("sequence", 0))
 
 
 UNFINISHED_KEEP = 3           # the newest unfinished turns a turn carries; outside the L1/L2 budgets
@@ -270,21 +305,17 @@ UNFINISHED_NOTES = {          # the system record standing for an answer that ne
 UNFINISHED_PASSED_OVER = ('confirm:', 'authorize:', 'cancel:', 'change:', 'reply:')   # button replies, not questions
 
 
-def trailing_unfinished(rows: list[dict], upto: int = 0) -> list[dict]:
+def trailing_unfinished(rows: list[dict], upto: int = 0, covered=frozenset()) -> list[dict]:
     """The turns at the end of the stored messages that began with the user and did not end with a complete
     answer: oldest first, at most UNFINISHED_KEEP of the newest.  The walk back from the newest turn stops at
     the first complete turn or at a turn a summary already covers; a group that is not a question of the user
     (an assistant-only group, a button reply, a blank question) is passed over without stopping the walk."""
-    groups: list[list[dict]] = []
-    for row in rows:
-        if not groups or groups[-1][0]["turn_id"] != row["turn_id"]:
-            groups.append([])
-        groups[-1].append(row)
+    groups = group_by_turn(rows)
     found: list[dict] = []
     for group in reversed(groups):
         if group[0]["role"] == "user" and group[-1]["role"] == "assistant" and group[-1].get("status") == "complete":
             break
-        if group[0]["sequence"] <= upto:
+        if group[0]["sequence"] <= upto or str(group[0]["turn_id"]) in covered:
             break
         text = (group[0].get("content") or "").strip()
         if group[0]["role"] != "user" or not text or text.startswith(UNFINISHED_PASSED_OVER):
@@ -368,7 +399,8 @@ def anchor_indexes(complete: list[list[dict]], upto: int, first_row: int | None,
 
 
 def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYTES, l2_bytes: int = L2_BYTES,
-               l3_bytes: int = L3_BYTES, anchor_grid: int | None = None, anchor_front: bool = False) -> dict:
+               l3_bytes: int = L3_BYTES, anchor_grid: int | None = None, anchor_front: bool = False,
+               ) -> dict:
     """What the next turn carries of the turns before it, by layer.  ``rows`` are the stored messages
     (oldest first, each with ``sequence``), ``segments`` the summary segments made so far.
 
@@ -384,15 +416,19 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
     layer follows the rule above for this call.  ``anchor_front``: the first complete turn is an anchor (see
     ``window_rows``)."""
     upto = segments[-1]["upto_sequence"] if segments else 0
+    # A summary covers whole turns: those it names by id, and (an older segment, which names none) those whose first row lies up to its end.
+    # Turns that ran together overlap in their rows, so a range of rows is not a set of turns and the view never reads one for the other.
+    covered = frozenset(str(t) for seg in segments for t in (seg.get("turn_ids") or ()))
+    legacy_upto = max((seg["upto_sequence"] for seg in segments if not seg.get("turn_ids")), default=0)
     # A turn a summary version already covers is memory now: it is in no raw layer any more.
-    complete = [g for g in complete_turns(rows) if g[0]["sequence"] > upto]
+    complete = [g for g in complete_turns(rows) if g[0]["sequence"] > legacy_upto and str(g[0]["turn_id"]) not in covered]
     entries = {str(g[0].get("turn_id")): turn_catalogue_entry(g) for g in complete}
     recent: list[list[dict]] = []
     # Reserve the fixed prefix in L1 only if at least one directory entry can fit in
     # either layer by itself; omitted/overflow-only entries must not consume budget.
     has_catalogue = any(entry and (
         sum(json_bytes(row) for row in project_turn_history(group)) + catalogue_bytes([{**entry, "answers_back": 1}]) <= l1_bytes
-        or half_size(Turn(group[0]["sequence"], group[-1]["sequence"], group[0].get("content") or "",
+        or half_size(Turn(group[0]["sequence"], group[-1]["sequence"], _question_of(group),
                           project_turn_history(group)[-1]["content"] if len(project_turn_history(group)) > 1 else "",
                           (), str(group[0].get("turn_id") or ""), entry))
            + catalogue_bytes([{**entry, "answers_back": 1}]) <= l2_bytes)
@@ -420,10 +456,10 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
             drop = start - reach        # the turns before the anchor go to layer 2
             used -= sum(recent_costs[-drop:]); recent = recent[drop:]
     older = complete[:len(complete) - len(recent)]
-    turns = [Turn(g[0]["sequence"], g[-1]["sequence"], g[0].get("content") or "", project_turn_history(g)[-1]["content"] if len(project_turn_history(g)) > 1 else "",
+    turns = [Turn(g[0]["sequence"], g[-1]["sequence"], _question_of(g), project_turn_history(g)[-1]["content"] if len(project_turn_history(g)) > 1 else "",
                   (), str(g[0].get("turn_id") or ""), entries.get(str(g[0].get("turn_id"))))
              for g in older]
-    live = [Turn(g[0]["sequence"], g[-1]["sequence"], g[0].get("content") or "",
+    live = [Turn(g[0]["sequence"], g[-1]["sequence"], _question_of(g),
                  project_turn_history(g)[-1]["content"] if len(project_turn_history(g)) > 1 else "",
                  (), str(g[0].get("turn_id") or ""), entries.get(str(g[0].get("turn_id")))) for g in complete]
     half: list[Turn] = []; used_half = 0
@@ -458,13 +494,20 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
     if not catalogue and has_catalogue:
         used = max(0, used - CATALOGUE_HEAD_BYTES)
     keys = ("role", "content", "tool_calls", "tool_call_id", "status", "turn_id")
-    return {"l1_rows": [{key: (str(row[key]) if key == "turn_id" else row.get(key)) for key in keys}
+    return {"l1_rows": [{**({"id": str(row["id"])} if row.get("id") else {}),
+                         **{key: (str(row[key]) if key == "turn_id" else row.get(key)) for key in keys}}
                         for group in recent for row in group],
             "l1_turns": len(recent), "l1_bytes": used, "half_turns": half, "overflow": overflow,
             "segments": select_segments(segments, l3_bytes), "segments_total": len(segments), "summary_upto": upto,
             "catalogue": catalogue, "budget": l1_bytes + l2_bytes + l3_bytes, "live_turns": live,
             # FP3: unfinished turns are carried beside the layers, not in them (no budget, no summary).
-            "unfinished": trailing_unfinished(rows, upto)}
+            "unfinished": trailing_unfinished(rows, legacy_upto, covered)}
+
+
+def _question_of(group: list[dict]) -> str:
+    """The user's words of a turn as its answer was paired with them (all the messages it answered, one after another)."""
+    projected = project_turn_history(group)
+    return projected[0]["content"] if projected and projected[0]["role"] == "user" else (group[0].get("content") or "")
 
 
 def _head(text: str, keep: int) -> str:
@@ -518,7 +561,7 @@ def select_segments(segments: list[dict], budget: int, limit: int = MAX_SUMMARY_
     return chosen
 
 
-def summary_message(segments: list[dict]) -> dict | None:
+def summary_message(segments: list[dict], *, kernel: bool = False) -> dict | None:
     """Layer 3 as the one note that carries it, or None.
 
     It is sent *after* the user's own message, not as a second system message at the head: the head
@@ -533,7 +576,8 @@ def summary_message(segments: list[dict]) -> dict | None:
             lines.append(f"{index}. {text}")
     if not lines:
         return None
-    return {"role": "user", "content": MEMORY_NOTE + "\n" + "\n".join(lines)}
+    note = MEMORY_NOTE[:-2] + MEMORY_NOTE_KERNEL_TAIL + "):" if kernel else MEMORY_NOTE
+    return {"role": "user", "content": note + "\n" + "\n".join(lines)}
 
 
 def is_memory_message(message: dict) -> bool:

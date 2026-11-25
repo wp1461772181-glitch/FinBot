@@ -244,8 +244,12 @@ def _store(row_id: str, figures: list[dict]) -> bool:
         if row is None or row.content_financials is not None:
             return False
         row.content_financials = figures
+        symbol = row.symbol
         db.commit()
-        return True
+    if figures:
+        from .company_facts import refresh_quietly      # after the commit, in its own session; a failure never reaches the store
+        refresh_quietly(symbol)
+    return True
 
 
 def _text_of(row_id: str) -> str:

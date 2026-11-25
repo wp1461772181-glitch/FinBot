@@ -19,17 +19,20 @@ from .. import x_search
 from ..agent_chat_identity import owner_credential_matches
 from ..agent_progress import mark_progress, progress_watchdog
 from .. import agent_skills
+from .. import latest_known
+from ..agent_context import is_catalogue_message, is_memory_message
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
-from . import act, ask, decide, press, progress, prompt, skills, tiers
-from .toolrun import mark_timeline, run_step_tools
+from . import act, ask, decide, helper, press, progress, prompt, skills, tiers
+from . import inbox as inboxes
+from .toolrun import mark_timeline, number_attached, run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
     "search_knowledge", "web_research", "search_configured_news", "search_x", "calculate", "calculate_formula",
-    "query_portfolio", "recall_conversations", "read_past_conversation", "read_history_citation",
+    "query_portfolio", "recall_conversations", "read_past_conversation", "read_history_citation", "read_turn",
     "query_latest_forecast", "query_materials", "query_research_faq", "query_material_analysis", "search_material_analysis",
-    "query_alerts", "query_holdings_overview", "read_workspace", "query_system_status", "query_research_queue", "list_routines")
+    "query_alerts", "query_holdings_overview", "read_workspace", "query_system_status", "query_research_queue", "list_routines", "list_models", "list_work")
 logger = logging.getLogger(__name__)
 MAX_STEPS = 12
 MAX_SETS = 6          # as the old engine: the last six result sets of a conversation
@@ -97,6 +100,13 @@ class _Run:
     step_text: str = ""
     narration: list = field(default_factory=list)
     checklist: list = field(default_factory=list)
+    inbox: object | None = None      # the running turn's inbox (``inbox.Inbox``): what the owner says while it works; None for a turn without one
+    is_helper: bool = False          # a helper's run (``helper.run``): the kernel's own tools are not its to call
+    pausable: bool = True            # a message arriving while the answer is being written stops the writing (not in the closing steps)
+    partial: str = ""                # the half-written answer an arriving message cut off: kept for a stop, which ends the turn with it
+    paused_partial: bool = False     # that text is still on the user's screen: the next thing written replaces it
+    cut: bool = False                # the next intake follows a cut-off answer
+    must_say: str = ""               # what code must tell the user whatever else happens (the executed report of a card press): a stop keeps it
     audit: dict = field(default_factory=lambda: {
         "engine": "v2", "model_calls": 0, "decision_steps": 0, "tool_calls": 0, "token_usage": 0,
         "cache_read_tokens": 0, "cache_write_tokens": 0, "calls": [], "stop_reason": None})
@@ -105,13 +115,15 @@ class _Run:
 def _tool_schemas(context) -> list[dict]:
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
     # search_x costs the owner money per post and needs his token: it is offered only where the server has one.
-    available = schemas(owner=owner, names=[n for n in READ_TOOLS if n != "search_x" or x_search.configured()])
+    available = schemas(owner=owner, kernel=True, names=[n for n in READ_TOOLS if n != "search_x" or x_search.configured()])
     scope = getattr(context, "tool_scope", None)
     # The kernel's own tools go last whatever the ceiling is, so the list is the same for the whole turn.
     # A skill is offered to an owner who has any enabled (the endpoint puts their list on the context); a bot's scope does not take it away.
     offered = [*(s for s in available if scope is None or s["function"]["name"] in scope), *([act.ACT_SCHEMA] if owner else []),
                ask.ASK_SCHEMA, *([skills.USE_SKILL_SCHEMA] if owner and getattr(context, "skill_block", None) else []),
-               progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]
+               progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA, *([inboxes.HANDLE_SCHEMA] if getattr(context, "inbox", None) is not None else [])]
+    if helper.offered(s["function"]["name"] for s in offered):      # behind the switch, after everything else: the list is unchanged with it off
+        offered.append(helper.DELEGATE_SCHEMA)
     return [progress.with_say(s) for s in offered]
 
 
@@ -119,7 +131,7 @@ def _wake_schemas(context) -> list[dict]:
     """A wake turn's tools: the reads an owner's turn has (no ``search_x``: it costs per post and an unattended run does not
     spend it), ``decide``, and the kernel's ``plan`` / ``escalate``.  No ``act``, no ``ask``, no ``use_skill``."""
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
-    available = schemas(owner=owner, names=[n for n in READ_TOOLS if n != "search_x"])
+    available = schemas(owner=owner, kernel=True, names=[n for n in READ_TOOLS if n != "search_x"])
     scope = getattr(context, "tool_scope", None)
     offered = [*(s for s in available if scope is None or s["function"]["name"] in scope),
                decide.DECIDE_SCHEMA, progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA]
@@ -202,15 +214,33 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
                 raise
 
 
+def _streams(use: "ModelUse") -> bool:
+    """Whether this model's answer text arrives piece by piece (Anthropic native); the others report the whole text once, after the call."""
+    from .. import anthropic_native
+    return anthropic_native.use_native(use.provider)
+
+
+class AnswerPaused(Exception):
+    """Raised from the text callback when the owner says something while the answer is being written: the call stops there."""
+
+
 async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
-    """One model call whose text is streamed out.  One retry on a retryable provider failure."""
+    """One model call whose text is streamed out.  One retry on a retryable provider failure.  When the owner sends a message while
+    the answer is being written, the call stops within one piece of text and returns what was written as ``{"paused": True, ...}``."""
     use = run.model
+    streaming = _streams(use)      # only a provider that streams can be stopped within a piece of text; the others finish the call first
 
     async def on_text(piece: str) -> None:
         if piece and isinstance(piece, str):
+            if run.paused_partial:      # the text the owner's message cut off is still on his screen: this replaces it
+                run.paused_partial = False
+                run.partial = ""
+                await run.emit({"event": "answer_reset"})
             run.sent_text = True
             run.step_text += piece
             await run.emit({"event": "delta", "text": piece})
+            if streaming and run.pausable and run.inbox is not None and run.inbox.has_fresh():
+                raise AnswerPaused()
 
     run.sent_text = False
     run.step_text = ""
@@ -223,6 +253,10 @@ async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
                     use.provider, use.model, use.api_key, run.messages, tool_schemas, base_url=use.base_url,
                     reasoning_effort=tiers.EFFORT[run.tier], on_text=on_text, keep_thinking=True, cache=True,
                     **({"catalog_name": use.name} if use.name else {}))
+        except AnswerPaused:
+            run.audit["model_calls"] += 1
+            run.audit["decision_steps"] += 1
+            return {"role": "assistant", "content": run.step_text, "paused": True}
         except Exception as failure:
             # Whatever was streamed in this step is a cut-off: never leave it behind as the answer.
             if run.sent_text:
@@ -248,7 +282,9 @@ async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
 
 async def _tool_step(run: _Run, message: dict) -> None:
     """The model asked for tools: drop the text it streamed, announce the request, run the calls."""
-    if run.sent_text:
+    deciding = any((c.get("function") or {}).get("name") == inboxes.HANDLE for c in message["tool_calls"])
+    if run.sent_text or (run.paused_partial and not deciding):      # the half-written text stays on screen while the model decides about the message
+        run.paused_partial = False
         await run.emit({"event": "answer_reset"})
     sentence, item, system = progress.step_narration(message["tool_calls"], message.get("content"))
     if sentence:
@@ -260,8 +296,8 @@ async def _tool_step(run: _Run, message: dict) -> None:
     run.messages.extend(await run_step_tools(run, message["tool_calls"]))
 
 
-def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None = None) -> dict:
-    status = "failed" if failure else "waiting_for_input" if run.pending or run.carried else "succeeded"
+def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None = None, status: str | None = None) -> dict:
+    status = status or ("failed" if failure else "waiting_for_input" if run.pending or run.carried else "succeeded")
     if run.pending and not run.question_card:
         run.audit.setdefault("write_outcome", "proposed")     # a press's own outcome (executed, failed) stays the turn's word
     run.audit["stop_reason"] = stop_reason
@@ -301,6 +337,8 @@ async def _mint_card(run: _Run) -> str:
     if not proposals:
         return ""
     context = run.context
+    if inboxes.other_card_since(context.conversation_id, run.turn_id, run.started):
+        return f"（确认卡没有生成：{ask.WRITE_CARD_WAITING} 请先处理那张卡片，再重新提出这项操作。）"
     variants = [("保存并启用", None), ("存为草稿", "draft")] if all(p.operation["name"] == "save_skill" for p in proposals) else None
     try:
         run.pending = await asyncio.to_thread(consent.propose, context.identity_credential, context.conversation_id,
@@ -311,6 +349,8 @@ async def _mint_card(run: _Run) -> str:
     except Exception:
         reason = consent.failure_reason("write_service_failed")
     else:
+        run.audit["card_minted"] = run.pending["id"]
+        inboxes.note_minted(context.conversation_id, run.turn_id, run.pending)
         return ""
     return f"（确认卡没有生成：{reason}。请重新提出这项操作。）"
 
@@ -321,6 +361,7 @@ async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_aga
     A closing call is offered the same tools as every step (a valid request, a warm cache), but the system note tells the
     model to answer; tool calls it makes anyway are not run and not kept, only its text counts.
     """
+    run.pausable = False      # the closing steps are not interrupted: a message that comes now gets its own answer
     answer = message.get("content") or ""
     if not answer.strip() and may_ask_again:
         run.messages.append(message)
@@ -329,6 +370,8 @@ async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_aga
             await run.emit({"event": "answer_reset"})
         message = await _model_step(run, run.schemas)
         answer = message.get("content") or ""
+    if run.inbox is not None:
+        run.inbox.close()      # no await since the last look at the inbox: whatever nobody decided is its own turn from here
     if not answer.strip():
         if run.sent_text:
             await run.emit({"event": "answer_reset"})
@@ -362,16 +405,68 @@ async def _loop(run: _Run) -> dict:
         if time.monotonic() - run.started > SOFT_SECONDS:
             stop = "time_cap"
             break
+        await _intake(run)
         message = await _model_step(run, run.schemas)
         if not message.get("tool_calls"):
+            if message.get("paused") or (run.inbox is not None and run.inbox.has_fresh()):
+                await _pause(run, message)      # the owner spoke while the answer was being written: decide with the half-written text in hand
+                continue
             return await _finish(run, message, None, may_ask_again=True)
         run.messages.append(message)
         await _tool_step(run, message)
+        if run.inbox is not None and run.inbox.stopping:
+            return await _stopped(run)
         if run.wake is not None and run.wake.decision is not None:     # the first valid ``decide`` ends a wake turn: no more model calls
             return _decided(run)
     run.messages.append({"role": "system", "content": CAP_NOTE})
+    run.pausable = False
     final = await _model_step(run, run.schemas)
     return await _finish(run, final, stop, may_ask_again=False)
+
+
+async def _intake(run: _Run) -> None:
+    """The messages the owner sent since the last look, as his own words after the work so far, and the one fixed note about them."""
+    box = run.inbox
+    if box is None or not box.has_fresh():
+        return
+    fresh = box.fresh()
+    for message in fresh:
+        message.shown = True
+        message.withdraws = tuple(id(p) for p in run.proposals)
+        run.messages.append({"role": "user", "content": prompt.neutralise(message.text)})
+    run.messages.append({"role": "system", "content": prompt.interjection_note([m.id[:inboxes.SHORT_ID] for m in fresh], paused=run.cut)})
+    run.cut = False
+    run.user_text += "\n" + "\n".join(m.text for m in fresh)      # his figures may be bound by ``calculate`` like any he typed
+    mark_timeline(run, "interjection", count=len(fresh))
+    mark_progress()
+
+
+async def _pause(run: _Run, message: dict) -> None:
+    """The answer was cut off (or was ready when a message came): the text so far is the model's own, and it decides with it in hand."""
+    text = message.get("content") or ""
+    if text.strip():
+        run.messages.append({"role": "assistant", "content": text})
+        run.partial = text
+        run.cut = True
+    if run.sent_text:
+        run.paused_partial = True
+        await run.emit({"event": "answer_paused"})
+    mark_timeline(run, "answer_paused")
+
+
+async def _stopped(run: _Run) -> dict:
+    """The owner said stop: the turn ends with whatever it had written and the model's one sentence; nothing it proposed becomes a card."""
+    sentence = run.inbox.stop_note or inboxes.DEFAULT_STOP_SENTENCE
+    run.proposals.clear()
+    run.pending = None
+    run.question_card = None
+    partial = run.partial.strip()
+    text = "\n\n".join(part for part in (run.must_say.strip(), partial, sentence) if part)
+    await run.emit({"event": "answer_reset"})
+    await run.emit({"event": "delta", "text": text})
+    await run.emit({"event": "stopped"})
+    run.audit["stopped_by_message"] = True
+    return _result(run, text, "stopped_by_message", status="stopped")
 
 
 async def _report_fallback(run: _Run, sentence: str) -> dict:
@@ -402,7 +497,61 @@ async def _skill_of_question(context, state: dict) -> dict | None:
         return None
 
 
+def _previous_user_message(history: list[dict], question: str, *, original: bool = False) -> str | None:
+    """The user message before this question: what a follow-up like 「那它的现金流呢」 refers back to.  Only what the person typed counts
+    (never the endpoint's memory note or citation catalogue), and the question is located the way ``build_messages`` does: it is in the
+    history only when a user message equal to it follows the last assistant message; otherwise (a reply press, a card press) the previous
+    message is simply the last one the person typed.  After a card press ``original`` is true: the question is the card's own, asked
+    before the card, so it is the last matching user message wherever it stands."""
+    body = [m for m in history if not is_memory_message(m) and not is_catalogue_message(m)]
+    after = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1)
+    asked = next((i for i in range(len(body) - 1, -1 if original else after, -1) if body[i].get("role") == "user" and body[i].get("content") == question), None)
+    typed = [m["content"] for m in (body[:asked] if asked is not None else body) if m.get("role") == "user" and isinstance(m.get("content"), str)]
+    return typed[-1] if typed else None
+
+
+async def _latest_block(run: "_Run", text: str, previous: str | None, focus: str | None, owner: bool) -> str | None:
+    """The "latest known" block of this turn (``latest_known.block_for``: code writes it, no model call, bounded, never raises).  A failure of
+    any kind means the turn goes on without it.  The companies it covers go on the audit and the timeline for the backstage."""
+    rows: list[dict] = []
+    try:
+        found, symbols = await latest_known.block_for(text, previous=previous, focus=focus, rows=rows,
+                                                      owner_hash=getattr(run.context, "owner_hash", None) if owner else None)
+        if found:      # its lines are the turn's first citations: the model can answer from them without reading them again
+            found = number_attached(run, found, rows)
+    except Exception:
+        logger.exception("kernel latest-known block failed")
+        return None
+    if not found:
+        return None
+    note_latest(run, symbols)
+    return found
+
+
+def note_latest(run: "_Run", symbols: list[str]) -> None:
+    run.audit["latest_known"] = list(symbols)
+    mark_timeline(run, "latest_known", symbols=list(symbols))
+
+
 async def run_turn(question: str, context, emit, messages: list[dict] | None = None, state: dict | None = None) -> dict:
+    """One kernel turn.  A turn with an inbox ends by closing it (what nobody decided is ``separate``) and says which user messages
+    its answer answers (``final_protocol["reply_to"]``) and what each interjection came to (``audit["interjections"]``)."""
+    box = getattr(context, "inbox", None)
+    if box is not None:
+        box.started = True
+    try:
+        result = await _run_turn(question, context, emit, messages, state)
+    finally:
+        if box is not None:
+            box.close()
+    if box is not None:
+        result["final_protocol"] = {**result.get("final_protocol", {}), "reply_to": box.reply_to()}
+        if box.messages:
+            result.setdefault("audit", {})["interjections"] = box.record()
+    return result
+
+
+async def _run_turn(question: str, context, emit, messages: list[dict] | None = None, state: dict | None = None) -> dict:
     state = state or {}
     history = list(messages or [])[1:]   # the first message is the endpoint's own system prompt
     pressed = press.read(question, state)
@@ -412,7 +561,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                model=ModelUse(context.provider, context.model, context.api_key, context.base_url, getattr(context, "catalog_name", None)),
                ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)),
-               question=question, turn_id=str(state.get("turn_id") or ""),
+               question=question, turn_id=str(state.get("turn_id") or ""), inbox=getattr(context, "inbox", None),
                carried_sets=[x for x in state.get("result_sets") or [] if isinstance(x, dict) and x.get("owner") == context.owner_hash
                              and x.get("conversation") == context.conversation_id and isinstance(x.get("rows"), list)][-MAX_SETS:])
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):
@@ -441,7 +590,13 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
         # skill up again.  A question card is not carried past the next turn, so this reaches that one turn only.
         if not started and (settled.reply is not None if pressed else True):
             started = await _skill_of_question(context, state)
-        run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started)
+        # The companies the user's words (or the previous message, for a follow-up, or the bot's own company) point at: the card's original
+        # question for a card press and the option's text for a reply, never a button's raw value.
+        owner = owner_credential_matches(getattr(context, "identity_credential", ""))
+        company = getattr(context, "default_company", None)
+        latest = await _latest_block(run, run.question if fact else question, _previous_user_message(history, run.question if fact else question, original=bool(fact)),
+                                     company.get("symbol") if isinstance(company, dict) else None, owner)
+        run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started, latest=latest, helper=helper.DELEGATE in run.tool_names)
         if started and owner_credential_matches(getattr(context, "identity_credential", "")):
             run.audit["skill"] = {"name": started["name"], "version": started["version"]}
         run.user_text = _user_text(run.question, history)
@@ -452,6 +607,7 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
         if not fact:
             return await _loop(run)
         # The write is done: whatever the model does next, the user is told what happened, so they do not ask for it twice.
+        run.must_say = settled.report + (settled.note or "")      # a stop must not hide that the write ran
         try:
             result = await _loop(run)
         except Exception:
@@ -459,13 +615,13 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
             result = None
         if result is None or result.get("reason") == "empty_answer":
             return await _report_fallback(run, settled.report + (settled.note or ""))
-        if settled.note:      # where a saved page landed: a link written by code, not left to the model
+        if settled.note and result.get("status") != "stopped":      # where a saved page landed (a stop's text already holds it): a link written by code, not left to the model
             await run.emit({"event": "delta", "text": settled.note})
             result["answer"] += settled.note
         return result
 
 
-async def run_wake(context, emit, messages: list[dict], *, turn_id: str) -> dict:
+async def run_wake(context, emit, messages: list[dict], *, turn_id: str, latest_symbols: list[str] | None = None) -> dict:
     """One wake turn (``wake.wake``): the same append-only loop with the restricted tools and no history; it ends at the first valid
     ``decide`` (``audit["decision"]``), or at an answer without one.  Nothing is streamed to anyone: ``emit`` is the caller's recorder."""
     tool_schemas = _wake_schemas(context)
@@ -473,5 +629,7 @@ async def run_wake(context, emit, messages: list[dict], *, turn_id: str) -> dict
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                model=ModelUse(context.provider, context.model, context.api_key, context.base_url, getattr(context, "catalog_name", None)),
                ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)), turn_id=turn_id, wake=decide.WakeState())
+    if latest_symbols:
+        note_latest(run, latest_symbols)
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):
         return await _loop(run)

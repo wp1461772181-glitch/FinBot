@@ -119,10 +119,11 @@ TOOL_PHRASES = {
     "query_sec_filings": "查 SEC 备案", "search_knowledge": "翻资料库", "web_research": "上网搜索",
     "search_configured_news": "查新闻", "search_x": "搜 X", "calculate": "算数", "calculate_formula": "算数", "query_portfolio": "看持仓",
     "recall_conversations": "翻之前的对话", "read_past_conversation": "翻之前的对话", "read_history_citation": "翻之前的对话",
+    "read_turn": "翻看之前那一轮",
     "query_latest_forecast": "看已存的预测", "query_materials": "翻已存材料", "query_material_analysis": "看已存的 AI 分析",
     "search_material_analysis": "看已存的 AI 分析", "read_workspace": "读工作区记录", "query_research_queue": "看研究队列",
     "query_research_faq": "翻问答库", "query_system_status": "看任务状态", "query_holdings_overview": "看持仓总览",
-    "query_alerts": "看提醒记录", "list_routines": "看例行任务",
+    "query_alerts": "看提醒记录", "list_routines": "看例行任务", "list_models": "看可用模型", "list_work": "看手上的事",
 }
 
 

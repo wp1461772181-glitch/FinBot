@@ -111,6 +111,22 @@ def _number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
 
 
+def _answered(db, conversation_id, record) -> list[dict]:
+    """The messages the answer says it answered, in its own order, each as 「回答了：…」 (the first 60 characters of the question)."""
+    from .agent_context import reply_quote
+    wanted = []
+    for item in _list(record.get("reply_to")):
+        try:
+            wanted.append(uuid.UUID(str(item)))
+        except ValueError:
+            continue
+    if not wanted:
+        return []
+    rows = {row.id: row.content for row in db.scalars(select(AgentMessage).where(AgentMessage.conversation_id == conversation_id,
+                                                                                  AgentMessage.id.in_(wanted)))}
+    return [{"message_id": str(i), "text": _question(reply_quote(rows[i])), "label": f"回答了：{_question(reply_quote(rows[i]))}"} for i in wanted if i in rows]
+
+
 def _iso(value):
     return value.isoformat() if value is not None else None
 
@@ -289,6 +305,26 @@ def cost_state(*, calls, ok_chat, expected, unpriced, ended_at, now, incomplete=
     return "unpriced" if unpriced else "priced"
 
 
+def _expected_chat_calls(audit: dict, audit_calls: list) -> int:
+    """How many ``chat`` ledger rows the turn should have: the audit's model calls less the helpers' (those are ``helper`` rows)."""
+    total = _number(audit.get("model_calls")) or len(audit_calls)
+    helped = sum(_number(_dict(item).get("model_calls")) or 0 for item in _list(audit.get("helpers")))
+    return max(0, total - helped)
+
+
+def _helpers(audit: dict) -> list[dict]:
+    """The turn's helpers, one line each: the model, how many steps, which tools, whether it finished, how long."""
+    lines = []
+    for item in _list(audit.get("helpers")):
+        item = _dict(item)
+        if not item:
+            continue
+        lines.append({"call_id": scrub(item.get("call_id")), "model": scrub(item.get("model")), "steps": _number(item.get("steps")),
+                      "model_calls": _number(item.get("model_calls")), "tokens": _number(item.get("token_usage")), "complete": item.get("complete"),
+                      "seconds": _number(item.get("seconds")), "tools": [scrub(name) for name in _list(item.get("tools")) if isinstance(name, str)]})
+    return lines
+
+
 def _list_item(asked, final, bot_id, ledger, bots, now, source="chat") -> dict:
     """One turn: ``asked`` is its user row, ``final`` its last assistant row (None when there is none).  A tool round is not an answer:
     a turn that stopped at one (or never got one) is ``incomplete`` and its item carries the question's id."""
@@ -296,7 +332,7 @@ def _list_item(asked, final, bot_id, ledger, bots, now, source="chat") -> dict:
     record = {} if incomplete else _record(final.tool_calls)
     audit = _dict(record.get("audit"))
     audit_calls = [_dict(call) for call in _list(audit.get("calls"))]
-    expected = _number(audit.get("model_calls")) or len(audit_calls)
+    expected = _expected_chat_calls(audit, audit_calls)
     if ledger:
         calls, tokens = ledger["calls"], {"total": ledger["tokens"], "cache_read": ledger["cache_read"], "cache_write": ledger["cache_write"]}
         models = ledger["models"]
@@ -608,9 +644,10 @@ def answer(message_id: str, x_chat_session: str | None = Header(default=None)):
         audit = _dict(record.get("audit"))
         calls, source, ledger_rows = _model_calls(db, opened.turn_id, record)
         card = _card(db, owner, record, now)
+        answered = _answered(db, opened.conversation_id, record)
         bot_name = _bot_names(db, owner).get(str(bot_id)) if bot_id else None
         audit_calls = _list(audit.get("calls"))
-        expected = _number(audit.get("model_calls")) or len(audit_calls)
+        expected = _expected_chat_calls(audit, audit_calls)
         lacking = [(row.catalog_name, row.cache_read_tokens > 0, row.cache_write_tokens > 0) for row in ledger_rows if row.cost_usd is None]
         state = cost_state(calls=len(ledger_rows) or (expected if source == "audit" else 0), ok_chat=sum(1 for row in ledger_rows if row.purpose == "chat" and row.ok),
                            expected=expected, unpriced=len(lacking), ended_at=(final or opened).created_at, now=now, incomplete=incomplete)
@@ -632,9 +669,11 @@ def answer(message_id: str, x_chat_session: str | None = Header(default=None)):
             "model_calls": calls, "model_calls_source": source, "cost_state": state, "missing_prices": missing,
             "narration": narration, "ordered": ordered, "events": events,
             "checklist": scrub(_list(record.get("checklist"))), "tool_calls": tool_calls, "citations": citations,
+            "answered": answered,
             "writes": scrub([item for item in _list(audit.get("writes")) if isinstance(item, dict)]),
             "write_outcome": audit.get("write_outcome"), "card": card, "answer": "" if incomplete else scrub(final.content or ""),
-            "backup_model": scrub(fallback) if isinstance(fallback, dict) else None, "langfuse_url": _langfuse_url(record)}
+            "backup_model": scrub(fallback) if isinstance(fallback, dict) else None, "helpers": _helpers(audit),
+            "latest_known": [scrub(symbol) for symbol in _list(audit.get("latest_known"))[:6] if isinstance(symbol, str)], "langfuse_url": _langfuse_url(record)}
 
 
 # --- usage ---------------------------------------------------------------------------------------------------------

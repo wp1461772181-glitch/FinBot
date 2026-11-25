@@ -1,0 +1,32 @@
+"""The tools as the old engine shows them: what the 3a branch widened (routine scheduling, analysis model and re-run) goes back to the
+pre-branch schema and description, so the old engine's tool list stays byte-identical.  The kernel and the cards use the full ones
+(``agent_tool_catalog.definitions``); only what is *offered to the old engine's model* is narrowed here (``legacy_definitions``)."""
+from __future__ import annotations
+from typing import Annotated,Literal
+from pydantic import Field,model_validator
+from .agent_tool_catalog import Args,SourceWriteArgs
+
+class RoutineArgs(Args):
+    name:str=Field(min_length=1,max_length=80,description='Short name of the routine, in the user\'s language (每小时新闻).')
+    instruction:str=Field(min_length=1,max_length=2000,description="What you do on each run, written as your own work instruction from the user's words, including when to notify_telegram (e.g. 找一条关于关注公司的最新新闻，有新的就用 notify_telegram 发给我).")
+    schedule_kind:Literal['hourly','daily','weekdays']
+    schedule_time:str=Field(default='09:00',pattern=r'^([01]\d|2[0-3]):[0-5]\d$',description='HH:MM local time (Asia/Shanghai); hourly runs at minute MM of every hour.')
+    symbols:list[Annotated[str,Field(pattern=r'^[A-Z][A-Z0-9.\-]{0,9}$')]]=Field(default_factory=list,max_length=30,description='Tickers the routine covers; empty: the research queue.')
+_ROUTINE_ID=Field(pattern=r'^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$',description='The id list_routines returned.')
+class UpdateRoutineArgs(Args):
+    routine_id:str=_ROUTINE_ID
+    name:str|None=Field(default=None,min_length=1,max_length=80)
+    instruction:str|None=Field(default=None,min_length=1,max_length=2000)
+    schedule_kind:Literal['hourly','daily','weekdays']|None=None
+    schedule_time:str|None=Field(default=None,pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
+    symbols:list[Annotated[str,Field(pattern=r'^[A-Z][A-Z0-9.\-]{0,9}$')]]|None=Field(default=None,max_length=30,description='New tickers; [] switches to the research queue.')
+    enabled:bool|None=Field(default=None,description='false pauses it, true resumes it.')
+    @model_validator(mode='after')
+    def changes_something(self):
+        if all(getattr(self,k) is None for k in ('name','instruction','schedule_kind','schedule_time','symbols','enabled')):raise ValueError('nothing_to_change')
+        return self
+LEGACY=(
+ ('analyze',SourceWriteArgs,'costly','Propose paid AI analysis of an exact saved source. Confirmation required.'),
+ ('create_routine',RoutineArgs,'reversible','Propose a scheduled routine of this bot (hourly, daily or on weekdays) when the USER asks for something repeated, e.g. 每小时找一条新闻给我 or 每天收盘后总结. Each run you follow its instruction unattended (reads and notify_telegram only, no writes). Owner confirmation required; the user can pause or delete it on the bot\'s 例行任务 page.'),
+ ('update_routine',UpdateRoutineArgs,'reversible','Propose changing one routine (its name, instruction, schedule, tickers, or pausing/resuming it) when the USER asks; pass only what changes. Owner confirmation required.'),
+)

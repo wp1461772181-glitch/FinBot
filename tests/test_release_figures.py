@@ -494,3 +494,44 @@ def test_release_figures_are_not_presented_as_the_filings_xbrl_block():
     block = block_from_stored(xbrl)
     assert 'XBRL' in block and 'Revenue' in block
     assert block_from_stored(xbrl + release) == block
+
+
+def test_storing_release_figures_refreshes_that_symbols_company_facts_after_the_commit(monkeypatch):
+    from app import company_facts
+    symbol = new_symbol(); release, _ = seed_release(symbol, RELEASE_FILED)
+    seen = []
+    def refresh(name, *, db=None):
+        seen.append((name, db, stored(release) is not None))      # the figures are already committed when the refresh runs
+    monkeypatch.setattr(company_facts, 'refresh', refresh)
+    try:
+        assert release_figures._store(release, [{'metric': 'revenue'}]) is True
+        assert seen == [(symbol, None, True)]
+        assert release_figures._store(release, [{'metric': 'revenue'}]) is False and len(seen) == 1      # already stored: nothing to refresh
+    finally:
+        drop([release])
+
+
+def test_a_company_facts_failure_does_not_fail_storing_release_figures(monkeypatch, caplog):
+    from app import company_facts
+    symbol = new_symbol(); release, _ = seed_release(symbol, RELEASE_FILED)
+    def refresh(name, *, db=None):
+        raise RuntimeError('facts are down')
+    monkeypatch.setattr(company_facts, 'refresh', refresh)
+    try:
+        with caplog.at_level('WARNING', logger='app.company_facts'):
+            assert release_figures._store(release, [{'metric': 'revenue'}]) is True
+        assert stored(release) == [{'metric': 'revenue'}]
+        assert [r.getMessage() for r in caplog.records if 'company facts refresh' in r.getMessage()] == [f'company facts refresh of {symbol} failed (RuntimeError: facts are down)']
+    finally:
+        drop([release])
+
+
+def test_an_empty_figure_list_does_not_trigger_a_refresh(monkeypatch):
+    from app import company_facts
+    symbol = new_symbol(); release, _ = seed_release(symbol, RELEASE_FILED, text=PERSONNEL)
+    calls = []
+    monkeypatch.setattr(company_facts, 'refresh', lambda name, *, db=None: calls.append(name))
+    try:
+        assert release_figures._store(release, []) is True and calls == []
+    finally:
+        drop([release])

@@ -46,11 +46,13 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # scope left them out answered 写记忆失败 while the background extractor stored the item anyway).
 # create_routine too: it only makes a card, and a bot that said 没有对应的工具 to 每小时找一条新闻 had none;
 # and list/update/delete_routine with it (Levi: 给了新增，怎么没给查看、编辑、删除).
+# read_turn, record_view and drop_view too (kernel-only): the memory note names read_turn, and a view is as much the owner's memory as remember; views make a card or a tier-1 write only.
 # The three portfolio writes too: they only ever make an owner-only card (query_portfolio is a data tool, scoped like the rest).
 ALWAYS_ON = frozenset({"ask_user", "use_result_set", "calculate", "read_history_citation", "select_stock",
                        "open_page", "request_action", "notify_telegram", "use_skill", "save_skill",
                        "remember", "forget", "create_routine", "list_routines", "update_routine",
-                       "delete_routine", "record_trade", "set_available_funds", "set_position_plan", "load_tools"})
+                       "delete_routine", "record_trade", "set_available_funds", "set_position_plan", "load_tools",
+                       "read_turn", "record_view", "drop_view"})
 
 TEMPLATES = {
     "blank": {"label": "空白", "name": "", "title": "", "description": "", "tool_scope": None},
@@ -209,6 +211,18 @@ def _model(value) -> str | None:
     if not isinstance(value, str) or not catalog.exists(value):
         raise BotError("unknown_model")
     return value
+
+
+def usable_model(name: str | None) -> None:
+    """A bot's model must be a catalog entry whose key is configured (None: the catalog default).  Checked where the owner's
+    request comes in (the route, and the ``create_bot`` / ``update_bot`` card); ``_model`` itself keeps only the name check."""
+    if not name:
+        return
+    from . import agent_model_catalog as catalog
+    if not catalog.exists(name):
+        raise BotError("unknown_model")
+    if not catalog.configured(name):
+        raise BotError("model_key_missing")
 
 
 def _reasoning_effort(value) -> str | None:
@@ -372,8 +386,9 @@ def get_bot(owner_hash: str, bot_id) -> dict | None:
         return serialize(bot, _last_messages(db, [bot.conversation_id]).get(bot.conversation_id)) if bot else None
 
 
-def create_bot(owner_hash: str, fields: dict) -> dict:
-    """Create a bot from the form (a template only filled the form) with its own new conversation."""
+def create_bot(owner_hash: str, fields: dict, *, dry_run: bool = False) -> dict:
+    """Create a bot from the form (a template only filled the form) with its own new conversation.  ``dry_run`` runs every check
+    and returns the bot as it would be, writing nothing but the system's own default bot if it is not there yet (as every page load does)."""
     ensure_default_bot(owner_hash)
     fields = {k: v for k, v in fields.items() if k not in {"is_default", "conversation_id", "id"}}
     with SessionLocal() as db:
@@ -386,6 +401,8 @@ def create_bot(owner_hash: str, fields: dict) -> dict:
         _apply_skills(owner_hash, bot, fields)
         if _name_taken(db, owner_hash, bot.name):
             raise BotError("name_taken")
+        if dry_run:
+            return serialize(bot)
         db.add(bot)
         db.flush()
         bot.conversation_id = _new_conversation(db, owner_hash, bot.id)
@@ -394,19 +411,38 @@ def create_bot(owner_hash: str, fields: dict) -> dict:
         return serialize(bot)
 
 
+def _changed(db, owner_hash: str, bot: AgentBot, fields: dict) -> None:
+    """Apply an edit to a loaded bot and run every check of it (the route's and the card's one definition of a valid change)."""
+    _apply(bot, fields)
+    _apply_skills(owner_hash, bot, fields)
+    if "name" in fields and _name_taken(db, owner_hash, bot.name, bot.id):
+        raise BotError("name_taken")
+
+
 def update_bot(owner_hash: str, bot_id, fields: dict) -> dict | None:
     fields = {k: v for k, v in fields.items() if k not in {"is_default", "conversation_id", "id"}}
     with SessionLocal() as db:
         bot = _owned(db, owner_hash, bot_id)
         if bot is None:
             return None
-        _apply(bot, fields)
-        _apply_skills(owner_hash, bot, fields)
-        if "name" in fields and _name_taken(db, owner_hash, bot.name, bot.id):
-            raise BotError("name_taken")
+        _changed(db, owner_hash, bot, fields)
         db.commit()
         db.refresh(bot)
         return serialize(bot, _last_messages(db, [bot.conversation_id]).get(bot.conversation_id))
+
+
+def preview_update(owner_hash: str, bot_id, fields: dict) -> tuple[dict, dict] | None:
+    """The bot before and after an edit, with every check of ``update_bot`` and nothing written; None when it is not this owner's."""
+    fields = {k: v for k, v in fields.items() if k not in {"is_default", "conversation_id", "id"}}
+    with SessionLocal() as db:
+        bot = _owned(db, owner_hash, bot_id)
+        if bot is None:
+            return None
+        before = serialize(bot)
+        _changed(db, owner_hash, bot, fields)
+        after = serialize(bot)
+        db.rollback()
+        return before, after
 
 
 def delete_bot(owner_hash: str, bot_id) -> bool:

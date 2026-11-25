@@ -540,27 +540,56 @@ def record_transaction(owner: str, fields: dict, *, today: date | None = None) -
                 "amount": text(txn.amount), "warnings": warnings, "warning_text": [WARNING_TEXT[w] for w in warnings]}
 
 
-def delete_transaction(owner: str, transaction_id: str) -> dict:
-    from .database import SessionLocal
+def _removal(rows, transaction_id: str):
+    """``(target row, the other rows as ledger entries, warnings after)`` for removing one entry; a refusal writes nothing.
+    One definition of what may be deleted, for the route and for the card of ``delete_transaction``."""
     try:
         key = uuid.UUID(str(transaction_id))
     except ValueError:
         raise PortfolioError("transaction_not_found") from None
+    target = next((r for r in rows if r.id == key), None)
+    if target is None:
+        raise PortfolioError("transaction_not_found")
+    rest = [_row_to_txn(r) for r in rows if r.id != key]
+    try:
+        warnings = warnings_after(rest)
+    except PortfolioError:
+        raise PortfolioError("would_break_history") from None
+    return target, rest, warnings
+
+
+def delete_transaction(owner: str, transaction_id: str) -> dict:
+    from .database import SessionLocal
     with SessionLocal() as db:
         _lock(db, owner)
-        rows = load_transactions(db, owner)
-        target = next((r for r in rows if r.id == key), None)
-        if target is None:
-            raise PortfolioError("transaction_not_found")
-        rest = [_row_to_txn(r) for r in rows if r.id != key]
-        try:
-            warnings = warnings_after(rest)
-        except PortfolioError:
-            raise PortfolioError("would_break_history") from None
+        target, _, warnings = _removal(load_transactions(db, owner), transaction_id)
+        key = target.id
         db.delete(target)
         db.commit()
         return {"ok": True, "status": "deleted", "id": str(key), "warnings": warnings,
                 "warning_text": [WARNING_TEXT[w] for w in warnings]}
+
+
+def preview_delete(owner: str, transaction_id: str) -> dict:
+    """What deleting one entry would do: the entry, the position of its symbol and the funds before and after.  Raises
+    PortfolioError like the real delete (not this owner's, already gone, or the history after it would not hold)."""
+    from .database import SessionLocal
+    with SessionLocal() as db:
+        rows = load_transactions(db, owner)
+        target, rest, warnings = _removal(rows, transaction_id)
+        txn = _row_to_txn(target)
+        before, after = replay([_row_to_txn(r) for r in rows]), replay(rest)
+    symbol = txn.symbol
+    return {"txn": txn, "warnings": warnings, "funds_before": text(before.funds), "funds_after": text(after.funds),
+            "position_before": before.positions.get(symbol) if symbol else None, "position_after": after.positions.get(symbol) if symbol else None}
+
+
+def recent_transactions(owner: str, limit: int = 30) -> list[dict]:
+    """The owner's newest entries as ``{id, text}`` (the lookup of ``delete_transaction``: the model needs an id to name one)."""
+    from .database import SessionLocal
+    with SessionLocal() as db:
+        rows = list(reversed(load_transactions(db, owner)))[:limit]
+    return [{"id": str(r.id), "text": entry_words(_row_to_txn(r))} for r in rows]
 
 
 def set_available_funds(owner: str, target, *, today: date | None = None) -> dict:
@@ -630,6 +659,8 @@ def apply_tool(name: str, owner: str, args: dict) -> dict:
     args = {k: v for k, v in args.items() if not str(k).startswith("_")}
     if name == "record_trade":
         return record_transaction(owner, args)
+    if name == "delete_transaction":
+        return delete_transaction(owner, args["transaction_id"])
     if name == "set_available_funds":
         return set_available_funds(owner, args["amount"])
     if name == "set_position_plan":
@@ -647,7 +678,27 @@ def apply_tool(name: str, owner: str, args: dict) -> dict:
 
 KIND_LABEL = {"opening": "期初持仓", "buy": "买入", "sell": "卖出", "dividend": "分红", "split": "拆股",
               "deposit": "入金", "withdraw": "出金", "cash_adjust": "资金调整"}
-WRITE_TOOLS = ("record_trade", "set_available_funds", "set_position_plan")
+WRITE_TOOLS = ("record_trade", "set_available_funds", "set_position_plan", "delete_transaction")
+
+
+def entry_words(txn: Txn) -> str:
+    """One ledger entry in words: date, what it was, and its figures (a trade: side, shares, symbol, price and fee)."""
+    label = KIND_LABEL[txn.kind]
+    if txn.kind in TRADE_KINDS:
+        what = f"{label} {number_text(txn.quantity)} 股 {txn.symbol} @ {number_text(txn.price)}" + (f"，手续费 {number_text(txn.fee)}" if txn.fee else "")
+    elif txn.kind == "split":
+        what = f"{txn.symbol} 1 拆 {number_text(txn.ratio)}"
+    elif txn.kind == "dividend":
+        what = f"{label} {text(txn.amount)}（{txn.symbol}）"
+    else:
+        what = f"{label} {text(txn.amount)}"
+    return f"{txn.occurred_on.isoformat()} {what}"
+
+
+def position_words(position) -> str:
+    if position is None or position.shares <= 0:
+        return "没有持仓"
+    return f"{number_text(position.shares)} 股（平均成本 {text(position.avg_cost)}）"
 
 
 def describe_write(owner: str, name: str, args: dict) -> dict:
@@ -671,6 +722,14 @@ def describe_write(owner: str, name: str, args: dict) -> dict:
         note = "".join(WARNING_TEXT[w] for w in preview["warnings"])
         return {"title": f"记录{label} · {txn.symbol}", "targets": [{"symbol": txn.symbol, "kind": what}],
                 "alternative": f"{detail}；日期 {txn.occurred_on.isoformat()}。{funds}{note}可在「持仓」页删除这一笔。"}
+    if name == "delete_transaction":
+        preview = preview_delete(owner, args.get("transaction_id"))
+        txn = preview["txn"]
+        move = (f"{txn.symbol} 持仓：{position_words(preview['position_before'])} → {position_words(preview['position_after'])}。"
+                if txn.symbol else "")
+        note = "".join(WARNING_TEXT[w] for w in preview["warnings"])
+        return {"title": f"删除一笔记录 · {txn.symbol or KIND_LABEL[txn.kind]}", "targets": [{"symbol": txn.symbol, "kind": entry_words(txn)} if txn.symbol else {"kind": entry_words(txn)}],
+                "alternative": f"删除后：{move}可用资金 {preview['funds_before']} → {preview['funds_after']}。{note}这是删除，不能撤销；要恢复只能重新记一笔。"}
     if name == "set_available_funds":
         target = to_decimal(args.get("amount"), code="invalid_amount")
         if target is None:

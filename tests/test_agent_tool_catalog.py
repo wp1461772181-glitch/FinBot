@@ -10,7 +10,7 @@ def test_catalogue_contains_executable_handlers_with_typed_permission_metadata()
         assert policy.args_schema and policy.description and policy.errors and policy.actionable_error
         assert policy.confirmation==(policy.level in {'reversible','costly'})
         assert not(policy.guest and policy.level=='costly')
-    assert {s['function']['name'] for s in schemas(owner=True,granted={n for n,p in policies.items() if p.level in {'reversible','costly'}})}==set(policies)
+    assert {s['function']['name'] for s in schemas(owner=True,kernel=True,granted={n for n,p in policies.items() if p.level in {'reversible','costly'}})}==set(policies)
     assert not {n for n,p in policies.items() if p.level in {'reversible','costly'}}&{s['function']['name'] for s in schemas(owner=True)}
     assert 'ingest_web_source' not in {s['function']['name'] for s in schemas(owner=False)}
 
@@ -45,6 +45,11 @@ WRITE_ARGUMENTS={
  'record_trade':{'kind':'buy','symbol':'INTC','quantity':100,'price':80},
  'set_available_funds':{'amount':5000},
  'set_position_plan':{'symbol':'INTC','stop_price':70},
+ 'create_bot':{'name':'研究员'},'update_bot':{'bot_id':'11111111-1111-4111-8111-111111111111','pinned':True},
+ 'delete_transaction':{'transaction_id':'11111111-1111-4111-8111-111111111111'},
+ 'manage_skill':{'action':'disable','skill_id':'11111111-1111-4111-8111-111111111111'},
+ 'set_default_model':{'name':'alpha'},'set_model_role':{'role':'judge'},'set_channel_prefs':{'mode':'all','channels':['telegram']},
+ 'record_view':{'symbol':'NVDA','text':'估值太高','quote':'我觉得估值太高'},'drop_view':{'symbol':'NVDA'},
 }
 
 

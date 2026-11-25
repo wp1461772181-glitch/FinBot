@@ -18,7 +18,7 @@ export type AnswerDetail = {
   writes: Array<{ operation: string; tier: number; outcome: string }>; write_outcome: string | null;
   card: { request_id: string; reason: string; title: string; targets: unknown[]; question: string | null; choices: Array<{ label: string; kind: string }>;
     consent: { status: string; expired: boolean; decided_at: string | null; operations: unknown[]; result: unknown } | null } | null;
-  answer: string; backup_model: { from: string | null; to: string | null; reason: string | null } | null; langfuse_url: string | null;
+  answer: string; backup_model: { from: string | null; to: string | null; reason: string | null } | null; latest_known?: string[]; langfuse_url: string | null;
 };
 
 export type UsageGroup = { key: string; label: string; calls: number; failed_calls: number; tokens: Tokens; ms_p50: number | null; cost_usd: number | null; unpriced_calls: number; missing_prices: string[] };

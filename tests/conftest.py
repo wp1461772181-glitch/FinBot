@@ -47,6 +47,8 @@ os.environ["PERSONAL_CHAT_LOGIN_PATH"] = os.path.join(
 # Keep the suite hermetic on CI where neither MODEL_CREDENTIAL_KEY nor
 # APP_API_ACCESS_KEY is present.
 os.environ.setdefault("MODEL_CREDENTIAL_KEY", "pytest-model-credential-key-0123456789abcdef")
+# The archive build worker could reach SEC: no test starts it through the app; its own tests switch it on with a faked build.
+os.environ["FINBOT_ARCHIVE_BUILDS"] = "off"
 
 # These imports must remain after DATABASE_URL is set so every application
 # module and test shares the disposable database engine.
@@ -80,3 +82,20 @@ def disposable_database():
 def client():
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def _no_latest_known_unless_asked(request, monkeypatch):
+    """The "latest known" block reads the shared test database, and its known-symbol cache is process-wide (any test that starts the app
+    warms it).  A test of something else must not get a block because an earlier test left rows or a warm cache behind: here every
+    ``block_for`` is empty unless the test file is about the block itself or the test sets its own."""
+    from app import latest_known
+    if request.module.__name__.rsplit(".", 1)[-1] == "test_latest_known":
+        yield
+        return
+
+    async def nothing(*args, **kwargs):
+        return None, []
+
+    monkeypatch.setattr(latest_known, "block_for", nothing)
+    yield

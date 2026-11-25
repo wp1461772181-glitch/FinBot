@@ -43,6 +43,10 @@ SLOW_TEXT = "收到，我在查，稍等一下。"
 BACKEND_DOWN_TEXT = "后端暂时连不上，提醒不受影响。"
 BUSY_WAITING_TEXT = "这条对话线正在别处回答（比如网页），你的消息已排队，那边结束后自动开始。"
 BUSY_GIVEUP_TEXT = "这个对话一直在别处回答，请稍后再发一次。"
+RECEIVED_TEXT = "收到。"
+MERGED_TEXT = "已并入上一个回答。"
+STOPPED_TEXT = "已停下。"
+QUOTE_CHARS = 30
 NON_TEXT_TEXT = "目前我只能读文字消息，请把内容打成文字发给我。"
 CARD_TEXT = "（这一步需要你确认，请到网页或 Telegram 里点确认。）"
 STALE_ALERT = "微信通道的登录失效了，需要重新扫码才能继续收发。我已暂停一小时再试，登录恢复前，原本要发到微信的消息会改发 Telegram。"
@@ -122,6 +126,7 @@ class Bridge:
     def __init__(self, ilink: wx.Ilink, state: dict, *, owner: str, route, ask, save=lambda: None):
         self.ilink, self.state, self.owner, self.route, self.ask, self.save = ilink, state, owner, route, ask, save
         self.locks: dict[str, asyncio.Lock] = {}
+        self.active: dict[str, int] = {}  # turns handed to the lock path per bot (running or waiting for the old engine)
         self.tasks: set[asyncio.Task] = set()
         self.paused_until = 0.0  # time.time() until which the login is stale: the poll and the outbox both wait
 
@@ -227,31 +232,93 @@ class Bridge:
         if not target.get("text"):
             return
         _log("inbound", chars=len(text), bot=target.get("bot_name"), has_context_token=bool(token), fields=sorted(str(k) for k in message)[:40])
-        task = asyncio.create_task(self._turn(uid, token, target))
+        bot = target["bot_id"]
+        if self.active.get(bot):
+            # 3c: the bot is answering something.  The new message goes to the API at once (no queue here); the
+            # backend merges it, stops the turn or answers it on its own.  A 409 falls back to the old waiting.
+            coro = self._interject(uid, token, target)
+        else:
+            self.active[bot] = self.active.get(bot, 0) + 1
+            coro = self._turn(uid, token, target)
+        task = asyncio.create_task(coro)
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
     async def _turn(self, uid: str, token: str | None, target: dict) -> None:
-        async with self.locks.setdefault(target["bot_id"], asyncio.Lock()):
-            progress = _Progress(lambda text: self._send_progress(uid, token, text))
-            slow = asyncio.create_task(self._slow_note(uid, token, progress))
-            try:
-                answer, cards = await self._ask_waiting(target, uid, token, progress)
-            except BackendUnavailable:
-                answer, cards = BACKEND_DOWN_TEXT, []
-            except ConversationBusy:
-                answer, cards = BUSY_GIVEUP_TEXT, []
-            except Exception as exc:  # noqa: BLE001
-                _log("turn_failed", error=type(exc).__name__)
-                answer, cards = "这次没有处理成功，稍后再发一次。", []
-            finally:
-                slow.cancel()
-                progress.stop()
-            prefix = f"【{target['bot_name']}】\n" if target.get("via") == "mention" else ""
-            body = answer.strip() or ("完成。" if cards else "（这条回复没有内容。）")
-            if cards:
-                body += "\n\n" + CARD_TEXT
-            await self.reply(uid, token, prefix + body)
+        """One turn on the lock path (one at a time per bot).  The caller has counted it in ``active``."""
+        try:
+            async with self.locks.setdefault(target["bot_id"], asyncio.Lock()):
+                progress = _Progress(lambda text: self._send_progress(uid, token, text))
+                seen: dict = {}
+                slow = asyncio.create_task(self._slow_note(uid, token, progress))
+                try:
+                    answer, cards = await self._ask_waiting(target, uid, token, progress, seen)
+                except BackendUnavailable:
+                    answer, cards = BACKEND_DOWN_TEXT, []
+                except ConversationBusy:
+                    answer, cards = BUSY_GIVEUP_TEXT, []
+                except Exception as exc:  # noqa: BLE001
+                    _log("turn_failed", error=type(exc).__name__)
+                    answer, cards = "这次没有处理成功，稍后再发一次。", []
+                finally:
+                    slow.cancel()
+                    progress.stop()
+                await self._send_outcome(uid, token, target, answer, cards, seen)
+        finally:
+            self.active[target["bot_id"]] = self.active.get(target["bot_id"], 1) - 1
+
+    def _recorder(self, uid: str, token: str | None, seen: dict, progress: _Progress):
+        async def on_event(kind: str, data: dict) -> None:
+            """What the backend did with a message that arrived while another answer was running."""
+            if kind in ("received", "merged", "stopped", "separate"):
+                seen[kind] = True
+            if kind == "received":
+                await self.reply(uid, token, RECEIVED_TEXT)
+            elif kind == "queued":
+                seen["queued"] = True
+                await self.reply(uid, token, f"排队中（前面 {data.get('ahead', 0)} 件）")
+            if kind in ("separate", "queued") and not progress._timer:
+                progress.start()    # this message is its own turn now: its clock, its at-most-two extra messages
+            await progress.on_event(kind, data)
+        return on_event
+
+    async def _send_outcome(self, uid: str, token: str | None, target: dict, answer: str, cards: list, seen: dict) -> None:
+        """The turn's answer; or, for a message the backend merged into a running turn or used to stop it, one line."""
+        if seen.get("received") and not answer.strip() and (seen.get("merged") or seen.get("stopped")):
+            await self.reply(uid, token, MERGED_TEXT if seen.get("merged") else STOPPED_TEXT)
+            return
+        prefix = f"【{target['bot_name']}】\n" if target.get("via") == "mention" else ""
+        if seen.get("received"):
+            first = " ".join(str(target["text"]).split())
+            prefix += "回复：" + (first[:QUOTE_CHARS] + "…" if len(first) > QUOTE_CHARS else first) + "\n\n"
+        if seen.get("stopped") and not seen.get("received") and not answer.strip():
+            answer = STOPPED_TEXT       # the stopped turn said nothing before it stopped
+        body = answer.strip() or ("完成。" if cards else "（这条回复没有内容。）")
+        if cards:
+            body += "\n\n" + CARD_TEXT
+        await self.reply(uid, token, prefix + body)
+
+    async def _interject(self, uid: str, token: str | None, target: dict) -> None:
+        """A message sent while the bot's answer is running: posted at once, no lock, no local queue."""
+        progress = _Progress(lambda text: self._send_progress(uid, token, text))
+        seen: dict = {}
+        try:
+            answer, cards, _cid = await self.ask(target["bot_id"], target["text"],
+                                                 on_event=self._recorder(uid, token, seen, progress))
+        except ConversationBusy:
+            # An engine that cannot take it answers 409: wait in line the old way.
+            bot = target["bot_id"]
+            self.active[bot] = self.active.get(bot, 0) + 1
+            await self._turn(uid, token, target)
+            return
+        except BackendUnavailable:
+            answer, cards = BACKEND_DOWN_TEXT, []
+        except Exception as exc:  # noqa: BLE001
+            _log("turn_failed", error=type(exc).__name__)
+            answer, cards = "这次没有处理成功，稍后再发一次。", []
+        finally:
+            progress.stop()
+        await self._send_outcome(uid, token, target, answer, cards, seen)
 
     async def _send_progress(self, uid: str, token: str | None, text: str) -> None:
         try:
@@ -265,12 +332,13 @@ class Bridge:
             progress.sentence_sent = True  # the note takes the turn's sentence slot
             await self.reply(uid, token, SLOW_TEXT)
 
-    async def _ask_waiting(self, target: dict, uid: str, token: str | None, progress: _Progress):
+    async def _ask_waiting(self, target: dict, uid: str, token: str | None, progress: _Progress, seen: dict):
         started, told = time.monotonic(), False
+        on_event = self._recorder(uid, token, seen, progress)
         while True:
             try:
                 progress.start()  # the 10 s clock runs from the stream, not from waiting in line
-                answer, cards, _cid = await self.ask(target["bot_id"], target["text"], on_event=progress.on_event)
+                answer, cards, _cid = await self.ask(target["bot_id"], target["text"], on_event=on_event)
                 return answer, cards
             except ConversationBusy as busy:
                 progress.stop()

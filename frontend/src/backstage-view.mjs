@@ -139,11 +139,26 @@ export function answerNotes(detail, w = ZH_WORDS) {
   if (detail?.ordered === false && list(detail?.events).length > 1) notes.push({ kind: "unordered", text: w.t("这条记录没有时间顺序，按类别排列") });
   const backup = detail?.backup_model;
   if (isObject(backup) && (backup.from || backup.to)) notes.push({ kind: "backup", text: `${w.t("改用备用模型")}${w.colon}${backup.from ?? DASH} → ${backup.to ?? DASH}${backup.reason ? w.parens(backup.reason) : ""}` });
+  const brought = list(detail?.latest_known).filter((symbol) => typeof symbol === "string" && symbol);
+  if (brought.length) notes.push({ kind: "latest_known", text: `${w.t("系统带上了")}${w.colon}${brought.join(w.list)}` });
   if (detail?.cost_state === "unrecorded") notes.push({ kind: "unrecorded", text: w.t("这一轮没有记账（早于记账功能，或记账丢失）") });
   if (detail?.cost_state === "pending") notes.push({ kind: "pending", text: w.t("记账中：有些调用的费用还在写入，稍后再看") });
   const lacking = list(detail?.missing_prices).map((name) => w.t(PRICE_NAMES[name] ?? text(name))).filter(Boolean);
   if (detail?.cost_state === "unpriced" && lacking.length) notes.push({ kind: "unpriced", text: `${w.t("未设价格的调用缺")}${w.colon}${lacking.join(w.list)}` });
   return notes;
+}
+
+/** One line per helper (小助手) the turn handed work to: the model, how many steps, what it read, whether it finished, how long.  Nothing when there were none. */
+export function helperLines(detail, w = ZH_WORDS) {
+  return list(detail?.helpers).filter(isObject).map((helper, index) => {
+    const steps = Number(helper.steps);
+    const tools = [...new Set(list(helper.tools).filter((name) => typeof name === "string" && name).map((name) => w.t(toolLabel(name))))];
+    const seconds = Number(helper.seconds);
+    const parts = [w.t("小助手"), text(helper.model), Number.isFinite(steps) && helper.steps !== null ? `${steps} ${w.t("步")}` : "",
+      tools.length ? `${w.t("读了")} ${tools.join(w.list)}` : "", helper.complete === false ? w.t("未做完") : helper.complete === true ? w.t("已做完") : "",
+      Number.isFinite(seconds) && helper.seconds !== null && helper.seconds !== "" ? formatMs(seconds * 1000) : ""].filter(Boolean);
+    return { id: text(helper.call_id) || `helper-${index}`, complete: helper.complete !== false, text: parts.join(" · ") };
+  });
 }
 
 function compactJson(value, max = 600) {
@@ -230,7 +245,7 @@ export function usageQuery({ from, to, group }) {
 }
 
 const PRICE_NAMES = { input: "输入价", output: "输出价", cache_read: "缓存读取价", cache_write: "缓存写入价" };
-const PURPOSES = { chat: "对话", summary: "摘要", profile: "画像", judge: "核查", forecast: "预测", earnings: "财报", material_analysis: "材料分析", news: "新闻", routine: "例行任务", duty: "值班",
+const PURPOSES = { chat: "对话", summary: "摘要", profile: "画像", judge: "核查", forecast: "预测", earnings: "财报", material_analysis: "材料分析", news: "新闻", routine: "例行任务", duty: "值班", helper: "小助手",
   query_expansion: "查询扩展", localization: "翻译", knowledge: "知识库", other: "其他" };
 
 /** The name of a group: a purpose in words; a day, a model and a bot as the API labels them. */

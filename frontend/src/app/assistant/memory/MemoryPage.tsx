@@ -1,6 +1,7 @@
 import { useSearchParams } from "react-router";
 import { CompanyTabs } from "../../research/CompanyTabs";
 import { useLocale } from "../../../i18n";
+import { OwnerViewsPanel } from "./OwnerViewsPanel";
 import { ProfilePanel } from "./ProfilePanel";
 import { RecallPanel } from "./RecallPanel";
 import { memoryTab } from "./memory-view.mjs";
@@ -17,7 +18,7 @@ export function MemoryPage() {
   return <main data-testid="memory-page" aria-labelledby="memory-title" className="mx-auto flex w-full min-w-0 max-w-[1100px] flex-1 flex-col gap-5 p-4 lg:p-6">
     <h1 id="memory-title" className="text-title-m text-ink">{t("记忆")}</h1>
     <CompanyTabs label={t("记忆")} value={tab} onChange={choose} tabs={[{ value: "profile", testId: "tab-profile", label: t("画像") }, { value: "recall", testId: "tab-recall", label: t("往事") }]}>
-      {tab === "profile" ? <ProfilePanel /> : <RecallPanel />}
+      {tab === "profile" ? <div className="flex min-w-0 flex-col gap-6"><OwnerViewsPanel /><ProfilePanel /></div> : <RecallPanel />}
     </CompanyTabs>
   </main>;
 }

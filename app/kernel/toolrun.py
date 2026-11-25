@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import re
 import copy
 import json
 import time
@@ -19,7 +20,9 @@ from ..agent_progress import mark_progress, progress_watchdog
 from ..agent_tool_catalog import definitions, validate
 from ..agent_workflow import tools
 from ..agent_workflow.evidence import number_rows
-from . import act, ask, decide, progress, skills, tiers
+from .. import source_authority
+from . import act, ask, decide, helper, progress, skills, tiers
+from . import inbox as inboxes
 
 MAX_PARALLEL = 4
 MAX_TIMELINE = 500     # entries of ``audit["timeline"]`` kept per turn
@@ -28,12 +31,12 @@ SLOW_SECONDS = 10     # a step whose reads are still out after this long gets on
 RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts。只需改正其中 found 为 false 的输入，其余保持不变；不要把数值改写成更长的小数去试。closest_in_source 与 bindable_values 都只是不完整的候选。"
 # Results of these tools are the model's memory, a computation, or state about the system and the owner's own lists, not
 # saved evidence: they are never numbered as rows.  The last three mirror the old engine's ``admin_tools`` (direct.py).
-_UNNUMBERED = {"recall_conversations", "read_past_conversation", "query_system_status", "query_research_queue", "list_routines"}
+_UNNUMBERED = {"recall_conversations", "read_past_conversation", "read_turn", "query_system_status", "query_research_queue", "list_routines", "list_models", "list_work"}
 # The pages these reads return can be saved with ``act``; a post found on X is not a web page.
 _WEB_PAGE_READS = ("web_research", "search_configured_news")
 # These return the owner's own data, not text from outside: they do not make a tier-1 write go onto a card.  The system
 # status is not one of them: job and document names and error text in it come from outside.
-_OWN_STATE_READS = frozenset({"query_research_queue", "list_routines"})
+_OWN_STATE_READS = frozenset({"query_research_queue", "list_routines", "list_models", "list_work"})
 _SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_news", "query_sec_filings": "official_filing",
                 "search_x": "x_post"}
 # Run one at a time after every read has been numbered, in call order: calculations work on the citations the reads just
@@ -86,10 +89,99 @@ def _number_evidence(run, name: str, outcome: dict) -> dict:
         prepared.append(row)
     if not prepared:
         return outcome
-    shown = {"ok": True, "data": number_rows(name, prepared, run.citations, {}), "source": outcome.get("source")}
-    if isinstance(outcome.get("meta"), dict):
-        shown["meta"] = outcome["meta"]
+    numbered = number_rows(name, prepared, run.citations, {})
+    source_authority.rank(run.citations)
+    for row in numbered:
+        match = _MARK_ORDINAL.fullmatch(str(row.get("citation") or ""))
+        cited = match and 0 < int(match[1]) <= len(run.citations) and run.citations[int(match[1]) - 1]
+        if cited and cited.get("authority_label"):
+            row["来源等级"] = cited["authority_label"]
+    shown = {"ok": True, "data": numbered, "source": outcome.get("source")}
+    meta = {**outcome["meta"]} if isinstance(outcome.get("meta"), dict) else {}
+    meta.update(source_authority.freshness(numbered, _now()))
+    if meta:
+        shown["meta"] = meta
     return shown
+
+
+_MARK_ORDINAL = re.compile(r"\[(\d+)\]")
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+HEADING_PREFIX = "  最新一季："
+_MARK = re.compile(r"\[#(\d+)\]( ?)")
+
+
+def _calculated(run, row: dict, ordinals: dict[int, str]) -> str | None:
+    """A derived figure of the block as a citation of the shape ``calculate`` makes (``source_type: calculation``, ``derived``, ``parents`` =
+    the citation numbers of its inputs), built straight from the stored row: the facts were checked when they were stored, so nothing here
+    re-binds numbers to text (that is for numbers a model supplies; it cannot take a negative input).  ``None`` (and no citation) when an
+    input was not numbered."""
+    spec = row["_calc"]
+    inputs, parents = [], []
+    for item in spec["inputs"]:
+        text = ordinals.get(item["k"])
+        if not text:
+            return None
+        number = int(text.strip("[]"))
+        inputs.append({"name": item["name"], "value": item["value"], "source_ordinal": number})
+        parents.append(number)
+    value = {"value": spec["value"], "expression": spec["expression"], "inputs": inputs, "parents": sorted(set(parents)), "derived": True}
+    ordinal = len(run.citations) + 1
+    run.citations.append({"ordinal": ordinal, "source_type": "calculation", "derived": True, "title": row.get("title") or "可复核计算",
+                          "quote": json.dumps(value, ensure_ascii=False), "calculation": value, "symbol": row.get("symbol")})
+    source_authority.rank(run.citations)
+    return f"[{ordinal}]"
+
+
+def number_attached(run, text: str, rows: list[dict]) -> str:
+    """The "latest known" block's lines as this turn's first citations, through the numbering the read results take: each row that
+    ``number_rows`` accepts gets its ordinal, and the block's ``[#k]`` marker becomes ``[ordinal]``.  A marker whose row was not accepted
+    (a news item without a real link) is removed, so no line shows a number that cites nothing.
+
+    A row with ``_calc`` is a figure the code derived from other rows of the block: once its inputs are numbered it becomes a ``calculation``
+    citation pointing at them (rows are in dependency order).  A row with ``_figures`` keeps the exact figures its line rounds."""
+    prepared = [copy.deepcopy(row) for row in rows if isinstance(row, dict) and isinstance(row.get("_k"), int)]
+    ordinals: dict[int, str] = {}
+    if prepared:
+        try:
+            plain = [row for row in prepared if "_calc" not in row]
+            for accepted in number_rows("latest_known", plain, run.citations, {}) if plain else []:
+                ordinals[accepted["_k"]] = accepted["citation"]
+                if accepted.get("_figures"):
+                    run.citations[int(accepted["citation"].strip("[]")) - 1]["figures"] = accepted["_figures"]
+            for row in sorted((row for row in prepared if "_calc" in row), key=lambda row: row["_k"]):
+                made = _calculated(run, row, ordinals)
+                if made:
+                    ordinals[row["_k"]] = made
+        except Exception:
+            logger.exception("latest-known citations could not be numbered")
+            ordinals = {}
+        source_authority.rank(run.citations)
+    def number(match):
+        return f"{ordinals[int(match[1])]}{match[2]}" if int(match[1]) in ordinals else ""
+    if HEADING_PREFIX not in text:
+        return _MARK.sub(number, text)
+    # A figure of the facts section is printed only with its citation: a line of that section (the indented lines after a quarter's heading)
+    # with a number that could not be numbered is dropped whole, and the heading with it when no line of the section is left.
+    kept, heading, inside = [], None, False
+    for line in text.split("\n"):
+        if line.startswith(HEADING_PREFIX):
+            heading, inside = line, True
+            continue
+        if inside and line.startswith("  "):
+            if any(int(k) not in ordinals for k in re.findall(r"\[#(\d+)\]", line)):
+                continue
+            if heading is not None:
+                kept.append(heading)
+                heading = None
+        else:
+            heading, inside = None, False
+        kept.append(line)
+    return _MARK.sub(number, "\n".join(kept))
 
 
 def _calculate(run, name: str, args: dict) -> dict:
@@ -101,6 +193,7 @@ def _calculate(run, name: str, args: dict) -> dict:
             ordinal = len(run.citations) + 1
             run.citations.append({"ordinal": ordinal, "source_type": "calculation", "derived": True, "title": "可复核计算",
                                   "quote": json.dumps(value, ensure_ascii=False), "calculation": value})
+            source_authority.rank(run.citations)
             return {"ok": True, "data": [{**value, "citation": f"[{ordinal}]"}]}
         from ..agent_workflow.formula_replay import execute_calculate_formula
         return execute_calculate_formula(args, run.citations)
@@ -258,6 +351,19 @@ async def _fetch_all(run, reads: list[_Call]) -> None:
             task.cancel()
 
 
+async def _settle_delegate(run, item: _Call) -> None:
+    """One ``delegate`` call: the helper's own run (its reads are numbered into this turn's citations as it makes them; the result is not numbered)."""
+    try:
+        item.result = await helper.run(run, item.id, item.args)
+    except (TimeoutError, ConnectionError):
+        item.result = tools.error("tool_timeout")
+    except Exception:
+        logger.exception("kernel helper run failed")
+        item.result = tools.error("tool_failed")
+    mark_progress()
+    _done(run, item)
+
+
 async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     """Execute one step's tool calls; return one tool message per call, in call order."""
     from ..agent_chat_stream import bounded_tool_result
@@ -274,15 +380,30 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         mark_timeline(run, "tool", call_id=call["id"], name=name)
         await run.emit({"event": "tool_start", "call_id": call["id"], "name": name, "arguments": args or {}})
         run.audit["tool_calls"] += 1
-    own, asks, reads, serial = [], [], [], []
+    own, asks, reads, serial, handles, delegates = [], [], [], [], [], []
     for item in items:
         if item.args is None:
             item.result = tools.error("invalid_arguments")
+        elif getattr(run, "is_helper", False) and item.name not in run.tool_names:
+            item.result = tools.error("tool_not_in_bot_scope")      # a helper has only the reads it was given: never ``act``, ``ask``, ``delegate``…
+        elif item.name == helper.DELEGATE:
+            refused = helper.check(run, item.args) if item.name in run.tool_names else tools.error("tool_not_in_bot_scope")
+            if isinstance(refused, dict):
+                item.result = refused           # refused before it runs: no slot, not a read
+            elif len(delegates) >= helper.MAX_HELPERS:
+                item.result = {"ok": False, "error_code": "too_many_helpers", "hint": f"一步里最多同时交给小助手 {helper.MAX_HELPERS} 件事；这件下一步再交，或者自己查。"}
+            else:
+                delegates.append(item)     # runs beside the reads, outside their gate
         elif getattr(run, "wake", None) is not None and item.name in (act.ACT, ask.ASK):
             item.result = tools.error("tool_not_in_bot_scope")      # a wake turn changes nothing and asks nobody
         elif item.name == decide.DECIDE:
             if item.name in run.tool_names:
                 own.append(item)      # offered to a wake turn only
+            else:
+                item.result = tools.error("tool_not_in_bot_scope")
+        elif item.name == inboxes.HANDLE:
+            if item.name in run.tool_names:
+                handles.append(item)  # the owner's messages sent while the turn works: settled first (a stop cancels the rest of the step)
             else:
                 item.result = tools.error("tool_not_in_bot_scope")
         elif item.name in (tiers.ESCALATE, progress.PLAN):
@@ -306,6 +427,19 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             serial.append(item)
         else:
             reads.append(item)
+    for item in handles:
+        try:
+            item.result = await inboxes.settle(run, item.args)
+        except Exception:
+            logger.exception("kernel handle_message failed")
+            item.result = tools.error("tool_failed")
+        _done(run, item)
+    if handles and run.inbox is not None and run.inbox.stopping:
+        # The owner said stop: nothing else this step asked for runs (no read, no write, no question).
+        for pending in (own, asks, reads, serial, delegates):
+            for item in pending:
+                item.result = {"ok": False, "data": [], "error_code": "turn_stopped"}
+            pending.clear()
     # The kernel's own calls take no time and read nothing: settle them first, so a checklist is on screen while the
     # reads are still out, not after the slowest of them.
     planned = False
@@ -320,9 +454,15 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     # One checklist event per step: after a plan and the ticks the step's labels ask for, before the reads.
     if progress.mark_items(run, numbers) or planned:
         await run.emit({"event": "checklist", "items": [dict(entry) for entry in run.checklist]})
-    await _fetch_all(run, reads)
+    helpers = [asyncio.ensure_future(_settle_delegate(run, item)) for item in delegates]
+    try:
+        await asyncio.gather(_fetch_all(run, reads), *helpers)
+    finally:
+        for task in helpers:
+            task.cancel()
     # A read's result (even a failed one) has come back: tier 1 no longer runs at once, unless it only showed the owner's own state.
-    run.read_results += sum(1 for item in reads if item.name not in _OWN_STATE_READS)
+    # It counts from the next step on: an ``act`` call of this very step was made before the model had seen it.
+    gained = sum(1 for item in reads if item.name not in _OWN_STATE_READS)
     for item in reads:
         if item.result is None:
             _guard(_settle_read, run, item)
@@ -336,9 +476,10 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             await _settle_skill(run, item)
         else:
             _guard(_settle_serial, run, item)
-            run.read_results += 1
+            gained += 1
         _done(run, item)
         mark_progress()
+    run.read_results += gained + len(delegates)      # a helper that ran has seen outside text, whatever it came back with
     messages = []
     for item in items:
         _done(run, item)       # a call that was never run (bad arguments, not in scope) is settled too

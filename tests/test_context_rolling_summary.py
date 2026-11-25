@@ -49,11 +49,11 @@ class MemoryStore:
         sizes = {**self.sizes, **{k: v for k, v in kwargs.items() if k.endswith("_bytes")}}
         return layers.layer_rows(self.rows, self.segments, **sizes)
 
-    async def append_summary(self, conversation_id, from_sequence, upto_sequence, content):
+    async def append_summary(self, conversation_id, from_sequence, upto_sequence, content, turn_ids=None):
         if self.segments and upto_sequence <= self.segments[-1]["upto_sequence"]:
             return False
         self.segments.append({"seq": len(self.segments) + 1, "from_sequence": from_sequence,
-                              "upto_sequence": upto_sequence, "content": content})
+                              "upto_sequence": upto_sequence, "content": content, "turn_ids": turn_ids})
         self.appended.append(content)
         return True
 

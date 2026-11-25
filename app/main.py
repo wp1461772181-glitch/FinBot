@@ -179,6 +179,7 @@ def create_tables() -> None:
             raise RuntimeError("PUBLIC_API_MODE requires a valid personal chat login configuration")
         if not allowed_origins or "*" in allowed_origins:
             raise RuntimeError("PUBLIC_API_MODE requires exact CORS_ALLOWED_ORIGINS; wildcard origins are not allowed")
+    from . import work  # registers agent_work with the metadata the next call creates
     # V2 schema changes are applied only by its explicit, locked migration.
     # Keep the longstanding startup behavior for legacy tables alone.
     Base.metadata.create_all(
@@ -232,6 +233,9 @@ def create_tables() -> None:
     safe_hook(backfill_recall)
     from .fin_news_engine import ensure_news_tables
     safe_hook(ensure_news_tables)
+    # The turns a restart cut off are closed here (after every column they read exists), before anything is served.
+    # Only the API's startup runs this: the bridges and the sentinel are other processes.
+    safe_hook(work.sweep_interrupted)
     with SessionLocal() as session:
         seed_faq(session)
         session.commit()
@@ -260,6 +264,19 @@ async def start_background_loops() -> None:
 
 
 @app.on_event("startup")
+def warm_latest_known() -> None:
+    """The set of companies the 「最新掌握」 block can recognise is read once here and refreshed in the background."""
+    from . import latest_known
+    latest_known.start_known_refresh()
+
+
+@app.on_event("shutdown")
+def stop_latest_known() -> None:
+    from . import latest_known
+    latest_known.stop_known_refresh()
+
+
+@app.on_event("startup")
 async def start_wake_worker() -> None:
     """The one worker that judges the alerts the sentinel posts (``kernel.wake``); it runs whatever the wake mode is."""
     from .kernel import wake
@@ -270,6 +287,19 @@ async def start_wake_worker() -> None:
 async def stop_wake_worker() -> None:
     from .kernel import wake
     await wake.stop()
+
+
+@app.on_event("startup")
+async def start_archive_worker() -> None:
+    """The one worker that builds a new company's archive from SEC filings (``archive_subjects``); idle until something is queued."""
+    from . import archive_subjects
+    archive_subjects.start()
+
+
+@app.on_event("shutdown")
+async def stop_archive_worker() -> None:
+    from . import archive_subjects
+    await archive_subjects.stop()
 
 
 @app.on_event("shutdown")
@@ -307,7 +337,10 @@ def finbot_routine_inline_confirm(
     routine_id: str,
     payload: dict | None = None,
 ) -> dict[str, object]:
-    """Direct notification-side confirmation endpoint (`POST /finbot/routines/{id}/confirm`, §6.B)."""
+    """Direct notification-side confirmation endpoint (`POST /finbot/routines/{id}/confirm`, §6.B).
+
+    It has no owner check of its own, so the card's own ``action_token`` is always required (the /agent-chat routes
+    and the Telegram bridge authenticate the owner instead)."""
     from . import fin_news_engine as news
     body = payload or {}
     action = str(body.get("action") or "confirm")
@@ -318,7 +351,8 @@ def finbot_routine_inline_confirm(
             routine_id,
             action=action,
             owner_hash=owner,
-            action_token=action_token,
+            action_token=action_token if isinstance(action_token, str) else None,
+            require_token=True,
         )
     except LookupError as exc:
         raise HTTPException(404, str(exc))

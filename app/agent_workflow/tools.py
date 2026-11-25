@@ -91,13 +91,53 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if definitions()[name].level!='reversible':raise ValueError('invalid_action_tool')
         if name=='remember':args['_source_message_id']=operation.get('source_message_id');args['_bot_id']=operation.get('bot_id')
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
+        if name=='record_view':args['_source_message_id']=operation.get('source_message_id');args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id')
+        # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
+        if name in {'create_bot','update_bot'}:args['_fields']=operation.get('fields')
+        # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
+        if operation.get('expect') is not None:args['_expect']=operation['expect']
         # The press, not the frozen operation, says whether a skill starts enabled or as a draft.
         if name=='save_skill':args['_status']=(overrides or {}).get('status') or 'active'
     except (ValueError,IndexError,KeyError,TypeError):return error('confirmation_required')
     return await _dispatch(name,args,context,True,emit)
 
 
+# What a routine card may set (what POST/PATCH /tasks take besides the tickers and the bot); one list for create and update.
+ROUTINE_FIELDS=('name','kind','instruction','schedule_kind','schedule_time','every_value','every_unit','max_runs','channel','skill_id','config','enabled')
+
+
 async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
+    if args.get('_expect') is not None and is_owner:
+        from . import directory_ops
+        if await asyncio.to_thread(directory_ops.is_stale,name,args,context.owner_hash):
+            stale=directory_ops.stale_refusal(name);return {'ok':False,'data':[],'error_code':stale.code,'reason':stale.reason,'hint':stale.reason}
+    if name=='list_work':
+        # The owner's own work in one list (chat turns, routines, card jobs, archive builds); nothing of another owner, nothing for a guest.
+        from .. import work
+        if not is_owner:return error('owner_login_required')
+        return result(await asyncio.to_thread(work.list_for,context.owner_hash),'work')
+    if name=='list_models':
+        # The catalog and the roles as the owner may see them: names and whether a key is set, never a key, a hint of one or where it is kept.
+        from .. import agent_model_catalog as catalog
+        from .. import agent_model_roles as roles
+        if not is_owner:return error('owner_login_required')
+        def overview():
+            listed,default=catalog.entries()
+            chosen=roles.all_roles(context.owner_hash)
+            names={item['name'] for item in listed}
+            notes={'earnings':'unset: the server default model','forecast':'unset: the server default model','judge':'unset: the configured judge','fallback':'unset: no backup model','helper':"unset: the turn's own model"}
+            return {'default_model':default,
+                    'models':[{'name':item['name'],'display_name':item['display_name'],'provider':item['provider'],'model':item['model'],
+                               'key_set':bool(catalog._key_for(item)),'is_default':item['name']==default} for item in listed],
+                    'roles':{role:({'model':chosen[role],'in_catalog':chosen[role] in names} if chosen.get(role) else {'model':None,'note':notes[role]}) for role in roles.ROLES}}
+        return result([await asyncio.to_thread(overview)],'model catalog')
+    if name=='read_turn':
+        # One earlier turn of THIS conversation, as said; a guest reads its own conversation's only.  Memory, not evidence.
+        from .. import agent_recall as recall
+        from ..agent_chat_store import read_turn
+        value=await read_turn(context.conversation_id,context.identity_credential,args['turn_id'])
+        if value is None:return {**error('turn_not_found'),'hint':'这个 turn_id 不在本会话里；用摘要或引用标记里给出的 turn_id。'}
+        return {**result([value],'earlier turn'),'label':recall.LABEL,'note':'这是那一轮当时说过的原话，只用来知道说过什么；它不是证据，不编号，数字和事实仍要在本轮重新读取。'}
     if name=='read_history_citation':
         from .history_citations import read_history_citation
         return await read_history_citation(args,context,**({'page_chars':page_chars} if page_chars is not None else {}))
@@ -250,7 +290,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         if name=='delete_routine':
             done=await asyncio.to_thread(tasks.delete_task,context.owner_hash,args['routine_id'])
             return result([{'status':'deleted','routine_id':args['routine_id']}],'bot routine') if done else error('routine_not_found')
-        fields={k:args[k] for k in ('name','instruction','schedule_kind','schedule_time','enabled') if args.get(k) is not None}
+        fields={k:args[k] for k in ROUTINE_FIELDS if args.get(k) is not None}
         if args.get('symbols') is not None:fields.update(symbols=args['symbols'],scope='symbols' if args['symbols'] else 'research_queue')
         try:task=await asyncio.to_thread(tasks.update_task,context.owner_hash,args['routine_id'],fields)
         except tasks.TaskError as exc:return error(str(exc))
@@ -265,7 +305,14 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         try:saved=await asyncio.to_thread(skills.save,context.owner_hash,fields,status=args.get('_status') or 'active')
         except skills.SkillError as exc:return error(str(exc))
         return result([{'status':'saved','id':saved['id'],'name':saved['name'],'skill_status':saved['status'],'link':'#skills/'+saved['id']}],'skill library')
-    if name in {'record_trade','set_available_funds','set_position_plan'}:
+    if name in {'create_bot','update_bot','manage_skill','set_default_model','set_model_role','set_channel_prefs'}:
+        # Only reached through execute_reversible: the owner pressed the card; each is the service function its HTTP route calls.
+        from . import directory_ops
+        if not is_owner:return error('owner_login_required')
+        try:data,source=await asyncio.to_thread(directory_ops.execute,name,args,context.owner_hash)
+        except directory_ops.Refusal as exc:return {'ok':False,'data':[],'error_code':exc.code,'reason':exc.reason,'hint':exc.hint}
+        return result([data],source)
+    if name in {'record_trade','set_available_funds','set_position_plan','delete_transaction'}:
         # Only reached through execute_reversible: the owner pressed the card, and the frozen operation matched.
         from .. import portfolio
         if not is_owner:return error('owner_login_required')
@@ -279,9 +326,9 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         # Only reached through execute_reversible; the bot is the proposing turn's, frozen in the operation.
         from .. import agent_tasks as tasks
         if not is_owner:return error('owner_login_required')
-        fields={'kind':'brief','name':args['name'],'instruction':args['instruction'],'schedule_kind':args['schedule_kind'],
-                'schedule_time':args['schedule_time'],'scope':'symbols' if args['symbols'] else 'research_queue',
+        fields={**{k:args[k] for k in ROUTINE_FIELDS if args.get(k) is not None},'scope':'symbols' if args['symbols'] else 'research_queue',
                 'symbols':args['symbols'],'bot_id':args.get('_bot_id')}
+        fields.setdefault('kind','brief')
         try:task=await asyncio.to_thread(tasks.create_task,context.owner_hash,fields)
         except tasks.TaskError as exc:return error(str(exc))
         return result([{'status':'created','name':task['name'],'schedule_kind':task['schedule_kind'],
@@ -302,6 +349,18 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         except profile.ProfileError as exc:return error(str(exc))
         if value.get('status')=='skipped':return error(value.get('reason') or 'profile_write_skipped')
         return result([{'status':'remembered','text':value['item']['text'],'handle':value['item']['handle']}],'owner profile')
+    if name in {'record_view','drop_view'}:
+        # Only reached through execute_reversible (the kernel's tier 1 or a pressed card): the owner's own view of one company, in his words.
+        from .. import owner_views
+        if not is_owner:return error('owner_login_required')
+        if name=='drop_view':
+            dropped=await asyncio.to_thread(owner_views.drop,context.owner_hash,args['symbol'])
+            return result([{'status':'dropped','symbol':dropped['symbol'],'text':dropped['text']}],'owner view') if dropped else error('view_not_found')
+        try:value=await asyncio.to_thread(owner_views.record,context.owner_hash,args['symbol'],args['text'],args['quote'],
+                                          args.get('_source_message_id'),args.get('_conversation_id'),args.get('_turn_id'))
+        except owner_views.ViewError as exc:return error(str(exc))
+        return result([{'status':value['status'],'symbol':value['view']['symbol'],'text':value['view']['text'],
+                        'replaced':(value['replaced'] or {}).get('text')}],'owner view')
     if name=='search_configured_news':
         from .. import fin_news_engine as news
         call=asyncio.to_thread(

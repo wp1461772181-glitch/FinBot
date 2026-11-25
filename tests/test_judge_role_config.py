@@ -77,8 +77,8 @@ def test_unreadable_role_falls_back_instead_of_breaking_the_judge(judge_env, mon
 
 
 def test_set_role_and_all_roles_include_judge(judge_env):
-    assert roles.ROLES == ("earnings", "forecast", "judge", "fallback")
-    assert roles.all_roles(OWNER_HASH) == {"earnings": None, "forecast": None, "judge": None, "fallback": None}
+    assert roles.ROLES == ("earnings", "forecast", "judge", "fallback", "helper")
+    assert roles.all_roles(OWNER_HASH) == {"earnings": None, "forecast": None, "judge": None, "fallback": None, "helper": None}
     roles.set_role(OWNER_HASH, "judge", "judgey")
     assert roles.all_roles(OWNER_HASH)["judge"] == "judgey"
     assert roles.all_roles(OWNER_HASH)["forecast"] is None
