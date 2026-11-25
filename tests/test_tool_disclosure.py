@@ -12,7 +12,7 @@ import uuid
 import pytest
 
 from app import agent_context as layers
-from app.agent_tool_catalog import ALWAYS_ON, TOOL_CATEGORIES, definitions
+from app.agent_tool_catalog import ALWAYS_ON, KERNEL_ONLY, TOOL_CATEGORIES, definitions, legacy_definitions
 
 OWNER = "o" * 40
 OWNER_HASH = "h" * 64
@@ -58,8 +58,10 @@ def test_every_tool_has_category():
             owned.setdefault(tool, []).append(category)
     for tool in ALWAYS_ON:
         owned.setdefault(tool, []).append("always_on")
-    names = set(definitions())
+    # The categories are the old engine's disclosure; tools only the kernel offers (it lists every tool at once) have none.
+    names = set(legacy_definitions())
     assert names == set(owned), (names ^ set(owned))
+    assert set(definitions()) - names == set(KERNEL_ONLY) and not KERNEL_ONLY & set(owned)
     assert {t: c for t, c in owned.items() if len(c) != 1} == {}
     assert all(info.summary and info.tools for info in TOOL_CATEGORIES.values())
     assert {"load_tools"} <= ALWAYS_ON <= names
