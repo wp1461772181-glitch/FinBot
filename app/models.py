@@ -417,10 +417,15 @@ class CompanyRatio(Base):
     span: Mapped[str] = mapped_column(String(16), nullable=False)
     fiscal_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fiscal_period: Mapped[str | None] = mapped_column(String(4), nullable=True)
-    value: Mapped[object] = mapped_column(Numeric(24, 8), nullable=False)
+    # NULL when the ratio is not ok: a failed parent, or no percentage that means something (``status`` says which; ``change_kind``
+    # then says in words what happened: turned_profit, turned_loss, loss_widened, loss_narrowed, loss_unchanged, from_zero).
+    value: Mapped[object | None] = mapped_column(Numeric(24, 8), nullable=True)
     formula: Mapped[str] = mapped_column(String(200), nullable=False)
     parents: Mapped[list] = mapped_column(JSON, nullable=False)
     basis: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ok")
     reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    change_kind: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    current_value: Mapped[object | None] = mapped_column(Numeric(38, 4), nullable=True)
+    base_value: Mapped[object | None] = mapped_column(Numeric(38, 4), nullable=True)
     built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
