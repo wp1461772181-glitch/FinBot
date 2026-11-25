@@ -35,7 +35,7 @@ export function RoleTable({ catalog, roles, analysis, busy, onChange }: { catalo
     rows.push({ key: "forecast", label: "预测模型", hint: "给出 20 个交易日涨/平/跌概率的模型，建议选推理模型；不选就用服务器默认模型。", value: roleValue("forecast"), options: roleOptions(unsetDefault), missing: byName(roles.forecast ?? "")?.key_status === "missing" });
     rows.push({ key: "judge", label: "审查模型", hint: "回答之后核查其中论断与依据的模型；不选就用部署时配置的审查模型。", value: roleValue("judge"), options: roleOptions(t("部署配置的审查模型")), missing: byName(roles.judge ?? "")?.key_status === "missing" });
     rows.push({ key: "fallback", label: "备用模型", hint: "对话模型出错或超时、重试一次仍不行时改用的模型；不选就没有备用，那一轮会失败。", value: roleValue("fallback"), options: roleOptions(t("不设备用模型")), missing: byName(roles.fallback ?? "")?.key_status === "missing" });
-    rows.push({ key: "helper", label: "小助手", hint: "拆出去的跑腿活用哪个模型；不设就用当时对话的模型", value: roleValue("helper"), options: roleOptions(t("用当时对话的模型")), missing: byName(roles.helper ?? "")?.key_status === "missing" });
+    rows.push({ key: "helper", label: "小助手", hint: "拆出去的跑腿活用哪个模型；不选就用当时对话的模型。", value: roleValue("helper"), options: roleOptions(t("用当时对话的模型")), missing: byName(roles.helper ?? "")?.key_status === "missing" });
   }
   const ready = models.filter((m) => m.key_status === "configured");
   const chosen = analysisChoice(analysis, models);

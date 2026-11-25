@@ -2523,7 +2523,7 @@
   "已并入回答": "Added to the answer",
   "没有开始，可以重发": "Did not start; you can send it again",
   "小助手": "Helper",
-  "拆出去的跑腿活用哪个模型；不设就用当时对话的模型": "The model for legwork handed off to a helper; if not set, the model of the conversation at that moment is used",
+  "拆出去的跑腿活用哪个模型；不选就用当时对话的模型。": "The model for legwork handed off to a helper; if not set, the model of the conversation at that moment is used",
   "用当时对话的模型": "The conversation's model",
   "读了": "Read",
   "已做完": "Finished",
