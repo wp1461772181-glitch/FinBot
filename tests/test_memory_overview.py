@@ -44,7 +44,7 @@ def _days(n):
 
 def _item(text, *, origin="explicit", status="active", owner=OWNER, bot_id=None, quote=None, examples=None, reason=None, age=10, used=None, kind="preference"):
     with SessionLocal() as db:
-        row = AgentProfileItem(owner_hash=owner, kind=kind, topic=None, text=text, origin=origin, quote=quote if quote is not None else text + "（原话）",
+        row = AgentProfileItem(owner_hash=owner, kind=kind, topic=None, text=text, origin=origin, quote=quote if quote is not None else "他当时的原话",
                                status=status, bot_id=bot_id, examples=examples, created_at=_days(age), updated_at=_days(age), last_seen_at=_days(age),
                                last_used_at=used, archived_at=_days(2) if status == "archived" else None, archived_reason=reason)
         db.add(row)
@@ -54,7 +54,7 @@ def _item(text, *, origin="explicit", status="active", owner=OWNER, bot_id=None,
 
 def _view(symbol, text, status="active", *, age=30, owner=OWNER, ended=None, conversation=None, reason=None):
     with SessionLocal() as db:
-        row = OwnerView(owner_hash=owner, symbol=symbol, text=text, quote=text + "，我觉得", status=status, created_at=_days(age), ended_at=ended,
+        row = OwnerView(owner_hash=owner, symbol=symbol, text=text, quote="我当时就是这么想的", status=status, created_at=_days(age), ended_at=ended,
                         conversation_id=conversation, archived_reason=reason)
         db.add(row)
         db.commit()
