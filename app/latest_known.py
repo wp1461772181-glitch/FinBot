@@ -843,10 +843,10 @@ def _guidance_line(cites: "_Cites", quarter: dict, revenue) -> str | None:
                 parts.append(add("营收", f"营收 {span} {low_unit}", f"{_plain(low_usd)} {_plain(high_usd)}"))
     if guidance.get("gross_margin") is not None:
         margin = Decimal(str(guidance["gross_margin"])).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
-        parts.append(add("毛利率", f"毛利率约 {margin}%", str(margin)))
+        parts.append(add("毛利率", f"毛利率（非 GAAP）约 {margin}%", str(margin)))
     if guidance.get("eps") is not None:
         eps = Decimal(str(guidance["eps"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        parts.append(add("每股收益", f"每股收益约 {eps} 美元", str(eps)))
+        parts.append(add("每股收益", f"每股收益（非 GAAP）约 {eps} 美元", str(eps)))
     if not parts:
         return None
     return _fit(f"  公司指引（新闻稿，{label}）：{'，'.join(parts)}")

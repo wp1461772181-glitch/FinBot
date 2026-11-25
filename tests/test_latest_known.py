@@ -986,7 +986,7 @@ def test_the_latest_quarter_carries_the_companys_guidance_with_every_number_cite
     line = guidance_line(text)
     assert line == next(l for l in facts_lines(text) if "公司指引" in l)
     assert facts_lines(text)[-1] == line                                  # after the 2b lines
-    assert re.fullmatch(r"  公司指引（新闻稿，FY2027 Q4）：营收 1,300.00–1,340.00 亿美元\[\d+\]，毛利率约 75.0%\[\d+\]，每股收益约 1.20 美元\[\d+\]", line), line
+    assert re.fullmatch(r"  公司指引（新闻稿，FY2027 Q4）：营收 1,300.00–1,340.00 亿美元\[\d+\]，毛利率（非 GAAP）约 75.0%\[\d+\]，每股收益（非 GAAP）约 1.20 美元\[\d+\]", line), line
     assert len(line) <= lk.LINE_LIMIT and "[#" not in text
     marks = [int(n) for n in re.findall(r"\[(\d+)\]", line)]
     assert len(marks) == 3 and len(set(marks)) == 3
@@ -1020,7 +1020,7 @@ def test_a_range_turned_around_or_in_other_units_is_left_out_and_the_rest_stays(
         if bad["gross_margin"] == 0.75:
             assert line is not None and "营收 1,300.00–1,340.00 亿美元[" in line and "毛利率" not in line, bad
         else:
-            assert line is not None and "营收" not in line and "毛利率约 75.0%[" in line, bad
+            assert line is not None and "营收" not in line and "毛利率（非 GAAP）约 75.0%[" in line, bad
 
 
 def test_no_8k_row_means_no_guidance_line(guided):
@@ -1037,7 +1037,7 @@ def test_only_the_newest_release_counts_and_one_out_before_the_quarter_ended_is_
     assert guidance_line(numbered_block()[0]) is None                       # the only release on record is a quarter old
     history({"gross_margin": 74.0})                                         # the newer one gave a margin only: it is the one shown
     line = guidance_line(numbered_block()[0])
-    assert "毛利率约 74.0%[" in line and "营收" not in line
+    assert "毛利率（非 GAAP）约 74.0%[" in line and "营收" not in line
     with SessionLocal() as db:
         db.execute(delete(EarningsHistory).where(EarningsHistory.symbol == "NVDA"))
         db.commit()
