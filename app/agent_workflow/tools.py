@@ -305,7 +305,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         try:saved=await asyncio.to_thread(skills.save,context.owner_hash,fields,status=args.get('_status') or 'active')
         except skills.SkillError as exc:return error(str(exc))
         return result([{'status':'saved','id':saved['id'],'name':saved['name'],'skill_status':saved['status'],'link':'#skills/'+saved['id']}],'skill library')
-    if name in {'create_bot','update_bot','manage_skill','set_default_model','set_model_role','set_channel_prefs'}:
+    if name in {'create_bot','update_bot','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template'}:
         # Only reached through execute_reversible: the owner pressed the card; each is the service function its HTTP route calls.
         from . import directory_ops
         if not is_owner:return error('owner_login_required')
