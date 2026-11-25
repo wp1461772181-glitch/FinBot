@@ -14,14 +14,15 @@ from urllib.parse import urlparse
 LABELS = {1: "官方", 2: "通讯社和主流媒体", 3: "聚合和其他新闻", 4: "社交平台和网页"}
 
 # Tier 1: regulators, exchanges and company-issued releases.  The release wires publish what companies hand them.
-OFFICIAL_DOMAINS = ("sec.gov", "hkexnews.hk", "sse.com.cn", "szse.cn", "cninfo.com.cn", "nasdaq.com", "nyse.com",
+# nasdaq.com is not here: most of its pages are syndicated articles from other outlets (it is an aggregator below).
+OFFICIAL_DOMAINS = ("sec.gov", "hkexnews.hk", "sse.com.cn", "szse.cn", "cninfo.com.cn", "nyse.com",
                     "businesswire.com", "prnewswire.com", "globenewswire.com")
 # Tier 2: wire services and mainstream financial press.
 MAINSTREAM_DOMAINS = ("reuters.com", "bloomberg.com", "wsj.com", "ft.com", "cnbc.com", "apnews.com", "caixin.com", "yicai.com", "stcn.com",
                       "barrons.com", "economist.com", "nytimes.com", "xinhuanet.com")
 MAINSTREAM_NAMES = ("财新", "第一财经", "证券时报", "路透", "彭博", "Reuters", "Bloomberg")
 # Tier 3 for a web page; a configured news source that is in neither list above is tier 3 anyway.
-AGGREGATOR_DOMAINS = ("finance.yahoo.com", "yahoo.com", "jin10.com", "marketwatch.com", "investing.com", "benzinga.com", "seekingalpha.com",
+AGGREGATOR_DOMAINS = ("finance.yahoo.com", "yahoo.com", "jin10.com", "nasdaq.com", "marketwatch.com", "investing.com", "benzinga.com", "seekingalpha.com",
                       "fool.com", "tipranks.com", "zerohedge.com", "msn.com", "google.com")
 
 # Source types that are the system's own records (the archive, quotes it fetched, forecasts it made) or numbers computed from them.

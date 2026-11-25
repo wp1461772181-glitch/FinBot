@@ -131,3 +131,9 @@ def test_latest_known_derived_figure_is_tier_one():
 
 def test_system_text_explains_the_two_labels_and_stays_short():
     assert "来源等级" in prompt.SYSTEM and "newest_age" in prompt.SYSTEM
+
+
+def test_nasdaq_pages_are_aggregated_news_not_official():
+    from app import source_authority as sa
+    assert sa.tier_of({"source_type": "web", "url": "https://www.nasdaq.com/articles/some-syndicated-story"}) == 3
+    assert sa.tier_of({"source_type": "web", "url": "https://www.sec.gov/Archives/edgar/data/1/x.htm"}) == 1
