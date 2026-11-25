@@ -91,6 +91,7 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if definitions()[name].level!='reversible':raise ValueError('invalid_action_tool')
         if name=='remember':args['_source_message_id']=operation.get('source_message_id');args['_bot_id']=operation.get('bot_id')
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
+        if name=='record_view':args['_source_message_id']=operation.get('source_message_id');args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id')
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
         if name in {'create_bot','update_bot'}:args['_fields']=operation.get('fields')
         # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
@@ -341,6 +342,18 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         except profile.ProfileError as exc:return error(str(exc))
         if value.get('status')=='skipped':return error(value.get('reason') or 'profile_write_skipped')
         return result([{'status':'remembered','text':value['item']['text'],'handle':value['item']['handle']}],'owner profile')
+    if name in {'record_view','drop_view'}:
+        # Only reached through execute_reversible (the kernel's tier 1 or a pressed card): the owner's own view of one company, in his words.
+        from .. import owner_views
+        if not is_owner:return error('owner_login_required')
+        if name=='drop_view':
+            dropped=await asyncio.to_thread(owner_views.drop,context.owner_hash,args['symbol'])
+            return result([{'status':'dropped','symbol':dropped['symbol'],'text':dropped['text']}],'owner view') if dropped else error('view_not_found')
+        try:value=await asyncio.to_thread(owner_views.record,context.owner_hash,args['symbol'],args['text'],args['quote'],
+                                          args.get('_source_message_id'),args.get('_conversation_id'),args.get('_turn_id'))
+        except owner_views.ViewError as exc:return error(str(exc))
+        return result([{'status':value['status'],'symbol':value['view']['symbol'],'text':value['view']['text'],
+                        'replaced':(value['replaced'] or {}).get('text')}],'owner view')
     if name=='search_configured_news':
         from .. import fin_news_engine as news
         call=asyncio.to_thread(

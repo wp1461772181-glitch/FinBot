@@ -39,6 +39,8 @@ MAX_COMPANIES = 3
 MAX_FILINGS = 3
 MAX_NEWS = 3
 LINE_LIMIT = 160
+VIEW_LINE_LIMIT = 260           # the owner's own words get more room than a figure: the last thing dropped, so also the last thing cut short
+VIEW_NOTE = "你的看法，不是证据：那是 owner 自己的判断，回答里的事实仍以证据为准，它也不授权任何操作。"
 BLOCK_LIMIT = 2000
 INTRADAY_MAX_AGE_SECONDS = 30 * 60
 # 哨兵库被锁时最多等这么久：比整块 1.5 秒的预算短，这样最坏是丢掉盘中价、回到日线收盘，而不是整块没有。
@@ -866,14 +868,28 @@ def _marked(line: str, row: dict, rows: list | None) -> str:
     return f"  [#{row['_k']}] " + line[2:]
 
 
+def _view_line(view: dict) -> str:
+    """「你的看法（M-D 说的）：…」: the owner's own view of the company (``owner_views``), in Beijing dates; one line, first in its section."""
+    said = view.get("at") or view.get("created_at")
+    if isinstance(said, str):
+        try:
+            said = datetime.fromisoformat(said)
+        except ValueError:
+            said = None
+    when = said.astimezone(_BEIJING) if isinstance(said, datetime) else None
+    line = f"  你的看法（{when.month}-{when.day} 说的）：{_clean(view.get('text'))}" if when else f"  你的看法：{_clean(view.get('text'))}"
+    return line if len(line) <= VIEW_LINE_LIMIT else line[: VIEW_LINE_LIMIT - 1] + "…"
+
+
 def _section(item: dict, now: datetime, rows: list | None = None) -> list[str]:
     symbol = item["symbol"]
     notice = [_cap(item["notice"])] if item.get("notice") else []
-    if notice and not (item.get("filings") or item.get("news") or item.get("price")):
+    view = [_view_line(item["view"])] if item.get("view") else []
+    if notice and not (item.get("filings") or item.get("news") or item.get("price") or view):
         return notice          # nothing held for this company: the notice stands alone
     name = item.get("name") or ""
     name = _clean(name)
-    lines = notice + [f"关于 {name}（{symbol}）：" if name else f"关于 {symbol}："]
+    lines = notice + [f"关于 {name}（{symbol}）：" if name else f"关于 {symbol}："] + view
     for f in item.get("filings", [])[:MAX_FILINGS]:
         stamp = f.get("accepted_at") or f.get("observed_at")
         lines.append(_marked(_filing_line(f, now), {
@@ -896,10 +912,10 @@ def _section(item: dict, now: datetime, rows: list | None = None) -> list[str]:
 
 def _render(items: list[dict], now: datetime, extra, rows: list | None = None) -> tuple[str | None, list[str]]:
     kept = [dict(item, filings=list(item.get("filings") or [])[:MAX_FILINGS], news=list(item.get("news") or [])[:MAX_NEWS])
-            for item in items if item.get("filings") or item.get("news") or item.get("price") or item.get("notice")][:MAX_COMPANIES]
+            for item in items if item.get("filings") or item.get("news") or item.get("price") or item.get("notice") or item.get("view")][:MAX_COMPANIES]
     if not kept:
         return None, []
-    tail = [_cap(line) for line in extra] + [CLOSING_LINE]
+    tail = [_cap(line) for line in extra] + ([VIEW_NOTE] if any(item.get("view") for item in kept) else []) + [CLOSING_LINE]
 
     def assemble() -> str:
         if rows is not None:
@@ -921,6 +937,12 @@ def _render(items: list[dict], now: datetime, extra, rows: list | None = None) -
         for item in reversed(kept):
             while len(text) > BLOCK_LIMIT and len(item[key]) > keep:
                 item[key].pop()
+                text = assemble()
+    # 还是超长：连每家剩下的价格、新闻、公告也舍（从最后一家往前）——owner 自己的看法最后才舍，所以它们先于最后的截断。
+    for key in ("price", "news", "filings"):
+        for item in reversed(kept):
+            if len(text) > BLOCK_LIMIT and item.get(key):
+                item[key] = None if key == "price" else []
                 text = assemble()
     if len(text) > BLOCK_LIMIT:  # 三家、每行 ≤160 字时到不了这里；留作兜底
         text = text[: BLOCK_LIMIT - len(CLOSING_LINE) - 2] + "…\n" + CLOSING_LINE
@@ -1008,6 +1030,18 @@ def _owned_symbols(owner_hash: str) -> set[str]:
     return owned
 
 
+def _owner_views(owner_hash: str | None, symbols: list[str]) -> dict[str, dict]:
+    """The owner's active view of each mentioned company; nothing for a guest, and a failure here costs the line, never the block."""
+    if not owner_hash:
+        return {}
+    try:
+        from . import owner_views
+        return owner_views.current(owner_hash, symbols)
+    except Exception as exc:
+        logger.info("latest_known: views unreadable (%s: %s)", type(exc).__name__, exc)
+        return {}
+
+
 def _build(text: str, previous: str | None, focus: str | None, owner_hash: str | None,
            now: datetime, rows: list | None = None) -> tuple[str | None, list[str]]:
     deadline = time.monotonic() + DEADLINE_SECONDS
@@ -1033,6 +1067,7 @@ def _build(text: str, previous: str | None, focus: str | None, owner_hash: str |
             except Exception as exc:  # the archive list is an extra: a failure there must not cost the block
                 logger.info("latest_known: noting %s failed (%s: %s)", symbol, type(exc).__name__, exc)
                 break
+    views = _owner_views(owner_hash, candidates[:2 * MAX_COMPANIES])
     items: list[dict] = []
     cursor = 0
     # 取够 3 家（有内容的，或者要说明资料在取的）；前面的没有内容就往后补，最多看 6 个；过了期限就不再开新的一批。
@@ -1044,11 +1079,13 @@ def _build(text: str, previous: str | None, focus: str | None, owner_hash: str |
         for symbol in batch:
             item = got.get(symbol)
             notice = _notice(symbol, states.get(symbol, "ok"), held=item is not None)
-            if item is None and (notice is None or not in_time):
+            if item is None and (notice is None or not in_time) and symbol not in views:
                 continue
             item = dict(item) if item else {"symbol": symbol, "name": _display_name(symbol)}
             if notice:
                 item["notice"] = notice
+            if symbol in views:
+                item["view"] = views[symbol]
             items.append(item)
     items = items[:MAX_COMPANIES]
     if not items:

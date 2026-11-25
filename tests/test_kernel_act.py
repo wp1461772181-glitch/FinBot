@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import agent_profile as profile
-from app import agent_tasks, portfolio
+from app import agent_tasks, owner_views, portfolio
 from app.agent_tool_catalog import definitions
 from app.agent_workflow import direct, directory_ops, sec_sources, workspace_tools
 from app.kernel import act
@@ -37,7 +37,7 @@ def test_every_operation_is_a_catalogue_write_and_every_write_is_listed():
 def test_summaries_costs_and_tiers():
     assert all(act.SUMMARIES[name] for name in act.OPERATIONS) and set(act.SUMMARIES) == set(act.OPERATIONS)
     assert set(act.COST_NOTES) == set(act.TIER3)
-    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 36
+    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 38
     assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "revise_forecast")] == [1, 2, 3, 3, 3]
     assert act.TIER1[0] == "remember" and act.TIER3[-2:] == ("ingest_web_source", "revise_forecast")
     assert act.SUMMARIES["ingest_web_source"].startswith("把这段对话里联网搜到的一个网页或新闻存进资料库")
@@ -222,6 +222,7 @@ MINIMAL = {
     "create_bot": {"name": "甲"}, "update_bot": {"bot_id": UUID, "pinned": True}, "delete_transaction": {"transaction_id": UUID},
     "manage_skill": {"action": "disable", "skill_id": UUID}, "set_default_model": {"name": "m"}, "set_model_role": {"role": "judge"},
     "set_channel_prefs": {"mode": "all", "channels": ["telegram"]},
+    "record_view": {"symbol": "AAPL", "text": "看好", "quote": "用中文回答"}, "drop_view": {"symbol": "AAPL"},
 }
 
 
@@ -258,6 +259,7 @@ def faked(monkeypatch):
     monkeypatch.setattr(act, "_already_saved", lambda *a: None)
     monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: ready_plan())
     monkeypatch.setattr(profile, "user_message_id", lambda *a: "m1")
+    monkeypatch.setattr(owner_views, "current", lambda owner, symbols: {"AAPL": {"text": "看好"}})
     monkeypatch.setattr(profile, "resolve_handle", lambda *a, **k: {"text": "用中文"})
     monkeypatch.setattr(agent_tasks, "get_task", lambda *a: fake_preview("o", {}))
     monkeypatch.setattr(direct, "source_display_title", lambda *a: "某材料")

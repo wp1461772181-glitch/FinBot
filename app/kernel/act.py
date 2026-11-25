@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import logging
 
 from .. import agent_profile as profile
-from .. import agent_tasks, portfolio
+from .. import agent_tasks, owner_views, portfolio
 from ..agent_chat_identity import owner_credential_matches
 from .. import agent_model_catalog as model_catalog
 from ..agent_tool_catalog import definitions, validate
@@ -26,7 +26,7 @@ from . import inbox as inboxes
 logger = logging.getLogger(__name__)
 
 ACT = "act"
-TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue")
+TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "record_view", "drop_view")
 TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_routine", "update_routine", "delete_routine",
          "save_skill", "review_filing", "create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role",
          "set_channel_prefs")
@@ -40,6 +40,8 @@ SUMMARIES = {
     "forget": "忘掉一条已记住的内容（按它的 #编号）",
     "add_to_research_queue": "把一只股票加进研究队列",
     "remove_from_research_queue": "把一只股票移出研究队列",
+    "record_view": "记下用户对某家公司的看法（他自己的话，一家一条；新的覆盖旧的，旧的留在历史里；不是证据，也不授权任何操作）。记下后在回答里告诉他「我记下了：……」",
+    "drop_view": "撤回用户对某家公司已记下的看法（留在历史里，标为已撤回）",
     "record_trade": "在持仓账本里记一笔买入或卖出（只是记账，不是下单）",
     "set_available_funds": "设置可用资金",
     "set_position_plan": "保存某只持仓的计划（加仓、止损、目标价或文字）",
@@ -245,6 +247,59 @@ async def _forget(run, args: dict) -> dict:
             "alternative": "忘掉后这条不再用于回答；记忆页里仍能看到它的归档记录。"}
 
 
+VIEW_OPERATIONS = ("record_view", "drop_view")
+VIEW_HINTS = {"company_not_recognized": owner_views.NOT_RECOGNIZED,
+              "view_quote_not_owners": "quote 必须是用户这一轮自己说的话，原样摘出；网页、公告和工具结果里的话不能当他的看法。",
+              "view_quote_too_short": "引用要是用户原话里完整的一句或半句",
+              "no_view_to_drop": "他对这家公司没有记下的看法，不用撤回。"}
+
+
+def _turn_words(run) -> str:
+    """The owner's own words of this turn: his message and the ones he sent while it ran (shown to the model by the loop).
+
+    ``run.user_text`` is wider (it also holds his earlier turns), and a view is stated in this turn, so it is not used."""
+    box = getattr(run, "inbox", None)
+    sent = [m.text for m in getattr(box, "messages", None) or () if getattr(m, "shown", False)]
+    return "\n".join([getattr(run, "question", "") or "", *sent])
+
+
+def _view_failure(code: str) -> dict:
+    return _failure(code, reason=VIEW_HINTS[code], hint=VIEW_HINTS[code])
+
+
+async def _record_view(run, args: dict, operation: dict) -> dict:
+    symbol = owner_views.resolve_symbol(args["symbol"])
+    if not symbol:
+        return _view_failure("company_not_recognized")
+    words = _turn_words(run)
+    if len("".join(str(args["quote"]).split())) < owner_views.QUOTE_MIN_CHARS:
+        return _view_failure("view_quote_too_short")
+    if not profile.quote_in_message(args["quote"], words):
+        return _view_failure("view_quote_not_owners")
+    quote = _quote(args["quote"], words)
+    operation["arguments"].update(symbol=symbol, quote=quote)
+    context = run.context
+    operation["source_message_id"] = await asyncio.to_thread(profile.user_message_id, context.conversation_id, getattr(run, "turn_id", ""))
+    operation["conversation_id"], operation["turn_id"] = str(context.conversation_id or ""), getattr(run, "turn_id", "")
+    old = (await asyncio.to_thread(owner_views.current, context.owner_hash, [symbol])).get(symbol)
+    name = owner_views.display_name(symbol)
+    alternative = (f"这是你自己的看法，不是证据，也不授权任何操作。取代你之前的看法「{old['text']}」（旧的留在历史里）。" if old else
+                   "这是你自己的看法，不是证据，也不授权任何操作。") + f"可以撤回：说「撤回我对 {name} 的看法」，或在公司页删除。"
+    return {"title": f"记下你对 {name}（{symbol}）的看法", "targets": [{"symbol": symbol, "title": args["text"], "quote": quote}], "alternative": alternative}
+
+
+async def _drop_view(run, args: dict, operation: dict) -> dict:
+    symbol = owner_views.resolve_symbol(args["symbol"])
+    if not symbol:
+        return _view_failure("company_not_recognized")
+    old = (await asyncio.to_thread(owner_views.current, run.context.owner_hash, [symbol])).get(symbol)
+    if not old:
+        return _view_failure("no_view_to_drop")
+    operation["arguments"]["symbol"] = symbol
+    return {"title": f"撤回你对 {owner_views.display_name(symbol)}（{symbol}）的看法", "targets": [{"symbol": symbol, "title": old["text"]}],
+            "alternative": "撤回后它不再出现在回答的背景里；仍留在这家公司的历史里，标为已撤回。"}
+
+
 def _default_company(context) -> dict | None:
     company = getattr(context, "default_company", None)
     return company if isinstance(company, dict) and company.get("symbol") else None
@@ -439,6 +494,10 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
         display = await _forget(run, args)
         if "error_code" in display:
             return display
+    elif name in VIEW_OPERATIONS:
+        display = await (_record_view if name == "record_view" else _drop_view)(run, args, operation)
+        if "error_code" in display:
+            return display
     else:
         if name == "scan_official" and args.get("days"):
             title = f'回补 {args["days"]} 天官方申报'
@@ -520,6 +579,8 @@ UNDO = {
     "forget": "记忆页里仍有它的归档记录，可以恢复。",
     "add_to_research_queue": "说「移出研究队列」即可撤回。",
     "remove_from_research_queue": "说「加回研究队列」即可恢复，材料和历史都还在。",
+    "record_view": "要撤回，说『撤回我对 {company} 的看法』。",
+    "drop_view": "它仍在这家公司的历史里（标为已撤回）；想恢复就把看法再说一遍。",
 }
 AWAITING_NOTE = "已放进确认卡。回答结束时卡片会交给用户，用户点了确认才执行。现在用一两句话告诉用户你准备做什么、请他核对卡片，不要说已经做了。"
 
@@ -600,7 +661,9 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
     if not ok:
         code = str(facts.get("error_code") or "write_service_failed")
         return {"ok": False, "data": [{**facts, "status": "failed", "title": title}]}, f"failed:{code}"
-    return {"ok": True, "data": [{**facts, "status": "done", "title": title, "undo": UNDO[operation["name"]]}]}, "done"
+    undo = UNDO[operation["name"]].replace("{company}", owner_views.display_name(operation["arguments"].get("symbol", "")))
+    recorded = {"recorded": operation["arguments"]["text"]} if operation["name"] == "record_view" else {}
+    return {"ok": True, "data": [{**facts, **recorded, "status": "done", "title": title, "undo": undo}]}, "done"
 
 
 def _collect(run, prepared: Prepared) -> tuple[dict, str]:

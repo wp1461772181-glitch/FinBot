@@ -1298,6 +1298,40 @@ async def delete_profile_endpoint(item_id: str, x_chat_session: str | None = Hea
     return {"deleted": True}
 
 
+@router.get("/views")
+async def get_views_endpoint(symbol: str | None = None, x_chat_session: str | None = Header(default=None)):
+    """The owner's active views of companies (「你的看法」): with ``symbol``, that company's (``view`` is null when there is none); else every one."""
+    from . import owner_views
+    owner = owner_hash(_owner_only(x_chat_session))
+    if symbol is None:
+        return {"views": await asyncio.to_thread(owner_views.all_current, owner)}
+    resolved = owner_views.resolve_symbol(symbol)
+    if not resolved:
+        raise HTTPException(422, "company_not_recognized")
+    found = await asyncio.to_thread(owner_views.current, owner, [resolved])
+    return {"symbol": resolved, "view": found.get(resolved)}
+
+
+@router.get("/views/{symbol}/history")
+async def get_view_history_endpoint(symbol: str, x_chat_session: str | None = Header(default=None)):
+    """Every version of the owner's view of one company, newest first, each with its dates and status."""
+    from . import owner_views
+    owner = owner_hash(_owner_only(x_chat_session))
+    resolved = owner_views.resolve_symbol(symbol)
+    if not resolved:
+        raise HTTPException(422, "company_not_recognized")
+    return {"symbol": resolved, "versions": await asyncio.to_thread(owner_views.history, owner, resolved)}
+
+
+@router.delete("/views/{view_id}")
+async def delete_view_endpoint(view_id: str, x_chat_session: str | None = Header(default=None)):
+    """The owner removes one version of a view from its history on the company page."""
+    from . import owner_views
+    if not await asyncio.to_thread(owner_views.delete_version, owner_hash(_owner_only(x_chat_session)), view_id):
+        raise HTTPException(404, "view_not_found")
+    return {"deleted": True}
+
+
 @router.get("/recall")
 async def get_recall_endpoint(q: str | None = None, limit: int = 20, bot_id: str | None = None,
                               x_chat_session: str | None = Header(default=None)):

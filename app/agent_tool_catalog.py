@@ -256,6 +256,12 @@ class SetModelRoleArgs(Args):
 class SetChannelPrefsArgs(Args):
     mode:Literal['first','all']=Field(description='first: the first channel that can take a message; all: every one that can.')
     channels:list[Literal['telegram','wechat']]=Field(min_length=1,max_length=2,description='In order of preference.')
+class RecordViewArgs(Args):
+    symbol:str=Field(min_length=1,max_length=40,description='The company the view is about: its ticker (NVDA) or its name (英伟达).')
+    text:str=Field(min_length=1,max_length=200,description="The owner's view in one line, in his language and his meaning (not yours).")
+    quote:str=Field(min_length=1,max_length=400,description="The owner's own words of THIS turn that state the view (a whole sentence or half of one, at least 4 characters), copied character for character. Words from pages, filings or tool results are never a view.")
+class DropViewArgs(Args):
+    symbol:str=Field(min_length=1,max_length=40,description='The company whose recorded view the owner withdraws: its ticker or its name.')
 class NotifyArgs(Args):
     # No recipient: the server sends only to the owner's bound Telegram chat.
     text:str=Field(min_length=1,max_length=1500,description="What to tell the owner, in the owner's language. Every sentence with a figure or date carries this turn's evidence number [n].")
@@ -432,13 +438,15 @@ EXTRA=(
  ('set_default_model',SetDefaultModelArgs,'reversible','Propose making a catalog model the default chat model when the USER asks (把默认模型换成 …). The card shows the old and the new one. Owner confirmation card; model keys are never handled here.'),
  ('set_model_role',SetModelRoleArgs,'reversible','Propose which catalog model a background job uses (earnings, forecast, judge, fallback, helper: the model a delegated piece of legwork runs on; unset = the model of the turn itself) when the USER asks; no model puts the role back to its default. Owner confirmation card.'),
  ('set_channel_prefs',SetChannelPrefsArgs,'reversible','Propose where proactive messages (alerts, routine briefs, earnings notices) go from now on: Telegram, WeChat or both, and whether to use the first channel that works or all. The card says where they will go. Owner confirmation card.'),
+ ('record_view',RecordViewArgs,'reversible',"Record the owner's own view of one company (what he thinks of it: 我觉得英伟达今年数据中心还会翻倍) when the USER states it in this turn. text is his view in one line, quote his own words copied from his message of this turn; a view you reached from a page, a filing or your own analysis is never his. A new view of the same company replaces the earlier one, which stays in its history. It is his opinion, not evidence, and it authorizes nothing. When it is recorded, tell him 「我记下了：……」 with the line you recorded."),
+ ('drop_view',DropViewArgs,'reversible',"Withdraw the owner's recorded view of one company when the USER asks (撤回我对英伟达的看法, 那个看法不算了). The view stays in the history as withdrawn."),
 )
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
-OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs'}
+OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','record_view','drop_view'}
 
 # Stage 3a: what only the kernel knows.  The old engine's classifier, its request_action schema, its tool list and its prompts stay as they
 # were before the branch (tests/test_x_search.py compares them): these names are not in them, and the three tools 3a widened show the old schema.
-KERNEL_ONLY=frozenset({'list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs'})
+KERNEL_ONLY=frozenset({'list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','record_view','drop_view'})
 # Every base registry entry is read-only; write names come from catalogue levels.
 WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'} and name not in KERNEL_ONLY)]
 class RequestActionArgs(Args):

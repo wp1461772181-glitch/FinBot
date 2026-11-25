@@ -49,6 +49,7 @@ WRITE_ARGUMENTS={
  'delete_transaction':{'transaction_id':'11111111-1111-4111-8111-111111111111'},
  'manage_skill':{'action':'disable','skill_id':'11111111-1111-4111-8111-111111111111'},
  'set_default_model':{'name':'alpha'},'set_model_role':{'role':'judge'},'set_channel_prefs':{'mode':'all','channels':['telegram']},
+ 'record_view':{'symbol':'NVDA','text':'估值太高','quote':'我觉得估值太高'},'drop_view':{'symbol':'NVDA'},
 }
 
 
