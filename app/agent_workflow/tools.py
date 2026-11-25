@@ -93,7 +93,7 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
         if name=='record_view':args['_source_message_id']=operation.get('source_message_id');args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id')
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
-        if name in {'create_bot','update_bot'}:args['_fields']=operation.get('fields')
+        if name in {'create_bot','update_bot','apply_role_template','undo_role_template'}:args['_fields']=operation.get('fields')
         # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
         if operation.get('expect') is not None:args['_expect']=operation['expect']
         # The press, not the frozen operation, says whether a skill starts enabled or as a draft.
