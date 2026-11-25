@@ -46,7 +46,7 @@ DELEGATE_SCHEMA: dict = {
         "description": "Hand one several-step piece of legwork to a helper, for work that does not need this conversation: e.g. reading several filings or "
                        "earnings calls for one kind of fact. Write a self-contained brief: the helper sees only the brief, not the conversation. "
                        "Do not delegate comparison, judgment or the answer itself; you do those. It comes back with a short report and the [n] numbers "
-                       "of the sources it read, which you can cite in your answer like any result. Several delegate calls in one step run at the same time.",
+                       "of the sources it read, which you can cite in your answer like any result. Up to three delegate calls in one step run at the same time.",
         "parameters": {
             "type": "object",
             "properties": {

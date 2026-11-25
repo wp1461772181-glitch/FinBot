@@ -25,9 +25,10 @@ from app.kernel import inbox as inboxes
 from tests.test_agent_bots import KEY_A, OWNER_HASH, owner  # noqa: F401  (fixture)
 from tests.test_kernel_loop import FakeConsent, act_call, call, env, fake_consent, make_context, step  # noqa: F401  (fixtures by name)
 
-# What the schemas and the system text hashed to before the helper existed (sorted keys, ensure_ascii off): the switch off must not move them.
+# What the schemas and the system text hash to with the switch off (sorted keys, ensure_ascii off): the same as before the helper existed, except that
+# the owner's role lists (set_model_role, list_models) now name the helper role, which exists whatever the switch.
 GOLDEN = {
-    "owner": ("f3001193e845ce51e64f45fdd5697698b610da4d9df7d21662ddc6b788cbc789", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
+    "owner": ("b693631651530d10cee01d4ef3a2099a76fe879dfaeb52333ea914c0a4eede95", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
     "guest": ("e40ff82abfb0e4af0af0ffd3c66737c01c11b4fc5dc5394df34d39a03a80db13", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
 }
 

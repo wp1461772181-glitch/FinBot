@@ -125,7 +125,7 @@ SKILL_REASONS = {
 MODEL_REASONS = {
     "model_not_found": "模型目录里没有这个名字；用 list_models 看有哪些。", "invalid_name": "模型名不合规；用 list_models 看有哪些。",
     "default_from_file": "默认模型由配置文件定死了，这里改不了。", "model_from_file": "这个模型来自配置文件，不能设为默认。",
-    "unknown_model": "模型目录里没有这个名字；用 list_models 看有哪些。", "unknown_role": "后台角色只有 earnings、forecast、judge、fallback。",
+    "unknown_model": "模型目录里没有这个名字；用 list_models 看有哪些。", "unknown_role": "后台角色只有 earnings、forecast、judge、fallback、helper。",
     "invalid_channels": "渠道只能是 telegram、wechat，不能重复，至少一个；mode 只能是 first 或 all。",
     "nothing_to_change": "和现在一模一样，没有要改的。",
 }
