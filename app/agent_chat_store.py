@@ -184,7 +184,7 @@ async def read_turn(conversation_id: str, credential: str, turn_id: str) -> dict
     texts = [_cut_text(m.content) for m in users]
     answer = _cut_text(final.content) if final is not None else (None, False)
     stamp = (users[0] if users else mine[0]).created_at
-    return {"turn_id": str(tid), "time": stamp.isoformat() if stamp else None, "user_messages": [t for t, _ in texts], "answer": answer[0],
+    return {"turn_id": str(tid), "time": stamp.isoformat() if stamp else None, "user_messages": [t for t, _ in texts], "answer": answer[0], "answer_status": (final.status or "complete") if final is not None else "no_answer",
             "cut": any(c for _, c in texts) or answer[1], "previous_turn_id": str(order[at - 1]) if at else None,
             "next_turn_id": str(order[at + 1]) if at + 1 < len(order) else None}
 

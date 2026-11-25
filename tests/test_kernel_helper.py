@@ -28,8 +28,8 @@ from tests.test_kernel_loop import FakeConsent, act_call, call, env, fake_consen
 # What the schemas and the system text hash to with the switch off (sorted keys, ensure_ascii off): the same as before the helper existed, except that
 # the owner's role lists (set_model_role, list_models) now name the helper role, which exists whatever the switch.  Stage 4a: plus read_turn.
 GOLDEN = {
-    "owner": ("a103c166886c3a8fae741990e6506de4590f2b08dfde1b082d905a445a42d567", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
-    "guest": ("e17db120d3825137d51aacdbdb7f4df53ca19e74975a1b9aa6a9a640892c8397", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
+    "owner": ("78b4aaf2e132d2b35bc420bf0af581a8dc62cac328c20650cd2cdb227d4d793d", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
+    "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
 }
 
 
