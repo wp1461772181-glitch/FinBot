@@ -1579,6 +1579,64 @@ async function chatCancel(ctx) {
   } finally { await view.close(); }
 }
 
+/** 3c: the box stays open while an answer is written; what a message sent meanwhile shows (received, merged, its own answer beside the first, queued), and the stop button stops one answer. */
+async function chatInterject(ctx) {
+  const view = await openChat(ctx, "chat-interject");
+  try {
+    const { page } = view;
+    const first = "t9000000-0000-4000-8000-0000000000e1", second = "t9000000-0000-4000-8000-0000000000e2";
+    const hand = await handFed(page);
+    const say = async (text, index) => { await page.locator("#agent-draft").fill(`${HAND_MARKER} ${text}`); await page.locator("[data-testid=send]").click(); if (index !== undefined) await hand.opened(index); };
+    await say("NVDA 营收", 0);
+    await hand.push(0, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: first, bot_id: BOT.finbot });
+    await hand.push(0, "delta", { text: "NVDA 营收约 " });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "NVDA 营收约" }).waitFor({ timeout: 10000 });
+    // 1. the box is open while it answers; stop and send sit side by side
+    assert(await page.locator("#agent-draft").isEnabled(), "the box is closed while an answer is written");
+    assert((await page.locator("[data-testid=stop]").count()) === 1 && (await page.locator("[data-testid=send]").count()) === 1, "stop and send are not both there");
+    // 2. a message sent meanwhile is added at once; the server's receipt makes it 已收到; a merge says so and the answer then quotes both
+    await say("顺便比 AMD", 1);
+    await page.locator("[data-testid=message][data-role=user]", { hasText: "顺便比 AMD" }).waitFor({ timeout: 10000 });
+    await hand.push(1, "received", { message_id: "m9000000-0000-4000-8000-0000000000e2" });
+    await page.locator("[data-testid=delivery-note][data-kind=received]", { hasText: "已收到" }).waitFor({ timeout: 10000 });
+    await hand.push(1, "merged", { into_turn: first }); await hand.close(1);
+    await page.locator("[data-testid=delivery-note][data-kind=merged]", { hasText: "已并入上一个回答" }).waitFor({ timeout: 10000 });
+    assert(await page.locator("#agent-draft").isEnabled() && (await page.locator("[data-testid=stop]").count()) === 1, "the first answer stopped being live when the message was taken in");
+    await hand.push(0, "delta", { text: "440 亿，AMD 70 亿。" }); await hand.push(0, "done", { status: "complete", turn_id: first, thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(0);
+    await page.locator("[data-testid=reply-quote]", { hasText: /NVDA 营收 \/ \[hand-fed\] 顺便比 AMD/ }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=stop]").waitFor({ state: "detached", timeout: 10000 });
+    // 3. a message that gets its own answer: two answers in progress at once; the stop button stops the newest one only
+    await say("另外记一下 TSLA", 2);
+    await hand.push(2, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: "t9000000-0000-4000-8000-0000000000e3", bot_id: BOT.finbot });
+    await hand.push(2, "delta", { text: "第一个回答在写，" });
+    await say("再看 AMD 毛利", 3);
+    await hand.push(3, "received", { message_id: "m9000000-0000-4000-8000-0000000000e4" }); await hand.push(3, "separate", { turn_id: second });
+    await hand.push(3, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: second, bot_id: BOT.finbot }); await hand.push(3, "delta", { text: "第二个回答也在写，" });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "第二个回答也在写" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "第一个回答在写" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=stop]").click();
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "第二个回答也在写" }).locator("[data-testid=stopped-note]").waitFor({ timeout: 10000 });
+    assert(await hand.aborted(3) && !(await hand.aborted(2)), "the stop button did not stop exactly the newest answer");
+    await hand.push(2, "delta", { text: "写完了。" });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "第一个回答在写，写完了。" }).waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=stop]").count()) === 1, "the other answer is still running: the stop button must stay");
+    await hand.push(2, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000e3", thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(2);
+    await page.locator("[data-testid=stop]").waitFor({ state: "detached", timeout: 10000 });
+    // 4. a turn that cannot take messages while it runs (409): the message comes back to the box with a note, and the running turn is untouched
+    await say("又一件事", 4);
+    await hand.push(4, "conversation", { conversation_id: CONVERSATION.finbot, turn_id: "t9000000-0000-4000-8000-0000000000e5", bot_id: BOT.finbot }); await hand.push(4, "delta", { text: "第五个回答，" });
+    await page.locator("[data-testid=message][data-role=assistant]", { hasText: "第五个回答" }).waitFor({ timeout: 10000 });
+    await page.locator("#agent-draft").fill(`${BUSY_MARKER} 忙时插话`); await page.locator("[data-testid=send]").click();
+    await page.locator("[data-testid=send-note]").waitFor({ timeout: 10000 });
+    assert((await page.locator("[data-testid=message][data-role=user]", { hasText: "忙时插话" }).count()) === 0, "the refused message stayed in the thread");
+    assert((await page.locator("#agent-draft").inputValue()).includes("忙时插话"), "the refused message did not come back to the box");
+    assert(!(await hand.aborted(4)), "the running turn was touched");
+    await hand.push(4, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000e5", thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(4);
+    await page.locator("[data-testid=stop]").waitFor({ state: "detached", timeout: 10000 });
+    return "box open while answering; 已收到, 已并入上一个回答 and a quote on the answer; two answers side by side, stop stops the newest only; a refused message returns to the box";
+  } finally { await view.close(); }
+}
+
 async function chatBackgroundLine(ctx) {
   const view = await openChat(ctx, "chat-background-line");
   try {
@@ -11587,6 +11645,7 @@ const CHECKS = [
   ["every page opens and reaches its ready condition", everyPageOpens],
   ["chat-send: send a message: user line, streamed answer, composer reusable", sendMessageStreams],
   ["chat-cancel: cancel before the stream ends: 已停止 shown, the generated text kept, composer usable", chatCancel],
+  ["chat-interject: the box stays open while an answer is written; 已收到 / 已并入 / its own answer / the stop button stops one answer / a refused message returns to the box", chatInterject],
   ["chat-background-line: the stream of the bot left behind finishes in the background; the row marks it; the whole answer on return", chatBackgroundLine],
   ["chat-clarification: a turn ending in a card; the pick goes out as the next turn with its request id", chatClarification],
   ["chat-write-confirm: 确认执行 sends the request id; 先不要 sends no confirmation", chatWriteConfirm],

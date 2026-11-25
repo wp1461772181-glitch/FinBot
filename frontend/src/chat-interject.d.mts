@@ -1,0 +1,13 @@
+type Msg = Record<string, any>;
+export function addUser<T extends Msg>(messages: T[], options: { key: string; content: string; interject?: boolean; answerKey?: string }): T[];
+export function patchByKey<T extends Msg>(messages: T[], key: string, patch: Msg): T[];
+export function removeByKey<T extends Msg>(messages: T[], key: string): T[];
+export function upsertAnswer<T extends Msg>(messages: T[], userKey: string, answer: T): T[];
+export function replyEntries(messages: Msg[], index: number): Array<{ id: string; text: string }>;
+export function replyQuote(messages: Msg[], index: number): string | null;
+export type Delivery = { kind: "sending" | "received" | "merged" | "separate" | "stopped" | "queued"; ahead?: number } | null;
+export function deliveries(messages: Msg[]): Delivery[];
+export function awaitingAnswer(messages: Msg[], sending: boolean): Set<number>;
+export type StreamHandle = { key: string; userKey: string; main: boolean; answer: boolean; dead: boolean; controller: AbortController; turnId?: string; conversationId: string | null; detachable: boolean };
+export function createStreamSet(): { add(line: string, handle: StreamHandle): void; remove(line: string, handle: StreamHandle): void; all(line: string): StreamHandle[]; count(line: string): number; stopTarget(line: string): StreamHandle | null; killExtras(line: string): void };
+export function queuedText(ahead: number, locale: string): string;

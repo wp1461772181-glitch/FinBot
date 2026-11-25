@@ -13,7 +13,9 @@ export type AgentCitation = { ordinal?:number; chunk_id?: string | null; documen
 
 export type AgentClarification = {request_id:string;reason:string;question?:string;display?:{title?:string;agent_suggestion?:boolean;saved_date?:string;web_date?:string;url?:string;alternative?:string;targets?:Array<Record<string,string>>};choices:Array<{label:string;value:string}>;options?:Array<{value:string;label:string;detail?:string}>;select?:{min:number;max:number}};
 
-export type AgentChatMessage = { citation_protocol?: string; citation_nodes?: { source_ref: string; citation_id?: string; quote?: string }[]; unverified_lines?: UnverifiedLine[]; public_marks?: unknown[]; role: "user" | "assistant" | "tool"; content: string; status?: string; turn_id?: string; reused_sources?: boolean; citations?: AgentCitation[]; clarification?: AgentClarification; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>; tool_call_id?: string; tool_trace?: Array<{ call_id?: string; name: string; arguments?: unknown; result?: unknown; status: string; card?: boolean }>; trace?: FlowNode[]; thinking_ms?: number; started_at?: number; narration?: string[]; checklist?: Array<{ text: string; status: string }>; tier?: string };
+export type AgentChatMessage = { citation_protocol?: string; citation_nodes?: { source_ref: string; citation_id?: string; quote?: string }[]; unverified_lines?: UnverifiedLine[]; public_marks?: unknown[]; role: "user" | "assistant" | "tool"; content: string; status?: string; turn_id?: string; reused_sources?: boolean; citations?: AgentCitation[]; clarification?: AgentClarification; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>; tool_call_id?: string; tool_trace?: Array<{ call_id?: string; name: string; arguments?: unknown; result?: unknown; status: string; card?: boolean }>; trace?: FlowNode[]; thinking_ms?: number; started_at?: number; narration?: string[]; checklist?: Array<{ text: string; status: string }>; tier?: string;
+  /** 3c (speaking while it works): `id` is the server's name for a stored message; `reply_to` says which messages an answer answers; the rest is what only this tab knows (see chat-interject.mjs). */
+  id?: string; reply_to?: Array<{ id: string; text: string }>; client_key?: string; user_key?: string; answer_key?: string; delivery?: "sending" | "received" | "merged" | "separate" | "stopped" | "queued"; into_turn?: string; queue_ahead?: number; live?: boolean; paused?: boolean; queued_ahead?: number; stopped_by_message?: boolean };
 export type AgentChatEvent = { event: string; data: Record<string, unknown> };
 const chatConversationKey = "market-evidence-agent:chat-conversation:v1";
 
@@ -122,6 +124,8 @@ export async function agentChatStream(config: AgentChatConfig | { bot_id: string
       const accepted = onEvent({ event: receivedEvent, data });
       if (accepted === false) { await reader.cancel().catch(() => {}); return answer; }
       if (receivedEvent === "conversation" && typeof data.conversation_id === "string") window.sessionStorage.setItem(chatConversationKey, data.conversation_id);
+      // A message that was taken in by the running answer, or stopped it, gets no answer of its own: its request ends with that outcome and no `done`.
+      if (receivedEvent === "merged" || receivedEvent === "stopped") receivedDone = true;
       if (receivedEvent === "done" && ["complete","succeeded","partially_succeeded","waiting_for_input","running","failed"].includes(String(data.status))) receivedDone = true;
       eventName = "message";
       if (receivedEvent === "error") throw new ApiError(String(data.code ?? "chat_failed"));

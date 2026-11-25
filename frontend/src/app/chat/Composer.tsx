@@ -78,9 +78,9 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
   const backendDown = useBackendDown().down;
   const said = announcement({ phase: turnSignal({ chatState: c.state, messages: c.messages }).phase, waiting: waitingCard, offline: isOffline({ backendDown, chatState: c.state, messages: c.messages }), tool: runningTool(c.messages) });
   const saying = said ? `${waitingName} ${t(said.phrase)}${said.detail ? `${colon()}${t(toolLabel(said.detail))}` : ""}` : "";
-  const sendDisabled = Boolean(c.archiveView) || c.restoring || !c.verified || !c.draft.trim() || sending;
+  const sendDisabled = Boolean(c.archiveView) || c.restoring || !c.verified || !c.draft.trim() || c.state === "testing";
   const fine = typeof window !== "undefined" && window.matchMedia?.("(pointer: fine) and (min-width: 640px)").matches;
-  const placeholder = bot ? `${t("给")} ${bot.name} ${t("发消息…")}${fine ? ` · ${t("Enter 发送，Shift+Enter 换行")}` : ""}` : t(c.verified ? "给 Agent 发消息…" : "登录个人聊天后才能对话");
+  const placeholder = sending && c.verified ? t("回答中也可以接着说…") : bot ? `${t("给")} ${bot.name} ${t("发消息…")}${fine ? ` · ${t("Enter 发送，Shift+Enter 换行")}` : ""}` : t(c.verified ? "给 Agent 发消息…" : "登录个人聊天后才能对话");
 
   if (!c.verified) return <div className="mx-auto w-full max-w-[760px] px-4 pb-4 lg:px-6"><GuestComposerNotice /></div>;
   if (c.archiveView) return <div className="mx-auto w-full max-w-[760px] px-4 pb-4 lg:px-6">
@@ -94,6 +94,7 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
     {waitingCard && <button type="button" data-testid="waiting-strip" onClick={() => void focusWaitingCard()} className="material-action mb-2 flex min-h-11 w-full items-center gap-2 px-3 text-left text-small text-ink outline-none hover:brightness-95 focus-visible:ring-2 focus-visible:ring-ring sm:min-h-9">
       <Hand aria-hidden="true" className="size-4 shrink-0 text-action" /><span className="min-w-0 flex-1 truncate">{waitingName} {t("在等你确认上面的卡片")}</span><ChevronUp aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
     </button>}
+    {c.sendNote && <p data-testid="send-note" role="status" className="mb-2 px-1 text-small text-muted-foreground">{c.sendNote}</p>}
     {c.status && c.state !== "sending" && c.state !== "error" && <p data-testid="chat-status" role="status" className="mb-2 px-1 text-small text-muted-foreground">{c.status}</p>}
     <form ref={form} data-testid="composer" onSubmit={event => { if (c.restoring) event.preventDefault(); else void c.send(event); }} className="relative rounded-lg border border-line-strong bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.04)] focus-within:border-ink-2">
       <label htmlFor="agent-draft" className="sr-only">{t("输入消息")}</label>
@@ -105,7 +106,7 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
         {...(slashItems.length > 0 ? { role: "combobox", "aria-expanded": true, "aria-controls": "skill-picker", "aria-activedescendant": `skill-option-${current}` } : {})}
         rows={1} value={c.draft} onChange={(e: ChangeEvent<HTMLTextAreaElement>) => { if (!inputBlocked()) c.setDraft(e.target.value); }} onKeyDown={onKeyDown}
         onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
-        maxLength={4000} disabled={sending} placeholder={placeholder}
+        maxLength={4000} disabled={c.state === "testing"} placeholder={placeholder}
         className="block max-h-[40dvh] min-h-[44px] w-full resize-none overflow-y-auto bg-transparent px-4 pb-1 pt-3 text-chat text-ink outline-none placeholder:text-faint disabled:opacity-60" />
       <div className="flex items-center justify-between gap-2 px-2 pb-2">
         <div className="flex min-w-0 items-center">
@@ -113,9 +114,9 @@ export function Composer({ bot, draftBox, onBotChanged }: { bot?: Bot | null; dr
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <ContextMeter conversationId={c.conversationId} botId={c.bot?.id ?? null} onCompact={() => void c.compactNow("")} refreshKey={`${c.messages.length}:${c.state === "sending" ? "sending" : "settled"}`} />
-          {stoppable
-            ? <button type="button" data-testid="stop" aria-label={t("停止")} title={t("停止")} onClick={c.cancel} className={sendButton}><Square className="size-3.5" fill="currentColor" aria-hidden="true" /></button>
-            : <button type="submit" data-testid="send" aria-label={t("发送")} title={t("发送")} disabled={sendDisabled} className={sendButton}><ArrowUp className="size-4" aria-hidden="true" /></button>}
+          {/* while a turn answers the box stays open: stop and send sit side by side (a message sent then is an interjection) */}
+          {stoppable && <button type="button" data-testid="stop" aria-label={t("停止")} title={t("停止")} onClick={c.cancel} className={sendButton}><Square className="size-3.5" fill="currentColor" aria-hidden="true" /></button>}
+          {(!stoppable || sending) && <button type="submit" data-testid="send" aria-label={t("发送")} title={t("发送")} disabled={sendDisabled} className={sendButton}><ArrowUp className="size-4" aria-hidden="true" /></button>}
         </div>
       </div>
     </form>
