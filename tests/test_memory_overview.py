@@ -64,7 +64,7 @@ def _view(symbol, text, status="active", *, age=30, owner=OWNER, ended=None, con
 def _review(view_id, symbol="NVDA", *, verdict="held", text="回头看：成立。", stray=(), age=1, owner=OWNER, snapshot=None):
     with SessionLocal() as db:
         db.add(ViewReview(owner_hash=owner, view_id=uuid.UUID(view_id), symbol=symbol, verdict=verdict, text=text, unmatched_figures=list(stray),
-                          input_snapshot=snapshot or {"price": {"then": 100.0, "now": 150.0, "change_pct": 50.0}, "quarter": {"label": "FY27Q3"}},
+                          input_snapshot=snapshot or {"price": {"then": {"date": "2026-09-25", "close": 100.0}, "now": {"date": "2026-11-24", "close": 150.0}, "change_pct": 50.0}, "quarter": {"label": "FY27Q3"}},
                           created_at=_days(age)))
         db.commit()
 
@@ -405,3 +405,12 @@ def test_render_markdown_survives_a_missing_part_and_a_fence_in_the_block():
     sections = _sections(markdown)
     assert "没能读出" in sections["你对公司的看法"] and "没能读出" in sections["盯防"] and "没能读出" in sections["记忆整理日程"]
     assert "第三行" in sections["它每轮读到的画像"] and "````" in sections["它每轮读到的画像"]
+
+
+def test_the_basis_line_reads_the_real_stored_shape_and_never_prints_a_dict():
+    real = {"price_then": {"date": "2026-09-25", "close": 100.0}, "price_now": {"date": "2026-11-24", "close": 150.5}, "change_pct": 50.5,
+            "quarter_label": "FY2026 Q3"}
+    assert overview._basis_text(real) == "股价 100 → 150.5（+50.5%）；最新一季 FY2026 Q3"
+    assert overview._basis_text({"price_then": None, "price_now": {"close": 150.0}, "change_pct": None, "quarter_label": None}) == "股价 — → 150"
+    assert overview._basis_text({"price_then": 100.0, "price_now": 150.0}) == "股价 100 → 150"      # a bare number is still read
+    assert "{" not in overview._basis_text(real) and overview._basis_text({}) == ""

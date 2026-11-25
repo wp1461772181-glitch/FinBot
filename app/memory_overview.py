@@ -237,9 +237,12 @@ def _basis_text(basis) -> str:
     if not isinstance(basis, dict):
         return ""
     bits = []
+    def close(point):       # the stored shape is {date, close} (4d); a bare number is read too
+        value = point.get("close") if isinstance(point, dict) else point
+        return f"{value:g}" if isinstance(value, (int, float)) else "—"
     if basis.get("price_then") is not None or basis.get("price_now") is not None:
         move = f"（{basis['change_pct']:+g}%）" if isinstance(basis.get("change_pct"), (int, float)) else ""
-        bits.append(f"股价 {basis.get('price_then', '—')} → {basis.get('price_now', '—')}{move}")
+        bits.append(f"股价 {close(basis.get('price_then'))} → {close(basis.get('price_now'))}{move}")
     if basis.get("quarter_label"):
         bits.append(f"最新一季 {basis['quarter_label']}")
     return "；".join(bits)
