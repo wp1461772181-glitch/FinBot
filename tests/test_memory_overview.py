@@ -200,7 +200,8 @@ def test_jobs_part():
     assert [j["job"] for j in jobs] == ["monthly_review", "quarterly_settle"]
     monthly, quarterly = jobs
     assert monthly["title"] == sched.JOB_TITLES["monthly_review"] and monthly["last_outcome"] == "skipped" and monthly["last_reason"] == "没有新内容"
-    assert monthly["next_due"] == (_days(5) + sched.period("monthly_review")).isoformat() and monthly["last_run_at"] == _days(5).isoformat()
+    # The same instants, whatever zone the database session writes them in (a test database set to +08:00 gives "17:00+08:00" for "09:00Z").
+    assert datetime.fromisoformat(monthly["next_due"]) == _days(5) + sched.period("monthly_review") and datetime.fromisoformat(monthly["last_run_at"]) == _days(5)
     assert monthly["messages_until_early"] == sched.review_min_messages()           # no message of his since
     assert quarterly["next_due"] is not None and quarterly["last_outcome"] is None and "messages_until_early" not in quarterly
     assert overview.collect("nobody")["jobs"] == []
