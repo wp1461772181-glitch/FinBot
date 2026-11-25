@@ -441,6 +441,29 @@ def update_task(owner_hash: str, task_id, fields: dict, *, now: datetime | None 
         return serialize_task(task)
 
 
+def preview_task(owner_hash: str, fields: dict, task_id=None, *, now: datetime | None = None) -> dict | None:
+    """What ``create_task`` (no ``task_id``) or ``update_task`` would save, checked by the same code and written nowhere:
+    the task as it would then be, or the route's own ``TaskError`` code.  None: this owner has no such task.  (The bot a
+    new task belongs to is not looked up: nothing here makes one.)"""
+    now = now or datetime.now(UTC)
+    with SessionLocal() as db:
+        if task_id is None:
+            if len(db.scalars(select(AgentTask.id).where(AgentTask.owner_hash == owner_hash)).all()) >= MAX_TASKS:
+                raise TaskError("too_many_tasks")
+            task = AgentTask(owner_hash=owner_hash, enabled=True, runs_done=0, symbols=[], config={})
+        else:
+            task = _owned_task(db, owner_hash, task_id)
+            if task is None:
+                return None
+        if "skill_id" in fields:
+            _task_skill(owner_hash, fields["skill_id"])
+        try:
+            _apply(task, fields, now)
+            return {**serialize_task(task), "id": str(task.id) if task.id else None}
+        finally:
+            db.rollback()       # a preview changes nothing, however far it got
+
+
 def delete_task(owner_hash: str, task_id) -> bool:
     with SessionLocal() as db:
         task = _owned_task(db, owner_hash, task_id)

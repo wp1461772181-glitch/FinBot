@@ -58,7 +58,7 @@ SNAPSHOT = {
     "use_result_set": "0bb3f796bc79e4d1",
     "fetch_sec": "eca539fe2c9b09b6",
     "refresh_sec": "1d3dc49753c2c240",
-    "analyze": "edbb36d26c217069",
+    "analyze": "a624c60d917a5ec9",
     "import": "3895fcef28f84650",
     "index": "fa21f8d1868c738d",
     "forecast": "298108635c3832ab",
@@ -70,9 +70,9 @@ SNAPSHOT = {
     "withdraw_knowledge_document": "85a167fe0cb5ef14",
     "test_retrieval_diagnostics": "01058de454f8ec10",
     "remember": "1f3033eb8378b354",
-    "create_routine": "ca594ad4f2389df3",
+    "create_routine": "fef8c72d6c16aeec",
     "list_routines": "98efb93e9d529c20",
-    "update_routine": "d6b5488d800cdea6",
+    "update_routine": "480c6eb1b407a361",
     "delete_routine": "6c73906e6473591c",
     "recall_conversations": "4276330682fd4787",
     "read_past_conversation": "ab97755f3fa5bd5c",
@@ -371,9 +371,11 @@ def test_other_tools_are_untouched():
     from app.agent_tool_catalog import definitions
     now = {n: hashlib.sha256((p.description + json.dumps(p.args_schema.model_json_schema(), sort_keys=True)).encode()).hexdigest()[:16]
            for n, p in definitions().items()}
-    assert {n: h for n, h in now.items() if n != "search_x"} == SNAPSHOT
+    # search_x (24 Nov) and list_models (stage 3a) are the additions; analyze, create_routine and update_routine were widened on purpose in 3a.
+    added = {"search_x", "list_models"}
+    assert {n: h for n, h in now.items() if n not in added} == SNAPSHOT
     names = list(definitions())
-    assert [n for n in names if n != "search_x"] == list(SNAPSHOT)
+    assert [n for n in names if n not in added] == list(SNAPSHOT) and names.index("list_models") == names.index("search_x") + 1
     assert names.index("search_x") == names.index("search_configured_news") + 1
 
 

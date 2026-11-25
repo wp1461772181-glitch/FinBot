@@ -31,7 +31,7 @@ READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_
     "search_knowledge", "web_research", "search_configured_news", "search_x", "calculate", "calculate_formula",
     "query_portfolio", "recall_conversations", "read_past_conversation", "read_history_citation",
     "query_latest_forecast", "query_materials", "query_research_faq", "query_material_analysis", "search_material_analysis",
-    "query_alerts", "query_holdings_overview", "read_workspace", "query_system_status", "query_research_queue", "list_routines")
+    "query_alerts", "query_holdings_overview", "read_workspace", "query_system_status", "query_research_queue", "list_routines", "list_models")
 logger = logging.getLogger(__name__)
 MAX_STEPS = 12
 MAX_SETS = 6          # as the old engine: the last six result sets of a conversation

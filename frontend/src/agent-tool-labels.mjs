@@ -53,6 +53,7 @@ export const TOOL_LABELS = {
   forget: "忘掉偏好",
   create_routine: "新建例行任务",
   list_routines: "查看例行任务",
+  list_models: "查看可用模型",
   update_routine: "修改例行任务",
   delete_routine: "删除例行任务",
   recall_conversations: "回想往事",

@@ -260,7 +260,7 @@ REPAIRABLE={'unsupported_numeric_claim','insufficient_numeric_evidence','unsuppo
             'bad_ordinal','claims_missing'}
 MAX_REPAIR_ROUNDS=2
 # Tools whose results are the product's own state; an answer narrating them is held to that state.
-SYSTEM_STATE_TOOLS={'query_system_status','query_research_queue','add_to_research_queue','remove_from_research_queue','open_page','select_stock','list_routines'}
+SYSTEM_STATE_TOOLS={'query_system_status','query_research_queue','add_to_research_queue','remove_from_research_queue','open_page','select_stock','list_routines','list_models'}
 REPAIR_INSTRUCTION=('上面草稿里的这些行没有通过来源核对。请原样输出完整回答（Markdown，表格和标题保持不变），只允许修正行内的来源编号 [n]：'
     '被拒的数字改用 rejected_numbers_appear_in 指出的来源编号，或 cited_sources 里确实载有该数字的来源编号；'
     '缺少来源编号的事实句，按 cited_sources 补上正确的 [n]。'
@@ -540,16 +540,65 @@ def routine_when(schedule):
     from ..agent_tasks import schedule_text
     return schedule_text(schedule)
 
-def routine_changes(args,task):
-    """What an update_routine card changes, in the owner's words (the saved task fills what stays)."""
+def routine_fields(args):
+    """The fields of a routine call as ``POST``/``PATCH /tasks`` take them (what ``tools`` writes on the press)."""
+    fields={k:args[k] for k in tools.ROUTINE_FIELDS if args.get(k) is not None}
+    if args.get('symbols') is not None:fields.update(symbols=args['symbols'],scope='symbols' if args['symbols'] else 'research_queue')
+    return fields
+
+def skill_names(owner):
+    """The owner's skills by id, for a card that names one; a lookup that fails names none."""
+    try:
+        from ..agent_skills import list_skills
+        return {s['id']:s['name'] for s in list_skills(owner)}
+    except Exception:return {}
+
+def _config_words(config):
+    """An alerts routine's checks in words: what it looks at and the price lines."""
+    config=config or {}
+    lines=[f'{l["symbol"]} '+'、'.join(([f'高于 {l["above"]:g}'] if l.get('above') is not None else [])+([f'低于 {l["below"]:g}'] if l.get('below') is not None else []))
+           for l in config.get('price_lines') or []]
+    return '；'.join([f'新申报 {"开" if config.get("filings",True) else "关"}',f'新闻 {"开" if config.get("news",True) else "关"}',
+                      '价位线 '+('、'.join(lines) if lines else '无')])
+
+def _scope_words(task):
+    return '、'.join(task.get('symbols') or []) or '研究队列'
+
+def _cut(text,limit=80):
+    text=' '.join(str(text or '').split())
+    return text if len(text)<=limit else text[:limit]+'…'
+
+def _skill_words(skill_id,skills):
+    return '无' if not skill_id else (skills or {}).get(skill_id) or '一个已选的技能'
+
+def routine_changes(args,task,new=None,skills=None):
+    """What an update_routine card changes, each line old → new, in the owner's words.  ``new`` is the task as the press
+    would leave it (``agent_tasks.preview_task``); without it the arguments are laid over the saved task."""
+    new=new or {**task,**{k:v for k,v in args.items() if v is not None and k in task}}
     parts=[]
-    if args.get('name'):parts.append(f'改名为「{args["name"]}」')
-    if args.get('schedule_kind') or args.get('schedule_time'):
-        parts.append('改为'+routine_when({**task,**{k:args[k] for k in ('schedule_kind','schedule_time') if args.get(k)}}))
-    if args.get('symbols') is not None:parts.append('范围改为 '+('、'.join(args['symbols']) if args['symbols'] else '研究队列'))
-    if args.get('instruction'):parts.append(f'每次运行：{args["instruction"]}')
-    if args.get('enabled') is not None:parts.append('恢复运行' if args['enabled'] else '暂停')
-    return '；'.join(parts)
+    if args.get('name') and new['name']!=task['name']:parts.append(f'名称：{task["name"]} → {new["name"]}')
+    if args.get('kind') and new['kind']!=task['kind']:parts.append(f'类型：{KIND_WORDS.get(task["kind"],task["kind"])} → {KIND_WORDS.get(new["kind"],new["kind"])}')
+    if any(args.get(k) is not None for k in ('schedule_kind','schedule_time','every_value','every_unit','max_runs')) and routine_when(new)!=routine_when(task):
+        parts.append(f'频率：{routine_when(task)} → {routine_when(new)}')
+    if args.get('symbols') is not None and _scope_words(new)!=_scope_words(task):parts.append(f'范围：{_scope_words(task)} → {_scope_words(new)}')
+    if args.get('instruction') and new.get('instruction')!=task.get('instruction'):parts.append(f'每次运行：{_cut(task.get("instruction")) or "无"} → {new["instruction"]}')
+    if args.get('enabled') is not None and bool(new['enabled'])!=bool(task['enabled']):parts.append('状态：运行中 → 暂停' if not new['enabled'] else '状态：暂停 → 运行中')
+    if args.get('channel') is not None and new['channel']!=task['channel']:parts.append(f'通知渠道：{CHANNEL_WORDS.get(task["channel"],task["channel"])} → {CHANNEL_WORDS.get(new["channel"],new["channel"])}')
+    if args.get('skill_id') is not None and new.get('skill_id')!=task.get('skill_id'):parts.append(f'技能：{_skill_words(task.get("skill_id"),skills)} → {_skill_words(new.get("skill_id"),skills)}')
+    if args.get('config') is not None and new.get('config')!=task.get('config'):parts.append(f'检查项：{_config_words(task.get("config"))} → {_config_words(new.get("config"))}')
+    return '；'.join(parts) or '没有实际变化（和现在一样）'
+
+def routine_created(new,skills=None):
+    """What a create_routine card says each run does, who is told, and how to undo it."""
+    if new['kind']=='alerts':lines=['每次运行：检查'+_config_words(new.get('config'))+'（不调用模型）']
+    else:lines=[f'每次运行：{new["instruction"]}']
+    if new.get('scope')=='symbols' or new.get('symbols'):lines.append('范围：'+_scope_words(new))
+    if new['kind']=='alerts' and new['channel']=='telegram':lines.append('通知：也发 Telegram')
+    if new.get('skill_id'):lines.append('技能：'+_skill_words(new['skill_id'],skills))
+    return '；'.join(lines)+'（可在「例行任务」页暂停、修改或删除）'
+
+KIND_WORDS={'brief':'简报','alerts':'盯盘（不调用模型）'}
+CHANNEL_WORDS={'inbox':'只在对话里','telegram':'也发 Telegram'}
 
 NOTHING_TO_DO={'already_reviewed','duplicate_source'}
 # Cards whose button runs a write: the confirmation card, and the revision card on which the user
@@ -2592,7 +2641,7 @@ class Turn:
     async def publish_result(self,name,outcome):
         # Read results reach SSE/history only after the same gate used by the answer.
         policy=definitions()[name]
-        admin_tools={'query_system_status','query_research_queue','recall_conversations','read_past_conversation','list_routines',
+        admin_tools={'query_system_status','query_research_queue','recall_conversations','read_past_conversation','list_routines','list_models',
                      'manage_news_source'}
         if not outcome.get('ok'):safe=outcome if (outcome.get('bindable_values') or outcome.get('hint')) else tools.error(outcome.get('error_code') or 'tool_failed')
         elif policy.level!='read' or name in admin_tools:safe=outcome
@@ -2807,7 +2856,7 @@ class Turn:
             self.last_accepted={'ok':True,'data':numbered,'source':outcome.get('source')}
             self.observations.append({'name':name,'arguments':args,'result':self.last_accepted,'accepted_evidence':True})
             return
-        admin_tools={'query_system_status','query_research_queue','list_routines',
+        admin_tools={'query_system_status','query_research_queue','list_routines','list_models',
                      'manage_news_source'}
         if policy.level!='read' or name in admin_tools:
             self.feedback.append({'name':name,'result':outcome});return
@@ -2974,18 +3023,27 @@ class Turn:
             display.update(card)
         if name=='create_routine':
             operation['bot_id']=self.context.bot_id
-            display.update(title=f'{title} · {args["name"]}',targets=[{'kind':routine_when({'schedule_kind':args['schedule_kind'],'schedule_time':args['schedule_time']}),**({'symbol':'、'.join(args['symbols'])} if args['symbols'] else {})}],
-                           alternative=f'每次运行：{args["instruction"]}（可在「例行任务」页暂停、修改或删除）')
+            from ..agent_tasks import TaskError,preview_task
+            try:preview=await asyncio.to_thread(preview_task,self.context.owner_hash,routine_fields(args))
+            except TaskError as exc:return tools.error(str(exc))
+            skills=await asyncio.to_thread(skill_names,self.context.owner_hash)
+            display.update(title=f'{title} · {args["name"]}',targets=[{'kind':routine_when(preview),**({'symbol':'、'.join(args['symbols'])} if args['symbols'] else {})}],
+                           alternative=routine_created(preview,skills))
         if name=='save_skill':
             display.update(title=f'{title} · {args["name"]}',targets=[{'kind':args['description']}],
                            alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能只会收窄可用工具，不授权写操作。')
         if name in {'update_routine','delete_routine'}:
             # The card names the routine as saved now; one this owner does not have makes no card.
-            from ..agent_tasks import get_task
+            from ..agent_tasks import TaskError,get_task,preview_task
             task=await asyncio.to_thread(get_task,self.context.owner_hash,args['routine_id'])
             if task is None:return tools.error('routine_not_found')
+            new=None
+            if name=='update_routine':
+                try:new=await asyncio.to_thread(preview_task,self.context.owner_hash,routine_fields(args),args['routine_id'])
+                except TaskError as exc:return tools.error(str(exc))
+            skills=await asyncio.to_thread(skill_names,self.context.owner_hash) if name=='update_routine' else None
             display.update(title=f'{title} · {task["name"]}',targets=[{'kind':routine_when(task)}],
-                           alternative=routine_changes(args,task) if name=='update_routine' else '删除后不再运行；已生成的简报会保留。')
+                           alternative=routine_changes(args,task,new,skills) if name=='update_routine' else '删除后不再运行；已生成的简报会保留。')
         if name=='ingest_web_source':
             # Guard an explicit newer-date condition; never choose a route or tool.
             if args.get('newer_than') is None and self.scope.get('write_condition')=='newer_than_saved':return tools.error('comparison_citation_required')

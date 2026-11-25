@@ -153,10 +153,12 @@ def test_routine_changes_and_deletes_need_an_existing_routine(monkeypatch):
     monkeypatch.setattr(agent_tasks, "get_task", lambda owner, task_id: None)
     assert run(act.prepare(make_run(), "update_routine", {"routine_id": UUID, "enabled": False}))["error_code"] == "routine_not_found"
     assert run(act.prepare(make_run(), "delete_routine", {"routine_id": UUID}))["error_code"] == "routine_not_found"
-    task = {"name": "每日", "schedule_kind": "daily", "schedule_time": "09:00"}
+    task = fake_preview("o", {})
     monkeypatch.setattr(agent_tasks, "get_task", lambda owner, task_id: task)
+    monkeypatch.setattr(agent_tasks, "preview_task", fake_preview)
+    monkeypatch.setattr(direct, "skill_names", lambda owner: {})
     out = run(act.prepare(make_run(), "update_routine", {"routine_id": UUID, "enabled": False}))
-    assert out.display["title"] == "修改例行任务 · 每日" and out.display["alternative"] == "暂停"
+    assert out.display["title"] == "修改例行任务 · 每日" and out.display["alternative"] == "状态：运行中 → 暂停"
     out = run(act.prepare(make_run(), "delete_routine", {"routine_id": UUID}))
     assert out.display["alternative"] == "删除后不再运行；已生成的简报会保留。"
 
@@ -236,13 +238,23 @@ def ready_plan(count=5):
             "excluded": [], "mentioned": []}
 
 
+def fake_preview(owner, fields, task_id=None):
+    """``agent_tasks.preview_task`` without a database: a saved daily brief with the fields laid over it."""
+    saved = {"name": "每日", "kind": "brief", "schedule_kind": "daily", "schedule_time": "09:00", "instruction": "看新闻", "enabled": True,
+             "channel": "inbox", "symbols": [], "scope": "research_queue", "config": {}, "skill_id": None, "every_value": None,
+             "every_unit": None, "max_runs": None}
+    return {**saved, **fields}
+
+
 @pytest.fixture
 def faked(monkeypatch):
+    monkeypatch.setattr(agent_tasks, "preview_task", fake_preview)
+    monkeypatch.setattr(direct, "skill_names", lambda owner: {})
     monkeypatch.setattr(act, "_already_saved", lambda *a: None)
     monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: ready_plan())
     monkeypatch.setattr(profile, "user_message_id", lambda *a: "m1")
     monkeypatch.setattr(profile, "resolve_handle", lambda *a, **k: {"text": "用中文"})
-    monkeypatch.setattr(agent_tasks, "get_task", lambda *a: {"name": "每日", "schedule_kind": "daily", "schedule_time": "09:00"})
+    monkeypatch.setattr(agent_tasks, "get_task", lambda *a: fake_preview("o", {}))
     monkeypatch.setattr(direct, "source_display_title", lambda *a: "某材料")
     monkeypatch.setattr(portfolio, "describe_write", lambda *a: {"title": "t", "targets": [{"symbol": "AAPL"}], "alternative": "a"})
     monkeypatch.setattr(sec_sources, "prepare_filing", lambda name, args, financial_only=False: {

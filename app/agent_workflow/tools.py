@@ -97,7 +97,26 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
     return await _dispatch(name,args,context,True,emit)
 
 
+# What a routine card may set (what POST/PATCH /tasks take besides the tickers and the bot); one list for create and update.
+ROUTINE_FIELDS=('name','kind','instruction','schedule_kind','schedule_time','every_value','every_unit','max_runs','channel','skill_id','config','enabled')
+
+
 async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
+    if name=='list_models':
+        # The catalog and the roles as the owner may see them: names and whether a key is set, never a key, a hint of one or where it is kept.
+        from .. import agent_model_catalog as catalog
+        from .. import agent_model_roles as roles
+        if not is_owner:return error('owner_login_required')
+        def overview():
+            listed,default=catalog.entries()
+            chosen=roles.all_roles(context.owner_hash)
+            names={item['name'] for item in listed}
+            notes={'earnings':'unset: the server default model','forecast':'unset: the server default model','judge':'unset: the configured judge','fallback':'unset: no backup model'}
+            return {'default_model':default,
+                    'models':[{'name':item['name'],'display_name':item['display_name'],'provider':item['provider'],'model':item['model'],
+                               'key_set':bool(catalog._key_for(item)),'is_default':item['name']==default} for item in listed],
+                    'roles':{role:({'model':chosen[role],'in_catalog':chosen[role] in names} if chosen.get(role) else {'model':None,'note':notes[role]}) for role in roles.ROLES}}
+        return result([await asyncio.to_thread(overview)],'model catalog')
     if name=='read_history_citation':
         from .history_citations import read_history_citation
         return await read_history_citation(args,context,**({'page_chars':page_chars} if page_chars is not None else {}))
@@ -250,7 +269,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         if name=='delete_routine':
             done=await asyncio.to_thread(tasks.delete_task,context.owner_hash,args['routine_id'])
             return result([{'status':'deleted','routine_id':args['routine_id']}],'bot routine') if done else error('routine_not_found')
-        fields={k:args[k] for k in ('name','instruction','schedule_kind','schedule_time','enabled') if args.get(k) is not None}
+        fields={k:args[k] for k in ROUTINE_FIELDS if args.get(k) is not None}
         if args.get('symbols') is not None:fields.update(symbols=args['symbols'],scope='symbols' if args['symbols'] else 'research_queue')
         try:task=await asyncio.to_thread(tasks.update_task,context.owner_hash,args['routine_id'],fields)
         except tasks.TaskError as exc:return error(str(exc))
@@ -279,9 +298,9 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         # Only reached through execute_reversible; the bot is the proposing turn's, frozen in the operation.
         from .. import agent_tasks as tasks
         if not is_owner:return error('owner_login_required')
-        fields={'kind':'brief','name':args['name'],'instruction':args['instruction'],'schedule_kind':args['schedule_kind'],
-                'schedule_time':args['schedule_time'],'scope':'symbols' if args['symbols'] else 'research_queue',
+        fields={**{k:args[k] for k in ROUTINE_FIELDS if args.get(k) is not None},'scope':'symbols' if args['symbols'] else 'research_queue',
                 'symbols':args['symbols'],'bot_id':args.get('_bot_id')}
+        fields.setdefault('kind','brief')
         try:task=await asyncio.to_thread(tasks.create_task,context.owner_hash,fields)
         except tasks.TaskError as exc:return error(str(exc))
         return result([{'status':'created','name':task['name'],'schedule_kind':task['schedule_kind'],

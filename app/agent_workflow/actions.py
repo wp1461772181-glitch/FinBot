@@ -63,6 +63,20 @@ def _action_lock_held(identity: str, request_key: str) -> bool:
         return not free
 
 
+def analysis_request(payload: dict[str, Any]) -> dict[str, Any]:
+    """What an analysis is asked for beyond its source, as ``POST .../analysis-jobs`` passes it: ``force``, and the settings of a
+    catalog model when the card named one (its key is read here for this one call and goes nowhere else)."""
+    request: dict[str, Any] = {"force": bool(payload.get("force"))}
+    if payload.get("catalog_model"):
+        from .. import agent_model_catalog as catalog
+        try:
+            chosen = catalog.resolve(payload["catalog_model"])
+        except catalog.CatalogError as exc:
+            raise ActionError(str(exc)) from exc
+        request.update(provider=chosen["provider"], base_url=chosen["base_url"], model=chosen["model"], api_key=chosen["api_key"])
+    return request
+
+
 def _underlying_key(identity: str, request_key: str) -> str:
     return f"agent:{identity[:16]}:{request_key}"
 
@@ -198,6 +212,7 @@ def execute_action(*, credential: str, request_key: str, action: str,
                     return {"ok": False, "status": "failed", "job_status": "interrupted_reconcile_required",
                             "action": action, "job_id": None, "error_code": "interrupted_reconcile_required", "result": {}}
             return _status(db, dict(existing))
+        analysis = analysis_request(payload) if action == "analyze" else {}
         # Validate scope before creating a durable request.
         if source_id and action in {"analyze", "import"}:
             source_type = payload.get("source_type", "official_filing")
@@ -245,7 +260,7 @@ def execute_action(*, credential: str, request_key: str, action: str,
             elif action == "analyze":
                 from ..material_analysis import request_material_analysis
                 result = request_material_analysis(db=db, source_type=payload.get("source_type", "official_filing"),
-                                                   source_id=source_id, idempotency_key=_underlying_key(identity, request_key))
+                                                   source_id=source_id, idempotency_key=_underlying_key(identity, request_key), **analysis)
                 job_kind, job_id = "analysis", uuid.UUID(str(result.get("job_id") or result.get("id")))
             elif action == "forecast":
                 from ..forecast_v2_api import _validate_source_refs, _supported_symbol

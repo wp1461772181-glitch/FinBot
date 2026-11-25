@@ -17,6 +17,7 @@ import logging
 from .. import agent_profile as profile
 from .. import agent_tasks, portfolio
 from ..agent_chat_identity import owner_credential_matches
+from .. import agent_model_catalog as model_catalog
 from ..agent_tool_catalog import definitions, validate
 from ..agent_workflow import consent, direct, sec_sources, tools, web_sources, workspace_tools
 from . import ask
@@ -40,13 +41,13 @@ SUMMARIES = {
     "record_trade": "在持仓账本里记一笔买入或卖出（只是记账，不是下单）",
     "set_available_funds": "设置可用资金",
     "set_position_plan": "保存某只持仓的计划（加仓、止损、目标价或文字）",
-    "create_routine": "新建一个定时例行任务",
-    "update_routine": "修改、暂停或恢复一个例行任务",
+    "create_routine": "新建一个定时例行任务（每天、工作日、每小时，或每隔 N 小时/天/周；可限次数、选通知渠道和技能；也可建只盯申报新闻价位的盯盘任务）",
+    "update_routine": "修改、暂停或恢复一个例行任务（名称、说明、频率与次数、范围、通知渠道、技能）",
     "delete_routine": "删除一个例行任务",
     "save_skill": "把一套做法存成技能",
     "review_filing": "把一份 SEC 申报标记为相关或不相关",
     "forecast": "生成一份新的研究预测",
-    "analyze": "对一份已存材料做 AI 分析",
+    "analyze": "对一份已存材料做 AI 分析（可指定模型目录里的模型，可强制重新分析）",
     "translate_content": "把一份分析或预测简报译成英文",
     "start_historical_replay": "对过去某个决策日做一次历史回放",
     "fetch_sec": "拉取一份 SEC 申报原文",
@@ -86,6 +87,16 @@ COST_NOTES = {
     "ingest_web_source": "会把这个网页存入资料库和知识库。",
     "revise_forecast": "会调用付费模型重新计算这份预测，生成新版本，旧版本保留。",
 }
+
+def cost_note(name: str, args: dict) -> str:
+    """The card's cost line: the fixed note of the operation, and for an analysis which model runs it and whether it runs again."""
+    if name != "analyze":
+        return COST_NOTES[name]
+    chosen = args.get("catalog_model")
+    entry = next((e for e in model_catalog.entries()[0] if e["name"] == chosen), None) if chosen else None
+    model = f"会调用付费模型「{entry['display_name'] or entry['name']}」（{entry['model']}）分析这份材料。" if entry else "会用默认的分析模型（付费）分析这份材料。"
+    return model + ("即使这份材料已有分析，也会重新生成一份。" if args.get("force") else "")
+
 
 _HEADINGS = (("直接生效（可撤销）", TIER1), ("需要用户点确认卡", TIER2), ("需要用户点确认卡，并且花钱或不可撤销", TIER3))
 _INTRO = "所有会改数据的操作都从这里做。只带 operation 调用会返回它的参数格式；带上 arguments 才是真的提出操作。"
@@ -371,6 +382,31 @@ async def _revision(run, args: dict) -> Prepared | dict:
     return Prepared(operation=operation, display=display, tier=3, options=options)
 
 
+_TASK_REASONS = {
+    "invalid_every": "间隔不合规：schedule_kind 要是 every，并给 every_value 和 every_unit（hours 1-720、days 1-365、weeks 1-52）。",
+    "invalid_max_runs": "max_runs 要在 1-1000 之间（0 表示不限次数）。",
+    "invalid_instruction": "简报型例行任务要有 instruction（不超过 2000 字）；只盯申报、新闻、价位线的用 kind=alerts。",
+    "invalid_schedule": "频率不合规：schedule_kind 用 daily、weekdays、hourly 或 every，schedule_time 用 HH:MM。",
+    "invalid_symbols": "股票代码不合规，或范围选了 symbols 却没给代码。",
+    "invalid_channel": "channel 只能是 inbox 或 telegram。",
+    "invalid_config": "config 格式不对：{filings, news, price_lines:[{symbol, above/below}]}。",
+    "unknown_skill": "没有这个技能（或不能用）；技能 id 要是用户已有且可用的。",
+    "too_many_tasks": "例行任务已经有 20 个，先删掉不用的再新建。",
+}
+
+
+def _task_refusal(failure: Exception) -> dict:
+    """The route's own refusal of a routine, with the same code, and what to change."""
+    code = str(failure)
+    reason = _TASK_REASONS.get(code)
+    return {**_failure(code), **({"reason": reason, "hint": reason} if reason else {})}
+
+
+def _usable_model(name: str) -> None:
+    """A catalog model that exists and has a key; ``CatalogError`` (model_not_found, model_key_missing) otherwise.  The key is not kept."""
+    model_catalog.resolve(name)
+
+
 async def prepare(run, name: str, arguments) -> Prepared | dict:
     """Validate a call and build the frozen operation and the card.  Never writes; an error comes back as a tool-result dict."""
     if name not in OPERATIONS:
@@ -404,10 +440,14 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
                 return {"ok": False, "data": [], "error_code": failure.code, "reason": failure.reason, "hint": failure.reason}
         elif name == "create_routine":
             operation["bot_id"] = getattr(context, "bot_id", None)
+            try:
+                preview = await asyncio.to_thread(agent_tasks.preview_task, context.owner_hash, direct.routine_fields(args))
+            except agent_tasks.TaskError as failure:
+                return _task_refusal(failure)
+            skills = await asyncio.to_thread(direct.skill_names, context.owner_hash)
             display.update(title=f'{title} · {args["name"]}',
-                           targets=[{"kind": direct.routine_when({"schedule_kind": args["schedule_kind"], "schedule_time": args["schedule_time"]}),
-                                     **({"symbol": "、".join(args["symbols"])} if args["symbols"] else {})}],
-                           alternative=f'每次运行：{args["instruction"]}（可在「例行任务」页暂停、修改或删除）')
+                           targets=[{"kind": direct.routine_when(preview), **({"symbol": "、".join(args["symbols"])} if args["symbols"] else {})}],
+                           alternative=direct.routine_created(preview, skills))
         elif name == "save_skill":
             display.update(title=f'{title} · {args["name"]}', targets=[{"kind": args["description"]}],
                            alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能不授权写操作；工具清单只对旧流程的 bot 生效。')
@@ -419,8 +459,22 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
             task = await asyncio.to_thread(agent_tasks.get_task, context.owner_hash, args["routine_id"])
             if task is None:
                 return _failure("routine_not_found")
+            changed = skills = None
+            if name == "update_routine":       # the route's own checks, before a card exists
+                try:
+                    changed = await asyncio.to_thread(agent_tasks.preview_task, context.owner_hash, direct.routine_fields(args), args["routine_id"])
+                except agent_tasks.TaskError as failure:
+                    return _task_refusal(failure)
+                if changed is None:
+                    return _failure("routine_not_found")
+                skills = await asyncio.to_thread(direct.skill_names, context.owner_hash)
             display.update(title=f'{title} · {task["name"]}', targets=[{"kind": direct.routine_when(task)}],
-                           alternative=direct.routine_changes(args, task) if name == "update_routine" else "删除后不再运行；已生成的简报会保留。")
+                           alternative=direct.routine_changes(args, task, changed, skills) if name == "update_routine" else "删除后不再运行；已生成的简报会保留。")
+        elif name == "analyze" and args.get("catalog_model"):
+            try:
+                await asyncio.to_thread(_usable_model, args["catalog_model"])
+            except model_catalog.CatalogError as failure:
+                return _failure(str(failure), hint="用 list_models 看有哪些模型可用，换一个名字重新提出。")
         elif name in {"fetch_sec", "refresh_sec"}:
             try:
                 operation = await asyncio.to_thread(sec_sources.prepare_filing, name, args, financial_only=False)
@@ -434,7 +488,7 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
 
     tier = tier_of(name)
     if tier == 3:
-        display["alternative"] = "\n".join(filter(None, [display.get("alternative"), f"代价：{COST_NOTES[name]}"]))
+        display["alternative"] = "\n".join(filter(None, [display.get("alternative"), f"代价：{await asyncio.to_thread(cost_note, name, args)}"]))
     return Prepared(operation=operation, display=display, tier=tier)
 
 
