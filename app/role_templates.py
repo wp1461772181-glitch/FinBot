@@ -159,3 +159,221 @@ def brief_fields(brief: dict, *, skill_id: str | None = None, bot_id: str | None
     if bot_id:
         fields["bot_id"] = bot_id
     return fields
+
+
+# ---- preview, apply, undo -----------------------------------------------------------------------------------------------------
+
+USUAL_MAX = 20
+PART_ORDER = ("skill", "memory", "brief", "usual")
+REUSE_SKILL = "已有同名技能，沿用你的"
+REUSE_MEMORY = "已有，沿用"
+REUSE_USUAL = "已在常用技能里"
+TASK_NAME_TAKEN = "已有同名任务"
+GONE = "已经不在了"
+ZONE_NAMES = {"America/New_York": "美东时间", "Asia/Shanghai": "北京时间"}
+EVERY_UNITS = {"days": "天", "hours": "小时", "weeks": "周"}
+_NEW = "new:"          # a skill this application will create, before it has an id
+
+
+class RoleTemplateError(ValueError):
+    """A short code the routes show: unknown_template, unknown_bot, unknown_leave_out, application_not_found, already_undone."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def _template(template_id) -> dict:
+    template = TEMPLATES.get(str(template_id or ""))
+    if template is None:
+        raise RoleTemplateError("unknown_template")
+    return template
+
+
+def _left_out(template: dict, leave_out) -> set[str]:
+    """The keys he unticked.  A key the template does not have is refused, not ignored (a typo must not write what he meant to leave out)."""
+    valid = ({m["key"] for m in template["memory"]} | {b["key"] for b in template["briefs"]} | {s["key"] for s in template["skills"]}
+             | set(template["usual"]))
+    left = [str(key) for key in (leave_out or [])]
+    if any(key not in valid for key in left):
+        raise RoleTemplateError("unknown_leave_out")
+    return set(left)
+
+
+def _default_bot(owner_hash: str) -> dict | None:
+    """His 「助理」 as it is now, or None when it has not been made yet (a preview never makes it)."""
+    with SessionLocal() as db:
+        row = db.scalars(select(AgentBot).where(AgentBot.owner_hash == owner_hash, AgentBot.is_default.is_(True))).first()
+        return {"id": str(row.id), "name": row.name, "skills": list(row.skills or [])} if row else None
+
+
+def _target(owner_hash: str, bot_id, *, create: bool) -> dict:
+    """Where it lands: the global memory layer and 「助理」 (``bot_id`` None), or one of his bots' own layer, tasks and usual skills."""
+    if bot_id in (None, ""):
+        if create:
+            agent_bots.ensure_default_bot(owner_hash)
+        found = _default_bot(owner_hash)
+        return {"scope": "global", "layer": None, "bot_id": found["id"] if found else None, "usual": list(found["skills"]) if found else [],
+                "bot_name": found["name"] if found else agent_bots.DEFAULT_NAME}
+    try:
+        uuid.UUID(str(bot_id))
+    except (TypeError, ValueError) as exc:
+        raise RoleTemplateError("unknown_bot") from exc
+    bot = agent_bots.get_bot(owner_hash, bot_id)
+    if bot is None:
+        raise RoleTemplateError("unknown_bot")
+    return {"scope": "bot", "layer": bot["id"], "bot_id": bot["id"], "bot_name": bot["name"], "usual": list(bot.get("skills") or [])}
+
+
+def _when(brief: dict) -> str:
+    """The schedule in plain words, with the zone it is set in."""
+    zone, at, kind = ZONE_NAMES.get(brief["timezone"], brief["timezone"]), brief["schedule_time"], brief["schedule_kind"]
+    if kind == "weekdays":
+        head = f"工作日 {at}"
+    elif kind == "daily":
+        head = f"每天 {at}"
+    elif kind == "every":
+        head = f"每 {brief['every_value']} {EVERY_UNITS.get(brief['every_unit'], brief['every_unit'])}，{at}"
+    else:
+        head = at
+    return f"{head}（{zone}）"
+
+
+def _skill_entries(owner_hash: str, template: dict, left: set[str]) -> tuple[list[dict], dict, list[dict]]:
+    """The template's skills: created, reused (he already has one of that name, active) or skipped.  Returns (entries, resolved, all skills)."""
+    skills = agent_skills.list_skills(owner_hash)
+    by_name = {s["name"]: s for s in skills}
+    mine = sum(1 for s in skills if not s["builtin"])
+    entries, resolved = [], {}
+    for spec in template["skills"]:
+        if spec["key"] in left:
+            resolved[spec["key"]] = None
+            continue
+        base = {"part": "skill", "key": spec["key"], "label": spec["name"], "name": spec["name"]}
+        row = by_name.get(spec["name"])
+        if row is not None and row["status"] == "active" and row.get("enabled", True):
+            entries.append({**base, "status": "reuse", "id": row["id"], "reason": REUSE_SKILL})
+            resolved[spec["key"]] = row["id"]
+        elif row is not None:
+            entries.append({**base, "status": "skip", "code": "name_taken", "reason": "已有同名技能（不是启用中的），没有创建"})
+            resolved[spec["key"]] = None
+        elif mine >= agent_skills.MAX_SKILLS:
+            entries.append({**base, "status": "skip", "code": "too_many_skills", "reason": f"你的技能已满 {agent_skills.MAX_SKILLS} 个，没有创建"})
+            resolved[spec["key"]] = None
+        else:
+            mine += 1
+            entries.append({**base, "status": "create", "spec": spec})
+            resolved[spec["key"]] = _NEW + spec["key"]
+    return entries, resolved, skills
+
+
+def _memory_entries(owner_hash: str, template: dict, left: set[str], layer) -> list[dict]:
+    """The template's memory lines: reused when the layer already has the same line (same text and kind, active), the rest created or, when
+    they would not fit under the layer's limit, ALL refused together (nothing of his is archived to make room)."""
+    active = [i for i in agent_profile.list_items(owner_hash, include_archived=False) if i["status"] == "active" and i["bot_id"] == layer]
+    plain = agent_profile._plain
+    entries = []
+    for line in template["memory"]:
+        if line["key"] in left:
+            continue
+        base = {"part": "memory", "key": line["key"], "label": line["text"], "kind": line["kind"], "text": line["text"]}
+        same = any(plain(i["text"]) == plain(line["text"]) and i["kind"] == line["kind"] for i in active)
+        entries.append({**base, "status": "reuse", "reason": REUSE_MEMORY} if same else {**base, "status": "create"})
+    fresh = [e for e in entries if e["status"] == "create"]
+    if fresh and len(active) + len(fresh) > agent_profile.MAX_ACTIVE_ITEMS:
+        reason = f"这一层记忆已有 {len(active)} 条，再加 {len(fresh)} 条会超过 {agent_profile.MAX_ACTIVE_ITEMS} 条；先删几条或少勾几条"
+        for entry in fresh:
+            entry.update(status="skip", code=MEMORY_FULL, reason=reason)
+    return entries
+
+
+def _brief_entries(owner_hash: str, template: dict, left: set[str], target: dict, resolved: dict, skill_names: dict) -> list[dict]:
+    tasks = agent_tasks.list_tasks(owner_hash)
+    names = {t["name"] for t in tasks if target["bot_id"] and str(t.get("bot_id")) == str(target["bot_id"])}
+    total = len(tasks)
+    entries = []
+    for brief in template["briefs"]:
+        if brief["key"] in left:
+            continue
+        skill_key = brief.get("skill_key")
+        has_skill = bool(skill_key and resolved.get(skill_key))
+        base = {"part": "brief", "key": brief["key"], "label": brief["name"], "name": brief["name"], "when": _when(brief),
+                "instruction": brief["instruction"], "skill_key": skill_key if has_skill else None,
+                "skill_name": skill_names.get(skill_key) if has_skill else None}
+        if brief["name"] in names:
+            entries.append({**base, "status": "skip", "code": "name_taken", "reason": TASK_NAME_TAKEN})
+        elif total >= agent_tasks.MAX_TASKS:
+            entries.append({**base, "status": "skip", "code": "too_many_tasks", "reason": f"例行任务已满 {agent_tasks.MAX_TASKS} 个，没有创建"})
+        else:
+            total += 1
+            names.add(brief["name"])
+            entries.append({**base, "status": "create"})
+    return entries
+
+
+def _usual_entries(template: dict, left: set[str], target: dict, resolved: dict, skills: list[dict]) -> list[dict]:
+    """The template's usual skills, appended after the ones the bot already has (up to 20); a built-in is named by its name."""
+    builtin = {s["name"]: s["id"] for s in skills if s["builtin"] and s["status"] == "active"}
+    current, planned, entries = list(target["usual"]), list(target["usual"]), []
+    for key in template["usual"]:
+        if key in left:
+            continue
+        if key in resolved:
+            skill_id = resolved[key]
+            if not skill_id:
+                continue            # that skill was left out or not made: its own entry says why
+            label = next((s["name"] for s in template["skills"] if s["key"] == key), key)
+        else:
+            skill_id, label = builtin.get(key), key
+            if not skill_id:
+                continue
+        base = {"part": "usual", "key": key, "label": label, "skill_id": skill_id}
+        if skill_id in current:
+            entries.append({**base, "status": "reuse", "reason": REUSE_USUAL})
+        elif len(planned) >= USUAL_MAX:
+            entries.append({**base, "status": "skip", "code": "usual_full", "reason": f"常用技能最多 {USUAL_MAX} 个，放不下了"})
+        else:
+            planned.append(skill_id)
+            entries.append({**base, "status": "create"})
+    return entries
+
+
+def plan(owner_hash: str, template_id: str, bot_id=None, leave_out=None, *, create: bool = False) -> dict:
+    """What applying would do, worked out against what he has now; writes nothing (``create=True``, used by ``apply`` only, makes 「助理」)."""
+    template = _template(template_id)
+    left = _left_out(template, leave_out)
+    target = _target(owner_hash, bot_id, create=create)
+    skills, resolved, all_skills = _skill_entries(owner_hash, template, left)
+    skill_names = {s["key"]: s["name"] for s in template["skills"]}
+    return {"template": template_id, "label": template["label"], "target": target, "resolved": resolved,
+            "skill": skills, "memory": _memory_entries(owner_hash, template, left, target["layer"]),
+            "brief": _brief_entries(owner_hash, template, left, target, resolved, skill_names),
+            "usual": _usual_entries(template, left, target, resolved, all_skills)}
+
+
+def _shown(entry: dict) -> dict:
+    return {k: v for k, v in entry.items() if k not in ("status", "spec")}
+
+
+def _by_status(worked: dict, status: str) -> list[dict]:
+    return [_shown(e) for part in PART_ORDER for e in worked[part] if e["status"] == status]
+
+
+def preview(owner_hash: str, template_id: str, bot_id=None, leave_out=None) -> dict:
+    """What a template would write on his data, as the card and the page show it.  Read-only: not even 「助理」 is made."""
+    worked = plan(owner_hash, template_id, bot_id, leave_out)
+    from .kernel import wake
+    mode = wake.mode()
+    will_create = _by_status(worked, "create")
+    for entry in will_create:
+        if entry["part"] == "brief":
+            brief = next(b for b in TEMPLATES[template_id]["briefs"] if b["key"] == entry["key"])
+            try:
+                entry["next_run_at"] = (agent_tasks.preview_task(owner_hash, brief_fields(brief)) or {}).get("next_run_at")
+            except agent_tasks.TaskError:
+                entry["next_run_at"] = None
+    target = worked["target"]
+    return {"template": template_id, "label": worked["label"],
+            "target": {"bot_id": target["layer"], "bot_name": target["bot_name"], "scope": target["scope"]},
+            "will_create": will_create, "reuse": _by_status(worked, "reuse"), "skip": _by_status(worked, "skip"),
+            "notes": notes(mode), "duty_mode": mode}
