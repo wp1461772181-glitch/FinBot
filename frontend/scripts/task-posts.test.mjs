@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isTaskPostHead, parseTaskPostHead } from "../src/task-posts.mjs";
+import { isTaskPostHead, parseTaskPostHead, taskPostKind } from "../src/task-posts.mjs";
 
 const HEAD = "【例行任务结果】「新申报提醒」2026-10-30 08:05（系统自动贴入，不是所有者说的话）";
 
@@ -20,4 +20,15 @@ test("a malformed head falls back to the raw text", () => {
   assert.equal(isTaskPostHead(raw), true);
   assert.deepEqual(parseTaskPostHead(raw), { raw, name: null, time: null });
   assert.equal(parseTaskPostHead("【例行任务结果】「只有名字」").time, null);
+});
+
+const JOB_HEAD = "【任务结果】「预测 AAPL」（系统自动贴入，不是所有者说的话）";
+
+test("the head of a card job's end message is a system head too, and says which kind it is", () => {
+  assert.equal(isTaskPostHead(JOB_HEAD), true);
+  assert.deepEqual(parseTaskPostHead(JOB_HEAD), { raw: JOB_HEAD, name: "预测 AAPL", time: null });
+  assert.equal(taskPostKind(JOB_HEAD), "job");
+  assert.equal(taskPostKind(HEAD), "routine");
+  assert.equal(taskPostKind("AAPL 最近怎么样？"), null);
+  assert.equal(isTaskPostHead("请看【任务结果】"), false);
 });

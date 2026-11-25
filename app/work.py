@@ -214,16 +214,66 @@ def _iso(value) -> str | None:
     return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC).isoformat()
 
 
+def _local(value) -> str | None:
+    """``MM-DD HH:MM`` in the owner's zone, so the model need not convert the UTC strings itself."""
+    if value is None:
+        return None
+    return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(LOCAL_TZ).strftime("%m-%d %H:%M")
+
+
 def _item(kind: str, ref: str, title: str, status: str, *, started=None, ended=None, next_run=None, failure=None, conversation_id=None) -> dict:
     return {"kind": kind, "id": ref, "title": title, "status": status, "status_label": STATUS_LABELS[status], "started_at": _iso(started),
-            "ended_at": _iso(ended), "next_run_at": _iso(next_run), "failure": failure,
-            "conversation_id": str(conversation_id) if conversation_id else None}
+            "started_local": _local(started), "ended_at": _iso(ended), "ended_local": _local(ended), "next_run_at": _iso(next_run),
+            "next_run_local": _local(next_run), "failure": failure, "conversation_id": str(conversation_id) if conversation_id else None}
 
 
 JOB_ACTIONS = {"forecast": "预测", "analyze": "分析"}
-JOB_FAILURE = "过程中出错了，可以让我重试"
 JOB_STATES = {"running": RUNNING, "succeeded": DONE, "partially_succeeded": DONE, "failed": FAILED}
 JOB_PAGES = {"forecast": "结果在「预测」页。", "analyze": "结果在「资料」页。"}
+# Why a job did not finish, in words a person can read (never the code).  ``blocked_data`` is not an error: the job found it could not be done.
+BLOCKED_REASONS = {"no_content": "这份材料没有可用的正文，这次没有做", "source_snapshot_missing": "没找到这份材料的原文，这次没有做",
+                   "analysis_model_unconfigured": "分析用的模型还没配置，这次没有做"}
+BLOCKED_DEFAULT = "数据不够，这次没有做"
+FAILED_REASONS = {"provider_error": "模型服务出错", "invalid_model_output": "模型的输出没通过核对", "processor_error": "处理过程出错"}
+FAILED_DEFAULT = "过程中出错了"
+
+
+def job_reason(status: str | None, code: str | None) -> tuple[str, bool]:
+    """(the short Chinese reason, whether it is a block rather than an error) for a job's own status and error code; the generic sentence only
+    when the job gives nothing."""
+    code = str(code or "")
+    if status == "blocked_data":
+        return BLOCKED_REASONS.get(code, BLOCKED_DEFAULT), True
+    if "timeout" in code or "timed_out" in code:
+        return "超时", False
+    return FAILED_REASONS.get(code, FAILED_DEFAULT), False
+
+
+def _job_facts(db, request: dict) -> dict:
+    """The job's own record, by kind: the start (``started_at``, else ``created_at``), the end (``completed_at``), its status and its error code
+    (forecast: ``forecast_jobs_v2.error_type``; analysis: ``material_analysis_jobs.safe_error_code``).  A time the job table does not have is None:
+    nothing is guessed."""
+    kind, job_id = request.get("job_kind"), request.get("job_id")
+    table, code = {"forecast": ("forecast_jobs_v2", "error_type"), "analysis": ("material_analysis_jobs", "safe_error_code")}.get(kind, (None, None))
+    if table is None or job_id is None:
+        return {}
+    try:
+        row = db.execute(text(f"SELECT started_at, created_at, completed_at, status, {code} AS code FROM {table} WHERE id=:id"), {"id": job_id}).mappings().first()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        _log_once(("facts", str(request.get("id"))), "reading the job record of action request %s failed", request.get("id"))
+        return {}
+    return {} if row is None else {"started": row["started_at"] or row["created_at"], "ended": row["completed_at"], "status": row["status"], "code": row["code"]}
+
+
+_LOGGED: set = set()
+
+
+def _log_once(key, message: str, *args) -> None:
+    """One traceback per trouble, not one a minute."""
+    if key not in _LOGGED and len(_LOGGED) < 1000:
+        _LOGGED.add(key)
+        log.exception(message, *args)
 
 
 def _card_of(db, request: dict):
@@ -242,21 +292,28 @@ def _job_state(db, request: dict) -> dict:
     try:
         return actions._status(db, request)
     except Exception:  # noqa: BLE001 - a job table that cannot be read: the ledger's own status stands
-        log.exception("reading the live status of an action request failed")
+        _log_once(("state", str(request.get("id"))), "reading the live status of action request %s failed", request.get("id"))
         db.rollback()
         return {"status": request["status"], "job_status": request["status"], "result": {}}
 
 
 def _what(consent, request: dict) -> str:
     title = " ".join(str((consent.display or {}).get("title") or "").split()) if consent is not None else ""
-    return title[:60] or f"{JOB_ACTIONS.get(request['action'], request['action'])}任务"
+    title = title[:60] or f"{JOB_ACTIONS.get(request['action'], request['action'])}任务"
+    if consent is not None and len(consent.operations or []) > 1:     # one card, several operations: say which
+        try:
+            title += f"（第 {int(str(request['request_key']).rsplit('.', 1)[1]) + 1} 项）"
+        except (ValueError, IndexError):
+            pass
+    return title
 
 
 def list_for(owner: str, *, now: datetime | None = None, limit: int = LIST_LIMIT) -> list[dict]:
     """The owner's work in one list, newest first, at most ``limit``: chat turns (running, and failed or stopped within a day), routines
     (queued for their time, running, or failed within a day), jobs started from a card (live status, running or ended within a day) and
     the archive builds he asked for.  Another owner's work is never in it.  Each item: kind, id, a short Chinese title, status
-    (running/done/failed/stopped, or queued) with its label, started_at, ended_at, next_run_at, failure (one Chinese sentence), conversation_id."""
+    (running/done/failed/stopped, or queued) with its label, started_at, ended_at (None when the job has no end time of its own),
+    next_run_at (each with a ``_local`` time in the owner's zone), failure (one Chinese sentence), conversation_id."""
     now = now or datetime.now(UTC)
     since = now - RECENT
     items: list[dict] = []
@@ -272,18 +329,24 @@ def list_for(owner: str, *, now: datetime | None = None, limit: int = LIST_LIMIT
                                   {"owner": owner, "since": since}).mappings().all()
         except Exception:  # noqa: BLE001 - the ledger table is made by a migration; without it there are no card jobs
             db.rollback()
+            _log_once(("ledger", "list"), "reading the action ledger failed")
             requests = []
         for request in requests:
             request = dict(request)
             consent = _card_of(db, request)
             if consent is None:
                 continue
-            state = JOB_STATES.get(_job_state(db, request)["status"], RUNNING)
-            if state != RUNNING and (request["updated_at"] or request["created_at"]) < since:
+            live = _job_state(db, request)
+            state = JOB_STATES.get(live["status"], RUNNING)
+            facts = _job_facts(db, request)
+            ended = facts.get("ended") if state != RUNNING else None
+            if state != RUNNING and ended is not None and ended < since:
                 continue
-            items.append(_item("job", str(request["id"]), _what(consent, request), state, started=request["created_at"],
-                               ended=None if state == RUNNING else (request["updated_at"] or request["created_at"]),
-                               failure=JOB_FAILURE if state == FAILED else None, conversation_id=consent.conversation_id))
+            if state != RUNNING and ended is None and request["created_at"] < since:
+                continue
+            failure = job_reason(facts.get("status"), facts.get("code"))[0] if state == FAILED else None
+            items.append(_item("job", str(request["id"]), _what(consent, request), state, started=facts.get("started") or request["created_at"],
+                               ended=ended, failure=failure, conversation_id=consent.conversation_id))
     from . import agent_tasks
     for task in agent_tasks.list_tasks(owner):
         if not task["enabled"] or task["finished"]:
@@ -330,87 +393,135 @@ def _archive_items(owner: str, now: datetime, since: datetime) -> list[dict]:
 # --- the end of a job started from a card -------------------------------------------------------------------------------
 
 WATCH_WINDOW = timedelta(days=1)
+WATCH_BATCH = 50          # unclaimed card jobs one pass looks at, newest first: a backlog cannot starve a new job
+BASELINE = "baseline"     # agent_work kind of the watcher's durable start marker (ref ``card_jobs``)
+GIVEN_UP = "不会再汇报这件事："
+
+
+def _claim(db, request: dict, *, status: str, reason: str | None, conversation_id=None, summary: str = "", started=None, ended=None):
+    """The one claim row of an action request (kind ``card_job``, ref its id).  None when it already exists (another pass, another worker).
+    A claim is final: a job reported failed that were ever requeued and then succeeded would not be reported again (not reachable today: failed and
+    blocked jobs are terminal)."""
+    from sqlalchemy.dialects.postgresql import insert
+    return db.execute(insert(AgentWork).values(id=uuid.uuid4(), kind=CARD_JOB, ref=str(request["id"]), owner_hash=request["owner_hash"],
+                                               conversation_id=conversation_id, summary=summary, status=status, reason=reason,
+                                               started_at=started or request["created_at"], ended_at=ended or datetime.now(UTC))
+                      .on_conflict_do_nothing(index_elements=["kind", "ref"]).returning(AgentWork.id)).first()
+
+
+def _unclaimed(db, since: datetime, limit: int) -> list[dict]:
+    return [dict(r) for r in db.execute(text("""SELECT r.* FROM agent_action_requests r WHERE r.job_id IS NOT NULL AND r.created_at >= :since
+        AND NOT EXISTS (SELECT 1 FROM agent_work w WHERE w.kind = 'card_job' AND w.ref = CAST(r.id AS text))
+        ORDER BY r.created_at DESC LIMIT :limit"""), {"since": since, "limit": limit}).mappings().all()]
+
+
+def _baseline(now: datetime) -> bool:
+    """True when this call made the watcher's first pass ever: the marker row and a silent claim for every job that has already ended (no message,
+    no notice) are one transaction, so a second process either waits and sees them or is the one that made them.  Only jobs that end after this
+    are reported."""
+    from sqlalchemy.dialects.postgresql import insert
+    with SessionLocal() as db:
+        made = db.execute(insert(AgentWork).values(id=uuid.uuid4(), kind=BASELINE, ref="card_jobs", owner_hash="", summary="", status=DONE,
+                                                   started_at=now, ended_at=now).on_conflict_do_nothing(index_elements=["kind", "ref"])
+                          .returning(AgentWork.id)).first()
+        if made is None:
+            db.rollback()
+            return False
+        for request in _unclaimed(db, now - WATCH_WINDOW, 1000):
+            if JOB_STATES.get(_job_state(db, request)["status"]) in (DONE, FAILED):
+                _claim(db, request, status=DONE, reason="已在监视开始前结束，不再汇报", summary="baseline")
+        db.commit()
+    return True
 
 
 def report_job_ends(now: datetime | None = None) -> int:
     """The watcher pass (``background``, every minute): every job started from a card that has ended and has not been reported gets one short
-    assistant message in the conversation its card came from, and, when it ran over 60 seconds and nobody is in that conversation, the channel
-    notice (the same ``work`` source and daily cap as a chat turn's).  The claim is one ``agent_work`` row per request (kind and ref unique),
-    taken in the transaction that writes the message: two workers or a restart cannot post twice, and a pass that fails leaves it for the next.
-    Returns how many it posted."""
+    assistant message in the conversation its card came from, and, when it ran over 60 seconds (by the job's own start and end) and nobody is in that
+    conversation, the channel notice (the same ``work`` source and daily cap as a chat turn's).  The first pass ever only records a baseline (jobs
+    that ended before it are not reported).  The claim is one ``agent_work`` row per request (kind and ref unique), taken in the transaction that
+    writes the message: two workers or a restart cannot post twice, and a pass that fails leaves it for the next.  A request that can never be
+    posted (no card, a conversation that is gone or archived) is claimed as given up so it is not visited again.  Returns how many it posted."""
     now = now or datetime.now(UTC)
-    with SessionLocal() as db:
-        try:
-            requests = [dict(r) for r in db.execute(text("""SELECT * FROM agent_action_requests WHERE job_id IS NOT NULL AND created_at >= :since
-                                                            ORDER BY created_at LIMIT 100"""), {"since": now - WATCH_WINDOW}).mappings().all()]
-        except Exception:  # noqa: BLE001
-            db.rollback()
+    try:
+        if _baseline(now):
             return 0
-        done = set(db.scalars(select(AgentWork.ref).where(AgentWork.kind == CARD_JOB, AgentWork.ref.in_([str(r["id"]) for r in requests]))))
+        with SessionLocal() as db:
+            requests = _unclaimed(db, now - WATCH_WINDOW, WATCH_BATCH)
+    except Exception:  # noqa: BLE001 - the ledger or work table may be missing (a migration not run): nothing to watch
+        _log_once(("ledger", "watch"), "the work watcher could not read the action ledger")
+        return 0
     posted = 0
     for request in requests:
-        if str(request["id"]) in done:
-            continue
         try:
             with SessionLocal() as db:
+                consent = _card_of(db, request)
+                if consent is None:
+                    _claim(db, request, status=STOPPED, reason=GIVEN_UP + "不是从卡片发起的")
+                    db.commit()
+                    continue
                 state = _job_state(db, request)
                 outcome = JOB_STATES.get(state["status"])
-                consent = _card_of(db, request) if outcome in (DONE, FAILED) else None
-                if consent is not None and _post_end(db, request, state, outcome, consent, now):
+                if outcome in (DONE, FAILED) and _post_end(db, request, outcome, consent, now):
                     posted += 1
         except Exception:  # noqa: BLE001 - one job's trouble never stops the others; the next pass tries again
-            log.exception("reporting the end of action request %s failed", request.get("id"))
+            _log_once(("report", str(request.get("id"))), "reporting the end of action request %s failed", request.get("id"))
     return posted
 
 
-def _post_end(db, request: dict, state: dict, outcome: str, consent, now: datetime) -> bool:
-    from sqlalchemy.dialects.postgresql import insert
+def _post_end(db, request: dict, outcome: str, consent, now: datetime) -> bool:
     from . import agent_bots
     from .agent_tasks import line_busy
     try:
         conversation_id = uuid.UUID(str(consent.conversation_id))
     except ValueError:
+        _claim(db, request, status=STOPPED, reason=GIVEN_UP + "找不到发起的对话")
+        db.commit()
         return False
     agent_bots.ensure_default_bot(request["owner_hash"])   # before the row lock below: it moves conversations under the bot in a session of its own
     line = db.query(AgentConversation).filter(AgentConversation.id == conversation_id).with_for_update().first()
-    what = _what(consent, request)
-    if line is not None and line_busy(db, line.id, now):
+    if line is None or line.archived_at is not None or line.owner_hash != request["owner_hash"]:
+        _claim(db, request, status=STOPPED, reason=GIVEN_UP + "发起的对话已不在")
+        db.commit()
+        return False
+    if line_busy(db, line.id, now):
         db.rollback()
         return False                       # a turn is being answered there: the next pass
-    started = request["created_at"]
-    duration = now - (started if started.tzinfo else started.replace(tzinfo=UTC))
-    claim = db.execute(insert(AgentWork).values(id=uuid.uuid4(), kind=CARD_JOB, ref=str(request["id"]), owner_hash=request["owner_hash"],
-                                                conversation_id=conversation_id, summary=what, status=outcome,
-                                                reason=JOB_FAILURE if outcome == FAILED else None, started_at=started, ended_at=now)
-                       .on_conflict_do_nothing(index_elements=["kind", "ref"]).returning(AgentWork.id)).first()
+    what = _what(consent, request)
+    facts = _job_facts(db, request)
+    started, ended = facts.get("started") or request["created_at"], facts.get("ended")
+    reason, blocked = job_reason(facts.get("status"), facts.get("code")) if outcome == FAILED else (None, False)
+    claim = _claim(db, request, status=outcome, reason=reason, conversation_id=conversation_id, summary=what, started=started, ended=ended)
     if claim is None:
         db.rollback()
         return False                       # reported already (another worker, an earlier pass)
-    if line is None:
-        db.commit()                        # the conversation is gone: nothing to post into, and nothing to retry
-        return False
     recent = db.scalar(select(func.max(AgentMessage.created_at)).where(AgentMessage.conversation_id == line.id))
     reading = bool(db.scalar(select(func.count()).select_from(AgentWork).where(AgentWork.conversation_id == line.id, AgentWork.kind == CHAT_TURN,
                                                                              AgentWork.status == RUNNING))) \
         or (recent is not None and now - (recent if recent.tzinfo else recent.replace(tzinfo=UTC)) < QUIET_FOR)
-    _post_end_message(db, line, request, outcome, what)
-    if duration > LONG_JOB and not reading:
-        line_text = f"你让我做的「{what}」{'已完成' if outcome == DONE else '失败了'}。打开对话查看。"
-        if _send_notice(db, request["owner_hash"], line.id, line_text, now):
+    _post_end_message(db, line, request, outcome, what, reason, blocked)
+    # The notice: the job ran over 60 seconds by its own record (no end time on record: not counted as long) and nobody is in the conversation.
+    long_job = ended is not None and started is not None and ended - (started if started.tzinfo else started.replace(tzinfo=UTC)) > LONG_JOB
+    if long_job and not reading:
+        verdict = "已完成" if outcome == DONE else ("没有做成：" + reason if blocked else "失败了：" + reason)
+        if _send_notice(db, request["owner_hash"], line.id, f"你让我做的「{what}」{verdict}。打开对话查看。", now):
             db.execute(update(AgentWork).where(AgentWork.id == claim[0]).values(notified_at=now, reader_present=False))
     db.commit()
     return True
 
 
-def _post_end_message(db, line, request: dict, outcome: str, what: str) -> None:
-    """The end message: a short row opened like a task's post (so the web shows the pair) and the assistant's one sentence."""
+def _post_end_message(db, line, request: dict, outcome: str, what: str, reason: str | None, blocked: bool) -> None:
+    """The end message: a head row marked as the system's (``WORK_END_HEAD`` and the note routine posts carry, so neither the web nor the model takes it
+    for the owner's words) and the assistant's one sentence."""
     sequence = db.scalar(select(func.coalesce(func.max(AgentMessage.sequence), 0)).where(AgentMessage.conversation_id == line.id))
     turn = uuid.uuid4()
     if outcome == DONE:
         text_out = f"你让我做的「{what}」已完成。{JOB_PAGES.get(request['action'], '')}"
+    elif blocked:
+        text_out = f"你让我做的「{what}」没有做成：{reason}。"
     else:
-        text_out = f"你让我做的「{what}」失败了（{JOB_FAILURE}）。"
-    db.add(AgentMessage(conversation_id=line.id, turn_id=turn, sequence=sequence + 1, role="user", content=f"{WORK_END_HEAD}「{what}」", status="complete"))
+        text_out = f"你让我做的「{what}」失败了（{reason}）。可以让我重试。"
+    from .agent_tasks import POST_NOTE
+    db.add(AgentMessage(conversation_id=line.id, turn_id=turn, sequence=sequence + 1, role="user", content=f"{WORK_END_HEAD}「{what}」{POST_NOTE}", status="complete"))
     db.add(AgentMessage(conversation_id=line.id, turn_id=turn, sequence=sequence + 2, role="assistant", content=text_out, status="complete",
                         tool_calls={"work_end": {"request_id": str(request["id"]), "outcome": outcome}, "audit": {}}))
     line.updated_at = func.now()

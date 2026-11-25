@@ -26,7 +26,7 @@ const EmptyChat = lazy(() => import("./EmptyChat"));
 function ExternalDivider({ content }: { content: string }) {
   const { t } = useLocale();
   const source = externalSource(content);
-  const text = source.kind === "routine" ? `${t("例行任务")}「${source.name}」${source.time ? ` · ${source.time}` : ""}` : t("外部消息");
+  const text = source.kind !== "external" ? `${t(source.kind === "job" ? "任务" : "例行任务")}「${source.name}」${source.time ? ` · ${source.time}` : ""}` : t("外部消息");
   return <div data-testid="external-divider" data-source={source.kind} role="separator" aria-label={text} className="flex items-center gap-3 text-caption text-muted-foreground">
     <span className="h-px flex-1 bg-line" aria-hidden="true" /><span>{text}</span><span className="h-px flex-1 bg-line" aria-hidden="true" />
   </div>;
