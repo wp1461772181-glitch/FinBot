@@ -511,6 +511,23 @@ class OwnerView(Base):
     archived_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
+class ViewReview(Base):
+    """Stage 4d: the quarterly look back at one version of the owner's view (``app/view_review.py``).  ``text`` is the model's judgement as
+    it wrote it; ``unmatched_figures`` only names figures in it that are not in the input; ``input_snapshot`` is the code-built price and
+    quarter label the page shows as the basis.  Nothing here is ever written back to the view or the profile."""
+    __tablename__ = "view_reviews"
+    __table_args__ = (Index("ix_view_reviews_owner_view", "owner_hash", "view_id", sql_text("created_at DESC")),)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    view_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    symbol: Mapped[str] = mapped_column(String(12), nullable=False)
+    verdict: Mapped[str] = mapped_column(String(12), nullable=False)
+    text: Mapped[str] = mapped_column(String(400), nullable=False)
+    unmatched_figures: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    input_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class MemoryJob(Base):
     """The calendar of the memory jobs (app/memory_schedule.py): one row per (job, owner) with when it last ran and who holds it now.
     ``claimed_at``/``claimed_by`` are the lock two workers race for; a claim older than 30 minutes is dead (a restart cut it off)."""
