@@ -139,9 +139,9 @@ def test_a_good_proposal_is_stored_proposed_with_examples_and_the_bad_ones_are_d
 def test_interest_becomes_about_me_and_a_duplicate_of_an_active_item_is_dropped(monkeypatch):
     ids = _twelve()
     profile.add_manual_item(OWNER, kind="preference", text="提问时总是先要结论")
-    _model(monkeypatch, {"items": [_proposal(ids), _proposal(ids, "最近在看现金流", quotes=("现金流", "现金流"), kind="interest")]})
+    _model(monkeypatch, {"items": [_proposal(ids), _proposal(ids, "最近在看现金流", quotes=("公司的现金流", "公司的现金流"), kind="interest")]})
     # the second needs two distinct messages
-    second = _proposal(ids, "最近在看现金流", quotes=("现金流", "现金流"), kind="interest")
+    second = _proposal(ids, "最近在看现金流", quotes=("公司的现金流", "公司的现金流"), kind="interest")
     second["examples"][1]["message_id"] = ids[1]
     _model(monkeypatch, {"items": [_proposal(ids), second]})
     result = review.run(OWNER, NOW, SINCE)
@@ -222,7 +222,7 @@ def test_the_section_shows_at_most_eight_lines_and_only_proposals_make_a_block(m
     assert len(section) == 8 and len(shown) == 8
 
 
-def test_the_change_note_counts_confirmed_deleted_and_stale_ones_from_the_store(monkeypatch):
+def test_the_change_note_counts_only_what_he_confirmed_or_rejected_himself(monkeypatch):
     ids = _twelve()
     with SessionLocal() as db:
         def pattern(text, status, age_days=1, updated=NOW - timedelta(days=2)):
@@ -230,19 +230,53 @@ def test_the_change_note_counts_confirmed_deleted_and_stale_ones_from_the_store(
                                    created_at=NOW - timedelta(days=age_days), updated_at=updated)
             db.add(row)
         pattern("确认的", "active")
-        pattern("删掉的", "rejected")
-        pattern("忘掉的", "archived")
+        pattern("他删掉的", "proposed")
+        pattern("他忘掉的", "proposed")
+        pattern("被上限挤掉的", "archived")
         pattern("太久没回的", "proposed", age_days=61, updated=NOW - timedelta(days=61))
         pattern("还在等的", "proposed", age_days=10, updated=NOW - timedelta(days=10))
         db.commit()
+    by_text = {r.text: r for r in _items()}
+    assert profile.delete_item(OWNER, str(by_text["他删掉的"].id))
+    assert profile.archive_item(OWNER, profile.handle(by_text["他忘掉的"].id))
     _model(monkeypatch, {"items": [_proposal(ids)]})
     result = review.run(OWNER, NOW, SINCE)
     assert result["archived"] == 1
     text = _posted()[0]
-    assert "新记 1 条推测、确认了 1 条、删掉 2 条" in text and "已自动归档" in text
-    stale = next(r for r in _items() if r.text == "太久没回的")
-    waiting = next(r for r in _items() if r.text == "还在等的")
-    assert (stale.status, waiting.status) == ("archived", "proposed")
+    assert "新记 1 条推测、确认了 1 条、删掉 2 条" in text and "1 条超过 60 天没回应，已自动归档" in text
+    now_rows = {r.text: r for r in _items()}
+    assert (now_rows["太久没回的"].status, now_rows["还在等的"].status) == ("archived", "proposed")
+
+
+def test_a_deleted_proposal_keeps_none_of_his_words_only_a_fingerprint(monkeypatch):
+    ids = _twelve()
+    _model(monkeypatch, {"items": [_proposal(ids)]})
+    review.run(OWNER, NOW, SINCE)
+    [row] = _items(status="proposed")
+    assert profile.delete_item(OWNER, str(row.id)) is True
+    [gone] = _items()
+    assert gone.status == "rejected" and gone.quote == "" and not gone.examples and gone.source_message_id is None
+    assert "先说结论" not in gone.text and "结论" not in gone.text and gone.text.startswith(profile.FINGERPRINT_PREFIX)
+    assert "结论" not in "".join(profile.review_texts(OWNER))
+    _model(monkeypatch, {"items": [_proposal(ids)]})
+    again = review.run(OWNER, NOW + timedelta(days=30), SINCE)
+    assert again["proposed"] == 0 and again["dropped"] == 1
+    assert "提问时总是先要结论" not in review_calls[-1]["user"]
+
+
+def test_a_two_character_quote_is_not_an_example(monkeypatch):
+    ids = _say([f"的话我们{i} 先说结论 {i}" for i in range(12)])
+    short = _proposal(ids, "只靠两个字", quotes=("的话", "的话"))
+    short["examples"][1]["message_id"] = ids[1]
+    _model(monkeypatch, {"items": [short]})
+    assert review.run(OWNER, NOW, SINCE)["proposed"] == 0
+
+
+def test_a_run_whose_window_is_smaller_than_the_floor_is_skipped(monkeypatch):
+    _say([f"问题{i}" for i in range(9)])
+    _say([f"confirm:{i}" for i in range(5)])
+    _model(monkeypatch, {"items": []})
+    assert review.run(OWNER, NOW, SINCE)["outcome"] == "skipped" and review_calls == []
 
 
 def test_forget_and_deleting_work_on_proposed_items(monkeypatch):
@@ -251,7 +285,7 @@ def test_forget_and_deleting_work_on_proposed_items(monkeypatch):
     review.run(OWNER, NOW, SINCE)
     [row] = _items(status="proposed")
     assert profile.resolve_handle(OWNER, profile.handle(row.id), every_bot=True)["id"] == str(row.id)
-    assert profile.archive_item(OWNER, profile.handle(row.id))["status"] in ("archived", "rejected")
+    assert profile.archive_item(OWNER, profile.handle(row.id))["status"] == "rejected"
     assert profile.render_block(OWNER)[0] is None
     assert profile.delete_item(OWNER, str(row.id)) is True
     # a deleted proposal is not proposed again

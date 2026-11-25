@@ -15,6 +15,7 @@ own bot; the owner moves items between layers on the memory page.  Topic replace
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -36,6 +37,7 @@ TEXT_MAX_CHARS = 200
 QUOTE_MIN_CHARS = 2
 MAX_ACTIVE_ITEMS = 30
 MAX_BLOCK_BYTES = 2048
+FINGERPRINT_PREFIX = "~"   # a rejected proposal keeps only this and a hash of its folded text, never his words
 PROPOSED_HEADING = "我的推测（未经你确认）：只影响回答的详略和先后，不影响结论和数字"
 PROPOSED_LINES = 8
 PROPOSED_BYTES = 1200
@@ -252,7 +254,10 @@ def archive_item(owner_hash: str, item_id: str) -> dict | None:
         row = db.get(AgentProfileItem, uuid.UUID(found["id"]))
         if not row or row.owner_hash != owner_hash:
             return None
-        row.status = "archived"
+        if row.origin == "pattern":
+            _reject(row)
+        else:
+            row.status = "archived"
         db.commit()
         return serialize(row, _bot_names(db, owner_hash))
 
@@ -265,6 +270,18 @@ def _owned(db, owner_hash: str, item_id: str) -> AgentProfileItem | None:
     return row if row and row.owner_hash == owner_hash else None
 
 
+def fingerprint(text: str) -> str:
+    return FINGERPRINT_PREFIX + hashlib.sha256("".join(_plain(text).split()).encode()).hexdigest()[:32]
+
+
+def _reject(row: AgentProfileItem) -> None:
+    """He turned a review proposal down (deleted or forgot it): the row stays only as a hash of its text, so the next review does not propose it
+    again and the change note can count it.  Text, quote and examples are gone."""
+    if not row.text.startswith(FINGERPRINT_PREFIX):
+        row.text = fingerprint(row.text)
+    row.status, row.quote, row.examples, row.source_message_id, row.topic = "rejected", "", None, None, None
+
+
 def delete_item(owner_hash: str, item_id: str) -> bool:
     """The owner removed the item on the memory page: it is gone, not archived."""
     with SessionLocal() as db:
@@ -273,8 +290,7 @@ def delete_item(owner_hash: str, item_id: str) -> bool:
         if not row:
             return False
         if row.origin == "pattern":
-            # A proposal he turns down stays as a hidden mark, so the next review neither proposes it again nor loses count of it.
-            row.status = "rejected"
+            _reject(row)
             db.commit()
             return True
         db.delete(row)
@@ -470,10 +486,11 @@ MAX_PROPOSED = 20
 
 
 def review_texts(owner_hash: str) -> list[str]:
-    """What a proposal must not repeat: every active and proposed item, and the proposals he turned down or forgot."""
+    """What a proposal must not repeat and the model is shown: every active and proposed item and the earlier proposals still archived.
+    Ones he rejected are not here (only their fingerprints remain; ``add_proposed`` checks those)."""
     with SessionLocal() as db:
         rows = db.scalars(select(AgentProfileItem).where(
-            AgentProfileItem.owner_hash == owner_hash,
+            AgentProfileItem.owner_hash == owner_hash, AgentProfileItem.status != "rejected",
             (AgentProfileItem.status.in_(("active", "proposed"))) | (AgentProfileItem.origin == "pattern")))
         return list(dict.fromkeys(r.text for r in rows))
 
@@ -487,8 +504,9 @@ def add_proposed(owner_hash: str, *, kind: str, text: str, examples: list[dict],
     with SessionLocal() as db:
         _lock(db, owner_hash)
         known = {_plain(t) for t in db.scalars(select(AgentProfileItem.text).where(AgentProfileItem.owner_hash == owner_hash,
-                 (AgentProfileItem.status.in_(("active", "proposed"))) | (AgentProfileItem.origin == "pattern")))}
-        if _plain(text) in known:
+                 AgentProfileItem.status != "rejected", (AgentProfileItem.status.in_(("active", "proposed"))) | (AgentProfileItem.origin == "pattern")))}
+        rejected = set(db.scalars(select(AgentProfileItem.text).where(AgentProfileItem.owner_hash == owner_hash, AgentProfileItem.status == "rejected")))
+        if _plain(text) in known or fingerprint(text) in rejected:
             return None
         first = examples[0]
         row = AgentProfileItem(owner_hash=owner_hash, kind=kind, topic=None, text=text, origin="pattern", status="proposed",
@@ -515,11 +533,11 @@ def archive_stale_proposed(owner_hash: str, now: datetime, days: int = 60) -> in
 
 
 def review_counts(owner_hash: str, since: datetime | None) -> dict:
-    """The change note's numbers from the table: proposals he confirmed since ``since`` (active, origin pattern), and ones he deleted or
-    forgot (rejected, or archived by forget)."""
+    """The change note's numbers from the table: proposals he confirmed since ``since`` (active, origin pattern), and ones he himself deleted
+    or forgot (rejected).  Rows archived by the 20-item limit or the 60-day rule are not his doing and are not counted."""
     with SessionLocal() as db:
         rows = db.scalars(select(AgentProfileItem).where(AgentProfileItem.owner_hash == owner_hash, AgentProfileItem.origin == "pattern")).all()
     def after(row):
         return since is None or (row.updated_at is not None and row.updated_at > since)
     return {"confirmed": sum(1 for r in rows if r.status == "active" and after(r)),
-            "deleted": sum(1 for r in rows if r.status in ("rejected", "archived") and after(r))}
+            "deleted": sum(1 for r in rows if r.status == "rejected" and after(r))}

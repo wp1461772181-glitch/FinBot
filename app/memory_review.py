@@ -23,6 +23,7 @@ from . import agent_profile as profile
 from .agent_chat_models import AgentConversation, AgentMessage
 from .agent_recall import owner_message_clause
 from .database import SessionLocal
+from .owner_views import QUOTE_MIN_CHARS   # an example quote is at least as long as a view's: a two-character quote could "show" anything
 
 log = logging.getLogger(__name__)
 
@@ -124,7 +125,8 @@ def _checked(item, by_id: dict) -> dict | None:
             return None
         message = by_id.get(str(example.get("message_id") or "").strip().lower())
         quote = " ".join(str(example.get("quote") or "").split())
-        if message is None or not profile.quote_in_message(quote, message["content"]):
+        if (message is None or len("".join(quote.split())) < QUOTE_MIN_CHARS
+                or not profile.quote_in_message(quote, message["content"])):
             return None
         kept.append({"message_id": message["id"], "quote": quote[:profile.TEXT_MAX_CHARS], "date": message["date"]})
     if len({e["message_id"] for e in kept}) < MIN_EXAMPLES:
@@ -154,7 +156,11 @@ def _post(owner_hash: str, text: str, now: datetime) -> bool:
         if line is None:
             return False
         work.post_system_message(db, line, JOB_NAME, text, {"memory_review": True, "audit": {}})
-        work._send_notice(db, owner_hash, line.id, "每月整理：我对你的了解多了几条推测，打开对话或记忆页确认。", now, source="memory", cap=1)
+        try:
+            with db.begin_nested():     # a notice that cannot be queued must not take the message with it
+                work._send_notice(db, owner_hash, line.id, "每月整理：我对你的了解多了几条推测，打开对话或记忆页确认。", now, source="memory", cap=1)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("memory review notice not queued: %s", type(exc).__name__)
         db.commit()
     return True
 
@@ -165,9 +171,11 @@ def run(owner_hash: str, now: datetime, last_run_at: datetime | None) -> dict:
     messages = owner_messages_since(owner_hash, last_run_at)
     if messages < floor():
         return {"outcome": "skipped", "reason": f"这段时间你只说了 {messages} 句话，太少了，下次再整理。", "skip": "too_few", "messages": messages}
+    window = _window(owner_hash, last_run_at)
+    if len(window) < floor():     # the count above includes button presses and empty rows the window leaves out
+        return {"outcome": "skipped", "reason": f"这段时间你只说了 {len(window)} 句话，太少了，下次再整理。", "skip": "too_few", "messages": len(window)}
     counts = profile.review_counts(owner_hash, last_run_at)
     archived = profile.archive_stale_proposed(owner_hash, now, ARCHIVE_DAYS)
-    window = _window(owner_hash, last_run_at)
     by_id = {m["id"]: m for m in window}
     payload = {"messages": [{"id": m["id"], "date": m["date"], "text": m["content"][:MESSAGE_VIEW_CHARS]} for m in window],
                "known": profile.review_texts(owner_hash)}
