@@ -8,13 +8,31 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from app import agent_skills, agent_tasks
 from app import role_templates as rt
+from app.agent_chat_models import AgentBot, AgentConversation, AgentMessage, AgentProfileItem, AgentSkill, AgentTask, RoleTemplateApplication
 from app.agent_tool_catalog import definitions
 from app.agent_profile import KINDS, TEXT_MAX_CHARS
+from app.database import Base, SessionLocal, engine
 
 APP = Path(__file__).resolve().parent.parent / "app"
 IDS = ("short_term", "dca", "fund_manager")
+
+
+TABLES = [AgentProfileItem.__table__, AgentBot.__table__, AgentConversation.__table__, AgentMessage.__table__, AgentSkill.__table__,
+          AgentTask.__table__, RoleTemplateApplication.__table__]
+
+
+@pytest.fixture
+def tables(disposable_database):
+    Base.metadata.create_all(engine, tables=TABLES)
+    with SessionLocal() as db:
+        for table in (RoleTemplateApplication, AgentTask, AgentSkill, AgentProfileItem, AgentBot):
+            db.query(table).delete()
+        db.commit()
+    return None
 
 
 # --- task 1: the data ----------------------------------------------------------------------------------------------------
@@ -71,7 +89,7 @@ def test_every_skill_passes_the_skill_validator_and_names_only_catalog_tools():
             assert checked["name"] == skill["name"]
 
 
-def test_every_brief_is_accepted_by_the_task_validator(monkeypatch):
+def test_every_brief_is_accepted_by_the_task_validator(tables):
     for template in rt.TEMPLATES.values():
         for brief in template["briefs"]:
             assert len(brief["instruction"]) <= agent_tasks.INSTRUCTION_MAX_CHARS
