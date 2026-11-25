@@ -106,6 +106,12 @@ class AgentProfileItem(Base):
     # ([{message_id, quote, date}]) and the run that made it.  Added to older tables by ``agent_profile.ensure_review_columns``.
     examples: Mapped[list | None] = mapped_column(JSON, nullable=True)
     review_run: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    # Stage 4c: when the owner's own words last bore the item out (not use: ``last_used_at`` is that), when the quarterly settle archived it and
+    # why, and when it became long-term.  Added to older tables by ``agent_profile.ensure_seen_columns`` (which also backfills last_seen_at).
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AgentConversationRecall(Base):
