@@ -10,6 +10,7 @@ Behind the switch ``FINBOT_HELPER`` (``on``; off by default: nothing about a tur
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -26,7 +27,8 @@ from . import inbox as inboxes
 DELEGATE = "delegate"
 SYSTEM_HEAD = "你是 FinBot 的小助手"
 HELPER_MAX_STEPS = 6       # model steps (the closing step after a cap is one more)
-HELPER_SECONDS = 120
+HELPER_SECONDS = 120       # a hard cap: each model call and tool step is cut at the time left
+CLOSING_SECONDS = 20       # the closing step's own allowance after a cap
 MAX_HELPERS = 3            # ``delegate`` calls run in one step of a turn
 BRIEF_MAX = 4000
 FAILED_HINT = "小助手没有做成，可以自己查。"
@@ -115,7 +117,22 @@ def _owner_spoke(parent) -> bool:
     return box is not None and (box.has_fresh() or box.stopping)
 
 
-def _arguments(parent, args) -> tuple[str, list | None] | dict:
+def helper_schemas(schemas: list[dict], wanted) -> list[dict]:
+    """The helper's tool list from the parent's: no kernel tools, only ``wanted`` when given, and without the ``say`` / ``item`` fields (they are for talking to the user)."""
+    kept = []
+    for schema in schemas:
+        name = schema["function"]["name"]
+        if name in OWN_TOOLS or (wanted is not None and name not in wanted):
+            continue
+        shown = copy.deepcopy(schema)
+        properties = shown["function"].get("parameters", {}).get("properties", {})
+        for key in ("say", "item"):
+            properties.pop(key, None)
+        kept.append(shown)
+    return kept
+
+
+def check(parent, args) -> tuple[str, list | None] | dict:
     """(brief, schemas of the helper's tools) or the refusal to give back before anything runs."""
     if not isinstance(args, dict) or set(args) - {"brief", "tools"}:
         return tools.error("invalid_arguments")
@@ -127,14 +144,14 @@ def _arguments(parent, args) -> tuple[str, list | None] | dict:
     allowed = [s for s in parent.schemas if s["function"]["name"] not in OWN_TOOLS and s["function"]["name"] in parent.tool_names]
     if wanted is not None and any(name not in {s["function"]["name"] for s in allowed} for name in wanted):
         return {**tools.error("tool_not_in_bot_scope"), "hint": "tools 只能从你自己被提供的读取类工具里选，写入、提问、delegate 不行。"}
-    return brief.strip(), [s for s in allowed if wanted is None or s["function"]["name"] in wanted]
+    return brief.strip(), helper_schemas(allowed, wanted)
 
 
 async def run(parent, call_id: str, args: dict) -> dict:
     """One ``delegate`` call.  Returns the tool result the turn sees; never raises (but for a cancelled turn)."""
     from . import loop
     from .toolrun import mark_timeline, run_step_tools
-    checked = _arguments(parent, args)
+    checked = check(parent, args)
     if isinstance(checked, dict):
         return checked
     brief, schemas = checked
@@ -182,38 +199,54 @@ async def run(parent, call_id: str, args: dict) -> dict:
 
 
 async def _work(loop, child, parent, deadline: float, state: dict, sources: list[int], used: list[str], note, run_step_tools) -> str:
-    """The helper's steps; returns its report and sets ``state["complete"]``.  A model failure raises."""
-    written = ""
+    """The helper's steps; returns its report and sets ``state["complete"]``.  A model failure in an ordinary step raises.
+
+    The report is the text of the final step (one without tool calls) or of the closing step; what a step wrote beside its tool calls is not one."""
     reason = None
     for _ in range(HELPER_MAX_STEPS):
         if _owner_spoke(parent):
             reason = "owner"      # the turn is to take his message at once: the helper stops here, with what it has read
             break
-        if time.monotonic() >= deadline:
+        left = deadline - time.monotonic()
+        if left <= 0:
             reason = "time"
             break
-        message = await loop._call_model(child, child.schemas)         # not ``_model_step``: no backup switch inside the helper
-        text = (message.get("content") or "").strip()
-        written = text or written
-        calls = message.get("tool_calls")
-        if not calls:
-            state["complete"] = bool(text)
-            return text or _built_report(sources)
-        child.messages.append(message)
-        sentence = progress.plain_sentence([(c.get("function") or {}).get("name") or "" for c in calls])      # the kernel's phrase: never the helper's own words
-        if sentence:
-            await child.emit({"event": "narration", "text": sentence, "system": True})
-        results = await run_step_tools(child, calls)
+        try:
+            message = await asyncio.wait_for(loop._call_model(child, child.schemas), left)    # not ``_model_step``: no backup switch inside the helper
+            calls = message.get("tool_calls")
+            if not calls:
+                text = (message.get("content") or "").strip()
+                state["complete"] = bool(text)
+                return text or _built_report(sources)
+            child.messages.append(message)
+            sentence = progress.plain_sentence([(c.get("function") or {}).get("name") or "" for c in calls])      # the kernel's phrase: never the helper's own words
+            if sentence:
+                await child.emit({"event": "narration", "text": sentence, "system": True})
+            try:
+                results = await asyncio.wait_for(run_step_tools(child, calls), max(deadline - time.monotonic(), 0.001))
+            except TimeoutError:
+                child.messages.pop()          # its tool calls got no results: the closing step must not see them
+                raise
+        except TimeoutError:
+            reason = "time"
+            break
         child.messages.extend(results)
         note(results)
         used.extend(name for name in ((c.get("function") or {}).get("name") for c in calls) if name and name not in used)
     else:
         reason = "steps"
-    if reason != "owner":
-        child.messages.append({"role": "system", "content": loop.CAP_NOTE})      # one closing step: answer from what it has
-        closing = await loop._call_model(child, child.schemas)
-        written = (closing.get("content") or "").strip() or written
-    return written or _built_report(sources)
+    if reason == "owner":
+        return _built_report(sources)
+    child.messages.append({"role": "system", "content": loop.CAP_NOTE})      # one closing step, itself bounded: answer from what it has
+    try:
+        closing = await asyncio.wait_for(loop._call_model(child, child.schemas), CLOSING_SECONDS)
+    except TimeoutError:
+        return _built_report(sources)
+    except Exception:
+        if not sources:
+            raise
+        return _built_report(sources)
+    return (closing.get("content") or "").strip() or _built_report(sources)
 
 
 def _record(parent, child, call_id: str, started: float, complete: bool, used: list[str]) -> None:

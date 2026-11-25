@@ -364,13 +364,6 @@ async def _settle_delegate(run, item: _Call) -> None:
     _done(run, item)
 
 
-def _counts_as_read(item: _Call) -> bool:
-    """A helper's result is one read result for the turn when it came back ok with at least one source."""
-    result = item.result or {}
-    data = result.get("data")
-    return bool(result.get("ok") and isinstance(data, dict) and data.get("sources"))
-
-
 async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     """Execute one step's tool calls; return one tool message per call, in call order."""
     from ..agent_chat_stream import bounded_tool_result
@@ -394,8 +387,9 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         elif getattr(run, "is_helper", False) and item.name not in run.tool_names:
             item.result = tools.error("tool_not_in_bot_scope")      # a helper has only the reads it was given: never ``act``, ``ask``, ``delegate``…
         elif item.name == helper.DELEGATE:
-            if item.name not in run.tool_names:
-                item.result = tools.error("tool_not_in_bot_scope")
+            refused = helper.check(run, item.args) if item.name in run.tool_names else tools.error("tool_not_in_bot_scope")
+            if isinstance(refused, dict):
+                item.result = refused           # refused before it runs: no slot, not a read
             elif len(delegates) >= helper.MAX_HELPERS:
                 item.result = {"ok": False, "error_code": "too_many_helpers", "hint": f"一步里最多同时交给小助手 {helper.MAX_HELPERS} 件事；这件下一步再交，或者自己查。"}
             else:
@@ -485,7 +479,7 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             gained += 1
         _done(run, item)
         mark_progress()
-    run.read_results += gained + sum(1 for item in delegates if _counts_as_read(item))
+    run.read_results += gained + len(delegates)      # a helper that ran has seen outside text, whatever it came back with
     messages = []
     for item in items:
         _done(run, item)       # a call that was never run (bad arguments, not in scope) is settled too

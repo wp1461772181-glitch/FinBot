@@ -8,6 +8,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -22,11 +23,11 @@ from app.database import SessionLocal
 from app.kernel import helper, loop, prompt, toolrun
 from app.kernel import inbox as inboxes
 from tests.test_agent_bots import KEY_A, OWNER_HASH, owner  # noqa: F401  (fixture)
-from tests.test_kernel_loop import FakeConsent, call, env, fake_consent, make_context, step  # noqa: F401  (fixtures by name)
+from tests.test_kernel_loop import FakeConsent, act_call, call, env, fake_consent, make_context, step  # noqa: F401  (fixtures by name)
 
 # What the schemas and the system text hashed to before the helper existed (sorted keys, ensure_ascii off): the switch off must not move them.
 GOLDEN = {
-    "owner": ("ef13f592f246ecfa08c0baf121810922406daa964110d83277edbb120f75b6e3", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
+    "owner": ("f3001193e845ce51e64f45fdd5697698b610da4d9df7d21662ddc6b788cbc789", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
     "guest": ("e40ff82abfb0e4af0af0ffd3c66737c01c11b4fc5dc5394df34d39a03a80db13", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
 }
 
@@ -61,6 +62,8 @@ class Model:
         queue = self.helpers[messages[1]["content"]] if is_helper else self.parent
         item = queue.pop(0)
         item = item(messages) if callable(item) else item
+        if isinstance(item, dict) and item.get("sleep"):
+            await asyncio.sleep(item["sleep"])
         if isinstance(item, BaseException):
             raise item
         for piece in item["pieces"]:
@@ -218,11 +221,15 @@ def test_a_delegate_result_is_unnumbered_and_counts_as_one_read_for_the_parent(o
         return {"ok": True, "data": {"report": "r", "sources": [1], "steps": 1, "complete": True}} if args["brief"] == "good" else \
                {"ok": False, "error_code": "helper_failed", "hint": "h", "data": {"sources": []}}
     on.monkeypatch.setattr(helper, "run", fake)
-    for brief, expected in (("good", 1), ("bad", 0)):
+    for brief, expected in (("good", 1), ("bad", 1)):      # a helper that ran counts whatever it came back with (it has seen outside text)
         run.read_results = 0
         messages = asyncio.run(toolrun.run_step_tools(run, [delegate("d", brief)]))
         assert run.read_results == expected and json.loads(messages[0]["content"])["data"].get("sources") is not None
         assert run.citations == []
+    run.read_results = 0
+    for refused in ({}, {"brief": "x", "tools": ["act"]}):      # refused before running: not a read
+        asyncio.run(toolrun.run_step_tools(run, [call("d", "delegate", refused)]))
+    assert run.read_results == 0
 
 
 def test_at_most_three_helpers_run_in_a_step_the_rest_are_refused_without_running(on, by_symbol):
@@ -539,3 +546,93 @@ def test_the_backstage_lists_each_helper_in_one_line_and_does_not_expect_chat_ro
     assert backstage_api._expected_chat_calls(audit, audit["calls"]) == 3
     assert backstage_api._expected_chat_calls({"model_calls": 4, "calls": [{}] * 4}, [{}] * 4) == 4
     assert backstage_api._expected_chat_calls({"calls": [{}] * 2}, [{}] * 2) == 2 and backstage_api._helpers({}) == []
+
+
+# --- fix round 1 -----------------------------------------------------------------------------------------------------------------
+
+def test_a_helper_that_ran_a_web_read_and_then_failed_still_puts_a_later_tier_1_write_on_the_card(on, by_symbol, fake_consent):
+    failing = provider.ProviderFailure("provider_error", stage="decision", retryable=False)
+    model = install(on, [step(calls=[delegate("d1", "上网看看")]),
+                         step(calls=[act_call("a1", "add_to_research_queue", {"symbol": "NVDA"})]), step(text="已放进确认卡。")],
+                    {"上网看看": [step(calls=[call("h1", "web_research", {"query": "NVDA"})]), failing]})
+    result, _ = run_turn(make_context(conversation_id="conv"))
+    assert reports(model.parent_calls()[1]["messages"])["d1"]["error_code"] == "helper_failed"
+    assert fake_consent.executed == [] and len(fake_consent.proposed) == 1          # it went onto the card, not out at once
+    assert result["status"] == "waiting_for_input" and result["pending_request"]
+
+
+def test_a_delegate_refused_before_running_does_not_make_a_later_tier_1_write_wait(on, fake_consent):
+    model = install(on, [step(calls=[call("d1", "delegate", {"brief": "x", "tools": ["act"]})]),
+                         step(calls=[act_call("a1", "add_to_research_queue", {"symbol": "NVDA"})]), step(text="好")])
+    run_turn(make_context(conversation_id="conv"))
+    assert model.helper_calls() == [] and len(fake_consent.executed) == 1       # ran at once
+
+
+def test_a_refused_delegate_takes_no_slot(on, by_symbol):
+    briefs = ["查一", "查二", "查三"]
+    calls = [call("bad", "delegate", {"brief": "x", "tools": ["act"]}), *(delegate(f"d{n}", b) for n, b in enumerate(briefs))]
+    model = install(on, [step(calls=calls), step(text="好")], {b: [step(text="无")] for b in briefs})
+    run_turn()
+    got = reports(model.parent_calls()[1]["messages"])
+    assert got["bad"]["error_code"] == "tool_not_in_bot_scope" and all(got[f"d{n}"]["ok"] for n in range(3))
+
+
+def test_the_time_cap_is_hard_a_slow_model_call_ends_in_a_bounded_closing_step_and_a_built_report(on, by_symbol):
+    on.monkeypatch.setattr(helper, "HELPER_SECONDS", 0.3)
+    on.monkeypatch.setattr(helper, "CLOSING_SECONDS", 0.3)
+    model = install(on, [step(calls=[delegate("d1", "慢")]), step(text="好")],
+                    {"慢": [step(calls=[call("h1", "query_financials", {"symbol": "NVDA"})]), {**step(text="太慢了"), "sleep": 5}, {**step(text="也太慢"), "sleep": 5}]})
+    began = time.monotonic()
+    result, _ = run_turn()
+    assert time.monotonic() - began < 3
+    got = reports(model.parent_calls()[1]["messages"])["d1"]
+    assert got == {"ok": True, "data": {"report": "还没写总结，已拿到的资料见 [1]。", "sources": [1], "steps": got["data"]["steps"], "complete": False}}
+    assert result["status"] == "succeeded"
+
+
+def test_a_slow_tool_step_is_cut_and_the_closing_step_sees_a_valid_message_list(on):
+    on.monkeypatch.setattr(helper, "HELPER_SECONDS", 0.3)
+
+    async def slow(name, args, context, *, emit=None, page_chars=None):
+        await asyncio.sleep(5)
+    on.monkeypatch.setattr(tools, "invoke", slow)
+    model = install(on, [step(calls=[delegate("d1", "慢工具")]), step(text="好")],
+                    {"慢工具": [step(calls=[call("h1", "query_financials", {"symbol": "NVDA"})]), step(text="没查到")]})
+    run_turn()
+    closing = model.helper_calls()[-1]["messages"]
+    assert closing[-1]["content"] == loop.CAP_NOTE and all(m.get("tool_calls") is None for m in closing if m["role"] == "assistant")
+    got = reports(model.parent_calls()[1]["messages"])["d1"]["data"]
+    assert got["report"] == "没查到" and got["complete"] is False
+
+
+def test_mid_step_chatter_is_not_a_report_and_a_failed_closing_step_gives_the_built_report(on, by_symbol):
+    on.monkeypatch.setattr(helper, "HELPER_MAX_STEPS", 1)
+    failing = provider.ProviderFailure("provider_error", stage="decision", retryable=False)
+    model = install(on, [step(calls=[delegate("d1", "x"), delegate("d2", "y")]), step(text="好")],
+                    {"x": [step(text="让我搜一下", calls=[call("h1", "query_financials", {"symbol": "NVDA"})]), failing],
+                     "y": [step(text="让我搜一下", calls=[call("h2", "query_financials", {"symbol": "AMD"})]), step(text="")]})
+    run_turn()
+    got = reports(model.parent_calls()[1]["messages"])
+    assert got["d1"]["ok"] and got["d1"]["data"]["complete"] is False and got["d1"]["data"]["report"].startswith("还没写总结")
+    assert got["d2"]["data"]["report"].startswith("还没写总结") and "让我搜一下" not in json.dumps(got, ensure_ascii=False)
+
+
+def test_a_failed_closing_step_without_any_source_is_helper_failed(on):
+    on.monkeypatch.setattr(helper, "HELPER_SECONDS", 0)
+    failing = provider.ProviderFailure("provider_error", stage="decision", retryable=False)
+    model = install(on, [step(calls=[delegate("d1", "x")]), step(text="好")], {"x": [failing]})
+    run_turn()
+    assert reports(model.parent_calls()[1]["messages"])["d1"]["error_code"] == "helper_failed"
+
+
+def test_the_helper_is_given_the_read_schemas_without_say_and_item(on):
+    model = install(on, [step(calls=[delegate("d1", "x")]), step(text="好")], {"x": [step(text="无")]})
+    run_turn()
+    seen = {}
+
+    async def spy(*args, **kwargs):
+        seen["schemas"] = args[4]
+        return {"usage": {}}, {"role": "assistant", "content": "无"}
+    schemas = helper.helper_schemas(loop._tool_schemas(make_context()), None)
+    assert schemas and all(not {"say", "item"} & set(s["function"]["parameters"].get("properties", {})) for s in schemas)
+    assert names(schemas) == [n for n in names(loop._tool_schemas(make_context())) if n not in helper.OWN_TOOLS]
