@@ -112,7 +112,8 @@ def _json_items(raw: str) -> list | None:
 
 def _checked(item, by_id: dict) -> dict | None:
     """The proposal as it may be stored, or None: a text of at most 80 characters, and 2 to 5 examples, each an exact quote of the message
-    it cites, that message his own and inside the window, at least two different messages."""
+    it cites, that message his own and inside the window, at least two different messages.  An example that fails is dropped on its own;
+    the proposal survives if at least two different messages still back it."""
     if not isinstance(item, dict):
         return None
     text = " ".join(str(item.get("text") or "").split())
@@ -122,12 +123,12 @@ def _checked(item, by_id: dict) -> dict | None:
     kept = []
     for example in examples[:MAX_EXAMPLES]:
         if not isinstance(example, dict):
-            return None
+            continue
         message = by_id.get(str(example.get("message_id") or "").strip().lower())
         quote = " ".join(str(example.get("quote") or "").split())
         if (message is None or len("".join(quote.split())) < QUOTE_MIN_CHARS
                 or not profile.quote_in_message(quote, message["content"])):
-            return None
+            continue
         kept.append({"message_id": message["id"], "quote": quote[:profile.TEXT_MAX_CHARS], "date": message["date"]})
     if len({e["message_id"] for e in kept}) < MIN_EXAMPLES:
         return None

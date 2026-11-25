@@ -264,6 +264,17 @@ def test_a_deleted_proposal_keeps_none_of_his_words_only_a_fingerprint(monkeypat
     assert "提问时总是先要结论" not in review_calls[-1]["user"]
 
 
+def test_one_bad_example_is_dropped_on_its_own_and_the_proposal_kept_when_two_messages_still_back_it(monkeypatch):
+    ids = _twelve()
+    three = _proposal(ids, "三条里一条是编的", quotes=("先说结论 0", "先说结论 1", "这句话他从没说过"))
+    three["examples"][2]["message_id"] = ids[2]
+    _model(monkeypatch, {"items": [three]})
+    result = review.run(OWNER, NOW, SINCE)
+    assert result["proposed"] == 1
+    [row] = _items()
+    assert [e["quote"] for e in row.examples] == ["先说结论 0", "先说结论 1"]
+
+
 def test_a_two_character_quote_is_not_an_example(monkeypatch):
     ids = _say([f"的话我们{i} 先说结论 {i}" for i in range(12)])
     short = _proposal(ids, "只靠两个字", quotes=("的话", "的话"))
