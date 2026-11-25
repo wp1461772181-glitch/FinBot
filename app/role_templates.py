@@ -168,6 +168,8 @@ PART_ORDER = ("skill", "memory", "brief", "usual")
 REUSE_SKILL = "已有同名技能，沿用你的"
 REUSE_MEMORY = "已有，沿用"
 REUSE_USUAL = "已在常用技能里"
+USUAL_STUCK = "常用技能列表里有一条已经失效的技能，没能改动这个列表；请在 bot 设置里先去掉失效的那条"
+USUAL_ADD_STUCK = "没有加进常用技能：现有的常用技能里有一条已经失效，请在 bot 设置里先去掉它"
 TASK_NAME_TAKEN = "已有同名任务"
 GONE = "已经不在了"
 ZONE_NAMES = {"America/New_York": "美东时间", "Asia/Shanghai": "北京时间"}
@@ -524,7 +526,7 @@ def apply(owner_hash: str, template_id: str, bot_id=None, leave_out=None) -> dic
                     agent_bots.update_bot(owner_hash, target["bot_id"], {"skills": merged})
                 except (agent_skills.SkillError, agent_bots.BotError) as exc:
                     for entry, _ in added:
-                        refuse(entry, str(exc), "没有加进常用技能")
+                        refuse(entry, str(exc), USUAL_ADD_STUCK if str(exc) == "unknown_skill" else "没有加进常用技能")
                 else:
                     for entry, skill_id in added:
                         made_one(entry, skill_id, "usual_added")
@@ -583,17 +585,21 @@ def list_applications(owner_hash: str) -> list[dict]:
     return listed
 
 
-def _drop_from_usual(owner_hash: str, bot_id, ids: set[str]) -> None:
+def _drop_from_usual(owner_hash: str, bot_id, ids: set[str]) -> bool:
+    """Take ``ids`` off the bot's usual skills.  False only when the list could not be changed (it holds something that no longer validates:
+    it is left exactly as it is rather than guessed at) so the caller does not report them as removed."""
     bot = _default_bot(owner_hash) if bot_id is None else agent_bots.get_bot(owner_hash, str(bot_id))
     if not bot or not ids:
-        return
+        return True
     current = list(bot.get("skills") or [])
     remaining = [x for x in current if x not in ids]
-    if remaining != current:
-        try:
-            agent_bots.update_bot(owner_hash, bot["id"], {"skills": remaining})
-        except (agent_skills.SkillError, agent_bots.BotError):
-            pass        # his own list holds something that no longer validates: leave it as it is rather than guess
+    if remaining == current:
+        return True
+    try:
+        agent_bots.update_bot(owner_hash, bot["id"], {"skills": remaining})
+    except (agent_skills.SkillError, agent_bots.BotError):
+        return False
+    return True
 
 
 def undo(owner_hash: str, application_id, leave_out=None) -> dict:
@@ -624,7 +630,12 @@ def undo(owner_hash: str, application_id, leave_out=None) -> dict:
             kept.append(shown)
         else:
             todo.append(shown)
-    _drop_from_usual(owner_hash, bot_id, {i["id"] for i in todo if i["part"] in ("skill", "usual")})
+    if not _drop_from_usual(owner_hash, bot_id, {i["id"] for i in todo if i["part"] in ("skill", "usual")}):
+        # His usual-skills list holds an entry that no longer validates, so it could not be changed: the usual skills stay on it and are said
+        # to stay (a skill this application made is still deleted below).
+        stuck = [i for i in todo if i["part"] == "usual"]
+        kept += [{**i, "reason": USUAL_STUCK} for i in stuck]
+        todo = [i for i in todo if i["part"] != "usual"]
     deleters = {"memory": agent_profile.delete_item, "brief": agent_tasks.delete_task, "skill": agent_skills.delete_skill}
     for shown in todo:
         deleter = deleters.get(shown["part"])

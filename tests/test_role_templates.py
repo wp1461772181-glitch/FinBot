@@ -598,3 +598,37 @@ def test_route_errors(owner, client):
     assert other.status_code == 404 and other.json()["detail"] == "application_not_found"
     assert client.post(f"/agent-chat/role-templates/applications/{uuid.uuid4()}/undo", headers=H, json={}).status_code == 404
     assert counts()["items"] == 4
+
+
+# --- from the independent review: a usual-skills list that holds an entry which no longer validates ------------------------------------
+
+def _poison_usual():
+    """A skill he put on 「助理」's usual list and then deleted: the list now holds an id no check accepts, so no write of the list goes through."""
+    default = default_bot()
+    ghost = agent_skills.create_skill(OWNER_HASH, {"name": "很快删掉", "description": "d", "body": "1. x", "allowed_tools": ["calculate"]})
+    with SessionLocal() as db:
+        row = db.get(AgentBot, default.id)
+        row.skills = list(row.skills or []) + [ghost["id"]]       # written straight: the service would refuse it, which is the point
+        db.commit()
+    agent_skills.delete_skill(OWNER_HASH, ghost["id"])
+    return ghost["id"]
+
+
+def test_apply_says_why_the_usual_skills_were_not_added_when_his_list_holds_a_dead_entry(owner):
+    _poison_usual()
+    done = rt.apply(OWNER_HASH, "dca")
+    stuck = [e for e in done["skipped"] if e["part"] == "usual"]
+    assert {e["key"] for e in stuck} == {"dca_skill_review", "财报速读"} and {e["code"] for e in stuck} == {"unknown_skill"}
+    assert all("已经失效" in e["reason"] for e in stuck)
+    assert counts()["items"] == 4 and counts()["skills"] == 1            # the rest of the template still went in
+
+
+def test_undo_does_not_claim_to_remove_usual_skills_it_could_not_take_off_a_list_it_could_not_change(owner):
+    done = rt.apply(OWNER_HASH, "dca")
+    ghost = _poison_usual()
+    undone = rt.undo(OWNER_HASH, done["application"]["id"])
+    assert [(k["part"], k["label"]) for k in undone["kept"]] == [("usual", "财报速读")] and "已经失效" in undone["kept"][0]["reason"]
+    assert "财报速读" not in [r["label"] for r in undone["removed"] if r["part"] == "usual"]
+    assert {r["part"] for r in undone["removed"]} == {"memory", "brief", "skill"}          # everything else was taken back, the skill too
+    assert ghost in (default_bot().skills or [])                                              # his list is exactly as it was: nothing guessed
+
