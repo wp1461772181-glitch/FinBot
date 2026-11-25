@@ -1,6 +1,9 @@
 import { ApiError, agentPath, ownerHeaders } from "./base";
 
-export type OwnerViewVersion = { id: string; symbol: string; text: string; quote: string; status: "active" | "superseded" | "dropped" | "archived"; status_label: string; archived_reason?: string | null; created_at: string | null; ended_at: string | null; conversation_id: string | null; turn_id: string | null };
+export type OwnerViewReviewBasis = { price_then?: { date: string | null; close: number | null } | null; price_now?: { date: string | null; close: number | null } | null; change_pct?: number | null; quarter_label?: string | null };
+/** 回头看 (the quarterly look back): the model's judgement is stored as it wrote it; `unmatched_figures` only names figures the system could not find in what it gave. */
+export type OwnerViewReview = { verdict: "held" | "not_held" | "mixed" | "too_early" | "unclear" | string; verdict_label: string; text: string; unmatched_figures: string[]; basis: OwnerViewReviewBasis | null; created_at: string | null };
+export type OwnerViewVersion = { id: string; symbol: string; text: string; quote: string; status: "active" | "superseded" | "dropped" | "archived"; status_label: string; archived_reason?: string | null; created_at: string | null; ended_at: string | null; conversation_id: string | null; turn_id: string | null; review?: OwnerViewReview | null };
 
 /** The owner's active view of each company (memory page), newest first.  Owner only: a guest gets 403. */
 export async function listOwnerViews(signal?: AbortSignal): Promise<OwnerViewVersion[]> {

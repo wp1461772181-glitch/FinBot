@@ -2553,5 +2553,15 @@
   "恢复失败，请重试。": "Restore failed, please try again.",
   "这一层的记忆已满，先删掉一条再恢复。": "This layer's memory is full; delete one first, then restore.",
   "这家公司已有一条当前看法，先撤回它再恢复": "This company already has a current view; withdraw it first, then restore.",
-  "已有一条同类的记忆在用，先忘掉它再恢复": "A similar memory is already in use; forget it first, then restore."
+  "已有一条同类的记忆在用，先忘掉它再恢复": "A similar memory is already in use; forget it first, then restore.",
+  "回头看": "Looking back",
+  "成立": "Held up",
+  "没有成立": "Did not hold",
+  "部分成立": "Partly held",
+  "还早": "Too early",
+  "说不准": "Can't tell",
+  "说的时候": "When said",
+  "现在": "Now",
+  "最新一季": "Latest quarter",
+  "这几个数字不在系统给的资料里，请自己核对：": "These figures are not in the data the system gave; please check them yourself: "
 }
