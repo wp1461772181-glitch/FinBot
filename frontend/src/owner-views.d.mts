@@ -1,4 +1,4 @@
-import type { OwnerViewVersion } from "./api/owner-views";
+import type { OwnerViewReview, OwnerViewReviewBasis, OwnerViewVersion } from "./api/owner-views";
 export function statusPhrase(status: string): string;
 export function monthDay(value: string | null | undefined, timeZone?: string): { month: number; day: number } | null;
 export function dayLabel(value: string | null | undefined, locale?: string): string;
@@ -6,3 +6,8 @@ export function splitVersions(versions: OwnerViewVersion[] | null | undefined): 
 export function hasAnyView(versions: OwnerViewVersion[] | null | undefined): boolean;
 export function versionSpan(version: Pick<OwnerViewVersion, "created_at" | "ended_at">, locale?: string): string;
 export function archivedCurrent(versions: OwnerViewVersion[] | null | undefined): OwnerViewVersion | null;
+export function reviewOf(version: Pick<OwnerViewVersion, "review"> | null | undefined): OwnerViewReview | null;
+export function verdictBadge(review: Pick<OwnerViewReview, "verdict" | "verdict_label"> | null | undefined): { label: string; kind: "success" | "failure" | "neutral" };
+export function changeLabel(value: number | null | undefined): string;
+export function basisLine(basis: OwnerViewReviewBasis | null | undefined, words?: { then?: string; now?: string; quarter?: string }): string;
+export function strayFigures(review: Pick<OwnerViewReview, "unmatched_figures"> | null | undefined): string[];
