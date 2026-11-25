@@ -1602,7 +1602,7 @@ async function chatInterject(ctx) {
     await hand.push(1, "merged", { into_turn: first }); await hand.close(1);
     await page.locator("[data-testid=delivery-note][data-kind=merged]", { hasText: "已并入回答" }).waitFor({ timeout: 10000 });
     assert(await page.locator("#agent-draft").isEnabled() && (await page.locator("[data-testid=stop]").count()) === 1, "the first answer stopped being live when the message was taken in");
-    const order = await page.locator("[data-testid=thread] > [data-testid=message]").evaluateAll(list => list.map(el => `${el.getAttribute("data-role")}:${(el.textContent || "").includes("顺便比 AMD") ? "merged" : ""}`));
+    const order = await page.locator("[data-testid=thread] > [data-testid=message]").evaluateAll(list => list.map(el => `${el.getAttribute("data-role")}:${el.getAttribute("data-role") === "user" && (el.textContent || "").includes("顺便比 AMD") ? "merged" : ""}`));
     assert(order.join(",").endsWith("user:,user:merged,assistant:"), `the merged message is not above the answer it joined: ${order.join(",")}`);
     await hand.push(0, "delta", { text: "440 亿，AMD 70 亿。" }); await hand.push(0, "done", { status: "complete", turn_id: first, thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(0);
     await page.locator("[data-testid=reply-quote]", { hasText: /NVDA 营收 \/ \[hand-fed\] 顺便比 AMD/ }).waitFor({ timeout: 10000 });
