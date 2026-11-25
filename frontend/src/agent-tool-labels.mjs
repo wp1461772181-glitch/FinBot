@@ -69,6 +69,7 @@ export const TOOL_LABELS = {
   delete_routine: "删除例行任务",
   recall_conversations: "回想往事",
   read_past_conversation: "读取往日对话",
+  read_turn: "翻看之前那一轮",
   notify_telegram: "发 Telegram 通知",
   use_skill: "使用技能",
   save_skill: "保存技能",

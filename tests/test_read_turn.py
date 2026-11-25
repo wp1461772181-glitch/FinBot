@@ -150,7 +150,7 @@ def test_kernel_offers_it_to_owner_and_guest_and_the_old_engine_never():
     from app.kernel import loop, progress, toolrun
     assert definitions()["read_turn"].level == "read" and definitions()["read_turn"].guest
     assert "read_turn" in KERNEL_ONLY and "read_turn" in loop.READ_TOOLS and "read_turn" in toolrun._UNNUMBERED
-    assert progress.PHRASES["read_turn"] == "翻看之前那一轮" if hasattr(progress, "PHRASES") else True
+    assert progress.TOOL_PHRASES["read_turn"] == "翻看之前那一轮"
     names = lambda items: {i["function"]["name"] for i in items}
     assert "read_turn" in names(schemas(owner=True, kernel=True)) and "read_turn" in names(schemas(owner=False, kernel=True))
     assert "read_turn" not in legacy_definitions() and "read_turn" not in names(schemas(owner=True)) and "read_turn" not in names(schemas(owner=False))

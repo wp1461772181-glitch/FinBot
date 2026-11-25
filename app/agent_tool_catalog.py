@@ -191,6 +191,8 @@ class ReadPastArgs(Args):
     conversation_id:str=Field(pattern=r'^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$',description='A conversation_id that recall_conversations returned.')
     limit:int=Field(default=3,ge=1,le=10,description='How many of its newest messages to read.')
     include_user:bool=Field(default=False,description='Also the user\'s questions; by default only the replies.')
+class ReadTurnArgs(Args):
+    turn_id:str=Field(pattern=r'^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$',description='A turn_id from the earlier-conversation summary or from a citation marker.')
 class ForgetArgs(Args):
     item_id:str=Field(pattern=r'^#?[0-9a-f]{8}$',description='The #handle of a line of the user profile.')
 class UseSkillArgs(Args):
@@ -418,6 +420,7 @@ EXTRA=(
  ('delete_routine',DeleteRoutineArgs,'reversible','Propose deleting one routine when the USER asks; its past briefs stay. Owner confirmation required.'),
  ('recall_conversations',RecallArgs,'read','Find the user\'s earlier conversations (when the user says 上次/之前/我们聊过, or you need to know what was discussed before): which day, which conversation, a short summary and a link. Owner only. '+(_RECALL_TAIL_SW2 if flag('FINBOT_SW2_MEMORY_PRELOAD',True) else _RECALL_TAIL_SW1)),
  ('read_past_conversation',ReadPastArgs,'read','Read the text of one past conversation that recall_conversations found (its newest replies, e.g. an earlier news analysis), from any bot\'s line. Owner only. '+(_READ_TAIL_SW2 if flag('FINBOT_SW2_MEMORY_PRELOAD',True) else _READ_TAIL_SW1)),
+ ('read_turn',ReadTurnArgs,'read','Read one earlier turn of THIS conversation as it was said: the user\'s own message(s) and the final answer, with its time and the ids of the turns just before and after it. Use it when the earlier-conversation summary points at a turn and you need what was actually said, not the summary. Memory, not evidence: a figure in it is not a source; a citation behind it is fetched with read_history_citation. Long texts are cut and marked.'),
  ('forget',ForgetArgs,'reversible','Propose forgetting one line of the user profile by its #handle, when the USER asks to forget or stop applying it. Owner confirmation required.'),
  ('use_skill',UseSkillArgs,'skill','Load the full steps and output format of one listed skill and follow them. While it is active only the tools it allows are offered (never more than this turn already has); a write it allows still needs the owner\'s confirmation card.'),
  ('save_skill',SaveSkillArgs,'reversible','Propose saving a skill to the skill library when the USER asks for one in any wording (存成技能, 把这个 skill 新增一下, 写一个……的 skill): write its steps from this turn\'s tool calls or from what the user described. Owner confirmation required; the card offers 保存并启用 or 存为草稿, and nothing is saved before the owner presses one.'),
@@ -446,7 +449,7 @@ OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines'
 
 # Stage 3a: what only the kernel knows.  The old engine's classifier, its request_action schema, its tool list and its prompts stay as they
 # were before the branch (tests/test_x_search.py compares them): these names are not in them, and the three tools 3a widened show the old schema.
-KERNEL_ONLY=frozenset({'list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','record_view','drop_view'})
+KERNEL_ONLY=frozenset({'list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','record_view','drop_view','read_turn'})
 # Every base registry entry is read-only; write names come from catalogue levels.
 WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'} and name not in KERNEL_ONLY)]
 class RequestActionArgs(Args):
@@ -469,6 +472,7 @@ _EVIDENCE_CLASS: dict[str, str] = {
     'query_market_quote': 'subject_row',
     'recall_conversations': 'memory',
     'read_past_conversation': 'memory',
+    'read_turn': 'memory',
     'calculate': 'derived',
     'calculate_formula': 'derived',
 }

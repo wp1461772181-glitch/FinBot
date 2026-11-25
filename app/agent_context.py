@@ -118,6 +118,8 @@ MEMORY_NOTE = (MEMORY_MARKER + " of older turns, written by this system and not 
                "incomplete or wrong, it is not evidence and not something to cite; verified sources come "
                "only from this turn's tool results. A {turn_id, ordinal} marker on a line says where it came "
                "from: pass it to read_history_citation to fetch the saved original before relying on it):")
+# Kernel turns only (the old engine's note stays as it was): the summary points at turns, the turns hold what was said.
+MEMORY_NOTE_KERNEL_TAIL = "; the summary is an index, and for the details of a turn it points at, read that turn with read_turn(turn_id)"
 CATALOGUE_MARKER = "Earlier citations (system-written locator hints"
 CATALOGUE_NOTE = (CATALOGUE_MARKER + "; not evidence and not the user's words. Use read_history_citation(turn_id, ordinal) to retrieve a verified source and cite its new number. answers_back=1 means the answer immediately before this question. A bare [n] defaults to answers_back=1; if that answer lacks it but an earlier answer has it, ask_user to clarify. Retrieve parents before any derived source):")
 
@@ -559,7 +561,7 @@ def select_segments(segments: list[dict], budget: int, limit: int = MAX_SUMMARY_
     return chosen
 
 
-def summary_message(segments: list[dict]) -> dict | None:
+def summary_message(segments: list[dict], *, kernel: bool = False) -> dict | None:
     """Layer 3 as the one note that carries it, or None.
 
     It is sent *after* the user's own message, not as a second system message at the head: the head
@@ -574,7 +576,8 @@ def summary_message(segments: list[dict]) -> dict | None:
             lines.append(f"{index}. {text}")
     if not lines:
         return None
-    return {"role": "user", "content": MEMORY_NOTE + "\n" + "\n".join(lines)}
+    note = MEMORY_NOTE[:-2] + MEMORY_NOTE_KERNEL_TAIL + "):" if kernel else MEMORY_NOTE
+    return {"role": "user", "content": note + "\n" + "\n".join(lines)}
 
 
 def is_memory_message(message: dict) -> bool:

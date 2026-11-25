@@ -30,7 +30,7 @@ from .toolrun import mark_timeline, number_attached, run_step_tools
 
 READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_market_quote", "query_sec_filings",
     "search_knowledge", "web_research", "search_configured_news", "search_x", "calculate", "calculate_formula",
-    "query_portfolio", "recall_conversations", "read_past_conversation", "read_history_citation",
+    "query_portfolio", "recall_conversations", "read_past_conversation", "read_history_citation", "read_turn",
     "query_latest_forecast", "query_materials", "query_research_faq", "query_material_analysis", "search_material_analysis",
     "query_alerts", "query_holdings_overview", "read_workspace", "query_system_status", "query_research_queue", "list_routines", "list_models", "list_work")
 logger = logging.getLogger(__name__)

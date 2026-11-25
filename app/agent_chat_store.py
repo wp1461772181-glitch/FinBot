@@ -145,6 +145,50 @@ async def load_turn_citation(conversation_id: str, credential: str, turn_id: str
     return {"ok": True, "citation": dict(matches[0]), "origin": {"turn_id": str(tid), "ordinal": ordinal}}
 
 
+READ_TURN_CHARS = 12000
+
+
+def _cut_text(text: str) -> tuple[str, bool]:
+    """A stored text for ``read_turn``: whole, or its first 12,000 characters and a mark saying how long it was."""
+    text = text or ""
+    if len(text) <= READ_TURN_CHARS: return text, False
+    return text[:READ_TURN_CHARS] + f"\n…（已截断，原文共 {len(text)} 字）", True
+
+
+async def read_turn(conversation_id: str, credential: str, turn_id: str) -> dict | None:
+    """One earlier turn of this conversation as it was said: the owner's message(s) of the turn in order, its final answer, its time and the
+    turns just before and after.  None when the conversation is not this credential's or has no such turn."""
+    try:
+        cid, tid = uuid.UUID(str(conversation_id)), uuid.UUID(str(turn_id))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    async with Session() as s:
+        owned = await s.scalar(select(AgentConversation.id).where(AgentConversation.id == cid, AgentConversation.owner_hash == owner_hash(credential)))
+        if owned is None: return None
+        rows = (await s.scalars(select(AgentMessage).where(AgentMessage.conversation_id == cid, AgentMessage.role.in_(("user", "assistant")))
+                                .order_by(AgentMessage.sequence))).all()
+    first: dict = {}
+    for m in rows:
+        first.setdefault(m.turn_id, m.sequence)
+    if tid not in first: return None
+    order = sorted(first, key=first.get)
+    at = order.index(tid)
+    mine = [m for m in rows if m.turn_id == tid]
+    users = [m for m in mine if m.role == "user"]
+    final = next((m for m in reversed(mine) if m.role == "assistant" and (m.content or "").strip()
+                  and not (isinstance(m.tool_calls, dict) and m.tool_calls.get("calls"))), None)
+    named = layers.reply_to_of({"tool_calls": final.tool_calls} if final is not None else None)
+    if named:     # the answer names the messages it answered; a message it did not answer is not part of this turn's story
+        answered = [m for m in users if str(m.id) in named]
+        users = answered or users
+    texts = [_cut_text(m.content) for m in users]
+    answer = _cut_text(final.content) if final is not None else (None, False)
+    stamp = (users[0] if users else mine[0]).created_at
+    return {"turn_id": str(tid), "time": stamp.isoformat() if stamp else None, "user_messages": [t for t, _ in texts], "answer": answer[0],
+            "cut": any(c for _, c in texts) or answer[1], "previous_turn_id": str(order[at - 1]) if at else None,
+            "next_turn_id": str(order[at + 1]) if at + 1 < len(order) else None}
+
+
 async def citation_remembered(conversation_id: str, credential: str, turn_id: str, ordinal: int) -> bool:
     """Whether a {turn_id, ordinal} may be fetched although the turn is no longer in the visible catalogue:
     the newest rolling summary names it as a source, or the turn lies inside what the summary covers."""

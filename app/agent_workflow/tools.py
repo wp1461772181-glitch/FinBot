@@ -131,6 +131,13 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
                                'key_set':bool(catalog._key_for(item)),'is_default':item['name']==default} for item in listed],
                     'roles':{role:({'model':chosen[role],'in_catalog':chosen[role] in names} if chosen.get(role) else {'model':None,'note':notes[role]}) for role in roles.ROLES}}
         return result([await asyncio.to_thread(overview)],'model catalog')
+    if name=='read_turn':
+        # One earlier turn of THIS conversation, as said; a guest reads its own conversation's only.  Memory, not evidence.
+        from .. import agent_recall as recall
+        from ..agent_chat_store import read_turn
+        value=await read_turn(context.conversation_id,context.identity_credential,args['turn_id'])
+        if value is None:return {**error('turn_not_found'),'hint':'这个 turn_id 不在本会话里；用摘要或引用标记里给出的 turn_id。'}
+        return {**result([value],'earlier turn'),'label':recall.LABEL,'note':'这是那一轮当时说过的原话，只用来知道说过什么；它不是证据，不编号，数字和事实仍要在本轮重新读取。'}
     if name=='read_history_citation':
         from .history_citations import read_history_citation
         return await read_history_citation(args,context,**({'page_chars':page_chars} if page_chars is not None else {}))

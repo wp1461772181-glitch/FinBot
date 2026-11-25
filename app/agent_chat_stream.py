@@ -726,7 +726,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
    messages.extend(layers.unfinished_messages(context.get("unfinished"),turn) if fp_flag("FINBOT_FP3_UNFINISHED_TURNS",True) else [])
    skill_block,active_skill,question=await _turn_skills(x_chat_session,bot,payload.message,bool(payload.pending_request_id),anchored)
    messages.append({"role":"user","content":question})
-   memory_note=layers.summary_message(context.get("segments",[]))
+   memory_note=layers.summary_message(context.get("segments",[]),kernel=anchored)
    if memory_note:messages.append(memory_note)
    catalogue=layers.render_citation_catalogue(context.get("catalogue",[]))
    if catalogue:messages.append(catalogue)

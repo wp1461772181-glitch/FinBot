@@ -381,7 +381,7 @@ def test_other_tools_are_untouched():
 def test_the_kernel_sees_the_3a_additions_and_widenings():
     from app.agent_tool_catalog import KERNEL_ONLY, definitions, legacy_definitions
     full, old = definitions(), legacy_definitions()
-    assert set(full) - set(old) == set(KERNEL_ONLY) and len(KERNEL_ONLY) == 11
+    assert set(full) - set(old) == set(KERNEL_ONLY) and len(KERNEL_ONLY) == 12
     widened = {n for n in old if full[n].description != old[n].description or full[n].args_schema is not old[n].args_schema}
     assert widened == {"analyze", "create_routine", "update_routine"}
     assert list(full).index("list_models") == list(full).index("search_x") + 1
