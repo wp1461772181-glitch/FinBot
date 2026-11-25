@@ -843,8 +843,11 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
      if event.get("reason") in {"retrieval_unavailable","zero_evidence","web_page_excerpt_unavailable","missing_source_coverage","publisher_date_unavailable"} or str(event.get("reason","")).startswith(("requested_","weak_")):
       await asyncio.to_thread(_record_low_confidence,payload.message,cid,turn,owner_hash(x_chat_session),event["reason"])
      ended=event.get("status")
-     # A turn the owner stopped in the middle (3c) keeps what it had written and the sentence it ended with, as a cancelled answer.
-     await append_message(cid,turn,"assistant",text_out,tool_calls=protocol,status="failed" if ended=="failed" else "cancelled" if ended=="stopped" else "complete")
+     audit_of=event.get("audit") or {}
+     # A stopped turn in which a write ran is stored complete: the next model call must see that the write happened (it would propose it again).
+     wrote=audit_of.get("write_outcome")=="executed" or any(isinstance(w,dict) and w.get("outcome")=="done" for w in audit_of.get("writes") or [])
+     # A turn the owner stopped in the middle (3c) keeps what it had written and the sentence it ended with: a cancelled answer, or a complete one when a write ran.
+     await append_message(cid,turn,"assistant",text_out,tool_calls=protocol,status="failed" if ended=="failed" else "cancelled" if ended=="stopped" and not wrote else "complete")
      settled=True
      outcome=(work.FAILED,WORK_FAILED_REASON) if ended=="failed" else (work.STOPPED,WORK_STOPPED_BY_MESSAGE) if ended=="stopped" else (work.DONE,None)
      if work_open:

@@ -946,3 +946,62 @@ def test_m_a_message_id_needs_four_characters_to_name_a_message():
     message = inboxes.Message(id="abcd1234-0000", text="x", turn_id="m", shown=True)
     box.put(message)
     assert box.find("abc") is None and box.find("abcd") is message
+
+
+def test_a_stopped_turn_that_executed_a_write_is_stored_complete_so_the_next_call_sees_it(lab, fake_consent):
+    from app import agent_context as layers
+    started, gate, count = asyncio.Event(), asyncio.Event(), []
+
+    async def model(provider_name, model_name, key, messages, schemas, **kwargs):
+        count.append(1)
+        if len(count) == 1:
+            return await reply("", [act_call("w1", "add_to_research_queue", {"symbol": "NVDA"})])(kwargs["on_text"])
+        if len(count) == 2:
+            await kwargs["on_text"]("已加入研究队列，")
+            started.set()
+            await gate.wait()
+            await kwargs["on_text"]("接着")
+        return await reply("", [call("h1", inboxes.HANDLE, {"message_id": _note_id(messages)[0], "decision": "stop", "note": "好的。"})])(kwargs["on_text"])
+    lab.model(model)
+
+    async def scenario():
+        reading_a = asyncio.ensure_future(collect(await lab.send("把 NVDA 加进研究队列")))
+        await started.wait()
+        reading_b = asyncio.ensure_future(collect(await lab.send("算了")))
+        await asyncio.sleep(0.02)
+        gate.set()
+        return await reading_a, await reading_b
+    a, b = _scenario(scenario())
+    assert dict(blocks(a))["done"]["status"] == "stopped"
+    [(turn, answer, kwargs)] = lab.answers()
+    assert kwargs["status"] == "complete" and answer.endswith("好的。")
+    with SessionLocal() as db:
+        assert db.scalars(select(work.AgentWork).where(work.AgentWork.ref == turn)).one().status == "stopped"
+    rows = [{"role": args[2], "content": args[3], "status": kw.get("status", "complete"), "turn_id": args[1], "sequence": i, "tool_calls": kw.get("tool_calls")}
+            for i, (args, kw) in enumerate(a for a in lab.stored if len(a[0]) >= 4)]
+    rows = [r for r in rows if r["turn_id"] == turn and not (isinstance(r["tool_calls"], dict) and r["tool_calls"].get("calls")) and r["role"] != "tool"]
+    assert layers.complete_turns(rows) and "已加入研究队列" in layers.project_turn_history(layers.complete_turns(rows)[0])[-1]["content"]
+
+
+def test_a_stopped_turn_that_executed_nothing_stays_cancelled(lab):
+    started, gate, count = asyncio.Event(), asyncio.Event(), []
+
+    async def model(provider_name, model_name, key, messages, schemas, **kwargs):
+        count.append(1)
+        if len(count) == 1:
+            await kwargs["on_text"]("NVDA 的")
+            started.set()
+            await gate.wait()
+            await kwargs["on_text"]("营收")
+        return await reply("", [call("h1", inboxes.HANDLE, {"message_id": _note_id(messages)[0], "decision": "stop"})])(kwargs["on_text"])
+    lab.model(model)
+
+    async def scenario():
+        reading_a = asyncio.ensure_future(collect(await lab.send("NVDA 的营收")))
+        await started.wait()
+        reading_b = asyncio.ensure_future(collect(await lab.send("算了")))
+        await asyncio.sleep(0.02)
+        gate.set()
+        await reading_a, await reading_b
+    _scenario(scenario())
+    assert lab.answers()[0][2]["status"] == "cancelled"
