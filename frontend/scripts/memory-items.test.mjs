@@ -81,3 +81,15 @@ test("examples are shown with a short date; bad rows are dropped", async () => {
     [{ key: "a", quote: "先说结论", date: "2026-11-03" }]);
   assert.deepEqual(exampleLines({ examples: null }), []);
 });
+
+test("settled items are tagged, the last-seen line and the archive note are quiet text with Beijing dates", async () => {
+  const { isSettled, seenLine, archiveNote } = await import("../src/memory-items.mjs");
+  assert.equal(isSettled({ settled_at: "2026-11-20T00:00:00+00:00" }), true);
+  assert.equal(isSettled({ settled_at: null }), false);
+  assert.equal(isSettled(undefined), false);
+  assert.equal(seenLine({ last_seen_at: "2026-11-07T17:00:00Z" }), "最近一次印证：11月8日");
+  assert.equal(seenLine({ last_seen_at: "2026-11-07T17:00:00Z" }, "en-US"), "Last borne out: 11/8");
+  assert.equal(seenLine({ last_seen_at: null }), "");
+  assert.deepEqual(archiveNote({ archived_at: "2026-11-07T17:00:00Z", archived_reason: " 很久没出现 " }), { reason: "很久没出现", date: "11月8日 归档" });
+  assert.deepEqual(archiveNote({ archived_at: null, archived_reason: null }), { reason: "", date: "" });
+});

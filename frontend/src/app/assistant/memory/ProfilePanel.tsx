@@ -9,9 +9,9 @@ import { EmptyState } from "@/components/state/EmptyState";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { DelayedSkeleton, Skeleton } from "@/components/state/Skeleton";
 import { confirm } from "@/components/state/confirm";
-import { confirmProfileItem, createProfileItem, deleteProfileItem, listProfileItems, updateProfileItem, type ProfileItem } from "../../../api/memory";
+import { confirmProfileItem, createProfileItem, deleteProfileItem, listProfileItems, restoreProfileItem, updateProfileItem, type ProfileItem } from "../../../api/memory";
 import { useLocale } from "../../../i18n";
-import { exampleLines, layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers, proposedItems } from "../../../memory-items.mjs";
+import { archiveNote, exampleLines, isSettled, layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers, proposedItems, seenLine } from "../../../memory-items.mjs";
 import { useLoad } from "../../use-load";
 import { KINDS, KIND_LABELS, MAX_TEXT, canSaveEdit, isInferred, scopeChoices } from "./memory-view.mjs";
 
@@ -24,7 +24,7 @@ type Layer = { key: string; label: string; items: ProfileItem[] };
  * Every request is the old page's (src/api/memory.ts): the same bodies, which memory-items.mjs makes.
  */
 export function ProfilePanel() {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const data = useLoad(signal => listProfileItems(signal));
   const items = data.data?.items ?? null, bots = data.data?.bots ?? [];
   const [error, setError] = useState<unknown>(null);
@@ -100,11 +100,13 @@ export function ProfilePanel() {
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <span data-testid="memory-kind"><StatusBadge kind="neutral" className="h-5">{kindText(item.kind)}</StatusBadge></span>
             <span data-testid="memory-origin" data-inferred={isInferred(item) ? "true" : "false"}><StatusBadge kind={isInferred(item) ? "opinion" : "neutral"} className="h-5">{t(originLabel(item.origin))}</StatusBadge></span>
+            {isSettled(item) && <span data-testid="memory-settled"><StatusBadge kind="neutral" className="h-5">{t("长期")}</StatusBadge></span>}
             {!mine && <p className="min-w-0 flex-1 basis-60 text-body font-medium text-ink [overflow-wrap:anywhere]">{item.text}</p>}
           </div>
           {mine && <Input value={editing.text} maxLength={MAX_TEXT} aria-label={t("编辑")} data-testid="memory-edit-input" autoFocus className="max-md:h-11" onChange={event => setEditing({ id: item.id, text: event.target.value })}
             onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter") { event.preventDefault(); void saveEdit(); } if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setEditing(null); } }} />}
           {item.quote?.trim() && <blockquote data-testid="memory-quote" className="material-fact m-0 px-3 py-2 font-quote text-small text-ink">“{item.quote}”</blockquote>}
+          {seenLine(item, locale) && <p data-testid="memory-seen" className="m-0 font-mono text-caption text-muted-foreground">{t(seenLine(item, locale))}</p>}
           <div className="flex flex-wrap items-center gap-2">
             <Select value={item.bot_id ?? GLOBAL} disabled={busy === item.id} onValueChange={value => { const target = value === GLOBAL ? null : value; void run(item.id, () => updateProfileItem(item.id, { bot_id: target })); }}>
               <SelectTrigger size="sm" aria-label={`${t("范围")} · ${item.text}`} data-testid="memory-scope" className="w-44 max-md:h-11"><SelectValue /></SelectTrigger>
@@ -147,12 +149,14 @@ export function ProfilePanel() {
       <CollapsibleTrigger className="group/fold flex min-h-11 w-full items-center gap-2 rounded-md px-3 text-left text-body text-ink outline-none focus-visible:ring-2 focus-visible:ring-ring">
         <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/fold:rotate-90 motion-reduce:transition-none" />{t("已归档")}<span className="font-mono text-caption text-muted-foreground">· {archived.length}</span>
       </CollapsibleTrigger>
-      <CollapsibleContent><ul className="m-0 flex list-none flex-col gap-2 border-t border-line p-3">{archived.map(item => <li key={item.id} data-testid="memory-archived-item" className="flex min-w-0 flex-wrap items-center gap-2">
+      <CollapsibleContent><ul className="m-0 flex list-none flex-col gap-2 border-t border-line p-3">{archived.map(item => { const note = archiveNote(item, locale); return <li key={item.id} data-testid="memory-archived-item" data-item={item.id} className="flex min-w-0 flex-wrap items-center gap-2">
         <StatusBadge kind="neutral" className="h-5">{kindText(item.kind)}</StatusBadge>
         <StatusBadge kind="neutral" className="h-5">{item.bot_id ? (item.bot_name ?? t("已删除的 bot")) : t(layerLabel(item))}</StatusBadge>
         <span className="min-w-0 flex-1 basis-48 text-small text-ink-2 [overflow-wrap:anywhere]">{item.text}</span>
+        {(note.reason || note.date) && <p data-testid="memory-archived-note" className="m-0 w-full basis-full text-caption text-muted-foreground">{note.reason && <span data-testid="memory-archived-reason">{t(note.reason)}</span>}{note.reason && note.date && " · "}{note.date && <span className="font-mono">{t(note.date)}</span>}</p>}
+        <Button type="button" size="sm" variant="outline" data-testid="memory-restore" disabled={busy === item.id} aria-label={`${t("恢复")} · ${item.text}`} className="max-md:h-11" onClick={() => void run(item.id, () => restoreProfileItem(item.id))}>{t("恢复")}</Button>
         <Button type="button" size="sm" variant="ghost" disabled={busy === item.id} aria-label={`${t("删除")} · ${item.text}`} className="text-danger max-md:h-11" onClick={event => void remove(item, event.currentTarget)}>{t("删除")}</Button>
-      </li>)}</ul></CollapsibleContent>
+      </li>; })}</ul></CollapsibleContent>
     </Collapsible>}
   </div>;
 }

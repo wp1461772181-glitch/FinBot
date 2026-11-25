@@ -1,3 +1,5 @@
+import { dayLabel } from "./owner-views.mjs";
+
 // Pure helpers of the memory page (profile items and past conversations), kept apart so node tests read them.
 
 const ORIGIN_LABELS = { explicit: "你说的", inferred: "推断", manual: "你写的", pattern: "你确认的推测" };
@@ -13,6 +15,22 @@ export function profileGroups(items) {
   const byAge = (a, b) => rank(a) - rank(b) || String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
   const list = Array.isArray(items) ? items : [];
   return { active: list.filter(i => i.status === "active").sort(byAge), archived: list.filter(i => i.status !== "active" && i.status !== "proposed").sort(byAge) };
+}
+
+/** True for a confirmed guess the quarterly settle made long-term (the page tags it 「长期」). */
+export function isSettled(item) { return Boolean(item?.settled_at); }
+
+/** The quiet line 「最近一次印证：M月D日」 (English: "Last borne out: M/D"); "" when the item has no last_seen_at. */
+export function seenLine(item, locale = "zh-CN") {
+  const day = dayLabel(item?.last_seen_at, locale);
+  if (!day) return "";
+  return locale === "en-US" ? `Last borne out: ${day}` : `最近一次印证：${day}`;
+}
+
+/** The archived row's own line: the reason the settle gave, and the day it was set aside (「M月D日 归档」 / "archived M/D"); either may be missing. */
+export function archiveNote(item, locale = "zh-CN") {
+  const day = dayLabel(item?.archived_at, locale);
+  return { reason: String(item?.archived_reason ?? "").trim(), date: day ? (locale === "en-US" ? `archived ${day}` : `${day} 归档`) : "" };
 }
 
 /** The monthly review's guesses waiting for his answer (status proposed), newest first.  Rejected ones never come from the server. */

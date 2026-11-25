@@ -5,3 +5,4 @@ export function dayLabel(value: string | null | undefined, locale?: string): str
 export function splitVersions(versions: OwnerViewVersion[] | null | undefined): { active: OwnerViewVersion | null; earlier: OwnerViewVersion[] };
 export function hasAnyView(versions: OwnerViewVersion[] | null | undefined): boolean;
 export function versionSpan(version: Pick<OwnerViewVersion, "created_at" | "ended_at">, locale?: string): string;
+export function archivedCurrent(versions: OwnerViewVersion[] | null | undefined): OwnerViewVersion | null;

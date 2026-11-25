@@ -28,7 +28,7 @@ export const SKILLS = {
 };
 
 const item = (n, fields) => ({ id: `pf000000-0000-4000-8000-${String(n).padStart(12, "0")}`, handle: `P${n}`, kind: "preference", topic: null, text: "", origin: "explicit", quote: "", status: "active", scope: "global", bot_id: null, bot_name: null,
-  created_at: daysAgo(30), updated_at: daysAgo(20), last_used_at: daysAgo(1), ...fields });
+  created_at: daysAgo(30), updated_at: daysAgo(20), last_used_at: daysAgo(1), last_seen_at: daysAgo(5), archived_at: null, archived_reason: null, settled_at: null, settled_label: "", ...fields });
 export const PROFILE = {
   items: [
     item(1, { kind: "about_me", text: "长期持有美股科技股，偏好以季度为周期做决策。", quote: "我主要持有美股科技，按季度看。" }),
@@ -51,6 +51,12 @@ export const REVIEW_ITEMS = [
     examples: [example(6, "周末我有空，今晚把这几家都过一遍", 10), example(7, "晚上回来看，你先整理好", 6), example(8, "这个周六再细看，先放着", 2)] }),
 ];
 export const CONFIRMED_GUESS = item(24, { kind: "preference", topic: "回答详略", text: "财报类问题先给一屏摘要，细节放后面。", origin: "pattern", status: "active", quote: "财报先给我摘要", created_at: daysAgo(40), updated_at: daysAgo(35), last_used_at: daysAgo(2) });
+/** The quarterly settle (stage 4c): a confirmed guess made long-term, one stale guess archived with its reason, and one old guess (archived by the 60-day rule, never confirmed) that returns to 我的推测 when restored. */
+export const SETTLE_ITEMS = [
+  item(31, { kind: "preference", topic: "提问习惯", text: "看公司先问最近一季的收入和利润，再问估值。", origin: "pattern", status: "active", quote: "NVDA 这季收入和利润多少", created_at: daysAgo(150), updated_at: daysAgo(100), last_seen_at: daysAgo(9), settled_at: daysAgo(3), settled_label: "长期" }),
+  item(32, { kind: "preference", topic: "回答详略", text: "喜欢每个问题先给一屏摘要，细节放后面。", origin: "inferred", status: "archived", quote: "先给我摘要", created_at: daysAgo(300), updated_at: daysAgo(3), last_seen_at: daysAgo(230), archived_at: daysAgo(3), archived_reason: "很久没在你的话里出现（最后一次 4月9日）" }),
+  item(33, { kind: "about_me", text: "多在周末集中看财报。", origin: "pattern", status: "archived", quote: "周末我再细看", created_at: daysAgo(120), updated_at: daysAgo(70), last_seen_at: daysAgo(90), archived_at: null, archived_reason: null }),
+];
 export const RECALL = [
   { conversation_id: CONVERSATION.finbot, title: "AAPL 服务收入与预测对比", date: dayOnly(0), summary: "对比了 AAPL 前两版预测，第 2 版下调了看跌概率。", kind: "summary", link: `#agent/${CONVERSATION.finbot}`, bot_id: BOT.finbot, bot_name: "FinBot" },
   { conversation_id: CONVERSATION.applebot, title: "AAPL 本季服务收入", date: dayOnly(1), summary: "问了服务收入与毛利率，引用了最新 10-Q。", kind: "summary", link: `#agent/${CONVERSATION.applebot}`, bot_id: BOT.applebot, bot_name: "AppleBot" },

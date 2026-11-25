@@ -12,7 +12,8 @@ import { handFed } from "./fake-sse.mjs";
 import { buildState } from "./fixtures/index.mjs";
 import { materialId } from "./fixtures/materials.mjs";
 import { EXTRA_INBOX, EXTRA_PROPOSALS, EXTRA_TASKS } from "./fixtures/routines.mjs";
-import { CONFIRMED_GUESS, EXTRA_SOURCES, IMPORT_SAMPLE, REVIEW_ITEMS, KNOWLEDGE_CANDIDATES, KNOWLEDGE_EXTRA_DOCS } from "./fixtures/assistant.mjs";
+import { OWNER_VIEWS } from "./fixtures/views.mjs";
+import { CONFIRMED_GUESS, SETTLE_ITEMS, EXTRA_SOURCES, IMPORT_SAMPLE, REVIEW_ITEMS, KNOWLEDGE_CANDIDATES, KNOWLEDGE_EXTRA_DOCS } from "./fixtures/assistant.mjs";
 
 import fs from "node:fs";
 // P9.1: a hook that presses or waits for a LABEL must work in the English interface too (the English run photographs every page): `either("登录")` matches the Chinese label or its English translation, exactly.
@@ -396,6 +397,21 @@ export function stateAssistantEmpty() {
 export function stateMonthlyReview() {
   const state = buildState();
   state.assistant.profile.push(structuredClone(CONFIRMED_GUESS), ...structuredClone(REVIEW_ITEMS));
+  return state;
+}
+/** The quarterly settle has run: one long-term guess, one archived item with its reason (restorable), and one old never-confirmed guess that returns to 我的推测. */
+export function stateQuarterlySettle() {
+  const state = buildState();
+  state.assistant.profile.push(...structuredClone(SETTLE_ITEMS));
+  return state;
+}
+/** The settle archived NVDA's view (the company is no longer held); the card shows it as archived, with a 恢复.  `blocked` also leaves a newer active view, so 恢复 is refused. */
+export function stateArchivedView({ blocked = false } = {}) {
+  const state = buildState();
+  state.views = state.views.filter((v) => v.symbol !== "NVDA" || v.status !== "active");
+  const third = { ...structuredClone(OWNER_VIEWS.find((v) => v.symbol === "NVDA" && v.status === "active")), status: "archived", status_label: "已归档", ended_at: "2026-11-22T01:00:00+00:00", archived_reason: "你已不持有、不在关注列表，也很久没提" };
+  state.views.push(third);
+  if (blocked) state.views.push({ ...structuredClone(third), id: "d0000000-0000-4000-8000-000000000099", status: "active", status_label: "", ended_at: null, archived_reason: null, created_at: "2026-11-23T01:00:00+00:00", text: "回调后可以重新看", quote: "回调以后我想重新看英伟达" });
   return state;
 }
 /** No view of any company has been noted. */
@@ -912,6 +928,10 @@ export const PAGES = [
     } },
   { name: "company-view-only-history", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-none]", element: "[data-testid=owner-view]", view: () => ({ fixtureState: stateViewsOnlyHistory() }) },
   { name: "memory-guesses", hash: "#/assistant/memory", ready: "[data-testid=memory-proposed-item]", view: () => ({ fixtureState: stateMonthlyReview() }) },
+  { name: "memory-settled", hash: "#/assistant/memory", ready: "[data-testid=memory-settled]", view: () => ({ fixtureState: stateQuarterlySettle() }), before: async (page) => {
+      await page.locator("[data-testid=memory-archived] button").first().click(); await page.locator("[data-testid=memory-restore]").first().waitFor({ timeout: 10000 });
+  } },
+  { name: "company-view-archived", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-archived]", element: "[data-testid=owner-view]", view: () => ({ fixtureState: stateArchivedView() }) },
   { name: "memory-recall", hash: "#/assistant/memory?tab=recall", ready: "[data-testid=recall-item]" },
   { name: "memory-empty", hash: "#/assistant/memory", ready: "[data-testid=memory-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
   { name: "news-test-result", hash: "#/assistant/news", ready: "[data-testid=news-row]", before: async (page) => {

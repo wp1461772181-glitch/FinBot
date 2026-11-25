@@ -9,3 +9,6 @@ export function exampleLines(item: ProfileItem): { key: string; quote: string; d
 export function layerLabel(item: ProfileItem): string;
 export function manualItemDraft(input: { kind?: string; text?: string; layer?: string | null }): { error: string; fields?: undefined } | { error?: undefined; fields: { kind: ProfileItem["kind"]; text: string; bot_id: string | null } };
 export function recallGroups(items: RecallItem[]): { key: string; label: string; items: RecallItem[] }[];
+export function isSettled(item: Pick<ProfileItem, "settled_at"> | null | undefined): boolean;
+export function seenLine(item: Pick<ProfileItem, "last_seen_at"> | null | undefined, locale?: string): string;
+export function archiveNote(item: Pick<ProfileItem, "archived_at" | "archived_reason"> | null | undefined, locale?: string): { reason: string; date: string };
