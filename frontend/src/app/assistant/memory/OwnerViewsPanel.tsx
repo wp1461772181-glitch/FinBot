@@ -48,7 +48,7 @@ function CompanyCard({ company, former, onChanged }: { company: ViewGroup; forme
     if (await run("write", () => writeOwnerView(symbol, text))) setEditing(null);
   }
   async function drop(from: HTMLElement | null) {
-    const yes = await confirm({ ...(from ? { returnFocus: from } : {}), title: t("撤回这条看法？"), description: t("撤回后它不再按这条看法回答，历史里还留着。"), confirmLabel: t("撤回"), cancelLabel: t("取消"), tone: "danger", hold: true });
+    const yes = await confirm({ ...(from ? { returnFocus: from } : {}), title: t("撤回这条看法？"), description: t("撤回后它不再按这条看法回答，历史里还留着。"), confirmLabel: t("撤回"), cancelLabel: t("取消"), tone: "danger" });
     if (yes) await run("drop", () => dropOwnerView(symbol));
   }
   async function remove(version: OwnerViewVersion, from: HTMLElement | null) {
