@@ -56,6 +56,8 @@ export const TOOL_LABELS = {
   list_models: "查看可用模型",
   list_work: "查看手上的事",
   delegate: "交给小助手",
+  record_view: "记下看法",
+  drop_view: "撤回看法",
   create_bot: "新建 bot",
   update_bot: "修改 bot",
   delete_transaction: "删除持仓记录",
