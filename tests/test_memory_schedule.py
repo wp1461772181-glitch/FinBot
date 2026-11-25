@@ -193,7 +193,8 @@ def test_a_job_that_raises_or_returns_nonsense_is_a_failed_run_and_the_loop_goes
     assert _row().claimed_at is None
 
 
-def test_a_job_whose_module_is_not_there_yet_fails_with_its_own_reason():
+def test_a_job_whose_module_is_not_there_yet_fails_with_its_own_reason(monkeypatch):
+    monkeypatch.setitem(sched.JOBS, JOB, "app.no_such_memory_module:run")
     _register(NOW - timedelta(days=31))
     assert sched.tick(NOW) == 1                                            # the default runner imports app.memory_review lazily
     row = _row()

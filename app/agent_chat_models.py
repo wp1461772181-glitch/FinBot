@@ -102,6 +102,10 @@ class AgentProfileItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The monthly review's proposals (origin ``pattern``, status ``proposed``): his own sentences as examples
+    # ([{message_id, quote, date}]) and the run that made it.  Added to older tables by ``agent_profile.ensure_review_columns``.
+    examples: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    review_run: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
 
 
 class AgentConversationRecall(Base):

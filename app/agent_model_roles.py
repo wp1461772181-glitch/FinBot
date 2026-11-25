@@ -6,14 +6,14 @@ agent_workflow/claim_judge_pin); it has no catalog-default fallback: no row, or 
 the catalog, means the env / pinned judge.  For the other roles, no row, or a row naming a model that has since left
 the catalog, means the server's default model.  ``fallback`` is the kernel's backup model: it has no default either
 (``fallback_for``: unset, or an entry that has left the catalog, means no backup).  ``helper`` is the kernel's helper (``delegate``): unset, or an
-entry that has left the catalog, means the model of the turn that delegates (``helper_for`` is None then; no server default stands in).  The table is made by ``Base.metadata.create_all`` at startup like the catalog's."""
+entry that has left the catalog, means the model of the turn that delegates (``helper_for`` is None then; no server default stands in).  ``memory`` is the monthly memory review (memory_review): unset, or an entry that has left the catalog, means the server's default model.  The table is made by ``Base.metadata.create_all`` at startup like the catalog's."""
 from __future__ import annotations
 
 from . import agent_model_catalog as catalog
 from .agent_chat_models import AgentModelRole
 from .database import SessionLocal
 
-ROLES = ("earnings", "forecast", "judge", "fallback", "helper")
+ROLES = ("earnings", "forecast", "judge", "fallback", "helper", "memory")
 
 
 class RoleError(ValueError):

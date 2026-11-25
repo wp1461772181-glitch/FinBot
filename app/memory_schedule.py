@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 
 from . import model_usage
 from .agent_chat_models import AgentConversation, AgentMessage, MemoryJob
+from .agent_recall import owner_message_clause
 from .database import SessionLocal
 
 log = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ def owner_messages_since(owner_hash: str, since: datetime | None) -> int:
 
 def _count_messages(db, owner_hash: str, since: datetime | None) -> int:
     query = (select(func.count()).select_from(AgentMessage).join(AgentConversation, AgentConversation.id == AgentMessage.conversation_id)
-             .where(AgentConversation.owner_hash == owner_hash, AgentMessage.role == "user"))
+             .where(AgentConversation.owner_hash == owner_hash, owner_message_clause()))
     if since is not None:
         query = query.where(AgentMessage.created_at > since)
     return int(db.scalar(query) or 0)

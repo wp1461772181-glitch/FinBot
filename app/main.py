@@ -200,6 +200,8 @@ def create_tables() -> None:
     # Memory layers (second edition, stage B): a profile item's bot; NULL (every existing item) is global.
     from .agent_profile import ensure_bot_column as ensure_profile_bot_column
     ensure_profile_bot_column()
+    from .agent_profile import ensure_review_columns as ensure_profile_review_columns
+    ensure_profile_review_columns()
     # Stage C: tasks and inbox entries belong to a bot; NULL (every existing row) is adopted by the default bot.
     from .agent_tasks import ensure_bot_columns as ensure_task_bot_columns
     ensure_task_bot_columns()
