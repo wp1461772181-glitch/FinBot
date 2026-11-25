@@ -11,10 +11,11 @@ import { TASKS, RUNS, PROPOSALS, INBOX } from "./routines.mjs";
 import { backstageRoutes } from "./backstage.mjs";
 import { OWNER_VIEWS, activeViews, viewHistory } from "./views.mjs";
 import { memoryOverview } from "./overview.mjs";
+import { buildTemplates, templateApply, templatePreview, templatesList, templateUndo } from "./templates.mjs";
 import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS, DRY_RUNS, REPAIRS, KNOWLEDGE_IMPORTABLE, knowledgeChunks, readSkillFile } from "./assistant.mjs";
 
 export function buildState() {
-  return { views: structuredClone(OWNER_VIEWS), bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), settings: buildSettings(), backstage: {} };
+  return { views: structuredClone(OWNER_VIEWS), bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), templates: buildTemplates(), settings: buildSettings(), backstage: {} };
 }
 
 /** The 设置 pages' data as a mutable copy (P8.2): the write routes below change it and the reads answer from it.  `writes` keeps every write as the page sent it (the role table's own state is `modelRoles`).
@@ -395,6 +396,17 @@ function assistantRoutes(route, reply, own) {
     if (state.views.some((v) => v.symbol === view.symbol && v.status === "active")) return reply.status(409, { detail: "这家公司已有一条当前看法，先撤回它再恢复" });
     Object.assign(view, { status: "active", status_label: "", ended_at: null, archived_reason: null });
     return { view };
+  }));
+  // --- 用模板起步 (4f): the templates and what was applied; preview writes nothing, apply writes the ticked memory into the profile, undo takes it out again.  `state.templates.writes` keeps every write as the page sent it.
+  route.get(`${A}/role-templates`, own(({ state }) => templatesList(state)));
+  route.post(`${A}/role-templates/applications/:id/undo`, own(({ params, body, state }) => {
+    state.templates.writes.push({ method: "POST", path: `/role-templates/applications/${params.id}/undo`, body: structuredClone(body ?? null) });
+    return templateUndo(state, params.id, body) ?? reply.status(404, { detail: "application_not_found" });
+  }));
+  route.post(`${A}/role-templates/:template/preview`, own(({ params, body, state }) => templatePreview(state, params.template, body) ?? reply.status(404, { detail: "unknown_template" })));
+  route.post(`${A}/role-templates/:template/apply`, own(({ params, body, state }) => {
+    state.templates.writes.push({ method: "POST", path: `/role-templates/${params.template}/apply`, body: structuredClone(body ?? null) });
+    return templateApply(state, params.template, body) ?? reply.status(404, { detail: "unknown_template" });
   }));
   // --- 它眼中的你: the overview of everything kept, the two page writes for a view, and the two downloads
   route.get(`${A}/memory/overview`, own(({ state }) => memoryOverview(state)));
