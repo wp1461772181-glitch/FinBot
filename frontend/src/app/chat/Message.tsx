@@ -29,7 +29,7 @@ import type { LiveMessage } from "./live-message";
 const ApprovalCard = lazy(() => import("@/components/ApprovalCard"));
 
 /** The words under a message that was sent while a turn was answering (the queue's sentence has a number in it: queuedText). */
-const DELIVERY_TEXT = { sending: "发送中", received: "已收到", merged: "已并入上一个回答", separate: "单独回答中", stopped: "已停下上一个回答" } as const;
+const DELIVERY_TEXT = { sending: "发送中", received: "已收到", merged: "已并入回答", unstarted: "没有开始，可以重发", separate: "单独回答中", stopped: "已停下上一个回答" } as const;
 
 // Message footer buttons: hidden until the message is hovered, tapped, or something in it has keyboard focus (they stay in the tab order).
 const footButton = "inline-flex size-8 items-center max-lg:size-11 justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-ink focus-visible:ring-2 focus-visible:ring-ring aria-pressed:text-brand [&_svg]:size-4";
@@ -76,7 +76,7 @@ export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex,
   // Two answers can be running at once (a message sent meanwhile that gets its own): each knows it is running, the line's state does not say which.
   const running = Boolean(m.live);
   const lineState = doneLineState(m, { streaming: streaming || running, ended });
-  const stoppedByMessage = m.status === "cancelled" && (Boolean(m.stopped_by_message) || (m.reply_to?.length ?? 0) > 1);
+  const stoppedByMessage = m.status === "stopped" || m.status === "cancelled" && (Boolean(m.stopped_by_message) || (m.reply_to?.length ?? 0) > 1);
   const kernelProgress = progressModel({ narration: m.narration, checklist: m.checklist, tier: m.tier, toolTrace: m.tool_trace, running });
   return <article {...common} data-tapped={tapped || undefined} onClick={() => setTapped(x => !x)} className="group/msg flex min-w-0 flex-col gap-2 rounded-md">
     {/* 1. head: small avatar, bot name, time */}

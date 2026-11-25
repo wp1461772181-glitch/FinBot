@@ -2515,10 +2515,11 @@
   "已停下": "Stopped",
   "发送中": "Sending",
   "已收到": "Received",
-  "已并入上一个回答": "Added to the answer above",
   "单独回答中": "Answering on its own",
   "已停下上一个回答": "Stopped the answer above",
   "写到这里先停下了：你刚发的消息在处理，处理完会接着答。": "Paused here: your new message is being handled, and the answer continues after.",
   "回答中也可以接着说…": "You can keep typing while it answers…",
-  "上一条还在回答，这条没有发出去；答完后再发。": "The last answer is still running and this message was not sent; send it again when that is done."
+  "上一条还在回答，这条没有发出去；答完后再发。": "The last answer is still running and this message was not sent; send it again when that is done.",
+  "已并入回答": "Added to the answer",
+  "没有开始，可以重发": "Did not start; you can send it again"
 }

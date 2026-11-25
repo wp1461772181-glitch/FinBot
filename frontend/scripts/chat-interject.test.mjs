@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addUser, patchByKey, removeByKey, upsertAnswer, replyEntries, replyQuote, deliveries, awaitingAnswer, createStreamSet, queuedText } from "../src/chat-interject.mjs";
+import { addUser, patchByKey, removeByKey, upsertAnswer, replyEntries, replyQuote, deliveries, awaitingAnswer, createStreamSet, queuedText, moveMerged, withdrawAnswer } from "../src/chat-interject.mjs";
+import { isActiveClarification } from "../src/chat-clarification.mjs";
 
 const user = (key, content, extra = {}) => ({ role: "user", content, client_key: key, ...extra });
 const answer = (key, userKey, extra = {}) => ({ role: "assistant", content: "答", client_key: key, user_key: userKey, ...extra });
@@ -125,4 +126,36 @@ test("killOthers marks every stream of a line but the main one dead", () => {
 test("the queue sentence", () => {
   assert.equal(queuedText(3, "zh-CN"), "排队中（前面 3 件）");
   assert.equal(queuedText(1, "en-US"), "Queued (1 ahead)");
+});
+
+test("a merged message is inserted above the answer it merged into, so a card on that answer stays answerable", () => {
+  let list = [user("u1", "买 10 股 NVDA"), answer("a1", "u1", { turn_id: "T1", status: "waiting_for_input", clarification: { request_id: "r" } }), user("u2", "不对，是 20 股", { delivery: "merged", into_turn: "T1" })];
+  assert.equal(isActiveClarification(list, 1, false), false, "the old order: the card is not last");
+  list = moveMerged(list, "u2", { intoTurn: "T1" });
+  assert.deepEqual(list.map(m => m.client_key), ["u1", "u2", "a1"]);
+  assert.equal(isActiveClarification(list, 2, false), true);
+});
+
+test("a merge that arrives before the answer exists sits under its target message, and the answer then goes below it", () => {
+  let list = [user("u1", "NVDA"), user("u2", "AMD", { delivery: "merged", into_turn: "T1" })];
+  list = moveMerged(list, "u2", { intoTurn: "T1", targetUserKey: "u1" });
+  list = upsertAnswer(list, "u1", answer("a1", "u1", { turn_id: "T1" }));
+  assert.deepEqual(list.map(m => m.client_key), ["u1", "u2", "a1"]);
+  const two = upsertAnswer([user("u1", "NVDA"), user("u2", "AMD", { delivery: "merged", into_turn: "T1" }), user("u3", "TSLA", { delivery: "merged", into_turn: "T1" })], "u1", answer("a1", "u1", { turn_id: "T1" }));
+  assert.deepEqual(two.map(m => m.client_key), ["u1", "u2", "u3", "a1"]);
+  assert.equal(moveMerged(list, "nope", { intoTurn: "T1" }), list);
+});
+
+test("withdrawing an answer removes it and the message stops waiting for it", () => {
+  const list = [user("u1", "a", { answer_key: "a1" }), answer("a1", "u1")];
+  const out = withdrawAnswer(list, "u1", "a1");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].answer_key, undefined);
+  assert.deepEqual([...awaitingAnswer(out, true)], []);
+});
+
+test("a queued message that never started says so; a stopped-status answer marks its stopper", () => {
+  assert.equal(deliveries([user("u1", "a", { delivery: "unstarted" })])[0].kind, "unstarted");
+  const stored = [{ role: "user", id: "m1", content: "x" }, { role: "user", id: "m2", content: "算了" }, { role: "assistant", status: "stopped", reply_to: [{ id: "m1", text: "x" }, { id: "m2", text: "算了" }] }];
+  assert.equal(deliveries(stored)[1].kind, "stopped");
 });

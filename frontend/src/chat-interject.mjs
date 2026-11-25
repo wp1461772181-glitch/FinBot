@@ -37,8 +37,31 @@ export function upsertAnswer(messages, userKey, answer) {
   const owner = messages.findIndex(m => isUser(m) && m.client_key === userKey);
   if (owner < 0) return [...messages, answer];
   let place = owner + 1;
-  while (place < messages.length && messages[place].role === "assistant") place += 1;
+  const takenIn = m => isUser(m) && m.delivery === "merged" && Boolean(answer.turn_id) && m.into_turn === answer.turn_id;
+  while (place < messages.length && (messages[place].role === "assistant" || takenIn(messages[place]))) place += 1;
   return [...messages.slice(0, place), answer, ...messages.slice(place)];
+}
+
+/**
+ * The message that was taken into a running answer goes where it arrived: above that answer (the stored order), so what is last in the list is still the
+ * answer (a card on it stays answerable).  The answer may not exist yet: then right under the message it was merged into, and the answer goes below it later.
+ */
+export function moveMerged(messages, key, { intoTurn, targetUserKey }) {
+  const at = messages.findIndex(m => m.client_key === key);
+  if (at < 0) return messages;
+  const rest = messages.filter((_, i) => i !== at), moved = messages[at];
+  const answerAt = intoTurn ? rest.findIndex(m => m.role === "assistant" && m.turn_id === intoTurn) : -1;
+  if (answerAt >= 0) return [...rest.slice(0, answerAt), moved, ...rest.slice(answerAt)];
+  const owner = rest.findIndex(m => isUser(m) && m.client_key === targetUserKey);
+  if (owner < 0) return messages;
+  let place = owner + 1;
+  while (place < rest.length && isUser(rest[place]) && rest[place].delivery === "merged" && rest[place].into_turn === intoTurn) place += 1;
+  return [...rest.slice(0, place), moved, ...rest.slice(place)];
+}
+
+/** An answer that will not be written after all (the server turned out to have taken the message in, or the request broke): it goes, and its message stops waiting for it. */
+export function withdrawAnswer(messages, userKey, answerKey) {
+  return removeByKey(patchByKey(messages, userKey, { answer_key: undefined }), answerKey);
 }
 
 /** What an answer answers, as `[{id, text}]`: the server's list when it has one, else what this tab knows (its own message, the ones it took in, the one that stopped it). */

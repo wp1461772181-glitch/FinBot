@@ -1600,8 +1600,10 @@ async function chatInterject(ctx) {
     await hand.push(1, "received", { message_id: "m9000000-0000-4000-8000-0000000000e2" });
     await page.locator("[data-testid=delivery-note][data-kind=received]", { hasText: "已收到" }).waitFor({ timeout: 10000 });
     await hand.push(1, "merged", { into_turn: first }); await hand.close(1);
-    await page.locator("[data-testid=delivery-note][data-kind=merged]", { hasText: "已并入上一个回答" }).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=delivery-note][data-kind=merged]", { hasText: "已并入回答" }).waitFor({ timeout: 10000 });
     assert(await page.locator("#agent-draft").isEnabled() && (await page.locator("[data-testid=stop]").count()) === 1, "the first answer stopped being live when the message was taken in");
+    const order = await page.locator("[data-testid=thread] > [data-testid=message]").evaluateAll(list => list.map(el => `${el.getAttribute("data-role")}:${(el.textContent || "").includes("顺便比 AMD") ? "merged" : ""}`));
+    assert(order.join(",").endsWith("user:,user:merged,assistant:"), `the merged message is not above the answer it joined: ${order.join(",")}`);
     await hand.push(0, "delta", { text: "440 亿，AMD 70 亿。" }); await hand.push(0, "done", { status: "complete", turn_id: first, thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(0);
     await page.locator("[data-testid=reply-quote]", { hasText: /NVDA 营收 \/ \[hand-fed\] 顺便比 AMD/ }).waitFor({ timeout: 10000 });
     await page.locator("[data-testid=stop]").waitFor({ state: "detached", timeout: 10000 });
@@ -1633,7 +1635,14 @@ async function chatInterject(ctx) {
     assert(!(await hand.aborted(4)), "the running turn was touched");
     await hand.push(4, "done", { status: "complete", turn_id: "t9000000-0000-4000-8000-0000000000e5", thinking_ms: 500, citations: [], citation_protocol: null }); await hand.close(4);
     await page.locator("[data-testid=stop]").waitFor({ state: "detached", timeout: 10000 });
-    return "box open while answering; 已收到, 已并入上一个回答 and a quote on the answer; two answers side by side, stop stops the newest only; a refused message returns to the box";
+    // 5. a message the server takes in although this tab thought nothing ran (a turn started elsewhere): it is labelled, and no empty answer is left
+    const answers = await page.locator("[data-testid=message][data-role=assistant]").count();
+    await say("别处开始的那一轮", 5);
+    await hand.push(5, "received", { message_id: "m9000000-0000-4000-8000-0000000000e6" }); await hand.push(5, "merged", { into_turn: "t-elsewhere" }); await hand.close(5);
+    await page.locator("[data-testid=delivery-note][data-kind=merged]", { hasText: "已并入回答" }).nth(1).waitFor({ timeout: 10000 });
+    await page.locator("[data-testid=stop]").waitFor({ state: "detached", timeout: 10000 });
+    assert((await page.locator("[data-testid=message][data-role=assistant]").count()) === answers, "an empty answer bubble was left");
+    return "box open while answering; 已收到, 已并入回答 above its answer and a quote on the answer; two answers side by side, stop stops the newest only; a refused message returns to the box";
   } finally { await view.close(); }
 }
 

@@ -178,7 +178,7 @@ export function freshWriteCard() {
 }
 
 // 3c (speaking while it works): what the server stores when messages were sent during an answer.  Each user row has an `id`; each answer says what it answers
-// (`reply_to`).  Turn 1 took a second message in (merged); turn 2 was stopped by one; turns 3 and 4 ran side by side, so their rows are not paired one under one.
+// (`reply_to`).  Turn 1 took a second message in (merged); turn 2 was stopped by one; turns 3 and 4 ran side by side (the endpoint returns rows grouped by turn, so each answer sits under its own message).
 export const INTERJECTION_IDS = { merged: "m0000000-0000-4000-8000-000000000002", stopper: "m0000000-0000-4000-8000-000000000004", other: "m0000000-0000-4000-8000-000000000006" };
 export function interjectionTurns() {
   const turn = n => `t7000000-0000-4000-8000-00000000000${n}`, id = n => `m0000000-0000-4000-8000-00000000000${n}`;
@@ -193,9 +193,9 @@ export function interjectionTurns() {
     { role: "assistant", status: "cancelled", turn_id: turn(2), id: "a0000000-0000-4000-8000-000000000002", reply_to: [quote(3, "写一份 NVDA 的完整分析"), quote(4, "算了不用了")],
       content: "NVDA 的分析先写到数据中心业务这一段，\n\n好的，不做了。" },
     { role: "user", id: id(5), content: "另外，帮我记一下我买了 10 股 TSLA", turn_id: turn(3), status: "complete" },
-    { role: "user", id: id(6), content: "AAPL 的服务收入呢？", turn_id: turn(4), status: "complete" },
     { role: "assistant", status: "complete", turn_id: turn(3), id: "a0000000-0000-4000-8000-000000000003", reply_to: [quote(5, "另外，帮我记一下我买了 10 股 TSLA")],
       content: "已经按 10 股 TSLA 准备好记录，请在卡片上确认。" },
+    { role: "user", id: id(6), content: "AAPL 的服务收入呢？", turn_id: turn(4), status: "complete" },
     { role: "assistant", status: "complete", turn_id: turn(4), id: "a0000000-0000-4000-8000-000000000004", reply_to: [quote(6, "AAPL 的服务收入呢？")],
       content: "AAPL 本季服务收入约 **288 亿美元**，同比增长 14%。" },
   ];
