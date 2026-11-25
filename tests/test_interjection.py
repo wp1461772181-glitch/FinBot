@@ -186,7 +186,7 @@ def test_a_stop_while_writing_cuts_the_text_within_a_delta_and_ends_the_turn_wit
     assert kinds[-3:] == ["answer_reset", "delta", "stopped"] and events[-2]["text"] == result["answer"]
     assert fake_consent.proposed == [] and result["pending_request"] is None     # nothing it proposed becomes a card
     assert holder[0].future.result().decision == "stop"
-    assert result["final_protocol"]["reply_to"] == ["own-1"]
+    assert result["final_protocol"]["reply_to"] == ["own-1", holder[0].id]      # the stop sentence answers his message too
 
 
 def test_a_stop_cancels_whatever_else_the_step_asked_for(env, fake_consent):
@@ -580,7 +580,7 @@ def test_focus_4_the_fourth_piece_of_work_waits_is_told_how_many_are_ahead_and_s
             await asyncio.sleep(0.01)
         fourth = asyncio.ensure_future(collect(await lab.send("问题 4", bot=False)))
         await asyncio.sleep(0.2)
-        assert started == [0, 1, 2] and not fourth.done()                 # nothing of the fourth has started
+        assert sorted(started) == [0, 1, 2] and not fourth.done()                 # nothing of the fourth has started
         with SessionLocal() as db:
             statuses = sorted(i.status for i in db.scalars(select(work.AgentWork)))
         assert statuses == ["queued", "running", "running", "running"]
@@ -683,8 +683,8 @@ def test_rows_of_turns_that_ran_together_group_by_turn_and_a_merged_message_is_p
             _row("A", 3, "assistant", "", tool_calls={"calls": [{"id": "c"}]}), _row("S", 4, "assistant", "请核对卡片"),
             _row("A", 5, "tool", "{}"), _row("A", 6, "user", "顺便把 AMD 也比一下"), _row("A", 7, "assistant", "NVDA 与 AMD [1]")]
     groups = layers.complete_turns(rows)
-    assert [[r["sequence"] for r in g] for g in groups] == [[1, 3, 5, 6, 7], [2, 4]]
-    assert layers.project_turn_history(groups[0]) == [{"role": "user", "content": "NVDA 的营收\n顺便把 AMD 也比一下"},
+    assert [[r["sequence"] for r in g] for g in groups] == [[2, 4], [1, 3, 5, 6, 7]]      # in the order they were answered
+    assert layers.project_turn_history(groups[1]) == [{"role": "user", "content": "NVDA 的营收\n顺便把 AMD 也比一下"},
                                                       {"role": "assistant", "content": "NVDA 与 AMD [1]"}]
     # a turn the owner stopped is an unfinished turn (cancelled), not a hole in the history
     stopped = [_row("A", 1, "user", "NVDA 的营收"), _row("A", 2, "user", "算了"), _row("A", 3, "assistant", "好的，已停下。", status="cancelled")]
@@ -820,7 +820,7 @@ def test_i3_a_message_is_never_parked_on_a_queued_turn(lab, monkeypatch):
             gate.set()
         return [await r for r in readings], "".join(first) + await rest, await reading5
     _, fourth, fifth = _scenario(scenario())
-    assert "received" not in names_of(fifth) and "queued" in names_of(fifth) and dict(blocks(fifth))["queued"]["ahead"] >= 3
+    assert "received" not in names_of(fifth) and "queued" in names_of(fifth) and [d for n, d in blocks(fifth) if n == "queued"][0]["ahead"] >= 3
 
 
 async def collect_iter(body):

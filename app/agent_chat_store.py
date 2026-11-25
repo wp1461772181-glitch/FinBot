@@ -37,6 +37,19 @@ async def append_message(conversation_id: str, turn_id: str, role: str, content:
         await s.commit()
     if role=="user":await _recall(recall.index_question,conversation_id,content)
     return seq
+async def message_texts(conversation_id: str, ids) -> dict:
+    """The user messages of this conversation with these ids, id -> text (what an answer on this page quotes from an earlier page)."""
+    try:cid=uuid.UUID(str(conversation_id))
+    except ValueError:return {}
+    wanted = []
+    for item in ids:
+        try:wanted.append(uuid.UUID(str(item)))
+        except ValueError:pass
+    if not wanted:return {}
+    async with Session() as s:
+        rows=(await s.execute(select(AgentMessage.id,AgentMessage.content).where(AgentMessage.conversation_id==cid,
+              AgentMessage.role=="user",AgentMessage.id.in_(wanted)))).all()
+    return {str(i):content for i,content in rows}
 async def move_message(conversation_id: str, message_id: str, turn_id: str) -> bool:
     """Put a stored row under another turn (the owner's message that a running turn took in: from then on it is part of that turn).
     False when there is no such row in this conversation."""
@@ -59,7 +72,7 @@ async def history(conversation_id: str, credential: str, limit_bytes=14000):
                 continue
             size=sum(_message_bytes(m) for m in group)
             if used+size>limit_bytes: break
-            output[0:0]=[{"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,"status":m.status,"turn_id":str(m.turn_id)} for m in group]; used+=size
+            output[0:0]=[{"id":str(m.id),"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,"status":m.status,"turn_id":str(m.turn_id)} for m in group]; used+=size
         return output
 CONTEXT_ROWS = 500       # how many of the newest rows a turn reads
 
@@ -87,7 +100,7 @@ async def conversation_context(conversation_id: str, credential: str, *, window:
                                     .where(AgentConversationSummary.conversation_id == cid)
                                     .order_by(AgentConversationSummary.seq.asc()))).all()
     skip = {uuid.UUID(str(t)) for t in exclude_turns or ()}
-    stored = [{"role": m.role, "content": m.content, "tool_calls": m.tool_calls, "tool_call_id": m.tool_call_id,
+    stored = [{"id": str(m.id), "role": m.role, "content": m.content, "tool_calls": m.tool_calls, "tool_call_id": m.tool_call_id,
                "status": m.status, "turn_id": m.turn_id, "sequence": m.sequence} for m in reversed(rows)
               if (upto_sequence is None or m.sequence <= upto_sequence) and m.turn_id not in skip]
     made = [{"seq": x.seq, "from_sequence": x.from_sequence, "upto_sequence": x.upto_sequence, "content": x.content}
@@ -223,7 +236,7 @@ async def owned_message_page(conversation_id: str, credential: str, *, before_se
                   .where(AgentConversationSummary.conversation_id==uuid.UUID(conversation_id))
                   .order_by(AgentConversationSummary.seq.asc()))).all()
     selected,has_more,next_before=_select_message_page(_eligible_turn_groups(rows),before_sequence,limit_turns)
-    return {"messages":[{"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,
+    return {"messages":[{**({"id":str(m.id)} if getattr(m,"id",None) else {}),"role":m.role,"content":m.content,"tool_calls":m.tool_calls,"tool_call_id":m.tool_call_id,
                          "status":m.status,"turn_id":str(m.turn_id)} for group in selected for m in group],
             "has_more":has_more,"next_before":next_before,
             "compactions":compaction_notices(rows,versions)}

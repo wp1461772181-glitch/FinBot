@@ -122,8 +122,9 @@ class Inbox:
         return [m.id for m in self.messages if m.decision == MERGE]
 
     def reply_to(self) -> list[str]:
-        """The user messages this turn's answer answers: the one that started it, then the merged ones, in arrival order."""
-        return [*([self.own_message_id] if self.own_message_id else []), *self.merged_ids()]
+        """The user messages this turn's answer answers: the one that started it, then the merged ones and the one that stopped it
+        (its closing sentence answers that), in arrival order."""
+        return [*([self.own_message_id] if self.own_message_id else []), *(m.id for m in self.messages if m.decision in (MERGE, STOP))]
 
     def record(self) -> list[dict]:
         return [{"message_id": m.id, "decision": m.decision, "defaulted": m.defaulted, **({"note": m.note} if m.note else {})}

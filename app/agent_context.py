@@ -197,8 +197,30 @@ def group_by_turn(rows: list, key=lambda row: row["turn_id"]) -> list[list]:
     return list(groups.values())
 
 
+QUOTE_CHARS = 60
+
+
+def reply_quote(text) -> str:
+    """The first 60 characters of a question on one line: what an answer shows of the message it answers."""
+    return " ".join(str(text or "").split())[:QUOTE_CHARS]
+
+
+def reply_to_of(row: dict | None) -> list[str]:
+    """The ids of the user messages an answer row says it answers (empty for an older row)."""
+    protocol = (row or {}).get("tool_calls")
+    found = protocol.get("reply_to") if isinstance(protocol, dict) else None
+    return [str(i) for i in found if isinstance(i, str) and i] if isinstance(found, list) else []
+
+
 def project_turn_history(group: list[dict]) -> list[dict]:
     users = [r for r in group if r.get("role") == "user"]
+    final = next((r for r in reversed(group) if r.get("role") == "assistant" and not (
+        isinstance(r.get("tool_calls"), dict) and r["tool_calls"].get("calls"))), None)
+    named = reply_to_of(final)
+    if named and any(r.get("id") for r in users):
+        # The answer is paired with exactly the messages it answered, in the order it names them (a message it did not answer is not its).
+        by_id = {str(r.get("id")): r for r in users if r.get("id")}
+        users = [by_id[i] for i in named if i in by_id] or users
     # A turn that took in messages the owner sent while it worked answers all of them: his words, one after another.
     user = {**users[0], "content": "\n".join((r.get("content") or "") for r in users)} if len(users) > 1 else (users[0] if users else None)
     answer = next((r for r in reversed(group) if r.get("role") == "assistant" and not (
@@ -265,8 +287,11 @@ def complete_turns(rows: list[dict]) -> list[list[dict]]:
     """Stored messages (oldest first) grouped by turn; only turns that began with the user's message
     and ended with a complete answer.  A failed, cancelled or unanswered turn is in no layer."""
     groups = group_by_turn(rows)
-    return [g for g in groups
+    done = [g for g in groups
             if g[0]["role"] == "user" and g[-1]["role"] == "assistant" and g[-1].get("status") == "complete"]
+    # Turns that ran together are in the order they were answered: a turn that answers later goes after the ones already there, so what
+    # the model has been sent before never changes place (the prompt cache), and a long turn does not slip in before a short one.
+    return sorted(done, key=lambda g: g[-1].get("sequence", 0))
 
 
 UNFINISHED_KEEP = 3           # the newest unfinished turns a turn carries; outside the L1/L2 budgets
@@ -397,7 +422,7 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
     # either layer by itself; omitted/overflow-only entries must not consume budget.
     has_catalogue = any(entry and (
         sum(json_bytes(row) for row in project_turn_history(group)) + catalogue_bytes([{**entry, "answers_back": 1}]) <= l1_bytes
-        or half_size(Turn(group[0]["sequence"], group[-1]["sequence"], group[0].get("content") or "",
+        or half_size(Turn(group[0]["sequence"], group[-1]["sequence"], _question_of(group),
                           project_turn_history(group)[-1]["content"] if len(project_turn_history(group)) > 1 else "",
                           (), str(group[0].get("turn_id") or ""), entry))
            + catalogue_bytes([{**entry, "answers_back": 1}]) <= l2_bytes)
@@ -425,10 +450,10 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
             drop = start - reach        # the turns before the anchor go to layer 2
             used -= sum(recent_costs[-drop:]); recent = recent[drop:]
     older = complete[:len(complete) - len(recent)]
-    turns = [Turn(g[0]["sequence"], g[-1]["sequence"], g[0].get("content") or "", project_turn_history(g)[-1]["content"] if len(project_turn_history(g)) > 1 else "",
+    turns = [Turn(g[0]["sequence"], g[-1]["sequence"], _question_of(g), project_turn_history(g)[-1]["content"] if len(project_turn_history(g)) > 1 else "",
                   (), str(g[0].get("turn_id") or ""), entries.get(str(g[0].get("turn_id"))))
              for g in older]
-    live = [Turn(g[0]["sequence"], g[-1]["sequence"], g[0].get("content") or "",
+    live = [Turn(g[0]["sequence"], g[-1]["sequence"], _question_of(g),
                  project_turn_history(g)[-1]["content"] if len(project_turn_history(g)) > 1 else "",
                  (), str(g[0].get("turn_id") or ""), entries.get(str(g[0].get("turn_id")))) for g in complete]
     half: list[Turn] = []; used_half = 0
@@ -468,13 +493,20 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
     if not catalogue and has_catalogue:
         used = max(0, used - CATALOGUE_HEAD_BYTES)
     keys = ("role", "content", "tool_calls", "tool_call_id", "status", "turn_id")
-    return {"l1_rows": [{key: (str(row[key]) if key == "turn_id" else row.get(key)) for key in keys}
+    return {"l1_rows": [{**({"id": str(row["id"])} if row.get("id") else {}),
+                         **{key: (str(row[key]) if key == "turn_id" else row.get(key)) for key in keys}}
                         for group in recent for row in group],
             "l1_turns": len(recent), "l1_bytes": used, "half_turns": half, "overflow": overflow,
             "segments": select_segments(segments, l3_bytes), "segments_total": len(segments), "summary_upto": upto,
             "catalogue": catalogue, "budget": l1_bytes + l2_bytes + l3_bytes, "live_turns": live,
             # FP3: unfinished turns are carried beside the layers, not in them (no budget, no summary).
             "unfinished": trailing_unfinished(rows, upto)}
+
+
+def _question_of(group: list[dict]) -> str:
+    """The user's words of a turn as its answer was paired with them (all the messages it answered, one after another)."""
+    projected = project_turn_history(group)
+    return projected[0]["content"] if projected and projected[0]["role"] == "user" else (group[0].get("content") or "")
 
 
 def _before(turns: list, hold_from: int) -> list:

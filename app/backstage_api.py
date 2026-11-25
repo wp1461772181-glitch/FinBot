@@ -111,6 +111,22 @@ def _number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
 
 
+def _answered(db, conversation_id, record) -> list[dict]:
+    """The messages the answer says it answered, in its own order, each as 「回答了：…」 (the first 60 characters of the question)."""
+    from .agent_context import reply_quote
+    wanted = []
+    for item in _list(record.get("reply_to")):
+        try:
+            wanted.append(uuid.UUID(str(item)))
+        except ValueError:
+            continue
+    if not wanted:
+        return []
+    rows = {row.id: row.content for row in db.scalars(select(AgentMessage).where(AgentMessage.conversation_id == conversation_id,
+                                                                                  AgentMessage.id.in_(wanted)))}
+    return [{"message_id": str(i), "text": _question(reply_quote(rows[i])), "label": f"回答了：{_question(reply_quote(rows[i]))}"} for i in wanted if i in rows]
+
+
 def _iso(value):
     return value.isoformat() if value is not None else None
 
@@ -608,6 +624,7 @@ def answer(message_id: str, x_chat_session: str | None = Header(default=None)):
         audit = _dict(record.get("audit"))
         calls, source, ledger_rows = _model_calls(db, opened.turn_id, record)
         card = _card(db, owner, record, now)
+        answered = _answered(db, opened.conversation_id, record)
         bot_name = _bot_names(db, owner).get(str(bot_id)) if bot_id else None
         audit_calls = _list(audit.get("calls"))
         expected = _number(audit.get("model_calls")) or len(audit_calls)
@@ -632,6 +649,7 @@ def answer(message_id: str, x_chat_session: str | None = Header(default=None)):
             "model_calls": calls, "model_calls_source": source, "cost_state": state, "missing_prices": missing,
             "narration": narration, "ordered": ordered, "events": events,
             "checklist": scrub(_list(record.get("checklist"))), "tool_calls": tool_calls, "citations": citations,
+            "answered": answered,
             "writes": scrub([item for item in _list(audit.get("writes")) if isinstance(item, dict)]),
             "write_outcome": audit.get("write_outcome"), "card": card, "answer": "" if incomplete else scrub(final.content or ""),
             "backup_model": scrub(fallback) if isinstance(fallback, dict) else None,

@@ -11,7 +11,7 @@ from .agent_chat_api import PROVIDER_PATTERN, REQUEST_SLOTS
 from .agent_tools import tool_schemas
 from .agent_workflow.graph import stream_workflow, mark_terminal_status, kernel_turn
 from .agent_workflow.trace import WIRE_KEYS
-from .agent_chat_store import create_conversation,verify_conversation,append_message,move_message,owned_message_page,history,finish_conversation,owner_hash
+from .agent_chat_store import create_conversation,verify_conversation,append_message,move_message,message_texts,owned_message_page,history,finish_conversation,owner_hash
 from .agent_chat_store import conversation_context
 from . import agent_context as layers
 from . import model_usage
@@ -1050,6 +1050,10 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
      trace["result"]=result
      trace["status"]="failed" if not result.get("ok") else "not_found" if isinstance(result.get("data"),list) and not result["data"] else "complete"
      break
+ # What each answer says it answered: the questions on this page, and any on an earlier one in one more read.
+ question_text={row["id"]:row["content"] for row in rows if row.get("role")=="user" and row.get("id")}
+ wanted={i for row in rows if row.get("role")=="assistant" for i in layers.reply_to_of(row)}-set(question_text)
+ if wanted:question_text.update(await message_texts(conversation_id,wanted))
  messages=[]
  from .agent_workflow.legacy_projection import RETIRED_FLAG, project_rows
  projected=await asyncio.to_thread(project_rows,rows)
@@ -1059,6 +1063,9 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
   if row.get("role")=="assistant" and not is_tool_request and (row.get("content") or row.get("status") in {"failed","cancelled"}):
    shown,retired=projected[index]
    item={"role":"assistant","content":shown,"status":row["status"],"turn_id":row["turn_id"]}
+   if row.get("id"):item["id"]=row["id"]
+   named=layers.reply_to_of(row)
+   if named:item["reply_to"]=[{"id":i,"text":layers.reply_quote(question_text.get(i))} for i in named]
    if retired:item[RETIRED_FLAG]=True
    if isinstance(row.get("tool_calls"),dict) and isinstance(row["tool_calls"].get("audit"),dict):
     item["status"]=row["tool_calls"]["audit"].get("terminal_status",item["status"])
@@ -1081,7 +1088,7 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
    if traces_by_turn.get(row["turn_id"]):item["tool_trace"]=traces_by_turn[row["turn_id"]]
    elif isinstance(row.get("tool_calls"),dict) and isinstance(row["tool_calls"].get("tool_trace"),list):item["tool_trace"]=row["tool_calls"]["tool_trace"]
    messages.append(item)
-  elif row.get("role")=="user":messages.append({"role":"user","content":row["content"],"status":row["status"],"turn_id":row["turn_id"]})
+  elif row.get("role")=="user":messages.append({"role":"user","content":row["content"],"status":row["status"],"turn_id":row["turn_id"],**({"id":row["id"]} if row.get("id") else {})})
 
   # A card-answering call has no tool result of its own: whether it is still running or already done
   # depends on what happened to the card.  Ask the server instead of guessing.
