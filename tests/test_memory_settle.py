@@ -1,4 +1,4 @@
-"""4c Task 2: the quarterly settle.  Review Focus 1 (confirmed guess seen again -> 长期; one unseen for 200 days -> archived with the date; an
+"""4c Task 2: the quarterly settle (4d adds the view review after it: Review Focus 2 and 5 of that plan are at the end).  Review Focus 1 (confirmed guess seen again -> 长期; one unseen for 200 days -> archived with the date; an
 explicit item untouched for two years stays), 2 (a sold company's view archived, the same company in the queue kept), 3 (the box down over
 05-15: one run on 05-20, next due 08-15), 5 (restore); the note; nothing changed -> no message.  Disposable Postgres, no model."""
 import uuid
@@ -6,9 +6,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app import agent_bots, agent_profile as profile, memory_schedule as sched, memory_settle as settle, owner_views
+import json
+
+from app import agent_bots, agent_profile as profile, memory_schedule as sched, memory_settle as settle, owner_views, view_review
 from app.agent_chat_models import (AgentBot, AgentConversation, AgentMessage, AgentProfileItem, AgentResearchQueue, AgentTelegramMessage,
-                                   MemoryJob, OwnerView)
+                                   MemoryJob, OwnerView, ViewReview)
 from app.agent_chat_store import owner_hash
 from app.database import Base, SessionLocal, engine
 
@@ -27,19 +29,24 @@ def world(monkeypatch, disposable_database):
     profile.ensure_seen_columns()
     owner_views.ensure_archive_column()
     with SessionLocal() as db:
-        for model in (AgentProfileItem, AgentMessage, AgentConversation, AgentTelegramMessage, AgentBot, MemoryJob, OwnerView, AgentResearchQueue):
+        for model in (AgentProfileItem, AgentMessage, AgentConversation, AgentTelegramMessage, AgentBot, MemoryJob, OwnerView, AgentResearchQueue, ViewReview):
             db.query(model).delete()
         from app.agent_chat_models import PortfolioTransaction
         db.query(PortfolioTransaction).delete()
         db.commit()
-    for name in ("FINBOT_MEMORY_STALE_DAYS", "FINBOT_MEMORY_QUARTER_ANCHORS"):
+    for name in ("FINBOT_MEMORY_STALE_DAYS", "FINBOT_MEMORY_QUARTER_ANCHORS", "FINBOT_VIEW_REVIEW_MAX", "FINBOT_VIEW_REVIEW_MIN_DAYS"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(view_review, "_complete", _no_model)      # a settle never reaches a real model in a test
     import app.channels as channels
     monkeypatch.setattr(channels, "available", lambda db, owner, channel, bot: channel == "telegram")
     import app.agent_chat_identity as identity
     import app.agent_chat_stream as stream
     for module in (identity, stream):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER, raising=False)
+
+
+def _no_model(owner, system, user):
+    raise RuntimeError("no model in tests")
 
 
 def _days(n):
@@ -236,10 +243,10 @@ def _registered(created):
 
 
 def test_the_job_is_registered_and_listed_with_its_title():
-    assert sched.JOBS[JOB] == "app.memory_settle:run" and sched.JOB_TITLES[JOB] == "每季整理记忆"
+    assert sched.JOBS[JOB] == "app.memory_settle:run" and sched.JOB_TITLES[JOB] == "每季整理记忆（含看法复盘）"
     from app import work
     sched.register(JOB, OWNER_HASH)
-    assert any(i["title"] == "每季整理记忆" for i in work._memory_items(OWNER_HASH, NOW))
+    assert any(i["title"] == "每季整理记忆（含看法复盘）" for i in work._memory_items(OWNER_HASH, NOW))
 
 
 def test_first_run_is_the_first_anchor_after_registration_and_then_one_catch_up_run():
@@ -416,3 +423,89 @@ def test_a_failure_while_archiving_a_view_still_reports_what_was_written(monkeyp
     note = _posted()[0]
     assert "推断的老习惯" in note and "归档 " in note
     assert ("看法" in note) == (result["views_archived"] > 0)
+
+
+# ---- 4d: the view review after the settle (Review Focus 2, 5) ----------------------------------------------------------
+
+def _reviewer(monkeypatch, answer):
+    sent = []
+
+    def fake(owner, system, user):
+        sent.append(json.loads(user))
+        value = answer(json.loads(user)) if callable(answer) else answer
+        if isinstance(value, Exception):
+            raise value
+        return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    monkeypatch.setattr(view_review, "_complete", fake)
+    return sent
+
+
+def _held_view(symbol, text="估值太高了"):
+    _buy(symbol, 10, "2026-01-05")
+    return _view(symbol, text)
+
+
+def test_a_review_is_made_after_the_settle_and_listed_in_the_note_even_when_nothing_else_changed(monkeypatch):
+    _held_view("NVDA")
+    sent = _reviewer(monkeypatch, {"verdict": "not_held", "text": "说的时候觉得估值太高，之后价格还在涨，这个看法没有成立；当时的理由现在还在，只是市场不买账。"})
+    result = settle.run(OWNER_HASH, NOW, None)
+    assert result["outcome"] == "done" and (result["promoted"], result["archived"], result["views_archived"]) == (0, 0, 0)
+    assert result["reviews"]["reviewed"] == 1 and result["reviews"]["failed"] == 0 and result["posted"] is True
+    assert "回看 1 条看法" in result["reason"] and len(sent) == 1
+    [note] = _posted()
+    said = _days(300)
+    assert note.startswith("这一季的记忆整理：") and "复盘：" in note and note.endswith("归档的都还在记忆页，可以恢复。")
+    assert f"- 英伟达的看法（{said.month}月{said.day}日）：没有成立——说的时候觉得估值太高，之后价格还在涨，这个看法没有成立；当时的理由现在还在，只是市场" in note
+    assert "转为长期" not in note and "归档 " not in note
+    assert _notices() == 1
+    with SessionLocal() as db:
+        assert db.query(ViewReview).count() == 1
+
+
+def test_a_view_archived_in_this_settle_is_not_reviewed(monkeypatch):
+    _view("NVDA")                  # not held, not followed, not mentioned: archived by this run
+    sent = _reviewer(monkeypatch, {"verdict": "held", "text": "成立。"})
+    result = settle.run(OWNER_HASH, NOW, None)
+    assert result["views_archived"] == 1 and result["reviews"]["reviewed"] == 0 and sent == []
+    assert "复盘：" not in _posted()[0]
+
+
+def test_a_failed_reply_for_one_view_leaves_the_settle_done_and_the_other_reviewed(monkeypatch):
+    _held_view("NVDA", "估值太高了")
+    _held_view("AAPL", "服务业务稳")
+    _item("推断的老习惯", origin="inferred", seen=_days(200))
+    _reviewer(monkeypatch, lambda payload: "这不是 JSON" if payload["view"]["text"] == "估值太高了" else {"verdict": "held", "text": "服务业务确实稳。"})
+    result = settle.run(OWNER_HASH, NOW, None)
+    assert result["outcome"] == "done" and result["archived"] == 1
+    assert result["reviews"]["reviewed"] == 1 and result["reviews"]["failed"] == 1
+    note = _posted()[0]
+    assert "推断的老习惯" in note and "苹果的看法" in note and "成立——服务业务确实稳。" in note and "英伟达的看法" not in note
+
+
+def test_a_review_that_blows_up_or_is_never_answered_never_changes_the_settle(monkeypatch):
+    _held_view("NVDA")
+    _item("推断的老习惯", origin="inferred", seen=_days(200))
+    monkeypatch.setattr(view_review, "run", lambda owner, now: (_ for _ in ()).throw(RuntimeError("boom")))
+    result = settle.run(OWNER_HASH, NOW, None)
+    assert result["outcome"] == "done" and result["archived"] == 1 and result["posted"] is True
+    assert result["reviews"] == {"reviewed": 0, "failed": 0, "not_reached": 0, "items": []}
+    assert "复盘：" not in _posted()[0]
+
+
+def test_no_review_written_and_nothing_else_changed_posts_nothing(monkeypatch):
+    _held_view("NVDA")
+    _reviewer(monkeypatch, RuntimeError("the model is down"))
+    result = settle.run(OWNER_HASH, NOW, None)
+    assert result["outcome"] == "done" and result["posted"] is False and result["reason"] == "这一季没有要整理的。"
+    assert result["reviews"]["failed"] == 1 and _posted() == [] and _notices() == 0
+
+
+def test_the_note_lists_at_most_ten_reviews_and_counts_the_rest(monkeypatch):
+    for symbol in ("AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "AMD", "INTC", "ORCL", "CRM", "ADBE", "NFLX"):
+        _held_view(symbol)
+    monkeypatch.setenv("FINBOT_VIEW_REVIEW_MAX", "12")
+    _reviewer(monkeypatch, {"verdict": "too_early", "text": "还早。"})
+    result = settle.run(OWNER_HASH, NOW, None)
+    assert result["reviews"]["reviewed"] == 12
+    note = _posted()[0]
+    assert note.count("的看法（") == 10 and "- 另有 2 条" in note
