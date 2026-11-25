@@ -1,6 +1,6 @@
 // Pure helpers of the memory page (profile items and past conversations), kept apart so node tests read them.
 
-const ORIGIN_LABELS = { explicit: "你说的", inferred: "推断", manual: "你写的" };
+const ORIGIN_LABELS = { explicit: "你说的", inferred: "推断", manual: "你写的", pattern: "你确认的推测" };
 const RECALL_KIND_LABELS = { summary: "摘要", questions: "你的提问" };
 
 export function originLabel(origin) { return ORIGIN_LABELS[origin] ?? origin; }
@@ -12,7 +12,19 @@ export function profileGroups(items) {
   const rank = item => (item.origin === "inferred" ? 1 : 0);
   const byAge = (a, b) => rank(a) - rank(b) || String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
   const list = Array.isArray(items) ? items : [];
-  return { active: list.filter(i => i.status === "active").sort(byAge), archived: list.filter(i => i.status !== "active").sort(byAge) };
+  return { active: list.filter(i => i.status === "active").sort(byAge), archived: list.filter(i => i.status !== "active" && i.status !== "proposed").sort(byAge) };
+}
+
+/** The monthly review's guesses waiting for his answer (status proposed), newest first.  Rejected ones never come from the server. */
+export function proposedItems(items) {
+  const list = Array.isArray(items) ? items : [];
+  return list.filter(i => i.status === "proposed").sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+}
+
+/** The quoted sentences of a guess, each with a short date; rows without a quote are dropped. */
+export function exampleLines(item) {
+  const rows = Array.isArray(item?.examples) ? item.examples : [];
+  return rows.filter(e => e && String(e.quote ?? "").trim()).map((e, n) => ({ key: String(e.message_id ?? n), quote: String(e.quote).trim(), date: String(e.date ?? "").slice(0, 10) }));
 }
 
 /** Active profile items by layer: 全局 first, then each bot (the default bot first, in the order given),

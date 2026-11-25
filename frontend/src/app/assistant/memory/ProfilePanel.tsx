@@ -11,7 +11,7 @@ import { DelayedSkeleton, Skeleton } from "@/components/state/Skeleton";
 import { confirm } from "@/components/state/confirm";
 import { confirmProfileItem, createProfileItem, deleteProfileItem, listProfileItems, updateProfileItem, type ProfileItem } from "../../../api/memory";
 import { useLocale } from "../../../i18n";
-import { layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers } from "../../../memory-items.mjs";
+import { exampleLines, layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers, proposedItems } from "../../../memory-items.mjs";
 import { useLoad } from "../../use-load";
 import { KINDS, KIND_LABELS, MAX_TEXT, canSaveEdit, isInferred, scopeChoices } from "./memory-view.mjs";
 
@@ -57,7 +57,8 @@ export function ProfilePanel() {
 
   const layers = (profileLayers(items ?? [], bots) as Layer[]).filter(layer => layer.items.length > 0);
   const archived = (profileGroups(items ?? []) as { archived: ProfileItem[] }).archived;
-  const empty = (items ?? []).every(item => item.status !== "active");
+  const proposed = proposedItems(items ?? []) as ProfileItem[];
+  const empty = (items ?? []).every(item => item.status !== "active" && item.status !== "proposed");
   const layerTitle = (layer: Layer) => layer.key === "global" ? t("全局") : layer.key === "gone" ? t("已删除的 bot") : layer.label;
   const kindText = (kind: ProfileItem["kind"]) => t(KIND_LABELS[kind] ?? kind);
 
@@ -124,6 +125,24 @@ export function ProfilePanel() {
         </li>;
       })}</ul>
     </section>)}
+    {proposed.length > 0 && <section data-testid="memory-proposed" aria-labelledby="memory-proposed-title" className="flex min-w-0 flex-col gap-2">
+      <h2 id="memory-proposed-title" className="text-title-s text-ink">{t("我的推测（未经你确认）")}<span className="ml-2 font-mono text-caption font-normal text-muted-foreground">{proposed.length}</span></h2>
+      <p data-testid="memory-proposed-note" className="max-w-3xl text-small text-ink-2">{t("这些是我从你最近的对话里归纳的，只影响回答的详略和先后，不影响结论。对的点「对」，不对的点「不对」。")}</p>
+      <ul className="m-0 flex list-none flex-col gap-2 p-0">{proposed.map(item => <li key={item.id} data-testid="memory-proposed-item" data-item={item.id} className="flex min-w-0 flex-col gap-2 rounded-md border border-line bg-surface p-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span data-testid="memory-kind"><StatusBadge kind="neutral" className="h-5">{kindText(item.kind)}</StatusBadge></span>
+          <p className="min-w-0 flex-1 basis-60 text-body font-medium text-ink [overflow-wrap:anywhere]">{item.text}</p>
+        </div>
+        <ul data-testid="memory-examples" className="m-0 flex list-none flex-col gap-1 p-0">{exampleLines(item).map(example => <li key={example.key} data-testid="memory-example" className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-small text-muted-foreground">
+          <q className="min-w-0 font-quote [overflow-wrap:anywhere]">{example.quote}</q>{example.date && <span className="font-mono text-caption">{example.date}</span>}
+        </li>)}</ul>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="ml-auto" />
+          <Button type="button" size="sm" variant="outline" data-testid="memory-proposed-yes" disabled={busy === item.id} aria-label={`${t("对")} · ${item.text}`} className="max-md:h-11" onClick={() => void run(item.id, () => confirmProfileItem(item.id))}>{t("对")}</Button>
+          <Button type="button" size="sm" variant="ghost" data-testid="memory-proposed-no" disabled={busy === item.id} aria-label={`${t("不对")} · ${item.text}`} className="max-md:h-11" onClick={() => void run(item.id, () => deleteProfileItem(item.id))}>{t("不对")}</Button>
+        </div>
+      </li>)}</ul>
+    </section>}
     {archived.length > 0 && <Collapsible data-testid="memory-archived" className="rounded-md border border-line bg-surface">
       <CollapsibleTrigger className="group/fold flex min-h-11 w-full items-center gap-2 rounded-md px-3 text-left text-body text-ink outline-none focus-visible:ring-2 focus-visible:ring-ring">
         <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/fold:rotate-90 motion-reduce:transition-none" />{t("已归档")}<span className="font-mono text-caption text-muted-foreground">· {archived.length}</span>

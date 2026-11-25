@@ -416,7 +416,7 @@ function assistantRoutes(route, reply, own) {
     kept(state, "POST", `/profile/${params.id}/confirm`, null);
     const item = state.assistant.profile.find((i) => i.id === params.id);
     if (!item) return reply.status(404, { detail: "profile_item_not_found" });
-    item.origin = "explicit";
+    if (item.status === "proposed") item.status = "active"; else item.origin = "explicit";   // a guess he confirms stays origin pattern
     return { item };
   }));
   route.delete(`${A}/profile/:id`, own(({ params, state }) => { kept(state, "DELETE", `/profile/${params.id}`, null); state.assistant.profile = state.assistant.profile.filter((i) => i.id !== params.id); return { ok: true }; }));

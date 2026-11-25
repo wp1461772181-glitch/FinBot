@@ -40,6 +40,17 @@ export const PROFILE = {
   ],
   bots: [{ id: BOT.finbot, name: "FinBot", is_default: true }, { id: BOT.newsbot, name: "NewsBot", is_default: false }, { id: BOT.applebot, name: "AppleBot", is_default: false }, { id: BOT.reportbot, name: "ReportBot", is_default: false }, { id: BOT.teslabot, name: "TeslaBot", is_default: false }],
 };
+/** The monthly review's output (stage 4b): three guesses waiting for his answer, each with 2-3 of his own sentences, and one guess he confirmed earlier (it sits among his items). */
+const example = (n, quote, ago) => ({ message_id: `me000000-0000-4000-8000-${String(n).padStart(12, "0")}`, quote, date: daysAgo(ago) });
+export const REVIEW_ITEMS = [
+  item(21, { kind: "preference", topic: "提问习惯", text: "看公司时先问最近一季的收入和利润，再问估值。", origin: "pattern", status: "proposed", scope: "global", created_at: daysAgo(1), updated_at: daysAgo(1), last_used_at: null, quote: "NVDA 这季收入和利润多少",
+    examples: [example(1, "NVDA 这季收入和利润多少", 12), example(2, "AAPL 上一季利润怎么样，估值之后再说", 8), example(3, "先看看 MSFT 最近一季的收入", 3)] }),
+  item(22, { kind: "about_me", text: "最近在盯半导体设备和 AI 算力链上的公司。", origin: "pattern", status: "proposed", scope: "global", created_at: daysAgo(1), updated_at: daysAgo(1), last_used_at: null, quote: "ASML 的订单有变化吗",
+    examples: [example(4, "ASML 的订单有变化吗", 15), example(5, "帮我看一下 AMAT 和 LRCX 谁的中国收入占比更高", 9)] }),
+  item(23, { kind: "preference", topic: "时间", text: "多在晚上和周末集中问，希望回答能留着慢慢看。", origin: "pattern", status: "proposed", scope: "global", created_at: daysAgo(1), updated_at: daysAgo(1), last_used_at: null, quote: "周末我有空，今晚把这几家都过一遍",
+    examples: [example(6, "周末我有空，今晚把这几家都过一遍", 10), example(7, "晚上回来看，你先整理好", 6), example(8, "这个周六再细看，先放着", 2)] }),
+];
+export const CONFIRMED_GUESS = item(24, { kind: "preference", topic: "回答详略", text: "财报类问题先给一屏摘要，细节放后面。", origin: "pattern", status: "active", quote: "财报先给我摘要", created_at: daysAgo(40), updated_at: daysAgo(35), last_used_at: daysAgo(2) });
 export const RECALL = [
   { conversation_id: CONVERSATION.finbot, title: "AAPL 服务收入与预测对比", date: dayOnly(0), summary: "对比了 AAPL 前两版预测，第 2 版下调了看跌概率。", kind: "summary", link: `#agent/${CONVERSATION.finbot}`, bot_id: BOT.finbot, bot_name: "FinBot" },
   { conversation_id: CONVERSATION.applebot, title: "AAPL 本季服务收入", date: dayOnly(1), summary: "问了服务收入与毛利率，引用了最新 10-Q。", kind: "summary", link: `#agent/${CONVERSATION.applebot}`, bot_id: BOT.applebot, bot_name: "AppleBot" },

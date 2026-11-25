@@ -3194,7 +3194,7 @@ class Turn:
                                          bot_id=self.context.bot_id,every_bot=self.context.bot_is_default)
             if not item:return self.write_error(name,'profile_item_not_found')
             display={'title':WRITE_TITLES['forget'],'targets':[{'title':item['text']}],
-                     'alternative':'忘掉后这条不再用于回答；记忆页里仍能看到它的归档记录。'}
+                     'alternative':'这是我的推测；删掉后不再保留原文，以后也不会再这样推测。' if item.get('status')=='proposed' else '忘掉后这条不再用于回答；记忆页里仍能看到它的归档记录。'}
         self.proposals.append(([operation],display))
         self.audit['write_outcome']='proposed'
         return {'ok':True,'data':[{'status':'awaiting_confirmation','title':display['title']}]}

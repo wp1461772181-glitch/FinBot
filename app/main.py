@@ -200,6 +200,8 @@ def create_tables() -> None:
     # Memory layers (second edition, stage B): a profile item's bot; NULL (every existing item) is global.
     from .agent_profile import ensure_bot_column as ensure_profile_bot_column
     ensure_profile_bot_column()
+    from .agent_profile import ensure_review_columns as ensure_profile_review_columns
+    ensure_profile_review_columns()
     # Stage C: tasks and inbox entries belong to a bot; NULL (every existing row) is adopted by the default bot.
     from .agent_tasks import ensure_bot_columns as ensure_task_bot_columns
     ensure_task_bot_columns()
@@ -261,6 +263,12 @@ async def start_background_loops() -> None:
     from . import background
     if background.enabled():
         _background_tasks.extend(background.start())
+        try:    # the memory calendar learns the site's owner before its first tick; the tick only reads what is registered
+            from . import memory_schedule
+            memory_schedule.register_for_configured_owner()
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).exception("registering the memory jobs failed")
 
 
 @app.on_event("startup")

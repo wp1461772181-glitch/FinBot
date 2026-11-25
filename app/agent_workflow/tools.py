@@ -125,7 +125,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
             listed,default=catalog.entries()
             chosen=roles.all_roles(context.owner_hash)
             names={item['name'] for item in listed}
-            notes={'earnings':'unset: the server default model','forecast':'unset: the server default model','judge':'unset: the configured judge','fallback':'unset: no backup model','helper':"unset: the turn's own model"}
+            notes={'earnings':'unset: the server default model','forecast':'unset: the server default model','judge':'unset: the configured judge','fallback':'unset: no backup model','helper':"unset: the turn's own model",'memory':'unset: the server default model'}
             return {'default_model':default,
                     'models':[{'name':item['name'],'display_name':item['display_name'],'provider':item['provider'],'model':item['model'],
                                'key_set':bool(catalog._key_for(item)),'is_default':item['name']==default} for item in listed],
@@ -339,7 +339,10 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         if not is_owner:return error('owner_login_required')
         if name=='forget':
             item=await asyncio.to_thread(profile.archive_item,context.owner_hash,args['item_id'])
-            return result([{'status':'forgotten','text':item['text'],'handle':item['handle']}],'owner profile') if item else error('profile_item_not_found')
+            if not item:return error('profile_item_not_found')
+            # A monthly-review guess is reduced to a fingerprint when forgotten: its text is gone, so only the handle comes back.
+            gone=item.get('status')=='rejected'
+            return result([{'status':'forgotten','handle':item['handle'],**({} if gone else {'text':item['text']})}],'owner profile')
         # The quote was checked against the user's message when the card was made (Turn.propose), and
         # the operation carrying it is frozen under the confirmation token; here only its shape is checked.
         # The layer is the frozen bot_id the server set from the proposing turn (None: global).

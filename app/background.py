@@ -19,6 +19,7 @@ HOURLY_SECONDS = 3600
 NEWS_SECONDS = 900         # configured news sources; until this loop the library was only refreshed while a chat turn waited on it
 RELEASE_FIGURES_SECONDS = 600   # 8-K earnings-release figures for a quarter whose 10-Q/10-K is not filed yet
 COMPANY_FACTS_SECONDS = 6 * 3600   # rebuild every company's code-built facts (the hooks do it per symbol as filings are stored; this catches the rest)
+MEMORY_JOBS_SECONDS = 600   # the memory calendar looks for a job that is due
 WORK_WATCH_SECONDS = 60     # a job started from a card that has ended gets its message within a minute
 EARNINGS_SECONDS = 60      # picks up events the response-time task missed, due follow-ups, and anything left over from a restart
 
@@ -118,6 +119,15 @@ def run_company_facts() -> None:
     log.info("company facts: symbols=%s facts=%s ratios=%s errors=%s", done["symbols"], done["facts"], done["ratios"], sorted(done["errors"]))
 
 
+def run_memory_jobs() -> None:
+    """The memory calendar (app.memory_schedule): the jobs that are due run once; a restart neither reruns nor skips one."""
+    from . import memory_schedule
+
+    ran = memory_schedule.tick()
+    if ran:
+        log.info("memory jobs: %s run", ran)
+
+
 LOOPS = (
     ("routine-tasks", ROUTINE_SECONDS, run_routine_tasks),
     ("sec-monitor", HOURLY_SECONDS, run_sec_monitor),
@@ -127,6 +137,7 @@ LOOPS = (
     ("release-figures", RELEASE_FIGURES_SECONDS, run_release_figures),
     ("company-facts", COMPANY_FACTS_SECONDS, run_company_facts),
     ("work-watch", WORK_WATCH_SECONDS, run_work_watch),
+    ("memory-jobs", MEMORY_JOBS_SECONDS, run_memory_jobs),
 )
 
 

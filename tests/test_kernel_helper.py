@@ -26,9 +26,9 @@ from tests.test_agent_bots import KEY_A, OWNER_HASH, owner  # noqa: F401  (fixtu
 from tests.test_kernel_loop import FakeConsent, act_call, call, env, fake_consent, make_context, step  # noqa: F401  (fixtures by name)
 
 # What the schemas and the system text hash to with the switch off (sorted keys, ensure_ascii off): the same as before the helper existed, except that
-# the owner's role lists (set_model_role, list_models) now name the helper role, which exists whatever the switch.  Stage 4a: plus read_turn.
+# the owner's role lists (set_model_role, list_models) now name the helper role, which exists whatever the switch.  Stage 4a: plus read_turn.  Stage 4b: the role lists also name the memory role.
 GOLDEN = {
-    "owner": ("78b4aaf2e132d2b35bc420bf0af581a8dc62cac328c20650cd2cdb227d4d793d", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
+    "owner": ("1bc180d8fa8d759e8fb9c1fa7e70b47027ddb7f230f79022b6fc25eec4ae584b", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
     "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
 }
 

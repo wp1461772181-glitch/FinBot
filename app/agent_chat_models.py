@@ -102,6 +102,10 @@ class AgentProfileItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The monthly review's proposals (origin ``pattern``, status ``proposed``): his own sentences as examples
+    # ([{message_id, quote, date}]) and the run that made it.  Added to older tables by ``agent_profile.ensure_review_columns``.
+    examples: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    review_run: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
 
 
 class AgentConversationRecall(Base):
@@ -495,6 +499,22 @@ class OwnerView(Base):
     status: Mapped[str] = mapped_column(String(12), nullable=False, default="active")      # active | superseded | dropped
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MemoryJob(Base):
+    """The calendar of the memory jobs (app/memory_schedule.py): one row per (job, owner) with when it last ran and who holds it now.
+    ``claimed_at``/``claimed_by`` are the lock two workers race for; a claim older than 30 minutes is dead (a restart cut it off)."""
+    __tablename__ = "memory_jobs"
+    job: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)     # the last run that counts (done or skipped)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)    # the last time any run ended
+    last_outcome: Mapped[str | None] = mapped_column(String(12), nullable=True)                      # done | skipped | failed
+    last_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)       # after a failure: not before this
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
 class EarningsEvent(Base):

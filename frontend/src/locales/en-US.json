@@ -2540,5 +2540,12 @@
   "打开公司页": "Open company page",
   "你的看法暂时无法读取。": "Your views cannot be read right now.",
   "登录个人聊天后才能查看你的看法。": "Sign in to personal chat to see your views.",
-  "还没有记下对哪家公司的看法。在对话里说出你的看法，它会记下来。": "No view of any company has been noted yet. Say your view in the conversation and it will be noted."
+  "还没有记下对哪家公司的看法。在对话里说出你的看法，它会记下来。": "No view of any company has been noted yet. Say your view in the conversation and it will be noted.",
+  "记忆整理": "Memory review",
+  "我的推测（未经你确认）": "My guesses (not confirmed by you)",
+  "这些是我从你最近的对话里归纳的，只影响回答的详略和先后，不影响结论。对的点「对」，不对的点「不对」。": "These are what I gathered from your recent conversations. They only affect how long answers are and what comes first, never conclusions. Press 「Right」 for correct ones, 「Wrong」 for the rest.",
+  "对": "Right",
+  "不对": "Wrong",
+  "你确认的推测": "A guess you confirmed",
+  "每月整理你的习惯和关注用哪个模型；不选就用服务器默认模型。": "The model that sorts out your habits and interests each month; if not set, the server's default model is used"
 }

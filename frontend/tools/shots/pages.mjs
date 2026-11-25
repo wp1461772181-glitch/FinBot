@@ -12,7 +12,7 @@ import { handFed } from "./fake-sse.mjs";
 import { buildState } from "./fixtures/index.mjs";
 import { materialId } from "./fixtures/materials.mjs";
 import { EXTRA_INBOX, EXTRA_PROPOSALS, EXTRA_TASKS } from "./fixtures/routines.mjs";
-import { EXTRA_SOURCES, IMPORT_SAMPLE, KNOWLEDGE_CANDIDATES, KNOWLEDGE_EXTRA_DOCS } from "./fixtures/assistant.mjs";
+import { CONFIRMED_GUESS, EXTRA_SOURCES, IMPORT_SAMPLE, REVIEW_ITEMS, KNOWLEDGE_CANDIDATES, KNOWLEDGE_EXTRA_DOCS } from "./fixtures/assistant.mjs";
 
 import fs from "node:fs";
 // P9.1: a hook that presses or waits for a LABEL must work in the English interface too (the English run photographs every page): `either("登录")` matches the Chinese label or its English translation, exactly.
@@ -390,6 +390,12 @@ export function stateAssistantEmpty() {
   const state = buildState();
   Object.assign(state.assistant, { skills: [], profile: [], recall: [], docs: [], candidates: [] });
   state.assistant.news.sources = [];
+  return state;
+}
+/** The monthly review has run: three guesses wait for his answer, and one he confirmed earlier is among his items. */
+export function stateMonthlyReview() {
+  const state = buildState();
+  state.assistant.profile.push(structuredClone(CONFIRMED_GUESS), ...structuredClone(REVIEW_ITEMS));
   return state;
 }
 /** No view of any company has been noted. */
@@ -905,6 +911,7 @@ export const PAGES = [
       await page.locator("[data-testid=owner-view-history-toggle]").click(); await page.locator("[data-testid=owner-view-version]").first().waitFor({ timeout: 10000 });
     } },
   { name: "company-view-only-history", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-none]", element: "[data-testid=owner-view]", view: () => ({ fixtureState: stateViewsOnlyHistory() }) },
+  { name: "memory-guesses", hash: "#/assistant/memory", ready: "[data-testid=memory-proposed-item]", view: () => ({ fixtureState: stateMonthlyReview() }) },
   { name: "memory-recall", hash: "#/assistant/memory?tab=recall", ready: "[data-testid=recall-item]" },
   { name: "memory-empty", hash: "#/assistant/memory", ready: "[data-testid=memory-empty]", view: () => ({ fixtureState: stateAssistantEmpty() }) },
   { name: "news-test-result", hash: "#/assistant/news", ready: "[data-testid=news-row]", before: async (page) => {

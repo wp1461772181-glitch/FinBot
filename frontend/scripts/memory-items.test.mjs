@@ -58,3 +58,26 @@ test("a typed item is checked before it is sent: text, kind and its layer (\"\" 
   const ordered = groups([item("i", "inferred", "active", "2026-10-01"), item("m", "manual", "active", "2026-10-02")]);
   assert.deepEqual(ordered.active.map(i => i.id), ["m", "i"]);
 });
+
+test("proposed guesses are their own group, never active and never archived; a confirmed one is labelled", async () => {
+  const { proposedItems, originLabel: label } = await import("../src/memory-items.mjs");
+  const list = [
+    { ...item("p-old", "pattern", "proposed", "2026-11-01"), examples: [{ message_id: "m1", quote: "q", date: "2026-10-30" }] },
+    { ...item("p-new", "pattern", "proposed", "2026-11-20") },
+    item("mine", "explicit", "active", "2026-10-01"), { ...item("kept", "pattern", "active", "2026-10-02") },
+    item("old", "explicit", "archived", "2026-09-01"),
+  ];
+  const groups = profileGroups(list);
+  assert.deepEqual(proposedItems(list).map(i => i.id), ["p-new", "p-old"]);
+  assert.deepEqual(groups.active.map(i => i.id), ["mine", "kept"]);
+  assert.deepEqual(groups.archived.map(i => i.id), ["old"]);
+  assert.equal(label("pattern"), "你确认的推测");
+  assert.deepEqual(proposedItems(null), []);
+});
+
+test("examples are shown with a short date; bad rows are dropped", async () => {
+  const { exampleLines } = await import("../src/memory-items.mjs");
+  assert.deepEqual(exampleLines({ examples: [{ message_id: "a", quote: " 先说结论 ", date: "2026-11-03T08:00:00+00:00" }, { quote: "" }, null] }),
+    [{ key: "a", quote: "先说结论", date: "2026-11-03" }]);
+  assert.deepEqual(exampleLines({ examples: null }), []);
+});

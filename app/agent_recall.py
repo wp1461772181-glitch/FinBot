@@ -72,6 +72,15 @@ TASK_POST_HEAD = "【例行任务结果】"
 WORK_END_HEAD = "【任务结果】"      # the row a finished card job's end message opens with (app.work): not the owner's question either
 
 
+def owner_message_clause():
+    """SQL condition on ``AgentMessage``: the row is the owner's own words.  System-posted head rows (task briefs, work-end messages, the monthly
+    memory message) are stored with role ``user`` too, but carry a head and ``agent_tasks.POST_NOTE``; none of them is his."""
+    from sqlalchemy import and_
+    from .agent_tasks import POST_NOTE
+    return and_(AgentMessage.role == "user", ~AgentMessage.content.contains(POST_NOTE, autoescape=True),
+                ~AgentMessage.content.startswith(TASK_POST_HEAD), ~AgentMessage.content.startswith(WORK_END_HEAD))
+
+
 def _title(db, cid: uuid.UUID) -> str:
     custom = db.get(AgentConversationTitle, cid)
     if custom is not None and custom.title:

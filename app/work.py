@@ -223,19 +223,20 @@ def daily_cap() -> int:
         return DEFAULT_DAILY_CAP
 
 
-def _send_notice(db, owner: str, conversation_id, line: str, now: datetime) -> bool:
-    """Queue one line for the owner's channel (source ``work``) inside the caller's transaction: under the owner's preference, the
-    work daily count and one notice at a time per owner.  False (nothing queued) when over the cap or no channel can take it."""
+def _send_notice(db, owner: str, conversation_id, line: str, now: datetime, *, source: str = "work", cap: int | None = None) -> bool:
+    """Queue one line for the owner's channel (source ``work``; the monthly memory review passes its own source and cap) inside the caller's
+    transaction: under the owner's preference, the source's daily count and one notice at a time per owner.  False (nothing queued) when over
+    the cap or no channel can take it."""
     from . import agent_telegram as telegram
-    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"work-notice:{owner}"})
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"{source}-notice:{owner}"})
     bot = _notice_bot(db, owner, conversation_id)
     today = db.scalar(select(func.count(func.distinct(func.coalesce(AgentTelegramMessage.group_id, AgentTelegramMessage.id))))
-                      .where(AgentTelegramMessage.owner_hash == owner, AgentTelegramMessage.source == "work",
+                      .where(AgentTelegramMessage.owner_hash == owner, AgentTelegramMessage.source == source,
                              AgentTelegramMessage.created_at >= telegram._day_start(now)))
-    if int(today or 0) >= daily_cap():
+    if int(today or 0) >= (daily_cap() if cap is None else cap):
         return False
     try:
-        telegram.enqueue(db, owner, bot.id, telegram.render(bot.name, line), source="work", now=now)
+        telegram.enqueue(db, owner, bot.id, telegram.render(bot.name, line), source=source, now=now)
     except telegram.NotifyError:
         return False
     return True
@@ -429,8 +430,35 @@ def list_for(owner: str, *, now: datetime | None = None, limit: int = LIST_LIMIT
         else:
             items.append(_item("routine", task["id"], title, QUEUED, next_run=nxt))
     items.extend(_archive_items(owner, now, since))
+    items.extend(_memory_items(owner, now))
     items.sort(key=lambda item: item["started_at"] or _iso(now), reverse=True)
     return items[:max(1, int(limit))]
+
+
+def _memory_items(owner: str, now: datetime) -> list[dict]:
+    """One item per memory job (app.memory_schedule): queued until its first run, then the last outcome; always with the next due time."""
+    from . import memory_schedule as schedule
+    from .agent_chat_models import MemoryJob
+    try:
+        with SessionLocal() as db:
+            rows = list(db.scalars(select(MemoryJob).where(MemoryJob.owner_hash == owner)))
+    except Exception:  # noqa: BLE001 - the table is made at startup; without it there is no calendar to show
+        _log_once(("memory", "list"), "reading the memory calendar failed")
+        return []
+    found = []
+    for row in rows:
+        if row.job not in schedule.JOBS:
+            continue
+        title, nxt = schedule.JOB_TITLES.get(row.job, "整理记忆"), schedule._next_due(row)
+        if row.claimed_at is not None and now - row.claimed_at < schedule.CLAIM_TTL:
+            found.append(_item("memory", row.job, title, RUNNING, started=row.claimed_at))
+        elif row.last_outcome == "failed":
+            found.append(_item("memory", row.job, title, FAILED, started=row.finished_at, ended=row.finished_at, next_run=nxt, failure=row.last_reason or "这次整理没有成功"))
+        elif row.last_outcome is None:
+            found.append(_item("memory", row.job, title, QUEUED, next_run=nxt))
+        else:
+            found.append(_item("memory", row.job, title, DONE, started=row.finished_at, ended=row.finished_at, next_run=nxt))
+    return found
 
 
 def _archive_items(owner: str, now: datetime, since: datetime) -> list[dict]:
@@ -580,16 +608,21 @@ def _post_end(db, request: dict, outcome: str, consent, now: datetime) -> bool:
 def _post_end_message(db, line, request: dict, outcome: str, what: str, reason: str | None, blocked: bool) -> None:
     """The end message: a head row marked as the system's (``WORK_END_HEAD`` and the note routine posts carry, so neither the web nor the model takes it
     for the owner's words) and the assistant's one sentence."""
-    sequence = db.scalar(select(func.coalesce(func.max(AgentMessage.sequence), 0)).where(AgentMessage.conversation_id == line.id))
-    turn = uuid.uuid4()
     if outcome == DONE:
         text_out = f"你让我做的「{what}」已完成。{JOB_PAGES.get(request['action'], '')}"
     elif blocked:
         text_out = f"你让我做的「{what}」没有做成：{reason}。"
     else:
         text_out = f"你让我做的「{what}」失败了（{reason}）。可以让我重试。"
+    post_system_message(db, line, what, text_out, {"work_end": {"request_id": str(request["id"]), "outcome": outcome}, "audit": {}})
+
+
+def post_system_message(db, line, what: str, text_out: str, tool_calls: dict) -> None:
+    """One system-posted exchange in a conversation: a head row marked as the system's (``WORK_END_HEAD`` and ``POST_NOTE``, so neither the web
+    nor the model nor the memory review takes it for the owner's words) and the assistant's text."""
     from .agent_tasks import POST_NOTE
+    sequence = db.scalar(select(func.coalesce(func.max(AgentMessage.sequence), 0)).where(AgentMessage.conversation_id == line.id))
+    turn = uuid.uuid4()
     db.add(AgentMessage(conversation_id=line.id, turn_id=turn, sequence=sequence + 1, role="user", content=f"{WORK_END_HEAD}「{what}」{POST_NOTE}", status="complete"))
-    db.add(AgentMessage(conversation_id=line.id, turn_id=turn, sequence=sequence + 2, role="assistant", content=text_out, status="complete",
-                        tool_calls={"work_end": {"request_id": str(request["id"]), "outcome": outcome}, "audit": {}}))
+    db.add(AgentMessage(conversation_id=line.id, turn_id=turn, sequence=sequence + 2, role="assistant", content=text_out, status="complete", tool_calls=tool_calls))
     line.updated_at = func.now()
