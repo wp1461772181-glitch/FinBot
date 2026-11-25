@@ -12,6 +12,7 @@ import json
 import re
 import uuid
 from runpy import run_path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -25,12 +26,18 @@ from app.agent_chat_stream import StreamRequest
 from app.agent_workflow import consent, tools
 from app.database import SessionLocal, engine
 from app.kernel import inbox as inboxes
-from app.kernel import loop
+from app.kernel import loop, press
 from tests.test_agent_chat_stream import stream_fixture  # noqa: F401  (fixture)
 from tests.test_kernel_loop import FakeConsent, act_call, call, env, fake_consent, make_context  # noqa: F401  (fixtures by name)
 from tests.test_kernel_wiring import Wiring
 
 CRED = "x" * 40
+
+
+@pytest.fixture(autouse=True)
+def streaming_provider(monkeypatch):
+    """The fake provider streams its text piece by piece, like Anthropic's native one (the others report the whole text after the call)."""
+    monkeypatch.setattr(loop, "_streams", lambda use: True, raising=False)
 
 
 def _new_id():
@@ -173,7 +180,7 @@ def test_a_stop_while_writing_cuts_the_text_within_a_delta_and_ends_the_turn_wit
     third = model.calls[2]["messages"]
     assert [m["role"] for m in third[-3:]] == ["assistant", "user", "system"]
     assert third[-3]["content"] == "NVDA 的营收是 100" and third[-2]["content"] == "算了不用了"
-    assert "写到一半" in third[-1]["content"]
+    assert "没有交给用户就停下了" in third[-1]["content"]
     assert result["status"] == "stopped"
     assert result["answer"] == "NVDA 的营收是 100\n\n好的，不做了。"
     assert kinds[-3:] == ["answer_reset", "delta", "stopped"] and events[-2]["text"] == result["answer"]
@@ -533,7 +540,7 @@ def test_a_separate_turn_still_starts_when_the_request_that_brought_it_is_droppe
     assert len(lab.answers()) == 2
 
 
-def test_a_message_while_a_card_press_runs_is_not_taken_in_and_old_engine_turns_keep_the_409(lab):
+def test_old_engine_turns_keep_the_409_while_the_conversation_is_busy(lab):
     from fastapi import HTTPException
     lab.w.bot["engine"] = None
     lab.monkeypatch.delenv("FINBOT_KERNEL_DEFAULT")
@@ -708,3 +715,234 @@ def test_a_stored_message_can_be_named_moved_and_left_out_of_the_history_as_of_a
         early = await store.conversation_context(conversation, CRED, upto_sequence=1)
         assert early["unfinished"] and early["unfinished"][0]["content"] == "NVDA 的营收"
     _scenario(scenario())
+
+
+# ---- fix round 1 ----
+
+def test_i1_a_stop_after_an_executed_press_still_tells_the_user_the_write_ran(env):
+    from tests.test_kernel_press import FakeCards, QUESTION, TOKEN, pending_card, pressed
+    from app.agent_workflow import consent as consent_module
+    fake = FakeCards()
+    for name in ("propose", "execute", "lookup", "cancel"):
+        env.monkeypatch.setattr(consent_module, name, getattr(fake, name))
+
+    async def costly(operation, key, context):
+        return {"ok": True, "status": "queued", "job_id": "job-1", "symbol": "AAPL"}
+    env.monkeypatch.setattr(tools, "execute_costly", lambda operation, key, context: {"ok": True, "status": "queued", "job_id": "job-1", "symbol": "AAPL"})
+
+    async def reversible(operation, key, context, *, emit=None, overrides=None):
+        return {"ok": True, "status": "saved"}
+    env.monkeypatch.setattr(tools, "execute_reversible", reversible)
+    holder, box_of = [], []
+    model = Model([{"pieces": ["预测已提交，", lambda: holder.append(_arrive(box_of[0], "算了")), "稍后"]},
+                   lambda messages: {"calls": [_handle("h1", holder[0], "stop", "好的。")]}])
+    env.monkeypatch.setattr(provider, "stream_decision", model)
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    async def scenario():
+        box = inboxes.Inbox("turn-p", own_message_id="own-p")
+        box_of.append(box)
+        context = make_context(conversation_id="conv")
+        context.inbox = box
+        card = pending_card(fake, [{"name": "forecast", "arguments": {"symbol": "AAPL"}}], question=QUESTION)
+        history = [{"role": "system", "content": "endpoint"}, {"role": "user", "content": QUESTION},
+                   {"role": "assistant", "content": "请核对卡片"}, {"role": "user", "content": f"confirm:{TOKEN}"}]
+        return await loop.run_turn(f"confirm:{TOKEN}", context, emit, history, pressed(card))
+    result = asyncio.run(scenario())
+    assert result["status"] == "stopped" and len(fake.executed) == 1
+    final = [e for e in events if e["event"] == "delta"][-1]["text"]
+    report = press.report_sentence("生成研究预测", [{"job_id": "job-1"}], True)
+    assert final == result["answer"] and final.startswith(report)          # the code-written report comes first
+    assert "预测已提交，" in final and final.endswith("好的。")          # then the partial text and the stop sentence
+
+
+def test_i2_a_provider_that_does_not_stream_finishes_the_call_and_its_tool_calls_still_run(env, monkeypatch):
+    monkeypatch.setattr(loop, "_streams", lambda use: False, raising=False)
+    box_of, made = [], []
+    result, box, events, model = _run_loop(
+        env,
+        [{"pieces": ["先查", lambda: made.append(_arrive(box_of[0], "也看看 AMD")), "一下"], "calls": [call("c1", "query_financials", {"symbol": "NVDA"})]},
+         lambda messages: {"calls": [_handle("h1", made[0], "merge"), call("c2", "query_financials", {"symbol": "AMD"})]},
+         {"pieces": ["两家的对比"]}],
+        setup=lambda b: box_of.append(b))
+    assert [args["symbol"] for _, args in env.invoked] == ["NVDA", "AMD"]          # the call the model already made was run, not dropped
+    second = model.calls[1]["messages"]
+    assert [m["role"] for m in second[-3:]] == ["tool", "user", "system"]          # handed over before the next model call
+    assert "answer_paused" not in [e["event"] for e in events]
+    assert result["answer"] == "两家的对比" and result["final_protocol"]["reply_to"] == ["own-1", made[0].id]
+
+
+def test_i3_only_a_turn_that_has_started_takes_messages():
+    box = inboxes.Inbox("t1")
+    inboxes.register("conv-i3", box)
+    try:
+        assert inboxes.target("conv-i3") is None            # registered, not yet running
+        box.started = True
+        assert inboxes.target("conv-i3") is box
+        box.close()
+        assert inboxes.target("conv-i3") is None and inboxes.finishing("conv-i3")
+    finally:
+        inboxes.unregister("conv-i3", box)
+
+
+def test_i3_a_message_is_never_parked_on_a_queued_turn(lab, monkeypatch):
+    monkeypatch.delenv("FINBOT_CONCURRENT_WORK", raising=False)
+    gates = [asyncio.Event() for _ in range(5)]
+    started = []
+
+    async def model(provider_name, model_name, key, messages, schemas, **kwargs):
+        text = next(m["content"] for m in reversed(messages) if m["role"] == "user")
+        index = int(text[-1]) - 1
+        started.append(index)
+        await gates[index].wait()
+        return await reply(f"答案 {index + 1}")(kwargs["on_text"])
+    lab.model(model)
+
+    async def scenario():
+        readings = [asyncio.ensure_future(collect(await lab.send(f"问题 {n}", bot=False))) for n in (1, 2, 3)]
+        while len(started) < 3:
+            await asyncio.sleep(0.01)
+        fourth = await lab.send("问题 4", bot=False)
+        body = fourth.body_iterator
+        first = [await body.__anext__() for _ in range(3)]            # (detach marker,) conversation, queued
+        cid4 = json.loads(next(c for c in first if c.startswith("event: conversation")).split("\n")[1][6:])["conversation_id"]
+        rest = asyncio.ensure_future(collect_iter(body))
+        fifth = await lab.send("问题 5", bot=False, conversation_id=cid4)       # said in the fourth's conversation while it waits
+        fifth_wire = []
+        reading5 = asyncio.ensure_future(collect(fifth))
+        await asyncio.sleep(0.2)
+        assert not reading5.done() and 4 not in started and 3 not in started
+        assert inboxes.target(cid4) is None                       # nobody took it
+        for gate in gates:
+            gate.set()
+        return [await r for r in readings], "".join(first) + await rest, await reading5
+    _, fourth, fifth = _scenario(scenario())
+    assert "received" not in names_of(fifth) and "queued" in names_of(fifth) and dict(blocks(fifth))["queued"]["ahead"] >= 3
+
+
+async def collect_iter(body):
+    return "".join([chunk async for chunk in body])
+
+
+def names_of(wire):
+    return names(wire)
+
+
+def test_i4_a_second_card_is_not_minted_while_a_parallel_turn_holds_one(env, fake_consent, monkeypatch):
+    from app import portfolio
+    monkeypatch.setattr(portfolio, "describe_write", lambda owner, name, args: {"title": f"记 {args['symbol']}", "targets": [{"symbol": args["symbol"]}]})
+    inboxes.MINTED.clear()
+    gate = asyncio.Event()
+
+    async def dispatcher(provider_name, model_name, key, messages, schemas, **kwargs):
+        first = next(m["content"] for m in messages if m["role"] == "user")
+        on_text = kwargs["on_text"]
+        names_seen = [m for m in messages if m["role"] == "tool"]
+        if first == "问题 A":
+            if not names_seen:
+                return await reply("", [act_call("a1", "forecast", {"symbol": "AAPL"})])(on_text)
+            await gate.wait()                              # B has minted its card by now
+            return await reply("A 的预测请核对")(on_text)
+        if not names_seen:
+            return await reply("", [act_call("b1", "forecast", {"symbol": "MSFT"})])(on_text)
+        return await reply("B 的预测请核对")(on_text)
+    monkeypatch.setattr(provider, "stream_decision", dispatcher)
+
+    async def one(question):
+        events = []
+
+        async def emit(event):
+            events.append(event)
+        ctx = make_context(conversation_id="conv-i4")
+        return await loop.run_turn(question, ctx, emit, [{"role": "system", "content": "s"}, {"role": "user", "content": question}], {"turn_id": question[-1]})
+
+    async def scenario():
+        a = asyncio.ensure_future(one("问题 A"))
+        await asyncio.sleep(0.05)
+        b = await one("问题 B")
+        gate.set()
+        return await a, b
+    a, b = asyncio.run(scenario())
+    assert b["pending_request"]["id"] == "card-1" and len(fake_consent.proposed) == 1     # B's card; A did not mint a second one
+    assert a["pending_request"] is None and "确认卡没有生成" in a["answer"]
+
+
+def test_i4_an_act_that_would_mint_a_second_card_is_refused_with_the_waiting_reason(env, fake_consent, monkeypatch):
+    inboxes.note_minted("conv-i4b", "other-turn", {"id": "card-x", "expires_at": "2999-01-01T00:00:00+00:00"})
+    model = Model([{"calls": [act_call("a1", "forecast", {"symbol": "AAPL"})]}, {"pieces": ["好"]}])
+    monkeypatch.setattr(provider, "stream_decision", model)
+    # the turn started before the other card was minted
+    ctx = make_context(conversation_id="conv-i4b")
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    async def scenario():
+        run_task = asyncio.ensure_future(loop.run_turn("q", ctx, emit, [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}], {"turn_id": "mine"}))
+        return await run_task
+    import time
+    inboxes.MINTED["conv-i4b"] = (time.monotonic() + 100, "other-turn", inboxes.MINTED["conv-i4b"][2])     # minted after this turn began
+    result = asyncio.run(scenario())
+    refused = [e for e in events if e["event"] == "tool_result" and e["name"] == "act"][0]["result"]
+    assert refused["ok"] is False and refused["error_code"] == "write_card_waiting"
+    assert fake_consent.proposed == []
+    inboxes.MINTED.pop("conv-i4b")
+
+
+def test_i5_a_merged_correction_replaces_the_card_operation_it_corrects(env, fake_consent, monkeypatch):
+    from app import portfolio
+    monkeypatch.setattr(portfolio, "describe_write", lambda owner, name, args: {"title": f"记 {args['symbol']} {args.get('quantity')}", "targets": [{"symbol": args["symbol"]}]})
+    inboxes.MINTED.clear()
+    box_of, made = [], []
+
+    async def invoke(name, args, context, *, emit=None, page_chars=None):
+        return {"ok": True, "data": [dict(ROW)], "source": "saved"}
+    trade = lambda quantity: {"kind": "buy", "symbol": "TSLA", "quantity": quantity, "price": 250}
+    result, box, events, model = _run_loop(
+        env,
+        [{"calls": [act_call("p1", "record_trade", trade(10))]},
+         {"pieces": ["准备记 10 股，请核对", lambda: made.append(_arrive(box_of[0], "不对，是 20 股"))]},
+         lambda messages: {"calls": [_handle("h1", made[0], "merge"), act_call("p2", "record_trade", trade(20))]},
+         {"pieces": ["改成 20 股了，请核对卡片"]}],
+        invoke=invoke, setup=lambda b: box_of.append(b))
+    assert len(fake_consent.proposed) == 1
+    quantities = [op["arguments"]["quantity"] for op in fake_consent.proposed[0]["operations"]]
+    assert quantities == [20]
+    handled = [e for e in events if e["event"] == "tool_result" and e["name"] == inboxes.HANDLE][0]["result"]["data"][0]
+    assert handled["withdrawn_proposals"] == 1 and "已撤回" in handled["note"]
+    assert "已撤回" in model.calls[2]["messages"][-1]["content"]
+
+
+def test_i6_a_summary_never_cuts_through_a_turn_that_is_still_running():
+    from app import agent_context as layers
+    big = "问题" * 200
+    rows = [_row("A", 10, "user", "长问题"), _row("B", 11, "user", big), _row("B", 12, "assistant", big),
+            _row("C", 13, "user", big), _row("C", 14, "assistant", big)]
+    plain = layers.layer_rows(rows, [], l1_bytes=10, l2_bytes=10, l3_bytes=10)
+    assert plain["overflow"] and plain["overflow"][-1].last_sequence >= 12           # without the hold B would be summarized past A's first row
+    held = layers.layer_rows(rows, [], l1_bytes=10, l2_bytes=10, l3_bytes=10, hold_from=10)
+    assert held["overflow"] == [] and held["live_turns"] == []                        # nothing that follows the running turn's first row is taken
+    after = layers.layer_rows(rows, [], l1_bytes=10, l2_bytes=10, l3_bytes=10, hold_from=13)
+    assert [t.turn_id for t in after["overflow"]] == ["B"]                            # B lies wholly before the hold: it may be summarized
+
+
+def test_m_the_cancel_button_finds_a_running_turn_when_the_first_one_has_ended(lab):
+    from app.agent_chat_stream import CancelBody
+    entry = {"turn_id": "t-late", "task": SimpleNamespace(done=lambda: False, cancel=lambda: None), "cid": lab.cid}
+    stream.TURNS_BY_ID["t-late"] = entry
+    try:
+        answer = _scenario(stream.cancel_turn_endpoint(lab.cid, CancelBody(), CRED))
+        assert answer == {"cancelled": True, "turn_id": "t-late"}
+    finally:
+        stream.TURNS_BY_ID.pop("t-late", None)
+
+
+def test_m_a_message_id_needs_four_characters_to_name_a_message():
+    box = inboxes.Inbox("t")
+    message = inboxes.Message(id="abcd1234-0000", text="x", turn_id="m", shown=True)
+    box.put(message)
+    assert box.find("abc") is None and box.find("abcd") is message

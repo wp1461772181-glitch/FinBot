@@ -72,6 +72,7 @@ def start_turn(owner: str, conversation_id: str, turn_id: str, text: str) -> Non
 
 
 DEFAULT_CONCURRENT = 3
+STALE_RUNNING_SECONDS = 1200 + 600     # the turn time limit and a margin
 
 
 def concurrent_limit() -> int:
@@ -83,8 +84,10 @@ def concurrent_limit() -> int:
 
 
 def _count(db, owner: str, status: str) -> int:
-    return int(db.scalar(select(func.count()).select_from(AgentWork).where(AgentWork.owner_hash == owner, AgentWork.kind == CHAT_TURN,
-                                                                           AgentWork.status == status)) or 0)
+    where = [AgentWork.owner_hash == owner, AgentWork.kind == CHAT_TURN, AgentWork.status == status]
+    if status == RUNNING:      # a row nobody closed (its end could not be written) must not hold a slot for ever: no turn runs this long
+        where.append(AgentWork.started_at > datetime.now(UTC) - timedelta(seconds=STALE_RUNNING_SECONDS))
+    return int(db.scalar(select(func.count()).select_from(AgentWork).where(*where)) or 0)
 
 
 def _slot_lock(db, owner: str) -> None:

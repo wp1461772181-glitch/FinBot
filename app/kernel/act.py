@@ -21,6 +21,7 @@ from .. import agent_model_catalog as model_catalog
 from ..agent_tool_catalog import definitions, validate
 from ..agent_workflow import consent, direct, directory_ops, sec_sources, tools, web_sources, workspace_tools
 from . import ask
+from . import inbox as inboxes
 
 logger = logging.getLogger(__name__)
 
@@ -603,6 +604,9 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
 
 
 def _collect(run, prepared: Prepared) -> tuple[dict, str]:
+    if inboxes.other_card_since(getattr(run.context, "conversation_id", ""), getattr(run, "turn_id", ""), getattr(run, "started", float("inf"))):
+        # Another turn of this conversation, running beside this one, has put a card in front of the user: one card waits at a time.
+        return {"ok": False, "data": [], "error_code": "write_card_waiting", "reason": ask.WRITE_CARD_WAITING}, "refused:write_card_waiting"
     if run.question_card:      # the turn's one card is the question
         return ask.refusal(), "refused:one_card_per_turn"
     if (prepared.options is not None and run.proposals) or any(p.options is not None for p in run.proposals):

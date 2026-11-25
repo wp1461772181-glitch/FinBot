@@ -18,9 +18,11 @@ HANDLE = "handle_message"
 MERGE, SEPARATE, STOP = "merge", "separate", "stop"
 DECISIONS = (MERGE, SEPARATE, STOP)
 NOTE_MAX = 200
+MIN_ID_PREFIX = 4       # the shortest prefix of a message id that names it
 SHORT_ID = 8          # how many characters of a message id the model is shown (and may give back)
 DEFAULT_STOP_SENTENCE = "好的，已停下。"
 UNKNOWN = "没有这条消息；只能处理系统说明里列出的编号。"
+WITHDRAWN = "你在这条消息之前提出的卡片操作已撤回；需要的话按新的说法重新提出。"
 ALREADY = "这条消息已经处理过了，不能再改。"
 
 HANDLE_SCHEMA: dict = {
@@ -59,6 +61,7 @@ class Message:
     excluded: frozenset = frozenset()   # the turns that were running when it arrived (a separate turn does not carry their unfinished rows)
     future: asyncio.Future | None = field(default=None, repr=False)
     shown: bool = False          # the model has been shown it
+    withdraws: tuple = ()        # the card proposals the turn had made when it was shown this message: a merge withdraws them
     decision: str | None = None
     note: str = ""
     defaulted: bool = False
@@ -70,6 +73,7 @@ class Inbox:
         self.own_message_id = own_message_id      # the message that started the turn
         self.messages: list[Message] = []         # arrival order
         self.closed = False
+        self.started = False                      # the turn's loop has begun: only a turn that can decide takes messages
         self.stopping = False                     # a message was decided ``stop``
         self.stop_note = ""
         self.adopt = None                         # async (message): the endpoint's hook that moves a merged or stopped row into this turn
@@ -93,7 +97,7 @@ class Inbox:
     def find(self, key) -> Message | None:
         """A shown message by its id or by a unique prefix of it (what the model was given)."""
         key = str(key or "").strip().lower()
-        if not key:
+        if len(key) < MIN_ID_PREFIX:
             return None
         found = [m for m in self.messages if m.shown and (m.id.lower() == key or m.id.lower().startswith(key))]
         return found[0] if len(found) == 1 else None
@@ -148,9 +152,41 @@ def unregister(conversation_id: str, inbox: Inbox) -> None:
 def target(conversation_id: str) -> Inbox | None:
     """The running turn a new message goes to: the newest one that still accepts messages."""
     for inbox in reversed(ACTIVE.get(str(conversation_id)) or []):
-        if not inbox.closed:
+        if inbox.started and not inbox.closed:
             return inbox
     return None
+
+
+def finishing(conversation_id: str) -> bool:
+    """A turn of the conversation has begun and no longer takes messages: it is storing its answer."""
+    return any(inbox.started and inbox.closed for inbox in ACTIVE.get(str(conversation_id)) or [])
+
+
+# The newest card each conversation's turns minted (not a card a turn only carried): parallel turns keep to one pending card.
+MINTED: dict[str, tuple[float, str, dict]] = {}
+MINTED_KEEP_SECONDS = 900
+
+
+def note_minted(conversation_id: str, turn_id: str, card: dict) -> None:
+    import time
+    now = time.monotonic()
+    for key in [k for k, (at, _, _) in MINTED.items() if now - at > MINTED_KEEP_SECONDS]:
+        MINTED.pop(key, None)
+    MINTED[str(conversation_id)] = (now, str(turn_id), card)
+
+
+def other_card_since(conversation_id: str, turn_id: str, since: float) -> dict | None:
+    """The card another turn of this conversation minted after ``since`` (this turn's start), if it is still good."""
+    from datetime import UTC, datetime
+    found = MINTED.get(str(conversation_id))
+    if found is None or found[0] <= since or found[1] == str(turn_id):
+        return None
+    try:
+        if datetime.fromisoformat(str(found[2].get("expires_at"))) <= datetime.now(UTC):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return found[2]
 
 
 def running_turns(conversation_id: str) -> list[str]:
@@ -174,5 +210,14 @@ async def settle(run, args: dict) -> dict:
     note = (note or "").strip()[:NOTE_MAX]
     if decision in (MERGE, STOP) and inbox.adopt is not None:
         await inbox.adopt(message)      # its row now belongs to this turn (the history reads the turn as one)
+    withdrawn = 0
+    if decision == MERGE and message.withdraws:
+        # A correction replaces what the turn had put on a card before it: those proposals are withdrawn, to be proposed again as he now says.
+        before = len(run.proposals)
+        run.proposals[:] = [p for p in run.proposals if id(p) not in message.withdraws]
+        withdrawn = before - len(run.proposals)
     inbox.decide(message, decision, note)
-    return {"ok": True, "data": [{"status": "recorded", "message_id": message.id[:SHORT_ID], "decision": decision}]}
+    result = {"status": "recorded", "message_id": message.id[:SHORT_ID], "decision": decision}
+    if withdrawn:
+        result.update(withdrawn_proposals=withdrawn, note=WITHDRAWN)
+    return {"ok": True, "data": [result]}

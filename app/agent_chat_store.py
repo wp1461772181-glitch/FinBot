@@ -92,11 +92,14 @@ async def conversation_context(conversation_id: str, credential: str, *, window:
               if (upto_sequence is None or m.sequence <= upto_sequence) and m.turn_id not in skip]
     made = [{"seq": x.seq, "from_sequence": x.from_sequence, "upto_sequence": x.upto_sequence, "content": x.content}
             for x in segments]
+    from .kernel import inbox as inboxes      # turns of this conversation that are running now (this process): a summary stays clear of them
+    running = {uuid.UUID(t) for t in inboxes.running_turns(conversation_id)}
+    hold = min((m["sequence"] for m in stored if m["turn_id"] in running), default=None)
     if not anchored:
-        return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes)
+        return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes, hold_from=hold)
     stored, front = layers.window_rows(stored, made[-1]["upto_sequence"] if made else 0, len(rows) >= limit, layers.ANCHOR_GRID)
     return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes,
-                             anchor_grid=layers.ANCHOR_GRID, anchor_front=front)
+                             anchor_grid=layers.ANCHOR_GRID, anchor_front=front, hold_from=hold)
 
 
 async def load_turn_citation(conversation_id: str, credential: str, turn_id: str, ordinal: int) -> dict:

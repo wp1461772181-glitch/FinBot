@@ -105,6 +105,7 @@ class _Run:
     partial: str = ""                # the half-written answer an arriving message cut off: kept for a stop, which ends the turn with it
     paused_partial: bool = False     # that text is still on the user's screen: the next thing written replaces it
     cut: bool = False                # the next intake follows a cut-off answer
+    must_say: str = ""               # what code must tell the user whatever else happens (the executed report of a card press): a stop keeps it
     audit: dict = field(default_factory=lambda: {
         "engine": "v2", "model_calls": 0, "decision_steps": 0, "tool_calls": 0, "token_usage": 0,
         "cache_read_tokens": 0, "cache_write_tokens": 0, "calls": [], "stop_reason": None})
@@ -210,6 +211,12 @@ async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
                 raise
 
 
+def _streams(use: "ModelUse") -> bool:
+    """Whether this model's answer text arrives piece by piece (Anthropic native); the others report the whole text once, after the call."""
+    from .. import anthropic_native
+    return anthropic_native.use_native(use.provider)
+
+
 class AnswerPaused(Exception):
     """Raised from the text callback when the owner says something while the answer is being written: the call stops there."""
 
@@ -218,16 +225,18 @@ async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
     """One model call whose text is streamed out.  One retry on a retryable provider failure.  When the owner sends a message while
     the answer is being written, the call stops within one piece of text and returns what was written as ``{"paused": True, ...}``."""
     use = run.model
+    streaming = _streams(use)      # only a provider that streams can be stopped within a piece of text; the others finish the call first
 
     async def on_text(piece: str) -> None:
         if piece and isinstance(piece, str):
             if run.paused_partial:      # the text the owner's message cut off is still on his screen: this replaces it
                 run.paused_partial = False
+                run.partial = ""
                 await run.emit({"event": "answer_reset"})
             run.sent_text = True
             run.step_text += piece
             await run.emit({"event": "delta", "text": piece})
-            if run.pausable and run.inbox is not None and run.inbox.has_fresh():
+            if streaming and run.pausable and run.inbox is not None and run.inbox.has_fresh():
                 raise AnswerPaused()
 
     run.sent_text = False
@@ -325,6 +334,8 @@ async def _mint_card(run: _Run) -> str:
     if not proposals:
         return ""
     context = run.context
+    if inboxes.other_card_since(context.conversation_id, run.turn_id, run.started):
+        return f"（确认卡没有生成：{ask.WRITE_CARD_WAITING} 请先处理那张卡片，再重新提出这项操作。）"
     variants = [("保存并启用", None), ("存为草稿", "draft")] if all(p.operation["name"] == "save_skill" for p in proposals) else None
     try:
         run.pending = await asyncio.to_thread(consent.propose, context.identity_credential, context.conversation_id,
@@ -335,6 +346,8 @@ async def _mint_card(run: _Run) -> str:
     except Exception:
         reason = consent.failure_reason("write_service_failed")
     else:
+        run.audit["card_minted"] = run.pending["id"]
+        inboxes.note_minted(context.conversation_id, run.turn_id, run.pending)
         return ""
     return f"（确认卡没有生成：{reason}。请重新提出这项操作。）"
 
@@ -416,6 +429,7 @@ async def _intake(run: _Run) -> None:
     fresh = box.fresh()
     for message in fresh:
         message.shown = True
+        message.withdraws = tuple(id(p) for p in run.proposals)
         run.messages.append({"role": "user", "content": prompt.neutralise(message.text)})
     run.messages.append({"role": "system", "content": prompt.interjection_note([m.id[:inboxes.SHORT_ID] for m in fresh], paused=run.cut)})
     run.cut = False
@@ -444,7 +458,7 @@ async def _stopped(run: _Run) -> dict:
     run.pending = None
     run.question_card = None
     partial = run.partial.strip()
-    text = f"{partial}\n\n{sentence}" if partial else sentence
+    text = "\n\n".join(part for part in (run.must_say.strip(), partial, sentence) if part)
     await run.emit({"event": "answer_reset"})
     await run.emit({"event": "delta", "text": text})
     await run.emit({"event": "stopped"})
@@ -520,6 +534,8 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
     """One kernel turn.  A turn with an inbox ends by closing it (what nobody decided is ``separate``) and says which user messages
     its answer answers (``final_protocol["reply_to"]``) and what each interjection came to (``audit["interjections"]``)."""
     box = getattr(context, "inbox", None)
+    if box is not None:
+        box.started = True
     try:
         result = await _run_turn(question, context, emit, messages, state)
     finally:
@@ -588,6 +604,7 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
         if not fact:
             return await _loop(run)
         # The write is done: whatever the model does next, the user is told what happened, so they do not ask for it twice.
+        run.must_say = settled.report + (settled.note or "")      # a stop must not hide that the write ran
         try:
             result = await _loop(run)
         except Exception:
@@ -595,7 +612,7 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
             result = None
         if result is None or result.get("reason") == "empty_answer":
             return await _report_fallback(run, settled.report + (settled.note or ""))
-        if settled.note:      # where a saved page landed: a link written by code, not left to the model
+        if settled.note and result.get("status") != "stopped":      # where a saved page landed (a stop's text already holds it): a link written by code, not left to the model
             await run.emit({"event": "delta", "text": settled.note})
             result["answer"] += settled.note
         return result

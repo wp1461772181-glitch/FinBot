@@ -372,7 +372,8 @@ def anchor_indexes(complete: list[list[dict]], upto: int, first_row: int | None,
 
 
 def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYTES, l2_bytes: int = L2_BYTES,
-               l3_bytes: int = L3_BYTES, anchor_grid: int | None = None, anchor_front: bool = False) -> dict:
+               l3_bytes: int = L3_BYTES, anchor_grid: int | None = None, anchor_front: bool = False,
+               hold_from: int | None = None) -> dict:
     """What the next turn carries of the turns before it, by layer.  ``rows`` are the stored messages
     (oldest first, each with ``sequence``), ``segments`` the summary segments made so far.
 
@@ -450,6 +451,11 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
         start = min((i for i in anchors if reach <= i < len(turns)), default=None)
         if start is not None: half = half[start - reach:]
     overflow = turns[:len(turns)-len(half)]
+    if hold_from is not None:
+        # A turn is still running and its first row is at ``hold_from``: a summary may take only turns that end before it, or it would
+        # swallow the running turn (its first row would lie inside the summary's range) when it ends.
+        overflow = _before(overflow, hold_from)
+        live = _before(live, hold_from)
     catalogue=[]
     visible = [str(g[0].get("turn_id")) for g in reversed(recent)] + [t.turn_id for t in reversed(half)]
     for idx, tid in enumerate(visible, 1):
@@ -469,6 +475,15 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
             "catalogue": catalogue, "budget": l1_bytes + l2_bytes + l3_bytes, "live_turns": live,
             # FP3: unfinished turns are carried beside the layers, not in them (no budget, no summary).
             "unfinished": trailing_unfinished(rows, upto)}
+
+
+def _before(turns: list, hold_from: int) -> list:
+    kept = []
+    for turn in turns:
+        if turn.last_sequence >= hold_from:
+            break
+        kept.append(turn)
+    return kept
 
 
 def _head(text: str, keep: int) -> str:

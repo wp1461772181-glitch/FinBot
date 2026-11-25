@@ -33,7 +33,6 @@ _BACKGROUND: set=set()
 # FP13: a turn sent with detach=true runs as a task that outlives its response; TURNS holds the running ones by conversation.
 TURNS={}
 TURNS_BY_ID={}      # every detached turn by its id (a conversation can have several running at once, 3c); TURNS holds the first of them
-_CARDS={}           # conversation id -> (when, card) of the newest card a turn minted: re-applied if a turn that started earlier overwrites it at its end
 QUEUE_POLL_SECONDS=1.0
 LOCK_WAIT_SECONDS=30
 DETACH_FRAME=": detached\n\n"
@@ -565,10 +564,6 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
   running=inboxes.target(cid)
   if running is not None:return await _interject(payload,x_chat_session,bot,chosen,model_label,cid,running)
  return await _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kernel)
-def _expired(card):
- from datetime import UTC,datetime
- try:return datetime.fromisoformat(str(card.get("expires_at"))) <= datetime.now(UTC)
- except (TypeError,ValueError):return False
 def _failed_future_quiet(task):
  if not task.cancelled():task.exception()
 async def _interject(payload,credential,bot,chosen,model_label,cid,target):
@@ -614,16 +609,18 @@ async def _interject(payload,credential,bot,chosen,model_label,cid,target):
 async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kernel,*,separate=None,reader_gone=False):
  """Start one turn and return its response.  ``separate``: the interjected message (``inbox.Message``) this turn answers on its own: its row is
  already stored, it runs beside the turn that was working (no conversation lock), and its history is the conversation as of the message."""
- if payload.pending_request_id:_CARDS.pop(cid,None)
+ if payload.pending_request_id:inboxes.MINTED.pop(cid,None)
  lock=None
  if separate is None:
   lock=LOCKS.setdefault(cid,asyncio.Lock())
   if lock.locked():
    if not is_kernel or payload.pending_request_id:raise HTTPException(409,"conversation_busy")
-   # A kernel turn that no longer takes messages is finishing: this one starts when it has stored its answer.
-   try: await asyncio.wait_for(lock.acquire(),timeout=LOCK_WAIT_SECONDS)
-   except TimeoutError: raise HTTPException(409,"conversation_busy") from None
-   LOCKS[cid]=lock
+   if inboxes.finishing(cid):
+    # A kernel turn that no longer takes messages is storing its answer: this one starts when it has.
+    try: await asyncio.wait_for(lock.acquire(),timeout=LOCK_WAIT_SECONDS)
+    except TimeoutError: raise HTTPException(409,"conversation_busy") from None
+    LOCKS[cid]=lock
+   else:lock=None        # the holder has not begun (it is setting up or waiting in line): this message is a turn of its own, beside it
   else:
    try: await lock.acquire()
    except BaseException:
@@ -664,7 +661,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
   give_back_lock()
  async def events():
   # The thinking time is the wait from the request to the answer being ready.
-  started=time.monotonic();own_card=None;text_out=""; citation_sidecar=[]; terminal=False; genuine_calls=set(); tool_traces=[]; progress={}; settled=False
+  started=time.monotonic();text_out=""; citation_sidecar=[]; terminal=False; genuine_calls=set(); tool_traces=[]; progress={}; settled=False
   pump_task=getter=None
   notify=_is_owner(x_chat_session)
   outcome=None          # how the turn ends once it is decided: (status, reason); the finally ends the item with it, whatever interrupts the writes
@@ -712,7 +709,9 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
    anchored=kernel_turn(bot)      # the history, and the summary made of it, are read the way the kernel reads them
    cut={}
    if separate is not None and separate.sequence is not None:cut={"upto_sequence":separate.sequence,"exclude_turns":separate.excluded}
-   elif box is not None and box.messages:cut={"exclude_turns":[m.turn_id for m in box.messages]}      # messages that came while this turn waited are shown to it as messages, not as history
+   elif box is not None:
+    others=[t for t in inboxes.running_turns(cid) if t!=turn]+[m.turn_id for m in box.messages]     # turns beside this one are not its history
+    if others:cut={"exclude_turns":others}
    context=await conversation_context(cid,x_chat_session,window=chosen.window,anchored=anchored,**cut) or {}
    # SW2 §3.1: read once at the turn start, shared by every model call of the turn (K9).
    self_state=await asyncio.to_thread(_self_state_inputs,cid,x_chat_session,turn,model_label) if fp_flag("FINBOT_SW2_SELF_STATE",True) else None
@@ -848,8 +847,6 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
      await append_message(cid,turn,"assistant",text_out,tool_calls=protocol,status="failed" if ended=="failed" else "cancelled" if ended=="stopped" else "complete")
      settled=True
      outcome=(work.FAILED,WORK_FAILED_REASON) if ended=="failed" else (work.STOPPED,WORK_STOPPED_BY_MESSAGE) if ended=="stopped" else (work.DONE,None)
-     if event.get("pending_request"):_CARDS[cid]=(time.monotonic(),event["pending_request"])
-     own_card=(event.get("pending_request") or {}).get("id")
      if work_open:
       await _end_work(turn,*outcome,reading["on"],notify)
       work_open=False
@@ -875,11 +872,11 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
      yield frame("done",{"conversation_id":cid,"turn_id":turn,"status":event.get("status","complete"),"reason":event.get("reason"),"thinking_ms":thinking_ms,**v2_fields})
    if terminal and box is not None:
     # Turns of one conversation that run together share its saved state: a card another turn minted after this one began is not lost by this one's end.
-    newest=_CARDS.get(cid)
-    if newest is not None and newest[0]>started and newest[1].get("id")!=own_card and not _expired(newest[1]):
+    newest=inboxes.other_card_since(cid,turn,started)      # only a card another turn minted, never one this turn merely carried
+    if newest is not None:
      try:
       from .agent_workflow.graph import set_pending_request
-      await set_pending_request(owner_hash(x_chat_session),cid,newest[1])
+      await set_pending_request(owner_hash(x_chat_session),cid,newest)
      except Exception:log.exception("re-applying the newest card failed (cid=%s)",cid)
    if not terminal:raise HTTPException(502,"workflow_incomplete")
   except asyncio.CancelledError:
@@ -1126,6 +1123,7 @@ async def cancel_turn_endpoint(conversation_id:str,body:CancelBody,x_chat_sessio
  entry=TURNS.get(conversation_id)
  named=TURNS_BY_ID.get(body.turn_id) if body.turn_id else None
  if named is not None and named["cid"]==conversation_id:entry=named      # a conversation can have several turns running (3c)
+ if entry is None and not body.turn_id:entry=next((e for e in TURNS_BY_ID.values() if e["cid"]==conversation_id and not e["task"].done()),None)
  if entry is None or entry["task"].done():return {"cancelled":False,"reason":"no_running_turn"}
  if body.turn_id and body.turn_id!=entry["turn_id"]:return {"cancelled":False,"reason":"turn_mismatch"}
  entry["task"].cancel()

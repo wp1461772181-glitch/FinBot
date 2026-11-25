@@ -68,11 +68,11 @@ SYSTEM = system_text()
 
 def interjection_note(ids: list[str], *, paused: bool = False) -> str:
     """The one fixed note after the messages the user sent while the turn was working (the messages themselves are the user's words, above it)."""
-    cut = "你刚才写到一半的回答被打断了（在上面）。" if paused else ""
+    cut = "你刚写的回答（在上面）没有交给用户就停下了，这条消息来了以后再决定。" if paused else ""
     listing = "、".join(ids)
     return (f"系统说明：用户在你工作时又发来了上面 {len(ids)} 条消息（按顺序，编号 {listing}）。{cut}"
             "写回答之前，对每一条用 handle_message 说明怎么处理："
-            "merge＝补充或修正，并入你正在做的这件事（已查到的资料全部保留，回答里一并答）；"
+            "merge＝补充或修正，并入你正在做的这件事（已查到的资料全部保留，回答里一并答；你在这条消息之前提出的卡片操作已撤回；需要的话按新的说法重新提出）；"
             "separate＝是另一件事，另起一个回答同时做；"
             "stop＝用户不要了，立即停下（note 里写一句话告诉他）。"
             "可以先继续查资料，但写回答之前必须处理完；没处理的按 separate 算。")
