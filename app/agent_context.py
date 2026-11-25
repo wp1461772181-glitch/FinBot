@@ -303,7 +303,7 @@ UNFINISHED_NOTES = {          # the system record standing for an answer that ne
 UNFINISHED_PASSED_OVER = ('confirm:', 'authorize:', 'cancel:', 'change:', 'reply:')   # button replies, not questions
 
 
-def trailing_unfinished(rows: list[dict], upto: int = 0) -> list[dict]:
+def trailing_unfinished(rows: list[dict], upto: int = 0, covered=frozenset()) -> list[dict]:
     """The turns at the end of the stored messages that began with the user and did not end with a complete
     answer: oldest first, at most UNFINISHED_KEEP of the newest.  The walk back from the newest turn stops at
     the first complete turn or at a turn a summary already covers; a group that is not a question of the user
@@ -313,7 +313,7 @@ def trailing_unfinished(rows: list[dict], upto: int = 0) -> list[dict]:
     for group in reversed(groups):
         if group[0]["role"] == "user" and group[-1]["role"] == "assistant" and group[-1].get("status") == "complete":
             break
-        if group[0]["sequence"] <= upto:
+        if group[0]["sequence"] <= upto or str(group[0]["turn_id"]) in covered:
             break
         text = (group[0].get("content") or "").strip()
         if group[0]["role"] != "user" or not text or text.startswith(UNFINISHED_PASSED_OVER):
@@ -398,7 +398,7 @@ def anchor_indexes(complete: list[list[dict]], upto: int, first_row: int | None,
 
 def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYTES, l2_bytes: int = L2_BYTES,
                l3_bytes: int = L3_BYTES, anchor_grid: int | None = None, anchor_front: bool = False,
-               hold_from: int | None = None) -> dict:
+               ) -> dict:
     """What the next turn carries of the turns before it, by layer.  ``rows`` are the stored messages
     (oldest first, each with ``sequence``), ``segments`` the summary segments made so far.
 
@@ -414,8 +414,12 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
     layer follows the rule above for this call.  ``anchor_front``: the first complete turn is an anchor (see
     ``window_rows``)."""
     upto = segments[-1]["upto_sequence"] if segments else 0
+    # A summary covers whole turns: those it names by id, and (an older segment, which names none) those whose first row lies up to its end.
+    # Turns that ran together overlap in their rows, so a range of rows is not a set of turns and the view never reads one for the other.
+    covered = frozenset(str(t) for seg in segments for t in (seg.get("turn_ids") or ()))
+    legacy_upto = max((seg["upto_sequence"] for seg in segments if not seg.get("turn_ids")), default=0)
     # A turn a summary version already covers is memory now: it is in no raw layer any more.
-    complete = [g for g in complete_turns(rows) if g[0]["sequence"] > upto]
+    complete = [g for g in complete_turns(rows) if g[0]["sequence"] > legacy_upto and str(g[0]["turn_id"]) not in covered]
     entries = {str(g[0].get("turn_id")): turn_catalogue_entry(g) for g in complete}
     recent: list[list[dict]] = []
     # Reserve the fixed prefix in L1 only if at least one directory entry can fit in
@@ -476,11 +480,6 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
         start = min((i for i in anchors if reach <= i < len(turns)), default=None)
         if start is not None: half = half[start - reach:]
     overflow = turns[:len(turns)-len(half)]
-    if hold_from is not None:
-        # A turn is still running and its first row is at ``hold_from``: a summary may take only turns that end before it, or it would
-        # swallow the running turn (its first row would lie inside the summary's range) when it ends.
-        overflow = _before(overflow, hold_from)
-        live = _before(live, hold_from)
     catalogue=[]
     visible = [str(g[0].get("turn_id")) for g in reversed(recent)] + [t.turn_id for t in reversed(half)]
     for idx, tid in enumerate(visible, 1):
@@ -500,22 +499,13 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
             "segments": select_segments(segments, l3_bytes), "segments_total": len(segments), "summary_upto": upto,
             "catalogue": catalogue, "budget": l1_bytes + l2_bytes + l3_bytes, "live_turns": live,
             # FP3: unfinished turns are carried beside the layers, not in them (no budget, no summary).
-            "unfinished": trailing_unfinished(rows, upto)}
+            "unfinished": trailing_unfinished(rows, legacy_upto, covered)}
 
 
 def _question_of(group: list[dict]) -> str:
     """The user's words of a turn as its answer was paired with them (all the messages it answered, one after another)."""
     projected = project_turn_history(group)
     return projected[0]["content"] if projected and projected[0]["role"] == "user" else (group[0].get("content") or "")
-
-
-def _before(turns: list, hold_from: int) -> list:
-    kept = []
-    for turn in turns:
-        if turn.last_sequence >= hold_from:
-            break
-        kept.append(turn)
-    return kept
 
 
 def _head(text: str, keep: int) -> str:

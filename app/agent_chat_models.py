@@ -61,6 +61,9 @@ class AgentConversationSummary(Base):
     from_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     upto_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # The turns this segment covers, by id (whole turns: turns that ran together overlap in their row numbers, so a range of rows is not a set of
+    # turns).  None for a segment made before: it covers the turns whose first row lies up to ``upto_sequence``.
+    turn_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 

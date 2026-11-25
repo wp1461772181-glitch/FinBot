@@ -917,17 +917,15 @@ def test_i5_a_merged_correction_replaces_the_card_operation_it_corrects(env, fak
     assert "已撤回" in model.calls[2]["messages"][-1]["content"]
 
 
-def test_i6_a_summary_never_cuts_through_a_turn_that_is_still_running():
+def test_i6_a_turn_that_finishes_after_a_summary_of_its_neighbours_is_not_swallowed():
     from app import agent_context as layers
     big = "问题" * 200
-    rows = [_row("A", 10, "user", "长问题"), _row("B", 11, "user", big), _row("B", 12, "assistant", big),
-            _row("C", 13, "user", big), _row("C", 14, "assistant", big)]
-    plain = layers.layer_rows(rows, [], l1_bytes=10, l2_bytes=10, l3_bytes=10)
-    assert plain["overflow"] and plain["overflow"][-1].last_sequence >= 12           # without the hold B would be summarized past A's first row
-    held = layers.layer_rows(rows, [], l1_bytes=10, l2_bytes=10, l3_bytes=10, hold_from=10)
-    assert held["overflow"] == [] and held["live_turns"] == []                        # nothing that follows the running turn's first row is taken
-    after = layers.layer_rows(rows, [], l1_bytes=10, l2_bytes=10, l3_bytes=10, hold_from=13)
-    assert [t.turn_id for t in after["overflow"]] == ["B"]                            # B lies wholly before the hold: it may be summarized
+    rows = [_row("A", 10, "user", "长问题"), _row("B", 11, "user", big), _row("B", 12, "assistant", big)]
+    segment = {"seq": 1, "from_sequence": 11, "upto_sequence": 12, "content": "摘要", "turn_ids": ["B"]}
+    assert layers.layer_rows(rows, [segment], l1_bytes=100_000, l2_bytes=100_000, l3_bytes=100_000)["l1_rows"] == []
+    rows += [_row("A", 20, "assistant", "长回答")]
+    later = layers.layer_rows(rows, [segment], l1_bytes=100_000, l2_bytes=100_000, l3_bytes=100_000)
+    assert {r["turn_id"] for r in later["l1_rows"]} == {"A"}               # A ended after the summary and is still in the history
 
 
 def test_m_the_cancel_button_finds_a_running_turn_when_the_first_one_has_ended(lab):

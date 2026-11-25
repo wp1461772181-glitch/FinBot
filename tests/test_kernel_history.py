@@ -240,7 +240,7 @@ class Store:
         grid = ANCHOR_GRID if kwargs.get("anchored") else None
         return layer_rows(self.rows, [], l1_bytes=L1, l2_bytes=L2, l3_bytes=L3, anchor_grid=grid)
 
-    async def append_summary(self, conversation_id, from_sequence, upto_sequence, content):
+    async def append_summary(self, conversation_id, from_sequence, upto_sequence, content, turn_ids=None):
         self.appended.append((from_sequence, upto_sequence))
         return True
 

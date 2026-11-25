@@ -103,16 +103,14 @@ async def conversation_context(conversation_id: str, credential: str, *, window:
     stored = [{"id": str(m.id), "role": m.role, "content": m.content, "tool_calls": m.tool_calls, "tool_call_id": m.tool_call_id,
                "status": m.status, "turn_id": m.turn_id, "sequence": m.sequence} for m in reversed(rows)
               if (upto_sequence is None or m.sequence <= upto_sequence) and m.turn_id not in skip]
-    made = [{"seq": x.seq, "from_sequence": x.from_sequence, "upto_sequence": x.upto_sequence, "content": x.content}
+    made = [{"seq": x.seq, "from_sequence": x.from_sequence, "upto_sequence": x.upto_sequence, "content": x.content,
+             "turn_ids": [str(t) for t in x.turn_ids] if x.turn_ids else None}
             for x in segments]
-    from .kernel import inbox as inboxes      # turns of this conversation that are running now (this process): a summary stays clear of them
-    running = {uuid.UUID(t) for t in inboxes.running_turns(conversation_id)}
-    hold = min((m["sequence"] for m in stored if m["turn_id"] in running), default=None)
     if not anchored:
-        return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes, hold_from=hold)
+        return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes)
     stored, front = layers.window_rows(stored, made[-1]["upto_sequence"] if made else 0, len(rows) >= limit, layers.ANCHOR_GRID)
     return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes,
-                             anchor_grid=layers.ANCHOR_GRID, anchor_front=front, hold_from=hold)
+                             anchor_grid=layers.ANCHOR_GRID, anchor_front=front)
 
 
 async def load_turn_citation(conversation_id: str, credential: str, turn_id: str, ordinal: int) -> dict:
@@ -171,7 +169,7 @@ async def citation_remembered(conversation_id: str, credential: str, turn_id: st
     return last is not None and last <= latest.upto_sequence
 
 
-async def append_summary(conversation_id: str, from_sequence: int, upto_sequence: int, content: str) -> bool:
+async def append_summary(conversation_id: str, from_sequence: int, upto_sequence: int, content: str, turn_ids=None) -> bool:
     """Append the next summary segment.  False when it would not move the covered range forward
     (another task got there first) or when the segment number was taken in the meantime."""
     cid = uuid.UUID(conversation_id)
@@ -182,7 +180,8 @@ async def append_summary(conversation_id: str, from_sequence: int, upto_sequence
         if last is not None and upto_sequence <= last.upto_sequence:
             return False
         s.add(AgentConversationSummary(conversation_id=cid, seq=(last.seq if last else 0) + 1,
-                                       from_sequence=from_sequence, upto_sequence=upto_sequence, content=content))
+                                       from_sequence=from_sequence, upto_sequence=upto_sequence, content=content,
+                                       turn_ids=[str(t) for t in turn_ids] if turn_ids else None))
         seq=(last.seq if last else 0) + 1
         try:
             await s.commit()
@@ -213,14 +212,22 @@ def _select_message_page(groups, before_sequence=None, limit_turns=20):
     is bounded by whole turns so a restored answer always carries its own tool rows;
     before_sequence is the exclusive cursor returned as next_before.
     """
+    # Turns that ran together overlap in their rows.  A page is a set of whole turns taken in the order they were answered (the order of
+    # the model's history too), so the cursor is a position in that order: every turn left for the next page ends before it.
+    groups=sorted(groups,key=lambda group:group[-1].sequence)
     if before_sequence is not None:
         groups=[group for group in groups if group[-1].sequence < before_sequence]
     if limit_turns is None:
-        selected=groups
+        selected,rest=groups,[]
     else:
-        selected=groups[-max(1,min(100,int(limit_turns))):]
-    has_more=len(groups)>len(selected)
-    next_before=selected[0][0].sequence if has_more and selected else None
+        keep=max(1,min(100,int(limit_turns)))
+        selected,rest=groups[-keep:],groups[:-keep]
+    has_more=bool(rest)
+    next_before=None
+    if has_more and selected:
+        # The first row of the oldest turn on the page, as always, when everything left ends before it; else (a turn left behind
+        # overlaps it) the last row of that turn, which every turn left ends before.
+        next_before=selected[0][0].sequence if selected[0][0].sequence > max(group[-1].sequence for group in rest) else selected[0][-1].sequence
     return selected,has_more,next_before
 
 
@@ -276,6 +283,8 @@ def ensure_conversation_archive_column() -> None:
         # The bot whose line a conversation is (agent_bots); NULL until the default bot adopts it.
         connection.execute(text("ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS bot_id UUID"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_agent_conversations_bot_id ON agent_conversations (bot_id)"))
+        # The turns a summary covers, by id (3c: turns that ran together overlap in their rows).  Older segments keep NULL and read by range.
+        connection.execute(text("ALTER TABLE IF EXISTS agent_conversation_summaries ADD COLUMN IF NOT EXISTS turn_ids JSON"))
 
 
 async def set_conversation_archived(credential: str, conversation_id: str, archived: bool) -> bool:

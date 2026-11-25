@@ -41,7 +41,7 @@ def test_a_summary_names_the_turns_it_covers_and_the_history_leaves_out_exactly_
 
 
 def test_the_overflow_a_summary_takes_is_whole_turns_that_carry_their_ids():
-    context = layers.layer_rows(review_rows(), [], l1_bytes=1500, l2_bytes=1, l3_bytes=1)
+    context = layers.layer_rows(review_rows(), [], l1_bytes=500, l2_bytes=1, l3_bytes=1)
     overflow = [t.turn_id for t in context["overflow"]]
     assert overflow and set(overflow) <= {"Z", "B", "A"} and overflow == [t for t in ["Z", "B", "A"] if t in overflow]      # answer order
     assert context["live_turns"] and all(t.turn_id for t in context["live_turns"])

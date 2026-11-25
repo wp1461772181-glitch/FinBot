@@ -191,7 +191,7 @@ async def summarize_pending(conversation_id: str, credential: str, *, provider: 
     source = "\n".join([*payload["earlier_segments"],
                         *(f"{item['user']}\n{item['assistant_start']}" for item in payload["turns"])])
     text = validate_summary(decision.get("content") if isinstance(decision, dict) else None, source)
-    return await append_summary(conversation_id, batch[0].first_sequence, batch[-1].last_sequence, text)
+    return await append_summary(conversation_id, batch[0].first_sequence, batch[-1].last_sequence, text, [t.turn_id for t in batch])
 
 
 # --- the rolling summary ---------------------------------------------------------------------------------
@@ -407,7 +407,8 @@ async def compact_conversation(conversation_id: str, credential: str, *, provide
         version = {"v": layers.ROLLING_VERSION, **merged, "turns_compacted": len(chunk),
                    "total_compacted": total, "focus": focus or None}
         if not await append_summary(conversation_id, chunk[0].first_sequence, chunk[-1].last_sequence,
-                                    json.dumps(version, ensure_ascii=False, separators=(",", ":"))):
+                                    json.dumps(version, ensure_ascii=False, separators=(",", ":")),
+                                    [t.turn_id for t in chunk]):
             total -= len(chunk)
             error = "not_appended"
             break
