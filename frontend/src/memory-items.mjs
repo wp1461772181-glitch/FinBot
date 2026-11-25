@@ -1,4 +1,5 @@
 import { dayLabel } from "./owner-views.mjs";
+import { templateLabel } from "./role-templates.mjs";
 
 // Pure helpers of the memory page (profile items and past conversations), kept apart so node tests read them.
 
@@ -25,6 +26,20 @@ export function seenLine(item, locale = "zh-CN") {
   const day = dayLabel(item?.last_seen_at, locale);
   if (!day) return "";
   return locale === "en-US" ? `Last borne out: ${day}` : `最近一次印证：${day}`;
+}
+
+/**
+ * An item that came from a role template (4f) says so: a badge 「模板·短线」 and, where the quote of his own words would be, the line 「你在 M月D日 选用模板「短线」时加的」 (the quote of
+ * such an item is the template's own text, not something he said).  `null` for any other item, which then shows exactly what it showed before.  The label is the server's `template_label`.
+ */
+export function templateNote(item, locale = "zh-CN") {
+  if (!item?.template) return null;
+  const label = templateLabel(item.template_label, locale);
+  const day = dayLabel(item.created_at, locale);
+  if (locale === "en-US") {
+    return { badge: label ? `Template · ${label}` : "Template", line: `Added${day ? ` on ${day}` : ""} when you picked the template${label ? ` "${label}"` : ""}` };
+  }
+  return { badge: label ? `模板·${label}` : "模板", line: `你${day ? `在 ${day} ` : ""}选用模板${label ? `「${label}」` : ""}时加的` };
 }
 
 /** The archived row's own line: the reason the settle gave, and the day it was set aside (「M月D日 归档」 / "archived M/D"); either may be missing. */
