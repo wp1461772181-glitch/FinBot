@@ -377,3 +377,254 @@ def preview(owner_hash: str, template_id: str, bot_id=None, leave_out=None) -> d
             "target": {"bot_id": target["layer"], "bot_name": target["bot_name"], "scope": target["scope"]},
             "will_create": will_create, "reuse": _by_status(worked, "reuse"), "skip": _by_status(worked, "skip"),
             "notes": notes(mode), "duty_mode": mode}
+
+
+# ---- apply -----------------------------------------------------------------------------------------------------------------------
+
+def _bot_label(owner_hash: str, bot_id) -> tuple[str, str]:
+    """(name, scope) of the bot an application went to: 「助理」 (global layer) when ``bot_id`` is None."""
+    if bot_id is None:
+        found = _default_bot(owner_hash)
+        return (found["name"] if found else agent_bots.DEFAULT_NAME), "global"
+    bot = agent_bots.get_bot(owner_hash, str(bot_id))
+    return (bot["name"] if bot else "已删除的 bot"), "bot"
+
+
+def _application(owner_hash: str, row) -> dict:
+    name, scope = _bot_label(owner_hash, row.bot_id)
+    return {"id": str(row.id), "template": row.template, "label": TEMPLATES.get(row.template, {}).get("label", row.template),
+            "bot_id": str(row.bot_id) if row.bot_id else None, "bot_name": name, "scope": scope,
+            "applied_at": row.applied_at.isoformat() if row.applied_at else None,
+            "undone_at": row.undone_at.isoformat() if row.undone_at else None}
+
+
+def _empty_created() -> dict:
+    return {"profile_item_ids": [], "task_ids": [], "skill_ids": [], "usual_added": [], "labels": {}}
+
+
+def _open_record(owner_hash: str, template_id: str, layer) -> uuid.UUID:
+    with SessionLocal() as db:
+        row = RoleTemplateApplication(owner_hash=owner_hash, template=template_id, bot_id=uuid.UUID(layer) if layer else None,
+                                      applied_at=datetime.now(UTC), created=_empty_created(), skipped=[])
+        db.add(row)
+        db.commit()
+        return row.id
+
+
+def _save_record(record_id, created: dict, skipped: list[dict]) -> None:
+    """The record as it stands: written after every step and once more in ``finally``, so an exception half-way still leaves what was written
+    findable for ``undo``.  A record that holds nothing is removed."""
+    with SessionLocal() as db:
+        row = db.get(RoleTemplateApplication, record_id)
+        if row is None:
+            return
+        if not (created["profile_item_ids"] or created["task_ids"] or created["skill_ids"] or created["usual_added"]):
+            db.delete(row)
+        else:
+            row.created, row.skipped = copy.deepcopy(created), copy.deepcopy(skipped)
+        db.commit()
+
+
+def apply(owner_hash: str, template_id: str, bot_id=None, leave_out=None) -> dict:
+    """Write what ``plan`` says through the services his own pages use: skills, then memory, then briefs, then usual skills.  Nothing he has is
+    changed: a duplicate is reused, what does not fit is skipped with its reason.  ``application`` is None when nothing was created."""
+    worked = plan(owner_hash, template_id, bot_id, leave_out, create=True)
+    target = worked["target"]
+    reused = _by_status(worked, "reuse")
+    skipped = _by_status(worked, "skip")
+    if not any(e["status"] == "create" for part in PART_ORDER for e in worked[part]):
+        return {"application": None, "created": [], "reused": reused, "skipped": skipped}
+    record_id = _open_record(owner_hash, template_id, target["layer"])
+    created, made = _empty_created(), []
+    ids = dict(worked["resolved"])               # template skill key -> id, or None once it could not be made
+
+    def made_one(entry: dict, item_id: str, bucket: str | None) -> None:
+        made.append({**_shown(entry), "id": item_id})
+        if bucket:
+            created[bucket].append(item_id)
+            created["labels"][item_id] = entry["label"]
+
+    def refuse(entry: dict, code: str, reason: str) -> None:
+        skipped.append({**_shown(entry), "code": code, "reason": reason})
+
+    try:
+        for entry in worked["skill"]:
+            if entry["status"] != "create":
+                continue
+            spec = entry["spec"]
+            try:
+                row = agent_skills.create_skill(owner_hash, {"name": spec["name"], "description": spec["description"], "body": spec["body"],
+                                                             "output_template": spec["output_template"], "allowed_tools": list(spec["allowed_tools"])})
+            except agent_skills.SkillError as exc:
+                ids[entry["key"]] = None
+                refuse(entry, str(exc), "没有创建")
+                continue
+            ids[entry["key"]] = row["id"]
+            made_one(entry, row["id"], "skill_ids")
+            _save_record(record_id, created, skipped)
+        for entry in worked["memory"]:
+            if entry["status"] != "create":
+                continue
+            try:
+                result = agent_profile.add_item(owner_hash, kind=entry["kind"], text=entry["text"], quote=entry["text"], message=entry["text"],
+                                                origin="manual", topic=None, bot_id=target["layer"])
+            except agent_profile.ProfileError as exc:
+                refuse(entry, MEMORY_FULL if "full" in str(exc) else str(exc), "没有写入")
+                continue
+            if result["status"] != "added":
+                reused.append({**_shown(entry), "reason": REUSE_MEMORY})
+                continue
+            item_id = result["item"]["id"]
+            made_one(entry, item_id, "profile_item_ids")
+            _save_record(record_id, created, skipped)
+            agent_profile.set_template(owner_hash, item_id, template_id)
+        for entry in worked["brief"]:
+            if entry["status"] != "create":
+                continue
+            brief = next(b for b in TEMPLATES[template_id]["briefs"] if b["key"] == entry["key"])
+            skill_id = ids.get(entry["skill_key"]) if entry["skill_key"] else None
+            if skill_id and skill_id.startswith(_NEW):
+                skill_id = None
+            try:
+                row = agent_tasks.create_task(owner_hash, brief_fields(brief, skill_id=skill_id, bot_id=target["bot_id"]))
+            except agent_tasks.TaskError as exc:
+                refuse(entry, str(exc), "没有创建")
+                continue
+            made_one(entry, row["id"], "task_ids")
+            _save_record(record_id, created, skipped)
+        wanted = []
+        for entry in worked["usual"]:
+            if entry["status"] != "create":
+                continue
+            skill_id = ids.get(entry["key"]) if entry["key"] in ids else entry["skill_id"]
+            if skill_id and not skill_id.startswith(_NEW):
+                wanted.append((entry, skill_id))
+        if wanted and target["bot_id"]:
+            current = list((agent_bots.get_bot(owner_hash, target["bot_id"]) or {}).get("skills") or [])
+            merged, added = list(current), []
+            for entry, skill_id in wanted:
+                if skill_id in merged:
+                    continue
+                if len(merged) >= USUAL_MAX:
+                    refuse(entry, "usual_full", f"常用技能最多 {USUAL_MAX} 个，放不下了")
+                    continue
+                merged.append(skill_id)
+                added.append((entry, skill_id))
+            if added:
+                try:
+                    agent_bots.update_bot(owner_hash, target["bot_id"], {"skills": merged})
+                except (agent_skills.SkillError, agent_bots.BotError) as exc:
+                    for entry, _ in added:
+                        refuse(entry, str(exc), "没有加进常用技能")
+                else:
+                    for entry, skill_id in added:
+                        made_one(entry, skill_id, "usual_added")
+    finally:
+        _save_record(record_id, created, skipped)
+    if not made:
+        return {"application": None, "created": [], "reused": reused, "skipped": skipped}
+    with SessionLocal() as db:
+        application = _application(owner_hash, db.get(RoleTemplateApplication, record_id))
+    return {"application": application, "created": made, "reused": reused, "skipped": skipped}
+
+
+# ---- what an application holds, and taking it back -----------------------------------------------------------------------------
+
+def _items(owner_hash: str, created: dict, bot_id) -> list[dict]:
+    """Each thing an application recorded, as it is now: ``{part, id, label, there, note}``.  The label is its current text or name (he may have
+    edited it) or, once it is gone, the one the record kept."""
+    labels = created.get("labels") or {}
+    texts = {i["id"]: i["text"] for i in agent_profile.list_items(owner_hash)}
+    tasks = {t["id"]: t for t in agent_tasks.list_tasks(owner_hash)}
+    skills = {s["id"]: s for s in agent_skills.list_skills(owner_hash)}
+    bot = _default_bot(owner_hash) if bot_id is None else agent_bots.get_bot(owner_hash, str(bot_id))
+    usual = set((bot or {}).get("skills") or [])
+    own_tasks, own_skills = set(created.get("task_ids") or []), set(created.get("skill_ids") or [])
+    out = []
+    for item_id in created.get("profile_item_ids") or []:
+        out.append({"part": "memory", "id": item_id, "label": texts.get(item_id) or labels.get(item_id, ""), "there": item_id in texts, "note": ""})
+    for item_id in created.get("task_ids") or []:
+        task = tasks.get(item_id)
+        out.append({"part": "brief", "id": item_id, "label": task["name"] if task else labels.get(item_id, ""), "there": task is not None, "note": ""})
+    for item_id in created.get("skill_ids") or []:
+        skill = skills.get(item_id)
+        others = sum(1 for t in tasks.values() if t.get("skill_id") == item_id and t["id"] not in own_tasks)
+        out.append({"part": "skill", "id": item_id, "label": skill["name"] if skill else labels.get(item_id, ""), "there": skill is not None,
+                    "note": f"还有 {others} 个别的例行任务在用它" if skill and others else ""})
+    for item_id in created.get("usual_added") or []:
+        if item_id in own_skills:
+            continue
+        skill = skills.get(item_id)
+        out.append({"part": "usual", "id": item_id, "label": skill["name"] if skill else labels.get(item_id, ""), "there": item_id in usual, "note": ""})
+    return out
+
+
+def list_applications(owner_hash: str) -> list[dict]:
+    """His applications, newest first, each with what is still there (``still_there``: memory, brief, skill, usual) and every item."""
+    with SessionLocal() as db:
+        rows = list(db.scalars(select(RoleTemplateApplication).where(RoleTemplateApplication.owner_hash == owner_hash)
+                               .order_by(RoleTemplateApplication.applied_at.desc())))
+        for row in rows:
+            db.expunge(row)
+    listed = []
+    for row in rows:
+        items = _items(owner_hash, row.created or {}, row.bot_id)
+        there = {part: sum(1 for i in items if i["part"] == part and i["there"]) for part in ("memory", "brief", "skill", "usual")}
+        listed.append({**_application(owner_hash, row), "still_there": there, "items": items})
+    return listed
+
+
+def _drop_from_usual(owner_hash: str, bot_id, ids: set[str]) -> None:
+    bot = _default_bot(owner_hash) if bot_id is None else agent_bots.get_bot(owner_hash, str(bot_id))
+    if not bot or not ids:
+        return
+    current = list(bot.get("skills") or [])
+    remaining = [x for x in current if x not in ids]
+    if remaining != current:
+        try:
+            agent_bots.update_bot(owner_hash, bot["id"], {"skills": remaining})
+        except (agent_skills.SkillError, agent_bots.BotError):
+            pass        # his own list holds something that no longer validates: leave it as it is rather than guess
+
+
+def undo(owner_hash: str, application_id, leave_out=None) -> dict:
+    """Take back what one application recorded and is still there: memory lines (edited ones too), briefs, the skills it made and the usual
+    skills it added.  ``leave_out`` ids stay.  Anything already gone is listed, anything not recorded is never touched.
+    Returns ``{removed, gone, kept}``."""
+    try:
+        key = uuid.UUID(str(application_id))
+    except (TypeError, ValueError) as exc:
+        raise RoleTemplateError("application_not_found") from exc
+    with SessionLocal() as db:
+        row = db.get(RoleTemplateApplication, key)
+        if row is None or row.owner_hash != owner_hash:
+            raise RoleTemplateError("application_not_found")
+        if row.undone_at is not None:
+            raise RoleTemplateError("already_undone")
+        created, bot_id = copy.deepcopy(row.created or {}), row.bot_id
+    keep = {str(x) for x in (leave_out or [])}
+    recorded = {str(x) for bucket in ("profile_item_ids", "task_ids", "skill_ids", "usual_added") for x in created.get(bucket) or []}
+    if keep - recorded:
+        raise RoleTemplateError("unknown_leave_out")
+    removed, gone, kept, todo = [], [], [], []
+    for item in _items(owner_hash, created, bot_id):
+        shown = {"part": item["part"], "id": item["id"], "label": item["label"]}
+        if not item["there"]:
+            gone.append({**shown, "reason": GONE})
+        elif item["id"] in keep:
+            kept.append(shown)
+        else:
+            todo.append(shown)
+    _drop_from_usual(owner_hash, bot_id, {i["id"] for i in todo if i["part"] in ("skill", "usual")})
+    deleters = {"memory": agent_profile.delete_item, "brief": agent_tasks.delete_task, "skill": agent_skills.delete_skill}
+    for shown in todo:
+        deleter = deleters.get(shown["part"])
+        if deleter is None or deleter(owner_hash, shown["id"]):
+            removed.append(shown)
+        else:
+            gone.append({**shown, "reason": GONE})
+    with SessionLocal() as db:
+        row = db.get(RoleTemplateApplication, key)
+        row.undone_at = datetime.now(UTC)
+        db.commit()
+    return {"removed": removed, "gone": gone, "kept": kept}

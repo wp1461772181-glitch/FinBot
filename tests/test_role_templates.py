@@ -529,7 +529,9 @@ def test_list_applications_newest_first_with_counts_and_bot_names(owner):
     assert [a["id"] for a in listed] == [second["application"]["id"], first["application"]["id"]]
     top = listed[0]
     assert (top["template"], top["label"], top["bot_name"], top["scope"], top["undone_at"]) == ("fund_manager", "基金经理", "助理", "global", None)
-    assert top["still_there"] == {"memory": 5, "brief": 2, "skill": 1, "usual": 2}       # usual: the two that are not also a created skill
+    # usual: only what this application itself added and that is not also a skill it made.  「财报速读」 was already on the list from the 定投
+    # application, so this one did not add it (and its undo must not take it away): that leaves 「同行对比」.
+    assert top["still_there"] == {"memory": 5, "brief": 2, "skill": 1, "usual": 1}
     assert rt.list_applications(OTHER_HASH) == []
 
 
