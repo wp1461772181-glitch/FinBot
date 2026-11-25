@@ -123,9 +123,10 @@ def _stated(symbol, filings):
 # --- checks and derivation -------------------------------------------------------------------------------------
 
 def _corroborated(fact, history):
-    """Another filing or a press release states the same value for the same period and span (within 0.1 %)."""
+    """An independent source states the same value for the same period and span (within 0.1 %): a press release against a periodic report,
+    or the reverse.  A later report repeating a comparative is not independent (a mapping error repeats in every filing)."""
     for entry in history.get((fact['metric'], fact['period_end'].isoformat(), fact['span']), []):
-        if entry['accession'] != fact['accession_number'] and abs(entry['value'] - fact['value']) <= _CORROBORATION * abs(fact['value']):
+        if entry['basis'] != fact['basis'] and entry['accession'] != fact['accession_number'] and abs(entry['value'] - fact['value']) <= _CORROBORATION * abs(fact['value']):
             return True
     return False
 
@@ -148,6 +149,19 @@ def _check_gross_profit(facts, history):
         for fact in (revenue, cost, gross):
             if not _corroborated(fact, history):
                 fact['status'], fact['reason'] = 'check_failed', reason
+
+
+def _check_bounds(facts):
+    """Limits no true figure breaks, whatever else is known: a negative cost of revenue, a gross profit above revenue."""
+    for key, fact in sorted(facts.items()):
+        if fact['status'] != 'ok':
+            continue
+        if fact['metric'] == 'cost_of_revenue' and fact['value'] < 0:
+            fact['status'], fact['reason'] = 'check_failed', 'cost_of_revenue is negative'
+        elif fact['metric'] == 'gross_profit':
+            revenue = facts.get(('revenue', key[1], key[2]))
+            if revenue and revenue['unit'] == fact['unit'] and fact['value'] > revenue['value']:
+                fact['status'], fact['reason'] = 'check_failed', f"gross_profit {int(fact['value'])} exceeds revenue {int(revenue['value'])}"
 
 
 def _vintage(fact, history):
@@ -174,11 +188,14 @@ _QUARTER_NAMES = {'Q2': '第二季', 'Q3': '第三季', 'Q4': '第四季'}
 
 
 def _mixed_vintage(big, small, history, fiscal_period):
-    """A parent restated in a later filing while the other parent still comes from an older one: the pair is not one set of books."""
-    for changed, other in ((big, small), (small, big)):
-        restated, since = _vintage(changed, history)
-        if restated and other['filed_at'] < date.fromisoformat(str(since)[:10]):
-            return f"{_PART_NAMES[changed['span']]}已重述，{_PART_NAMES[other['span']]}未同步重述，无法推出{_QUARTER_NAMES[fiscal_period]}"
+    """Exactly one parent restated in a later filing while the other still comes from an older one: the pair is not one set of books.
+    Both restated (each in its own filing) or neither is not flagged here."""
+    (big_restated, big_since), (small_restated, small_since) = _vintage(big, history), _vintage(small, history)
+    if big_restated == small_restated:
+        return None
+    changed, other, since = (big, small, big_since) if big_restated else (small, big, small_since)
+    if other['filed_at'] < date.fromisoformat(str(since)[:10]):
+        return f"{_PART_NAMES[changed['span']]}已重述，{_PART_NAMES[other['span']]}未同步重述，无法推出{_QUARTER_NAMES[fiscal_period]}"
     return None
 
 
@@ -205,6 +222,8 @@ def _derive(symbol, facts, history):
                         problem = f"两个累计数的会计科目不同（{small['concept']} 与 {big['concept']}），无法相减"
                     stated = facts.get(key)
                     if stated is not None:
+                        if stated['status'] == 'ok' and problem:
+                            stated['reason'] = f'not compared with the year-to-date figures: {problem}'
                         if stated['status'] == 'ok' and not problem and abs(stated['value'] - value) > _GP_TOLERANCE * abs(stated['value']):
                             stated['status'] = 'check_failed'
                             stated['reason'] = (f"stated quarter {int(stated['value'])} ({stated['form']} {stated['accession_number']}) != {formula} = {int(value)} "
@@ -285,6 +304,8 @@ def _ratios(symbol, facts):
             status, reason = _worst([top, revenue])
             if status == 'ok' and revenue['value'] == 0:
                 status, reason = 'not_meaningful', 'revenue is zero'
+            elif status == 'ok' and abs(top['value']) > abs(revenue['value']):
+                status, reason = 'check_failed', f'{name} outside -100%..100%'
             out[(name, end, span)] = _ratio(symbol, name, revenue, f'{numerator} / revenue', [top, revenue], _weakest(top['basis'], revenue['basis']),
                                             _ratio_value(top['value'], revenue['value']) if status == 'ok' else None, status, reason)
     for (metric, end, span), current in sorted(facts.items()):
@@ -338,8 +359,10 @@ def _rebuild(db, symbol):
     db.execute(text('SELECT pg_advisory_xact_lock(hashtext(:space), hashtext(:symbol))'), {'space': 'company_facts', 'symbol': symbol})
     facts, history = _stated(symbol, _filings(db, symbol))
     _check_gross_profit(facts, history)
+    _check_bounds(facts)
     _derive(symbol, facts, history)
     _check_gross_profit(facts, history)
+    _check_bounds(facts)
     ratios = _ratios(symbol, facts)
     _store(db, CompanyFact, _FACT_COLUMNS, list(facts.values()), symbol, now)
     _store(db, CompanyRatio, _RATIO_COLUMNS, list(ratios.values()), symbol, now)
@@ -349,7 +372,9 @@ def _rebuild(db, symbol):
 
 
 def refresh(symbol: str, *, db=None) -> dict:
-    """Rebuild one symbol's facts and ratios in one transaction.  With ``db`` the caller commits; without it this commits (and rolls back on error)."""
+    """Rebuild one symbol's facts and ratios in one transaction.  With ``db`` the caller commits; without it this commits (and rolls back on error).
+    The transaction holds a per-symbol lock until it ends: refresh one symbol per transaction (or symbols in sorted order), and never keep
+    the transaction open across a network fetch, or every other refresh of that symbol waits."""
     symbol = (symbol or '').strip().upper()
     session = db or SessionLocal()
     try:

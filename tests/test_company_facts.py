@@ -397,9 +397,9 @@ def test_when_revenue_cost_and_gross_profit_disagree_all_three_are_marked(world)
     assert cf.latest_quarter(symbol) is None
 
 
-def test_a_figure_another_filing_states_again_stays_when_the_trio_disagrees(world):
-    later = [flow('revenue', [p('2027-04-01', '2027-06-30', 1300, 2027, 'Q3'), p('2026-04-01', '2026-06-30', 1000, 2027, 'Q3')])]
-    symbol = world([{'form': '10-Q', 'filed': date(2026, 8, 1), 'figures': trio(1000, 400, 700)}, {'form': '10-Q', 'filed': date(2027, 8, 1), 'figures': later}])
+def test_a_figure_a_release_states_again_stays_when_the_trio_disagrees(world):
+    release = [press('revenue', '2026-06-30', 1000, 3, 2026, 'Q3')]
+    symbol = world([{'form': '10-Q', 'filed': date(2026, 8, 1), 'figures': trio(1000, 400, 700)}, {'form': '8-K', 'filed': date(2026, 7, 25), 'figures': release}])
     cf.refresh(symbol)
     f = facts(symbol)
     assert f[('revenue', '2026-06-30', 'quarter')].status == 'ok'
@@ -440,3 +440,80 @@ def test_refresh_all_clears_the_rows_of_a_symbol_whose_figures_are_gone(world):
         db.commit()
     cf.refresh_all()
     assert not facts(symbol) and not ratios(symbol)
+
+
+# --- fix round 2 ------------------------------------------------------------------------------------------------
+
+def test_a_restatement_that_reaches_both_parents_is_derived_and_ok(world):
+    def rev(*periods):
+        return [flow('revenue', list(periods))]
+    symbol = world([
+        {'form': '10-Q', 'filed': date(2026, 8, 1), 'figures': rev(p('2025-10-01', '2026-06-30', 700, 2026, 'Q3'))},
+        {'form': '10-K', 'filed': date(2026, 11, 20), 'figures': rev(p('2025-10-01', '2026-09-30', 1000, 2026, 'FY'))},
+        {'form': '10-Q', 'filed': date(2027, 8, 1), 'figures': rev(p('2026-10-01', '2027-06-30', 900, 2027, 'Q3'), p('2025-10-01', '2026-06-30', 560, 2027, 'Q3'))},
+        {'form': '10-K', 'filed': date(2027, 11, 20), 'figures': rev(p('2026-10-01', '2027-09-30', 1200, 2027, 'FY'), p('2025-10-01', '2026-09-30', 800, 2027, 'FY'))}])
+    cf.refresh(symbol)
+    q4 = facts(symbol)[('revenue', '2026-09-30', 'quarter')]
+    assert q4.status == 'ok' and int(q4.value) == 240 and q4.kind == 'derived'
+
+
+def test_a_restatement_with_unchanged_comparative_elsewhere_is_still_flagged(world):
+    # Only the annual figure changed; the nine months were repeated unchanged: one parent restated, the other older.
+    def rev(*periods):
+        return [flow('revenue', list(periods))]
+    symbol = world([
+        {'form': '10-Q', 'filed': date(2026, 8, 1), 'figures': rev(p('2025-10-01', '2026-06-30', 700, 2026, 'Q3'))},
+        {'form': '10-K', 'filed': date(2026, 11, 20), 'figures': rev(p('2025-10-01', '2026-09-30', 1000, 2026, 'FY'))},
+        {'form': '10-K', 'filed': date(2027, 11, 20), 'figures': rev(p('2026-10-01', '2027-09-30', 1200, 2027, 'FY'), p('2025-10-01', '2026-09-30', 800, 2027, 'FY'))}])
+    cf.refresh(symbol)
+    assert facts(symbol)[('revenue', '2026-09-30', 'quarter')].status == 'check_failed'
+
+
+def repeated_trio():
+    first = [flow('revenue', [p('2026-04-01', '2026-06-30', 500, 2026, 'Q3')]), flow('cost_of_revenue', [p('2026-04-01', '2026-06-30', 400, 2026, 'Q3')]),
+             flow('gross_profit', [p('2026-04-01', '2026-06-30', 600, 2026, 'Q3')])]
+    again = [flow('revenue', [p('2027-04-01', '2027-06-30', 520, 2027, 'Q3'), p('2026-04-01', '2026-06-30', 500, 2027, 'Q3')]),
+             flow('cost_of_revenue', [p('2027-04-01', '2027-06-30', 420, 2027, 'Q3'), p('2026-04-01', '2026-06-30', 400, 2027, 'Q3')]),
+             flow('gross_profit', [p('2027-04-01', '2027-06-30', 100, 2027, 'Q3'), p('2026-04-01', '2026-06-30', 600, 2027, 'Q3')])]
+    return [{'form': '10-Q', 'filed': date(2026, 8, 1), 'figures': first}, {'form': '10-Q', 'filed': date(2027, 8, 1), 'figures': again}]
+
+
+def test_a_later_report_repeating_a_comparative_does_not_corroborate_it(world):
+    symbol = world(repeated_trio())
+    cf.refresh(symbol)
+    f, r = facts(symbol), ratios(symbol)
+    assert all(f[(m, '2026-06-30', 'quarter')].status == 'check_failed' for m in ('revenue', 'cost_of_revenue', 'gross_profit'))
+    assert r[('gross_margin', '2026-06-30', 'quarter')].status == 'check_failed' and r[('gross_margin', '2026-06-30', 'quarter')].value is None
+    assert r[('gross_margin_change_yoy_pp', '2027-06-30', 'quarter')].status == 'check_failed'
+
+
+def test_a_release_corroborates_a_report_and_the_other_way_round(world):
+    t = [flow('revenue', [p('2026-04-01', '2026-06-30', 500, 2026, 'Q3')]), flow('cost_of_revenue', [p('2026-04-01', '2026-06-30', 400, 2026, 'Q3')]),
+         flow('gross_profit', [p('2026-04-01', '2026-06-30', 600, 2026, 'Q3')])]
+    symbol = world([{'form': '10-Q', 'filed': date(2026, 8, 1), 'figures': t}, {'form': '8-K', 'filed': date(2026, 7, 25), 'figures': [press('revenue', '2026-06-30', 500, 3, 2026, 'Q3')]}])
+    cf.refresh(symbol)
+    f = facts(symbol)
+    assert f[('revenue', '2026-06-30', 'quarter')].status == 'ok' and f[('gross_profit', '2026-06-30', 'quarter')].status == 'check_failed'
+
+
+def test_bounds_hold_whatever_else_is_true(world):
+    # Gross profit above revenue; a negative cost of revenue; a margin beyond 100 %.
+    a = [flow('revenue', [p('2026-04-01', '2026-06-30', 100, 2026, 'Q3')]), flow('gross_profit', [p('2026-04-01', '2026-06-30', 150, 2026, 'Q3')]),
+         flow('cost_of_revenue', [p('2026-01-01', '2026-03-31', -5, 2026, 'Q2')]), flow('net_income', [p('2026-04-01', '2026-06-30', -250, 2026, 'Q3')])]
+    symbol = world([{'form': '10-Q', 'filed': date(2026, 8, 1), 'figures': a}])
+    cf.refresh(symbol)
+    f, r = facts(symbol), ratios(symbol)
+    assert f[('gross_profit', '2026-06-30', 'quarter')].status == 'check_failed' and 'exceeds revenue' in f[('gross_profit', '2026-06-30', 'quarter')].reason
+    assert f[('cost_of_revenue', '2026-03-31', 'quarter')].status == 'check_failed' and 'negative' in f[('cost_of_revenue', '2026-03-31', 'quarter')].reason
+    assert r[('net_margin', '2026-06-30', 'quarter')].status == 'check_failed' and r[('net_margin', '2026-06-30', 'quarter')].value is None
+    assert f[('net_income', '2026-06-30', 'quarter')].status == 'ok'
+
+
+def test_a_skipped_comparison_leaves_a_note_on_the_stated_quarter(world):
+    symbol = world([
+        {'form': '10-Q', 'filed': date(2026, 2, 1), 'figures': [flow('revenue', [p('2025-10-01', '2025-12-31', 100, 2026, 'Q1')])]},
+        {'form': '10-Q', 'filed': date(2026, 5, 1), 'figures': [flow('revenue', [p('2026-01-01', '2026-03-31', 150, 2026, 'Q2'), p('2025-10-01', '2026-03-31', 250, 2026, 'Q2')])]},
+        {'form': '10-Q', 'filed': date(2027, 5, 1), 'figures': [flow('revenue', [p('2027-01-01', '2027-03-31', 300, 2027, 'Q2'), p('2025-10-01', '2026-03-31', 400, 2027, 'Q2')])]}])
+    cf.refresh(symbol)
+    stated = facts(symbol)[('revenue', '2026-03-31', 'quarter')]
+    assert stated.status == 'ok' and stated.reason and 'not compared' in stated.reason
