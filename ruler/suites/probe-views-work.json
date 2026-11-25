@@ -1,0 +1,161 @@
+{
+ "version": 1,
+ "cases": [
+  {
+   "id": "PV11",
+   "kind": "recall",
+   "title": "V1",
+   "turns": [
+    {
+     "text": "我觉得英伟达估值太高了，现在不想追，等回调再说。记一下我的看法。",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  },
+  {
+   "id": "PV12",
+   "kind": "recall",
+   "title": "V1",
+   "turns": [
+    {
+     "text": "我觉得英伟达估值太高了，现在不想追，等回调再说。记一下我的看法。",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  },
+  {
+   "id": "PV21",
+   "kind": "recall",
+   "title": "V2",
+   "turns": [
+    {
+     "text": "记下我对特斯拉的看法：自动驾驶真正落地之前我不碰它。",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  },
+  {
+   "id": "PV22",
+   "kind": "recall",
+   "title": "V2",
+   "turns": [
+    {
+     "text": "记下我对特斯拉的看法：自动驾驶真正落地之前我不碰它。",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  },
+  {
+   "id": "PV31",
+   "kind": "recall",
+   "title": "V3",
+   "turns": [
+    {
+     "text": "我对微软的看法是云业务还会继续加速，帮我记下来。",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  },
+  {
+   "id": "PV32",
+   "kind": "recall",
+   "title": "V3",
+   "turns": [
+    {
+     "text": "我对微软的看法是云业务还会继续加速，帮我记下来。",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  },
+  {
+   "id": "PV41",
+   "kind": "recall",
+   "title": "V4",
+   "turns": [
+    {
+     "text": "我觉得 AMD 这一季数据中心增速会放缓，你记一下。",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  },
+  {
+   "id": "PV42",
+   "kind": "recall",
+   "title": "V4",
+   "turns": [
+    {
+     "text": "我觉得 AMD 这一季数据中心增速会放缓，你记一下。",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  },
+  {
+   "id": "PW11",
+   "kind": "recall",
+   "title": "W1",
+   "turns": [
+    {
+     "text": "你手上有什么事？",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  },
+  {
+   "id": "PW12",
+   "kind": "recall",
+   "title": "W1",
+   "turns": [
+    {
+     "text": "你手上有什么事？",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  },
+  {
+   "id": "PW21",
+   "kind": "recall",
+   "title": "W2",
+   "turns": [
+    {
+     "text": "现在有哪些事在进行中？",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  },
+  {
+   "id": "PW22",
+   "kind": "recall",
+   "title": "W2",
+   "turns": [
+    {
+     "text": "现在有哪些事在进行中？",
+     "checks": {
+      "status": "any"
+     }
+    }
+   ]
+  }
+ ]
+}
