@@ -168,3 +168,29 @@ test("a refused request says its reason in Chinese: the code's words, or the ser
   assert.equal(templateWriteError(500, undefined), "没有成功，请重试。");
   assert.equal(templateWriteError(undefined, null), "没有成功，请重试。");
 });
+
+// The server's real shapes (tests/test_role_templates.py in the backend): rows { part, id, label, there, note }, still_there { memory, brief, skill, usual },
+// and the apply answer's `created` as a list of { part, key, label, id }.
+test("the undo dialog reads the server's rows: the label is the text, `there: false` is gone", () => {
+  const rows = applicationRows({ items: [
+    { part: "skill", id: "s1", label: "盘前速览", there: true, note: "还有 1 个别的例行任务在用它" },
+    { part: "memory", id: "m1", label: "我改过这一条的字", there: true, note: "" },
+    { part: "brief", id: "t1", label: "盘前速览", there: false, note: "" },
+  ] });
+  assert.deepEqual(rows.map((r) => [r.part, r.id, r.text, r.gone]), [["memory", "m1", "我改过这一条的字", false], ["brief", "t1", "盘前速览", true], ["skill", "s1", "盘前速览", false]]);
+  assert.deepEqual(undoLeaveOut(rows, new Set(["m1"])), ["s1"]);                   // the gone one is never sent; the unticked one stays out of the list of things to remove
+});
+
+test("the still-there line reads the server's counts (memory, brief, skill, usual) and the old names too", () => {
+  assert.equal(stillThereLine({ still_there: { memory: 5, brief: 0, skill: 2, usual: 1 } }), "还在：5 条记忆 · 0 个简报 · 2 个技能");
+  assert.equal(stillThereLine({ still_there: { memory: 0, brief: 0, skill: 0, usual: 0 } }), "都已不在了");
+  assert.equal(stillThereLine({ still_there: { profile_items: 2, tasks: 1, skills: 1 } }), stillThereLine({ still_there: { memory: 2, brief: 1, skill: 1 } }));
+});
+
+test("what an apply wrote is counted from the server's list of entries", () => {
+  const created = [{ part: "skill", key: "k1", label: "a", id: "1" }, { part: "skill", key: "k2", label: "b", id: "2" }, { part: "memory", key: "m1", label: "c", id: "3" },
+    { part: "memory", key: "m2", label: "d", id: "4" }, { part: "memory", key: "m3", label: "e", id: "5" }, { part: "brief", key: "b1", label: "f", id: "6" }, { part: "usual", key: "u1", label: "g", id: "7" }];
+  assert.equal(createdLine(created), "3 条记忆 · 1 个简报 · 2 个技能");
+  assert.equal(createdLine([]), "");
+});
+

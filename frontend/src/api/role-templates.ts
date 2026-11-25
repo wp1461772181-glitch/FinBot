@@ -11,7 +11,7 @@
 //  2. Preview / apply lines: `reuse` and `skip` are lists of { key, reason } (a key of the template: memory, brief or skill key; a line about a whole part, such as memory_full, may carry
 //     the key "memory" or none).  `will_create` is a list of keys or { key, part? }: the page does not need it (anything ticked and not in reuse/skip is written) and ignores its shape.
 //     `reason` is the server's Chinese sentence, shown as given (and through t() when it is one of the fixed ones).
-//  3. Apply answer: `application` is the new record (same shape as in the list), `created` is { profile_item_ids, task_ids, skill_ids, usual_added } (the plan's record), `reused` and
+//  3. Apply answer: `application` is the new record (same shape as in the list, without `items`), `created` is the list of entries it wrote { part, key, label, id } (the helpers also read the record's { profile_item_ids, ... }), `reused` and
 //     `skipped` are lists of { key, reason }.
 //  4. Undo dialog: each application in the list carries `items: [{ id, part: "memory"|"brief"|"skill"|"usual", text, gone? }]` -- the things it wrote with their CURRENT text (he may have
 //     edited it) and `gone: true` for one already deleted.  The plan says the undo list shows current text but names only counts in `still_there`; without `items` the dialog says it
@@ -31,14 +31,16 @@ export type TemplateBrief = { key: string; name: string; schedule_kind: string; 
 export type TemplateSkill = { key: string; name: string; description: string; body: string; output_template: string; allowed_tools: string[] };
 export type RoleTemplate = { id: string; label: string; blurb: string; memory: TemplateMemory[]; briefs: TemplateBrief[]; skills: TemplateSkill[]; usual: string[]; notes: string[] };
 export type ApplicationItem = { id: string; part: string; text: string; gone: boolean };
-export type StillThere = { profile_items?: number; tasks?: number; skills?: number; usual?: number };
-export type RoleTemplateApplication = { id: string; template: string; label: string; bot_id: string | null; bot_name: string | null; applied_at: string | null; undone_at: string | null; still_there: StillThere; items?: Array<Partial<ApplicationItem>> };
+/** A row as the server sends it: its current label (he may have edited it), whether it is still there, and a note (「还有 1 个别的例行任务在用它」). */
+export type ServerApplicationItem = { id: string; part: string; label?: string; there?: boolean; note?: string; text?: string; gone?: boolean };
+export type StillThere = { memory?: number; brief?: number; skill?: number; profile_items?: number; tasks?: number; skills?: number; usual?: number };
+export type RoleTemplateApplication = { id: string; template: string; label: string; bot_id: string | null; bot_name: string | null; applied_at: string | null; undone_at: string | null; still_there: StillThere; items?: Array<ServerApplicationItem> };
 export type RoleTemplates = { templates: RoleTemplate[]; applications: RoleTemplateApplication[]; duty_mode: string };
 /** `bot_id` null is 全局 + 助理; `leave_out` the keys he unticked. */
 export type ApplyBody = { bot_id: string | null; leave_out: string[] };
 export type ResultLine = { key: string; reason: string };
 export type TemplatePreview = { will_create: unknown[]; reuse: ResultLine[]; skip: ResultLine[]; notes: string[] };
-export type ApplyResult = { application: RoleTemplateApplication | null; created: { profile_item_ids?: string[]; task_ids?: string[]; skill_ids?: string[]; usual_added?: string[] }; reused: ResultLine[]; skipped: ResultLine[] };
+export type ApplyResult = { application: RoleTemplateApplication | null; created: unknown;  /* a list of { part, key, label, id } from the server, or the record's { profile_item_ids, ... }: only createdLine reads it */ reused: ResultLine[]; skipped: ResultLine[] };
 export type UndoResult = { removed: unknown; gone: unknown };
 
 const arr = <T,>(value: unknown): T[] => (Array.isArray(value) ? value as T[] : []);
@@ -68,7 +70,7 @@ export async function previewRoleTemplate(template: string, body: ApplyBody, sig
 /** The owner presses 应用: writes the ticked parts as ordinary memory, tasks and skills (nothing new is overwritten or archived). */
 export async function applyRoleTemplate(template: string, body: ApplyBody, signal?: AbortSignal): Promise<ApplyResult> {
   const data = await write<Partial<ApplyResult>>(`role-templates/${encodeURIComponent(template)}/apply`, body, signal);
-  return { application: data.application ?? null, created: data.created ?? {}, reused: arr<ResultLine>(data.reused), skipped: arr<ResultLine>(data.skipped) };
+  return { application: data.application ?? null, created: data.created ?? [], reused: arr<ResultLine>(data.reused), skipped: arr<ResultLine>(data.skipped) };
 }
 /** Takes back what an application wrote and is still there, except the ids left out. */
 export async function undoRoleTemplate(applicationId: string, leaveOut: string[], signal?: AbortSignal): Promise<UndoResult> {

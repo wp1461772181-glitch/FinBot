@@ -136,7 +136,11 @@ export function countThings(value) {
 
 /** What an apply wrote: 「写入了 3 条记忆、1 个简报、2 个技能」; "" when nothing new was written. */
 export function createdLine(created, locale = "zh-CN") {
-  const memory = countThings(created?.profile_item_ids), briefs = countThings(created?.task_ids), skills = countThings(created?.skill_ids);
+  // The server lists what it wrote as entries { part, key, label, id }; the record's { profile_item_ids, task_ids, skill_ids } is read too.
+  const byPart = (part) => (Array.isArray(created) ? created.filter((entry) => entry?.part === part).length : 0);
+  const memory = Array.isArray(created) ? byPart("memory") : countThings(created?.profile_item_ids);
+  const briefs = Array.isArray(created) ? byPart("brief") : countThings(created?.task_ids);
+  const skills = Array.isArray(created) ? byPart("skill") : countThings(created?.skill_ids);
   if (memory + briefs + skills === 0) return "";
   return partsLine(memory, briefs, skills, locale);
 }
@@ -159,7 +163,8 @@ export function applicationGroups(applications) {
 /** What of an application is still there, from the server's counts: 「还在：2 条记忆 · 1 个简报 · 2 个技能」, or 「都已不在了」. */
 export function stillThereLine(application, locale = "zh-CN") {
   const there = application?.still_there ?? {};
-  const memory = countThings(there.profile_items), briefs = countThings(there.tasks), skills = countThings(there.skills);
+  // The server's keys are memory, brief, skill, usual; profile_items, tasks, skills are read too.
+  const memory = countThings(there.memory ?? there.profile_items), briefs = countThings(there.brief ?? there.tasks), skills = countThings(there.skill ?? there.skills);
   if (memory + briefs + skills + countThings(there.usual) === 0) return en(locale) ? "None of it is left" : "都已不在了";
   return (en(locale) ? "Still there: " : "还在：") + partsLine(memory, briefs, skills, locale);
 }
@@ -172,7 +177,8 @@ const PART_ORDER = ["memory", "brief", "skill", "usual"];
 export function applicationRows(application) {
   const rank = (part) => { const at = PART_ORDER.indexOf(part); return at < 0 ? PART_ORDER.length : at; };
   return list(application?.items)
-    .map((row) => ({ id: String(row.id ?? ""), part: text(row.part), text: text(row.text), gone: Boolean(row.gone) }))
+    // The server's rows are { part, id, label, there, note }; { text, gone } is read too.
+    .map((row) => ({ id: String(row.id ?? ""), part: text(row.part), text: text(row.label) || text(row.text), gone: row.there === false || Boolean(row.gone) }))
     .filter((row) => row.id)
     .sort((a, b) => rank(a.part) - rank(b.part));
 }
