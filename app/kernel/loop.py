@@ -24,7 +24,7 @@ from ..agent_context import is_catalogue_message, is_memory_message
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
-from . import act, ask, decide, press, progress, prompt, skills, tiers
+from . import act, ask, decide, helper, press, progress, prompt, skills, tiers
 from . import inbox as inboxes
 from .toolrun import mark_timeline, number_attached, run_step_tools
 
@@ -101,6 +101,7 @@ class _Run:
     narration: list = field(default_factory=list)
     checklist: list = field(default_factory=list)
     inbox: object | None = None      # the running turn's inbox (``inbox.Inbox``): what the owner says while it works; None for a turn without one
+    is_helper: bool = False          # a helper's run (``helper.run``): the kernel's own tools are not its to call
     pausable: bool = True            # a message arriving while the answer is being written stops the writing (not in the closing steps)
     partial: str = ""                # the half-written answer an arriving message cut off: kept for a stop, which ends the turn with it
     paused_partial: bool = False     # that text is still on the user's screen: the next thing written replaces it
@@ -121,6 +122,8 @@ def _tool_schemas(context) -> list[dict]:
     offered = [*(s for s in available if scope is None or s["function"]["name"] in scope), *([act.ACT_SCHEMA] if owner else []),
                ask.ASK_SCHEMA, *([skills.USE_SKILL_SCHEMA] if owner and getattr(context, "skill_block", None) else []),
                progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA, *([inboxes.HANDLE_SCHEMA] if getattr(context, "inbox", None) is not None else [])]
+    if helper.offered(s["function"]["name"] for s in offered):      # behind the switch, after everything else: the list is unchanged with it off
+        offered.append(helper.DELEGATE_SCHEMA)
     return [progress.with_say(s) for s in offered]
 
 
@@ -593,7 +596,7 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
         company = getattr(context, "default_company", None)
         latest = await _latest_block(run, run.question if fact else question, _previous_user_message(history, run.question if fact else question, original=bool(fact)),
                                      company.get("symbol") if isinstance(company, dict) else None, owner)
-        run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started, latest=latest)
+        run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started, latest=latest, helper=helper.DELEGATE in run.tool_names)
         if started and owner_credential_matches(getattr(context, "identity_credential", "")):
             run.audit["skill"] = {"name": started["name"], "version": started["version"]}
         run.user_text = _user_text(run.question, history)

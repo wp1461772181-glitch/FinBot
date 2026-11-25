@@ -251,7 +251,7 @@ class ManageSkillArgs(Args):
 class SetDefaultModelArgs(Args):
     name:str=Field(min_length=1,max_length=40,description='A catalog model name (list_models).')
 class SetModelRoleArgs(Args):
-    role:Literal['earnings','forecast','judge','fallback']=Field(description="earnings: the earnings-release reader; forecast: the forecast's probabilities; judge: the claim judge; fallback: the backup chat model.")
+    role:Literal['earnings','forecast','judge','fallback','helper']=Field(description="earnings: the earnings-release reader; forecast: the forecast's probabilities; judge: the claim judge; fallback: the backup chat model; helper: the model the helper (delegate) runs on.")
     model:str|None=Field(default=None,max_length=40,description='A catalog model name (list_models); omit to go back to the default for that role.')
 class SetChannelPrefsArgs(Args):
     mode:Literal['first','all']=Field(description='first: the first channel that can take a message; all: every one that can.')

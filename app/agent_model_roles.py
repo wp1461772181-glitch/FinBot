@@ -5,14 +5,15 @@ forecast's direction probabilities (forecast_model_provider).  ``judge`` is the 
 agent_workflow/claim_judge_pin); it has no catalog-default fallback: no row, or a row naming a model that has left
 the catalog, means the env / pinned judge.  For the other roles, no row, or a row naming a model that has since left
 the catalog, means the server's default model.  ``fallback`` is the kernel's backup model: it has no default either
-(``fallback_for``: unset, or an entry that has left the catalog, means no backup).  The table is made by ``Base.metadata.create_all`` at startup like the catalog's."""
+(``fallback_for``: unset, or an entry that has left the catalog, means no backup).  ``helper`` is the kernel's helper (``delegate``): unset, or an
+entry that has left the catalog, means the model of the turn that delegates (``helper_for`` is None then; no server default stands in).  The table is made by ``Base.metadata.create_all`` at startup like the catalog's."""
 from __future__ import annotations
 
 from . import agent_model_catalog as catalog
 from .agent_chat_models import AgentModelRole
 from .database import SessionLocal
 
-ROLES = ("earnings", "forecast", "judge", "fallback")
+ROLES = ("earnings", "forecast", "judge", "fallback", "helper")
 
 
 class RoleError(ValueError):
@@ -59,8 +60,8 @@ def resolve_with_source(owner_hash: str | None, role: str) -> tuple[dict, dict]:
     names a model that has left the catalog; the server default is used and ``role_model`` says which)."""
     if role not in ROLES:
         raise RoleError("unknown_role")
-    if role == "fallback":
-        raise RoleError("role_has_no_default")     # nothing stands in for a backup: ``fallback_for`` is its reader
+    if role in ("fallback", "helper"):
+        raise RoleError("role_has_no_default")     # nothing stands in for a backup or a helper's model: ``fallback_for`` / ``helper_for`` read them
     name = get(owner_hash, role) if owner_hash else None
     if name and catalog.exists(name):
         return catalog.resolve(name), {"source": "role", "role_model": name}
@@ -79,6 +80,18 @@ def fallback_for(owner_hash: str | None) -> dict | None:
     """Provider settings (with the key, in memory only) of the owner's backup model, or None: the role is unset, or
     names an entry that has left the catalog or has no key.  Unlike the other roles nothing stands in for it."""
     name = get(owner_hash, "fallback") if owner_hash else None
+    if not name or not catalog.exists(name):
+        return None
+    try:
+        return catalog.resolve(name)
+    except catalog.CatalogError:
+        return None
+
+
+def helper_for(owner_hash: str | None) -> dict | None:
+    """Provider settings (with the key, in memory only) of the owner's helper model, or None: the role is unset, or names an entry that has
+    left the catalog or has no key.  The caller then uses the model of the turn."""
+    name = get(owner_hash, "helper") if owner_hash else None
     if not name or not catalog.exists(name):
         return None
     try:

@@ -21,7 +21,7 @@ from ..agent_tool_catalog import definitions, validate
 from ..agent_workflow import tools
 from ..agent_workflow.evidence import number_rows
 from .. import source_authority
-from . import act, ask, decide, progress, skills, tiers
+from . import act, ask, decide, helper, progress, skills, tiers
 from . import inbox as inboxes
 
 MAX_PARALLEL = 4
@@ -351,6 +351,26 @@ async def _fetch_all(run, reads: list[_Call]) -> None:
             task.cancel()
 
 
+async def _settle_delegate(run, item: _Call) -> None:
+    """One ``delegate`` call: the helper's own run (its reads are numbered into this turn's citations as it makes them; the result is not numbered)."""
+    try:
+        item.result = await helper.run(run, item.id, item.args)
+    except (TimeoutError, ConnectionError):
+        item.result = tools.error("tool_timeout")
+    except Exception:
+        logger.exception("kernel helper run failed")
+        item.result = tools.error("tool_failed")
+    mark_progress()
+    _done(run, item)
+
+
+def _counts_as_read(item: _Call) -> bool:
+    """A helper's result is one read result for the turn when it came back ok with at least one source."""
+    result = item.result or {}
+    data = result.get("data")
+    return bool(result.get("ok") and isinstance(data, dict) and data.get("sources"))
+
+
 async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     """Execute one step's tool calls; return one tool message per call, in call order."""
     from ..agent_chat_stream import bounded_tool_result
@@ -367,10 +387,19 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         mark_timeline(run, "tool", call_id=call["id"], name=name)
         await run.emit({"event": "tool_start", "call_id": call["id"], "name": name, "arguments": args or {}})
         run.audit["tool_calls"] += 1
-    own, asks, reads, serial, handles = [], [], [], [], []
+    own, asks, reads, serial, handles, delegates = [], [], [], [], [], []
     for item in items:
         if item.args is None:
             item.result = tools.error("invalid_arguments")
+        elif getattr(run, "is_helper", False) and item.name not in run.tool_names:
+            item.result = tools.error("tool_not_in_bot_scope")      # a helper has only the reads it was given: never ``act``, ``ask``, ``delegate``…
+        elif item.name == helper.DELEGATE:
+            if item.name not in run.tool_names:
+                item.result = tools.error("tool_not_in_bot_scope")
+            elif len(delegates) >= helper.MAX_HELPERS:
+                item.result = {"ok": False, "error_code": "too_many_helpers", "hint": f"一步里最多同时交给小助手 {helper.MAX_HELPERS} 件事；这件下一步再交，或者自己查。"}
+            else:
+                delegates.append(item)     # runs beside the reads, outside their gate
         elif getattr(run, "wake", None) is not None and item.name in (act.ACT, ask.ASK):
             item.result = tools.error("tool_not_in_bot_scope")      # a wake turn changes nothing and asks nobody
         elif item.name == decide.DECIDE:
@@ -413,7 +442,7 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         _done(run, item)
     if handles and run.inbox is not None and run.inbox.stopping:
         # The owner said stop: nothing else this step asked for runs (no read, no write, no question).
-        for pending in (own, asks, reads, serial):
+        for pending in (own, asks, reads, serial, delegates):
             for item in pending:
                 item.result = {"ok": False, "data": [], "error_code": "turn_stopped"}
             pending.clear()
@@ -431,7 +460,12 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     # One checklist event per step: after a plan and the ticks the step's labels ask for, before the reads.
     if progress.mark_items(run, numbers) or planned:
         await run.emit({"event": "checklist", "items": [dict(entry) for entry in run.checklist]})
-    await _fetch_all(run, reads)
+    helpers = [asyncio.ensure_future(_settle_delegate(run, item)) for item in delegates]
+    try:
+        await asyncio.gather(_fetch_all(run, reads), *helpers)
+    finally:
+        for task in helpers:
+            task.cancel()
     # A read's result (even a failed one) has come back: tier 1 no longer runs at once, unless it only showed the owner's own state.
     # It counts from the next step on: an ``act`` call of this very step was made before the model had seen it.
     gained = sum(1 for item in reads if item.name not in _OWN_STATE_READS)
@@ -451,7 +485,7 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             gained += 1
         _done(run, item)
         mark_progress()
-    run.read_results += gained
+    run.read_results += gained + sum(1 for item in delegates if _counts_as_read(item))
     messages = []
     for item in items:
         _done(run, item)       # a call that was never run (bad arguments, not in scope) is settled too

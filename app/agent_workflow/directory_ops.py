@@ -25,8 +25,8 @@ BOT_ARGS = ("title", "description", "focus_companies", "focus_theme", "tool_scop
             "reasoning_effort", "use_default_effort", "pinned", "hidden", "skills")
 CHANNEL_WORDS = {"telegram": "Telegram", "wechat": "微信"}
 ROLE_WORDS = {"earnings": ("财报判断", "财报发布后写判断的模型"), "forecast": ("预测概率", "给预测方向概率的模型"),
-              "judge": ("声明法官", "核对回答声明的法官模型"), "fallback": ("备用模型", "主模型出错时顶上的备用模型")}
-ROLE_DEFAULTS = {"judge": "配置里指定的法官", "fallback": "不设备用模型"}
+              "judge": ("声明法官", "核对回答声明的法官模型"), "fallback": ("备用模型", "主模型出错时顶上的备用模型"), "helper": ("小助手", "替回答跑腿查资料的小助手模型")}
+ROLE_DEFAULTS = {"judge": "配置里指定的法官", "fallback": "不设备用模型", "helper": "跟随当前对话模型"}
 
 
 # What a card showed as the old state is frozen with it (``expect``); at the press the state is read again and a card whose old state is
