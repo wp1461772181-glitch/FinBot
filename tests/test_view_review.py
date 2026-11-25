@@ -67,9 +67,10 @@ def _bar(symbol, on, close):
 
 
 def _prices(symbol="NVDA", then_close=100.0, now_close=150.0, said_age=60):
-    _bar(symbol, (_days(said_age + 1)).date(), 90.0)          # an older one: not the one wanted
-    _bar(symbol, _days(said_age).date(), then_close)           # the day he said it
-    _bar(symbol, _days(said_age - 10).date(), 120.0)           # after: not "then"
+    _bar(symbol, (_days(said_age + 2)).date(), 90.0)          # an older one: not the one wanted
+    _bar(symbol, _days(said_age + 1).date(), then_close)       # the last close that existed when he spoke (he spoke at 04:00 New York)
+    _bar(symbol, _days(said_age).date(), 95.0)                 # the day he spoke: its close came after his words, not "then"
+    _bar(symbol, _days(said_age - 10).date(), 120.0)           # later: not "then"
     _bar(symbol, _days(1).date(), now_close)
 
 
@@ -103,7 +104,7 @@ def test_the_input_carries_the_code_computed_return_and_a_reply_with_it_passes_s
     assert result["reviewed"] == 1 and result["failed"] == 0
     [sent] = calls
     price = sent["input"]["price"]
-    assert price["then"] == {"date": _days(60).date().isoformat(), "close": 100.0}
+    assert price["then"] == {"date": _days(61).date().isoformat(), "close": 100.0}
     assert price["now"] == {"date": _days(1).date().isoformat(), "close": 150.0} and price["change_pct"] == 50.0
     assert sent["input"]["view"]["text"] == "估值太高了" and sent["input"]["view"]["said_on"] == _days(60).date().isoformat()
     quarter = sent["input"]["quarter"]
@@ -295,3 +296,84 @@ def test_another_owners_views_are_never_read(monkeypatch):
     _view(owner=OTHER, age=100)
     _model(monkeypatch, {"verdict": "held", "text": "成立。"})
     assert view_review.run(OWNER, NOW) == {"reviewed": 0, "failed": 0, "not_reached": 0, "items": []} and calls == []
+
+
+# ---- fixes from the independent review (11-25 night) ------------------------------------------------------------------------------
+
+def _rich_input():
+    """A realistic quarter (six flows, eps, nine ratios) and a price move: the case in which a marker that pairs everything with everything marks nothing."""
+    facts = [("revenue", 57006e6), ("cost_of_revenue", 15157e6), ("gross_profit", 41849e6), ("operating_income", 36010e6),
+             ("net_income", 31910e6), ("operating_cash_flow", 23750e6)]
+    ratios = [("gross_margin", 0.734), ("operating_margin", 0.632), ("net_margin", 0.56), ("revenue_yoy", 0.62), ("revenue_qoq", 0.22),
+              ("net_income_yoy", 0.65), ("net_income_qoq", 0.21)]
+    return {"view": {"text": "估值太高了", "quote": "估值太高了，我觉得", "said_on": "2026-09-26", "status": "active", "ended_on": None},
+            "price": {"then": {"date": "2026-09-25", "close": 180.0}, "now": {"date": "2026-11-24", "close": 195.5}, "change_pct": 8.6},
+            "quarter": {"label": "FY2026 Q3", "period_end": "2026-10-26", "basis_note": None,
+                        "facts": [{"metric": m, "value": v, "unit": "USD"} for m, v in facts] + [{"metric": "eps_diluted", "value": 1.3, "unit": "USD/shares"}],
+                        "ratios": [{"name": n, "value": v, "as_percent": round(v * 100, 2)} for n, v in ratios]
+                        + [{"name": "gross_margin_change_yoy_pp", "value": 2.1}, {"name": "gross_margin_change_qoq_pp", "value": -0.4}]}}
+
+
+def test_with_a_full_quarter_an_invented_figure_is_still_marked_and_the_given_ones_are_not():
+    sent = _rich_input()
+    assert view_review.check_figures("营收同比增长 37%", sent) == ["37%"]
+    assert view_review.check_figures("营收同比增长 62%，毛利率 73%，净利率 56%", sent) == []
+    assert view_review.check_figures("涨了 8.6%，现在 195.5 美元", sent) == []
+    assert view_review.check_figures("净利润占收入约 56%", sent) == []                       # a fact against revenue
+    passing = [n for n in range(1, 100) if view_review.check_figures(f"同比增长 {n}%", sent) == []]
+    assert len(passing) < 35, passing                                                       # not nine in ten by coincidence (it was 89 of 99)
+
+
+def test_dates_counts_and_names_with_a_number_are_not_figures():
+    sent = _rich_input()
+    for text in ("今天 2026-11-25", "截至 2026-11-24 收盘", "2026/9/26 说的", "9/26", "有 3 个理由", "连续 3 个交易日", "一共 5 条", "约 6 成", "涨 1/3",
+                 "COVID-19 之后", "GPT-5 发布后"):
+        assert view_review.check_figures(text, sent) == [], text
+    assert view_review.check_figures("毛利率提高了 3 个百分点", sent) == ["3"]                 # 个百分点 is an amount
+
+
+def test_a_never_reviewed_view_is_not_pushed_out_by_re_reviews(monkeypatch):
+    for n in range(12):
+        v = _view(f"R{n}", age=200 + n)
+        _review_row(v, 90 + n, symbol=f"R{n}")
+    fresh = _view("NEW", age=40)
+    gone = _view("OLD", age=150, status="superseded", ended=_days(60))
+    picked = [v["symbol"] for v in view_review.plan(OWNER, NOW)]
+    assert picked[:2] == ["NEW", "OLD"] and len(picked) == 10 and {fresh, gone} <= {v["id"] for v in view_review.plan(OWNER, NOW)}
+    assert picked[2:4] == ["R11", "R10"]                                                     # then the longest unreviewed first
+
+
+def test_a_series_that_ends_before_he_spoke_has_no_now_and_no_zero_return(monkeypatch):
+    _view(age=60)
+    _bar("NVDA", _days(200).date(), 90.0)
+    _bar("NVDA", _days(100).date(), 110.0)
+    _model(monkeypatch, {"verdict": "unclear", "text": "数据停在他说话之前，说不准。"})
+    view_review.run(OWNER, NOW)
+    price = calls[0]["input"]["price"]
+    assert price["then"]["close"] == 110.0 and price["now"] is None and price["change_pct"] is None
+    [(_s, _v, _t, _stray, snapshot)] = _reviews()
+    assert view_review.basis(snapshot) == {"price_then": {"date": _days(100).date().isoformat(), "close": 110.0}, "price_now": None, "change_pct": None,
+                                           "quarter_label": None}
+
+
+def test_the_dates_are_the_owners_beijing_days_and_then_is_the_close_he_could_see(monkeypatch):
+    spoke = datetime(2026, 9, 26, 23, 30, tzinfo=UTC)               # 07:30 on 9-27 in Beijing, 19:30 on 9-26 in New York (after the close)
+    with SessionLocal() as db:
+        db.add(OwnerView(owner_hash=OWNER, symbol="NVDA", text="估值太高了", quote="估值太高了，我觉得", status="active", created_at=spoke))
+        db.commit()
+    _bar("NVDA", date(2026, 9, 25), 100.0)
+    _bar("NVDA", date(2026, 9, 26), 105.0)                           # that day's close was already out
+    _bar("NVDA", date(2026, 11, 24), 120.0)
+    _model(monkeypatch, {"verdict": "held", "text": "成立。"})
+    result = view_review.run(OWNER, NOW)
+    sent = calls[0]["input"]
+    assert sent["view"]["said_on"] == "2026-09-27" and result["items"][0]["said_on"] == "2026-09-27"
+    assert sent["price"]["then"] == {"date": "2026-09-26", "close": 105.0}
+
+
+def test_the_note_line_carries_the_figure_mark():
+    from app import memory_settle
+    lines = memory_settle._review_lines([{"symbol": "NVDA", "verdict": "mixed", "said_on": "2026-09-27", "text": "收入同比增长 37%，估值的理由还在。",
+                                          "unmatched_figures": ["37%"]},
+                                         {"symbol": "AAPL", "verdict": "held", "said_on": "2026-09-27", "text": "成立。", "unmatched_figures": []}])
+    assert "37% 不在系统给的资料里，请自己核对" in lines[0] and "不在系统给的资料里" not in lines[1]

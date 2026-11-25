@@ -174,7 +174,10 @@ def _review_lines(items: list[dict]) -> list[str]:
             when = f"（{said.month}月{said.day}日）"
         except (KeyError, TypeError, ValueError):
             when = ""
-        shown.append(f"- {owner_views.display_name(item['symbol'])}的看法{when}：{view_review.VERDICT_LABELS.get(item['verdict'], '')}——{item['text'][:60]}")
+        cut = item["text"][:60] + ("…" if len(item["text"]) > 60 else "")
+        stray = [str(x) for x in item.get("unmatched_figures") or [] if str(x).strip()]
+        note = f"（其中 {'、'.join(stray)} 不在系统给的资料里，请自己核对）" if stray else ""      # the same mark the company page shows, never a silent drop
+        shown.append(f"- {owner_views.display_name(item['symbol'])}的看法{when}：{view_review.VERDICT_LABELS.get(item['verdict'], '')}——{cut}{note}")
     if len(items) > LIST_MAX:
         shown.append(f"- 另有 {len(items) - LIST_MAX} 条")
     return shown

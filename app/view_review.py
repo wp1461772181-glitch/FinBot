@@ -16,15 +16,20 @@ import re
 import time
 import unicodedata
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text as sql
 
 from . import owner_views
 from .agent_chat_models import OwnerView, ViewReview
 from .database import SessionLocal
 
 log = logging.getLogger(__name__)
+
+NEW_YORK, BEIJING = ZoneInfo("America/New_York"), ZoneInfo("Asia/Shanghai")
+READ_TIMEOUT_MS = 15_000        # a background job on a small box: the chat block's 1.2 s cap would make a slow read fail every quarter
 
 VERDICTS = ("held", "not_held", "mixed", "too_early", "unclear")
 VERDICT_LABELS = {"held": "成立", "not_held": "没有成立", "mixed": "部分成立", "too_early": "还早", "unclear": "说不准"}
@@ -87,23 +92,47 @@ def plan(owner_hash: str, now: datetime) -> list[dict]:
         last = dict(db.execute(select(ViewReview.view_id, func.max(ViewReview.created_at)).where(ViewReview.owner_hash == owner_hash)
                                .group_by(ViewReview.view_id)).all())
         again = now - timedelta(days=REVIEW_AGAIN_DAYS)
-        due = [r for r in rows if r.id not in last or (r.status == owner_views.ACTIVE and last[r.id] <= again)]
-        due.sort(key=lambda r: (r.status != owner_views.ACTIVE, -r.created_at.timestamp()))
-        return [owner_views.serialize(r) for r in due[:max_views()]]
+        # Never-reviewed views first (active before the others, newest first), then the active ones due again, the longest unreviewed first:
+        # a run's cap must never let the same ten re-reviews push a view that has not been looked at yet out, quarter after quarter.
+        never = sorted((r for r in rows if r.id not in last), key=lambda r: (r.status != owner_views.ACTIVE, -r.created_at.timestamp()))
+        due_again = sorted((r for r in rows if r.id in last and r.status == owner_views.ACTIVE and last[r.id] <= again), key=lambda r: last[r.id])
+        return [owner_views.serialize(r) for r in (never + due_again)[:max_views()]]
 
 
 # ---- the input --------------------------------------------------------------------------------------------------------------
+
+@contextmanager
+def _read_session():
+    """A read-only session with a statement timeout fit for a background job (not the 1.2 s of the chat block)."""
+    session = SessionLocal()
+    try:
+        session.execute(sql(f"SET LOCAL statement_timeout = {READ_TIMEOUT_MS}"))
+        yield session
+    finally:
+        session.close()
+
 
 def _day(value) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
-def _prices(session, symbol: str, said_on) -> dict:
+def _last_close_date(spoke: datetime):
+    """The trading date of the last US close that existed when he spoke: today's if it was said after the close (16:00 New York, with half an
+    hour for the bar to land), otherwise yesterday's.  Weekends and holidays fall back by themselves (the query takes the last bar on or before)."""
+    local = spoke.astimezone(NEW_YORK)
+    return local.date() if (local.hour, local.minute) >= (16, 30) else local.date() - timedelta(days=1)
+
+
+def _prices(session, symbol: str, cutoff) -> dict:
+    """The close on or before ``cutoff`` (then) and the newest close (now), the return between them computed here.  When the newest bar is no
+    later than the "then" one the series stops before today: there is no "now" and no return (the same bar twice is not a 0.0% move)."""
     from .models import MarketPrice
     base = select(MarketPrice.trading_date, MarketPrice.close).where(MarketPrice.symbol == symbol)
     order = (MarketPrice.trading_date.desc(), MarketPrice.fetched_at.desc())
-    then = session.execute(base.where(MarketPrice.trading_date <= said_on).order_by(*order).limit(1)).first()
+    then = session.execute(base.where(MarketPrice.trading_date <= cutoff).order_by(*order).limit(1)).first()
     now = session.execute(base.order_by(*order).limit(1)).first()
+    if then and now and now[0] <= then[0]:
+        now = None
     out = {"then": {"date": _day(then[0]), "close": float(then[1])} if then else None,
            "now": {"date": _day(now[0]), "close": float(now[1])} if now else None, "change_pct": None}
     if then and now and float(then[1]) != 0:
@@ -139,16 +168,16 @@ def _fit(payload: dict) -> dict:
 def gather(view: dict, now: datetime) -> tuple[dict, dict]:
     """``(input, snapshot)`` for one view.  The input is what the model sees; the snapshot is the part the page shows as the basis (the price
     then and now, the return, and the quarter's label).  A read that fails raises: a missing price must not read as "no price"."""
-    from .latest_known import _read_session
-    created = datetime.fromisoformat(view["created_at"]).astimezone(UTC)
+    created = datetime.fromisoformat(view["created_at"])
     ended = view.get("ended_at")
     symbol = view["symbol"].upper()
     with _read_session() as session:
-        price = _prices(session, symbol, created.date())
+        price = _prices(session, symbol, _last_close_date(created))
         quarter = _quarter(session, symbol)
-    payload = {"view": {"text": view["text"], "quote": view["quote"], "said_on": created.date().isoformat(), "status": view["status"],
-                        "ended_on": datetime.fromisoformat(ended).astimezone(UTC).date().isoformat() if ended else None},
-               "price": price, "quarter": quarter, "today": now.astimezone(UTC).date().isoformat()}
+    # The dates are the owner's own (Beijing): the page and the note show the same day he sees in the app.
+    payload = {"view": {"text": view["text"], "quote": view["quote"], "said_on": created.astimezone(BEIJING).date().isoformat(), "status": view["status"],
+                        "ended_on": datetime.fromisoformat(ended).astimezone(BEIJING).date().isoformat() if ended else None},
+               "price": price, "quarter": quarter, "today": now.astimezone(BEIJING).date().isoformat()}
     payload = _fit(payload)
     snapshot = {"price": price, "quarter": {"label": quarter["label"], "period_end": quarter["period_end"]} if quarter else None}
     return payload, snapshot
@@ -157,6 +186,11 @@ def gather(view: dict, now: datetime) -> tuple[dict, dict]:
 # ---- the figure marker ------------------------------------------------------------------------------------------------------
 
 _TIME_SPAN = re.compile(r"\d+(?:\.\d+)?\s*(?:个?月|天|日|周|年|个?季度|季|小时)")
+# Not amounts either: dates written with digits (2026-11-24, 2026/9/26, 9/26 and a fraction like 1/3), counts of things (3 个理由, 5 条, 6 成;
+# 「3 个百分点」 stays an amount) and names that carry a number (GPT-5, COVID-19).
+_DATE_OR_FRACTION = re.compile(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,4}/\d{1,2}(?:/\d{1,4})?")
+_COUNT = re.compile(r"\d+\s*(?:个(?!\s*百分点)|次|条|项|家|只|笔|位|类|种|名|成)")
+_NAME_WITH_NUMBER = re.compile(r"[A-Za-z]+-\d+")
 _WRITTEN = re.compile(r"(?<![A-Za-z\d.])\d[\d,]*(?:\.\d+)?\s*(?:(?:万亿|千万|百万|亿|万|千|trillion|billion|million|thousand|bn|mn|[bkm])(?![A-Za-z]))?\s*%?", re.I)
 
 
@@ -185,31 +219,32 @@ def _known_figures(sent: dict) -> set[float]:
         known.add(abs(float(price["change_pct"])))
     known |= _pairs(closes + (own if len(own) <= 4 else []))      # the return, the gap to a price he named
     quarter = sent.get("quarter") or {}
-    by_unit: dict = {}
-    for fact in quarter.get("facts") or []:
-        if isinstance(fact.get("value"), (int, float)):
-            by_unit.setdefault(fact.get("unit"), []).append(float(fact["value"]))
-    for values in by_unit.values():
-        known |= {abs(v) for v in values} | _pairs(values)
-    shown = []
-    for ratio in quarter.get("ratios") or []:
+    facts = [f for f in quarter.get("facts") or [] if isinstance(f.get("value"), (int, float))]
+    known |= {abs(float(f["value"])) for f in facts}
+    # The only computation on the quarter's figures a reply plainly needs: each of the others against revenue (a share of it, what is left of it).
+    revenue = next((f for f in facts if f.get("metric") == "revenue" and f["value"]), None)
+    for fact in facts if revenue else ():
+        if fact is not revenue and fact.get("unit") == revenue.get("unit"):
+            share = abs(float(fact["value"]) / float(revenue["value"]))
+            known |= {share, share * 100, abs(float(revenue["value"]) - float(fact["value"]))}
+    for ratio in quarter.get("ratios") or []:           # no ratio of ratios: the system already gave the ones that matter
         for key in ("value", "as_percent"):
             if isinstance(ratio.get(key), (int, float)):
                 known.add(abs(float(ratio[key])))
-        shown.append(float(ratio["as_percent"] if "as_percent" in ratio else ratio.get("value", 0)))
-    known |= _pairs(shown)
     return known
 
 
 def check_figures(text: str, input_json) -> list[str]:
-    """The figures in ``text`` (as written) that are neither in the input nor derivable from two of its figures of one kind (the price then and
-    now, or the facts of one unit, or the ratios): a difference, a ratio, a change.  A figure passes when it equals one within 2% or is one
-    rounded to a whole number or to one or two decimals.  Dates, years, quarter labels and spans of time are not figures.  Marks only: the
-    text is never touched."""
+    """The figures in ``text`` (as written) that are neither in the input nor a plain computation on it: between the price then, the price now
+    and the figures in his own words (a difference, a ratio, a change), and each quarter fact against revenue.  A figure passes when it equals
+    one within 2% or is one rounded to a whole number or to one or two decimals.  Dates, years, quarter labels, spans of time and counts
+    of things are not figures.  Marks only: the text is never touched."""
     from .agent_context_summary import _figure_supported
     from .agent_workflow.semantic import figure_values
     sent = json.loads(input_json) if isinstance(input_json, str) else (input_json or {})
-    cleaned = _TIME_SPAN.sub(" ", unicodedata.normalize("NFKC", str(text or "")))
+    cleaned = unicodedata.normalize("NFKC", str(text or ""))
+    for pattern in (_DATE_OR_FRACTION, _NAME_WITH_NUMBER, _TIME_SPAN, _COUNT):
+        cleaned = pattern.sub(" ", cleaned)
     claimed = figure_values(cleaned)
     if not claimed:
         return []
@@ -272,7 +307,8 @@ def run(owner_hash: str, now: datetime) -> dict:
             log.warning("view review of one view failed: %s", type(exc).__name__)
             failed += 1
             continue
-        items.append({"symbol": view["symbol"], "verdict": answer["verdict"], "text": answer["text"], "said_on": payload["view"]["said_on"]})
+        items.append({"symbol": view["symbol"], "verdict": answer["verdict"], "text": answer["text"], "said_on": payload["view"]["said_on"],
+                      "unmatched_figures": stray})
     return {"reviewed": len(items), "failed": failed, "not_reached": not_reached, "items": items}
 
 
