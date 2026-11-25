@@ -16,6 +16,7 @@ import copy
 from datetime import UTC, datetime, timedelta, tzinfo
 from email.utils import parsedate_to_datetime
 import hashlib
+import hmac
 import html
 import json
 import os
@@ -2075,6 +2076,7 @@ def handle_inline_confirmation_action(
     *,
     owner_hash: str | None = None,
     action_token: str | None = None,
+    require_token: bool = False,
 ) -> dict[str, Any]:
     """Transition an inline confirmation item (`pending_confirm -> confirmed | skipped | expired`)
     without requiring the user to open the chat first (§6.B).
@@ -2083,8 +2085,15 @@ def handle_inline_confirmation_action(
     - the inbox item UUID (`id`)
     - the routine `task_id` UUID
     - the 6-char `short_code` (from `CONFIRM <short_code>`)
+
+    ``require_token`` is for a caller that proves nothing but the card itself (the notification-side route in ``app/main.py``): the
+    card's own ``action_token`` must then be given and must match, and a card that is missing, someone else's or has no token looks
+    the same as a wrong token (``invalid_action_token``).  Callers that have authenticated the owner (the /agent-chat routes, the
+    Telegram bridge) leave it off.
     """
     ensure_news_tables()
+    if require_token and not (isinstance(action_token, str) and action_token.strip()):
+        raise PermissionError("invalid_action_token")
     normalized_action = str(action or "confirm").strip().lower()
     if normalized_action not in {"confirm", "skip", "later", "expire"}:
         raise ValueError("invalid_confirmation_action")
@@ -2117,15 +2126,16 @@ def handle_inline_confirmation_action(
                     row = candidate
                     break
 
-        if row is None:
-            raise LookupError("confirmation_not_found")
-        if owner_hash and row.owner_hash not in {owner_hash, "owner"}:
-            raise LookupError("confirmation_not_found")
+        if row is None or (owner_hash and row.owner_hash not in {owner_hash, "owner"}):
+            raise (PermissionError("invalid_action_token") if require_token else LookupError("confirmation_not_found"))
 
         payload = copy.deepcopy(row.payload if isinstance(row.payload, dict) else {})
         current_state = str(payload.get("confirmation_state") or ("confirmed" if row.status == "done" else "pending_confirm"))
 
-        if action_token and payload.get("action_token") and action_token != payload.get("action_token"):
+        stored_token = payload.get("action_token")
+        if require_token and not (stored_token and hmac.compare_digest(str(action_token), str(stored_token))):
+            raise PermissionError("invalid_action_token")
+        if action_token and stored_token and action_token != stored_token:
             raise PermissionError("invalid_action_token")
 
         # Check expiration

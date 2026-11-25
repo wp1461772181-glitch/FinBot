@@ -333,7 +333,10 @@ def finbot_routine_inline_confirm(
     routine_id: str,
     payload: dict | None = None,
 ) -> dict[str, object]:
-    """Direct notification-side confirmation endpoint (`POST /finbot/routines/{id}/confirm`, §6.B)."""
+    """Direct notification-side confirmation endpoint (`POST /finbot/routines/{id}/confirm`, §6.B).
+
+    It has no owner check of its own, so the card's own ``action_token`` is always required (the /agent-chat routes
+    and the Telegram bridge authenticate the owner instead)."""
     from . import fin_news_engine as news
     body = payload or {}
     action = str(body.get("action") or "confirm")
@@ -344,7 +347,8 @@ def finbot_routine_inline_confirm(
             routine_id,
             action=action,
             owner_hash=owner,
-            action_token=action_token,
+            action_token=action_token if isinstance(action_token, str) else None,
+            require_token=True,
         )
     except LookupError as exc:
         raise HTTPException(404, str(exc))
