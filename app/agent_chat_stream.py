@@ -1288,6 +1288,20 @@ async def confirm_profile_endpoint(item_id: str, x_chat_session: str | None = He
     return {"item": item}
 
 
+@router.post("/profile/{item_id}/restore")
+async def restore_profile_endpoint(item_id: str, x_chat_session: str | None = Header(default=None)):
+    """The owner brings an archived memory item back (the quarterly settle keeps what it archives): active again, seen now."""
+    from .agent_profile import ProfileError, restore_item
+    credential = _owner_only(x_chat_session)
+    try:
+        item = await asyncio.to_thread(restore_item, owner_hash(credential), item_id)
+    except ProfileError as exc:
+        raise HTTPException(409, str(exc)) from None
+    if item is None:
+        raise HTTPException(404, "profile_item_not_found")
+    return {"item": item}
+
+
 @router.delete("/profile/{item_id}")
 async def delete_profile_endpoint(item_id: str, x_chat_session: str | None = Header(default=None)):
     """The owner deletes an item on the memory page; the next turn no longer carries it."""
@@ -1321,6 +1335,20 @@ async def get_view_history_endpoint(symbol: str, x_chat_session: str | None = He
     if not resolved:
         raise HTTPException(422, "company_not_recognized")
     return {"symbol": resolved, "versions": await asyncio.to_thread(owner_views.history, owner, resolved)}
+
+
+@router.post("/views/{view_id}/restore")
+async def restore_view_endpoint(view_id: str, x_chat_session: str | None = Header(default=None)):
+    """The owner brings an archived view of a company back; refused while the company has another current one."""
+    from . import owner_views
+    owner = owner_hash(_owner_only(x_chat_session))
+    try:
+        view = await asyncio.to_thread(owner_views.restore, owner, view_id)
+    except owner_views.ViewError:
+        raise HTTPException(409, owner_views.RESTORE_BLOCKED) from None
+    if view is None:
+        raise HTTPException(404, "view_not_found")
+    return {"view": view}
 
 
 @router.delete("/views/{view_id}")

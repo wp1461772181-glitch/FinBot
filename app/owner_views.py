@@ -20,8 +20,10 @@ from .symbols import normalize_market_symbol
 TEXT_MAX_CHARS = 200
 QUOTE_MAX_CHARS = 400
 QUOTE_MIN_CHARS = 4          # after whitespace folding: a view's own rule (remember keeps profile.QUOTE_MIN_CHARS); a trivial quote could anchor any text
-ACTIVE, SUPERSEDED, DROPPED = "active", "superseded", "dropped"
-STATUS_LABELS = {SUPERSEDED: "已更新", DROPPED: "已撤回"}
+ACTIVE, SUPERSEDED, DROPPED, ARCHIVED = "active", "superseded", "dropped", "archived"
+STATUS_LABELS = {SUPERSEDED: "已更新", DROPPED: "已撤回", ARCHIVED: "已归档"}
+ARCHIVE_REASON_MAX = 80
+RESTORE_BLOCKED = "这家公司已有一条当前看法，先撤回它再恢复"
 NOT_RECOGNIZED = "没认出是哪家公司；用代码再说一次"
 
 
@@ -63,7 +65,15 @@ def serialize(row: OwnerView) -> dict:
     return {"id": str(row.id), "symbol": row.symbol, "text": row.text, "quote": row.quote, "status": row.status,
             "status_label": STATUS_LABELS.get(row.status, ""), "source_message_id": str(row.source_message_id) if row.source_message_id else None,
             "conversation_id": str(row.conversation_id) if row.conversation_id else None, "turn_id": str(row.turn_id) if row.turn_id else None,
-            "created_at": row.created_at.isoformat() if row.created_at else None, "ended_at": row.ended_at.isoformat() if row.ended_at else None}
+            "created_at": row.created_at.isoformat() if row.created_at else None, "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+            "archived_reason": row.archived_reason}
+
+
+def ensure_archive_column() -> None:
+    """Add the archive reason (stage 4c) to a table made before it.  A fresh database gets it from the model."""
+    from .database import engine
+    with engine.begin() as connection:
+        connection.execute(sql("ALTER TABLE owner_views ADD COLUMN IF NOT EXISTS archived_reason VARCHAR(80)"))
 
 
 def _lock(db, owner_hash: str, symbol: str) -> None:
@@ -164,3 +174,44 @@ def delete_version(owner_hash: str, view_id: str) -> bool:
         db.delete(row)
         db.commit()
         return True
+
+
+def archive(owner_hash: str, view_id, reason: str, *, at: datetime | None = None) -> dict | None:
+    """The quarterly settle sets an active view aside: status ``archived`` with the end date and the reason.  Kept, and restorable.  None when
+    the id is not an active view of this owner."""
+    key = _uuid(view_id)
+    if key is None:
+        return None
+    with SessionLocal() as db:
+        row = db.get(OwnerView, key)
+        if row is None or row.owner_hash != owner_hash:
+            return None
+        _lock(db, owner_hash, row.symbol)
+        db.refresh(row)
+        if row.status != ACTIVE:
+            return None
+        row.status, row.ended_at, row.archived_reason = ARCHIVED, at or datetime.now(UTC), " ".join(str(reason or "").split())[:ARCHIVE_REASON_MAX]
+        db.commit()
+        return serialize(row)
+
+
+def restore(owner_hash: str, view_id) -> dict | None:
+    """The owner brings an archived view back (the memory page).  None when it is not his archived view; ``ViewError("view_active_exists")``
+    when the company already has a current one (he withdraws that first)."""
+    key = _uuid(view_id)
+    if key is None:
+        return None
+    with SessionLocal() as db:
+        row = db.get(OwnerView, key)
+        if row is None or row.owner_hash != owner_hash or row.status != ARCHIVED:
+            return None
+        _lock(db, owner_hash, row.symbol)
+        db.refresh(row)
+        if row.status != ARCHIVED:
+            return None
+        if _active(db, owner_hash, row.symbol) is not None:
+            raise ViewError("view_active_exists")
+        row.status, row.ended_at, row.archived_reason = ACTIVE, None, None
+        db.commit()
+        return serialize(row)
+

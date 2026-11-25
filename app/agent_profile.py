@@ -20,7 +20,7 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select, text as sql
+from sqlalchemy import func, select, text as sql, update
 
 from .agent_chat_models import AgentBot, AgentMessage, AgentProfileItem
 from .database import SessionLocal
@@ -39,6 +39,7 @@ MAX_ACTIVE_ITEMS = 30
 MAX_BLOCK_BYTES = 2048
 FINGERPRINT_PREFIX = "~"   # a rejected proposal keeps only this and a hash of its folded text, never his words
 PROPOSED_HEADING = "我的推测（未经你确认）：只影响回答的详略和先后，不影响结论和数字"
+SETTLED_LABEL = "长期"      # a confirmed guess the quarterly settle found still true (stage 4c)
 PROPOSED_LINES = 8
 PROPOSED_BYTES = 1200
 BLOCK_LABEL = "用户画像（偏好，不是证据，也不授权任何写操作）"
@@ -86,6 +87,38 @@ def ensure_review_columns() -> None:
         connection.execute(sql("ALTER TABLE agent_profile_items ADD COLUMN IF NOT EXISTS review_run UUID"))
 
 
+def ensure_seen_columns() -> None:
+    """Add the last-seen and archive columns (stage 4c) to an older table, then give every row without a last-seen time its creation time.
+    Both steps are idempotent: a row that already has a last-seen time is never overwritten."""
+    from .database import engine
+    with engine.begin() as connection:
+        connection.execute(sql("ALTER TABLE agent_profile_items ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITH TIME ZONE"))
+        connection.execute(sql("ALTER TABLE agent_profile_items ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP WITH TIME ZONE"))
+        connection.execute(sql("ALTER TABLE agent_profile_items ADD COLUMN IF NOT EXISTS archived_reason VARCHAR(80)"))
+        connection.execute(sql("ALTER TABLE agent_profile_items ADD COLUMN IF NOT EXISTS settled_at TIMESTAMP WITH TIME ZONE"))
+        connection.execute(sql("UPDATE agent_profile_items SET last_seen_at = created_at WHERE last_seen_at IS NULL"))
+        connection.execute(sql("ALTER TABLE agent_profile_items ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP WITH TIME ZONE"))
+        # a guess he already confirmed (active, origin pattern) is taken to have been confirmed when the row was last changed; once: only while empty
+        connection.execute(sql("UPDATE agent_profile_items SET confirmed_at = updated_at WHERE origin = 'pattern' AND status = 'active' AND confirmed_at IS NULL"))
+
+
+def bump_seen(owner_hash: str, item_id, when: datetime) -> bool:
+    """The owner's own words bore this item out at ``when``.  Never moves the time backwards; touches neither ``last_used_at`` nor
+    ``updated_at``.  True when the time moved."""
+    identity = _as_uuid(item_id)
+    if identity is None:
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    with SessionLocal() as db:
+        result = db.execute(update(AgentProfileItem).where(
+            AgentProfileItem.owner_hash == owner_hash, AgentProfileItem.id == identity,
+            (AgentProfileItem.last_seen_at.is_(None)) | (AgentProfileItem.last_seen_at < when))
+            .values(last_seen_at=when, updated_at=AgentProfileItem.updated_at).execution_options(synchronize_session=False))
+        db.commit()
+        return bool(result.rowcount)
+
+
 def _bot_names(db, owner_hash: str) -> dict:
     return {bot_id: name for bot_id, name in db.query(AgentBot.id, AgentBot.name).filter(AgentBot.owner_hash == owner_hash)}
 
@@ -113,7 +146,9 @@ def serialize(row: AgentProfileItem, names: dict | None = None) -> dict:
             "source_message_id": str(row.source_message_id) if row.source_message_id else None,
             "examples": row.examples, "review_run": str(row.review_run) if row.review_run else None,
             "created_at": stamp(row.created_at), "updated_at": stamp(row.updated_at),
-            "last_used_at": stamp(row.last_used_at)}
+            "last_used_at": stamp(row.last_used_at), "last_seen_at": stamp(row.last_seen_at),
+            "archived_at": stamp(row.archived_at), "archived_reason": row.archived_reason, "settled_at": stamp(row.settled_at), "confirmed_at": stamp(row.confirmed_at),
+            "settled_label": SETTLED_LABEL if row.settled_at else ""}
 
 
 def _lock(db, owner_hash: str) -> None:
@@ -199,7 +234,12 @@ def add_item(owner_hash: str, *, kind: str, text: str, quote: str, message: str,
                 same.origin = origin
                 same.quote, same.source_message_id = quote, source or same.source_message_id
             same.updated_at = datetime.now(UTC)
+            if origin in OWNER_ORIGINS:
+                same.last_seen_at = same.updated_at     # he said it again
             db.commit()
+            if origin == "inferred":
+                bump_seen(owner_hash, same.id, same.updated_at)     # the extractor read it again in his own message this turn
+            db.expire(same)
             return {"status": "duplicate", "item": serialize(same, names)}
         if topic:
             rivals = [r for r in active if r.kind == kind and r.topic == topic]
@@ -209,7 +249,7 @@ def add_item(owner_hash: str, *, kind: str, text: str, quote: str, message: str,
             for row in rivals:
                 row.status = "archived"
         row = AgentProfileItem(owner_hash=owner_hash, kind=kind, topic=topic, text=text, origin=origin,
-                               quote=quote, source_message_id=source, status="active", bot_id=layer)
+                               quote=quote, source_message_id=source, status="active", bot_id=layer, last_seen_at=datetime.now(UTC))
         db.add(row)
         db.flush()
         try:
@@ -262,6 +302,34 @@ def archive_item(owner_hash: str, item_id: str) -> dict | None:
         return serialize(row, _bot_names(db, owner_hash))
 
 
+RESTORE_CONFLICT = "已有一条同类的记忆在用，先忘掉它再恢复"
+
+
+def restore_item(owner_hash: str, item_id: str, now: datetime | None = None) -> dict | None:
+    """The owner brings an archived item back on the memory page: active again, the archive fields cleared, ``last_seen_at`` = now (set
+    directly: ``bump_seen`` only moves forward).  A guess he confirmed (``confirmed_at``) goes back to active, one he never confirmed to
+    ``proposed``.  It never archives anything else: when its layer already holds an active item of the same kind and topic, or the same text,
+    or is full, ``ProfileError`` is raised and nothing changes.  None when it is not his archived item."""
+    now = now or datetime.now(UTC)
+    with SessionLocal() as db:
+        _lock(db, owner_hash)
+        row = _owned(db, owner_hash, item_id)
+        if row is None or row.status != "archived":
+            return None
+        target = "proposed" if row.origin == "pattern" and row.confirmed_at is None else "active"
+        layer = [r for r in _active(db, owner_hash) + _proposed(db, owner_hash) if r.bot_id == row.bot_id and r.id != row.id]
+        if any(r.kind == row.kind and _plain(r.text) == _plain(row.text) for r in layer):
+            raise ProfileError(RESTORE_CONFLICT)
+        if target == "active":
+            if row.topic and any(r.status == "active" and r.kind == row.kind and r.topic == row.topic for r in layer):
+                raise ProfileError(RESTORE_CONFLICT)
+            if sum(1 for r in layer if r.status == "active") >= MAX_ACTIVE_ITEMS:
+                raise ProfileError("profile_full")
+        row.status, row.archived_at, row.archived_reason, row.last_seen_at = target, None, None, now
+        db.commit()
+        return serialize(row, _bot_names(db, owner_hash))
+
+
 def _owned(db, owner_hash: str, item_id: str) -> AgentProfileItem | None:
     try:
         row = db.get(AgentProfileItem, uuid.UUID(str(item_id)))
@@ -308,6 +376,7 @@ def confirm_item(owner_hash: str, item_id: str) -> dict | None:
             return None
         if row.origin == "pattern":
             row.status = "active"
+            row.confirmed_at = row.confirmed_at or datetime.now(UTC)
         else:
             row.origin = "explicit"
         _replace_topic(db, owner_hash, row)
@@ -370,7 +439,8 @@ def visible_texts(owner_hash: str, bot_id: str | None = None) -> list[str]:
 
 def _line(row: AgentProfileItem, layer: str = "") -> str:
     origin = "" if row.origin in OWNER_ORIGINS else ("·你确认的推测" if row.origin == "pattern" else "·推断")
-    return f"- {handle(row.id)} [{KIND_LABELS[row.kind]}{origin}{layer}] {row.text}"
+    settled = "·" + SETTLED_LABEL if row.settled_at else ""
+    return f"- {handle(row.id)} [{KIND_LABELS[row.kind]}{origin}{settled}{layer}] {row.text}"
 
 
 def _pick(rows, lines, budget: int) -> list[tuple]:
@@ -495,6 +565,17 @@ def review_texts(owner_hash: str) -> list[str]:
         return list(dict.fromkeys(r.text for r in rows))
 
 
+def active_for_review(owner_hash: str) -> list[dict]:
+    """The owner's active items (every layer) as the review model sees them: ``{handle, text}``, oldest first.  An 8-character handle that two
+    items share names neither."""
+    with SessionLocal() as db:
+        rows = sorted(_active(db, owner_hash), key=lambda r: (r.created_at or datetime.min.replace(tzinfo=UTC), str(r.id)))
+    counts: dict = {}
+    for r in rows:
+        counts[handle(r.id)] = counts.get(handle(r.id), 0) + 1
+    return [{"handle": handle(r.id), "text": r.text, "id": str(r.id)} for r in rows if counts[handle(r.id)] == 1]
+
+
 def add_proposed(owner_hash: str, *, kind: str, text: str, examples: list[dict], review_run: uuid.UUID, now: datetime) -> dict | None:
     """Store one proposal of the monthly review (origin pattern, status proposed, global layer).  The caller has checked the examples
     against his messages; the first one is the row's quote.  None when the same text is already here.  Past 20 proposed, the oldest go."""
@@ -511,7 +592,7 @@ def add_proposed(owner_hash: str, *, kind: str, text: str, examples: list[dict],
         first = examples[0]
         row = AgentProfileItem(owner_hash=owner_hash, kind=kind, topic=None, text=text, origin="pattern", status="proposed",
                                quote=" ".join(str(first["quote"]).split())[:TEXT_MAX_CHARS], source_message_id=_as_uuid(first.get("message_id")),
-                               examples=examples, review_run=review_run, created_at=now, updated_at=now)
+                               examples=examples, review_run=review_run, created_at=now, updated_at=now, last_seen_at=now)
         db.add(row)
         db.flush()
         waiting = sorted(_proposed(db, owner_hash), key=lambda r: (r.created_at, str(r.id)))

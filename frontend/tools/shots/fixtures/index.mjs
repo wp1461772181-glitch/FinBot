@@ -387,6 +387,14 @@ function assistantRoutes(route, reply, own) {
   // --- 你的看法 (the owner's views of companies): the memory page lists the active ones, a company page reads its history, 删除 removes one version
   route.get(`${A}/views`, own(({ state }) => ({ views: activeViews(state.views) })));
   route.get(`${A}/views/:symbol/history`, own(({ params, state }) => ({ symbol: params.symbol.toUpperCase(), versions: viewHistory(state.views, params.symbol.toUpperCase()) })));
+  route.post(`${A}/views/:id/restore`, own(({ params, state }) => {
+    kept(state, "POST", `/views/${params.id}/restore`, null);
+    const view = state.views.find((v) => v.id === params.id && v.status === "archived");
+    if (!view) return reply.status(404, { detail: "view_not_found" });
+    if (state.views.some((v) => v.symbol === view.symbol && v.status === "active")) return reply.status(409, { detail: "这家公司已有一条当前看法，先撤回它再恢复" });
+    Object.assign(view, { status: "active", status_label: "", ended_at: null, archived_reason: null });
+    return { view };
+  }));
   route.delete(`${A}/views/:id`, own(({ params, state }) => {
     const found = state.views.some((v) => v.id === params.id);
     if (!found) return reply.status(404, { detail: "view_not_found" });
@@ -417,6 +425,14 @@ function assistantRoutes(route, reply, own) {
     const item = state.assistant.profile.find((i) => i.id === params.id);
     if (!item) return reply.status(404, { detail: "profile_item_not_found" });
     if (item.status === "proposed") item.status = "active"; else item.origin = "explicit";   // a guess he confirms stays origin pattern
+    return { item };
+  }));
+  route.post(`${A}/profile/:id/restore`, own(({ params, state }) => {
+    kept(state, "POST", `/profile/${params.id}/restore`, null);
+    const item = state.assistant.profile.find((i) => i.id === params.id && i.status === "archived");
+    if (!item) return reply.status(404, { detail: "profile_item_not_found" });
+    item.status = item.origin === "pattern" && !item.archived_at ? "proposed" : "active";
+    Object.assign(item, { archived_at: null, archived_reason: null, last_seen_at: "2026-11-25T02:00:00.000Z" });
     return { item };
   }));
   route.delete(`${A}/profile/:id`, own(({ params, state }) => { kept(state, "DELETE", `/profile/${params.id}`, null); state.assistant.profile = state.assistant.profile.filter((i) => i.id !== params.id); return { ok: true }; }));

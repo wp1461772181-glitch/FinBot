@@ -202,6 +202,10 @@ def create_tables() -> None:
     ensure_profile_bot_column()
     from .agent_profile import ensure_review_columns as ensure_profile_review_columns
     ensure_profile_review_columns()
+    from .agent_profile import ensure_seen_columns as ensure_profile_seen_columns
+    ensure_profile_seen_columns()
+    from .owner_views import ensure_archive_column as ensure_view_archive_column
+    ensure_view_archive_column()
     # Stage C: tasks and inbox entries belong to a bot; NULL (every existing row) is adopted by the default bot.
     from .agent_tasks import ensure_bot_columns as ensure_task_bot_columns
     ensure_task_bot_columns()

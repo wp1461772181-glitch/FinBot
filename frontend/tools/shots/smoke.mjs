@@ -4,7 +4,7 @@ import { parseArgs } from "./args.mjs";
 import { startServer } from "./server.mjs";
 import { FIXED_TIME, launch, newView, settle } from "./harness.mjs";
 import { summarizeUnmatched } from "./mock-api.mjs";
-import { PAGES, workspaceCardsLoaded, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateMonthlyReview, stateNoViews, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, stateWithQueue, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
+import { PAGES, workspaceCardsLoaded, stateModelsEmpty, stateModelsReadonly, stateTelegramNoToken, stateTelegramUnbound, stateAssistantEmpty, stateMonthlyReview, stateQuarterlySettle, stateArchivedView, stateNoViews, stateWithKnowledgeCandidates, stateWithNewsExtras, stateWithRoutines, stateWithoutConfirms, stateWithPortfolio, stateWithQueue, listReady, openMaterial, pickFilter, stateWithMaterials, clickSend, fillDraft, openMoreDrawer, openNewBotDialog, endWithCard, endWithError, firstAnswer, handTurn, openSection, openStudio, settingsAt, stateWithForecasts, streamHalfway, streamParagraph, streamSteps, tickCandidates, traceEvent, waitReady } from "./pages.mjs";
 import { ASK_MARKER, BOT, BUSY_MARKER, CONVERSATION, HAND_MARKER, HOLD_MARKER, JUDGMENT, LOGIN_CODE, ROOT, VERSION } from "./fixtures/ids.mjs";
 import { CLARIFY_REQUEST_ID, FRESH_WRITE_REQUEST_ID, REVISION_REQUEST_ID, freshWriteCard, olderTurns, revisionCard } from "./fixtures/chat.mjs";
 import { handFed } from "./fake-sse.mjs";
@@ -11115,6 +11115,62 @@ async function settingsModelConfigFile(ctx) {
   return "2 file entries: no button, the old sentence on each, the file note with its problem count; 5 server entries keep 编辑; 缺 key said in words with the variable; 对话默认 lists the file entries disabled and shows one when it is the default";
 }
 
+/** The quarterly settle (stage 4c): 「长期」 on a settled item and 「最近一次印证」 on every active one; the archived group shows each reason and date with a 恢复 (no dialog, one POST, no body) and the item moves back (a never-confirmed guess to 我的推测); an archived view on the company page shows 已归档, its reason and 恢复; a refused restore shows the server's reason. */
+async function memorySettle(ctx) {
+  {
+    const view = await asOpen(ctx, "memory settle", "#/assistant/memory", "[data-testid=memory-settled]", { state: stateQuarterlySettle() });
+    try {
+      const { page } = view;
+      assert((await page.locator("[data-testid=memory-settled]").count()) === 1, "not exactly one 长期 tag");
+      const row = page.locator("[data-testid=memory-item]", { has: page.locator("[data-testid=memory-settled]") });
+      assert((await row.locator("[data-testid=memory-settled]").innerText()).trim() === "长期", "the tag is not 长期");
+      assert((await row.locator("[data-testid=memory-origin]").innerText()).trim() === "你确认的推测", "the origin tag is gone");
+      const seen = await page.locator("[data-testid=memory-seen]").allInnerTexts();
+      assert(seen.length === (await page.locator("[data-testid=memory-item]").count()) && seen.every((t) => /^最近一次印证：\d{1,2}月\d{1,2}日$/.test(t.trim())), `seen lines: ${JSON.stringify(seen)}`);
+      await page.locator("[data-testid=memory-archived] button").first().click();
+      const rows = await page.locator("[data-testid=memory-archived-item]").evaluateAll((els) => els.map((e) => ({ text: e.innerText, restore: !!e.querySelector("[data-testid=memory-restore]"), reason: e.querySelector("[data-testid=memory-archived-reason]")?.textContent ?? null })));
+      const stale = rows.find((r) => r.text.includes("一屏摘要"));
+      assert(stale && stale.restore && stale.reason === "很久没在你的话里出现（最后一次 4月9日）" && /\d{1,2}月\d{1,2}日 归档/.test(stale.text), `the archived row: ${JSON.stringify(stale)}`);
+      const old = rows.find((r) => r.text.includes("周末集中看财报"));
+      assert(old && old.restore && old.reason === null, `the old row: ${JSON.stringify(old)}`);
+      await page.locator("[data-testid=memory-archived-item]", { hasText: "一屏摘要" }).locator("[data-testid=memory-restore]").click();
+      const [w] = await asWritesAfter(view, 1, "恢复");
+      asHere(w, "POST", /\/profile\/pf000000-0000-4000-8000-000000000032\/restore$/, "恢复");
+      assert(w.body === null, "a restore sends a body");
+      await page.waitForFunction(() => document.querySelectorAll("[data-testid=memory-item]").length === 7 && !document.querySelector("[data-testid=memory-archived]")?.innerText.includes("一屏摘要"), null, { timeout: 5000 });
+      assert((await page.locator('[data-slot="alert-dialog-title"]').count()) === 0, "恢复 asked first");
+      await page.locator("[data-testid=memory-archived-item]", { hasText: "周末集中看财报" }).locator("[data-testid=memory-restore]").click();
+      await asWritesAfter(view, 2, "恢复 the guess");
+      await page.waitForFunction(() => document.querySelectorAll("[data-testid=memory-proposed-item]").length === 1 && document.querySelector("[data-testid=memory-archived]").innerText.includes("周末集中看财报") === false, null, { timeout: 5000 });
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "company archived view", "#/research/c/NVDA", "[data-testid=owner-view-archived]", { state: stateArchivedView() });
+    try {
+      const { page } = view;
+      const card = page.locator("[data-testid=owner-view-archived]");
+      const said = await card.innerText();
+      assert(said.includes("已归档") && said.includes("你已不持有、不在关注列表，也很久没提") && said.includes("估值太高，现在不想追"), `the archived card says: ${said}`);
+      await card.locator("[data-testid=owner-view-restore]").click();
+      const [w] = await asWritesAfter(view, 1, "恢复 a view");
+      asHere(w, "POST", /\/views\/d0000000-0000-4000-8000-000000000003\/restore$/, "恢复 a view");
+      await page.waitForFunction(() => !document.querySelector("[data-testid=owner-view-archived]") && document.querySelector("[data-testid=owner-view-text]")?.innerText === "估值太高，现在不想追", null, { timeout: 5000 });
+    } finally { await view.close(); }
+  }
+  {
+    const view = await asOpen(ctx, "company archived view blocked", "#/research/c/NVDA", "[data-testid=owner-view-text]", { state: stateArchivedView({ blocked: true }) });
+    try {
+      const { page } = view;
+      assert((await page.locator("[data-testid=owner-view-archived]").count()) === 0, "an archived card shows beside an active view");
+      await page.locator("[data-testid=owner-view-history-toggle]").click();
+      const rows = await page.locator("[data-testid=owner-view-version]").evaluateAll((els) => els.map((e) => ({ status: e.getAttribute("data-status"), text: e.innerText })));
+      const arch = rows.find((r) => r.status === "archived");
+      assert(arch && arch.text.includes("已归档") && arch.text.includes("你已不持有"), `history rows: ${JSON.stringify(rows)}`);
+    } finally { await view.close(); }
+  }
+  return "settled item tagged 长期 and every active item says 最近一次印证；the archived group shows reason + date and 恢复 (one POST, no body, no dialog); the item returns to its group, a never-confirmed guess to 我的推测；an archived view shows 已归档 + reason + 恢复 and returns as the current one; a history row says 已归档";
+}
+
 /** The monthly review's guesses (stage 4b): shown above the archived group, with his sentences; 对 confirms (no body) and the item moves to his own list labelled 你确认的推测; 不对 deletes at once, no dialog; a page with no guess shows no group. */
 async function memoryGuesses(ctx) {
   {
@@ -11989,6 +12045,7 @@ const CHECKS = [
   ["memory-ops: the nine memory operations (add ×3, edit with Enter / Esc, scope, 确认 only on inferred, delete by hold, the 往事 tab in the address, search only on submit, the bot filter, open a conversation) send the old requests; a refresh keeps the tab", memoryOps],
   ["owner-views: the company page's 你的看法 card (current view, his words, date, folded history, delete with a confirm) and the memory page's section", ownerViews],
   ["memory-notes-once: each tab's one sentence appears exactly once, word for word as the old page, and not on the other tab; inferred items carry 推断 and 确认, the others neither", memoryNotesOnce],
+  ["memory-settle: 长期 tag and 最近一次印证 on items; archived group with reason, date and 恢复 (one POST, no dialog), restored items return to their group; an archived view on the company page with its reason and 恢复; a history row says 已归档", memorySettle],
   ["memory-guesses: the monthly review's guesses above 已归档 with his sentences; 对 confirms (no body) and the item moves to his own list as 你确认的推测; 不对 deletes at once; no group when there is none", memoryGuesses],
   ["memory-keyboard: the tabs by arrow keys and Enter / Space, an item added with Enter, a row edited (Enter saves, Esc leaves) from the keyboard", memoryKeyboard],
   ["news-ops: the seven news-source operations (new, edit ×6, switch both ways, test fetch ×6 opening under the row, REA repair only on repairable sources, delete by hold, the push length) send the old requests body for body", newsOps],

@@ -1,9 +1,9 @@
 // 你的看法 (the owner's view of a company): pure helpers for the company page card and the memory page section.  The backend's rows are
 // { id, symbol, text, quote, status: active|superseded|dropped, created_at, ended_at }.
 
-const STATUS_PHRASES = { superseded: "已更新", dropped: "已撤回" };
+const STATUS_PHRASES = { superseded: "已更新", dropped: "已撤回", archived: "已归档" };
 
-/** The phrase naming an earlier version's status (已更新 / 已撤回); "" for the active one or an unknown status. */
+/** The phrase naming an earlier version's status (已更新 / 已撤回 / 已归档); "" for the active one or an unknown status. */
 export function statusPhrase(status) { return STATUS_PHRASES[status] ?? ""; }
 
 /** The month and day of an instant as the owner lives it (Beijing), or null when it is not a date. */
@@ -27,6 +27,12 @@ export function splitVersions(versions) {
   const byNewest = [...list].sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
   const active = byNewest.find(v => v.status === "active") ?? null;
   return { active, earlier: byNewest.filter(v => v !== active) };
+}
+
+/** The archived view the card shows as its current one: there is no active view and the newest version was archived (a view the quarterly settle set aside).  Else null. */
+export function archivedCurrent(versions) {
+  const { active, earlier } = splitVersions(versions);
+  return !active && earlier[0]?.status === "archived" ? earlier[0] : null;
 }
 
 /** True when the card has anything to say: a view or any history.  No view and no history means no card at all. */

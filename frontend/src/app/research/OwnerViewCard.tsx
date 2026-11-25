@@ -6,9 +6,9 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { SkeletonCard } from "@/components/state/Skeleton";
 import { confirm } from "@/components/state/confirm";
-import { deleteOwnerView, getOwnerViewHistory, type OwnerViewVersion } from "../../api/owner-views";
+import { deleteOwnerView, getOwnerViewHistory, restoreOwnerView, type OwnerViewVersion } from "../../api/owner-views";
 import { useLocale } from "../../i18n";
-import { dayLabel, hasAnyView, splitVersions, statusPhrase, versionSpan } from "../../owner-views.mjs";
+import { archivedCurrent, dayLabel, hasAnyView, splitVersions, statusPhrase, versionSpan } from "../../owner-views.mjs";
 import { useWorkspace } from "../workspace";
 import { actionMessage } from "./support";
 import { useRead } from "./use-read";
@@ -58,6 +58,16 @@ export function OwnerViewCard({ symbol }: { symbol: string }) {
     finally { setBusy(null); }
   }
 
+  const archivedNow = archivedCurrent(versions.value) as OwnerViewVersion | null;
+  const history = archivedNow ? earlier.filter(version => version !== archivedNow) : earlier;
+  async function restore(version: OwnerViewVersion) {
+    setBusy(version.id); setFailure(null);
+    try { await restoreOwnerView(version.id); retry(); }
+    catch (error) { setFailure(error); }
+    finally { setBusy(null); }
+  }
+  const archivedLine = (version: OwnerViewVersion) => <p data-testid="owner-view-archived-note" className="m-0 text-caption text-muted-foreground">{version.archived_reason ? `${t(version.archived_reason)} · ` : ""}<span className="font-mono">{dayLabel(version.ended_at, locale) && (locale === "en-US" ? `${t("已归档")} ${dayLabel(version.ended_at, locale)}` : `${dayLabel(version.ended_at, locale)} ${t("已归档")}`)}</span></p>;
+
   return <section data-testid="owner-view" aria-label={t("你的看法")} className="flex min-w-0 flex-col gap-3 rounded-md border border-line bg-surface p-4">
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <h2 className="text-title-s text-ink">{t("你的看法")}</h2>
@@ -68,17 +78,28 @@ export function OwnerViewCard({ symbol }: { symbol: string }) {
         <p data-testid="owner-view-text" className="m-0 text-body font-medium text-ink [overflow-wrap:anywhere]">{active.text}</p>
         <Quote text={active.quote} />
       </>
-      : <p data-testid="owner-view-none" className="m-0 text-small text-muted-foreground">{t("目前没有看法")}</p>}
-    {failure != null && <ErrorBar message={actionMessage(failure, "删除失败，请重试。")} />}
-    {earlier.length > 0 && <Collapsible open={open} onOpenChange={setOpen} data-testid="owner-view-history" className="border-t border-line pt-2">
+      : archivedNow
+        ? <div data-testid="owner-view-archived" className="flex min-w-0 flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge kind="neutral" className="h-5">{t("已归档")}</StatusBadge>
+            <Button type="button" size="sm" variant="outline" data-testid="owner-view-restore" disabled={busy === archivedNow.id} aria-label={`${t("恢复")} · ${archivedNow.text}`} className="ml-auto max-md:h-11" onClick={() => void restore(archivedNow)}>{t("恢复")}</Button>
+          </div>
+          <p data-testid="owner-view-text" className="m-0 text-body font-medium text-ink [overflow-wrap:anywhere]">{archivedNow.text}</p>
+          {archivedLine(archivedNow)}
+          <Quote text={archivedNow.quote} />
+        </div>
+        : <p data-testid="owner-view-none" className="m-0 text-small text-muted-foreground">{t("目前没有看法")}</p>}
+    {failure != null && <ErrorBar message={actionMessage(failure, "操作失败，请重试。")} />}
+    {history.length > 0 && <Collapsible open={open} onOpenChange={setOpen} data-testid="owner-view-history" className="border-t border-line pt-2">
       <CollapsibleTrigger data-testid="owner-view-history-toggle" className="group/fold flex min-h-11 items-center gap-1.5 rounded-sm text-small text-ink-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/fold:rotate-90 motion-reduce:transition-none" />{t("历史")}<span className="font-mono text-caption text-muted-foreground">· {earlier.length}</span>
+        <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/fold:rotate-90 motion-reduce:transition-none" />{t("历史")}<span className="font-mono text-caption text-muted-foreground">· {history.length}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <ul className="m-0 flex list-none flex-col gap-3 p-0 pt-2">{earlier.map(version => <li key={version.id} data-testid="owner-view-version" data-status={version.status} className="flex min-w-0 flex-col gap-2 rounded-md border border-line bg-sunken p-3">
+        <ul className="m-0 flex list-none flex-col gap-3 p-0 pt-2">{history.map(version => <li key={version.id} data-testid="owner-view-version" data-status={version.status} className="flex min-w-0 flex-col gap-2 rounded-md border border-line bg-sunken p-3">
           <div className="flex flex-wrap items-center gap-2">
             {statusPhrase(version.status) && <StatusBadge kind="neutral" className="h-5">{t(statusPhrase(version.status))}</StatusBadge>}
             <span className="font-mono text-caption text-muted-foreground">{versionSpan(version, locale)}</span>
+            {version.status === "archived" && version.archived_reason && <span data-testid="owner-view-archived-note" className="min-w-0 text-caption text-muted-foreground">{t(version.archived_reason)}</span>}
             <Button type="button" size="sm" variant="ghost" data-testid="owner-view-delete" disabled={busy === version.id} aria-label={`${t("删除")} · ${version.text}`} className="ml-auto text-danger max-md:h-11" onClick={event => void remove(version, event.currentTarget)}>{t("删除")}</Button>
           </div>
           <p className="m-0 text-small text-ink [overflow-wrap:anywhere]">{version.text}</p>

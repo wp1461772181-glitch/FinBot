@@ -1,7 +1,7 @@
 // 你的看法 (the owner's views of companies): NVDA has three versions (the first withdrawn, the second replaced, the third active), TSLA and AMD one active view each.  Every other
 // company has none, so its page shows no card.  Invented sentences; the ids are fixed fake UUIDs.
 const id = (n) => `d0000000-0000-4000-8000-0000000000${String(n).padStart(2, "0")}`;
-const version = (n, symbol, status, text, quote, created_at, ended_at = null) => ({ id: id(n), symbol, text, quote, status, status_label: status === "superseded" ? "已更新" : status === "dropped" ? "已撤回" : "", source_message_id: null, conversation_id: null, turn_id: null, created_at, ended_at });
+const version = (n, symbol, status, text, quote, created_at, ended_at = null) => ({ id: id(n), symbol, text, quote, status, status_label: status === "superseded" ? "已更新" : status === "dropped" ? "已撤回" : status === "archived" ? "已归档" : "", archived_reason: null, source_message_id: null, conversation_id: null, turn_id: null, created_at, ended_at });
 
 export const OWNER_VIEWS = [
   version(1, "NVDA", "dropped", "数据中心收入今年还会翻倍", "我觉得英伟达今年数据中心还会翻倍", "2026-10-03T03:10:00+00:00", "2026-10-20T01:00:00+00:00"),

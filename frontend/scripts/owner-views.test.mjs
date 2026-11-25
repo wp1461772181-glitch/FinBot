@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dayLabel, hasAnyView, splitVersions, statusPhrase, versionSpan } from "../src/owner-views.mjs";
+import { archivedCurrent, dayLabel, hasAnyView, splitVersions, statusPhrase, versionSpan } from "../src/owner-views.mjs";
 
 const v = (id, status, created_at, ended_at = null) => ({ id, status, created_at, ended_at, text: id, quote: id });
 
@@ -33,4 +33,14 @@ test("dates are the owner's Beijing day: 11月8日, or 11/8 in English; a bad va
 test("an earlier version's span runs from the day said to the day it ended", () => {
   assert.equal(versionSpan(v("a", "superseded", "2026-11-01T02:00:00Z", "2026-11-08T02:00:00Z")), "11月1日 – 11月8日");
   assert.equal(versionSpan(v("a", "dropped", "2026-11-01T02:00:00Z")), "11月1日");
+});
+
+test("an archived view is the card's current one only when no view is active; 已归档 is its status phrase", () => {
+  assert.equal(statusPhrase("archived"), "已归档");
+  const archived = v("arch", "archived", "2026-11-01T02:00:00Z", "2026-11-20T02:00:00Z");
+  assert.equal(archivedCurrent([v("old", "dropped", "2026-10-01T02:00:00Z", "2026-10-20T02:00:00Z"), archived]).id, "arch");
+  assert.equal(archivedCurrent([archived, v("new", "active", "2026-11-22T02:00:00Z")]), null);
+  assert.equal(archivedCurrent([v("new", "active", "2026-11-22T02:00:00Z"), v("a", "archived", "2026-11-01T02:00:00Z")]), null);
+  assert.equal(archivedCurrent([v("d", "dropped", "2026-11-01T02:00:00Z"), v("a", "archived", "2026-10-01T02:00:00Z")]), null);
+  assert.equal(archivedCurrent(null), null);
 });
