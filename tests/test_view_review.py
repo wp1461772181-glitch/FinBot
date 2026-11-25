@@ -11,7 +11,7 @@ import pytest
 from app import agent_profile as profile, owner_views, view_review
 from app.agent_chat_models import AgentProfileItem, OwnerView, ViewReview
 from app.database import Base, SessionLocal, engine
-from app.models import CompanyFact, CompanyRatio, MarketPrice
+from app.models import CompanyFact, CompanyRatio, MarketPrice, MarketPriceRevision
 
 OWNER = "owner-hash-view-review"
 OTHER = "other-hash-view-review"
@@ -26,7 +26,7 @@ def world(monkeypatch, disposable_database):
     Base.metadata.create_all(engine)
     owner_views.ensure_archive_column()
     with SessionLocal() as db:
-        for model in (ViewReview, OwnerView, AgentProfileItem, MarketPrice, CompanyFact, CompanyRatio):
+        for model in (ViewReview, OwnerView, AgentProfileItem, MarketPriceRevision, MarketPrice, CompanyFact, CompanyRatio):
             db.query(model).delete()
         db.commit()
     for name in ("FINBOT_VIEW_REVIEW_MIN_DAYS", "FINBOT_VIEW_REVIEW_MAX", "FINBOT_VIEW_REVIEW_SECONDS"):
