@@ -112,6 +112,8 @@ class AgentProfileItem(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When the owner confirmed a monthly-review guess (origin ``pattern``); the settle's 60-day rule counts from it, not from ``updated_at``.
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AgentConversationRecall(Base):

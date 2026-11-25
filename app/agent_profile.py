@@ -97,6 +97,9 @@ def ensure_seen_columns() -> None:
         connection.execute(sql("ALTER TABLE agent_profile_items ADD COLUMN IF NOT EXISTS archived_reason VARCHAR(80)"))
         connection.execute(sql("ALTER TABLE agent_profile_items ADD COLUMN IF NOT EXISTS settled_at TIMESTAMP WITH TIME ZONE"))
         connection.execute(sql("UPDATE agent_profile_items SET last_seen_at = created_at WHERE last_seen_at IS NULL"))
+        connection.execute(sql("ALTER TABLE agent_profile_items ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP WITH TIME ZONE"))
+        # a guess he already confirmed (active, origin pattern) is taken to have been confirmed when the row was last changed; once: only while empty
+        connection.execute(sql("UPDATE agent_profile_items SET confirmed_at = updated_at WHERE origin = 'pattern' AND status = 'active' AND confirmed_at IS NULL"))
 
 
 def bump_seen(owner_hash: str, item_id, when: datetime) -> bool:
@@ -144,7 +147,7 @@ def serialize(row: AgentProfileItem, names: dict | None = None) -> dict:
             "examples": row.examples, "review_run": str(row.review_run) if row.review_run else None,
             "created_at": stamp(row.created_at), "updated_at": stamp(row.updated_at),
             "last_used_at": stamp(row.last_used_at), "last_seen_at": stamp(row.last_seen_at),
-            "archived_at": stamp(row.archived_at), "archived_reason": row.archived_reason, "settled_at": stamp(row.settled_at),
+            "archived_at": stamp(row.archived_at), "archived_reason": row.archived_reason, "settled_at": stamp(row.settled_at), "confirmed_at": stamp(row.confirmed_at),
             "settled_label": SETTLED_LABEL if row.settled_at else ""}
 
 
@@ -296,27 +299,30 @@ def archive_item(owner_hash: str, item_id: str) -> dict | None:
         return serialize(row, _bot_names(db, owner_hash))
 
 
+RESTORE_CONFLICT = "已有一条同类的记忆在用，先忘掉它再恢复"
+
+
 def restore_item(owner_hash: str, item_id: str, now: datetime | None = None) -> dict | None:
-    """The owner brings an archived item back on the memory page: active again (a guess nobody ever confirmed goes back to ``proposed``), the
-    archive fields cleared, ``last_seen_at`` = now.  The time is set directly: ``bump_seen`` only moves forward.  Replacing its topic and the
-    layer's cap apply as for any new item (``ProfileError('profile_full')`` when nothing may make room).  None when it is not his archived item."""
+    """The owner brings an archived item back on the memory page: active again, the archive fields cleared, ``last_seen_at`` = now (set
+    directly: ``bump_seen`` only moves forward).  A guess he confirmed (``confirmed_at``) goes back to active, one he never confirmed to
+    ``proposed``.  It never archives anything else: when its layer already holds an active item of the same kind and topic, or the same text,
+    or is full, ``ProfileError`` is raised and nothing changes.  None when it is not his archived item."""
     now = now or datetime.now(UTC)
     with SessionLocal() as db:
         _lock(db, owner_hash)
         row = _owned(db, owner_hash, item_id)
         if row is None or row.status != "archived":
             return None
-        row.status = "proposed" if row.origin == "pattern" and row.archived_at is None else "active"
-        row.archived_at = row.archived_reason = None
-        row.last_seen_at = now
-        db.flush()
-        if row.status == "active":
-            _replace_topic(db, owner_hash, row)
-            try:
-                _evict(db, owner_hash, row.bot_id)
-            except ProfileError:
-                db.rollback()
-                raise
+        target = "proposed" if row.origin == "pattern" and row.confirmed_at is None else "active"
+        layer = [r for r in _active(db, owner_hash) + _proposed(db, owner_hash) if r.bot_id == row.bot_id and r.id != row.id]
+        if any(r.kind == row.kind and _plain(r.text) == _plain(row.text) for r in layer):
+            raise ProfileError(RESTORE_CONFLICT)
+        if target == "active":
+            if row.topic and any(r.status == "active" and r.kind == row.kind and r.topic == row.topic for r in layer):
+                raise ProfileError(RESTORE_CONFLICT)
+            if sum(1 for r in layer if r.status == "active") >= MAX_ACTIVE_ITEMS:
+                raise ProfileError("profile_full")
+        row.status, row.archived_at, row.archived_reason, row.last_seen_at = target, None, None, now
         db.commit()
         return serialize(row, _bot_names(db, owner_hash))
 
@@ -367,6 +373,7 @@ def confirm_item(owner_hash: str, item_id: str) -> dict | None:
             return None
         if row.origin == "pattern":
             row.status = "active"
+            row.confirmed_at = row.confirmed_at or datetime.now(UTC)
         else:
             row.origin = "explicit"
         _replace_topic(db, owner_hash, row)

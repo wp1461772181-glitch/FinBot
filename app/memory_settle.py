@@ -48,15 +48,15 @@ def _seen(row: AgentProfileItem) -> datetime | None:
 
 
 def _promote(db, owner_hash: str, now: datetime) -> list[str]:
-    """Confirmed guesses (origin pattern, active) seen within 120 days and confirmed (``updated_at``) at least 60 days ago get ``settled_at``."""
+    """Confirmed guesses (origin pattern, active) seen within 120 days and confirmed (``confirmed_at``) at least 60 days ago get ``settled_at``."""
     done = []
     rows = db.scalars(select(AgentProfileItem).where(AgentProfileItem.owner_hash == owner_hash, AgentProfileItem.origin == "pattern",
                                                      AgentProfileItem.status == "active", AgentProfileItem.settled_at.is_(None)))
     for row in rows:
         seen = _seen(row)
-        if seen is None or row.updated_at is None:
+        if seen is None or row.confirmed_at is None:
             continue
-        if seen >= now - timedelta(days=SEEN_WITHIN_DAYS) and row.updated_at <= now - timedelta(days=CONFIRMED_DAYS):
+        if seen >= now - timedelta(days=SEEN_WITHIN_DAYS) and row.confirmed_at <= now - timedelta(days=CONFIRMED_DAYS):
             db.execute(update(AgentProfileItem).where(AgentProfileItem.id == row.id)
                        .values(settled_at=now, updated_at=AgentProfileItem.updated_at).execution_options(synchronize_session=False))
             done.append(row.text)
@@ -126,24 +126,31 @@ def _mentioned(db, owner_hash: str, symbols: set[str], since: datetime) -> set[s
     return found
 
 
-def _expire_views(db, owner_hash: str, now: datetime, days: int) -> list[tuple[str, str]]:
+def _plan_views(db, owner_hash: str, now: datetime, days: int) -> list[dict]:
+    """The active views to archive.  Every read (ledger, queue, bot focus, his messages) happens here, before anything is written; a read
+    that fails means no view is archived this quarter (not knowing what he holds is not a reason to archive)."""
     views = owner_views.all_current(owner_hash)
     if not views:
         return []
-    symbols = {v["symbol"].upper() for v in views}
     try:
-        keep = _held(owner_hash)
-    except Exception as exc:  # noqa: BLE001 - an unreadable ledger is not news that he sold
-        log.warning("quarterly settle: ledger unreadable (%s); views left alone", type(exc).__name__)
+        keep = _held(owner_hash) | _queued(db, owner_hash) | _focused(db, owner_hash)
+        keep |= _mentioned(db, owner_hash, {v["symbol"].upper() for v in views} - keep, now - timedelta(days=days))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("quarterly settle: reading what he holds or follows failed (%s); views left alone", type(exc).__name__)
         return []
-    keep |= _queued(db, owner_hash) | _focused(db, owner_hash)
-    keep |= _mentioned(db, owner_hash, symbols - keep, now - timedelta(days=days))
+    return [v for v in views if v["symbol"].upper() not in keep]
+
+
+def _archive_views(owner_hash: str, planned: list[dict], now: datetime) -> list[tuple[str, str]]:
+    """Write the plan; what was actually archived is returned (a failure stops the rest but keeps what is done)."""
     done = []
-    for view in views:
-        if view["symbol"].upper() in keep:
-            continue
-        if owner_views.archive(owner_hash, view["id"], VIEW_REASON, at=now):
-            done.append((f"{owner_views.display_name(view['symbol'])}的看法：{view['text']}", VIEW_REASON))
+    for view in planned:
+        try:
+            if owner_views.archive(owner_hash, view["id"], VIEW_REASON, at=now):
+                done.append((f"{owner_views.display_name(view['symbol'])}的看法：{view['text']}", VIEW_REASON))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("quarterly settle: archiving a view failed (%s)", type(exc).__name__)
+            break
     return done
 
 
@@ -168,11 +175,12 @@ def run(owner_hash: str, now: datetime, last_run_at: datetime | None) -> dict:
     """One settle.  ``{"outcome": "done", "reason", promoted, archived, views_archived, posted}``; no model call."""
     days = stale_days()
     with SessionLocal() as db:
+        planned = _plan_views(db, owner_hash, now, days)      # every read first
         profile._lock(db, owner_hash)
         promoted = _promote(db, owner_hash, now)
         expired = _expire(db, owner_hash, now, days)
         db.commit()
-        view_expired = _expire_views(db, owner_hash, now, days)
+    view_expired = _archive_views(owner_hash, planned, now)   # the note below is made of what was actually written
     archived = expired + view_expired
     result = {"outcome": "done", "promoted": len(promoted), "archived": len(expired), "views_archived": len(view_expired), "posted": False}
     if not promoted and not archived:
