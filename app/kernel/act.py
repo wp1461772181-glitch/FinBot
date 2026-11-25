@@ -243,8 +243,11 @@ async def _forget(run, args: dict) -> dict:
                                    bot_id=getattr(context, "bot_id", None), every_bot=getattr(context, "bot_is_default", False))
     if not item:
         return _failure("profile_item_not_found")
-    return {"title": direct.WRITE_TITLES["forget"], "targets": [{"title": item["text"]}],
-            "alternative": "忘掉后这条不再用于回答；记忆页里仍能看到它的归档记录。"}
+    if item.get("status") == "proposed":      # a monthly-review guess: forgetting it removes the text, keeping only a fingerprint
+        alternative = "这是我的推测；删掉后不再保留原文，以后也不会再这样推测。"
+    else:
+        alternative = "忘掉后这条不再用于回答；记忆页里仍能看到它的归档记录。"
+    return {"title": direct.WRITE_TITLES["forget"], "targets": [{"title": item["text"]}], "alternative": alternative}
 
 
 VIEW_OPERATIONS = ("record_view", "drop_view")
