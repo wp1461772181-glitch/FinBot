@@ -64,6 +64,7 @@ class AnalyzeArgs(SourceWriteArgs):
     catalog_model:str|None=Field(default=None,min_length=1,max_length=40,description='The name of a model of the catalog (list_models) to analyse with; omitted: the default analysis model.')
     force:bool=Field(default=False,description='Run the analysis again even when this source already has one.')
 class ListModelsArgs(Args):pass
+class ListWorkArgs(Args):pass
 class IndexArgs(Args):
     source_id:str|None=Field(default=None,pattern=r'^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$')
     max_tasks:int=Field(default=20,ge=1,le=200)
@@ -423,6 +424,7 @@ EXTRA=(
  ('search_configured_news',SearchConfiguredNewsArgs,'read','Search news items from enabled user-configured news sources only (RSS/JSON/HTML). Call this FIRST for recent market/macro/company news before falling back to web_research. Every returned item has a URL and still goes through citation and numeric gates.'),
  ('search_x',SearchXArgs,'read','Search recent posts (the last 7 days at most) on X through its official API. Use it when the user asks what is being said on X, or when something may have been posted on X before it reached news or filings. Posts are unverified claims: say that it is from X, who posted it and when, and check anything that matters against official sources before stating it as fact. Query syntax: words, "exact phrase", from:username, OR, -word, lang:en, cashtags like $NVDA. Each returned post costs money, so ask for only as many as you need.'),
  ('list_models',ListModelsArgs,'read','List the models of the catalog (name, provider, model id, whether a key is set; never the key), the default chat model, and the model each background role (earnings, forecast, judge, fallback) uses. Owner only. Call it before analyze with catalog_model, or when the user asks which models are available.'),
+ ('list_work',ListWorkArgs,'read','List what is on the owner\'s hands right now and lately, newest first: this turn and other running turns, routines waiting for their time, jobs started from a card (analysis, forecast) with their live status, archive builds, and what failed or was stopped in the last day. Each item has a kind, a short title, a status (进行中, 完成, 失败, 已停, 排队中), start and end times and, for a failure, why. Owner only. Call it when the user asks what you are working on (你手上有什么事).'),
  ('create_bot',CreateBotArgs,'reversible','Propose a new bot (a long-lived assistant with its own conversation) when the USER asks for one: name, title, instruction, companies it watches, the tools it may use, its model and effort, skills. Same checks as the bots page. Owner confirmation card listing what it will be. Deleting a bot is not offered.'),
  ('update_bot',UpdateBotArgs,'reversible','Propose changing one bot (name, title, instruction, companies, tool scope, model, effort, pinned, hidden, usual skills) when the USER asks; pass only what changes. Call act with only operation update_bot first to get the bot ids. The card lists each change old to new and the tools added and removed. Owner confirmation card.'),
  ('delete_transaction',DeleteTransactionArgs,'reversible','Propose deleting one mistaken entry of the owner\'s portfolio ledger when the USER asks (删掉那笔买入). Call act with only operation delete_transaction first to get recent entries and their ids. The card shows the entry and the position and cash after; an entry a later sell depends on is refused. It cannot be undone. Own card.'),
@@ -432,11 +434,11 @@ EXTRA=(
  ('set_channel_prefs',SetChannelPrefsArgs,'reversible','Propose where proactive messages (alerts, routine briefs, earnings notices) go from now on: Telegram, WeChat or both, and whether to use the first channel that works or all. The card says where they will go. Owner confirmation card.'),
 )
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
-OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs'}
+OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs'}
 
 # Stage 3a: what only the kernel knows.  The old engine's classifier, its request_action schema, its tool list and its prompts stay as they
 # were before the branch (tests/test_x_search.py compares them): these names are not in them, and the three tools 3a widened show the old schema.
-KERNEL_ONLY=frozenset({'list_models','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs'})
+KERNEL_ONLY=frozenset({'list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs'})
 # Every base registry entry is read-only; write names come from catalogue levels.
 WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'} and name not in KERNEL_ONLY)]
 class RequestActionArgs(Args):

@@ -110,6 +110,11 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         from . import directory_ops
         if await asyncio.to_thread(directory_ops.is_stale,name,args,context.owner_hash):
             stale=directory_ops.stale_refusal(name);return {'ok':False,'data':[],'error_code':stale.code,'reason':stale.reason,'hint':stale.reason}
+    if name=='list_work':
+        # The owner's own work in one list (chat turns, routines, card jobs, archive builds); nothing of another owner, nothing for a guest.
+        from .. import work
+        if not is_owner:return error('owner_login_required')
+        return result(await asyncio.to_thread(work.list_for,context.owner_hash),'work')
     if name=='list_models':
         # The catalog and the roles as the owner may see them: names and whether a key is set, never a key, a hint of one or where it is kept.
         from .. import agent_model_catalog as catalog

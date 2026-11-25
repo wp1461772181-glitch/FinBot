@@ -19,6 +19,7 @@ HOURLY_SECONDS = 3600
 NEWS_SECONDS = 900         # configured news sources; until this loop the library was only refreshed while a chat turn waited on it
 RELEASE_FIGURES_SECONDS = 600   # 8-K earnings-release figures for a quarter whose 10-Q/10-K is not filed yet
 COMPANY_FACTS_SECONDS = 6 * 3600   # rebuild every company's code-built facts (the hooks do it per symbol as filings are stored; this catches the rest)
+WORK_WATCH_SECONDS = 60     # a job started from a card that has ended gets its message within a minute
 EARNINGS_SECONDS = 60      # picks up events the response-time task missed, due follow-ups, and anything left over from a restart
 
 
@@ -91,6 +92,15 @@ def run_release_figures() -> None:
         log.info("release figures: %s", done)
 
 
+def run_work_watch() -> None:
+    """The end of every job started from a card (analysis, forecast) is told once, in the conversation its card came from (app.work)."""
+    from . import work
+
+    posted = work.report_job_ends()
+    if posted:
+        log.info("work watch: %s end messages", posted)
+
+
 def run_company_facts() -> None:
     """Every symbol with saved figures, one transaction each.  The loop runs its job when it starts, so this is also the once-at-startup pass."""
     from .company_facts import refresh_all
@@ -116,6 +126,7 @@ LOOPS = (
     ("news-poll", NEWS_SECONDS, run_news_poll),
     ("release-figures", RELEASE_FIGURES_SECONDS, run_release_figures),
     ("company-facts", COMPANY_FACTS_SECONDS, run_company_facts),
+    ("work-watch", WORK_WATCH_SECONDS, run_work_watch),
 )
 
 
