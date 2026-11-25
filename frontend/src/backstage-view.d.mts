@@ -31,6 +31,7 @@ export function pagedQuery(before: string | null | undefined): string;
 export function slowRuleText(thresholdMs: unknown, w?: Words): string;
 export function answerRow(item: unknown, timeZone?: string, w?: Words): AnswerRow;
 export function answerNotes(detail: unknown, w?: Words): { kind: string; text: string }[];
+export function helperLines(detail: unknown, w?: Words): { id: string; complete: boolean; text: string }[];
 export function detailTimeline(detail: unknown, timeZone?: string, w?: Words): TimelineStep[];
 export function usageRange(days: number, today: string): { from: string; to: string };
 export function usageQuery(options: { from?: string; to?: string; group?: string }): string;

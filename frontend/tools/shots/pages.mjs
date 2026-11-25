@@ -835,6 +835,8 @@ export const PAGES = [
     before: async (page) => { await page.locator("[data-testid=answer-open]").nth(4).click(); await page.locator("[data-testid=note-old_engine]").waitFor({ timeout: 10000 }); } },
   { name: "backstage-answer-incomplete", hash: "#/backstage/answers", ready: "[data-testid=answers-table]", element: "[data-testid=answer-drawer]",
     before: async (page) => { await page.locator("[data-testid=answer-open]").nth(3).click(); await page.locator("[data-testid=note-incomplete]").waitFor({ timeout: 10000 }); } },
+  { name: "backstage-answer-helpers", hash: "#/backstage/answers", ready: "[data-testid=answers-table]", element: "[data-testid=answer-drawer]", view: () => ({ fixtureState: stateWithBackstage({ helpers: true }) }),
+    before: async (page) => { await page.locator("[data-testid=answer-open]").nth(1).click(); await page.locator("[data-testid=helpers]").waitFor({ timeout: 10000 }); } },
   { name: "backstage-answers-empty", hash: "#/backstage/answers", ready: "[data-testid=backstage-empty]", view: () => ({ fixtureState: stateWithBackstage({ empty: true }) }) },
   { name: "backstage-answers-error", hash: "#/backstage/answers", ready: "[data-slot=error-bar]", view: () => ({ fixtureState: stateWithBackstage({ fail: true }) }) },
   // A token about 300 characters long with no break in it, in a question, a card title and a reminder: the page must not scroll sideways (the picture is taken after the check).

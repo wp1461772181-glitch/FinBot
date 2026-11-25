@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
-  ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyModeLine, dutyRow, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
+  ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyModeLine, helperLines, dutyRow, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
   slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
 } from "../src/backstage-view.mjs";
-import { ANSWERS, DELIVERIES, DETAIL, DUTY, DETAIL_INCOMPLETE, DETAIL_OLD, OPERATIONS, usageAnswer } from "../tools/shots/fixtures/backstage.mjs";
+import { ANSWERS, DELIVERIES, DETAIL, DUTY, HELPERS, DETAIL_INCOMPLETE, DETAIL_OLD, OPERATIONS, usageAnswer } from "../tools/shots/fixtures/backstage.mjs";
 
 const src = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
@@ -289,4 +289,15 @@ test("duty: the mode line says the mode in the owner's words, and an unknown mod
   assert.equal(dutyModeLine("off"), "已关闭");
   assert.equal(dutyModeLine("???"), "");
   assert.equal(usageGroupLabel("purpose", { key: "duty", label: "duty" }), "值班");
+});
+
+test("helpers: one plain line each (model, steps, what it read, finished or not, how long); nothing when there are none", () => {
+  assert.deepEqual(helperLines(DETAIL), []);
+  assert.deepEqual(helperLines({ helpers: [] }), []);
+  assert.deepEqual(helperLines(undefined), []);
+  assert.deepEqual(helperLines({ ...DETAIL, helpers: HELPERS }).map((h) => h.text), [
+    "小助手 · haiku-5.5 · 3 步 · 读了 已披露财务数字、搜索已配置新闻源 · 已做完 · 18.0 s",
+    "小助手 · deepseek-flash · 6 步 · 读了 SEC 申报 · 未做完 · 2 min 0 s"]);
+  assert.deepEqual(helperLines({ helpers: [{ call_id: "x", model: "m", steps: 1, complete: true, seconds: 2, tools: [] }] }).map((h) => h.text), ["小助手 · m · 1 步 · 已做完 · 2.0 s"], "no tools read: no 读了");
+  assert.equal(helperLines({ helpers: [{ call_id: "x", complete: false }] })[0].complete, false);
 });

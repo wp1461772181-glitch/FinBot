@@ -11076,7 +11076,7 @@ async function settingsRolesOneTable(ctx) {
   try {
     const { page } = view;
     const rows = await page.locator("[data-testid=roles-table] [data-testid=role-row]").evaluateAll((r) => r.map((x) => x.dataset.role));
-    assert(JSON.stringify(rows) === JSON.stringify(["chat", "earnings", "forecast", "judge", "analysis"]), `the rows are ${JSON.stringify(rows)}`);
+    assert(JSON.stringify(rows) === JSON.stringify(["chat", "earnings", "forecast", "judge", "fallback", "helper", "analysis"]), `the rows are ${JSON.stringify(rows)}`);
     const reads = (re) => view.mock.requests.filter((r) => r.method === "GET" && re.test(r.path)).length;
     assert(reads(/model-roles$/) === 1 && reads(/model-catalog$/) === 1 && reads(/analysis-settings$/) === 1, `reads on entering: roles ${reads(/model-roles$/)}, catalog ${reads(/model-catalog$/)}, analysis ${reads(/analysis-settings$/)} (one each; the old page read 3, 2, 1)`);
     assert((await page.locator("[data-testid=roles-card]").getByRole("button", { name: /保存|设为默认|恢复/ }).count()) === 0, "the table has a save button");

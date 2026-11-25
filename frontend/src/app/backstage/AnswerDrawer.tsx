@@ -4,7 +4,7 @@ import { ErrorBar } from "@/components/state/ErrorBar";
 import { DelayedSkeleton, SkeletonRows } from "@/components/state/Skeleton";
 import { cn } from "@/lib/utils";
 import { readAnswer, type AnswerDetail } from "../../api/backstage";
-import { answerNotes, detailTimeline, formatMs, formatTime, answerStatus, type TimelineStep } from "../../backstage-view.mjs";
+import { answerNotes, detailTimeline, helperLines, formatMs, formatTime, answerStatus, type TimelineStep } from "../../backstage-view.mjs";
 import { colon, useLocale } from "../../i18n";
 import { useLoad } from "../use-load";
 import { CostText, Status } from "./BackstageTable";
@@ -68,6 +68,7 @@ export function AnswerDrawer({ id, onClose, returnFocus }: { id: string | null; 
   const detail = id && load.data?.id === id ? load.data.detail : null;
   const steps = detail ? detailTimeline(detail, undefined, w) : [];
   const notes = detail ? answerNotes(detail, w) : [];
+  const helpers = detail ? helperLines(detail, w) : [];
   const langfuse = safeUrl(detail?.langfuse_url);
   const citations = detail?.citations ?? [];
   return <Drawer open={id !== null} onOpenChange={open => { if (!open) onClose(); }} direction="right" autoFocus>
@@ -83,6 +84,7 @@ export function AnswerDrawer({ id, onClose, returnFocus }: { id: string | null; 
         {load.error && !load.loading && !detail ? <ErrorBar error={load.error} onRetry={() => void load.reload()} retrying={load.loading} /> : null}
         {load.loading && !detail ? <DelayedSkeleton delay={150}><SkeletonRows rows={5} /></DelayedSkeleton> : null}
         {notes.map(note => <p key={note.kind} data-testid={`note-${note.kind}`} role="note" className="rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2">{note.text}</p>)}
+        {helpers.length > 0 && <ul data-testid="helpers" aria-label={t("小助手")} className="m-0 flex list-none flex-col gap-1 p-0">{helpers.map(helper => <li key={helper.id} data-testid="helper-line" data-complete={helper.complete ? "true" : "false"} className="rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2">{helper.text}</li>)}</ul>}
         {steps.length > 0 && <ol data-testid="timeline" aria-label={t("时间线")} className="m-0 flex list-none flex-col p-0">{steps.map((step, index) => <Step key={`${step.kind}-${index}`} step={step} />)}</ol>}
         {detail && steps.length === 0 && <p className="text-small text-muted-foreground">{t("这一轮没有留下可以显示的内容。")}</p>}
         {citations.length > 0 && <section aria-labelledby="answer-citations" className="flex flex-col gap-1.5">

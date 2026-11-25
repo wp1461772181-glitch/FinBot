@@ -63,6 +63,12 @@ export const DETAIL = {
   langfuse_url: "https://langfuse.example/trace/abc123",
 };
 
+/** The helpers (小助手) of a turn that handed legwork off: one finished, one stopped early (the fake backend adds them to DETAIL when its state says `helpers`). */
+export const HELPERS = [
+  { call_id: "call-h1", model: "haiku-5.5", steps: 3, model_calls: 3, tokens: 5400, complete: true, seconds: 18, tools: ["query_financials", "search_configured_news"] },
+  { call_id: "call-h2", model: "deepseek-flash", steps: 6, model_calls: 6, tokens: 9100, complete: false, seconds: 120, tools: ["query_sec_filings"] },
+];
+
 /** A turn of the old engine: whatever it stored, partial. */
 export const DETAIL_OLD = {
   message_id: M(5), conversation_id: CONVERSATION.finbot, turn_id: TURN(5), bot_id: BOT.finbot, bot_name: "FinBot", created_at: "2026-11-10T03:30:00+00:00", engine: "v1", partial: true,
@@ -182,9 +188,9 @@ export function backstageRoutes(route, reply, own) {
     if (asked("slow")) return { items: items.filter((row) => (row.total_ms ?? 0) > 4000), next_before: null, slow_threshold_ms: 4000, slow_rule: "total_ms above the p90 of the turns in this page's window" };
     return { ...ANSWERS, items, next_before: items.length >= ANSWERS.items.length ? ANSWERS.next_before : null };
   }));
-  route.get("/backstage/answers/:id", guarded(({ params }) => {
+  route.get("/backstage/answers/:id", guarded(({ params, state }) => {
     const found = [DETAIL, DETAIL_OLD, DETAIL_INCOMPLETE].find((d) => d.message_id === params.id);
-    return found ?? reply.status(404, { detail: "not_found" });
+    return found && found === DETAIL && state.backstage?.helpers ? { ...found, helpers: HELPERS } : found ?? reply.status(404, { detail: "not_found" });
   }));
   route.get("/backstage/usage", guarded(({ state, query }) => {
     if (state.backstage?.empty) return { ...usageAnswer("day"), totals: { calls: 0, failed_calls: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, ms_p50: null, cost_usd: null, unpriced_calls: 0, missing_prices: [] }, groups: [] };

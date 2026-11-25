@@ -148,6 +148,19 @@ export function answerNotes(detail, w = ZH_WORDS) {
   return notes;
 }
 
+/** One line per helper (小助手) the turn handed work to: the model, how many steps, what it read, whether it finished, how long.  Nothing when there were none. */
+export function helperLines(detail, w = ZH_WORDS) {
+  return list(detail?.helpers).filter(isObject).map((helper, index) => {
+    const steps = Number(helper.steps);
+    const tools = [...new Set(list(helper.tools).filter((name) => typeof name === "string" && name).map((name) => w.t(toolLabel(name))))];
+    const seconds = Number(helper.seconds);
+    const parts = [w.t("小助手"), text(helper.model), Number.isFinite(steps) && helper.steps !== null ? `${steps} ${w.t("步")}` : "",
+      tools.length ? `${w.t("读了")} ${tools.join(w.list)}` : "", helper.complete === false ? w.t("未做完") : helper.complete === true ? w.t("已做完") : "",
+      Number.isFinite(seconds) && helper.seconds !== null && helper.seconds !== "" ? formatMs(seconds * 1000) : ""].filter(Boolean);
+    return { id: text(helper.call_id) || `helper-${index}`, complete: helper.complete !== false, text: parts.join(" · ") };
+  });
+}
+
 function compactJson(value, max = 600) {
   if (!isObject(value) || Object.keys(value).length === 0) return "";
   let out = "";
