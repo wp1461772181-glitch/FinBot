@@ -21,7 +21,7 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta, timezone
-from decimal import Decimal, localcontext
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from pathlib import Path
 
 from sqlalchemy import cast, func, select, union
@@ -355,19 +355,30 @@ def _trading_day(at: datetime) -> date:
         return (at - timedelta(hours=5)).date()
 
 
-def _read_facts(session, symbol: str) -> dict | None:
-    """The company's latest quarter from the code-built facts (``company_facts.latest_quarter``: a few indexed reads, nothing computed).
-    In a savepoint, so a failure or a statement timeout here costs only this section, not the rest of the read."""
+FACTS_MIN_SECONDS = 0.3     # less than this of the block's time left: the facts are skipped, the rest of the block is not touched
+
+
+def _read_facts(session, symbol: str, deadline: float | None = None) -> dict | None:
+    """The company's latest quarter from the code-built facts (``company_facts.latest_quarter``: two indexed reads, nothing computed).
+    Skipped when too little of the block's time is left; in a savepoint, with a statement timeout of the time left, so a failure or a
+    slow read costs only this section, not the rest of the block."""
     from . import company_facts
+    timeout_ms = STATEMENT_TIMEOUT_MS
+    if deadline is not None:
+        left = deadline - time.monotonic()
+        if left < FACTS_MIN_SECONDS:
+            return None
+        timeout_ms = max(100, min(STATEMENT_TIMEOUT_MS, int(left * 1000)))
     try:
         with session.begin_nested():
+            session.execute(sql_text(f"SET LOCAL statement_timeout = {timeout_ms}"))
             return company_facts.latest_quarter(symbol, db=session)
     except Exception as exc:
         logger.info("latest_known: company facts of %s unreadable (%s: %s)", symbol, type(exc).__name__, exc)
         return None
 
 
-def gather(symbols: list[str], *, now: datetime, deadline: float | None = None) -> list[dict]:
+def gather(symbols: list[str], *, now: datetime, deadline: float | None = None, with_facts: bool = True) -> list[dict]:
     """每个代码库里最新的东西；什么都没有的代码不出现在结果里。同步函数，调用方放进线程。"""
     from .agent_chat_models import NewsItem
     from .models import MarketPrice, SecFilingInventory
@@ -440,10 +451,13 @@ def gather(symbols: list[str], *, now: datetime, deadline: float | None = None) 
                 price = {"kind": "close", "value": float(latest[1]), "at": latest[2], "date": latest[0],
                          "change_pct": (latest[1] / prev_close - 1) * 100 if prev_close else None}
 
-            facts = _read_facts(session, symbol) if filings or news or price else None
             if filings or news or price:
                 items.append({"symbol": symbol, "name": _display_name(symbol),
-                              "filings": filings, "news": news, "price": price, "facts": facts})
+                              "filings": filings, "news": news, "price": price, "facts": None})
+        # The quarter's numbers come last, once everything else is in hand, so a slow read of them can only cost themselves.
+        if with_facts:
+            for item in items:
+                item["facts"] = _read_facts(session, item["symbol"], deadline)
     return items
 
 
@@ -539,9 +553,8 @@ UNAUDITED = "新闻稿未经审计"
 
 def _money(value) -> str:
     amount = Decimal(str(value))
-    if abs(amount) >= 10 ** 8:
-        return f"{amount / Decimal(10 ** 8):,.2f} 亿美元"
-    return f"{amount / Decimal(10 ** 4):,.2f} 万美元"
+    unit, label = (10 ** 8, "亿美元") if abs(amount) >= 10 ** 8 else (10 ** 4, "万美元")
+    return f"{(amount / unit).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):,.2f} {label}"
 
 
 def _plain(value) -> str:
@@ -553,9 +566,9 @@ def _evaluate(kind: str, a: Decimal, b: Decimal) -> str:
     with localcontext() as ctx:
         ctx.prec = 50
         if kind == "sub":
-            return str((a - b).quantize(Decimal(1)))
+            return str((a - b).quantize(Decimal(1), rounding=ROUND_HALF_UP))
         value = (a - b) / b * 100 if kind == "growth" else a / b * 100
-        return str(value.quantize(Decimal("0.1")))
+        return str(value.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
 
 
 _CALC = {"sub": ("a - b", 0), "growth": ("(a - b) / b * 100", 1), "share": ("a / b * 100", 1)}
@@ -716,7 +729,7 @@ def _facts_lines(quarter: dict | None, symbol: str, rows: list | None) -> list[s
         parents = [cites.facts.get(p) for p in margin["parents"]]
         profit = next((p for p in parents if p and p["metric"] == "gross_profit"), None)
         base = next((p for p in parents if p and p["metric"] == "revenue"), None)
-        got = cites.calc(f"{symbol} FY{quarter['fiscal_year']} {quarter['fiscal_period']} 毛利率", "share", [profit["id"], base["id"]]) if profit and base else None
+        got = cites.calc(f"{symbol} {cites.period(top['revenue'])}毛利率", "share", [profit["id"], base["id"]]) if profit and base else None
         if got and abs(Decimal(got[1]) - Decimal(str(margin["value"])) * 100) <= Decimal("0.051"):
             gross = cites.fact(profit["id"])
             lines.append(_fit(f"  毛利率 {Decimal(got[1]):.1f}%{mark(got[0])}（毛利 {_money(gross[1])}{mark(gross[0])} ÷ 营收{mark(revenue[0])}）",
@@ -840,7 +853,7 @@ def _build(text: str, previous: str | None, focus: str | None, owner_hash: str |
     while cursor < min(len(candidates), 2 * MAX_COMPANIES) and len(items) < MAX_COMPANIES and time.monotonic() < deadline:
         batch = candidates[cursor:cursor + (MAX_COMPANIES - len(items))]
         cursor += len(batch)
-        items.extend(gather(batch, now=now, deadline=deadline))
+        items.extend(gather(batch, now=now, deadline=deadline, with_facts=rows is not None))
     items = items[:MAX_COMPANIES]
     if not items:
         return None, []

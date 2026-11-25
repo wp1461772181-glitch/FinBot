@@ -93,27 +93,25 @@ def _number_evidence(run, name: str, outcome: dict) -> dict:
     return shown
 
 
+HEADING_PREFIX = "  最新一季："
 _MARK = re.compile(r"\[#(\d+)\]( ?)")
 
 
 def _calculated(run, row: dict, ordinals: dict[int, str]) -> str | None:
     """A derived figure of the block as a citation of the shape ``calculate`` makes (``source_type: calculation``, ``derived``, ``parents`` =
-    the citation numbers of its inputs), made by the same function, so the answer checks accept it as they accept a calculation the model ran.
-    ``None`` (and no citation) when an input was not numbered or the calculation does not give the value the block shows."""
-    from ..agent_workflow.calculation import calculate
+    the citation numbers of its inputs), built straight from the stored row: the facts were checked when they were stored, so nothing here
+    re-binds numbers to text (that is for numbers a model supplies; it cannot take a negative input).  ``None`` (and no citation) when an
+    input was not numbered."""
     spec = row["_calc"]
-    inputs = []
+    inputs, parents = [], []
     for item in spec["inputs"]:
         text = ordinals.get(item["k"])
         if not text:
             return None
-        inputs.append({"name": item["name"], "value": item["value"], "source_ordinal": int(text.strip("[]"))})
-    try:
-        value = calculate({"expression": spec["expression"], "inputs": inputs, "decimals": spec["decimals"]}, run.citations, run.user_text)
-    except Exception:
-        return None
-    if value.get("value") != spec["value"]:
-        return None
+        number = int(text.strip("[]"))
+        inputs.append({"name": item["name"], "value": item["value"], "source_ordinal": number})
+        parents.append(number)
+    value = {"value": spec["value"], "expression": spec["expression"], "inputs": inputs, "parents": sorted(set(parents)), "derived": True}
     ordinal = len(run.citations) + 1
     run.citations.append({"ordinal": ordinal, "source_type": "calculation", "derived": True, "title": row.get("title") or "可复核计算",
                           "quote": json.dumps(value, ensure_ascii=False), "calculation": value, "symbol": row.get("symbol")})
@@ -143,7 +141,27 @@ def number_attached(run, text: str, rows: list[dict]) -> str:
         except Exception:
             logger.exception("latest-known citations could not be numbered")
             ordinals = {}
-    return _MARK.sub(lambda m: f"{ordinals[int(m[1])]}{m[2]}" if int(m[1]) in ordinals else "", text)
+    def number(match):
+        return f"{ordinals[int(match[1])]}{match[2]}" if int(match[1]) in ordinals else ""
+    if HEADING_PREFIX not in text:
+        return _MARK.sub(number, text)
+    # A figure of the facts section is printed only with its citation: a line of that section (the indented lines after a quarter's heading)
+    # with a number that could not be numbered is dropped whole, and the heading with it when no line of the section is left.
+    kept, heading, inside = [], None, False
+    for line in text.split("\n"):
+        if line.startswith(HEADING_PREFIX):
+            heading, inside = line, True
+            continue
+        if inside and line.startswith("  "):
+            if any(int(k) not in ordinals for k in re.findall(r"\[#(\d+)\]", line)):
+                continue
+            if heading is not None:
+                kept.append(heading)
+                heading = None
+        else:
+            heading, inside = None, False
+        kept.append(line)
+    return _MARK.sub(number, "\n".join(kept))
 
 
 def _calculate(run, name: str, args: dict) -> dict:

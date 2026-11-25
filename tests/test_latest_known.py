@@ -662,10 +662,106 @@ def test_a_plain_render_has_no_markers_and_the_same_figures(nvda):
     assert "[#" not in plain and "营收 1,158.44 亿美元，环比 +20.4%" in plain and "由[" not in plain
 
 
-def test_an_unnumbered_parent_leaves_the_derived_figure_without_a_number(nvda):
+def uncited_numbers(text):
+    """The amounts and percentages of the facts section that are not followed by a citation number."""
+    body = "\n".join(facts_lines(text)[1:]) if "最新一季" in text else ""
+    return [m[0] for m in re.finditer(r"-?[\d,]+\.\d+ (?:亿|万)美元(?!\[\d+\])|[+-]?\d+\.\d%(?!\[\d+\])", body)]
+
+
+def test_every_number_of_the_facts_section_carries_a_citation(nvda):
+    assert uncited_numbers(numbered_block()[0]) == [] and "最新一季" in numbered_block()[0]
+
+
+def test_a_line_whose_parent_is_not_numbered_is_dropped_not_printed_bare(nvda):
     rows: list = []
     block, _ = asyncio.run(lk.block_for("NVDA", previous=None, focus=None, owner_hash=None, now=NOW, rows=rows))
-    revenue = next(r for r in rows if r.get("source_type") == "official_filing" and r["title"].endswith("营收") and "单季" in r["title"] and "1,158.44" in r["excerpt"])
+    revenue = next(r for r in rows if r.get("source_type") == "official_filing" and "1,158.44" in r.get("excerpt", ""))
     rows = [r for r in rows if r["_k"] != revenue["_k"]]
     text = number_attached(SimpleNamespace(citations=[], user_text=""), block, rows)
-    assert "环比 +20.4%（上一季" in text and "[#" not in text
+    assert "[#" not in text and "营收 1,158.44" not in text and "由、" not in text and uncited_numbers(text) == []
+    assert "净利润 652.87 亿美元[" in text and "最新一季" in text
+
+
+def test_a_heading_without_any_line_left_is_dropped_too(nvda):
+    rows: list = []
+    block, _ = asyncio.run(lk.block_for("NVDA", previous=None, focus=None, owner_hash=None, now=NOW, rows=rows))
+    text = number_attached(SimpleNamespace(citations=[], user_text=""), block, [r for r in rows if not str(r.get("id", "")).startswith("company-fact:")])
+    assert "最新一季" not in text and "亿美元" not in text and "[#" not in text
+
+
+def test_a_derived_figure_over_a_negative_parent_is_cited(world):
+    """A loss-making company: the first quarter's cash flow was -20 M, the six months +15 M, so the second quarter was +35 M."""
+    symbol = new_symbol()
+    q1 = [flow("revenue", [p("2026-01-01", "2026-03-31", 100 * M, 2026, "Q1")]), flow("operating_cash_flow", [p("2026-01-01", "2026-03-31", -20 * M, 2026, "Q1")]),
+          flow("net_income", [p("2026-01-01", "2026-03-31", -8 * M, 2026, "Q1")])]
+    q2 = [flow("revenue", [p("2026-04-01", "2026-06-30", 120 * M, 2026, "Q2")]), flow("operating_cash_flow", [p("2026-01-01", "2026-06-30", 15 * M, 2026, "Q2")]),
+          flow("net_income", [p("2026-04-01", "2026-06-30", -3 * M, 2026, "Q2")])]
+    ids = seed(symbol, [{"form": "10-Q", "filed": date(2026, 5, 10), "figures": q1}, {"form": "10-Q", "filed": date(2026, 8, 10), "figures": q2}])
+    try:
+        cf.refresh(symbol)
+        items = lk.gather([symbol], now=NOW)
+        rows: list = []
+        block, _ = lk._render(items, NOW, [], rows)
+        run = SimpleNamespace(citations=[], user_text="")
+        text = number_attached(run, block, rows)
+        section = "\n".join(facts_lines(text))
+        assert "经营现金流 3,500.00 万美元[" in section and "净利润 -300.00 万美元[" in section and uncited_numbers(text) == []
+        cash = next(c for c in run.citations if c["source_type"] == "calculation" and c["calculation"]["value"] == "35000000")
+        assert cash["derived"] is True and cash["calculation"]["expression"] == "a - b" and cash["calculation"]["parents"] == sorted(cash["calculation"]["parents"])
+        inputs = {i["name"]: i for i in cash["calculation"]["inputs"]}
+        assert inputs["b"]["value"] == "-20000000" and run.citations[inputs["b"]["source_ordinal"] - 1]["figures"] == "-20000000"
+        assert cash["calculation"]["parents"] == sorted(i["source_ordinal"] for i in inputs.values())
+    finally:
+        drop(ids)
+        with SessionLocal() as db:
+            for model in (CompanyFact, CompanyRatio):
+                db.execute(delete(model).where(model.symbol == symbol))
+            db.commit()
+
+
+def test_money_rounds_half_up():
+    assert lk._money(115_844_500_000) == "1,158.45 亿美元" and lk._money(-31_910_500_000) == "-319.11 亿美元" and lk._money(12_345_000) == "1,234.50 万美元"
+    assert lk._evaluate("growth", lk.Decimal(1005), lk.Decimal(1000)) == "0.5" and lk._evaluate("share", lk.Decimal(1), lk.Decimal(8)) == "12.5"
+
+
+def test_the_facts_are_read_in_two_queries(nvda):
+    from sqlalchemy import event
+    seen = []
+    with SessionLocal() as db:
+        def count(conn, cursor, statement, *args):
+            seen.append(statement)
+        event.listen(db.get_bind(), "before_cursor_execute", count)
+        try:
+            assert cf.latest_quarter("NVDA", db=db)["fiscal_label"] == "FY2027 Q3"
+        finally:
+            event.remove(db.get_bind(), "before_cursor_execute", count)
+    assert len([q for q in seen if "company_" in q]) == 2
+
+
+def test_a_slow_facts_reader_costs_only_the_facts(world, monkeypatch):
+    _filing("NVDA", excerpt="EX-99.1 x NVIDIA results")
+    _filing("AMD", excerpt="EX-99.1 x AMD results")
+    calls = []
+    def slow(symbol, db=None):
+        calls.append(symbol)
+        time.sleep(0.3)
+        return {"fiscal_label": "slow"}
+    monkeypatch.setattr(cf, "latest_quarter", slow)
+    items = lk.gather(["NVDA", "AMD"], now=NOW, deadline=time.monotonic() + 0.55)
+    assert [i["symbol"] for i in items] == ["NVDA", "AMD"] and all(i["filings"] for i in items)
+    assert calls == ["NVDA"] and [i["facts"] for i in items] == [{"fiscal_label": "slow"}, None]
+    assert all(i["facts"] is None for i in lk.gather(["NVDA"], now=NOW, deadline=time.monotonic() + 0.1))
+
+
+def test_a_failing_facts_read_leaves_the_rest_of_the_item(world, monkeypatch):
+    _filing("NVDA", excerpt="EX-99.1 x NVIDIA results")
+    def broken(symbol, db=None):
+        raise RuntimeError("no facts")
+    monkeypatch.setattr(cf, "latest_quarter", broken)
+    items = lk.gather(["NVDA"], now=NOW)
+    assert items[0]["filings"] and items[0]["facts"] is None
+
+
+def test_a_wake_style_block_without_rows_carries_no_figures(nvda):
+    text = asyncio.run(lk.block_for("NVDA", previous=None, focus=None, owner_hash=None, now=NOW))[0]
+    assert text and "最新一季" not in text and "亿美元" not in text

@@ -20,7 +20,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 
 from .agent_workflow.financials import PRESS_RELEASE_BASIS, figure_rows
 from .database import SessionLocal
@@ -39,6 +39,7 @@ _BASIS_RANK = {REPORTED: 0, PRESS_RELEASE_BASIS: 1}
 _QUARTER_GAP = (84, 98)
 _YEAR_GAP = (357, 372)
 _START_SLACK = 7
+_WINDOW_DAYS = 400      # how far back from the newest quarter its comparison periods and derivation parents can lie
 _GP_TOLERANCE = Decimal('0.005')
 _CORROBORATION = Decimal('0.001')
 _DERIVATIONS = (('ytd6', 'quarter', 'ytd6 - q1', 'Q2'), ('ytd9', 'ytd6', 'ytd9 - ytd6', 'Q3'), ('annual', 'ytd9', 'annual - ytd9', 'Q4'))
@@ -414,7 +415,7 @@ def refresh_all(*, limit: int | None = None) -> dict:
         try:
             one = refresh(symbol)
         except Exception as exc:
-            log.exception('company facts refresh failed for %s', symbol)
+            log.warning('company facts refresh failed for %s (%s: %s)', symbol, type(exc).__name__, str(exc)[:200])
             total['errors'][symbol] = f'{type(exc).__name__}: {exc}'[:200]
             continue
         total['symbols'] += 1
@@ -446,20 +447,24 @@ def _ratio_dict(r):
 
 
 def latest_quarter(symbol: str, *, db=None) -> dict | None:
-    """The newest quarter that has at least revenue, with its facts, ratios and the comparison periods those ratios used."""
+    """The newest quarter that has at least revenue, with its facts, ratios and the comparison periods those ratios used.
+    Two reads in all: the symbol's usable facts and its usable ratios from a year and a bit before the newest quarter on (the comparison
+    periods and the parents of a derived figure all lie inside that window); the rest is picking in memory."""
     symbol = (symbol or '').strip().upper()
     session = db or SessionLocal()
     try:
-        top = session.scalars(select(CompanyFact).where(CompanyFact.symbol == symbol, CompanyFact.metric == 'revenue', CompanyFact.span == 'quarter',
-                                                        CompanyFact.status == 'ok').order_by(CompanyFact.period_end.desc())).first()
-        if top is None:
+        newest = select(func.max(CompanyFact.period_end) - _WINDOW_DAYS).where(
+            CompanyFact.symbol == symbol, CompanyFact.metric == 'revenue', CompanyFact.span == 'quarter', CompanyFact.status == 'ok').scalar_subquery()
+        facts = {str(f.id): f for f in session.scalars(select(CompanyFact).where(
+            CompanyFact.symbol == symbol, CompanyFact.status == 'ok', CompanyFact.period_end >= newest))}
+        tops = [f for f in facts.values() if f.metric == 'revenue' and f.span == 'quarter']
+        if not tops:
             return None
-        quarter = [f for f in session.scalars(select(CompanyFact).where(
-            CompanyFact.symbol == symbol, CompanyFact.period_end == top.period_end, CompanyFact.span.in_(('quarter', 'instant')),
-            CompanyFact.status == 'ok').order_by(CompanyFact.metric))]
-        own_ratios = list(session.scalars(select(CompanyRatio).where(
-            CompanyRatio.symbol == symbol, CompanyRatio.period_end == top.period_end, CompanyRatio.span == 'quarter',
-            CompanyRatio.status.in_(('ok', 'not_meaningful'))).order_by(CompanyRatio.name)))
+        top = max(tops, key=lambda f: f.period_end)
+        ratios = {str(r.id): r for r in session.scalars(select(CompanyRatio).where(
+            CompanyRatio.symbol == symbol, CompanyRatio.status.in_(('ok', 'not_meaningful')), CompanyRatio.period_end >= newest))}
+        quarter = sorted((f for f in facts.values() if f.period_end == top.period_end and f.span in ('quarter', 'instant')), key=lambda f: f.metric)
+        own_ratios = sorted((r for r in ratios.values() if r.period_end == top.period_end and r.span == 'quarter'), key=lambda r: r.name)
         known = {str(f.id) for f in quarter} | {str(r.id) for r in own_ratios}
         comparison_facts, comparison_ratios = {}, {}
         wanted = [p for r in own_ratios for p in r.parents] + [p for f in quarter for p in (f.parents or [])]
@@ -468,14 +473,12 @@ def latest_quarter(symbol: str, *, db=None) -> dict | None:
             if identity in known:
                 continue
             known.add(identity)
-            fact = session.get(CompanyFact, uuid.UUID(identity))
-            ratio = None if fact else session.get(CompanyRatio, uuid.UUID(identity))
-            if fact:
-                comparison_facts[identity] = fact
-                wanted += list(fact.parents or [])      # a derived figure's own parents, so every figure shown can be traced to a stated one
-            elif ratio and ratio.status != 'check_failed':
-                comparison_ratios[identity] = ratio
-                wanted += list(ratio.parents or [])
+            if identity in facts:
+                comparison_facts[identity] = facts[identity]
+                wanted += list(facts[identity].parents or [])      # a derived figure's own parents, so every figure shown can be traced to a stated one
+            elif identity in ratios:
+                comparison_ratios[identity] = ratios[identity]
+                wanted += list(ratios[identity].parents or [])
         return {'symbol': symbol, 'fiscal_label': f'FY{top.fiscal_year} {top.fiscal_period}', 'fiscal_year': top.fiscal_year,
                 'fiscal_period': top.fiscal_period, 'period_end': top.period_end.isoformat(), 'basis': top.basis,
                 'basis_note': '新闻稿，未经审计' if top.basis == PRESS_RELEASE_BASIS else None,
