@@ -324,3 +324,42 @@ def test_profile_api_is_owner_only_and_lists_confirms_deletes(owner, client):
     assert confirmed.status_code == 200 and confirmed.json()["item"]["origin"] == "explicit"
     assert client.delete(f"/agent-chat/profile/{item_id}", headers={"X-Chat-Session": OWNER}).json() == {"deleted": True}
     assert client.delete(f"/agent-chat/profile/{item_id}", headers={"X-Chat-Session": OWNER}).status_code == 404
+
+
+# --- stage 4f: a line that came from a role template says so; a line that did not renders as before ----------------------------
+
+def test_template_column_is_added_once_and_the_model_has_it(owner):
+    profile.ensure_template_column()
+    profile.ensure_template_column()
+    from sqlalchemy import inspect
+    assert "template" in {c["name"] for c in inspect(engine).get_columns("agent_profile_items")}
+
+
+def test_a_line_without_a_template_renders_byte_identically_and_one_with_a_template_names_it(owner):
+    plain = profile.add_item(OWNER_HASH, kind="instruction", text="先给结论", quote="先给结论", message="先给结论", origin="manual")["item"]
+    before, _ids = profile.render_block(OWNER_HASH)
+    assert f"- {plain['handle']} [长期指令] 先给结论" in before and "模板" not in before
+    assert plain["template"] is None and plain["template_label"] == ""
+
+    other = profile.add_item(OWNER_HASH, kind="about_me", text="我主要做短线", quote="我主要做短线", message="我主要做短线", origin="manual")["item"]
+    assert profile.set_template(OWNER_HASH, other["id"], "short_term") is True
+    after, _ids = profile.render_block(OWNER_HASH)
+    assert f"- {other['handle']} [关于我·模板「短线」] 我主要做短线" in after
+    assert f"- {plain['handle']} [长期指令] 先给结论" in after             # the other line is untouched
+    shown = next(i for i in profile.list_items(OWNER_HASH) if i["id"] == other["id"])
+    assert shown["template"] == "short_term" and shown["template_label"] == "短线"
+
+
+def test_set_template_touches_neither_updated_at_nor_last_seen_and_only_the_owners_row(owner):
+    item = profile.add_item(OWNER_HASH, kind="preference", text="数字用表格", quote="数字用表格", message="数字用表格", origin="manual")["item"]
+    with SessionLocal() as db:
+        row = db.get(AgentProfileItem, uuid.UUID(item["id"]))
+        before = (row.updated_at, row.last_seen_at)
+    assert profile.set_template("somebody-else", item["id"], "dca") is False
+    assert profile.set_template(OWNER_HASH, "not-an-id", "dca") is False
+    assert profile.set_template(OWNER_HASH, item["id"], "dca") is True
+    with SessionLocal() as db:
+        row = db.get(AgentProfileItem, uuid.UUID(item["id"]))
+        assert (row.updated_at, row.last_seen_at) == before and row.template == "dca"
+    assert profile.set_template(OWNER_HASH, item["id"], None) is True
+    assert profile.list_items(OWNER_HASH)[0]["template"] is None
