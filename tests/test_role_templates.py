@@ -632,3 +632,21 @@ def test_undo_does_not_claim_to_remove_usual_skills_it_could_not_take_off_a_list
     assert {r["part"] for r in undone["removed"]} == {"memory", "brief", "skill"}          # everything else was taken back, the skill too
     assert ghost in (default_bot().skills or [])                                              # his list is exactly as it was: nothing guessed
 
+
+# --- from the independent review: what the preview promises is what the apply writes ---------------------------------------------------
+
+def _leave_outs(template_id):
+    template = rt.TEMPLATES[template_id]
+    return [[], [template["memory"][0]["key"]], [template["briefs"][0]["key"]], [s["key"] for s in template["skills"]],
+            [template["memory"][0]["key"], template["briefs"][-1]["key"], template["usual"][-1]]]
+
+
+@pytest.mark.parametrize("template_id,leave", [(t, lo) for t in IDS for lo in _leave_outs(t)])
+def test_the_preview_lists_exactly_what_the_apply_then_creates(owner, template_id, leave):
+    shown = rt.preview(OWNER_HASH, template_id, leave_out=leave)
+    done = rt.apply(OWNER_HASH, template_id, leave_out=leave)
+    promised = sorted((e["part"], e["key"]) for e in shown["will_create"])
+    written = sorted((e["part"], e["key"]) for e in done["created"])
+    assert promised == written and (done["application"] is None) == (not written)
+    assert done["skipped"] == [] and shown["skip"] == [] and not [e for e in shown["will_create"] if e["key"] in leave]
+
