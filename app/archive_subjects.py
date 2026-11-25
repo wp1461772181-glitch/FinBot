@@ -113,6 +113,25 @@ def refresh_ticker_list() -> bool:
     return True
 
 
+_WARMING = threading.Event()
+
+
+def warm_ticker_list() -> None:
+    """Start one background fetch of SEC's ticker list when none has arrived yet and builds are on (a no-op otherwise, and while one is under
+    way); a turn that met a cold cache ignores the unknown ticker this time and the next turn finds the list."""
+    if _TICKERS["symbols"] is not None or _WARMING.is_set() or not builds_enabled():
+        return
+    _WARMING.set()
+
+    def run() -> None:
+        try:
+            refresh_ticker_list()
+        finally:
+            _WARMING.clear()
+
+    threading.Thread(target=run, name="sec-tickers-warm", daemon=True).start()
+
+
 def sec_symbol(value: str) -> str | None:
     """The normalised symbol if SEC's ticker list has it, else None (a word like CEO or IT is not a company until SEC says it is).
     Reads the cached list only, never the network: until the first list has arrived (a moment after startup) nothing is known."""

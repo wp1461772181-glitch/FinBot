@@ -70,6 +70,15 @@ _COMMON_WORDS = frozenset(
     """.split()
 )
 
+# Ordinary English and finance words that are also tickers SEC lists.  Typed in capitals without a $ they are words, not companies,
+# unless the system already holds the company (``$HOLD`` is still a company).
+_SEC_ONLY_WORDS = frozenset(
+    """
+    BUY SELL HOLD LONG SHORT CALL PUT CASH FREE GOOD BEST PLAY LOVE REAL TRUE OPEN HIGH LOW HOME LIFE SAFE FAST NEXT LAST FIRST
+    RSI MACD EBIT CAGR PEG FCF ATH EBITDA FOMC NEWS DATA INFO WHAT WHEN WITH FROM THAT THIS HAVE WILL BEAR BULL RISK GAIN LOSS
+    """.split()
+)
+
 _CASHTAG = re.compile(r"\$([A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?)(?![A-Za-z0-9])")
 _BARE = re.compile(r"(?<![A-Za-z0-9$.\-])([A-Z]{1,5}(?:[.-][A-Z]{1,2})?)(?![A-Za-z0-9])")
 
@@ -202,6 +211,17 @@ def _resolve(symbol: str | None, known) -> str | None:
     return None
 
 
+class _OwnerKnown:
+    """For the owner's turn: the symbols the system holds, plus every ticker SEC's own list has (read from its cache, never the network)."""
+
+    def __init__(self, local, sec_symbol) -> None:
+        self.local = local
+        self._sec_symbol = sec_symbol
+
+    def __contains__(self, symbol) -> bool:
+        return symbol in self.local or (isinstance(symbol, str) and self._sec_symbol(symbol) == symbol)
+
+
 def _scan(text: str, known: set[str] | frozenset[str], owned: set[str] | frozenset[str]) -> list[str]:
     """一段话里提到的股票代码，按先后排，去重。"""
     hits: list[tuple[int, str]] = []
@@ -215,7 +235,8 @@ def _scan(text: str, known: set[str] | frozenset[str], owned: set[str] | frozens
         if not symbol:
             continue
         letters = len(symbol.split(".")[0])
-        if symbol in owned or (letters >= 3 and symbol not in _COMMON_WORDS):
+        held = symbol in getattr(known, "local", known)
+        if symbol in owned or (letters >= 3 and symbol not in _COMMON_WORDS and (held or symbol not in _SEC_ONLY_WORDS)):
             hits.append((match.start(), symbol))
     for match in _NAMES.finditer(text.lower()):
         name = match.group(0)
@@ -758,9 +779,12 @@ def _marked(line: str, row: dict, rows: list | None) -> str:
 
 def _section(item: dict, now: datetime, rows: list | None = None) -> list[str]:
     symbol = item["symbol"]
+    notice = [_cap(item["notice"])] if item.get("notice") else []
+    if notice and not (item.get("filings") or item.get("news") or item.get("price")):
+        return notice          # nothing held for this company: the notice stands alone
     name = item.get("name") or ""
     name = _clean(name)
-    lines = [f"关于 {name}（{symbol}）：" if name else f"关于 {symbol}："]
+    lines = notice + [f"关于 {name}（{symbol}）：" if name else f"关于 {symbol}："]
     for f in item.get("filings", [])[:MAX_FILINGS]:
         stamp = f.get("accepted_at") or f.get("observed_at")
         lines.append(_marked(_filing_line(f, now), {
@@ -783,7 +807,7 @@ def _section(item: dict, now: datetime, rows: list | None = None) -> list[str]:
 
 def _render(items: list[dict], now: datetime, extra, rows: list | None = None) -> tuple[str | None, list[str]]:
     kept = [dict(item, filings=list(item.get("filings") or [])[:MAX_FILINGS], news=list(item.get("news") or [])[:MAX_NEWS])
-            for item in items if item.get("filings") or item.get("news") or item.get("price")][:MAX_COMPANIES]
+            for item in items if item.get("filings") or item.get("news") or item.get("price") or item.get("notice")][:MAX_COMPANIES]
     if not kept:
         return None, []
     tail = [_cap(line) for line in extra] + [CLOSING_LINE]
@@ -820,6 +844,56 @@ def render(items: list[dict], *, now: datetime, extra: list[str] = ()) -> str | 
 # 入口
 # ----------------------------------------------------------------------------------------------------------
 
+# What the archive builder's short codes mean, in words the owner can read (one table for both the failed and the partial line).
+_REASONS = {
+    "no_figures": "没取到年报、季报里的财务数字",
+    "no_facts": "没能算出最新一季的营收",
+    "xbrl_429": "SEC 限流，财务数字没取全",
+    "xbrl_403": "SEC 拒绝了取财务数字的请求",
+    "xbrl_401": "SEC 拒绝了取财务数字的请求",
+    "xbrl_timeout": "取财务数字超时",
+    "unavailable": "部分公告取不到",
+    "sec_unavailable": "SEC 暂时取不到",
+    "deadline": "超过了 5 分钟的时限",
+    "stopping": "系统重启打断了",
+    "timeout": "连接 SEC 超时",
+    "sec_error": "SEC 返回了错误",
+    "error": "取资料时出错",
+    "http_429": "SEC 限流",
+    "http_403": "SEC 拒绝了请求",
+    "http_401": "SEC 拒绝了请求",
+    "http_404": "SEC 上找不到",
+    "http_500": "SEC 服务出错",
+    "http_502": "SEC 服务出错",
+    "http_503": "SEC 服务出错",
+}
+
+
+def _reason_text(code: str | None) -> str:
+    return _REASONS.get(code or "", "原因未知")
+
+
+def _notice(symbol: str, state: str, held: bool) -> str | None:
+    """The one true line about a company's archive: being built, queued, held back by a cap, failed, or partly built.  ``held`` is whether the
+    block has real material for the company: the lines that say 「系统里还没有」 are left out then, and a partial one points to it."""
+    kind, _, code = state.partition(":")
+    name = _display_name(symbol) or symbol
+    if kind in ("building", "queued"):
+        return None if held else (f"系统里还没有 {name} 的资料：已开始从 SEC 取最近的年报、季报和财报新闻稿，通常一两分钟；"
+                                  "这一轮请用工具查，或稍后再问。")
+    if kind == "limited":
+        return None if held else f"这一小时从 SEC 取新公司资料的次数已满，{name} 稍后会补上；这一轮请用工具查。"
+    if kind == "failed":
+        return f"上次从 SEC 取 {name} 的资料没有成功（{_reason_text(code)}），这一轮请用工具查。"
+    if kind == "partial":
+        return (f"{name} 的资料只取到一部分（缺：{_reason_text(code)}），已有的部分见下方；这一轮缺的请用工具查。" if held
+                else f"{name} 的资料只取到一部分（缺：{_reason_text(code)}），这一轮缺的请用工具查。")
+    return None
+
+
+MAX_ASKS = 30               # at most this many mentioned companies are noted per turn (the hourly cap is 30 builds anyway)
+
+
 def _owned_symbols(owner_hash: str) -> set[str]:
     """owner 的持仓和研究队列里的代码；只用来决定「IT」「ON」这种词算不算代码，以及顺序之外别无他用。"""
     from .agent_chat_models import AgentResearchQueue
@@ -844,16 +918,44 @@ def _build(text: str, previous: str | None, focus: str | None, owner_hash: str |
            now: datetime, rows: list | None = None) -> tuple[str | None, list[str]]:
     deadline = time.monotonic() + DEADLINE_SECONDS
     owned = _owned_symbols(owner_hash) if owner_hash else set()
-    candidates = mentions(text, previous=previous, focus=focus, owned=owned)
+    # Only the owner's own turn can name a company the system holds nothing for (SEC's ticker list, cache only) and ask for its archive; a guest's
+    # turn never touches the subjects table.
+    archive = None
+    known = None
+    if owner_hash:
+        from . import archive_subjects as archive
+        archive.warm_ticker_list()
+        known = _OwnerKnown(_known_symbols(), archive.sec_symbol)
+    candidates = mentions(text, previous=previous, focus=focus, owned=owned, known=known)
     if not candidates:
         return None, []
+    states: dict[str, str] = {}
+    if archive is not None:
+        for symbol in candidates[:MAX_ASKS]:
+            if time.monotonic() >= deadline:
+                break
+            try:
+                states[symbol] = archive.note_asked(symbol)
+            except Exception as exc:  # the archive list is an extra: a failure there must not cost the block
+                logger.info("latest_known: noting %s failed (%s: %s)", symbol, type(exc).__name__, exc)
+                break
     items: list[dict] = []
     cursor = 0
-    # 取够 3 家有内容的；前面的没有内容就往后补，最多看 6 个；过了期限就不再开新的一批。
+    # 取够 3 家（有内容的，或者要说明资料在取的）；前面的没有内容就往后补，最多看 6 个；过了期限就不再开新的一批。
     while cursor < min(len(candidates), 2 * MAX_COMPANIES) and len(items) < MAX_COMPANIES and time.monotonic() < deadline:
         batch = candidates[cursor:cursor + (MAX_COMPANIES - len(items))]
         cursor += len(batch)
-        items.extend(gather(batch, now=now, deadline=deadline, with_facts=rows is not None))
+        got = {item["symbol"]: item for item in gather(batch, now=now, deadline=deadline, with_facts=rows is not None)}
+        in_time = time.monotonic() <= deadline          # past it, a company missing from ``got`` may just not have been read
+        for symbol in batch:
+            item = got.get(symbol)
+            notice = _notice(symbol, states.get(symbol, "ok"), held=item is not None)
+            if item is None and (notice is None or not in_time):
+                continue
+            item = dict(item) if item else {"symbol": symbol, "name": _display_name(symbol)}
+            if notice:
+                item["notice"] = notice
+            items.append(item)
     items = items[:MAX_COMPANIES]
     if not items:
         return None, []

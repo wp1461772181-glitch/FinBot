@@ -765,3 +765,179 @@ def test_a_failing_facts_read_leaves_the_rest_of_the_item(world, monkeypatch):
 def test_a_wake_style_block_without_rows_carries_no_figures(nvda):
     text = asyncio.run(lk.block_for("NVDA", previous=None, focus=None, owner_hash=None, now=NOW))[0]
     assert text and "最新一季" not in text and "亿美元" not in text
+
+
+# ----------------------------------------------------------------------------------------------------------
+# 2c: a company the system holds nothing for (the owner's turn asks for its archive; SEC is faked, no build runs)
+# ----------------------------------------------------------------------------------------------------------
+
+from app import archive_subjects as subjects          # noqa: E402
+from app.models import ArchiveSubject                 # noqa: E402
+
+SEC_TICKERS = frozenset({"NVDA", "XYZ", "NEWCO", "GS", "IT", "CEO", "BUY", "HOLD", "NEWS"} | {f"Q{c}" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"})
+BUILDING = "系统里还没有 {} 的资料：已开始从 SEC 取最近的年报、季报和财报新闻稿，通常一两分钟；这一轮请用工具查，或稍后再问。"
+
+
+def _subjects_wipe():
+    with SessionLocal() as db:
+        db.execute(delete(ArchiveSubject))
+        db.execute(delete(SecFilingInventory).where(SecFilingInventory.symbol.in_(("XYZ", "NEWCO", "GS"))))
+        db.commit()
+
+
+@pytest.fixture()
+def sec(world, monkeypatch):
+    _subjects_wipe()
+    monkeypatch.setattr(subjects, "_now", lambda: NOW)
+    monkeypatch.setattr(subjects, "_poke", lambda: None)
+    subjects._TICKERS.update(at=NOW, symbols=SEC_TICKERS, tried_at=None)
+    lk.refresh_known()
+    yield
+    subjects._TICKERS.update(at=None, symbols=None, tried_at=None)
+    _subjects_wipe()
+
+
+def owner_block(text, rows=None, **kw):
+    return asyncio.run(lk.block_for(text, previous=None, focus=None, owner_hash=OWNER, now=NOW, rows=rows, **kw))
+
+
+def subject(symbol):
+    with SessionLocal() as db:
+        return db.get(ArchiveSubject, symbol)
+
+
+def test_the_owner_naming_a_company_we_hold_nothing_for_starts_its_build_and_is_told_so(sec):
+    rows = []
+    text, symbols = owner_block("$XYZ 最近怎么样", rows)
+    assert symbols == ["XYZ"] and rows == []
+    assert BUILDING.format("XYZ") in text and "关于 XYZ" not in text and "[#" not in text
+    assert text.startswith(lk.HEADING) and text.endswith(lk.CLOSING_LINE)
+    assert subject("XYZ").build_status == "queued"
+    again = owner_block("$XYZ 呢")[0]             # asked again while it waits: the same true line, still one build
+    assert BUILDING.format("XYZ") in again and subject("XYZ").build_status == "queued"
+
+
+def test_a_guest_naming_a_company_changes_nothing(sec, monkeypatch):
+    def forbidden(*a, **k):
+        raise AssertionError("a guest's turn must not touch archive_subjects")
+    monkeypatch.setattr(subjects, "note_asked", forbidden)
+    monkeypatch.setattr(subjects, "sec_symbol", forbidden)
+    monkeypatch.setattr(subjects, "warm_ticker_list", forbidden)
+    for guest in ("", None):
+        assert asyncio.run(lk.block_for("$XYZ 怎么样 高盛呢", previous=None, focus=None, owner_hash=guest, now=NOW)) == (None, [])
+    with SessionLocal() as db:
+        assert db.query(ArchiveSubject).count() == 0
+
+
+def test_words_that_are_not_companies_start_nothing(sec):
+    # ABCDE: SEC does not know it.  CEO, IT, BUY/HOLD/NEWS: SEC lists them, but as plain words typed bare they are not a company.
+    assert owner_block("$ABCDE 的 CEO 说 IT 部门要 BUY 还是 HOLD，看 NEWS") == (None, [])
+    assert owner_block("what is ABCDE") == (None, [])
+    with SessionLocal() as db:
+        assert db.query(ArchiveSubject).count() == 0
+    # ... but a cashtag is a deliberate company, even for a wordy ticker
+    assert owner_block("$HOLD 怎么样")[1] == ["HOLD"] and subject("HOLD").build_status == "queued"
+
+
+def test_a_bare_new_ticker_and_a_company_name_from_the_directory_count(sec):
+    text, symbols = owner_block("NEWCO 值得看吗")
+    assert symbols == ["NEWCO"] and BUILDING.format("NEWCO") in text
+    text, symbols = owner_block("高盛怎么样")
+    assert symbols == ["GS"] and BUILDING.format("高盛") in text and subject("GS").build_status == "queued"
+    assert asyncio.run(lk.block_for("高盛怎么样", previous=None, focus=None, owner_hash="", now=NOW)) == (None, [])
+
+
+def test_a_known_company_only_refreshes_its_asked_date(sec):
+    _filing("NVDA", excerpt="EX-99.1 2 a.htm EX-99.1  Document  nvda results")
+    with SessionLocal() as db:
+        db.add(ArchiveSubject(symbol="NVDA", held=False, queued=False, asked_at=NOW - timedelta(days=3), first_seen_at=NOW - timedelta(days=30),
+                              last_active_at=NOW - timedelta(days=3), build_status="ok", filings_added=3))
+        db.commit()
+    text, symbols = owner_block("NVDA 怎么样")
+    assert symbols == ["NVDA"] and "关于 英伟达（NVDA）" in text and "还没有" not in text and "没有成功" not in text
+    row = subject("NVDA")
+    assert row.build_status == "ok" and row.asked_at.replace(tzinfo=UTC) == NOW
+
+
+def test_a_burst_of_25_new_tickers_gives_three_lines_twenty_queued_and_the_rest_named(sec):
+    names = [f"Q{c}" for c in "ABCDEFGHIJKLMNOPQRSTUVWXY"]
+    text, symbols = owner_block("比较 " + " ".join("$" + n for n in names))
+    assert symbols == names[:3] and len(text) <= lk.BLOCK_LIMIT
+    for n in names[:3]:
+        assert BUILDING.format(n) in text
+    line = next(l for l in text.splitlines() if l.startswith("另提到："))
+    assert all(n in line for n in names[3:]) is True or len(line) == lk.LINE_LIMIT      # named, unless the line limit cut the tail
+    assert "QD" in line and "QE" in line
+    with SessionLocal() as db:
+        statuses = [r.build_status for r in db.query(ArchiveSubject).all()]
+    assert statuses.count("queued") == 20 and len(statuses) == 25
+    # the hourly/waiting cap holds across messages: a new company now gets the "limited" line and nothing is queued
+    later, _ = owner_block("$QZ 呢")
+    assert "这一小时从 SEC 取新公司资料的次数已满，QZ 稍后会补上；这一轮请用工具查。" in later
+    assert subject("QZ").build_status == "never"
+    with SessionLocal() as db:
+        assert [r.build_status for r in db.query(ArchiveSubject).all()].count("queued") == 20
+
+
+def test_a_failed_build_is_said_on_the_next_mention(sec):
+    with SessionLocal() as db:
+        db.add(ArchiveSubject(symbol="XYZ", held=False, queued=False, asked_at=NOW - timedelta(minutes=20), first_seen_at=NOW - timedelta(hours=1),
+                              last_active_at=NOW, build_status="failed", build_error="http_429", build_finished_at=NOW - timedelta(minutes=10),
+                              filings_added=0))
+        db.commit()
+    text, symbols = owner_block("$XYZ 怎么样")
+    assert symbols == ["XYZ"]
+    assert "上次从 SEC 取 XYZ 的资料没有成功（SEC 限流），这一轮请用工具查。" in text
+    assert subject("XYZ").build_status == "failed"             # too soon to try again
+
+
+def test_a_partial_build_says_what_is_missing_and_the_held_part_follows(sec):
+    with SessionLocal() as db:
+        db.add(ArchiveSubject(symbol="XYZ", held=False, queued=False, asked_at=NOW - timedelta(minutes=20), first_seen_at=NOW - timedelta(hours=1),
+                              last_active_at=NOW, build_status="partial", build_error="xbrl_429", build_finished_at=NOW - timedelta(minutes=10),
+                              filings_added=2))
+        db.commit()
+    _filing("XYZ", excerpt="EX-99.1 2 a.htm EX-99.1  Document  xyz results")
+    text, symbols = owner_block("$XYZ 怎么样")
+    assert symbols == ["XYZ"]
+    lines = text.splitlines()
+    i = next(n for n, l in enumerate(lines) if l.startswith("XYZ 的资料只取到一部分"))
+    assert lines[i] == "XYZ 的资料只取到一部分（缺：SEC 限流，财务数字没取全），已有的部分见下方；这一轮缺的请用工具查。"
+    assert lines[i + 1] == "关于 XYZ：" and "[#" not in text
+
+
+def test_a_partial_build_with_nothing_to_show_does_not_point_below(sec):
+    with SessionLocal() as db:
+        db.add(ArchiveSubject(symbol="XYZ", held=False, queued=False, asked_at=NOW, first_seen_at=NOW, last_active_at=NOW,
+                              build_status="partial", build_error="no_figures", build_finished_at=NOW, filings_added=0))
+        db.commit()
+    text, _ = owner_block("$XYZ")
+    assert "XYZ 的资料只取到一部分（缺：没取到年报、季报里的财务数字），这一轮缺的请用工具查。" in text and "见下方" not in text
+
+
+def test_company_with_data_that_is_being_built_gets_its_section_not_a_false_nothing_line(sec):
+    _filing("XYZ", excerpt="EX-99.1 2 a.htm EX-99.1  Document  xyz results")
+    text, _ = owner_block("$XYZ 怎么样")
+    assert "关于 XYZ" in text and "还没有 XYZ" not in text
+    assert subject("XYZ").build_status == "queued"
+
+
+def test_reason_codes_have_one_table_and_an_unmapped_code_is_unknown():
+    assert lk._reason_text("deadline") == "超过了 5 分钟的时限"
+    assert lk._reason_text("xbrl_429") and lk._reason_text("http_403") and lk._reason_text("sec_unavailable")
+    assert lk._reason_text("weird_new_code") == "原因未知" and lk._reason_text(None) == "原因未知" and lk._reason_text("") == "原因未知"
+
+
+def test_a_cold_ticker_list_ignores_the_unknown_ticker_and_warms_in_the_background(sec, monkeypatch):
+    subjects._TICKERS.update(at=None, symbols=None, tried_at=None)
+    warmed = []
+    monkeypatch.setattr(subjects, "warm_ticker_list", lambda: warmed.append(1))
+    assert owner_block("$XYZ 怎么样") == (None, [])
+    assert warmed and subject("XYZ") is None
+
+
+def test_a_failure_in_the_archive_list_does_not_cost_the_block(sec, monkeypatch):
+    _filing("NVDA", excerpt="EX-99.1 2 a.htm EX-99.1  Document  nvda results")
+    monkeypatch.setattr(subjects, "note_asked", lambda s: (_ for _ in ()).throw(RuntimeError("db down")))
+    text, symbols = owner_block("NVDA 怎么样")
+    assert symbols == ["NVDA"] and "关于 英伟达（NVDA）" in text
