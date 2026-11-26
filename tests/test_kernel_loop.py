@@ -857,8 +857,10 @@ def test_an_unknown_operation_is_audited_as_none(env, fake_consent):
     assert result["audit"]["writes"] == [{"operation": None, "tier": None, "outcome": "refused:unknown_operation"}]
 
 
-def test_prompt_tells_the_model_a_read_turns_tier_1_into_a_card():
-    assert "如果这一轮里你已经查过资料，这类操作也会放进确认卡。" in prompt.SYSTEM
+def test_prompt_tells_the_model_a_read_turns_tier_1_into_a_card(monkeypatch):
+    monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", "off")       # flag off: the earlier text, byte for byte
+    assert prompt.system_text() == prompt.system_text() and prompt.MEMORY_LINE in prompt.system_text()
+    assert "如果这一轮里你已经查过资料，这类操作也会放进确认卡。" in prompt.system_text()
 
 
 # --- the history-end cache mark ---------------------------------------------------------------------------------------
