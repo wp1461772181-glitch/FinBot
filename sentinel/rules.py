@@ -1,8 +1,10 @@
-"""The owner's own watch rules (stage 5b-1): pure functions, no I/O, stdlib only, never imports ``app``.
+"""The owner's own watch rules (stage 5b-1) and the system's preset rules (5b-2): pure functions, no I/O, stdlib only,
+never imports ``app``.
 
 A rule is the JSON the API writes into the snapshot (``rules``): one symbol, one metric, one or two levels.  This module
 only measures and compares; the state ("fired today"), the sending and the text live in sentinel/main.py and signals.py.
-A metric whose data is missing measures ``None`` and never fires: a rule must not guess."""
+A metric whose data is missing measures ``None`` and never fires: a rule must not guess.  A preset is rule-shaped (plus
+``source: "preset"``, ``preset_key`` and ``scope``); ``concrete`` turns it into one rule per symbol the scope covers."""
 
 from __future__ import annotations
 
@@ -20,11 +22,20 @@ DIRECTIONS = {
     "price": ("above", "below"),
     "position_weight": ("above", "below"),
     "volume_ratio": ("above",),
+    "portfolio_day_change": ("up", "down", "either"),
+    "down_days": ("down",),
+    "high_52w": ("above",),
+    "low_52w": ("below",),
 }
 METRICS = tuple(DIRECTIONS)
 # State-like metrics describe a condition that can stay true for days: they fire on the edge (see main._rule_alerts).
 # The others measure a move or a pace that resets by itself and keep plain once-per-level-per-day.
-STATE_METRICS = ("price", "position_weight", "cost_change", "n_day_change")
+STATE_METRICS = ("price", "position_weight", "cost_change", "n_day_change", "down_days", "high_52w", "low_52w")
+EXTREME_METRICS = ("high_52w", "low_52w")   # the threshold is ignored: the condition is "price is past the extreme close"
+YEAR_METRICS = ("down_days", "high_52w", "low_52w")   # need the daily history of a year (52-week window / long streaks)
+PRESET_SCOPES = ("holdings", "watched", "portfolio")
+YEAR_CLOSES = 252                 # the 52-week window: completed trading days
+YEAR_MIN_CLOSES = 240             # fewer than this is not a year of history (a 1y chart holds about 250): measure None
 LEVEL_NAMES = ("remind", "urgent")
 REPEATS = ("daily", "once")
 SESSION_MINUTES = 390             # 09:30-16:00
@@ -43,6 +54,11 @@ def valid(rule) -> bool:
         metric = rule.get("metric")
         if metric not in DIRECTIONS or rule.get("direction") not in DIRECTIONS[metric]:
             return False
+        is_preset = rule.get("source") == "preset"
+        if str(rule["symbol"]).strip() == "*" and not is_preset:
+            return False                                    # "every symbol" is a preset's way of saying its scope
+        if (metric == "portfolio_day_change") != (is_preset and rule.get("scope") == "portfolio"):
+            return False                                    # a portfolio measure belongs to the portfolio preset alone
         if (rule.get("repeat") or "daily") not in REPEATS:
             return False
         levels = rule.get("levels")
@@ -50,7 +66,14 @@ def valid(rule) -> bool:
             return False
         for item in levels:
             threshold = item.get("threshold")
-            if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or threshold <= 0:
+            if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+                return False
+            if metric in EXTREME_METRICS:
+                if threshold < 0:                           # ignored, but a malformed number is still refused
+                    return False
+            elif threshold <= 0:
+                return False
+            if metric == "down_days" and (float(threshold) != int(threshold) or threshold < 2):
                 return False
             if item.get("level") not in LEVEL_NAMES:
                 return False
@@ -61,6 +84,22 @@ def valid(rule) -> bool:
         return True
     except (AttributeError, TypeError):
         return False
+
+
+def preset_valid(preset) -> bool:
+    """A well-formed preset: a valid rule (symbol ``*`` allowed) that says where it applies.  A bad one is ignored."""
+    try:
+        return (valid(preset) and preset.get("source") == "preset" and bool(str(preset.get("preset_key") or "").strip())
+                and preset.get("scope") in PRESET_SCOPES
+                and (preset["metric"] == "portfolio_day_change") == (preset["scope"] == "portfolio"))
+    except (AttributeError, TypeError, KeyError):
+        return False
+
+
+def concrete(preset: dict, symbol: str) -> dict:
+    """The preset as one rule for one symbol (``*`` for the portfolio).  Its id carries the symbol, so every symbol has its
+    own fired / armed state; ``preset_id`` is the id the API knows."""
+    return {**preset, "id": f"{preset['id']}:{symbol}", "preset_id": preset["id"], "symbol": symbol}
 
 
 def symbol_of(rule: dict) -> str:
@@ -74,7 +113,11 @@ def expired(rule: dict, today: str) -> bool:
 
 
 def needs_daily(rule: dict) -> bool:
-    return rule.get("metric") in ("n_day_change", "volume_ratio")
+    return rule.get("metric") in ("n_day_change", "volume_ratio") + YEAR_METRICS
+
+
+def needs_year(rule: dict) -> bool:
+    return rule.get("metric") in YEAR_METRICS
 
 
 def severity_order(rule: dict) -> list[int]:
@@ -151,10 +194,21 @@ def measure(rule: dict, ctx: dict) -> float | None:
     the last one is yesterday's), volume_today (regular session so far), avg_volume (20-day average daily volume),
     expected_volume (volume normally traded by now, from the 5-minute profile; None when unknown),
     session_minutes (minutes since 09:30 ET, None outside the regular session), shares, market_value, total_assets."""
+    metric = rule["metric"]
+    if metric == "portfolio_day_change":
+        move = portfolio_move(ctx)
+        return None if move is None else move["pct"]
     price = ctx.get("price")
     if not isinstance(price, (int, float)) or price <= 0:
         return None
-    metric = rule["metric"]
+    if metric == "down_days":
+        return down_days(ctx)
+    if metric in EXTREME_METRICS:
+        closes = ctx.get("closes")
+        if not closes or len(closes) < YEAR_MIN_CLOSES:
+            return None
+        window = closes[-YEAR_CLOSES:]
+        return round(float(price) - (max(window) if metric == "high_52w" else min(window)), 6)
     if metric in PCT_METRICS:
         ref = reference(rule, ctx)
         return None if ref is None else round((price / ref - 1) * 100, 6)
@@ -188,6 +242,52 @@ def measure(rule: dict, ctx: dict) -> float | None:
     return None
 
 
+def extreme_close(rule: dict, ctx: dict) -> float | None:
+    """The close a 52-week rule is measured against (what its message names), or None."""
+    closes = ctx.get("closes")
+    if not closes or len(closes) < YEAR_MIN_CLOSES:
+        return None
+    window = closes[-YEAR_CLOSES:]
+    return float(max(window) if rule["metric"] == "high_52w" else min(window))
+
+
+def down_days(ctx: dict) -> int | None:
+    """Consecutive trading days that closed below the close before, counted back from yesterday, plus today when the price
+    is below yesterday's close now.  None when the closes or the previous close are unknown."""
+    closes, prev = ctx.get("closes"), ctx.get("prev_close")
+    if not closes or not isinstance(prev, (int, float)) or prev <= 0:
+        return None
+    run, i = 0, len(closes) - 1
+    while i >= 1 and closes[i] < closes[i - 1]:
+        run, i = run + 1, i - 1
+    return run + (1 if float(ctx["price"]) < float(prev) else 0)
+
+
+def portfolio_move(ctx: dict) -> dict | None:
+    """The day's move of all holdings against yesterday's total assets: ``{"pct", "amount", "rows": [(symbol, amount)]}``.
+
+    ctx: ``holdings`` ([{symbol, shares, price, prev_close, market_value?}]) and ``total_assets``.  Total assets move with
+    the holdings (as in position_weight: the snapshot's market values come out, today's go in), so yesterday's assets are
+    the total now minus the day's move.  None when any holding lacks a price or a previous close."""
+    holdings, total = ctx.get("holdings"), ctx.get("total_assets")
+    if not holdings or not isinstance(total, (int, float)) or total <= 0:
+        return None
+    rows, delta, old, now_value = [], 0.0, 0.0, 0.0
+    for h in holdings:
+        shares, price, prev = h.get("shares"), h.get("price"), h.get("prev_close")
+        if not all(isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0 for x in (shares, price, prev)):
+            return None
+        amount = float(shares) * (float(price) - float(prev))
+        rows.append((str(h.get("symbol") or ""), amount))
+        delta += amount
+        now_value += float(shares) * float(price)
+        old += float(h["market_value"]) if isinstance(h.get("market_value"), (int, float)) else float(shares) * float(price)
+    base = float(total) - old + now_value - delta
+    if base <= 0:
+        return None
+    return {"pct": round(delta / base * 100, 6), "amount": delta, "rows": rows}
+
+
 def _hit(direction: str, value: float, threshold: float) -> bool:
     if direction in ("up", "above"):
         return value >= threshold
@@ -200,7 +300,19 @@ def reached(rule: dict, value: float | None) -> list[int]:
     """Indexes of every level whose condition holds at ``value``, mildest first.  Equal to a threshold counts."""
     if value is None:
         return []
-    return [i for i in severity_order(rule) if _hit(rule["direction"], value, float(rule["levels"][i]["threshold"]))]
+    metric = rule.get("metric")
+    out = []
+    for i in severity_order(rule):
+        threshold = float(rule["levels"][i]["threshold"])
+        if metric == "down_days":
+            hit = value >= threshold                         # a count of days, not a signed move
+        elif metric in EXTREME_METRICS:
+            hit = value >= 0 if metric == "high_52w" else value <= 0     # the value is the price minus the extreme close
+        else:
+            hit = _hit(rule["direction"], value, threshold)
+        if hit:
+            out.append(i)
+    return out
 
 
 def crossed(rule: dict, value: float | None) -> int | None:

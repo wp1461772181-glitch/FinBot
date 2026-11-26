@@ -47,6 +47,7 @@ class Sentinel:
         self.short_moves: bool | None = None
         self.escalator = Escalator(self.store, notify.Channels())
         self._daily_failed: dict[str, float] = {}
+        self._poll: dict[str, dict] = {}   # this poll's fresh price of each symbol ({"price", "prev_close"}); the portfolio preset reads it
         self.filings = FilingWatcher(self.store, self.config.get, post_event=self.post_event_now,
                                      raise_alert=self.escalator.raise_alert)
 
@@ -85,15 +86,23 @@ class Sentinel:
     def _policy(self) -> str:
         return (self.policy or os.environ.get("SENTINEL_ALERT_POLICY") or "tiers").strip().lower()
 
+    # Settings the owner can change (5b-2): the snapshot's ``alert_settings`` first, then its old flat keys, then the env of
+    # this process.  ``self.sensitivity`` / ``self.short_moves`` are the replay harness's explicit override.
     def _sensitivity(self, snap: dict) -> str:
-        return (self.sensitivity or os.environ.get("SENTINEL_SENSITIVITY") or snap.get("alert_sensitivity")
-                or "standard")
+        settings = snap.get("alert_settings")
+        return (self.sensitivity or (settings.get("sensitivity") if isinstance(settings, dict) else None)
+                or snap.get("alert_sensitivity") or os.environ.get("SENTINEL_SENSITIVITY") or "standard")
 
     def _short_moves_on(self, snap: dict) -> bool:
         if self.short_moves is not None:
             return self.short_moves
+        settings = snap.get("alert_settings")
+        if isinstance(settings, dict) and isinstance(settings.get("short_moves"), bool):
+            return settings["short_moves"]
+        if "short_moves" in snap:
+            return bool(snap["short_moves"])
         env = (os.environ.get("SENTINEL_SHORT_MOVES") or "").strip().lower()
-        return env in ("on", "1", "true", "yes") or bool(snap.get("short_moves"))
+        return env in ("on", "1", "true", "yes")
 
     # --- intraday moves (Task 11) ----------------------------------------------------------------
     def baseline_for(self, symbol: str, now: datetime) -> dict:
@@ -127,27 +136,30 @@ class Sentinel:
             prev_close = chart["prev_close"]  # e.g. under two days of daily history: the meta value
         today = signals._et(now).date().isoformat()
         daily = None
-        if any(owner_rules.needs_daily(r) for r in self._owner_rules(snap, today) if owner_rules.symbol_of(r) == symbol):
-            daily = self.rules_daily(symbol, now)
+        mine = [r for r in self._owner_rules(snap, today) if owner_rules.symbol_of(r) == symbol]
+        wanted = mine + self._presets_for(symbol, held, rules_only, snap, today, mine)
+        if any(owner_rules.needs_daily(r) for r in wanted):
+            daily = self.rules_daily(symbol, now, year=any(owner_rules.needs_year(r) for r in wanted))
         return self.alerts_from(symbol, held, now, snap, chart["bars"], prev_close,
                                 base.get("baseline"), base.get("splits"), daily=daily, rules_only=rules_only)
 
-    def rules_daily(self, symbol: str, now: datetime) -> dict | None:
-        """``{"closes", "avg_volume"}`` from the symbol's daily bars (3 months), fetched once per New York date and only for
-        a symbol that has an n_day_change or volume_ratio rule.  None when it cannot be had; the rule then measures None."""
+    def rules_daily(self, symbol: str, now: datetime, year: bool = False) -> dict | None:
+        """``{"closes", "avg_volume"}`` from the symbol's daily bars (3 months; a year for the 52-week and down-days rules),
+        fetched once per New York date and only for a symbol that has a rule or preset needing it.  None when it cannot be
+        had; the rule then measures None.  A cached year serves a three-month need too."""
         today = signals._et(now).date()
         cached = self.store.get_kv(f"rules_daily:{symbol}")
-        if cached and cached[0].get("asof") == today.isoformat():
+        if cached and cached[0].get("asof") == today.isoformat() and (cached[0].get("year") or not year):
             return cached[0]
         if time.time() - self._daily_failed.get(symbol, 0.0) < DAILY_RETRY:
             return None
         try:
-            bars = signals.fetch_chart(symbol, "1d", "3mo", prepost=False)["bars"]
+            bars = signals.fetch_chart(symbol, "1d", "1y" if year else "3mo", prepost=False)["bars"]
         except Exception as exc:
             self._daily_failed[symbol] = time.time()
             logger.warning("daily history for %s unavailable: %s", symbol, type(exc).__name__)
             return None
-        data = owner_rules.daily_summary(bars, today) | {"asof": today.isoformat()}
+        data = owner_rules.daily_summary(bars, today) | {"asof": today.isoformat(), "year": year}
         self.store.set_kv(f"rules_daily:{symbol}", data)
         return data
 
@@ -159,10 +171,71 @@ class Sentinel:
         today = signals._et(now).date().isoformat()
         mine = [r for r in self._owner_rules(snap, today) if owner_rules.symbol_of(r) == symbol]
         day_rule = set().union(*(owner_rules.covered_directions(r) for r in mine if r["metric"] == "day_change"))
+        self._note_poll(symbol, now, bars, prev_close, splits)
         out = [] if rules_only else self._default_alerts(symbol, held, now, snap, bars, prev_close, baseline, splits,
                                                          day_rule=day_rule)
-        if mine:
-            out += self._rule_alerts(symbol, held, now, today, snap, bars, prev_close, splits, daily, mine, baseline)
+        checked = mine + self._presets_for(symbol, held, rules_only, snap, today, mine)
+        if checked:
+            out += self._rule_alerts(symbol, held, now, today, snap, bars, prev_close, splits, daily, checked, baseline)
+        return out
+
+    # --- the system's preset rules (5b-2) -------------------------------------------------------------------------------
+    def _presets_for(self, symbol: str, held: bool, rules_only: bool, snap: dict, today: str, mine: list[dict]) -> list[dict]:
+        """The snapshot's presets as concrete rules for this symbol: enabled, well-formed, not expired, within their scope
+        (``holdings``: held; ``watched``: held or in the research queue, not a symbol only an owner rule names) and not
+        yielding: where the owner has an enabled rule of the same metric on the symbol, the preset of that metric stays out.
+        The portfolio preset is not here (``portfolio_alerts``).  Presets never touch the stop price or the filings."""
+        out = []
+        for preset in snap.get("presets") or []:
+            if not owner_rules.preset_valid(preset) or preset.get("enabled") is False or owner_rules.expired(preset, today):
+                continue
+            scope = preset["scope"]
+            if scope == "portfolio" or (scope == "holdings" and not held) or (scope == "watched" and rules_only):
+                continue
+            if any(r["metric"] == preset["metric"] for r in mine):
+                continue
+            out.append(owner_rules.concrete(preset, symbol))
+        return out
+
+    def new_poll(self) -> None:
+        """Forget the previous poll's prices (the portfolio preset must only see prices of this one)."""
+        self._poll = {}
+
+    def _note_poll(self, symbol: str, now: datetime, bars: list[dict], prev_close, splits) -> None:
+        """Remember this poll's fresh price of ``symbol``; a stale price, a recent split or no previous close leaves none."""
+        self._poll.pop(symbol, None)
+        valid = [b for b in bars if signals._bar_ok(b)]
+        if (valid and not signals.is_stale(valid[-1]["ts"], now) and signals._recent_split(splits, now) is None
+                and isinstance(prev_close, (int, float)) and prev_close > 0):
+            self._poll[symbol] = {"price": float(valid[-1]["close"]), "prev_close": float(prev_close)}
+
+    def portfolio_alerts(self, now: datetime, snap: dict) -> list[dict]:
+        """The portfolio-scope presets, once per poll after every symbol was looked at.  They measure None (and say nothing)
+        unless every holding has a fresh price from this poll."""
+        today = signals._et(now).date().isoformat()
+        presets = [p for p in snap.get("presets") or [] if owner_rules.preset_valid(p) and p["scope"] == "portfolio"
+                   and p.get("enabled") is not False and not owner_rules.expired(p, today)]
+        if not presets:
+            return []
+        holdings = []
+        for position in snap.get("positions") or []:
+            if not position.get("symbol") or not position.get("shares"):
+                continue
+            seen = self._poll.get(position["symbol"])
+            if seen is None:
+                return []
+            holdings.append({"symbol": position["symbol"], "shares": position["shares"], "price": seen["price"],
+                             "prev_close": seen["prev_close"], "market_value": position.get("market_value")})
+        ctx = {"holdings": holdings, "total_assets": snap.get("total_assets")}
+        out = []
+        for preset in presets:
+            try:
+                hit = self._fire(owner_rules.concrete(preset, "*"), ctx, now, today,
+                                 lambda r, i, v: signals.format_preset(r, i, v, ctx))
+                if hit is not None:
+                    out.append(self._preset_alert(hit, True, None, None, None, ctx))
+            except Exception as exc:
+                logger.warning("preset %s failed: %s", preset.get("preset_key"), type(exc).__name__)
         return out
 
     def _default_alerts(self, symbol: str, held: bool, now: datetime, snap: dict, bars: list[dict], prev_close,
@@ -372,42 +445,67 @@ class Sentinel:
         out = []
         for rule in mine:
             try:
-                if self._rule_done_on(rule) is not None:
+                is_preset = rule.get("source") == "preset"
+                hit = self._fire(rule, ctx, now, today, lambda r, i, v: (signals.format_preset if is_preset else signals.format_rule)(r, i, v, ctx))
+                if hit is None:
                     continue
-                value = owner_rules.measure(rule, ctx)
-                rule_id = str(rule["id"])
-                hit = owner_rules.reached(rule, value)
-                edge = rule["metric"] in owner_rules.STATE_METRICS
-                if edge and value is not None:
-                    # re-arm every level whose condition is seen false at this poll (no measurement: no change)
-                    for i in range(len(rule["levels"])):
-                        if i not in hit:
-                            self.store.set_rule_armed(rule_id, owner_rules.level_key(rule, i), True)
-                index = hit[-1] if hit else None
-                if index is None:
-                    continue
-                scope = "*" if (rule.get("repeat") or "daily") == "once" else today
-                if self.store.rule_fired_at(rule_id, scope, owner_rules.level_key(rule, index)) is not None:
-                    continue
-                if edge and not self.store.rule_armed(rule_id, owner_rules.level_key(rule, index)):
-                    continue                              # still the same stretch of the condition being true
-                text = signals.format_rule(rule, index, value, ctx)
-                order = owner_rules.severity_order(rule)
-                for i in order[:order.index(index) + 1]:
-                    self.store.rule_mark(rule_id, scope, owner_rules.level_key(rule, i), now.timestamp())
-                    if edge:
-                        self.store.set_rule_armed(rule_id, owner_rules.level_key(rule, i), False)
-                level = rule["levels"][index]["level"]
-                way = {"up": "up", "above": "up", "down": "down", "below": "down"}.get(rule["direction"]) or (
-                    "up" if (value or 0) > 0 else "down")
-                out.append({"symbol": symbol, "kind": "rule", "direction": way, "held": held, "text": text,
-                            "escalate": level == "urgent", "weight_pct": weight, "price_move": False, "trigger": "",
-                            "event_date": None, "price": price, "prev_close": prev_close, "earnings_unacked": False,
-                            "after_send": lambda deferred, alert_id: None, "rollback": lambda: None,
-                            "tier": 2 if level == "urgent" else 1, "rule_id": rule_id, "owner_rule": True, "digest_text": text.splitlines()[0]})
+                out.append(self._preset_alert(hit, held, weight, price, prev_close, ctx) if is_preset
+                           else self._owner_alert(hit, symbol, held, weight, price, prev_close))
             except Exception as exc:                     # one bad rule must not stop the others, nor the default alerts
                 logger.warning("owner rule %s for %s failed: %s", rule.get("id"), symbol, type(exc).__name__)
         return out
+
+    def _fire(self, rule: dict, ctx: dict, now: datetime, today: str, render) -> dict | None:
+        """Measure one rule (an owner's or a concrete preset) and, if a level is to be said now, commit its state and return
+        ``{"rule", "index", "value", "text"}``; else None.  A state-like metric fires on the edge: once while its condition
+        stays true, again only after it was seen false."""
+        if self._rule_done_on(rule) is not None:
+            return None
+        value = owner_rules.measure(rule, ctx)
+        rule_id = str(rule["id"])
+        hit = owner_rules.reached(rule, value)
+        edge = rule["metric"] in owner_rules.STATE_METRICS
+        if edge and value is not None:
+            # re-arm every level whose condition is seen false at this poll (no measurement: no change)
+            for i in range(len(rule["levels"])):
+                if i not in hit:
+                    self.store.set_rule_armed(rule_id, owner_rules.level_key(rule, i), True)
+        index = hit[-1] if hit else None
+        if index is None:
+            return None
+        scope = "*" if (rule.get("repeat") or "daily") == "once" else today
+        if self.store.rule_fired_at(rule_id, scope, owner_rules.level_key(rule, index)) is not None:
+            return None
+        if edge and not self.store.rule_armed(rule_id, owner_rules.level_key(rule, index)):
+            return None                                   # still the same stretch of the condition being true
+        text = render(rule, index, value)
+        order = owner_rules.severity_order(rule)
+        for i in order[:order.index(index) + 1]:
+            self.store.rule_mark(rule_id, scope, owner_rules.level_key(rule, i), now.timestamp())
+            if edge:
+                self.store.set_rule_armed(rule_id, owner_rules.level_key(rule, i), False)
+        return {"rule": rule, "index": index, "value": value, "text": text}
+
+    @staticmethod
+    def _candidate(hit: dict, symbol: str, held: bool, weight, price, prev_close, *, kind: str, rule_id: str) -> dict:
+        rule, value = hit["rule"], hit["value"]
+        level = rule["levels"][hit["index"]]["level"]
+        way = {"up": "up", "above": "up", "down": "down", "below": "down"}.get(rule["direction"]) or (
+            "up" if (value or 0) > 0 else "down")
+        return {"symbol": symbol, "kind": kind, "direction": way, "held": held, "text": hit["text"],
+                "escalate": level == "urgent", "weight_pct": weight, "price_move": False, "trigger": "",
+                "event_date": None, "price": price, "prev_close": prev_close, "earnings_unacked": False,
+                "after_send": lambda deferred, alert_id: None, "rollback": lambda: None,
+                "tier": 2 if level == "urgent" else 1, "rule_id": rule_id, "digest_text": hit["text"].splitlines()[0]}
+
+    def _owner_alert(self, hit: dict, symbol, held, weight, price, prev_close) -> dict:
+        return self._candidate(hit, symbol, held, weight, price, prev_close, kind="rule",
+                               rule_id=str(hit["rule"]["id"])) | {"owner_rule": True}
+
+    def _preset_alert(self, hit: dict, held, weight, price, prev_close, ctx) -> dict:
+        rule = hit["rule"]
+        return self._candidate(hit, rule["symbol"], held, weight, price, prev_close, kind="preset",
+                               rule_id=str(rule.get("preset_id") or rule["id"])) | {"preset_key": rule["preset_key"]}
 
     # --- the tiers policy ---------------------------------------------------------------------------------------------
     _ROW = {"max_tier": 0, "extreme_r": 0.0, "reversal_said": 0, "short_said": 0, "last_push_ts": None,
@@ -647,7 +745,7 @@ class Sentinel:
                    "prev_close": alert.get("prev_close"), "trigger": alert.get("trigger") or None,
                    "event_date": alert.get("event_date"), "members": members or None, "tier": alert.get("tier"),
                    "sigma_mult": alert.get("sigma_mult"), "rule_id": alert.get("rule_id"),
-                   "owner_rule": True if alert.get("kind") == "rule" else None}
+                   "owner_rule": True if alert.get("kind") == "rule" else None, "preset_key": alert.get("preset_key")}
         price, prev_close = alert.get("price"), alert.get("prev_close")
         if price is not None and prev_close:
             payload["move_pct"] = (price / prev_close - 1) * 100
@@ -664,6 +762,7 @@ class Sentinel:
         # a symbol only an owner rule names is polled for that rule alone: the owner did not ask for default alerts on it
         named = sorted({owner_rules.symbol_of(r) for r in self._owner_rules(snap, today)} - set(held) - set(queued))
         collected: list[dict] = []
+        self.new_poll()
         self._market = self.fetch_market(now) if self._policy() == "tiers" else None
         for symbol, is_held, only in ([(s, True, False) for s in held] + [(s, False, False) for s in queued]
                                       + [(s, False, True) for s in named]):
@@ -671,6 +770,10 @@ class Sentinel:
                 collected += self.evaluate_symbol(symbol, is_held, now, snap, rules_only=only)
             except Exception as exc:  # one symbol failing must not stop the others
                 logger.warning("signal check for %s failed: %s", symbol, type(exc).__name__)
+        try:
+            collected += self.portfolio_alerts(now, snap)         # after every symbol: it needs this poll's prices
+        except Exception as exc:
+            logger.warning("portfolio presets failed: %s", type(exc).__name__)
         self.flush(collected, snap, now)
 
     def fetch_market(self, now: datetime) -> dict | None:

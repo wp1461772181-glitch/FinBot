@@ -126,7 +126,8 @@ def test_sensitivity_from_snapshot_and_env(make, monkeypatch):
     sensitive = dict(BIG, alert_sensitivity="sensitive")
     assert len(look(make(), "INTC", 35.0, et(10, 0), snap=sensitive)) == 1   # -12.5% = 1.67 sigma >= 1.5
     monkeypatch.setenv("SENTINEL_SENSITIVITY", "quiet")
-    assert look(make(), "INTC", 35.0, et(10, 0, day=4), snap=sensitive) == []   # env overrides the snapshot
+    assert len(look(make(), "INTC", 35.0, et(10, 0, day=4), snap=sensitive)) == 1   # 5b-2: the snapshot's setting beats the env
+    assert look(make(), "INTC", 35.0, et(10, 0, day=5), snap=BIG) == []             # no setting in the snapshot: the env applies
 
 
 def test_holding_impact_over_two_percent_is_major_but_only_for_a_move_worth_knowing(make):
