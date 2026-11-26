@@ -198,3 +198,37 @@ def test_the_default_policy_is_tiers(tmp_path, monkeypatch):
     assert s._policy() == "tiers"
     monkeypatch.setenv("SENTINEL_ALERT_POLICY", "anchor")
     assert s._policy() == "anchor"
+
+
+# --- second review: a quieter push never stops a ringing one ---------------------------------------------------------------
+
+def test_a_push_that_does_not_ring_leaves_an_unacknowledged_ringing_alert_ringing():
+    from sentinel.escalation import Escalator
+    from sentinel.store import Store
+    import tempfile, os
+
+    class Channels:
+        def __init__(self):
+            self.cancelled = []
+
+        def telegram_alert(self, config, text, alert_id):
+            return alert_id
+
+        def pushover_emergency(self, config, text):
+            return "r1"
+
+        def cancel_receipt(self, config, receipt):
+            self.cancelled.append(receipt)
+
+    store = Store(os.path.join(tempfile.mkdtemp(), "s.db"))
+    channels = Channels()
+    from datetime import datetime, timezone
+    noon = datetime(2026, 11, 26, 6, 0, tzinfo=timezone.utc).timestamp()      # 14:00 Beijing: no night rule
+    esc = Escalator(store, channels, clock=lambda: noon)
+    snap = {"telegram": {"chat_id": 1}, "pushover": {"user_key": "u", "app_token": "t"}}
+    first = esc.raise_alert(snap, {"symbol": "X", "kind": "daily", "text": "X 跌 9%", "escalate": True, "price_move": True})
+    store.update_alert(first, receipt="r1")
+    esc.raise_alert(snap, {"symbol": "X", "kind": "daily", "text": "X 涨 4.6%", "escalate": False, "price_move": True})   # the other direction, tier 1
+    assert store.alert(first)["superseded_by"] is None and channels.cancelled == []
+    louder = esc.raise_alert(snap, {"symbol": "X", "kind": "daily", "text": "X 跌 15%", "escalate": True, "price_move": True})
+    assert store.alert(first)["superseded_by"] == louder and channels.cancelled == ["r1"]           # one ring per symbol still holds
