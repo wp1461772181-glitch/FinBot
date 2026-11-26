@@ -194,7 +194,7 @@ def compare_actual(db_path: Path | str, result: dict, start: date, end: date, wi
     replayed alerts within +-30 minutes on the same symbol.  An unmatched one says how big the move was then."""
     lo = datetime.combine(start, dtime(0, 0), tzinfo=signals.ET).timestamp()
     hi = datetime.combine(end + timedelta(days=1), dtime(0, 0), tzinfo=signals.ET).timestamp()
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)     # a copy: never written; a WAL copy needs no -shm
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute("SELECT id, symbol, kind, text, escalate, created_at FROM alerts WHERE created_at >= ?"
