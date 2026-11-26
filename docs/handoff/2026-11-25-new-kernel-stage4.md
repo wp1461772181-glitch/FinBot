@@ -25,6 +25,8 @@
 
 ## 四、黑豹上的发布和影子环境（需要能 ssh 到盒子）
 
+- GitHub 令牌：开 PR、看 CI、合并需要 fine-grained 令牌对本仓库有 Contents: Read and write、Pull requests: Read and write、Actions: Read。令牌由 owner 自己配置，缺权限就报告，不要找别的绕法。
+
 - 发布（archive-swap，先 API）：`git archive <合并提交>` 传到 `/opt/finbot/incoming-<sha>.tar.gz` → 先跑 `/opt/finbot/bin/finbot-db-backup.sh` 手动备份 → 解到 `/opt/finbot/src-new`，拷 `src/.env` 和 `rsync src/data/` → `systemctl stop finbot-api` → `mv src src-oldNN`（现在最大是 `src-old88`）→ `mv src-new src` → 起 API，等 `/health` → 依次重启 rag-slim、telegram、wechat、sentinel → 看 `journalctl -p warning` 和公网 `/health`。**不要回滚到带 `pre-s0-DO-NOT-ROLLBACK` 的旧树。** 远程脚本里 `set -e` 时 `r=$(curl …)` 失败会直接退出，用 `|| true`。
 - 前端：合并后 Pages 会自动部署；常见失败「No artifacts named github-pages」，用 `gh workflow run "Deploy frontend to GitHub Pages" --ref main` 新开一次。
 - 影子：`/opt/finbot/bin/ruler_shadow.sh up v2|status|down`（用最新夜间备份恢复 `finbot_ruler`，9031 端口）。要测某个分支：`git archive` 传上去解到 `/opt/finbot/ruler-src` 后 `systemctl restart finbot-ruler-api`。在影子里跑 Python 一定在 `/opt/finbot/ruler-src` 下、带 `PYTHONPATH=.`（否则会导入线上代码），并先 `. ./.env && . /opt/finbot/ruler.env`。影子里没有桥，通道提醒只进发件箱不会发出去；SEC 代码表要先 `archive_subjects.refresh_ticker_list()`。跑完 `down`。
