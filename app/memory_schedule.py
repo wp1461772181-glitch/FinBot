@@ -23,7 +23,7 @@ from .database import SessionLocal
 log = logging.getLogger(__name__)
 
 JOBS: dict[str, str] = {"monthly_review": "app.memory_review:run", "quarterly_settle": "app.memory_settle:run"}
-JOB_TITLES = {"monthly_review": "每月整理记忆", "quarterly_settle": "每季整理记忆"}
+JOB_TITLES = {"monthly_review": "每月整理记忆", "quarterly_settle": "每季整理记忆（含看法复盘）"}
 ANCHORED = ("quarterly_settle",)        # due at the first calendar anchor after the last run, not a period after it
 DEFAULT_ANCHORS = "02-15,05-15,08-15,11-15"
 CLAIM_TTL = timedelta(minutes=30)       # a claim older than this is dead: its worker was cut off

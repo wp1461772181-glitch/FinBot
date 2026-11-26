@@ -10,7 +10,7 @@ import pytest
 from app import agent_bots as bots
 from app import latest_known as lk
 from app import owner_views
-from app.agent_chat_models import AgentBot, AgentConversation, AgentMessage, OwnerView
+from app.agent_chat_models import AgentBot, AgentConversation, AgentMessage, OwnerView, ViewReview
 from app.agent_chat_store import owner_hash
 from app.agent_tool_catalog import KERNEL_ONLY, OWNER_ONLY, definitions, legacy_definitions, schemas, write_tool_names
 from app.agent_workflow import consent
@@ -41,14 +41,14 @@ def make_run(question="", credential=OWNER, read_results=0, inbox=None, turn_id=
 
 def wipe():
     with SessionLocal() as db:
-        for model in (OwnerView, AgentConsent, AgentMessage):
+        for model in (ViewReview, OwnerView, AgentConsent, AgentMessage):
             db.query(model).delete()
         db.commit()
 
 
 @pytest.fixture
 def owner(monkeypatch, disposable_database):
-    Base.metadata.create_all(engine, tables=[OwnerView.__table__, AgentConsent.__table__, AgentBot.__table__, AgentConversation.__table__,
+    Base.metadata.create_all(engine, tables=[OwnerView.__table__, ViewReview.__table__, AgentConsent.__table__, AgentBot.__table__, AgentConversation.__table__,
                                              AgentMessage.__table__])
     wipe()
     import app.agent_chat_identity as identity
@@ -246,6 +246,69 @@ def test_the_registry_knows_where_they_are_and_that_a_web_delete_is_not_theirs()
     assert {"record_view", "drop_view"} <= KERNEL_ONLY_OPERATIONS
     row = OPERATION_REGISTRY[("DELETE", "/agent-chat/views/{view_id}")]
     assert row == {"exempt": "网页上本人删除一条历史，不开放给助手"}
+
+
+# ---- 4d: the review under each version ----------------------------------------------------------------------------------------
+
+def _review(view_id, *, age_days=1, verdict="held", text="成立。", stray=(), snapshot=None, owner=OWNER_HASH):
+    import uuid
+    with SessionLocal() as db:
+        db.add(ViewReview(owner_hash=owner, view_id=uuid.UUID(view_id), symbol="NVDA", verdict=verdict, text=text, unmatched_figures=list(stray),
+                          input_snapshot=snapshot if snapshot is not None else {}, created_at=datetime.now(UTC) - timedelta(days=age_days)))
+        db.commit()
+
+
+def test_history_carries_the_latest_review_with_a_basis_built_from_the_snapshot(owner, client):
+    record(FIRST, text="数据中心还会翻倍")
+    first = owner_views.history(OWNER_HASH, "NVDA")[0]["id"]
+    record(SECOND, text="估值太高")
+    snapshot = {"price": {"then": {"date": "2026-09-01", "close": 100.0}, "now": {"date": "2026-11-24", "close": 150.0}, "change_pct": 50.0},
+                "quarter": {"label": "FY2026 Q3", "period_end": "2026-10-26"}}
+    _review(first, age_days=100, verdict="unclear", text="旧的复盘")
+    _review(first, age_days=2, verdict="mixed", text="部分成立，收入翻了但估值也涨了。", stray=["37%"], snapshot=snapshot)
+    newest, older = owner_views.history(OWNER_HASH, "NVDA")
+    assert newest["review"] is None
+    review = older["review"]
+    assert (review["verdict"], review["verdict_label"], review["text"], review["unmatched_figures"]) == ("mixed", "部分成立", "部分成立，收入翻了但估值也涨了。", ["37%"])
+    assert review["basis"] == {"price_then": {"date": "2026-09-01", "close": 100.0}, "price_now": {"date": "2026-11-24", "close": 150.0},
+                               "change_pct": 50.0, "quarter_label": "FY2026 Q3"}
+    assert review["created_at"] is not None
+    over_the_wire = client.get("/agent-chat/views/NVDA/history", headers={"X-Chat-Session": OWNER}).json()["versions"]
+    assert over_the_wire[0]["review"] is None and over_the_wire[1]["review"]["verdict_label"] == "部分成立"
+    assert client.get("/agent-chat/views/NVDA/history", headers={"X-Chat-Session": "g" * 64}).status_code == 403
+
+
+def test_a_review_with_no_price_and_no_quarter_has_no_basis(owner):
+    record(FIRST, text="数据中心还会翻倍")
+    only = owner_views.history(OWNER_HASH, "NVDA")[0]["id"]
+    _review(only, snapshot={"price": {"then": None, "now": None, "change_pct": None}, "quarter": None})
+    assert owner_views.history(OWNER_HASH, "NVDA")[0]["review"]["basis"] is None
+    _review(only, age_days=0, snapshot={"price": {"then": None, "now": {"date": "2026-11-24", "close": 150.0}, "change_pct": None}, "quarter": None})
+    assert owner_views.history(OWNER_HASH, "NVDA")[0]["review"]["basis"]["price_now"]["close"] == 150.0
+
+
+def test_another_owners_review_is_never_attached(owner):
+    record(FIRST, text="数据中心还会翻倍")
+    mine = owner_views.history(OWNER_HASH, "NVDA")[0]["id"]
+    _review(mine, owner=OTHER_HASH)
+    assert owner_views.history(OWNER_HASH, "NVDA")[0]["review"] is None
+
+
+def test_deleting_a_version_deletes_its_reviews_and_only_its_own(owner):
+    record(FIRST, text="数据中心还会翻倍")
+    first = owner_views.history(OWNER_HASH, "NVDA")[0]["id"]
+    record(SECOND, text="估值太高")
+    second = owner_views.history(OWNER_HASH, "NVDA")[0]["id"]
+    _review(first)
+    _review(first, age_days=50)
+    _review(second)
+    assert owner_views.delete_version(OTHER_HASH, first) is False
+    with SessionLocal() as db:
+        assert db.query(ViewReview).count() == 3
+    assert owner_views.delete_version(OWNER_HASH, first) is True
+    with SessionLocal() as db:
+        left = db.query(ViewReview).all()
+        assert [str(r.view_id) for r in left] == [second]
 
 
 # ---- Review Focus 3: the line in the 「系统最新掌握」 block --------------------------------------------------------------

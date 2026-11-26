@@ -3,19 +3,22 @@
 A view is one line the model renders (``text``) next to the owner's own words (``quote``), found in a message of the turn that recorded it.
 It is not evidence and it authorizes nothing: it only lets the next turn know what the owner already thinks.  One version is active per
 (owner, symbol); recording a new one marks the old ``superseded`` (with its end date), ``drop`` marks the active one ``dropped``.  Nothing
-is deleted here; only the owner, on the web page, removes one version (``delete_version``).
+is deleted here; only the owner, on the web page, removes one version (``delete_version``, which takes the version's reviews with it).
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select, text as sql
+from sqlalchemy import delete, select, text as sql
 
-from .agent_chat_models import OwnerView
+from .agent_chat_models import OwnerView, ViewReview
 from .company_directory import ALIASES
 from .database import SessionLocal
 from .symbols import normalize_market_symbol
+
+log = logging.getLogger(__name__)
 
 TEXT_MAX_CHARS = 200
 QUOTE_MAX_CHARS = 400
@@ -152,14 +155,24 @@ def all_current(owner_hash: str) -> list[dict]:
 
 
 def history(owner_hash: str, symbol: str) -> list[dict]:
-    """Every version of the owner's view of one company, newest first (the active one, if any, leads)."""
+    """Every version of the owner's view of one company, newest first (the active one, if any, leads).  Each carries ``review``: the latest
+    look back at it (stage 4d, ``view_review.serialize``), or None."""
     symbol = resolve_symbol(symbol)
     if not symbol:
         return []
     with SessionLocal() as db:
         rows = db.scalars(select(OwnerView).where(OwnerView.owner_hash == owner_hash, OwnerView.symbol == symbol)
                           .order_by(OwnerView.created_at.desc(), OwnerView.ended_at.is_(None).desc()))
-        return [serialize(row) for row in rows]
+        versions = [serialize(row) for row in rows]
+    reviews = {}
+    if versions:
+        try:       # the look back is an addition: a failed read of it leaves the history as it was
+            from . import view_review
+            with SessionLocal() as db:
+                reviews = view_review.latest_by_view(db, owner_hash, [uuid.UUID(v["id"]) for v in versions])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("reading the reviews of a view history failed: %s", type(exc).__name__)
+    return [{**v, "review": reviews.get(v["id"])} for v in versions]
 
 
 def delete_version(owner_hash: str, view_id: str) -> bool:
@@ -171,6 +184,7 @@ def delete_version(owner_hash: str, view_id: str) -> bool:
         row = db.get(OwnerView, key)
         if row is None or row.owner_hash != owner_hash:
             return False
+        db.execute(delete(ViewReview).where(ViewReview.owner_hash == owner_hash, ViewReview.view_id == key))
         db.delete(row)
         db.commit()
         return True

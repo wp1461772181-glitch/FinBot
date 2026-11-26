@@ -1,4 +1,4 @@
-"""The quarterly settle (stage 4c): code only, no model call.  Once a quarter (anchor dates, see ``memory_schedule``) it
+"""The quarterly settle (stage 4c; stage 4d adds the view review after it).  Once a quarter (anchor dates, see ``memory_schedule``) it
 
 * makes a confirmed guess that keeps showing up long-term (``settled_at``: the block and the page label it 「长期」),
 * archives, with a reason, an inferred or guessed item his own words have not borne out for a long time, and a company view whose company he
@@ -6,6 +6,10 @@
 
 and posts one short change note.  Nothing is deleted: archived is kept and restorable on the memory page.  An explicit or manual item is his own
 word and is never archived here.  A failed read of the ledger leaves the views alone (not knowing what he holds is not a reason to archive).
+
+The settle itself is code only, no model call.  After its writes ``view_review.run`` looks back at his earlier views (one model call per view,
+role ``memory``, within a time cap) and the note lists what it wrote.  A review that fails, is slow or raises is logged and ignored: the settle
+stays ``done`` and its own changes are posted as usual.
 """
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, update
 
 from . import agent_profile as profile
-from . import owner_views
+from . import owner_views, view_review
 from .agent_chat_models import AgentBot, AgentConversation, AgentMessage, AgentProfileItem, AgentResearchQueue
 from .agent_recall import owner_message_clause
 from .company_directory import COMPANIES
@@ -161,18 +165,48 @@ def _lines(items, with_reason: bool) -> list[str]:
     return shown
 
 
-def _note(promoted: list[str], archived: list[tuple[str, str]]) -> str:
+def _review_lines(items: list[dict]) -> list[str]:
+    """One line per review: the company, the date he said it, the verdict, the first 60 characters of the judgement; at most ``LIST_MAX``."""
+    shown = []
+    for item in items[:LIST_MAX]:
+        try:
+            said = datetime.fromisoformat(item["said_on"])
+            when = f"（{said.month}月{said.day}日）"
+        except (KeyError, TypeError, ValueError):
+            when = ""
+        cut = item["text"][:60] + ("…" if len(item["text"]) > 60 else "")
+        stray = [str(x) for x in item.get("unmatched_figures") or [] if str(x).strip()]
+        note = f"（其中 {'、'.join(stray)} 不在系统给的资料里，请自己核对）" if stray else ""      # the same mark the company page shows, never a silent drop
+        shown.append(f"- {owner_views.display_name(item['symbol'])}的看法{when}：{view_review.VERDICT_LABELS.get(item['verdict'], '')}——{cut}{note}")
+    if len(items) > LIST_MAX:
+        shown.append(f"- 另有 {len(items) - LIST_MAX} 条")
+    return shown
+
+
+def _note(promoted: list[str], archived: list[tuple[str, str]], reviewed: list[dict] | None = None) -> str:
     parts = [HEAD]
     if promoted:
         parts += [f"转为长期 {len(promoted)} 条：", *_lines(promoted, False)]
     if archived:
         parts += [f"归档 {len(archived)} 条：", *_lines(archived, True)]
+    if reviewed:
+        parts += ["复盘：", *_review_lines(reviewed)]
     parts.append(TAIL)
     return "\n".join(parts)
 
 
+def _review(owner_hash: str, now: datetime) -> dict:
+    """The view review; whatever goes wrong in it is logged and leaves an empty result (the settle's own outcome is not its business)."""
+    try:
+        return view_review.run(owner_hash, now)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("quarterly settle: the view review failed (%s)", type(exc).__name__)
+        return {"reviewed": 0, "failed": 0, "not_reached": 0, "items": []}
+
+
 def run(owner_hash: str, now: datetime, last_run_at: datetime | None) -> dict:
-    """One settle.  ``{"outcome": "done", "reason", promoted, archived, views_archived, posted}``; no model call."""
+    """One settle.  ``{"outcome": "done", "reason", promoted, archived, views_archived, reviews, posted}``; ``reviews`` is what
+    ``view_review.run`` returned (``{reviewed, failed, not_reached, items}``).  The settle's own writes need no model call."""
     days = stale_days()
     with SessionLocal() as db:
         planned = _plan_views(db, owner_hash, now, days)      # every read first
@@ -182,15 +216,19 @@ def run(owner_hash: str, now: datetime, last_run_at: datetime | None) -> dict:
         db.commit()
     view_expired = _archive_views(owner_hash, planned, now)   # the note below is made of what was actually written
     archived = expired + view_expired
-    result = {"outcome": "done", "promoted": len(promoted), "archived": len(expired), "views_archived": len(view_expired), "posted": False}
-    if not promoted and not archived:
+    reviews = _review(owner_hash, now)
+    reviewed = reviews["items"]
+    result = {"outcome": "done", "promoted": len(promoted), "archived": len(expired), "views_archived": len(view_expired), "reviews": reviews,
+              "posted": False}
+    if not promoted and not archived and not reviewed:
         result["reason"] = "这一季没有要整理的。"
         return result
-    summary = "、".join(x for x in (f"转为长期 {len(promoted)} 条" if promoted else "", f"归档 {len(archived)} 条" if archived else "") if x)
+    summary = "、".join(x for x in (f"转为长期 {len(promoted)} 条" if promoted else "", f"归档 {len(archived)} 条" if archived else "",
+                                   f"回看 {len(reviewed)} 条看法" if reviewed else "") if x)
     result["reason"] = summary + "。"
     try:
         from .memory_review import _post
-        result["posted"] = _post(owner_hash, _note(promoted, archived), now, what=JOB_NAME, marker="memory_settle", notice=NOTICE.format(summary=summary))
+        result["posted"] = _post(owner_hash, _note(promoted, archived, reviewed), now, what=JOB_NAME, marker="memory_settle", notice=NOTICE.format(summary=summary))
     except Exception as exc:  # noqa: BLE001 - the changes are made; the memory page shows them without the message
         log.warning("quarterly settle message not posted: %s", type(exc).__name__)
     return result

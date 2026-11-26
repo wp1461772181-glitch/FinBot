@@ -6,9 +6,9 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { SkeletonCard } from "@/components/state/Skeleton";
 import { confirm } from "@/components/state/confirm";
-import { deleteOwnerView, getOwnerViewHistory, restoreOwnerView, type OwnerViewVersion } from "../../api/owner-views";
+import { deleteOwnerView, getOwnerViewHistory, restoreOwnerView, type OwnerViewReview, type OwnerViewVersion } from "../../api/owner-views";
 import { useLocale } from "../../i18n";
-import { archivedCurrent, dayLabel, hasAnyView, splitVersions, statusPhrase, versionSpan } from "../../owner-views.mjs";
+import { archivedCurrent, basisLine, dayLabel, hasAnyView, reviewOf, splitVersions, statusPhrase, strayFigures, verdictBadge, versionSpan } from "../../owner-views.mjs";
 import { useWorkspace } from "../workspace";
 import { actionMessage } from "./support";
 import { useRead } from "./use-read";
@@ -26,6 +26,28 @@ function Quote({ text, className = "" }: { text: string; className?: string }) {
   return <div className={`flex min-w-0 flex-col gap-0.5 ${className}`}>
     <p className="m-0 text-caption text-muted-foreground">{t("你的原话")}</p>
     <blockquote data-testid="owner-view-quote" className="m-0 border-l-2 border-line pl-3 font-quote text-small text-ink-2 [overflow-wrap:anywhere]">“{text}”</blockquote>
+  </div>;
+}
+
+/**
+ * 回头看: the quarterly look back at one version.  The review text is shown exactly as stored; the basis line is the code's own snapshot (a part with no data is left out);
+ * the caution appears only when the system could not find some figure of the review in the data it gave, and names those figures so the owner can check them himself.
+ */
+function LookBack({ version }: { version: OwnerViewVersion }) {
+  const { t, locale } = useLocale();
+  const review = reviewOf(version) as OwnerViewReview | null;
+  if (!review) return null;
+  const badge = verdictBadge(review) as { label: string; kind: string };
+  const basis = basisLine(review.basis, { then: t("说的时候"), now: t("现在"), quarter: t("最新一季") }) as string;
+  const stray = strayFigures(review) as string[];
+  return <div data-testid="owner-view-review" data-verdict={review.verdict} className="flex min-w-0 flex-col gap-1.5 rounded-md border border-line bg-surface p-3">
+    <div className="flex flex-wrap items-center gap-2">
+      <p className="m-0 text-caption text-muted-foreground">{t("回头看")}</p>
+      {badge.label && <StatusBadge kind={badge.kind} className="h-5">{t(badge.label)}</StatusBadge>}
+    </div>
+    <p data-testid="owner-view-review-text" className="m-0 text-small text-ink [overflow-wrap:anywhere]">{review.text}</p>
+    {basis && <p data-testid="owner-view-review-basis" className="m-0 font-mono text-caption text-muted-foreground [overflow-wrap:anywhere]">{basis}</p>}
+    {stray.length > 0 && <p data-testid="owner-view-review-stray" className="m-0 text-caption text-muted-foreground [overflow-wrap:anywhere]">{t("这几个数字不在系统给的资料里，请自己核对：")}{stray.join(locale === "en-US" ? ", " : "、")}</p>}
   </div>;
 }
 
@@ -77,6 +99,7 @@ export function OwnerViewCard({ symbol }: { symbol: string }) {
       ? <>
         <p data-testid="owner-view-text" className="m-0 text-body font-medium text-ink [overflow-wrap:anywhere]">{active.text}</p>
         <Quote text={active.quote} />
+        <LookBack version={active} />
       </>
       : archivedNow
         ? <div data-testid="owner-view-archived" className="flex min-w-0 flex-col gap-2">
@@ -87,6 +110,7 @@ export function OwnerViewCard({ symbol }: { symbol: string }) {
           <p data-testid="owner-view-text" className="m-0 text-body font-medium text-ink [overflow-wrap:anywhere]">{archivedNow.text}</p>
           {archivedLine(archivedNow)}
           <Quote text={archivedNow.quote} />
+          <LookBack version={archivedNow} />
         </div>
         : <p data-testid="owner-view-none" className="m-0 text-small text-muted-foreground">{t("目前没有看法")}</p>}
     {failure != null && <ErrorBar message={actionMessage(failure, "操作失败，请重试。")} />}
@@ -104,6 +128,7 @@ export function OwnerViewCard({ symbol }: { symbol: string }) {
           </div>
           <p className="m-0 text-small text-ink [overflow-wrap:anywhere]">{version.text}</p>
           <Quote text={version.quote} />
+          <LookBack version={version} />
         </li>)}</ul>
       </CollapsibleContent>
     </Collapsible>}

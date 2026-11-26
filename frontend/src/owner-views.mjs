@@ -46,3 +46,48 @@ export function versionSpan(version, locale = "zh-CN") {
   const from = dayLabel(version?.created_at, locale), to = dayLabel(version?.ended_at, locale);
   return from && to ? `${from} – ${to}` : from || to;
 }
+
+// 回头看 (the quarterly look back at a view).  The review text is the model's and is never altered here; only the code-built basis line and the figure caution are made.
+const VERDICTS = { held: ["成立", "success"], not_held: ["没有成立", "failure"], mixed: ["部分成立", "neutral"], too_early: ["还早", "neutral"], unclear: ["说不准", "neutral"] };
+
+/** The review a version carries, or null when it has none or it is empty. */
+export function reviewOf(version) {
+  const review = version?.review;
+  return review && typeof review === "object" && String(review.text ?? "").trim() ? review : null;
+}
+
+/** The badge of a verdict: `{ label, kind }`.  An unknown verdict falls back to the server's own label, as neutral. */
+export function verdictBadge(review) {
+  const known = VERDICTS[review?.verdict];
+  if (known) return { label: known[0], kind: known[1] };
+  return { label: String(review?.verdict_label ?? ""), kind: "neutral" };
+}
+
+const price = value => (typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(2)}` : "");
+
+/** `+12.3%` / `-4.0%` of a number; "" when it is not one. */
+export function changeLabel(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "";
+  return `${value >= 0 ? "+" : "-"}${Math.abs(value).toFixed(1)}%`;
+}
+
+/**
+ * The basis line from the code's own snapshot: `说的时候 $X → 现在 $Y（+Z%） · 最新一季 FYxx Qx`.  A part with no data is left out, never made up; "" when nothing is left.
+ * `words` carries the translated 说的时候 / 现在 / 最新一季 (default Chinese).
+ */
+export function basisLine(basis, words = {}) {
+  const w = { then: "说的时候", now: "现在", quarter: "最新一季", ...words };
+  const then = price(basis?.price_then?.close), now = price(basis?.price_now?.close), change = changeLabel(basis?.change_pct);
+  const parts = [];
+  if (then && now) parts.push(`${w.then} ${then} → ${w.now} ${now}${change ? `（${change}）` : ""}`);
+  else if (now) parts.push(`${w.now} ${now}`);
+  else if (then) parts.push(`${w.then} ${then}`);
+  const quarter = String(basis?.quarter_label ?? "").trim();
+  if (quarter) parts.push(`${w.quarter} ${quarter}`);
+  return parts.join(" · ");
+}
+
+/** The figures of the review the system could not find in the data it gave the model (as written); [] when there are none. */
+export function strayFigures(review) {
+  return Array.isArray(review?.unmatched_figures) ? review.unmatched_figures.map(x => String(x).trim()).filter(Boolean) : [];
+}
