@@ -4,6 +4,10 @@
 
 @docs/claude/shared-memory.md
 
+## 协作规范（owner 与 Claude 怎么一起干活，开工先读）
+
+@docs/claude/collaboration-rules.md
+
 设计规则全文见 `docs/finbot-design-rules.md`（需要细节时再读，不要凭速览版猜）。
 
 ## 三条核心准则——贯穿全系统设计，先于任何具体方案
