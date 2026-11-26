@@ -494,6 +494,7 @@ def test_query_alerts_read_only_and_fallback(tmp_path, monkeypatch):
     conn.execute("CREATE TABLE alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, kind TEXT, text TEXT, created_at REAL)")
     conn.execute("INSERT INTO alerts (symbol, kind, text, created_at) VALUES ('AAPL', 'daily', 'AAPL 涨超 5%', 1793750000.0)")
     conn.execute("INSERT INTO alerts (symbol, kind, text, created_at) VALUES ('MSFT', 'short', 'MSFT 5分钟异动', 1793751000.0)")
+    conn.execute("INSERT INTO alerts (symbol, kind, text, created_at) VALUES ('AAPL', 'record', 'AAPL 没有单独提醒', 1793752000.0)")   # digest-only rows
     conn.commit()
     conn.close()
 

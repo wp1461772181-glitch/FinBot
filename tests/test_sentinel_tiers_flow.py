@@ -271,8 +271,8 @@ def test_alert_payload_gains_tier_and_sigma_mult(make):
     assert payload["tier"] == 1 and payload["sigma_mult"] == pytest.approx(2.13, abs=0.01) and "trigger" not in payload
 
 
-def test_the_default_policy_is_still_anchor(tmp_path, monkeypatch):
-    monkeypatch.delenv("SENTINEL_ALERT_POLICY", raising=False)
+def test_anchor_policy_still_available_by_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("SENTINEL_ALERT_POLICY", "anchor")
     s = Sentinel(config=signals.SnapshotConfig(tmp_path / "none.json"), store=Store(tmp_path / "s.db"))
     out = s.alerts_from("INTC", True, et(10, 0), BIG, bars(et(10, 0), 33.6), PREV, INTC, [])
     assert out and out[0]["trigger"] == "T0" and "tier" not in out[0]
