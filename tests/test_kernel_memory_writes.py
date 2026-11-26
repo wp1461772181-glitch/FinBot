@@ -232,7 +232,7 @@ def test_flag_off_remember_is_the_earlier_one(monkeypatch):
 def test_the_system_text_has_the_two_memory_lines_and_is_constant_across_turns(monkeypatch):
     from app.kernel import prompt
     text = prompt.system_text()
-    assert "记住、忘掉、研究队列这类只影响你自己记忆的操作，调用后直接生效：告诉用户做了什么、怎么撤销。忘掉和研究队列在这一轮查过资料后会放进确认卡。" in text
+    assert "记住、忘掉、研究队列这类只影响你自己记忆的操作，调用后直接生效：告诉用户做了什么、怎么撤销。这一轮查过资料后，除了记成推测，这类操作都会放进确认卡。" in text
     assert "可以用 remember 记成推测（basis=noticed），quote 摘他的原话。一次对话记一两条就够，不要把一次性的提问当成习惯。" in text
     assert "也会放进确认卡。" not in text.replace("会放进确认卡。", "")
     context = SimpleNamespace(identity_credential=CREDENTIAL, bot_block=None, profile_block=None, skill_block=None)
