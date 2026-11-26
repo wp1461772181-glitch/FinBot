@@ -164,15 +164,41 @@ def history(owner_hash: str, symbol: str) -> list[dict]:
         rows = db.scalars(select(OwnerView).where(OwnerView.owner_hash == owner_hash, OwnerView.symbol == symbol)
                           .order_by(OwnerView.created_at.desc(), OwnerView.ended_at.is_(None).desc()))
         versions = [serialize(row) for row in rows]
-    reviews = {}
-    if versions:
-        try:       # the look back is an addition: a failed read of it leaves the history as it was
-            from . import view_review
-            with SessionLocal() as db:
-                reviews = view_review.latest_by_view(db, owner_hash, [uuid.UUID(v["id"]) for v in versions])
-        except Exception as exc:  # noqa: BLE001
-            log.warning("reading the reviews of a view history failed: %s", type(exc).__name__)
+    reviews = _reviews_of(owner_hash, [v["id"] for v in versions])
     return [{**v, "review": reviews.get(v["id"])} for v in versions]
+
+
+def _reviews_of(owner_hash: str, ids) -> dict:
+    """The latest look back of each version id (string -> serialized); a failed read of it (an addition) leaves the versions as they were."""
+    if not ids:
+        return {}
+    try:
+        from . import view_review
+        with SessionLocal() as db:
+            return view_review.latest_by_view(db, owner_hash, [uuid.UUID(i) for i in ids])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("reading the reviews of a view history failed: %s", type(exc).__name__)
+        return {}
+
+
+def all_versions(owner_hash: str) -> list[dict]:
+    """Every version of every company's view, grouped as ``{symbol, name, current, versions}`` (the memory page and the export).  Companies with
+    a current view come first, the one most recently said first; the others follow by their newest version.  Versions are newest first, each as
+    ``history`` gives it (with ``review``); ``current`` is the active one (the same dict) or None."""
+    with SessionLocal() as db:
+        rows = db.scalars(select(OwnerView).where(OwnerView.owner_hash == owner_hash)
+                          .order_by(OwnerView.created_at.desc(), OwnerView.ended_at.is_(None).desc()))
+        versions = [serialize(row) for row in rows]
+    reviews = _reviews_of(owner_hash, [v["id"] for v in versions])
+    grouped: dict[str, list[dict]] = {}
+    for version in versions:
+        grouped.setdefault(version["symbol"], []).append({**version, "review": reviews.get(version["id"])})
+    groups = []
+    for symbol, items in grouped.items():
+        groups.append({"symbol": symbol, "name": display_name(symbol), "current": next((v for v in items if v["status"] == ACTIVE), None), "versions": items})
+    groups.sort(key=lambda g: (g["current"] or g["versions"][0])["created_at"] or "", reverse=True)       # newest current (else newest version) first
+    groups.sort(key=lambda g: g["current"] is None)                                                     # stable: the ones with a current view lead
+    return groups
 
 
 def delete_version(owner_hash: str, view_id: str) -> bool:

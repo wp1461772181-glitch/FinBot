@@ -86,7 +86,7 @@ class InitializeArgs(SymbolArgs):
 class ScanArgs(SymbolArgs):
     days:int|None=Field(default=None,ge=1,le=3650,description='Calendar days of history to backfill; omit for the incremental scan since the last saved watermark.')
 class PageArgs(Args):
-    page:Literal['overview','predictions','materials','sec','revisions','evaluation','agent','knowledge']
+    page:Literal['overview','predictions','materials','sec','revisions','evaluation','agent','knowledge','memory']
 class StockArgs(SymbolArgs):pass
 class CardArgs(Args):
     question:str=Field(min_length=1,max_length=400)

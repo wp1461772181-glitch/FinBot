@@ -21,9 +21,9 @@ type Layer = { key: string; label: string; items: ProfileItem[] };
 /**
  * 画像 (design 4.11): what the agent should remember about the owner, in layers (全局 first, then each bot, then the bots that are gone).  Each item says its kind and where it came from: what the owner said or
  * typed is plain, what the model inferred is marked 推断 in the opinion colour and carries 确认.  The owner's own words are quoted in the fact material.  The add row is on top; 已归档 is a fold.
- * Every request is the old page's (src/api/memory.ts): the same bodies, which memory-items.mjs makes.
+ * Every request is the old page's (src/api/memory.ts): the same bodies, which memory-items.mjs makes.  `onChanged` (4e): called after a write succeeded, so the overview above and below re-reads its counts and the block the model sees.
  */
-export function ProfilePanel() {
+export function ProfilePanel({ onChanged }: { onChanged?: () => void } = {}) {
   const { t, locale } = useLocale();
   const data = useLoad(signal => listProfileItems(signal));
   const items = data.data?.items ?? null, bots = data.data?.bots ?? [];
@@ -35,7 +35,7 @@ export function ProfilePanel() {
 
   async function run(id: string, work: () => Promise<unknown>): Promise<boolean> {
     setBusy(id); setError(null);
-    try { await work(); await data.reload(); return true; }
+    try { await work(); await data.reload(); onChanged?.(); return true; }
     catch (failure) { setError(failure); return false; }
     finally { setBusy(null); }
   }

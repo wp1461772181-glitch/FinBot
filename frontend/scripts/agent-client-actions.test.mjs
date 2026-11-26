@@ -20,3 +20,10 @@ test('stream replay stays idempotent when session storage is unavailable',()=>{
  assert.equal(dispatchAgentAction(action,host),false);
  assert.equal(events.length,1);
 });
+test('open_page can name the memory page (4e) and still refuses a page it does not know',()=>{
+ const events=[];
+ const host={sessionStorage:{getItem(){return null},setItem(){}},CustomEvent:class{constructor(type,options){this.type=type;this.detail=options.detail}},dispatchEvent:e=>events.push(e)};
+ assert.equal(dispatchAgentAction({id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',action:'open_page',page:'memory'},host),true);
+ assert.equal(events[0].detail.page,'memory');
+ assert.equal(dispatchAgentAction({id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',action:'open_page',page:'passwords'},host),false);
+});

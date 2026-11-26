@@ -243,7 +243,7 @@ def test_the_old_engine_does_not_know_them():
 
 
 def test_the_registry_knows_where_they_are_and_that_a_web_delete_is_not_theirs():
-    assert {"record_view", "drop_view"} <= KERNEL_ONLY_OPERATIONS
+    assert not ({"record_view", "drop_view"} & KERNEL_ONLY_OPERATIONS)       # since 4e the memory page writes and withdraws a view: they have routes
     row = OPERATION_REGISTRY[("DELETE", "/agent-chat/views/{view_id}")]
     assert row == {"exempt": "网页上本人删除一条历史，不开放给助手"}
 
@@ -404,3 +404,90 @@ def test_a_failure_reading_views_costs_the_line_not_the_block(owner, block, monk
     monkeypatch.setattr(owner_views, "current", broken)
     text, symbols = block("英伟达怎么样", OWNER_HASH)
     assert symbols == ["NVDA"] and "你的看法" not in text and "关于 英伟达" in text
+
+
+# ---- 4e Task 2, Review Focus 3: the owner writes and withdraws a view on the memory page -------------------------------------
+
+PAGE_TEXT = "估值太高，先不加仓"
+
+
+def test_a_view_typed_on_the_page_supersedes_the_old_one_and_is_its_own_quote(owner, client, block):
+    record(FIRST, text="今年英伟达数据中心还会翻倍")
+    headers = {"X-Chat-Session": OWNER}
+    answer = client.post("/agent-chat/views/NVDA", json={"text": PAGE_TEXT}, headers=headers)
+    assert answer.status_code == 200
+    body = answer.json()
+    assert body["status"] == "recorded" and body["view"]["text"] == PAGE_TEXT and body["replaced"]["status"] == "superseded"
+    assert rows() == [("今年英伟达数据中心还会翻倍", "superseded", True), (PAGE_TEXT, "active", False)]
+    new = owner_views.current(OWNER_HASH, ["NVDA"])["NVDA"]
+    assert new["quote"] == PAGE_TEXT and new["conversation_id"] is None and new["turn_id"] is None and new["source_message_id"] is None
+    # the model reads it back in the 「系统最新掌握」 block exactly as one said in chat
+    text, _ = block("英伟达怎么样", OWNER_HASH)
+    assert f"）：{PAGE_TEXT}" in text and "今年英伟达数据中心还会翻倍" not in text
+    # the same text again changes nothing
+    assert client.post("/agent-chat/views/NVDA", json={"text": PAGE_TEXT}, headers=headers).json()["status"] == "unchanged"
+    assert len(rows()) == 2
+    # a company named in words routes like the ticker
+    assert client.post("/agent-chat/views/英伟达", json={"text": "还是先观望"}, headers=headers).json()["view"]["symbol"] == "NVDA"
+
+
+def test_withdrawing_a_view_on_the_page_keeps_it_as_dropped(owner, client, block):
+    owner_views.record(OWNER_HASH, "NVDA", PAGE_TEXT, PAGE_TEXT)
+    headers = {"X-Chat-Session": OWNER}
+    answer = client.post("/agent-chat/views/NVDA/drop", headers=headers)
+    assert answer.status_code == 200 and answer.json()["view"]["status"] == "dropped" and answer.json()["view"]["ended_at"]
+    assert rows() == [(PAGE_TEXT, "dropped", True)]
+    assert "你的看法" not in block("英伟达怎么样", OWNER_HASH)[0]
+    again = client.post("/agent-chat/views/NVDA/drop", headers=headers)
+    assert again.status_code == 404 and again.json()["detail"] == "view_not_found"
+    assert client.post("/agent-chat/views/没这家公司/drop", headers=headers).status_code == 404
+
+
+def test_the_page_write_refuses_with_the_services_own_code(owner, client):
+    headers = {"X-Chat-Session": OWNER}
+    short = client.post("/agent-chat/views/NVDA", json={"text": "太高了"}, headers=headers)
+    assert short.status_code == 422 and short.json()["detail"] == "view_quote_too_short"
+    assert client.post("/agent-chat/views/NVDA", json={"text": "   "}, headers=headers).json()["detail"] == "invalid_view_text"
+    assert client.post("/agent-chat/views/NVDA", json={"text": "估" * 201}, headers=headers).json()["detail"] == "invalid_view_text"
+    assert client.post("/agent-chat/views/没这家公司", json={"text": PAGE_TEXT}, headers=headers).json()["detail"] == "company_not_recognized"
+    for body in ({}, {"text": PAGE_TEXT, "quote": "他说的"}, {"text": PAGE_TEXT, "conversation_id": CONVERSATION}, {"text": "估" * 401}, {"text": None}):
+        assert client.post("/agent-chat/views/NVDA", json=body, headers=headers).status_code == 422
+    assert rows() == []
+
+
+def test_a_guest_cannot_write_or_withdraw_a_view_and_another_owners_view_is_untouched(owner, client):
+    owner_views.record(OTHER_HASH, "NVDA", "别人的看法", "别人的看法在这里")
+    guest = {"X-Chat-Session": "g" * 64}
+    for headers in (guest, {}):
+        write = client.post("/agent-chat/views/NVDA", json={"text": PAGE_TEXT}, headers=headers)
+        assert write.status_code == 403 and write.json()["detail"] == "owner_only"
+        assert client.post("/agent-chat/views/NVDA/drop", headers=headers).status_code == 403
+    assert client.post("/agent-chat/views/NVDA/drop", headers={"X-Chat-Session": OWNER}).status_code == 404       # his own: nothing to drop
+    assert owner_views.current(OTHER_HASH, ["NVDA"])["NVDA"]["status"] == "active" and rows() == []
+
+
+def test_the_new_page_routes_do_not_shadow_the_history_and_restore_routes(owner, client):
+    headers = {"X-Chat-Session": OWNER}
+    owner_views.record(OWNER_HASH, "NVDA", "先看看", "我想先看看英伟达")
+    archived = owner_views.history(OWNER_HASH, "NVDA")[0]["id"]
+    assert owner_views.archive(OWNER_HASH, archived, "很久没提了")["status"] == "archived"
+    owner_views.record(OWNER_HASH, "NVDA", PAGE_TEXT, PAGE_TEXT)
+    history = client.get("/agent-chat/views/NVDA/history", headers=headers)
+    assert history.status_code == 200 and [v["status"] for v in history.json()["versions"]] == ["active", "archived"]
+    # restore is ``POST /views/{view_id}/restore``: refused (409) while another view is current; not read as a symbol
+    blocked = client.post(f"/agent-chat/views/{archived}/restore", headers=headers)
+    assert blocked.status_code == 409 and blocked.json()["detail"] == owner_views.RESTORE_BLOCKED
+    assert client.post("/agent-chat/views/NVDA/drop", headers=headers).status_code == 200
+    restored = client.post(f"/agent-chat/views/{archived}/restore", headers=headers)
+    assert restored.status_code == 200 and restored.json()["view"]["status"] == "active"
+    assert client.post("/agent-chat/views/not-an-id/restore", headers=headers).status_code == 404
+    assert client.delete(f"/agent-chat/views/{archived}", headers=headers).json() == {"deleted": True}
+
+
+# ---- 4e Task 2, Review Focus 7: the registry -----------------------------------------------------------------------------------
+
+def test_the_page_writes_are_mapped_to_the_view_operations_and_nothing_is_kernel_only_any_more():
+    assert OPERATION_REGISTRY[("POST", "/agent-chat/views/{symbol}")] == {"operation": "record_view"}
+    assert OPERATION_REGISTRY[("POST", "/agent-chat/views/{symbol}/drop")] == {"operation": "drop_view"}
+    assert not ({"record_view", "drop_view"} & KERNEL_ONLY_OPERATIONS)
+    assert {"record_view", "drop_view"} <= set(act.OPERATIONS)
