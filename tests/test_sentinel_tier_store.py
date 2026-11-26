@@ -19,9 +19,9 @@ def test_tier_state_is_per_symbol_date_and_direction(tmp_path):
 
 
 def test_tier_state_survives_a_restart(tmp_path):
-    Store(tmp_path / "s.db").set_tier_state("INTC", "2026-11-03", "down", max_tier=1, reversal_said=1)
+    Store(tmp_path / "s.db").set_tier_state("INTC", "2999-01-03", "down", max_tier=1, reversal_said=1)   # a future date: not pruned
     again = Store(tmp_path / "s.db")
-    assert again.get_tier_states("INTC", "2026-11-03")["down"]["reversal_said"] == 1
+    assert again.get_tier_states("INTC", "2999-01-03")["down"]["reversal_said"] == 1
 
 
 def test_level_lock_roundtrip_keyed_by_the_level_price(tmp_path):
