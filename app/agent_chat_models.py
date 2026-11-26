@@ -509,6 +509,32 @@ class PortfolioPlan(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class WatchRule(Base):
+    """One rule the owner set for when he wants to be told (stage 5b-1, ``app/watch_rules.py``).  The fields are structured; the plain-language
+    reading is written by code from them and is not stored.  ``levels`` is a list of {threshold, level}; deleting is soft (``enabled`` false,
+    ``deleted_at`` set).  ``quote`` is his own words that asked for it; ``fired_once`` is for ``repeat=once`` (kept for the sentinel bridge)."""
+    __tablename__ = "watch_rules"
+    __table_args__ = (Index("ix_watch_rules_owner", "owner_hash", "enabled"),)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(12), nullable=False)
+    metric: Mapped[str] = mapped_column(String(24), nullable=False)
+    direction: Mapped[str] = mapped_column(String(8), nullable=False)
+    levels: Mapped[list] = mapped_column(JSON, nullable=False)
+    window_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    level_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    repeat: Mapped[str] = mapped_column(String(8), nullable=False, default="daily")
+    expires_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_on: Mapped[date] = mapped_column(Date, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    source: Mapped[str] = mapped_column(String(12), nullable=False, default="owner")
+    quote: Mapped[str] = mapped_column(String(400), nullable=False, default="")
+    fired_once: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class OwnerView(Base):
     """The owner's own view of one company, in his words.  One version is ``active`` per (owner, symbol); a newer one marks the old
     ``superseded``, ``drop_view`` marks it ``dropped`` and nothing is deleted by the model.  Not evidence, and it authorizes nothing."""
