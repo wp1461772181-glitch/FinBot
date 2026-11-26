@@ -784,3 +784,42 @@ def format_rule(rule: dict, index: int, value: float, ctx: dict) -> str:
     if own:
         text += f"\n按你{(' ' + made + ' ') if made else ''}定的规则：{own}"
     return text
+
+
+# --- the system's preset rules (5b-2): same shape as the owner's rules, but they say whose rule it is and how to change it ---
+
+PRESET_TITLES = {"concentration": "单只占比过高", "portfolio_drawdown": "组合单日大跌", "down_streak": "连续下跌",
+                 "new_high_52w": "52 周新高", "new_low_52w": "52 周新低", "volume_surge": "持仓放量"}
+PRESET_TAIL = "（系统默认；可以在「它眼中的你」页面关掉或改门槛）"
+
+
+def format_preset(rule: dict, index: int, value: float, ctx: dict) -> str:
+    """One push for a level of a preset.  The headline says what was measured; the last line names the preset and where it
+    can be turned off.  ``rule`` is the concrete preset (one symbol, or ``*`` for the portfolio)."""
+    item, metric, symbol = rule["levels"][index], rule["metric"], str(rule["symbol"]).upper()
+    extra = ""
+    if metric == "portfolio_day_change":
+        move = rules.portfolio_move(ctx)
+        amount = move["amount"] if move else 0.0
+        body = f"你的组合今天{'涨' if value > 0 else '跌'} {abs(value):.1f}%（{amount:+,.0f} 美元）"
+        mine = sorted((r for r in (move["rows"] if move else []) if r[1] * amount > 0), key=lambda r: -abs(r[1]))[:3]
+        if mine:
+            extra = "\n" + ("带动最大：" if amount > 0 else "拖累最大：") + "、".join(f"{s} {a:+,.0f} 美元" for s, a in mine) + "。"
+    else:
+        price = float(ctx["price"])
+        now_price = f"现价 {price:.2f}"
+        if metric == "position_weight":
+            body = f"{symbol} 占你总资产 {value:.1f}%，超过 {item['threshold']:g}%"
+        elif metric == "down_days":
+            down_today = float(ctx["prev_close"]) > price
+            body = f"{symbol} 已连续 {int(value)} 个交易日{'下跌（含今天盘中）' if down_today else '收跌'}，{now_price}"
+        elif metric in rules.EXTREME_METRICS:
+            close = rules.extreme_close(rule, ctx)
+            body = (f"{symbol} 创 52 周新高：{now_price}，高过过去一年的最高收盘 {close:.2f}" if metric == "high_52w"
+                    else f"{symbol} 创 52 周新低：{now_price}，低于过去一年的最低收盘 {close:.2f}")
+        elif metric == "volume_ratio":
+            body = f"{symbol} 今日成交量已是同一时段正常水平的 {value:.1f} 倍，{now_price}"
+        else:
+            body = f"{symbol} {value:g}，{now_price}"
+    title = PRESET_TITLES.get(rule.get("preset_key"), str(rule.get("preset_key") or "预置规则"))
+    return f"【系统默认·{RULE_WORD[item['level']]}】{body}。{extra}\n规则：{title}{PRESET_TAIL}"

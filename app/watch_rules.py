@@ -27,9 +27,13 @@ MAX_RULES = 50
 DRY_RUN_DAYS = 30
 MIN_BARS = 10
 NO_HISTORY = "没有足够的历史行情，试跑不了"
+NO_YEAR = "历史行情不够一年，试跑不了"
+YEAR_WINDOW = 252    # the 52-week high or low is taken over the most recent 252 completed closes
+YEAR_BARS = 240      # completed closes a 52-week high or low needs (a one-year chart has about 250); the sentinel uses the same
+COOLDOWN_DAYS = 20   # after a 52-week high or low fired for a symbol, no new one within the next 20 completed trading days
 LEVEL_WORDS = {"remind": "提醒", "urgent": "加急"}
 REPEATS = ("daily", "once")
-STATE_METRICS = frozenset({"price", "position_weight", "cost_change", "n_day_change"})      # edge-triggered: a level fires when its condition becomes true
+STATE_METRICS = frozenset({"price", "position_weight", "cost_change", "n_day_change", "down_days", "high_52w", "low_52w"})      # edge-triggered: a level fires when its condition becomes true
 MOVES = ("up", "down", "either")
 
 # metric -> (directions allowed, default direction, needs a holding, largest threshold, label)
@@ -42,9 +46,17 @@ METRICS: dict[str, dict] = {
     "volume_ratio": {"directions": ("above",), "default": "above", "holding": False, "max": 1000, "label": "成交量相对 20 日均量的倍数"},
     "position_pnl": {"directions": MOVES, "default": "either", "holding": True, "max": 100_000_000, "label": "持仓当天盈亏（美元）"},
     "position_weight": {"directions": ("above", "below"), "default": "above", "holding": True, "max": 100, "label": "持仓占总资产的比例"},
+    # 5b-2.  portfolio_day_change is the system's own (a preset): the owner cannot make a rule on it.
+    "portfolio_day_change": {"directions": MOVES, "default": "either", "holding": False, "max": 100, "label": "整个组合当天相对昨收的涨跌（占总资产的%）"},
+    "down_days": {"directions": ("down",), "default": "down", "holding": False, "max": 30, "label": "连续下跌的交易日数（收盘低于前一日；今天股价低于昨收也算一天）"},
+    "high_52w": {"directions": ("above",), "default": "above", "holding": False, "max": 0, "label": "股价创 52 周新高（不看数值）"},
+    "low_52w": {"directions": ("below",), "default": "below", "holding": False, "max": 0, "label": "股价创 52 周新低（不看数值）"},
 }
+PRESET_ONLY = frozenset({"portfolio_day_change"})
+NO_THRESHOLD = frozenset({"high_52w", "low_52w"})      # the level's number is ignored (stored as 0)
+PORTFOLIO = "*"      # the symbol of a rule about the whole portfolio
 UNITS = {"day_change": "%", "open_change": "%", "cost_change": "%", "n_day_change": "%", "price": "美元", "volume_ratio": "倍",
-         "position_pnl": "美元", "position_weight": "%"}
+         "position_pnl": "美元", "position_weight": "%", "portfolio_day_change": "%", "down_days": "天", "high_52w": "", "low_52w": ""}
 WINDOW_MIN, WINDOW_MAX = 2, 60
 
 
@@ -92,6 +104,13 @@ def _parse_date(value) -> date | None:
 
 
 def _levels(raw, metric: str, direction: str) -> list[dict]:
+    if metric in NO_THRESHOLD:
+        if not isinstance(raw, (list, tuple)) or len(raw) != 1:
+            raise WatchRuleError("invalid_levels", "这类规则没有数值，只要一档：级别是提醒（remind）或加急（urgent）。")
+        level = raw[0].get("level") if isinstance(raw[0], dict) else None
+        if level not in LEVEL_WORDS:
+            raise WatchRuleError("invalid_levels", "级别只有提醒（remind）和加急（urgent）两种。")
+        return [{"threshold": 0, "level": level}]
     if not isinstance(raw, (list, tuple)) or not 1 <= len(raw) <= 2:
         raise WatchRuleError("invalid_levels", "要 1 到 2 档，每档有一个数值和一个级别（提醒 remind 或加急 urgent）。")
     unit, top = UNITS[metric], METRICS[metric]["max"]
@@ -107,6 +126,8 @@ def _levels(raw, metric: str, direction: str) -> list[dict]:
             raise WatchRuleError("invalid_threshold", f"这个指标的数值要大于 0，不超过 {_g(top)} {unit}。")
         if direction == "down" and unit == "%" and threshold >= 100 and metric != "position_weight":
             raise WatchRuleError("invalid_threshold", "跌幅不可能达到 100% 或更多。")
+        if metric == "down_days" and (threshold != int(threshold) or threshold < 2):
+            raise WatchRuleError("invalid_threshold", "连续下跌的天数要是不小于 2 的整数。")
         found.append({"threshold": _num(threshold), "level": level})
     found.sort(key=lambda entry: entry["threshold"])
     if len({entry["threshold"] for entry in found}) < len(found):
@@ -120,18 +141,24 @@ def _levels(raw, metric: str, direction: str) -> list[dict]:
     return found
 
 
-def validate(fields: dict, *, owner: str | None = None, today: date | None = None) -> dict:
+def validate(fields: dict, *, owner: str | None = None, today: date | None = None, preset: bool = False) -> dict:
     """The fields of one rule, checked and in their stored form; ``WatchRuleError`` with the reason otherwise.
 
-    With ``owner`` a rule that needs a holding (cost, position P&L, position weight) is refused for a symbol he does not hold."""
-    try:
-        symbol = normalize_market_symbol(fields.get("symbol"))
-    except ValueError:
-        raise WatchRuleError("invalid_symbol", "代码不对，要美股代码，比如 INTC。")
+    With ``owner`` a rule that needs a holding (cost, position P&L, position weight) is refused for a symbol he does not hold.
+    ``preset``: the system's own rule (``app/watch_presets.py``): it may use the portfolio metric and the symbol ``*`` (every symbol of its scope)."""
     metric = fields.get("metric")
     spec = METRICS.get(metric)
     if spec is None:
-        raise WatchRuleError("unknown_metric", "没有这个指标。可选：" + "、".join(f"{k}（{v['label']}）" for k, v in METRICS.items()) + "。")
+        raise WatchRuleError("unknown_metric", "没有这个指标。可选：" + "、".join(f"{k}（{v['label']}）" for k, v in METRICS.items() if k not in PRESET_ONLY) + "。")
+    if metric in PRESET_ONLY and not preset:
+        raise WatchRuleError("preset_only_metric", "整个组合的当日涨跌只有系统默认的那一条在盯，暂时不能自己定规则；可以去改默认那条的门槛。")
+    if preset and fields.get("symbol") == PORTFOLIO:
+        symbol = PORTFOLIO
+    else:
+        try:
+            symbol = normalize_market_symbol(fields.get("symbol"))
+        except ValueError:
+            raise WatchRuleError("invalid_symbol", "代码不对，要美股代码，比如 INTC。")
     direction = fields.get("direction") or spec["default"]
     if direction is None:
         raise WatchRuleError("direction_required", "股价规则要说明是高于（above）还是低于（below）某个价。")
@@ -150,7 +177,7 @@ def validate(fields: dict, *, owner: str | None = None, today: date | None = Non
     if expires is not None and expires < (today or today_ny()):
         raise WatchRuleError("invalid_expiry", "到期日已经过了。")
     levels = _levels(fields.get("levels"), metric, direction)
-    if spec["holding"] and owner is not None and symbol not in _holdings(owner):
+    if spec["holding"] and owner is not None and symbol != PORTFOLIO and symbol not in _holdings(owner):
         raise WatchRuleError("not_a_holding", f"你现在没有持有 {symbol}。成本、持仓盈亏、仓位占比这几类规则只能用在持仓上；先记下这笔持仓，或换一个指标。")
     return {"symbol": symbol, "metric": metric, "direction": direction, "levels": levels, "window_days": window,
             "repeat": repeat, "expires_on": expires.isoformat() if expires else None}
@@ -163,10 +190,12 @@ def _name(symbol: str) -> str:
     return display_name(symbol)
 
 
-def describe(rule: dict) -> str:
-    """The rule in plain Chinese, from its fields only.  What the owner reads on the card and in the list; the model never writes it."""
+def describe(rule: dict, subject: str | None = None) -> str:
+    """The rule in plain Chinese, from its fields only.  What the owner reads on the card and in the list; the model never writes it.
+
+    ``subject`` replaces the stock's name for a system default that covers many stocks (「每只持仓」)."""
     metric, direction, levels, symbol = rule["metric"], rule["direction"], list(rule["levels"]), rule["symbol"]
-    name = _name(symbol)
+    name = subject or _name(symbol)
     move = {"up": "上涨", "down": "下跌", "either": "涨或跌"}.get(direction, "")
     if direction == "below":
         levels = levels[::-1]      # most severe first for a fall: 低于 100 提醒，低于 90 加急
@@ -185,6 +214,14 @@ def describe(rule: dict) -> str:
     elif metric == "volume_ratio":
         prefix = f"{name}今天的成交量（只看常规交易时段，按开盘后已过去的时间折算；开盘后 30 分钟内不判断）相对近 20 个交易日的日均量"
         reach = lambda t: f"达到 {_g(t)} 倍"      # noqa: E731
+    elif metric == "portfolio_day_change":
+        prefix, reach = f"{name}今天的涨跌（所有持仓现有股数 × 相对昨收的价差，合计占昨收时总资产的比例）{move}", pct
+    elif metric == "down_days":
+        prefix, reach = f"{name}连续下跌（每个交易日收盘低于前一日，今天股价低于昨收也算一天）", lambda t: f"达到 {_g(t)} 个交易日"      # noqa: E731
+    elif metric in NO_THRESHOLD:
+        prefix = f"{name}的股价"
+        word = "高" if metric == "high_52w" else "低"
+        reach = lambda t: f"创 52 周新{word}（不{'低' if metric == 'high_52w' else '高'}于过去一年（约 250 个交易日）的最{word}收盘价）"      # noqa: E731
     elif metric == "position_pnl":
         prefix = f"你持有的{name}今天的盈亏（现有股数 × 相对昨收的价差）"
         word = {"up": "盈利", "down": "亏损"}.get(direction, "盈利或亏损")
@@ -195,12 +232,18 @@ def describe(rule: dict) -> str:
     state = metric in STATE_METRICS
     if rule.get("repeat") == "once":
         again = "每档只触发一次，最高档触发后这条规则自动停用。" if len(levels) == 2 else "只触发一次，之后这条规则自动停用。"
+    elif metric in NO_THRESHOLD:
+        again = f"同一只股票一个月（{COOLDOWN_DAYS} 个交易日）内最多提醒一次。"
     elif state:
         def rearm(entry) -> str:
             t = _g(entry["threshold"])
             if metric in ("price", "position_weight"):
                 size = f"{t} 美元" if metric == "price" else f"{t}%"
                 return f"回到 {size}以下后再升破" if direction == "above" else f"回到 {size}以上后再跌破"
+            if metric == "down_days":
+                return f"连续下跌中断后再连跌到 {t} 个交易日"
+            if metric in NO_THRESHOLD:
+                return "股价回到" + ("前高以下后再创新高" if metric == "high_52w" else "前低以上后再创新低")
             if direction == "up":
                 return f"涨幅回落到 {t}% 以下后再达到"
             if direction == "down":
@@ -259,6 +302,20 @@ def _extremes(rule: dict, bars: list[dict], i: int, holding: dict | None) -> tup
             return None
         move = (day["close"] / bars[back]["close"] - 1) * 100
         return move, move
+    if metric == "down_days":
+        streak = 0
+        while i - streak >= 1 and bars[i - streak]["close"] < bars[i - streak - 1]["close"]:
+            streak += 1
+        return -streak, -streak      # a fall is "down": the measure is the negative of the streak, so ``_reached("down", ...)`` reads ``streak >= threshold``
+    if metric in NO_THRESHOLD:
+        closes = [b["close"] for b in bars[max(0, i - YEAR_WINDOW):i]]      # the most recent completed closes, up to 252 (as the sentinel)
+        if len(closes) < YEAR_BARS:
+            return None
+        if metric == "high_52w":
+            move = (day["high"] / max(closes) - 1) * 100      # >= 0: at or above the highest close of the last year
+        else:
+            move = (day["low"] / min(closes) - 1) * 100       # <= 0: at or below the lowest
+        return move, move
     if metric == "volume_ratio":
         if i < 20:
             return None
@@ -297,10 +354,12 @@ def dry_run(owner: str, rule: dict, days: int = DRY_RUN_DAYS, *, today: date | N
     Cost and position rules use today's holding (shares, average cost, total assets) for every day, as the plan says."""
     today = today or today_ny()
     start = today - timedelta(days=days)
-    bars = _bars(rule["symbol"], start - timedelta(days=130), today)
     empty = {"hits": [], "covered_days": 0, "note": None}
+    if rule["metric"] == "portfolio_day_change":
+        return _portfolio_dry_run(owner, rule, days, today, empty)
+    bars = _bars(rule["symbol"], start - timedelta(days=430 if rule["metric"] in NO_THRESHOLD else 130), today)
     if len(bars) < MIN_BARS:
-        return {**empty, "note": NO_HISTORY}
+        return {**empty, "note": NO_YEAR if rule["metric"] in NO_THRESHOLD else NO_HISTORY}
     holding = None
     if METRICS[rule["metric"]]["holding"]:
         holding = _holdings(owner).get(rule["symbol"])
@@ -312,40 +371,82 @@ def dry_run(owner: str, rule: dict, days: int = DRY_RUN_DAYS, *, today: date | N
             return {**empty, "note": "没有持仓成本，试跑不了"}
     if holding is not None:
         holding = {**holding, "price_now": next((b["close"] for b in reversed(bars) if b["date"] <= today), None)}
+    if rule["metric"] in NO_THRESHOLD:      # fewer than a year of closes before the first day of the window: nothing honest to say
+        first = next((i for i in range(len(bars)) if bars[i]["date"] > start), len(bars))
+        if first < YEAR_BARS:
+            return {**empty, "note": NO_YEAR}
+    series = [(bars[i]["date"], _extremes(rule, bars, i, holding)) for i in range(1, len(bars))]
+    return _scan(rule, series, start, today, empty)
+
+
+def _scan(rule: dict, series: list, start: date, today: date, empty: dict) -> dict:
+    """The hits of ``rule`` over ``series`` (``[(date, (highest, lowest) or None)]``, oldest first) in the window after ``start``."""
     state = rule["metric"] in STATE_METRICS
     hits, covered, fired = [], 0, set()
     ever = set()
+    cooldown = COOLDOWN_DAYS if rule["metric"] in NO_THRESHOLD else 0
+    last_fire = None      # the series index of the last hit (a 52-week high or low is not said again for ``cooldown`` completed days)
     highest = (rule["levels"][0] if rule["direction"] == "below" else rule["levels"][-1])["level"]
-    for i in range(1, len(bars)):
-        day = bars[i]["date"]
+    for index, (day, measured) in enumerate(series):
         if day <= start or day > today:
             continue
         if rule.get("repeat") == "once" and highest in ever:
             break      # the rule switched itself off after its highest level fired
-        measured = _extremes(rule, bars, i, holding)
         if measured is None:
             continue
         covered += 1
+        cooling = bool(cooldown) and last_fire is not None and index - last_fire <= cooldown
         for entry in rule["levels"]:
             now = _reached(rule["direction"], measured[0], measured[1], entry["threshold"])
             key = ("was", entry["level"])
             was = key in fired
             if state:      # edge-triggered: fires on the day the condition becomes true; the first day of the window counts as becoming true
-                (fired.add if now else fired.discard)(key)
+                if not (now and cooling):      # while cooling down a true condition does not use up the edge (the sentinel does not either)
+                    (fired.add if now else fired.discard)(key)
             if not now or (state and was):
+                continue
+            if cooling:
                 continue
             if rule.get("repeat") == "once" and entry["level"] in ever:
                 continue
+            last_fire = index
             ever.add(entry["level"])
             hits.append({"date": day.isoformat(), "level": entry["level"]})
     if not covered:
-        return {**empty, "note": NO_HISTORY}
+        return {**empty, "note": NO_YEAR if rule["metric"] in NO_THRESHOLD else NO_HISTORY}
     hits.sort(key=lambda hit: (hit["date"], hit["level"] == "urgent"))
     return {"hits": hits, "covered_days": covered, "note": None, "metric": rule["metric"]}
 
 
+def _portfolio_dry_run(owner: str, rule: dict, days: int, today: date, empty: dict) -> dict:
+    """The whole portfolio's day move, from daily closes: today's shares x each day's move of each holding / that day's total assets
+    (today's total assets minus what the holdings gained since that day's previous close: the same adjustment as the position weight)."""
+    start = today - timedelta(days=days)
+    held = _holdings(owner)
+    if not held:
+        return {**empty, "note": "你现在没有持仓，试跑不了"}
+    total = next(iter(held.values())).get("total_assets")
+    if not total:
+        return {**empty, "note": "总资产暂时算不出来（有持仓缺行情），试跑不了"}
+    closes = {symbol: {b["date"]: b["close"] for b in _bars(symbol, start - timedelta(days=130), today)} for symbol in held}
+    dates = sorted(set.intersection(*(set(c) for c in closes.values())))
+    if len(dates) < MIN_BARS:
+        return {**empty, "note": NO_HISTORY}
+    last, series = dates[-1], []
+    for i in range(1, len(dates)):
+        day, before = dates[i], dates[i - 1]
+        gain = sum(held[s]["shares"] * (closes[s][day] - closes[s][before]) for s in held)
+        since = sum(held[s]["shares"] * (closes[s][last] - closes[s][before]) for s in held)
+        denominator = total - since
+        pct = gain / denominator * 100 if denominator > 0 else None
+        series.append((day, None if pct is None else (pct, pct)))
+    return _scan(rule, series, start, today, empty)
+
+
 ESTIMATE = "（按每天常规交易时段的最高最低价估算；实际盘前盘后也会检查，盘中一闪而过的波动可能比这里多或少）"
 ESTIMATES = {"n_day_change": "（按每天的收盘价估算；实际盘中会随时检查，可能比这里多）",
+             "portfolio_day_change": "（按每天的收盘价估算；实际盘中会随时检查，可能比这里多）",
+             "down_days": "（按每天的收盘价估算，不含当天盘中的最新价；实际盘中会随时检查）",
              "volume_ratio": "（按整天的成交量估算；实际是盘中按已过去的时间折算，可能比这里多或少）"}
 
 

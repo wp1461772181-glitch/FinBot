@@ -120,7 +120,7 @@ def test_a_rule_that_needs_a_holding_is_refused_for_a_symbol_he_does_not_hold(db
 # ---- the reading ---------------------------------------------------------------------------------------------------------------
 
 def test_describe_is_the_fixture_text_for_every_metric():
-    assert {r["metric"] for r in CONTRACT} == set(watch_rules.METRICS)
+    assert {r["metric"] for r in CONTRACT} == set(watch_rules.METRICS) - {"portfolio_day_change", "down_days", "high_52w", "low_52w"}      # the 5b-2 metrics: tests/test_watch_presets.py
     for rule in CONTRACT:
         assert describe(rule) == rule["text"], rule["metric"]
 

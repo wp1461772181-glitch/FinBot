@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 
 SCHEMA = "finbot-memory-export/1"
 SUMMARY_CAP = 2000
-DEFAULT_RULES_NOTE = "另外，系统默认对你的持仓和研究队列盯价格异动、新公告（哨兵），这些默认规则现在还不能按你单独调整。"
+DEFAULT_RULES_NOTE = "另外，系统默认对你的持仓和研究队列盯价格异动、新公告（哨兵）；这些默认规则都列在「它在帮你盯的」页面，可以关掉或改门槛（止损价和新公告是硬保证，不能关），也可以在对话里说。"
 NO_RAW_NOTE = "不含对话原文：原文在每条对话里，也在每夜的数据库备份里。"
 FORMATS = {"json": ("json", "application/json; charset=utf-8"), "md": ("md", "text/markdown; charset=utf-8")}
 PARTS = ("counts", "views", "watch", "jobs", "seen_block")
@@ -80,16 +80,25 @@ def _counts(db, owner: str) -> dict:
 
 def _rules(owner: str) -> list[dict]:
     """The rules he set himself (stage 5b-1): id, symbol and the reading written by code."""
-    from . import watch_rules
-    rules = watch_rules.list_rules(owner)
-    states = watch_rules.statuses(rules)
+    return _view_rules(_view(owner))
+
+
+def _view(owner: str) -> dict:
+    from . import watch_rules_view
+    return watch_rules_view.watch_view(owner)
+
+
+def _view_rules(view: dict) -> list[dict]:
     return [{"id": r["id"], "symbol": r["symbol"], "text": r["text"], "created_on": r["created_on"], "expires_on": r["expires_on"],
-             "status": states[r["id"]]} for r in rules]
+             "status": "done" if r["status"] == "finished" else r["status"]} for r in view["rules"]]      # the page's own codes
 
 
 def _watch(db, owner: str) -> dict:
+    view = _view(owner)      # the one builder the page's GET /agent-chat/watch and list_watch_rules read (5b-2)
     return {"plans": _plans(db, owner), "alert_routines": _routines(db, owner), "research_queue": _queue(db, owner),
-            "rules": _rules(owner), "default_rules_note": DEFAULT_RULES_NOTE}
+            "rules": _view_rules(view), "default_rules_note": DEFAULT_RULES_NOTE,
+            "presets": [{"id": p["key"], "title": p["title"], "text": p["text"], "enabled": p["enabled"], "hard_guarantee": p["hard_guarantee"]} for p in view["presets"]],
+            "settings": view["settings"]}
 
 
 def _jobs(owner: str) -> list[dict]:
@@ -307,6 +316,12 @@ def _watch_lines(watch) -> list[str]:
     lines += [NONE_LINE] if not watch.get("rules") else []
     queue = watch.get("research_queue")
     lines += ["", "### 研究队列", ("、".join(queue) if queue else NONE_LINE) if queue is not None else "（还没存过研究队列）"]
+    if watch.get("presets"):
+        from .watch_presets import SENSITIVITY_WORDS
+        lines += ["", "### 系统默认规则"]
+        lines += [f"- {p['title']}：{p['text']}" + ("" if p["enabled"] else "（已关）") for p in watch["presets"]]
+        if watch.get("settings"):
+            lines.append(f"- 灵敏度：{SENSITIVITY_WORDS.get(watch['settings']['sensitivity'], '标准')}；5 分钟急动：{'开' if watch['settings']['short_moves'] else '关'}")
     if watch.get("default_rules_note"):
         lines += ["", watch["default_rules_note"]]
     return lines

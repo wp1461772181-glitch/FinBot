@@ -15,6 +15,7 @@ import { materialId } from "./fixtures/materials.mjs";
 import { EXTRA_INBOX, EXTRA_PROPOSALS, EXTRA_TASKS } from "./fixtures/routines.mjs";
 import { OWNER_VIEWS } from "./fixtures/views.mjs";
 import { OVERVIEW_REVIEW } from "./fixtures/overview.mjs";
+import { buildWatchNoRules } from "./fixtures/watch.mjs";
 import { CONFIRMED_GUESS, SETTLE_ITEMS, EXTRA_SOURCES, IMPORT_SAMPLE, REVIEW_ITEMS, KNOWLEDGE_CANDIDATES, KNOWLEDGE_EXTRA_DOCS } from "./fixtures/assistant.mjs";
 
 import fs from "node:fs";
@@ -444,6 +445,12 @@ export function stateTemplateMemoryFull() {
 export function stateNoViews() {
   const state = buildState();
   state.views = [];
+  return state;
+}
+/** 它在帮你盯的: no rule of his own yet (the defaults are the system's). */
+export function stateNoWatchRules() {
+  const state = buildState();
+  state.watch = buildWatchNoRules();
   return state;
 }
 /** NVDA has only history: the one view was withdrawn. */
@@ -965,6 +972,12 @@ export const PAGES = [
   { name: "memory-template-undo", hash: "#/assistant/memory", ready: "[data-testid=template-application]", view: () => ({ fixtureState: stateTemplateApplied() }), before: async (page) => {
       await page.locator("[data-testid=template-undo]").first().click(); await page.locator("[data-testid=template-undo-dialog] [data-testid=template-application-row]").first().waitFor({ timeout: 10000 });
     } },
+  // 它在帮你盯的 → 规则 (5b-2): his rules next to the system defaults (a hard guarantee, a switched-off one, one with a yield note), the sensitivity; a threshold being edited; and no rule of his own yet.
+  { name: "memory-watch-rules", hash: "#/assistant/memory", ready: "[data-testid=watch-preset]", element: "[data-testid=memory-watch]" },
+  { name: "memory-watch-edit", hash: "#/assistant/memory", ready: "[data-testid=watch-preset]", element: "[data-testid=memory-watch]", before: async (page) => {
+      await page.locator("[data-testid=watch-preset][data-key=portfolio_drawdown] [data-testid=watch-preset-edit]").click(); await page.locator("[data-testid=watch-preset-input]").first().waitFor({ timeout: 10000 });
+    } },
+  { name: "memory-watch-empty", hash: "#/assistant/memory", ready: "[data-testid=watch-owner-rules-empty]", element: "[data-testid=memory-watch]", view: () => ({ fixtureState: stateNoWatchRules() }) },
   { name: "memory-views-empty", hash: "#/assistant/memory", ready: "[data-testid=owner-views-empty]", element: "[data-testid=owner-views]", view: () => ({ fixtureState: stateNoViews() }) },
   { name: "company-view", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-text]", element: "[data-testid=owner-view]" },
   { name: "company-view-history", hash: "#/research/c/NVDA", ready: "[data-testid=owner-view-text]", element: "[data-testid=owner-view]", before: async (page) => {

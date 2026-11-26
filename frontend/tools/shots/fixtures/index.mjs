@@ -11,11 +11,12 @@ import { TASKS, RUNS, PROPOSALS, INBOX } from "./routines.mjs";
 import { backstageRoutes } from "./backstage.mjs";
 import { OWNER_VIEWS, activeViews, viewHistory } from "./views.mjs";
 import { memoryOverview } from "./overview.mjs";
+import { buildWatch, patchPreset, resetPreset, watchView } from "./watch.mjs";
 import { buildTemplates, templateApply, templatePreview, templatesList, templateUndo } from "./templates.mjs";
 import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS, DRY_RUNS, REPAIRS, KNOWLEDGE_IMPORTABLE, knowledgeChunks, readSkillFile } from "./assistant.mjs";
 
 export function buildState() {
-  return { views: structuredClone(OWNER_VIEWS), bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), templates: buildTemplates(), settings: buildSettings(), backstage: {} };
+  return { views: structuredClone(OWNER_VIEWS), bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), templates: buildTemplates(), watch: buildWatch(), settings: buildSettings(), backstage: {} };
 }
 
 /** The 设置 pages' data as a mutable copy (P8.2): the write routes below change it and the reads answer from it.  `writes` keeps every write as the page sent it (the role table's own state is `modelRoles`).
@@ -407,6 +408,31 @@ function assistantRoutes(route, reply, own) {
   route.post(`${A}/role-templates/:template/apply`, own(({ params, body, state }) => {
     state.templates.writes.push({ method: "POST", path: `/role-templates/${params.template}/apply`, body: structuredClone(body ?? null) });
     return templateApply(state, params.template, body) ?? reply.status(404, { detail: "unknown_template" });
+  }));
+  // --- 它在帮你盯的 → 规则 (5b-2): the rules, the system defaults and the sensitivity; every write is kept in `state.watch.writes` as the page sent it.
+  route.get(`${A}/watch`, own(({ state }) => watchView(state)));
+  route.patch(`${A}/watch-presets/:key`, own(({ params, body, state }) => {
+    state.watch.writes.push({ method: "PATCH", path: `/watch-presets/${params.key}`, body: structuredClone(body ?? null) });
+    const done = patchPreset(state, params.key, body);
+    return done.row ?? reply.status(done.status, { detail: done.detail });
+  }));
+  route.post(`${A}/watch-presets/:key/reset`, own(({ params, state }) => {
+    state.watch.writes.push({ method: "POST", path: `/watch-presets/${params.key}/reset`, body: null });
+    const done = resetPreset(state, params.key);
+    return done.row ?? reply.status(done.status, { detail: done.detail });
+  }));
+  route.put(`${A}/alert-settings`, own(({ body, state }) => {
+    state.watch.writes.push({ method: "PUT", path: "/alert-settings", body: structuredClone(body ?? null) });
+    if (body?.sensitivity !== undefined && !["quiet", "standard", "sensitive"].includes(body.sensitivity)) return reply.status(400, { detail: { error_code: "bad_sensitivity", reason: "灵敏度只能是安静、标准或灵敏。" } });
+    if (body?.sensitivity !== undefined) state.watch.settings.sensitivity = body.sensitivity;
+    if (typeof body?.short_moves === "boolean") state.watch.settings.short_moves = body.short_moves;
+    return watchView(state).settings;
+  }));
+  route.delete(`${A}/watch-rules/:id`, own(({ params, state }) => {
+    state.watch.writes.push({ method: "DELETE", path: `/watch-rules/${params.id}`, body: null });
+    if (!state.watch.rules.some((r) => r.id === params.id)) return reply.status(404, { detail: "没有这条规则。" });
+    state.watch.rules = state.watch.rules.filter((r) => r.id !== params.id);
+    return { ok: true };
   }));
   // --- 它眼中的你: the overview of everything kept, the two page writes for a view, and the two downloads
   route.get(`${A}/memory/overview`, own(({ state }) => memoryOverview(state)));

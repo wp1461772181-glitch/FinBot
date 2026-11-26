@@ -51,6 +51,7 @@ WRITE_ARGUMENTS={
  'set_default_model':{'name':'alpha'},'set_model_role':{'role':'judge'},'set_channel_prefs':{'mode':'all','channels':['telegram']},'apply_role_template':{'template':'定投'},'undo_role_template':{},
  'record_view':{'symbol':'NVDA','text':'估值太高','quote':'我觉得估值太高'},'drop_view':{'symbol':'NVDA'},
  'set_watch_rule':{'symbol':'INTC','metric':'day_change','levels':[{'threshold':10,'level':'remind'}],'quote':'英特尔涨跌 10% 提醒我'},'delete_watch_rule':{'rule_id':'11111111-1111-4111-8111-111111111111'},
+ 'set_watch_preset':{'key':'concentration','enabled':False},'set_alert_settings':{'sensitivity':'quiet'},
 }
 
 

@@ -58,6 +58,8 @@ export const TOOL_LABELS = {
   set_watch_rule: "设盯防规则",
   delete_watch_rule: "删除盯防规则",
   list_watch_rules: "查看盯防规则",
+  set_watch_preset: "改默认盯防规则",
+  set_alert_settings: "改提醒灵敏度",
   delegate: "交给小助手",
   record_view: "记下看法",
   drop_view: "撤回看法",

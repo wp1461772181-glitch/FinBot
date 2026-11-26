@@ -37,7 +37,7 @@ def test_every_operation_is_a_catalogue_write_and_every_write_is_listed():
 def test_summaries_costs_and_tiers():
     assert all(act.SUMMARIES[name] for name in act.OPERATIONS) and set(act.SUMMARIES) == set(act.OPERATIONS)
     assert set(act.COST_NOTES) == set(act.TIER3)
-    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 42
+    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 44
     assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "revise_forecast")] == [1, 2, 3, 3, 3]
     assert act.TIER1[0] == "remember" and act.TIER3[-2:] == ("ingest_web_source", "revise_forecast")
     assert act.SUMMARIES["ingest_web_source"].startswith("把这段对话里联网搜到的一个网页或新闻存进资料库")
@@ -230,6 +230,7 @@ MINIMAL = {
     "record_view": {"symbol": "AAPL", "text": "看好", "quote": "用中文回答"}, "drop_view": {"symbol": "AAPL"},
     "set_watch_rule": {"symbol": "INTC", "metric": "day_change", "levels": [{"threshold": 10, "level": "remind"}], "quote": "用中文回答"},
     "delete_watch_rule": {"rule_id": UUID},
+    "set_watch_preset": {"key": "concentration", "enabled": False}, "set_alert_settings": {"sensitivity": "quiet"},
 }
 
 
@@ -265,6 +266,9 @@ def faked(monkeypatch):
     from app import watch_rules
     monkeypatch.setattr(watch_rules, "list_rules", lambda owner: [{"id": UUID, "symbol": "INTC", "text": "英特尔……"}])
     monkeypatch.setattr(watch_rules, "dry_run", lambda owner, fields, days=30, today=None: {"hits": [], "covered_days": 0, "note": None})
+    from app import watch_presets
+    monkeypatch.setattr(watch_presets, "_overrides", lambda owner: {})          # no database: every default is at its default
+    monkeypatch.setattr(watch_presets, "get_settings", lambda owner: {"sensitivity": "standard", "short_moves": False})
     monkeypatch.setattr(direct, "skill_names", lambda owner: {})
     monkeypatch.setattr(act, "_already_saved", lambda *a: None)
     monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: ready_plan())

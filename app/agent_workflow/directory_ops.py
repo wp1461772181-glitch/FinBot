@@ -80,6 +80,13 @@ def snapshot(owner: str, name: str, args: dict) -> dict:
         from .. import agent_tasks
         task = agent_tasks.get_task(owner, args["routine_id"])
         return {k: task.get(k) for k in _ROUTINE_STATE} if task else {"gone": True}
+    if name == "set_watch_preset":
+        from .. import watch_presets
+        found = next((p for p in watch_presets.resolved(owner) if p["preset_key"] == args["key"]), None)
+        return {"enabled": found["enabled"], "levels": found["levels"]} if found else {"gone": True}
+    if name == "set_alert_settings":
+        from .. import watch_presets
+        return watch_presets.get_settings(owner)
     if name in {"set_watch_rule", "delete_watch_rule"}:
         from .. import watch_rules
         if not args.get("rule_id"):

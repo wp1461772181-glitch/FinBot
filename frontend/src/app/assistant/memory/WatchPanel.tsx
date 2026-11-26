@@ -8,6 +8,7 @@ import type { MemoryWatch } from "../../../api/memory-overview";
 import { useLocale } from "../../../i18n";
 import { watchRows } from "../../../memory-overview.mjs";
 import { paths } from "../../../routes.mjs";
+import { WatchRulesSection } from "./WatchRulesSection";
 
 /** One of the three lists: its title, the link to the page where it is changed, and its rows (or 「（没有）」: an empty list is said, never left out). */
 function WatchList({ id, title, linkLabel, to, empty, children }: { id: string; title: string; linkLabel: string; to: string; empty: boolean; children: ReactNode }) {
@@ -22,8 +23,8 @@ function WatchList({ id, title, linkLabel, to, empty, children }: { id: string; 
 }
 
 /**
- * 它在帮你盯的 (the 它眼中的你 tab): what it watches for him, read-only here (each list is changed on its own page, with a link): his portfolio plans, his alert routines, the research queue, and
- * the one sentence about the system's own default rules.  `failed`: the server could not build this part.
+ * 它在帮你盯的 (the 它眼中的你 tab): what it watches for him.  The first three lists are read-only here (each is changed on its own page, with a link): his portfolio plans, his alert routines, the research queue.
+ * Then the rules block (WatchRulesSection: his own rules, the system defaults he can switch off or re-threshold, the sensitivity), which he changes right here, and the server's note about the defaults.  `failed`: the server could not build this part.
  */
 export function WatchPanel({ watch, failed, loading, onReload }: { watch: MemoryWatch | null; failed: boolean; loading: boolean; onReload: () => Promise<void> }) {
   const { t, locale } = useLocale();
@@ -44,7 +45,7 @@ export function WatchPanel({ watch, failed, loading, onReload }: { watch: Memory
         <ul className="m-0 flex list-none flex-col gap-2 p-0">{rows.routines.map(routine => <li key={routine.id} data-testid="memory-watch-routine" data-enabled={routine.enabled ? "true" : "false"} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-small text-ink-2">
           <span className="min-w-0 text-body font-medium text-ink [overflow-wrap:anywhere]">{routine.name}</span>
           {!routine.enabled && <StatusBadge kind="neutral" className="h-5">{t("已暂停")}</StatusBadge>}
-          <span>{t("范围")}：{t(routine.scopeLabel)}{routine.symbols.length > 0 && <span className="font-mono"> {routine.symbols.join(locale === "en-US" ? ", " : "、")}</span>}</span>
+          <span>{t("范围")}{locale === "en-US" ? ": " : "："}{t(routine.scopeLabel)}{routine.symbols.length > 0 && <span className="font-mono"> {routine.symbols.join(locale === "en-US" ? ", " : "、")}</span>}</span>
           {routine.contents.length > 0 && <span className="min-w-0 [overflow-wrap:anywhere]">{routine.contents.map(item => <span key={item.key} className="mr-2">{t(item.label)}{item.detail && <span className="font-mono"> {item.detail}</span>}</span>)}</span>}
           {routine.next && <span>{t("下次运行")} <span className="font-mono text-ink">{routine.next}</span></span>}
         </li>)}</ul>
@@ -52,7 +53,8 @@ export function WatchPanel({ watch, failed, loading, onReload }: { watch: Memory
       <WatchList id="queue" title="研究队列" linkLabel="去研究页看" to={paths.research()} empty={!rows.queue || rows.queue.length === 0}>
         <ul className="m-0 flex list-none flex-wrap gap-x-3 gap-y-1 p-0">{(rows.queue ?? []).map(symbol => <li key={symbol} data-testid="memory-watch-queue-symbol" className="font-mono text-small text-ink">{symbol}</li>)}</ul>
       </WatchList>
-      {rows.note && <p data-testid="memory-watch-note" className="m-0 text-small text-muted-foreground">{t(rows.note)}</p>}
     </>}
+    <WatchRulesSection onChanged={onReload} />
+    {rows?.note && <p data-testid="memory-watch-note" className="m-0 text-small text-muted-foreground">{t(rows.note)}</p>}
   </section>;
 }

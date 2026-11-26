@@ -20,7 +20,9 @@ def rule(metric, direction, levels, **extra):
 
 def test_every_contract_rule_is_accepted_and_one_per_metric():
     assert all(rules.valid(r) for r in CONTRACT)
-    assert {r["metric"] for r in CONTRACT} == set(rules.METRICS)
+    presets = json.loads((Path(__file__).parent / "fixtures" / "watch_presets_contract.json").read_text(encoding="utf-8"))["presets"]
+    # the owner-rule contract (5b-1) and the preset contract (5b-2) together name every metric the sentinel measures
+    assert {r["metric"] for r in CONTRACT} | {p["metric"] for p in presets} == set(rules.METRICS)
 
 
 @pytest.mark.parametrize("change", [

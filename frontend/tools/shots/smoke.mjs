@@ -10040,6 +10040,53 @@ async function ownerViews(ctx) {
   return "NVDA: the active view, his words, 11月8日 说的, the history folded, two earlier versions (已更新, 已撤回), delete asks 删除这条历史？ / 删除后无法恢复 and sends one DELETE after a hold (none after Esc); the memory page lists 3 views with company links; empty sentence; a company with none shows no card";
 }
 
+/** 它在帮你盯的 → 规则 (5b-2): his rules and the system defaults are listed; a hard guarantee has no switch; the switch, the threshold edit, 恢复默认, the sensitivity and the 5-minute switch each send one write with the contract's body; a bad threshold sends nothing; 删除 asks first. */
+async function watchRules(ctx) {
+  const view = await asOpen(ctx, "watch rules", "#/assistant/memory", "[data-testid=watch-preset]", { width: 390 });
+  try {
+    const { page } = view;
+    const sent = (method, re) => view.mock.state.watch.writes.filter((r) => r.method === method && re.test(r.path));   // the fake backend keeps each write with its body
+    const hardKeys = await page.locator("[data-testid=watch-preset][data-hard=true]").evaluateAll((els) => els.map((e) => ({ key: e.getAttribute("data-key"), switches: e.querySelectorAll("[role=switch]").length })));
+    assert(hardKeys.length === 2 && hardKeys.every((h) => h.switches === 0), `hard guarantees: ${JSON.stringify(hardKeys)}`);
+    assert((await page.locator("[data-testid=watch-owner-rule]").count()) === 3, "his three rules are not listed");
+    assert((await page.locator("[data-testid=watch-preset][data-key=concentration] [data-testid=watch-preset-yields]").innerText()).includes("INTC"), "the yield note is missing");
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert(wide <= 0, `sideways overflow of ${wide}px at 390`);
+    await page.locator("[data-testid=watch-preset][data-key=volume_surge] [role=switch]").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=watch-preset][data-key=volume_surge]")?.getAttribute("data-enabled") === "false", null, { timeout: 8000 });
+    assert(sent("PATCH", /watch-presets\/volume_surge$/).length === 1 && JSON.stringify(sent("PATCH", /watch-presets\/volume_surge$/)[0].body) === '{"enabled":false}', "the switch did not send {enabled:false}");
+    const box = page.locator("[data-testid=watch-preset][data-key=concentration]");
+    await box.locator("[data-testid=watch-preset-edit]").click();
+    await box.locator("[data-testid=watch-preset-input]").fill("0");
+    await box.locator("[data-testid=watch-preset-save]").click();
+    assert((await box.locator("[data-testid=watch-preset-problem]").count()) === 1 && sent("PATCH", /watch-presets\/concentration$/).length === 0, "a bad threshold was sent or not refused");
+    await box.locator("[data-testid=watch-preset-input]").fill("30");
+    await box.locator("[data-testid=watch-preset-save]").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=watch-preset][data-key=concentration] [data-testid=watch-preset-text]")?.textContent.includes("30%"), null, { timeout: 8000 });
+    assert(JSON.stringify(sent("PATCH", /watch-presets\/concentration$/)[0].body) === '{"levels":[{"threshold":30,"level":"remind"}]}', "the threshold body is not the contract's");
+    await page.locator("[data-testid=watch-preset][data-key=down_streak] [data-testid=watch-preset-reset]").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=watch-preset][data-key=down_streak]")?.getAttribute("data-enabled") === "true", null, { timeout: 8000 });
+    assert(sent("POST", /watch-presets\/down_streak\/reset$/).length === 1, "恢复默认 did not send one POST");
+    await page.locator("[data-testid=watch-sensitivity-choice][data-value=sensitive]").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=watch-sensitivity-choice][data-value=sensitive]")?.getAttribute("aria-checked") === "true", null, { timeout: 8000 });
+    assert(JSON.stringify(sent("PUT", /alert-settings$/)[0].body) === '{"sensitivity":"sensitive"}', "the sensitivity body is not the contract's");
+    await page.locator("[data-testid=watch-short-moves]").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=watch-short-moves]")?.getAttribute("aria-checked") === "true", null, { timeout: 8000 });
+    assert(JSON.stringify(sent("PUT", /alert-settings$/)[1].body) === '{"short_moves":true}', "the 5-minute switch body is not the contract's");
+    await page.locator("[data-testid=watch-owner-rule-delete]").first().click();
+    const dialog = dialogOf(page);
+    await dialog.waitFor({ state: "visible", timeout: 5000 });
+    await page.keyboard.press("Escape"); await dialog.waitFor({ state: "hidden", timeout: 5000 });
+    assert(sent("DELETE", /watch-rules\//).length === 0, "a rule was deleted by cancelling");
+    await page.locator("[data-testid=watch-owner-rule-delete]").first().click();
+    await dialog.waitFor({ state: "visible", timeout: 5000 });
+    await dialog.locator("button", { hasText: "删除" }).last().click();
+    await page.waitForFunction(() => document.querySelectorAll("[data-testid=watch-owner-rule]").length === 2, null, { timeout: 8000 });
+    assert(sent("DELETE", /watch-rules\//).length === 1, "the delete did not send one DELETE");
+  } finally { await view.close(); }
+  return "hard guarantees have no switch; switch, threshold (0 refused unsent), reset, sensitivity, 5-minute switch and delete (cancel sends nothing) send one write each with the contract's body; no sideways overflow at 390";
+}
+
 async function memoryNotesOnce(ctx) {
   const PROFILE = AS.memory.load.paragraphs[0], SCOPE = AS.memory.load.paragraphs[1], RECALL = AS.memory.recall.load.paragraphs[0];
   const times = (text, note) => text.split(note).length - 1;
@@ -12044,6 +12091,7 @@ const CHECKS = [
   ["skills-keyboard: a skill made and saved with the keyboard alone, the card's 「…」 menu with Esc returning the focus, the editor closed with Esc and the focus back on 编辑", skillsKeyboard],
   ["memory-ops: the nine memory operations (add ×3, edit with Enter / Esc, scope, 确认 only on inferred, delete by hold, the 往事 tab in the address, search only on submit, the bot filter, open a conversation) send the old requests; a refresh keeps the tab", memoryOps],
   ["owner-views: the company page's 你的看法 card (current view, his words, date, folded history, delete with a confirm) and the memory page's section", ownerViews],
+  ["watch-rules: the memory page's rules block: his rules, the system defaults (a hard guarantee has no switch), the switch, the threshold edit, restore, the sensitivity, the 5-minute switch and delete each send the contract's write", watchRules],
   ["memory-notes-once: each tab's one sentence appears exactly once, word for word as the old page, and not on the other tab; inferred items carry 推断 and 确认, the others neither", memoryNotesOnce],
   ["memory-settle: 长期 tag and 最近一次印证 on items; archived group with reason, date and 恢复 (one POST, no dialog), restored items return to their group; an archived view on the company page with its reason and 恢复; a history row says 已归档", memorySettle],
   ["memory-guesses: the monthly review's guesses above 已归档 with his sentences; 对 confirms (no body) and the item moves to his own list as 你确认的推测; 不对 deletes at once; no group when there is none", memoryGuesses],

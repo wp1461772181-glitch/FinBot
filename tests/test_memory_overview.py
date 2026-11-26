@@ -184,7 +184,7 @@ def test_watch_part():
         "name": "盯盘", "enabled": True, "scope": "symbols", "symbols": ["NVDA"], "filings": True, "news": False, "price_lines": [{"symbol": "NVDA", "below": 90.0}]}
     assert set(routine) == {"id", "name", "enabled", "scope", "symbols", "filings", "news", "price_lines", "next_run_at", "bot_id"}
     assert watch["research_queue"] is None              # never saved
-    assert watch["default_rules_note"] == "另外，系统默认对你的持仓和研究队列盯价格异动、新公告（哨兵），这些默认规则现在还不能按你单独调整。"
+    assert watch["default_rules_note"] == "另外，系统默认对你的持仓和研究队列盯价格异动、新公告（哨兵）；这些默认规则都列在「它在帮你盯的」页面，可以关掉或改门槛（止损价和新公告是硬保证，不能关），也可以在对话里说。"
     with SessionLocal() as db:
         db.add(AgentResearchQueue(owner_hash=OWNER, symbols=["NVDA", "AMD"]))
         db.commit()
