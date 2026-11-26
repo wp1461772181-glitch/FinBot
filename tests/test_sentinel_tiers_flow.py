@@ -162,7 +162,7 @@ def test_add_price_five_crossings_in_a_week_is_at_most_once_a_day(make):
     first = levels(run(54.9, et(10, 30), 3))
     assert len(first) == 1 and first[0]["escalate"] is False and "穿过补仓价 55" in first[0]["text"]
     assert first[0]["text"].count("第") == 0
-    for minute, price in ((40, 55.5), (50, 54.0), (60, 55.8)):           # chop inside the lock
+    for minute, price in ((40, 55.5), (50, 54.0), (55, 55.8)):           # chop inside the lock
         assert not levels(run(price, et(10, minute), 3))
     assert not levels(run(56.2, et(11, 0), 3))                           # 2% above 55 is 56.1: re-armed here
     second = levels(run(54.5, et(11, 30), 3))
@@ -198,14 +198,14 @@ def test_level_state_survives_a_restart(make, monkeypatch):
 
 def test_short_moves_are_off_by_default_and_need_half_a_sigma_when_on(make, monkeypatch):
     base = {"daily_sigma": 0.02, "bucket_sigma": {"mid": 0.001}, "avg_vol5": {"mid": 1000.0}}
-    series = bars(et(11, 0), 100.0, n=14) + [{"ts": et(11, 0), "close": 98.8, "volume": 100}]
+    series = bars(et(10, 59), 100.0, n=14) + [{"ts": et(11, 0), "close": 98.8, "volume": 100}]
     s = make()
     assert look(s, "INTC", 98.8, et(11, 0), prev=99.0, base=base, window=series) == []
     monkeypatch.setenv("SENTINEL_SHORT_MOVES", "on")
     out = look(make(), "INTC", 98.8, et(11, 0), prev=99.0, base=base, window=series)
     assert len(out) == 1 and out[0]["kind"] == "short" and out[0]["tier"] == 1 and "短线" in out[0]["text"]
-    small = bars(et(11, 0), 100.0, n=14) + [{"ts": et(11, 0), "close": 99.7, "volume": 100}]
-    assert look(make(), "INTC", 99.7, et(11, 0, 4), prev=99.0, base=base, window=small) == []     # 0.3% < 0.5 * 2%
+    small = bars(et(10, 59), 100.0, n=14) + [{"ts": et(11, 0), "close": 99.7, "volume": 100}]
+    assert look(make(), "INTC", 99.7, et(11, 0), prev=99.0, base=base, window=small) == []     # 0.3% < 0.5 * 2%
 
 
 # --- flush: grouping, merging, urgency ---------------------------------------------------------------------------
