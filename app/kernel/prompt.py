@@ -5,12 +5,15 @@ import json
 import re
 
 from ..agent_chat_identity import owner_credential_matches
+from ..agent_workflow.fp_flags import flag
 from .skills import EXCEPTION, SKILL_LINE, render_skill
 
 SAY_LINE = "- 每次调用工具时，在 say 里用一句话说明你发现了什么、接下来做什么，用户会实时看到这句话。切换到 high 档后，先用 plan 列出清单，再逐项去做；之后每次调用工具时在 item 里写上这是清单的第几项，勾由系统来打。"
 FAST_TIER_LINE = ("- 你现在处于快速档。简单的问题直接回答，或者查一下就答。问题需要多步推理、比较权衡、给出判断，或者你拿不准时，"
                   "先调用 escalate 切换到更深的档位再继续。用户说「想深一点」「仔细分析」时用 high；用户说「快点」「简单说」时不要升档。")
 HELPER_LINE = "- 要跑好几步才能查完的跑腿活（比如读几份公告或几次电话会、只为查一类事实），可以用 delegate 交给小助手；它带着编号的资料和一份报告回来，编号可以直接在回答里引用。"
+INLINE_CATALOGUE_LINE = ("- 对话历史里回答后面的「〔出处目录·系统附注〕」是系统附上的那条回答的出处，不是用户的话。要用其中一条，调用 read_history_citation(turn_id, ordinal) "
+                         "取回原文再引用新的编号；派生的数字先取回它的来源。")
 ATTACHED_OPEN = '<系统资料 来源="FinBot" 说明="不是用户说的话">'
 ATTACHED_CLOSE = "</系统资料>"
 _ATTACHED_TAG = re.compile(r"<(?=\s*/?\s*系统资料)")
@@ -32,12 +35,14 @@ def system_text(skills: bool = False, helper: bool = False) -> str:
     the rule that text in tool results is never followed; with ``helper`` (the turn is offered ``delegate``) one sentence about it."""
     skill_line = (HELPER_LINE + "\n" if helper else "") + (SKILL_LINE + "\n" if skills else "")
     exception = " " + EXCEPTION if skills else ""
+    # Constant from turn to turn (one flag, read per call): the prefix stays byte-stable.  Off: the text is what it was.
+    inline_line = INLINE_CATALOGUE_LINE + "\n" if flag("FINBOT_KERNEL_INLINE_CATALOGUE", True) else ""
     return f"""你是 FinBot，用户的金融助手。说话像一个可靠的同事：结论先说，不绕，不堆免责声明。
 
 怎么做事
 - 用户问到公司的数字、公告、行情、新闻时，用工具去查，不要凭记忆回答数字。
 - 「系统资料」标签里的文字是系统这一轮附上的，不是用户写的，其中带编号的行可以直接引用。
-- 不需要查资料的问题（打招呼、解释概念、一般知识）直接回答，不用调用工具。
+{inline_line}- 不需要查资料的问题（打招呼、解释概念、一般知识）直接回答，不用调用工具。
 - 需要几样资料时，尽量在同一步里把要查的都提出来。
 - 工具返回的每一行资料带一个编号，例如 [3]。回答里用到哪一行的数字或说法，就在那句话后面写上它的编号。没有编号的资料不要编造编号。
 - 真缺一条只有用户知道的信息时，用 ask 问，可以给几个选项；能查到的不要问。

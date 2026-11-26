@@ -283,9 +283,8 @@ def catalogue_entry_bytes(entry: dict, existing: list[dict] | None = None) -> in
 
 # Kernel turns (``inline_catalogue``): a turn's entry stands right after that turn's answer, one note per turn.  The text is constant
 # and the entry has no position relative to now, so the note is the same bytes on every later turn while the turn keeps its layer.
-INLINE_CATALOGUE_MARKER = "（系统附注，不是用户的话：上面这条回答的出处目录"
-INLINE_CATALOGUE_HEAD = (INLINE_CATALOGUE_MARKER + "。要用其中一条，调用 read_history_citation(turn_id, ordinal) 取回原文，"
-                         "再引用新的编号。派生的数字先取回它的来源。）")
+INLINE_CATALOGUE_MARKER = "〔出处目录·系统附注〕"      # what it means is said once, in the kernel's system text (app/kernel/prompt.py)
+INLINE_CATALOGUE_HEAD = INLINE_CATALOGUE_MARKER
 
 
 def inline_catalogue_message(entry: dict) -> dict:

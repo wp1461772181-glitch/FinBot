@@ -79,8 +79,7 @@ def test_each_cited_answer_is_followed_by_its_own_note_and_nothing_names_a_posit
 
 
 def test_the_note_head_is_the_plans_text_and_notes_are_not_conversation():
-    head = ("（系统附注，不是用户的话：上面这条回答的出处目录。要用其中一条，调用 read_history_citation(turn_id, ordinal) "
-            "取回原文，再引用新的编号。派生的数字先取回它的来源。）")
+    head = "〔出处目录·系统附注〕"
     assert layers.INLINE_CATALOGUE_HEAD == head
     note = layers.inline_catalogue_message({"turn_id": "t", "opening": "o", "sources": [], "answers_back": 3})
     assert note["content"] == head + '\n{"turn_id":"t","opening":"o","sources":[]}'
@@ -410,3 +409,31 @@ def test_compaction_pressure_includes_the_half_compressed_notes():
     plain = {**context, "inline_catalogue": False}
     notes = sum(layers.inline_note_bytes(t.catalogue) for t in context["half_turns"] if t.catalogue)
     assert notes and layers.history_usage(context)["bytes"] - layers.history_usage(plain)["bytes"] == notes
+
+
+# --- the explanation lives once in the kernel's system text --------------------------------------------------------------
+
+def test_the_system_text_explains_the_note_once_after_the_system_material_line(monkeypatch):
+    from app.kernel import prompt
+    monkeypatch.delenv("FINBOT_KERNEL_INLINE_CATALOGUE", raising=False)
+    on = prompt.system_text()
+    assert on.count(prompt.INLINE_CATALOGUE_LINE) == 1 and prompt.INLINE_CATALOGUE_LINE.startswith("- 对话历史里回答后面的「〔出处目录·系统附注〕」")
+    lines = on.split("\n")
+    assert lines[lines.index(prompt.INLINE_CATALOGUE_LINE) - 1].startswith("- 「系统资料」标签里的文字")
+    assert on == prompt.system_text() == prompt.SYSTEM          # constant across calls: the prefix stays cache-stable
+    assert prompt.system_text(True, True).count(prompt.INLINE_CATALOGUE_LINE) == 1
+
+
+def test_with_the_flag_off_the_system_text_is_what_it_was(monkeypatch):
+    from app.kernel import prompt
+    monkeypatch.delenv("FINBOT_KERNEL_INLINE_CATALOGUE", raising=False)
+    on = prompt.system_text()
+    monkeypatch.setenv("FINBOT_KERNEL_INLINE_CATALOGUE", "off")
+    off = prompt.system_text()
+    assert off == on.replace(prompt.INLINE_CATALOGUE_LINE + "\n", "") and "出处目录" not in off
+
+
+def test_the_request_system_message_is_identical_on_two_kernel_turns(kernel):
+    first = sent_messages(kernel, turn_rows(4), inline=True)[0]
+    second = sent_messages(kernel, turn_rows(5), inline=True)[0]
+    assert first == second and first["role"] == "system" and "〔出处目录·系统附注〕" in first["content"]
