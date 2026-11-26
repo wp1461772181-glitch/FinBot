@@ -763,10 +763,7 @@ async def handle(run, args: dict) -> dict:
 
 def _direct_after_reads(run, prepared: Prepared) -> bool:
     operation = prepared.operation
-    if not memory_writes() or operation["name"] != "remember":
-        return False
-    arguments = operation["arguments"]
-    return arguments.get("basis") == "noticed" or profile.quote_in_message(arguments["quote"], getattr(run, "question", "") or "")
+    return memory_writes() and operation["name"] == "remember" and operation["arguments"].get("basis") == "noticed"
 
 
 async def _handle(run, name, args: dict) -> tuple[dict, str]:
@@ -795,9 +792,8 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
         return prepared, "proposed" if status == "awaiting_selection" else f"refused:{prepared.get('error_code') or status or 'refused'}"
     # Tier 1 runs at once only while nothing but the owner's own words has been seen this turn: once a read has come back, a
     # page or filing could be asking the model to remember something, so the operation goes onto the card like tier 2.
-    # With memory writes on, ``remember`` still runs at once after a read when it is a guess (basis noticed: stored unconfirmed, he can reject it)
-    # or when its quote is in this turn's own message.  A quote found only in an earlier turn proves nothing about the text, so it goes on the card.
-    # record_view, forget, drop_view and the research queue keep the rule.
+    # With memory writes on, after a read only a guess (``remember`` with basis noticed: stored unconfirmed, light use, he can reject it) still runs at once.
+    # A said ``remember`` (his quote proves nothing about the text next to it), record_view, forget, drop_view and the research queue go on the card.
     if prepared.tier == 1 and (not run.read_results or _direct_after_reads(run, prepared)):
         return await _run_at_once(run, prepared)
     return _collect(run, prepared)

@@ -862,7 +862,8 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
      from .agent_context_summary import schedule_summary
      schedule_summary(cid,x_chat_session,provider=chosen.provider,model=chosen.model,
                       api_key=chosen.key(),base_url=chosen.base_url,window=chosen.window,anchored=anchored,**({"catalog_name":chosen.name} if chosen.name else {}))
-     if _is_owner(x_chat_session) and not payload.pending_request_id and ended!="stopped":
+     # A kernel turn writes its own memory (``remember`` with basis noticed): the side extractor, which sees one sentence, stays out of it.
+     if _is_owner(x_chat_session) and not payload.pending_request_id and ended!="stopped" and not (anchored and fp_flag("FINBOT_KERNEL_MEMORY_WRITES",True)):
       from .agent_profile_extract import schedule_extraction,remember_handled
       schedule_extraction(owner_hash(x_chat_session),payload.message,conversation_id=cid,turn_id=turn,
                           bot=bot,asked_to_remember=remember_handled(event.get("audit")),

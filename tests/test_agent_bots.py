@@ -407,6 +407,25 @@ def test_bot_turn_uses_the_catalog_model_and_a_changed_model_applies_on_the_next
     assert client.post("/agent-chat/stream", headers=H, json={"message": "hi"}).status_code == 422
 
 
+@pytest.mark.parametrize("kernel, flag, extracted", [(True, "on", 0), (True, "off", 1), (False, "on", 1), (False, "off", 1)])
+def test_the_side_extractor_stays_out_of_kernel_turns_only_while_the_memory_writes_flag_is_on(owner, client, monkeypatch, kernel, flag, extracted):
+    catalog.save_entry("alpha", provider="deepseek", model="deepseek-chat", api_key=KEY_A, create=True, is_default=True)
+    bot = client.post("/agent-chat/bots", headers=H, json={"name": "读财报", "model": "alpha"}).json()["bot"]
+
+    async def stream_workflow(**kwargs):
+        yield {"event": "delta", "text": "好的。"}
+        yield {"event": "done", "status": "complete", "citations": [], "final_protocol": {}, "audit": {}}
+    import app.agent_chat_stream as stream
+    calls = []
+    monkeypatch.setattr(stream, "stream_workflow", stream_workflow)
+    monkeypatch.setattr(stream, "kernel_turn", lambda bot_: kernel)
+    monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", flag)
+    monkeypatch.setattr("app.agent_context_summary.schedule_summary", lambda *a, **k: None)
+    monkeypatch.setattr("app.agent_profile_extract.schedule_extraction", lambda *a, **k: calls.append(a))
+    assert client.post("/agent-chat/stream", headers=H, json={"message": "我平时总先看同比", "bot_id": bot["id"]}).status_code == 200
+    assert len(calls) == extracted
+
+
 def test_bot_turn_with_a_missing_key_fails_with_a_code(owner, client, monkeypatch):
     monkeypatch.delenv("NOKEY_API_KEY", raising=False)
     catalog.save_entry("nokey", provider="deepseek", model="deepseek-chat", key_env="NOKEY_API_KEY", create=True)

@@ -180,15 +180,14 @@ def test_a_repeated_or_rejected_guess_writes_nothing_and_says_why():
     assert back["ok"] is False and back["data"][0]["reason"] == "这条他否过。" and [r.status for r in _rows()] == ["rejected"]
 
 
-def test_after_a_read_a_said_quote_from_this_turn_runs_at_once_but_one_from_an_earlier_turn_goes_on_a_card():
-    now = make_run("NVDA 同比多少", EARLIER, read_results=2)
-    assert remember(now)["data"][0]["status"] == "done" and now.proposals == []
-    earlier = make_run("再看看 INTC", EARLIER, read_results=2)
-    out = remember(earlier, text="别的")
-    assert out["data"][0]["status"] == "awaiting_confirmation" and [p.operation["name"] for p in earlier.proposals] == ["remember"]
-    assert len(_rows()) == 1       # only the first was written
+def test_after_a_read_a_said_remember_goes_on_a_card_whatever_the_quote_but_without_reads_it_runs_at_once():
+    for question in ("NVDA 同比多少", "再看看 INTC"):       # the quote is in this turn's message, or only in an earlier turn
+        run_ = make_run(question, EARLIER, read_results=2)
+        out = remember(run_)
+        assert out["data"][0]["status"] == "awaiting_confirmation" and [p.operation["name"] for p in run_.proposals] == ["remember"]
+    assert _rows() == []
     quiet = make_run("再看看 INTC", EARLIER, read_results=0)
-    assert remember(quiet, text="没读过资料")["data"][0]["status"] == "done"       # no read: the widened quote source executes at once
+    assert remember(quiet, text="没读过资料")["data"][0]["status"] == "done" and len(_rows()) == 1       # no read: his earlier words are enough
 
 
 def test_after_a_read_a_noticed_guess_runs_at_once_as_a_proposal():
