@@ -475,3 +475,63 @@ def test_at_night_a_reminder_waits_for_the_digest_and_an_urgent_rule_is_sent(tmp
     assert channels.sent == [] and store.alerts_where("deferred = 1")[0]["kind"] == "rule"
     esc.raise_alert(snap, rule_candidate("NVDA", urgent=True))
     assert len(channels.sent) == 1 and len(channels.rang) == 1
+
+
+# --- state-like metrics fire on the edge -------------------------------------------------------------------------------
+
+def below_50(**extra):
+    return make_rule("price", "below", ((50, "remind"),), **extra)
+
+
+def test_price_below_that_stays_below_for_three_days_says_one_push(make):
+    s, rule = make(), below_50()
+    assert len(only_rules(look(s, 48.0, et(10, 0, day=3), rules_list=[rule]))) == 1     # first look, condition holds
+    assert only_rules(look(s, 47.0, et(10, 30, day=3), rules_list=[rule])) == []
+    assert only_rules(look(s, 46.0, et(10, 0, day=4), rules_list=[rule])) == []         # a new day, same stretch
+    assert only_rules(look(s, 45.0, et(10, 0, day=5), rules_list=[rule])) == []
+
+
+def test_it_says_again_once_the_condition_was_seen_false(make):
+    s, rule = make(), below_50()
+    assert len(only_rules(look(s, 48.0, et(10, 0, day=3), rules_list=[rule]))) == 1
+    assert only_rules(look(s, 47.0, et(10, 0, day=4), rules_list=[rule])) == []
+    assert only_rules(look(s, 52.0, et(10, 0, day=5), rules_list=[rule])) == []         # above: re-armed, nothing to say
+    assert len(only_rules(look(s, 49.0, et(11, 0, day=5), rules_list=[rule]))) == 1     # below again, same day as the re-arm
+
+
+def test_still_at_most_once_per_day_after_a_re_arm(make):
+    s, rule = make(), below_50()
+    assert len(only_rules(look(s, 48.0, et(10, 0), rules_list=[rule]))) == 1
+    assert only_rules(look(s, 52.0, et(10, 5), rules_list=[rule])) == []
+    assert only_rules(look(s, 48.0, et(10, 10), rules_list=[rule])) == []               # re-armed, but said today already
+    assert len(only_rules(look(s, 48.0, et(10, 0, day=4), rules_list=[rule]))) == 1     # next day it may say again
+
+
+def test_a_restart_in_the_middle_of_the_condition_does_not_repeat(make):
+    s, rule = make(), below_50()
+    assert len(only_rules(look(s, 48.0, et(10, 0, day=3), rules_list=[rule]))) == 1
+    restarted = make()                                                                  # same store file
+    assert only_rules(look(restarted, 47.0, et(10, 0, day=4), rules_list=[rule])) == []
+
+
+def test_a_missing_measurement_neither_re_arms_nor_fires(make):
+    s = make()
+    rule = make_rule("n_day_change", "up", ((10, "remind"),), window_days=3)
+    daily = {"closes": [30.0, 31.0, 32.0], "avg_volume": None}
+    assert len(only_rules(look(s, 36.0, et(10, 0, day=3), rules_list=[rule], daily=daily))) == 1
+    assert only_rules(look(s, 36.0, et(10, 0, day=4), rules_list=[rule], daily=None)) == []     # no history today
+    assert only_rules(look(s, 36.0, et(10, 5, day=4), rules_list=[rule], daily=daily)) == []    # still the same stretch
+
+
+def test_a_stronger_level_is_armed_on_its_own(make):
+    s = make()
+    rule = make_rule("price", "below", ((50, "remind"), (40, "urgent")))
+    assert [a["escalate"] for a in only_rules(look(s, 48.0, et(10, 0), rules_list=[rule]))] == [False]
+    assert [a["escalate"] for a in only_rules(look(s, 39.0, et(10, 5), rules_list=[rule]))] == [True]
+
+
+def test_a_change_metric_keeps_plain_once_per_day(make):
+    s, rule = make(), make_rule("position_pnl", "down", ((300, "remind"),))
+    assert len(only_rules(look(s, 35.0, et(10, 0, day=3), rules_list=[rule]))) == 1
+    assert only_rules(look(s, 35.0, et(10, 30, day=3), rules_list=[rule])) == []
+    assert len(only_rules(look(s, 35.0, et(10, 0, day=4), rules_list=[rule]))) == 1     # no edge needed: a new day

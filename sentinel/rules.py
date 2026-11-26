@@ -21,6 +21,9 @@ DIRECTIONS = {
     "volume_ratio": ("above",),
 }
 METRICS = tuple(DIRECTIONS)
+# State-like metrics describe a condition that can stay true for days: they fire on the edge (see main._rule_alerts).
+# The others measure a move or a pace that resets by itself and keep plain once-per-level-per-day.
+STATE_METRICS = ("price", "position_weight", "cost_change", "n_day_change")
 LEVEL_NAMES = ("remind", "urgent")
 REPEATS = ("daily", "once")
 SESSION_MINUTES = 390             # 09:30-16:00
@@ -152,12 +155,17 @@ def _hit(direction: str, value: float, threshold: float) -> bool:
     return abs(value) >= threshold
 
 
-def crossed(rule: dict, value: float | None) -> int | None:
-    """The index of the strongest level ``value`` has reached, or None.  Equal to a threshold counts as reached."""
+def reached(rule: dict, value: float | None) -> list[int]:
+    """Indexes of every level whose condition holds at ``value``, mildest first.  Equal to a threshold counts."""
     if value is None:
-        return None
-    reached = [i for i in severity_order(rule) if _hit(rule["direction"], value, float(rule["levels"][i]["threshold"]))]
-    return reached[-1] if reached else None
+        return []
+    return [i for i in severity_order(rule) if _hit(rule["direction"], value, float(rule["levels"][i]["threshold"]))]
+
+
+def crossed(rule: dict, value: float | None) -> int | None:
+    """The index of the strongest level ``value`` has reached, or None."""
+    hit = reached(rule, value)
+    return hit[-1] if hit else None
 
 
 def daily_summary(bars: list[dict], today: date) -> dict:

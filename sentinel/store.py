@@ -65,6 +65,10 @@ class Store:
             conn.execute("CREATE TABLE IF NOT EXISTS rule_state ("
                          "rule_id TEXT NOT NULL, ny_date TEXT NOT NULL, level TEXT NOT NULL, fired_at REAL NOT NULL,"
                          "PRIMARY KEY (rule_id, ny_date, level))")
+            # Edge trigger of the state-like rules: a row with armed=0 means the level fired and its condition has not been
+            # seen false since.  No row = armed (a new rule's first look may fire).
+            conn.execute("CREATE TABLE IF NOT EXISTS rule_arm ("
+                         "rule_id TEXT NOT NULL, level TEXT NOT NULL, armed INTEGER NOT NULL, PRIMARY KEY (rule_id, level))")
             # CREATE TABLE IF NOT EXISTS never adds columns to a table an older release made.
             have = {row["name"] for row in conn.execute("PRAGMA table_info(alerts)")}
             for column, ddl in (("superseded_by", "INTEGER"), ("event_date", "TEXT"), ("digest_text", "TEXT")):
@@ -188,6 +192,16 @@ class Store:
         with self._conn() as conn:
             conn.execute("INSERT OR IGNORE INTO rule_state (rule_id, ny_date, level, fired_at) VALUES (?, ?, ?, ?)",
                          (rule_id, scope, level, ts))
+
+    def rule_armed(self, rule_id: str, level: str) -> bool:
+        with self._conn() as conn:
+            row = conn.execute("SELECT armed FROM rule_arm WHERE rule_id = ? AND level = ?", (rule_id, level)).fetchone()
+        return True if row is None else bool(row["armed"])
+
+    def set_rule_armed(self, rule_id: str, level: str, armed: bool) -> None:
+        with self._conn() as conn:
+            conn.execute("INSERT OR REPLACE INTO rule_arm (rule_id, level, armed) VALUES (?, ?, ?)",
+                         (rule_id, level, int(armed)))
 
     def rule_unmark(self, rule_id: str, scope: str, levels: list[str]) -> None:
         with self._conn() as conn:

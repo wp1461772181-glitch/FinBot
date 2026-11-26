@@ -373,17 +373,28 @@ class Sentinel:
                 if self._rule_done_on(rule) is not None:
                     continue
                 value = owner_rules.measure(rule, ctx)
-                index = owner_rules.crossed(rule, value)
+                rule_id = str(rule["id"])
+                hit = owner_rules.reached(rule, value)
+                edge = rule["metric"] in owner_rules.STATE_METRICS
+                if edge and value is not None:
+                    # re-arm every level whose condition is seen false at this poll (no measurement: no change)
+                    for i in range(len(rule["levels"])):
+                        if i not in hit:
+                            self.store.set_rule_armed(rule_id, owner_rules.level_key(rule, i), True)
+                index = hit[-1] if hit else None
                 if index is None:
                     continue
                 scope = "*" if (rule.get("repeat") or "daily") == "once" else today
-                rule_id = str(rule["id"])
                 if self.store.rule_fired_at(rule_id, scope, owner_rules.level_key(rule, index)) is not None:
                     continue
+                if edge and not self.store.rule_armed(rule_id, owner_rules.level_key(rule, index)):
+                    continue                              # still the same stretch of the condition being true
                 text = signals.format_rule(rule, index, value, ctx)
                 order = owner_rules.severity_order(rule)
                 for i in order[:order.index(index) + 1]:
                     self.store.rule_mark(rule_id, scope, owner_rules.level_key(rule, i), now.timestamp())
+                    if edge:
+                        self.store.set_rule_armed(rule_id, owner_rules.level_key(rule, i), False)
                 level = rule["levels"][index]["level"]
                 way = {"up": "up", "above": "up", "down": "down", "below": "down"}.get(rule["direction"]) or (
                     "up" if (value or 0) > 0 else "down")
