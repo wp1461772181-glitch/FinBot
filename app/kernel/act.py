@@ -389,7 +389,14 @@ def _watch_title(verb: str, symbol: str) -> str:
     return f"{verb} · {owner_views.display_name(symbol)}（{symbol}）"
 
 
-async def _set_watch_rule(run, args: dict, operation: dict) -> dict:
+NIGHT_NOTE = "夜里（北京时间 0–8 点）「提醒」会攒进早上的汇总，「加急」照常马上发。"
+
+
+def _expiry_words(value) -> str:
+    return value or "不设期限"
+
+
+async def _set_watch_rule(run, args: dict, operation: dict, clear: tuple = ()) -> dict:
     """The card of one watch rule: the reading and the dry run are written here, by code, from the validated fields.  The model's words are not on it."""
     owner = run.context.owner_hash
     words = _turn_words(run)
@@ -398,7 +405,7 @@ async def _set_watch_rule(run, args: dict, operation: dict) -> dict:
     quote = _quote(args["quote"], words)
     try:
         if args.get("rule_id"):
-            old, fields = await asyncio.to_thread(watch_rules.merged_fields, owner, args["rule_id"], args)
+            old, fields = await asyncio.to_thread(watch_rules.merged_fields, owner, args["rule_id"], args, clear)
         else:
             old, fields = None, await asyncio.to_thread(watch_rules.validate, args, owner=owner)
     except watch_rules.WatchRuleError as failure:
@@ -412,7 +419,10 @@ async def _set_watch_rule(run, args: dict, operation: dict) -> dict:
     except Exception:
         logger.exception("watch rule dry run failed")
         shown = DRY_RUN_FAILED
-    lines = ([f"原来的规则：{old['text']}"] if old else []) + [shown, WATCH_EFFECT]
+    lines = [f"原来的规则：{old['text']}"] if old else []
+    if old and old["expires_on"] != fields["expires_on"]:
+        lines.append(f"到期日：{_expiry_words(old['expires_on'])} → {_expiry_words(fields['expires_on'])}。")
+    lines += [shown, *([NIGHT_NOTE] if any(e["level"] == "remind" for e in fields["levels"]) else []), WATCH_EFFECT]
     return {"title": _watch_title("改一条盯防规则" if old else "设一条盯防规则", fields["symbol"]),
             "targets": [{"symbol": fields["symbol"], "title": watch_rules.describe(fields), "quote": quote}], "alternative": "\n".join(lines)}
 
@@ -628,7 +638,11 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
         if "error_code" in display:
             return display
     elif name in WATCH_OPERATIONS:
-        display = await (_set_watch_rule if name == "set_watch_rule" else _delete_watch_rule)(run, args, operation)
+        if name == "set_watch_rule":
+            wiped = ("expires_on",) if "expires_on" in arguments and not args.get("expires_on") else ()
+            display = await _set_watch_rule(run, args, operation, wiped)
+        else:
+            display = await _delete_watch_rule(run, args, operation)
         if "error_code" in display:
             return display
     else:

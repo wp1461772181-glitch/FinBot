@@ -29,7 +29,7 @@ class RuleBody(BaseModel):
     levels: list[LevelBody] | None = Field(default=None, max_length=2)
     window_days: int | None = None
     repeat: str | None = Field(default=None, max_length=8)
-    expires_on: str | None = Field(default=None, max_length=10)
+    expires_on: str | None = Field(default=None, max_length=10)      # on a change: null or "" removes the last day
     quote: str | None = Field(default=None, max_length=400)
 
 
@@ -60,7 +60,8 @@ async def create_endpoint(body: RuleBody, x_chat_session: str | None = Header(de
 async def update_endpoint(rule_id: str, body: RuleBody, x_chat_session: str | None = Header(default=None)):
     owner = owner_hash(_owner_only(x_chat_session))
     try:
-        return await asyncio.to_thread(watch_rules.update, owner, rule_id, _fields(body), body.quote)
+        wipe = ("expires_on",) if "expires_on" in body.model_fields_set and not body.expires_on else ()      # explicit null or "" clears it
+        return await asyncio.to_thread(lambda: watch_rules.update(owner, rule_id, _fields(body), body.quote, clear=wipe))
     except watch_rules.WatchRuleError as exc:
         raise _refused(exc)
 

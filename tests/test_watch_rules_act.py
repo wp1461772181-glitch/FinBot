@@ -26,6 +26,8 @@ OTHER_HASH = owner_hash("somebody-else")
 ASK = "英特尔涨跌 10% 提醒我，20% 加急"
 ARGS = {"symbol": "INTC", "metric": "day_change", "direction": "either",
         "levels": [{"threshold": 10, "level": "remind"}, {"threshold": 20, "level": "urgent"}], "quote": ASK}
+ESTIMATE = "（按每天常规交易时段的最高最低价估算；实际盘前盘后也会检查，盘中一闪而过的波动可能比这里多或少）"
+NIGHT = "夜里（北京时间 0–8 点）「提醒」会攒进早上的汇总，「加急」照常马上发。"
 HOLD = {"INTC": {"shares": 100.0, "avg_cost": 50.0, "total_assets": 10000.0}}
 
 
@@ -102,14 +104,16 @@ def test_the_card_is_the_reading_plus_the_dry_run_and_nothing_the_model_wrote(ow
     assert display["targets"] == [{"symbol": "INTC", "title": "英特尔相对昨收涨或跌达到 10%：提醒；达到 20%：加急。每天每档一次。", "quote": ASK}]
     today = watch_rules.today_ny()
     first, second, third = (today - timedelta(days=n) for n in (25, 10, 3))
-    assert display["alternative"] == (f"按这条规则，过去 30 天会提醒你 4 次：{first:%m-%d}、{second:%m-%d}（提醒+加急）、{third:%m-%d}。\n"
-                                      "点确认后生效；哨兵每分钟检查，不用模型。")
+    assert display["alternative"] == (f"按这条规则，过去 30 天会提醒你 4 次：{first:%m-%d}、{second:%m-%d}（提醒+加急）、{third:%m-%d}。{ESTIMATE}\n"
+                                      f"{NIGHT}\n点确认后生效；哨兵每分钟检查，不用模型。")
     assert out.operation["fields"]["levels"] == ARGS["levels"] and out.operation["arguments"]["quote"] == ASK
 
 
 def test_the_dry_run_line_says_when_there_is_no_history(owner):
     out = prepare(ARGS)
-    assert out.display["alternative"] == "试跑：没有足够的历史行情，试跑不了。\n点确认后生效；哨兵每分钟检查，不用模型。"
+    assert out.display["alternative"] == f"试跑：没有足够的历史行情，试跑不了。\n{NIGHT}\n点确认后生效；哨兵每分钟检查，不用模型。"
+    urgent_only = prepare({**ARGS, "levels": [{"threshold": 10, "level": "urgent"}]})
+    assert NIGHT not in urgent_only.display["alternative"]          # nothing to hold back for a rule with no remind level
 
 
 def test_a_dry_run_that_breaks_does_not_stop_the_card(owner, monkeypatch):
@@ -237,9 +241,9 @@ def test_list_watch_rules_has_his_rules_and_the_marked_defaults(owner, monkeypat
     own = [r for r in rows if r["kind"] == "你自己定的规则"]
     defaults = [r for r in rows if r["kind"] == "系统默认"]
     assert [r["id"] for r in own][0] == mine["id"] and own[0]["text"] == mine["text"] and own[0]["created_on"] == mine["created_on"]
-    assert own[0]["last_fired"] is None
+    assert own[0]["last_fired"] is None and own[0]["status"] == "生效中"          # no sentinel store here: nothing is known
     assert own[0]["note"] == "默认的涨跌分级对它不生效" and "note" not in own[1]
-    assert len(defaults) == 4 and "标准" in defaults[0]["text"] and "INTC 默认的涨跌分级对它不生效" in defaults[0]["text"]
+    assert len(defaults) == 4 and "标准" in defaults[0]["text"] and "INTC（涨跌）" in defaults[0]["text"]
     assert "止损价永远会盯" in defaults[1]["text"] and defaults[2]["text"] == "5 分钟急动提醒：关。"
 
 
@@ -253,7 +257,7 @@ def test_list_watch_rules_reads_the_last_firing_from_the_sentinel_store(owner, m
     conn.commit()
     conn.close()
     monkeypatch.setenv("SENTINEL_DB_PATH", str(path))
-    assert watch_rules_view.rows(OWNER_HASH)[0]["last_fired"] == "2025-11-20 12:00"
+    assert watch_rules_view.rows(OWNER_HASH)[0]["last_fired"] == "11-20 20:00（北京时间）"
 
 
 def test_the_read_tool_dispatch_returns_the_rows(owner):
@@ -293,7 +297,76 @@ def test_the_memory_overview_lists_his_rules_with_their_text(owner):
     from app import memory_overview
     rule = watch_rules.create(OWNER_HASH, ARGS | {"quote": None}, ASK)
     watch = memory_overview.collect(OWNER_HASH)["watch"]
-    assert watch["rules"] == [{"id": rule["id"], "symbol": "INTC", "text": rule["text"], "created_on": rule["created_on"], "expires_on": None}]
+    assert watch["rules"] == [{"id": rule["id"], "symbol": "INTC", "text": rule["text"], "created_on": rule["created_on"], "expires_on": None,
+                               "status": "active"}]
     assert memory_overview.collect(OWNER_HASH)["counts"]["watch"] == 1
     lines = memory_overview._watch_lines(watch)
     assert "### 你自己定的规则" in lines and any(rule["text"] in line for line in lines)
+
+
+def _store(path, rule_ids_and_rows):
+    import sqlite3
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE rule_state(rule_id TEXT, ny_date TEXT, level TEXT, fired_at REAL)")
+    for row in rule_ids_and_rows:
+        conn.execute("INSERT INTO rule_state VALUES (?, ?, ?, ?)", row)
+    conn.commit()
+    conn.close()
+
+
+def test_list_marks_expired_and_finished_rules_and_the_override_is_direction_aware(owner, monkeypatch, tmp_path):
+    from sentinel import rules as sr
+    path = tmp_path / "sentinel.db"
+    monkeypatch.setenv("SENTINEL_DB_PATH", str(path))
+    up = watch_rules.create(OWNER_HASH, ARGS | {"quote": None, "direction": "up", "symbol": "NVDA"}, "q")
+    once = watch_rules.create(OWNER_HASH, ARGS | {"quote": None, "repeat": "once", "symbol": "AMD"}, "q")
+    old = watch_rules.create(OWNER_HASH, ARGS | {"quote": None, "symbol": "MSFT"}, "q")
+    with SessionLocal() as db:
+        import uuid as _uuid
+        from datetime import date
+        db.get(WatchRule, _uuid.UUID(old["id"])).expires_on = date(2020, 1, 1)
+        db.commit()
+    _store(path, [(once["id"], "*", sr.level_key(once, sr.severity_order(once)[-1]), 1763640000)])
+    rows = {r["symbol"]: r for r in watch_rules_view.rows(OWNER_HASH) if r["kind"] == "你自己定的规则"}
+    assert rows["NVDA"]["note"] == "默认的上涨分级对它不生效" and rows["NVDA"]["status"] == "生效中" and rows["NVDA"]["last_fired"] == "近 7 天没有触发"
+    assert rows["AMD"]["status"] == "已完成（不再检查）" and "note" not in rows["AMD"] and rows["AMD"]["last_fired"] == "11-20 20:00（北京时间）"
+    assert rows["MSFT"]["status"] == "已过期（不再检查）" and "note" not in rows["MSFT"]
+    tiers = next(r for r in watch_rules_view.rows(OWNER_HASH) if r["kind"] == "系统默认")["text"]
+    assert "NVDA（上涨）" in tiers and "AMD" not in tiers and "MSFT" not in tiers
+    down = watch_rules.create(OWNER_HASH, ARGS | {"quote": None, "direction": "down", "symbol": "NVDA"}, "q")
+    assert next(r for r in watch_rules_view.rows(OWNER_HASH) if r.get("id") == down["id"])["note"] == "默认的下跌分级对它不生效"
+    assert "NVDA（涨跌）" in next(r for r in watch_rules_view.rows(OWNER_HASH) if r["kind"] == "系统默认")["text"]      # up + down together cover both
+
+
+def test_the_memory_overview_marks_finished_rules(owner):
+    from app import memory_overview
+    rule = watch_rules.create(OWNER_HASH, ARGS | {"quote": None}, ASK)
+    with SessionLocal() as db:
+        import uuid as _uuid
+        from datetime import date
+        db.get(WatchRule, _uuid.UUID(rule["id"])).expires_on = date(2020, 1, 1)
+        db.commit()
+    watch = memory_overview.collect(OWNER_HASH)
+    assert watch["watch"]["rules"][0]["status"] == "expired" and watch["counts"]["watch"] == 0
+    assert any("已过期（不再检查）" in line for line in memory_overview._watch_lines(watch["watch"]))
+
+
+def test_update_card_shows_the_last_day_change_and_clears_it_only_when_asked(owner):
+    press(prepare({**ARGS, "expires_on": "2099-12-31"}))
+    rule = watch_rules.list_rules(OWNER_HASH)[0]
+    words = "英特尔那条规则不设期限了"
+    kept = prepare({"rule_id": rule["id"], "repeat": "once", "quote": "英特尔那条规则"}, question=words)
+    assert kept.operation["fields"]["expires_on"] == "2099-12-31" and "到期日" not in kept.display["alternative"]
+    cleared = prepare({"rule_id": rule["id"], "expires_on": None, "quote": "那条规则不设期限了"}, question=words)
+    assert cleared.operation["fields"]["expires_on"] is None and "到期日：2099-12-31 → 不设期限。" in cleared.display["alternative"]
+    assert press(cleared)["ok"] and watch_rules.list_rules(OWNER_HASH)[0]["expires_on"] is None
+    empty = prepare({"rule_id": rule["id"], "expires_on": "", "quote": "那条规则不设期限了"}, question=words)
+    assert isinstance(empty, act.Prepared) and empty.operation["fields"]["expires_on"] is None
+
+
+def test_the_route_clears_the_last_day_on_an_explicit_null(owner, client):
+    mine = {"X-Chat-Session": OWNER}
+    body = {"symbol": "INTC", "metric": "day_change", "levels": [{"threshold": 10, "level": "remind"}], "expires_on": "2099-12-31"}
+    rule_id = client.post("/agent-chat/watch-rules", json=body, headers=mine).json()["id"]
+    assert client.patch(f"/agent-chat/watch-rules/{rule_id}", json={"repeat": "once"}, headers=mine).json()["expires_on"] == "2099-12-31"
+    assert client.patch(f"/agent-chat/watch-rules/{rule_id}", json={"expires_on": None}, headers=mine).json()["expires_on"] is None

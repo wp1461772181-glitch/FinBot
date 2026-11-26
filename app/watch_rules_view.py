@@ -6,39 +6,18 @@ from __future__ import annotations
 
 import logging
 import os
-import sqlite3
-from pathlib import Path
-
 from . import watch_rules
 
 log = logging.getLogger(__name__)
 OWN = "你自己定的规则"
 DEFAULT = "系统默认"
-NOT_APPLIED = "默认的涨跌分级对它不生效"
 SENSITIVITY_WORDS = {"quiet": "安静", "standard": "标准", "sensitive": "敏感"}
 
 
-def _sentinel_db() -> Path:
-    env = os.environ.get("SENTINEL_DB_PATH")
-    return Path(env) if env else Path(__file__).resolve().parent.parent / "data" / "sentinel.db"
-
-
 def last_fired(rule_ids: list[str]) -> dict[str, str]:
-    """{rule_id: when} from the sentinel's ``rule_state`` table; empty when the table or the file is not there."""
-    path = _sentinel_db()
-    if not rule_ids or not path.is_file():
-        return {}
-    try:
-        conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=2.0)
-        try:
-            rows = conn.execute("SELECT rule_id, MAX(fired_at) FROM rule_state GROUP BY rule_id").fetchall()
-        finally:
-            conn.close()
-    except Exception:
-        return {}
-    from datetime import UTC, datetime
-    wanted = set(rule_ids)
-    return {rid: datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%d %H:%M") for rid, at in rows if rid in wanted and at}
+    """{rule_id: "11-26 22:40（北京时间）"} for the rules the sentinel has a row for; empty when its store cannot be read."""
+    found = watch_rules.fired_rows(rule_ids) or {}
+    return {rid: watch_rules.when_beijing(max(at for _, _, at in rows)) for rid, rows in found.items() if rows}
 
 
 def _tiers_text(sensitivity: str) -> str:
@@ -65,19 +44,31 @@ def _plan_prices(owner: str) -> list[str]:
     return found
 
 
+COVERS = {"up": "上涨", "down": "下跌"}
+NEVER_FIRED = "近 7 天没有触发"
+
+
+def _override_word(direction: str) -> str:
+    return COVERS.get(direction, "涨跌")
+
+
 def rows(owner: str) -> list[dict]:
     mine = watch_rules.list_rules(owner)
-    fired = last_fired([r["id"] for r in mine])
-    moved = sorted({r["symbol"] for r in mine if r["metric"] == "day_change"})
-    out = []
+    states = watch_rules.fired_rows([r["id"] for r in mine])
+    out, covered = [], {}
     for rule in mine:
+        status = watch_rules.status_of(rule, (states or {}).get(rule["id"]))
+        fired = (states or {}).get(rule["id"]) or []
         row = {"kind": OWN, "id": rule["id"], "symbol": rule["symbol"], "text": rule["text"], "created_on": rule["created_on"],
-               "expires_on": rule["expires_on"], "last_fired": fired.get(rule["id"])}
-        if rule["metric"] == "day_change":
-            row["note"] = NOT_APPLIED
+               "expires_on": rule["expires_on"], "status": watch_rules.STATUS_WORDS.get(status, "生效中"),
+               "last_fired": watch_rules.when_beijing(max(at for _, _, at in fired)) if fired else (NEVER_FIRED if states is not None else None)}
+        if status == watch_rules.ACTIVE and rule["metric"] == "day_change":      # only a rule that is still checked takes the default's place
+            row["note"] = f"默认的{_override_word(rule['direction'])}分级对它不生效"
+            covered.setdefault(rule["symbol"], set()).update({"up", "down"} if rule["direction"] == "either" else {rule["direction"]})
         out.append(row)
     sensitivity = (os.environ.get("SENTINEL_SENSITIVITY") or "standard").strip().lower()
-    tiers = _tiers_text(sensitivity) + (f"{'、'.join(moved)} {NOT_APPLIED}（你为它定了自己的涨跌规则）。" if moved else "")
+    moved = [f"{symbol}（{_override_word('either' if len(sides) == 2 else next(iter(sides)))}）" for symbol, sides in sorted(covered.items())]
+    tiers = _tiers_text(sensitivity) + (f"你为{'、'.join(moved)}定了自己的涨跌规则，默认的分级在这些方向上对它们不生效。" if moved else "")
     prices = _plan_prices(owner)
     short = (os.environ.get("SENTINEL_SHORT_MOVES") or "").strip().lower() in {"on", "1", "true", "yes"}
     out += [{"kind": DEFAULT, "text": tiers},

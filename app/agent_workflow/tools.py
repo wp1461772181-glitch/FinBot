@@ -284,7 +284,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
                 return result([{'status':'deleted','symbol':gone['symbol'],'rule_id':gone['id'],'title':gone['text']}],'watch rule')
             fields=args.get('_fields')
             if not fields:return error('confirmation_required')
-            if args.get('rule_id'):saved=await asyncio.to_thread(watch_rules.update,context.owner_hash,args['rule_id'],fields,args['quote'])
+            if args.get('rule_id'):saved=await asyncio.to_thread(lambda:watch_rules.update(context.owner_hash,args['rule_id'],fields,args['quote'],replace=True))
             else:saved=await asyncio.to_thread(watch_rules.create,context.owner_hash,fields,args['quote'])
         except watch_rules.WatchRuleError as exc:return {'ok':False,'data':[],'error_code':exc.code,'reason':exc.reason,'hint':exc.reason}
         return result([{'status':'saved','symbol':saved['symbol'],'rule_id':saved['id'],'title':saved['text']}],'watch rule')

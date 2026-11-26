@@ -286,7 +286,7 @@ class SetWatchRuleArgs(Args):
     levels:list[WatchLevelArgs]|None=Field(default=None,min_length=1,max_length=2,description='One or two levels. 「10% 提醒，20% 加急」 is [{threshold:10,level:remind},{threshold:20,level:urgent}].')
     window_days:int|None=Field(default=None,description='Only for n_day_change: how many trading days back (2 to 60).')
     repeat:Literal['daily','once']|None=Field(default=None,description='daily (default): each level at most once a day. once: each level once ever, and the rule switches itself off after its highest level fired.')
-    expires_on:str|None=Field(default=None,pattern=r'^\d{4}-\d{2}-\d{2}$',description='The last day it is checked, if he gave one.')
+    expires_on:str|None=Field(default=None,pattern=r'^(\d{4}-\d{2}-\d{2})?$',description='The last day it is checked, if he gave one. When changing a rule, null or an empty string removes the last day; leave it out to keep it.')
     quote:str=Field(min_length=1,max_length=400,description="The owner's own words of THIS turn that ask for the rule (at least 4 characters), copied character for character.")
     @model_validator(mode='after')
     def whole_or_change(self):

@@ -16,7 +16,8 @@ from app.watch_rules import WatchRuleError, describe, dry_run, dry_run_line, val
 OWNER = "owner-hash"
 TODAY = date(2026, 11, 26)
 CONTRACT = json.loads((Path(__file__).parent / "fixtures" / "watch_rules_contract.json").read_text())
-HOLD = {"INTC": {"shares": 100.0, "avg_cost": 50.0, "total_assets": 10000.0}}
+HOLD = {"INTC": {"shares": 100.0, "avg_cost": 50.0, "total_assets": 20000.0}}
+ESTIMATE = "（按每天常规交易时段的最高最低价估算；实际盘前盘后也会检查，盘中一闪而过的波动可能比这里多或少）"
 
 
 @pytest.fixture
@@ -136,9 +137,9 @@ def test_describe_directions_repeat_and_expiry():
     assert describe({**base, "expires_on": "2026-12-01"}).endswith("每天最多一次。有效到 2026-12-01。")
     price = next(r for r in CONTRACT if r["metric"] == "price")
     assert describe({**price, "direction": "above", "levels": level((110, "remind"), (120, "urgent"))}) == (
-        "超微的股价高于 110 美元：提醒；高于 120 美元：加急。每档各自：条件成立时提醒一次，回到该档之内后再次越过，才会再提醒；每天每档最多一次。")
+        "超微的股价高于 110 美元：提醒；高于 120 美元：加急。条件成立时每档各提醒一次；提醒档回到 110 美元以下后再升破、加急档回到 120 美元以下后再升破，会再提醒该档；每天每档最多一次。")
     one = describe({**price, "direction": "below", "levels": level((50, "remind"))})
-    assert one == "超微的股价低于 50 美元：提醒。条件成立时提醒一次，回到 50 美元之内后再次越过，才会再提醒；每天最多一次。"
+    assert one == "超微的股价低于 50 美元：提醒。条件成立时提醒一次，回到 50 美元以上后再跌破会再提醒；每天最多一次。"
     assert describe({**base, "symbol": "ZZZZ"}).startswith("ZZZZ相对昨收")      # no Chinese name: the ticker
 
 
@@ -172,7 +173,7 @@ def test_dry_run_day_change_counts_each_level_reached_per_day(db):
     assert got["note"] is None and got["covered_days"] == 30
     assert got["hits"] == [{"date": "2026-11-01", "level": "remind"}, {"date": "2026-11-16", "level": "remind"},
                            {"date": "2026-11-16", "level": "urgent"}, {"date": "2026-11-23", "level": "remind"}]
-    assert dry_run_line(got) == "按这条规则，过去 30 天会提醒你 4 次：11-01、11-16（提醒+加急）、11-23。"
+    assert dry_run_line(got) == "按这条规则，过去 30 天会提醒你 4 次：11-01、11-16（提醒+加急）、11-23。"+ESTIMATE
 
 
 def test_dry_run_direction_is_respected(db):
@@ -186,7 +187,7 @@ def test_dry_run_a_quiet_stock_would_not_have_rung(db):
     flat("INTC")
     got = dry_run(OWNER, rule(), today=TODAY)
     assert got["hits"] == [] and got["covered_days"] == 30
-    assert dry_run_line(got) == "按这条规则，过去 30 天不会提醒你（看了 30 个交易日）。"
+    assert dry_run_line(got) == "按这条规则，过去 30 天不会提醒你（看了 30 个交易日）。" + ESTIMATE
 
 
 def test_dry_run_once_counts_each_level_once(db):
@@ -233,7 +234,8 @@ def test_dry_run_holding_rules_use_todays_holding(db):
     assert [h["date"] for h in cost] == ["2026-11-22"]
     pnl = dry_run(OWNER, rule(metric="position_pnl", direction="down", levels=level((1500, "remind"), (2000, "urgent"))), today=TODAY)["hits"]
     assert pnl == [{"date": "2026-11-24", "level": "remind"}, {"date": "2026-11-24", "level": "urgent"}]      # 100 shares x 20 = 2000
-    weight = dry_run(OWNER, rule(metric="position_weight", direction="above", levels=level((120, "remind"))), today=TODAY)["hits"]
+    weight = dry_run(OWNER, rule(metric="position_weight", direction="above", levels=level((55, "remind"))), today=TODAY)["hits"]
+    # the denominator moves with the position: 20000 - 100 x 100 (today) + 100 x 130 = 23000, so 13000 / 23000 = 56.5% on the spike, 50% on a flat day
     assert [h["date"] for h in weight] == ["2026-11-22"]      # 100 x 130 / 10000 = 130%, flat days 100% (total assets taken as today's)
 
 
@@ -330,7 +332,8 @@ def test_the_snapshot_holds_enabled_unexpired_rules_only(db):
     assert watch_rules.snapshot_rules("someone-else") == []
 
 
-def test_a_broken_rules_section_does_not_stop_the_snapshot(db, monkeypatch):
+def test_a_broken_rules_section_does_not_stop_the_snapshot(db, monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel_bridge, "snapshot_path", lambda: tmp_path / "none.json")
     monkeypatch.setattr(watch_rules, "snapshot_rules", lambda owner: (_ for _ in ()).throw(RuntimeError("db down")))
     monkeypatch.setattr(sentinel_bridge, "_research_queue", lambda owner: [])
     monkeypatch.setattr(sentinel_bridge, "_telegram", lambda owner: {})
@@ -350,3 +353,89 @@ def test_the_first_window_day_counts_as_becoming_true(db):
     flat("INTC", price=90)
     got = dry_run(OWNER, rule(metric="price", direction="below", levels=level((100, "remind"), )), today=TODAY)
     assert got["hits"] == [{"date": "2026-10-28", "level": "remind"}]
+
+
+def test_the_estimate_line_says_which_prices_it_used(db):
+    flat("INTC", spikes={5: {"high": 112}})
+    assert dry_run_line(dry_run(OWNER, rule(), today=TODAY)).endswith(ESTIMATE)
+    closes = dry_run(OWNER, rule(metric="n_day_change", direction="up", window_days=2, levels=level((50, "remind"))), today=TODAY)
+    assert dry_run_line(closes).endswith("（按每天的收盘价估算；实际盘中会随时检查，可能比这里多）")
+    volume = dry_run(OWNER, rule(metric="volume_ratio", direction="above", levels=level((3, "remind"))), today=TODAY)
+    assert dry_run_line(volume).endswith("（按整天的成交量估算；实际是盘中按已过去的时间折算，可能比这里多或少）")
+    assert "估算" not in dry_run_line({"hits": [], "covered_days": 0, "note": watch_rules.NO_HISTORY})
+
+
+@pytest.mark.parametrize("metric,direction,lv,words", [
+    ("price", "below", level((50, "remind")), "回到 50 美元以上后再跌破会再提醒"),
+    ("price", "above", level((120, "urgent")), "回到 120 美元以下后再升破会再提醒"),
+    ("position_weight", "below", level((10, "remind")), "回到 10%以上后再跌破会再提醒"),
+    ("position_weight", "above", level((30, "remind")), "回到 30%以下后再升破会再提醒"),
+    ("cost_change", "down", level((10, "remind")), "跌幅收窄到 10% 以内后再达到会再提醒"),
+    ("n_day_change", "up", level((10, "remind")), "涨幅回落到 10% 以下后再达到会再提醒"),
+])
+def test_a_state_rule_says_how_it_rearms(metric, direction, lv, words):
+    rule_ = {**CONTRACT[0], "metric": metric, "direction": direction, "levels": lv, "window_days": 5 if metric == "n_day_change" else None}
+    assert words in describe(rule_) and "该档之内" not in describe(rule_)
+
+
+def test_a_state_rule_with_two_levels_names_each_levels_rearm_point():
+    rule_ = next(r for r in CONTRACT if r["metric"] == "price")
+    assert "提醒档回到 100 美元以上后再跌破、加急档回到 90 美元以上后再跌破，会再提醒该档" in describe(rule_)
+
+
+def test_status_expired_and_finished(db, tmp_path, monkeypatch):
+    import sqlite3
+    path = tmp_path / "sentinel.db"
+    monkeypatch.setenv("SENTINEL_DB_PATH", str(path))
+    once = watch_rules.create(OWNER, fields(repeat="once"), "q", today=TODAY)
+    daily = watch_rules.create(OWNER, fields(symbol="NVDA"), "q", today=TODAY)
+    from sentinel import rules as sr
+    top = sr.level_key(once, sr.severity_order(once)[-1])
+    low = sr.level_key(once, sr.severity_order(once)[0])
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE rule_state(rule_id TEXT, ny_date TEXT, level TEXT, fired_at REAL)")
+    conn.execute("INSERT INTO rule_state VALUES (?, '*', ?, 1)", (once["id"], low))
+    conn.commit()
+    rules = watch_rules.list_rules(OWNER)
+    assert set(watch_rules.statuses(rules).values()) == {"active"}          # only the milder level has fired
+    conn.execute("INSERT INTO rule_state VALUES (?, '*', ?, 2)", (once["id"], top))
+    conn.execute("INSERT INTO rule_state VALUES (?, '2026-11-26', ?, 2)", (daily["id"], sr.level_key(daily, 1)))
+    conn.commit()
+    conn.close()
+    states = watch_rules.statuses(rules)
+    assert states[once["id"]] == "done" and states[daily["id"]] == "active"      # a daily rule never finishes
+    old = {**daily, "expires_on": "2026-11-01"}
+    assert watch_rules.status_of(old, None, today=TODAY) == "expired" and watch_rules.status_of(old, None, today=date(2026, 11, 1)) == "active"
+
+
+def test_expired_and_finished_rules_take_no_room(db, monkeypatch):
+    monkeypatch.setattr(watch_rules, "MAX_RULES", 2)
+    a = watch_rules.create(OWNER, fields(), "q", today=TODAY)
+    watch_rules.create(OWNER, fields(symbol="NVDA"), "q", today=TODAY)
+    with pytest.raises(WatchRuleError):
+        watch_rules.create(OWNER, fields(symbol="AMD"), "q", today=TODAY)
+    with SessionLocal() as s:
+        s.get(WatchRule, uuid.UUID(a["id"])).expires_on = date(2020, 1, 1)
+        s.commit()
+    assert watch_rules.create(OWNER, fields(symbol="AMD"), "q", today=TODAY)["symbol"] == "AMD"
+
+
+def test_update_can_clear_the_last_day_and_omitting_it_keeps_it(db):
+    made = watch_rules.create(OWNER, fields(expires_on="2026-12-31"), "q", today=TODAY)
+    kept = watch_rules.update(OWNER, made["id"], {"repeat": "once"})
+    assert kept["expires_on"] == "2026-12-31"
+    cleared = watch_rules.update(OWNER, made["id"], {"repeat": "daily"}, clear=("expires_on",))
+    assert cleared["expires_on"] is None and cleared["repeat"] == "daily"
+    again = watch_rules.create(OWNER, fields(symbol="NVDA", expires_on="2026-12-31"), "q", today=TODAY)
+    whole = {**{k: again[k] for k in ("symbol", "metric", "direction", "levels", "window_days", "repeat")}, "expires_on": None}
+    assert watch_rules.update(OWNER, again["id"], whole, replace=True)["expires_on"] is None      # what a pressed card writes
+
+
+def test_the_snapshot_keeps_the_old_rules_when_they_cannot_be_read(db, monkeypatch, tmp_path):
+    path = tmp_path / "snap.json"
+    monkeypatch.setattr(sentinel_bridge, "snapshot_path", lambda: path)
+    path.write_text(json.dumps({"rules": [CONTRACT[0]]}))
+    monkeypatch.setattr(watch_rules, "snapshot_rules", lambda owner: (_ for _ in ()).throw(RuntimeError("db down")))
+    assert sentinel_bridge._rules(OWNER) == [CONTRACT[0]]
+    path.unlink()
+    assert sentinel_bridge._rules(OWNER) == []

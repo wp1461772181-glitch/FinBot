@@ -193,13 +193,24 @@ def describe(rule: dict) -> str:
         prefix, reach = f"{name}占你总资产的比例", lambda t: f"{'低于' if below else '高于'} {_g(t)}%"
     clauses = "；".join(f"{reach(entry['threshold'])}：{LEVEL_WORDS[entry['level']]}" for entry in levels)
     state = metric in STATE_METRICS
-    unit = {"%": "%", "美元": " 美元"}.get(UNITS[metric], "")
     if rule.get("repeat") == "once":
         again = "每档只触发一次，最高档触发后这条规则自动停用。" if len(levels) == 2 else "只触发一次，之后这条规则自动停用。"
-    elif state and len(levels) == 2:
-        again = "每档各自：条件成立时提醒一次，回到该档之内后再次越过，才会再提醒；每天每档最多一次。"
     elif state:
-        again = f"条件成立时提醒一次，回到 {_g(levels[0]['threshold'])}{unit}之内后再次越过，才会再提醒；每天最多一次。"
+        def rearm(entry) -> str:
+            t = _g(entry["threshold"])
+            if metric in ("price", "position_weight"):
+                size = f"{t} 美元" if metric == "price" else f"{t}%"
+                return f"回到 {size}以下后再升破" if direction == "above" else f"回到 {size}以上后再跌破"
+            if direction == "up":
+                return f"涨幅回落到 {t}% 以下后再达到"
+            if direction == "down":
+                return f"跌幅收窄到 {t}% 以内后再达到"
+            return f"涨跌幅回到 {t}% 以内后再达到"
+        if len(levels) == 2:
+            again = ("条件成立时每档各提醒一次；" + "、".join(f"{LEVEL_WORDS[e['level']]}档{rearm(e)}" for e in levels)
+                     + "，会再提醒该档；每天每档最多一次。")
+        else:
+            again = f"条件成立时提醒一次，{rearm(levels[0])}会再提醒；每天最多一次。"
     else:
         again = "每天每档一次。" if len(levels) == 2 else "每天最多一次。"
     until = f"有效到 {rule['expires_on']}。" if rule.get("expires_on") else ""
@@ -264,8 +275,18 @@ def _extremes(rule: dict, bars: list[dict], i: int, holding: dict | None) -> tup
     if metric == "position_pnl":
         return holding["shares"] * (day["high"] - prev["close"]), holding["shares"] * (day["low"] - prev["close"])
     if metric == "position_weight":
-        total = holding.get("total_assets")
-        return None if not total else (holding["shares"] * day["high"] / total * 100, holding["shares"] * day["low"] / total * 100)
+        # As the sentinel measures: total assets move with the position, so the denominator is today's total
+        # assets minus today's value of the position plus its value at that day's price.
+        total, now = holding.get("total_assets"), holding.get("price_now")
+        if not total or not now:
+            return None
+        shares = holding["shares"]
+
+        def weight(price):
+            denominator = total - shares * now + shares * price
+            return None if denominator <= 0 else shares * price / denominator * 100
+        high, low = weight(day["high"]), weight(day["low"])
+        return None if high is None or low is None else (high, low)
     return None
 
 
@@ -289,6 +310,8 @@ def dry_run(owner: str, rule: dict, days: int = DRY_RUN_DAYS, *, today: date | N
             return {**empty, "note": "总资产暂时算不出来（有持仓缺行情），试跑不了"}
         if rule["metric"] == "cost_change" and not holding.get("avg_cost"):
             return {**empty, "note": "没有持仓成本，试跑不了"}
+    if holding is not None:
+        holding = {**holding, "price_now": next((b["close"] for b in reversed(bars) if b["date"] <= today), None)}
     state = rule["metric"] in STATE_METRICS
     hits, covered, fired = [], 0, set()
     ever = set()
@@ -318,15 +341,21 @@ def dry_run(owner: str, rule: dict, days: int = DRY_RUN_DAYS, *, today: date | N
     if not covered:
         return {**empty, "note": NO_HISTORY}
     hits.sort(key=lambda hit: (hit["date"], hit["level"] == "urgent"))
-    return {"hits": hits, "covered_days": covered, "note": None}
+    return {"hits": hits, "covered_days": covered, "note": None, "metric": rule["metric"]}
+
+
+ESTIMATE = "（按每天常规交易时段的最高最低价估算；实际盘前盘后也会检查，盘中一闪而过的波动可能比这里多或少）"
+ESTIMATES = {"n_day_change": "（按每天的收盘价估算；实际盘中会随时检查，可能比这里多）",
+             "volume_ratio": "（按整天的成交量估算；实际是盘中按已过去的时间折算，可能比这里多或少）"}
 
 
 def dry_run_line(result: dict, days: int = DRY_RUN_DAYS) -> str:
-    """The one line the card shows under the reading."""
+    """The one line the card shows under the reading; it says it is an estimate and from which prices."""
     if result.get("note"):
         return f"试跑：{result['note']}。"
+    estimate = ESTIMATES.get(result.get("metric"), ESTIMATE)
     if not result["hits"]:
-        return f"按这条规则，过去 {days} 天不会提醒你（看了 {result['covered_days']} 个交易日）。"
+        return f"按这条规则，过去 {days} 天不会提醒你（看了 {result['covered_days']} 个交易日）。{estimate}"
     by_day: dict[str, set] = {}
     for hit in result["hits"]:
         by_day.setdefault(hit["date"], set()).add(hit["level"])
@@ -334,7 +363,74 @@ def dry_run_line(result: dict, days: int = DRY_RUN_DAYS) -> str:
     for day, levels in by_day.items():
         mark = "（提醒+加急）" if len(levels) == 2 else "（加急）" if "urgent" in levels else ""
         shown.append(day[5:] + mark)
-    return f"按这条规则，过去 {days} 天会提醒你 {len(result['hits'])} 次：{'、'.join(shown)}。"
+    return f"按这条规则，过去 {days} 天会提醒你 {len(result['hits'])} 次：{'、'.join(shown)}。{estimate}"
+
+
+# --- what the sentinel has done with a rule ---------------------------------------------------------------------------------
+
+BEIJING = ZoneInfo("Asia/Shanghai")
+EXPIRED, DONE, ACTIVE = "expired", "done", "active"
+STATUS_WORDS = {EXPIRED: "已过期（不再检查）", DONE: "已完成（不再检查）"}
+
+
+def _sentinel_db():
+    import os
+    from pathlib import Path
+    env = os.environ.get("SENTINEL_DB_PATH")
+    return Path(env) if env else Path(__file__).resolve().parent.parent / "data" / "sentinel.db"
+
+
+def fired_rows(rule_ids: list[str]) -> dict[str, list[tuple[str, str, float]]] | None:
+    """{rule_id: [(ny_date, level key, fired_at)]} from the sentinel's ``rule_state`` (read-only); None when it cannot be read.
+
+    The sentinel keeps the daily rows for 7 days and the rows of a ``once`` rule (ny_date ``*``) for good."""
+    import sqlite3
+    path = _sentinel_db()
+    if not path.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=2.0)
+        try:
+            rows = conn.execute("SELECT rule_id, ny_date, level, fired_at FROM rule_state").fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    wanted = set(rule_ids)
+    found: dict[str, list] = {rid: [] for rid in wanted}
+    for rid, scope, key, at in rows:
+        if rid in wanted:
+            found[rid].append((scope, key, float(at)))
+    return found
+
+
+def _top_key(rule: dict) -> str | None:
+    """The state key of the strongest level, as the sentinel writes it (``<level>@<threshold>#<8 hex>``)."""
+    try:
+        from sentinel import rules as sentinel_rules
+        return sentinel_rules.level_key(rule, sentinel_rules.severity_order(rule)[-1])
+    except Exception:
+        return None
+
+
+def status_of(rule: dict, fired: list | None, today: date | None = None) -> str:
+    """``expired`` (past its last day), ``done`` (a ``once`` rule whose strongest level has fired) or ``active``."""
+    if rule.get("expires_on") and rule["expires_on"] < (today or today_ny()).isoformat():
+        return EXPIRED
+    if rule.get("repeat") == "once" and fired:
+        top = _top_key(rule)
+        if top and any(scope == "*" and key == top for scope, key, _ in fired):
+            return DONE
+    return ACTIVE
+
+
+def statuses(rules: list[dict], today: date | None = None) -> dict[str, str]:
+    states = fired_rows([r["id"] for r in rules]) or {}
+    return {r["id"]: status_of(r, states.get(r["id"]), today) for r in rules}
+
+
+def when_beijing(ts: float) -> str:
+    return datetime.fromtimestamp(ts, UTC).astimezone(BEIJING).strftime("%m-%d %H:%M") + "（北京时间）"
 
 
 # --- storage ------------------------------------------------------------------------------------------------------------------
@@ -381,8 +477,9 @@ def snapshot_rules(owner: str, *, today: date | None = None) -> list[dict]:
     return [rule for rule in list_rules(owner) if not rule["expires_on"] or rule["expires_on"] >= today.isoformat()]
 
 
-def merged_fields(owner: str, rule_id: str, fields: dict) -> tuple[dict, dict]:
-    """(the rule now, the fields it would have after ``fields`` change it); only the keys given (not None) change."""
+def merged_fields(owner: str, rule_id: str, fields: dict, clear: tuple = ()) -> tuple[dict, dict]:
+    """(the rule now, the fields it would have after ``fields`` change it); only the keys given (not None) change.
+    ``clear`` names fields to empty (only ``expires_on``: an explicit null or "" clears the last day; omitted leaves it)."""
     with SessionLocal() as db:
         current = rule_dict(_live(db, owner, rule_id))
     keep = ("symbol", "metric", "direction", "levels", "window_days", "repeat", "expires_on")
@@ -391,13 +488,18 @@ def merged_fields(owner: str, rule_id: str, fields: dict) -> tuple[dict, dict]:
     if given.get("metric") not in (None, current["metric"]):      # a different measure: direction and window start over unless said
         merged.update(direction=None, window_days=None)
     merged.update(given)
+    if "expires_on" in clear:
+        merged["expires_on"] = None
     return current, validate(merged, owner=owner)
 
 
 def create(owner: str, fields: dict, quote: str = "", *, today: date | None = None) -> dict:
     clean = validate(fields, owner=owner, today=today)
     with SessionLocal() as db:
-        live = db.scalars(select(WatchRule.id).where(WatchRule.owner_hash == owner, WatchRule.enabled.is_(True), WatchRule.deleted_at.is_(None))).all()
+        mine = [rule_dict(r) for r in db.scalars(select(WatchRule).where(WatchRule.owner_hash == owner, WatchRule.enabled.is_(True),
+                                                                       WatchRule.deleted_at.is_(None)))]
+        states = statuses(mine, today)
+        live = [r for r in mine if states[r["id"]] == ACTIVE]      # an expired or finished rule takes no room
         if len(live) >= MAX_RULES:
             raise WatchRuleError("too_many_rules", f"盯防规则已经有 {MAX_RULES} 条了，先删掉不用的再加。")
         row = WatchRule(owner_hash=owner, symbol=clean["symbol"], metric=clean["metric"], direction=clean["direction"], levels=clean["levels"],
@@ -411,9 +513,16 @@ def create(owner: str, fields: dict, quote: str = "", *, today: date | None = No
     return made
 
 
-def update(owner: str, rule_id: str, fields: dict, quote: str | None = None, *, today: date | None = None) -> dict:
-    """Change the fields given; the rest stay.  The rule is validated as a whole."""
-    _, clean = merged_fields(owner, rule_id, fields)
+def update(owner: str, rule_id: str, fields: dict, quote: str | None = None, *, clear: tuple = (), replace: bool = False,
+           today: date | None = None) -> dict:
+    """Change the fields given; the rest stay.  The rule is validated as a whole.  ``replace``: ``fields`` are the whole rule (what a
+    card froze), so an empty ``expires_on`` clears it."""
+    if replace:
+        with SessionLocal() as db:
+            _live(db, owner, rule_id)
+        clean = validate(fields, owner=owner)
+    else:
+        _, clean = merged_fields(owner, rule_id, fields, clear)
     with SessionLocal() as db:
         row = _live(db, owner, rule_id)
         row.symbol, row.metric, row.direction, row.levels = clean["symbol"], clean["metric"], clean["direction"], clean["levels"]
