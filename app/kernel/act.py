@@ -423,7 +423,6 @@ async def _delete_watch_rule(run, args: dict, operation: dict) -> dict:
     if old is None:
         return _watch_refusal(watch_rules.WatchRuleError("rule_not_found", "没有这条规则（或已经删了）。"))
     operation["arguments"]["rule_id"] = old["id"]
-    operation["arguments"]["symbol"] = old["symbol"]
     operation["expect"] = await asyncio.to_thread(directory_ops.snapshot, owner, "delete_watch_rule", args)
     return {"title": _watch_title("删掉一条盯防规则", old["symbol"]), "targets": [{"symbol": old["symbol"], "title": old["text"]}], "alternative": WATCH_GONE}
 

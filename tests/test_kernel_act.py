@@ -37,7 +37,7 @@ def test_every_operation_is_a_catalogue_write_and_every_write_is_listed():
 def test_summaries_costs_and_tiers():
     assert all(act.SUMMARIES[name] for name in act.OPERATIONS) and set(act.SUMMARIES) == set(act.OPERATIONS)
     assert set(act.COST_NOTES) == set(act.TIER3)
-    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 40
+    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 42
     assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "revise_forecast")] == [1, 2, 3, 3, 3]
     assert act.TIER1[0] == "remember" and act.TIER3[-2:] == ("ingest_web_source", "revise_forecast")
     assert act.SUMMARIES["ingest_web_source"].startswith("把这段对话里联网搜到的一个网页或新闻存进资料库")
@@ -159,6 +159,9 @@ def test_routine_changes_and_deletes_need_an_existing_routine(monkeypatch):
     task = fake_preview("o", {})
     monkeypatch.setattr(agent_tasks, "get_task", lambda owner, task_id: task)
     monkeypatch.setattr(agent_tasks, "preview_task", fake_preview)
+    from app import watch_rules
+    monkeypatch.setattr(watch_rules, "list_rules", lambda owner: [{"id": UUID, "symbol": "INTC", "text": "英特尔……"}])
+    monkeypatch.setattr(watch_rules, "dry_run", lambda owner, fields, days=30, today=None: {"hits": [], "covered_days": 0, "note": None})
     monkeypatch.setattr(direct, "skill_names", lambda owner: {})
     out = run(act.prepare(make_run(), "update_routine", {"routine_id": UUID, "enabled": False}))
     assert out.display["title"] == "修改例行任务 · 每日" and out.display["alternative"] == "状态：运行中 → 暂停"
@@ -225,6 +228,8 @@ MINIMAL = {
     "set_channel_prefs": {"mode": "all", "channels": ["telegram"]},
     "apply_role_template": {"template": "定投"}, "undo_role_template": {},
     "record_view": {"symbol": "AAPL", "text": "看好", "quote": "用中文回答"}, "drop_view": {"symbol": "AAPL"},
+    "set_watch_rule": {"symbol": "INTC", "metric": "day_change", "levels": [{"threshold": 10, "level": "remind"}], "quote": "用中文回答"},
+    "delete_watch_rule": {"rule_id": UUID},
 }
 
 
@@ -257,6 +262,9 @@ def fake_preview(owner, fields, task_id=None):
 @pytest.fixture
 def faked(monkeypatch):
     monkeypatch.setattr(agent_tasks, "preview_task", fake_preview)
+    from app import watch_rules
+    monkeypatch.setattr(watch_rules, "list_rules", lambda owner: [{"id": UUID, "symbol": "INTC", "text": "英特尔……"}])
+    monkeypatch.setattr(watch_rules, "dry_run", lambda owner, fields, days=30, today=None: {"hits": [], "covered_days": 0, "note": None})
     monkeypatch.setattr(direct, "skill_names", lambda owner: {})
     monkeypatch.setattr(act, "_already_saved", lambda *a: None)
     monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: ready_plan())

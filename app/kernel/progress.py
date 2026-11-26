@@ -123,7 +123,7 @@ TOOL_PHRASES = {
     "query_latest_forecast": "看已存的预测", "query_materials": "翻已存材料", "query_material_analysis": "看已存的 AI 分析",
     "search_material_analysis": "看已存的 AI 分析", "read_workspace": "读工作区记录", "query_research_queue": "看研究队列",
     "query_research_faq": "翻问答库", "query_system_status": "看任务状态", "query_holdings_overview": "看持仓总览",
-    "query_alerts": "看提醒记录", "list_routines": "看例行任务", "list_models": "看可用模型", "list_work": "看手上的事",
+    "query_alerts": "看提醒记录", "list_routines": "看例行任务", "list_models": "看可用模型", "list_work": "看手上的事", "list_watch_rules": "看盯着什么",
 }
 
 

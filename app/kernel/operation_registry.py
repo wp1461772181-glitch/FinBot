@@ -114,6 +114,10 @@ OPERATION_REGISTRY: dict[tuple[str, str], dict] = {
     ("DELETE", "/agent-chat/portfolio/transactions/{transaction_id}"): _op("delete_transaction"),
     ("PUT", "/agent-chat/portfolio/plans/{symbol}"): _op("set_position_plan"),
     ("PUT", "/agent-chat/portfolio/cash"): _op("set_available_funds"),
+    # 盯防规则
+    ("POST", "/agent-chat/watch-rules"): _op("set_watch_rule"),
+    ("PATCH", "/agent-chat/watch-rules/{rule_id}"): _op("set_watch_rule"),
+    ("DELETE", "/agent-chat/watch-rules/{rule_id}"): _op("delete_watch_rule"),
     # 预测
     ("POST", "/v2/forecast-jobs"): _op("forecast"),
     ("POST", "/v2/historical-replays"): _op("start_historical_replay"),
