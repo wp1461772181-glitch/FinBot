@@ -29,7 +29,8 @@ from tests.test_kernel_loop import FakeConsent, act_call, call, env, fake_consen
 # the owner's role lists (set_model_role, list_models) now name the helper role, which exists whatever the switch.  Stage 4a: plus read_turn.  Stage 4b: the role lists also name the memory role.
 GOLDEN = {
     # Memory writes (11-26): remember's basis and quote wording in the act tool; the memory lines of the system text.
-    "owner": ("ea03644b26435b7387bae3577467339e1159c9914bb854bbe31f167d7ff5fde0",
+    # 5b-1: the owner's tools gain set_watch_rule / delete_watch_rule in act and the list_watch_rules read (the system text is unchanged).
+    "owner": ("b5d14873cce573a5e6fb5e5fd8711888f8728a79ab9eed3c7254072dc6f9d401",
                "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
     "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
 }

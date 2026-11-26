@@ -393,7 +393,7 @@ async def _set_watch_rule(run, args: dict, operation: dict) -> dict:
     """The card of one watch rule: the reading and the dry run are written here, by code, from the validated fields.  The model's words are not on it."""
     owner = run.context.owner_hash
     words = _turn_words(run)
-    if not profile.quote_in_message(args["quote"], words):
+    if len("".join(str(args["quote"]).split())) < owner_views.QUOTE_MIN_CHARS or not profile.quote_in_message(args["quote"], words):
         return _failure("watch_quote_not_owners", reason=WATCH_QUOTE_HINT, hint=WATCH_QUOTE_HINT)
     quote = _quote(args["quote"], words)
     try:
