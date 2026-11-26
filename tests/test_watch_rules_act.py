@@ -10,7 +10,7 @@ import pytest
 
 from app import agent_bots as bots
 from app import sentinel_bridge, watch_rules, watch_rules_view
-from app.agent_chat_models import AgentBot, AgentConversation, AgentMessage, AgentTask, PortfolioPlan, WatchRule
+from app.agent_chat_models import AgentBot, AgentConversation, AgentMessage, AgentTask, AlertSetting, PortfolioPlan, WatchPresetOverride, WatchRule
 from app.agent_chat_store import owner_hash
 from app.agent_tool_catalog import KERNEL_ONLY, OWNER_ONLY, definitions, legacy_definitions, schemas
 from app.agent_workflow import consent
@@ -44,7 +44,7 @@ def make_run(question=ASK):
 
 def wipe():
     with SessionLocal() as db:
-        for model in (WatchRule, MarketPrice, AgentConsent, AgentMessage):
+        for model in (WatchRule, WatchPresetOverride, AlertSetting, MarketPrice, AgentConsent, AgentMessage):
             db.query(model).delete()
         db.commit()
 
@@ -52,7 +52,8 @@ def wipe():
 @pytest.fixture
 def owner(monkeypatch, disposable_database):
     Base.metadata.create_all(engine, tables=[WatchRule.__table__, MarketPrice.__table__, AgentConsent.__table__, AgentBot.__table__,
-                                             AgentConversation.__table__, AgentMessage.__table__, PortfolioPlan.__table__, AgentTask.__table__])
+                                             AgentConversation.__table__, AgentMessage.__table__, PortfolioPlan.__table__, AgentTask.__table__,
+                                             WatchPresetOverride.__table__, AlertSetting.__table__])
     wipe()
     import app.agent_chat_identity as identity
     import app.agent_chat_stream as stream
@@ -213,7 +214,7 @@ def test_the_operations_are_kernel_only_owner_only_and_the_old_engine_does_not_s
 
 def test_the_directory_tells_the_model_what_is_and_is_not_a_rule():
     text = act.SUMMARIES["set_watch_rule"]
-    for metric in watch_rules.METRICS:
+    for metric in set(watch_rules.METRICS) - watch_rules.PRESET_ONLY:      # the owner makes no rule on the portfolio metric
         assert metric in text
     assert "remember" in text and "新闻" in text           # a condition that needs content is an instruction, not a rule
     for missing in ("期权", "卖空比例", "分析师评级"):
@@ -243,8 +244,12 @@ def test_list_watch_rules_has_his_rules_and_the_marked_defaults(owner, monkeypat
     assert [r["id"] for r in own][0] == mine["id"] and own[0]["text"] == mine["text"] and own[0]["created_on"] == mine["created_on"]
     assert own[0]["last_fired"] is None and own[0]["status"] == "生效中"          # no sentinel store here: nothing is known
     assert own[0]["note"] == "默认的涨跌分级对它不生效" and "note" not in own[1]
-    assert len(defaults) == 4 and "标准" in defaults[0]["text"] and "INTC（涨跌）" in defaults[0]["text"]
-    assert "止损价永远会盯" in defaults[1]["text"] and defaults[2]["text"] == "5 分钟急动提醒：关。"
+    by_key = {r["key"]: r for r in defaults}
+    assert list(by_key) == ["concentration", "portfolio_drawdown", "down_streak", "new_high_52w", "new_low_52w", "volume_surge",
+                            "day_tiers", "short_moves", "plan_prices", "stop_price", "filings"]
+    assert "标准" in by_key["day_tiers"]["text"] and "INTC（涨跌）" in by_key["day_tiers"]["text"]
+    assert "不受你的规则和设置影响" in by_key["stop_price"]["text"] and by_key["stop_price"]["hard_guarantee"] and by_key["filings"]["hard_guarantee"]
+    assert by_key["short_moves"]["text"] == "5 分钟急动提醒：关。" and by_key["concentration"]["enabled"] and not by_key["concentration"]["hard_guarantee"]
 
 
 def test_list_watch_rules_reads_the_last_firing_from_the_sentinel_store(owner, monkeypatch, tmp_path):
@@ -331,11 +336,11 @@ def test_list_marks_expired_and_finished_rules_and_the_override_is_direction_awa
     assert rows["NVDA"]["note"] == "默认的上涨分级对它不生效" and rows["NVDA"]["status"] == "生效中" and rows["NVDA"]["last_fired"] == "近 7 天没有触发"
     assert rows["AMD"]["status"] == "已完成（不再检查）" and "note" not in rows["AMD"] and rows["AMD"]["last_fired"] == "11-20 20:00（北京时间）"
     assert rows["MSFT"]["status"] == "已过期（不再检查）" and "note" not in rows["MSFT"]
-    tiers = next(r for r in watch_rules_view.rows(OWNER_HASH) if r["kind"] == "系统默认")["text"]
+    tiers = next(r for r in watch_rules_view.rows(OWNER_HASH) if r.get("key") == "day_tiers")["text"]
     assert "NVDA（上涨）" in tiers and "AMD" not in tiers and "MSFT" not in tiers
     down = watch_rules.create(OWNER_HASH, ARGS | {"quote": None, "direction": "down", "symbol": "NVDA"}, "q")
     assert next(r for r in watch_rules_view.rows(OWNER_HASH) if r.get("id") == down["id"])["note"] == "默认的下跌分级对它不生效"
-    assert "NVDA（涨跌）" in next(r for r in watch_rules_view.rows(OWNER_HASH) if r["kind"] == "系统默认")["text"]      # up + down together cover both
+    assert "NVDA（涨跌）" in next(r for r in watch_rules_view.rows(OWNER_HASH) if r.get("key") == "day_tiers")["text"]      # up + down together cover both
 
 
 def test_the_memory_overview_marks_finished_rules(owner):

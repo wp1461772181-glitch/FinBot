@@ -118,6 +118,9 @@ OPERATION_REGISTRY: dict[tuple[str, str], dict] = {
     ("POST", "/agent-chat/watch-rules"): _op("set_watch_rule"),
     ("PATCH", "/agent-chat/watch-rules/{rule_id}"): _op("set_watch_rule"),
     ("DELETE", "/agent-chat/watch-rules/{rule_id}"): _op("delete_watch_rule"),
+    ("PATCH", "/agent-chat/watch-presets/{key}"): _op("set_watch_preset"),
+    ("POST", "/agent-chat/watch-presets/{key}/reset"): _op("set_watch_preset"),
+    ("PUT", "/agent-chat/alert-settings"): _op("set_alert_settings"),
     # 预测
     ("POST", "/v2/forecast-jobs"): _op("forecast"),
     ("POST", "/v2/historical-replays"): _op("start_historical_replay"),

@@ -71,6 +71,14 @@ def _portfolio(owner_hash: str) -> dict:
     return portfolio.sentinel_view(owner_hash)
 
 
+def _kept(name: str):
+    """What the snapshot on disk already says about ``name`` (None when there is no readable file or no such section)."""
+    try:
+        return json.loads(snapshot_path().read_text(encoding="utf-8")).get(name)
+    except Exception:
+        return None
+
+
 def _rules(owner_hash: str) -> list[dict]:
     """The owner's own watch rules (enabled, not expired), each as ``watch_rules.rule_dict``; the sentinel checks them without a model."""
     from . import watch_rules
@@ -80,11 +88,33 @@ def _rules(owner_hash: str) -> list[dict]:
     except Exception:
         # Not reading the rules is not "he has none": keep what the snapshot on disk already says, so a database blip does not switch his rules off.
         logger.warning("sentinel snapshot: rules unreadable, keeping the existing snapshot's rules", exc_info=True)
-        try:
-            kept = json.loads(snapshot_path().read_text(encoding="utf-8")).get("rules")
-        except Exception:
-            kept = None
+        kept = _kept("rules")
         return kept if isinstance(kept, list) else []
+
+
+def _presets(owner_hash: str) -> list[dict]:
+    """The system's default rules that are switched on, resolved with the owner's overrides (``watch_presets.snapshot_presets``).  Unreadable: the
+    last snapshot's, so a database blip does not switch the defaults off (or back on after he switched one off)."""
+    from . import watch_presets
+
+    try:
+        return watch_presets.snapshot_presets(owner_hash)
+    except Exception:
+        logger.warning("sentinel snapshot: presets unreadable, keeping the existing snapshot's presets", exc_info=True)
+        kept = _kept("presets")
+        return kept if isinstance(kept, list) else []
+
+
+def _alert_settings(owner_hash: str) -> dict:
+    """{sensitivity, short_moves}; unreadable: the last snapshot's, else empty (the sentinel then falls back to its old keys and the environment)."""
+    from . import watch_presets
+
+    try:
+        return watch_presets.get_settings(owner_hash)
+    except Exception:
+        logger.warning("sentinel snapshot: alert settings unreadable, keeping the existing snapshot's", exc_info=True)
+        kept = _kept("alert_settings")
+        return kept if isinstance(kept, dict) else {}
 
 
 def build_snapshot(owner_hash: str) -> dict:
@@ -96,7 +126,9 @@ def build_snapshot(owner_hash: str) -> dict:
         "positions": portfolio.get("positions", []),
         "plans": portfolio.get("plans", []),
         "total_assets": portfolio.get("total_assets"),
+        "alert_settings": _alert_settings(owner_hash),
         "rules": _rules(owner_hash),
+        "presets": _presets(owner_hash),
         "research_queue": _section("research_queue", lambda: _research_queue(owner_hash), []),
         "telegram": _section("telegram", lambda: _telegram(owner_hash), {}),
         "pushover": _section("pushover", lambda: _pushover(owner_hash), {}),

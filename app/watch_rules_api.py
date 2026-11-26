@@ -1,4 +1,4 @@
-"""Owner-only routes for the owner's own watch rules (the web page's side of what ``act`` does with a confirmation card).
+"""Owner-only routes for the owner's own watch rules and the system defaults (the web page's side of what ``act`` does with a confirmation card).
 
 Same owner check as ``portfolio_api``.  A refused rule is a 422 with a short code and the reason in Chinese; every write refreshes the
 sentinel's snapshot (inside ``app.watch_rules``)."""
@@ -10,11 +10,13 @@ from typing import Literal
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from . import watch_rules, watch_rules_view
+from . import watch_presets, watch_rules, watch_rules_view
 from .agent_chat_store import owner_hash
 from .agent_chat_stream import _owner_only
 
 router = APIRouter(prefix="/agent-chat/watch-rules", tags=["watch-rules"])
+presets_router = APIRouter(prefix="/agent-chat", tags=["watch-presets"])
+BAD_REQUEST = {"unknown_preset", "not_editable", "hard_guarantee", "nothing_to_change"}      # the key or the kind of change is wrong: 400; a wrong value is 422
 
 
 class LevelBody(BaseModel):
@@ -73,3 +75,51 @@ async def delete_endpoint(rule_id: str, x_chat_session: str | None = Header(defa
         return await asyncio.to_thread(watch_rules.delete, owner, rule_id)
     except watch_rules.WatchRuleError as exc:
         raise _refused(exc)
+
+
+class PresetBody(BaseModel):
+    enabled: bool | None = None
+    levels: list[LevelBody] | None = Field(default=None, max_length=2)
+
+
+class SettingsBody(BaseModel):
+    sensitivity: str | None = Field(default=None, max_length=12)
+    short_moves: bool | None = None
+
+
+def _preset_refused(exc: watch_rules.WatchRuleError) -> HTTPException:
+    return HTTPException(400 if exc.code in BAD_REQUEST else 422, {"error_code": exc.code, "reason": exc.reason})
+
+
+@presets_router.get("/watch")
+async def watch_endpoint(x_chat_session: str | None = Header(default=None)):
+    owner = owner_hash(_owner_only(x_chat_session))
+    return await asyncio.to_thread(watch_rules_view.watch_view, owner)
+
+
+@presets_router.patch("/watch-presets/{key}")
+async def preset_endpoint(key: str, body: PresetBody, x_chat_session: str | None = Header(default=None)):
+    owner = owner_hash(_owner_only(x_chat_session))
+    levels = None if body.levels is None else [level.model_dump() for level in body.levels]
+    try:
+        return await asyncio.to_thread(watch_presets.set_override, owner, key, body.enabled, levels)
+    except watch_rules.WatchRuleError as exc:
+        raise _preset_refused(exc)
+
+
+@presets_router.post("/watch-presets/{key}/reset")
+async def preset_reset_endpoint(key: str, x_chat_session: str | None = Header(default=None)):
+    owner = owner_hash(_owner_only(x_chat_session))
+    try:
+        return await asyncio.to_thread(watch_presets.reset, owner, key)
+    except watch_rules.WatchRuleError as exc:
+        raise _preset_refused(exc)
+
+
+@presets_router.put("/alert-settings")
+async def settings_endpoint(body: SettingsBody, x_chat_session: str | None = Header(default=None)):
+    owner = owner_hash(_owner_only(x_chat_session))
+    try:
+        return await asyncio.to_thread(watch_presets.set_settings, owner, body.sensitivity, body.short_moves)
+    except watch_rules.WatchRuleError as exc:
+        raise _preset_refused(exc)

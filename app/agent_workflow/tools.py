@@ -93,7 +93,7 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
         if name=='record_view':args['_source_message_id']=operation.get('source_message_id');args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id')
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
-        if name in {'create_bot','update_bot','apply_role_template','undo_role_template','set_watch_rule'}:args['_fields']=operation.get('fields')
+        if name in {'create_bot','update_bot','apply_role_template','undo_role_template','set_watch_rule','set_watch_preset','set_alert_settings'}:args['_fields']=operation.get('fields')
         # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
         if operation.get('expect') is not None:args['_expect']=operation['expect']
         # The press, not the frozen operation, says whether a skill starts enabled or as a draft.
@@ -288,6 +288,19 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
             else:saved=await asyncio.to_thread(watch_rules.create,context.owner_hash,fields,args['quote'])
         except watch_rules.WatchRuleError as exc:return {'ok':False,'data':[],'error_code':exc.code,'reason':exc.reason,'hint':exc.reason}
         return result([{'status':'saved','symbol':saved['symbol'],'rule_id':saved['id'],'title':saved['text']}],'watch rule')
+    if name in {'set_watch_preset','set_alert_settings'}:
+        # Only reached through execute_reversible: the owner pressed the card; the values are the ones the card showed.
+        from .. import watch_presets,watch_rules
+        if not is_owner:return error('owner_login_required')
+        fields=args.get('_fields')
+        if not fields:return error('confirmation_required')
+        try:
+            if name=='set_alert_settings':
+                saved=await asyncio.to_thread(watch_presets.set_settings,context.owner_hash,fields['sensitivity'],fields['short_moves'])
+                return result([{'status':'saved','sensitivity':saved['sensitivity'],'short_moves':saved['short_moves']}],'alert settings')
+            row=await asyncio.to_thread(watch_presets.put,context.owner_hash,fields['key'],fields['enabled'],fields['levels'])
+        except watch_rules.WatchRuleError as exc:return {'ok':False,'data':[],'error_code':exc.code,'reason':exc.reason,'hint':exc.reason}
+        return result([{'status':'saved','key':row['key'],'enabled':row['enabled'],'title':row['text']}],'watch preset')
     if name=='list_routines':
         # A bot lists its own routines; all_bots (or the default bot) lists every bot's, each with its bot.
         from .. import agent_tasks as tasks

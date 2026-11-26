@@ -1,0 +1,132 @@
+{
+  "alert_settings": {
+    "sensitivity": "standard",
+    "short_moves": false
+  },
+  "presets": [
+    {
+      "id": "preset:concentration",
+      "preset_key": "concentration",
+      "source": "preset",
+      "scope": "holdings",
+      "symbol": "*",
+      "metric": "position_weight",
+      "direction": "above",
+      "levels": [
+        {
+          "threshold": 25,
+          "level": "remind"
+        }
+      ],
+      "window_days": null,
+      "repeat": "daily",
+      "expires_on": null,
+      "created_on": null,
+      "text": "每只持仓占你总资产的比例高于 25%：提醒。条件成立时提醒一次，回到 25%以下后再升破会再提醒；每天最多一次。"
+    },
+    {
+      "id": "preset:portfolio_drawdown",
+      "preset_key": "portfolio_drawdown",
+      "source": "preset",
+      "scope": "portfolio",
+      "symbol": "*",
+      "metric": "portfolio_day_change",
+      "direction": "down",
+      "levels": [
+        {
+          "threshold": 3,
+          "level": "remind"
+        },
+        {
+          "threshold": 5,
+          "level": "urgent"
+        }
+      ],
+      "window_days": null,
+      "repeat": "daily",
+      "expires_on": null,
+      "created_on": null,
+      "text": "你的组合今天的涨跌（所有持仓现有股数 × 相对昨收的价差，合计占昨收时总资产的比例）下跌达到 3%：提醒；达到 5%：加急。每天每档一次。"
+    },
+    {
+      "id": "preset:down_streak",
+      "preset_key": "down_streak",
+      "source": "preset",
+      "scope": "watched",
+      "symbol": "*",
+      "metric": "down_days",
+      "direction": "down",
+      "levels": [
+        {
+          "threshold": 5,
+          "level": "remind"
+        }
+      ],
+      "window_days": null,
+      "repeat": "daily",
+      "expires_on": null,
+      "created_on": null,
+      "text": "持仓和研究队列里的每只股票连续下跌（每个交易日收盘低于前一日，今天股价低于昨收也算一天）达到 5 个交易日：提醒。条件成立时提醒一次，连续下跌中断后再连跌到 5 个交易日会再提醒；每天最多一次。"
+    },
+    {
+      "id": "preset:new_high_52w",
+      "preset_key": "new_high_52w",
+      "source": "preset",
+      "scope": "watched",
+      "symbol": "*",
+      "metric": "high_52w",
+      "direction": "above",
+      "levels": [
+        {
+          "threshold": 0,
+          "level": "remind"
+        }
+      ],
+      "window_days": null,
+      "repeat": "daily",
+      "expires_on": null,
+      "created_on": null,
+      "text": "持仓和研究队列里的每只股票的股价创 52 周新高（不低于过去 252 个交易日里最高的收盘价）：提醒。条件成立时提醒一次，股价回到前高以下后再创新高会再提醒；每天最多一次。"
+    },
+    {
+      "id": "preset:new_low_52w",
+      "preset_key": "new_low_52w",
+      "source": "preset",
+      "scope": "watched",
+      "symbol": "*",
+      "metric": "low_52w",
+      "direction": "below",
+      "levels": [
+        {
+          "threshold": 0,
+          "level": "remind"
+        }
+      ],
+      "window_days": null,
+      "repeat": "daily",
+      "expires_on": null,
+      "created_on": null,
+      "text": "持仓和研究队列里的每只股票的股价创 52 周新低（不高于过去 252 个交易日里最低的收盘价）：提醒。条件成立时提醒一次，股价回到前低以上后再创新低会再提醒；每天最多一次。"
+    },
+    {
+      "id": "preset:volume_surge",
+      "preset_key": "volume_surge",
+      "source": "preset",
+      "scope": "holdings",
+      "symbol": "*",
+      "metric": "volume_ratio",
+      "direction": "above",
+      "levels": [
+        {
+          "threshold": 3,
+          "level": "remind"
+        }
+      ],
+      "window_days": null,
+      "repeat": "daily",
+      "expires_on": null,
+      "created_on": null,
+      "text": "每只持仓今天的成交量（只看常规交易时段，按开盘后已过去的时间折算；开盘后 30 分钟内不判断）相对近 20 个交易日的日均量达到 3 倍：提醒。每天最多一次。"
+    }
+  ]
+}

@@ -104,7 +104,7 @@ app = FastAPI(title="FinBot", version="0.1.0")
 @app.exception_handler(RequestValidationError)
 async def safe_agent_chat_validation(request: Request, exc: RequestValidationError):
     if request.url.path in {"/agent-chat/hello", "/agent-chat/messages", "/agent-chat/stream", "/agent-chat/models", "/agent-chat/personal-login",
-                            "/agent-chat/background-model"} or request.url.path.startswith(("/agent-chat/model-catalog", "/agent-chat/bots", "/agent-chat/portfolio", "/agent-chat/watch-rules")):
+                            "/agent-chat/background-model"} or request.url.path.startswith(("/agent-chat/model-catalog", "/agent-chat/bots", "/agent-chat/portfolio", "/agent-chat/watch", "/agent-chat/alert-settings")):
         from .agent_chat_api import safe_validation_response
         return await safe_validation_response(request, exc)
     return await request_validation_exception_handler(request, exc)
@@ -127,8 +127,9 @@ from .agent_bots_api import router as agent_bots_router
 app.include_router(agent_bots_router)
 from .portfolio_api import router as portfolio_router
 app.include_router(portfolio_router)
-from .watch_rules_api import router as watch_rules_router
+from .watch_rules_api import presets_router as watch_presets_router, router as watch_rules_router
 app.include_router(watch_rules_router)
+app.include_router(watch_presets_router)
 from .agent_skills_api import router as agent_skills_router
 app.include_router(agent_skills_router)
 from .sentinel_api import router as sentinel_router

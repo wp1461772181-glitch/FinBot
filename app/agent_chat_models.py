@@ -534,6 +534,26 @@ class WatchRule(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class WatchPresetOverride(Base):
+    """What the owner changed on one system default rule (stage 5b-2, ``app/watch_presets.py``): switched off, or other levels.  A preset
+    with no row is at its default; deleting the row is 「恢复默认」.  ``levels`` is None when only ``enabled`` was changed."""
+    __tablename__ = "watch_preset_overrides"
+    owner_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    preset_key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    levels: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class AlertSetting(Base):
+    """The owner's sensitivity (quiet / standard / sensitive) and the 5-minute-moves switch (stage 5b-2); no row means the defaults."""
+    __tablename__ = "alert_settings"
+    owner_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    sensitivity: Mapped[str] = mapped_column(String(12), nullable=False, default="standard")
+    short_moves: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class OwnerView(Base):
     """The owner's own view of one company, in his words.  One version is ``active`` per (owner, symbol); a newer one marks the old
     ``superseded``, ``drop_view`` marks it ``dropped`` and nothing is deleted by the model.  Not evidence, and it authorizes nothing."""

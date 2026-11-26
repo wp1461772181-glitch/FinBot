@@ -52,7 +52,8 @@ ALWAYS_ON = frozenset({"ask_user", "use_result_set", "calculate", "read_history_
                        "open_page", "request_action", "notify_telegram", "use_skill", "save_skill",
                        "remember", "forget", "create_routine", "list_routines", "update_routine",
                        "delete_routine", "record_trade", "set_available_funds", "set_position_plan", "load_tools",
-                       "read_turn", "record_view", "drop_view", "set_watch_rule", "delete_watch_rule", "list_watch_rules"})
+                       "read_turn", "record_view", "drop_view", "set_watch_rule", "delete_watch_rule", "list_watch_rules",
+                       "set_watch_preset", "set_alert_settings"})
 
 TEMPLATES = {
     "blank": {"label": "空白", "name": "", "title": "", "description": "", "tool_scope": None},
