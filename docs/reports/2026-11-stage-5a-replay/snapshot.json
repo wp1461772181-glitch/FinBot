@@ -1,0 +1,6 @@
+{
+  "positions": [{"symbol": "INTC", "shares": 100}],
+  "plans": [{"symbol": "INTC", "add_price": 55, "stop_price": 30, "target_price": 80}],
+  "total_assets": 13135,
+  "research_queue": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AMD"]
+}

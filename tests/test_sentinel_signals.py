@@ -3,6 +3,14 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sentinel import signals
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _anchor_policy(monkeypatch):
+    monkeypatch.setenv("SENTINEL_ALERT_POLICY", "anchor")     # these tests pin the anchor policy; tiers is the default
+
+
 
 ET = ZoneInfo("America/New_York")
 

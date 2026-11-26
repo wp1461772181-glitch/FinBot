@@ -11,9 +11,9 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
-from . import notify, signals
+from . import notify, signals, tiers
 from .filings import FilingWatcher
 from .escalation import Escalator
 from .store import Store
@@ -39,6 +39,10 @@ class Sentinel:
         self.alerted = False
         self.worker: object | None = None  # the Popen we started, if still running
         self.cooldown = signals.Cooldown(self.store)
+        self._market: dict | None = None   # SPY's move at this poll ({"r", "sigma"}); the tiers policy reads it
+        self.policy: str | None = None     # overrides SENTINEL_ALERT_POLICY (the replay harness sets it)
+        self.sensitivity: str | None = None
+        self.short_moves: bool | None = None
         self.escalator = Escalator(self.store, notify.Channels())
         self.filings = FilingWatcher(self.store, self.config.get, post_event=self.post_event_now,
                                      raise_alert=self.escalator.raise_alert)
@@ -71,6 +75,22 @@ class Sentinel:
                            available, signals.MIN_AVAILABLE_MB)
             return
         self.worker = signals.spawn_worker()
+
+    # --- the push policy: ``tiers`` (design section 7.3, stage 5a; the default) or ``anchor`` (design-alert-policy.md) ----
+    # Unchanged on purpose: the night rule still defers a small-weight holding's alerts to the 08:00 Beijing digest
+    # (only a fall on a holding of at least 10% of total assets rings at night).
+    def _policy(self) -> str:
+        return (self.policy or os.environ.get("SENTINEL_ALERT_POLICY") or "tiers").strip().lower()
+
+    def _sensitivity(self, snap: dict) -> str:
+        return (self.sensitivity or os.environ.get("SENTINEL_SENSITIVITY") or snap.get("alert_sensitivity")
+                or "standard")
+
+    def _short_moves_on(self, snap: dict) -> bool:
+        if self.short_moves is not None:
+            return self.short_moves
+        env = (os.environ.get("SENTINEL_SHORT_MOVES") or "").strip().lower()
+        return env in ("on", "1", "true", "yes") or bool(snap.get("short_moves"))
 
     # --- intraday moves (Task 11) ----------------------------------------------------------------
     def baseline_for(self, symbol: str, now: datetime) -> dict:
@@ -118,11 +138,13 @@ class Sentinel:
         found = signals.detect(symbol, bars, now, baseline, prev_close, held=held, splits=splits)
         valid = [b for b in bars if signals._bar_ok(b)]
         price = float(valid[-1]["close"]) if valid and not signals.is_stale(valid[-1]["ts"], now) else None
+        tiers_on = self._policy() == "tiers"
         plan_found = []
-        if held and price is not None:
+        if held and price is not None and not tiers_on:
             plan = next((p for p in snap.get("plans") or [] if p.get("symbol") == symbol), None)
             if plan:
                 plan_found = signals.plan_crossings(symbol, self.store.get_price(symbol), price, plan)
+        last_seen = self.store.get_price(symbol)      # before set_price below: the level locks are seeded from it
         if price is not None:
             self.store.set_price(symbol, price)
         weight = None
@@ -164,6 +186,12 @@ class Sentinel:
                 c["after_send"] = lambda deferred, alert_id, old=old: (
                     self.store.update_event(symbol, today, **old) if deferred else None)
             out.append(c)
+
+        if tiers_on:
+            if price is not None and prev_close and not any(s.kind == "split" for s in found):
+                out += self._tiers_alerts(symbol, held, now, today, snap, price, prev_close, baseline or {}, valid,
+                                          position, total, candidate, last_seen)
+            return out
 
         primary = next((s for k in ("gap", "daily", "short") for s in found if s.kind == k), None)
         if price is not None and prev_close and not any(s.kind == "split" for s in found):   # a split pauses price signals
@@ -243,6 +271,148 @@ class Sentinel:
                          trigger=decision.trigger, steps=decision.steps, event_date=today, digest_text=digest,
                          rollback=rollback, after_send=after_send)
 
+    # --- the tiers policy ---------------------------------------------------------------------------------------------
+    _ROW = {"max_tier": 0, "extreme_r": 0.0, "reversal_said": 0, "short_said": 0, "last_push_ts": None,
+            "record_alert_id": None, "record_mult": 0.0}
+
+    def _tiers_alerts(self, symbol, held, now, today, snap, price, prev_close, baseline, valid, position, total,
+                      candidate, last_seen=None) -> list[dict]:
+        """Section 7.3: measure the move against the stock's own daily sigma, tier it, say each tier once per direction
+        per New York date, lock price levels.  State is committed here; a candidate carries ``rollback`` for the
+        merge interval."""
+        stamp = now.timestamp()
+        sigma = baseline.get("daily_sigma")
+        sens = self._sensitivity(snap)
+        low, high = tiers.thresholds(sens)
+        market = self._market if symbol != "SPY" else None
+        market_r = market.get("r") if market else None
+        shares = position.get("shares") if position else None
+        m = tiers.measure(price, prev_close, sigma, market_r, shares, total)
+        r, direction = m["r"], m["direction"]
+        tier, rule = tiers.tier_rule(m, sens, held)
+        store = self.store
+        states = store.get_tier_states(symbol, today)
+        row_of = lambda d: states.get(d) or dict(self._ROW)       # noqa: E731
+        if direction and abs(r) > abs(row_of(direction)["extreme_r"] or 0):
+            store.set_tier_state(symbol, today, direction, extreme_r=r)
+            states[direction] = dict(row_of(direction), extreme_r=r)
+        out: list[dict] = []
+        common = {"sigma_mult": m["sigma_mult"], "r": r, "impact_pct": m["impact_pct"], "market_r": market_r,
+                  "market_sigma": market.get("sigma") if market else None}
+
+        def text_of(**kw) -> str:
+            return signals.format_tiered(symbol=symbol, now=now, price=price, prev_close=prev_close,
+                                         sigma_mult=m["sigma_mult"], low=low, high=high, position=position,
+                                         total_assets=total, impact_pct=m["impact_pct"], market_r=market_r, **kw)
+
+        # price levels: held symbols only; a stop is major, add/target worth knowing.  Not evaluated for 2 days after a
+        # split (alerts_from skips every price signal then: prices before and after are not comparable).
+        plan = next((p for p in snap.get("plans") or [] if p.get("symbol") == symbol), None) if held else None
+        for field, kind in (("add_price", "plan_add"), ("stop_price", "plan_stop"), ("target_price", "plan_target")):
+            level = (plan or {}).get(field)
+            if level is None:
+                continue
+            old = store.get_level(symbol, kind, float(level))
+            fire, count, new = tiers.level_state(old, kind, float(level), price, sigma, today,
+                                                    ref=last_seen if last_seen else prev_close)
+            if new != old:
+                store.set_level(symbol, kind, float(level), new)
+            if not fire:
+                continue
+            lt = 2 if kind == "plan_stop" else 1
+            sig = signals.Signal(symbol, kind, "up" if kind == "plan_target" else "down", r, price, float(level),
+                                 detail=str(level))
+            out.append(candidate(sig, text_of(tier=lt, why="level", kind=kind, level=float(level), count=count),
+                                 escalate=bool(held and kind == "plan_stop"), tier=lt, why="level", **common))
+
+        last_push = max((st["last_push_ts"] for st in states.values() if st.get("last_push_ts") is not None),
+                        default=None)
+        dec = tiers.decide(states, tier, direction, r, stamp, last_push)
+        if dec.action == "hold":
+            logger.info("%s %s: tier %s push held (%s)", symbol, today, dec.tier, dec.reason)
+            return out
+        if dec.action == "push":
+            out.append(self._tier_push(symbol, held, today, stamp, dec, states, tier, rule, r, text_of, common, candidate,
+                                       price, prev_close))
+            return out
+        if self._short_moves_on(snap) and held:
+            short = self._short_push(symbol, today, stamp, now, states, valid, price, sigma, baseline, text_of, common,
+                                     last_push, candidate, prev_close)
+            if short is not None:
+                out.append(short)
+                return out
+        if tier == 0 and rule == "record" and direction and not row_of(direction)["max_tier"]:
+            self._record_move(symbol, today, stamp, direction, r, m["sigma_mult"], row_of(direction))
+        return out
+
+    def _tier_push(self, symbol, held, today, stamp, dec, states, tier, rule, r, text_of, common, candidate, price,
+                   prev_close) -> dict:
+        store = self.store
+        target = dec.direction
+        row = states.get(target) or dict(self._ROW)
+        old = {k: row[k] for k in ("max_tier", "last_push_ts", "reversal_said")}
+        if dec.why == "reversal":
+            fields = {"reversal_said": 1, "last_push_ts": stamp}
+            move_dir = "up" if target == "down" else "down"
+            text = text_of(tier=1, why="reversal", kind="reversal", extreme_r=row["extreme_r"])
+            kind, escalate, pushed_tier = "reversal", False, 1      # its own kind: it must not supersede a ringing alert
+        else:
+            fields = {"max_tier": max(int(row["max_tier"] or 0), dec.tier), "last_push_ts": stamp}
+            move_dir = target
+            text = text_of(tier=dec.tier, why=dec.why, kind="move", rule=rule)
+            # today's convention: only a fall on a holding rings (a stop crossing too); a major rise is pushed, not escalated
+            kind, escalate, pushed_tier = ("daily" if dec.why == "first" else "update"), bool(
+                held and dec.tier == 2 and move_dir == "down"), dec.tier
+        store.set_tier_state(symbol, today, target, **fields)
+        if row.get("record_alert_id"):                              # it is now said on its own: the digest line goes
+            store.update_alert(row["record_alert_id"], digested_at=stamp)
+            store.set_tier_state(symbol, today, target, record_alert_id=None)
+        sig = signals.Signal(symbol, kind, move_dir, r, price, prev_close, sigma_mult=common["sigma_mult"])
+        return candidate(sig, text, escalate=escalate, kind=kind, direction=move_dir, price_move=True, tier=pushed_tier,
+                         why=dec.why, rollback=lambda: store.set_tier_state(symbol, today, target, **old), **common) | (
+            {"price_move": False} if dec.why == "reversal" else {})   # not a merge/supersede candidate: the first alert keeps ringing
+
+    def _short_push(self, symbol, today, stamp, now, states, valid, price, sigma, baseline, text_of, common, last_push,
+                    candidate, prev_close) -> dict | None:
+        """A 5- or 15-minute move (off unless the owner turned short moves on): tier 1 at most, once per direction a day."""
+        last = valid[-1]
+        bucket = signals.bucket_of(last["ts"])
+        volume = sum(float(b.get("volume") or 0) for b in valid[-5:])
+        avg = (baseline.get("avg_vol5") or {}).get(bucket)
+        best = None
+        for minutes, label in ((5, "5m"), (15, "15m")):
+            ref = signals._bar_before(valid, last["ts"] - timedelta(minutes=minutes))
+            if ref is None or last["ts"] - ref["ts"] > timedelta(minutes=minutes + 3):
+                continue
+            window_r = price / float(ref["close"]) - 1
+            if tiers.short_move(window_r, sigma, bucket, volume, avg) and (best is None or abs(window_r) > abs(best[1])):
+                best = (label, window_r)
+        if best is None:
+            return None
+        label, window_r = best
+        way = "up" if window_r > 0 else "down"
+        row = states.get(way) or dict(self._ROW)
+        if row["short_said"] or (last_push is not None and stamp - last_push < tiers.MIN_GAP):
+            return None
+        store = self.store
+        old = {"short_said": 0, "last_push_ts": row["last_push_ts"]}
+        store.set_tier_state(symbol, today, way, short_said=1, last_push_ts=stamp)
+        sig = signals.Signal(symbol, "short", way, window_r, price, prev_close, sigma_mult=common["sigma_mult"], window=label)
+        return candidate(sig, text_of(tier=1, why="short", kind="short", window=label, window_r=window_r), escalate=False,
+                         price_move=True, tier=1, why="short",
+                         rollback=lambda: store.set_tier_state(symbol, today, way, **old), **common)
+
+    def _record_move(self, symbol, today, stamp, direction, r, mult, row) -> None:
+        """A move over 1 sigma that stayed under the tier line: one night-digest line per symbol and direction a day,
+        rewritten when it grows by a quarter sigma."""
+        text = signals.format_record_line(symbol, r, mult)
+        if not row.get("record_alert_id"):
+            alert_id = self.store.add_alert(symbol, "record", text, False, stamp, deferred=True, digest_text=text)
+            self.store.set_tier_state(symbol, today, direction, record_alert_id=alert_id, record_mult=mult)
+        elif mult - float(row.get("record_mult") or 0) >= 0.25:
+            self.store.update_alert(row["record_alert_id"], text=text, digest_text=text)
+            self.store.set_tier_state(symbol, today, direction, record_mult=mult)
+
     # --- delivery: merge a burst, then raise ----------------------------------------------------------
     def flush(self, candidates: list[dict], snap: dict, now: datetime) -> None:
         """Send one tick's candidates.  Plan crossings and splits go at once; price pushes go one by one, or as a
@@ -254,14 +424,27 @@ class Sentinel:
                 self._raise(snap, c)
         if not moves:
             return
+        tiered = [c for c in moves if "tier" in c]
+        if tiered:
+            known = next((c for c in tiered if c.get("market_r") is not None), tiered[0])
+            grouped = tiers.group(tiered, known.get("market_r"), known.get("market_sigma"))
+            if grouped:                                            # the whole market moved with them: one message
+                members, _ = grouped
+                self._raise_merged(snap, members, text=signals.format_grouped(members, known["market_r"]))
+                moves = [c for c in moves if c not in members]
+                if not moves:
+                    return
         mode = self.store.get_kv("merge_mode")
         state = mode[0] if mode else {}
         active = bool(state.get("active"))
         if active and stamp - float(state.get("last_flush") or 0) < signals.MIN_GAP:
+            urgent = [c for c in moves if c.get("tier") == 2]      # a major move is never held back, only the rest
             for c in moves:
-                if c.get("rollback"):
+                if c not in urgent and c.get("rollback"):
                     c["rollback"]()                                # anchors stay put; re-measured at the next flush
-            logger.info("merge interval: %d price pushes held back", len(moves))
+            for c in urgent:
+                self._raise(snap, c)
+            logger.info("merge interval: %d price pushes held back, %d major sent", len(moves) - len(urgent), len(urgent))
             return
         recent = self.store.recent_price_push_symbols(stamp - MERGE_WINDOW) | {c["symbol"] for c in moves}
         if len(moves) >= 2 and (active or len(recent) >= MERGE_MIN):
@@ -278,13 +461,18 @@ class Sentinel:
         alert["after_send"](self.escalator.deferred(alert_id), alert_id)
         self._announce(alert_id, alert)
 
-    def _raise_merged(self, snap: dict, members: list[dict]) -> None:
+    def _raise_merged(self, snap: dict, members: list[dict], text: str | None = None) -> None:
+        if any("tier" in m for m in members):                      # a major holding is listed first
+            members = sorted(members, key=lambda m: not (m["held"] and m.get("tier") == 2))
         symbols = [m["symbol"] for m in members]
         merged = {"symbol": "+".join(symbols)[:80], "symbols": symbols, "kind": "merged", "direction": "",
-                  "held": any(m["held"] for m in members), "text": signals.format_merged(members),
+                  "held": any(m["held"] for m in members), "text": text or signals.format_merged(members),
                   "escalate": any(m["escalate"] for m in members), "price_move": True, "members": members,
                   "weight_pct": max(m.get("weight_pct") or 0 for m in members), "trigger": "T0",
                   "event_date": None, "earnings_unacked": False}
+        if any("tier" in m for m in members):
+            merged["tier"] = max(m.get("tier") or 0 for m in members)
+            merged["sigma_mult"] = max(m.get("sigma_mult") or 0 for m in members)
         alert_id = self.escalator.raise_alert(snap, merged)
         deferred = self.escalator.deferred(alert_id)
         for m in members:
@@ -311,7 +499,8 @@ class Sentinel:
                    "escalate": bool(row.get("escalate", alert.get("escalate"))), "held": bool(alert.get("held")),
                    "weight_pct": alert.get("weight_pct") or None, "price": alert.get("price"),
                    "prev_close": alert.get("prev_close"), "trigger": alert.get("trigger") or None,
-                   "event_date": alert.get("event_date"), "members": members or None}
+                   "event_date": alert.get("event_date"), "members": members or None, "tier": alert.get("tier"),
+                   "sigma_mult": alert.get("sigma_mult")}
         price, prev_close = alert.get("price"), alert.get("prev_close")
         if price is not None and prev_close:
             payload["move_pct"] = (price / prev_close - 1) * 100
@@ -325,12 +514,27 @@ class Sentinel:
         held = [p["symbol"] for p in snap.get("positions") or [] if p.get("symbol") and p.get("shares")]
         queued = [s for s in snap.get("research_queue") or [] if s not in held]
         collected: list[dict] = []
+        self._market = self.fetch_market(now) if self._policy() == "tiers" else None
         for symbol, is_held in [(s, True) for s in held] + [(s, False) for s in queued]:
             try:
                 collected += self.evaluate_symbol(symbol, is_held, now, snap)
             except Exception as exc:  # one symbol failing must not stop the others
                 logger.warning("signal check for %s failed: %s", symbol, type(exc).__name__)
         self.flush(collected, snap, now)
+
+    def fetch_market(self, now: datetime) -> dict | None:
+        """SPY's move from its previous close at this minute and its daily sigma, once per poll; None when unavailable."""
+        try:
+            base = self.baseline_for("SPY", now)
+            chart = signals.fetch_chart("SPY", "1m", "1d")
+            valid = [b for b in chart["bars"] if signals._bar_ok(b)]
+            prev = base.get("prev_close") or chart["prev_close"]
+            if not valid or not prev or signals.is_stale(valid[-1]["ts"], now):
+                return None
+            return {"r": float(valid[-1]["close"]) / prev - 1, "sigma": (base.get("baseline") or {}).get("daily_sigma")}
+        except Exception as exc:
+            logger.warning("SPY for the market line unavailable: %s", type(exc).__name__)
+            return None
 
     def check_escalation(self) -> None:
         self.escalator.tick(self.config.get())

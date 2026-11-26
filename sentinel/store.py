@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "sentinel.db"
@@ -49,12 +50,24 @@ class Store:
                          "pushes INTEGER NOT NULL DEFAULT 0, suppressed INTEGER NOT NULL DEFAULT 0,"
                          "low REAL, high REAL, last_price REAL, last_r REAL, pending_alert_id INTEGER,"
                          "PRIMARY KEY (symbol, ny_date))")
+            # 5a tiers policy: what was said today per direction, and the lock of each price level.
+            conn.execute("CREATE TABLE IF NOT EXISTS tier_state ("
+                         "symbol TEXT NOT NULL, ny_date TEXT NOT NULL, direction TEXT NOT NULL,"
+                         "max_tier INTEGER NOT NULL DEFAULT 0, extreme_r REAL NOT NULL DEFAULT 0,"
+                         "reversal_said INTEGER NOT NULL DEFAULT 0, short_said INTEGER NOT NULL DEFAULT 0,"
+                         "last_push_ts REAL, record_alert_id INTEGER, record_mult REAL NOT NULL DEFAULT 0,"
+                         "PRIMARY KEY (symbol, ny_date, direction))")
+            conn.execute("CREATE TABLE IF NOT EXISTS level_lock ("
+                         "symbol TEXT NOT NULL, kind TEXT NOT NULL, level REAL NOT NULL, armed INTEGER NOT NULL,"
+                         "last_date TEXT, count_today INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (symbol, kind, level))")
             # CREATE TABLE IF NOT EXISTS never adds columns to a table an older release made.
             have = {row["name"] for row in conn.execute("PRAGMA table_info(alerts)")}
             for column, ddl in (("superseded_by", "INTEGER"), ("event_date", "TEXT"), ("digest_text", "TEXT")):
                 if column not in have:
                     conn.execute(f"ALTER TABLE alerts ADD COLUMN {column} {ddl}")
             conn.execute("DELETE FROM price_event WHERE first_ts < ?", (time.time() - 7 * 86400,))
+            conn.execute("DELETE FROM tier_state WHERE ny_date < ?",
+                         (datetime.fromtimestamp(time.time() - 7 * 86400, timezone.utc).date().isoformat(),))
 
     def _conn(self) -> sqlite3.Connection:
         # One short-lived connection per call: safe across the sentinel's threads.
@@ -134,6 +147,40 @@ class Store:
         except sqlite3.OperationalError:
             return False
         return row is not None
+
+    # --- tiers policy state (5a) ------------------------------------------------------------------------
+    TIER_FIELDS = ("max_tier", "extreme_r", "reversal_said", "short_said", "last_push_ts", "record_alert_id", "record_mult")
+
+    def get_tier_states(self, symbol: str, ny_date: str) -> dict[str, dict]:
+        """``{"up": row, "down": row}`` for the rows that exist today."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM tier_state WHERE symbol = ? AND ny_date = ?", (symbol, ny_date)).fetchall()
+        return {r["direction"]: dict(r) for r in rows}
+
+    def set_tier_state(self, symbol: str, ny_date: str, direction: str, **fields) -> None:
+        """Create the row if needed and merge ``fields`` into it."""
+        bad = set(fields) - set(self.TIER_FIELDS)
+        if bad:
+            raise ValueError(f"unknown tier_state fields: {sorted(bad)}")
+        with self._conn() as conn:
+            conn.execute("INSERT OR IGNORE INTO tier_state (symbol, ny_date, direction) VALUES (?, ?, ?)",
+                         (symbol, ny_date, direction))
+            if fields:
+                sets = ", ".join(f"{name} = ?" for name in fields)
+                conn.execute(f"UPDATE tier_state SET {sets} WHERE symbol = ? AND ny_date = ? AND direction = ?",
+                             (*fields.values(), symbol, ny_date, direction))
+
+    def get_level(self, symbol: str, kind: str, level: float) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT armed, last_date, count_today FROM level_lock WHERE symbol = ? AND kind = ?"
+                               " AND level = ?", (symbol, kind, float(level))).fetchone()
+        return None if row is None else dict(row)
+
+    def set_level(self, symbol: str, kind: str, level: float, state: dict) -> None:
+        with self._conn() as conn:
+            conn.execute("INSERT OR REPLACE INTO level_lock (symbol, kind, level, armed, last_date, count_today)"
+                         " VALUES (?, ?, ?, ?, ?, ?)", (symbol, kind, float(level), int(bool(state.get("armed"))),
+                                                        state.get("last_date"), int(state.get("count_today") or 0)))
 
     # --- price events (the push policy) ---------------------------------------------------------------
     def get_event(self, symbol: str, ny_date: str) -> dict | None:

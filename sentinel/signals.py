@@ -652,3 +652,92 @@ def position_weight(position: dict, price: float, total_assets: float) -> float:
     value = shares * price
     assets = total_assets - old_value + value
     return value / assets if assets > 0 else 0.0
+
+
+# --- tiered alert text (5a; the numbers come from sentinel/tiers.py, the sentence from here) -----------------------
+
+TIER_WORD = {1: "值得知道", 2: "重大"}
+_LEVEL_LABEL = {"plan_add": "补仓价", "plan_stop": "止损价", "plan_target": "目标价"}
+
+
+def _session_word(now: datetime) -> str:
+    return {"pre": "盘前", "post": "盘后"}.get(bucket_of(now), "盘中")
+
+
+def _fold(value: float) -> str:
+    return f"{value:g}"
+
+
+def _move_rule(tier: int, rule: str, *, low: float, high: float, impact_pct: float | None, why: str) -> str:
+    if rule == "impact":
+        text = f"重大：这一下占总资产 {abs(impact_pct or 0):.1f}%，超过 2%"
+    elif tier == 2:
+        text = f"重大：超过 {_fold(high)} 倍日常波动"
+    else:
+        text = f"值得知道：超过 {_fold(low)} 倍日常波动"
+    return text + ("（从「值得知道」升级）" if why == "rise" else "")
+
+
+def format_tiered(*, symbol: str, tier: int, why: str, kind: str, now: datetime, price: float, prev_close: float,
+                  sigma_mult: float, rule: str = "", low: float = 2.0, high: float = 4.0, position: dict | None = None,
+                  total_assets: float | None = None, impact_pct: float | None = None, market_r: float | None = None,
+                  level: float | None = None, count: int = 1, extreme_r: float | None = None,
+                  window: str = "", window_r: float = 0.0) -> str:
+    """One tiered push in Chinese.  ``kind`` is ``move`` | ``plan_add|plan_stop|plan_target`` | ``reversal`` | ``short``.
+    It says the move against yesterday's close in the stock's own daily sigma, what it means for a holding, what the
+    market did at the same time, and which rule fired.  It does not say why the stock moved."""
+    r = price / prev_close - 1
+    word = TIER_WORD.get(tier, "值得知道")
+    side = "涨" if r > 0 else "跌"
+    vs_close = f"较昨收{side} {abs(r) * 100:.1f}%，现价 {price:.2f}（约 {sigma_mult:.1f} 倍它的日常波动）"
+    if kind in _LEVEL_LABEL:
+        label = _LEVEL_LABEL[kind]
+        verb = "涨到" if kind == "plan_target" else "跌破"
+        head = f"【{word}·价位】{symbol} {verb}{label} {_fold(level)}，{vs_close}。"
+        crossing = f"第 {count} 次穿过{label} {_fold(level)}" if count >= 2 else f"穿过{label} {_fold(level)}"
+        rule_line = f"{word}：{crossing}"
+    elif kind == "reversal":
+        up = (extreme_r or 0) > 0
+        head = (f"【{word}·回吐】{symbol} 今日一度{'涨' if up else '跌'}到 {(extreme_r or 0) * 100:+.1f}%，"
+                f"现回到 {r * 100:+.1f}%，现价 {price:.2f}。")
+        rule_line = f"{word}：回吐了今日{'涨' if up else '跌'}幅的一半以上"
+    elif kind == "short":
+        span = window.replace("15m", "15 分钟").replace("5m", "5 分钟") or "短时"
+        head = (f"【{word}·短线】{symbol} {span}内{'涨' if window_r > 0 else '跌'} {abs(window_r) * 100:.1f}%，"
+                f"现价 {price:.2f}；{vs_close.split('，现价')[0]}（约 {sigma_mult:.1f} 倍它的日常波动）。")
+        rule_line = f"{word}：短线，5 分钟或 15 分钟的涨跌超过半个日常波动"
+    else:
+        head = f"【{word}·{_session_word(now)}】{symbol} {vs_close}。"
+        rule_line = _move_rule(tier, rule, low=low, high=high, impact_pct=impact_pct, why=why)
+    lines = [head]
+    if position and position.get("shares"):
+        shares = float(position["shares"])
+        change = shares * (price - prev_close)
+        line = f"持仓 {shares:g} 股，较昨收{'亏' if change < 0 else '赚'} {_money(change)}"
+        if impact_pct is not None:
+            line += f"，占总资产 {abs(impact_pct):.2f}%"
+        lines.append(line + "。")
+    if market_r is not None:
+        lines.append(f"同期标普 {market_r * 100:+.1f}%。")
+    lines.append(f"规则：{rule_line}")
+    return "\n".join(lines)
+
+
+def format_record_line(symbol: str, r: float, sigma_mult: float) -> str:
+    """A tier-0 move above 1 sigma, for the digest: it was not sent on its own."""
+    return f"{symbol} 较昨收{'涨' if r > 0 else '跌'} {abs(r) * 100:.1f}%（约 {sigma_mult:.1f} 倍日常波动），没有单独提醒。"
+
+
+def format_grouped(members: list[dict], market_r: float) -> str:
+    """One message when the whole market moved the same way as three or more of the owner's symbols."""
+    down = market_r < 0
+    lines = [f"【多股同向】大盘同向：标普 {market_r * 100:+.1f}%；你关注的 {len(members)} 只一起{'跌' if down else '涨'}："]
+    for item in members:
+        mark = "（持仓）" if item.get("held") else ""
+        line = (f"· {item['symbol']}{mark} {TIER_WORD.get(item.get('tier'), '值得知道')}，"
+                f"{'跌' if item.get('r', 0) < 0 else '涨'} {abs(item.get('r', 0)) * 100:.1f}%"
+                f"（约 {item.get('sigma_mult', 0):.1f} 倍日常波动）")
+        if item.get("held") and item.get("impact_pct") is not None:
+            line += f"，占总资产 {abs(item['impact_pct']):.1f}%"
+        lines.append(line)
+    return "\n".join(lines)

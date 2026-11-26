@@ -1182,12 +1182,12 @@ async def query_alerts(symbol: str | None = None, limit: int = 20) -> dict:
             try:
                 if symbol:
                     cur = conn.execute(
-                        "SELECT id, symbol, kind, text, created_at FROM alerts WHERE symbol = ? ORDER BY id DESC LIMIT ?",
+                        "SELECT id, symbol, kind, text, created_at FROM alerts WHERE symbol = ? AND kind != 'record' ORDER BY id DESC LIMIT ?",
                         (symbol, limit_val)
                     )
                 else:
                     cur = conn.execute(
-                        "SELECT id, symbol, kind, text, created_at FROM alerts ORDER BY id DESC LIMIT ?",
+                        "SELECT id, symbol, kind, text, created_at FROM alerts WHERE kind != 'record' ORDER BY id DESC LIMIT ?",
                         (limit_val,)
                     )
                 db_rows = cur.fetchall()

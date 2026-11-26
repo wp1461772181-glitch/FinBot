@@ -77,7 +77,7 @@ class Escalator:
         if hold:
             return alert_id
         if alert.get("price_move"):
-            self._supersede(snap, alert_id, alert.get("symbols") or [alert["symbol"]])
+            self._supersede(snap, alert_id, alert.get("symbols") or [alert["symbol"]], rings=bool(alert.get("escalate")) or ring)
         self._send_telegram(snap, alert_id, alert["text"], now)
         if (night and ring) or alert.get("earnings_unacked"):
             self._escalate(snap, alert_id, now)
@@ -87,13 +87,16 @@ class Escalator:
         row = self.store.alert(alert_id)
         return bool(row and row["deferred"])
 
-    def _supersede(self, snap: dict, new_id: int, symbols: list[str]) -> None:
-        """A new push on a symbol closes that symbol's earlier live alert and stops its ringing (one ring per symbol)."""
+    def _supersede(self, snap: dict, new_id: int, symbols: list[str], *, rings: bool = True) -> None:
+        """A new push on a symbol closes that symbol's earlier live alert and stops its ringing (one ring per symbol).
+
+        A push that does not ring itself never closes one that does: an unacknowledged escalating alert (a big fall on a holding)
+        keeps ringing until the owner acknowledges it, whatever quieter message about the same symbol comes after it."""
         marks = ",".join("?" for _ in symbols)
         pushover = snap.get("pushover") or {}
         for row in self.store.alerts_where(
                 f"symbol IN ({marks}) AND kind IN {PRICE_KINDS} AND id != ? AND acked_at IS NULL"
-                " AND superseded_by IS NULL AND deferred = 0", (*symbols, new_id)):
+                " AND superseded_by IS NULL AND deferred = 0" + ("" if rings else " AND escalate = 0"), (*symbols, new_id)):
             self.store.update_alert(row["id"], superseded_by=new_id)
             if row["receipt"] and not row["receipt_closed"]:
                 self.channels.cancel_receipt(pushover, row["receipt"])
@@ -159,9 +162,21 @@ class Escalator:
         if is_night(now):
             return
         rows = self.store.alerts_where("deferred = 1 AND digested_at IS NULL")
-        if not rows:
+        # tier-0 "record" rows (moves that were not sent on their own) only ever ride in the morning digest, 08:00-08:59
+        # Beijing: never alone, never in a daytime flush
+        morning = datetime.fromtimestamp(now, BEIJING).hour == NIGHT_END_HOUR
+        records = [r for r in rows if r["kind"] == "record"] if morning else []
+        rows = [r for r in rows if r["kind"] != "record"]
+        if not rows and not records:
             return
-        body = "【夜间汇总】昨夜到现在没有直接打扰你的提醒：\n" + "\n".join(f"· {r.get('digest_text') or r['text'].splitlines()[0]}" for r in rows)
+        line = lambda r: f"· {r.get('digest_text') or r['text'].splitlines()[0]}"      # noqa: E731
+        parts = []
+        if rows:
+            parts.append("昨夜到现在没有直接打扰你的提醒：\n" + "\n".join(line(r) for r in rows))
+        if records:
+            parts.append("昨天没有单独提醒的波动：\n" + "\n".join(line(r) for r in records))
+        rows = rows + records
+        body = "【夜间汇总】" + "\n".join(parts)
         if self.channels.telegram_text(snap.get("telegram") or {}, body):
             for row in rows:
                 self.store.update_alert(row["id"], digested_at=now)
