@@ -10049,7 +10049,7 @@ async function watchRules(ctx) {
     const hardKeys = await page.locator("[data-testid=watch-preset][data-hard=true]").evaluateAll((els) => els.map((e) => ({ key: e.getAttribute("data-key"), switches: e.querySelectorAll("[role=switch]").length })));
     assert(hardKeys.length === 2 && hardKeys.every((h) => h.switches === 0), `hard guarantees: ${JSON.stringify(hardKeys)}`);
     assert((await page.locator("[data-testid=watch-owner-rule]").count()) === 3, "his three rules are not listed");
-    assert((await page.locator("[data-testid=watch-preset][data-key=concentration] [data-testid=watch-preset-yields]").innerText()).includes("NVDA"), "the yield note is missing");
+    assert((await page.locator("[data-testid=watch-preset][data-key=concentration] [data-testid=watch-preset-yields]").innerText()).includes("INTC"), "the yield note is missing");
     const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     assert(wide <= 0, `sideways overflow of ${wide}px at 390`);
     await page.locator("[data-testid=watch-preset][data-key=volume_surge] [role=switch]").click();

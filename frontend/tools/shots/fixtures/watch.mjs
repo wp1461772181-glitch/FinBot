@@ -1,29 +1,264 @@
 // 它在帮你盯的 → 规则 (stage 5b-2, GET /agent-chat/watch): the owner's own rules, the system defaults already resolved with his changes, and the sensitivity.  The shapes are the plan's contract
 // (docs/superpowers/plans/2026-11-26-stage5b2-preset-rules.md); the sentences are invented but worded the way the server's code writes them.  The write routes (index.mjs) change `state.watch`.
 
+// Taken from the server's own view (app.watch_rules_view.watch_view) in a test database, so the shapes and sentences are the real ones.
 const OWNER_RULES = [
-  { id: "wr-0000-4000-8000-000000000001", symbol: "INTC", metric: "day_change", direction: "down", levels: [{ threshold: 8, level: "remind" }], text: "英特尔单日下跌超过 8%：提醒。当天只提醒一次。", status: "active", last_fired: "11-24 22:40（北京时间）", overrides_default: "默认的下跌分级对它不生效" },
-  { id: "wr-0000-4000-8000-000000000002", symbol: "NVDA", metric: "position_weight", direction: "above", levels: [{ threshold: 40, level: "urgent" }], text: "英伟达占总资产超过 40%：加急。条件成立时提醒一次，回到 40% 以下后再超过会再提醒。", status: "active", last_fired: "近 7 天没有触发", overrides_default: null },
-  { id: "wr-0000-4000-8000-000000000003", symbol: "AMD", metric: "price", direction: "above", levels: [{ threshold: 180, level: "remind" }], text: "超威半导体涨到 180 美元以上：提醒。有效到 11-20。", status: "expired", last_fired: "近 7 天没有触发", overrides_default: null },
+ {
+  "id": "25c9d5af-f12d-47ba-8ddf-07d7743f5617",
+  "symbol": "INTC",
+  "metric": "day_change",
+  "direction": "down",
+  "levels": [
+   {
+    "threshold": 8,
+    "level": "remind"
+   },
+   {
+    "threshold": 15,
+    "level": "urgent"
+   }
+  ],
+  "text": "英特尔相对昨收下跌达到 8%：提醒；达到 15%：加急。每天每档一次。",
+  "status": "active",
+  "last_fired": "11-24 22:40（北京时间）",
+  "overrides_default": "默认的下跌分级对它不生效",
+  "created_on": "2026-11-26",
+  "expires_on": null
+ },
+ {
+  "id": "244d28c2-f728-4075-8de2-4bd0575e0910",
+  "symbol": "INTC",
+  "metric": "position_weight",
+  "direction": "above",
+  "levels": [
+   {
+    "threshold": 40,
+    "level": "urgent"
+   }
+  ],
+  "text": "英特尔占你总资产的比例高于 40%：加急。条件成立时提醒一次，回到 40%以下后再升破会再提醒；每天最多一次。",
+  "status": "active",
+  "last_fired": "近 7 天没有触发",
+  "overrides_default": "系统默认的「单只占比过高」在 INTC 上让位给这条",
+  "created_on": "2026-11-26",
+  "expires_on": null
+ },
+ {
+  "id": "e8464b10-c8df-441a-bd31-8c2cb7a94c7e",
+  "symbol": "AMD",
+  "metric": "price",
+  "direction": "above",
+  "levels": [
+   {
+    "threshold": 180,
+    "level": "remind"
+   }
+  ],
+  "text": "超微的股价高于 180 美元：提醒。条件成立时提醒一次，回到 180 美元以下后再升破会再提醒；每天最多一次。有效到 2026-11-20。",
+  "status": "expired",
+  "last_fired": "近 7 天没有触发",
+  "overrides_default": null,
+  "created_on": "2026-11-26",
+  "expires_on": "2026-11-20"
+ }
 ];
-
-const preset = (key, title, text, extra = {}) => ({ key, title, text, enabled: true, levels: null, editable: false, hard_guarantee: false, applies_to: null, yields_on: [], changed: false, ...extra });
 
 const PRESETS = [
-  preset("day_moves", "涨跌分级", "按每只股票自己的日波动幅度（σ）分档：约 2σ 值得提醒，4σ 算重大。灵敏度见下面。", { applies_to: ["持仓", "研究队列"], yields_on: ["INTC"] }),
-  preset("short_moves", "5 分钟急动", "持仓在 5 分钟内的急动提醒：关。开关在下面。", { enabled: false, applies_to: ["持仓"] }),
-  preset("plan_prices", "持仓计划里的价位线", "补仓价、止损价、目标价到了就提醒。价位在持仓计划里改。", { applies_to: ["NVDA"] }),
-  preset("stop_price", "止损价", "跌到你写的止损价，立刻加急提醒。这条是硬保证，不能关。", { hard_guarantee: true, applies_to: ["NVDA"] }),
-  preset("filings", "新公告（SEC 申报）", "你的持仓和研究队列有新申报，就提醒。这条是硬保证，不能关。", { hard_guarantee: true }),
-  preset("concentration", "单只占比过高", "单只持仓占总资产超过 25%：提醒。条件成立时提醒一次，回到 25% 以下后再超过会再提醒。", { levels: [{ threshold: 25, level: "remind" }], editable: true, applies_to: ["INTC", "NVDA", "TSLA"], yields_on: ["NVDA"] }),
-  preset("portfolio_drawdown", "组合单日大跌", "组合今天跌超过 3%：提醒；超过 5%：加急。", { levels: [{ threshold: 3, level: "remind" }, { threshold: 5, level: "urgent" }], editable: true, applies_to: "整个组合" }),
-  preset("down_streak", "连续下跌", "连续 5 个交易日收盘低于前一天：提醒。", { enabled: false, levels: [{ threshold: 5, level: "remind" }], editable: true, changed: true, applies_to: ["持仓", "研究队列"] }),
-  preset("new_high_52w", "创 52 周新高", "价格创下近 252 个交易日的最高收盘：提醒。", { levels: [{ threshold: 0, level: "remind" }], editable: true, applies_to: ["持仓", "研究队列"] }),
-  preset("new_low_52w", "创 52 周新低", "价格创下近 252 个交易日的最低收盘：提醒。", { levels: [{ threshold: 0, level: "remind" }], editable: true, applies_to: ["持仓", "研究队列"] }),
-  preset("volume_surge", "持仓异常放量", "持仓的成交量超过平时的 3 倍：提醒。", { levels: [{ threshold: 3, level: "remind" }], editable: true, applies_to: ["INTC", "NVDA", "TSLA"] }),
+ {
+  "key": "concentration",
+  "title": "单只占比过高",
+  "text": "每只持仓占你总资产的比例高于 25%：提醒。条件成立时提醒一次，回到 25%以下后再升破会再提醒；每天最多一次。",
+  "enabled": true,
+  "levels": [
+   {
+    "threshold": 25,
+    "level": "remind"
+   }
+  ],
+  "editable": true,
+  "hard_guarantee": false,
+  "applies_to": "所有持仓",
+  "yields_on": [
+   "INTC"
+  ],
+  "changed": false,
+  "threshold_editable": true,
+  "unit": "%"
+ },
+ {
+  "key": "portfolio_drawdown",
+  "title": "组合当日大跌",
+  "text": "你的组合今天的涨跌（所有持仓现有股数 × 相对昨收的价差，合计占昨收时总资产的比例）下跌达到 3%：提醒；达到 5%：加急。每天每档一次。",
+  "enabled": true,
+  "levels": [
+   {
+    "threshold": 3,
+    "level": "remind"
+   },
+   {
+    "threshold": 5,
+    "level": "urgent"
+   }
+  ],
+  "editable": true,
+  "hard_guarantee": false,
+  "applies_to": "整个组合",
+  "yields_on": [],
+  "changed": false,
+  "threshold_editable": true,
+  "unit": "%"
+ },
+ {
+  "key": "down_streak",
+  "title": "连续下跌",
+  "text": "持仓和研究队列里的每只股票连续下跌（每个交易日收盘低于前一日，今天股价低于昨收也算一天）达到 5 个交易日：提醒。条件成立时提醒一次，连续下跌中断后再连跌到 5 个交易日会再提醒；每天最多一次。",
+  "enabled": false,
+  "levels": [
+   {
+    "threshold": 5,
+    "level": "remind"
+   }
+  ],
+  "editable": true,
+  "hard_guarantee": false,
+  "applies_to": "持仓和研究队列",
+  "yields_on": [],
+  "changed": true,
+  "threshold_editable": true,
+  "unit": "天"
+ },
+ {
+  "key": "new_high_52w",
+  "title": "52 周新高",
+  "text": "持仓和研究队列里的每只股票的股价创 52 周新高（不低于过去一年（约 250 个交易日）的最高收盘价）：提醒。同一只股票一个月（20 个交易日）内最多提醒一次。",
+  "enabled": true,
+  "levels": [
+   {
+    "threshold": 0,
+    "level": "remind"
+   }
+  ],
+  "editable": true,
+  "hard_guarantee": false,
+  "applies_to": "持仓和研究队列",
+  "yields_on": [],
+  "changed": false,
+  "threshold_editable": false,
+  "unit": null
+ },
+ {
+  "key": "new_low_52w",
+  "title": "52 周新低",
+  "text": "持仓和研究队列里的每只股票的股价创 52 周新低（不高于过去一年（约 250 个交易日）的最低收盘价）：提醒。同一只股票一个月（20 个交易日）内最多提醒一次。",
+  "enabled": true,
+  "levels": [
+   {
+    "threshold": 0,
+    "level": "remind"
+   }
+  ],
+  "editable": true,
+  "hard_guarantee": false,
+  "applies_to": "持仓和研究队列",
+  "yields_on": [],
+  "changed": false,
+  "threshold_editable": false,
+  "unit": null
+ },
+ {
+  "key": "volume_surge",
+  "title": "成交量异常放大",
+  "text": "每只持仓今天的成交量（只看常规交易时段，按开盘后已过去的时间折算；开盘后 30 分钟内不判断）相对近 20 个交易日的日均量达到 3 倍：提醒。每天最多一次。",
+  "enabled": true,
+  "levels": [
+   {
+    "threshold": 3,
+    "level": "remind"
+   }
+  ],
+  "editable": true,
+  "hard_guarantee": false,
+  "applies_to": "所有持仓",
+  "yields_on": [],
+  "changed": false,
+  "threshold_editable": true,
+  "unit": "倍"
+ },
+ {
+  "key": "day_tiers",
+  "title": "涨跌分级",
+  "text": "涨跌分级：按每只股票自己的日波动幅度（σ）分档，现在的灵敏度是「标准」：约 2σ 提醒、4σ 重大。你为INTC（下跌）定了自己的涨跌规则，默认的分级在这些方向上对它们不生效。",
+  "enabled": true,
+  "levels": null,
+  "editable": false,
+  "hard_guarantee": false,
+  "applies_to": "持仓和研究队列",
+  "yields_on": [
+   "INTC"
+  ],
+  "changed": false,
+  "threshold_editable": false,
+  "unit": null
+ },
+ {
+  "key": "short_moves",
+  "title": "5 分钟急动",
+  "text": "5 分钟急动提醒：关。",
+  "enabled": false,
+  "levels": null,
+  "editable": false,
+  "hard_guarantee": false,
+  "applies_to": "持仓和研究队列",
+  "yields_on": [],
+  "changed": false,
+  "threshold_editable": false,
+  "unit": null
+ },
+ {
+  "key": "plan_prices",
+  "title": "计划价位（补仓价、目标价）",
+  "text": "持仓计划里的补仓价和目标价：你还没写。价位在持仓计划里改。",
+  "enabled": true,
+  "levels": null,
+  "editable": false,
+  "hard_guarantee": false,
+  "applies_to": "写了计划价位的持仓",
+  "yields_on": [],
+  "changed": false,
+  "threshold_editable": false,
+  "unit": null
+ },
+ {
+  "key": "stop_price",
+  "title": "止损价",
+  "text": "持仓计划里的止损价：你还没写。跌破就会提醒你，不受你的规则和设置影响。这条是硬保证，不能关。",
+  "enabled": true,
+  "levels": null,
+  "editable": false,
+  "hard_guarantee": true,
+  "applies_to": "写了计划价位的持仓",
+  "yields_on": [],
+  "changed": false,
+  "threshold_editable": false,
+  "unit": null
+ },
+ {
+  "key": "filings",
+  "title": "新公告（SEC 申报）",
+  "text": "新公告（SEC 申报）：盯你的持仓和研究队列。这条是硬保证，不能关。",
+  "enabled": true,
+  "levels": null,
+  "editable": false,
+  "hard_guarantee": true,
+  "applies_to": "持仓和研究队列",
+  "yields_on": [],
+  "changed": false,
+  "threshold_editable": false,
+  "unit": null
+ }
 ];
 
-const THRESHOLDS = { quiet: [2.5, 5], standard: [2, 4], sensitive: [1.5, 3] };
+const THRESHOLDS = {"quiet": {"remind": 2.5, "major": 5.0}, "standard": {"remind": 2.0, "major": 4.0}, "sensitive": {"remind": 1.5, "major": 3.0}};
 const DEFAULT_LEVELS = { concentration: [25], portfolio_drawdown: [3, 5], down_streak: [5], volume_surge: [3] };
 const TEXTS = {
   concentration: ([a]) => `单只持仓占总资产超过 ${a}%：提醒。条件成立时提醒一次，回到 ${a}% 以下后再超过会再提醒。`,
