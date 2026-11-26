@@ -11,7 +11,7 @@ import { DelayedSkeleton, Skeleton } from "@/components/state/Skeleton";
 import { confirm } from "@/components/state/confirm";
 import { confirmProfileItem, createProfileItem, deleteProfileItem, listProfileItems, restoreProfileItem, updateProfileItem, type ProfileItem } from "../../../api/memory";
 import { useLocale } from "../../../i18n";
-import { archiveNote, exampleLines, isSettled, layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers, proposedItems, seenLine } from "../../../memory-items.mjs";
+import { archiveNote, exampleLines, isSettled, layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers, proposedItems, seenLine, templateNote } from "../../../memory-items.mjs";
 import { useLoad } from "../../use-load";
 import { KINDS, KIND_LABELS, MAX_TEXT, canSaveEdit, isInferred, scopeChoices } from "./memory-view.mjs";
 
@@ -21,9 +21,9 @@ type Layer = { key: string; label: string; items: ProfileItem[] };
 /**
  * 画像 (design 4.11): what the agent should remember about the owner, in layers (全局 first, then each bot, then the bots that are gone).  Each item says its kind and where it came from: what the owner said or
  * typed is plain, what the model inferred is marked 推断 in the opinion colour and carries 确认.  The owner's own words are quoted in the fact material.  The add row is on top; 已归档 is a fold.
- * Every request is the old page's (src/api/memory.ts): the same bodies, which memory-items.mjs makes.
+ * Every request is the old page's (src/api/memory.ts): the same bodies, which memory-items.mjs makes.  `onChanged` (4e): called after a write succeeded, so the overview above and below re-reads its counts and the block the model sees.
  */
-export function ProfilePanel() {
+export function ProfilePanel({ onChanged }: { onChanged?: () => void } = {}) {
   const { t, locale } = useLocale();
   const data = useLoad(signal => listProfileItems(signal));
   const items = data.data?.items ?? null, bots = data.data?.bots ?? [];
@@ -35,7 +35,7 @@ export function ProfilePanel() {
 
   async function run(id: string, work: () => Promise<unknown>): Promise<boolean> {
     setBusy(id); setError(null);
-    try { await work(); await data.reload(); return true; }
+    try { await work(); await data.reload(); onChanged?.(); return true; }
     catch (failure) { setError(failure); return false; }
     finally { setBusy(null); }
   }
@@ -101,11 +101,14 @@ export function ProfilePanel() {
             <span data-testid="memory-kind"><StatusBadge kind="neutral" className="h-5">{kindText(item.kind)}</StatusBadge></span>
             <span data-testid="memory-origin" data-inferred={isInferred(item) ? "true" : "false"}><StatusBadge kind={isInferred(item) ? "opinion" : "neutral"} className="h-5">{t(originLabel(item.origin))}</StatusBadge></span>
             {isSettled(item) && <span data-testid="memory-settled"><StatusBadge kind="neutral" className="h-5">{t("长期")}</StatusBadge></span>}
+            {templateNote(item, locale) && <span data-testid="memory-template"><StatusBadge kind="neutral" className="h-5">{templateNote(item, locale)?.badge}</StatusBadge></span>}
             {!mine && <p className="min-w-0 flex-1 basis-60 text-body font-medium text-ink [overflow-wrap:anywhere]">{item.text}</p>}
           </div>
           {mine && <Input value={editing.text} maxLength={MAX_TEXT} aria-label={t("编辑")} data-testid="memory-edit-input" autoFocus className="max-md:h-11" onChange={event => setEditing({ id: item.id, text: event.target.value })}
             onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter") { event.preventDefault(); void saveEdit(); } if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setEditing(null); } }} />}
-          {item.quote?.trim() && <blockquote data-testid="memory-quote" className="material-fact m-0 px-3 py-2 font-quote text-small text-ink">“{item.quote}”</blockquote>}
+          {templateNote(item, locale)
+            ? <p data-testid="memory-template-note" className="m-0 text-small text-muted-foreground">{templateNote(item, locale)?.line}</p>
+            : item.quote?.trim() && <blockquote data-testid="memory-quote" className="material-fact m-0 px-3 py-2 font-quote text-small text-ink">“{item.quote}”</blockquote>}
           {seenLine(item, locale) && <p data-testid="memory-seen" className="m-0 font-mono text-caption text-muted-foreground">{t(seenLine(item, locale))}</p>}
           <div className="flex flex-wrap items-center gap-2">
             <Select value={item.bot_id ?? GLOBAL} disabled={busy === item.id} onValueChange={value => { const target = value === GLOBAL ? null : value; void run(item.id, () => updateProfileItem(item.id, { bot_id: target })); }}>

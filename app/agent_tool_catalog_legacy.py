@@ -25,7 +25,10 @@ class UpdateRoutineArgs(Args):
     def changes_something(self):
         if all(getattr(self,k) is None for k in ('name','instruction','schedule_kind','schedule_time','symbols','enabled')):raise ValueError('nothing_to_change')
         return self
+class PageArgs(Args):       # named as the catalogue's, because the schema carries the class name; ``memory`` (4e) is for the kernel only
+    page:Literal['overview','predictions','materials','sec','revisions','evaluation','agent','knowledge']
 LEGACY=(
+ ('open_page',PageArgs,'client','Open a named existing workspace page without changing data.'),
  ('analyze',SourceWriteArgs,'costly','Propose paid AI analysis of an exact saved source. Confirmation required.'),
  ('create_routine',RoutineArgs,'reversible','Propose a scheduled routine of this bot (hourly, daily or on weekdays) when the USER asks for something repeated, e.g. 每小时找一条新闻给我 or 每天收盘后总结. Each run you follow its instruction unattended (reads and notify_telegram only, no writes). Owner confirmation required; the user can pause or delete it on the bot\'s 例行任务 page.'),
  ('update_routine',UpdateRoutineArgs,'reversible','Propose changing one routine (its name, instruction, schedule, tickers, or pausing/resuming it) when the USER asks; pass only what changes. Owner confirmation required.'),

@@ -70,6 +70,8 @@ OPERATION_REGISTRY: dict[tuple[str, str], dict] = {
     ("POST", "/agent-chat/profile/{item_id}/confirm"): _no("把推断项确认为明示本来就是 owner 亲手点的动作，让模型代点会抹掉这个区别"),
     ("POST", "/agent-chat/profile/{item_id}/restore"): _no("本人在页面上恢复"),
     ("DELETE", "/agent-chat/profile/{item_id}"): _op("forget"),
+    ("POST", "/agent-chat/views/{symbol}"): _op("record_view"),
+    ("POST", "/agent-chat/views/{symbol}/drop"): _op("drop_view"),
     ("POST", "/agent-chat/views/{view_id}/restore"): _no("本人在页面上恢复"),
     ("DELETE", "/agent-chat/views/{view_id}"): _no("网页上本人删除一条历史，不开放给助手"),
     # 研究队列与例行任务
@@ -95,6 +97,9 @@ OPERATION_REGISTRY: dict[tuple[str, str], dict] = {
     ("PUT", "/agent-chat/background-model"): _no(_KEY),
     ("DELETE", "/agent-chat/background-model/key"): _no("清除已存的后台密钥，属于密钥管理"),
     ("PUT", "/agent-chat/channels"): _op("set_channel_prefs"),
+    ("POST", "/agent-chat/role-templates/{template}/preview"): _no("只预览模板会写什么，不写数据"),
+    ("POST", "/agent-chat/role-templates/{template}/apply"): _op("apply_role_template"),
+    ("POST", "/agent-chat/role-templates/applications/{application_id}/undo"): _op("undo_role_template"),
     ("POST", "/agent-chat/telegram/token"): _no(_CREDENTIAL),
     ("POST", "/agent-chat/telegram/bind"): _no(_CHANNEL_BINDING),
     ("POST", "/agent-chat/telegram/unbind"): _no(_CHANNEL_BINDING),
@@ -144,8 +149,9 @@ OPERATION_REGISTRY: dict[tuple[str, str], dict] = {
     ("PUT", "/agent-chat/local-model-profiles"): _no("只在本机开发模式开启，公开模式下直接 404"),
 }
 
-# Operations ``act`` has that no HTTP route corresponds to (``record_view`` and ``drop_view``: the owner states a view in chat; the web page only reads and deletes a version); naming one here keeps the "every operation is on a route" check honest.
-KERNEL_ONLY_OPERATIONS: frozenset[str] = frozenset({"record_view", "drop_view"})
+# Operations ``act`` has that no HTTP route corresponds to; naming one here keeps the "every operation is on a route" check honest.  None since 4e:
+# ``record_view`` and ``drop_view`` have the memory page's two view writes.
+KERNEL_ONLY_OPERATIONS: frozenset[str] = frozenset()
 
 
 def operations_of(entry: dict) -> tuple[str, ...]:

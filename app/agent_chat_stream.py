@@ -2,7 +2,7 @@ from __future__ import annotations
 import asyncio, hashlib, json, logging, uuid, time
 from urllib.parse import urlsplit
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from typing import Literal
 from starlette.background import BackgroundTask
 from pydantic import model_validator, BaseModel, ConfigDict, Field, SecretStr, field_validator
@@ -1312,6 +1312,26 @@ async def delete_profile_endpoint(item_id: str, x_chat_session: str | None = Hea
     return {"deleted": True}
 
 
+@router.get("/memory/overview")
+async def get_memory_overview_endpoint(x_chat_session: str | None = Header(default=None)):
+    """Everything the 「它眼中的你」 page adds to the profile list: counts, every view version with its review, what is being watched, the
+    memory calendar and the profile text the model reads each turn.  A part that cannot be read is null and named in ``errors``."""
+    from . import memory_overview
+    return await asyncio.to_thread(memory_overview.collect, owner_hash(_owner_only(x_chat_session)))
+
+
+@router.get("/memory/export")
+async def get_memory_export_endpoint(fmt: str = Query(default="json", alias="format"), x_chat_session: str | None = Header(default=None)):
+    """The owner's memory as one downloadable file: ``json`` (complete, for machines) or ``md`` (for reading).  No raw conversation text."""
+    from . import memory_overview
+    owner = owner_hash(_owner_only(x_chat_session))
+    try:
+        content, filename, media_type = await asyncio.to_thread(memory_overview.export, owner, fmt)
+    except ValueError:
+        raise HTTPException(422, "invalid_format") from None
+    return Response(content=content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 @router.get("/views")
 async def get_views_endpoint(symbol: str | None = None, x_chat_session: str | None = Header(default=None)):
     """The owner's active views of companies (「你的看法」): with ``symbol``, that company's (``view`` is null when there is none); else every one."""
@@ -1335,6 +1355,33 @@ async def get_view_history_endpoint(symbol: str, x_chat_session: str | None = He
     if not resolved:
         raise HTTPException(422, "company_not_recognized")
     return {"symbol": resolved, "versions": await asyncio.to_thread(owner_views.history, owner, resolved)}
+
+
+class ViewWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(max_length=400)         # the service holds the 200-character rule; this is only the edge
+
+
+@router.post("/views/{symbol}")
+async def write_view_endpoint(symbol: str, body: ViewWrite, x_chat_session: str | None = Header(default=None)):
+    """The owner writes his view of a company on the memory page: what he typed is its own quote, no conversation behind it.  The earlier
+    view stays in the history, exactly as when he says it in chat."""
+    from . import owner_views
+    owner = owner_hash(_owner_only(x_chat_session))
+    try:
+        return await asyncio.to_thread(owner_views.record, owner, symbol, body.text, body.text)
+    except owner_views.ViewError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@router.post("/views/{symbol}/drop")
+async def drop_view_endpoint(symbol: str, x_chat_session: str | None = Header(default=None)):
+    """The owner withdraws his current view of a company on the memory page; it stays in the history as withdrawn."""
+    from . import owner_views
+    view = await asyncio.to_thread(owner_views.drop, owner_hash(_owner_only(x_chat_session)), symbol)
+    if view is None:
+        raise HTTPException(404, "view_not_found")
+    return {"view": view}
 
 
 @router.post("/views/{view_id}/restore")

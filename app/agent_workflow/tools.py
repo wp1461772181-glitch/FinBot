@@ -93,7 +93,7 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
         if name=='record_view':args['_source_message_id']=operation.get('source_message_id');args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id')
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
-        if name in {'create_bot','update_bot'}:args['_fields']=operation.get('fields')
+        if name in {'create_bot','update_bot','apply_role_template','undo_role_template'}:args['_fields']=operation.get('fields')
         # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
         if operation.get('expect') is not None:args['_expect']=operation['expect']
         # The press, not the frozen operation, says whether a skill starts enabled or as a draft.
@@ -305,7 +305,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         try:saved=await asyncio.to_thread(skills.save,context.owner_hash,fields,status=args.get('_status') or 'active')
         except skills.SkillError as exc:return error(str(exc))
         return result([{'status':'saved','id':saved['id'],'name':saved['name'],'skill_status':saved['status'],'link':'#skills/'+saved['id']}],'skill library')
-    if name in {'create_bot','update_bot','manage_skill','set_default_model','set_model_role','set_channel_prefs'}:
+    if name in {'create_bot','update_bot','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template'}:
         # Only reached through execute_reversible: the owner pressed the card; each is the service function its HTTP route calls.
         from . import directory_ops
         if not is_owner:return error('owner_login_required')

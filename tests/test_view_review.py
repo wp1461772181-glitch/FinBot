@@ -327,9 +327,11 @@ def test_with_a_full_quarter_an_invented_figure_is_still_marked_and_the_given_on
 def test_dates_counts_and_names_with_a_number_are_not_figures():
     sent = _rich_input()
     for text in ("今天 2026-11-25", "截至 2026-11-24 收盘", "2026/9/26 说的", "9/26", "有 3 个理由", "连续 3 个交易日", "一共 5 条", "约 6 成", "涨 1/3",
-                 "COVID-19 之后", "GPT-5 发布后"):
+                 "COVID-19 之后", "GPT-5 发布后", "10-16 收盘", "到 11-25 收盘", "从 9-26 起"):
         assert view_review.check_figures(text, sent) == [], text
     assert view_review.check_figures("毛利率提高了 3 个百分点", sent) == ["3"]                 # 个百分点 is an amount
+    assert view_review.check_figures("估值区间 13-17%", sent) != []                              # a range of an amount stays a figure
+    assert "37%" in view_review.check_figures("10-16 收盘后同比增长 37%", sent)                   # a date beside it does not hide a made-up figure
 
 
 def test_a_never_reviewed_view_is_not_pushed_out_by_re_reviews(monkeypatch):

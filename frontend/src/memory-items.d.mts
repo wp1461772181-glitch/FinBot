@@ -11,5 +11,6 @@ export function manualItemDraft(input: { kind?: string; text?: string; layer?: s
 export function recallGroups(items: RecallItem[]): { key: string; label: string; items: RecallItem[] }[];
 export function isSettled(item: Pick<ProfileItem, "settled_at"> | null | undefined): boolean;
 export function seenLine(item: Pick<ProfileItem, "last_seen_at"> | null | undefined, locale?: string): string;
+export function templateNote(item: Pick<ProfileItem, "template" | "template_label" | "created_at"> | null | undefined, locale?: string): { badge: string; line: string } | null;
 export function archiveNote(item: Pick<ProfileItem, "archived_at" | "archived_reason"> | null | undefined, locale?: string): { reason: string; date: string };
 export function restoreFailText(status: number, detail: unknown): string;

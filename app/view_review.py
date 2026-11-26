@@ -188,7 +188,9 @@ def gather(view: dict, now: datetime) -> tuple[dict, dict]:
 _TIME_SPAN = re.compile(r"\d+(?:\.\d+)?\s*(?:个?月|天|日|周|年|个?季度|季|小时)")
 # Not amounts either: dates written with digits (2026-11-24, 2026/9/26, 9/26 and a fraction like 1/3), counts of things (3 个理由, 5 条, 6 成;
 # 「3 个百分点」 stays an amount) and names that carry a number (GPT-5, COVID-19).
-_DATE_OR_FRACTION = re.compile(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,4}/\d{1,2}(?:/\d{1,4})?")
+# A month-day written as 10-16 (as the input's dates are, without the year) is a date too, unless it reads as a range of an amount (10-16%).
+_DATE_OR_FRACTION = re.compile(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,4}/\d{1,2}(?:/\d{1,4})?"
+                               r"|(?<![\d.\-])(?:0?[1-9]|1[0-2])-(?:0?[1-9]|[12]\d|3[01])(?![\d.]|\s*[%％万亿千百])")
 _COUNT = re.compile(r"\d+\s*(?:个(?!\s*百分点)|次|条|项|家|只|笔|位|类|种|名|成)")
 _NAME_WITH_NUMBER = re.compile(r"[A-Za-z]+-\d+")
 _WRITTEN = re.compile(r"(?<![A-Za-z\d.])\d[\d,]*(?:\.\d+)?\s*(?:(?:万亿|千万|百万|亿|万|千|trillion|billion|million|thousand|bn|mn|[bkm])(?![A-Za-z]))?\s*%?", re.I)

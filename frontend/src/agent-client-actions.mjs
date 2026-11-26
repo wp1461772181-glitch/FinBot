@@ -1,7 +1,7 @@
 const memorySeen = new WeakMap();
 const actions = new Set(['queue_add','queue_remove','queue_sync','show_queue','select_stock','open_page']);
 const ticker = /^[A-Z]{1,5}(?:\.[A-Z]{1,2})?$/;
-const pages = new Set(['overview','predictions','materials','sec','revisions','evaluation','agent','knowledge']);
+const pages = new Set(['overview','predictions','materials','sec','revisions','evaluation','agent','knowledge','memory']);
 export function dispatchAgentAction(data, host = globalThis) {
   if (!data || typeof data.id !== 'string' || !/^[a-f0-9-]{36}$/.test(data.id) || !actions.has(data.action)) return false;
   if (['queue_add','queue_remove','select_stock'].includes(data.action) && !ticker.test(data.symbol ?? '')) return false;

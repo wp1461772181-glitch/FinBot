@@ -94,6 +94,17 @@ test("settled items are tagged, the last-seen line and the archive note are quie
   assert.deepEqual(archiveNote({ archived_at: null, archived_reason: null }), { reason: "", date: "" });
 });
 
+test("an item from a role template says so (badge and line); any other item has no note", async () => {
+  const { templateNote } = await import("../src/memory-items.mjs");
+  const from = { template: "short_term", template_label: "短线", created_at: "2026-11-25T17:00:00Z" };
+  assert.deepEqual(templateNote(from), { badge: "模板·短线", line: "你在 11月26日 选用模板「短线」时加的" });
+  assert.deepEqual(templateNote(from, "en-US"), { badge: "Template · Short-term", line: "Added on 11/26 when you picked the template \"Short-term\"" });
+  assert.deepEqual(templateNote({ template: "x", template_label: "", created_at: null }), { badge: "模板", line: "你选用模板时加的" });
+  assert.equal(templateNote({ template: null, template_label: "", created_at: "2026-11-25T17:00:00Z" }), null);
+  assert.equal(templateNote({ origin: "manual" }), null);
+  assert.equal(templateNote(undefined), null);
+});
+
 test("a restore refusal names its real reason: full only for profile_full, else the server's Chinese text", () => {
   assert.equal(restoreFailText(409, "profile_full"), "这一层的记忆已满，先删掉一条再恢复。");
   assert.equal(restoreFailText(409, "已有一条同类的记忆在用，先忘掉它再恢复"), "已有一条同类的记忆在用，先忘掉它再恢复");

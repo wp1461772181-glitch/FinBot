@@ -88,3 +88,13 @@ def test_a_new_route_without_a_row_is_reported_by_name(monkeypatch):
     monkeypatch.setattr(me, "app", extra)
     missing = sorted(me.app_routes() - set(OPERATION_REGISTRY))
     assert missing == [("POST", "/brand-new/{x}")]
+
+
+def test_the_memory_page_added_two_view_writes_and_nothing_else_that_changes_data():
+    """4e: the page writes a view and withdraws one (the same operations as in chat); the overview and the export are reads, and no other row appeared."""
+    mine = sorted(r for r in app_routes() if r[1].startswith(("/agent-chat/views", "/agent-chat/memory")))
+    assert mine == [("DELETE", "/agent-chat/views/{view_id}"), ("POST", "/agent-chat/views/{symbol}"), ("POST", "/agent-chat/views/{symbol}/drop"),
+                    ("POST", "/agent-chat/views/{view_id}/restore")]
+    assert OPERATION_REGISTRY[("POST", "/agent-chat/views/{symbol}")] == {"operation": "record_view"}
+    assert OPERATION_REGISTRY[("POST", "/agent-chat/views/{symbol}/drop")] == {"operation": "drop_view"}
+    assert not KERNEL_ONLY_OPERATIONS
