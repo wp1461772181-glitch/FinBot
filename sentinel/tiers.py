@@ -10,7 +10,9 @@ from dataclasses import dataclass
 
 UNIT_FALLBACK = 0.02              # one "sigma" when the stock has no baseline
 SENSITIVITY = {"quiet": (2.5, 5.0), "standard": (2.0, 4.0), "sensitive": (1.5, 3.0)}   # (worth knowing, major) in sigmas
-IMPACT_MAJOR_PCT = 2.0            # a holding's move that costs or makes this share of total assets is major
+IMPACT_MAJOR_PCT = 2.0            # a holding's move that costs or makes this share of total assets is major ...
+IMPACT_NEEDS_SIGMA = True         # ... but only a move that is already worth knowing (set False for the literal design text:
+                                  # a 44% position then makes every 4.6% day "major" on a stock whose day is 7%)
 MIN_GAP = 10 * 60                 # seconds between minor pushes on one symbol
 REARM_SIGMAS = 0.5                # a locked level re-arms after the price is this many daily sigmas away
 REARM_FALLBACK = 0.01
@@ -42,7 +44,8 @@ def tier_rule(m: dict, sensitivity: str | None = "standard", held: bool = False)
     low, high = thresholds(sensitivity)
     if m["sigma_mult"] >= high:
         return 2, "sigma_major"
-    if held and m.get("impact_pct") is not None and abs(m["impact_pct"]) >= IMPACT_MAJOR_PCT:
+    if (held and m.get("impact_pct") is not None and abs(m["impact_pct"]) >= IMPACT_MAJOR_PCT
+            and (m["sigma_mult"] >= low or not IMPACT_NEEDS_SIGMA)):
         return 2, "impact"
     if m["sigma_mult"] >= low:
         return 1, "sigma"

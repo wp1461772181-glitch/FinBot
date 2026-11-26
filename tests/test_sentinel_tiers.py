@@ -43,12 +43,15 @@ def test_unknown_sensitivity_is_standard():
     assert tiers.tier_of(m(104.0), "bogus") == 1 and tiers.thresholds("") == (2.0, 4.0)
 
 
-def test_holding_impact_over_two_percent_is_major_but_a_queue_symbol_has_none():
-    big = tiers.measure(94.0, 100.0, 0.05, shares=100, total_assets=10000)     # 1.2 sigma, 6% of assets
-    assert tiers.tier_of(big, "standard", held=True) == 2
-    assert tiers.tier_of(big, "standard", held=False) == 0
-    small = tiers.measure(94.0, 100.0, 0.05, shares=10, total_assets=10000)    # 0.6% of assets
-    assert tiers.tier_of(small, "standard", held=True) == 0
+def test_holding_impact_over_two_percent_lifts_a_worth_knowing_move_to_major():
+    lifted = tiers.measure(89.0, 100.0, 0.05, shares=100, total_assets=20000)       # 2.2 sigma, 5.5% of assets
+    assert tiers.tier_of(lifted, "standard", held=True) == 2
+    assert tiers.tier_rule(lifted, "standard", held=True) == (2, "impact")
+    assert tiers.tier_of(lifted, "standard", held=False) == 1                       # a queue symbol has no impact rule
+    ordinary = tiers.measure(94.0, 100.0, 0.05, shares=100, total_assets=10000)     # 1.2 sigma: its ordinary day, 6% of assets
+    assert tiers.tier_of(ordinary, "standard", held=True) == 0
+    small = tiers.measure(89.0, 100.0, 0.05, shares=10, total_assets=10000)         # 2.2 sigma but 1.1% of assets
+    assert tiers.tier_of(small, "standard", held=True) == 1
 
 
 # --- decide ---------------------------------------------------------------------------------------------------------

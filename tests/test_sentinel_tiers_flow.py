@@ -129,12 +129,13 @@ def test_sensitivity_from_snapshot_and_env(make, monkeypatch):
     assert look(make(), "INTC", 35.0, et(10, 0, day=4), snap=sensitive) == []   # env overrides the snapshot
 
 
-def test_holding_impact_over_two_percent_is_major(make):
+def test_holding_impact_over_two_percent_is_major_but_only_for_a_move_worth_knowing(make):
     s = make()
     small = {"positions": [{"symbol": "INTC", "shares": 100.0}], "total_assets": 13135.0}
-    out = look(s, "INTC", 36.0, et(10, 0), snap=small)                   # -10%: 1.3 sigma but 3% of assets
+    assert look(s, "INTC", 36.0, et(10, 0), snap=small) == []            # -10%: 1.3 sigma, 3% of assets, still its ordinary day
+    out = look(s, "INTC", 33.6, et(10, 30), snap=small)                  # -16%: 2.1 sigma and 4.9% of assets
     assert len(out) == 1 and out[0]["tier"] == 2 and out[0]["escalate"] is True
-    assert "占总资产 3.0%" in out[0]["text"] or "超过 2%" in out[0]["text"]
+    assert "重大：这一下占总资产 4.9%，超过 2%" in out[0]["text"]
 
 
 def test_market_move_is_in_the_message_when_known(make):

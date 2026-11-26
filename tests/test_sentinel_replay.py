@@ -84,8 +84,23 @@ def test_compare_actual_lines_up_each_actual_alert(tmp_path):
     assert "新规则也会发 1 条" in (out / "summary.md").read_text(encoding="utf-8")
 
 
-def test_cache_roundtrip_and_cli_help(tmp_path):
+def test_cache_roundtrip(tmp_path):
     path = tmp_path / "bars.json"
     replay.dump_data(data(), path)
     again = replay.load_data(path)
     assert again["bars5"]["INTC"][0]["ts"] == data()["bars5"]["INTC"][0]["ts"] and json.loads(path.read_text())["errors"] == {}
+
+
+def test_cli_runs_offline_from_a_cache_and_writes_the_report(tmp_path, capsys):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("sentinel_replay_cli", Path(__file__).resolve().parent.parent / "scripts" / "sentinel_replay.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    cache, snap, out = tmp_path / "bars.json", tmp_path / "snap.json", tmp_path / "out"
+    replay.dump_data(data(), cache)
+    snap.write_text(json.dumps(SNAP), encoding="utf-8")
+    code = cli.main(["--symbols", "INTC", "--snapshot", str(snap), "--from", "2026-11-03", "--to", "2026-11-03",
+                     "--cache", str(cache), "--out", str(out)])
+    assert code == 0 and json.loads(capsys.readouterr().out)["total"] == 1
+    assert (out / "alerts-tiers.csv").exists() and (out / "summary-tiers.md").exists()
