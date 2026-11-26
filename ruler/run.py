@@ -1,9 +1,15 @@
-"""Command-line runner for ruler: ask every case, check the answers, write results and reports."""
+"""Command-line runner for ruler: ask every case, check the answers, write results and reports.
+
+Also `ask`: put a few questions to one running API by hand, for checks on the box.
+"""
 
 import argparse
 import functools
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -132,19 +138,27 @@ def _fail(message: str) -> int:
     return 2
 
 
+def _production_guard(base: str) -> str | None:
+    """Why this base must not be asked without --allow-production, or None when it may."""
+    try:
+        parsed = urlparse(base)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:
+        return f"--base 无法解析: {base}"
+    if not host:
+        return f"--base 里没有主机名: {base}"
+    if host not in _LOCAL_HOSTS:
+        return f"拒绝对非本机主机 {host} 发问；确需如此请加 --allow-production"
+    if port == PRODUCTION_PORT:
+        return f"拒绝对生产端口 {PRODUCTION_PORT} 发问；确需如此请加 --allow-production"
+    return None
+
+
 def _command_run(args) -> int:
     if not args.allow_production:
-        try:
-            parsed = urlparse(args.base)
-            host, port = parsed.hostname, parsed.port
-        except ValueError:
-            return _fail(f"--base 无法解析: {args.base}")
-        if not host:
-            return _fail(f"--base 里没有主机名: {args.base}")
-        if host not in _LOCAL_HOSTS:
-            return _fail(f"拒绝对非本机主机 {host} 发问；确需如此请加 --allow-production")
-        if port == PRODUCTION_PORT:
-            return _fail(f"拒绝对生产端口 {PRODUCTION_PORT} 发问；确需如此请加 --allow-production")
+        problem = _production_guard(args.base)
+        if problem:
+            return _fail(problem)
     try:
         cases = load_suite(args.suite)
     except SuiteError as exc:
@@ -187,6 +201,92 @@ def _command_run(args) -> int:
 def ask_through(base: str, credential: str, text: str, **kwargs):
     # Looked up at call time so that the module-level name can be replaced in tests.
     return ask(base, credential, text, **kwargs)
+
+
+def server_process(base: str) -> tuple[int, str] | None:
+    """The process listening on the base's port and its working directory, or None when that cannot be found.
+
+    Which code is under test is decided by the server on the port, not by the directory this tool
+    happens to be run from, so the answer is read from the listening process itself.
+    """
+    try:
+        port = urlparse(base).port
+    except ValueError:
+        return None
+    if not port:
+        return None
+    try:
+        if Path("/proc/self").exists() and shutil.which("ss"):
+            listing = subprocess.run(["ss", "-H", "-ltnp", f"sport = :{port}"],
+                                     capture_output=True, text=True, timeout=5).stdout
+            match = re.search(r"pid=(\d+)", listing)
+            if not match:
+                return None
+            pid = int(match.group(1))
+            return pid, os.readlink(f"/proc/{pid}/cwd")
+        if shutil.which("lsof"):
+            listing = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                                     capture_output=True, text=True, timeout=5).stdout.split()
+            if not listing:
+                return None
+            pid = int(listing[0])
+            fields = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                                    capture_output=True, text=True, timeout=5).stdout.splitlines()
+            directory = next((field[1:] for field in fields if field.startswith("n")), None)
+            return (pid, directory) if directory else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+def _seconds(milliseconds: int | None) -> str:
+    return "无" if milliseconds is None else f"{milliseconds / 1000:.1f} 秒"
+
+
+def _command_ask(args) -> int:
+    """Ask a few questions by hand and print the answers, after naming the code that will answer them."""
+    if not args.allow_production:
+        problem = _production_guard(args.base)
+        if problem:
+            return _fail(problem)
+    if not api_alive(args.base):
+        return _fail(f"API 探活失败: {args.base}")
+    here = Path.cwd().resolve()
+    expected = Path(args.server_dir).resolve() if args.server_dir else here
+    print(f"本工具运行在：{here}")
+    found = server_process(args.base)
+    if found is None:
+        print("查不到端口上的服务进程，无法确认被测的是哪份代码（可能需要 root，或本机没有 ss / lsof）。")
+    else:
+        pid, directory = found
+        print(f"被测服务：进程 {pid}，工作目录 {directory}")
+        if Path(directory).resolve() != expected:
+            return _fail(
+                f"被测服务的工作目录是 {directory}，不是 {expected}。"
+                "请到被测的那份代码目录里运行，或用 --server-dir 写明预期的目录。"
+            )
+    try:
+        credential = owner_credential()
+    except Exception as exc:
+        return _fail(f"取不到 owner 凭证: {type(exc).__name__}")
+
+    conversation_id = None
+    all_normal = True
+    for index, text in enumerate(args.texts, 1):
+        outcome = ask_through(args.base, credential, text,
+                              catalog_model=args.model, conversation_id=conversation_id)
+        conversation_id = outcome.conversation_id or conversation_id
+        all_normal = all_normal and outcome.status in _NORMAL_STATUSES
+        detail = f"状态 {outcome.status}"
+        if outcome.reason:
+            detail += f"（{outcome.reason}）"
+        if outcome.error:
+            detail += f" · 错误 {outcome.error[:_ERROR_MESSAGE_CHARS]}"
+        detail += f" · 首字 {_seconds(outcome.first_delta_ms)} · 总计 {_seconds(outcome.total_ms)}"
+        if outcome.tools:
+            detail += f" · 工具 {', '.join(outcome.tools)}"
+        print(f"\n[{index}] 问：{text}\n    {detail}\n    答：{outcome.answer or '（空）'}")
+    return 0 if all_normal else 1
 
 
 def _load_summary(directory) -> dict:
@@ -260,12 +360,20 @@ def _build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--title", required=True)
     compare.add_argument("--out", required=True)
     compare.add_argument("--meta", action="append", default=[], help="名称=值，可重复")
+
+    ask_cmd = commands.add_parser("ask", help="ask a few questions by hand and print the answers")
+    ask_cmd.add_argument("texts", nargs="+", help="一句或多句，多句在同一个对话里依次发")
+    ask_cmd.add_argument("--base", default=DEFAULT_BASE)
+    ask_cmd.add_argument("--model", default="")
+    ask_cmd.add_argument("--server-dir", default="", help="被测服务应当所在的目录；默认是当前目录")
+    ask_cmd.add_argument("--allow-production", action="store_true")
     return parser
 
 
 def main(argv: list[str]) -> int:
     args = _build_parser().parse_args(argv)
-    handlers = {"run": _command_run, "report": _command_report, "compare": _command_compare}
+    handlers = {"run": _command_run, "report": _command_report, "compare": _command_compare,
+                "ask": _command_ask}
     return handlers[args.command](args)
 
 

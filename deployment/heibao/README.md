@@ -134,4 +134,14 @@ set -a; . /opt/finbot/ruler.env; set +a; export RULER_DATABASE_URL="$DATABASE_UR
 
 - 运行器默认连 `127.0.0.1:9031`；目标不是本机（127.0.0.1、localhost、::1）或是 8000 端口（线上）时会拒绝，除非带 `--allow-production`。
 - `--cases F01,U03` 只跑指定的题。
+
+只想手工问几句（发布后看效果、复现问题），不用另写脚本，同样在被测的那份代码目录下：
+
+```bash
+/opt/finbot/venv/bin/python -m ruler.run ask "第一句" "同一个对话里的追问"
+```
+
+- 发问前先打印端口上那个服务的进程号和工作目录；它和当前目录不是同一个就拒绝发问。确实要从别处问，用 `--server-dir <目录>` 写明预期的目录。查不到进程时会照问，但会明说没法确认被测的是哪份代码。
+- 每句打印状态、首字和总用时、用到的工具、回答全文；有一句没有正常结束就以 1 退出。
+- 默认连影子的 9031；`--base`、`--model`、`--allow-production` 的含义和 `run` 一样。对线上（8000）发问会以 owner 身份新开一个对话。
 - 题库 `ruler/suites/baseline-v1.json` 由 `ruler/suites/make_baseline_v1.py` 生成；里面的标准数字取自生成当天的影子库，备份换了以后「最近一季」类的题要重新核对。

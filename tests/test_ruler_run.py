@@ -194,3 +194,54 @@ def test_malformed_results_row_is_a_message_not_a_traceback(tmp_path, monkeypatc
         assert ruler_run.main(["compare", "--base", str(bad), "--new", str(tmp_path / "a"), "--title", "t", "--out", str(tmp_path / "c.md")]) == 2
         capsys.readouterr()
         rows[0] = json.loads((tmp_path / "a" / "results.jsonl").read_text(encoding="utf-8").split("\n")[0])
+
+
+def _stub_ask_command(monkeypatch, tmp_path, *, server, outcomes=None):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ruler_run, "owner_credential", lambda: "cred")
+    monkeypatch.setattr(ruler_run, "api_alive", lambda base: True)
+    monkeypatch.setattr(ruler_run, "server_process", lambda base: server)
+    asked = []
+    replies = list(outcomes or [])
+    def fake_ask(base, cred, text, **kw):
+        asked.append((text, kw.get("conversation_id")))
+        return replies.pop(0) if replies else outcome(cid="conv-1")
+    monkeypatch.setattr(ruler_run, "ask", fake_ask)
+    return asked
+
+def test_ask_names_the_code_under_test_and_prints_the_answers(tmp_path, monkeypatch, capsys):
+    asked = _stub_ask_command(monkeypatch, tmp_path, server=(4321, str(tmp_path)))
+    assert ruler_run.main(["ask", "第一句", "第二句"]) == 0
+    printed = capsys.readouterr().out
+    assert asked == [("第一句", None), ("第二句", "conv-1")]
+    assert "进程 4321" in printed and str(tmp_path) in printed and "营收 1158.44 亿" in printed
+    assert "cred" not in printed
+
+def test_ask_refuses_a_server_running_from_another_directory(tmp_path, monkeypatch, capsys):
+    asked = _stub_ask_command(monkeypatch, tmp_path, server=(4321, "/opt/finbot/src"))
+    assert ruler_run.main(["ask", "问"]) == 2
+    assert "/opt/finbot/src" in capsys.readouterr().err and asked == []
+
+def test_ask_accepts_a_stated_server_directory(tmp_path, monkeypatch):
+    other = tmp_path / "elsewhere"; other.mkdir()
+    asked = _stub_ask_command(monkeypatch, tmp_path, server=(4321, str(other)))
+    assert ruler_run.main(["ask", "问", "--server-dir", str(other)]) == 0 and len(asked) == 1
+
+def test_ask_goes_ahead_but_says_so_when_the_server_cannot_be_identified(tmp_path, monkeypatch, capsys):
+    asked = _stub_ask_command(monkeypatch, tmp_path, server=None)
+    assert ruler_run.main(["ask", "问"]) == 0
+    assert "查不到" in capsys.readouterr().out and len(asked) == 1
+
+def test_ask_exits_1_when_a_turn_does_not_end_normally(tmp_path, monkeypatch, capsys):
+    _stub_ask_command(monkeypatch, tmp_path, server=None, outcomes=[outcome(status="http_500", answer="")])
+    assert ruler_run.main(["ask", "问"]) == 1
+    assert "http_500" in capsys.readouterr().out
+
+def test_ask_refuses_the_production_port_without_the_flag(tmp_path, monkeypatch, capsys):
+    asked = _stub_ask_command(monkeypatch, tmp_path, server=None)
+    assert ruler_run.main(["ask", "问", "--base", "http://127.0.0.1:8000"]) == 2
+    assert "8000" in capsys.readouterr().err and asked == []
+
+def test_server_process_is_none_for_a_port_nobody_listens_on():
+    assert ruler_run.server_process("http://127.0.0.1:1") is None
+    assert ruler_run.server_process("http://127.0.0.1:notaport") is None
