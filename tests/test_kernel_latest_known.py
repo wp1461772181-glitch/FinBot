@@ -69,8 +69,9 @@ def test_the_history_before_the_question_is_the_same_with_and_without_the_block(
     plain = prompt.build_messages("NVDA 怎么样", context, copy.deepcopy(history))
     with_block = prompt.build_messages("NVDA 怎么样", context, copy.deepcopy(history), latest=BLOCK)
     # The question is last; the block sits right before it, and everything before the block is what it was.
-    assert with_block[-1] == plain[-1] == {"role": "user", "content": "NVDA 怎么样"} and with_block[-2] == {"role": "system", "content": wrapped(BLOCK)}
-    assert json.dumps(with_block[:-2], sort_keys=True) == json.dumps(plain[:-1], sort_keys=True)
+    assert with_block[-1] == plain[-1] == {"role": "user", "content": "NVDA 怎么样"} and with_block[-3] == {"role": "system", "content": wrapped(BLOCK)}
+    assert with_block[-2] == {"role": "user", "content": prompt.QUESTION_FOLLOWS}
+    assert json.dumps(with_block[:-3], sort_keys=True) == json.dumps(plain[:-1], sort_keys=True)
 
 
 def test_a_fact_turn_keeps_the_fact_last(env):
