@@ -7,13 +7,13 @@ import pytest
 
 from sentinel import rules
 
-CONTRACT = json.loads((Path(__file__).parent / "fixtures" / "watch_rules_contract.json").read_text(encoding="utf-8"))["rules"]
+CONTRACT = json.loads((Path(__file__).parent / "fixtures" / "watch_rules_contract.json").read_text(encoding="utf-8"))
 BY_METRIC = {r["metric"] + ":" + r["direction"]: r for r in CONTRACT}
 
 
 def rule(metric, direction, levels, **extra):
     base = {"id": "r1", "symbol": "INTC", "metric": metric, "direction": direction, "window_days": None,
-            "level_price": None, "repeat": "daily", "expires_on": None, "created_on": "2026-11-26", "text": "t",
+            "repeat": "daily", "expires_on": None, "created_on": "2026-11-26", "text": "t",
             "levels": [{"threshold": t, "level": n} for t, n in levels]}
     return base | extra
 
@@ -35,9 +35,9 @@ def test_a_malformed_rule_is_not_valid(change):
 
 def test_volume_ratio_only_goes_above_and_n_day_needs_a_window():
     assert not rules.valid(BY_METRIC["volume_ratio:above"] | {"direction": "below"})
-    assert not rules.valid(BY_METRIC["n_day_change:up"] | {"window_days": None})
-    assert not rules.valid(BY_METRIC["n_day_change:up"] | {"window_days": 1})
-    assert not rules.valid(BY_METRIC["n_day_change:up"] | {"window_days": 61})
+    assert not rules.valid(BY_METRIC["n_day_change:either"] | {"window_days": None})
+    assert not rules.valid(BY_METRIC["n_day_change:either"] | {"window_days": 1})
+    assert not rules.valid(BY_METRIC["n_day_change:either"] | {"window_days": 61})
 
 
 # --- measure ----------------------------------------------------------------------------------------------------------

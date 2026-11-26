@@ -13,7 +13,7 @@ from sentinel.store import Store
 ET = ZoneInfo("America/New_York")
 PREV = 40.0
 INTC = {"daily_sigma": 0.075, "bucket_sigma": {"pre": 0.002, "mid": 0.003}, "avg_vol5": {"pre": 100.0, "mid": 1000.0}}
-CONTRACT = json.loads((Path(__file__).parent / "fixtures" / "watch_rules_contract.json").read_text(encoding="utf-8"))["rules"]
+CONTRACT = json.loads((Path(__file__).parent / "fixtures" / "watch_rules_contract.json").read_text(encoding="utf-8"))
 POSITION = {"symbol": "INTC", "shares": 100.0, "avg_cost": 50.0, "market_value": 4000.0}
 BASE = {"positions": [POSITION], "total_assets": 100000.0}
 
@@ -30,7 +30,7 @@ def bars(end, price, n=15, volume=100, opened=None):
 
 def make_rule(metric="day_change", direction="either", levels=((10, "remind"), (20, "urgent")), **extra):
     rule = {"id": "r-" + metric, "symbol": "INTC", "metric": metric, "direction": direction, "window_days": None,
-            "level_price": None, "repeat": "daily", "expires_on": None, "created_on": "2026-11-02",
+            "repeat": "daily", "expires_on": None, "created_on": "2026-11-02",
             "text": "英特尔相对昨收涨或跌达到 10%：提醒；达到 20%：加急。每天每档一次。",
             "levels": [{"threshold": t, "level": n} for t, n in levels]}
     return rule | extra
