@@ -318,6 +318,25 @@ def _fence(text: str) -> str:
     return "`" * max(3, longest + 1)
 
 
+_ROLLING_TITLES = {"goals": "目标", "conclusions": "结论", "open": "未办完", "preferences": "偏好", "numbers": "关键数字"}
+
+
+def _summary_lines(content) -> list[str]:
+    """A summary as readable lines: a structured (rolling) summary becomes its lists under plain headings, without the source markers that only
+    the model uses; a free-text summary stays as it is."""
+    from .agent_context import ROLLING_LISTS, parse_rolling
+    rolling = parse_rolling(content)
+    if rolling is None:
+        return str(content or "").splitlines()
+    lines: list[str] = []
+    for key in ROLLING_LISTS:
+        items = [item.get("text", "") if isinstance(item, dict) else str(item) for item in rolling.get(key) or []]
+        items = [item for item in items if item]
+        if items:
+            lines += [f"**{_ROLLING_TITLES[key]}**"] + [f"- {item}" for item in items]
+    return lines
+
+
 def render_markdown(doc: dict) -> str:
     """The export document as Markdown, for reading.  Pure (no database).  Every section is always there; an empty one says so."""
     out = [f"# 它眼中的你（导出于 {_day(doc.get('exported_at'))}）", "", "## 概览", ""]
@@ -360,7 +379,7 @@ def render_markdown(doc: dict) -> str:
     summaries = doc.get("conversation_summaries") or []
     for summary in summaries:
         out += [f"### {summary.get('bot_name') or '（没有 bot）'} · 第 {summary.get('seq')} 段 · {_day(summary.get('created_at'))}", ""]
-        out += ["> " + line for line in str(summary.get("content") or "").splitlines() or [""]]
+        out += ["> " + line for line in _summary_lines(summary.get("content")) or [""]]
         out.append("")
     if not summaries:
         out.append(NONE_LINE)

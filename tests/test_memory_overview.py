@@ -414,3 +414,18 @@ def test_the_basis_line_reads_the_real_stored_shape_and_never_prints_a_dict():
     assert overview._basis_text({"price_then": None, "price_now": {"close": 150.0}, "change_pct": None, "quarter_label": None}) == "股价 — → 150"
     assert overview._basis_text({"price_then": 100.0, "price_now": 150.0}) == "股价 100 → 150"      # a bare number is still read
     assert "{" not in overview._basis_text(real) and overview._basis_text({}) == ""
+
+
+def test_render_markdown_shows_a_structured_summary_as_lists_not_json():
+    doc = _empty_doc()
+    rolling = {"v": 2, "goals": ["查 GOOGL 下跌原因"], "conclusions": [{"text": "GOOGL 10-29 收盘 283.82", "turn_id": "t-1", "ordinal": 1}],
+               "open": [], "preferences": [], "numbers": [{"text": "INTC 下跌 3.62%", "turn_id": "t-2", "ordinal": 3}]}
+    doc["conversation_summaries"] = [{"bot_name": "FinBot", "seq": 9, "created_at": "2026-11-24T00:00:00+00:00",
+                                      "content": json.dumps(rolling, ensure_ascii=False)},
+                                     {"bot_name": "FinBot", "seq": 1, "created_at": "2026-10-29T00:00:00+00:00", "content": "旧式摘要一段话"}]
+    markdown = overview.render_markdown(doc)
+    assert '{"v"' not in markdown and "turn_id" not in markdown
+    assert "> **目标**\n> - 查 GOOGL 下跌原因" in markdown
+    assert "> **结论**\n> - GOOGL 10-29 收盘 283.82" in markdown and "> **关键数字**\n> - INTC 下跌 3.62%" in markdown
+    assert "未办完" not in markdown.split("## 对话摘要")[1]
+    assert "> 旧式摘要一段话" in markdown
