@@ -49,7 +49,7 @@ def test_holding_impact_over_two_percent_lifts_a_worth_knowing_move_to_major():
     assert tiers.tier_rule(lifted, "standard", held=True) == (2, "impact")
     assert tiers.tier_of(lifted, "standard", held=False) == 1                       # a queue symbol has no impact rule
     ordinary = tiers.measure(94.0, 100.0, 0.05, shares=100, total_assets=10000)     # 1.2 sigma: its ordinary day, 6% of assets
-    assert tiers.tier_rule(ordinary, "standard", held=True) == (1, "impact_only")   # matters to the owner, not major
+    assert tiers.tier_rule(ordinary, "standard", held=True) == (0, "record")         # impact alone is not pushed (11-26 replay)
     small = tiers.measure(89.0, 100.0, 0.05, shares=10, total_assets=10000)         # 2.2 sigma but 1.1% of assets
     assert tiers.tier_of(small, "standard", held=True) == 1
 

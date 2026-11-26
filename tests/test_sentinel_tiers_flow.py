@@ -132,8 +132,8 @@ def test_sensitivity_from_snapshot_and_env(make, monkeypatch):
 def test_holding_impact_over_two_percent_is_major_but_only_for_a_move_worth_knowing(make):
     s = make()
     small = {"positions": [{"symbol": "INTC", "shares": 100.0}], "total_assets": 13135.0}
-    first = look(s, "INTC", 36.0, et(10, 0), snap=small)                 # -10%: 1.3 sigma, 3% of assets: matters to the owner
-    assert [a["tier"] for a in first] == [1] and "对你：约占总资产 3.0%" in first[0]["text"]
+    first = look(s, "INTC", 36.0, et(10, 0), snap=small)                 # -10%: 1.3 sigma, 3% of assets: its ordinary day
+    assert first == []                                                    # impact alone is not pushed (11-26 replay)
     out = look(s, "INTC", 33.6, et(10, 30), snap=small)                  # -16%: 2.1 sigma and 4.9% of assets
     assert len(out) == 1 and out[0]["tier"] == 2 and out[0]["escalate"] is True
     assert "重大：这一下占总资产 4.9%，超过 2%" in out[0]["text"]

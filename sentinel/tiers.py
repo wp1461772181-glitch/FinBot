@@ -49,8 +49,9 @@ def tier_rule(m: dict, sensitivity: str | None = "standard", held: bool = False)
         return 2, "impact"
     if sigma_tier == 1:
         return 1, "sigma"
-    if impact:
-        return 1, "impact_only"
+    # Impact alone (a holding's ordinary day that is >= 2% of total assets) is not pushed: for a concentrated holding it fired
+    # every other day in the replay (INTC, 44% of assets: 18 of 29 alerts).  Concentration itself is a portfolio rule (5b); the
+    # owner can set his own move rule for a stock.  Such a day still goes into the digest when it is over 1 sigma.
     return 0, "record" if m["sigma_mult"] >= RECORD_MIN_SIGMAS else ""
 
 

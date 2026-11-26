@@ -154,7 +154,7 @@ def test_a_reversal_does_not_stop_the_ringing_of_the_major_alert(make):
 # --- 6: impact rule ---------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("price, held, expect", [
-    (95.4, True, (1, "impact_only")),      # 0.9 sigma at sigma 5%, 4.6% of 10000... impact 2.3%: tier 1 on impact alone
+    (95.4, True, (0, "")),                 # 0.9 sigma, impact 2.3%: impact alone is not pushed (11-26 replay)
     (89.0, True, (2, "impact")),           # 2.2 sigma and impact over 2%
     (89.0, False, (1, "sigma")),
     (99.0, True, (0, "")),                 # tiny
@@ -165,13 +165,13 @@ def test_impact_rule(price, held, expect):
     assert tiers.tier_rule(tiers.measure(80.0, 100.0, 0.05, shares=1, total_assets=1e9), "standard", True) == (2, "sigma_major")
 
 
-def test_an_impact_only_push_says_what_it_means_for_the_owner(make):
+def test_an_ordinary_day_of_a_big_holding_is_not_pushed_on_impact_alone(make):
     s, _, _ = make()
     snap = {"positions": [{"symbol": "INTC", "shares": 100.0}], "total_assets": 13135.0}
     out = s.alerts_from("INTC", True, et(10, 0), snap, bars(et(10, 0), 38.0), 40.0, INTC, [])      # -5%: 0.67 sigma, 1.5% ... 
     assert out == []                                                  # 1.5% of assets: under the 2% line
     out = s.alerts_from("INTC", True, et(10, 5), snap, bars(et(10, 5), 37.0), 40.0, INTC, [])       # -7.5%: 1 sigma, 2.3% of assets
-    assert len(out) == 1 and out[0]["tier"] == 1 and "规则：对你：约占总资产 2.3%" in out[0]["text"]
+    assert out == []                                                  # 1 sigma, 2.3% of assets: its ordinary day, digest only
 
 
 # --- 8: grouping market -----------------------------------------------------------------------------------------------

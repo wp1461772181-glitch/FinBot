@@ -669,8 +669,6 @@ def _fold(value: float) -> str:
 
 
 def _move_rule(tier: int, rule: str, *, low: float, high: float, impact_pct: float | None, why: str) -> str:
-    if rule == "impact_only":
-        return f"对你：约占总资产 {abs(impact_pct or 0):.1f}%"
     if rule == "impact":
         text = f"重大：这一下占总资产 {abs(impact_pct or 0):.1f}%，超过 2%"
     elif tier == 2:
