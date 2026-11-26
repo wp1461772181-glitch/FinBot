@@ -43,8 +43,8 @@ def is_night(ts: float) -> bool:
 def rings_at_night(alert: dict) -> bool:
     if alert.get("members"):
         return any(rings_at_night(member) for member in alert["members"])
-    if alert.get("kind") == "rule":
-        return bool(alert.get("escalate"))            # the owner asked for "urgent" himself: it rings at night too; a plain reminder waits
+    if alert.get("kind") in ("rule", "preset"):
+        return bool(alert.get("escalate"))            # "urgent" (his own, or a system default's) rings at night too; a plain reminder waits
     if alert.get("kind") == "earnings_followup":
         return alert.get("bias") == "down" and alert.get("confidence") == "high"
     if not (alert.get("escalate") and alert.get("held") and (alert.get("weight_pct") or 0) >= NIGHT_WEIGHT_PCT):

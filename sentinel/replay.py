@@ -28,12 +28,13 @@ PRICE_KINDS = ("short", "daily", "gap", "update", "merged", "plan_add", "plan_st
 
 
 def fetch_data(symbols: list[str]) -> dict:
-    """Yahoo 5-minute bars (60 days, pre/post) and daily bars for each symbol, with the sentinel's own fetcher."""
+    """Yahoo 5-minute bars (60 days, pre/post) and daily bars (2 years: the 52-week presets need a year of closes before
+    the first replayed day) for each symbol, with the sentinel's own fetcher."""
     data: dict = {"bars5": {}, "daily": {}, "errors": {}}
     for symbol in symbols:
         try:
             data["bars5"][symbol] = signals.fetch_chart(symbol, "5m", "60d", events=True)["bars"]
-            data["daily"][symbol] = signals.fetch_chart(symbol, "1d", "3mo", prepost=False, events=True)["bars"]
+            data["daily"][symbol] = signals.fetch_chart(symbol, "1d", "2y", prepost=False, events=True)["bars"]
         except Exception as exc:                                  # a refused or rate-limited symbol: say so, go on
             data["errors"][symbol] = f"{type(exc).__name__}: {exc}"
     return data
@@ -83,14 +84,20 @@ def _sessions(start: date, end: date, bars5: dict) -> list[date]:
 
 
 def run_replay(data: dict, snapshot: dict, start: date, end: date, *, policy: str = "tiers",
-               sensitivity: str = "standard", short_moves: bool = False, workdir: Path | str | None = None) -> dict:
-    """``{"alerts": [...], "records": [...], "trace": {symbol: [(ts, r, sigma_mult), ...]}, "symbols": [...]}``."""
+               sensitivity: str | None = None, short_moves: bool | None = None, workdir: Path | str | None = None) -> dict:
+    """``{"alerts": [...], "records": [...], "trace": {symbol: [(ts, r, sigma_mult), ...]}, "symbols": [...]}``.
+
+    The snapshot's ``presets`` and ``alert_settings`` are honoured; ``sensitivity`` / ``short_moves`` given here override
+    the snapshot's settings (standard / off when neither says)."""
     workdir = Path(workdir or tempfile.mkdtemp(prefix="sentinel-replay-"))
     store = Store(workdir / "replay.db")
     sentinel = Sentinel(config=signals.SnapshotConfig(workdir / "none.json"), store=store)
     collector = Collector(store)
     sentinel.escalator, sentinel._announce = collector, lambda *a, **k: None
-    sentinel.policy, sentinel.sensitivity, sentinel.short_moves = policy, sensitivity, short_moves
+    settings = snapshot.get("alert_settings") if isinstance(snapshot.get("alert_settings"), dict) else {}
+    sentinel.policy = policy
+    sentinel.sensitivity = sensitivity or settings.get("sensitivity") or snapshot.get("alert_sensitivity") or "standard"
+    sentinel.short_moves = bool(short_moves if short_moves is not None else settings.get("short_moves", snapshot.get("short_moves")))
     held = [p["symbol"] for p in snapshot.get("positions") or [] if p.get("symbol") and p.get("shares")]
     queue = [s for s in snapshot.get("research_queue") or [] if s not in held]
     # symbols only an owner rule names are replayed for that rule alone (as the live loop polls them)
@@ -100,6 +107,7 @@ def run_replay(data: dict, snapshot: dict, start: date, end: date, *, policy: st
              for s in set(symbols) | {"SPY"} if s in data["bars5"]}
     alerts, trace = [], {s: [] for s in symbols}
     baselines: dict = {}
+    summaries: dict = {}
 
     def baseline_of(symbol: str, day: date) -> dict:
         key = (symbol, day)
@@ -121,6 +129,7 @@ def run_replay(data: dict, snapshot: dict, start: date, end: date, *, policy: st
             now = moment.astimezone(UTC)
             moment += STEP
             sentinel._market = None
+            sentinel.new_poll()
             if policy == "tiers" and "SPY" in bars5:
                 spy = [b for b in visible("SPY", now) if signals._bar_ok(b)]
                 spy_prev = signals.prev_close_from_daily(data["daily"].get("SPY", []), now)
@@ -139,19 +148,28 @@ def run_replay(data: dict, snapshot: dict, start: date, end: date, *, policy: st
                     r = float(last["close"]) / prev_close - 1
                     trace[symbol].append((now.timestamp(), r, abs(r) / (base.get("daily_sigma") or 0.02)))
                 try:
-                    daily = owner_rules.daily_summary(data["daily"].get(symbol, []), signals._et(now).date())
+                    today = signals._et(now).date()
+                    if (symbol, today) not in summaries:
+                        summaries[(symbol, today)] = owner_rules.daily_summary(data["daily"].get(symbol, []), today)
+                    daily = summaries[(symbol, today)]
                     collected += sentinel.alerts_from(symbol, symbol in held, now, snapshot, series, prev_close, base, [],
                                                       daily=daily, rules_only=symbol in named)
                 except Exception as exc:                          # one symbol's bad data must not end the replay
                     alerts.append({"ts": now.timestamp(), "symbol": symbol, "kind": "error", "tier": "", "text": repr(exc),
                                    "escalate": False, "symbols": [symbol]})
+            try:
+                collected += sentinel.portfolio_alerts(now, snapshot)       # after every symbol, as the live loop does
+            except Exception as exc:
+                alerts.append({"ts": now.timestamp(), "symbol": "*", "kind": "error", "tier": "", "text": repr(exc),
+                               "escalate": False, "symbols": ["*"]})
             collector.now, collector.sent = now.timestamp(), []
             sentinel.flush(collected, snapshot, now)
             for item in collector.sent:
                 a = item["alert"]
                 alerts.append({"ts": item["ts"], "symbol": a["symbol"], "kind": a.get("kind", ""),
                                "tier": a.get("tier", ""), "text": a["text"], "escalate": bool(a.get("escalate")),
-                               "symbols": a.get("symbols") or [a["symbol"]], "sigma_mult": a.get("sigma_mult", "")})
+                               "symbols": a.get("symbols") or [a["symbol"]], "sigma_mult": a.get("sigma_mult", ""),
+                               "preset_key": a.get("preset_key", "")})
     records = [{"ts": r["created_at"], "symbol": r["symbol"], "text": r["digest_text"] or r["text"]}
                for r in store.alerts_where("kind = 'record'")]
     return {"alerts": alerts, "records": records, "trace": trace, "symbols": symbols, "policy": policy}
@@ -175,8 +193,13 @@ def counts(result: dict) -> dict:
         per_symbol[a["symbol"]] = per_symbol.get(a["symbol"], 0) + 1
         key = str(a["tier"]) if a["tier"] != "" else "-"
         per_tier[key] = per_tier.get(key, 0) + 1
+    per_preset: dict[str, int] = {}
+    for a in result["alerts"]:
+        if a.get("preset_key"):
+            per_preset[a["preset_key"]] = per_preset.get(a["preset_key"], 0) + 1
     return {"total": len(result["alerts"]), "per_symbol": dict(sorted(per_symbol.items())),
-            "per_tier": dict(sorted(per_tier.items())), "digest_lines": len(result["records"])}
+            "per_tier": dict(sorted(per_tier.items())), "per_preset": dict(sorted(per_preset.items())),
+            "digest_lines": len(result["records"])}
 
 
 def _clock(ts: float, zone) -> str:
@@ -186,13 +209,14 @@ def _clock(ts: float, zone) -> str:
 def write_alerts_csv(result: dict, path: Path | str) -> None:
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["time_et", "time_bj", "symbol", "tier", "kind", "escalate", "sigma_mult", "text"])
+        writer.writerow(["time_et", "time_bj", "symbol", "tier", "kind", "escalate", "sigma_mult", "text", "preset_key"])
         for a in result["alerts"]:
             mult = a.get("sigma_mult")
             if mult in ("", None) and a["symbol"] in result["trace"]:
                 mult = sigma_at(result, a["symbol"], a["ts"])
             writer.writerow([_clock(a["ts"], signals.ET), _clock(a["ts"], signals.BEIJING), a["symbol"], a["tier"], a["kind"],
-                             int(a["escalate"]), "" if mult in ("", None) else f"{float(mult):.1f}", a["text"].replace("\n", " / ")])
+                             int(a["escalate"]), "" if mult in ("", None) else f"{float(mult):.1f}", a["text"].replace("\n", " / "),
+                             a.get("preset_key", "")])
 
 
 def compare_actual(db_path: Path | str, result: dict, start: date, end: date, window: float = 30 * 60) -> list[dict]:
@@ -247,6 +271,8 @@ def write_summary(result: dict, path: Path | str, *, title: str, args_line: str,
     lines += [f"- 发出 {c['total']} 条；夜间简报行（不到档、过 1 倍日常波动）{c['digest_lines']} 条", ""]
     lines += ["| 股票 | 条数 |", "|---|---|"] + [f"| {s} | {n} |" for s, n in c["per_symbol"].items()]
     lines += ["", "| 档位 | 条数 |", "|---|---|"] + [f"| {t} | {n} |" for t, n in c["per_tier"].items()]
+    if c["per_preset"]:
+        lines += ["", "| 系统默认规则 | 条数 |", "|---|---|"] + [f"| {k} | {n} |" for k, n in c["per_preset"].items()]
     if notes:
         lines += ["", "说明："] + [f"- {n}" for n in notes]
     if comparison is not None:
