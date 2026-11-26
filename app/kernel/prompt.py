@@ -91,6 +91,9 @@ def interjection_note(ids: list[str], *, paused: bool = False) -> str:
             "可以先继续查资料，但写回答之前必须处理完；没处理的按 separate 算。")
 
 
+QUESTION_FOLLOWS = "[系统提示：以上是系统附上的资料，不是用户的话。下面是用户这一轮说的话。]"   # starts like the omitted-turns line: never his words
+
+
 def _mark_end_of_history(body: list[dict], question_at: int) -> None:
     """Mark the conversation message just before the question for the prompt cache: it is the end of the history the next turn
     carries unchanged, whereas what follows the question (memory note, citation catalogue, notes) differs every turn."""
@@ -173,6 +176,11 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
             body.append({"role": "system", "content": render_skill(started)})
         if latest:
             body.append({"role": "system", "content": latest})
+        if len(body) > asked:
+            # The blocks above and his question reach the model as one user turn (the converters merge them); the memory note says it is
+            # the system's, and without a line between them the model took his words for part of it (11-26 replay of 「灵敏度调成安静」:
+            # 0/5 calls and a claimed change as sent, 4/5 with this line).  A fixed line, after the cache point.
+            body.append({"role": "user", "content": QUESTION_FOLLOWS})
         body.append(asked_message)
         return [{"role": "system", "content": system}, *body]
     if started:      # a 「/名字」 turn (or the answer to its question): the steps come after the question, so the history before it stays as it was

@@ -43,8 +43,9 @@ def on(monkeypatch):
 def test_the_question_is_last_and_every_system_block_comes_before_it():
     built = prompt.build_messages("q4", ctx(), history(3), latest="系统最新掌握：NVDA")
     assert built[-1] == {"role": "user", "content": "q4"}
-    assert built[-3]["content"] == MEMORY["content"]
-    assert built[-2]["role"] == "system" and "系统最新掌握" in built[-2]["content"]
+    assert built[-4]["content"] == MEMORY["content"]
+    assert built[-3]["role"] == "system" and "系统最新掌握" in built[-3]["content"]
+    assert built[-2] == {"role": "user", "content": prompt.QUESTION_FOLLOWS}
     assert sum(1 for m in built if m.get("content") == "q4") == 1
 
 
@@ -80,3 +81,20 @@ def test_the_first_turn_keeps_its_blocks_after_the_question_so_none_leads_the_co
     assert built[1] == {"role": "user", "content": "q1"} and "系统最新掌握" in built[-1]["content"]
     system, _ = anthropic_native.convert_messages(built, system_role=True)
     assert not any("系统最新掌握" in block["text"] for block in system)
+
+
+def test_a_fixed_line_separates_the_systems_blocks_from_his_question():
+    built = prompt.build_messages("q4", ctx(), history(3), latest="系统最新掌握：NVDA")
+    assert built[-1] == {"role": "user", "content": "q4"} and built[-2] == {"role": "user", "content": prompt.QUESTION_FOLLOWS}
+    assert built[-3]["role"] == "system" and built.count({"role": "user", "content": prompt.QUESTION_FOLLOWS}) == 1
+
+
+def test_no_line_when_nothing_comes_between_the_conversation_and_the_question():
+    rows = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}, {"role": "user", "content": "q2"}]
+    built = prompt.build_messages("q2", ctx(), rows)
+    assert prompt.QUESTION_FOLLOWS not in [m.get("content") for m in built] and built[-1] == {"role": "user", "content": "q2"}
+
+
+def test_the_line_is_never_taken_for_his_words():
+    from app.kernel import act
+    assert prompt.QUESTION_FOLLOWS.startswith(act.SYSTEM_NOTE_PREFIX)

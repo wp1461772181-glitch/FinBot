@@ -350,9 +350,9 @@ def test_with_the_flag_off_a_kernel_turn_has_the_one_catalogue_message_after_the
     messages = sent_messages(kernel, turn_rows(5), inline=False)
     conversation = [m for m in messages if m["role"] != "system"]
     # The one catalogue message the endpoint puts after the question; the kernel sends the question last (question-last).
-    assert conversation[-1]["content"].endswith("下一个问题") and layers.is_catalogue_message(conversation[-2])
-    assert conversation[-2]["content"].startswith(layers.CATALOGUE_MARKER)
-    assert sum(layers.is_catalogue_message(m) for m in conversation) == 1 and "answers_back" in conversation[-2]["content"]
+    assert conversation[-1]["content"].endswith("下一个问题") and conversation[-2]["content"].startswith("[系统提示：")
+    assert layers.is_catalogue_message(conversation[-3]) and conversation[-3]["content"].startswith(layers.CATALOGUE_MARKER)
+    assert sum(layers.is_catalogue_message(m) for m in conversation) == 1 and "answers_back" in conversation[-3]["content"]
 
 
 def test_an_old_engine_turn_keeps_the_catalogue_after_the_question(stream_fixture, monkeypatch):

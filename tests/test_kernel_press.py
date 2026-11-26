@@ -629,7 +629,8 @@ def test_build_messages_does_not_repeat_the_question_after_the_notes():
     history = [{"role": "assistant", "content": "答"}, {"role": "user", "content": "问"}, {"role": "user", "content": "记忆笔记"},
                {"role": "user", "content": "引用目录"}]
     messages = prompt.build_messages("问", ctx(), history)
-    assert _roles_and_texts(messages) == [("assistant", "答"), ("user", "记忆笔记"), ("user", "引用目录"), ("user", "问")]      # the question is last
+    assert _roles_and_texts(messages)[:3] == [("assistant", "答"), ("user", "记忆笔记"), ("user", "引用目录")]
+    assert _roles_and_texts(messages)[-1] == ("user", "问") and _roles_and_texts(messages)[-2][1].startswith("[系统提示：")      # the question is last, after the line
     assert [m["content"] for m in messages if m.get("cache_point")] == ["答"]
 
 
