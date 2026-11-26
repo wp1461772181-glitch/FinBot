@@ -102,6 +102,34 @@ def ensure_seen_columns() -> None:
         connection.execute(sql("UPDATE agent_profile_items SET confirmed_at = updated_at WHERE origin = 'pattern' AND status = 'active' AND confirmed_at IS NULL"))
 
 
+def ensure_template_column() -> None:
+    """Add the role-template label column (stage 4f) to an older table.  A fresh database gets it from the model."""
+    from .database import engine
+    with engine.begin() as connection:
+        connection.execute(sql("ALTER TABLE agent_profile_items ADD COLUMN IF NOT EXISTS template VARCHAR(32)"))
+
+
+def _template_label(template: str | None) -> str:
+    """The shown name of a template id (the data lives in ``role_templates``; this module knows no id).  A template that no longer exists shows its id."""
+    if not template:
+        return ""
+    from .role_templates import TEMPLATES
+    return TEMPLATES.get(template, {}).get("label", template)
+
+
+def set_template(owner_hash: str, item_id, template: str | None) -> bool:
+    """Label one of the owner's items with the template that wrote it (None clears it).  Touches neither ``updated_at`` nor ``last_seen_at``:
+    a label is not an edit, and ``updated_at`` ranks his items.  False when it is not his item."""
+    identity = _as_uuid(item_id)
+    if identity is None:
+        return False
+    with SessionLocal() as db:
+        result = db.execute(update(AgentProfileItem).where(AgentProfileItem.owner_hash == owner_hash, AgentProfileItem.id == identity)
+                            .values(template=template, updated_at=AgentProfileItem.updated_at).execution_options(synchronize_session=False))
+        db.commit()
+        return bool(result.rowcount)
+
+
 def bump_seen(owner_hash: str, item_id, when: datetime) -> bool:
     """The owner's own words bore this item out at ``when``.  Never moves the time backwards; touches neither ``last_used_at`` nor
     ``updated_at``.  True when the time moved."""
@@ -148,7 +176,8 @@ def serialize(row: AgentProfileItem, names: dict | None = None) -> dict:
             "created_at": stamp(row.created_at), "updated_at": stamp(row.updated_at),
             "last_used_at": stamp(row.last_used_at), "last_seen_at": stamp(row.last_seen_at),
             "archived_at": stamp(row.archived_at), "archived_reason": row.archived_reason, "settled_at": stamp(row.settled_at), "confirmed_at": stamp(row.confirmed_at),
-            "settled_label": SETTLED_LABEL if row.settled_at else ""}
+            "settled_label": SETTLED_LABEL if row.settled_at else "",
+            "template": row.template, "template_label": _template_label(row.template)}
 
 
 def _lock(db, owner_hash: str) -> None:
@@ -440,7 +469,8 @@ def visible_texts(owner_hash: str, bot_id: str | None = None) -> list[str]:
 def _line(row: AgentProfileItem, layer: str = "") -> str:
     origin = "" if row.origin in OWNER_ORIGINS else ("·你确认的推测" if row.origin == "pattern" else "·推断")
     settled = "·" + SETTLED_LABEL if row.settled_at else ""
-    return f"- {handle(row.id)} [{KIND_LABELS[row.kind]}{origin}{settled}{layer}] {row.text}"
+    chosen = f"·模板「{_template_label(row.template)}」" if row.template else ""    # he chose that template: true information for the model
+    return f"- {handle(row.id)} [{KIND_LABELS[row.kind]}{chosen}{origin}{settled}{layer}] {row.text}"
 
 
 def _pick(rows, lines, budget: int) -> list[tuple]:

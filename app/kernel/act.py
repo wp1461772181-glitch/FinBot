@@ -29,7 +29,7 @@ ACT = "act"
 TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "record_view", "drop_view")
 TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_routine", "update_routine", "delete_routine",
          "save_skill", "review_filing", "create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role",
-         "set_channel_prefs")
+         "set_channel_prefs", "apply_role_template", "undo_role_template")
 TIER3 = ("forecast", "analyze", "translate_content", "start_historical_replay", "fetch_sec", "refresh_sec", "scan_official",
          "initialize_prices", "import", "import_sources", "index", "retry_document_index", "review_knowledge_candidate",
          "withdraw_knowledge_document", "save_material_evidence", "ingest_web_source", "revise_forecast")
@@ -57,6 +57,8 @@ SUMMARIES = {
     "set_default_model": "把模型目录里的某个模型设为默认对话模型",
     "set_model_role": "指定后台任务用哪个模型（财报判断、预测概率、声明法官、备用模型、小助手——替回答跑腿查资料的模型，不设就用当前对话模型），或恢复默认",
     "set_channel_prefs": "设置主动消息（盯盘提醒、例行简报、财报通知）发到哪里：Telegram、微信，或都发",
+    "apply_role_template": "按一个角色模板（短线、定投、基金经理）写入起步的记忆、简报任务和常用技能；会列出每一项，用户点确认才写",
+    "undo_role_template": "撤掉之前用过的角色模板加的东西（还在的那些）",
     "forecast": "生成一份新的研究预测",
     "analyze": "对一份已存材料做 AI 分析（可指定模型目录里的模型，可强制重新分析）",
     "translate_content": "把一份分析或预测简报译成英文",

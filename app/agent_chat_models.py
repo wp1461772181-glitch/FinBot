@@ -114,6 +114,9 @@ class AgentProfileItem(Base):
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # When the owner confirmed a monthly-review guess (origin ``pattern``); the settle's 60-day rule counts from it, not from ``updated_at``.
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Stage 4f: the role template he chose that wrote this line (a label only; nothing reads it to decide anything).  Added to older tables by
+    # ``agent_profile.ensure_template_column``.
+    template: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class AgentConversationRecall(Base):
@@ -423,6 +426,22 @@ class AgentSkill(Base):
     status: Mapped[str] = mapped_column(String(10), nullable=False, default="active")  # active | draft
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class RoleTemplateApplication(Base):
+    """One time the owner applied a role template (stage 4f): what it created, so the page can show it and take it back.
+    ``created`` is {profile_item_ids, task_ids, skill_ids, usual_added}; ``skipped`` is [{key, reason}].  Nothing here is read to decide
+    how the agent behaves."""
+    __tablename__ = "role_template_applications"
+    __table_args__ = (Index("ix_role_template_applications_owner_applied", "owner_hash", "applied_at"),)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    template: Mapped[str] = mapped_column(String(32), nullable=False)
+    bot_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    skipped: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
 
 class NewsItem(Base):

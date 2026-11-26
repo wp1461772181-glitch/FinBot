@@ -18,7 +18,8 @@ from .. import agent_skills as skills
 from .. import channels, portfolio
 from ..database import SessionLocal
 
-NAMES = frozenset({"create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role", "set_channel_prefs"})
+NAMES = frozenset({"create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role", "set_channel_prefs",
+                   "apply_role_template", "undo_role_template"})
 # ``delete_transaction`` is pressed through the portfolio's own write tools (``portfolio.apply_tool``), like the other ledger operations.
 EXECUTED = NAMES - {"delete_transaction"}
 BOT_ARGS = ("title", "description", "focus_companies", "focus_theme", "tool_scope", "all_tools", "model", "use_default_model",
@@ -32,7 +33,8 @@ ROLE_DEFAULTS = {"judge": "配置里指定的法官", "fallback": "不设备用�
 
 # What a card showed as the old state is frozen with it (``expect``); at the press the state is read again and a card whose old state is
 # no longer true is refused and left spent.  Every operation whose card shows an old value, and ``update_routine``, is checked this way.
-FRESH = (NAMES - {"create_bot"}) | {"update_routine"}
+# A template application is idempotent (a duplicate is reused), so its card shows no old state to compare at the press.
+FRESH = (NAMES - {"create_bot", "apply_role_template", "undo_role_template"}) | {"update_routine"}
 STALE = "卡片发出后这项设置变了，没有执行；请让我重新出一张卡。"
 STALE_DELETE = "这笔记录或持仓在卡片发出后变了，没有删除；请让我重新出一张卡。"
 _BOT_STATE = ("name", "title", "description", "focus", "tool_scope", "model", "reasoning_effort", "pinned", "hidden", "skills")
@@ -130,6 +132,18 @@ MODEL_REASONS = {
     "invalid_channels": "渠道只能是 telegram、wechat，不能重复，至少一个；mode 只能是 first 或 all。",
     "nothing_to_change": "和现在一模一样，没有要改的。",
 }
+
+
+TEMPLATE_REASONS = {
+    "unknown_template": "没有这个角色模板；只带 operation 调用一次 apply_role_template，看有哪几个。",
+    "unknown_bot": "没有这个 bot（或不是你的）；只带 operation 调用一次 apply_role_template，看 bot 列表。",
+    "bot_not_found": "没有这个 bot（或不是你的）；只带 operation 调用一次 apply_role_template，看 bot 列表。",
+    "unknown_leave_out": "leave_out 里有这个模板（或这次应用）没有的项；用只带 operation 的那次调用里列出的 key 或 id。",
+    "application_not_found": "没有这次应用（或不是你的）；只带 operation 调用一次 undo_role_template，看列表。",
+    "already_undone": "这次应用已经撤过了。",
+    "nothing_to_change": "没有要写（或要撤）的：想写的都已经有了，或这一层放不下。",
+}
+PART_WORDS = {"skill": "技能", "memory": "记忆", "brief": "简报", "usual": "常用技能"}
 
 
 def _refuse(code: str, reasons: dict, hint: str | None = None) -> Refusal:
@@ -424,6 +438,80 @@ def _set_channel_prefs_card(owner: str, args: dict) -> dict:
     return {"title": "设置主动消息的去向", "targets": [{"kind": _route_words(wanted, mode)}], "alternative": text}
 
 
+def _template_bot(owner: str, bot) -> str | None:
+    """The bot he named (its name or id), or None for the global memory and the default assistant."""
+    if bot in (None, ""):
+        return None
+    wanted = str(bot).strip()
+    for found in bots.list_bots(owner):
+        if wanted in (found["id"], found["name"]):
+            return found["id"]
+    raise _refuse("bot_not_found", TEMPLATE_REASONS)
+
+
+def _template_line(entry: dict) -> str:
+    text = f"{PART_WORDS[entry['part']]} · {_cut(entry['label'], 80)}"
+    return f"{text}（{entry['when']}）" if entry["part"] == "brief" else text
+
+
+def _template_fields(owner: str, args: dict) -> dict:
+    from .. import role_templates as templates
+    try:
+        return {"template": templates.resolve_template(args["template"]), "bot_id": _template_bot(owner, args.get("bot")),
+                "leave_out": list(args.get("leave_out") or [])}
+    except templates.RoleTemplateError as failure:
+        raise _refuse(failure.code, TEMPLATE_REASONS) from None
+
+
+def _apply_role_template_card(owner: str, args: dict) -> dict:
+    """What a template would write, item by item, from ``role_templates.preview`` (the same call the page's dialog makes): the card says the
+    truth about reach (what is reused, what does not fit, what the default alerts do), and he presses to write."""
+    from .. import role_templates as templates
+    fields = _template_fields(owner, args)
+    try:
+        shown = templates.preview(owner, fields["template"], fields["bot_id"], fields["leave_out"])
+    except templates.RoleTemplateError as failure:
+        raise _refuse(failure.code, TEMPLATE_REASONS) from None
+    if not shown["will_create"]:
+        raise _refuse("nothing_to_change", TEMPLATE_REASONS)
+    where = shown["target"]["bot_name"] + ("的记忆、任务和常用技能" if shown["target"]["scope"] == "bot" else "（全局记忆 + 默认助理的任务和常用技能）")
+    lines = [f"写到：{where}。"]
+    if shown["reuse"]:
+        lines.append("已有、沿用：" + "、".join(_cut(e["label"], 30) for e in shown["reuse"]) + "。")
+    if shown["skip"]:
+        lines.append("这次放不下：" + "；".join(f"{_cut(e['label'], 30)}（{e['reason']}）" for e in shown["skip"]) + "。")
+    lines += shown["notes"]
+    return {"title": f"用模板起步 · {shown['label']}", "targets": [{"kind": _template_line(e)} for e in shown["will_create"]],
+            "alternative": "".join(lines), "fields": fields}
+
+
+def _undo_role_template_card(owner: str, args: dict) -> dict:
+    from .. import role_templates as templates
+    listed = templates.list_applications(owner)
+    wanted = args.get("application_id")
+    found = next((a for a in listed if a["id"] == wanted), None) if wanted else next((a for a in listed if not a["undone_at"]), None)
+    if found is None:
+        raise _refuse("application_not_found", TEMPLATE_REASONS)
+    if found["undone_at"]:
+        raise _refuse("already_undone", TEMPLATE_REASONS)
+    keep = {str(x) for x in (args.get("leave_out") or [])}
+    if keep - {i["id"] for i in found["items"]}:
+        raise _refuse("unknown_leave_out", TEMPLATE_REASONS)
+    todo = [i for i in found["items"] if i["there"] and i["id"] not in keep]
+    if not todo:
+        raise _refuse("nothing_to_change", TEMPLATE_REASONS)
+    gone = [i for i in found["items"] if not i["there"]]
+    stay = [i for i in found["items"] if i["there"] and i["id"] in keep]
+    lines = ["撤掉的是它当时写进去、现在还在的这些（你改过字的也会撤）；你自己另外加的不动。"]
+    if gone:
+        lines.append("已经不在了：" + "、".join(_cut(i["label"], 30) for i in gone) + "。")
+    if stay:
+        lines.append("留下：" + "、".join(_cut(i["label"], 30) for i in stay) + "。")
+    targets = [{"kind": f"{PART_WORDS[i['part']]} · {_cut(i['label'], 80)}" + (f"（{i['note']}）" if i["note"] else "")} for i in todo]
+    return {"title": f"撤掉模板 · {found['label']}", "targets": targets, "alternative": "".join(lines),
+            "fields": {"application_id": found["id"], "leave_out": sorted(keep)}}
+
+
 # --- the three jobs ----------------------------------------------------------------------------------------------------------
 
 def describe(owner: str, name: str, args: dict) -> dict:
@@ -448,6 +536,10 @@ def _describe(owner: str, name: str, args: dict) -> dict:
         return _set_model_role_card(owner, args)
     if name == "set_channel_prefs":
         return _set_channel_prefs_card(owner, args)
+    if name == "apply_role_template":
+        return _apply_role_template_card(owner, args)
+    if name == "undo_role_template":
+        return _undo_role_template_card(owner, args)
     if name == "delete_transaction":
         try:
             return portfolio.describe_write(owner, name, args)
@@ -513,6 +605,23 @@ def execute(name: str, args: dict, owner: str) -> tuple[dict, str]:
         except ValueError as failure:
             raise _refuse(str(failure), MODEL_REASONS) from None
         return {"status": "set", **saved}, "channels"
+    if name == "apply_role_template":
+        from .. import role_templates as templates
+        fields = frozen if frozen is not None else _template_fields(owner, args)
+        try:
+            done = templates.apply(owner, fields["template"], fields.get("bot_id"), fields.get("leave_out"))
+        except templates.RoleTemplateError as failure:
+            raise _refuse(failure.code, TEMPLATE_REASONS) from None
+        return {"status": "applied", "application_id": (done["application"] or {}).get("id"), "created": len(done["created"]),
+                "reused": len(done["reused"]), "skipped": [{"key": e["key"], "reason": e["reason"]} for e in done["skipped"]]}, "role templates"
+    if name == "undo_role_template":
+        from .. import role_templates as templates
+        fields = frozen if frozen is not None else {"application_id": args.get("application_id"), "leave_out": list(args.get("leave_out") or [])}
+        try:
+            done = templates.undo(owner, fields["application_id"], fields.get("leave_out"))
+        except templates.RoleTemplateError as failure:
+            raise _refuse(failure.code, TEMPLATE_REASONS) from None
+        return {"status": "undone", "removed": len(done["removed"]), "gone": len(done["gone"]), "kept": len(done["kept"])}, "role templates"
     raise KeyError(name)
 
 
@@ -539,4 +648,15 @@ def lookup(owner: str, name: str) -> dict:
     if name == "set_channel_prefs":
         with SessionLocal() as db:
             return {"now": channels.prefs(db, owner), "available": {c: channels.available(db, owner, c, None) for c in channels.CHANNELS}}
+    if name == "apply_role_template":
+        from .. import role_templates as templates
+        return {"templates": [{"id": t["id"], "label": t["label"], "blurb": t["blurb"], "memory": [{"key": m["key"], "text": m["text"]} for m in t["memory"]],
+                               "briefs": [{"key": b["key"], "name": b["name"], "when": templates._when(b)} for b in t["briefs"]],
+                               "skills": [{"key": k["key"], "name": k["name"]} for k in t["skills"]], "notes": t["notes"]} for t in templates.templates()],
+                "bots": [{"id": b["id"], "name": b["name"]} for b in bots.list_bots(owner)]}
+    if name == "undo_role_template":
+        from .. import role_templates as templates
+        return {"applications": [{"id": a["id"], "template": a["label"], "applied_at": a["applied_at"], "undone": bool(a["undone_at"]),
+                                  "items": [{"id": i["id"], "part": i["part"], "label": i["label"], "there": i["there"]} for i in a["items"]]}
+                                 for a in templates.list_applications(owner)]}
     return {}
