@@ -1,0 +1,162 @@
+[
+  {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "symbol": "INTC",
+    "metric": "day_change",
+    "direction": "either",
+    "levels": [
+      {
+        "threshold": 10,
+        "level": "remind"
+      },
+      {
+        "threshold": 20,
+        "level": "urgent"
+      }
+    ],
+    "window_days": null,
+    "repeat": "daily",
+    "expires_on": null,
+    "created_on": "2026-11-26",
+    "text": "英特尔相对昨收涨或跌达到 10%：提醒；达到 20%：加急。每天每档一次。"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "symbol": "NVDA",
+    "metric": "open_change",
+    "direction": "up",
+    "levels": [
+      {
+        "threshold": 3,
+        "level": "remind"
+      }
+    ],
+    "window_days": null,
+    "repeat": "daily",
+    "expires_on": null,
+    "created_on": "2026-11-20",
+    "text": "英伟达相对今天的开盘价（只看常规交易时段）上涨达到 3%：提醒。每天最多一次。"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000003",
+    "symbol": "AAPL",
+    "metric": "cost_change",
+    "direction": "down",
+    "levels": [
+      {
+        "threshold": 10,
+        "level": "remind"
+      },
+      {
+        "threshold": 20,
+        "level": "urgent"
+      }
+    ],
+    "window_days": null,
+    "repeat": "daily",
+    "expires_on": "2099-12-31",
+    "created_on": "2026-11-21",
+    "text": "苹果相对你的持仓成本价下跌达到 10%：提醒；达到 20%：加急。条件成立时每档各提醒一次；提醒档跌幅收窄到 10% 以内后再达到、加急档跌幅收窄到 20% 以内后再达到，会再提醒该档；每天每档最多一次。有效到 2099-12-31。"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000004",
+    "symbol": "TSLA",
+    "metric": "n_day_change",
+    "direction": "either",
+    "levels": [
+      {
+        "threshold": 15,
+        "level": "remind"
+      }
+    ],
+    "window_days": 5,
+    "repeat": "daily",
+    "expires_on": null,
+    "created_on": "2026-11-22",
+    "text": "特斯拉相对 5 个交易日前的收盘价涨或跌达到 15%：提醒。条件成立时提醒一次，涨跌幅回到 15% 以内后再达到会再提醒；每天最多一次。"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000005",
+    "symbol": "AMD",
+    "metric": "price",
+    "direction": "below",
+    "levels": [
+      {
+        "threshold": 90,
+        "level": "urgent"
+      },
+      {
+        "threshold": 100,
+        "level": "remind"
+      }
+    ],
+    "window_days": null,
+    "repeat": "daily",
+    "expires_on": null,
+    "created_on": "2026-11-23",
+    "text": "超微的股价低于 100 美元：提醒；低于 90 美元：加急。条件成立时每档各提醒一次；提醒档回到 100 美元以上后再跌破、加急档回到 90 美元以上后再跌破，会再提醒该档；每天每档最多一次。"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000006",
+    "symbol": "MSFT",
+    "metric": "volume_ratio",
+    "direction": "above",
+    "levels": [
+      {
+        "threshold": 3,
+        "level": "remind"
+      },
+      {
+        "threshold": 5,
+        "level": "urgent"
+      }
+    ],
+    "window_days": null,
+    "repeat": "daily",
+    "expires_on": null,
+    "created_on": "2026-11-24",
+    "text": "微软今天的成交量（只看常规交易时段，按开盘后已过去的时间折算；开盘后 30 分钟内不判断）相对近 20 个交易日的日均量达到 3 倍：提醒；达到 5 倍：加急。每天每档一次。"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000007",
+    "symbol": "INTC",
+    "metric": "position_pnl",
+    "direction": "down",
+    "levels": [
+      {
+        "threshold": 500,
+        "level": "remind"
+      },
+      {
+        "threshold": 1000,
+        "level": "urgent"
+      }
+    ],
+    "window_days": null,
+    "repeat": "daily",
+    "expires_on": null,
+    "created_on": "2026-11-25",
+    "text": "你持有的英特尔今天的盈亏（现有股数 × 相对昨收的价差）亏损达到 500 美元：提醒；亏损达到 1000 美元：加急。每天每档一次。"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000008",
+    "symbol": "GOOGL",
+    "metric": "position_weight",
+    "direction": "above",
+    "levels": [
+      {
+        "threshold": 30,
+        "level": "remind"
+      },
+      {
+        "threshold": 40,
+        "level": "urgent"
+      }
+    ],
+    "window_days": null,
+    "repeat": "daily",
+    "expires_on": null,
+    "created_on": "2026-11-26",
+    "text": "谷歌占你总资产的比例高于 30%：提醒；高于 40%：加急。条件成立时每档各提醒一次；提醒档回到 30%以下后再升破、加急档回到 40%以下后再升破，会再提醒该档；每天每档最多一次。"
+  }
+]

@@ -93,7 +93,7 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
         if name=='record_view':args['_source_message_id']=operation.get('source_message_id');args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id')
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
-        if name in {'create_bot','update_bot','apply_role_template','undo_role_template'}:args['_fields']=operation.get('fields')
+        if name in {'create_bot','update_bot','apply_role_template','undo_role_template','set_watch_rule'}:args['_fields']=operation.get('fields')
         # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
         if operation.get('expect') is not None:args['_expect']=operation['expect']
         # The press, not the frozen operation, says whether a skill starts enabled or as a draft.
@@ -270,6 +270,24 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
             if not row:return error('source_not_found')
             review_inventory_filing(symbol=row.symbol,accession_number=row.accession_number,decision=args['decision'],note=args['note'],db=db)
             db.commit();return result([{'source_id':args['source_id'],'decision':args['decision']}],'relevance review')
+    if name=='list_watch_rules':
+        from .. import watch_rules_view
+        if not is_owner:return error('owner_login_required')
+        return result(await asyncio.to_thread(watch_rules_view.rows,context.owner_hash),'watch rules')
+    if name in {'set_watch_rule','delete_watch_rule'}:
+        # Only reached through execute_reversible: the owner pressed the card; the fields are the ones the card showed.
+        from .. import watch_rules
+        if not is_owner:return error('owner_login_required')
+        try:
+            if name=='delete_watch_rule':
+                gone=await asyncio.to_thread(watch_rules.delete,context.owner_hash,args['rule_id'])
+                return result([{'status':'deleted','symbol':gone['symbol'],'rule_id':gone['id'],'title':gone['text']}],'watch rule')
+            fields=args.get('_fields')
+            if not fields:return error('confirmation_required')
+            if args.get('rule_id'):saved=await asyncio.to_thread(lambda:watch_rules.update(context.owner_hash,args['rule_id'],fields,args['quote'],replace=True))
+            else:saved=await asyncio.to_thread(watch_rules.create,context.owner_hash,fields,args['quote'])
+        except watch_rules.WatchRuleError as exc:return {'ok':False,'data':[],'error_code':exc.code,'reason':exc.reason,'hint':exc.reason}
+        return result([{'status':'saved','symbol':saved['symbol'],'rule_id':saved['id'],'title':saved['text']}],'watch rule')
     if name=='list_routines':
         # A bot lists its own routines; all_bots (or the default bot) lists every bot's, each with its bot.
         from .. import agent_tasks as tasks

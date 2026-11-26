@@ -72,15 +72,24 @@ def _counts(db, owner: str) -> dict:
         return sum(n for (o, s), n in by.items() if (origin is None or o == origin) and (status is None or s == status))
     views_current = db.scalar(select(func.count()).select_from(OwnerView).where(OwnerView.owner_hash == owner, OwnerView.status == owner_views.ACTIVE))
     companies = db.scalar(select(func.count(OwnerView.symbol.distinct())).where(OwnerView.owner_hash == owner))
-    watching = len(_plans(db, owner)) + sum(1 for r in _routines(db, owner) if r["enabled"]) + len(_queue(db, owner) or [])
+    watching = len(_plans(db, owner)) + sum(1 for r in _rules(owner) if r["status"] == "active") + sum(1 for r in _routines(db, owner) if r["enabled"]) + len(_queue(db, owner) or [])
     return {"said": items("explicit", "active"), "typed": items("manual", "active"), "inferred": items("inferred", "active"),
             "guesses_confirmed": items("pattern", "active"), "guesses_waiting": items(status="proposed"), "archived": items(status="archived"),
             "views_current": int(views_current or 0), "views_companies": int(companies or 0), "watch": watching}
 
 
+def _rules(owner: str) -> list[dict]:
+    """The rules he set himself (stage 5b-1): id, symbol and the reading written by code."""
+    from . import watch_rules
+    rules = watch_rules.list_rules(owner)
+    states = watch_rules.statuses(rules)
+    return [{"id": r["id"], "symbol": r["symbol"], "text": r["text"], "created_on": r["created_on"], "expires_on": r["expires_on"],
+             "status": states[r["id"]]} for r in rules]
+
+
 def _watch(db, owner: str) -> dict:
     return {"plans": _plans(db, owner), "alert_routines": _routines(db, owner), "research_queue": _queue(db, owner),
-            "default_rules_note": DEFAULT_RULES_NOTE}
+            "rules": _rules(owner), "default_rules_note": DEFAULT_RULES_NOTE}
 
 
 def _jobs(owner: str) -> list[dict]:
@@ -291,6 +300,11 @@ def _watch_lines(watch) -> list[str]:
         scope = "、".join(routine.get("symbols") or []) if routine.get("scope") == "symbols" else "研究队列"
         lines.append(f"- {routine['name']}（范围：{scope}；{'；'.join(what)}；下次运行 {_day(routine.get('next_run_at'))}" + ("" if routine.get("enabled") else "；已暂停") + "）")
     lines += [NONE_LINE] if not watch.get("alert_routines") else []
+    lines += ["", "### 你自己定的规则"]
+    for rule in watch.get("rules") or []:
+        from .watch_rules import STATUS_WORDS
+        lines.append(f"- {rule['text']}（{rule['created_on']} 定的" + (f"；{STATUS_WORDS[rule['status']]}" if rule.get("status") in STATUS_WORDS else "") + "）")
+    lines += [NONE_LINE] if not watch.get("rules") else []
     queue = watch.get("research_queue")
     lines += ["", "### 研究队列", ("、".join(queue) if queue else NONE_LINE) if queue is not None else "（还没存过研究队列）"]
     if watch.get("default_rules_note"):
