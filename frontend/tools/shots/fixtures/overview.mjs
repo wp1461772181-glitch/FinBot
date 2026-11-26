@@ -43,7 +43,7 @@ export function memoryOverview(state) {
       plans: PLANS,
       alert_routines: alerts.map((t) => ({ id: t.id, name: t.name, enabled: t.enabled, scope: t.scope, symbols: t.symbols, filings: t.config?.filings ?? true, news: t.config?.news ?? true, price_lines: t.config?.price_lines ?? [], next_run_at: t.next_run_at, bot_id: t.bot_id })),
       research_queue: state.queue.length ? state.queue : null,
-      default_rules_note: "另外，系统默认对你的持仓和研究队列盯价格异动、新公告（哨兵），这些默认规则现在还不能按你单独调整。",
+      default_rules_note: "另外，系统默认对你的持仓和研究队列盯价格异动、新公告（哨兵）。",
     },
     jobs: JOBS,
     seen_block: items.some((i) => i.status === "active") ? SEEN_BLOCK : null,
