@@ -120,6 +120,7 @@ def test_create_routine_carries_the_bot(monkeypatch):
 
 
 def test_remember_quotes_the_users_message_and_sets_bot_only_for_bot_scope(monkeypatch):
+    monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", "off")      # the earlier behaviour, kept byte for byte with the flag off
     monkeypatch.setattr(profile, "user_message_id", lambda conversation, turn: f"msg-{conversation}-{turn}")
     message = "以后回答都用中文，数字用万元"
     args = {"kind": "preference", "text": "用中文", "quote": "用中文", "scope": "global"}
@@ -279,7 +280,8 @@ def test_every_prepared_operation_still_passes_its_handler_validation(name, fake
     assert all(any(row.values()) for row in out.display["targets"]), "an empty target row"
 
 
-def test_the_fallback_quote_is_a_valid_remember_quote(faked):
+def test_the_fallback_quote_is_a_valid_remember_quote(faked, monkeypatch):
+    monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", "off")
     from app.agent_tool_catalog import RememberArgs
     message = "字" * 300
     out = run(act.prepare(make_run(question=message), "remember", {**MINIMAL["remember"], "quote": "不在其中"}))

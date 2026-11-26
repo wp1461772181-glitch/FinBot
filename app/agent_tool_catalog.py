@@ -144,8 +144,9 @@ class RememberArgs(Args):
     kind:Literal['preference','about_me','instruction']
     topic:str|None=Field(default=None,pattern=r'^[a-z][a-z0-9_]{0,39}$',description='Short slug of the setting this changes (currency_unit, answer_language, answer_order); a newer item with the same kind and topic replaces the older one. Null when it replaces nothing.')
     text:str=Field(min_length=1,max_length=200,description='Short note of what to remember, in the user\'s language.')
-    quote:str=Field(min_length=2,max_length=200,description="The user's own words of THIS turn that ask for it, copied character for character; the server quotes the user's message when this is not in it.")
+    quote:str=Field(min_length=2,max_length=200,description="The user's own words, copied character for character: from this turn when he asks for it now; with basis noticed, from any of his messages in this conversation. The server checks the quote against his messages.")
     scope:Literal['global','bot']=Field(default='global',description="global: holds in every bot (units, language, answer style, who the user is, views across companies). bot: only in the bot you are (a view on or focus within its company or theme, what it should watch). No other bot can be named.")
+    basis:Literal['said','noticed']=Field(default='said',exclude_if=lambda value:value=='said',description="said: he said it, or said to remember it. noticed: you saw it in his words but he did not state it as a rule; it is kept as a guess he can confirm or reject. Either way quote is his own words from this conversation.")
 class _ScheduleFields(Args):
     """What ``POST``/``PATCH /tasks`` take beyond a name and an instruction.  The route's own validation (``agent_tasks``) decides what is
     in range, so a value it rejects is rejected here with the same code."""

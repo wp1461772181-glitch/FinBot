@@ -383,7 +383,8 @@ def test_the_kernel_sees_the_3a_additions_and_widenings():
     full, old = definitions(), legacy_definitions()
     assert set(full) - set(old) == set(KERNEL_ONLY) and len(KERNEL_ONLY) == 14
     widened = {n for n in old if full[n].description != old[n].description or full[n].args_schema is not old[n].args_schema}
-    assert widened == {"analyze", "create_routine", "update_routine", "open_page"}       # open_page: 4e added the memory page to the kernel's list only
+    # open_page: 4e added the memory page to the kernel's list only; remember: the kernel's has basis (11-26 memory writes)
+    assert widened == {"analyze", "create_routine", "update_routine", "open_page", "remember"}
     assert list(full).index("list_models") == list(full).index("search_x") + 1
 
 

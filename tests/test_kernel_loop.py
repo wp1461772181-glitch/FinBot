@@ -768,8 +768,10 @@ def remember_args():
 
 
 def stub_remember(env):
+    """The earlier, narrower ``remember``: the memory-writes flag is off (these tests are its parity tests; the flag-on ones follow)."""
     from app import agent_profile as profile
     env.monkeypatch.setattr(profile, "user_message_id", lambda conversation, turn: "m1")
+    env.monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", "off")
 
 
 def test_tier1_without_a_prior_read_runs_at_once_and_a_lookup_does_not_count(env, fake_consent):
@@ -855,8 +857,10 @@ def test_an_unknown_operation_is_audited_as_none(env, fake_consent):
     assert result["audit"]["writes"] == [{"operation": None, "tier": None, "outcome": "refused:unknown_operation"}]
 
 
-def test_prompt_tells_the_model_a_read_turns_tier_1_into_a_card():
-    assert "如果这一轮里你已经查过资料，这类操作也会放进确认卡。" in prompt.SYSTEM
+def test_prompt_tells_the_model_a_read_turns_tier_1_into_a_card(monkeypatch):
+    monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", "off")       # flag off: the earlier text, byte for byte
+    assert prompt.system_text() == prompt.system_text() and prompt.MEMORY_LINE in prompt.system_text()
+    assert "如果这一轮里你已经查过资料，这类操作也会放进确认卡。" in prompt.system_text()
 
 
 # --- the history-end cache mark ---------------------------------------------------------------------------------------

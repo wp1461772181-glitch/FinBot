@@ -22,6 +22,7 @@ from . import agent_model_roles as roles
 from . import agent_profile as profile
 from .agent_chat_models import AgentConversation, AgentMessage
 from .agent_recall import owner_message_clause
+from .agent_workflow.fp_flags import flag
 from .database import SessionLocal
 from .owner_views import QUOTE_MIN_CHARS   # an example quote is at least as long as a view's: a two-character quote could "show" anything
 
@@ -168,11 +169,13 @@ def _bump_seen(owner_hash: str, offered, by_id: dict, handles: dict) -> tuple[in
     return bumped, ignored
 
 
-def _message(stored: list[dict], counts: dict, new: int, archived: int) -> str:
+def _message(stored: list[dict], counts: dict, new: int, archived: int, waiting: list[dict] = ()) -> str:
     lines = [HEAD]
     for number, item in enumerate(stored, 1):
         quote = item["examples"][0]["quote"]
         lines.append(f"{number}. {item['text']}（我的推测）\n   例：「{quote[:60]}」")
+    for number, item in enumerate(waiting, len(stored) + 1):      # guesses the model wrote during a chat, still waiting for him
+        lines.append(f"{number}. {item['text']}（我的推测）\n   例：「{item['quote'][:60]}」")
     note = f"新记 {new} 条推测、确认了 {counts['confirmed']} 条、删掉 {counts['deleted']} 条"
     if archived:
         note += f"（另有 {archived} 条超过 {ARCHIVE_DAYS} 天没回应，已自动归档）"
@@ -246,9 +249,10 @@ def run(owner_hash: str, now: datetime, last_run_at: datetime | None) -> dict:
     result = {"outcome": "done", "reason": f"新记 {len(stored)} 条推测。" if stored else "这次没有新的推测。",
               "proposed": len(stored), "dropped": dropped, "archived": archived, "posted": False,
               "seen": seen, "seen_unverified": seen_unverified}
-    if stored:
+    waiting = profile.waiting_guesses(owner_hash, last_run_at) if flag("FINBOT_KERNEL_MEMORY_WRITES", True) else []
+    if stored or waiting:
         try:
-            result["posted"] = _post(owner_hash, _message(stored, counts, len(stored), archived), now)
+            result["posted"] = _post(owner_hash, _message(stored, counts, len(stored), archived, waiting), now)
         except Exception as exc:  # noqa: BLE001 - the proposals are stored; the page shows them without the message
             log.warning("memory review message not posted: %s", type(exc).__name__)
     return result

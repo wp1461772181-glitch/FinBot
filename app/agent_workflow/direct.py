@@ -3179,6 +3179,7 @@ class Turn:
         from .. import agent_profile as profile
         operation={'name':name,'arguments':copy.deepcopy(args)}
         if name=='remember':
+            operation['arguments'].pop('basis',None)       # the old engine writes only what he said; a guess is the kernel's
             quote=self.remember_quote(args['quote'])
             if not quote:return self.write_error(name,'quote_not_in_user_message')
             args={**args,'quote':quote};operation['arguments']['quote']=quote

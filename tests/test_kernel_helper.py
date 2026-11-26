@@ -28,9 +28,10 @@ from tests.test_kernel_loop import FakeConsent, act_call, call, env, fake_consen
 # What the schemas and the system text hash to with the switch off (sorted keys, ensure_ascii off): the same as before the helper existed, except that
 # the owner's role lists (set_model_role, list_models) now name the helper role, which exists whatever the switch.  Stage 4a: plus read_turn.  Stage 4b: the role lists also name the memory role.
 GOLDEN = {
-    "owner": ("8e7d01519ff8e9f327e68f32fa777c5a1c0690b384c27fe1b0d007736f789197",   # 4f: the act tool lists two more operations; the system text digest is unchanged
-               "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
-    "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "6879e7b107b66134ab3f8af98e154fa8636b9c9177236c82959a647c78ca0cd0"),
+    # Memory writes (11-26): remember's basis and quote wording in the act tool; the memory lines of the system text.
+    "owner": ("ea03644b26435b7387bae3577467339e1159c9914bb854bbe31f167d7ff5fde0",
+               "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
+    "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
 }
 
 
@@ -130,6 +131,7 @@ def by_symbol(env):
 
 @pytest.mark.parametrize("setting", [None, "off", "OFF", "", "no"])
 def test_the_switch_off_leaves_schemas_and_system_text_as_they_were(env, setting):
+    env.monkeypatch.setenv("FINBOT_KERNEL_INLINE_CATALOGUE", "off")     # the golden text is the one from before the inline-catalogue line
     if setting is None:
         env.monkeypatch.delenv("FINBOT_HELPER", raising=False)
     else:

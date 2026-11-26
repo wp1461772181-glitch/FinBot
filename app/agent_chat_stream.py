@@ -720,15 +720,18 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
    # Older turns come first (layer 2), then the newest raw turns (layer 1).  The layer-3 note goes
    # after the user's own message, so that everything before it stays a byte-identical prefix from
    # one turn to the next and a provider can keep caching it.
-   messages.extend(layers.history_messages(context.get("half_turns",[]), omitted=len(context.get("overflow") or [])))
-   for group in layers.complete_turns(history_rows):
-    messages.extend(layers.project_turn_history(group))
+   inline_catalogue=bool(anchored and context.get("inline_catalogue"))     # kernel turns: each answer carries the note of its own citations
+   if inline_catalogue:messages.extend(layers.inline_history_messages(context))
+   else:
+    messages.extend(layers.history_messages(context.get("half_turns",[]), omitted=len(context.get("overflow") or [])))
+    for group in layers.complete_turns(history_rows):
+     messages.extend(layers.project_turn_history(group))
    messages.extend(layers.unfinished_messages(context.get("unfinished"),turn) if fp_flag("FINBOT_FP3_UNFINISHED_TURNS",True) else [])
    skill_block,active_skill,question=await _turn_skills(x_chat_session,bot,payload.message,bool(payload.pending_request_id),anchored)
    messages.append({"role":"user","content":question})
    memory_note=layers.summary_message(context.get("segments",[]),kernel=anchored)
    if memory_note:messages.append(memory_note)
-   catalogue=layers.render_citation_catalogue(context.get("catalogue",[]))
+   catalogue=layers.latest_inline_note(context) if inline_catalogue else layers.render_citation_catalogue(context.get("catalogue",[]))
    if catalogue:messages.append(catalogue)
    if _protocol_size({"messages":messages,"tools":tool_schemas()})>layers.guard_for_window(chosen.window):raise HTTPException(413,"chat_context_too_large")
    from .agent_workflow.semantic import hydrate_legacy_web_sets, legacy_web_source_choices
@@ -862,7 +865,8 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
      from .agent_context_summary import schedule_summary
      schedule_summary(cid,x_chat_session,provider=chosen.provider,model=chosen.model,
                       api_key=chosen.key(),base_url=chosen.base_url,window=chosen.window,anchored=anchored,**({"catalog_name":chosen.name} if chosen.name else {}))
-     if _is_owner(x_chat_session) and not payload.pending_request_id and ended!="stopped":
+     # A kernel turn writes its own memory (``remember`` with basis noticed): the side extractor, which sees one sentence, stays out of it.
+     if _is_owner(x_chat_session) and not payload.pending_request_id and ended!="stopped" and not (anchored and fp_flag("FINBOT_KERNEL_MEMORY_WRITES",True)):
       from .agent_profile_extract import schedule_extraction,remember_handled
       schedule_extraction(owner_hash(x_chat_session),payload.message,conversation_id=cid,turn_id=turn,
                           bot=bot,asked_to_remember=remember_handled(event.get("audit")),
@@ -967,6 +971,9 @@ def _context_report(context: dict | None, window: int | None = None) -> dict:
     half_turns = context.get("half_turns", [])
     half_catalogue = [item for item in context.get("catalogue", []) if item.get("answers_back", 0) > int(context.get("l1_turns", 0))]
     half_bytes = sum(layers.half_size(turn) for turn in half_turns)
+    if context.get("inline_catalogue"):      # each note is the size it is sent at, charged to its own half-compressed turn
+        half_catalogue = []
+        half_bytes += sum(layers.inline_note_bytes(turn.catalogue) for turn in half_turns if turn.catalogue)
     existing_catalogue = [item for item in context.get("catalogue", [])
                           if item.get("answers_back", 0) <= int(context.get("l1_turns", 0))]
     header_already_billed = bool(existing_catalogue) or any(context.get("catalogue", []))
