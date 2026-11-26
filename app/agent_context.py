@@ -281,8 +281,26 @@ def catalogue_entry_bytes(entry: dict, existing: list[dict] | None = None) -> in
     return catalogue_bytes(base + [entry]) - before
 
 
+# Kernel turns (``inline_catalogue``): a turn's entry stands right after that turn's answer, one note per turn.  The text is constant
+# and the entry has no position relative to now, so the note is the same bytes on every later turn while the turn keeps its layer.
+INLINE_CATALOGUE_MARKER = "〔出处目录·系统附注〕"      # what it means is said once, in the kernel's system text (app/kernel/prompt.py)
+INLINE_CATALOGUE_HEAD = INLINE_CATALOGUE_MARKER
+
+
+def inline_catalogue_message(entry: dict) -> dict:
+    """The note after one answer: the head above and the compact JSON of that turn's entry (never an ``answers_back``)."""
+    entry = {key: value for key, value in entry.items() if key != "answers_back"}
+    return {"role": "user", "content": INLINE_CATALOGUE_HEAD + "\n" + json.dumps(entry, ensure_ascii=False, separators=(",", ":"))}
+
+
+def inline_note_bytes(entry: dict) -> int:
+    """Exact serialized size of one inline note as it is sent to the model."""
+    return json_bytes(inline_catalogue_message(entry))
+
+
 def is_catalogue_message(message: dict) -> bool:
-    return isinstance(message.get("content"), str) and message["content"].startswith(CATALOGUE_MARKER)
+    content = message.get("content")
+    return isinstance(content, str) and content.startswith((CATALOGUE_MARKER, INLINE_CATALOGUE_MARKER))
 
 
 def complete_turns(rows: list[dict]) -> list[list[dict]]:
@@ -400,7 +418,7 @@ def anchor_indexes(complete: list[list[dict]], upto: int, first_row: int | None,
 
 def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYTES, l2_bytes: int = L2_BYTES,
                l3_bytes: int = L3_BYTES, anchor_grid: int | None = None, anchor_front: bool = False,
-               ) -> dict:
+               inline_catalogue: bool = False) -> dict:
     """What the next turn carries of the turns before it, by layer.  ``rows`` are the stored messages
     (oldest first, each with ``sequence``), ``segments`` the summary segments made so far.
 
@@ -414,7 +432,11 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
     anchor (see ``anchor_indexes``), the earliest one from which the turns still fit; a turn that the rule
     above would keep but that lies before that anchor goes to the layer below.  When no anchor fits, that
     layer follows the rule above for this call.  ``anchor_front``: the first complete turn is an anchor (see
-    ``window_rows``)."""
+    ``window_rows``).
+
+    ``inline_catalogue`` (kernel turns): each turn's catalogue entry is sent as a note right after that turn's answer
+    (``inline_history_messages``), not as one message after the question.  Each turn is then charged its answer plus its own
+    note, with no shared header and no ``answers_back``, and ``catalogue`` lists the entries as the notes carry them, oldest first."""
     upto = segments[-1]["upto_sequence"] if segments else 0
     # A summary covers whole turns: those it names by id, and (an older segment, which names none) those whose first row lies up to its end.
     # Turns that ran together overlap in their rows, so a range of rows is not a set of turns and the view never reads one for the other.
@@ -426,7 +448,7 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
     recent: list[list[dict]] = []
     # Reserve the fixed prefix in L1 only if at least one directory entry can fit in
     # either layer by itself; omitted/overflow-only entries must not consume budget.
-    has_catalogue = any(entry and (
+    has_catalogue = not inline_catalogue and any(entry and (
         sum(json_bytes(row) for row in project_turn_history(group)) + catalogue_bytes([{**entry, "answers_back": 1}]) <= l1_bytes
         or half_size(Turn(group[0]["sequence"], group[-1]["sequence"], _question_of(group),
                           project_turn_history(group)[-1]["content"] if len(project_turn_history(group)) > 1 else "",
@@ -440,7 +462,9 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
         entry = entries.get(str(group[0].get("turn_id")))
         projected = project_turn_history(group)
         cost = sum(json_bytes(row) for row in projected)
-        if entry:
+        if entry and inline_catalogue:
+            cost += inline_note_bytes(entry)
+        elif entry:
             billed_entry = {**entry, "answers_back": len(recent) + 1}
             before = catalogue_bytes(recent_catalogue) if recent_catalogue else (CATALOGUE_HEAD_BYTES if has_catalogue else 0)
             cost += catalogue_bytes([*recent_catalogue, billed_entry]) - before
@@ -468,7 +492,9 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
                           if entries.get(str(g[0].get("turn_id")))]
     for turn in reversed(turns):
         cost = half_size(turn)
-        if turn.catalogue:
+        if turn.catalogue and inline_catalogue:
+            cost += inline_note_bytes(turn.catalogue)
+        elif turn.catalogue:
             billed_entry = {**turn.catalogue, "answers_back": len(recent) + len(half) + 1}
             before = catalogue_bytes(selected_catalogue) if selected_catalogue else (CATALOGUE_HEAD_BYTES if has_catalogue else 0)
             cost += catalogue_bytes([*selected_catalogue, billed_entry]) - before
@@ -487,7 +513,8 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
     for idx, tid in enumerate(visible, 1):
         entry=entries.get(tid)
         if entry:
-            catalogue.append({**entry,"answers_back":idx})
+            catalogue.append(entry if inline_catalogue else {**entry,"answers_back":idx})
+    if inline_catalogue: catalogue.reverse()
     # A candidate catalogue can reserve the fixed prefix during selection, then
     # disappear when its only source is summarized or falls outside both layers.
     # Charge that prefix only when the final rendered catalogue is nonempty.
@@ -500,6 +527,7 @@ def layer_rows(rows: list[dict], segments: list[dict], *, l1_bytes: int = L1_BYT
             "l1_turns": len(recent), "l1_bytes": used, "half_turns": half, "overflow": overflow,
             "segments": select_segments(segments, l3_bytes), "segments_total": len(segments), "summary_upto": upto,
             "catalogue": catalogue, "budget": l1_bytes + l2_bytes + l3_bytes, "live_turns": live,
+            **({"inline_catalogue": True} if inline_catalogue else {}),
             # FP3: unfinished turns are carried beside the layers, not in them (no budget, no summary).
             "unfinished": trailing_unfinished(rows, legacy_upto, covered)}
 
@@ -608,6 +636,27 @@ def history_messages(half_turns: list[Turn], *, omitted: int = 0) -> list[dict]:
     return messages
 
 
+def inline_history_messages(context: dict) -> list[dict]:
+    """The history before the question for a kernel turn read with ``inline_catalogue``: the half-compressed turns, then the raw
+    turns, each answer followed by the note of its own catalogue entry.  Nothing goes after the question."""
+    by_turn = {str(entry.get("turn_id")): entry for entry in context.get("catalogue", [])}
+    messages: list[dict] = []
+    omitted = len(context.get("overflow") or [])
+    if omitted > 0:
+        messages.extend(history_messages([], omitted=omitted))
+    for turn in context.get("half_turns", []):
+        messages.extend(half_messages(turn))
+        if turn.catalogue:
+            messages.append(inline_catalogue_message(turn.catalogue))
+    for group in complete_turns(context.get("l1_rows", [])):
+        projected = project_turn_history(group)
+        messages.extend(projected)
+        entry = by_turn.get(str(group[0].get("turn_id")))
+        if entry and len(projected) > 1:
+            messages.append(inline_catalogue_message(entry))
+    return messages
+
+
 ROLLING_VERSION = 2
 ROLLING_LISTS = ("goals", "conclusions", "open", "preferences", "numbers")
 ROLLING_SOURCED = ("conclusions", "numbers")     # items that must carry {turn_id, ordinal}
@@ -647,6 +696,8 @@ def history_usage(context: dict) -> dict:
     every turn not yet summarized at its half-compressed size (the part layer 2 may have to drop)."""
     note = summary_message(context.get("segments", []))
     pending = sum(half_size(t) for t in [*context.get("half_turns", []), *context.get("overflow", [])])
+    if context.get("inline_catalogue"):      # the notes of the half-compressed turns are part of what the turn carries
+        pending += sum(inline_note_bytes(t.catalogue) for t in context.get("half_turns", []) if t.catalogue)
     used = (json_bytes(note) if note else 0) + int(context.get("l1_bytes", 0)) + pending
     budget = int(context.get("budget") or HISTORY_BUDGET)
     return {"bytes": used, "budget": budget, "fraction": used / budget if budget else 0.0}

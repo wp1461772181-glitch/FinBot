@@ -131,6 +131,7 @@ def by_symbol(env):
 
 @pytest.mark.parametrize("setting", [None, "off", "OFF", "", "no"])
 def test_the_switch_off_leaves_schemas_and_system_text_as_they_were(env, setting):
+    env.monkeypatch.setenv("FINBOT_KERNEL_INLINE_CATALOGUE", "off")     # the golden text is the one from before the inline-catalogue line
     if setting is None:
         env.monkeypatch.delenv("FINBOT_HELPER", raising=False)
     else:

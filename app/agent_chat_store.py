@@ -7,6 +7,7 @@ from .agent_chat_models import (AgentConversation, AgentConversationSummary, Age
                                 AgentResearchQueue)
 from . import agent_context as layers
 from . import agent_recall as recall
+from .agent_workflow.fp_flags import flag
 ASYNC_URL=DATABASE_URL
 engine=create_async_engine(ASYNC_URL,pool_pre_ping=True,connect_args={"connect_timeout":3})
 Session=async_sessionmaker(engine,expire_on_commit=False)
@@ -109,8 +110,10 @@ async def conversation_context(conversation_id: str, credential: str, *, window:
     if not anchored:
         return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes)
     stored, front = layers.window_rows(stored, made[-1]["upto_sequence"] if made else 0, len(rows) >= limit, layers.ANCHOR_GRID)
+    # Kernel turns only: each turn's citation entry stands after its own answer (a stable prefix), not once after the question.
+    inline = {"inline_catalogue": True} if flag("FINBOT_KERNEL_INLINE_CATALOGUE", True) else {}
     return layers.layer_rows(stored, made, l1_bytes=l1_bytes, l2_bytes=l2_bytes, l3_bytes=l3_bytes,
-                             anchor_grid=layers.ANCHOR_GRID, anchor_front=front)
+                             anchor_grid=layers.ANCHOR_GRID, anchor_front=front, **inline)
 
 
 async def load_turn_citation(conversation_id: str, credential: str, turn_id: str, ordinal: int) -> dict:
