@@ -124,8 +124,10 @@ export function checkThresholds(key, levels, inputs) {
   return { levels: out };
 }
 
-/** The reason to show for a refused write: the server's Chinese `detail` when it sent a sentence, else a plain line for the status. */
+/** The reason to show for a refused write: `detail.reason` (the server's `{ error_code, reason }`), else a Chinese string `detail`, else a plain line for the status. */
 export function watchWriteError(status, detail) {
+  const reason = isObject(detail) && typeof detail.reason === "string" ? detail.reason.trim() : "";
+  if (reason) return reason;
   if (typeof detail === "string" && /[一-鿿]/.test(detail)) return detail;
   if (status === 403 || status === 401) return "登录个人聊天后才能修改。";
   if (status === 404) return "这条已不存在。";

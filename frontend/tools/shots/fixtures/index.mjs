@@ -423,7 +423,7 @@ function assistantRoutes(route, reply, own) {
   }));
   route.put(`${A}/alert-settings`, own(({ body, state }) => {
     state.watch.writes.push({ method: "PUT", path: "/alert-settings", body: structuredClone(body ?? null) });
-    if (body?.sensitivity !== undefined && !["quiet", "standard", "sensitive"].includes(body.sensitivity)) return reply.status(400, { detail: "灵敏度只能是安静、标准或灵敏。" });
+    if (body?.sensitivity !== undefined && !["quiet", "standard", "sensitive"].includes(body.sensitivity)) return reply.status(400, { detail: { error_code: "bad_sensitivity", reason: "灵敏度只能是安静、标准或灵敏。" } });
     if (body?.sensitivity !== undefined) state.watch.settings.sensitivity = body.sensitivity;
     if (typeof body?.short_moves === "boolean") state.watch.settings.short_moves = body.short_moves;
     return watchView(state).settings;

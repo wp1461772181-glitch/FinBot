@@ -287,12 +287,12 @@ export function watchView(state) {
 /** PATCH /agent-chat/watch-presets/:key: a refusal is `{ status, detail }`, else the row. */
 export function patchPreset(state, key, body) {
   const row = state.watch.presets.find((p) => p.key === key);
-  if (!row) return { status: 400, detail: "没有这条系统默认。" };
-  if (row.hard_guarantee) return { status: 400, detail: "这条是硬保证，不能关。" };
-  if (!row.editable) return { status: 400, detail: "这条默认不在这里调整。" };
+  if (!row) return { status: 400, detail: { error_code: "refused_1", reason: "没有这条系统默认。" } };
+  if (row.hard_guarantee) return { status: 400, detail: { error_code: "refused_2", reason: "这条是硬保证，不能关。" } };
+  if (!row.editable) return { status: 400, detail: { error_code: "refused_3", reason: "这条默认不在这里调整。" } };
   if (typeof body?.enabled === "boolean") row.enabled = body.enabled;
   if (Array.isArray(body?.levels)) {
-    if (body.levels.some((l) => !(Number(l.threshold) > 0)) && !["new_high_52w", "new_low_52w"].includes(key)) return { status: 400, detail: "门槛要大于 0。" };
+    if (body.levels.some((l) => !(Number(l.threshold) > 0)) && !["new_high_52w", "new_low_52w"].includes(key)) return { status: 400, detail: { error_code: "refused_4", reason: "门槛要大于 0。" } };
     row.levels = body.levels.map((l) => ({ threshold: Number(l.threshold), level: l.level }));
     if (TEXTS[key]) row.text = TEXTS[key](row.levels.map((l) => l.threshold));
   }
@@ -304,8 +304,8 @@ export function patchPreset(state, key, body) {
 export function resetPreset(state, key) {
   const row = state.watch.presets.find((p) => p.key === key);
   const base = PRESETS.find((p) => p.key === key);
-  if (!row || !base) return { status: 400, detail: "没有这条系统默认。" };
-  if (row.hard_guarantee) return { status: 400, detail: "这条是硬保证，不能关。" };
+  if (!row || !base) return { status: 400, detail: { error_code: "refused_5", reason: "没有这条系统默认。" } };
+  if (row.hard_guarantee) return { status: 400, detail: { error_code: "refused_6", reason: "这条是硬保证，不能关。" } };
   Object.assign(row, { enabled: true, changed: false, levels: structuredClone(base.levels), text: DEFAULT_LEVELS[key] && TEXTS[key] ? TEXTS[key](DEFAULT_LEVELS[key]) : base.text });
   return { row };
 }

@@ -67,8 +67,8 @@ function PresetItem({ preset, busy, error, onRun }: { preset: PresetRow; busy: b
       ? <div className="flex min-w-0 flex-col gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
           {edit.map((level, i) => <label key={level.level} className="flex items-center gap-1.5 text-small text-ink-2">
-            {level.label}
-            <Input inputMode="decimal" value={inputs[i] ?? ""} autoFocus={i === 0} data-testid="watch-preset-input" aria-label={`${preset.title} · ${level.label}`} className="h-8 w-20 font-mono max-md:h-11" onChange={event => setInputs(previous => (previous ?? []).map((value, j) => (j === i ? event.target.value : value)))} onKeyDown={keys} />
+            {t(level.label)}
+            <Input inputMode="decimal" value={inputs[i] ?? ""} autoFocus={i === 0} data-testid="watch-preset-input" aria-label={`${preset.title} · ${t(level.label)}`} className="h-8 w-20 font-mono max-md:h-11" onChange={event => setInputs(previous => (previous ?? []).map((value, j) => (j === i ? event.target.value : value)))} onKeyDown={keys} />
             {unit}
           </label>)}
           <Button type="button" size="sm" data-testid="watch-preset-save" disabled={busy} className="max-md:h-11" onClick={() => void save()}>{t("保存")}</Button>

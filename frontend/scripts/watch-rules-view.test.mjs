@@ -151,6 +151,11 @@ test("units of the editable defaults", () => {
 
 test("a refused write shows the server's Chinese reason, else a plain line by status", () => {
   assert.equal(watchWriteError(400, "这条是硬保证，不能关。"), "这条是硬保证，不能关。");
+  assert.equal(watchWriteError(400, { error_code: "hard_guarantee", reason: "这条是硬保证，不能关。" }), "这条是硬保证，不能关。");
+  assert.equal(watchWriteError(422, { error_code: "bad_levels", reason: "门槛要大于 0。" }), "门槛要大于 0。");
+  assert.equal(watchWriteError(400, { error_code: "bad_levels", reason: "  " }), "保存失败，请重试。");
+  assert.equal(watchWriteError(400, { error_code: "bad_levels" }), "保存失败，请重试。");
+  assert.equal(watchWriteError(404, { error_code: "x", reason: 5 }), "这条已不存在。");
   assert.equal(watchWriteError(400, "bad_key"), "保存失败，请重试。");
   assert.equal(watchWriteError(403), "登录个人聊天后才能修改。");
   assert.equal(watchWriteError(404), "这条已不存在。");
