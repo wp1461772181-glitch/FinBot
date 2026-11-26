@@ -583,3 +583,12 @@ PR #32，线上 `3c32bca`，旧树 `src-old85`。报告 `docs/reports/2026-11-st
 ## 三十六、4c 每季沉淀已上线（11-25 22:17，PR #35，`81656ca`）
 
 报告 `docs/reports/2026-11-stage-4c.md`。全量 5,303 通过（`dace10e`）。发布前备份 `finbot-20261125-141732.dump`，旧树 `src-old88`。线上 `memory_jobs` 有 monthly_review 和 quarterly_settle（第一次每季整理 2027-02-15）；3 条明说记忆都补上了 last_seen_at，无归档。前端 Pages 第一次又报 artifact 错，新开一次成功。第四阶段剩：4d 复盘、4e 「它眼中的你」页面（可改可删可导出）、4f 角色模板。
+
+## 三十七、4d、4e、4f 已上线，第四阶段完成（11-26）
+
+4d、4e、4f 在 Muse VM 上写完（报告 `docs/reports/2026-11-stage-4{d,e,f}.md`），VM 连不上盒子、没有 npm、令牌开不了 PR。4d 经 PR #38（`f20f78e`）于 11-26 09:06 上线（旧树 `src-old89`）。4e、4f 的 PR #40、#39 合进了已失效的叠加分支，没进 main；在 Mac 上合成 PR #41（`89103db`），补了全量（5,454 过 / 2 项在册失败）、前端 tsc/build/18 张截图、影子实测，修了两处（导出里结构化摘要原样打 JSON；复盘把「10-16」这类月-日误标为数字），详见 `docs/reports/2026-11-stage-4def-ship.md`。11-26 09:45 上线，发布前备份 `finbot-20261126-014204.dump`，旧树 `src-old90`；五个服务 active，公网 `/health` 正常，线上导出无原样 JSON。
+
+- 叠加 PR 的教训：上层 PR 合并前先把 base 改成 main，或按顺序一个个合。
+- 手动跑 `finbot-db-backup.sh` 不会读 `/opt/finbot/backup.env`，向量库会被跳过（每日定时任务会读）；发布前手动备份要先 `set -a; . /opt/finbot/backup.env; set +a`。
+- 模板简报影子实测每次 10–27 万 token；措辞里偶有把内部过程说出来的话（「上一版草稿说…」），等 owner 用起来再调模板文字。
+- 下一步：阶段 5（后台值班和留痕）。仍等 owner 定：备份同步到盒外、小助手和值班开关、「基金经理」模板的 25% / 3% 两条线。
