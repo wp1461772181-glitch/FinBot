@@ -437,3 +437,27 @@ def test_the_request_system_message_is_identical_on_two_kernel_turns(kernel):
     first = sent_messages(kernel, turn_rows(4), inline=True)[0]
     second = sent_messages(kernel, turn_rows(5), inline=True)[0]
     assert first == second and first["role"] == "system" and "〔出处目录·系统附注〕" in first["content"]
+
+
+def test_on_a_card_press_the_note_after_the_cards_answer_is_inside_the_cached_history():
+    from app.agent_context import INLINE_CATALOGUE_HEAD
+    from app.kernel import prompt as kprompt
+    from types import SimpleNamespace
+    note = {"role": "user", "content": INLINE_CATALOGUE_HEAD + "\n{}"}
+    history = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1 [1]"}, note, {"role": "user", "content": "confirm:x"}]
+    context = SimpleNamespace(identity_credential="", bot_block=None, skill_block=None, profile_block=None, active_skill=None)
+    messages = kprompt.build_messages("confirm:x", context, history, fact="系统：已执行")
+    marked = [m for m in messages if m.get("cache_point")]
+    assert marked and marked[0]["content"] == note["content"]
+
+
+def test_compaction_counts_a_half_turns_note_as_freed(monkeypatch):
+    from app.agent_context_summary import select_for_compaction
+    entry = {"turn_id": "t", "opening": "x", "sources": []}
+    turns = [SimpleNamespace(catalogue=entry), SimpleNamespace(catalogue=entry), SimpleNamespace(catalogue=None)]
+    monkeypatch.setattr(layers, "half_size", lambda turn: 100)
+    monkeypatch.setattr(layers, "inline_note_bytes", lambda e: 500)
+    monkeypatch.setattr(layers, "history_usage", lambda context: {"bytes": 5_550, "budget": 10_000})   # 550 over the target
+    context = {"live_turns": turns, "l1_turns": 1, "inline_catalogue": True}
+    assert select_for_compaction(context, manual=False) == turns[:1]              # 100 + its 500-byte note frees enough
+    assert select_for_compaction({**context, "inline_catalogue": False}, manual=False) == turns[:2]

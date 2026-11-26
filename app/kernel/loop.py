@@ -92,6 +92,7 @@ class _Run:
     proposals: list = field(default_factory=list)     # tier-2/3 operations collected this turn, put on one card when it ends
     writes: list = field(default_factory=list)       # one audit line per act call
     read_results: int = 0            # read or calculation results received this turn: after the first, tier 1 goes onto the card
+    noticed_count: int = 0           # guesses remember wrote this turn (act keeps it to NOTICED_PER_TURN)
     question_card: dict | None = None    # the card of this turn's ``ask``, given to the user when the turn ends
     wake: decide.WakeState | None = None  # a wake turn (``run_wake``): what it has decided; None for every other turn
     pending: dict | None = None      # the card minted this turn

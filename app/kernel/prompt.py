@@ -5,6 +5,7 @@ import json
 import re
 
 from ..agent_chat_identity import owner_credential_matches
+from ..agent_context import is_catalogue_message
 from ..agent_workflow.fp_flags import flag
 from .skills import EXCEPTION, SKILL_LINE, render_skill
 
@@ -141,6 +142,8 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
             del body[last]
         if asked is None:   # the loop already took the button value out: the end is the card's own (last assistant) message
             asked = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1) + 1
+            while asked < len(body) and is_catalogue_message(body[asked]):     # the card's own citation note belongs to the cached history
+                asked += 1
         _mark_end_of_history(body, asked)
         return [{"role": "system", "content": system}, *body, *([{"role": "system", "content": latest}] if latest else []),
                 {"role": "system", "content": fact}]

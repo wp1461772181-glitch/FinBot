@@ -246,3 +246,44 @@ def test_flag_off_the_system_text_is_the_earlier_one(monkeypatch):
     from app.kernel import prompt
     monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", "off")
     assert prompt.MEMORY_LINE in prompt.system_text() and "basis=noticed" not in prompt.system_text()
+
+
+# --- after the review: what a guess may be, how short its quote, how many a turn; the omitted-turns line is not his -----------------------
+
+def test_a_guess_is_a_preference_or_about_him_never_a_standing_instruction():
+    out = remember(make_run("再看看 INTC", EARLIER), basis="noticed", kind="instruction")
+    assert out["ok"] is False and out["error_code"] == "noticed_kind" and "明说" in out["reason"] and _rows() == []
+    assert remember(make_run("再看看 INTC", EARLIER), basis="noticed", kind="about_me")["ok"]
+
+
+def test_a_guess_needs_a_quote_of_at_least_four_characters():
+    out = remember(make_run("再看看 INTC", EARLIER), basis="noticed", quote="同比")
+    assert out["ok"] is False and out["error_code"] == "noticed_quote_too_short" and _rows() == []
+
+
+def test_at_most_two_guesses_a_turn():
+    run_ = make_run("再看看 INTC", EARLIER, read_results=1)
+    texts = ["总先问同比", "关心毛利", "只看美股"]
+    outs = [remember(run_, basis="noticed", text=t) for t in texts]
+    assert [o["ok"] for o in outs] == [True, True, False] and outs[2]["error_code"] == "noticed_turn_cap"
+    assert len(_rows()) == 2
+
+
+def test_the_omitted_turns_line_is_not_his_words():
+    marker = {"role": "user", "content": "[系统提示：有 3 轮更早的对话因长度限制未直接展开，如需回查请调用 recall_conversations。]"}
+    out = remember(make_run("再看看 INTC", [marker]), basis="noticed", quote="更早的对话因长度限制")
+    assert out["ok"] is False and out["error_code"] == "quote_not_owners"
+
+
+def test_the_old_engine_and_the_flag_off_kernel_see_remember_as_before():
+    from app.agent_tool_catalog import schemas
+    from app.agent_tool_catalog_legacy import RememberArgs as Legacy
+    (old,) = [s for s in schemas(owner=True, granted=("remember",)) if s["function"]["name"] == "remember"]
+    assert old["function"]["parameters"] == Legacy.model_json_schema() and "basis" not in old["function"]["parameters"]["properties"]
+    assert "THIS turn" in old["function"]["parameters"]["properties"]["quote"]["description"]
+
+
+def test_flag_off_the_kernel_schema_is_the_legacy_one(monkeypatch):
+    from app.agent_tool_catalog_legacy import RememberArgs as Legacy
+    monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", "off")
+    assert act.describe("remember")["arguments"] == Legacy.model_json_schema()

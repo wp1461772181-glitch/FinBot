@@ -147,10 +147,10 @@ def tier_of(name: str) -> int:
 
 
 def _schema(name: str) -> dict:
-    schema = definitions()[name].args_schema.model_json_schema()
-    if name == "remember" and not memory_writes():      # without the flag there is no guess to write: the model is not shown the field
-        schema["properties"].pop("basis", None)
-    return schema
+    if name == "remember" and not memory_writes():      # without the flag there is no guess to write: the schema is the one before it
+        from ..agent_tool_catalog_legacy import RememberArgs as LegacyRememberArgs
+        return LegacyRememberArgs.model_json_schema()
+    return definitions()[name].args_schema.model_json_schema()
 
 
 def describe(name: str) -> dict:
@@ -246,6 +246,12 @@ REMEMBER_HINTS = {"quote_not_owners": "quote 必须是用户自己在这段对�
 NOTICED_TITLE = "记下一条推测"
 NOTICED_NOTE = "记成了一条推测（未经他确认，只影响回答的详略和先后）。用一句话告诉他你记了什么；他说『不对』『忘掉』或在记忆页点『不对』就会删掉。"
 NOTICED_REASONS = {"already_noticed": "已经有这条推测了。", "rejected_before": "这条他否过。"}
+NOTICED_KINDS = ("preference", "about_me")       # a standing instruction is his to state; it is not guessed
+NOTICED_PER_TURN = 2                             # the system text says one or two; the code keeps it to that
+NOTICED_HINTS = {"noticed_kind": "推测只记偏好（preference）或关于他的背景（about_me）；长期指令要他自己明说。",
+                 "noticed_quote_too_short": "推测的引用要是他原话里完整的一句或半句（至少 4 个字）。",
+                 "noticed_turn_cap": "这一轮已经记了两条推测，够了；其余的不用记。"}
+SYSTEM_NOTE_PREFIX = "[系统提示："               # the omitted-turns marker: a system line in a user-role message, not his words
 
 
 def _history_words(run) -> list[str]:
@@ -253,13 +259,22 @@ def _history_words(run) -> list[str]:
     system's own notes (the layer-3 memory note, the citation catalogue).  Pages, tool results, assistant text and system messages are not here."""
     return [m["content"] for m in getattr(run, "messages", None) or ()
             if m.get("role") == "user" and isinstance(m.get("content"), str)
-            and not agent_context.is_memory_message(m) and not agent_context.is_catalogue_message(m)]
+            and not agent_context.is_memory_message(m) and not agent_context.is_catalogue_message(m)
+            and not m["content"].startswith(SYSTEM_NOTE_PREFIX)]
 
 
 async def _remember(run, args: dict, operation: dict) -> dict:
     if not memory_writes():
         operation["arguments"].pop("basis", None)
         return await _remember_write(run, args, operation, _quote(args["quote"], getattr(run, "question", "") or ""))
+    noticed = args.get("basis") == "noticed"
+    if noticed:
+        if args.get("kind") not in NOTICED_KINDS:
+            return _failure("noticed_kind", reason=NOTICED_HINTS["noticed_kind"], hint=NOTICED_HINTS["noticed_kind"])
+        if len("".join(str(args["quote"]).split())) < owner_views.QUOTE_MIN_CHARS:
+            return _failure("noticed_quote_too_short", reason=NOTICED_HINTS["noticed_quote_too_short"], hint=NOTICED_HINTS["noticed_quote_too_short"])
+        if getattr(run, "noticed_count", 0) >= NOTICED_PER_TURN:
+            return _failure("noticed_turn_cap", reason=NOTICED_HINTS["noticed_turn_cap"], hint=NOTICED_HINTS["noticed_turn_cap"])
     turn = _turn_words(run)
     if profile.quote_in_message(args["quote"], turn):
         quote = _quote(args["quote"], turn)
@@ -267,7 +282,9 @@ async def _remember(run, args: dict, operation: dict) -> dict:
         quote = " ".join(str(args["quote"]).split())
     else:
         return _failure("quote_not_owners", reason=REMEMBER_HINTS["quote_not_owners"], hint=REMEMBER_HINTS["quote_not_owners"])
-    return await _remember_write(run, args, operation, quote, noticed=args.get("basis") == "noticed")
+    if noticed:
+        run.noticed_count = getattr(run, "noticed_count", 0) + 1
+    return await _remember_write(run, args, operation, quote, noticed=noticed)
 
 
 async def _remember_write(run, args: dict, operation: dict, quote: str, *, noticed: bool = False) -> dict:

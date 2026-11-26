@@ -349,6 +349,8 @@ def select_for_compaction(context: dict, *, manual: bool) -> list[layers.Turn]:
             break
         chosen.append(turn)
         freed += layers.half_size(turn)
+        if context.get("inline_catalogue") and turn.catalogue:     # its note goes with it (history_usage counts it)
+            freed += layers.inline_note_bytes(turn.catalogue)
     return chosen
 
 
