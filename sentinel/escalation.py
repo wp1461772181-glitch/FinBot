@@ -159,9 +159,21 @@ class Escalator:
         if is_night(now):
             return
         rows = self.store.alerts_where("deferred = 1 AND digested_at IS NULL")
-        if not rows:
+        # tier-0 "record" rows (moves that were not sent on their own) only ever ride in the morning digest, 08:00-08:59
+        # Beijing: never alone, never in a daytime flush
+        morning = datetime.fromtimestamp(now, BEIJING).hour == NIGHT_END_HOUR
+        records = [r for r in rows if r["kind"] == "record"] if morning else []
+        rows = [r for r in rows if r["kind"] != "record"]
+        if not rows and not records:
             return
-        body = "【夜间汇总】昨夜到现在没有直接打扰你的提醒：\n" + "\n".join(f"· {r.get('digest_text') or r['text'].splitlines()[0]}" for r in rows)
+        line = lambda r: f"· {r.get('digest_text') or r['text'].splitlines()[0]}"      # noqa: E731
+        parts = []
+        if rows:
+            parts.append("昨夜到现在没有直接打扰你的提醒：\n" + "\n".join(line(r) for r in rows))
+        if records:
+            parts.append("昨天没有单独提醒的波动：\n" + "\n".join(line(r) for r in records))
+        rows = rows + records
+        body = "【夜间汇总】" + "\n".join(parts)
         if self.channels.telegram_text(snap.get("telegram") or {}, body):
             for row in rows:
                 self.store.update_alert(row["id"], digested_at=now)

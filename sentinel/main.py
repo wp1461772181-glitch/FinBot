@@ -76,9 +76,11 @@ class Sentinel:
             return
         self.worker = signals.spawn_worker()
 
-    # --- the push policy: ``anchor`` (design-alert-policy.md) or ``tiers`` (design section 7.3, stage 5a) --------------
+    # --- the push policy: ``tiers`` (design section 7.3, stage 5a; the default) or ``anchor`` (design-alert-policy.md) ----
+    # Unchanged on purpose: the night rule still defers a small-weight holding's alerts to the 08:00 Beijing digest
+    # (only a fall on a holding of at least 10% of total assets rings at night).
     def _policy(self) -> str:
-        return (self.policy or os.environ.get("SENTINEL_ALERT_POLICY") or "anchor").strip().lower()
+        return (self.policy or os.environ.get("SENTINEL_ALERT_POLICY") or "tiers").strip().lower()
 
     def _sensitivity(self, snap: dict) -> str:
         return (self.sensitivity or os.environ.get("SENTINEL_SENSITIVITY") or snap.get("alert_sensitivity")
@@ -142,6 +144,7 @@ class Sentinel:
             plan = next((p for p in snap.get("plans") or [] if p.get("symbol") == symbol), None)
             if plan:
                 plan_found = signals.plan_crossings(symbol, self.store.get_price(symbol), price, plan)
+        last_seen = self.store.get_price(symbol)      # before set_price below: the level locks are seeded from it
         if price is not None:
             self.store.set_price(symbol, price)
         weight = None
@@ -187,7 +190,7 @@ class Sentinel:
         if tiers_on:
             if price is not None and prev_close and not any(s.kind == "split" for s in found):
                 out += self._tiers_alerts(symbol, held, now, today, snap, price, prev_close, baseline or {}, valid,
-                                          position, total, candidate)
+                                          position, total, candidate, last_seen)
             return out
 
         primary = next((s for k in ("gap", "daily", "short") for s in found if s.kind == k), None)
@@ -273,7 +276,7 @@ class Sentinel:
             "record_alert_id": None, "record_mult": 0.0}
 
     def _tiers_alerts(self, symbol, held, now, today, snap, price, prev_close, baseline, valid, position, total,
-                      candidate) -> list[dict]:
+                      candidate, last_seen=None) -> list[dict]:
         """Section 7.3: measure the move against the stock's own daily sigma, tier it, say each tier once per direction
         per New York date, lock price levels.  State is committed here; a candidate carries ``rollback`` for the
         merge interval."""
@@ -302,14 +305,16 @@ class Sentinel:
                                          sigma_mult=m["sigma_mult"], low=low, high=high, position=position,
                                          total_assets=total, impact_pct=m["impact_pct"], market_r=market_r, **kw)
 
-        # price levels: held symbols only; a stop is major, add/target worth knowing
+        # price levels: held symbols only; a stop is major, add/target worth knowing.  Not evaluated for 2 days after a
+        # split (alerts_from skips every price signal then: prices before and after are not comparable).
         plan = next((p for p in snap.get("plans") or [] if p.get("symbol") == symbol), None) if held else None
         for field, kind in (("add_price", "plan_add"), ("stop_price", "plan_stop"), ("target_price", "plan_target")):
             level = (plan or {}).get(field)
             if level is None:
                 continue
             old = store.get_level(symbol, kind, float(level))
-            fire, count, new = tiers.level_state(old, kind, float(level), price, sigma, today)
+            fire, count, new = tiers.level_state(old, kind, float(level), price, sigma, today,
+                                                    ref=last_seen if last_seen else prev_close)
             if new != old:
                 store.set_level(symbol, kind, float(level), new)
             if not fire:
@@ -350,19 +355,22 @@ class Sentinel:
             fields = {"reversal_said": 1, "last_push_ts": stamp}
             move_dir = "up" if target == "down" else "down"
             text = text_of(tier=1, why="reversal", kind="reversal", extreme_r=row["extreme_r"])
-            kind, escalate, pushed_tier = "update", False, 1
+            kind, escalate, pushed_tier = "reversal", False, 1      # its own kind: it must not supersede a ringing alert
         else:
             fields = {"max_tier": max(int(row["max_tier"] or 0), dec.tier), "last_push_ts": stamp}
             move_dir = target
             text = text_of(tier=dec.tier, why=dec.why, kind="move", rule=rule)
-            kind, escalate, pushed_tier = ("daily" if dec.why == "first" else "update"), bool(held and dec.tier == 2), dec.tier
+            # today's convention: only a fall on a holding rings (a stop crossing too); a major rise is pushed, not escalated
+            kind, escalate, pushed_tier = ("daily" if dec.why == "first" else "update"), bool(
+                held and dec.tier == 2 and move_dir == "down"), dec.tier
         store.set_tier_state(symbol, today, target, **fields)
         if row.get("record_alert_id"):                              # it is now said on its own: the digest line goes
             store.update_alert(row["record_alert_id"], digested_at=stamp)
             store.set_tier_state(symbol, today, target, record_alert_id=None)
         sig = signals.Signal(symbol, kind, move_dir, r, price, prev_close, sigma_mult=common["sigma_mult"])
         return candidate(sig, text, escalate=escalate, kind=kind, direction=move_dir, price_move=True, tier=pushed_tier,
-                         why=dec.why, rollback=lambda: store.set_tier_state(symbol, today, target, **old), **common)
+                         why=dec.why, rollback=lambda: store.set_tier_state(symbol, today, target, **old), **common) | (
+            {"price_move": False} if dec.why == "reversal" else {})   # not a merge/supersede candidate: the first alert keeps ringing
 
     def _short_push(self, symbol, today, stamp, now, states, valid, price, sigma, baseline, text_of, common, last_push,
                     candidate, prev_close) -> dict | None:
@@ -418,10 +426,11 @@ class Sentinel:
             return
         tiered = [c for c in moves if "tier" in c]
         if tiered:
-            grouped = tiers.group(tiered, tiered[0].get("market_r"), tiered[0].get("market_sigma"))
+            known = next((c for c in tiered if c.get("market_r") is not None), tiered[0])
+            grouped = tiers.group(tiered, known.get("market_r"), known.get("market_sigma"))
             if grouped:                                            # the whole market moved with them: one message
                 members, _ = grouped
-                self._raise_merged(snap, members, text=signals.format_grouped(members, tiered[0]["market_r"]))
+                self._raise_merged(snap, members, text=signals.format_grouped(members, known["market_r"]))
                 moves = [c for c in moves if c not in members]
                 if not moves:
                     return

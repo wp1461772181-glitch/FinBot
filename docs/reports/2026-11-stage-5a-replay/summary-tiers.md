@@ -2,23 +2,24 @@
 
 命令：`python -m scripts.sentinel_replay --symbols INTC,AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA,AMD --snapshot docs/reports/2026-11-stage-5a-replay/snapshot.json --from 2026-11-03 --to 2026-11-25 --policy tiers --cache /private/tmp/claude-501/-Users-wupeng--claude-spares-spare-5lHNoF/da47914c-6a5b-4ebd-8120-ac05d9527de4/scratchpad/bars.json --out docs/reports/2026-11-stage-5a-replay`
 
-- 发出 45 条；夜间简报行（不到档、过 1 倍日常波动）96 条
+- 发出 67 条；夜间简报行（不到档、过 1 倍日常波动）87 条
 
 | 股票 | 条数 |
 |---|---|
 | AAPL | 4 |
-| AMD | 5 |
+| AMD | 4 |
 | GOOGL | 2 |
-| INTC | 6 |
+| INTC | 29 |
+| INTC+TSLA+AMD | 1 |
 | META | 5 |
 | MSFT | 2 |
 | NVDA | 15 |
 | NVDA+TSLA | 1 |
-| TSLA | 5 |
+| TSLA | 4 |
 
 | 档位 | 条数 |
 |---|---|
-| 1 | 36 |
+| 1 | 58 |
 | 2 | 9 |
 
 说明：

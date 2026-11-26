@@ -194,13 +194,20 @@ def compare_actual(db_path: Path | str, result: dict, start: date, end: date, wi
     replayed alerts within +-30 minutes on the same symbol.  An unmatched one says how big the move was then."""
     lo = datetime.combine(start, dtime(0, 0), tzinfo=signals.ET).timestamp()
     hi = datetime.combine(end + timedelta(days=1), dtime(0, 0), tzinfo=signals.ET).timestamp()
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)     # a copy: never written; a WAL copy needs no -shm
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute("SELECT id, symbol, kind, text, escalate, created_at FROM alerts WHERE created_at >= ?"
-                            " AND created_at < ? ORDER BY created_at", (lo, hi)).fetchall()
-    finally:
-        conn.close()
+    query = ("SELECT id, symbol, kind, text, escalate, created_at FROM alerts WHERE created_at >= ?"
+             " AND created_at < ? ORDER BY created_at")
+    rows = None
+    for mode in ("mode=ro", "mode=ro&immutable=1"):      # a WAL copy without its -shm cannot be opened plain read-only
+        conn = sqlite3.connect(f"file:{db_path}?{mode}", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(query, (lo, hi)).fetchall()
+            break
+        except sqlite3.OperationalError:
+            if mode != "mode=ro":
+                raise
+        finally:
+            conn.close()
     out = []
     for row in rows:
         if row["kind"] not in PRICE_KINDS:

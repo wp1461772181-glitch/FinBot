@@ -7,6 +7,11 @@ import pytest
 
 from sentinel import signals
 from sentinel.signals import decide_push, realert_limits, step_for
+@pytest.fixture(autouse=True)
+def _anchor_policy(monkeypatch):
+    monkeypatch.setenv("SENTINEL_ALERT_POLICY", "anchor")     # these tests pin the anchor policy; tiers is the default
+
+
 
 ET = ZoneInfo("America/New_York")
 PREV = 338.32

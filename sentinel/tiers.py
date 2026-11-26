@@ -10,9 +10,8 @@ from dataclasses import dataclass
 
 UNIT_FALLBACK = 0.02              # one "sigma" when the stock has no baseline
 SENSITIVITY = {"quiet": (2.5, 5.0), "standard": (2.0, 4.0), "sensitive": (1.5, 3.0)}   # (worth knowing, major) in sigmas
-IMPACT_MAJOR_PCT = 2.0            # a holding's move that costs or makes this share of total assets is major ...
-IMPACT_NEEDS_SIGMA = True         # ... but only a move that is already worth knowing (set False for the literal design text:
-                                  # a 44% position then makes every 4.6% day "major" on a stock whose day is 7%)
+IMPACT_PCT = 2.0                  # a holding's move that costs or makes this share of total assets matters to the owner:
+                                  # on its own it is "worth knowing"; on top of a sigma-worthy move it is major
 MIN_GAP = 10 * 60                 # seconds between minor pushes on one symbol
 REARM_SIGMAS = 0.5                # a locked level re-arms after the price is this many daily sigmas away
 REARM_FALLBACK = 0.01
@@ -42,13 +41,16 @@ def measure(price: float, prev_close: float, daily_sigma: float | None = None, m
 def tier_rule(m: dict, sensitivity: str | None = "standard", held: bool = False) -> tuple[int, str]:
     """(tier, why): why is ``sigma_major`` | ``impact`` | ``sigma`` | ``record`` (tier 0 above 1 sigma) | ``""``."""
     low, high = thresholds(sensitivity)
-    if m["sigma_mult"] >= high:
+    sigma_tier = 2 if m["sigma_mult"] >= high else 1 if m["sigma_mult"] >= low else 0
+    impact = bool(held and m.get("impact_pct") is not None and abs(m["impact_pct"]) >= IMPACT_PCT)
+    if sigma_tier == 2:
         return 2, "sigma_major"
-    if (held and m.get("impact_pct") is not None and abs(m["impact_pct"]) >= IMPACT_MAJOR_PCT
-            and (m["sigma_mult"] >= low or not IMPACT_NEEDS_SIGMA)):
+    if sigma_tier == 1 and impact:
         return 2, "impact"
-    if m["sigma_mult"] >= low:
+    if sigma_tier == 1:
         return 1, "sigma"
+    if impact:
+        return 1, "impact_only"
     return 0, "record" if m["sigma_mult"] >= RECORD_MIN_SIGMAS else ""
 
 
@@ -94,15 +96,20 @@ def decide(states: dict | None, tier: int, direction: str, r: float, now: float,
 
 
 def level_state(state: dict | None, kind: str, level: float, price: float, daily_sigma: float | None,
-                ny_date: str) -> tuple[bool, int, dict]:
+                ny_date: str, ref: float | None = None) -> tuple[bool, int, dict]:
     """The lock of one price level.  ``state`` is the stored row or None (never seen).  Returns (fire, count today,
     new state).  A level fires when armed and the price reaches it; then it locks until the price has moved away
-    from it by half a daily sigma on the side it came from.  A level first seen already crossed starts locked."""
+    from it by half a daily sigma on the side it came from.  A level never seen before is seeded from ``ref``
+    (the last price the owner saw, or yesterday's close): if ``ref`` was on the side the price comes from and the price is
+    now at or through the level, it fires; if ``ref`` was already through it, it starts locked.  Without ``ref`` it is
+    seeded from the current side and cannot fire at its first look."""
     falling = kind in ("plan_add", "plan_stop")                  # these fire when the price falls to the level
     from_side = price > level if falling else price < level
     reached = price <= level if falling else price >= level
     if state is None:
-        return False, 0, {"armed": 1 if from_side else 0, "last_date": None, "count_today": 0}
+        if ref is None:
+            return False, 0, {"armed": 1 if from_side else 0, "last_date": None, "count_today": 0}
+        state = {"armed": 1 if (ref > level if falling else ref < level) else 0, "last_date": None, "count_today": 0}
     new = dict(state)
     if new.get("armed"):
         if not reached:

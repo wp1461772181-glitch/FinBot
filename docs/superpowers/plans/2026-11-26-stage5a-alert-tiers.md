@@ -88,3 +88,13 @@
 3. No state leak across NY dates (pre-market belongs to the new date); a restart mid-day does not repeat pushes (state is in sqlite).
 4. The grouped message never hides a major tier of a holding (a holding at tier 2 is listed first and the message escalates).
 5. Replay output is reproducible and its comparison with the actual 70 alerts is honest (say which actual alerts would not be sent and why).
+
+## Review amendments (2026-11-26)
+
+- Record digest lines (tier 0 above 1 sigma) ride only in the 08:00-08:59 Beijing morning digest, under their own heading; never alone, never in a daytime flush. The model's `query_alerts` does not read them.
+- Level locks seed from the last price the owner saw (else yesterday's close): a first look already through a stop fires.
+- Only a fall on a holding (and a stop crossing) escalates; a major rise is pushed without ringing.
+- A reversal push has its own kind and is not a supersede candidate, so a ringing major alert keeps ringing until acknowledged.
+- Impact rule: `tier = max(sigma_tier, 1 if holding impact >= 2%)`; major if sigma_tier 2, a stop crossing, or sigma_tier >= 1 with impact >= 2%. An impact-only push says 「对你：约占总资产 x%」.
+- Unchanged and by design: price signals, including level rules, are paused for 2 days after a split (prices are not comparable); the night rule still defers a small-weight holding's alerts to the 08:00 Beijing digest.
+- `tiers` is the default policy; `SENTINEL_ALERT_POLICY=anchor` restores the old one.
