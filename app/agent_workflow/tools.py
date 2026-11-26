@@ -346,6 +346,13 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         # The quote was checked against the user's message when the card was made (Turn.propose), and
         # the operation carrying it is frozen under the confirmation token; here only its shape is checked.
         # The layer is the frozen bot_id the server set from the proposing turn (None: global).
+        if args.get('basis')=='noticed':
+            # A guess the model wrote on the spot: the quote was checked against his words when the operation was prepared (kernel act).
+            try:value=await asyncio.to_thread(profile.add_noticed,context.owner_hash,kind=args['kind'],text=args['text'],quote=args['quote'],
+                                              bot_id=args.get('_bot_id'),message_id=args.get('_source_message_id'))
+            except profile.ProfileError as exc:return error(str(exc))
+            if value['status']!='added':return error('already_noticed' if value['status']=='duplicate' else 'rejected_before')
+            return result([{'status':'noticed','text':value['item']['text'],'handle':value['item']['handle']}],'owner profile')
         try:value=await asyncio.to_thread(profile.add_item,context.owner_hash,origin='explicit',message=args['quote'],
                                           source_message_id=args.get('_source_message_id'),bot_id=args.get('_bot_id'),
                                           **{k:args[k] for k in ('kind','topic','text','quote')})

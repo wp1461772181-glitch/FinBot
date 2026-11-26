@@ -768,8 +768,10 @@ def remember_args():
 
 
 def stub_remember(env):
+    """The earlier, narrower ``remember``: the memory-writes flag is off (these tests are its parity tests; the flag-on ones follow)."""
     from app import agent_profile as profile
     env.monkeypatch.setattr(profile, "user_message_id", lambda conversation, turn: "m1")
+    env.monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", "off")
 
 
 def test_tier1_without_a_prior_read_runs_at_once_and_a_lookup_does_not_count(env, fake_consent):

@@ -144,7 +144,8 @@ def test_another_owners_views_are_never_read(owner):
 
 # ---- Review Focus 2: a card after a read, the owner's own words --------------------------------------------------------
 
-def test_after_a_read_the_view_goes_on_a_card_and_is_written_only_on_the_press(owner):
+def test_after_a_read_the_view_goes_on_a_card_and_is_written_only_on_the_press(owner, monkeypatch):
+    monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", "off")       # flag off: the earlier rule (the flag-on one is in test_kernel_memory_writes)
     out, run_ = record(FIRST, text="数据中心还会翻倍", read_results=1)
     assert out["data"][0]["status"] == "awaiting_confirmation" and len(run_.proposals) == 1 and rows() == []
     prepared = run_.proposals[0]
