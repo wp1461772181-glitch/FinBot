@@ -116,8 +116,10 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
 
     ``history`` may already end with the current question; it is added only when it is not there.  With ``fact`` the question
     is a card button's raw value: it is dropped from the history, never added, and the fact (a system message) is the last message.
-    ``latest`` is the "latest known" block (``latest_known.block_for``): a system message after the question and after any started skill
-    (before the fact), so the history before the question stays byte-identical with or without it.
+    ``latest`` is the "latest known" block (``latest_known.block_for``).  With ``FINBOT_KERNEL_QUESTION_LAST`` (default on) the question is
+    the last message: the notes the endpoint put after it, the skill's steps and the latest block go right before it, and the cache
+    point stays on the last message of the conversation itself.  On the first turn (no conversation yet), on a card press (the fact is
+    last) and with the flag off, the blocks follow the question as before.
     """
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
     skill_block = getattr(context, "skill_block", None) if owner else None
@@ -156,6 +158,23 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
         asked = len(body) - 1
     _mark_end_of_history(body, asked)
     started = (skill or getattr(context, "active_skill", None)) if owner else None
+    # With no conversation before the question, a system block in front of it would lead the conversation and be folded into the system
+    # prompt (``anthropic_native.convert_messages``): the first turn keeps its blocks after the question, where nothing competes with it.
+    if flag("FINBOT_KERNEL_QUESTION_LAST", True) and any(m.get("role") in ("user", "assistant") for m in body[:asked]):
+        # The question is the last thing the model reads.  What the system writes for this turn (the layer-3 memory note and any
+        # catalogue the endpoint put after the question, the skill's steps, the latest-known block) goes right before it: in a long
+        # conversation a 10 KB summary after the question pulled the model away from what was asked (11-26 replay: the memory tool
+        # was called 0/6 as sent, 6/6 with the same blocks moved before the question).  The cache point stays where
+        # ``_mark_end_of_history`` put it, on the last message of the conversation itself, so the cached prefix is unchanged.
+        asked_message, notes = body[asked], body[asked + 1:]
+        del body[asked:]
+        body.extend(notes)
+        if started:
+            body.append({"role": "system", "content": render_skill(started)})
+        if latest:
+            body.append({"role": "system", "content": latest})
+        body.append(asked_message)
+        return [{"role": "system", "content": system}, *body]
     if started:      # a 「/名字」 turn (or the answer to its question): the steps come after the question, so the history before it stays as it was
         body.append({"role": "system", "content": render_skill(started)})
     if latest:
