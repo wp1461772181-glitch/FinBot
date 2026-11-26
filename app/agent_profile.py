@@ -632,6 +632,41 @@ def add_proposed(owner_hash: str, *, kind: str, text: str, examples: list[dict],
         return serialize(row, _bot_names(db, owner_hash))
 
 
+def add_noticed(owner_hash: str, *, kind: str, text: str, quote: str, bot_id: str | None = None, message_id: str | None = None,
+                now: datetime | None = None) -> dict:
+    """The kernel model wrote a guess on the spot (``remember`` with basis noticed): origin pattern, status proposed, in the turn's layer
+    (``bot_id`` None: global), the quote it saw as its one example, no review run.  The caller has checked the quote against his words.
+    Returns {status: added, item} or {status: duplicate | rejected} (nothing written: the same text is here, or he rejected it before).
+    Past ``MAX_PROPOSED`` waiting guesses the oldest are archived, as for the monthly review's."""
+    text = " ".join(str(text or "").split())
+    quote = " ".join(str(quote or "").split())
+    if kind not in KINDS or not text or len(text) > TEXT_MAX_CHARS or len(quote) > TEXT_MAX_CHARS or not quote:
+        raise ProfileError("invalid_proposal")
+    now = now or datetime.now(UTC)
+    with SessionLocal() as db:
+        _lock(db, owner_hash)
+        layer = _bot(db, owner_hash, bot_id)
+        known = {_plain(t) for t in db.scalars(select(AgentProfileItem.text).where(AgentProfileItem.owner_hash == owner_hash,
+                 AgentProfileItem.status != "rejected", (AgentProfileItem.status.in_(("active", "proposed"))) | (AgentProfileItem.origin == "pattern")))}
+        rejected = set(db.scalars(select(AgentProfileItem.text).where(AgentProfileItem.owner_hash == owner_hash, AgentProfileItem.status == "rejected")))
+        if fingerprint(text) in rejected:
+            return {"status": "rejected"}
+        if _plain(text) in known:
+            return {"status": "duplicate"}
+        source = _as_uuid(message_id)
+        row = AgentProfileItem(owner_hash=owner_hash, kind=kind, topic=None, text=text, origin="pattern", status="proposed", quote=quote,
+                               source_message_id=source, bot_id=layer, review_run=None, created_at=now, updated_at=now, last_seen_at=now,
+                               examples=[{"quote": quote, "message_id": str(source) if source else None, "at": now.isoformat(),
+                                         "date": now.date().isoformat()}])    # ``date`` is what the memory page shows beside an example
+        db.add(row)
+        db.flush()
+        waiting = sorted(_proposed(db, owner_hash), key=lambda r: (r.created_at, str(r.id)))
+        for old in waiting[:max(0, len(waiting) - MAX_PROPOSED)]:
+            old.status = "archived"
+        db.commit()
+        return {"status": "added", "item": serialize(row, _bot_names(db, owner_hash))}
+
+
 def archive_stale_proposed(owner_hash: str, now: datetime, days: int = 60) -> int:
     """Proposals nobody answered for ``days`` days are archived.  Returns how many."""
     with SessionLocal() as db:
