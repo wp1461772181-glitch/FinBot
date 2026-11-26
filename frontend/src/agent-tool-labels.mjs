@@ -65,6 +65,8 @@ export const TOOL_LABELS = {
   set_default_model: "设置默认模型",
   set_model_role: "设置后台模型",
   set_channel_prefs: "设置消息去向",
+  apply_role_template: "用模板起步",
+  undo_role_template: "撤掉模板",
   update_routine: "修改例行任务",
   delete_routine: "删除例行任务",
   recall_conversations: "回想往事",

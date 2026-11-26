@@ -48,7 +48,7 @@ WRITE_ARGUMENTS={
  'create_bot':{'name':'研究员'},'update_bot':{'bot_id':'11111111-1111-4111-8111-111111111111','pinned':True},
  'delete_transaction':{'transaction_id':'11111111-1111-4111-8111-111111111111'},
  'manage_skill':{'action':'disable','skill_id':'11111111-1111-4111-8111-111111111111'},
- 'set_default_model':{'name':'alpha'},'set_model_role':{'role':'judge'},'set_channel_prefs':{'mode':'all','channels':['telegram']},
+ 'set_default_model':{'name':'alpha'},'set_model_role':{'role':'judge'},'set_channel_prefs':{'mode':'all','channels':['telegram']},'apply_role_template':{'template':'定投'},'undo_role_template':{},
  'record_view':{'symbol':'NVDA','text':'估值太高','quote':'我觉得估值太高'},'drop_view':{'symbol':'NVDA'},
 }
 

@@ -11,7 +11,7 @@ import { DelayedSkeleton, Skeleton } from "@/components/state/Skeleton";
 import { confirm } from "@/components/state/confirm";
 import { confirmProfileItem, createProfileItem, deleteProfileItem, listProfileItems, restoreProfileItem, updateProfileItem, type ProfileItem } from "../../../api/memory";
 import { useLocale } from "../../../i18n";
-import { archiveNote, exampleLines, isSettled, layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers, proposedItems, seenLine } from "../../../memory-items.mjs";
+import { archiveNote, exampleLines, isSettled, layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers, proposedItems, seenLine, templateNote } from "../../../memory-items.mjs";
 import { useLoad } from "../../use-load";
 import { KINDS, KIND_LABELS, MAX_TEXT, canSaveEdit, isInferred, scopeChoices } from "./memory-view.mjs";
 
@@ -101,11 +101,14 @@ export function ProfilePanel({ onChanged }: { onChanged?: () => void } = {}) {
             <span data-testid="memory-kind"><StatusBadge kind="neutral" className="h-5">{kindText(item.kind)}</StatusBadge></span>
             <span data-testid="memory-origin" data-inferred={isInferred(item) ? "true" : "false"}><StatusBadge kind={isInferred(item) ? "opinion" : "neutral"} className="h-5">{t(originLabel(item.origin))}</StatusBadge></span>
             {isSettled(item) && <span data-testid="memory-settled"><StatusBadge kind="neutral" className="h-5">{t("长期")}</StatusBadge></span>}
+            {templateNote(item, locale) && <span data-testid="memory-template"><StatusBadge kind="neutral" className="h-5">{templateNote(item, locale)?.badge}</StatusBadge></span>}
             {!mine && <p className="min-w-0 flex-1 basis-60 text-body font-medium text-ink [overflow-wrap:anywhere]">{item.text}</p>}
           </div>
           {mine && <Input value={editing.text} maxLength={MAX_TEXT} aria-label={t("编辑")} data-testid="memory-edit-input" autoFocus className="max-md:h-11" onChange={event => setEditing({ id: item.id, text: event.target.value })}
             onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter") { event.preventDefault(); void saveEdit(); } if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setEditing(null); } }} />}
-          {item.quote?.trim() && <blockquote data-testid="memory-quote" className="material-fact m-0 px-3 py-2 font-quote text-small text-ink">“{item.quote}”</blockquote>}
+          {templateNote(item, locale)
+            ? <p data-testid="memory-template-note" className="m-0 text-small text-muted-foreground">{templateNote(item, locale)?.line}</p>
+            : item.quote?.trim() && <blockquote data-testid="memory-quote" className="material-fact m-0 px-3 py-2 font-quote text-small text-ink">“{item.quote}”</blockquote>}
           {seenLine(item, locale) && <p data-testid="memory-seen" className="m-0 font-mono text-caption text-muted-foreground">{t(seenLine(item, locale))}</p>}
           <div className="flex flex-wrap items-center gap-2">
             <Select value={item.bot_id ?? GLOBAL} disabled={busy === item.id} onValueChange={value => { const target = value === GLOBAL ? null : value; void run(item.id, () => updateProfileItem(item.id, { bot_id: target })); }}>

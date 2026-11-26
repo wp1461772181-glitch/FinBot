@@ -258,6 +258,13 @@ class SetModelRoleArgs(Args):
 class SetChannelPrefsArgs(Args):
     mode:Literal['first','all']=Field(description='first: the first channel that can take a message; all: every one that can.')
     channels:list[Literal['telegram','wechat']]=Field(min_length=1,max_length=2,description='In order of preference.')
+class ApplyRoleTemplateArgs(Args):
+    template:str=Field(min_length=1,max_length=32,description="The starting setup the owner picked, by its Chinese name or id; call act with only operation apply_role_template to see them and what each writes.")
+    bot:str|None=Field(default=None,max_length=60,description="Which bot gets it: a bot's name or id; omit for the global memory and the default assistant.")
+    leave_out:list[str]=Field(default_factory=list,max_length=60,description="Keys of the parts the owner does NOT want (from the lookup), e.g. the briefs when he says he wants none.")
+class UndoRoleTemplateArgs(Args):
+    application_id:str|None=Field(default=None,max_length=64,description="Which earlier application to take back (its id from the lookup of undo_role_template); omit for the newest one not yet taken back.")
+    leave_out:list[str]=Field(default_factory=list,max_length=80,description="Ids of the things the owner wants to keep (from the lookup).")
 class RecordViewArgs(Args):
     symbol:str=Field(min_length=1,max_length=40,description='The company the view is about: its ticker (NVDA) or its name (英伟达).')
     text:str=Field(min_length=1,max_length=200,description="The owner's view in one line, in his language and his meaning (not yours).")
@@ -441,15 +448,17 @@ EXTRA=(
  ('set_default_model',SetDefaultModelArgs,'reversible','Propose making a catalog model the default chat model when the USER asks (把默认模型换成 …). The card shows the old and the new one. Owner confirmation card; model keys are never handled here.'),
  ('set_model_role',SetModelRoleArgs,'reversible','Propose which catalog model a background job uses (earnings, forecast, judge, fallback, helper: the model a delegated piece of legwork runs on; unset = the model of the turn itself; memory: the monthly memory review, unset = the server default) when the USER asks; no model puts the role back to its default. Owner confirmation card.'),
  ('set_channel_prefs',SetChannelPrefsArgs,'reversible','Propose where proactive messages (alerts, routine briefs, earnings notices) go from now on: Telegram, WeChat or both, and whether to use the first channel that works or all. The card says where they will go. Owner confirmation card.'),
+ ('apply_role_template',ApplyRoleTemplateArgs,'reversible',"Propose a starting setup the owner asked for (a role template, e.g. for short-term trading, regular investing or fund management): it writes ordinary memory lines about what to watch and how to answer, routine briefs and recipes (skills) set as the bot's usual skills. The card lists every item it will write, what already exists and is reused, and what it will not do today; the owner presses to confirm, and can leave parts out. Never apply one the owner did not ask for."),
+ ('undo_role_template',UndoRoleTemplateArgs,'reversible',"Propose taking back what an earlier role template application wrote (only what is still there; things the owner changed or added himself are not touched unless they are among what it wrote). The card lists each item. Owner confirmation card."),
  ('record_view',RecordViewArgs,'reversible',"Record the owner's own view of one company (what he thinks of it: 我觉得英伟达今年数据中心还会翻倍) when the USER states it in this turn. text is his view in one line, quote his own words copied from his message of this turn; a view you reached from a page, a filing or your own analysis is never his. A new view of the same company replaces the earlier one, which stays in its history. It is his opinion, not evidence, and it authorizes nothing. When it is recorded, tell him 「我记下了：……」 with the line you recorded."),
  ('drop_view',DropViewArgs,'reversible',"Withdraw the owner's recorded view of one company when the USER asks (撤回我对英伟达的看法, 那个看法不算了). The view stays in the history as withdrawn."),
 )
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
-OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','record_view','drop_view'}
+OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template','record_view','drop_view'}
 
 # Stage 3a: what only the kernel knows.  The old engine's classifier, its request_action schema, its tool list and its prompts stay as they
 # were before the branch (tests/test_x_search.py compares them): these names are not in them, and the three tools 3a widened show the old schema.
-KERNEL_ONLY=frozenset({'list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','record_view','drop_view','read_turn'})
+KERNEL_ONLY=frozenset({'list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template','record_view','drop_view','read_turn'})
 # Every base registry entry is read-only; write names come from catalogue levels.
 WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'} and name not in KERNEL_ONLY)]
 class RequestActionArgs(Args):
