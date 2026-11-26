@@ -1,0 +1,27 @@
+{
+ "total": 77,
+ "per_symbol": {
+  "*": 7,
+  "AAPL": 13,
+  "AMD": 5,
+  "GOOGL": 5,
+  "INTC": 8,
+  "META": 6,
+  "MSFT": 5,
+  "NVDA": 22,
+  "NVDA+TSLA": 1,
+  "TSLA": 5
+ },
+ "per_tier": {
+  "1": 66,
+  "2": 11
+ },
+ "per_preset": {
+  "concentration": 1,
+  "down_streak": 4,
+  "new_high_52w": 11,
+  "new_low_52w": 9,
+  "portfolio_drawdown": 7
+ },
+ "digest_lines": 96
+}
