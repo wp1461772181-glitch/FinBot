@@ -206,8 +206,8 @@ def test_the_new_metrics_read_the_same_for_an_owner_rule_and_a_default():
         "英特尔连续下跌（每个交易日收盘低于前一日，今天股价低于昨收也算一天）达到 4 个交易日：提醒；达到 6 个交易日：加急。"
         "条件成立时每档各提醒一次；提醒档连续下跌中断后再连跌到 4 个交易日、加急档连续下跌中断后再连跌到 6 个交易日，会再提醒该档；每天每档最多一次。")
     assert describe({**base, "metric": "high_52w", "direction": "above", "levels": level((0, "urgent"))}) == (
-        "英特尔的股价创 52 周新高（不低于过去 252 个交易日里最高的收盘价）：加急。条件成立时提醒一次，股价回到前高以下后再创新高会再提醒；每天最多一次。")
-    assert describe({**base, "metric": "low_52w", "direction": "below", "levels": level((0, "remind"))}).startswith("英特尔的股价创 52 周新低（不高于过去 252 个交易日里最低的收盘价）：提醒。")
+        "英特尔的股价创 52 周新高（不低于过去一年（约 250 个交易日）的最高收盘价）：加急。同一只股票一个月（20 个交易日）内最多提醒一次。")
+    assert describe({**base, "metric": "low_52w", "direction": "below", "levels": level((0, "remind"))}).startswith("英特尔的股价创 52 周新低（不高于过去一年（约 250 个交易日）的最低收盘价）：提醒。同一只股票一个月（20 个交易日）内最多提醒一次。")
     assert describe({**base, "symbol": "*", "metric": "portfolio_day_change", "direction": "down", "levels": level((3, "remind"))}, subject="你的组合") == (
         "你的组合今天的涨跌（所有持仓现有股数 × 相对昨收的价差，合计占昨收时总资产的比例）下跌达到 3%：提醒。每天最多一次。")
     for entry in CONTRACT["presets"]:
@@ -230,15 +230,22 @@ def test_dry_run_down_days_counts_the_streak_on_closes(owner):
 def test_dry_run_52_week_needs_a_year_of_bars_and_fires_on_the_day_it_becomes_true(owner):
     quiet = {"close": 100, "high": 99, "low": 101}          # bars that are neither at a high nor at a low
     rows = [dict(quiet) for _ in range(330)]
-    rows[-11], rows[-4] = {**quiet, "high": 101}, {**quiet, "high": 102}          # new highs on day -10 and -3 (a quiet day between)
+    rows[-30], rows[-6] = {**quiet, "high": 101}, {**quiet, "high": 102}          # new highs on day -29 and -5: 24 days apart, past the cooldown
     rows[-8] = {**quiet, "low": 99}
     daily("INTC", rows)
     high = dry_run(OWNER_HASH, {"symbol": "INTC", "metric": "high_52w", "direction": "above", "levels": level((0, "remind")), "repeat": "daily"}, today=TODAY)
-    assert high["hits"] == [{"date": "2026-11-16", "level": "remind"}, {"date": "2026-11-23", "level": "remind"}] and high["note"] is None
+    assert high["hits"] == [{"date": "2026-10-28", "level": "remind"}, {"date": "2026-11-21", "level": "remind"}] and high["note"] is None
+    close = [dict(quiet) for _ in range(330)]
+    close[-11], close[-4] = {**quiet, "high": 101}, {**quiet, "high": 102}          # 7 days apart: the second is inside the 20-day cooldown
+    daily("AMD", close)
+    held = dry_run(OWNER_HASH, {"symbol": "AMD", "metric": "high_52w", "direction": "above", "levels": level((0, "remind")), "repeat": "daily"}, today=TODAY)
+    assert held["hits"] == [{"date": "2026-11-16", "level": "remind"}]
     low = dry_run(OWNER_HASH, {"symbol": "INTC", "metric": "low_52w", "direction": "below", "levels": level((0, "urgent")), "repeat": "daily"}, today=TODAY)
     assert low["hits"] == [{"date": "2026-11-19", "level": "urgent"}]
     daily("NVDA", [dict(quiet) for _ in range(120)])
     short = dry_run(OWNER_HASH, {"symbol": "NVDA", "metric": "high_52w", "direction": "above", "levels": level((0, "remind")), "repeat": "daily"}, today=TODAY)
+    daily("TSLA", [dict(quiet) for _ in range(260)])          # 229 closes before the first window day: under 240
+    assert dry_run(OWNER_HASH, {"symbol": "TSLA", "metric": "low_52w", "direction": "below", "levels": level((0, "remind")), "repeat": "daily"}, today=TODAY)["note"] == "历史行情不够一年，试跑不了"
     assert short["hits"] == [] and short["note"] == "历史行情不够一年，试跑不了" and dry_run_line(short) == "试跑：历史行情不够一年，试跑不了。"
 
 

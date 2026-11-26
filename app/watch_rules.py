@@ -28,7 +28,8 @@ DRY_RUN_DAYS = 30
 MIN_BARS = 10
 NO_HISTORY = "没有足够的历史行情，试跑不了"
 NO_YEAR = "历史行情不够一年，试跑不了"
-YEAR_BARS = 252
+YEAR_BARS = 240      # completed closes a 52-week high or low needs (a one-year chart has about 250); the sentinel uses the same
+COOLDOWN_DAYS = 20   # after a 52-week high or low fired for a symbol, no new one within the next 20 completed trading days
 LEVEL_WORDS = {"remind": "提醒", "urgent": "加急"}
 REPEATS = ("daily", "once")
 STATE_METRICS = frozenset({"price", "position_weight", "cost_change", "n_day_change", "down_days", "high_52w", "low_52w"})      # edge-triggered: a level fires when its condition becomes true
@@ -219,7 +220,7 @@ def describe(rule: dict, subject: str | None = None) -> str:
     elif metric in NO_THRESHOLD:
         prefix = f"{name}的股价"
         word = "高" if metric == "high_52w" else "低"
-        reach = lambda t: f"创 52 周新{word}（不{'低' if metric == 'high_52w' else '高'}于过去 {YEAR_BARS} 个交易日里最{word}的收盘价）"      # noqa: E731
+        reach = lambda t: f"创 52 周新{word}（不{'低' if metric == 'high_52w' else '高'}于过去一年（约 250 个交易日）的最{word}收盘价）"      # noqa: E731
     elif metric == "position_pnl":
         prefix = f"你持有的{name}今天的盈亏（现有股数 × 相对昨收的价差）"
         word = {"up": "盈利", "down": "亏损"}.get(direction, "盈利或亏损")
@@ -230,6 +231,8 @@ def describe(rule: dict, subject: str | None = None) -> str:
     state = metric in STATE_METRICS
     if rule.get("repeat") == "once":
         again = "每档只触发一次，最高档触发后这条规则自动停用。" if len(levels) == 2 else "只触发一次，之后这条规则自动停用。"
+    elif metric in NO_THRESHOLD:
+        again = f"同一只股票一个月（{COOLDOWN_DAYS} 个交易日）内最多提醒一次。"
     elif state:
         def rearm(entry) -> str:
             t = _g(entry["threshold"])
@@ -367,6 +370,10 @@ def dry_run(owner: str, rule: dict, days: int = DRY_RUN_DAYS, *, today: date | N
             return {**empty, "note": "没有持仓成本，试跑不了"}
     if holding is not None:
         holding = {**holding, "price_now": next((b["close"] for b in reversed(bars) if b["date"] <= today), None)}
+    if rule["metric"] in NO_THRESHOLD:      # fewer than a year of closes before the first day of the window: nothing honest to say
+        first = next((i for i in range(len(bars)) if bars[i]["date"] > start), len(bars))
+        if first < YEAR_BARS:
+            return {**empty, "note": NO_YEAR}
     series = [(bars[i]["date"], _extremes(rule, bars, i, holding)) for i in range(1, len(bars))]
     return _scan(rule, series, start, today, empty)
 
@@ -376,8 +383,10 @@ def _scan(rule: dict, series: list, start: date, today: date, empty: dict) -> di
     state = rule["metric"] in STATE_METRICS
     hits, covered, fired = [], 0, set()
     ever = set()
+    cooldown = COOLDOWN_DAYS if rule["metric"] in NO_THRESHOLD else 0
+    last_fire = None      # the series index of the last hit (a 52-week high or low is not said again for ``cooldown`` completed days)
     highest = (rule["levels"][0] if rule["direction"] == "below" else rule["levels"][-1])["level"]
-    for day, measured in series:
+    for index, (day, measured) in enumerate(series):
         if day <= start or day > today:
             continue
         if rule.get("repeat") == "once" and highest in ever:
@@ -395,6 +404,9 @@ def _scan(rule: dict, series: list, start: date, today: date, empty: dict) -> di
                 continue
             if rule.get("repeat") == "once" and entry["level"] in ever:
                 continue
+            if cooldown and last_fire is not None and index - last_fire <= cooldown:
+                continue
+            last_fire = index
             ever.add(entry["level"])
             hits.append({"date": day.isoformat(), "level": entry["level"]})
     if not covered:
