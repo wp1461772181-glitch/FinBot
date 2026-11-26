@@ -168,21 +168,30 @@ def describe(rule: dict) -> str:
     """The rule in plain Chinese, from its fields only.  What the owner reads on the card and in the list; the model never writes it."""
     metric, direction, levels, symbol = rule["metric"], rule["direction"], list(rule["levels"]), rule["symbol"]
     name = _name(symbol)
-    move = {"up": "涨", "down": "跌", "either": "涨或跌"}.get(direction, "")
+    move = {"up": "上涨", "down": "下跌", "either": "涨或跌"}.get(direction, "")
     if direction == "below":
         levels = levels[::-1]      # most severe first for a fall: 低于 100 提醒，低于 90 加急
-    prefix, reach = {
-        "day_change": (f"{name}相对昨收{move}", lambda t: f"达到 {_g(t)}%"),
-        "open_change": (f"{name}相对今天的开盘价（只看常规交易时段）{move}", lambda t: f"达到 {_g(t)}%"),
-        "cost_change": (f"{name}相对你的持仓成本价{move}", lambda t: f"达到 {_g(t)}%"),
-        "n_day_change": (f"{name}相对 {rule.get('window_days')} 个交易日前的收盘价{move}", lambda t: f"达到 {_g(t)}%"),
-        "price": (f"{name}的股价", lambda t: f"{'高于' if direction == 'above' else '低于'} {_g(t)} 美元"),
-        "volume_ratio": (f"{name}今天的成交量（只看常规交易时段，按开盘后已过去的时间折算；开盘后 30 分钟内不判断）相对近 20 个交易日的日均量",
-                         lambda t: f"达到 {_g(t)} 倍"),
-        "position_pnl": (f"你持有的{name}今天{ {'up': '赚', 'down': '亏', 'either': '赚或亏'}[direction] }（现有股数 × 相对昨收的价差）",
-                         lambda t: f"达到 {_g(t)} 美元"),
-        "position_weight": (f"{name}占你总资产的比例", lambda t: f"{'高于' if direction == 'above' else '低于'} {_g(t)}%"),
-    }[metric]
+    pct = lambda t: f"达到 {_g(t)}%"      # noqa: E731
+    below = direction == "below"
+    if metric == "day_change":
+        prefix, reach = f"{name}相对昨收{move}", pct
+    elif metric == "open_change":
+        prefix, reach = f"{name}相对今天的开盘价（只看常规交易时段）{move}", pct
+    elif metric == "cost_change":
+        prefix, reach = f"{name}相对你的持仓成本价{move}", pct
+    elif metric == "n_day_change":
+        prefix, reach = f"{name}相对 {rule.get('window_days')} 个交易日前的收盘价{move}", pct
+    elif metric == "price":
+        prefix, reach = f"{name}的股价", lambda t: f"{'低于' if below else '高于'} {_g(t)} 美元"
+    elif metric == "volume_ratio":
+        prefix = f"{name}今天的成交量（只看常规交易时段，按开盘后已过去的时间折算；开盘后 30 分钟内不判断）相对近 20 个交易日的日均量"
+        reach = lambda t: f"达到 {_g(t)} 倍"      # noqa: E731
+    elif metric == "position_pnl":
+        prefix = f"你持有的{name}今天的盈亏（现有股数 × 相对昨收的价差）"
+        word = {"up": "盈利", "down": "亏损"}.get(direction, "盈利或亏损")
+        reach = lambda t: f"{word}达到 {_g(t)} 美元"      # noqa: E731
+    else:
+        prefix, reach = f"{name}占你总资产的比例", lambda t: f"{'低于' if below else '高于'} {_g(t)}%"
     clauses = "；".join(f"{reach(entry['threshold'])}：{LEVEL_WORDS[entry['level']]}" for entry in levels)
     if rule.get("repeat") == "once":
         again = "每档只触发一次，最高档触发后这条规则自动停用。" if len(levels) == 2 else "只触发一次，之后这条规则自动停用。"

@@ -71,6 +71,13 @@ def _portfolio(owner_hash: str) -> dict:
     return portfolio.sentinel_view(owner_hash)
 
 
+def _rules(owner_hash: str) -> list[dict]:
+    """The owner's own watch rules (enabled, not expired), each as ``watch_rules.rule_dict``; the sentinel checks them without a model."""
+    from . import watch_rules
+
+    return watch_rules.snapshot_rules(owner_hash)
+
+
 def build_snapshot(owner_hash: str) -> dict:
     portfolio = _section("portfolio", lambda: _portfolio(owner_hash), {"positions": [], "plans": [], "total_assets": None})
     return {
@@ -80,6 +87,7 @@ def build_snapshot(owner_hash: str) -> dict:
         "positions": portfolio.get("positions", []),
         "plans": portfolio.get("plans", []),
         "total_assets": portfolio.get("total_assets"),
+        "rules": _section("rules", lambda: _rules(owner_hash), []),
         "research_queue": _section("research_queue", lambda: _research_queue(owner_hash), []),
         "telegram": _section("telegram", lambda: _telegram(owner_hash), {}),
         "pushover": _section("pushover", lambda: _pushover(owner_hash), {}),
