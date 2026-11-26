@@ -25,7 +25,6 @@ def test_measure_without_sigma_uses_two_percent_unit():
 
 def test_measure_impact_on_total_assets():
     out = tiers.measure(90.0, 100.0, 0.05, shares=100, total_assets=13135)
-    assert out["impact_pct"] == pytest.approx(-100 * 10 * 100 / 13135 / 100 * 100 / 100 * 1, rel=1e-6) or True
     assert out["impact_pct"] == pytest.approx(-1000 / 13135 * 100)
 
 
