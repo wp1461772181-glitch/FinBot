@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import statistics
-from datetime import date
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -34,6 +34,7 @@ STATE_METRICS = ("price", "position_weight", "cost_change", "n_day_change", "dow
 EXTREME_METRICS = ("high_52w", "low_52w")   # the threshold is ignored: the condition is "price is past the extreme close"
 YEAR_METRICS = ("down_days", "high_52w", "low_52w")   # need the daily history of a year (52-week window / long streaks)
 PRESET_SCOPES = ("holdings", "watched", "portfolio")
+EXTREME_COOLDOWN_DAYS = 20        # after a 52-week level fired for a symbol: not again within this many completed trading days
 YEAR_CLOSES = 252                 # the 52-week window: completed trading days
 YEAR_MIN_CLOSES = 240             # fewer than this is not a year of history (a 1y chart holds about 250): measure None
 LEVEL_NAMES = ("remind", "urgent")
@@ -242,6 +243,21 @@ def measure(rule: dict, ctx: dict) -> float | None:
     return None
 
 
+def cooldown_active(fired_on: str | None, today: str, dates: list | None) -> bool:
+    """True while fewer than ``EXTREME_COOLDOWN_DAYS`` completed trading days have passed since ``fired_on`` (ISO dates).
+    Trading days are counted from the daily history's dates; without them, weekdays stand in."""
+    if not fired_on:
+        return False
+    if dates:
+        passed = sum(1 for d in dates if fired_on < str(d)[:10] < today)
+    else:
+        day, end, passed = date.fromisoformat(fired_on) + timedelta(days=1), date.fromisoformat(today), 0
+        while day < end:
+            passed += day.weekday() < 5
+            day += timedelta(days=1)
+    return passed < EXTREME_COOLDOWN_DAYS
+
+
 def extreme_close(rule: dict, ctx: dict) -> float | None:
     """The close a 52-week rule is measured against (what its message names), or None."""
     closes = ctx.get("closes")
@@ -351,5 +367,5 @@ def daily_summary(bars: list[dict], today: date) -> dict:
         if day < today:
             done.append((day, float(bar["close"]), bar.get("volume")))
     volumes = [float(v) for _, _, v in done[-AVG_VOLUME_DAYS:] if isinstance(v, (int, float)) and v > 0]
-    return {"closes": [c for _, c, _ in done],
+    return {"closes": [c for _, c, _ in done], "dates": [d.isoformat() for d, _, _ in done],
             "avg_volume": statistics.fmean(volumes) if len(volumes) >= AVG_VOLUME_MIN_DAYS else None}

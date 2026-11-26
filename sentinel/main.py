@@ -422,7 +422,7 @@ class Sentinel:
         position = position or {}
         minutes = (local - start).total_seconds() / 60 if in_regular else None
         return {"price": price, "prev_close": prev_close, "open": opened, "avg_cost": position.get("avg_cost"),
-                "closes": (daily or {}).get("closes"), "avg_volume": (daily or {}).get("avg_volume"),
+                "closes": (daily or {}).get("closes"), "dates": (daily or {}).get("dates"), "avg_volume": (daily or {}).get("avg_volume"),
                 "volume_today": sum(float(b.get("volume") or 0) for b in regular) if in_regular and regular else None,
                 "session_minutes": minutes,
                 "expected_volume": owner_rules.expected_volume((baseline or {}).get("avg_vol5"), minutes) if in_regular else None,
@@ -477,7 +477,17 @@ class Sentinel:
             return None
         if edge and not self.store.rule_armed(rule_id, owner_rules.level_key(rule, index)):
             return None                                   # still the same stretch of the condition being true
+        cooldown = None
+        if rule["metric"] in owner_rules.EXTREME_METRICS:
+            # a new 52-week extreme is said again for the same symbol only after 20 completed trading days (owner rules and
+            # presets of the metric share it); the fire date is kept per symbol and metric
+            cooldown = f"cooldown:{rule['metric']}:{owner_rules.symbol_of(rule)}"
+            last = self.store.get_kv(cooldown)
+            if owner_rules.cooldown_active(last[0].get("date") if last else None, today, ctx.get("dates")):
+                return None
         text = render(rule, index, value)
+        if cooldown:
+            self.store.set_kv(cooldown, {"date": today})
         order = owner_rules.severity_order(rule)
         for i in order[:order.index(index) + 1]:
             self.store.rule_mark(rule_id, scope, owner_rules.level_key(rule, i), now.timestamp())

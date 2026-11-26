@@ -288,6 +288,46 @@ def test_a_new_52w_high_and_low_say_the_close_they_beat(make):
     assert presets_of(look(make(), "AMD", 100.0, et(10, 0), held=False, prev=1.0, presets=[preset("new_high_52w"), preset("new_low_52w")], daily=down)) == []
 
 
+def cycle(s, day, hi, lo, daily, **kw):
+    """A dip under the old high (re-arms) and then a new high, on one New York date."""
+    when = datetime(2026, 11, day, 10, 0, tzinfo=ET) if day <= 30 else datetime(2026, 12, day - 30, 10, 0, tzinfo=ET)
+    look(s, "AMD", lo, when, held=False, prev=250.0, daily=daily, **kw)
+    out = look(s, "AMD", hi, when + timedelta(minutes=1), held=False, prev=250.0, daily=daily, **kw)
+    return [a for a in out if a["kind"] in ("preset", "rule")]
+
+
+def test_a_52w_level_is_not_said_again_for_20_completed_trading_days(make):
+    s, high = make(), [preset("new_high_52w")]
+    daily = {"closes": year(), "avg_volume": None}
+    assert len(cycle(s, 3, 251.0, 249.0, daily, presets=high)) == 1
+    assert cycle(s, 4, 251.0, 249.0, daily, presets=high) == []          # re-armed by the dip, but inside the cooldown
+    assert cycle(s, 30, 251.0, 249.0, daily, presets=high) == []         # 18 completed weekdays since the 3rd
+    assert len(cycle(s, 32, 251.0, 249.0, daily, presets=high)) == 1     # Dec 2: Nov 4 .. Dec 1 is 20 completed days
+
+
+def test_the_cooldown_counts_trading_days_from_the_history_and_is_per_symbol_and_metric(make):
+    s, high = make(), [preset("new_high_52w"), preset("new_low_52w")]
+    dates = [f"2026-10-{d:02d}" for d in range(1, 31)] + ["2026-11-02"]
+    daily = {"closes": year(), "avg_volume": None, "dates": ["2025-01-01"] * 219 + dates}
+    assert len(cycle(s, 3, 251.0, 249.0, daily, presets=high)) == 1
+    later = daily | {"dates": daily["dates"] + [f"2026-11-{d:02d}" for d in (4, 5, 6, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 23, 24, 25, 26, 27, 30)]}
+    assert cycle(s, 31, 251.0, 249.0, later, presets=high) == []         # holidays: only 19 trading days passed
+    longer = later | {"dates": later["dates"] + ["2026-12-01"]}
+    assert len(cycle(s, 32, 251.0, 249.0, longer, presets=high)) == 1
+    # the same symbol's other direction has its own cooldown
+    low = {"closes": year(up=False), "avg_volume": None}
+    assert len(presets_of(look(s, "AMD", 0.9, et(10, 0, day=5), held=False, prev=1.0, presets=high, daily=low))) == 1
+    assert len(presets_of(look(s, "NVDA", 251.0, et(10, 0, day=5), held=False, prev=250.0, presets=high, daily=daily))) == 1
+
+
+def test_an_owner_rule_on_a_52w_metric_shares_the_cooldown(make):
+    s = make()
+    mine = owner_rule("high_52w", "above", [(0, "remind")], symbol="AMD")
+    daily = {"closes": year(), "avg_volume": None}
+    assert len(cycle(s, 3, 251.0, 249.0, daily, rules_list=[mine])) == 1
+    assert cycle(s, 4, 251.0, 249.0, daily, rules_list=[mine]) == []
+
+
 def test_52w_without_a_year_of_closes_is_silent(make):
     short = {"closes": year(100), "avg_volume": None}
     out = look(make(), "AMD", 500.0, et(10, 0), held=False, prev=100.0, presets=[preset("new_high_52w")], daily=short)
