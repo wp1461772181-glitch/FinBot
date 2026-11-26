@@ -60,12 +60,23 @@ class Store:
             conn.execute("CREATE TABLE IF NOT EXISTS level_lock ("
                          "symbol TEXT NOT NULL, kind TEXT NOT NULL, level REAL NOT NULL, armed INTEGER NOT NULL,"
                          "last_date TEXT, count_today INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (symbol, kind, level))")
+            # 5b-1 owner rules: which level of which rule was said.  ny_date is the New York date for a daily rule and '*' for
+            # a rule that fires once ever; level is "<name>@<threshold>" so an edited rule starts afresh.
+            conn.execute("CREATE TABLE IF NOT EXISTS rule_state ("
+                         "rule_id TEXT NOT NULL, ny_date TEXT NOT NULL, level TEXT NOT NULL, fired_at REAL NOT NULL,"
+                         "PRIMARY KEY (rule_id, ny_date, level))")
+            # Edge trigger of the state-like rules: a row with armed=0 means the level fired and its condition has not been
+            # seen false since.  No row = armed (a new rule's first look may fire).
+            conn.execute("CREATE TABLE IF NOT EXISTS rule_arm ("
+                         "rule_id TEXT NOT NULL, level TEXT NOT NULL, armed INTEGER NOT NULL, PRIMARY KEY (rule_id, level))")
             # CREATE TABLE IF NOT EXISTS never adds columns to a table an older release made.
             have = {row["name"] for row in conn.execute("PRAGMA table_info(alerts)")}
             for column, ddl in (("superseded_by", "INTEGER"), ("event_date", "TEXT"), ("digest_text", "TEXT")):
                 if column not in have:
                     conn.execute(f"ALTER TABLE alerts ADD COLUMN {column} {ddl}")
             conn.execute("DELETE FROM price_event WHERE first_ts < ?", (time.time() - 7 * 86400,))
+            conn.execute("DELETE FROM rule_state WHERE ny_date != '*' AND ny_date < ?",
+                         (datetime.fromtimestamp(time.time() - 7 * 86400, timezone.utc).date().isoformat(),))
             conn.execute("DELETE FROM tier_state WHERE ny_date < ?",
                          (datetime.fromtimestamp(time.time() - 7 * 86400, timezone.utc).date().isoformat(),))
 
@@ -169,6 +180,33 @@ class Store:
                 sets = ", ".join(f"{name} = ?" for name in fields)
                 conn.execute(f"UPDATE tier_state SET {sets} WHERE symbol = ? AND ny_date = ? AND direction = ?",
                              (*fields.values(), symbol, ny_date, direction))
+
+    # --- owner rules (5b-1) ---------------------------------------------------------------------------------------------
+    def rule_fired_at(self, rule_id: str, scope: str, level: str) -> float | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT fired_at FROM rule_state WHERE rule_id = ? AND ny_date = ? AND level = ?",
+                               (rule_id, scope, level)).fetchone()
+        return None if row is None else float(row["fired_at"])
+
+    def rule_mark(self, rule_id: str, scope: str, level: str, ts: float) -> None:
+        with self._conn() as conn:
+            conn.execute("INSERT OR IGNORE INTO rule_state (rule_id, ny_date, level, fired_at) VALUES (?, ?, ?, ?)",
+                         (rule_id, scope, level, ts))
+
+    def rule_armed(self, rule_id: str, level: str) -> bool:
+        with self._conn() as conn:
+            row = conn.execute("SELECT armed FROM rule_arm WHERE rule_id = ? AND level = ?", (rule_id, level)).fetchone()
+        return True if row is None else bool(row["armed"])
+
+    def set_rule_armed(self, rule_id: str, level: str, armed: bool) -> None:
+        with self._conn() as conn:
+            conn.execute("INSERT OR REPLACE INTO rule_arm (rule_id, level, armed) VALUES (?, ?, ?)",
+                         (rule_id, level, int(armed)))
+
+    def rule_unmark(self, rule_id: str, scope: str, levels: list[str]) -> None:
+        with self._conn() as conn:
+            conn.executemany("DELETE FROM rule_state WHERE rule_id = ? AND ny_date = ? AND level = ?",
+                             [(rule_id, scope, level) for level in levels])
 
     def get_level(self, symbol: str, kind: str, level: float) -> dict | None:
         with self._conn() as conn:

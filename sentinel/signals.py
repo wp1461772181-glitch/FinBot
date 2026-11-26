@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from . import rules
+
 logger = logging.getLogger("sentinel.signals")
 
 MIN_AVAILABLE_MB = 200
@@ -501,7 +503,8 @@ def parse_chart(payload: dict) -> dict:
     for i, stamp in enumerate(stamps):
         close = (quote.get("close") or [])[i] if i < len(quote.get("close") or []) else None
         volume = (quote.get("volume") or [])[i] if i < len(quote.get("volume") or []) else None
-        bars.append({"ts": datetime.fromtimestamp(stamp, UTC), "close": close, "volume": volume})
+        opened = (quote.get("open") or [])[i] if i < len(quote.get("open") or []) else None
+        bars.append({"ts": datetime.fromtimestamp(stamp, UTC), "close": close, "volume": volume, "open": opened})
     splits = []
     for item in ((result.get("events") or {}).get("splits") or {}).values():
         when = datetime.fromtimestamp(item.get("date", 0), UTC).date().isoformat()
@@ -741,3 +744,43 @@ def format_grouped(members: list[dict], market_r: float) -> str:
             line += f"，占总资产 {abs(item['impact_pct']):.1f}%"
         lines.append(line)
     return "\n".join(lines)
+
+
+# --- the owner's own rules (5b-1): the headline says what was measured, the second line quotes the rule ----------------
+
+RULE_WORD = {"remind": "提醒", "urgent": "加急"}
+
+
+def format_rule(rule: dict, index: int, value: float, ctx: dict) -> str:
+    """One push for a level of an owner rule.  ``value`` is ``rules.measure``'s number, ``ctx`` the inputs it was measured
+    from.  The second line is the rule's own text, written by the API from the fields the owner confirmed."""
+    item = rule["levels"][index]
+    metric, price = rule["metric"], float(ctx["price"])
+    side = "涨" if value > 0 else "跌"
+    pct = f"{side} {abs(value):.1f}%"
+    now_price = f"现价 {price:.2f}"
+    if metric == "day_change":
+        body = f"较昨收{pct}，{now_price}"
+    elif metric == "open_change":
+        body = f"较今日开盘价 {float(ctx['open']):.2f} {pct}，{now_price}"
+    elif metric == "cost_change":
+        body = f"较你的持仓成本 {float(ctx['avg_cost']):.2f} {pct}，{now_price}"
+    elif metric == "n_day_change":
+        days = int(rule["window_days"])
+        body = f"较 {days} 个交易日前的收盘 {rules.reference(rule, ctx):.2f} {pct}，{now_price}"
+    elif metric == "price":
+        line = f"{item['threshold']:g} 美元"
+        body = (f"涨到 {price:.2f}，到了你设的 {line}" if rule["direction"] == "above"
+                else f"跌到 {price:.2f}，到了你设的 {line}")
+    elif metric == "volume_ratio":
+        body = f"今日成交量已是同一时段正常水平的 {value:.1f} 倍，{now_price}"
+    elif metric == "position_pnl":
+        body = f"持仓今天较昨收{'赚' if value > 0 else '亏'} {_money(value)}，{now_price}"
+    else:                                          # position_weight
+        body = f"持仓占总资产 {value:.1f}%，{now_price}"
+    text = f"【你的规则·{RULE_WORD[item['level']]}】{str(rule['symbol']).upper()} {body}。"
+    made = str(rule.get("created_on") or "")[5:10]
+    own = str(rule.get("text") or "").strip()
+    if own:
+        text += f"\n按你{(' ' + made + ' ') if made else ''}定的规则：{own}"
+    return text

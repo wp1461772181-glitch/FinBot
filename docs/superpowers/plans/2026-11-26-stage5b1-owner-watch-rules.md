@@ -108,6 +108,8 @@ Stored server-side; sent to the sentinel in the snapshot as `rules: [Rule, ...]`
 - `sentinel/main.py`:
   - Each poll evaluates the owner's rules for the symbol, keeping state in a new store table `rule_state(rule_id, ny_date, level, fired_at)`.
   - A level fires once per NY date (`daily`) or once ever (`once`).
+  - State-like metrics (`price`, `position_weight`, `cost_change`, `n_day_change`) are edge-triggered. A level fires when its condition becomes true and does not fire again until a poll has seen that level's condition false (re-armed); it is still at most once per NY date per level (`daily`) or once ever (`once`). A rule's first look (no state yet) counts as "became true" if the condition holds: the owner just set it, one notice is right. A poll that cannot measure the metric changes nothing. The armed bit is persisted in a sibling table `rule_arm(rule_id, level, armed)` (no row = armed), so a restart does not re-fire.
+  - Change-type metrics (`day_change`, `open_change`, `position_pnl`, `volume_ratio`) keep plain once-per-level-per-day.
   - A rise from remind to urgent the same day fires the urgent level.
   - Messages: 「【你的规则·提醒】/【你的规则·加急】INTC 较昨收跌 10.4%，现价 35.84。 / 按你 11-26 定的规则：<text>」.
   - Kind `rule`.
