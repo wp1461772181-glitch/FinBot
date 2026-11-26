@@ -467,9 +467,8 @@ class Sentinel:
         edge = rule["metric"] in owner_rules.STATE_METRICS
         if edge and value is not None:
             # re-arm every level whose condition is seen false at this poll (no measurement: no change)
-            for i in range(len(rule["levels"])):
-                if i not in hit:
-                    self.store.set_rule_armed(rule_id, owner_rules.level_key(rule, i), True)
+            for i in owner_rules.rearm_levels(rule, ctx, hit):
+                self.store.set_rule_armed(rule_id, owner_rules.level_key(rule, i), True)
         index = hit[-1] if hit else None
         if index is None:
             return None

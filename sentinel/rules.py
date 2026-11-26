@@ -251,16 +251,35 @@ def extreme_close(rule: dict, ctx: dict) -> float | None:
     return float(max(window) if rule["metric"] == "high_52w" else min(window))
 
 
-def down_days(ctx: dict) -> int | None:
-    """Consecutive trading days that closed below the close before, counted back from yesterday, plus today when the price
-    is below yesterday's close now.  None when the closes or the previous close are unknown."""
-    closes, prev = ctx.get("closes"), ctx.get("prev_close")
-    if not closes or not isinstance(prev, (int, float)) or prev <= 0:
+def completed_run(ctx: dict) -> int | None:
+    """Consecutive completed trading days that closed below the close before, counted back from yesterday; None when the
+    closes are unknown."""
+    closes = ctx.get("closes")
+    if not closes:
         return None
     run, i = 0, len(closes) - 1
     while i >= 1 and closes[i] < closes[i - 1]:
         run, i = run + 1, i - 1
+    return run
+
+
+def down_days(ctx: dict) -> int | None:
+    """The completed run plus today when the price is below yesterday's close now.  None when the closes or the previous
+    close are unknown."""
+    run, prev = completed_run(ctx), ctx.get("prev_close")
+    if run is None or not isinstance(prev, (int, float)) or prev <= 0:
+        return None
     return run + (1 if float(ctx["price"]) < float(prev) else 0)
+
+
+def rearm_levels(rule: dict, ctx: dict, hit: list[int]) -> list[int]:
+    """The levels of a state-like rule whose condition counts as seen false now, so the next time it holds it may say so
+    again.  For most metrics that is "does not hold now".  A down streak ends when a completed day closed up, not when
+    today's price flickers back over yesterday's close: otherwise one streak would be said twice (once on the day it
+    reached the threshold, once the morning after)."""
+    if rule["metric"] == "down_days":
+        return list(range(len(rule["levels"]))) if completed_run(ctx) == 0 else []
+    return [i for i in range(len(rule["levels"])) if i not in hit]
 
 
 def portfolio_move(ctx: dict) -> dict | None:

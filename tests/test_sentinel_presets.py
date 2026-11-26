@@ -265,6 +265,16 @@ def test_down_streak_is_an_edge_and_rearms_when_the_run_breaks(make):
     assert len(presets_of(look(s, "AMD", 2.9, et(10, 0, day=5), daily=again, held=False, prev=3.0, presets=[streak]))) == 1
 
 
+def test_a_streak_is_said_once_even_when_today_flickers_back_over_yesterdays_close(make):
+    s, streak = make(), preset("down_streak")
+    first = {"closes": [9.0, 8.0, 7.0, 6.0, 5.0], "avg_volume": None}                  # 4 completed down days
+    args = dict(held=False, presets=[streak])
+    assert len(presets_of(look(s, "AMD", 4.9, et(10, 0), daily=first, prev=5.0, **args))) == 1   # today makes the 5th
+    assert presets_of(look(s, "AMD", 5.1, et(10, 5), daily=first, prev=5.0, **args)) == []      # flickers up: 4 again
+    nxt = {"closes": [9.0, 8.0, 7.0, 6.0, 5.0, 4.9], "avg_volume": None}                # it closed down: 5 completed
+    assert presets_of(look(s, "AMD", 4.95, et(10, 0, day=4), daily=nxt, prev=4.9, **args)) == []    # the same streak: not again
+
+
 def test_a_new_52w_high_and_low_say_the_close_they_beat(make):
     s = make()
     up, down = {"closes": year(), "avg_volume": None}, {"closes": year(up=False), "avg_volume": None}
