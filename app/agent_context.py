@@ -638,8 +638,12 @@ def history_messages(half_turns: list[Turn], *, omitted: int = 0) -> list[dict]:
 
 def inline_history_messages(context: dict) -> list[dict]:
     """The history before the question for a kernel turn read with ``inline_catalogue``: the half-compressed turns, then the raw
-    turns, each answer followed by the note of its own catalogue entry.  Nothing goes after the question."""
+    turns, each answer followed by the note of its own catalogue entry, except the newest answer's: the question follows that answer
+    directly and its note goes after the question (``latest_inline_note``).  Next turn that note is in its place after its answer, so
+    the cached prefix (which ends at the answer before the question) still holds."""
     by_turn = {str(entry.get("turn_id")): entry for entry in context.get("catalogue", [])}
+    groups = complete_turns(context.get("l1_rows", []))
+    held = str(groups[-1][0].get("turn_id")) if groups else None
     messages: list[dict] = []
     omitted = len(context.get("overflow") or [])
     if omitted > 0:
@@ -648,13 +652,22 @@ def inline_history_messages(context: dict) -> list[dict]:
         messages.extend(half_messages(turn))
         if turn.catalogue:
             messages.append(inline_catalogue_message(turn.catalogue))
-    for group in complete_turns(context.get("l1_rows", [])):
+    for group in groups:
         projected = project_turn_history(group)
         messages.extend(projected)
         entry = by_turn.get(str(group[0].get("turn_id")))
-        if entry and len(projected) > 1:
+        if entry and len(projected) > 1 and str(group[0].get("turn_id")) != held:
             messages.append(inline_catalogue_message(entry))
     return messages
+
+
+def latest_inline_note(context: dict) -> dict | None:
+    """The note of the newest raw turn's answer, which a kernel turn sends after the question (see ``inline_history_messages``)."""
+    groups = complete_turns(context.get("l1_rows", []))
+    if not groups or len(project_turn_history(groups[-1])) < 2:
+        return None
+    entry = {str(e.get("turn_id")): e for e in context.get("catalogue", [])}.get(str(groups[-1][0].get("turn_id")))
+    return inline_catalogue_message(entry) if entry else None
 
 
 ROLLING_VERSION = 2

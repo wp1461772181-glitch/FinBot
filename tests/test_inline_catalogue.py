@@ -67,7 +67,10 @@ def test_each_cited_answer_is_followed_by_its_own_note_and_nothing_names_a_posit
     assert context["half_turns"] and context["l1_turns"], "both layers must hold turns for the test to mean anything"
     messages = layers.inline_history_messages(context)
     notes = notes_of(messages)
-    assert len(notes) == len(context["catalogue"]) == context["l1_turns"] + len(context["half_turns"])
+    # The newest answer's note is held back: the question follows that answer directly and the note goes after the question.
+    assert len(notes) + 1 == len(context["catalogue"]) == context["l1_turns"] + len(context["half_turns"])
+    held = layers.latest_inline_note(context)
+    assert held and messages[-1]["role"] == "assistant" and messages[-1]["content"].startswith(json.loads(held["content"].split("\n", 1)[1])["opening"][:10])
     for at, message in enumerate(messages):
         if message in notes:
             entry = json.loads(message["content"].split("\n", 1)[1])
@@ -115,7 +118,8 @@ def test_history_up_to_the_new_turn_is_byte_identical_between_turn_n_and_n_plus_
             own = layers.inline_history_messages({**current, "half_turns": [], "overflow": [],
                                                   "l1_rows": [r for r in current["l1_rows"] if r["turn_id"] == str(UUID(int=n))]})
             assert json.dumps(after[:len(before)], ensure_ascii=False) == json.dumps(before, ensure_ascii=False), f"prefix broke at turn {n}"
-            assert after[len(before):] == own
+            held = layers.latest_inline_note(previous)
+            assert after[len(before):] == ([held] if held else []) + own      # last turn's note takes its place, then the new turn
             checked += 1
         full += bool(current["half_turns"] and current["overflow"])
         previous = current
@@ -148,7 +152,8 @@ def test_layer_bytes_equal_what_is_sent_including_every_note():
     for n in (20, 80, 150):
         context = inline_at(rows, ends, n, l1=6000, l2=8000)
         l1_only = layers.inline_history_messages({**context, "half_turns": [], "overflow": []})
-        assert context["l1_bytes"] == sum(layers.json_bytes(m) for m in l1_only)
+        held = layers.latest_inline_note(context)          # sent after the question, still charged to its turn in layer 1
+        assert context["l1_bytes"] == sum(layers.json_bytes(m) for m in l1_only) + (layers.json_bytes(held) if held else 0)
         half = layers.inline_history_messages({**context, "l1_rows": [], "overflow": []})
         report_half = sum(layers.half_size(t) + (layers.inline_note_bytes(t.catalogue) if t.catalogue else 0) for t in context["half_turns"])
         assert report_half == sum(layers.json_bytes(m) for m in half)
@@ -238,7 +243,7 @@ def test_read_history_citation_accepts_every_entry_shown_inline_and_refuses_one_
     context = inline_at(rows, ends, 60, l1=4000, l2=5000)
     shown = {(e["turn_id"], s["ordinal"]) for e in context["catalogue"] for s in e["sources"]}
     inline = {(json.loads(m["content"].split("\n", 1)[1])["turn_id"], s["ordinal"])
-              for m in notes_of(layers.inline_history_messages(context))
+              for m in notes_of(layers.inline_history_messages(context)) + [layers.latest_inline_note(context)]
               for s in json.loads(m["content"].split("\n", 1)[1])["sources"]}
     assert shown == inline and shown
     hidden = (str(UUID(int=1)), 1)
@@ -268,8 +273,8 @@ def test_the_kernel_prompt_keeps_notes_in_the_history_and_marks_the_cache_point_
     history = layers.inline_history_messages(context)
     built = prompt.build_messages("下一个问题", SimpleNamespace(identity_credential=""), history)
     assert built[-1] == {"role": "user", "content": "下一个问题"}
-    assert layers.is_catalogue_message(built[-2]) and built[-2].get("cache_point") is True
-    assert sum(layers.is_catalogue_message(m) for m in built) == 4
+    assert built[-2]["role"] == "assistant" and built[-2].get("cache_point") is True      # the question follows the newest answer
+    assert sum(layers.is_catalogue_message(m) for m in built) == 3
     assert [m.get("cache_point") for m in built].count(True) == 1
     previous = _previous_user_message(history + [{"role": "user", "content": "下一个问题"}], "下一个问题")
     assert previous == "question 4 " + previous[len("question 4 "):]      # his own words, never a note
@@ -321,14 +326,15 @@ def sent_messages(wiring, rows, *, inline, message="下一个问题"):
     return seen[0]
 
 
-def test_a_kernel_turn_places_the_notes_inline_and_adds_no_catalogue_after_the_question(kernel):
+def test_a_kernel_turn_places_the_notes_inline_and_only_the_newest_after_the_question(kernel):
     messages = sent_messages(kernel, turn_rows(5), inline=True)
     conversation = [m for m in messages if m["role"] != "system"]
-    assert conversation[-1] == {"role": "user", "content": "下一个问题"} or conversation[-1]["content"].endswith("下一个问题")
+    assert layers.is_catalogue_message(conversation[-1])              # the newest answer's note, right after the question
     at = max(i for i, m in enumerate(conversation) if m["content"].endswith("下一个问题"))
-    assert not any(layers.is_catalogue_message(m) for m in conversation[at:])
-    notes = [i for i, m in enumerate(conversation) if layers.is_catalogue_message(m)]
-    assert len(notes) == 5 and all(conversation[i - 1]["role"] == "assistant" for i in notes)
+    assert conversation[at - 1]["role"] == "assistant"                                   # the question follows the newest answer
+    assert [layers.is_catalogue_message(m) for m in conversation[at:]].count(True) == 1     # and that answer's note follows the question
+    notes = [i for i, m in enumerate(conversation[:at]) if layers.is_catalogue_message(m)]
+    assert len(notes) == 4 and all(conversation[i - 1]["role"] == "assistant" for i in notes)
     assert all(m.get("content", "").find("answers_back") < 0 for m in messages)
 
 
@@ -384,7 +390,7 @@ def test_the_context_report_counts_the_notes_where_they_are_sent():
     context = {**inline_at(rows, ends, 120, l1=6000, l2=8000), "segments": []}
     assert context["half_turns"] and context["l1_turns"]
     report = {p["key"]: p for p in _context_report(context)["parts"]}
-    sent = [m for m in layers.inline_history_messages(context) if not m["content"].startswith("[系统提示：有 ")]
+    sent = [m for m in layers.inline_history_messages(context) if not m["content"].startswith("[系统提示：有 ")] + [layers.latest_inline_note(context)]
     assert report["recent"]["bytes"] + report["compressed"]["bytes"] == sum(layers.json_bytes(m) for m in sent)
     assert report["recent"]["bytes"] == context["l1_bytes"]
 
