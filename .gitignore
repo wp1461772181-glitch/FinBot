@@ -37,3 +37,7 @@ config/models.yaml
 
 # Local scratch of the superpowers workflow (mockups, brainstorming state)
 .superpowers/
+
+# Claude Code: per-session worktrees and personal overrides stay local; settings.json and hooks/ are shared.
+.claude/worktrees/
+.claude/settings.local.json

@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|mcp__dsh__dsh_run",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_bash.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/list_background.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
