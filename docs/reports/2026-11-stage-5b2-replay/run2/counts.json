@@ -1,25 +1,25 @@
 {
- "total": 76,
+ "total": 60,
  "per_symbol": {
   "*": 4,
-  "AAPL": 15,
+  "AAPL": 7,
   "AMD": 5,
-  "GOOGL": 5,
+  "GOOGL": 3,
   "INTC": 7,
   "META": 6,
-  "MSFT": 5,
-  "NVDA": 23,
+  "MSFT": 4,
+  "NVDA": 18,
   "TSLA": 6
  },
  "per_tier": {
-  "1": 64,
+  "1": 48,
   "2": 12
  },
  "per_preset": {
   "concentration": 2,
   "down_streak": 4,
-  "new_high_52w": 11,
-  "new_low_52w": 9,
+  "new_high_52w": 2,
+  "new_low_52w": 2,
   "portfolio_drawdown": 4,
   "volume_surge": 1
  },
