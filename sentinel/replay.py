@@ -18,6 +18,7 @@ import tempfile
 from datetime import UTC, date, datetime, time as dtime, timedelta
 from pathlib import Path
 
+from . import rules as owner_rules
 from . import signals
 from .main import Sentinel
 from .store import Store
@@ -40,7 +41,7 @@ def fetch_data(symbols: list[str]) -> dict:
 
 def dump_data(data: dict, path: Path | str) -> None:
     def enc(bar):
-        return {"ts": bar["ts"].isoformat(), "close": bar["close"], "volume": bar.get("volume")}
+        return {"ts": bar["ts"].isoformat(), "close": bar["close"], "volume": bar.get("volume"), "open": bar.get("open")}
     out = {"errors": data.get("errors", {}), **{k: {s: [enc(b) for b in bars] for s, bars in data[k].items()}
                                                  for k in ("bars5", "daily")}}
     Path(path).write_text(json.dumps(out), encoding="utf-8")
@@ -50,7 +51,8 @@ def load_data(path: Path | str) -> dict:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
 
     def dec(bar):
-        return {"ts": datetime.fromisoformat(bar["ts"]), "close": bar["close"], "volume": bar.get("volume")}
+        return {"ts": datetime.fromisoformat(bar["ts"]), "close": bar["close"], "volume": bar.get("volume"),
+                "open": bar.get("open")}
     return {"errors": raw.get("errors", {}), **{k: {s: [dec(b) for b in bars] for s, bars in raw[k].items()}
                                                  for k in ("bars5", "daily")}}
 
@@ -91,7 +93,9 @@ def run_replay(data: dict, snapshot: dict, start: date, end: date, *, policy: st
     sentinel.policy, sentinel.sensitivity, sentinel.short_moves = policy, sensitivity, short_moves
     held = [p["symbol"] for p in snapshot.get("positions") or [] if p.get("symbol") and p.get("shares")]
     queue = [s for s in snapshot.get("research_queue") or [] if s not in held]
-    symbols = [s for s in held + queue if s in data["bars5"]]
+    # symbols only an owner rule names are replayed for that rule alone (as the live loop polls them)
+    named = sorted({owner_rules.symbol_of(r) for r in snapshot.get("rules") or [] if owner_rules.valid(r)} - set(held) - set(queue))
+    symbols = [s for s in held + queue + named if s in data["bars5"]]
     bars5 = {s: sorted((b for b in data["bars5"][s] if signals._bar_ok(b)), key=lambda b: b["ts"])
              for s in set(symbols) | {"SPY"} if s in data["bars5"]}
     alerts, trace = [], {s: [] for s in symbols}
@@ -135,7 +139,9 @@ def run_replay(data: dict, snapshot: dict, start: date, end: date, *, policy: st
                     r = float(last["close"]) / prev_close - 1
                     trace[symbol].append((now.timestamp(), r, abs(r) / (base.get("daily_sigma") or 0.02)))
                 try:
-                    collected += sentinel.alerts_from(symbol, symbol in held, now, snapshot, series, prev_close, base, [])
+                    daily = owner_rules.daily_summary(data["daily"].get(symbol, []), signals._et(now).date())
+                    collected += sentinel.alerts_from(symbol, symbol in held, now, snapshot, series, prev_close, base, [],
+                                                      daily=daily, rules_only=symbol in named)
                 except Exception as exc:                          # one symbol's bad data must not end the replay
                     alerts.append({"ts": now.timestamp(), "symbol": symbol, "kind": "error", "tier": "", "text": repr(exc),
                                    "escalate": False, "symbols": [symbol]})
