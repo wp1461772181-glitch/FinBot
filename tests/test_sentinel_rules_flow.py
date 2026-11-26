@@ -263,19 +263,48 @@ def test_price_above_and_below(make):
     assert [(a["rule_id"], a["escalate"]) for a in out] == [("b", True)] and "跌到 29.00，到了你设的 30 美元" in out[0]["text"]
 
 
-def test_volume_ratio_measures_against_the_time_of_day(make):
-    s = make()
-    rule = make_rule("volume_ratio", "above", ((2, "remind"), (4, "urgent")))
+def volume_window(minutes, per_minute):
+    """Regular-session bars from 09:30 for ``minutes`` minutes; ``per_minute(i)`` is the volume of minute i."""
+    return [{"ts": et(9, 30) + timedelta(minutes=i), "close": 40.0, "volume": per_minute(i), "open": 40.0}
+            for i in range(minutes + 1)]
+
+
+PROFILE = {"daily_sigma": 0.075, "bucket_sigma": {}, "avg_vol5": {"open30": 3000.0, "mid": 1000.0, "close30": 2000.0}}
+
+
+def look_with(s, base, price, when, **kw):
+    snapshot = BASE | {"rules": kw.pop("rules_list")}
+    return s.alerts_from("INTC", True, when, snapshot, kw.pop("window"), PREV, base, [], daily=kw.pop("daily", None))
+
+
+def test_volume_ratio_on_an_ordinary_u_shaped_day_stays_near_one(make):
+    rule = make_rule("volume_ratio", "above", ((1.5, "remind"),))
+    ordinary = lambda i: 600.0 if i < 30 else 200.0                                           # 3000 / 1000 per 5 minutes   # noqa: E731
     daily = {"closes": [40.0] * 20, "avg_volume": 39000.0}
-    window = [{"ts": et(9, 30) + timedelta(minutes=i), "close": 40.0, "volume": 1000.0, "open": 40.0} for i in range(61)]
-    # 10:30 = 60 minutes in (fraction 60/390); 61 bars * 1000 = 61000 against 39000 * 60/390 = 6000 -> 10.2x
-    out = only_rules(look(s, 40.0, et(10, 30), rules_list=[rule], window=window, daily=daily))
-    assert len(out) == 1 and out[0]["escalate"] is True
-    assert out[0]["text"].startswith("【你的规则·加急】INTC 今日成交量已是同一时段正常水平的 10.2 倍，现价 40.00。")
-    # before 10:00 it is not measured, whatever the volume
+    for minute in (30, 45, 60, 90):                                                           # 10:00 .. 11:00
+        when = et(9, 30) + timedelta(minutes=minute)
+        window = volume_window(minute - 1, ordinary)
+        s = make()
+        out = only_rules(look_with(s, PROFILE, 40.0, when, rules_list=[rule], window=window, daily=daily))
+        assert out == [], minute
+    # twice the normal pace is said, and the message reads 2.0x
+    heavy = lambda i: 1200.0 if i < 30 else 400.0                                             # noqa: E731
+    out = only_rules(look_with(make(), PROFILE, 40.0, et(10, 30), rules_list=[make_rule("volume_ratio", "above", ((1.5, "remind"),))],
+                               window=volume_window(59, heavy), daily=daily))
+    assert len(out) == 1 and "同一时段正常水平的 2.0 倍" in out[0]["text"]
+
+
+def test_volume_ratio_without_a_profile_waits_for_eleven(make):
+    rule = make_rule("volume_ratio", "above", ((2, "remind"),))
+    daily = {"closes": [40.0] * 20, "avg_volume": 39000.0}
+    window = volume_window(60, lambda i: 1000.0)
+    bare = {"daily_sigma": 0.075, "bucket_sigma": {}, "avg_vol5": {}}
+    assert only_rules(look_with(make(), bare, 40.0, et(10, 30), rules_list=[rule], window=window, daily=daily)) == []
+    late = volume_window(100, lambda i: 1000.0)
+    assert len(only_rules(look_with(make(), bare, 40.0, et(11, 11), rules_list=[rule], window=late, daily=daily))) == 1
+    # before 10:00 it is not measured whatever the volume
     early = [{"ts": et(9, 30) + timedelta(minutes=i), "close": 40.0, "volume": 1e6, "open": 40.0} for i in range(10)]
-    assert only_rules(look(make(), 40.0, et(9, 39), rules_list=[rule], window=early, daily=daily)) == []
-    assert only_rules(look(make(), 40.0, et(10, 30), rules_list=[rule], window=window, daily=None)) == []
+    assert only_rules(look_with(make(), PROFILE, 40.0, et(9, 39), rules_list=[rule], window=early, daily=daily)) == []
 
 
 def test_position_pnl_and_weight(make):
@@ -535,3 +564,71 @@ def test_a_change_metric_keeps_plain_once_per_day(make):
     assert len(only_rules(look(s, 35.0, et(10, 0, day=3), rules_list=[rule]))) == 1
     assert only_rules(look(s, 35.0, et(10, 30, day=3), rules_list=[rule])) == []
     assert len(only_rules(look(s, 35.0, et(10, 0, day=4), rules_list=[rule]))) == 1     # no edge needed: a new day
+
+
+# --- review fixes: direction-aware override, edited rules, owner_rule flag ------------------------------------------------
+
+def test_an_up_only_day_rule_leaves_the_default_fall_alone(make):
+    s = make()
+    if s._policy() != "tiers":
+        pytest.skip("tiers only")
+    rule = make_rule(direction="up", levels=((10, "remind"),))
+    out = look(s, 34.0, et(10, 0), rules_list=[rule])                                         # -15%: 2 sigma... major below
+    out += look(s, 27.0, et(10, 20), rules_list=[rule])                                       # -32.5%: tier 2
+    majors = [a for a in out if a["kind"] != "rule" and a["tier"] == 2]
+    assert len(majors) == 1 and majors[0]["escalate"] is True and majors[0]["direction"] == "down"
+
+
+def test_an_up_only_day_rule_still_replaces_the_default_rise(make):
+    s = make()
+    if s._policy() != "tiers":
+        pytest.skip("tiers only")
+    rule = make_rule(direction="up", levels=((30, "remind"),))
+    assert look(s, 46.4, et(10, 0), rules_list=[rule]) == []                                  # +16%: the owner speaks for rises
+    assert len(s.store.alerts_where("kind = 'record'")) == 1
+
+
+def test_a_down_only_day_rule_leaves_the_default_rise_alone(make):
+    s = make()
+    if s._policy() != "tiers":
+        pytest.skip("tiers only")
+    rule = make_rule(direction="down", levels=((30, "remind"),))
+    out = look(s, 46.4, et(10, 0), rules_list=[rule])
+    assert [a["tier"] for a in out if a["kind"] != "rule"] == [1]
+
+
+def test_changing_the_direction_the_same_day_starts_the_rule_afresh(make):
+    s = make()
+    up = make_rule(direction="up", levels=((10, "remind"),))
+    assert len(only_rules(look(s, 45.0, et(10, 0), rules_list=[up]))) == 1                    # +12.5%
+    down = up | {"direction": "down"}                                                         # same id, edited
+    assert only_rules(look(s, 45.0, et(10, 1), rules_list=[down])) == []
+    assert len(only_rules(look(s, 35.0, et(10, 2), rules_list=[down]))) == 1                  # -12.5%: not inherited as "said"
+
+
+def test_a_finished_once_rule_that_is_edited_is_live_again(make):
+    s = make()
+    once = make_rule(repeat="once", direction="up", levels=((10, "remind"),))
+    assert len(only_rules(look(s, 45.0, et(10, 0), rules_list=[once]))) == 1
+    assert only_rules(look(s, 45.0, et(10, 5), rules_list=[once])) == []
+    edited = once | {"direction": "down"}
+    assert len(only_rules(look(s, 35.0, et(10, 10, day=4), rules_list=[edited]))) == 1
+
+
+def test_an_edited_edge_rule_does_not_inherit_the_disarmed_bit(make):
+    s = make()
+    rule = make_rule("price", "below", ((50, "remind"),))
+    assert len(only_rules(look(s, 48.0, et(10, 0), rules_list=[rule]))) == 1
+    other = rule | {"direction": "above", "levels": [{"threshold": 40, "level": "remind"}]}
+    assert len(only_rules(look(s, 48.0, et(10, 5, day=4), rules_list=[other]))) == 1
+
+
+def test_the_rule_payload_says_it_is_the_owners_own_request(make):
+    s = make()
+    s.escalator = Collector(s.store)
+    out = only_rules(look(s, 35.0, et(10, 0), rules_list=[make_rule()]))
+    assert out[0]["owner_rule"] is True
+    alert_id = s.escalator.raise_alert({}, out[0])
+    assert s.alert_payload(alert_id, out[0])["owner_rule"] is True
+    plain = s.alert_payload(s.escalator.raise_alert({}, move_candidate("A")), move_candidate("A"))
+    assert "owner_rule" not in plain

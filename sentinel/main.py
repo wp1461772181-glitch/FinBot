@@ -158,15 +158,15 @@ class Sentinel:
         that an owner ``day_change`` rule replaces the sigma-tier day-move pushes of its symbol (tiers policy)."""
         today = signals._et(now).date().isoformat()
         mine = [r for r in self._owner_rules(snap, today) if owner_rules.symbol_of(r) == symbol]
-        day_rule = any(r["metric"] == "day_change" for r in mine)
+        day_rule = set().union(*(owner_rules.covered_directions(r) for r in mine if r["metric"] == "day_change"))
         out = [] if rules_only else self._default_alerts(symbol, held, now, snap, bars, prev_close, baseline, splits,
                                                          day_rule=day_rule)
         if mine:
-            out += self._rule_alerts(symbol, held, now, today, snap, bars, prev_close, splits, daily, mine)
+            out += self._rule_alerts(symbol, held, now, today, snap, bars, prev_close, splits, daily, mine, baseline)
         return out
 
     def _default_alerts(self, symbol: str, held: bool, now: datetime, snap: dict, bars: list[dict], prev_close,
-                        baseline: dict | None, splits, *, day_rule: bool = False) -> list[dict]:
+                        baseline: dict | None, splits, *, day_rule: set | frozenset = frozenset()) -> list[dict]:
         """Signals -> push policy -> candidate alerts.  Separate from the fetching so it can be run on built data.
 
         The event row (anchor etc.) is committed here.  A candidate carries ``rollback`` (undo it, when a merge
@@ -335,7 +335,7 @@ class Sentinel:
         return out
 
     def _rule_ctx(self, symbol: str, now: datetime, snap: dict, bars: list[dict], price: float, prev_close,
-                  daily: dict | None) -> dict:
+                  daily: dict | None, baseline: dict | None = None) -> dict:
         """Every input a rule metric can use; what is not known stays None and its metrics measure None."""
         position = next((p for p in snap.get("positions") or [] if p.get("symbol") == symbol and p.get("shares")), None)
         local = signals._et(now)
@@ -347,14 +347,16 @@ class Sentinel:
             first = min(regular, key=lambda b: b["ts"])
             opened = first.get("open") if isinstance(first.get("open"), (int, float)) and first["open"] > 0 else first["close"]
         position = position or {}
+        minutes = (local - start).total_seconds() / 60 if in_regular else None
         return {"price": price, "prev_close": prev_close, "open": opened, "avg_cost": position.get("avg_cost"),
                 "closes": (daily or {}).get("closes"), "avg_volume": (daily or {}).get("avg_volume"),
                 "volume_today": sum(float(b.get("volume") or 0) for b in regular) if in_regular and regular else None,
-                "session_minutes": (local - start).total_seconds() / 60 if in_regular else None,
+                "session_minutes": minutes,
+                "expected_volume": owner_rules.expected_volume((baseline or {}).get("avg_vol5"), minutes) if in_regular else None,
                 "shares": position.get("shares"), "market_value": position.get("market_value"),
                 "total_assets": snap.get("total_assets")}
 
-    def _rule_alerts(self, symbol, held, now, today, snap, bars, prev_close, splits, daily, mine) -> list[dict]:
+    def _rule_alerts(self, symbol, held, now, today, snap, bars, prev_close, splits, daily, mine, baseline=None) -> list[dict]:
         """Check each owner rule of this symbol.  A level is said once per New York date (``daily``) or once ever
         (``once``); reaching a stronger level is said even if a milder one was said before, and saying a level also
         settles the milder ones.  Rule pushes are never merged into a group message and never held by MIN_GAP."""
@@ -362,7 +364,7 @@ class Sentinel:
         if not valid or signals.is_stale(valid[-1]["ts"], now) or signals._recent_split(splits, now) is not None:
             return []                                    # no fresh price, or a split: prices before and after do not compare
         price = float(valid[-1]["close"])
-        ctx = self._rule_ctx(symbol, now, snap, bars, price, prev_close, daily)
+        ctx = self._rule_ctx(symbol, now, snap, bars, price, prev_close, daily, baseline)
         weight = None
         if ctx["shares"] and snap.get("total_assets"):
             weight = signals.position_weight({"shares": ctx["shares"], "market_value": ctx["market_value"]}, price,
@@ -402,7 +404,7 @@ class Sentinel:
                             "escalate": level == "urgent", "weight_pct": weight, "price_move": False, "trigger": "",
                             "event_date": None, "price": price, "prev_close": prev_close, "earnings_unacked": False,
                             "after_send": lambda deferred, alert_id: None, "rollback": lambda: None,
-                            "tier": 2 if level == "urgent" else 1, "rule_id": rule_id, "digest_text": text.splitlines()[0]})
+                            "tier": 2 if level == "urgent" else 1, "rule_id": rule_id, "owner_rule": True, "digest_text": text.splitlines()[0]})
             except Exception as exc:                     # one bad rule must not stop the others, nor the default alerts
                 logger.warning("owner rule %s for %s failed: %s", rule.get("id"), symbol, type(exc).__name__)
         return out
@@ -412,7 +414,7 @@ class Sentinel:
             "record_alert_id": None, "record_mult": 0.0}
 
     def _tiers_alerts(self, symbol, held, now, today, snap, price, prev_close, baseline, valid, position, total,
-                      candidate, last_seen=None, day_rule=False) -> list[dict]:
+                      candidate, last_seen=None, day_rule=frozenset()) -> list[dict]:
         """Section 7.3: measure the move against the stock's own daily sigma, tier it, say each tier once per direction
         per New York date, lock price levels.  State is committed here; a candidate carries ``rollback`` for the
         merge interval."""
@@ -465,11 +467,13 @@ class Sentinel:
                         default=None)
         dec = tiers.decide(states, tier, direction, r, stamp, last_push)
         if day_rule:
-            # The owner's own day_change rule for this symbol replaces the sigma-tier day-move pushes (levels and the
-            # 5-minute rule are untouched).  The move is still written as a digest line, so nothing is silently lost.
-            if direction and tier >= 1:
+            # The owner's own day_change rule replaces the sigma-tier day-move pushes of the direction(s) it covers (levels and
+            # the 5-minute rule are untouched; the other direction keeps its defaults).  A covered move is still written as a
+            # digest line, so nothing is silently lost.
+            if direction in day_rule and tier >= 1:
                 self._record_move(symbol, today, stamp, direction, r, m["sigma_mult"], row_of(direction))
-            dec = tiers.Decision("none")
+            if dec.action != "none" and dec.direction in day_rule:
+                dec = tiers.Decision("none")
         if dec.action == "hold":
             logger.info("%s %s: tier %s push held (%s)", symbol, today, dec.tier, dec.reason)
             return out
@@ -642,7 +646,8 @@ class Sentinel:
                    "weight_pct": alert.get("weight_pct") or None, "price": alert.get("price"),
                    "prev_close": alert.get("prev_close"), "trigger": alert.get("trigger") or None,
                    "event_date": alert.get("event_date"), "members": members or None, "tier": alert.get("tier"),
-                   "sigma_mult": alert.get("sigma_mult"), "rule_id": alert.get("rule_id")}
+                   "sigma_mult": alert.get("sigma_mult"), "rule_id": alert.get("rule_id"),
+                   "owner_rule": True if alert.get("kind") == "rule" else None}
         price, prev_close = alert.get("price"), alert.get("prev_close")
         if price is not None and prev_close:
             payload["move_pct"] = (price / prev_close - 1) * 100

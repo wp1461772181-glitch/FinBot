@@ -71,7 +71,7 @@ def test_n_day_change_counts_trading_days_back_from_yesterday():
 
 def test_the_volume_floor_and_ceiling_of_the_session_fraction():
     r = rule("volume_ratio", "above", [(2, "remind")])
-    assert rules.measure(r, CTX | {"session_minutes": 30, "volume_today": 100.0}) == pytest.approx(100 / (1000 * 0.1))
+    assert rules.measure(r, CTX | {"session_minutes": 90, "volume_today": 100.0}) == pytest.approx(100 / (1000 * 90 / 390))
     assert rules.measure(r, CTX | {"session_minutes": 390, "volume_today": 1000.0}) == pytest.approx(1.0)
 
 
@@ -138,9 +138,37 @@ def test_expiry_is_the_last_day_checked():
     assert not rules.expired(rule("price", "above", [(1, "remind")]), "2099-01-01")
 
 
-def test_level_key_carries_the_threshold():
+def test_level_key_carries_threshold_and_what_is_checked():
     r = rule("day_change", "up", [(10, "remind"), (20, "urgent")])
-    assert [rules.level_key(r, i) for i in (0, 1)] == ["remind@10", "urgent@20"]
+    keys = [rules.level_key(r, i) for i in (0, 1)]
+    assert [k.split("#")[0] for k in keys] == ["remind@10", "urgent@20"] and len(keys[0].split("#")[1]) == 8
+    base = rules.level_key(r, 0)
+    for change in ({"direction": "down"}, {"metric": "open_change"}, {"symbol": "NVDA"}, {"window_days": 5}):
+        assert rules.level_key(r | change, 0) != base, change
+    assert rules.level_key(r | {"symbol": "intc ", "text": "edited words", "repeat": "once"}, 0) == base   # not what is checked
+
+
+def test_covered_directions():
+    assert rules.covered_directions(rule("day_change", "up", [(1, "remind")])) == {"up"}
+    assert rules.covered_directions(rule("day_change", "down", [(1, "remind")])) == {"down"}
+    assert rules.covered_directions(rule("day_change", "either", [(1, "remind")])) == {"up", "down"}
+
+
+def test_expected_volume_follows_the_u_shape():
+    prof = {"open30": 3000.0, "mid": 1000.0, "close30": 2000.0}
+    assert rules.expected_volume(prof, 30) == 6 * 3000
+    assert rules.expected_volume(prof, 60) == 6 * 3000 + 6 * 1000
+    assert rules.expected_volume(prof, 32.5) == 6 * 3000 + 0.5 * 1000
+    assert rules.expected_volume({"open30": 3000.0}, 60) is None and rules.expected_volume(None, 60) is None
+
+
+def test_volume_ratio_prefers_the_profile_and_linear_waits_until_eleven():
+    r = rule("volume_ratio", "above", [(2, "remind")])
+    assert rules.measure(r, CTX | {"session_minutes": 60, "expected_volume": 300.0}) == pytest.approx(2.0)
+    assert rules.measure(r, CTX | {"session_minutes": 60, "expected_volume": None}) is None
+    assert rules.measure(r, CTX | {"session_minutes": 89, "expected_volume": None}) is None
+    assert rules.measure(r, CTX | {"session_minutes": 90, "expected_volume": None}) is not None
+    assert rules.measure(r, CTX | {"session_minutes": 29, "expected_volume": 300.0}) is None
 
 
 def test_daily_summary_drops_today_and_averages_twenty_days():

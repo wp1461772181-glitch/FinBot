@@ -6,6 +6,7 @@ A metric whose data is missing measures ``None`` and never fires: a rule must no
 
 from __future__ import annotations
 
+import hashlib
 import statistics
 from datetime import date
 from zoneinfo import ZoneInfo
@@ -28,6 +29,7 @@ LEVEL_NAMES = ("remind", "urgent")
 REPEATS = ("daily", "once")
 SESSION_MINUTES = 390             # 09:30-16:00
 VOLUME_MIN_MINUTES = 30           # volume_ratio is not measured before 10:00 ET: the first half hour is too noisy
+VOLUME_LINEAR_MIN_MINUTES = 90    # without the intraday profile, linear pacing over-reads early (volume is U-shaped): not before 11:00
 VOLUME_MIN_FRACTION = 0.1
 AVG_VOLUME_DAYS = 20
 AVG_VOLUME_MIN_DAYS = 10
@@ -82,10 +84,24 @@ def severity_order(rule: dict) -> list[int]:
     return sorted(range(len(levels)), key=lambda i: (levels[i]["level"] == "urgent", i))
 
 
+def fingerprint(rule: dict) -> str:
+    """Eight hex digits of what the rule checks (symbol, metric, direction, window).  An edit that changes what is measured
+    gives a new fingerprint, so the old fired / armed / done state cannot leak into the edited rule."""
+    basis = "|".join(str(x) for x in (symbol_of(rule), rule.get("metric"), rule.get("direction"),
+                                       rule.get("window_days") or ""))
+    return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:8]
+
+
 def level_key(rule: dict, index: int) -> str:
-    """The state key of one level.  It carries the threshold, so an edited rule starts afresh."""
+    """The state key of one level: ``<level>@<threshold>#<fingerprint>``, e.g. ``urgent@20#3fa9c1d2``.  Editing the
+    threshold or anything the fingerprint covers starts the level afresh."""
     item = rule["levels"][index]
-    return f"{item['level']}@{item['threshold']:g}"
+    return f"{item['level']}@{item['threshold']:g}#{fingerprint(rule)}"
+
+
+def covered_directions(rule: dict) -> set[str]:
+    """The move directions (``up`` / ``down``) a day_change rule speaks for; ``either`` covers both."""
+    return {"up": {"up"}, "down": {"down"}}.get(rule.get("direction"), {"up", "down"})
 
 
 def reference(rule: dict, ctx: dict) -> float | None:
@@ -106,6 +122,24 @@ def reference(rule: dict, ctx: dict) -> float | None:
     return float(ref) if isinstance(ref, (int, float)) and ref > 0 else None
 
 
+def expected_volume(avg_vol5: dict | None, minutes: float) -> float | None:
+    """Volume a stock normally trades in the first ``minutes`` of the regular session: its average 5-minute volume of each
+    bucket summed over the elapsed slots (a partial slot counts in proportion).  None when a needed bucket is unknown."""
+    if not avg_vol5 or minutes is None or minutes <= 0:
+        return None
+    total, slot = 0.0, 0
+    while slot * 5 < min(minutes, SESSION_MINUTES):
+        covered = min(5.0, min(minutes, SESSION_MINUTES) - slot * 5) / 5
+        at = 9 * 60 + 30 + slot * 5
+        bucket = "open30" if at < 10 * 60 else "mid" if at < 15 * 60 + 30 else "close30"
+        avg = avg_vol5.get(bucket)
+        if not isinstance(avg, (int, float)) or avg <= 0:
+            return None
+        total += avg * covered
+        slot += 1
+    return total
+
+
 def volume_fraction(minutes: float) -> float:
     return max(VOLUME_MIN_FRACTION, min(1.0, minutes / SESSION_MINUTES))
 
@@ -115,6 +149,7 @@ def measure(rule: dict, ctx: dict) -> float | None:
 
     ctx keys: price, prev_close, open (regular session only), avg_cost, closes (completed daily closes, oldest first,
     the last one is yesterday's), volume_today (regular session so far), avg_volume (20-day average daily volume),
+    expected_volume (volume normally traded by now, from the 5-minute profile; None when unknown),
     session_minutes (minutes since 09:30 ET, None outside the regular session), shares, market_value, total_assets."""
     price = ctx.get("price")
     if not isinstance(price, (int, float)) or price <= 0:
@@ -127,8 +162,14 @@ def measure(rule: dict, ctx: dict) -> float | None:
         return float(price)
     shares = ctx.get("shares")
     if metric == "volume_ratio":
-        minutes, volume, avg = ctx.get("session_minutes"), ctx.get("volume_today"), ctx.get("avg_volume")
-        if minutes is None or minutes < VOLUME_MIN_MINUTES or volume is None or not avg or avg <= 0:
+        minutes, volume = ctx.get("session_minutes"), ctx.get("volume_today")
+        if minutes is None or minutes < VOLUME_MIN_MINUTES or volume is None:
+            return None
+        expected = ctx.get("expected_volume")             # the stock's own intraday profile (sum of average 5-minute volumes)
+        if isinstance(expected, (int, float)) and expected > 0:
+            return round(float(volume) / float(expected), 6)
+        avg = ctx.get("avg_volume")                        # no profile: linear pacing, only once the session is well under way
+        if minutes < VOLUME_LINEAR_MIN_MINUTES or not avg or avg <= 0:
             return None
         return round(float(volume) / (float(avg) * volume_fraction(minutes)), 6)
     if not shares or shares <= 0:
