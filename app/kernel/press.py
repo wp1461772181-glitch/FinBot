@@ -144,6 +144,10 @@ def read(question: str, state: dict) -> Press | None:
         return Press("confirm", request_id, token, ticked if ticked and waiting is not None else None)
     if kind == "reply" and waiting is not None and waiting.get("reason") == QUESTION_CARD:
         return Press("reply", request_id, None, None, rest)
+    if waiting is not None and waiting.get("reason") == QUESTION_CARD:
+        # Text typed in the card's own reply box (the web sends it with the card's id): his own words, an ordinary turn, exactly as
+        # if he had typed it in the message box.  It used to fall through to "a button this kernel does not own" and be refused.
+        return None
     if waiting is not None and waiting.get("reason") in WRITE_CARDS:
         raise ValueError("confirmation_required")
     return Press("confirm", request_id, None, None)      # a button of a card this kernel does not own: settle refuses it

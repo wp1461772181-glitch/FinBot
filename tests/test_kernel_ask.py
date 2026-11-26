@@ -302,3 +302,28 @@ def test_an_empty_reply_is_refused_as_an_empty_answer_and_the_card_is_kept(cards
     result, _ = turn("reply:", pressed(card), messages=history("reply:"))
     assert fake.calls == [] and result["pending_request"] == card and result["status"] == "waiting_for_input"
     assert result["answer"] == press.EMPTY_REPLY
+
+
+# --- typing an answer in the card's own reply box (11-26): the web sends the text with the card's id ---------------------------
+
+def test_text_typed_on_the_waiting_question_card_is_an_ordinary_message(cards):
+    card = asked()
+    assert press.read("我记得是年初第一天", pressed(card)) is None          # his own words: an ordinary turn, not a button
+
+
+def test_a_typed_answer_sent_with_the_cards_id_goes_on_as_an_ordinary_turn(cards, env):
+    fake = script(env, [step(text="好的，按 1 月 2 日记。")])
+    card = asked()
+    result, _ = turn("就用一月第一个交易日", pressed(card), messages=history("就用一月第一个交易日"))
+    assert result["answer"] == "好的，按 1 月 2 日记。" and result["status"] == "succeeded"
+    assert result["audit"].get("write_outcome") != "refused:unsupported_card"
+    sent = fake.calls[0]["messages"]
+    assert sent[-1] == {"role": "user", "content": "就用一月第一个交易日"}
+
+
+def test_typed_text_on_a_write_card_still_does_not_confirm_it(cards):
+    from test_kernel_press import TOKEN
+    card = {"id": "11111111-1111-4111-8111-111111111111", "reason": press.WRITE_CARD,
+            "choices": [{"value": f"confirm:{TOKEN}", "label": "确认"}]}
+    with pytest.raises(ValueError, match="confirmation_required"):
+        press.read("同意", {"pending_request": card, "requested_pending_id": card["id"]})
