@@ -445,8 +445,8 @@ def test_question_is_not_appended_again_after_trailing_system_notes(env):
                {"role": "user", "content": "问题"}, {"role": "system", "content": "记忆摘要"}, {"role": "system", "content": "引用目录"}]
     run("问题", messages=history)
     sent = fake.calls[0]["messages"]
-    assert [m["role"] for m in sent] == ["system", "user", "assistant", "user", "system", "system"]
-    assert [m["content"] for m in sent].count("问题") == 1 and sent[-2]["content"] == "记忆摘要"
+    assert [m["role"] for m in sent] == ["system", "user", "assistant", "system", "system", "user"]      # the question is last
+    assert [m["content"] for m in sent].count("问题") == 1 and sent[-3]["content"] == "记忆摘要" and sent[-1]["content"] == "问题"
 
 
 def test_question_missing_from_history_is_appended_once_at_the_end(env):

@@ -731,7 +731,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
    messages.append({"role":"user","content":question})
    memory_note=layers.summary_message(context.get("segments",[]),kernel=anchored)
    if memory_note:messages.append(memory_note)
-   catalogue=layers.latest_inline_note(context) if inline_catalogue else layers.render_citation_catalogue(context.get("catalogue",[]))
+   catalogue=None if inline_catalogue else layers.render_citation_catalogue(context.get("catalogue",[]))
    if catalogue:messages.append(catalogue)
    if _protocol_size({"messages":messages,"tools":tool_schemas()})>layers.guard_for_window(chosen.window):raise HTTPException(413,"chat_context_too_large")
    from .agent_workflow.semantic import hydrate_legacy_web_sets, legacy_web_source_choices

@@ -283,7 +283,7 @@ def test_a_skill_that_asked_a_question_is_in_force_when_the_answer_arrives(saved
                 {"role": "user", "content": "reply:2024"}]
     result, _ = turn("reply:2024", pressed(card), context=with_skills(), messages=messages)
     sent = fake.calls[-1]["messages"]
-    assert sent[-1] == {"role": "system", "content": skills.render_skill(SKILL)} and sent[-2] == {"role": "user", "content": "2024"}
+    assert sent[-2] == {"role": "system", "content": skills.render_skill(SKILL)} and sent[-1] == {"role": "user", "content": "2024"}
     assert ("o", "财报速读") in saved.asked and result["audit"]["skill"] == {"name": "财报速读", "version": 3}
     assert "reply:" not in json.dumps(sent, ensure_ascii=False)
 
@@ -295,7 +295,7 @@ def test_a_typed_answer_to_the_skills_question_takes_the_skill_up_again(saved, c
                 {"role": "user", "content": "2024 年的"}]
     result, _ = turn("2024 年的", {"pending_request": first["pending_request"]}, context=with_skills(), messages=messages)
     sent = fake.calls[-1]["messages"]
-    assert sent[-1] == {"role": "system", "content": skills.render_skill(SKILL)} and sent[-2] == {"role": "user", "content": "2024 年的"}
+    assert sent[-2] == {"role": "system", "content": skills.render_skill(SKILL)} and sent[-1] == {"role": "user", "content": "2024 年的"}
     assert result["audit"]["skill"] == {"name": "财报速读", "version": 3} and not result.get("pending_request")
 
 
