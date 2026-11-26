@@ -200,7 +200,7 @@ def get_settings(owner: str) -> dict:
     with SessionLocal() as db:
         row = db.get(AlertSetting, owner)
         if row is None:
-            return _env_defaults()
+            return _env_defaults()      # env only fills in until he has chosen: the stored row, when present, wins over env by design
         return {"sensitivity": row.sensitivity if row.sensitivity in SENSITIVITIES else DEFAULT_SENSITIVITY, "short_moves": bool(row.short_moves)}
 
 

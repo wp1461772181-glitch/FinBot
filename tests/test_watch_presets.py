@@ -509,3 +509,50 @@ def test_the_status_codes_are_active_expired_finished(owner, monkeypatch, tmp_pa
     conn.close()
     status = {r["symbol"]: r["status"] for r in watch_rules_view.watch_view(OWNER_HASH)["rules"]}
     assert status == {"AMD": "finished", "MSFT": "expired", "NVDA": "active"} and new
+
+
+def test_a_finished_once_rule_makes_no_default_yield(owner, monkeypatch, tmp_path):
+    import sqlite3
+    from sentinel import rules as sr
+    path = tmp_path / "sentinel.db"
+    monkeypatch.setenv("SENTINEL_DB_PATH", str(path))
+    once = watch_rules.create(OWNER_HASH, {"symbol": "INTC", "metric": "position_weight", "direction": "above", "levels": level((40, "remind")), "repeat": "once"}, "q", today=TODAY)
+    before = watch_rules_view.watch_view(OWNER_HASH)
+    assert before["rules"][0]["status"] == "active" and {p["key"]: p for p in before["presets"]}["concentration"]["yields_on"] == ["INTC"]
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE rule_state(rule_id TEXT, ny_date TEXT, level TEXT, fired_at REAL)")
+    conn.execute("INSERT INTO rule_state VALUES (?, '*', ?, 1763640000)", (once["id"], sr.level_key(once, sr.severity_order(once)[-1])))
+    conn.commit()
+    conn.close()
+    view = watch_rules_view.watch_view(OWNER_HASH)
+    assert view["rules"][0]["status"] == "finished" and view["rules"][0]["overrides_default"] is None
+    assert {p["key"]: p for p in view["presets"]}["concentration"]["yields_on"] == []
+
+
+def _high(rows_count, spikes, peak_at=None):
+    rows = [{"close": 100, "high": 99, "low": 101} for _ in range(rows_count)]
+    for index in spikes:
+        rows[index] = {**rows[index], "high": 105}
+    if peak_at is not None:
+        rows[peak_at] = {"close": 110, "high": 99, "low": 101}
+    return rows
+
+
+HIGH = {"symbol": "INTC", "metric": "high_52w", "direction": "above", "levels": level((0, "remind")), "repeat": "daily"}
+
+
+def test_the_52_week_window_is_the_most_recent_252_closes(owner):
+    last = 299      # the 300 bars end today; the last window day is index 299
+    daily("INTC", _high(300, [last], peak_at=last - 252))          # the peak is the 252nd close before today: still counted
+    assert dry_run(OWNER_HASH, HIGH, today=TODAY)["hits"] == []
+    daily("NVDA", _high(300, [last], peak_at=last - 253))          # one day older: no longer counted, today's high is a new 52-week high
+    assert dry_run(OWNER_HASH, {**HIGH, "symbol": "NVDA"}, today=TODAY)["hits"] == [{"date": "2026-11-26", "level": "remind"}]
+
+
+def test_the_edge_is_not_used_up_while_cooling_down(owner):
+    # fires on index 275; the condition is false for a while; true again on 295 (20 days on: inside the cooldown) and 296 (outside): fires on 296
+    daily("INTC", _high(300, [275, 295, 296]))
+    got = dry_run(OWNER_HASH, HIGH, today=TODAY)
+    assert [h["date"] for h in got["hits"]] == ["2026-11-02", "2026-11-23"]      # index 275 and 296
+    daily("AMD", _high(300, list(range(275, 300))))          # a trend: true every day from 275 on: one hit, the edge was used by it
+    assert [h["date"] for h in dry_run(OWNER_HASH, {**HIGH, "symbol": "AMD"}, today=TODAY)["hits"]] == ["2026-11-02"]

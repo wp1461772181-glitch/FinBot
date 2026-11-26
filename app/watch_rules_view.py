@@ -63,7 +63,7 @@ def _own_rules(owner: str) -> tuple[list[dict], dict]:
         if status == watch_rules.ACTIVE and rule["metric"] == "day_change":      # only a rule that is still checked takes the default's place
             note = f"默认的{_override_word(rule['direction'])}分级对它不生效"
             covered.setdefault(rule["symbol"], set()).update({"up", "down"} if rule["direction"] == "either" else {rule["direction"]})
-        elif status != watch_rules.EXPIRED and rule["metric"] in YIELDS:
+        elif status == watch_rules.ACTIVE and rule["metric"] in YIELDS:      # a finished or expired rule no longer takes the default's place
             note = f"系统默认的「{watch_presets.CATALOG[YIELDS[rule['metric']]]['title']}」在 {rule['symbol']} 上让位给这条"
         out.append({"id": rule["id"], "symbol": rule["symbol"], "metric": rule["metric"], "direction": rule["direction"], "levels": rule["levels"],
                     "text": rule["text"], "status": FINISHED if status == watch_rules.DONE else status, "last_fired": watch_rules.when_beijing(max(at for _, _, at in fired)) if fired else None,
@@ -88,7 +88,7 @@ def _fixed_text(owner: str, key: str, settings: dict, covered: dict) -> str:
 def watch_view(owner: str) -> dict:
     """``{"rules": [...], "presets": [...], "settings": {...}}``: the contract of ``GET /agent-chat/watch`` (``docs/superpowers/plans/2026-11-26-stage5b2-preset-rules.md``)."""
     rules, covered = _own_rules(owner)
-    live = [r for r in rules if r["status"] != watch_rules.EXPIRED]      # what the sentinel is handed: an expired rule is not
+    live = [r for r in rules if r["status"] == watch_rules.ACTIVE]      # only a rule still being checked makes a default yield (the sentinel stops counting a finished ``once`` rule the day after)
     settings = watch_presets.settings_view(owner)
     presets = []
     for preset in watch_presets.resolved(owner):

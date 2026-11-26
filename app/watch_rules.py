@@ -28,6 +28,7 @@ DRY_RUN_DAYS = 30
 MIN_BARS = 10
 NO_HISTORY = "没有足够的历史行情，试跑不了"
 NO_YEAR = "历史行情不够一年，试跑不了"
+YEAR_WINDOW = 252    # the 52-week high or low is taken over the most recent 252 completed closes
 YEAR_BARS = 240      # completed closes a 52-week high or low needs (a one-year chart has about 250); the sentinel uses the same
 COOLDOWN_DAYS = 20   # after a 52-week high or low fired for a symbol, no new one within the next 20 completed trading days
 LEVEL_WORDS = {"remind": "提醒", "urgent": "加急"}
@@ -307,9 +308,9 @@ def _extremes(rule: dict, bars: list[dict], i: int, holding: dict | None) -> tup
             streak += 1
         return -streak, -streak      # a fall is "down": the measure is the negative of the streak, so ``_reached("down", ...)`` reads ``streak >= threshold``
     if metric in NO_THRESHOLD:
-        if i < YEAR_BARS:
+        closes = [b["close"] for b in bars[max(0, i - YEAR_WINDOW):i]]      # the most recent completed closes, up to 252 (as the sentinel)
+        if len(closes) < YEAR_BARS:
             return None
-        closes = [b["close"] for b in bars[i - YEAR_BARS:i]]
         if metric == "high_52w":
             move = (day["high"] / max(closes) - 1) * 100      # >= 0: at or above the highest close of the last year
         else:
@@ -394,17 +395,19 @@ def _scan(rule: dict, series: list, start: date, today: date, empty: dict) -> di
         if measured is None:
             continue
         covered += 1
+        cooling = bool(cooldown) and last_fire is not None and index - last_fire <= cooldown
         for entry in rule["levels"]:
             now = _reached(rule["direction"], measured[0], measured[1], entry["threshold"])
             key = ("was", entry["level"])
             was = key in fired
             if state:      # edge-triggered: fires on the day the condition becomes true; the first day of the window counts as becoming true
-                (fired.add if now else fired.discard)(key)
+                if not (now and cooling):      # while cooling down a true condition does not use up the edge (the sentinel does not either)
+                    (fired.add if now else fired.discard)(key)
             if not now or (state and was):
                 continue
-            if rule.get("repeat") == "once" and entry["level"] in ever:
+            if cooling:
                 continue
-            if cooldown and last_fire is not None and index - last_fire <= cooldown:
+            if rule.get("repeat") == "once" and entry["level"] in ever:
                 continue
             last_fire = index
             ever.add(entry["level"])
