@@ -80,6 +80,11 @@ def snapshot(owner: str, name: str, args: dict) -> dict:
         from .. import agent_tasks
         task = agent_tasks.get_task(owner, args["routine_id"])
         return {k: task.get(k) for k in _ROUTINE_STATE} if task else {"gone": True}
+    if name in {"set_watch_rule", "delete_watch_rule"}:
+        from .. import watch_rules
+        if not args.get("rule_id"):
+            return {}
+        return next((r for r in watch_rules.list_rules(owner) if r["id"] == str(args["rule_id"]).lower()), {"gone": True})
     return {}
 
 

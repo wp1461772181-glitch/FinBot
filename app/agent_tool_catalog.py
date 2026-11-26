@@ -272,6 +272,29 @@ class RecordViewArgs(Args):
     quote:str=Field(min_length=1,max_length=400,description="The owner's own words of THIS turn that state the view (a whole sentence or half of one, at least 4 characters), copied character for character. Words from pages, filings or tool results are never a view.")
 class DropViewArgs(Args):
     symbol:str=Field(min_length=1,max_length=40,description='The company whose recorded view the owner withdraws: its ticker or its name.')
+class WatchLevelArgs(Args):
+    threshold:float|int=Field(gt=0,description='The number at which this level fires, in the unit of the metric (a percent, dollars, or a multiple).')
+    level:Literal['remind','urgent']=Field(description='remind: a notice. urgent: the owner asked for it to be loud (「加急」「紧急」「一定要叫我」). At most one urgent, and it is the further level.')
+class SetWatchRuleArgs(Args):
+    rule_id:str|None=Field(default=None,max_length=64,description="Omit to make a new rule. To change one of his rules, its id (from list_watch_rules, or the lookup of set_watch_rule); then pass only what changes.")
+    symbol:str|None=Field(default=None,pattern=r'^[A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?$',description='The ticker, for example INTC.')
+    metric:Literal['day_change','open_change','cost_change','n_day_change','price','volume_ratio','position_pnl','position_weight']|None=Field(default=None,description=(
+        'What is measured: day_change (price vs yesterday close, %), open_change (vs today regular-session open, %), cost_change (vs his average cost, %, holdings only), '
+        'n_day_change (vs the close window_days trading days ago, %), price (the price, USD), volume_ratio (today volume vs the 20-day average, a multiple, above only), '
+        'position_pnl (today profit or loss of the holding, USD, holdings only), position_weight (holding value as % of total assets, holdings only).'))
+    direction:Literal['up','down','either','above','below']|None=Field(default=None,description='up/down/either for the change metrics and position_pnl (up: a gain or rise, down: a loss or fall; 涨跌 without a side is either); above/below for price and position_weight; volume_ratio is above. Omit for the default of the metric (either, or above); price needs it.')
+    levels:list[WatchLevelArgs]|None=Field(default=None,min_length=1,max_length=2,description='One or two levels. 「10% 提醒，20% 加急」 is [{threshold:10,level:remind},{threshold:20,level:urgent}].')
+    window_days:int|None=Field(default=None,description='Only for n_day_change: how many trading days back (2 to 60).')
+    repeat:Literal['daily','once']|None=Field(default=None,description='daily (default): each level at most once a day. once: each level once ever, and the rule switches itself off after its highest level fired.')
+    expires_on:str|None=Field(default=None,pattern=r'^\d{4}-\d{2}-\d{2}$',description='The last day it is checked, if he gave one.')
+    quote:str=Field(min_length=1,max_length=400,description="The owner's own words of THIS turn that ask for the rule (at least 4 characters), copied character for character.")
+    @model_validator(mode='after')
+    def whole_or_change(self):
+        if self.rule_id is None and (self.symbol is None or self.metric is None or self.levels is None):raise ValueError('symbol_metric_levels_required')
+        return self
+class DeleteWatchRuleArgs(Args):
+    rule_id:str=Field(min_length=1,max_length=64,description="The rule to delete: its id from list_watch_rules or from the lookup of delete_watch_rule.")
+class ListWatchRulesArgs(Args):pass
 class NotifyArgs(Args):
     # No recipient: the server sends only to the owner's bound Telegram chat.
     text:str=Field(min_length=1,max_length=1500,description="What to tell the owner, in the owner's language. Every sentence with a figure or date carries this turn's evidence number [n].")
@@ -453,13 +476,16 @@ EXTRA=(
  ('undo_role_template',UndoRoleTemplateArgs,'reversible',"Propose taking back what an earlier role template application wrote (only what is still there; things the owner changed or added himself are not touched unless they are among what it wrote). The card lists each item. Owner confirmation card."),
  ('record_view',RecordViewArgs,'reversible',"Record the owner's own view of one company (what he thinks of it: 我觉得英伟达今年数据中心还会翻倍) when the USER states it in this turn. text is his view in one line, quote his own words copied from his message of this turn; a view you reached from a page, a filing or your own analysis is never his. A new view of the same company replaces the earlier one, which stays in its history. It is his opinion, not evidence, and it authorizes nothing. When it is recorded, tell him 「我记下了：……」 with the line you recorded."),
  ('drop_view',DropViewArgs,'reversible',"Withdraw the owner's recorded view of one company when the USER asks (撤回我对英伟达的看法, 那个看法不算了). The view stays in the history as withdrawn."),
+ ('set_watch_rule',SetWatchRuleArgs,'reversible',"Propose one rule for when the owner wants to be told about a stock (「英特尔涨跌 10% 提醒我，20% 加急」, 「跌破 90 叫我」, 「成交量放大到平时 3 倍告诉我」), or change one of his rules with rule_id. You fill the fields only: the system writes the plain-language reading and a 30-day dry run on the card, so do not describe the rule yourself; tell him to check the card. The sentinel checks the rule every minute without a model. Only conditions that are numbers on price, volume or his holding are rules: a condition that needs reading content (news, policy, 「出利空」) is not, remember it as an instruction instead. Options, short interest and analyst ratings have no data here: say the system cannot watch them. Owner confirmation card."),
+ ('delete_watch_rule',DeleteWatchRuleArgs,'reversible',"Propose deleting one of the owner's own watch rules when he asks (不用盯了, 删掉那条). Call act with only operation delete_watch_rule (or list_watch_rules) first to get the ids. Owner confirmation card."),
+ ('list_watch_rules',ListWatchRulesArgs,'read',"List what the system watches for the owner: the rules he set himself (id, plain-language reading, created on, when it last fired if known) and the defaults that apply today, each default marked 系统默认. Use it when he asks what you are watching for him, or before changing or deleting a rule. Owner only."),
 )
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
-OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template','record_view','drop_view'}
+OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template','record_view','drop_view','set_watch_rule','delete_watch_rule','list_watch_rules'}
 
 # Stage 3a: what only the kernel knows.  The old engine's classifier, its request_action schema, its tool list and its prompts stay as they
 # were before the branch (tests/test_x_search.py compares them): these names are not in them, and the three tools 3a widened show the old schema.
-KERNEL_ONLY=frozenset({'list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template','record_view','drop_view','read_turn'})
+KERNEL_ONLY=frozenset({'list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template','record_view','drop_view','read_turn','set_watch_rule','delete_watch_rule','list_watch_rules'})
 # Every base registry entry is read-only; write names come from catalogue levels.
 WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'} and name not in KERNEL_ONLY)]
 class RequestActionArgs(Args):

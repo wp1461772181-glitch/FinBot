@@ -522,7 +522,6 @@ class WatchRule(Base):
     direction: Mapped[str] = mapped_column(String(8), nullable=False)
     levels: Mapped[list] = mapped_column(JSON, nullable=False)
     window_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    level_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     repeat: Mapped[str] = mapped_column(String(8), nullable=False, default="daily")
     expires_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_on: Mapped[date] = mapped_column(Date, nullable=False)

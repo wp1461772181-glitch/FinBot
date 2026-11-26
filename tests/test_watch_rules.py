@@ -68,7 +68,7 @@ def refused(code, **over):
 def test_each_metric_has_a_valid_shape(db, metric, direction, lv, extra):
     clean = validate(fields(metric=metric, direction=direction, levels=lv, **extra), owner=OWNER, today=TODAY)
     assert clean["metric"] == metric and clean["direction"] == direction and clean["levels"] == lv
-    assert clean["level_price"] is None and clean["repeat"] == "daily" and clean["expires_on"] is None
+    assert "level_price" not in clean and clean["repeat"] == "daily" and clean["expires_on"] is None
 
 
 def test_defaults_and_normalization(db):
@@ -104,7 +104,6 @@ def test_refusals_say_why(db):
     refused("invalid_repeat", repeat="hourly")
     refused("invalid_expiry", expires_on="next week")
     refused("invalid_expiry", expires_on="2026-11-01")
-    refused("invalid_level_price", level_price=5)
     assert validate(fields(repeat="once", expires_on="2026-12-01"), owner=OWNER, today=TODAY)["expires_on"] == "2026-12-01"
 
 
@@ -136,7 +135,10 @@ def test_describe_directions_repeat_and_expiry():
     assert describe({**base, "direction": "down", "repeat": "once"}) == "英特尔相对昨收下跌达到 8%：加急。只触发一次，之后这条规则自动停用。"
     assert describe({**base, "expires_on": "2026-12-01"}).endswith("每天最多一次。有效到 2026-12-01。")
     price = next(r for r in CONTRACT if r["metric"] == "price")
-    assert describe({**price, "direction": "above", "levels": level((110, "remind"), (120, "urgent"))}) == "超微的股价高于 110 美元：提醒；高于 120 美元：加急。每天每档一次。"
+    assert describe({**price, "direction": "above", "levels": level((110, "remind"), (120, "urgent"))}) == (
+        "超微的股价高于 110 美元：提醒；高于 120 美元：加急。每档各自：条件成立时提醒一次，回到该档之内后再次越过，才会再提醒；每天每档最多一次。")
+    one = describe({**price, "direction": "below", "levels": level((50, "remind"))})
+    assert one == "超微的股价低于 50 美元：提醒。条件成立时提醒一次，回到 50 美元之内后再次越过，才会再提醒；每天最多一次。"
     assert describe({**base, "symbol": "ZZZZ"}).startswith("ZZZZ相对昨收")      # no Chinese name: the ticker
 
 
@@ -206,7 +208,8 @@ def test_dry_run_price_levels(db):
     got = dry_run(OWNER, rule(metric="price", direction="below", levels=level((90, "urgent"), (100, "remind"))), today=TODAY)
     assert got["hits"] == [{"date": "2026-11-20", "level": "remind"}, {"date": "2026-11-24", "level": "remind"}, {"date": "2026-11-24", "level": "urgent"}]
     above = dry_run(OWNER, rule(metric="price", direction="above", levels=level((104, "remind"))), today=TODAY)
-    assert above["covered_days"] == 30 and len(above["hits"]) == 30      # flat at 105: above 104 every day
+    # flat at 105: above 104 every day, but a state metric fires once, on the day the condition becomes true (the window's first day)
+    assert above["covered_days"] == 30 and above["hits"] == [{"date": "2026-10-28", "level": "remind"}]
 
 
 def test_dry_run_n_day_change_compares_closes(db):
@@ -214,7 +217,8 @@ def test_dry_run_n_day_change_compares_closes(db):
     flat("INTC", spikes=closes)
     got = dry_run(OWNER, rule(metric="n_day_change", direction="up", window_days=2, levels=level((1.9, "remind"))), today=TODAY)
     # a steady climb of 1 a day: a 2-day move is 2% at 100 and falls below 1.9% from 108 up
-    assert got["covered_days"] == 30 and [h["date"] for h in got["hits"]] == [f"2026-10-{d}" for d in (29, 30, 31)] + [f"2026-11-0{d}" for d in (1, 2, 3)]
+    # edge-triggered: the condition holds on 6 days in a row and fires on the first only
+    assert got["covered_days"] == 30 and [h["date"] for h in got["hits"]] == ["2026-10-29"]
 
 
 def test_dry_run_volume_ratio_against_the_twenty_day_average(db):
@@ -295,7 +299,7 @@ def test_the_number_of_rules_is_capped(db, monkeypatch):
 
 def stored(rule):
     return WatchRule(id=uuid.UUID(rule["id"]), owner_hash=OWNER, symbol=rule["symbol"], metric=rule["metric"], direction=rule["direction"],
-                     levels=rule["levels"], window_days=rule["window_days"], level_price=rule["level_price"], repeat=rule["repeat"],
+                     levels=rule["levels"], window_days=rule["window_days"], repeat=rule["repeat"],
                      expires_on=date.fromisoformat(rule["expires_on"]) if rule["expires_on"] else None,
                      created_on=date.fromisoformat(rule["created_on"]), enabled=True, source="owner", quote="q",
                      created_at=datetime(2026, 11, 26, tzinfo=UTC) + timedelta(minutes=int(rule["id"][-1])))
@@ -312,7 +316,7 @@ def test_the_snapshot_rules_equal_the_contract_fixture(db, monkeypatch):
     monkeypatch.setattr(sentinel_bridge, "_portfolio", lambda owner: {"positions": [], "plans": [], "total_assets": None})
     snapshot = sentinel_bridge.build_snapshot(OWNER)
     assert snapshot["rules"] == CONTRACT
-    assert all(set(r) == {"id", "symbol", "metric", "direction", "levels", "window_days", "level_price", "repeat", "expires_on", "created_on", "text"}
+    assert all(set(r) == {"id", "symbol", "metric", "direction", "levels", "window_days", "repeat", "expires_on", "created_on", "text"}
                for r in snapshot["rules"])
 
 
@@ -333,3 +337,16 @@ def test_a_broken_rules_section_does_not_stop_the_snapshot(db, monkeypatch):
     monkeypatch.setattr(sentinel_bridge, "_pushover", lambda owner: {})
     monkeypatch.setattr(sentinel_bridge, "_portfolio", lambda owner: {"positions": [], "plans": [], "total_assets": None})
     assert sentinel_bridge.build_snapshot(OWNER)["rules"] == []
+
+
+def test_a_state_metric_rearms_after_the_condition_was_false(db):
+    flat("INTC", price=105, spikes={10: {"low": 95}, 9: {"low": 94}, 8: {"low": 96}, 6: {"low": 99}})
+    got = dry_run(OWNER, rule(metric="price", direction="below", levels=level((100, "remind"))), today=TODAY)
+    # below 100 on days 10, 9, 8 (one hit), back above on day 7, below again on day 6 (a second hit)
+    assert [h["date"] for h in got["hits"]] == ["2026-11-16", "2026-11-20"]
+
+
+def test_the_first_window_day_counts_as_becoming_true(db):
+    flat("INTC", price=90)
+    got = dry_run(OWNER, rule(metric="price", direction="below", levels=level((100, "remind"), )), today=TODAY)
+    assert got["hits"] == [{"date": "2026-10-28", "level": "remind"}]

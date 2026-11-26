@@ -29,6 +29,7 @@ MIN_BARS = 10
 NO_HISTORY = "没有足够的历史行情，试跑不了"
 LEVEL_WORDS = {"remind": "提醒", "urgent": "加急"}
 REPEATS = ("daily", "once")
+STATE_METRICS = frozenset({"price", "position_weight", "cost_change", "n_day_change"})      # edge-triggered: a level fires when its condition becomes true
 MOVES = ("up", "down", "either")
 
 # metric -> (directions allowed, default direction, needs a holding, largest threshold, label)
@@ -142,8 +143,6 @@ def validate(fields: dict, *, owner: str | None = None, today: date | None = Non
             raise WatchRuleError("invalid_window", f"N 日涨跌要给 window_days，{WINDOW_MIN} 到 {WINDOW_MAX} 个交易日。")
     elif window is not None:
         raise WatchRuleError("invalid_window", "只有 N 日涨跌（n_day_change）才用 window_days。")
-    if fields.get("level_price") is not None:
-        raise WatchRuleError("invalid_level_price", "这个字段暂时不用，留空。")
     repeat = fields.get("repeat") or "daily"
     if repeat not in REPEATS:
         raise WatchRuleError("invalid_repeat", "repeat 只有 daily（每天每档一次）和 once（每档只一次，之后自动停用）。")
@@ -153,7 +152,7 @@ def validate(fields: dict, *, owner: str | None = None, today: date | None = Non
     levels = _levels(fields.get("levels"), metric, direction)
     if spec["holding"] and owner is not None and symbol not in _holdings(owner):
         raise WatchRuleError("not_a_holding", f"你现在没有持有 {symbol}。成本、持仓盈亏、仓位占比这几类规则只能用在持仓上；先记下这笔持仓，或换一个指标。")
-    return {"symbol": symbol, "metric": metric, "direction": direction, "levels": levels, "window_days": window, "level_price": None,
+    return {"symbol": symbol, "metric": metric, "direction": direction, "levels": levels, "window_days": window,
             "repeat": repeat, "expires_on": expires.isoformat() if expires else None}
 
 
@@ -193,8 +192,14 @@ def describe(rule: dict) -> str:
     else:
         prefix, reach = f"{name}占你总资产的比例", lambda t: f"{'低于' if below else '高于'} {_g(t)}%"
     clauses = "；".join(f"{reach(entry['threshold'])}：{LEVEL_WORDS[entry['level']]}" for entry in levels)
+    state = metric in STATE_METRICS
+    unit = {"%": "%", "美元": " 美元"}.get(UNITS[metric], "")
     if rule.get("repeat") == "once":
         again = "每档只触发一次，最高档触发后这条规则自动停用。" if len(levels) == 2 else "只触发一次，之后这条规则自动停用。"
+    elif state and len(levels) == 2:
+        again = "每档各自：条件成立时提醒一次，回到该档之内后再次越过，才会再提醒；每天每档最多一次。"
+    elif state:
+        again = f"条件成立时提醒一次，回到 {_g(levels[0]['threshold'])}{unit}之内后再次越过，才会再提醒；每天最多一次。"
     else:
         again = "每天每档一次。" if len(levels) == 2 else "每天最多一次。"
     until = f"有效到 {rule['expires_on']}。" if rule.get("expires_on") else ""
@@ -284,24 +289,31 @@ def dry_run(owner: str, rule: dict, days: int = DRY_RUN_DAYS, *, today: date | N
             return {**empty, "note": "总资产暂时算不出来（有持仓缺行情），试跑不了"}
         if rule["metric"] == "cost_change" and not holding.get("avg_cost"):
             return {**empty, "note": "没有持仓成本，试跑不了"}
+    state = rule["metric"] in STATE_METRICS
     hits, covered, fired = [], 0, set()
+    ever = set()
     highest = (rule["levels"][0] if rule["direction"] == "below" else rule["levels"][-1])["level"]
     for i in range(1, len(bars)):
         day = bars[i]["date"]
         if day <= start or day > today:
             continue
-        if rule.get("repeat") == "once" and highest in fired:
+        if rule.get("repeat") == "once" and highest in ever:
             break      # the rule switched itself off after its highest level fired
         measured = _extremes(rule, bars, i, holding)
         if measured is None:
             continue
         covered += 1
         for entry in rule["levels"]:
-            if not _reached(rule["direction"], measured[0], measured[1], entry["threshold"]):
+            now = _reached(rule["direction"], measured[0], measured[1], entry["threshold"])
+            key = ("was", entry["level"])
+            was = key in fired
+            if state:      # edge-triggered: fires on the day the condition becomes true; the first day of the window counts as becoming true
+                (fired.add if now else fired.discard)(key)
+            if not now or (state and was):
                 continue
-            if rule.get("repeat") == "once" and entry["level"] in fired:
+            if rule.get("repeat") == "once" and entry["level"] in ever:
                 continue
-            fired.add(entry["level"])
+            ever.add(entry["level"])
             hits.append({"date": day.isoformat(), "level": entry["level"]})
     if not covered:
         return {**empty, "note": NO_HISTORY}
@@ -331,7 +343,7 @@ def rule_dict(row: WatchRule) -> dict:
     """The rule as the sentinel and the routes see it (the contract of the plan); ``text`` is always written fresh by ``describe``."""
     rule = {"id": str(row.id), "symbol": row.symbol, "metric": row.metric, "direction": row.direction,
             "levels": [{"threshold": _num(e["threshold"]), "level": e["level"]} for e in row.levels],
-            "window_days": row.window_days, "level_price": row.level_price, "repeat": row.repeat,
+            "window_days": row.window_days, "repeat": row.repeat,
             "expires_on": row.expires_on.isoformat() if row.expires_on else None, "created_on": row.created_on.isoformat()}
     return {**rule, "text": describe(rule)}
 
@@ -373,7 +385,7 @@ def merged_fields(owner: str, rule_id: str, fields: dict) -> tuple[dict, dict]:
     """(the rule now, the fields it would have after ``fields`` change it); only the keys given (not None) change."""
     with SessionLocal() as db:
         current = rule_dict(_live(db, owner, rule_id))
-    keep = ("symbol", "metric", "direction", "levels", "window_days", "level_price", "repeat", "expires_on")
+    keep = ("symbol", "metric", "direction", "levels", "window_days", "repeat", "expires_on")
     merged = {key: current[key] for key in keep}
     given = {key: value for key, value in fields.items() if key in keep and value is not None}
     if given.get("metric") not in (None, current["metric"]):      # a different measure: direction and window start over unless said
@@ -389,7 +401,7 @@ def create(owner: str, fields: dict, quote: str = "", *, today: date | None = No
         if len(live) >= MAX_RULES:
             raise WatchRuleError("too_many_rules", f"盯防规则已经有 {MAX_RULES} 条了，先删掉不用的再加。")
         row = WatchRule(owner_hash=owner, symbol=clean["symbol"], metric=clean["metric"], direction=clean["direction"], levels=clean["levels"],
-                        window_days=clean["window_days"], level_price=None, repeat=clean["repeat"],
+                        window_days=clean["window_days"], repeat=clean["repeat"],
                         expires_on=date.fromisoformat(clean["expires_on"]) if clean["expires_on"] else None,
                         created_on=today or today_ny(), enabled=True, source="owner", quote=" ".join(str(quote or "").split())[:400])
         db.add(row)
