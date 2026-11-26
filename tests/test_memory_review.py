@@ -327,3 +327,49 @@ def test_the_memory_role_exists_and_resolves_to_the_server_default_when_unset(mo
     asked = {}
     monkeypatch.setattr(roles, "resolve", lambda owner, role: asked.update(owner=owner, role=role) or {"name": "x"})
     assert review._model_for(OWNER) == {"name": "x"} and asked == {"owner": OWNER, "role": "memory"}
+
+
+# --- the guesses the model wrote during a chat (kernel memory writes, slice A5) -----------------------------------------------------------
+
+def _guess(text, when=None, quote="先说结论 3"):
+    return profile.add_noticed(OWNER, kind="preference", text=text, quote=quote, now=when or NOW - timedelta(days=2))
+
+
+def test_the_message_lists_the_waiting_in_chat_guesses_after_its_own_proposals_and_does_not_propose_them_again(monkeypatch):
+    ids = _twelve()
+    _guess("总是先要结论")
+    _guess("上个月就记下的猜测", when=SINCE - timedelta(days=5))       # older than the last run: he has seen it in that month's message
+    _model(monkeypatch, {"items": [_proposal(ids), _proposal(ids, text="总是先要结论")]})        # the second repeats the in-chat guess
+    result = review.run(OWNER, NOW, SINCE)
+    assert result["proposed"] == 1 and result["dropped"] == 1
+    sent = json.loads(review_calls[0]["user"])
+    assert "总是先要结论" in sent["known"] and "上个月就记下的猜测" in sent["known"]
+    text = _posted()[0]
+    assert "1. 提问时总是先要结论（我的推测）" in text and "2. 总是先要结论（我的推测）\n   例：「先说结论 3」" in text and "上个月就记下的猜测" not in text
+    assert "新记 1 条推测" in text
+    assert len(_items(status="proposed")) == 3
+
+
+def test_waiting_guesses_alone_still_get_a_message_and_a_confirmed_or_reviewed_one_is_not_listed(monkeypatch):
+    _twelve()
+    _guess("总是先要结论")
+    _guess("别的习惯")
+    with SessionLocal() as db:
+        db.query(AgentProfileItem).filter_by(text="别的习惯").update({"review_run": uuid.uuid4()})      # a review's own proposal: its message already listed it
+        db.commit()
+    _model(monkeypatch, {"items": []})
+    result = review.run(OWNER, NOW, SINCE)
+    assert result["proposed"] == 0 and result["posted"] is True
+    text = _posted()[0]
+    assert "1. 总是先要结论（我的推测）" in text and "别的习惯" not in text
+
+
+def test_flag_off_the_message_is_the_earlier_one(monkeypatch):
+    monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", "off")
+    ids = _twelve()
+    _guess("总是先要结论")
+    _model(monkeypatch, {"items": []})
+    assert review.run(OWNER, NOW, SINCE)["posted"] is False and _posted() == []
+    _model(monkeypatch, {"items": [_proposal(ids)]})
+    review.run(OWNER, NOW, SINCE)
+    assert "2. " not in _posted()[0] and "例：「先说结论 3」" not in _posted()[0]

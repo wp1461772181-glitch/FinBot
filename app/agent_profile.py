@@ -667,6 +667,15 @@ def add_noticed(owner_hash: str, *, kind: str, text: str, quote: str, bot_id: st
         return {"status": "added", "item": serialize(row, _bot_names(db, owner_hash))}
 
 
+def waiting_guesses(owner_hash: str, since: datetime | None) -> list[dict]:
+    """The guesses the model wrote on the spot (origin pattern, still proposed, no review run) created after ``since``, oldest first:
+    ``{text, quote}``.  The monthly message lists them next to its own proposals."""
+    with SessionLocal() as db:
+        rows = [r for r in _proposed(db, owner_hash) if r.origin == "pattern" and r.review_run is None and (since is None or (r.created_at and r.created_at > since))]
+    rows.sort(key=lambda r: (r.created_at, str(r.id)))
+    return [{"text": r.text, "quote": r.quote} for r in rows]
+
+
 def archive_stale_proposed(owner_hash: str, now: datetime, days: int = 60) -> int:
     """Proposals nobody answered for ``days`` days are archived.  Returns how many."""
     with SessionLocal() as db:
