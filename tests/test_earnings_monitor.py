@@ -365,4 +365,14 @@ def test_the_reader_records_the_revenue_figure_as_written():
         number = er._number(token)
         assert er._billions(entry, number) == value and er._step(entry, "revenue_b", number) == step, token
     assert er._step({"revenue_b": None}, "revenue_b", None) is None
+    # the quote is the release's own text: a token the model shortened or converted is counted as the quote writes it
+    assert er._step({"revenue_b": "15", "quote": "Revenue was $15.0 billion, up 4%"}, "revenue_b", 15.0) == 0.1
+    assert er._step({"revenue_b": "14.3", "quote": "revenue of $14,300 million"}, "revenue_b", 14.3) == 0.001
+    assert er._step({"revenue_b": "16", "quote": "revenue of $16 billion"}, "revenue_b", 16.0) == 1.0
+
+
+def test_the_judge_sees_no_revenue_step():
+    from app import earnings_reader as er
+    payload = json.loads(er._judge_payload(er.ReleaseFacts(revenue=15.0, revenue_step=0.1), er.Comparison(), "", None))
+    assert "revenue_step" not in payload["facts"] and payload["facts"]["revenue"] == 15.0
     assert er.ReleaseFacts().revenue_step is None, "a record from before keeps working"

@@ -288,9 +288,20 @@ def _grounded(entry, key: str, haystack: str) -> float | None:
 
 
 def _step(entry, key: str, value: float | None) -> float | None:
-    """The written precision of a revenue token in $ billions: 10^-decimals of the token as written, divided by 1,000 when it is in millions."""
+    """The written precision of the release's revenue in $ billions.  From the quote first: the number in it that is this revenue (in
+    billions, or in millions when the quote has it so), counted as written there; the model may have copied 「15.0」 as 「15」 or turned
+    「14,300」 million into 「14.3」 billion, and the quote is the release's own text.  Else from the token as given.  None when unknown."""
     if value is None or not isinstance(entry, dict):
         return None
+    billions = _billions(entry, value)
+    quote = entry.get("quote") if isinstance(entry.get("quote"), str) else ""
+    for written in re.findall(r"\d[\d,]*(?:\.\d+)?", quote):
+        number = float(written.replace(",", ""))
+        decimals = len(written.split(".", 1)[1]) if "." in written else 0
+        if number < 1000 and abs(number - billions) < 1e-9:
+            return 10.0 ** -decimals
+        if number >= 1000 and abs(number / 1000.0 - billions) < 1e-9:
+            return 10.0 ** -decimals / 1000.0
     token = entry.get(key) if entry.get(key) is not None else entry.get("number")
     if not isinstance(token, str):
         return None
@@ -387,7 +398,8 @@ JUDGE_PROMPT = """你是读财报的人，要像一个懂这家公司的行业�
 
 def _judge_payload(facts: ReleaseFacts, comparison: Comparison, commentary: str, after_hours_return) -> str:
     from dataclasses import asdict
-    payload = {"facts": {k: v for k, v in asdict(facts).items() if k != "source_text"},
+    # revenue_step is the consensus line's, not the judge's: its input stays as the blind test saw it
+    payload = {"facts": {k: v for k, v in asdict(facts).items() if k not in ("source_text", "revenue_step")},
                "comparison": asdict(comparison), "commentary": commentary or "",
                "after_hours_return": after_hours_return,
                "release_text": facts.source_text[:JUDGE_SOURCE_CHARS]}
