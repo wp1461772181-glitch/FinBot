@@ -2739,7 +2739,7 @@
   "这些结果读不出来": "These runs could not be read",
   "最近 8 周，按回答所在的那一周（周一开始，北京时间）统计你点的「好」和「不好」，在对话里说的也算。": "The last 8 weeks, by the week of the answer (weeks start on Monday, Beijing time): your good and not-helpful marks, including the ones you said in a conversation.",
   "尺子是固定的一套真实问题，每次改动前后在影子环境里跑一遍；这里列出盒子上留下的每一次结果。": "The ruler is a fixed set of real questions, run in the shadow environment before and after each change; every run kept on the box is listed here.",
-  "那周": "week",
+  "{date} 那周": "Week of {date}",
   "（没写原因）": "(no reason given)",
   "在对话里说的": "said in a conversation",
   "（早期记录，没有题库说明）": "(early run, no suite record)",

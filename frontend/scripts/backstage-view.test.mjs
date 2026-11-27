@@ -526,6 +526,8 @@ test("5d-3a: 「被点不好的」 is feedback=bad; a row says his verdict; the 
 
 test("5d-3b 质量: a week, an answer marked 不好, a ruler run with and without its record", () => {
   assert.deepEqual(qualityWeekRow({ week_start: "2026-11-23", good: 3, bad: 1 }), { id: "2026-11-23", week: "11-23 那周", good: "3", bad: "1" });
+  const english = { t: (phrase) => ({ "{date} 那周": "Week of {date}" })[phrase] ?? phrase, colon: ": ", comma: ", ", list: ", ", parens: (value) => ` (${value})` };
+  assert.equal(qualityWeekRow({ week_start: "2026-11-23" }, english).week, "Week of 11-23");
   assert.deepEqual(qualityWeekRow({}), { id: "", week: "—", good: "0", bad: "0" });
   const bad = badAnswerRow({ message_id: "m1", at: "2026-11-27T12:46:00+00:00", bot: "研究员", question: "英伟达营收", reason: "没说环比", channel: "chat" }, "UTC");
   assert.deepEqual(bad, { id: "m1", time: "11-27 12:46", bot: "研究员", question: "英伟达营收", reason: "没说环比", said: "在对话里说的" });

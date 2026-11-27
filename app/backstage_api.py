@@ -1088,9 +1088,11 @@ def _bad_answers(db, owner: str) -> list[dict]:
                       .where(AF.owner_hash == owner, AF.verdict == "bad", AgentConversation.owner_hash == owner)
                       .order_by(AgentMessage.created_at.desc(), AF.id.desc()).limit(QUALITY_BAD)).all()
     turns = [row[0].turn_id for row in rows]
+    conversations = {row[0].conversation_id for row in rows}
     asked = {}
     if turns:
-        for turn_id, content in db.execute(select(AgentMessage.turn_id, AgentMessage.content).where(AgentMessage.turn_id.in_(turns), AgentMessage.role == "user")
+        for turn_id, content in db.execute(select(AgentMessage.turn_id, AgentMessage.content).where(AgentMessage.turn_id.in_(turns), AgentMessage.role == "user",
+                                                                                                    AgentMessage.conversation_id.in_(conversations))
                                            .order_by(AgentMessage.sequence)).all():
             asked.setdefault(turn_id, content)
     bots = _bot_names(db, owner)
@@ -1115,8 +1117,9 @@ def _failed_cases(path: Path) -> list[dict]:
             except ValueError:
                 continue
             if isinstance(row, dict) and row.get("passed") is False:
-                failed.append({"case_id": str(row.get("case_id") or ""), "turn": row.get("turn_index"),
-                               "checks": [str(check) for check in row.get("failed_checks") or []][:5]})
+                checks = row.get("failed_checks") if isinstance(row.get("failed_checks"), list) else []
+                turn = row.get("turn_index") if isinstance(row.get("turn_index"), int) else None
+                failed.append({"case_id": str(row.get("case_id") or ""), "turn": turn, "checks": [str(check) for check in checks][:5]})
                 if len(failed) >= RULER_FAILED:
                     break
     return failed
@@ -1125,11 +1128,19 @@ def _failed_cases(path: Path) -> list[dict]:
 def _ruler_run(directory: Path) -> dict:
     summary_path = directory / "summary.json"
     summary = _read_json(summary_path)
+    if not isinstance(summary, dict):
+        raise ValueError("summary is not an object")
     meta_path = directory / "meta.json"
-    meta = _read_json(meta_path) if meta_path.is_file() and not meta_path.is_symlink() else None
+    try:
+        meta = _read_json(meta_path) if meta_path.is_file() and not meta_path.is_symlink() else None
+    except (OSError, ValueError):
+        meta = None                    # a broken record is no record: the run still shows, as an early one
     meta = meta if isinstance(meta, dict) else None
-    at = (meta or {}).get("finished_at") or datetime.fromtimestamp(summary_path.stat().st_mtime, UTC).isoformat()
-    return {"name": directory.name, "at": at, "meta": meta is not None, "suite": (meta or {}).get("suite"), "note": (meta or {}).get("note") or None,
+    finished = (meta or {}).get("finished_at")
+    at = finished if isinstance(finished, str) and finished else datetime.fromtimestamp(summary_path.stat().st_mtime, UTC).isoformat()
+    note, suite = (meta or {}).get("note"), (meta or {}).get("suite")
+    return {"name": directory.name, "at": at, "meta": meta is not None, "suite": suite if isinstance(suite, str) else None,
+            "note": note if isinstance(note, str) and note else None,
             "turns": summary.get("turns"), "pass_rate": summary.get("pass_rate"), "total_ms_p50": summary.get("total_ms_p50"),
             "total_ms_p90": summary.get("total_ms_p90"), "model_calls_mean": summary.get("model_calls_mean"),
             "failed": _failed_cases(directory / "results.jsonl")}
@@ -1150,7 +1161,7 @@ def ruler_runs(root: Path | None = None) -> tuple[list[dict], list[str]]:
             continue
         try:
             runs.append(_ruler_run(directory))
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError, TypeError):
             errors.append(directory.name)
     runs.sort(key=lambda run: run["at"], reverse=True)
     return runs[:RULER_RUNS], sorted(errors)

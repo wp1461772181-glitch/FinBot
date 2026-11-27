@@ -534,7 +534,7 @@ export const EARLY_RUN = "（早期记录，没有题库说明）";
 export function qualityWeekRow(item, w = ZH_WORDS) {
   const start = text(item?.week_start);
   const [, month, day] = start.split("-");
-  return { id: start, week: month && day ? `${month}-${day} ${w.t("那周")}` : DASH, good: String(Number(item?.good) || 0), bad: String(Number(item?.bad) || 0) };
+  return { id: start, week: month && day ? w.t("{date} 那周").replace("{date}", `${month}-${day}`) : DASH, good: String(Number(item?.good) || 0), bad: String(Number(item?.bad) || 0) };
 }
 
 /** One answer he marked 不好: when, which bot, the question, his reason (and that he said it in a conversation). */

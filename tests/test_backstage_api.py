@@ -1407,3 +1407,31 @@ def test_quality_keeps_the_newest_50_runs(client, monkeypatch, tmp_path):
         write_run(root, f"run{i:02d}", meta={"finished_at": (NOW - timedelta(minutes=i)).isoformat()})
     runs, errors = backstage_api.ruler_runs(root)
     assert len(runs) == 50 and runs[0]["name"] == "run00" and runs[-1]["name"] == "run49" and errors == []
+
+
+def test_quality_survives_bad_records_and_reads_no_linked_file(client, monkeypatch, tmp_path):
+    """Review of 5d-3b: a malformed results line or meta must not fail the tab; a summary, results or meta that is a link is not followed."""
+    from app import backstage_api
+    root = tmp_path / "ruler-out"
+    write_run(root, "odd-results", meta={"finished_at": (NOW - timedelta(hours=1)).isoformat()},
+              results=[{"case_id": "B01", "passed": False, "failed_checks": 3, "turn_index": "x"}])
+    write_run(root, "numeric-time", meta={"finished_at": 1764000000, "note": 7})
+    bad_meta = write_run(root, "broken-meta")
+    (bad_meta / "meta.json").write_text("{oops", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "summary.json").write_text(json.dumps({"turns": 1, "pass_rate": 0.0}), encoding="utf-8")
+    linked = root / "linked-summary"
+    linked.mkdir()
+    (linked / "summary.json").symlink_to(outside / "summary.json")
+    linked_results = write_run(root, "linked-results")
+    (linked_results / "results.jsonl").unlink()
+    (outside / "results.jsonl").write_text(json.dumps({"case_id": "X99", "passed": False}) + "\n", encoding="utf-8")
+    (linked_results / "results.jsonl").symlink_to(outside / "results.jsonl")
+    runs, errors = backstage_api.ruler_runs(root)
+    by = {run["name"]: run for run in runs}
+    assert set(by) == {"odd-results", "numeric-time", "broken-meta", "linked-results"} and errors == [], "a linked summary is no run"
+    assert by["odd-results"]["failed"] == [{"case_id": "B01", "turn": None, "checks": []}]
+    assert (by["numeric-time"]["note"], isinstance(by["numeric-time"]["at"], str)) == (None, True)
+    assert (by["broken-meta"]["meta"], by["broken-meta"]["pass_rate"]) == (False, 1.0)
+    assert by["linked-results"]["failed"] == [], "a linked results file is not read"
