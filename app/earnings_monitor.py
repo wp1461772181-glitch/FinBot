@@ -474,7 +474,7 @@ def _consensus(event: EarningsEvent, facts) -> list[str] | None:
     try:
         from . import earnings_calendar
         row = earnings_calendar.consensus_for(event.symbol, event.accepted_at.astimezone(NY).date())
-        return earnings_calendar.consensus_lines(row, getattr(facts, "revenue", None), getattr(facts, "eps", None))
+        return earnings_calendar.consensus_lines(row, getattr(facts, "revenue", None), getattr(facts, "eps", None), getattr(facts, "eps_gaap", None))
     except Exception:
         log.warning("earnings %s: the consensus could not be read", event.symbol, exc_info=True)
         return None

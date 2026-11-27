@@ -358,31 +358,61 @@ def consensus_for(symbol: str, reported: date, window_days: int = 3) -> dict | N
     return min(rows, key=lambda row: abs((date.fromisoformat(row["report_date"]) - reported).days))
 
 
-def _versus(actual: float, expected: float) -> str:
-    if not expected:
-        return ""
-    gap = (actual - expected) / abs(expected) * 100
-    if abs(gap) < 0.05:
-        return "，与预期持平"
+def _decimals(value: float) -> int:
+    """How many decimals a figure taken from a release carries (15.8 → 1, 14.762 → 3): its precision, not the float's."""
+    text = repr(float(value))
+    return len(text.split(".")[1].rstrip("0")) if "." in text and "e" not in text else 0
+
+
+def _revenue_versus(actual: float, expected: float) -> str:
+    """Revenue against the consensus: higher / lower by a percentage, but in line when the gap is within the actual's own precision (a release
+    that says 「$15.8 billion」 cannot be said to beat 15.79), and no direction at all when the two are not the same order of magnitude."""
+    ratio = actual / expected
+    if not 0.2 <= ratio <= 5:
+        return "，量级对不上，可能是单位问题，请以原文为准"
+    places = _decimals(actual)
+    if abs(actual - expected) < 0.5 * 10 ** -places:
+        return f"，与预期大致持平（新闻稿实际数只到小数点后 {places} 位）" if places < 3 else "，与预期持平"
+    gap = (actual - expected) / expected * 100
     return f"，比预期{'高' if gap > 0 else '低'} {abs(gap):.1f}%"
 
 
-def consensus_lines(row: dict | None, revenue_billions: float | None, eps_adjusted: float | None) -> list[str]:
-    """The follow-up's 「对比市场预期」 section, written by code: revenue and adjusted EPS against the consensus the calendar holds for this
-    report.  A report the calendar does not know says so in one line."""
-    head = f"对比市场预期（{SOURCE_NAME}，调整后口径）"
-    if row is None or (row.get("eps_estimate") is None and row.get("revenue_estimate") is None):
-        return [head, "· 这一季没有拿到市场预期"]
+def _eps_versus(actual: float, expected: float) -> str:
+    """EPS against the consensus as a difference in dollars (a percentage of an expectation near zero or below it means nothing); the
+    percentage is added only when the expectation is at least 0.10 dollars.  Within half a cent is in line (EPS is reported to the cent)."""
+    gap = actual - expected
+    if abs(gap) < 0.005:
+        return "，与预期持平"
+    said = f"，比预期{'高' if gap > 0 else '低'} {abs(gap):.2f} 美元"
+    if abs(expected) >= 0.10:
+        said += f"（{abs(gap) / abs(expected) * 100:.1f}%）"
+    return said
+
+
+def consensus_lines(row: dict | None, revenue_billions: float | None, eps_adjusted: float | None, eps_gaap: float | None = None) -> list[str]:
+    """The follow-up's 「对比市场预期」 section, written by code: revenue and EPS against the consensus the calendar holds for this report.
+    The consensus EPS is the adjusted one (checked on 11-27 against the box's history: Finnhub's actuals equal the releases' non-GAAP EPS, and
+    the GAAP one for a company that reports no other), so a release with only GAAP EPS is compared with a note.  A report the calendar does
+    not know says so in one line."""
+    if row is None or (row.get("eps_estimate") is None and not row.get("revenue_estimate")):
+        return [f"对比市场预期（{SOURCE_NAME}，调整后口径）", "· 这一季没有拿到市场预期"]
+    fetched = datetime.fromisoformat(row["fetched_at"]).astimezone(UTC) + timedelta(hours=8) if row.get("fetched_at") else None
+    head = (f"对比市场预期（{SOURCE_NAME}，调整后口径；FY{row['fiscal_year']} Q{row['fiscal_quarter']}"
+            + (f"，{fetched:%m-%d %H:%M} 拉取" if fetched else "") + "）")
     lines = [head]
-    if row.get("revenue_estimate") is not None:
+    if row.get("revenue_estimate"):
         expected = row["revenue_estimate"] / 1e9
-        if revenue_billions is not None:
-            lines.append(f"· 营收 {revenue_billions:.2f}B：预期 {expected:.2f}B{_versus(revenue_billions, expected)}")
+        if revenue_billions:
+            lines.append(f"· 营收 {revenue_billions:g}B：预期 {expected:.2f}B{_revenue_versus(revenue_billions, expected)}")
         else:
             lines.append(f"· 营收：预期 {expected:.2f}B（新闻稿里没取到实际数）")
     if row.get("eps_estimate") is not None:
+        expected = row["eps_estimate"]
         if eps_adjusted is not None:
-            lines.append(f"· 每股收益（非 GAAP）{eps_adjusted:.2f}：预期 {row['eps_estimate']:.2f}{_versus(eps_adjusted, row['eps_estimate'])}")
+            lines.append(f"· 每股收益（非 GAAP）{eps_adjusted:.2f}：预期 {expected:.2f}{_eps_versus(eps_adjusted, expected)}")
+        elif eps_gaap is not None:
+            lines.append(f"· 每股收益（GAAP）{eps_gaap:.2f}：预期 {expected:.2f}{_eps_versus(eps_gaap, expected)}"
+                         "（新闻稿只给了 GAAP 每股收益，和预期的调整后口径可能不同）")
         else:
-            lines.append(f"· 每股收益：预期 {row['eps_estimate']:.2f}（新闻稿里没取到实际数）")
+            lines.append(f"· 每股收益：预期 {expected:.2f}（新闻稿里没取到调整后的每股收益）")
     return lines

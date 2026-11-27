@@ -312,9 +312,9 @@ def test_the_first_message_compares_revenue_and_adjusted_eps_with_the_consensus(
     try:
         first(symbol="INTC", held=True)
         body = items()[0][1]
-        assert "对比市场预期（Finnhub，调整后口径）" in body
-        assert "· 营收 14.30B：预期 14.50B，比预期低 1.4%" in body
-        assert "· 每股收益（非 GAAP）0.20：预期 0.18，比预期高 11.1%" in body
+        assert "对比市场预期（Finnhub，调整后口径；FY2026 Q3，" in body
+        assert "· 营收 14.3B：预期 14.50B，比预期低 1.4%" in body
+        assert "· 每股收益（非 GAAP）0.20：预期 0.18，比预期高 0.02 美元（11.1%）" in body
         assert body.index("对比市场预期") < body.index("新指引（下季）")
     finally:
         with SessionLocal() as db:
@@ -325,10 +325,28 @@ def test_the_first_message_compares_revenue_and_adjusted_eps_with_the_consensus(
 def test_a_release_the_calendar_does_not_know_says_so_and_a_broken_calendar_leaves_the_message_as_it_was(owner, monkeypatch):
     from app import earnings_calendar as ec
     assert ec.consensus_lines(None, 14.3, 0.2) == ["对比市场预期（Finnhub，调整后口径）", "· 这一季没有拿到市场预期"]
-    assert ec.consensus_lines({"eps_estimate": 0.2, "revenue_estimate": 14.3e9}, 14.3, 0.2)[1:] == [
-        "· 营收 14.30B：预期 14.30B，与预期持平", "· 每股收益（非 GAAP）0.20：预期 0.20，与预期持平"]
-    assert ec.consensus_lines({"eps_estimate": 0.2, "revenue_estimate": None}, None, None)[1:] == ["· 每股收益：预期 0.20（新闻稿里没取到实际数）"]
+    row = {"fiscal_year": 2026, "fiscal_quarter": 3, "fetched_at": None}
+    assert ec.consensus_lines({**row, "eps_estimate": 0.2, "revenue_estimate": 14.3e9}, 14.3, 0.2)[1:] == [
+        "· 营收 14.3B：预期 14.30B，与预期大致持平（新闻稿实际数只到小数点后 1 位）", "· 每股收益（非 GAAP）0.20：预期 0.20，与预期持平"]
+    assert ec.consensus_lines({**row, "eps_estimate": 0.2, "revenue_estimate": None}, None, None)[1:] == ["· 每股收益：预期 0.20（新闻稿里没取到调整后的每股收益）"]
     monkeypatch.setattr(ec, "consensus_for", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("table gone")))
     first(symbol="INTC", held=True)
     body = items()[0][1]
     assert "对比市场预期" not in body and "新指引（下季）" in body
+
+
+def test_the_comparison_does_not_claim_more_than_the_figures_carry():
+    """Fable acceptance of 5e-3: precision, a consensus near zero, GAAP only, and a unit slip."""
+    from app import earnings_calendar as ec
+    row = {"fiscal_year": 2026, "fiscal_quarter": 4, "fetched_at": "2027-01-19T22:00:00+00:00", "eps_estimate": 0.2541, "revenue_estimate": 15.79e9}
+    lines = ec.consensus_lines(row, 15.8, 0.25)
+    assert lines[0] == "对比市场预期（Finnhub，调整后口径；FY2026 Q4，01-20 06:00 拉取）"
+    assert lines[1] == "· 营收 15.8B：预期 15.79B，与预期大致持平（新闻稿实际数只到小数点后 1 位）", "15.8 cannot be said to beat 15.79"
+    assert lines[2] == "· 每股收益（非 GAAP）0.25：预期 0.25，与预期持平", "0.25 against 0.2541 is within half a cent"
+    assert ec.consensus_lines(row, 15.76, 0.31)[1:] == ["· 营收 15.76B：预期 15.79B，比预期低 0.2%", "· 每股收益（非 GAAP）0.31：预期 0.25，比预期高 0.06 美元（22.0%）"]
+    assert "量级对不上，可能是单位问题" in ec.consensus_lines(row, 850.2, None)[1]
+    gaap = ec.consensus_lines(row, None, None, 0.18)[2]
+    assert gaap.startswith("· 每股收益（GAAP）0.18：预期 0.25，比预期低 0.07 美元") and "和预期的调整后口径可能不同" in gaap
+    near_zero = ec.consensus_lines({**row, "eps_estimate": 0.01, "revenue_estimate": 0}, None, 0.05)
+    assert near_zero[1:] == ["· 每股收益（非 GAAP）0.05：预期 0.01，比预期高 0.04 美元"], "no percentage of a cent, and a zero revenue estimate is none"
+    assert ec.consensus_lines({**row, "eps_estimate": -0.02}, None, 0.03)[2] == "· 每股收益（非 GAAP）0.03：预期 -0.02，比预期高 0.05 美元"
