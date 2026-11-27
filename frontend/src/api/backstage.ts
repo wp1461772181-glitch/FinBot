@@ -56,3 +56,11 @@ export const listMemoryChanges = (filters: Partial<MemoryFilters>, before: strin
   get<Paged<MemoryChangeItem>>(`memory${memoryQuery({ ...filters, before: before ?? "" })}`, signal);
 export const sendFeedback = (group: string, verdict: Verdict) => requestJson<{ verdict: Verdict }>("/api/backstage/feedback", {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(feedbackBody(group, verdict)) });
+
+/** 5d-3b 质量: his 「好／不好」 by week, the answers he marked 不好, and the ruler's runs on the box. */
+export type QualityWeek = { week_start: string; good: number; bad: number };
+export type BadAnswer = { message_id: string; at: string | null; rated_at: string | null; bot: string | null; question: string; reason: string | null; channel: string };
+export type RulerRun = { name: string; at: string; meta: boolean; suite: string | null; note: string | null; turns: number | null; pass_rate: number | null;
+  total_ms_p50: number | null; total_ms_p90: number | null; model_calls_mean: number | null; failed: Array<{ case_id: string; turn: number | null; checks: string[] }> };
+export type Quality = { feedback: QualityWeek[]; bad: BadAnswer[]; ruler: RulerRun[]; ruler_errors: string[] };
+export const readQuality = (signal?: AbortSignal) => get<Quality>("quality", signal);

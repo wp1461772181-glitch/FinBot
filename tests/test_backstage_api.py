@@ -5,7 +5,7 @@ the way the other API tests do it.
 """
 import json
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import select, text
@@ -35,7 +35,7 @@ BUTTONS = (CONFIRM, AUTHORIZE, CHANGE, REPLY)
 HASHES = ("c4p4b1l1ty" + "h" * 54, "d1g3st" + "d" * 58)
 
 ENDPOINTS = ["/backstage/answers", f"/backstage/answers/{uuid.uuid4()}", "/backstage/usage", "/backstage/operations",
-             "/backstage/deliveries", "/backstage/duty", "/backstage/memory"]
+             "/backstage/deliveries", "/backstage/duty", "/backstage/memory", "/backstage/quality"]
 
 
 @pytest.fixture(autouse=True)
@@ -1319,3 +1319,119 @@ def test_memory_changes_name_a_deleted_bot_as_deleted_not_as_the_global_layer(cl
     memory_event(text="全局：金额用亿美元", at=NOW - timedelta(minutes=1))
     rows = get(client, "/backstage/memory").json()["items"]
     assert [(r["bot"], r["bot_deleted"], r["reason"]) for r in rows] == [(None, True, "bot_deleted"), (None, False, None)]
+
+
+# --- 质量 (5d-3b) ------------------------------------------------------------------------------------------------------
+
+def rate(cid, turn_id, verdict, reason=None):
+    from app import answer_feedback as af
+    return af.record(OWNER_HASH, cid, turn_id, verdict, "web", reason)
+
+
+def test_quality_counts_his_verdicts_by_beijing_week_with_empty_weeks_kept(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("FINBOT_RULER_OUT", str(tmp_path / "none"))
+    cid = conversation(bot("研究员"))
+    t1, _ = turn(cid, "苹果股价", at=NOW)
+    t2, _ = turn(cid, "英伟达营收", at=NOW)
+    t3, _ = turn(cid, "特斯拉", at=NOW - timedelta(days=21))
+    rate(cid, t1, "good"); rate(cid, t2, "bad", "没说日期"); rate(cid, t3, "bad")
+    body = get(client, "/backstage/quality").json()
+    weeks = body["feedback"]
+    assert len(weeks) == 8 and weeks == sorted(weeks, key=lambda w: w["week_start"], reverse=True)
+    assert (weeks[0]["good"], weeks[0]["bad"]) == (1, 1), weeks[0]
+    assert sum(w["bad"] for w in weeks) == 2 and sum(w["good"] for w in weeks) == 1
+    assert all(date.fromisoformat(w["week_start"]).weekday() == 0 for w in weeks), "weeks start on Monday"
+    assert [b["question"] for b in body["bad"]] == ["英伟达营收", "特斯拉"]
+    assert (body["bad"][0]["reason"], body["bad"][0]["bot"], body["bad"][0]["channel"]) == ("没说日期", "研究员", "web")
+    assert body["ruler"] == [] and body["ruler_errors"] == []
+
+
+def test_quality_weeks_turn_at_beijing_midnight_monday(client, monkeypatch, tmp_path):
+    from app import backstage_api
+    sunday_night = datetime(2026, 11, 22, 15, 30, tzinfo=UTC)      # Sunday 23:30 Beijing: still the week of Monday 11-16
+    assert backstage_api._week_start(sunday_night) == date(2026, 11, 16)
+    assert backstage_api._week_start(datetime(2026, 11, 22, 16, 30, tzinfo=UTC)) == date(2026, 11, 23), "00:30 Monday Beijing"
+
+
+def test_quality_shows_only_his_verdicts(client, monkeypatch, tmp_path):
+    from app import answer_feedback as af
+    monkeypatch.setenv("FINBOT_RULER_OUT", str(tmp_path / "none"))
+    theirs = conversation(owner="t" * 64)
+    tid, _ = turn(theirs, "别人的问题")
+    af.record("t" * 64, theirs, tid, "bad", "web", "别人的原因")
+    body = get(client, "/backstage/quality").json()
+    assert body["bad"] == [] and sum(w["bad"] for w in body["feedback"]) == 0
+
+
+def write_run(root, name, *, meta=None, summary=None, results=(), when=None):
+    directory = root / name
+    directory.mkdir(parents=True)
+    (directory / "summary.json").write_text(json.dumps(summary or {"turns": 86, "pass_rate": 1.0, "total_ms_p50": 5800, "total_ms_p90": 10300,
+                                                                   "model_calls_mean": 1.6}), encoding="utf-8")
+    (directory / "results.jsonl").write_text("".join(json.dumps(row) + "\n" for row in results), encoding="utf-8")
+    if meta is not None:
+        (directory / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    if when is not None:
+        import os
+        os.utime(directory / "summary.json", (when.timestamp(), when.timestamp()))
+    return directory
+
+
+def test_quality_lists_ruler_runs_newest_first_with_failed_cases_and_skips_what_it_cannot_read(client, monkeypatch, tmp_path):
+    root = tmp_path / "ruler-out"
+    root.mkdir()
+    write_run(root, "baseline-v1", when=NOW - timedelta(days=4))
+    write_run(root, "5d3a2-20261127", meta={"finished_at": (NOW - timedelta(hours=1)).isoformat(), "suite": "ruler/suites/baseline-v1.json", "note": "65fc373"},
+              summary={"turns": 86, "pass_rate": 0.988, "total_ms_p50": 6077, "total_ms_p90": 12072, "model_calls_mean": 1.67},
+              results=[{"case_id": "B06", "turn_index": 0, "passed": False, "failed_checks": ["include_any[0]"]}, {"case_id": "F01", "passed": True}])
+    broken = root / "broken"
+    broken.mkdir()
+    (broken / "summary.json").write_text("{not json", encoding="utf-8")
+    (root / "notes.txt").write_text("a file at the root", encoding="utf-8")
+    (root / "linked").symlink_to(root / "baseline-v1")
+    (root / "scripts").mkdir()                                   # a directory with no summary is not a run
+    monkeypatch.setenv("FINBOT_RULER_OUT", str(root))
+    body = get(client, "/backstage/quality").json()
+    assert [run["name"] for run in body["ruler"]] == ["5d3a2-20261127", "baseline-v1"]
+    newest, old = body["ruler"]
+    assert (newest["meta"], newest["note"], newest["suite"], newest["pass_rate"], newest["turns"]) == (True, "65fc373", "ruler/suites/baseline-v1.json", 0.988, 86)
+    assert newest["failed"] == [{"case_id": "B06", "turn": 0, "checks": ["include_any[0]"]}]
+    assert (old["meta"], old["note"], old["failed"]) == (False, None, [])
+    assert body["ruler_errors"] == ["broken"]
+
+
+def test_quality_keeps_the_newest_50_runs(client, monkeypatch, tmp_path):
+    from app import backstage_api
+    root = tmp_path / "ruler-out"
+    for i in range(55):
+        write_run(root, f"run{i:02d}", meta={"finished_at": (NOW - timedelta(minutes=i)).isoformat()})
+    runs, errors = backstage_api.ruler_runs(root)
+    assert len(runs) == 50 and runs[0]["name"] == "run00" and runs[-1]["name"] == "run49" and errors == []
+
+
+def test_quality_survives_bad_records_and_reads_no_linked_file(client, monkeypatch, tmp_path):
+    """Review of 5d-3b: a malformed results line or meta must not fail the tab; a summary, results or meta that is a link is not followed."""
+    from app import backstage_api
+    root = tmp_path / "ruler-out"
+    write_run(root, "odd-results", meta={"finished_at": (NOW - timedelta(hours=1)).isoformat()},
+              results=[{"case_id": "B01", "passed": False, "failed_checks": 3, "turn_index": "x"}])
+    write_run(root, "numeric-time", meta={"finished_at": 1764000000, "note": 7})
+    bad_meta = write_run(root, "broken-meta")
+    (bad_meta / "meta.json").write_text("{oops", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "summary.json").write_text(json.dumps({"turns": 1, "pass_rate": 0.0}), encoding="utf-8")
+    linked = root / "linked-summary"
+    linked.mkdir()
+    (linked / "summary.json").symlink_to(outside / "summary.json")
+    linked_results = write_run(root, "linked-results")
+    (linked_results / "results.jsonl").unlink()
+    (outside / "results.jsonl").write_text(json.dumps({"case_id": "X99", "passed": False}) + "\n", encoding="utf-8")
+    (linked_results / "results.jsonl").symlink_to(outside / "results.jsonl")
+    runs, errors = backstage_api.ruler_runs(root)
+    by = {run["name"]: run for run in runs}
+    assert set(by) == {"odd-results", "numeric-time", "broken-meta", "linked-results"} and errors == [], "a linked summary is no run"
+    assert by["odd-results"]["failed"] == [{"case_id": "B01", "turn": None, "checks": []}]
+    assert (by["numeric-time"]["note"], isinstance(by["numeric-time"]["at"], str)) == (None, True)
+    assert (by["broken-meta"]["meta"], by["broken-meta"]["pass_rate"]) == (False, 1.0)
+    assert by["linked-results"]["failed"] == [], "a linked results file is not read"

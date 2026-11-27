@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import urllib.request
+from datetime import UTC, datetime
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
@@ -179,6 +180,7 @@ def _command_run(args) -> int:
         return _fail(f"API 探活失败: {args.base}")
 
     db_url = os.environ.get(_DB_ENV)
+    started = datetime.now(UTC)
     results = run_suite(
         cases,
         ask=functools.partial(ask_through, args.base, credential),
@@ -193,6 +195,10 @@ def _command_run(args) -> int:
     (out / "summary.json").write_text(
         json.dumps(summarize(results), ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    # what this run was, for the backstage's 质量 tab (5d-3b): the summary alone does not say which suite, model or code it measured
+    meta = {"started_at": started.isoformat(), "finished_at": datetime.now(UTC).isoformat(), "suite": args.suite, "cases": len(cases),
+            "base": args.base, "model": args.model, "parallel": args.parallel, "note": args.note}
+    (out / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     passed = sum(result.passed for result in results)
     print(f"{passed}/{len(results)} 轮通过，结果写在 {out}")
     return 0
@@ -347,6 +353,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--parallel", type=int, default=2)
     run.add_argument("--cases", default="")
     run.add_argument("--allow-production", action="store_true")
+    run.add_argument("--note", default="", help="一句说明，比如被测的提交号；写进 meta.json，后台「质量」栏显示")
 
     report = commands.add_parser("report", help="render one run as Markdown")
     report.add_argument("--results", required=True)

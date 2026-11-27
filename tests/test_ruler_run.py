@@ -87,6 +87,18 @@ def test_run_writes_results_and_summary(tmp_path, monkeypatch):
     rows = [json.loads(line) for line in (out / "results.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [row["case_id"] for row in rows] == ["F01"] and "cred" not in (out / "results.jsonl").read_text()
     assert json.loads((out / "summary.json").read_text())["pass_rate"] == 1.0
+    meta = json.loads((out / "meta.json").read_text())
+    assert (meta["cases"], meta["note"], meta["suite"]) == (1, "", str(_suite(tmp_path)))
+    assert meta["started_at"] <= meta["finished_at"]
+
+def test_run_writes_its_note_into_meta(tmp_path, monkeypatch):
+    monkeypatch.setattr(ruler_run, "owner_credential", lambda: "cred")
+    monkeypatch.setattr(ruler_run, "api_alive", lambda base: True)
+    monkeypatch.setattr(ruler_run, "ask", lambda base, cred, text, **kw: outcome())
+    out = tmp_path / "o"
+    assert ruler_run.main(["run", "--suite", str(_suite(tmp_path)), "--out", str(out), "--note", "5d-3b 3f2a1c0"]) == 0
+    meta = json.loads((out / "meta.json").read_text())
+    assert (meta["note"], meta["cases"], "cred" in json.dumps(meta)) == ("5d-3b 3f2a1c0", 2, False)
 
 def test_run_exits_2_when_api_is_down(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(ruler_run, "owner_credential", lambda: "cred")

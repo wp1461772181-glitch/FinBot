@@ -17,9 +17,12 @@ import asyncio
 import json
 import logging
 import math
+import os
 import re
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -1040,3 +1043,136 @@ def _uuid_or_none(value):
         return uuid.UUID(str(value)) if value else None
     except (TypeError, ValueError):
         return None
+
+
+# --- quality (5d-3b) -----------------------------------------------------------------------------------------------
+
+QUALITY_WEEKS = 8
+QUALITY_BAD = 20
+RULER_RUNS = 50
+RULER_FAILED = 20
+_BEIJING = ZoneInfo("Asia/Shanghai")
+
+
+def ruler_root() -> Path:
+    """Where the ruler's runs are kept on the box (``ruler.run run --out``); ``FINBOT_RULER_OUT`` for another place."""
+    return Path(os.environ.get("FINBOT_RULER_OUT") or "/opt/finbot/ruler-out")
+
+
+def _week_start(at: datetime) -> date:
+    local = _aware(at).astimezone(_BEIJING).date()
+    return local - timedelta(days=local.weekday())
+
+
+def _feedback_weeks(db, owner: str, now: datetime) -> list[dict]:
+    """His verdicts by the week (Monday, Beijing time) of the answer they are on, the last ``QUALITY_WEEKS`` weeks, newest first, zeros kept."""
+    AF = answer_feedback.AnswerFeedback
+    this_week = _week_start(now)
+    first = this_week - timedelta(weeks=QUALITY_WEEKS - 1)
+    since = datetime.combine(first, datetime.min.time(), tzinfo=_BEIJING)
+    rows = db.execute(select(AgentMessage.created_at, AF.verdict).join(AgentMessage, AgentMessage.id == AF.message_id)
+                      .where(AF.owner_hash == owner, AgentMessage.created_at >= since)).all()
+    counts = {first + timedelta(weeks=i): {"good": 0, "bad": 0} for i in range(QUALITY_WEEKS)}
+    for at, verdict in rows:
+        week = _week_start(at)
+        if week in counts and verdict in ("good", "bad"):
+            counts[week][verdict] += 1
+    return [{"week_start": week.isoformat(), **counts[week]} for week in sorted(counts, reverse=True)]
+
+
+def _bad_answers(db, owner: str) -> list[dict]:
+    """The newest answers he marked 不好, with his reason, the question of their turn and the bot."""
+    AF = answer_feedback.AnswerFeedback
+    rows = db.execute(select(AF, AgentMessage.created_at, AgentConversation.bot_id).join(AgentMessage, AgentMessage.id == AF.message_id)
+                      .join(AgentConversation, AgentConversation.id == AF.conversation_id)
+                      .where(AF.owner_hash == owner, AF.verdict == "bad", AgentConversation.owner_hash == owner)
+                      .order_by(AgentMessage.created_at.desc(), AF.id.desc()).limit(QUALITY_BAD)).all()
+    turns = [row[0].turn_id for row in rows]
+    conversations = {row[0].conversation_id for row in rows}
+    asked = {}
+    if turns:
+        for turn_id, content in db.execute(select(AgentMessage.turn_id, AgentMessage.content).where(AgentMessage.turn_id.in_(turns), AgentMessage.role == "user",
+                                                                                                    AgentMessage.conversation_id.in_(conversations))
+                                           .order_by(AgentMessage.sequence)).all():
+            asked.setdefault(turn_id, content)
+    bots = _bot_names(db, owner)
+    return [{"message_id": str(feedback.message_id), "at": _iso(at), "rated_at": _iso(feedback.updated_at),
+             "bot": bots.get(str(bot_id)) if bot_id else None, "question": _question(asked.get(feedback.turn_id) or ""),
+             "reason": scrub(feedback.reason) if feedback.reason else None, "channel": feedback.channel}
+            for feedback, at, bot_id in rows]
+
+
+def _read_json(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _failed_cases(path: Path) -> list[dict]:
+    failed = []
+    if not path.is_file() or path.is_symlink():
+        return failed
+    with path.open(encoding="utf-8") as lines:
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("passed") is False:
+                checks = row.get("failed_checks") if isinstance(row.get("failed_checks"), list) else []
+                turn = row.get("turn_index") if isinstance(row.get("turn_index"), int) else None
+                failed.append({"case_id": str(row.get("case_id") or ""), "turn": turn, "checks": [str(check) for check in checks][:5]})
+                if len(failed) >= RULER_FAILED:
+                    break
+    return failed
+
+
+def _ruler_run(directory: Path) -> dict:
+    summary_path = directory / "summary.json"
+    summary = _read_json(summary_path)
+    if not isinstance(summary, dict):
+        raise ValueError("summary is not an object")
+    meta_path = directory / "meta.json"
+    try:
+        meta = _read_json(meta_path) if meta_path.is_file() and not meta_path.is_symlink() else None
+    except (OSError, ValueError):
+        meta = None                    # a broken record is no record: the run still shows, as an early one
+    meta = meta if isinstance(meta, dict) else None
+    finished = (meta or {}).get("finished_at")
+    at = finished if isinstance(finished, str) and finished else datetime.fromtimestamp(summary_path.stat().st_mtime, UTC).isoformat()
+    note, suite = (meta or {}).get("note"), (meta or {}).get("suite")
+    return {"name": directory.name, "at": at, "meta": meta is not None, "suite": suite if isinstance(suite, str) else None,
+            "note": note if isinstance(note, str) and note else None,
+            "turns": summary.get("turns"), "pass_rate": summary.get("pass_rate"), "total_ms_p50": summary.get("total_ms_p50"),
+            "total_ms_p90": summary.get("total_ms_p90"), "model_calls_mean": summary.get("model_calls_mean"),
+            "failed": _failed_cases(directory / "results.jsonl")}
+
+
+def ruler_runs(root: Path | None = None) -> tuple[list[dict], list[str]]:
+    """Every run directly under the root that holds a summary, newest first, at most ``RULER_RUNS``; and the names of those that could not be
+    read.  Only the root's own directories are read: no symlink is followed, nothing outside it is opened."""
+    root = root or ruler_root()
+    if not root.is_dir():
+        return [], []
+    runs, errors = [], []
+    for directory in root.iterdir():
+        if directory.is_symlink() or not directory.is_dir():
+            continue
+        summary = directory / "summary.json"
+        if not summary.is_file() or summary.is_symlink():
+            continue
+        try:
+            runs.append(_ruler_run(directory))
+        except (OSError, ValueError, AttributeError, TypeError):
+            errors.append(directory.name)
+    runs.sort(key=lambda run: run["at"], reverse=True)
+    return runs[:RULER_RUNS], sorted(errors)
+
+
+@router.get("/quality")
+def quality(x_chat_session: str | None = Header(default=None)):
+    """质量: his 「好／不好」 by week and the answers he marked 不好 (``answer_feedback``), and every ruler run on the box with its pass rate, times
+    and failed cases (``FINBOT_RULER_OUT``).  Read-only."""
+    owner = _owner(x_chat_session)
+    with SessionLocal() as db:
+        weeks, bad = _feedback_weeks(db, owner, datetime.now(UTC)), _bad_answers(db, owner)
+    runs, errors = ruler_runs()
+    return {"feedback": weeks, "bad": bad, "ruler": runs, "ruler_errors": errors}
