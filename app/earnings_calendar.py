@@ -341,3 +341,91 @@ def prep_finish(row_id: int, **fields) -> dict:
 def prep_taken(owner_hash: str, day: str) -> bool:
     with SessionLocal() as db:
         return db.scalar(select(EarningsPrep.id).where(EarningsPrep.owner_hash == owner_hash, EarningsPrep.day == day)) is not None
+
+
+# --- actual against the consensus in the earnings follow-up (5e-3) --------------------------------------------------------------
+
+def consensus_for(symbol: str, reported: date, window_days: int = 3) -> dict | None:
+    """The calendar row of the report a filing on ``reported`` (US Eastern date) belongs to: the same company, its report date within
+    ``window_days`` of the filing's, the nearest one; None when the calendar has no such row."""
+    with SessionLocal() as db:
+        rows = [as_dict(row) for row in db.scalars(select(EarningsCalendar).where(
+            EarningsCalendar.symbol == str(symbol).upper(),
+            EarningsCalendar.report_date >= reported - timedelta(days=window_days),
+            EarningsCalendar.report_date <= reported + timedelta(days=window_days))).all()]
+    if not rows:
+        return None
+    return min(rows, key=lambda row: abs((date.fromisoformat(row["report_date"]) - reported).days))
+
+
+def _step_words(step: float) -> str:
+    """A revenue precision in words: 0.1 B → 「1 亿美元」, 0.001 B → 「100 万美元」."""
+    amount = step * 1e9
+    return f"{amount / 1e8:g} 亿美元" if amount >= 1e8 else f"{amount / 1e4:g} 万美元"
+
+
+def _revenue_versus(actual: float, expected: float, step: float | None) -> str:
+    """Revenue against the consensus: higher / lower by a percentage; in line when the gap is within half the release figure's own written step
+    (「$15.8 billion」 cannot be said to beat 15.79) or under 0.05%; no direction at all when the two are not the same order of magnitude.
+    The step comes from the token as written (``ReleaseFacts.revenue_step``); unknown, only the percentage rule applies."""
+    ratio = actual / expected
+    if not 0.2 <= ratio <= 5:
+        return "，量级对不上，可能是单位问题，请以原文为准"
+    if step and abs(actual - expected) < step / 2:
+        return f"，与预期大致持平（新闻稿实际数精确到 {_step_words(step)}）"
+    gap = (actual - expected) / expected * 100
+    if abs(gap) < 0.05:
+        return "，与预期持平"
+    return f"，比预期{'高' if gap > 0 else '低'} {abs(gap):.1f}%"
+
+
+def _revenue_text(actual: float, step: float | None) -> str:
+    """The release's revenue as written: to its own step when known (15.0 stays 15.0)."""
+    if step:
+        places = max(0, round(-__import__("math").log10(step)))
+        return f"{actual:.{places}f}"
+    return f"{actual:g}"
+
+
+def _eps_versus(actual: float, expected: float) -> str:
+    """EPS against the consensus as a difference in dollars (a percentage of an expectation near zero or below it means nothing); the
+    percentage is added only when the expectation is at least 0.10 dollars.  Within half a cent is in line (EPS is reported to the cent)."""
+    gap = actual - expected
+    if abs(gap) < 0.005:
+        return "，与预期持平"
+    said = f"，比预期{'高' if gap > 0 else '低'} {abs(gap):.2f} 美元"
+    if abs(expected) >= 0.10:
+        said += f"（{abs(gap) / abs(expected) * 100:.1f}%）"
+    return said
+
+
+def consensus_lines(row: dict | None, revenue_billions: float | None, eps_adjusted: float | None, eps_gaap: float | None = None,
+                    revenue_step: float | None = None) -> list[str]:
+    """The follow-up's 「对比市场预期」 section, written by code: revenue and EPS against the consensus the calendar holds for this report.
+    The consensus EPS is the adjusted one (checked on 11-27 against the box's history: Finnhub's actuals equal the releases' non-GAAP EPS, and
+    the GAAP one for a company that reports no other), so a release with only GAAP EPS is compared with a note.  A report the calendar does
+    not know says so in one line."""
+    if row is None or (row.get("eps_estimate") is None and not row.get("revenue_estimate")):
+        return [f"对比市场预期（{SOURCE_NAME}，调整后口径）", "· 这一季没有拿到市场预期"]
+    fetched = datetime.fromisoformat(row["fetched_at"]).astimezone(UTC) + timedelta(hours=8) if row.get("fetched_at") else None
+    head = (f"对比市场预期（{SOURCE_NAME}，调整后口径；FY{row['fiscal_year']} Q{row['fiscal_quarter']}"
+            + (f"，{fetched:%m-%d %H:%M} 拉取" if fetched else "") + "）")
+    lines = [head]
+    if row.get("revenue_estimate"):
+        expected = row["revenue_estimate"] / 1e9
+        if revenue_billions:
+            lines.append(f"· 营收 {_revenue_text(revenue_billions, revenue_step)}B：预期 {expected:.2f}B{_revenue_versus(revenue_billions, expected, revenue_step)}")
+        else:
+            lines.append(f"· 营收：预期 {expected:.2f}B（新闻稿里没取到实际数）")
+    if row.get("eps_estimate") is not None:
+        expected = row["eps_estimate"]
+        if eps_adjusted is not None:
+            lines.append(f"· 每股收益（非 GAAP）{eps_adjusted:.2f}：预期 {expected:.2f}{_eps_versus(eps_adjusted, expected)}")
+        elif eps_gaap is not None:
+            gap = eps_gaap - expected
+            versus = "，与预期持平" if abs(gap) < 0.005 else f"，比预期{'高' if gap > 0 else '低'} {abs(gap):.2f} 美元"
+            lines.append(f"· 每股收益（GAAP）{eps_gaap:.2f}：预期 {expected:.2f}{versus}"
+                         "（没取到非 GAAP 每股收益，这里用 GAAP 数比，口径可能不同）")
+        else:
+            lines.append(f"· 每股收益：预期 {expected:.2f}（新闻稿里没取到调整后的每股收益）")
+    return lines

@@ -81,6 +81,9 @@ class ReleaseFacts:
     eps_gaap: float | None = None
     guidance: Guidance = field(default_factory=Guidance)     # for the next quarter
     source_text: str = ""
+    # The smallest step the release's revenue figure is written to, in $ billions (「$15.0 billion」 → 0.1, 「14,300」 million → 0.001), from
+    # the token as written: a float keeps no trailing zero.  None when unknown.  Recorded by code; the model is asked for nothing new.
+    revenue_step: float | None = None
     unverified_fields: list[str] = field(default_factory=list)
 
 
@@ -284,6 +287,32 @@ def _grounded(entry, key: str, haystack: str) -> float | None:
     return val
 
 
+def _step(entry, key: str, value: float | None) -> float | None:
+    """The written precision of the release's revenue in $ billions: the finest of how the token and every number in the quote equal to this
+    revenue (in billions, or in millions) are written.  The quote is the release's own text (the model may have copied 「15.0」 as 「15」 or
+    turned 「14,300」 million into 「14.3」 billion); the finest wins because an equal number elsewhere in it (「Q3」 before 「$3.0 billion」)
+    is not the revenue and must not make it coarser.  None when unknown."""
+    if value is None or not isinstance(entry, dict):
+        return None
+    billions = _billions(entry, value)
+    steps = []
+    token = entry.get(key) if entry.get(key) is not None else entry.get("number")
+    if isinstance(token, str):
+        cleaned = token.replace(",", "").replace("$", "").strip()
+        decimals = len(cleaned.split(".", 1)[1]) if "." in cleaned else 0
+        millions = str(entry.get("unit", "B")).upper() == "M" or abs(value) >= 1000
+        steps.append(10.0 ** -decimals / (1000.0 if millions else 1.0))
+    quote = entry.get("quote") if isinstance(entry.get("quote"), str) else ""
+    for written in re.findall(r"\d[\d,]*(?:\.\d+)?", quote):
+        number = float(written.replace(",", ""))
+        decimals = len(written.split(".", 1)[1]) if "." in written else 0
+        if number < 1000 and abs(number - billions) < 1e-9:
+            steps.append(10.0 ** -decimals)
+        elif number >= 1000 and abs(number / 1000.0 - billions) < 1e-9:
+            steps.append(10.0 ** -decimals / 1000.0)
+    return min(steps) if steps else None
+
+
 def _billions(entry, value: float | None) -> float | None:
     if value is None:
         return None
@@ -302,6 +331,7 @@ async def extract_release(text: str, model: dict) -> ReleaseFacts:
     entry = data.get("revenue")
     val, ok = _grounded_with_status(entry, "revenue_b", haystack)
     facts.revenue = _billions(entry, val)
+    facts.revenue_step = _step(entry, "revenue_b", val)
     if entry and not ok:
         facts.unverified_fields.append("revenue")
 
@@ -370,7 +400,8 @@ JUDGE_PROMPT = """你是读财报的人，要像一个懂这家公司的行业�
 
 def _judge_payload(facts: ReleaseFacts, comparison: Comparison, commentary: str, after_hours_return) -> str:
     from dataclasses import asdict
-    payload = {"facts": {k: v for k, v in asdict(facts).items() if k != "source_text"},
+    # revenue_step is the consensus line's, not the judge's: its input stays as the blind test saw it
+    payload = {"facts": {k: v for k, v in asdict(facts).items() if k not in ("source_text", "revenue_step")},
                "comparison": asdict(comparison), "commentary": commentary or "",
                "after_hours_return": after_hours_return,
                "release_text": facts.source_text[:JUDGE_SOURCE_CHARS]}

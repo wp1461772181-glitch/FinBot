@@ -432,7 +432,7 @@ def _deliver(event: EarningsEvent, kind: str, title: str, body: str, now: dateti
                           post={"head": tasks.post_head("财报监控", now, "UTC"), "citations": []})
 
 
-def render_first(event: EarningsEvent, facts, c, prior_known: bool, commentary: str) -> tuple[str, str]:
+def render_first(event: EarningsEvent, facts, c, prior_known: bool, commentary: str, consensus: list[str] | None = None) -> tuple[str, str]:
     local = event.accepted_at.astimezone(NY)
     guid = facts.guidance
     lines = [f"{event.symbol} 于美东 {local:%m-%d %H:%M} 发布财报（8-K Item 2.02），{quarter_label(event.accepted_at)} 季度。", "", "关键数字（对比上季指引）"]
@@ -446,6 +446,8 @@ def render_first(event: EarningsEvent, facts, c, prior_known: bool, commentary: 
         lines += [f"· 营收 {_num(facts.revenue)}B，每股收益（非 GAAP）{_num(facts.eps)}，毛利率 {_num(facts.gross_margin)}%（没有上季指引可比）"]
     if getattr(facts, "unverified_fields", None):
         lines.append("· 注：部分数字引文待核对（请以原文为准）")
+    if consensus:
+        lines += [""] + consensus          # 5e-3: actual against the market's consensus (earnings_calendar.consensus_lines)
     lines += ["", "新指引（下季）"]
     if guid.revenue_low is not None:
         lines.append(f"· 营收 {_num(guid.revenue_low)}–{_num(guid.revenue_high)}B，指引中值 {_num(guid.revenue_mid)}B：对本季 {_pct(c.new_revenue_vs_actual_pct)}"
@@ -467,6 +469,18 @@ def render_first(event: EarningsEvent, facts, c, prior_known: bool, commentary: 
     return f"{event.symbol} 财报已出：分析", "\n".join(lines)
 
 
+def _consensus(event: EarningsEvent, facts) -> list[str] | None:
+    """The 「对比市场预期」 lines for this release (5e-3); None when the calendar cannot be read (the message goes out without them)."""
+    try:
+        from . import earnings_calendar
+        row = earnings_calendar.consensus_for(event.symbol, event.accepted_at.astimezone(NY).date())
+        return earnings_calendar.consensus_lines(row, getattr(facts, "revenue", None), getattr(facts, "eps", None), getattr(facts, "eps_gaap", None),
+                                               getattr(facts, "revenue_step", None))
+    except Exception:
+        log.warning("earnings %s: the consensus could not be read", event.symbol, exc_info=True)
+        return None
+
+
 def send_first(event_id, sources, reader, now: datetime) -> None:
     from dataclasses import asdict
     with SessionLocal() as db:
@@ -483,7 +497,8 @@ def send_first(event_id, sources, reader, now: datetime) -> None:
     prior = prior_guidance(event.symbol, event.accepted_at)
     comparison = reader.compare(facts, prior, history, prices_before(closes, event.accepted_at))
     _store_history(event.symbol, event.accession, event.accepted_at, facts, reader.READER_VERSION, closes)
-    title, body = render_first(event, facts, comparison, prior is not None, commentary_from(text))
+    consensus = _consensus(event, facts)
+    title, body = render_first(event, facts, comparison, prior is not None, commentary_from(text), consensus)
     _deliver(event, "first", title, body, now)
     with SessionLocal() as db:
         row = db.get(EarningsEvent, event_id)
