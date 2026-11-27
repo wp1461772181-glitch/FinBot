@@ -164,3 +164,11 @@ def test_the_week_is_monday_to_sunday_and_a_report_out_already_is_left_out():
               {**base, "symbol": "CCC", "report_date": date(2027, 1, 19), "eps_actual": 0.3}], NOW) # out already: left out
     week, reports = ec.week_block(["AAA", "BBB", "CCC"], date(2027, 1, 18))
     assert reports and "AAA" in week and "BBB" not in week and "CCC" not in week
+
+
+def test_the_consensus_of_a_filing_is_the_nearest_report_within_three_days():
+    base = ec.parse(PAYLOAD)[0]          # INTC 2027-01-20 Q4
+    ec.store([base, {**base, "fiscal_quarter": 3, "report_date": date(2026, 10, 29)}], NOW)
+    assert ec.consensus_for("intc", date(2027, 1, 21))["fiscal_quarter"] == 4
+    assert ec.consensus_for("INTC", date(2026, 10, 30))["fiscal_quarter"] == 3
+    assert ec.consensus_for("INTC", date(2026, 12, 1)) is None and ec.consensus_for("MSFT", date(2027, 1, 20)) is None

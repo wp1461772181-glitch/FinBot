@@ -295,3 +295,40 @@ def test_release_document_is_found_when_not_named_like_exhibit_99_1():
     assert em.pick_release_document(names, "intc-20261029.htm") == "q326earningsrelease.htm"
     assert em.pick_release_document(["a8-k.htm", "ex99-1.htm", "ex99-2.htm"], "a8-k.htm") == "ex99-1.htm"
     assert em.pick_release_document(["a8-k.htm", "ex10-1.htm"], "a8-k.htm") is None   # no press-release-looking page: do not guess
+
+
+# --- 5e-3: actual against the consensus ------------------------------------------------------------------------------------------
+
+def test_the_first_message_compares_revenue_and_adjusted_eps_with_the_consensus(owner):
+    from datetime import date
+    from app import earnings_calendar as ec
+    from app.database import Base, engine
+    Base.metadata.create_all(engine, tables=[ec.EarningsCalendar.__table__])
+    with SessionLocal() as db:
+        db.query(ec.EarningsCalendar).delete()
+        db.commit()
+    ec.store([{"symbol": "INTC", "report_date": date(2026, 10, 30), "hour": "amc", "fiscal_year": 2026, "fiscal_quarter": 3,
+               "eps_estimate": 0.18, "revenue_estimate": 14.5e9, "eps_actual": None, "revenue_actual": None}], E_AT)
+    try:
+        first(symbol="INTC", held=True)
+        body = items()[0][1]
+        assert "对比市场预期（Finnhub，调整后口径）" in body
+        assert "· 营收 14.30B：预期 14.50B，比预期低 1.4%" in body
+        assert "· 每股收益（非 GAAP）0.20：预期 0.18，比预期高 11.1%" in body
+        assert body.index("对比市场预期") < body.index("新指引（下季）")
+    finally:
+        with SessionLocal() as db:
+            db.query(ec.EarningsCalendar).delete()
+            db.commit()
+
+
+def test_a_release_the_calendar_does_not_know_says_so_and_a_broken_calendar_leaves_the_message_as_it_was(owner, monkeypatch):
+    from app import earnings_calendar as ec
+    assert ec.consensus_lines(None, 14.3, 0.2) == ["对比市场预期（Finnhub，调整后口径）", "· 这一季没有拿到市场预期"]
+    assert ec.consensus_lines({"eps_estimate": 0.2, "revenue_estimate": 14.3e9}, 14.3, 0.2)[1:] == [
+        "· 营收 14.30B：预期 14.30B，与预期持平", "· 每股收益（非 GAAP）0.20：预期 0.20，与预期持平"]
+    assert ec.consensus_lines({"eps_estimate": 0.2, "revenue_estimate": None}, None, None)[1:] == ["· 每股收益：预期 0.20（新闻稿里没取到实际数）"]
+    monkeypatch.setattr(ec, "consensus_for", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("table gone")))
+    first(symbol="INTC", held=True)
+    body = items()[0][1]
+    assert "对比市场预期" not in body and "新指引（下季）" in body
