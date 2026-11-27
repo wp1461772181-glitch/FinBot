@@ -221,9 +221,15 @@ def test_a_live_alert_the_day_before_or_an_earnings_alert_does_not_cover_the_mov
     assert [f["symbol"] for f in found] == ["INTC"] and checked["live"] == 0
 
 
-def test_two_replayed_alerts_on_one_symbol_are_one_finding(env):
+def test_a_level_alert_is_not_counted_only_the_days_move_is(env):
+    # The stop at 35 fires in the replay as well (plan_stop), but a level stays locked across days in the live loop and the
+    # replay starts from an empty store, so only the move counts.
     found, checked = prices(env, snapshot=SNAP | {"plans": [{"symbol": "INTC", "stop_price": 35.0}]})
-    assert checked["replayed"] >= 2 and [f["symbol"] for f in found] == ["INTC"]
+    assert [f["symbol"] for f in found] == ["INTC"] and "kind=plan_stop" not in found[0]["why"]
+
+
+def test_only_move_kinds_count():
+    assert set(selfcheck.MOVE_KINDS) >= {"daily", "move", "merged"} and not {"preset", "rule", "plan_add", "plan_stop"} & set(selfcheck.MOVE_KINDS)
 
 
 # --- the run ----------------------------------------------------------------------------------------------------------------

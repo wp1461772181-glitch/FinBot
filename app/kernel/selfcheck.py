@@ -42,7 +42,10 @@ LAST_HOUR = 12
 STUCK = timedelta(minutes=60)
 WINDOW_FIRST = timedelta(days=14)
 MINUTE = "%Y-%m-%d %H:%M"
-COUNTED_KINDS = ("rule", "preset", "plan_add", "plan_stop", "plan_target")
+# Only the day's own move alerts count: their state starts fresh each New York day, in the live loop and in the replay alike.  A rule,
+# a preset or a price level fires once while its condition holds and stays locked across days (rule_state, level_lock); the replay
+# starts from an empty store, so it would "miss" them every day (shadow check on 11-25: five such false misses, no real one).
+MOVE_KINDS = ("daily", "gap", "update", "move", "reversal", "merged")
 WHY_FAILED = "财报解读试了三次都没做成"
 WHY_STUCK = "收到一个多小时了还没发出"
 WHY_UNSEEN = "盯盘程序看到了这份财报，但没交到解读那一步"
@@ -175,7 +178,7 @@ def price_findings(day: date, snapshot: dict, sentinel_db, fetch=None) -> tuple[
     data = (fetch or replay.fetch_data)(symbols + ([] if "SPY" in symbols else ["SPY"]))    # SPY: the tiers policy's market move
     with tempfile.TemporaryDirectory(prefix="selfcheck-replay-") as workdir:
         result = replay.run_replay(data, snapshot, day, day, policy=_policy(), workdir=workdir)
-    counted = sorted((a for a in result["alerts"] if a.get("tier") in (1, 2) or a.get("kind") in COUNTED_KINDS), key=lambda a: a["ts"])
+    counted = sorted((a for a in result["alerts"] if a.get("tier") in (1, 2) and a.get("kind") in MOVE_KINDS), key=lambda a: a["ts"])
     live, live_rows = _live_symbols(sentinel_db, day)
     findings, told = [], set()
     for alert in counted:
