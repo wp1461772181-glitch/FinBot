@@ -1,5 +1,5 @@
 """5c-3c: 「有用／没用」 said in a conversation, the kernel's tier-1 ``rate_alert``.  Code finds the message he means and the result names it;
-with no read this turn it runs at once (channel chat), after a read it goes on the card; a sentinel alert is acknowledged too.
+it runs at once (channel chat), also after a read; a sentinel alert is acknowledged too, but only when nothing was read this turn.
 Disposable Postgres and a scripted sentinel database; no network, no model."""
 import asyncio
 import uuid
@@ -89,17 +89,24 @@ def test_with_no_read_it_runs_at_once_records_with_channel_chat_and_acknowledges
     assert owner.alert(alert_id)["acked_at"] is not None            # 「收到」 as well: the sentinel stops escalating
 
 
-def test_after_a_read_it_goes_on_the_card_with_the_message_it_matched(owner):
+def test_after_a_read_it_still_runs_at_once_but_does_not_acknowledge(owner):
+    # He usually asks which alert first (query_alerts); a card would leave WeChat stuck.  A page read this turn could ask for a
+    # verdict, so the verdict is kept but the alert is not acknowledged: nothing read can silence an urgent alert.
     created = _ago(2)
     alert_id = owner.add_alert("INTC", "short", "INTC 急跌", True, created)
     out, run_ = rate({"verdict": "useful", "symbol": "INTC"}, read_results=1)
-    assert out["data"][0]["status"] == "awaiting_confirmation" and run_.writes == [{"operation": "rate_alert", "tier": 1, "outcome": "proposed"}]
-    (prepared,) = run_.proposals
+    assert out["ok"] and out["data"][0]["status"] == "done" and run_.writes == [{"operation": "rate_alert", "tier": 1, "outcome": "done"}]
+    assert [r["target_id"] for r in feedback.recent(OWNER_HASH)] == [str(alert_id)]
+    assert owner.alert(alert_id)["acked_at"] is None
+
+
+def test_a_card_rates_the_message_it_named_even_if_a_newer_one_arrives(owner):
+    created = _ago(2)
+    alert_id = owner.add_alert("INTC", "short", "INTC 急跌", True, created)
+    prepared = run(act.prepare(make_run(), "rate_alert", {"verdict": "useful", "symbol": "INTC", "quote": "英特尔那条有用"}))
     assert prepared.display == {"title": "记下提醒反馈", "targets": [{"symbol": "INTC", "title": f"{_beijing(created)}「INTC 急跌」", "decision": "有用"}],
                                 "alternative": "说错了就说『那条改成有用／没用』。"}
     assert prepared.operation["match"]["target_id"] == str(alert_id)
-    assert feedback.recent(OWNER_HASH) == [] and owner.alert(alert_id)["acked_at"] is None
-    # a newer INTC alert arrives before he presses: the press rates the one the card named
     owner.add_alert("INTC", "short", "INTC 又跌", True, _ago(0.1))
     proposed = consent.propose(OWNER, CONVERSATION, [prepared.operation], prepared.display)
     token = proposed["choices"][0]["value"].split(":", 1)[1]
@@ -165,7 +172,7 @@ def test_the_operation_is_tier_one_kernel_only_owner_only_and_always_on():
     from app import agent_bots
     from app.agent_tool_catalog import KERNEL_ONLY, OWNER_ONLY, definitions, legacy_definitions, validate
     assert act.tier_of("rate_alert") == 1 and "\nrate_alert：" in act.ACT_SCHEMA["function"]["description"]
-    assert act.SUMMARIES["rate_alert"] == "记下用户对某条提醒、值班消息或早间简报的『有用／没用』（他这轮亲口说的；不写股票就是最近一条）。记下后照工具返回的那句告诉他对上的是哪一条。"
+    assert act.SUMMARIES["rate_alert"].startswith("记下用户对某条提醒、值班消息或早间简报的『有用／没用』") and "不用先查提醒列表" in act.SUMMARIES["rate_alert"]
     assert definitions()["rate_alert"].level == "reversible" and "rate_alert" in OWNER_ONLY and "rate_alert" in KERNEL_ONLY
     assert "rate_alert" not in legacy_definitions() and "rate_alert" in agent_bots.ALWAYS_ON
     assert validate("rate_alert", {"verdict": "useful", "symbol": " brk.b ", "quote": "有用"}) == {"verdict": "useful", "about": "alert", "symbol": "BRK.B", "quote": "有用"}

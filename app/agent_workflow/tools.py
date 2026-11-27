@@ -103,7 +103,7 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
         if name=='record_view':args['_source_message_id']=operation.get('source_message_id');args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id')
         # The message the card named, frozen when it was made: the press rates that one, not whatever is newest by then.
-        if name=='rate_alert':args['_match']=operation.get('match')
+        if name=='rate_alert':args['_match']=operation.get('match');args['_ack']=operation.get('ack',True)
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
         if name in {'create_bot','update_bot','apply_role_template','undo_role_template','set_watch_rule','set_watch_preset','set_alert_settings'}:args['_fields']=operation.get('fields')
         # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
@@ -426,7 +426,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         try:await asyncio.to_thread(feedback.record,context.owner_hash,match['target'],match['target_id'],args['verdict'],'chat',
                                     symbol=match.get('symbol'),kind=match.get('kind'),text=match.get('text'))
         except ValueError as exc:return error(str(exc))
-        if match['target']=='sentinel':
+        if match['target']=='sentinel' and args.get('_ack',True):
             # A verdict on an alert also says he has seen it, as the button does: the sentinel stops escalating.
             try:
                 from sentinel.store import Store,db_path

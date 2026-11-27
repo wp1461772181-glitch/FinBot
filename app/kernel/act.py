@@ -57,7 +57,7 @@ SUMMARIES = {
     "forget": "忘掉一条已记住的内容（按它的 #编号）",
     "add_to_research_queue": "把一只股票加进研究队列",
     "remove_from_research_queue": "把一只股票移出研究队列",
-    "rate_alert": "记下用户对某条提醒、值班消息或早间简报的『有用／没用』（他这轮亲口说的；不写股票就是最近一条）。记下后照工具返回的那句告诉他对上的是哪一条。",
+    "rate_alert": "记下用户对某条提醒、值班消息或早间简报的『有用／没用』（他这轮亲口说的；不写股票就是最近一条）。不用先查提醒列表：代码会自己找到最近 48 小时里对得上的那条，并在结果里写明是哪一条。记下后照工具返回的那句告诉他对上的是哪一条，对错了他会说。他想顺便调提醒的门槛，记下之后再问。",
     "record_view": "记下用户对某家公司的看法（他自己的话，一家一条；新的覆盖旧的，旧的留在历史里；不是证据，也不授权任何操作）。记下后在回答里告诉他「我记下了：……」",
     "drop_view": "撤回用户对某家公司已记下的看法（留在历史里，标为已撤回）",
     "record_trade": "在持仓账本里记一笔买入或卖出（只是记账，不是下单）",
@@ -926,6 +926,10 @@ async def handle(run, args: dict) -> dict:
 
 def _direct_after_reads(run, prepared: Prepared) -> bool:
     operation = prepared.operation
+    if operation["name"] == "rate_alert":
+        # His verdict on a message the system itself sent: the worst a page could do is a wrong verdict, which he sees in the reply
+        # and changes.  He usually asks which alert first (query_alerts), and a card would leave WeChat, which has no buttons, stuck.
+        return True
     return memory_writes() and operation["name"] == "remember" and operation["arguments"].get("basis") == "noticed"
 
 
@@ -962,5 +966,9 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
     # With memory writes on, after a read only a guess (``remember`` with basis noticed: stored unconfirmed, light use, he can reject it) still runs at once.
     # A said ``remember`` (his quote proves nothing about the text next to it), record_view, forget, drop_view, rate_alert and the research queue go on the card.
     if prepared.tier == 1 and (not run.read_results or _direct_after_reads(run, prepared)):
+        if prepared.operation["name"] == "rate_alert":
+            # The verdict also acknowledges a sentinel alert (the sentinel stops escalating) only while nothing but his own words was
+            # seen this turn: a page could ask for a verdict, and must not be able to silence an urgent alert with it.
+            prepared.operation["ack"] = not run.read_results
         return await _run_at_once(run, prepared)
     return _collect(run, prepared)
