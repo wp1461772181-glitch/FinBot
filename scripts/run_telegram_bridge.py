@@ -40,7 +40,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app import channels
+from app import alert_feedback, channels
 from app.agent_telegram import split_for_telegram, tables_for_telegram
 from app.agent_workflow.fp_flags import flag
 
@@ -827,10 +827,13 @@ async def _handle_callback(client, callback: dict, pending: dict, owner: str, cr
 
     kind, _, short_id = data.partition(":")
     if kind == "ack":
-        await _ack_alert_press(client, bot_token, cb_id, chat_id, message.get("message_id"), short_id)
+        await _ack_alert_press(client, bot_token, cb_id, chat_id, message, short_id)
+        return
+    if kind in {"fu", "fn"}:
+        await _feedback_press(client, bot_token, cb_id, chat_id, message, data, owner)
         return
     if kind not in {"ok", "no", "pick"}:
-        await _answer_callback(client, bot_token, cb_id)
+        await _answer_callback(client, bot_token, cb_id, "看不懂这个按钮")
         return
     entry = pending.pop(short_id, None)
     if not entry:
@@ -868,8 +871,9 @@ def _sentinel_store():
     return Store()
 
 
-async def _ack_alert_press(client, bot_token: str, cb_id: str, chat_id: int, message_id, alert_id: str) -> None:
-    """「收到」on a sentinel alert: write the acknowledgement into data/sentinel.db (the sentinel stops escalating)."""
+async def _ack_alert_press(client, bot_token: str, cb_id: str, chat_id: int, message: dict, alert_id: str) -> None:
+    """「收到」on a sentinel alert: write the acknowledgement into data/sentinel.db (the sentinel stops escalating), then take the
+    「收到」 row off the message (the 「有用／没用」 row stays)."""
     try:
         await asyncio.to_thread(_sentinel_store().ack_alert, int(alert_id))
     except Exception as exc:  # the file is the only channel to the sentinel; say so rather than pretend
@@ -877,7 +881,49 @@ async def _ack_alert_press(client, bot_token: str, cb_id: str, chat_id: int, mes
         await _answer_callback(client, bot_token, cb_id, "确认没有记上，请再点一次。")
         return
     await _answer_callback(client, bot_token, cb_id, "已确认")
-    await _clear_keyboard(client, bot_token, chat_id, message_id)
+    await _set_keyboard(client, bot_token, chat_id, message.get("message_id"), _rows_without(message, ("ack:",)))
+
+
+FEEDBACK_SAVED = {"useful": "记下了：有用", "not_useful": "记下了：没用"}
+
+
+def _feedback_keyboard(item: dict) -> list | None:
+    """The 「有用／没用」 row of an outbox message of source duty or brief (its group id, else its own id); None for any other source."""
+    if item.get("source") not in alert_feedback.SOURCES:
+        return None
+    group = item.get("group_id") or item["id"]
+    return [[{"text": "有用", "callback_data": f"fu:o:{group}"}, {"text": "没用", "callback_data": f"fn:o:{group}"}]]
+
+
+async def _feedback_press(client, bot_token: str, cb_id: str, chat_id: int, message: dict, data: str, owner: str) -> None:
+    """「有用／没用」 on an alert or a duty message: record the verdict, then take the feedback row off the message (the 「收到」 row
+    stays while it is there).  A button it cannot read records nothing; a failed write leaves the buttons as they were."""
+    parsed = alert_feedback.parse_callback(data)
+    if parsed is None:
+        await _answer_callback(client, bot_token, cb_id, "看不懂这个按钮")
+        return
+    target, target_id, verdict = parsed
+
+    def store():
+        about = alert_feedback.describe(owner, target, target_id)
+        return alert_feedback.record(owner, target, target_id, verdict, "telegram", **about)
+
+    try:
+        await asyncio.to_thread(store)
+    except Exception as exc:  # noqa: BLE001 - the owner is asked to press again, never shown a traceback
+        print(f"Alert feedback failed: {_redact(exc)}", file=sys.stderr)
+        await _answer_callback(client, bot_token, cb_id, "没有记上，请再点一次。")
+        return
+    await _answer_callback(client, bot_token, cb_id, FEEDBACK_SAVED[verdict])
+    await _set_keyboard(client, bot_token, chat_id, message.get("message_id"), _rows_without(message, ("fu:", "fn:")))
+
+
+def _rows_without(message: dict, prefixes: tuple[str, ...]) -> list:
+    """The message's inline keyboard as Telegram sent it with the press, less every row with a button whose data starts with ``prefixes``."""
+    markup = message.get("reply_markup") if isinstance(message.get("reply_markup"), dict) else {}
+    rows = markup.get("inline_keyboard") if isinstance(markup.get("inline_keyboard"), list) else []
+    return [row for row in rows if isinstance(row, list)
+            and not any(isinstance(button, dict) and str(button.get("callback_data") or "").startswith(prefixes) for button in row)]
 
 
 async def _ack_by_reply(chat_id: int, reply_to) -> bool:
@@ -936,7 +982,7 @@ async def _send_queued(client, owner: str, bound_chat: int, tg, channel: dict | 
     queued = (await asyncio.to_thread(tg.pending_messages, owner, 20, channel["row_id"]) if channel
               else await asyncio.to_thread(tg.pending_messages, owner))
     for item in queued:
-        sent = await _send_text(client, bot_token, bound_chat, item["text"], markdown=False)
+        sent = await _send_text(client, bot_token, bound_chat, item["text"], _feedback_keyboard(item), markdown=False)
         if sent is None:
             await asyncio.to_thread(tg.mark_failed, item["id"])
         else:
@@ -1033,6 +1079,20 @@ async def _clear_keyboard(client, bot_token: str, chat_id: int, message_id) -> N
     try:
         await client.post(f"{TELEGRAM_API}/bot{bot_token}/editMessageReplyMarkup",
                           json={"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}})
+    except Exception as exc:
+        print(f"Telegram editMessageReplyMarkup failed: {_redact(exc)}", file=sys.stderr)
+
+
+async def _set_keyboard(client, bot_token: str, chat_id: int, message_id, rows: list) -> None:
+    """Leave only ``rows`` on a message: no rows left takes the keyboard off.  Best effort, as ``_clear_keyboard``."""
+    if not rows:
+        await _clear_keyboard(client, bot_token, chat_id, message_id)
+        return
+    if not bot_token or not isinstance(message_id, int):
+        return
+    try:
+        await client.post(f"{TELEGRAM_API}/bot{bot_token}/editMessageReplyMarkup",
+                          json={"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": rows}})
     except Exception as exc:
         print(f"Telegram editMessageReplyMarkup failed: {_redact(exc)}", file=sys.stderr)
 

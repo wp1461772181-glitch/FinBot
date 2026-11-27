@@ -324,8 +324,9 @@ function deliveryStatus(item) {
   return { label: text(item?.status) || DASH, kind: "neutral" };
 }
 
-/** One line of the outbox table. */
+/** One line of the outbox table.  `feedback` is null except on a duty or brief row: then its group id and the verdict given (null for none yet). */
 export function deliveryRow(item, timeZone, w = ZH_WORDS) {
+  const group = text(item?.group_id) || text(item?.id);
   return {
     id: item?.id ?? "",
     time: formatTime(item?.created_at, timeZone),
@@ -334,7 +335,19 @@ export function deliveryRow(item, timeZone, w = ZH_WORDS) {
     status: deliveryStatus(item),
     acked: item?.acked_at ? formatTime(item.acked_at, timeZone) : item?.status === "sent" ? w.t("未确认") : DASH,
     text: text(item?.text),
+    feedback: FEEDBACK_SOURCES.includes(item?.source) && group ? { group, verdict: FEEDBACK_VERDICTS.includes(item?.feedback) ? item.feedback : null } : null,
   };
+}
+
+/** The outbox sources a 「有用／没用」 is asked for, and the two buttons (labels are Chinese source text for t()). */
+export const FEEDBACK_SOURCES = ["duty", "brief"];
+export const FEEDBACK_VERDICTS = ["useful", "not_useful"];
+export const FEEDBACK_CHOICES = [{ verdict: "useful", label: "有用" }, { verdict: "not_useful", label: "没用" }];
+export const FEEDBACK_FAILED = "没记上";
+
+/** The body of POST /backstage/feedback for one duty or brief message. */
+export function feedbackBody(group, verdict) {
+  return { target: "outbox", target_id: group, verdict };
 }
 
 // ---- 值班 ----------------------------------------------------------------------------------------------------------

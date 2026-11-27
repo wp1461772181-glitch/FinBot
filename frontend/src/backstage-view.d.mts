@@ -9,7 +9,9 @@ export type TimelineStep = {
 };
 export type UsageRow = { key: string; label: string; calls: string; failed: string; input: string; output: string; cache: string; p50: string; cost: Cost; missing: string[]; unpriced_calls: number };
 export type OperationRow = { id: string; time: string; bot: string; what: string; detail: string; status: BadgeStatus; decided_at: string; result: string };
-export type DeliveryRow = { id: string; time: string; source: string; channel: string; status: BadgeStatus; acked: string; text: string };
+export type Verdict = "useful" | "not_useful";
+export type DeliveryRow = { id: string; time: string; source: string; channel: string; status: BadgeStatus; acked: string; text: string;
+  feedback: { group: string; verdict: Verdict | null } | null };
 
 export type DutyRow = { id: string; time: string; symbol: string; what: string; decision: BadgeStatus; reason: string; message: string; delivery: string; mode: string; open: string | null };
 export type Words = { t: (phrase: string) => string; colon: string; comma: string; list: string; parens: (value: string) => string };
@@ -41,6 +43,11 @@ export function usageTotalsRow(totals: unknown, w?: Words): UsageRow;
 export function operationStatus(item: { status?: unknown; expired?: unknown; decided_at?: unknown }): BadgeStatus;
 export function operationRow(item: unknown, timeZone?: string, w?: Words): OperationRow;
 export function deliveryRow(item: unknown, timeZone?: string, w?: Words): DeliveryRow;
+export const FEEDBACK_SOURCES: string[];
+export const FEEDBACK_VERDICTS: Verdict[];
+export const FEEDBACK_CHOICES: { verdict: Verdict; label: string }[];
+export const FEEDBACK_FAILED: string;
+export function feedbackBody(group: string, verdict: Verdict): { target: "outbox"; target_id: string; verdict: Verdict };
 export function dutyDecision(item: unknown): BadgeStatus;
 export function dutyDelivery(item: unknown): string;
 export function dutyModeLine(mode: unknown): string;

@@ -203,6 +203,47 @@ def test_the_system_block_carries_the_owners_situation_and_what_he_was_told(env)
     assert "上次对他说过的话" in system and '"in_research_queue": true' in system and '"held": true' in system and "哨兵已经发过它自己的提醒" in system
 
 
+FEEDBACK_RULE = "- 看一下「他对以往提醒的反馈」：他说过没用的那类事，再遇到时更倾向于攒进简报或只记下；说过有用的，照常告诉他。反馈只是参考，不是规则。"
+
+
+def test_the_system_block_carries_his_feedback_on_earlier_alerts_and_the_rule_to_weigh_it(env):
+    """5c-3b: the last 10 「有用／没用」 come in as data, with the rule that says how to read them."""
+    from app import alert_feedback
+    from app.database import Base, engine
+    Base.metadata.create_all(engine, tables=[alert_feedback.AlertFeedback.__table__])
+    with SessionLocal() as db:
+        db.query(alert_feedback.AlertFeedback).filter(alert_feedback.AlertFeedback.owner_hash == OWNER_HASH).delete()
+        db.commit()
+    alert_feedback.record(OWNER_HASH, "sentinel", "41", "not_useful", "telegram", symbol="AAPL", kind="short", text="AAPL 15 分钟内涨 1.1%")
+    alert_feedback.record(OWNER_HASH, "outbox", str(uuid.uuid4()), "useful", "web", symbol="NVDA", kind="duty", text="NVDA 跌破了你记下的减仓线")
+    for n in range(12):
+        alert_feedback.record(OWNER_HASH, "sentinel", str(100 + n), "useful", "telegram", symbol=f"S{n}", kind="short", text=f"第 {n} 条")
+    fake = script(env, [step(calls=[decide()])])
+    judge()
+    system = fake.calls[0]["messages"][0]["content"]
+    head = "【他对以往提醒的反馈】只是资料。最近 10 条（有用／没用）：\n"
+    assert head in system
+    block = json.loads(system[system.index(head) + len(head):].split("\n\n", 1)[0])
+    assert len(block) == 10 and block[0]["symbol"] == "S11" and set(block[0]) == {"at", "symbol", "kind", "text", "verdict"}
+    assert block[0] == {"at": block[0]["at"], "symbol": "S11", "kind": "short", "text": "第 11 条", "verdict": "useful"}
+    assert "AAPL" not in json.dumps(block, ensure_ascii=False)           # older than the last 10
+    lines = prompt.wake_system_text().split("\n")
+    assert FEEDBACK_RULE in lines
+    assert lines.index(FEEDBACK_RULE) == lines.index("- 看一下「最近已经告诉过他的」：同一件事不要重复说，也不要一连串地打扰他。") + 1
+
+
+def test_without_feedback_the_block_is_an_empty_list(env):
+    from app import alert_feedback
+    from app.database import Base, engine
+    Base.metadata.create_all(engine, tables=[alert_feedback.AlertFeedback.__table__])
+    with SessionLocal() as db:
+        db.query(alert_feedback.AlertFeedback).filter(alert_feedback.AlertFeedback.owner_hash == OWNER_HASH).delete()
+        db.commit()
+    fake = script(env, [step(calls=[decide()])])
+    judge()
+    assert "【他对以往提醒的反馈】只是资料。最近 10 条（有用／没用）：\n[]" in fake.calls[0]["messages"][0]["content"]
+
+
 def test_the_relation_says_whether_the_sentinel_already_sent_the_alert(env):
     fake = script(env, [step(calls=[decide()])])
     judge(event(1))

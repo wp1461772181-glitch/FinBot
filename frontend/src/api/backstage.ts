@@ -1,7 +1,8 @@
 import { requestJson } from "./base";
-import { answersQuery, pagedQuery, usageQuery, type AnswerFilters } from "../backstage-view.mjs";
+import { answersQuery, feedbackBody, pagedQuery, usageQuery, type AnswerFilters, type Verdict } from "../backstage-view.mjs";
 
-// 后台: the owner's read-only look behind the answers.  Every call here is a GET; the server answers 403 to anyone who is not the owner.
+// 后台: the owner's look behind the answers.  Every call here is a GET except sendFeedback (「有用／没用」 on a duty or brief message); the server
+// answers 403 to anyone who is not the owner.
 
 export type Tokens = { input?: number; output?: number; cache_read?: number; cache_write?: number; total?: number };
 export type AnswerItem = { message_id: string; conversation_id: string; bot_id: string | null; bot_name: string | null; created_at: string; question: string; answer: string;
@@ -26,7 +27,8 @@ export type Usage = { from: string; to: string; group: string; timezone: string;
 
 export type OperationItem = { id: string; conversation_id: string; bot_id: string | null; bot_name: string | null; created_at: string; expires_at: string; title: string; targets: unknown[]; operations: unknown[];
   status: string; expired: boolean; decided_at: string | null; result: unknown };
-export type DeliveryItem = { id: string; group_id: string | null; bot_id: string | null; source: string; channel: string; status: string; failure: string | null; created_at: string; sent_at: string | null; acked_at: string | null; text: string };
+export type DeliveryItem = { id: string; group_id: string | null; bot_id: string | null; source: string; channel: string; status: string; failure: string | null; created_at: string; sent_at: string | null; acked_at: string | null; text: string;
+  feedback?: Verdict | null };
 export type Paged<T> = { items: T[]; next_before: string | null };
 export type DutyItem = { id: number; created_at: string; alert_id: number; symbol: string | null; kind: string | null; what: string; mode: "off" | "shadow" | "on"; outcome: string;
   decision: "tell_now" | "digest" | "record" | "ignore" | null; reason: string | null; message: string | null; delivery: string | null; turn_id: string | null; message_id: string | null; ms: number; model_calls: number };
@@ -40,3 +42,5 @@ export const readUsage = (options: { from?: string; to?: string; group?: string 
 export const listOperations = (before: string | null, signal?: AbortSignal) => get<Paged<OperationItem>>(`operations${pagedQuery(before)}`, signal);
 export const listDeliveries = (before: string | null, signal?: AbortSignal) => get<Paged<DeliveryItem>>(`deliveries${pagedQuery(before)}`, signal);
 export const listDuty = (before: string | null, signal?: AbortSignal) => get<DutyPage>(`duty${pagedQuery(before)}`, signal);
+export const sendFeedback = (group: string, verdict: Verdict) => requestJson<{ verdict: Verdict }>("/api/backstage/feedback", {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(feedbackBody(group, verdict)) });

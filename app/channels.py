@@ -107,7 +107,8 @@ def pending(owner_hash: str, channel: str, limit: int = 20, telegram_bot_row_id=
             now: datetime | None = None) -> list[dict]:
     """Queued messages of one channel, oldest first.  Telegram: the shared bot's (None) or a bot's own.  The rows
     returned are claimed (``claimed_at``): the sweep leaves them alone for ``CLAIM_SECONDS``, so a row a bridge is
-    sending is not closed and failed over under it.  A bridge that died stops claiming and its rows expire."""
+    sending is not closed and failed over under it.  A bridge that died stops claiming and its rows expire.  Each item carries its
+    ``source`` and ``group_id`` (the Telegram bridge puts 「有用／没用」 on a duty or brief message by its group)."""
     with SessionLocal() as db:
         query = select(AgentTelegramMessage).where(AgentTelegramMessage.owner_hash == owner_hash,
                                                    AgentTelegramMessage.status == "pending",
@@ -120,7 +121,8 @@ def pending(owner_hash: str, channel: str, limit: int = 20, telegram_bot_row_id=
         for row in rows:
             row.claimed_at = stamp
         db.commit()
-        return [{"id": str(r.id), "bot_id": str(r.bot_id) if r.bot_id else None, "text": r.text} for r in rows]
+        return [{"id": str(r.id), "bot_id": str(r.bot_id) if r.bot_id else None, "text": r.text, "source": r.source,
+                 "group_id": str(r.group_id) if r.group_id else None} for r in rows]
 
 
 def _locked(db, message_id):

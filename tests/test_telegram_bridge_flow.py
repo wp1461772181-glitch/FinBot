@@ -367,3 +367,129 @@ def test_the_compress_command_compacts_the_bots_line_and_is_not_sent_to_the_mode
     other = _command(OWNER_ID, "private", OWNER_ID, "/help")
     asyncio.run(bridge._handle_message(Client(), "cred", "owner", other, OWNER_ID, OWNER_ID, {}, telegram))
     assert len(posted) == 2                                                      # other commands are still ignored
+
+
+# --- 5c-3b: 「有用／没用」 on alerts and duty messages ----------------------------------------------------------
+from app import alert_feedback  # noqa: E402
+
+GROUP = "6f1c2a4e-1b2c-4d5e-8f90-0a1b2c3d4e5f"
+ROW = "0d9e8f7a-6b5c-4d3e-9f2a-1b0c9d8e7f6a"
+ACK_ROW = [{"text": "收到", "callback_data": "ack:7"}]
+ALERT_FEEDBACK_ROW = [{"text": "有用", "callback_data": "fu:s:7"}, {"text": "没用", "callback_data": "fn:s:7"}]
+
+
+def _outbox_row(group):
+    return [{"text": "有用", "callback_data": f"fu:o:{group}"}, {"text": "没用", "callback_data": f"fn:o:{group}"}]
+
+
+class _FeedbackStore:
+    """``alert_feedback`` with the real parser and a recorded store; ``fail`` makes the write raise."""
+    SOURCES = alert_feedback.SOURCES
+    parse_callback = staticmethod(alert_feedback.parse_callback)
+
+    def __init__(self, fail=False):
+        self.records, self.fail = [], fail
+
+    def describe(self, owner, target, target_id):
+        return {"symbol": "INTC", "kind": "short", "text": "INTC 急跌"}
+
+    def record(self, owner, target, target_id, verdict, channel, **about):
+        if self.fail:
+            raise RuntimeError("db down")
+        self.records.append((owner, target, target_id, verdict, channel, about))
+        return {"verdict": verdict}
+
+
+def _press_wire(monkeypatch, store=None):
+    """Telegram recorded: the callback answers (toasts) and the keyboard edits (posts)."""
+    calls = {"toasts": [], "posts": []}
+
+    class Client:
+        async def post(self, url, json=None):
+            calls["posts"].append((url.rsplit("/", 1)[-1], json))
+
+    async def answer(client, token, cb_id, text=None):
+        calls["toasts"].append(text)
+
+    async def nothing(*a, **k):
+        pass
+
+    monkeypatch.setattr(bridge, "_answer_callback", answer)
+    monkeypatch.setattr(bridge, "_acknowledge", nothing)
+    monkeypatch.setattr(bridge, "_bot_token_for_send", lambda owner, tg: TOKEN)
+    monkeypatch.setattr(bridge, "alert_feedback", store or _FeedbackStore())
+    return Client(), calls
+
+
+def _keyboard_press(data, keyboard):
+    return {"id": "cb-1", "data": data, "from": {"id": OWNER_ID},
+            "message": {"message_id": 55, "chat": {"id": OWNER_ID, "type": "private"}, "reply_markup": {"inline_keyboard": keyboard}}}
+
+
+def _press(client, callback):
+    asyncio.run(bridge._handle_callback(client, callback, {}, "owner", "cred", OWNER_ID, OWNER_ID, _Telegram()))
+
+
+def _edit(rows):
+    return ("editMessageReplyMarkup", {"chat_id": OWNER_ID, "message_id": 55, "reply_markup": {"inline_keyboard": rows}})
+
+
+def test_duty_and_brief_messages_go_out_with_the_feedback_row_and_a_notify_without(monkeypatch):
+    sent = []
+
+    async def send_text(client, token, chat_id, text, inline_keyboard=None, *, markdown=True):
+        sent.append((text, inline_keyboard, markdown))
+        return 900 + len(sent)
+
+    monkeypatch.setattr(bridge, "_send_text", send_text)
+    monkeypatch.setattr(bridge, "_bot_token_for_send", lambda owner, tg: TOKEN)
+    telegram = _Telegram()
+    telegram.pending_messages = lambda owner, *a: [
+        {"id": "a1", "text": "值班", "source": "duty", "group_id": GROUP},
+        {"id": ROW, "text": "简报", "source": "brief", "group_id": None},           # no group: its own id
+        {"id": "a3", "text": "提醒", "source": "notify", "group_id": GROUP}]
+    marked = []
+    telegram.mark_sent = lambda *a: marked.append(a)
+    telegram.mark_failed = lambda *a: None
+    asyncio.run(bridge._send_queued(None, "owner", OWNER_ID, telegram, None))
+    assert sent == [("值班", [_outbox_row(GROUP)], False), ("简报", [_outbox_row(ROW)], False), ("提醒", None, False)]
+    assert [a[0] for a in marked] == ["a1", ROW, "a3"]
+
+
+@pytest.mark.parametrize("data,keyboard,recorded,toast,left", [
+    ("fu:s:7", [ACK_ROW, ALERT_FEEDBACK_ROW], ("sentinel", "7", "useful"), "记下了：有用", [ACK_ROW]),
+    ("fn:s:7", [ACK_ROW, ALERT_FEEDBACK_ROW], ("sentinel", "7", "not_useful"), "记下了：没用", [ACK_ROW]),
+    ("fu:s:7", [ALERT_FEEDBACK_ROW], ("sentinel", "7", "useful"), "记下了：有用", []),              # 收到 already pressed
+    (f"fu:o:{GROUP}", [_outbox_row(GROUP)], ("outbox", GROUP, "useful"), "记下了：有用", []),
+    (f"fn:o:{GROUP}", [_outbox_row(GROUP)], ("outbox", GROUP, "not_useful"), "记下了：没用", []),
+])
+def test_a_feedback_press_records_and_takes_off_only_the_feedback_row(monkeypatch, data, keyboard, recorded, toast, left):
+    store = _FeedbackStore()
+    client, calls = _press_wire(monkeypatch, store)
+    _press(client, _keyboard_press(data, keyboard))
+    assert store.records == [("owner", *recorded, "telegram", {"symbol": "INTC", "kind": "short", "text": "INTC 急跌"})]
+    assert calls["toasts"] == [toast]
+    assert calls["posts"] == [_edit(left)]
+
+
+@pytest.mark.parametrize("keyboard,left", [([ACK_ROW, ALERT_FEEDBACK_ROW], [ALERT_FEEDBACK_ROW]), ([ACK_ROW], [])])
+def test_ack_takes_off_only_the_ack_row(monkeypatch, keyboard, left):
+    client, calls = _press_wire(monkeypatch)
+    acked = []
+    monkeypatch.setattr(bridge, "_sentinel_store", lambda: type("S", (), {"ack_alert": lambda self, alert_id: acked.append(alert_id)})())
+    _press(client, _keyboard_press("ack:7", keyboard))
+    assert acked == [7] and calls["toasts"] == ["已确认"] and calls["posts"] == [_edit(left)]
+
+
+@pytest.mark.parametrize("data", ["fu:s:abc", "fn:s:", "fu:o:not-a-uuid", "fu:x:7", "fu:s:7:8", "fu:o:" + "a" * 100, "fx:s:1"])
+def test_a_button_it_cannot_read_records_nothing(monkeypatch, data):
+    store = _FeedbackStore()
+    client, calls = _press_wire(monkeypatch, store)
+    _press(client, _keyboard_press(data, [ACK_ROW, ALERT_FEEDBACK_ROW]))
+    assert store.records == [] and calls["toasts"] == ["看不懂这个按钮"] and calls["posts"] == []
+
+
+def test_a_failed_write_leaves_the_keyboard_and_asks_for_another_press(monkeypatch):
+    client, calls = _press_wire(monkeypatch, _FeedbackStore(fail=True))
+    _press(client, _keyboard_press("fu:s:7", [ACK_ROW, ALERT_FEEDBACK_ROW]))
+    assert calls["toasts"] == ["没有记上，请再点一次。"] and calls["posts"] == []
