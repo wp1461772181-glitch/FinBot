@@ -1,9 +1,10 @@
-// 后台 (the owner's read-only backstage): what the four tabs show, as plain rows.  Pure: no React, no window, no fetch.
+// 后台 (the owner's read-only backstage): what the tabs show, as plain rows.  Pure: no React, no window, no fetch.
 //
 // The API's answers (app/backstage_api.py) go in; rows of display text come out.  A phrase that needs translating is returned as its Chinese
 // source text (the component passes it through t()); numbers, times and ids are returned ready to print.  Nothing here guesses a value the API
 // did not give: a cost the API could not price is 「未设价格」, a missing figure is a dash.
 import { toolLabel } from "./agent-tool-labels.mjs";
+import { paths } from "./routes.mjs";
 
 const DASH = "—";
 
@@ -425,5 +426,89 @@ export function dutyRow(item, timeZone, w = ZH_WORDS) {
     delivery: dutyDelivery(item),
     mode: DUTY_MODES[item?.mode] ? w.t(DUTY_MODES[item.mode]) : DASH,
     open: typeof item?.message_id === "string" && item.message_id ? item.message_id : null,
+  };
+}
+
+// ---- 记忆变更 ------------------------------------------------------------------------------------------------------
+
+/** The filters of the memory-changes tab: 对象 (target), 变更 (a group of actions), 谁改的 (by), the search text and the cursor. */
+export const MEMORY_FILTER_DEFAULTS = Object.freeze({ target: "", change: "", by: "", q: "", before: "" });
+export const MEMORY_TARGETS = [{ value: "profile", label: "记忆" }, { value: "view", label: "看法" }];
+/** 变更: each choice is the API actions it stands for (the API takes several joined by commas). */
+export const MEMORY_CHANGES = [
+  { value: "recorded", label: "记下", actions: ["added", "recorded"] },
+  { value: "guessed", label: "推测", actions: ["noticed", "proposed"] },
+  { value: "confirmed", label: "确认", actions: ["confirmed", "settled"] },
+  { value: "edited", label: "修改", actions: ["edited", "moved"] },
+  { value: "archived", label: "归档", actions: ["archived", "superseded", "dropped"] },
+  { value: "restored", label: "恢复", actions: ["restored"] },
+  { value: "deleted", label: "删除", actions: ["deleted", "rejected"] },
+];
+export const MEMORY_BYS = [
+  { value: "chat", label: "对话里" }, { value: "page", label: "记忆页" }, { value: "review", label: "每月整理" }, { value: "settle", label: "季度沉淀" },
+  { value: "template", label: "角色模板" }, { value: "extract", label: "旧流程提取" },
+];
+/** The fixed line under the table. */
+export const MEMORY_NOTE = "标「补记」的是这一栏上线前的变更，按记忆里已有的时间推出来的；那之前的修改和删除没有留下记录。";
+export const MEMORY_GONE = "（已删除，内容不保留）";
+
+const MEMORY_ACTION_LABELS = {
+  profile: { added: "记下", noticed: "推测", proposed: "推测", confirmed: "确认", edited: "修改", moved: "改范围", archived: "归档", restored: "恢复",
+    settled: "转为长期", rejected: "否掉推测", deleted: "删除" },
+  view: { recorded: "记下", superseded: "被取代", dropped: "撤回", archived: "归档", restored: "恢复", deleted: "删除" },
+};
+const MEMORY_BY_LABELS = { ...Object.fromEntries(MEMORY_BYS.map((by) => [by.value, by.label])), unknown: "不明" };
+// The reasons the code gives; anything else (the quarterly settle's own sentence) is shown as written.
+const MEMORY_REASONS = { replaced: "同一主题有了新的一条", cap: "超过 30 条上限", limit: "待确认的推测超过 20 条", stale: "60 天没有回应", restated: "你自己又说了一遍",
+  bot_deleted: "所属的 bot 被删除" };
+
+/** The query string of the memory-changes list: only what is set; 变更 becomes the actions it stands for; the search text is cut to 100 characters. */
+export function memoryQuery(filters) {
+  const f = { ...MEMORY_FILTER_DEFAULTS, ...filters };
+  const change = MEMORY_CHANGES.find((choice) => choice.value === f.change);
+  return paramsOf([["target", MEMORY_TARGETS.some((choice) => choice.value === f.target) ? f.target : ""], ["action", change ? change.actions.join(",") : ""],
+    ["by", MEMORY_BYS.some((choice) => choice.value === f.by) ? f.by : ""], ["q", text(f.q).slice(0, SEARCH_MAX)], ["before", f.before]]);
+}
+
+function layerName(layer, w) {
+  if (!isObject(layer)) return DASH;
+  return layer.id ? text(layer.name) || w.t("已删除的 bot") : w.t("全局");
+}
+
+/**
+ * One line of the memory-changes table.  `what` is the object (记忆, a bot's memory, or 看法 · the company); `content` the words (an edit shows old → new; a deleted
+ * or rejected item, and an earlier change of one, keeps none); `basis` the pieces it rests on (his quote, how many examples, the reason, a layer move); `link` opens
+ * the conversation it came from; `reconstructed` is 「补记」 for a change rebuilt from the timestamps the rows already had.
+ */
+export function memoryRow(item, timeZone, w = ZH_WORDS) {
+  const view = item?.target === "view";
+  const action = text(item?.action);
+  const symbol = text(item?.symbol), company = text(item?.company), bot = text(item?.bot);
+  const named = company && company !== symbol ? `${company}${w.parens(symbol)}` : symbol || company;
+  const owner = bot || (item?.bot_deleted === true ? w.t("已删除的 bot") : "");
+  const what = view ? (named ? `${w.t("看法")} · ${named}` : w.t("看法")) : owner ? `${w.t("记忆")} · ${owner}` : w.t("记忆");
+  const words = text(item?.text), before = text(item?.before);
+  const gone = action === "deleted" || action === "rejected" || !words;
+  const basis = [];
+  const quote = text(item?.quote);
+  if (quote) basis.push(`「${quote}」`);
+  const examples = list(item?.examples).filter(isObject).length;
+  if (examples) basis.push(`${w.t("例句")}${w.colon}${examples}`);
+  const reason = text(item?.reason);
+  if (reason) basis.push(`${w.t("原因")}${w.colon}${MEMORY_REASONS[reason] ? w.t(MEMORY_REASONS[reason]) : reason}`);
+  if (action === "moved") basis.push(`${w.t("范围")}${w.colon}${layerName(item?.from_bot, w)} → ${layerName(item?.to_bot, w)}`);
+  const conversation = text(item?.conversation_id);
+  const label = MEMORY_ACTION_LABELS[view ? "view" : "profile"][action];
+  return {
+    id: text(item?.id),
+    time: formatTime(item?.at, timeZone),
+    what,
+    action: label ? w.t(label) : action || DASH,
+    content: gone ? w.t(MEMORY_GONE) : action === "edited" && before ? `${before} → ${words}` : words,
+    gone,
+    by: MEMORY_BY_LABELS[item?.by] ? w.t(MEMORY_BY_LABELS[item.by]) : text(item?.by) || DASH,
+    basis,
+    link: conversation ? { label: w.t("查看原对话"), to: paths.chatConversation(conversation) } : null,
+    reconstructed: item?.reconstructed === true ? w.t("补记") : "",
   };
 }

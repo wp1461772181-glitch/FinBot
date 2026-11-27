@@ -1,5 +1,5 @@
 import { requestJson } from "./base";
-import { answersQuery, feedbackBody, pagedQuery, usageQuery, type AnswerFilters, type Verdict } from "../backstage-view.mjs";
+import { answersQuery, feedbackBody, memoryQuery, pagedQuery, usageQuery, type AnswerFilters, type MemoryFilters, type Verdict } from "../backstage-view.mjs";
 
 // 后台: the owner's look behind the answers.  Every call here is a GET except sendFeedback (「有用／没用」 on a duty or brief message); the server
 // answers 403 to anyone who is not the owner.
@@ -36,6 +36,11 @@ export type Paged<T> = { items: T[]; next_before: string | null };
 export type DutyItem = { id: number; created_at: string; alert_id: number; symbol: string | null; kind: string | null; what: string; mode: "off" | "shadow" | "on"; outcome: string;
   decision: "tell_now" | "digest" | "record" | "ignore" | null; reason: string | null; message: string | null; delivery: string | null; turn_id: string | null; message_id: string | null; ms: number; model_calls: number };
 export type DutyPage = Paged<DutyItem> & { mode: "off" | "shadow" | "on" };
+/** One change to the owner's memory or his views of companies (5d-2).  `text` is null once the item was deleted; `from_bot`/`to_bot` only on a layer move (id null: global). */
+export type MemoryLayer = { id: string | null; name: string | null };
+export type MemoryChangeItem = { id: string; at: string; target: "profile" | "view"; action: string; by: string; text: string | null; before: string | null; reason: string | null;
+  bot: string | null; bot_deleted: boolean; symbol: string | null; company: string | null; reconstructed: boolean; quote: string | null; examples: Array<Record<string, unknown>>;
+  conversation_id: string | null; message_id: string | null; run: string | null; template: string | null; from_bot: MemoryLayer | null; to_bot: MemoryLayer | null };
 
 const get = <T,>(path: string, signal?: AbortSignal) => requestJson<T>(`/api/backstage/${path}`, { signal });
 
@@ -45,5 +50,7 @@ export const readUsage = (options: { from?: string; to?: string; group?: string 
 export const listOperations = (before: string | null, signal?: AbortSignal) => get<Paged<OperationItem>>(`operations${pagedQuery(before)}`, signal);
 export const listDeliveries = (before: string | null, signal?: AbortSignal) => get<Paged<DeliveryItem>>(`deliveries${pagedQuery(before)}`, signal);
 export const listDuty = (before: string | null, signal?: AbortSignal) => get<DutyPage>(`duty${pagedQuery(before)}`, signal);
+export const listMemoryChanges = (filters: Partial<MemoryFilters>, before: string | null, signal?: AbortSignal) =>
+  get<Paged<MemoryChangeItem>>(`memory${memoryQuery({ ...filters, before: before ?? "" })}`, signal);
 export const sendFeedback = (group: string, verdict: Verdict) => requestJson<{ verdict: Verdict }>("/api/backstage/feedback", {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(feedbackBody(group, verdict)) });

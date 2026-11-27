@@ -20,6 +20,7 @@ from sqlalchemy import select
 
 from . import agent_model_roles as roles
 from . import agent_profile as profile
+from . import memory_events
 from .agent_chat_models import AgentConversation, AgentMessage
 from .agent_recall import owner_message_clause
 from .agent_workflow.fp_flags import flag
@@ -212,7 +213,8 @@ def run(owner_hash: str, now: datetime, last_run_at: datetime | None) -> dict:
     if len(window) < floor():     # the count above includes button presses and empty rows the window leaves out
         return {"outcome": "skipped", "reason": f"这段时间你只说了 {len(window)} 句话，太少了，下次再整理。", "skip": "too_few", "messages": len(window)}
     counts = profile.review_counts(owner_hash, last_run_at)
-    archived = profile.archive_stale_proposed(owner_hash, now, ARCHIVE_DAYS)
+    run_id = uuid.uuid4()           # made here so what this run archives as stale is logged under it too (memory_events)
+    archived = profile.archive_stale_proposed(owner_hash, now, ARCHIVE_DAYS, by=memory_events.review(run_id))
     by_id = {m["id"]: m for m in window}
     active = profile.active_for_review(owner_hash)
     handles = {a["handle"].lstrip("#"): a["id"] for a in active}
@@ -231,14 +233,14 @@ def run(owner_hash: str, now: datetime, last_run_at: datetime | None) -> dict:
         offered = None
     if offered is None:
         return {"outcome": "failed", "reason": "整理记忆时模型返回的内容看不懂。", "archived": archived}
-    run_id, stored, dropped = uuid.uuid4(), [], 0
+    stored, dropped = [], 0
     for item in offered[:MAX_PROPOSALS]:
         checked = _checked(item, by_id)
         if checked is None:
             dropped += 1
             continue
         try:
-            row = profile.add_proposed(owner_hash, review_run=run_id, now=now, **checked)
+            row = profile.add_proposed(owner_hash, review_run=run_id, now=now, by=memory_events.review(run_id), **checked)
         except profile.ProfileError:
             row = None
         if row is None:

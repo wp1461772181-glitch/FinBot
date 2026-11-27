@@ -1,5 +1,5 @@
 """The owner's backstage: endpoints over what the assistant did (answers and their courses, model-call usage, confirmation cards,
-the outbox).
+the outbox, the duty log, the changes to his memory).
 
 Every route answers 403 ``owner_only`` to anyone but the owner (the same check as the other owner pages).  Every route is a GET and
 writes nothing, except ``POST /backstage/feedback``: the owner's 「有用／没用」 on a duty or brief message (``alert_feedback``).
@@ -27,7 +27,7 @@ from sqlalchemy import String, Text, and_, case, cast, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 
-from . import alert_feedback, channels
+from . import alert_feedback, channels, memory_events
 from .agent_chat_models import AgentBot, AgentConversation, AgentConversationTitle, AgentMessage, ModelCall
 from .agent_chat_store import owner_hash as hash_of
 from .agent_workflow.models import AgentConsent
@@ -948,3 +948,73 @@ def duty(x_chat_session: str | None = Header(default=None), decision: str | None
         items = [_duty_item(row, opens) for row in rows]
         next_before = _duty_cursor(rows[-1].created_at, rows[-1].id) if more else None
     return {"mode": wake.mode(), "items": items, "next_before": next_before}
+
+
+# --- memory changes ------------------------------------------------------------------------------------------------
+
+def _layer_of(basis: dict, key: str, bots: dict):
+    """A move's end (``basis.from_bot`` / ``to_bot``) as ``{"id", "name"}``: id null is the global layer, name null a bot that is gone."""
+    if key not in basis:
+        return None
+    identity = basis.get(key)
+    return {"id": identity, "name": bots.get(identity) if identity else None} if identity is None or isinstance(identity, str) else None
+
+
+def _memory_item(event: dict, bots: dict) -> dict:
+    """One change as the 「记忆变更」 tab shows it: what, who, the words (a deleted item's are gone), and what it rests on."""
+    from .owner_views import display_name
+    basis = _dict(event.get("basis"))
+    bot, symbol = event.get("bot_id"), event.get("symbol")
+    def text(value):
+        return scrub(value) if isinstance(value, str) else None
+    return {"id": event["id"], "at": event["at"], "target": event["target"], "action": event["action"], "by": event["by"],
+            "text": text(event.get("text")), "before": text(event.get("before")), "reason": text(event.get("reason")),
+            "bot": bots.get(bot) if bot else None, "bot_deleted": bool(bot) and bot not in bots, "symbol": symbol, "company": display_name(symbol) if symbol else None,
+            "reconstructed": bool(event.get("reconstructed")), "quote": text(basis.get("quote")),
+            "examples": scrub([item for item in _list(basis.get("examples")) if isinstance(item, dict)]),
+            "conversation_id": text(basis.get("conversation_id")), "message_id": text(basis.get("message_id")),
+            "run": text(basis.get("run")), "template": text(basis.get("template")),
+            "from_bot": _layer_of(basis, "from_bot", bots), "to_bot": _layer_of(basis, "to_bot", bots)}
+
+
+@router.get("/memory")
+def memory(x_chat_session: str | None = Header(default=None), target: str | None = None, action: str | None = None, by: str | None = None,
+           q: str | None = Query(default=None, max_length=100), before: str | None = None, limit: int = Query(default=50, ge=1, le=MAX_LIMIT)):
+    """Every change to what the assistant keeps about the owner (his memory items and his views of companies), newest first: what was
+    recorded, changed, archived, restored, confirmed or deleted, who did it (``by``) and its basis.  ``action`` takes one action or several
+    joined by commas; ``q`` searches the text, an edit's old text and the reason.  Read-only (``memory_events``)."""
+    owner = _owner(x_chat_session)
+    actions = [part for part in action.split(",") if part] if action is not None else []
+    if ((target is not None and target not in memory_events.TARGETS) or (by is not None and by not in memory_events.BYS)
+            or (action is not None and (not actions or any(part not in memory_events.ACTIONS for part in actions)))):
+        raise HTTPException(400, "invalid_filter")
+    cursor = _parse_cursor(before)
+    items, more = memory_events.page(owner, target=target, action=actions, by=by, q=q, before=cursor, limit=limit)
+    with SessionLocal() as db:
+        bots = _bot_names(db, owner)
+        found = _conversations_of(db, owner, items)
+    next_before = _cursor(datetime.fromisoformat(items[-1]["at"]), items[-1]["id"]) if more and items else None
+    shown = [_memory_item(event, bots) for event in items]
+    for item in shown:
+        if not item["conversation_id"] and item["message_id"]:
+            item["conversation_id"] = found.get(item["message_id"])
+    return {"items": shown, "next_before": next_before}
+
+
+def _conversations_of(db, owner, events) -> dict:
+    """The conversation of each message a change names without its conversation (an item rebuilt from its row knows only his message), among
+    the owner's own conversations: ``{message_id: conversation_id}``."""
+    wanted = {_uuid_or_none(_dict(event.get("basis")).get("message_id")) for event in events
+              if not _dict(event.get("basis")).get("conversation_id")} - {None}
+    if not wanted:
+        return {}
+    rows = db.execute(select(AgentMessage.id, AgentMessage.conversation_id).join(AgentConversation, AgentConversation.id == AgentMessage.conversation_id)
+                      .where(AgentMessage.id.in_(wanted), AgentConversation.owner_hash == owner)).all()
+    return {str(message): str(conversation) for message, conversation in rows}
+
+
+def _uuid_or_none(value):
+    try:
+        return uuid.UUID(str(value)) if value else None
+    except (TypeError, ValueError):
+        return None

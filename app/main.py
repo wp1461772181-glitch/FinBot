@@ -211,6 +211,9 @@ def create_tables() -> None:
     ensure_profile_template_column()
     from .owner_views import ensure_archive_column as ensure_view_archive_column
     ensure_view_archive_column()
+    # 5d-2: the memory change log (created above with the other tables) gets, once, what happened before it, rebuilt from the rows.
+    from .memory_events import backfill_at_startup as backfill_memory_events
+    backfill_memory_events()
     # Stage C: tasks and inbox entries belong to a bot; NULL (every existing row) is adopted by the default bot.
     from .agent_tasks import ensure_bot_columns as ensure_task_bot_columns
     ensure_task_bot_columns()

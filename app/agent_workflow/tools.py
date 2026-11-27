@@ -118,6 +118,13 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
 ROUTINE_FIELDS=('name','kind','instruction','schedule_kind','schedule_time','every_value','every_unit','max_runs','channel','skill_id','config','enabled')
 
 
+def _memory_actor(context,args):
+    """Who a remember / forget / record_view / drop_view press is, for the memory change log: this conversation, and the turn and his message
+    when the frozen operation carries them (record_view carries all three, remember the message, the others neither)."""
+    from .. import memory_events
+    return memory_events.chat(args.get('_conversation_id') or context.conversation_id,args.get('_turn_id'),args.get('_source_message_id'))
+
+
 async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
     if args.get('_expect') is not None and is_owner:
         from . import directory_ops
@@ -381,7 +388,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         from .. import agent_profile as profile
         if not is_owner:return error('owner_login_required')
         if name=='forget':
-            item=await asyncio.to_thread(profile.archive_item,context.owner_hash,args['item_id'])
+            item=await asyncio.to_thread(profile.archive_item,context.owner_hash,args['item_id'],by=_memory_actor(context,args))
             if not item:return error('profile_item_not_found')
             # A monthly-review guess is reduced to a fingerprint when forgotten: its text is gone, so only the handle comes back.
             gone=item.get('status')=='rejected'
@@ -392,12 +399,12 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         if args.get('basis')=='noticed':
             # A guess the model wrote on the spot: the quote was checked against his words when the operation was prepared (kernel act).
             try:value=await asyncio.to_thread(profile.add_noticed,context.owner_hash,kind=args['kind'],text=args['text'],quote=args['quote'],
-                                              bot_id=args.get('_bot_id'),message_id=args.get('_source_message_id'))
+                                              bot_id=args.get('_bot_id'),message_id=args.get('_source_message_id'),by=_memory_actor(context,args))
             except profile.ProfileError as exc:return error(str(exc))
             if value['status']!='added':return error('already_noticed' if value['status']=='duplicate' else 'rejected_before')
             return result([{'status':'noticed','text':value['item']['text'],'handle':value['item']['handle']}],'owner profile')
         try:value=await asyncio.to_thread(profile.add_item,context.owner_hash,origin='explicit',message=args['quote'],
-                                          source_message_id=args.get('_source_message_id'),bot_id=args.get('_bot_id'),
+                                          source_message_id=args.get('_source_message_id'),bot_id=args.get('_bot_id'),by=_memory_actor(context,args),
                                           **{k:args[k] for k in ('kind','topic','text','quote')})
         except profile.ProfileError as exc:return error(str(exc))
         if value.get('status')=='skipped':return error(value.get('reason') or 'profile_write_skipped')
@@ -407,10 +414,10 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         from .. import owner_views
         if not is_owner:return error('owner_login_required')
         if name=='drop_view':
-            dropped=await asyncio.to_thread(owner_views.drop,context.owner_hash,args['symbol'])
+            dropped=await asyncio.to_thread(owner_views.drop,context.owner_hash,args['symbol'],by=_memory_actor(context,args))
             return result([{'status':'dropped','symbol':dropped['symbol'],'text':dropped['text']}],'owner view') if dropped else error('view_not_found')
         try:value=await asyncio.to_thread(owner_views.record,context.owner_hash,args['symbol'],args['text'],args['quote'],
-                                          args.get('_source_message_id'),args.get('_conversation_id'),args.get('_turn_id'))
+                                          args.get('_source_message_id'),args.get('_conversation_id'),args.get('_turn_id'),by=_memory_actor(context,args))
         except owner_views.ViewError as exc:return error(str(exc))
         return result([{'status':value['status'],'symbol':value['view']['symbol'],'text':value['view']['text'],
                         'replaced':(value['replaced'] or {}).get('text')}],'owner view')

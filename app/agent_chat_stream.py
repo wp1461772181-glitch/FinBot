@@ -1270,9 +1270,10 @@ class ProfileCreate(BaseModel):
 async def create_profile_endpoint(body: ProfileCreate, x_chat_session: str | None = Header(default=None)):
     """The owner types an item on the memory page: global (``bot_id`` null) or one bot's own memory."""
     from .agent_profile import ProfileError, add_manual_item
+    from .memory_events import PAGE
     credential = _owner_only(x_chat_session)
     try:
-        outcome = await asyncio.to_thread(add_manual_item, owner_hash(credential), **body.model_dump())
+        outcome = await asyncio.to_thread(add_manual_item, owner_hash(credential), **body.model_dump(), by=PAGE)
     except ProfileError as exc:
         raise HTTPException(422, str(exc)) from None
     if outcome.get("status") == "skipped":
@@ -1290,10 +1291,11 @@ class ProfilePatch(BaseModel):
 async def patch_profile_endpoint(item_id: str, body: ProfilePatch, x_chat_session: str | None = Header(default=None)):
     """The owner edits an item's text or moves it to another layer (``bot_id`` null: global)."""
     from .agent_profile import ProfileError, update_item
+    from .memory_events import PAGE
     credential = _owner_only(x_chat_session)
     fields = body.model_dump(exclude_unset=True)
     try:
-        item = await asyncio.to_thread(update_item, owner_hash(credential), item_id, fields)
+        item = await asyncio.to_thread(update_item, owner_hash(credential), item_id, fields, by=PAGE)
     except ProfileError as exc:
         raise HTTPException(422, str(exc)) from None
     if item is None:
@@ -1305,8 +1307,9 @@ async def patch_profile_endpoint(item_id: str, body: ProfilePatch, x_chat_sessio
 async def confirm_profile_endpoint(item_id: str, x_chat_session: str | None = Header(default=None)):
     """The owner confirms an inferred item on the memory page; it becomes explicit."""
     from .agent_profile import confirm_item
+    from .memory_events import PAGE
     credential = _owner_only(x_chat_session)
-    item = await asyncio.to_thread(confirm_item, owner_hash(credential), item_id)
+    item = await asyncio.to_thread(confirm_item, owner_hash(credential), item_id, by=PAGE)
     if item is None:
         raise HTTPException(404, "profile_item_not_found")
     return {"item": item}
@@ -1316,9 +1319,10 @@ async def confirm_profile_endpoint(item_id: str, x_chat_session: str | None = He
 async def restore_profile_endpoint(item_id: str, x_chat_session: str | None = Header(default=None)):
     """The owner brings an archived memory item back (the quarterly settle keeps what it archives): active again, seen now."""
     from .agent_profile import ProfileError, restore_item
+    from .memory_events import PAGE
     credential = _owner_only(x_chat_session)
     try:
-        item = await asyncio.to_thread(restore_item, owner_hash(credential), item_id)
+        item = await asyncio.to_thread(restore_item, owner_hash(credential), item_id, by=PAGE)
     except ProfileError as exc:
         raise HTTPException(409, str(exc)) from None
     if item is None:
@@ -1330,8 +1334,9 @@ async def restore_profile_endpoint(item_id: str, x_chat_session: str | None = He
 async def delete_profile_endpoint(item_id: str, x_chat_session: str | None = Header(default=None)):
     """The owner deletes an item on the memory page; the next turn no longer carries it."""
     from .agent_profile import delete_item
+    from .memory_events import PAGE
     credential = _owner_only(x_chat_session)
-    if not await asyncio.to_thread(delete_item, owner_hash(credential), item_id):
+    if not await asyncio.to_thread(delete_item, owner_hash(credential), item_id, by=PAGE):
         raise HTTPException(404, "profile_item_not_found")
     return {"deleted": True}
 
@@ -1391,9 +1396,10 @@ async def write_view_endpoint(symbol: str, body: ViewWrite, x_chat_session: str 
     """The owner writes his view of a company on the memory page: what he typed is its own quote, no conversation behind it.  The earlier
     view stays in the history, exactly as when he says it in chat."""
     from . import owner_views
+    from .memory_events import PAGE
     owner = owner_hash(_owner_only(x_chat_session))
     try:
-        return await asyncio.to_thread(owner_views.record, owner, symbol, body.text, body.text)
+        return await asyncio.to_thread(owner_views.record, owner, symbol, body.text, body.text, by=PAGE)
     except owner_views.ViewError as exc:
         raise HTTPException(422, str(exc)) from None
 
@@ -1402,7 +1408,8 @@ async def write_view_endpoint(symbol: str, body: ViewWrite, x_chat_session: str 
 async def drop_view_endpoint(symbol: str, x_chat_session: str | None = Header(default=None)):
     """The owner withdraws his current view of a company on the memory page; it stays in the history as withdrawn."""
     from . import owner_views
-    view = await asyncio.to_thread(owner_views.drop, owner_hash(_owner_only(x_chat_session)), symbol)
+    from .memory_events import PAGE
+    view = await asyncio.to_thread(owner_views.drop, owner_hash(_owner_only(x_chat_session)), symbol, by=PAGE)
     if view is None:
         raise HTTPException(404, "view_not_found")
     return {"view": view}
@@ -1412,9 +1419,10 @@ async def drop_view_endpoint(symbol: str, x_chat_session: str | None = Header(de
 async def restore_view_endpoint(view_id: str, x_chat_session: str | None = Header(default=None)):
     """The owner brings an archived view of a company back; refused while the company has another current one."""
     from . import owner_views
+    from .memory_events import PAGE
     owner = owner_hash(_owner_only(x_chat_session))
     try:
-        view = await asyncio.to_thread(owner_views.restore, owner, view_id)
+        view = await asyncio.to_thread(owner_views.restore, owner, view_id, by=PAGE)
     except owner_views.ViewError:
         raise HTTPException(409, owner_views.RESTORE_BLOCKED) from None
     if view is None:
@@ -1426,7 +1434,8 @@ async def restore_view_endpoint(view_id: str, x_chat_session: str | None = Heade
 async def delete_view_endpoint(view_id: str, x_chat_session: str | None = Header(default=None)):
     """The owner removes one version of a view from its history on the company page."""
     from . import owner_views
-    if not await asyncio.to_thread(owner_views.delete_version, owner_hash(_owner_only(x_chat_session)), view_id):
+    from .memory_events import PAGE
+    if not await asyncio.to_thread(owner_views.delete_version, owner_hash(_owner_only(x_chat_session)), view_id, by=PAGE):
         raise HTTPException(404, "view_not_found")
     return {"deleted": True}
 

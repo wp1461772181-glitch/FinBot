@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, update
 
 from . import agent_profile as profile
-from . import owner_views, view_review
+from . import memory_events, owner_views, view_review
 from .agent_chat_models import AgentBot, AgentConversation, AgentMessage, AgentProfileItem, AgentResearchQueue
 from .agent_recall import owner_message_clause
 from .company_directory import COMPANIES
@@ -63,6 +63,8 @@ def _promote(db, owner_hash: str, now: datetime) -> list[str]:
         if seen >= now - timedelta(days=SEEN_WITHIN_DAYS) and row.confirmed_at <= now - timedelta(days=CONFIRMED_DAYS):
             db.execute(update(AgentProfileItem).where(AgentProfileItem.id == row.id)
                        .values(settled_at=now, updated_at=AgentProfileItem.updated_at).execution_options(synchronize_session=False))
+            memory_events.log(db, owner_hash, target="profile", item_id=row.id, action="settled", by=memory_events.SETTLE, at=now, text=row.text,
+                              bot_id=row.bot_id)
             done.append(row.text)
     return done
 
@@ -83,6 +85,8 @@ def _expire(db, owner_hash: str, now: datetime, days: int) -> list[tuple[str, st
         db.execute(update(AgentProfileItem).where(AgentProfileItem.id == row.id)
                    .values(status="archived", archived_at=now, archived_reason=reason, updated_at=AgentProfileItem.updated_at)
                    .execution_options(synchronize_session=False))
+        memory_events.log(db, owner_hash, target="profile", item_id=row.id, action="archived", by=memory_events.SETTLE, at=now, text=row.text,
+                          reason=reason, bot_id=row.bot_id)
         done.append((row.text, reason))
     return done
 
@@ -150,7 +154,7 @@ def _archive_views(owner_hash: str, planned: list[dict], now: datetime) -> list[
     done = []
     for view in planned:
         try:
-            if owner_views.archive(owner_hash, view["id"], VIEW_REASON, at=now):
+            if owner_views.archive(owner_hash, view["id"], VIEW_REASON, at=now, by=memory_events.SETTLE):
                 done.append((f"{owner_views.display_name(view['symbol'])}的看法：{view['text']}", VIEW_REASON))
         except Exception as exc:  # noqa: BLE001
             log.warning("quarterly settle: archiving a view failed (%s)", type(exc).__name__)

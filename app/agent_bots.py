@@ -21,7 +21,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func
+from sqlalchemy import func, select, text as sql_text
 
 from .agent_tool_catalog import expand_legacy
 from .agent_chat_models import AgentBot, AgentConversation, AgentInboxItem, AgentMessage, AgentProfileItem, AgentTask
@@ -447,9 +447,10 @@ def preview_update(owner_hash: str, bot_id, fields: dict) -> tuple[dict, dict] |
         return before, after
 
 
-def delete_bot(owner_hash: str, bot_id) -> bool:
+def delete_bot(owner_hash: str, bot_id, by=None) -> bool:
     """Remove the bot and archive its conversations and its own memory items (they stay in the database and
-    on the memory page).  The default bot cannot be deleted.  No other bot, conversation or memory changes."""
+    on the memory page).  The default bot cannot be deleted.  No other bot, conversation or memory changes.
+    Each archived memory item is recorded in ``memory_events`` (``by``: the bot page; reason ``bot_deleted``)."""
     with SessionLocal() as db:
         bot = _owned(db, owner_hash, bot_id)
         if bot is None:
@@ -460,9 +461,13 @@ def delete_bot(owner_hash: str, bot_id) -> bool:
                                            AgentConversation.bot_id == bot.id,
                                            AgentConversation.archived_at.is_(None)).update(
             {"archived_at": func.now()}, synchronize_session=False)
-        db.query(AgentProfileItem).filter(AgentProfileItem.owner_hash == owner_hash, AgentProfileItem.bot_id == bot.id,
-                                          AgentProfileItem.status == "active").update(
-            {"status": "archived"}, synchronize_session=False)
+        from . import memory_events
+        db.execute(sql_text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": "profile:" + owner_hash})   # agent_profile's writer lock
+        for item in db.scalars(select(AgentProfileItem).where(AgentProfileItem.owner_hash == owner_hash, AgentProfileItem.bot_id == bot.id,
+                                                              AgentProfileItem.status == "active")).all():
+            item.status = "archived"
+            memory_events.log(db, owner_hash, target="profile", item_id=item.id, action="archived", by=by, text=item.text,
+                              reason=memory_events.BOT_DELETED, bot_id=item.bot_id)
         # Its routine tasks go with it; its briefs stop counting as unread and its suggestions are dismissed
         # (their run conversations are archived with the bot's line).
         db.query(AgentTask).filter(AgentTask.owner_hash == owner_hash, AgentTask.bot_id == bot.id).delete(

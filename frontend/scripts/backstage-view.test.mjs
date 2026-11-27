@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyDelivery, dutyModeLine, helperLines, dutyRow, FEEDBACK_CHOICES, FEEDBACK_FAILED, feedbackBody, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
   RECONCILE_NOTE, reconcileBlock, slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
+  MEMORY_BYS, MEMORY_CHANGES, MEMORY_FILTER_DEFAULTS, MEMORY_GONE, MEMORY_NOTE, MEMORY_TARGETS, memoryQuery, memoryRow,
 } from "../src/backstage-view.mjs";
 import { ANSWERS, DELIVERIES, DETAIL, DUTY, HELPERS, DETAIL_INCOMPLETE, DETAIL_OLD, OPERATIONS, usageAnswer } from "../tools/shots/fixtures/backstage.mjs";
 
@@ -392,4 +393,118 @@ test("every phrase of the figure check is in both catalogs", () => {
     assert.ok(chinese.includes(phrase), phrase);
     assert.ok(english[phrase]?.trim(), phrase);
   }
+});
+
+
+// ---- 5d-2: 记忆变更 ------------------------------------------------------------------------------------------------
+
+const CONVERSATION = "c0ffee00-0000-4000-8000-000000000001";
+const CHANGE = { id: "e-1", at: "2026-11-27T10:30:00+00:00", target: "profile", action: "added", by: "chat", text: "金额用亿美元", before: null, reason: null,
+  bot: null, symbol: null, company: null, reconstructed: false, quote: "以后金额用亿美元", examples: [], conversation_id: CONVERSATION, message_id: "m-1",
+  run: null, template: null, from_bot: null, to_bot: null };
+const change = (patch) => memoryRow({ ...CHANGE, ...patch }, "UTC");
+
+test("the memory-changes query carries only the filters that are set, and 变更 is the actions it stands for", () => {
+  assert.equal(memoryQuery(MEMORY_FILTER_DEFAULTS), "");
+  assert.equal(memoryQuery({ ...MEMORY_FILTER_DEFAULTS, target: "view", change: "recorded", by: "page", q: " NVDA ", before: "1.x" }),
+    "?target=view&action=added%2Crecorded&by=page&q=NVDA&before=1.x");
+  assert.equal(memoryQuery({ ...MEMORY_FILTER_DEFAULTS, change: "deleted" }), "?action=deleted%2Crejected");
+  assert.equal(memoryQuery({ ...MEMORY_FILTER_DEFAULTS, target: "junk", change: "junk", by: "junk" }), "", "a value the API does not know is not sent");
+  assert.equal(memoryQuery({ ...MEMORY_FILTER_DEFAULTS, q: "x".repeat(150) }), `?q=${"x".repeat(100)}`);
+  assert.deepEqual(MEMORY_TARGETS.map((choice) => choice.label), ["记忆", "看法"]);
+  assert.deepEqual(MEMORY_CHANGES.map((choice) => choice.label), ["记下", "推测", "确认", "修改", "归档", "恢复", "删除"]);
+  assert.deepEqual(MEMORY_BYS.map((choice) => choice.label), ["对话里", "记忆页", "每月整理", "季度沉淀", "角色模板", "旧流程提取"]);
+  const api = ["added", "noticed", "proposed", "confirmed", "edited", "moved", "archived", "restored", "settled", "rejected", "deleted", "recorded", "superseded", "dropped"];
+  assert.deepEqual([...new Set(MEMORY_CHANGES.flatMap((choice) => choice.actions))].sort(), [...api].sort(), "every action the API records has a filter, and no other");
+});
+
+test("a change said in chat: the object, the action, his words, who, his quote and the conversation it came from", () => {
+  assert.deepEqual(change({}), { id: "e-1", time: "11-27 10:30", what: "记忆", action: "记下", content: "金额用亿美元", gone: false, by: "对话里",
+    basis: ["「以后金额用亿美元」"], link: { label: "查看原对话", to: `/chat/c/${CONVERSATION}` }, reconstructed: "" });
+  assert.equal(change({ conversation_id: null }).link, null, "no conversation, no link");
+  assert.equal(change({ bot: "研究员" }).what, "记忆 · 研究员", "a bot's own memory names the bot");
+});
+
+test("an edit shows old → new; a deleted or rejected item, and an earlier change of one, keeps no words", () => {
+  const edit = change({ action: "edited", by: "page", before: "金额用万元", quote: null, conversation_id: null });
+  assert.deepEqual([edit.action, edit.content, edit.by, edit.basis], ["修改", "金额用万元 → 金额用亿美元", "记忆页", []]);
+  for (const action of ["deleted", "rejected"]) {
+    const gone = change({ action, text: null, quote: null });
+    assert.equal(gone.content, MEMORY_GONE, action);
+    assert.equal(gone.gone, true, action);
+  }
+  assert.equal(change({ action: "deleted", text: "不该出现" }).content, MEMORY_GONE, "even a text the API sent by mistake is not shown for a deletion");
+  const scrubbed = change({ text: null, quote: null });
+  assert.equal(scrubbed.content, MEMORY_GONE, "an earlier change of a deleted item");
+  assert.deepEqual(scrubbed.basis, []);
+  assert.equal(change({ action: "rejected", text: null }).action, "否掉推测");
+  assert.equal(MEMORY_GONE, "（已删除，内容不保留）");
+});
+
+test("a reconstructed change says 补记, and the note under the table says what that means", () => {
+  assert.equal(change({ reconstructed: true }).reconstructed, "补记");
+  assert.equal(change({ reconstructed: "yes" }).reconstructed, "", "only a true flag");
+  assert.equal(MEMORY_NOTE, "标「补记」的是这一栏上线前的变更，按记忆里已有的时间推出来的；那之前的修改和删除没有留下记录。");
+});
+
+test("a view names its company; each view action has its word; the settle's reason is shown as it wrote it", () => {
+  const view = { target: "view", symbol: "NVDA", company: "英伟达", text: "估值太高了", quote: "估值太高了，我觉得" };
+  assert.equal(change({ ...view, action: "recorded" }).what, "看法 · 英伟达（NVDA）");
+  assert.equal(change({ ...view, company: "AAPL", symbol: "AAPL", action: "recorded" }).what, "看法 · AAPL", "a ticker with no Chinese name is not doubled");
+  assert.deepEqual(["recorded", "superseded", "dropped", "archived", "restored", "deleted"].map((action) => change({ ...view, action }).action),
+    ["记下", "被取代", "撤回", "归档", "恢复", "删除"]);
+  const archived = change({ ...view, action: "archived", by: "settle", quote: null, conversation_id: null, reason: "你已不持有、不在关注列表，也很久没提" });
+  assert.deepEqual([archived.by, archived.basis], ["季度沉淀", ["原因：你已不持有、不在关注列表，也很久没提"]]);
+});
+
+test("every profile action has its word; the code's reasons, the review's examples and a layer move read in words", () => {
+  assert.deepEqual(["added", "noticed", "proposed", "confirmed", "edited", "moved", "archived", "restored", "settled", "rejected", "deleted"].map((action) => change({ action }).action),
+    ["记下", "推测", "推测", "确认", "修改", "改范围", "归档", "恢复", "转为长期", "否掉推测", "删除"]);
+  const proposed = change({ action: "proposed", by: "review", quote: null, conversation_id: null, examples: [{ quote: "a" }, { quote: "b" }, "junk"] });
+  assert.deepEqual([proposed.by, proposed.basis], ["每月整理", ["例句：2"]]);
+  assert.deepEqual(change({ action: "archived", quote: null, reason: "cap" }).basis, ["原因：超过 30 条上限"]);
+  assert.deepEqual(change({ action: "archived", quote: null, reason: "replaced" }).basis, ["原因：同一主题有了新的一条"]);
+  assert.deepEqual(change({ action: "archived", quote: null, reason: "limit" }).basis, ["原因：待确认的推测超过 20 条"]);
+  assert.deepEqual(change({ action: "archived", quote: null, reason: "stale" }).basis, ["原因：60 天没有回应"]);
+  assert.deepEqual(change({ action: "confirmed", quote: null, reason: "restated" }).basis, ["原因：你自己又说了一遍"]);
+  const moved = change({ action: "moved", by: "page", quote: null, conversation_id: null, from_bot: { id: null, name: null }, to_bot: { id: "b-1", name: "研究员" } });
+  assert.deepEqual(moved.basis, ["范围：全局 → 研究员"]);
+  assert.deepEqual(change({ action: "moved", quote: null, from_bot: { id: "b-1", name: null }, to_bot: { id: null, name: null } }).basis.slice(0, 1), ["范围：已删除的 bot → 全局"]);
+  assert.deepEqual(["template", "extract", "settle", "unknown", "???"].map((by) => change({ by }).by), ["角色模板", "旧流程提取", "季度沉淀", "不明", "???"]);
+  const english = { t: (phrase) => `<${phrase}>`, colon: ": ", comma: ", ", list: ", ", parens: (value) => ` (${value})` };
+  const translated = memoryRow({ ...CHANGE, target: "view", symbol: "NVDA", company: "英伟达", action: "archived", reason: "stale", quote: null }, "UTC", english);
+  assert.deepEqual([translated.what, translated.action, translated.basis], ["<看法> · 英伟达 (NVDA)", "<归档>", ["<原因>: <60 天没有回应>"]]);
+});
+
+test("the memory tab: its filters go into the request, the note sits under the table, and it writes nothing", () => {
+  const tab = src("app/backstage/MemoryTab.tsx"), page = src("app/backstage/BackstagePage.tsx"), api = src("api/backstage.ts");
+  for (const id of ["filter-target", "filter-change", "filter-by", "filter-q"]) assert.match(tab, new RegExp(`data-testid="${id}"`), id);
+  assert.match(tab, /listMemoryChanges\(applied, before, signal\)/, "the filters (with the settled search) are what is asked for");
+  assert.match(tab, /const key = JSON\.stringify\(applied\);/, "a new filter starts the list again");
+  assert.match(tab, /\{t\(MEMORY_NOTE\)\}/);
+  assert.match(tab, /<Link to=\{row\.link\.to\}/, "the conversation opens in the app");
+  assert.match(api, /get<Paged<MemoryChangeItem>>\(`memory\$\{memoryQuery\(\{ \.\.\.filters, before: before \?\? "" \}\)\}`, signal\)/);
+  assert.match(page, /\{ value: "memory", testId: "tab-memory", label: t\("记忆变更"\) \}/);
+  assert.match(page, /\{tab === "memory" && <MemoryTab \/>\}/);
+  assert.doesNotMatch(tab, /method:\s*"(POST|PUT|PATCH|DELETE)"|<form|type="submit"/);
+  assert.deepEqual(api.match(/method:\s*"(POST|PUT|PATCH|DELETE)"/g), ['method: "POST"'], "still only the feedback POST");
+});
+
+test("every phrase of the memory-changes tab is in both catalogs", () => {
+  const chinese = JSON.parse(src("locales/zh-CN.json")), english = JSON.parse(src("locales/en-US.json"));
+  const phrases = [...MEMORY_TARGETS, ...MEMORY_CHANGES, ...MEMORY_BYS].map((choice) => choice.label).concat([
+    MEMORY_NOTE, MEMORY_GONE, "记忆变更", "对象", "变更", "谁改的", "内容", "依据", "全部", "筛选记忆变更", "搜索内容和原因", "没有符合筛选的变更。", "还没有记忆变更的记录。",
+    "记下、修改、归档或删除一条记忆或看法时，这里就多一行。", "记忆变更记录", "改范围", "转为长期", "否掉推测", "被取代", "撤回", "不明", "同一主题有了新的一条", "超过 30 条上限",
+    "待确认的推测超过 20 条", "60 天没有回应", "你自己又说了一遍", "例句", "原因", "范围", "全局", "已删除的 bot", "查看原对话", "补记"]);
+  for (const phrase of phrases) {
+    assert.ok(chinese.includes(phrase), phrase);
+    assert.ok(english[phrase]?.trim(), phrase);
+  }
+});
+
+test("a memory item whose bot was deleted reads 记忆 · 已删除的 bot, not the global layer, with its reason in words", () => {
+  const row = change({ action: "archived", bot: null, bot_deleted: true, reason: "bot_deleted", quote: null });
+  assert.equal(row.what, "记忆 · 已删除的 bot");
+  assert.ok(row.basis.includes("原因：所属的 bot 被删除"), row.basis.join(" | "));
+  assert.equal(change({ bot: null, bot_deleted: false }).what, "记忆");
 });
