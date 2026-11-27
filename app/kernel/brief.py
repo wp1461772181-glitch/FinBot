@@ -161,6 +161,22 @@ def filtered_line(counts: dict, since: datetime) -> str:
     return f"从 {start} 到现在，另有 {n} 条提醒我看过，判断不用打扰你（{'，'.join(parts)}），在后台「值班」里能看到。"
 
 
+def week_calendar(owner: str, day: str) -> tuple[str, bool]:
+    """When the brief's Beijing ``day`` is a Monday, the week's earnings calendar of the companies he holds and follows (5e-2a, code-written)
+    and whether any reports this week; else ``("", False)``.  The brief's own day, not the clock, so a replay of a past Monday shows its week.
+    A failure to read it is logged and leaves the brief as it was."""
+    from datetime import date
+    monday = date.fromisoformat(day)
+    if monday.weekday() != 0:
+        return "", False
+    try:
+        from .. import earnings_calendar
+        return earnings_calendar.week_block(earnings_calendar.tracked_symbols(owner), monday)
+    except Exception:
+        logger.exception("morning brief: the week's earnings calendar could not be read")
+        return "", False
+
+
 def _window_start(owner: str, now: datetime) -> datetime:
     """Where the brief's window starts: the newest done brief; else 24 hours before the owner's oldest brief row (so a failed day's rows
     are carried by the next brief); else 24 hours before ``now``."""
@@ -246,10 +262,12 @@ async def _run(row_id: int, owner: str, day: str, current: str, now: datetime, s
         counts = {**counts, "missed": len(findings), **({"unchecked": serious} if serious else {})}
     line = filtered_line(counts, since)
     missed = selfcheck_lines(findings, problems)
-    tail = "".join(f"\n\n{part}" for part in (missed, line) if part)
-    if not any(counts.values()):
+    # the week's reports are content on a Monday (the brief goes out for them alone); 「本周没有」 only rides along with a brief going out anyway
+    week, reports_this_week = await asyncio.to_thread(week_calendar, owner, day)
+    tail = "".join(f"\n\n{part}" for part in (missed, line, week) if part)
+    if not any(counts.values()) and not reports_this_week:
         return await asyncio.to_thread(lambda: finish(outcome="skipped", reason=NOTHING, counts=counts))
-    if not kept and not held and not line and not missed:
+    if not kept and not held and not line and not missed and not reports_this_week:
         return await asyncio.to_thread(lambda: finish(outcome="skipped", reason=NOTHING_TO_SAY, counts=counts))
     fields: dict = {"counts": counts}
     if kept or held:
