@@ -105,10 +105,12 @@ def tracked_symbols(owner_hash: str) -> list[str]:
 
 
 def store(rows: list[dict], now: datetime) -> int:
-    """Insert or update each (symbol, fiscal quarter) row; returns how many were written."""
+    """Insert or update each (symbol, fiscal quarter) row; returns how many were written.  A quarter given twice in one batch keeps the
+    later row (the session does not flush between rows, so a second insert of the same key would fail the whole batch)."""
+    unique = {(row["symbol"], row["fiscal_year"], row["fiscal_quarter"]): row for row in rows}
     written = 0
     with SessionLocal() as db:
-        for row in rows:
+        for row in unique.values():
             found = db.scalar(select(EarningsCalendar).where(EarningsCalendar.symbol == row["symbol"], EarningsCalendar.fiscal_year == row["fiscal_year"],
                                                               EarningsCalendar.fiscal_quarter == row["fiscal_quarter"], EarningsCalendar.source == SOURCE))
             if found is None:
@@ -122,22 +124,32 @@ def store(rows: list[dict], now: datetime) -> int:
     return written
 
 
-def last_fetched() -> datetime | None:
+def fetched_by_symbol(symbols) -> dict[str, datetime]:
+    """When each symbol's calendar was last read (its newest row's ``fetched_at``); a symbol never read is absent."""
+    from sqlalchemy import func
+    wanted = sorted({str(s).upper() for s in symbols or [] if s})
+    if not wanted:
+        return {}
     with SessionLocal() as db:
-        return db.scalar(select(EarningsCalendar.fetched_at).order_by(EarningsCalendar.fetched_at.desc()).limit(1))
+        rows = db.execute(select(EarningsCalendar.symbol, func.max(EarningsCalendar.fetched_at)).where(EarningsCalendar.symbol.in_(wanted))
+                          .group_by(EarningsCalendar.symbol)).all()
+    return {symbol: at for symbol, at in rows}
 
 
 def refresh(owner_hash: str, now: datetime | None = None, *, fetch=finnhub_fetch, pause: float = PAUSE_SECONDS, force: bool = False) -> dict:
-    """Fetch the tracked companies' calendars when the last fetch is older than ``STALE_AFTER`` (or ``force``).  One company failing does
-    not stop the others.  ``{"symbols", "rows", "errors", "skipped"}``; no key: ``skipped`` says so and nothing is fetched."""
+    """Fetch each tracked company whose own last fetch is older than ``STALE_AFTER`` (or that was never fetched, or failed: it has no new
+    row; or all with ``force``).  Each company is its own try: one failing does not stop the others, and the error kept names only the
+    company and the kind of error (never the request, which carries the key).  ``{"symbols", "rows", "errors", "skipped"}``; no key:
+    ``skipped`` says so and nothing is fetched."""
     now = now or datetime.now(UTC)
     key = os.getenv(KEY_ENV, "").strip()
     if not key:
         return {"symbols": 0, "rows": 0, "errors": [], "skipped": "no_key"}
-    latest = last_fetched()
-    if not force and latest is not None and now - latest < STALE_AFTER:
+    tracked = tracked_symbols(owner_hash)
+    seen = fetched_by_symbol(tracked)
+    symbols = [s for s in tracked if force or s not in seen or now - seen[s] >= STALE_AFTER]
+    if not symbols:
         return {"symbols": 0, "rows": 0, "errors": [], "skipped": "fresh"}
-    symbols = tracked_symbols(owner_hash)
     since, until = (now - timedelta(days=BACK_DAYS)).date(), (now + timedelta(days=AHEAD_DAYS)).date()
     rows, errors = [], []
     for index, symbol in enumerate(symbols):
@@ -145,20 +157,27 @@ def refresh(owner_hash: str, now: datetime | None = None, *, fetch=finnhub_fetch
             time.sleep(pause)
         try:
             rows += [row for row in fetch(symbol, since, until, key) if row["symbol"] == symbol]
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001 - any failure is this company's; the others still go
             errors.append(f"{symbol}: {type(exc).__name__}")
     written = store(rows, now) if rows else 0
     return {"symbols": len(symbols), "rows": written, "errors": errors, "skipped": None}
 
 
-def upcoming(symbols, today: date) -> dict[str, dict]:
-    """For each symbol its next report on or after ``today`` (the earliest), as stored: ``{symbol: row dict}``; a symbol with none is absent."""
+def upcoming(symbols, today: date, session=None) -> dict[str, dict]:
+    """For each symbol its next report on or after ``today`` (US Eastern date) that has not come out yet (no actual EPS), the earliest, as
+    stored: ``{symbol: row dict}``; a symbol with none is absent.  ``session``: read in the caller's (its timeouts hold)."""
+    from sqlalchemy import and_, or_
     wanted = sorted({str(s).upper() for s in symbols or [] if s})
     if not wanted:
         return {}
-    with SessionLocal() as db:
-        rows = db.scalars(select(EarningsCalendar).where(EarningsCalendar.symbol.in_(wanted), EarningsCalendar.report_date >= today)
-                          .order_by(EarningsCalendar.symbol, EarningsCalendar.report_date)).all()
+    query = (select(EarningsCalendar).where(EarningsCalendar.symbol.in_(wanted), EarningsCalendar.report_date >= today,
+                                            or_(EarningsCalendar.eps_actual.is_(None), EarningsCalendar.report_date > today))
+             .order_by(EarningsCalendar.symbol, EarningsCalendar.report_date))
+    if session is not None:
+        rows = session.scalars(query).all()
+    else:
+        with SessionLocal() as db:
+            rows = db.scalars(query).all()
     found: dict[str, dict] = {}
     for row in rows:
         found.setdefault(row.symbol, as_dict(row))
@@ -182,7 +201,7 @@ def _amount(value: float) -> str:
 def line(row: dict) -> str:
     """One line for a company's next report: its date and hour, and the consensus with where it came from and when it was read."""
     when = row["report_date"]
-    weekday = f"（周{WEEKDAYS[date.fromisoformat(when).weekday()]}）"      # written by code: a model counting days from a date gets it wrong
+    weekday = f"（周{WEEKDAYS[date.fromisoformat(when).weekday()]}，美东）"      # written by code: a model counting days from a date gets it wrong
     hour = HOURS.get(row.get("hour") or "")
     expected = []
     if row.get("eps_estimate") is not None:
