@@ -201,3 +201,65 @@ def test_a_figure_worked_out_on_one_line_passes_where_the_answer_restates_it():
     sources = [{"ordinal": 1, "title": "利润表", "quote": "毛利 4,751 营收 28,236"}]
     answer = "上一季毛利率约 16.8%。\n| 毛利率 | 16.8%（4,751 ÷ 28,236，计算值） |"
     assert rc.reconcile(answer, sources, question="", user_text="")["flagged"] == []
+
+
+# --- what the passes still flag (Fable acceptance of 5d-1: B1, B2) ---------------------------------------------------------------
+
+def test_a_unit_scales_only_a_source_that_names_it():
+    """「回购 12 亿美元」 is not held by a source that states 1.2 somewhere: only a table that says it is in millions scales its figures."""
+    move = [{"ordinal": 1, "title": "行情", "quote": "苹果今天上涨 1.2%，收于 271.01 美元。"}]
+    assert rc.reconcile("苹果宣布回购 12 亿美元 [1]。", move, question="", user_text="")["flagged"] != []
+    assert rc.reconcile("苹果宣布回购 12 亿美元 [1]。", [], question="", user_text="", earlier=move)["flagged"] != []
+    fifty = [{"ordinal": 1, "title": "新闻", "quote": "公司有 50 家门店。"}]
+    assert rc.reconcile("现金 5 万美元 [1]。", fifty, question="", user_text="")["flagged"] != []
+    table = [{"ordinal": 1, "title": "10-Q", "quote": "(In millions) Buyback 1.2 Revenue 81,615"}]
+    assert rc.reconcile("回购 1,200,000 美元 [1]。", table, question="", user_text="")["flagged"] == []      # the table says millions
+
+
+def test_a_marker_a_date_or_a_count_does_not_make_a_figure_pass_by_restating():
+    sources = [{"ordinal": i, "title": f"s{i}", "quote": "苹果营收 4500 美元。"} for i in range(1, 24)]
+    for elsewhere in ("见 [23]。", "11 月 23 日发布。", "共 23 家机构。"):
+        assert rc.reconcile(f"营收同比增长 23% [1]。\n{elsewhere}", sources, question="", user_text="")["flagged"] != [], elsewhere
+    one = [{"ordinal": 1, "title": "行情", "quote": "苹果收于 271.01 美元。"}]
+    assert rc.reconcile("同比增长 25% [1]。\n21:25 更新。", one, question="", user_text="")["flagged"] != []
+
+
+def test_an_inference_does_not_become_evidence_by_restating():
+    one = [{"ordinal": 1, "title": "行情", "quote": "苹果收于 240 美元，每股收益 12 美元。"}]
+    answer = "推断：按 40 倍市盈率，目标价约 480 美元。\n目标价 480 美元 [1]。"
+    flagged = rc.reconcile(answer, one, question="", user_text="")["flagged"]
+    assert any("480" in item["values"] for item in flagged if item["line"].startswith("目标价"))
+
+
+def test_markers_dates_and_small_counts_are_not_operands():
+    one = [{"ordinal": 1, "title": "行情", "quote": "苹果收于 271.01 美元。"}]
+    assert rc.reconcile("收盘 271.01 [1]，目标价 813.03 [3]。", one, question="", user_text="")["flagged"] != []       # 271.01 × 3
+    assert rc.reconcile("12 月 31 日收盘 271.01 [1]，成本 8,401.31 [1]。", one, question="", user_text="")["flagged"] != []   # × 31
+
+
+def test_two_fabricated_figures_on_one_line_do_not_vouch_for_each_other():
+    one = [{"ordinal": 1, "title": "行情", "quote": "苹果收于 271.01 美元。"}]
+    result = rc.reconcile("按 850 股算，成本 1,234.5 美元，合计 1,049,325 美元 [1]。", one, question="", user_text="")
+    assert result["flagged"] and set(result["flagged"][0]["values"]) >= {"1,049,325"}
+
+
+def test_tool_rounds_do_not_push_the_earlier_answers_out_of_the_window(stored):
+    """Fable N1: a tool round is an assistant row with no text; EARLIER_ANSWERS counts answers, not rows."""
+    first = stored("一月最低收盘 259.48 美元 [1]。", {"route": "K", "citations": [{"ordinal": 1, "title": "一月行情", "quote": "AAPL 一月最低收盘 259.48 美元。"}]})
+    for _ in range(rc.EARLIER_ANSWERS + 3):
+        stored("", {"calls": [{"id": "c"}], "citations": []})
+    mid = stored("一月最低收盘约 259.48 美元。", {"route": "K", "citations": []})
+    with SessionLocal() as db:
+        inputs = rc.inputs_of(db, db.get(AgentMessage, mid))
+    assert first and any("259.48" in c["quote"] for c in inputs["earlier"])
+    assert rc.check(mid)["flagged"] == []
+
+
+def test_a_ratio_of_figures_written_in_millions_is_not_flagged():
+    """A filing fact stated in full (「4,751 百万美元」) is the operand a table in millions writes as 「4,751」 (shadow answer ad83ae0a)."""
+    facts = [{"ordinal": 1, "title": "毛利", "quote": "毛利 4,751,000,000 USD，即 4,751 百万美元。"},
+             {"ordinal": 2, "title": "营收", "quote": "营收 28,236,000,000 USD，即 28,236 百万美元。"}]
+    table = "| 指标（百万美元） | 上季 |\n|---|---:|\n| 营收 | 28,236 [2] |\n| 毛利 | 4,751 [1] |\n| 毛利率 | {row} |"
+    assert rc.reconcile(table.format(row="16.8%（4,751 ÷ 28,236，计算值）"), facts, question="", user_text="")["flagged"] == []
+    flagged = rc.reconcile(table.format(row="18.3%（4,751 ÷ 25,962，计算值）"), facts, question="", user_text="")["flagged"]
+    assert flagged and "18.3%" in flagged[0]["values"]          # 25,962 is nowhere, so neither is the ratio

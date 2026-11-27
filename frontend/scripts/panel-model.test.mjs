@@ -93,7 +93,7 @@ test("a flagged check: the title, how many were checked, each line with its valu
 });
 
 test("a clean check is one quiet line; an unchecked, failed or figure-less answer shows nothing", () => {
-  assert.deepEqual(roundReconcile({ reconciliation: { version: 1, figures: 2, flagged: [] } }), { kind: "clean", text: "数字对账：这一轮的 2 个数字都在资料里找得到。" });
+  assert.deepEqual(roundReconcile({ reconciliation: { version: 1, figures: 2, flagged: [] } }), { kind: "clean", text: "数字对账：核对了 2 个数字，没有发现找不到出处的。" });
   assert.equal(roundReconcile({ role: "assistant", content: "x" }), null, "not checked");
   assert.equal(roundReconcile({ reconciliation: null }), null);
   assert.equal(roundReconcile({ reconciliation: { version: 1, error: "KeyError" } }), null, "a failed check is the backstage's business");
@@ -108,12 +108,12 @@ test("the phrases go through t and {n} is filled after", () => {
   assert.equal(flagged.title, "<数字对账>");
   assert.equal(flagged.intro, "<这一轮核对了 1 个数字，下面这些在这一轮读到的资料里都找不到：>");
   assert.equal(flagged.note, `<${RECONCILE_NOTE}>`);
-  assert.equal(roundReconcile({ reconciliation: { figures: 4, flagged: [] } }, t).text, "<数字对账：这一轮的 4 个数字都在资料里找得到。>");
+  assert.equal(roundReconcile({ reconciliation: { figures: 4, flagged: [] } }, t).text, "<数字对账：核对了 4 个数字，没有发现找不到出处的。>");
 });
 
 test("every phrase of the 出处 tab's figure check is in both catalogs", () => {
   const chinese = JSON.parse(src("locales/zh-CN.json")), english = JSON.parse(src("locales/en-US.json"));
-  for (const phrase of ["数字对账", "这一轮核对了 {n} 个数字，下面这些在这一轮读到的资料里都找不到：", "数字对账：这一轮的 {n} 个数字都在资料里找得到。", RECONCILE_NOTE]) {
+  for (const phrase of ["数字对账", "这一轮核对了 {n} 个数字，下面这些在这一轮读到的资料里都找不到：", "数字对账：核对了 {n} 个数字，没有发现找不到出处的。", RECONCILE_NOTE]) {
     assert.ok(chinese.includes(phrase), phrase);
     assert.ok(english[phrase]?.trim(), phrase);
     if (phrase.includes("{n}")) assert.ok(english[phrase].includes("{n}"), `the English of ${phrase} keeps {n}`);

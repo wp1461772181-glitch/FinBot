@@ -97,5 +97,5 @@ export function roundReconcile(message, t = (phrase) => phrase) {
     return { kind: "flagged", title: t("数字对账"), intro: t("这一轮核对了 {n} 个数字，下面这些在这一轮读到的资料里都找不到：").replace("{n}", n), lines, note: t(RECONCILE_NOTE) };
   }
   if (figures === 0) return null;
-  return { kind: "clean", text: t("数字对账：这一轮的 {n} 个数字都在资料里找得到。").replace("{n}", n) };
+  return { kind: "clean", text: t("数字对账：核对了 {n} 个数字，没有发现找不到出处的。").replace("{n}", n) };
 }

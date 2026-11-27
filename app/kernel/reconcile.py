@@ -1,8 +1,8 @@
 """5d-1: after a kernel answer has gone out, its figures are checked against what the turn read.  Nothing in the answer changes.
 
-The check is the old deterministic one (no model call): what ``evidence.number_check`` rejects, kept only where no source of the turn states
-the figure at all (``unverified.entries``).  Legitimate arithmetic and the user's own figures pass.  The result is kept on
-the stored answer under ``tool_calls.reconciliation`` and shown in the backstage only.
+The check is the old deterministic one (no model call): what ``unverified.line_numbers`` rejects line by line, kept only where no source
+of the conversation states the figure at all and it is not the sources' or the user's arithmetic.  The result is kept on the stored
+answer under ``tool_calls.reconciliation`` and shown in the backstage and in the chat's 「来源」 panel; the answer itself is never marked.
 
 ``reconcile`` is the check; ``check_and_store`` is the background job the stream schedules (``agent_chat_stream``); ``kernel_answers`` and
 ``inputs_of`` give ``scripts/reconcile_report.py`` the same inputs the job reads.
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 
 log = logging.getLogger(__name__)
@@ -30,16 +31,42 @@ def _value_text(value) -> str:
     return f"{number:.4f}".rstrip("0").rstrip(".")
 
 
-_TABLE_UNITS = (1e3, 1e6, 1e9)       # "(In thousands / millions / billions)": a table states 81,615 for 81,615 百万
+def _scaled(holders: list[dict]) -> set:
+    """The figures of the sources whose own text says its table is in thousands, millions or billions, in that unit (the old check's
+    ``evidence._SCALE``: a table states 81,615 under "(In millions)" for 81,615 百万).  A source that names no unit scales nothing."""
+    from ..agent_workflow import evidence
+    out: set = set()
+    for citation in holders:
+        scanned = str(citation.get("check_text") or citation.get("quote") or "")
+        for marker, scale in evidence._SCALE:
+            if marker.search(scanned):
+                out |= {round(v * scale, 4) for v in evidence._figures_of(scanned) if v >= 1}
+    return out
 
 
-def _held(value: float, holders: list[dict], pool: set) -> bool:
-    """Whether some source states ``value``: as written, or in a table's unit (the per-line review knows the cited source's unit;
-    this asks of every source, so it reads the unit from the figure)."""
-    from ..agent_workflow import unverified
-    if unverified._holders(value, holders):
-        return True
-    return any(round(value / unit, 4) in pool for unit in _TABLE_UNITS if value >= unit)
+def _held(value: float, pool: set, scaled: set) -> bool:
+    """Whether some source states ``value``: as written, or in the unit its table names."""
+    return value in pool or value in scaled
+
+
+_UNITS = (1e3, 1e6, 1e9)
+
+
+def _operand(value: float, pool: set, scaled: set, said: set) -> bool:
+    """Whether a figure the line writes may take part in its own arithmetic: a source states it (also where the line writes in
+    millions what the source states in full: 「4,751」 for 「4,751 百万美元」, a ratio is the same in either unit), or the user did."""
+    return _held(value, pool, scaled) or value in said or any(round(value * unit, 4) in pool for unit in _UNITS)
+
+
+# Digits that are not amounts and must not take part in the arithmetic or the restating rule: a citation marker, a date, a clock time.
+_NOT_AMOUNTS = re.compile(r"\[\d+\]|(?:\d{2,4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{2,4}\s*年\s*\d{1,2}\s*月|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
+                          r"|(?<![\d.])\d{1,2}/\d{1,2}(?![\d/])|(?<![\d.:])\d{1,2}:\d{2}(?::\d{2})?(?![\d:])")
+
+
+def _amounts(line: str) -> set:
+    """The amounts a line writes, with markers, dates and clock times left out."""
+    from ..agent_workflow import evidence
+    return {r["value"] for r in evidence._figure_records(_NOT_AMOUNTS.sub(" ", line))}
 
 
 def _product(record: dict, pool: list) -> bool:
@@ -85,32 +112,35 @@ def reconcile(answer: str, citations: list[dict], *, question: str, user_text: s
         pool = set()
         for citation in holders:
             pool |= evidence._figures_of(evidence.citation_check_text(citation))
+        scaled = _scaled(holders)
+        said = evidence.user_figure_values(user_text)
         grouped: dict[str, list[str]] = {}
-        passed: set = set()
+        passed: set = set()          # figures worked out from the sources on some line (not one the sources or the user state)
         for _, stripped, checked in evidence._reviewable_lines(answer or "", cites):
             if checked is None:
                 continue          # a table header or rule is not a claim
             # the line as the old check reads it (a table row inherits its table's markers): the figures it rejects there, then
-            # only those no citation of the turn holds at all
+            # only those no source of the conversation holds at all
             _, written = unverified.line_numbers(checked, cites, user_text=user_text, verified=verified)
-            missing = [token for token, values in written if not any(_held(v, holders, pool) for v in values)]
-            # a sentence with no [n] cites no source, so the review had nothing to derive from: a sum, difference, ratio or change of
-            # any source's figures is the model's own arithmetic, not a figure from nowhere (same closure and false-accept bound)
-            # the line's own figures that some source states come first (price × shares, a written-out ratio): a pool that small stays
-            # well inside the false-accept bound where the whole turn's figures would not
-            near = {r["value"] for r in evidence._figure_records(checked)} | evidence.user_figure_values(user_text)
-            near = {v for v in near if v not in {r["value"] for t in missing for r in evidence._figure_records(t)}}
-            missing = [token for token in missing if not (_derived(token, near, near) or _derived(token, pool, verified))]
-            stated = {r["value"] for r in evidence._figure_records(checked)}
-            still = {r["value"] for t in missing for r in evidence._figure_records(t)}
-            passed |= stated - still
+            missing = [token for token, values in written if not any(_held(v, pool, scaled) for v in values)]
+            if missing:
+                # arithmetic: first on the line's own figures that a source or the user states (price × shares, a written-out ratio; a pool
+                # that small stays well inside the false-accept bound where the whole turn's figures would not), then on all the sources'
+                # figures (same closure and false-accept bound as the old check)
+                near = {v for v in _amounts(checked) if _operand(v, pool, scaled, said) or v in passed} | said
+                derived = [token for token in missing if _derived(token, near, near) or _derived(token, pool, verified)]
+                missing = [token for token in missing if token not in derived]
+                # an estimate does not become evidence by being repeated (``answer_verified_figures``): a labelled inference's own
+                # figures pass where they are, not where the answer restates them
+                if not evidence.is_inference_label(stripped):
+                    passed |= {r["value"] for t in derived for r in evidence._figure_records(t)}
             if not missing:
                 continue
             values = grouped.setdefault(str(stripped).strip()[:LINE_CHARS], [])
             for token in missing:
                 if token not in values:
                     values.append(token)
-        # a figure that passed on one line (worked out in a table row) is the same figure when the answer restates it elsewhere
+        # a figure worked out on one line (a table row) is the same figure when the answer restates it elsewhere
         for line in list(grouped):
             grouped[line] = [t for t in grouped[line] if not {r["value"] for r in evidence._figure_records(t)} <= passed]
             if not grouped[line]:
@@ -138,7 +168,7 @@ def inputs_of(db, row) -> dict:
     """What the check reads for one stored answer: its text, the citations stored with it (they keep their check text up to
     ``evidence.STORED_CHECK_TEXT_CHARS``), the turn's first user message as the question, and everything the person typed in the
     conversation up to the answer (the rule of ``Turn.user_stated_text``: no card button values)."""
-    from sqlalchemy import select
+    from sqlalchemy import func, select
     from ..agent_chat_models import AgentMessage
     from ..agent_workflow.direct import CONTROL_PREFIXES
     M = AgentMessage
@@ -148,8 +178,10 @@ def inputs_of(db, row) -> dict:
     said = [content for _, content in typed if isinstance(content, str) and content and not content.startswith(CONTROL_PREFIXES)]
     question = next((content for turn, content in typed if turn == row.turn_id and isinstance(content, str)), "")
     earlier: list[dict] = []
+    # answers, not tool rounds (stored as assistant rows with no text): a turn with many lookups must not push the earlier answers out
     for stored in db.scalars(select(M.tool_calls).where(M.conversation_id == row.conversation_id, M.role == "assistant",
-                                                         M.sequence < row.sequence).order_by(M.sequence.desc()).limit(EARLIER_ANSWERS)):
+                                                         M.sequence < row.sequence, func.btrim(func.coalesce(M.content, "")) != "")
+                             .order_by(M.sequence.desc()).limit(EARLIER_ANSWERS)):
         found = _record(stored).get("citations")
         earlier.extend(c for c in found if isinstance(c, dict)) if isinstance(found, list) else None
     return {"answer": row.content or "", "citations": citations if isinstance(citations, list) else [],

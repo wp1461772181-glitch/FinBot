@@ -56,3 +56,12 @@ def test_a_planted_figure_is_one_no_source_states():
     planted, token = plant("营收 1,275.77 亿美元 [1]，毛利率 59.7%。")
     assert token == "1,747.80" and token in planted and "1,275.77" not in planted
     assert plant("没有数字。") == ("没有数字。", None)
+
+
+def test_a_planted_whole_amount_is_its_own_measure():
+    from scripts.reconcile_report import _caught, plant
+    planted, token = plant("苹果回购 12 亿美元 [1]，上涨 2.5%。", whole=True)
+    assert token == "16" and planted.startswith("苹果回购 16 亿美元")
+    assert plant("上涨 2.5%。", whole=True) == ("上涨 2.5%。", None)
+    assert _caught({"flagged": [{"line": "x", "values": ["16 亿美元"]}]}, "16")
+    assert not _caught({"flagged": [{"line": "x", "values": ["160"]}]}, "16")
