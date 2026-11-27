@@ -18,3 +18,6 @@ export function feedbackBody(verdict: AnswerVerdict, reason?: string | null): { 
 export function uploadFor(message: Rated | null | undefined, storage: Storage): AnswerVerdict | null;
 export function forgetLocal(storage: Storage, turnId: string): void;
 export function toggleLocal(storage: Storage, turnId: string, pressed: AnswerVerdict): AnswerVerdict | null;
+export function uploadBody(verdict: AnswerVerdict): { verdict: AnswerVerdict; if_absent: true };
+export function feedbackRequest(base: string, conversationId: string, turnId: string, method: "PUT" | "DELETE", body: unknown, credential: string):
+  { url: string; init: { method: "PUT" | "DELETE"; cache: "no-store"; headers: Record<string, string>; body?: string } };

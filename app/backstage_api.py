@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import re
 import uuid
@@ -57,6 +58,7 @@ class _NoStoreRoute(APIRoute):
         return handler
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/backstage", tags=["backstage"], route_class=_NoStoreRoute)
 
 STATUSES = ("failed", "cancelled", "succeeded", "waiting_for_input", "incomplete")
@@ -459,7 +461,11 @@ def answers(x_chat_session: str | None = Header(default=None), bot_id: str | Non
         items = [_list_item(asked, final, bot_of, ledger.get(asked.turn_id), bots, now, "duty" if duty else "chat") for asked, final, bot_of, duty in rows]
         next_before = _cursor(rows[-1][0].created_at, rows[-1][0].id) if more else None
     # His 「好／不好」 on each answer (an incomplete turn has no answer to rate: its item carries the question's id, which has none).
-    given = answer_feedback.of(owner, [item["message_id"] for item in items if item["status"] != "incomplete"])
+    try:
+        given = answer_feedback.of(owner, [item["message_id"] for item in items if item["status"] != "incomplete"])
+    except Exception:  # noqa: BLE001 - his verdicts are a column of the list, not a reason to fail it
+        logger.warning("answer feedback unreadable for the answers list", exc_info=True)
+        given = {}
     for item in items:
         item["feedback"] = (given.get(item["message_id"]) or {}).get("verdict") if item["status"] != "incomplete" else None
     threshold = None
@@ -709,7 +715,11 @@ def answer(message_id: str, x_chat_session: str | None = Header(default=None)):
         positions = _model_positions(source, ledger_rows, audit_calls)
     shown = asked_row if incomplete and asked_row is not None else final or opened
     engine = None if incomplete else _engine(record)
-    given = None if incomplete else answer_feedback.of(owner, [str(final.id)]).get(str(final.id))
+    try:
+        given = None if incomplete else answer_feedback.of(owner, [str(final.id)]).get(str(final.id))
+    except Exception:  # noqa: BLE001 - the detail still opens without his verdict
+        logger.warning("answer feedback unreadable for an answer's detail", exc_info=True)
+        given = None
     citations = [{"ordinal": item.get("ordinal"), "title": scrub(item.get("title")), "url": scrub(item.get("url")),
                   "source_type": item.get("source_type")} for item in map(_dict, _list(record.get("citations"))) if item]
     fallback = audit.get("fallback")

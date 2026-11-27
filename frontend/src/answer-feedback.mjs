@@ -77,3 +77,19 @@ export function toggleLocal(storage, turnId, pressed) {
   } catch { /* the thumbs are a local note, not required */ }
   return now;
 }
+
+/** The body of the one-time upload of an old note: the verdict, and keep any verdict the server already has (given since, elsewhere). */
+export function uploadBody(verdict) {
+  return { verdict, if_absent: true };
+}
+
+/**
+ * The request for one turn's feedback: PUT (a body) or DELETE (none) on /agent-chat/conversations/{cid}/turns/{tid}/feedback under `base` (the
+ * agent-chat base URL, ending in "/"), with his session.  Pure: the API module only fetches it.
+ */
+export function feedbackRequest(base, conversationId, turnId, method, body, credential) {
+  const url = `${base}conversations/${encodeURIComponent(conversationId)}/turns/${encodeURIComponent(turnId)}/feedback`;
+  const headers = { Accept: "application/json", "X-Chat-Session": credential };
+  if (method === "PUT") return { url, init: { method, cache: "no-store", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(body) } };
+  return { url, init: { method: "DELETE", cache: "no-store", headers } };
+}

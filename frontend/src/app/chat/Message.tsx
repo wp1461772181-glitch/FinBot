@@ -12,7 +12,7 @@ import { doneLineState, type TurnEnd } from "../../signature.mjs";
 import { roundSources, turnKey } from "../../panel-model.mjs";
 import type { AgentChatMessage } from "../../api/conversations";
 import { deleteAnswerFeedback, putAnswerFeedback } from "../../api/conversations";
-import { FAILED_TEXT, REASON_MAX, REASON_PLACEHOLDER, THUMBS, asksReason, feedbackBody, forgetLocal, nextVerdict, readLocal, serverVerdict, toggleLocal, uploadFor, type AnswerVerdict } from "../../answer-feedback.mjs";
+import { FAILED_TEXT, REASON_MAX, REASON_PLACEHOLDER, THUMBS, asksReason, feedbackBody, forgetLocal, nextVerdict, readLocal, serverVerdict, toggleLocal, uploadBody, uploadFor, type AnswerVerdict } from "../../answer-feedback.mjs";
 import type { Bot } from "../../api/bots";
 import { useLocale, colon } from "../../i18n";
 import { queuedText, type Delivery } from "../../chat-interject.mjs";
@@ -142,7 +142,7 @@ function useAnswerFeedback(m: AgentChatMessage, onFeedback: () => void) {
   useEffect(() => {
     if (!upload || !c.conversationId) return;
     let live = true;
-    putAnswerFeedback(c.conversationId, turnId, { verdict: upload })
+    putAnswerFeedback(c.conversationId, turnId, uploadBody(upload))
       .then(saved => { forgetLocal(browserStore(), turnId); if (live) setMine(current => current === undefined ? saved.verdict : current); })
       .catch(() => { /* kept in this browser: sent again next time */ });
     return () => { live = false; };

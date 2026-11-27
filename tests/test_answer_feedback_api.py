@@ -111,3 +111,13 @@ def test_a_guest_history_reads_no_feedback_and_a_failed_read_still_loads(monkeyp
     monkeypatch.setattr(feedback, "of", broken)
     messages = asyncio.run(stream.get_messages("conversation", before=None, limit=20, x_chat_session=OWNER))["messages"]
     assert len(messages) == 4 and all("feedback" not in m for m in messages)
+
+
+def test_the_browsers_one_time_upload_keeps_a_verdict_the_server_already_has(client):
+    """Review of 5d-3a: a page loaded before he rated the answer elsewhere must not overwrite that verdict with its old browser note."""
+    cid, tid, mid = answered()
+    assert client.put(path(cid, tid), headers=H, json={"verdict": "good", "if_absent": True}).json()["verdict"] == "good"    # none yet: stored
+    client.put(path(cid, tid), headers=H, json={"verdict": "bad", "reason": "没说日期"})                                       # he changes it since
+    kept = client.put(path(cid, tid), headers=H, json={"verdict": "good", "if_absent": True}).json()
+    assert (kept["verdict"], kept["reason"]) == ("bad", "没说日期")
+    assert feedback.of(OWNER_HASH, [mid])[mid] == {"verdict": "bad", "reason": "没说日期"}

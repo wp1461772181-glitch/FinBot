@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  FAILED_TEXT, REASON_PLACEHOLDER, THUMBS, asksReason, cleanReason, feedbackBody, forgetLocal, localKey, nextVerdict, readLocal, serverVerdict, toggleLocal, uploadFor,
+  FAILED_TEXT, REASON_PLACEHOLDER, THUMBS, asksReason, feedbackRequest, uploadBody, cleanReason, feedbackBody, forgetLocal, localKey, nextVerdict, readLocal, serverVerdict, toggleLocal, uploadFor,
 } from "../src/answer-feedback.mjs";
 
 function memoryStore(entries = {}) {
@@ -70,4 +70,15 @@ test("the words are in both locales", async () => {
     assert.ok(zh.includes(phrase), phrase);
     assert.ok(typeof en[phrase] === "string" && en[phrase], phrase);
   }
+});
+
+test("the requests: PUT with the body and the session, DELETE with none; ids are escaped; the upload keeps a verdict the server has", () => {
+  const put = feedbackRequest("https://api.example/agent-chat/", "c 1", "t/2", "PUT", { verdict: "bad", reason: "太旧" }, "cred");
+  assert.equal(put.url, "https://api.example/agent-chat/conversations/c%201/turns/t%2F2/feedback");
+  assert.deepEqual(put.init, { method: "PUT", cache: "no-store", headers: { Accept: "application/json", "X-Chat-Session": "cred", "Content-Type": "application/json" },
+    body: JSON.stringify({ verdict: "bad", reason: "太旧" }) });
+  const del = feedbackRequest("https://api.example/agent-chat/", "c1", "t2", "DELETE", null, "cred");
+  assert.deepEqual(del.init, { method: "DELETE", cache: "no-store", headers: { Accept: "application/json", "X-Chat-Session": "cred" } });
+  assert.equal("body" in del.init, false);
+  assert.deepEqual(uploadBody("good"), { verdict: "good", if_absent: true });
 });

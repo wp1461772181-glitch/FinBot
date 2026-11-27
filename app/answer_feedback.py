@@ -24,6 +24,7 @@ CHANNELS = ("web", "chat")            # chat: said in a conversation, on any cha
 VERDICT_WORDS = {"good": "好", "bad": "不好"}
 REASON_MAX = 200
 LINE_MAX = 60                         # how much of the answer's first line names it
+RESOLVE_ROWS = 200                    # assistant rows read back to find the previous answer (tool rounds included)
 BEIJING = ZoneInfo("Asia/Shanghai")
 
 
@@ -98,12 +99,13 @@ def answer_of(owner_hash: str, conversation_id, turn_id):
         return rows[0]
 
 
-def record(owner_hash: str, conversation_id, turn_id, verdict: str, channel: str, reason: str | None = None) -> dict | None:
+def record(owner_hash: str, conversation_id, turn_id, verdict: str, channel: str, reason: str | None = None, *, only_if_absent: bool = False) -> dict | None:
     """Store his verdict on the final answer of one turn and return the row; None when the turn has no answer of his.
 
     The other verdict replaces the one there (a reason goes only with 不好, so 好 clears it); the same verdict again changes nothing,
     except that a reason given now replaces the old one.  ``ValueError("invalid_feedback")`` for a verdict, a channel or a reason that
-    is not one (a reason with 好, a reason over ``REASON_MAX``)."""
+    is not one (a reason with 好, a reason over ``REASON_MAX``).  ``only_if_absent``: keep a verdict already there and return it unchanged
+    (the browser's one-time upload of an old note must not overwrite one he gave since, in a conversation or on another device)."""
     if verdict not in VERDICTS or channel not in CHANNELS:
         raise ValueError("invalid_feedback")
     reason = clean_reason(reason)
@@ -127,6 +129,8 @@ def record(owner_hash: str, conversation_id, turn_id, verdict: str, channel: str
                     db.rollback()
                     continue
                 db.refresh(row)
+                return as_dict(row)
+            if only_if_absent:
                 return as_dict(row)
             # The other verdict brings its own reason (none for 好); the same verdict keeps the old reason unless a new one is given.
             new_reason = reason if row.verdict != verdict or reason is not None else row.reason
@@ -187,7 +191,8 @@ def resolve_last(owner_hash: str, conversation_id, before_turn) -> dict | None:
         if current is not None:
             query = query.where(AgentMessage.turn_id != current)
         seen: set = set()
-        for row in db.scalars(query.order_by(AgentMessage.sequence.desc())):
+        # the newest rows are enough: the answer before this turn is among the last few turns' rows
+        for row in db.scalars(query.order_by(AgentMessage.sequence.desc()).limit(RESOLVE_ROWS)):
             if row.turn_id in seen:
                 continue                  # a turn's earlier rows: its last assistant row decided already
             seen.add(row.turn_id)

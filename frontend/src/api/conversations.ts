@@ -1,4 +1,5 @@
 import { agentChatUrl } from "../agent-chat-url.mjs";
+import { feedbackRequest } from "../answer-feedback.mjs";
 import { fetchAgentChatModels } from "../agent-chat-models.mjs";
 import { type CompactionNotice, type ContextUsage, normalizeCompactions, normalizeContextUsage } from "../context-usage.mjs";
 import { conversationCreatedAtForMode, conversationForMode, selectConversationForMode } from "../chat-identity.mjs";
@@ -84,10 +85,10 @@ export async function archiveAgentConversation(id:string,archived=true,signal?:A
 /** The owner's research queue as the server keeps it: null until one was saved.  Owner only. */
 
 /** 5d-3a: the owner's 「好／不好」 on the final answer of one turn (a reason only with 不好); resolves to what the server now keeps.  Owner only. */
-export async function putAnswerFeedback(conversationId: string, turnId: string, body: { verdict: "good" | "bad"; reason?: string }, signal?: AbortSignal): Promise<{ verdict: "good" | "bad"; reason: string | null }> {
+export async function putAnswerFeedback(conversationId: string, turnId: string, body: { verdict: "good" | "bad"; reason?: string; if_absent?: boolean }, signal?: AbortSignal): Promise<{ verdict: "good" | "bad"; reason: string | null }> {
   const base = agentChatUrl("stream", configuredApiBaseUrl).replace(/stream$/, "");
-  const response = await fetch(`${base}conversations/${encodeURIComponent(conversationId)}/turns/${encodeURIComponent(turnId)}/feedback`, { method: "PUT", signal, cache: "no-store",
-    headers: { Accept: "application/json", "Content-Type": "application/json", "X-Chat-Session": chatCredential() }, body: JSON.stringify(body) });
+  const request = feedbackRequest(base, conversationId, turnId, "PUT", body, chatCredential());
+  const response = await fetch(request.url, { ...request.init, signal });
   if (!response.ok) throw new ApiError("answer_feedback_failed", response.status);
   const data = await response.json().catch(() => null) as { verdict?: unknown; reason?: unknown } | null;
   return { verdict: data?.verdict === "bad" ? "bad" : "good", reason: typeof data?.reason === "string" ? data.reason : null };
@@ -95,8 +96,8 @@ export async function putAnswerFeedback(conversationId: string, turnId: string, 
 /** Take the owner's verdict on that answer back (the second press on the same thumb). */
 export async function deleteAnswerFeedback(conversationId: string, turnId: string, signal?: AbortSignal): Promise<void> {
   const base = agentChatUrl("stream", configuredApiBaseUrl).replace(/stream$/, "");
-  const response = await fetch(`${base}conversations/${encodeURIComponent(conversationId)}/turns/${encodeURIComponent(turnId)}/feedback`, { method: "DELETE", signal, cache: "no-store",
-    headers: { Accept: "application/json", "X-Chat-Session": chatCredential() } });
+  const request = feedbackRequest(base, conversationId, turnId, "DELETE", null, chatCredential());
+  const response = await fetch(request.url, { ...request.init, signal });
   if (!response.ok) throw new ApiError("answer_feedback_failed", response.status);
 }
 export async function listAgentConversations(offset=0,signal?:AbortSignal): Promise<{conversations:ConversationSummary[];hasMore:boolean}> {

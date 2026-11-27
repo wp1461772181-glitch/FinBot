@@ -1161,6 +1161,7 @@ class AnswerFeedbackBody(BaseModel):
  model_config=ConfigDict(extra="forbid")
  verdict:Literal["good","bad"]
  reason:str|None=Field(default=None,max_length=200)
+ if_absent:bool=False      # the browser's one-time upload of an old note: keep a verdict the server already has
 
 
 def _feedback_reply(turn_id:str,row:dict|None)->dict:
@@ -1173,7 +1174,7 @@ async def put_answer_feedback(conversation_id:str,turn_id:str,body:AnswerFeedbac
  page does not know yet) can be rated too.  Owner only (a guest keeps the note in the browser); 404 when the turn has no answer of his."""
  credential=_owner_only(x_chat_session)
  from . import answer_feedback
- try:row=await asyncio.to_thread(answer_feedback.record,owner_hash(credential),conversation_id,turn_id,body.verdict,"web",body.reason)
+ try:row=await asyncio.to_thread(answer_feedback.record,owner_hash(credential),conversation_id,turn_id,body.verdict,"web",body.reason,only_if_absent=body.if_absent)
  except ValueError:raise HTTPException(422,"invalid_feedback") from None
  if row is None:raise HTTPException(404,"answer_not_found")
  return _feedback_reply(turn_id,row)
