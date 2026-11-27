@@ -101,6 +101,33 @@ def test_a_background_command_without_a_completion_notice_is_listed():
     assert "1 个" in text and "盯日志" in text and "bbb222" in text
 
 
+def _said(text):
+    return json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}},
+                      ensure_ascii=False)
+
+
+def test_a_silent_closing_message_holds_the_stop_back_and_hands_over_the_list():
+    lines = _started("bbb222", "toolu_2", "盯日志") + [_said("改完了。")]
+    result = background.decide({}, lines)
+    assert result["decision"] == "block" and "盯日志" in result["reason"] and "最晚什么时候" in result["reason"]
+
+
+def test_a_closing_message_that_mentions_background_work_passes():
+    lines = _started("bbb222", "toolu_2", "盯日志") + [_said("后台还有一条命令在盯日志，10 分钟后自己结束。")]
+    assert background.decide({}, lines) is None
+    silent = _started("bbb222", "toolu_2", "盯日志") + [_said("改完了。")]
+    assert background.decide({"last_assistant_message": "后台那条命令还在跑。"}, silent) is None
+
+
+def test_the_same_stop_is_never_held_back_twice():
+    lines = _started("bbb222", "toolu_2", "盯日志") + [_said("改完了。")]
+    assert background.decide({"stop_hook_active": True}, lines) is None
+
+
+def test_nothing_running_never_holds_a_stop_back():
+    assert background.decide({}, [_said("改完了。")]) is None
+
+
 def test_a_stopped_background_command_is_not_listed():
     stop = json.dumps({"type": "assistant", "message": {"content": [{
         "type": "tool_use", "id": "toolu_9", "name": "TaskStop", "input": {"task_id": "aaa111"}}]}})
