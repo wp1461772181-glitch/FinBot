@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
 
-from . import alert_feedback, duty_brief, duty_log, duty_selfcheck  # noqa: F401  (registers the duty tables before startup creates the tables)
+from . import alert_feedback, duty_brief, duty_log, duty_selfcheck, sentinel_copy  # noqa: F401  (registers the duty tables before startup creates the tables)
 
 router = APIRouter(prefix="/agent-chat/internal/sentinel", tags=["sentinel-internal"])
 logger = logging.getLogger(__name__)
@@ -86,6 +86,11 @@ async def post_event(body: SentinelEvent, request: Request, background: Backgrou
             event = wake.clean_event(body.payload)
         except ValueError:
             raise HTTPException(422, "invalid_event") from None
+        try:
+            # A copy on WeChat when the owner's preference wants one (5c-2b); its failure never stops the wake or the 202.
+            await asyncio.to_thread(sentinel_copy.copy_to_wechat, owner, event)
+        except Exception:
+            logger.exception("sentinel: the WeChat copy of alert %s failed", event["alert_id"])
         await wake.submit(event, owner)
         return JSONResponse({"accepted": True}, status_code=202)
     return {"accepted": True, "type": body.type}
