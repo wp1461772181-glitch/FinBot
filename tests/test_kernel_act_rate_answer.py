@@ -164,3 +164,17 @@ def test_the_operation_is_tier_one_kernel_only_owner_only_and_always_on():
     for bad in ({"verdict": "useful"}, {"verdict": "bad", "reason": ""}, {"verdict": "bad", "reason": "字" * 201}, {"verdict": "bad", "quote": "x"}, {}):
         with pytest.raises(Exception):
             validate("rate_answer", bad)
+
+
+def test_each_tier_one_line_names_its_arguments_from_the_schema():
+    """The shadow run of 5d-3a: the model guessed rate_answer's argument (rating), the retry came after a lookup in the same step and went on a
+    card.  The operations that run in the turn name their arguments in the directory, read from their schemas."""
+    lines = {line.split("：", 1)[0]: line for line in act.ACT_SCHEMA["function"]["description"].splitlines()}
+    assert lines["rate_answer"].endswith("参数：verdict（good/bad）、reason（可省）")
+    assert "参数：verdict（useful/not_useful）、about（alert/brief，可省）、symbol（可省）、quote" in lines["rate_alert"]
+    for name in act.TIER1:
+        assert "参数：" in lines[name], name
+        for key in act._schema(name).get("properties", {}):
+            if not key.startswith("_") and key != "say":
+                assert key in lines[name].split("参数：")[1], (name, key)
+    assert all("参数：" not in lines[name] for name in act.TIER2 if name in lines), "the card operations keep the lookup"

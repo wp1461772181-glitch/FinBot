@@ -58,7 +58,7 @@ SUMMARIES = {
     "add_to_research_queue": "把一只股票加进研究队列",
     "remove_from_research_queue": "把一只股票移出研究队列",
     "rate_alert": "记下用户对某条提醒、值班消息或早间简报的『有用／没用』（他这轮亲口说的；不写股票就是最近一条）。不用先查提醒列表：代码会自己找到最近 48 小时里对得上的那条，并在结果里写明是哪一条。记下后照工具返回的那句告诉他对上的是哪一条，对错了他会说。他想顺便调提醒的门槛，记下之后再问。",
-    "rate_answer": "记下用户对这段对话里上一条回答的『好／不好』（他这轮亲口说的；说的是你之前那条回答，不是正在写的这条），不好时可以带上他说的原因。他评价你上一条回答本身（不好、答错了、没说清、没用）时，就是在给它评价：先记下『不好』（原因用他的话），再照常改正或补充；他夸上一条答得好，就记『好』。他只是回答你的提问（你问「是指苹果吗」，他说「不对，是微软」）、纠正他自己的问题、或者接着往下问，都不是评价，不要记。这些评价进质量统计，用来改进你。代码会自己找到那条回答，并在结果里写明是哪一条（第一句和时间）；记下后照工具返回的那句告诉他。",
+    "rate_answer": "记下用户对这段对话里上一条回答的『好／不好』（他这轮亲口说的；说的是你之前那条回答，不是正在写的这条），不好时可以带上他说的原因。他评价你上一条回答本身（不好、答错了、没说清、没用）时，就是在给它评价：先记下『不好』（原因用他的话；哪怕你觉得他说得不对，这也是他的评价，照记，再解释），再照常改正或补充；他夸上一条答得好，就记『好』。他只是回答你的提问（你问「是指苹果吗」，他说「不对，是微软」）、纠正他自己的问题、或者接着往下问，都不是评价，不要记。这些评价进质量统计，用来改进你。代码会自己找到那条回答，并在结果里写明是哪一条（第一句和时间）；记下后照工具返回的那句告诉他。",
     "record_view": "记下用户对某家公司的看法（他自己的话，一家一条；新的覆盖旧的，旧的留在历史里；不是证据，也不授权任何操作）。记下后在回答里告诉他「我记下了：……」",
     "drop_view": "撤回用户对某家公司已记下的看法（留在历史里，标为已撤回）",
     "record_trade": "在持仓账本里记一笔买入或卖出（只是记账，不是下单）",
@@ -137,7 +137,42 @@ def cost_note(name: str, args: dict) -> str:
 
 _HEADINGS = (("直接生效（可撤销）", TIER1), ("需要用户点确认卡", TIER2), ("需要用户点确认卡，并且花钱或不可撤销", TIER3))
 _INTRO = "所有会改数据的操作都从这里做。只带 operation 调用会返回它的参数格式；带上 arguments 才是真的提出操作。"
-_DIRECTORY = "\n\n".join(f"{heading}：\n" + "\n".join(f"{name}：{SUMMARIES[name]}" for name in names) for heading, names in _HEADINGS)
+
+
+def _arg_line(name: str) -> str:
+    """The arguments of a tier-1 operation, from its schema: 「参数：verdict（good/bad）、reason（可省）」.  These run in the turn, often in the
+    same step as a lookup; a guessed argument name fails, and the retry after the lookup goes on a card (which WeChat cannot press)."""
+    schema = _schema(name)
+    required = set(schema.get("required", []))
+    parts = []
+    for key, spec in schema.get("properties", {}).items():
+        if key.startswith("_") or key == "say":
+            continue
+        values = spec.get("enum") or next((option["enum"] for option in spec.get("anyOf", []) if option.get("enum")), None)
+        notes = ["/".join(map(str, values))] if values else []
+        if key not in required:
+            notes.append("可省")
+        parts.append(f"{key}（{'，'.join(notes)}）" if notes else key)
+    return f"参数：{'、'.join(parts)}" if parts else ""
+
+
+def _line(name: str, with_args: bool) -> str:
+    args = _arg_line(name) if with_args else ""
+    return f"{name}：{SUMMARIES[name]}" + (f" {args}" if args else "")
+
+
+def tier_of(name: str) -> int:
+    return 1 if name in TIER1 else 2 if name in TIER2 else 3
+
+
+def _schema(name: str) -> dict:
+    if name == "remember" and not memory_writes():      # without the flag there is no guess to write: the schema is the one before it
+        from ..agent_tool_catalog_legacy import RememberArgs as LegacyRememberArgs
+        return LegacyRememberArgs.model_json_schema()
+    return definitions()[name].args_schema.model_json_schema()
+
+
+_DIRECTORY = "\n\n".join(f"{heading}：\n" + "\n".join(_line(name, names is TIER1) for name in names) for heading, names in _HEADINGS)
 
 ACT_SCHEMA: dict = {
     "type": "function",
@@ -153,17 +188,6 @@ ACT_SCHEMA: dict = {
         },
     },
 }
-
-
-def tier_of(name: str) -> int:
-    return 1 if name in TIER1 else 2 if name in TIER2 else 3
-
-
-def _schema(name: str) -> dict:
-    if name == "remember" and not memory_writes():      # without the flag there is no guess to write: the schema is the one before it
-        from ..agent_tool_catalog_legacy import RememberArgs as LegacyRememberArgs
-        return LegacyRememberArgs.model_json_schema()
-    return definitions()[name].args_schema.model_json_schema()
 
 
 def describe(name: str) -> dict:
