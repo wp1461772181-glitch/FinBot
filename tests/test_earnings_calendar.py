@@ -29,6 +29,9 @@ def world(disposable_database, monkeypatch):
     monkeypatch.setenv(ec.KEY_ENV, "test-key")
     monkeypatch.setattr(ec, "tracked_symbols", lambda owner: ["INTC", "MSFT", "ANT"])
     yield
+    with SessionLocal() as db:            # other suites read the calendar (latest_known): leave it as found
+        db.query(ec.EarningsCalendar).delete()
+        db.commit()
 
 
 def test_parse_keeps_the_rows_that_name_a_company_a_date_and_a_quarter():

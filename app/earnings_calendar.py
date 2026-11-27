@@ -259,3 +259,85 @@ def week_block(symbols, monday: date) -> tuple[str, bool]:
         nxt = rows[0]
         return f"本周你持有和关注的公司没有财报；最近的一家是 {_when(nxt)} {_company(nxt['symbol'])}（美东日期）。", False
     return WEEK_HEAD + "".join(f"\n· {_when(row)}　{_company(row['symbol'])}　{_expected(row)}" for row in week), True
+
+
+# --- the evening-before preparation (5e-2b) -------------------------------------------------------------------------------------
+
+def reporting_next(symbols, beijing_day: date) -> list[dict]:
+    """The tracked companies reporting in the next half day, seen from a Beijing evening: an after-the-close, during-the-market or not-said
+    report on the US date equal to the Beijing date (out tonight or before the Beijing morning), and a before-the-open report on the next US
+    date (out tomorrow evening Beijing).  Not reported yet; earliest first."""
+    wanted = sorted({str(s).upper() for s in symbols or [] if s})
+    if not wanted:
+        return []
+    tomorrow = beijing_day + timedelta(days=1)
+    with SessionLocal() as db:
+        rows = [as_dict(row) for row in db.scalars(select(EarningsCalendar).where(
+            EarningsCalendar.symbol.in_(wanted), EarningsCalendar.report_date.in_([beijing_day, tomorrow]), EarningsCalendar.eps_actual.is_(None))
+            .order_by(EarningsCalendar.report_date, EarningsCalendar.symbol)).all()]
+    return [row for row in rows if (row["report_date"] == beijing_day.isoformat() and row.get("hour") != "bmo")
+            or (row["report_date"] == tomorrow.isoformat() and row.get("hour") == "bmo")]
+
+
+def beijing_release(row: dict) -> str:
+    """Roughly when the report is out in Beijing time, written by code (the model is told to copy it, not to convert)."""
+    reported = date.fromisoformat(row["report_date"])
+    hour = row.get("hour")
+    if hour == "amc":
+        return f"北京时间 {reported + timedelta(days=1):%m-%d} 清晨 4 点到 6 点前后（美东 {reported:%m-%d} 盘后）"
+    if hour == "bmo":
+        return f"北京时间 {reported:%m-%d} 晚上 7 点到 9 点前后（美东 {reported:%m-%d} 盘前）"
+    if hour == "dmh":
+        return f"北京时间 {reported:%m-%d} 晚上到 {reported + timedelta(days=1):%m-%d} 凌晨之间（美东 {reported:%m-%d} 盘中）"
+    return f"美东 {reported:%m-%d}，盘前还是盘后没有说；最早北京时间 {reported:%m-%d} 晚上，最晚 {reported + timedelta(days=1):%m-%d} 清晨"
+
+
+class EarningsPrep(Base):
+    """One evening's 「财报前瞻」 (``kernel.prep``): claimed before anything happens, finished whatever happened, one per owner and Beijing day."""
+    __tablename__ = "earnings_prep"
+    __table_args__ = (UniqueConstraint("owner_hash", "day", name="uq_earnings_prep_owner_day"),)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    owner_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    day: Mapped[str] = mapped_column(String(10), nullable=False)                     # Beijing date of the evening
+    mode: Mapped[str] = mapped_column(String(8), nullable=False)                     # off | shadow | on, when it ran
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)                 # running | done | skipped | skipped_off | failed
+    symbols: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    message: Mapped[str | None] = mapped_column(String(8000), nullable=True)
+    delivery: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    turn_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    model_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+PREP_FIELDS = ("outcome", "symbols", "reason", "message", "delivery", "turn_id", "model_calls")
+
+
+def prep_claim(owner_hash: str, day: str, mode: str) -> int | None:
+    from sqlalchemy.exc import IntegrityError
+    row = EarningsPrep(owner_hash=owner_hash, day=day, mode=mode, outcome="running")
+    with SessionLocal() as db:
+        db.add(row)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            return None
+        return row.id
+
+
+def prep_finish(row_id: int, **fields) -> dict:
+    if set(fields) - set(PREP_FIELDS):
+        raise ValueError("invalid_prep_row")
+    with SessionLocal() as db:
+        row = db.get(EarningsPrep, row_id)
+        for key, value in fields.items():
+            setattr(row, key, str(value)[:8000] if key in ("message",) and value is not None else value)
+        db.commit()
+        return {"id": row.id, "day": row.day, "mode": row.mode, "outcome": row.outcome, "symbols": row.symbols, "reason": row.reason,
+                "message": row.message, "delivery": row.delivery, "turn_id": row.turn_id, "model_calls": row.model_calls}
+
+
+def prep_taken(owner_hash: str, day: str) -> bool:
+    with SessionLocal() as db:
+        return db.scalar(select(EarningsPrep.id).where(EarningsPrep.owner_hash == owner_hash, EarningsPrep.day == day)) is not None
