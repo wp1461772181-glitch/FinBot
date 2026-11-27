@@ -22,6 +22,7 @@ COMPANY_FACTS_SECONDS = 6 * 3600   # rebuild every company's code-built facts (t
 MEMORY_JOBS_SECONDS = 600   # the memory calendar looks for a job that is due
 WORK_WATCH_SECONDS = 60     # a job started from a card that has ended gets its message within a minute
 EARNINGS_SECONDS = 60      # picks up events the response-time task missed, due follow-ups, and anything left over from a restart
+BRIEF_SECONDS = 60         # the morning brief looks whether today's is due (08:05–12:00 Beijing) and not written yet
 
 
 def enabled() -> bool:
@@ -128,6 +129,21 @@ def run_memory_jobs() -> None:
         log.info("memory jobs: %s run", ran)
 
 
+def run_morning_brief() -> None:
+    """The kernel's morning brief (app.kernel.brief): written once a Beijing day, from 08:05; a day already written is left alone."""
+    from datetime import UTC, datetime
+
+    from .kernel import brief
+    from .sentinel_bridge import owner_hash_from_login_config
+
+    owner = owner_hash_from_login_config()
+    if not owner:
+        return
+    row = asyncio.run(brief.run_once(owner, datetime.now(UTC)))
+    if row:
+        log.info("morning brief %s: %s (%s)", row.get("day"), row.get("outcome"), row.get("delivery") or row.get("reason") or "-")
+
+
 LOOPS = (
     ("routine-tasks", ROUTINE_SECONDS, run_routine_tasks),
     ("sec-monitor", HOURLY_SECONDS, run_sec_monitor),
@@ -138,6 +154,7 @@ LOOPS = (
     ("company-facts", COMPANY_FACTS_SECONDS, run_company_facts),
     ("work-watch", WORK_WATCH_SECONDS, run_work_watch),
     ("memory-jobs", MEMORY_JOBS_SECONDS, run_memory_jobs),
+    ("morning-brief", BRIEF_SECONDS, run_morning_brief),
 )
 
 

@@ -1,0 +1,195 @@
+"""The morning brief: every morning (Beijing 08:05) the kernel writes the owner one message about what its duty kept overnight.
+
+It covers the duty rows since the last brief that ran (else the last 24 hours): the alerts the wake chose to keep for the brief
+(``digest``), the follow-ups it wrote at night but did not send (``tell_now`` held over the night), and one line, written by code, of
+how many alerts it looked at and decided not to bother him with.  The kept and held items go to one model turn (``loop.run_wake``
+without ``decide``: reads only, no ``act``, no ``ask``); a turn that fails still sends what was kept, as a plain list.  Only filtered
+rows means no model call; no rows at all means no brief.
+
+``FINBOT_DUTY_MODE`` decides as it does for the wake: ``off`` no brief, ``shadow`` written and logged, ``on`` sent through the outbox
+(source ``brief``: neither the duty messages' daily count nor the bot's notify count).  Every day that is due leaves one ``duty_brief``
+row whatever happened; the turn is stored in the owner's hidden duty conversation like a wake turn.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
+
+from .. import duty_brief, duty_log, model_usage
+from . import loop, prompt, wake
+
+logger = logging.getLogger(__name__)
+
+BEIJING = timezone(timedelta(hours=8))
+DUE_AT = (8, 5)
+LAST_HOUR = 12
+WINDOW_DEFAULT = timedelta(hours=24)
+SOURCE = "brief"
+HEAD = "【早间简报】"
+TEXT_MAX = 300        # alert text per kept item
+WALL_SECONDS = 180
+COUNT_KEYS = ("digest", "held", "record", "ignore", "told", "failed")
+NOTHING = "从上次简报到现在没有值班记录。"
+NOTHING_TO_SAY = "从上次简报到现在没有要写进简报的事（只有已经发出的或没有完成的值班记录）。"
+OFF = "值班功能关着（FINBOT_DUTY_MODE=off），没有写简报。"
+FALLBACK_HEAD = "这份简报没能由我来写，先把夜里留给你的事原样列出："
+
+
+def due_day(now: datetime) -> str | None:
+    """The Beijing date when ``now`` (aware) is between 08:05 inclusive and 12:00 exclusive Beijing, else None."""
+    local = now.astimezone(BEIJING)
+    if (local.hour, local.minute) >= DUE_AT and local.hour < LAST_HOUR:
+        return local.date().isoformat()
+    return None
+
+
+def gather(owner_hash: str, since: datetime) -> dict:
+    """The duty rows after ``since`` as what the brief carries (``kept``, ``held``) and what it counts."""
+    counts = dict.fromkeys(COUNT_KEYS, 0)
+    kept: list[dict] = []
+    held: list[dict] = []
+    for row in duty_log.since(owner_hash, since):
+        if row["outcome"] != "decided":
+            counts["failed"] += 1
+            continue
+        event = row["event"] or {}
+        text = event.get("text") if isinstance(event.get("text"), str) else ""
+        decision = row["decision"]
+        if decision == "digest":
+            counts["digest"] += 1
+            kept.append({"symbol": event.get("symbol"), "text": text[:TEXT_MAX], "reason": row["reason"], "at": row["created_at"]})
+        elif decision == "tell_now" and row["delivery"] == wake.HELD_NIGHT:
+            counts["held"] += 1
+            held.append({"id": row["id"], "symbol": event.get("symbol"), "text": text[:TEXT_MAX], "message": row["message"], "at": row["created_at"]})
+        elif decision == "tell_now" and row["delivery"] == "queued":
+            counts["told"] += 1
+        elif decision in ("record", "ignore"):
+            counts[decision] += 1
+    return {"kept": kept, "held": held, "counts": counts}
+
+
+def filtered_line(counts: dict) -> str:
+    """The line code writes about the alerts the duty looked at and kept from him; empty when there were none."""
+    record, ignore = int(counts.get("record") or 0), int(counts.get("ignore") or 0)
+    n = record + ignore
+    if n == 0:
+        return ""
+    parts = [part for part, count in ((f"{record} 条只记下", record), (f"{ignore} 条不理会", ignore)) if count]
+    return f"从昨天到现在，另有 {n} 条提醒我看过，判断不用打扰你（{'，'.join(parts)}），在后台「值班」里能看到。"
+
+
+def _first_line(text) -> str:
+    stripped = text.strip() if isinstance(text, str) else ""
+    return stripped.splitlines()[0] if stripped else ""
+
+
+def fallback_text(kept: list[dict], held: list[dict]) -> str:
+    """What is sent when the model could not write the brief: every kept alert's first line and every held message, as they are."""
+    lines = [FALLBACK_HEAD]
+    lines += [f"· {_first_line(item.get('text')) or item.get('symbol') or ''}" for item in kept]
+    lines += [f"· {(item.get('message') or '').strip()}" for item in held]
+    return "\n".join(lines)
+
+
+async def _turn(owner: str, day: str, kept: list[dict], held: list[dict], turn_id: str, recorder: wake.Recorder, holder: dict) -> dict:
+    """The model turn that writes the brief.  ``holder`` receives the hidden conversation's id as soon as it exists."""
+    bot, context = await wake.duty_context(owner, holder)
+    shown = [{key: value for key, value in item.items() if key != "id"} for item in held]     # the row id is the system's, not data for the model
+    messages = prompt.build_brief_messages(context, kept, shown)
+    with model_usage.purpose("duty", owner_hash=owner, conversation_id=holder["conversation"], bot_id=bot.id, turn_id=turn_id, job=f"brief:{day}"):
+        return await loop.run_wake(context, recorder.emit, messages, turn_id=turn_id, decide_tool=False)
+
+
+async def _write(owner: str, day: str, kept: list[dict], held: list[dict]) -> dict:
+    """Run the model turn and store it.  Returns the body, why the fallback was used (or None), the turn id and the model calls."""
+    turn_id = str(uuid.uuid4())
+    recorder, holder, result, failure = wake.Recorder(), {}, None, None
+    try:
+        result = await asyncio.wait_for(_turn(owner, day, kept, held, turn_id, recorder, holder), WALL_SECONDS)
+    except TimeoutError:
+        failure = f"超过 {WALL_SECONDS} 秒还没有写完"
+    except Exception as exc:
+        logger.warning("morning brief %s: the model turn failed: %s", day, wake._code(exc), exc_info=not hasattr(exc, "detail"))
+        failure = f"模型这次没有写成：{wake._code(exc)}"
+    answer = ((result or {}).get("answer") or "").strip()
+    if result is not None and (result.get("reason") == "empty_answer" or not answer):
+        failure, answer = "模型没有写出简报正文", ""
+    reason = f"{failure}，改发原样列表。" if failure else None
+    body = answer if not failure else fallback_text(kept, held)
+    audit = (result or {}).get("audit") or {}
+    if holder.get("conversation"):
+        from ..agent_recall import TASK_POST_HEAD       # keeps the brief out of the past-conversation index, as wake turns are
+        protocol = {"route": "K", **((result or {}).get("final_protocol") or {}),
+                    "audit": audit or {"engine": "v2", "terminal_status": "failed", "model_calls": 0, "calls": []},
+                    "citations": (result or {}).get("citations") or [], "unattended": True, "brief": True}
+        try:
+            await asyncio.to_thread(wake._store_turn, owner, holder["conversation"], turn_id, f"{TASK_POST_HEAD}早间简报 {day}", recorder, protocol,
+                                    answer or reason or "没有结果。", result is None)
+        except Exception:
+            logger.exception("morning brief %s: the turn could not be stored", day)
+    return {"body": body, "reason": reason, "turn_id": turn_id if holder.get("conversation") else None,
+            "model_calls": int(audit.get("model_calls") or 0)}
+
+
+async def _run(row_id: int, owner: str, day: str, current: str, now: datetime, since: datetime | None, began: float) -> dict:
+    def ms() -> int:
+        return round((time.monotonic() - began) * 1000)
+
+    def finish(**fields) -> dict:
+        return duty_brief.finish(row_id, ms=ms(), **fields)
+
+    if current == "off":
+        return await asyncio.to_thread(lambda: finish(outcome="skipped_off", reason=OFF))
+    if since is None:
+        last = await asyncio.to_thread(duty_brief.last_done, owner)
+        since = datetime.fromisoformat(last["created_at"]) if last and last.get("created_at") else now - WINDOW_DEFAULT
+    gathered = await asyncio.to_thread(gather, owner, since)
+    kept, held, counts = gathered["kept"], gathered["held"], gathered["counts"]
+    line = filtered_line(counts)
+    if not any(counts.values()):
+        return await asyncio.to_thread(lambda: finish(outcome="skipped", reason=NOTHING, counts=counts))
+    if not kept and not held and not line:
+        return await asyncio.to_thread(lambda: finish(outcome="skipped", reason=NOTHING_TO_SAY, counts=counts))
+    fields: dict = {"counts": counts}
+    if kept or held:
+        written = await _write(owner, day, kept, held)
+        message = HEAD + written["body"] + (f"\n\n{line}" if line else "")
+        fields.update(reason=written["reason"], turn_id=written["turn_id"], model_calls=written["model_calls"])
+    else:
+        message = HEAD + line          # only filtered rows: the code-written line alone, no model call
+    fields["message"] = message
+    if current == "on":
+        group, why = await asyncio.to_thread(lambda: wake._deliver(owner, message, source=SOURCE, cap=False))
+        fields["delivery"] = why
+        if group is not None:
+            fields["delivery_group"] = group
+        if why == "queued" and held:
+            await asyncio.to_thread(duty_log.mark_briefed, [item["id"] for item in held])
+    return await asyncio.to_thread(lambda: finish(outcome="done", **fields))
+
+
+async def run_once(owner_hash: str, now: datetime, *, day: str | None = None, since: datetime | None = None) -> dict | None:
+    """Write the day's brief if it is due and not written yet; returns its ``duty_brief`` row, or None (not due, or the day is taken).
+    ``day`` and ``since`` are for the shadow replay: a day given skips the time check, a ``since`` given replaces the window's start.
+    Never raises after the day is claimed: a failure finishes the row as ``failed``."""
+    day = day or due_day(now)
+    if day is None:
+        return None
+    current = wake.mode()
+    row_id = await asyncio.to_thread(duty_brief.claim, owner_hash, day, current)
+    if row_id is None:
+        return None
+    began = time.monotonic()
+    try:
+        return await _run(row_id, owner_hash, day, current, now, since, began)
+    except Exception as exc:
+        logger.exception("morning brief %s failed", day)
+        try:
+            return await asyncio.to_thread(lambda: duty_brief.finish(row_id, outcome="failed", reason=f"这份简报没有完成：{type(exc).__name__}。",
+                                                                     ms=round((time.monotonic() - began) * 1000)))
+        except Exception:
+            logger.exception("morning brief %s: the failure could not be logged", day)
+            return None

@@ -115,8 +115,9 @@ def _facts(owner: str, event: dict) -> tuple[dict, list[dict], list[dict]]:
             outbox = [{"at": r.created_at.isoformat(), "source": r.source, "text": r.text[:RECENT_TEXT]} for r in rows]
     except Exception:
         logger.exception("wake: the owner's context could not be read")
-    # Only messages that really went out: shadow, capped, unbound-channel and night-held ones never reached him.
-    sent = [r for r in duty_log.recent(owner, RECENT * 5, decision="tell_now") if r["mode"] == "on" and r["delivery"] == "queued"]
+    # Only messages that really went out: shadow, capped, unbound-channel and night-held ones never reached him (a held one the morning
+    # brief carried did: ``briefed``).
+    sent = [r for r in duty_log.recent(owner, RECENT * 5, decision="tell_now") if r["mode"] == "on" and r["delivery"] in ("queued", "briefed")]
     told = [{"at": r["created_at"], "symbol": (r["event"] or {}).get("symbol"), "message": r["message"]} for r in sent[:RECENT]]
     return relation, told, outbox
 
@@ -163,7 +164,7 @@ def _question(event: dict) -> str:
     return f"{head}（{event.get('kind') or '未分类'}）{event.get('symbol')}：{event['text']}"[:QUESTION_MAX]
 
 
-def _store_turn(owner: str, cid: str, turn_id: str, event: dict, recorder: Recorder, protocol: dict, answer: str, failed: bool) -> None:
+def _store_turn(owner: str, cid: str, turn_id: str, question: str, recorder: Recorder, protocol: dict, answer: str, failed: bool) -> None:
     from sqlalchemy import func
     from ..agent_chat_models import AgentMessage
     from ..database import SessionLocal
@@ -175,7 +176,7 @@ def _store_turn(owner: str, cid: str, turn_id: str, event: dict, recorder: Recor
             nonlocal sequence
             sequence += 1
             db.add(AgentMessage(conversation_id=conversation, turn_id=turn, sequence=sequence, role=role, content=content, **fields))
-        add("user", _question(event))
+        add("user", question)
         for item in recorder.events:
             if item["event"] == "assistant_tool_request":
                 add("assistant", "", tool_calls=item["protocol"])
@@ -187,10 +188,11 @@ def _store_turn(owner: str, cid: str, turn_id: str, event: dict, recorder: Recor
 
 # --- delivery (mode on) -----------------------------------------------------------------------------------------------
 
-def _deliver(owner: str, text: str) -> tuple[uuid.UUID | None, str]:
-    """Queue the kernel's message for the owner through the outbox (source ``duty``, the owner's channel preference applies).  Duty messages
-    have a daily count of their own (``daily_cap``, per UTC day) and neither use up nor wait on the bot's notify cap.  Returns the outbox
-    group and ``"queued"``, or None and why nothing was queued (``capped``, ``telegram_not_bound``)."""
+def _deliver(owner: str, text: str, *, source: str = "duty", cap: bool = True) -> tuple[uuid.UUID | None, str]:
+    """Queue the kernel's message for the owner through the outbox (the owner's channel preference applies).  Duty messages (source ``duty``)
+    have a daily count of their own (``daily_cap``, per UTC day) and neither use up nor wait on the bot's notify cap; ``cap=False`` (the
+    morning brief, source ``brief``) skips that count.  Returns the outbox group and ``"queued"``, or None and why nothing was queued
+    (``capped``, ``telegram_not_bound``)."""
     from sqlalchemy import func
     from .. import agent_bots as bots
     from .. import agent_telegram as telegram
@@ -199,17 +201,18 @@ def _deliver(owner: str, text: str) -> tuple[uuid.UUID | None, str]:
     bot = bots.ensure_default_bot(owner)
     now = datetime.now(UTC)
     with SessionLocal() as db:
-        mine = (AgentTelegramMessage.owner_hash == owner, AgentTelegramMessage.source == "duty",
-                AgentTelegramMessage.created_at >= now.replace(hour=0, minute=0, second=0, microsecond=0))
-        sent = int(db.scalar(select(func.count(func.distinct(func.coalesce(AgentTelegramMessage.group_id, AgentTelegramMessage.id)))).where(*mine)) or 0)
-        if sent >= daily_cap():
-            return None, "capped"
+        if cap:
+            mine = (AgentTelegramMessage.owner_hash == owner, AgentTelegramMessage.source == source,
+                    AgentTelegramMessage.created_at >= now.replace(hour=0, minute=0, second=0, microsecond=0))
+            sent = int(db.scalar(select(func.count(func.distinct(func.coalesce(AgentTelegramMessage.group_id, AgentTelegramMessage.id)))).where(*mine)) or 0)
+            if sent >= daily_cap():
+                return None, "capped"
         try:
-            telegram.enqueue(db, owner, bot.id, telegram.render(bot.name, text), source="duty", now=now)
+            telegram.enqueue(db, owner, bot.id, telegram.render(bot.name, text), source=source, now=now)
         except telegram.NotifyError as failure:
             db.rollback()
             return None, str(failure)
-        rows = list(db.scalars(select(AgentTelegramMessage).where(AgentTelegramMessage.owner_hash == owner, AgentTelegramMessage.source == "duty",
+        rows = list(db.scalars(select(AgentTelegramMessage).where(AgentTelegramMessage.owner_hash == owner, AgentTelegramMessage.source == source,
                                                                   AgentTelegramMessage.created_at == now, AgentTelegramMessage.bot_id == bot.id)))
         group = next((row.group_id for row in rows if row.group_id), None) or uuid.uuid4()
         for row in rows:
@@ -233,8 +236,9 @@ def _code(failure: Exception) -> str:
     return detail if isinstance(detail, str) and detail else type(failure).__name__
 
 
-async def _judge(event: dict, owner: str, turn_id: str, recorder: Recorder, held: dict) -> dict:
-    """The wake turn itself.  ``held`` receives the conversation id as soon as it exists (the stored turn needs it even if the turn fails)."""
+async def duty_context(owner: str, held: dict):
+    """The unattended context a duty turn (a wake, the morning brief) runs in, and the owner's default bot.  ``held`` receives the hidden
+    conversation's id as soon as it exists (the stored turn needs it even if the turn fails).  Raises WakeFailure (no owner, bot or model)."""
     from .. import agent_bots as bots
     from .. import agent_task_runner as runner
     from ..agent_chat_store import owner_hash as hash_of
@@ -251,16 +255,23 @@ async def _judge(event: dict, owner: str, turn_id: str, recorder: Recorder, held
     if model is None:
         raise WakeFailure("no_model")
     cid = held["conversation"] = await asyncio.to_thread(_wake_conversation, owner, bot.id)
-    relation, told, outbox = await asyncio.to_thread(_facts, owner, event)
     # The settings are the routine runner's: the owner's default bot (its instruction, tool scope, effort), the catalog model that bot names
     # (else the background model), the owner's profile block, an unattended context.  No token budget: the runner passes none either, and
-    # a wake turn is bounded by the loop's step cap and the wall clock below.
+    # a duty turn is bounded by the loop's step cap and its caller's wall clock.
     context = AgentRuntimeContext(
         provider=model["provider"], model=model["model"], api_key=model["api_key"], base_url=model.get("base_url"), owner_hash=owner,
         conversation_id=cid, identity_credential=credential, profile_block=await _profile_block(credential, settings), unattended=True,
         bot_id=settings.get("bot_id"), bot_name=settings.get("bot_name"), bot_is_default=bool(settings.get("is_default")),
         bot_block=settings.get("block"), tool_scope=settings.get("tool_scope"), reasoning_effort=settings.get("reasoning_effort"),
         engine="v2", default_company=settings.get("default_company"), catalog_name=model.get("name"))
+    return bot, context
+
+
+async def _judge(event: dict, owner: str, turn_id: str, recorder: Recorder, held: dict) -> dict:
+    """The wake turn itself.  ``held`` receives the conversation id as soon as it exists (the stored turn needs it even if the turn fails)."""
+    bot, context = await duty_context(owner, held)
+    cid = held["conversation"]
+    relation, told, outbox = await asyncio.to_thread(_facts, owner, event)
     # The alert's company always gets its block (its own symbol as the focus; the other members of a group alert follow).
     symbols = [s for s in (event.get("members") or []) if isinstance(s, str)]
     block, shown = None, []
@@ -316,7 +327,7 @@ async def wake(event: dict, *, owner_hash: str) -> dict:
                 "citations": (result or {}).get("citations") or [], "unattended": True, "wake": True}
     if held.get("conversation"):
         try:
-            await asyncio.to_thread(_store_turn, owner_hash, held["conversation"], turn_id, event, recorder, protocol, answer, result is None)
+            await asyncio.to_thread(_store_turn, owner_hash, held["conversation"], turn_id, _question(event), recorder, protocol, answer, result is None)
         except Exception:
             logger.exception("wake: the turn of alert %s could not be stored", alert_id)
     return await asyncio.to_thread(lambda: duty_log.record(

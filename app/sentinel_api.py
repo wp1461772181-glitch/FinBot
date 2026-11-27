@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
 
-from . import duty_log  # noqa: F401  (registers the duty_log table before startup creates the tables)
+from . import duty_brief, duty_log  # noqa: F401  (registers the duty_brief and duty_log tables before startup creates the tables)
 
 router = APIRouter(prefix="/agent-chat/internal/sentinel", tags=["sentinel-internal"])
 logger = logging.getLogger(__name__)

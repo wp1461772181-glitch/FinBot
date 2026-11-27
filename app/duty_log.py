@@ -17,7 +17,7 @@ from .database import Base, SessionLocal
 
 MODES = ("off", "shadow", "on")
 DUTY_TITLE = "盯盘唤醒"        # the title of the owner's hidden conversation that keeps the wake turns
-DELIVERIES = ("queued", "capped")
+DELIVERIES = ("queued", "capped", "held_night", "briefed")     # documentation only: nothing validates against it (held_night: kept for the morning brief; briefed: the brief carried it)
 OUTCOMES = ("decided", "failed", "no_decision", "dropped", "skipped_off")
 DECISIONS = ("tell_now", "digest", "record", "ignore")
 REASON_MAX = 500
@@ -87,3 +87,21 @@ def recent(owner_hash: str, limit: int = 50, *, decision: str | None = None) -> 
         query = query.where(DutyLog.decision == decision)
     with SessionLocal() as db:
         return [as_dict(row) for row in db.scalars(query.order_by(DutyLog.created_at.desc(), DutyLog.id.desc()).limit(max(1, int(limit))))]
+
+
+def since(owner_hash: str, after: datetime) -> list[dict]:
+    """The owner's rows written after ``after``, oldest first (what the morning brief covers)."""
+    query = select(DutyLog).where(DutyLog.owner_hash == owner_hash, DutyLog.created_at > after).order_by(DutyLog.created_at, DutyLog.id)
+    with SessionLocal() as db:
+        return [as_dict(row) for row in db.scalars(query)]
+
+
+def mark_briefed(row_ids: list[int]) -> None:
+    """The morning brief carried these rows' held messages to the owner: their delivery becomes ``briefed``."""
+    ids = [int(i) for i in row_ids or []]
+    if not ids:
+        return
+    with SessionLocal() as db:
+        for row in db.scalars(select(DutyLog).where(DutyLog.id.in_(ids))):
+            row.delivery = "briefed"
+        db.commit()
