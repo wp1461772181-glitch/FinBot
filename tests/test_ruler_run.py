@@ -147,6 +147,18 @@ def test_allow_production_passes_the_guard(tmp_path, monkeypatch):
     _stub_api(monkeypatch)
     assert ruler_run.main(_run_args(tmp_path, "http://127.0.0.1:8000") + ["--allow-production"]) == 0
 
+def test_guard_refuses_a_base_without_a_hostname(tmp_path, capsys):
+    assert ruler_run.main(_run_args(tmp_path, "http:///x")) == 2
+    assert "没有主机名" in capsys.readouterr().err
+
+def test_guard_lets_ipv6_loopback_through(tmp_path, monkeypatch):
+    _stub_api(monkeypatch)
+    assert ruler_run.main(_run_args(tmp_path, "http://[::1]:9031")) == 0
+
+def test_guard_lets_localhost_without_a_port_through(tmp_path, monkeypatch):
+    _stub_api(monkeypatch)
+    assert ruler_run.main(_run_args(tmp_path, "http://localhost")) == 0
+
 def test_repeated_meta_flags_are_all_kept(tmp_path, monkeypatch):
     _stub_api(monkeypatch)
     ruler_run.main(["run", "--suite", str(_suite(tmp_path)), "--out", str(tmp_path / "a")])
