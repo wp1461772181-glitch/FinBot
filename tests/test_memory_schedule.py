@@ -248,3 +248,47 @@ def test_the_loop_is_registered_and_registering_follows_the_configured_owner(mon
     assert _row().owner_hash == OWNER
     monkeypatch.setattr("app.sentinel_bridge.owner_hash_from_login_config", lambda: None)
     sched.register_for_configured_owner()                                   # no owner configured: nothing, no error
+
+
+# --- 5d-3c: the weekly self-check on the same calendar ------------------------------------------------------------------
+
+def _register_job(job, created, owner=OWNER):
+    sched.register(job, owner)
+    with SessionLocal() as db:
+        db.query(MemoryJob).filter_by(job=job, owner_hash=owner).update({"created_at": created})
+        db.commit()
+
+
+def test_the_weekly_self_check_is_due_every_seven_days_and_a_busy_week_does_not_bring_it_forward(monkeypatch):
+    assert sched.JOBS["weekly_quality"] == "app.quality_review:run" and sched.JOB_TITLES["weekly_quality"] == "每周自检"
+    monkeypatch.setenv("FINBOT_MEMORY_REVIEW_MIN_MESSAGES", "3")
+    _register_job("weekly_quality", NOW - timedelta(days=6, hours=23))
+    _messages(50, NOW - timedelta(days=1))
+    assert ("weekly_quality", OWNER) not in sched.due(NOW), "messages bring only the monthly review forward"
+    assert ("weekly_quality", OWNER) in sched.due(NOW + timedelta(hours=2))
+    monkeypatch.setenv("FINBOT_QUALITY_DAYS", "3")
+    assert ("weekly_quality", OWNER) in sched.due(NOW)
+
+
+def test_the_weekly_self_check_counts_its_model_calls_as_quality(monkeypatch):
+    import sys
+    import types
+    seen = {}
+
+    def run(owner_hash, now, last_run_at):
+        seen["purpose"] = (model_usage._TAGS.get() or {}).get("purpose")
+        return {"outcome": "done", "reason": None}
+    module = types.ModuleType("app.quality_review")
+    module.run = run
+    module.days = lambda: 7
+    monkeypatch.setitem(sys.modules, "app.quality_review", module)
+    _register_job("weekly_quality", NOW - timedelta(days=8))
+    assert sched.tick(NOW) == 1 and seen["purpose"] == "quality"
+    assert "quality" in model_usage.PURPOSES
+
+
+def test_the_memory_page_calendar_lists_the_memory_jobs_only(monkeypatch):
+    from app import memory_overview
+    _register_job("monthly_review", NOW - timedelta(days=1))
+    _register_job("weekly_quality", NOW - timedelta(days=1))
+    assert [job["job"] for job in memory_overview._jobs(OWNER)] == ["monthly_review"]

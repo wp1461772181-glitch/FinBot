@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyDelivery, dutyModeLine, helperLines, dutyRow, FEEDBACK_CHOICES, FEEDBACK_FAILED, feedbackBody, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
-  RECONCILE_NOTE, reconcileBlock, answerFeedbackBlock, EARLY_RUN, qualityWeekRow, badAnswerRow, rulerRunRow, slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
+  RECONCILE_NOTE, reconcileBlock, answerFeedbackBlock, EARLY_RUN, qualityWeekRow, badAnswerRow, rulerRunRow, QUALITY_CATEGORIES, weeklyReportView, slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
   MEMORY_BYS, MEMORY_CHANGES, MEMORY_FILTER_DEFAULTS, MEMORY_GONE, MEMORY_NOTE, MEMORY_TARGETS, memoryQuery, memoryRow,
 } from "../src/backstage-view.mjs";
 import { ANSWERS, DELIVERIES, DETAIL, DUTY, HELPERS, DETAIL_INCOMPLETE, DETAIL_OLD, OPERATIONS, usageAnswer } from "../tools/shots/fixtures/backstage.mjs";
@@ -541,4 +541,25 @@ test("5d-3b 质量: a week, an answer marked 不好, a ruler run with and withou
   assert.equal(early.failed, "全过");
   assert.equal(early.pass_rate, "100.0%");
   assert.equal(rulerRunRow({ name: "x", pass_rate: null, turns: null }, "UTC").pass_rate, "—");
+});
+
+
+test("5d-3c 每周自检: an empty week says no model was asked; a sorted one lists its categories in the fixed order, what to fix first and each answer", () => {
+  const empty = weeklyReportView({ id: "r1", status: "empty", good: 2, bad: 0, period_start: "2026-11-20T13:00:00+00:00", period_end: "2026-11-27T13:00:00+00:00" }, "UTC");
+  assert.equal(empty.empty, true);
+  assert.equal(empty.note, "这一周没有被点「不好」的回答，没有调用模型。");
+  assert.equal(empty.period, "11-20 13:00 – 11-27 13:00");
+  assert.equal(empty.counts, "好 2 · 不好 0");
+  const done = weeklyReportView({ id: "r2", status: "done", good: 1, bad: 3, categories: { "其他": 1, "想得太浅": 2, "新类": 1 }, next: "先补环比。", model: "judge",
+    items: [{ message_id: "m1", question: "英伟达营收", reason: "没说环比", category: "想得太浅", why: "漏了环比" }, { message_id: "m2", question: "", category: "" }] }, "UTC");
+  assert.deepEqual(done.categories, [{ name: "想得太浅", count: "2" }, { name: "其他", count: "1" }, { name: "新类", count: "1" }]);
+  assert.equal(done.next, "先补环比。");
+  assert.deepEqual(done.items, [{ id: "m1", category: "想得太浅", question: "英伟达营收", reason: "没说环比", why: "漏了环比" },
+    { id: "m2", category: "没归类", question: "（没有问题文字）", reason: "", why: "" }]);
+  assert.deepEqual(QUALITY_CATEGORIES.slice(0, 5), ["缺数据", "工具没用对", "想得太浅", "记错偏好", "说得不清楚"]);
+  const chinese = JSON.parse(src("locales/zh-CN.json")), english = JSON.parse(src("locales/en-US.json"));
+  for (const phrase of [...QUALITY_CATEGORIES, "每周自检", "先改", "这一周没有被点「不好」的回答，没有调用模型。"]) {
+    assert.ok(chinese.includes(phrase), phrase);
+    assert.ok(typeof english[phrase] === "string", phrase);
+  }
 });

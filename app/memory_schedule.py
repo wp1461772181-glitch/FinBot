@@ -22,8 +22,10 @@ from .database import SessionLocal
 
 log = logging.getLogger(__name__)
 
-JOBS: dict[str, str] = {"monthly_review": "app.memory_review:run", "quarterly_settle": "app.memory_settle:run"}
-JOB_TITLES = {"monthly_review": "每月整理记忆", "quarterly_settle": "每季整理记忆（含看法复盘）"}
+JOBS: dict[str, str] = {"monthly_review": "app.memory_review:run", "quarterly_settle": "app.memory_settle:run", "weekly_quality": "app.quality_review:run"}
+JOB_TITLES = {"monthly_review": "每月整理记忆", "quarterly_settle": "每季整理记忆（含看法复盘）", "weekly_quality": "每周自检"}
+MEMORY_JOBS = ("monthly_review", "quarterly_settle")     # the memory page's calendar; the weekly self-check is the backstage's (5d-3c)
+JOB_PURPOSES = {"weekly_quality": "quality"}              # model usage is counted under this purpose; the others under "memory"
 ANCHORED = ("quarterly_settle",)        # due at the first calendar anchor after the last run, not a period after it
 DEFAULT_ANCHORS = "02-15,05-15,08-15,11-15"
 CLAIM_TTL = timedelta(minutes=30)       # a claim older than this is dead: its worker was cut off
@@ -77,6 +79,9 @@ def next_anchor(after: datetime) -> datetime:
 
 
 def period(job: str) -> timedelta:
+    if job == "weekly_quality":
+        from .quality_review import days
+        return timedelta(days=days())
     return timedelta(days=review_days())
 
 
@@ -106,6 +111,8 @@ def _is_due(db, row: MemoryJob, now: datetime) -> bool:
         return now >= next_anchor(base)
     if now >= base + period(row.job):
         return True
+    if row.job != "monthly_review":
+        return False              # only the monthly review is brought forward by a busy month
     return _count_messages(db, row.owner_hash, base) >= review_min_messages()
 
 
@@ -219,7 +226,7 @@ def tick(now: datetime | None = None, runner=None) -> int:
         ran += 1
         outcome, reason = "failed", RAN_BADLY
         try:
-            with model_usage.purpose("memory", owner_hash=owner, job=job):
+            with model_usage.purpose(JOB_PURPOSES.get(job, "memory"), owner_hash=owner, job=job):
                 result = runner(job, owner, now, _last_run(job, owner))
             if isinstance(result, dict) and result.get("outcome") in OUTCOMES:
                 outcome, reason = result["outcome"], result.get("reason")
