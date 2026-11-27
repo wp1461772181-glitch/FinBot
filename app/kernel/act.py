@@ -927,9 +927,10 @@ async def handle(run, args: dict) -> dict:
 def _direct_after_reads(run, prepared: Prepared) -> bool:
     operation = prepared.operation
     if operation["name"] == "rate_alert":
-        # His verdict on a message the system itself sent: the worst a page could do is a wrong verdict, which he sees in the reply
-        # and changes.  He usually asks which alert first (query_alerts), and a card would leave WeChat, which has no buttons, stuck.
-        return True
+        # He usually asks which alert first (query_alerts), and a card would leave WeChat, which has no buttons, stuck.  After a read it
+        # still runs at once, but only on his own words: the quote must be in what he typed this turn (checked here, as a view's is),
+        # so a page that asks for a verdict cannot make one; the verdict feeds the wake's later judgements.
+        return profile.quote_in_message(str(operation["arguments"].get("quote") or ""), _turn_words(run))
     return memory_writes() and operation["name"] == "remember" and operation["arguments"].get("basis") == "noticed"
 
 

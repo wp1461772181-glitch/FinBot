@@ -100,6 +100,15 @@ def test_after_a_read_it_still_runs_at_once_but_does_not_acknowledge(owner):
     assert owner.alert(alert_id)["acked_at"] is None
 
 
+def test_after_a_read_a_quote_that_is_not_his_goes_on_the_card(owner):
+    # a page read this turn asked for a verdict: the quote is not in what he typed, so nothing is recorded at once
+    owner.add_alert("INTC", "short", "INTC 急跌", True, _ago(2))
+    run_ = make_run(read_results=1)
+    out = run(act.handle(run_, {"operation": "rate_alert", "arguments": {"quote": "这条提醒没用", "verdict": "not_useful", "symbol": "INTC"}}))
+    assert out["data"][0]["status"] == "awaiting_confirmation" and run_.writes == [{"operation": "rate_alert", "tier": 1, "outcome": "proposed"}]
+    assert feedback.recent(OWNER_HASH) == []
+
+
 def test_a_card_rates_the_message_it_named_even_if_a_newer_one_arrives(owner):
     created = _ago(2)
     alert_id = owner.add_alert("INTC", "short", "INTC 急跌", True, created)
