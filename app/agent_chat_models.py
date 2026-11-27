@@ -681,3 +681,28 @@ class ModelCall(Base):
     streamed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)   # the answer text was passed on as it arrived
     # USD, fixed when the row was written from the model's prices then; NULL: no price, or a cache price the call needs is not set.
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class MemoryEvent(Base):
+    """One change to what the assistant keeps about the owner (5d-2, ``app/memory_events.py``): a profile item or a version of his view of a
+    company was recorded, changed, archived, restored, confirmed or deleted, by whom (``by``) and on what basis (``basis``: his quote, the
+    conversation, the review's examples ...).  Append-only: written in the same transaction as the change it records.  Deleting an item removes
+    its words from its earlier events too (``memory_events.scrub``); ``reconstructed`` marks the events the one-off backfill rebuilt from the
+    rows' own timestamps."""
+    __tablename__ = "memory_events"
+    __table_args__ = (Index("ix_memory_events_owner_at", "owner_hash", sql_text("at DESC"), sql_text("id DESC")),
+                      Index("ix_memory_events_owner_item", "owner_hash", "item_id"))
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    target: Mapped[str] = mapped_column(String(8), nullable=False)               # profile | view
+    item_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)              # the profile item, or the view version
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    by: Mapped[str] = mapped_column(String(12), nullable=False)                   # chat | page | review | settle | template | extract | unknown
+    text: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    before: Mapped[str | None] = mapped_column(String(200), nullable=True)        # an edit's old text
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    basis: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    bot_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    symbol: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    reconstructed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_text("false"))

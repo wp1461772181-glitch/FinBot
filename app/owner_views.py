@@ -4,6 +4,7 @@ A view is one line the model renders (``text``) next to the owner's own words (`
 It is not evidence and it authorizes nothing: it only lets the next turn know what the owner already thinks.  One version is active per
 (owner, symbol); recording a new one marks the old ``superseded`` (with its end date), ``drop`` marks the active one ``dropped``.  Nothing
 is deleted here; only the owner, on the web page, removes one version (``delete_version``, which takes the version's reviews with it).
+Every change takes ``by`` (a ``memory_events.Actor``; None is unknown) and is recorded in ``memory_events`` before its commit (5d-2).
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import delete, select, text as sql
 
+from . import memory_events
 from .agent_chat_models import OwnerView, ViewReview
 from .company_directory import ALIASES
 from .database import SessionLocal
@@ -88,8 +90,14 @@ def _active(db, owner_hash: str, symbol: str) -> OwnerView | None:
     return db.scalar(select(OwnerView).where(OwnerView.owner_hash == owner_hash, OwnerView.symbol == symbol, OwnerView.status == ACTIVE))
 
 
+def _event(db, row: OwnerView, action: str, by, *, words: bool = True, **fields) -> None:
+    """Record one change of ``row`` in the caller's session (``memory_events.log``); ``words`` False once its words are gone."""
+    memory_events.log(db, row.owner_hash, target="view", item_id=row.id, action=action, by=by, text=row.text if words else None,
+                      symbol=row.symbol, **fields)
+
+
 def record(owner_hash: str, symbol: str, text: str, quote: str, source_message_id=None, conversation_id=None, turn_id=None,
-           *, at: datetime | None = None) -> dict:
+           *, at: datetime | None = None, by: memory_events.Actor | None = None) -> dict:
     """Make ``text`` the active view of ``symbol``; the one it replaces is kept, marked superseded at the same moment.
 
     Returns ``{status: recorded|unchanged, view, replaced}`` (``replaced`` is the earlier version, or None).  The quote is the caller's to
@@ -118,11 +126,16 @@ def record(owner_hash: str, symbol: str, text: str, quote: str, source_message_i
         row = OwnerView(owner_hash=owner_hash, symbol=symbol, text=text, quote=quote, source_message_id=_uuid(source_message_id),
                         conversation_id=_uuid(conversation_id), turn_id=_uuid(turn_id), status=ACTIVE, created_at=now)
         db.add(row)
+        db.flush()
+        _event(db, row, "recorded", by, at=now, basis={"quote": memory_events.quote_basis(quote, text), "message_id": row.source_message_id,
+                                                      "conversation_id": row.conversation_id, "turn_id": row.turn_id})
+        if old:
+            _event(db, old, "superseded", by, at=now, basis={"by_item": row.id})
         db.commit()
         return {"status": "recorded", "view": serialize(row), "replaced": replaced}
 
 
-def drop(owner_hash: str, symbol: str, *, at: datetime | None = None) -> dict | None:
+def drop(owner_hash: str, symbol: str, *, at: datetime | None = None, by: memory_events.Actor | None = None) -> dict | None:
     """Withdraw the active view of ``symbol`` (it stays in the history as dropped); None when there is none."""
     symbol = resolve_symbol(symbol)
     if not symbol:
@@ -133,6 +146,7 @@ def drop(owner_hash: str, symbol: str, *, at: datetime | None = None) -> dict | 
         if row is None:
             return None
         row.status, row.ended_at = DROPPED, at or datetime.now(UTC)
+        _event(db, row, "dropped", by, at=row.ended_at)
         db.commit()
         return serialize(row)
 
@@ -201,8 +215,9 @@ def all_versions(owner_hash: str) -> list[dict]:
     return groups
 
 
-def delete_version(owner_hash: str, view_id: str) -> bool:
-    """The owner removes one version on the web page.  Another owner's id, or one that is not an id, deletes nothing."""
+def delete_version(owner_hash: str, view_id: str, by: memory_events.Actor | None = None) -> bool:
+    """The owner removes one version on the web page.  Another owner's id, or one that is not an id, deletes nothing.  Its words leave the
+    change log too."""
     key = _uuid(view_id)
     if key is None:
         return False
@@ -210,13 +225,15 @@ def delete_version(owner_hash: str, view_id: str) -> bool:
         row = db.get(OwnerView, key)
         if row is None or row.owner_hash != owner_hash:
             return False
+        _event(db, row, "deleted", by, words=False)
+        memory_events.scrub(db, owner_hash, "view", row.id)
         db.execute(delete(ViewReview).where(ViewReview.owner_hash == owner_hash, ViewReview.view_id == key))
         db.delete(row)
         db.commit()
         return True
 
 
-def archive(owner_hash: str, view_id, reason: str, *, at: datetime | None = None) -> dict | None:
+def archive(owner_hash: str, view_id, reason: str, *, at: datetime | None = None, by: memory_events.Actor | None = None) -> dict | None:
     """The quarterly settle sets an active view aside: status ``archived`` with the end date and the reason.  Kept, and restorable.  None when
     the id is not an active view of this owner."""
     key = _uuid(view_id)
@@ -231,11 +248,12 @@ def archive(owner_hash: str, view_id, reason: str, *, at: datetime | None = None
         if row.status != ACTIVE:
             return None
         row.status, row.ended_at, row.archived_reason = ARCHIVED, at or datetime.now(UTC), " ".join(str(reason or "").split())[:ARCHIVE_REASON_MAX]
+        _event(db, row, "archived", by, at=row.ended_at, reason=row.archived_reason)
         db.commit()
         return serialize(row)
 
 
-def restore(owner_hash: str, view_id) -> dict | None:
+def restore(owner_hash: str, view_id, by: memory_events.Actor | None = None) -> dict | None:
     """The owner brings an archived view back (the memory page).  None when it is not his archived view; ``ViewError("view_active_exists")``
     when the company already has a current one (he withdraws that first)."""
     key = _uuid(view_id)
@@ -252,6 +270,7 @@ def restore(owner_hash: str, view_id) -> dict | None:
         if _active(db, owner_hash, row.symbol) is not None:
             raise ViewError("view_active_exists")
         row.status, row.ended_at, row.archived_reason = ACTIVE, None, None
+        _event(db, row, "restored", by)
         db.commit()
         return serialize(row)
 

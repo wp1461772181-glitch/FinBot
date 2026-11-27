@@ -12,6 +12,9 @@ Items live in two layers (second edition): global (``bot_id`` NULL), read by eve
 read by that bot and by the default bot (labelled with the bot's name).  A turn writes only global or its
 own bot; the owner moves items between layers on the memory page.  Topic replacement, duplicates and the
 30-item cap apply within one layer.
+
+Every function below that changes a row takes ``by`` (a ``memory_events.Actor``; None is unknown) and records
+the change, and each row its consequence changes, in ``memory_events`` before its own commit (5d-2).
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, text as sql, update
 
+from . import memory_events
 from .agent_chat_models import AgentBot, AgentMessage, AgentProfileItem
 from .database import SessionLocal
 from .agent_workflow.fp_flags import flag
@@ -180,6 +184,17 @@ def serialize(row: AgentProfileItem, names: dict | None = None) -> dict:
             "template": row.template, "template_label": _template_label(row.template)}
 
 
+def _event(db, row: AgentProfileItem, action: str, by, *, words: bool = True, **fields) -> None:
+    """Record one change of ``row`` in the caller's session (``memory_events.log``); ``words`` False for a row whose words are gone."""
+    memory_events.log(db, row.owner_hash, target="profile", item_id=row.id, action=action, by=by, text=row.text if words else None,
+                      bot_id=row.bot_id, **fields)
+
+
+def _said(row: AgentProfileItem) -> dict:
+    """The basis of an item in his words: the quote (unless it only repeats the text) and the message it came from."""
+    return {"quote": memory_events.quote_basis(row.quote, row.text), "message_id": row.source_message_id}
+
+
 def _lock(db, owner_hash: str) -> None:
     # One writer per owner: two turns finishing together cannot both pass the conflict check.
     db.execute(sql("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": "profile:" + owner_hash})
@@ -230,7 +245,7 @@ def _check(kind: str, topic: str | None, text: str, quote: str, message: str, or
     return topic, text, quote
 
 
-def _evict(db, owner_hash: str, bot_id) -> None:
+def _evict(db, owner_hash: str, bot_id, by=None) -> None:
     """Over a layer's cap, the inferred item used longest ago goes first; explicit items are never evicted."""
     active = _layer(_active(db, owner_hash), bot_id)
     excess = len(active) - MAX_ACTIVE_ITEMS
@@ -243,10 +258,12 @@ def _evict(db, owner_hash: str, bot_id) -> None:
         raise ProfileError("profile_full")
     for row in inferred[:excess]:
         row.status = "archived"
+        _event(db, row, "archived", by, reason=memory_events.CAP)
 
 
 def add_item(owner_hash: str, *, kind: str, text: str, quote: str, message: str, origin: str,
-             topic: str | None = None, source_message_id: str | None = None, bot_id: str | None = None) -> dict:
+             topic: str | None = None, source_message_id: str | None = None, bot_id: str | None = None,
+             by: memory_events.Actor | None = None) -> dict:
     """Store one item in a layer (``bot_id`` None: global).  Returns {status: added|duplicate|skipped, item?,
     reason?}; raises ProfileError for an item that must not be stored at all (bad kind, a quote that is not
     the owner's words, a bot that is not this owner's)."""
@@ -262,6 +279,7 @@ def add_item(owner_hash: str, *, kind: str, text: str, quote: str, message: str,
             if origin in OWNER_ORIGINS and same.origin not in OWNER_ORIGINS:
                 same.origin = origin
                 same.quote, same.source_message_id = quote, source or same.source_message_id
+                _event(db, same, "confirmed", by, reason=memory_events.RESTATED, basis=_said(same))     # a guess he has now said himself
             same.updated_at = datetime.now(UTC)
             if origin in OWNER_ORIGINS:
                 same.last_seen_at = same.updated_at     # he said it again
@@ -270,19 +288,24 @@ def add_item(owner_hash: str, *, kind: str, text: str, quote: str, message: str,
                 bump_seen(owner_hash, same.id, same.updated_at)     # the extractor read it again in his own message this turn
             db.expire(same)
             return {"status": "duplicate", "item": serialize(same, names)}
+        replaced = []
         if topic:
             rivals = [r for r in active if r.kind == kind and r.topic == topic]
             # What the owner said outright outranks what was inferred from their words.
             if origin == "inferred" and any(r.origin in OWNER_ORIGINS for r in rivals):
                 return {"status": "skipped", "reason": "explicit_exists"}
-            for row in rivals:
-                row.status = "archived"
+            for rival in rivals:
+                rival.status = "archived"
+                replaced.append(rival)
         row = AgentProfileItem(owner_hash=owner_hash, kind=kind, topic=topic, text=text, origin=origin,
                                quote=quote, source_message_id=source, status="active", bot_id=layer, last_seen_at=datetime.now(UTC))
         db.add(row)
         db.flush()
+        _event(db, row, "added", by, basis=_said(row))
+        for rival in replaced:
+            _event(db, rival, "archived", by, reason=memory_events.REPLACED, basis={"by_item": row.id})
         try:
-            _evict(db, owner_hash, layer)
+            _evict(db, owner_hash, layer, by)
         except ProfileError:
             db.rollback()
             raise
@@ -291,13 +314,13 @@ def add_item(owner_hash: str, *, kind: str, text: str, quote: str, message: str,
 
 
 def add_manual_item(owner_hash: str, *, kind: str, text: str, topic: str | None = None,
-                    bot_id: str | None = None) -> dict:
+                    bot_id: str | None = None, by: memory_events.Actor | None = None) -> dict:
     """The owner types an item on the memory page, for the global layer or one of their bots.  No chat turn
     is involved: the typed text is its own quote (origin ``manual``), so nothing but the owner's own words
-    can become such a row either."""
+    can become such a row either.  It is the memory page's write: ``by`` defaults to it."""
     text = " ".join(str(text or "").split())
     return add_item(owner_hash, kind=kind, text=text, quote=text, message=text, origin="manual", topic=topic,
-                    bot_id=bot_id)
+                    bot_id=bot_id, by=by or memory_events.PAGE)
 
 
 def resolve_handle(owner_hash: str, value: str, *, bot_id: str | None = None, every_bot: bool = False) -> dict | None:
@@ -312,7 +335,7 @@ def resolve_handle(owner_hash: str, value: str, *, bot_id: str | None = None, ev
         return serialize(rows[0], _bot_names(db, owner_hash)) if len(rows) == 1 else None
 
 
-def archive_item(owner_hash: str, item_id: str) -> dict | None:
+def archive_item(owner_hash: str, item_id: str, by: memory_events.Actor | None = None) -> dict | None:
     """``forget``: the item stops being sent but stays on the memory page as archived.  The card that got
     here named an item the proposing turn could see; the frozen id is looked up among all the owner's."""
     found = resolve_handle(owner_hash, item_id, every_bot=True)
@@ -325,8 +348,11 @@ def archive_item(owner_hash: str, item_id: str) -> dict | None:
             return None
         if row.origin == "pattern":
             _reject(row)
+            _event(db, row, "rejected", by, words=False)
+            memory_events.scrub(db, owner_hash, "profile", row.id)
         else:
             row.status = "archived"
+            _event(db, row, "archived", by)
         db.commit()
         return serialize(row, _bot_names(db, owner_hash))
 
@@ -334,7 +360,7 @@ def archive_item(owner_hash: str, item_id: str) -> dict | None:
 RESTORE_CONFLICT = "已有一条同类的记忆在用，先忘掉它再恢复"
 
 
-def restore_item(owner_hash: str, item_id: str, now: datetime | None = None) -> dict | None:
+def restore_item(owner_hash: str, item_id: str, now: datetime | None = None, by: memory_events.Actor | None = None) -> dict | None:
     """The owner brings an archived item back on the memory page: active again, the archive fields cleared, ``last_seen_at`` = now (set
     directly: ``bump_seen`` only moves forward).  A guess he confirmed (``confirmed_at``) goes back to active, one he never confirmed to
     ``proposed``.  It never archives anything else: when its layer already holds an active item of the same kind and topic, or the same text,
@@ -355,6 +381,7 @@ def restore_item(owner_hash: str, item_id: str, now: datetime | None = None) -> 
             if sum(1 for r in layer if r.status == "active") >= MAX_ACTIVE_ITEMS:
                 raise ProfileError("profile_full")
         row.status, row.archived_at, row.archived_reason, row.last_seen_at = target, None, None, now
+        _event(db, row, "restored", by, at=now)
         db.commit()
         return serialize(row, _bot_names(db, owner_hash))
 
@@ -379,23 +406,28 @@ def _reject(row: AgentProfileItem) -> None:
     row.status, row.quote, row.examples, row.source_message_id, row.topic = "rejected", "", None, None, None
 
 
-def delete_item(owner_hash: str, item_id: str) -> bool:
-    """The owner removed the item on the memory page: it is gone, not archived."""
+def delete_item(owner_hash: str, item_id: str, by: memory_events.Actor | None = None) -> bool:
+    """The owner removed the item on the memory page: it is gone, not archived.  Its words leave the change log too."""
     with SessionLocal() as db:
         _lock(db, owner_hash)
         row = _owned(db, owner_hash, item_id)
         if not row:
             return False
         if row.origin == "pattern":
-            _reject(row)
+            if row.status != "rejected":            # one already turned down has nothing left to record
+                _reject(row)
+                _event(db, row, "rejected", by, words=False)
+            memory_events.scrub(db, owner_hash, "profile", row.id)
             db.commit()
             return True
+        _event(db, row, "deleted", by, words=False)
+        memory_events.scrub(db, owner_hash, "profile", row.id)
         db.delete(row)
         db.commit()
         return True
 
 
-def confirm_item(owner_hash: str, item_id: str) -> dict | None:
+def confirm_item(owner_hash: str, item_id: str, by: memory_events.Actor | None = None) -> dict | None:
     """The owner confirmed an inferred item: it becomes explicit and replaces its topic's other items.  A proposal of the monthly
     review (``proposed``) becomes active and keeps its origin ``pattern``."""
     with SessionLocal() as db:
@@ -404,24 +436,29 @@ def confirm_item(owner_hash: str, item_id: str) -> dict | None:
         if not row or row.status not in ("active", "proposed"):
             return None
         if row.origin == "pattern":
+            changed = row.status != "active"
             row.status = "active"
             row.confirmed_at = row.confirmed_at or datetime.now(UTC)
         else:
+            changed = row.origin != "explicit"
             row.origin = "explicit"
-        _replace_topic(db, owner_hash, row)
+        if changed:
+            _event(db, row, "confirmed", by)
+        _replace_topic(db, owner_hash, row, by)
         db.commit()
         return serialize(row, _bot_names(db, owner_hash))
 
 
-def _replace_topic(db, owner_hash: str, row: AgentProfileItem) -> None:
+def _replace_topic(db, owner_hash: str, row: AgentProfileItem, by=None) -> None:
     """``row`` now holds its topic in its layer: the layer's other active items of that topic are archived."""
     if row.topic and row.status == "active":
         for other in _layer(_active(db, owner_hash), row.bot_id):
             if other.id != row.id and other.kind == row.kind and other.topic == row.topic:
                 other.status = "archived"
+                _event(db, other, "archived", by, reason=memory_events.REPLACED, basis={"by_item": row.id})
 
 
-def update_item(owner_hash: str, item_id: str, fields: dict) -> dict | None:
+def update_item(owner_hash: str, item_id: str, fields: dict, by: memory_events.Actor | None = None) -> dict | None:
     """The owner edits an item on the memory page: its text and/or its layer (``bot_id`` None: global, or
     any of the owner's bots).  The quote stays the owner's original words.  None when it is not theirs."""
     with SessionLocal() as db:
@@ -433,14 +470,20 @@ def update_item(owner_hash: str, item_id: str, fields: dict) -> dict | None:
             text = " ".join(str(fields["text"] or "").split())
             if not text or len(text) > TEXT_MAX_CHARS:
                 raise ProfileError("invalid_text")
+            old = row.text
             row.text = text
+            if text != old:
+                _event(db, row, "edited", by, before=old)
         if "bot_id" in fields:
+            old_bot = row.bot_id
             row.bot_id = _bot(db, owner_hash, fields["bot_id"])
+            if row.bot_id != old_bot:
+                _event(db, row, "moved", by, basis={"from_bot": old_bot, "to_bot": row.bot_id})
             db.flush()
-            _replace_topic(db, owner_hash, row)
+            _replace_topic(db, owner_hash, row, by)
             if row.status == "active":
                 try:
-                    _evict(db, owner_hash, row.bot_id)
+                    _evict(db, owner_hash, row.bot_id, by)
                 except ProfileError:
                     db.rollback()
                     raise
@@ -606,7 +649,8 @@ def active_for_review(owner_hash: str) -> list[dict]:
     return [{"handle": handle(r.id), "text": r.text, "id": str(r.id)} for r in rows if counts[handle(r.id)] == 1]
 
 
-def add_proposed(owner_hash: str, *, kind: str, text: str, examples: list[dict], review_run: uuid.UUID, now: datetime) -> dict | None:
+def add_proposed(owner_hash: str, *, kind: str, text: str, examples: list[dict], review_run: uuid.UUID, now: datetime,
+                 by: memory_events.Actor | None = None) -> dict | None:
     """Store one proposal of the monthly review (origin pattern, status proposed, global layer).  The caller has checked the examples
     against his messages; the first one is the row's quote.  None when the same text is already here.  Past 20 proposed, the oldest go."""
     text = " ".join(str(text or "").split())
@@ -625,15 +669,17 @@ def add_proposed(owner_hash: str, *, kind: str, text: str, examples: list[dict],
                                examples=examples, review_run=review_run, created_at=now, updated_at=now, last_seen_at=now)
         db.add(row)
         db.flush()
+        _event(db, row, "proposed", by, at=now, basis={"examples": examples, "run": review_run})
         waiting = sorted(_proposed(db, owner_hash), key=lambda r: (r.created_at, str(r.id)))
         for old in waiting[:max(0, len(waiting) - MAX_PROPOSED)]:
             old.status = "archived"
+            _event(db, old, "archived", by, at=now, reason=memory_events.LIMIT, basis={"by_item": row.id})
         db.commit()
         return serialize(row, _bot_names(db, owner_hash))
 
 
 def add_noticed(owner_hash: str, *, kind: str, text: str, quote: str, bot_id: str | None = None, message_id: str | None = None,
-                now: datetime | None = None) -> dict:
+                now: datetime | None = None, by: memory_events.Actor | None = None) -> dict:
     """The kernel model wrote a guess on the spot (``remember`` with basis noticed): origin pattern, status proposed, in the turn's layer
     (``bot_id`` None: global), the quote it saw as its one example, no review run.  The caller has checked the quote against his words.
     Returns {status: added, item} or {status: duplicate | rejected} (nothing written: the same text is here, or he rejected it before).
@@ -660,9 +706,11 @@ def add_noticed(owner_hash: str, *, kind: str, text: str, quote: str, bot_id: st
                                          "date": now.date().isoformat()}])    # ``date`` is what the memory page shows beside an example
         db.add(row)
         db.flush()
+        _event(db, row, "noticed", by, at=now, basis={"quote": quote, "message_id": source})
         waiting = sorted(_proposed(db, owner_hash), key=lambda r: (r.created_at, str(r.id)))
         for old in waiting[:max(0, len(waiting) - MAX_PROPOSED)]:
             old.status = "archived"
+            _event(db, old, "archived", by, at=now, reason=memory_events.LIMIT, basis={"by_item": row.id})
         db.commit()
         return {"status": "added", "item": serialize(row, _bot_names(db, owner_hash))}
 
@@ -676,13 +724,14 @@ def waiting_guesses(owner_hash: str, since: datetime | None) -> list[dict]:
     return [{"text": r.text, "quote": r.quote} for r in rows]
 
 
-def archive_stale_proposed(owner_hash: str, now: datetime, days: int = 60) -> int:
+def archive_stale_proposed(owner_hash: str, now: datetime, days: int = 60, by: memory_events.Actor | None = None) -> int:
     """Proposals nobody answered for ``days`` days are archived.  Returns how many."""
     with SessionLocal() as db:
         _lock(db, owner_hash)
         stale = [r for r in _proposed(db, owner_hash) if r.created_at and r.created_at < now - timedelta(days=days)]
         for row in stale:
             row.status = "archived"
+            _event(db, row, "archived", by, at=now, reason=memory_events.STALE)
         db.commit()
         return len(stale)
 

@@ -29,6 +29,7 @@ import json
 import logging
 
 from . import agent_profile as profile
+from . import memory_events
 
 log = logging.getLogger(__name__)
 
@@ -201,7 +202,7 @@ async def store_explicit_fallback(owner_hash: str, message: str, *, conversation
         source = await asyncio.to_thread(profile.user_message_id, conversation_id, turn_id)
         outcome = await asyncio.to_thread(
             profile.add_item, owner_hash, origin="explicit", message=message,
-            source_message_id=source, **item)
+            source_message_id=source, by=memory_events.extract(source), **item)
     except profile.ProfileError as exc:
         log.info("explicit memory fallback dropped reason=%s", exc)
         return False
@@ -226,7 +227,7 @@ async def store_gated_fallback(owner_hash: str, message: str, *, conversation_id
     try:
         source = await asyncio.to_thread(profile.user_message_id, conversation_id, turn_id)
         outcome = await asyncio.to_thread(
-            profile.add_item, owner_hash, origin="inferred", message=message, source_message_id=source, **item)
+            profile.add_item, owner_hash, origin="inferred", message=message, source_message_id=source, by=memory_events.extract(source), **item)
     except profile.ProfileError as exc:
         log.info("memory fallback dropped reason=%s", exc)
         return False
@@ -313,7 +314,7 @@ async def extract_from_turn(owner_hash: str, message: str, *, conversation_id: s
         layer = bot_id if item.pop("scope") == "bot" else None
         try:
             outcome = await asyncio.to_thread(profile.add_item, owner_hash, origin="inferred", message=message,
-                                              source_message_id=source, bot_id=layer, **item)
+                                              source_message_id=source, bot_id=layer, by=memory_events.extract(source), **item)
         except profile.ProfileError as exc:
             log.info("profile candidate dropped conv=%s reason=%s", conversation_id, exc)
             continue

@@ -10,8 +10,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select, text
 
-from app import channels, model_usage
-from app.agent_chat_models import (AgentBot, AgentConversation, AgentMessage, AgentTelegramMessage, ModelCall)
+from app import channels, memory_events, model_usage, owner_views
+from app.agent_chat_models import (AgentBot, AgentConversation, AgentMessage, AgentProfileItem, AgentTelegramMessage, MemoryEvent, ModelCall)
 from app.agent_chat_store import owner_hash
 from app.agent_workflow import consent
 from app.agent_workflow.models import AgentConsent
@@ -34,21 +34,23 @@ BUTTONS = (CONFIRM, AUTHORIZE, CHANGE, REPLY)
 HASHES = ("c4p4b1l1ty" + "h" * 54, "d1g3st" + "d" * 58)
 
 ENDPOINTS = ["/backstage/answers", f"/backstage/answers/{uuid.uuid4()}", "/backstage/usage", "/backstage/operations",
-             "/backstage/deliveries", "/backstage/duty"]
+             "/backstage/deliveries", "/backstage/duty", "/backstage/memory"]
 
 
 @pytest.fixture(autouse=True)
 def world(monkeypatch, disposable_database):
     Base.metadata.create_all(engine, tables=[AgentConversation.__table__, AgentMessage.__table__, AgentBot.__table__,
                                              ModelCall.__table__, AgentConsent.__table__, AgentTelegramMessage.__table__,
-                                             DutyLog.__table__, DutyBrief.__table__, AlertFeedback.__table__])
+                                             DutyLog.__table__, DutyBrief.__table__, AlertFeedback.__table__,
+                                             AgentProfileItem.__table__, MemoryEvent.__table__])
     consent.ensure_columns()
     import app.agent_chat_identity as identity
     monkeypatch.setattr(identity, "owner_credential_matches", lambda value: value == OWNER)
     monkeypatch.setattr(consent, "owner_credential_matches", lambda value: value == OWNER)
     model_usage.flush(timeout=10)
     with SessionLocal() as db:
-        for model in (AlertFeedback, DutyBrief, DutyLog, ModelCall, AgentConsent, AgentTelegramMessage, AgentMessage, AgentConversation, AgentBot):
+        for model in (MemoryEvent, AgentProfileItem, AlertFeedback, DutyBrief, DutyLog, ModelCall, AgentConsent, AgentTelegramMessage, AgentMessage,
+                      AgentConversation, AgentBot):
             db.query(model).delete()
         db.commit()
     yield
@@ -1165,3 +1167,109 @@ def test_the_detail_names_the_companies_the_system_brought_and_skips_its_timelin
     assert body["ordered"] is True and all(e["kind"] != "latest_known" for e in body["events"])
     plain = turn(cid, record=kernel_record())[1]
     assert get(client, f"/backstage/answers/{plain}").json()["latest_known"] == []
+
+
+# --- memory changes (5d-2) -------------------------------------------------------------------------------------------
+
+MEMORY_KEYS = {"id", "at", "target", "action", "by", "text", "before", "reason", "bot", "symbol", "company", "reconstructed", "quote", "examples",
+               "conversation_id", "message_id", "run", "template", "from_bot", "to_bot"}
+
+
+def memory_event(*, owner=OWNER_HASH, item_id=None, target="profile", action="added", by="chat", **fields):
+    with SessionLocal() as db:
+        row = memory_events.log(db, owner, target=target, item_id=item_id or uuid.uuid4(), action=action, by=by, **fields)
+        db.commit()
+        return row.id
+
+
+def test_memory_changes_list_item_for_an_edit_said_in_a_bots_conversation(client):
+    b = bot("研究员")
+    cid = conversation(b)
+    memory_event(action="edited", by=memory_events.chat(cid, None, None), text="金额用亿美元", before="金额用万元", bot_id=b, at=NOW)
+    body = get(client, "/backstage/memory").json()
+    assert body["next_before"] is None
+    [row] = body["items"]
+    assert set(row) == MEMORY_KEYS
+    assert (row["target"], row["action"], row["by"], row["text"], row["before"], row["bot"]) == ("profile", "edited", "chat", "金额用亿美元", "金额用万元", "研究员")
+    assert (row["conversation_id"], row["reconstructed"], row["quote"], row["examples"], row["symbol"], row["company"]) == (str(cid), False, None, [], None, None)
+    assert datetime.fromisoformat(row["at"]) == NOW
+    assert get(client, "/backstage/memory").headers["cache-control"] == "no-store"
+
+
+def test_memory_changes_a_view_names_its_company_a_move_names_both_layers_and_a_review_its_examples(client):
+    b = bot("研究员")
+    memory_event(target="view", action="recorded", by="page", text="估值太高了", symbol="NVDA", basis={"quote": "估值太高了，我觉得"}, at=NOW)
+    memory_event(action="moved", by="page", text="先说结论", bot_id=b, basis={"from_bot": None, "to_bot": b}, at=NOW - timedelta(minutes=1))
+    examples = [{"quote": "我先看现金流", "message_id": str(uuid.uuid4()), "date": "2026-11-01"}]
+    run = uuid.uuid4()
+    memory_event(action="proposed", by=memory_events.review(run), text="先看现金流", basis={"examples": examples}, at=NOW - timedelta(minutes=2),
+                 reconstructed=True)
+    view, moved, proposed = get(client, "/backstage/memory").json()["items"]
+    assert (view["target"], view["symbol"], view["company"], view["quote"]) == ("view", "NVDA", owner_views.display_name("NVDA"), "估值太高了，我觉得")
+    assert (moved["from_bot"], moved["to_bot"], moved["bot"]) == ({"id": None, "name": None}, {"id": str(b), "name": "研究员"}, "研究员")
+    assert view["from_bot"] is None and view["to_bot"] is None
+    assert (proposed["by"], proposed["run"], proposed["examples"], proposed["reconstructed"]) == ("review", str(run), examples, True)
+
+
+def test_memory_changes_filters_search_and_paging(client):
+    for minute in range(5):
+        memory_event(action="added", by="page", text=f"第{minute}条", at=NOW - timedelta(minutes=minute))
+    memory_event(target="view", action="superseded", by="chat", text="旧看法", symbol="NVDA", at=NOW - timedelta(minutes=10))
+    memory_event(action="archived", by="settle", text="老习惯", reason="很久没在你的话里出现", at=NOW - timedelta(minutes=11))
+    first = get(client, "/backstage/memory", limit=3).json()
+    second = get(client, "/backstage/memory", limit=3, before=first["next_before"]).json()
+    third = get(client, "/backstage/memory", limit=3, before=second["next_before"]).json()
+    texts = [i["text"] for page in (first, second, third) for i in page["items"]]
+    assert texts == ["第0条", "第1条", "第2条", "第3条", "第4条", "旧看法", "老习惯"] and third["next_before"] is None
+    assert [i["text"] for i in get(client, "/backstage/memory", target="view").json()["items"]] == ["旧看法"]
+    assert [i["text"] for i in get(client, "/backstage/memory", action="superseded,archived").json()["items"]] == ["旧看法", "老习惯"]
+    assert [i["text"] for i in get(client, "/backstage/memory", by="settle").json()["items"]] == ["老习惯"]
+    assert [i["text"] for i in get(client, "/backstage/memory", q="很久没").json()["items"]] == ["老习惯"], "the reason is searched"
+    assert [i["text"] for i in get(client, "/backstage/memory", q="第3").json()["items"]] == ["第3条"]
+    assert get(client, "/backstage/memory", q="%").json()["items"] == []
+
+
+@pytest.mark.parametrize("bad", [{"target": "x"}, {"target": ""}, {"action": "x"}, {"action": ""}, {"action": "added,x"}, {"by": "x"}])
+def test_memory_changes_refuse_a_filter_that_is_no_value(client, bad):
+    response = get(client, "/backstage/memory", **bad)
+    assert response.status_code == 400 and response.json() == {"detail": "invalid_filter"}
+
+
+def test_memory_changes_cursor_and_limit_validation(client):
+    assert get(client, "/backstage/memory", before="nonsense").status_code == 400
+    assert get(client, "/backstage/memory", limit=0).status_code == 422
+    assert get(client, "/backstage/memory", limit=201).status_code == 422
+    assert get(client, "/backstage/memory", q="x" * 101).status_code == 422
+
+
+def test_memory_changes_are_the_owners_alone_and_show_no_card_button_value(client):
+    memory_event(owner=owner_hash(GUEST), text="别人的记忆")
+    memory_event(text="按 " + CONFIRM, reason=AUTHORIZE)
+    response = get(client, "/backstage/memory")
+    assert [i["text"] for i in response.json()["items"]] == ["按 [已移除]"]
+    assert "别人的记忆" not in response.text and CONFIRM not in response.text and AUTHORIZE not in response.text
+    assert get(client, "/backstage/memory", headers=G).status_code == 403
+
+
+def test_a_memory_page_write_shows_up_in_the_tab_as_the_pages(client):
+    response = client.post("/agent-chat/profile", headers=H, json={"kind": "instruction", "text": "先说结论"})
+    assert response.status_code == 200, response.text
+    item_id = response.json()["item"]["id"]
+    assert client.delete(f"/agent-chat/profile/{item_id}", headers=H).status_code == 200
+    items = get(client, "/backstage/memory").json()["items"]
+    assert [(i["action"], i["by"], i["text"]) for i in items] == [("deleted", "page", None), ("added", "page", None)], "deleted: its words are gone"
+
+
+def test_memory_changes_find_the_conversation_of_a_change_that_names_only_his_message(client):
+    """A change rebuilt from its row knows only his message: the tab still links the conversation, his own and nobody else's."""
+    mine, theirs = conversation(), conversation(owner="t" * 64)
+    with SessionLocal() as db:
+        said = AgentMessage(conversation_id=mine, turn_id=uuid.uuid4(), sequence=1, role="user", content="以后金额用亿美元")
+        other = AgentMessage(conversation_id=theirs, turn_id=uuid.uuid4(), sequence=1, role="user", content="别人的话")
+        db.add_all([said, other])
+        db.commit()
+        said_id, other_id = said.id, other.id
+    memory_event(by=memory_events.chat(None, None, said_id), text="金额用亿美元", at=NOW, reconstructed=True)
+    memory_event(by=memory_events.chat(None, None, other_id), text="别人的", at=NOW - timedelta(minutes=1))
+    rows = get(client, "/backstage/memory").json()["items"]
+    assert [(r["message_id"], r["conversation_id"]) for r in rows] == [(str(said_id), str(mine)), (str(other_id), None)]

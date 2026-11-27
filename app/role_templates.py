@@ -11,12 +11,13 @@ memory part with a reason.  ``undo`` takes back only what the application record
 from __future__ import annotations
 
 import copy
+import functools
 import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from . import agent_bots, agent_profile, agent_skills, agent_tasks
+from . import agent_bots, agent_profile, agent_skills, agent_tasks, memory_events
 from .agent_chat_models import AgentBot, AgentSkill, AgentTask, RoleTemplateApplication
 from .database import SessionLocal
 
@@ -478,7 +479,7 @@ def apply(owner_hash: str, template_id: str, bot_id=None, leave_out=None) -> dic
                 continue
             try:
                 result = agent_profile.add_item(owner_hash, kind=entry["kind"], text=entry["text"], quote=entry["text"], message=entry["text"],
-                                                origin="manual", topic=None, bot_id=target["layer"])
+                                                origin="manual", topic=None, bot_id=target["layer"], by=memory_events.template(template_id))
             except agent_profile.ProfileError as exc:
                 refuse(entry, MEMORY_FULL if "full" in str(exc) else str(exc), "没有写入")
                 continue
@@ -616,7 +617,7 @@ def undo(owner_hash: str, application_id, leave_out=None) -> dict:
             raise RoleTemplateError("application_not_found")
         if row.undone_at is not None:
             raise RoleTemplateError("already_undone")
-        created, bot_id = copy.deepcopy(row.created or {}), row.bot_id
+        created, bot_id, template_id = copy.deepcopy(row.created or {}), row.bot_id, row.template
     keep = {str(x) for x in (leave_out or [])}
     recorded = {str(x) for bucket in ("profile_item_ids", "task_ids", "skill_ids", "usual_added") for x in created.get(bucket) or []}
     if keep - recorded:
@@ -636,7 +637,8 @@ def undo(owner_hash: str, application_id, leave_out=None) -> dict:
         stuck = [i for i in todo if i["part"] == "usual"]
         kept += [{**i, "reason": USUAL_STUCK} for i in stuck]
         todo = [i for i in todo if i["part"] != "usual"]
-    deleters = {"memory": agent_profile.delete_item, "brief": agent_tasks.delete_task, "skill": agent_skills.delete_skill}
+    deleters = {"memory": functools.partial(agent_profile.delete_item, by=memory_events.template(template_id)),
+                "brief": agent_tasks.delete_task, "skill": agent_skills.delete_skill}
     for shown in todo:
         deleter = deleters.get(shown["part"])
         if deleter is None or deleter(owner_hash, shown["id"]):
