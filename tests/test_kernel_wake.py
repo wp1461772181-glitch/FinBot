@@ -191,7 +191,8 @@ def test_an_instruction_in_the_alert_text_is_only_data(env):
 
 
 def test_the_system_block_carries_the_owners_situation_and_what_he_was_told(env):
-    duty_log.record(OWNER_HASH, 90, event={"symbol": "AAPL"}, mode="on", outcome="decided", decision="tell_now", reason="r", message="上次对他说过的话")
+    duty_log.record(OWNER_HASH, 90, event={"symbol": "AAPL"}, mode="on", outcome="decided", decision="tell_now", reason="r", message="上次对他说过的话",
+                    delivery="queued")
     with SessionLocal() as db:
         from app.agent_chat_models import AgentResearchQueue
         db.merge(AgentResearchQueue(owner_hash=OWNER_HASH, symbols=["NVDA", "TSLA"]))
@@ -200,6 +201,57 @@ def test_the_system_block_carries_the_owners_situation_and_what_he_was_told(env)
     judge()
     system = fake.calls[0]["messages"][0]["content"]
     assert "上次对他说过的话" in system and '"in_research_queue": true' in system and '"held": true' in system and "哨兵已经发过它自己的提醒" in system
+
+
+def test_the_relation_says_whether_the_sentinel_already_sent_the_alert(env):
+    fake = script(env, [step(calls=[decide()])])
+    judge(event(1))
+    assert '"already_sent": true' in fake.calls[0]["messages"][0]["content"]
+    fake = script(env, [step(calls=[decide()])])
+    judge(event(2, deferred=True))
+    system = fake.calls[0]["messages"][0]["content"]
+    assert '"already_sent": false' in system and '"already_sent": true' not in system
+    assert "夜里（北京 0–8 点）压住的提醒" in prompt.wake_system_text()
+
+
+def test_on_holds_a_tell_now_for_a_night_held_alert_and_only_logs_it(env):
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
+    _bind()          # a bound channel: nothing is sent because the alert is held, not because there is nowhere to send
+    script(env, [step(calls=[call("d1", "decide", TELL)])])
+    row = judge(event(1, deferred=True))
+    assert outbox() == []
+    assert row["decision"] == "tell_now" and row["message"] == TELL["message"] and row["delivery"] == wake.HELD_NIGHT == "held_night"
+    assert row["mode"] == "on" and row["delivery_group"] is None
+
+
+def test_the_told_list_only_has_messages_that_really_went_out(env):
+    for alert_id, mode, delivery, message in [(91, "shadow", None, "只是影子模式写下的话"), (92, "on", "capped", "超过当天上限没发出的话"),
+                                              (93, "on", "queued", "真正发出去的话")]:
+        duty_log.record(OWNER_HASH, alert_id, event={"symbol": "AAPL"}, mode=mode, outcome="decided", decision="tell_now", reason="r",
+                        message=message, delivery=delivery)
+    fake = script(env, [step(calls=[decide()])])
+    judge(event(1))
+    system = fake.calls[0]["messages"][0]["content"]
+    assert "真正发出去的话" in system and "只是影子模式写下的话" not in system and "超过当天上限没发出的话" not in system
+
+
+@pytest.mark.parametrize("tier,label", [(1, "值得知道"), (2, "重大")])
+def test_the_relation_carries_the_tier_label_for_tier_one_and_two(env, tier, label):
+    fake = script(env, [step(calls=[decide()])])
+    judge(event(tier=tier))
+    assert f'"tier_label": "{label}"' in fake.calls[0]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("extra", [{}, {"tier": 0}, {"tier": True}, {"tier": "2"}])
+def test_the_relation_has_no_tier_label_without_a_tier_one_or_two(env, extra):
+    fake = script(env, [step(calls=[decide()])])
+    judge(event(**extra))
+    assert '"tier_label"' not in fake.calls[0]["messages"][0]["content"]
+
+
+def test_the_cause_section_sits_between_the_four_choices_and_how_to_work():
+    text = prompt.wake_system_text()
+    assert text.index("四个选择") < text.index("异动的原因") < text.index("\n怎么做\n")
 
 
 def test_a_read_tool_round_is_kept_with_the_turn(env):
