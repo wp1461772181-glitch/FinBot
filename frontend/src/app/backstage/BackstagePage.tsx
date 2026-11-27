@@ -9,7 +9,7 @@ import { OperationsTab } from "./OperationsTab";
 import { UsageTab } from "./UsageTab";
 
 /**
- * 后台 (#/backstage/<tab>): the owner's read-only look behind the assistant.  Five tabs in the address (回答, 用量, 操作记录, 提醒投递, 值班).  Nothing on this page writes: it has
+ * 后台 (#/backstage/<tab>): the owner's read-only look behind the assistant.  Five tabs in the address (回答, 用量, 操作记录, 提醒投递, 值班).  Nothing on this page writes except the 有用／没用 feedback on duty and brief deliveries: it has
  * no button that changes a record, and every request is a GET that the server answers only to the owner.
  */
 export function BackstagePage() {

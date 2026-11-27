@@ -68,11 +68,13 @@ class Channels:
     """The real channels behind the escalation; tests pass a fake with the same methods."""
 
     def telegram_alert(self, config: dict, text: str, alert_id: int) -> int | None:
-        """An alert with the 「收到」button; returns the Telegram message id (replies to it count as acks)."""
+        """An alert with the 「收到」 row and the 「有用／没用」 row; returns the Telegram message id (replies to it count as acks)."""
         token, chat_id = config.get("bot_token"), config.get("chat_id")
         if not token or not chat_id:
             return None
-        keyboard = {"inline_keyboard": [[{"text": "收到", "callback_data": f"ack:{alert_id}"}]]}
+        keyboard = {"inline_keyboard": [[{"text": "收到", "callback_data": f"ack:{alert_id}"}],
+                                        [{"text": "有用", "callback_data": f"fu:s:{alert_id}"},
+                                         {"text": "没用", "callback_data": f"fn:s:{alert_id}"}]]}
         try:
             body = _post_json(f"https://api.telegram.org/bot{token}/sendMessage",
                               {"chat_id": chat_id, "text": text, "reply_markup": json.dumps(keyboard)})

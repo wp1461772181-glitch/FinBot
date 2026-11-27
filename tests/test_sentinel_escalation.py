@@ -185,6 +185,25 @@ def test_bridge_button_and_reply_write_the_ack(tmp_path, monkeypatch):
     callback = {"id": "cb1", "data": f"ack:{first}", "from": {"id": 42},
                 "message": {"chat": {"id": 42, "type": "private"}, "message_id": 5}}
     asyncio.run(bridge._handle_callback(None, callback, {}, "owner", "cred", 42, 42, tg=object(), channel={"token": "t"}))
-    assert store.alert(first)["acked_at"] is not None and cleared == [5] and answers == ["已确认"]
+    assert store.alert(first)["acked_at"] is not None and cleared == [] and answers == ["已确认"]      # no keyboard came with the press: nothing is edited
     assert asyncio.run(bridge._ack_by_reply(42, 777)) is True and store.alert(second)["acked_at"] is not None
     assert asyncio.run(bridge._ack_by_reply(42, 1)) is False
+
+
+def test_the_alert_goes_out_with_the_ack_row_and_the_feedback_row(monkeypatch):
+    """5c-3b: the real ``telegram_alert`` sends 「收到」 on one row and 「有用」「没用」 on the next."""
+    import json
+
+    from sentinel import notify
+
+    posted = []
+
+    def post(url, fields, timeout=15):
+        posted.append(fields)
+        return {"ok": True, "result": {"message_id": 321}}
+
+    monkeypatch.setattr(notify, "_post_json", post)
+    assert notify.Channels().telegram_alert({"bot_token": "t", "chat_id": 1}, "INTC 急跌", 7) == 321
+    assert json.loads(posted[0]["reply_markup"]) == {"inline_keyboard": [
+        [{"text": "收到", "callback_data": "ack:7"}],
+        [{"text": "有用", "callback_data": "fu:s:7"}, {"text": "没用", "callback_data": "fn:s:7"}]]}

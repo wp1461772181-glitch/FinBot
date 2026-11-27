@@ -1,8 +1,9 @@
-"""The owner's backstage: read-only endpoints over what the assistant did (answers and their courses, model-call usage,
-confirmation cards, the outbox).
+"""The owner's backstage: endpoints over what the assistant did (answers and their courses, model-call usage, confirmation cards,
+the outbox).
 
-Every route is a GET and answers 403 ``owner_only`` to anyone but the owner (the same check as the other owner pages).  Nothing here
-writes.  Stored records come in two shapes (the kernel's turn, the old engine's) and some are null or damaged; every reader below
+Every route answers 403 ``owner_only`` to anyone but the owner (the same check as the other owner pages).  Every route is a GET and
+writes nothing, except ``POST /backstage/feedback``: the owner's 「有用／没用」 on a duty or brief message (``alert_feedback``).
+Stored records come in two shapes (the kernel's turn, the old engine's) and some are null or damaged; every reader below
 takes what it finds and shows what it can.  A card's button value (``confirm:``, ``authorize:``, ``change:``, ``reply:``,
 ``cancel:``) never leaves this module: the detail and the lists strip any that a stored record carries.
 
@@ -11,6 +12,7 @@ message cap's own constant, not his setting), and the response says so.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
@@ -25,7 +27,7 @@ from sqlalchemy import String, Text, and_, cast, exists, func, or_, select, tupl
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 
-from . import channels
+from . import alert_feedback, channels
 from .agent_chat_models import AgentBot, AgentConversation, AgentConversationTitle, AgentMessage, ModelCall
 from .agent_chat_store import owner_hash as hash_of
 from .agent_workflow.models import AgentConsent
@@ -800,13 +802,51 @@ def operations(x_chat_session: str | None = Header(default=None), limit: int = Q
 @router.get("/deliveries")
 def deliveries(x_chat_session: str | None = Header(default=None), limit: int = Query(default=50, ge=1, le=MAX_LIMIT),
                before: str | None = None):
-    """The outbox list ``channels.deliveries`` builds (proactive messages, newest first), with paging."""
+    """The outbox list ``channels.deliveries`` builds (proactive messages, newest first), with paging.  A duty or brief row also carries its
+    group (its own id when it has none) and the owner's 「有用／没用」 on it (``feedback``: useful, not_useful or null)."""
     owner = _owner(x_chat_session)
     cursor = _parse_cursor(before)
     rows = channels.deliveries(owner, limit + 1, cursor)
     more, rows = len(rows) > limit, rows[:limit]
     next_before = _cursor(datetime.fromisoformat(rows[-1]["created_at"]), rows[-1]["id"]) if more else None
-    return {"items": rows, "next_before": next_before}
+    rated = [row for row in rows if row["source"] in alert_feedback.SOURCES]
+    for row in rated:
+        row["group_id"] = row["group_id"] or row["id"]
+    given = alert_feedback.verdicts(owner, "outbox", [row["group_id"] for row in rated])
+    items = [{**row, "feedback": given.get(row["group_id"]) if row["source"] in alert_feedback.SOURCES else None} for row in rows]
+    return {"items": items, "next_before": next_before}
+
+
+FEEDBACK_KEYS = {"target", "target_id", "verdict"}
+
+
+@router.post("/feedback")
+async def feedback(request: Request, x_chat_session: str | None = Header(default=None)):
+    """The owner's 「有用／没用」 on one duty or brief message: ``{"target": "outbox", "target_id": "<group id>", "verdict": "useful" |
+    "not_useful"}``.  Anything else is 400 ``invalid_feedback``; a group that is not one of his duty or brief messages is 404.  Returns the row."""
+    owner = _owner(x_chat_session)
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(400, "invalid_feedback") from None
+    if not isinstance(body, dict) or set(body) != FEEDBACK_KEYS or body["target"] != "outbox" or body["verdict"] not in alert_feedback.VERDICTS:
+        raise HTTPException(400, "invalid_feedback")
+    try:
+        group = alert_feedback.check_target("outbox", body["target_id"])
+    except ValueError:
+        raise HTTPException(400, "invalid_feedback") from None
+    return await asyncio.to_thread(_record_feedback, owner, group, body["verdict"])
+
+
+def _record_feedback(owner: str, group: str, verdict: str) -> dict:
+    from .agent_chat_models import AgentTelegramMessage as T
+    identity = uuid.UUID(group)
+    with SessionLocal() as db:
+        found = db.scalar(select(T.id).where(T.owner_hash == owner, T.source.in_(alert_feedback.SOURCES),
+                                             or_(T.group_id == identity, and_(T.group_id.is_(None), T.id == identity))).limit(1))
+    if found is None:
+        raise HTTPException(404, "not_found")
+    return alert_feedback.record(owner, "outbox", group, verdict, "web", **alert_feedback.describe(owner, "outbox", group))
 
 
 # --- duty ----------------------------------------------------------------------------------------------------------

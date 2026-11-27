@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from .. import duty_log, latest_known, model_usage
+from .. import alert_feedback, duty_log, latest_known, model_usage
 from . import loop, prompt
 
 logger = logging.getLogger(__name__)
@@ -92,8 +92,8 @@ def clean_event(payload) -> dict:
 
 # --- what the kernel is told about the owner ------------------------------------------------------------------------------
 
-def _facts(owner: str, event: dict) -> tuple[dict, list[dict], list[dict]]:
-    """(the owner's relation to this event, the last ``tell_now`` messages, the last outbox messages) as plain data."""
+def _facts(owner: str, event: dict) -> tuple[dict, list[dict], list[dict], list[dict]]:
+    """(the owner's relation to this event, the last ``tell_now`` messages, the last outbox messages, his last 「有用／没用」) as plain data."""
     from ..agent_chat_models import AgentResearchQueue, AgentTelegramMessage
     from ..database import SessionLocal
     symbols = [s for s in (event.get("members") or [event.get("symbol")]) if isinstance(s, str)]
@@ -119,7 +119,14 @@ def _facts(owner: str, event: dict) -> tuple[dict, list[dict], list[dict]]:
     # brief carried did: ``briefed``).
     sent = [r for r in duty_log.recent(owner, RECENT * 5, decision="tell_now") if r["mode"] == "on" and r["delivery"] in ("queued", "briefed")]
     told = [{"at": r["created_at"], "symbol": (r["event"] or {}).get("symbol"), "message": r["message"]} for r in sent[:RECENT]]
-    return relation, told, outbox
+    feedback: list[dict] = []
+    try:
+        feedback = [{"at": r["updated_at"], "symbol": r["symbol"], "kind": r["kind"], "text": r["text"], "verdict": r["verdict"]}
+                    for r in alert_feedback.recent(owner, RECENT * 2) if r["kind"] != "brief"][:RECENT]
+        # a verdict on a whole morning brief is about the brief, not about one kind of alert: it is not the wake's to act on
+    except Exception:
+        logger.exception("wake: the owner's feedback could not be read")
+    return relation, told, outbox, feedback
 
 
 # --- the stored turn (the backstage opens it by its turn id) -----------------------------------------------------------------
@@ -271,7 +278,7 @@ async def _judge(event: dict, owner: str, turn_id: str, recorder: Recorder, held
     """The wake turn itself.  ``held`` receives the conversation id as soon as it exists (the stored turn needs it even if the turn fails)."""
     bot, context = await duty_context(owner, held)
     cid = held["conversation"]
-    relation, told, outbox = await asyncio.to_thread(_facts, owner, event)
+    relation, told, outbox, feedback = await asyncio.to_thread(_facts, owner, event)
     # The alert's company always gets its block (its own symbol as the focus; the other members of a group alert follow).
     symbols = [s for s in (event.get("members") or []) if isinstance(s, str)]
     block, shown = None, []
@@ -279,7 +286,7 @@ async def _judge(event: dict, owner: str, turn_id: str, recorder: Recorder, held
         block, shown = await latest_known.block_for(" ".join([event["symbol"], *symbols]), previous=None, focus=event["symbol"], owner_hash=owner)
     except Exception:
         logger.exception("wake latest-known block failed")
-    messages = prompt.build_wake_messages(context, event, relation, told, outbox, block)
+    messages = prompt.build_wake_messages(context, event, relation, told, outbox, block, feedback=feedback)
     with model_usage.purpose("duty", owner_hash=owner, conversation_id=cid, bot_id=bot.id, turn_id=turn_id, job=str(event["alert_id"])):
         return await loop.run_wake(context, recorder.emit, messages, turn_id=turn_id, latest_symbols=shown if block else None)
 

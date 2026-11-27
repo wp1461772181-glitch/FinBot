@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
-  ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyDelivery, dutyModeLine, helperLines, dutyRow, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
+  ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyDelivery, dutyModeLine, helperLines, dutyRow, FEEDBACK_CHOICES, FEEDBACK_FAILED, feedbackBody, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
   slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
 } from "../src/backstage-view.mjs";
 import { ANSWERS, DELIVERIES, DETAIL, DUTY, HELPERS, DETAIL_INCOMPLETE, DETAIL_OLD, OPERATIONS, usageAnswer } from "../tools/shots/fixtures/backstage.mjs";
@@ -221,7 +221,7 @@ test("operations: what, status, decided at, result; a lapsed card nobody touched
 
 test("deliveries: time, source, channel, status, acknowledged", () => {
   const rows = DELIVERIES.items.map((d) => deliveryRow(d, "UTC"));
-  assert.deepEqual(rows[0], { id: DELIVERIES.items[0].id, time: "11-13 01:00", source: "提醒", channel: "Telegram", status: { label: "已发送", kind: "success" }, acked: "11-13 01:05", text: "NVDA 上穿了你设的 125 美元价格线。" });
+  assert.deepEqual(rows[0], { id: DELIVERIES.items[0].id, time: "11-13 01:00", source: "提醒", channel: "Telegram", status: { label: "已发送", kind: "success" }, acked: "11-13 01:05", text: "NVDA 上穿了你设的 125 美元价格线。", feedback: null });
   assert.equal(rows[1].source, "任务");
   assert.equal(rows[1].channel, "微信");
   assert.equal(rows[1].acked, "未确认");
@@ -238,14 +238,39 @@ test("deliveries: the kernel's duty messages and its morning brief read in words
   assert.equal(deliveryRow({ ...DELIVERIES.items[0], source: "brief" }, "UTC").source, "早间简报");
 });
 
-test("the page is wired in: route, owner-only navigation, a read-only page", () => {
+test("deliveries: 有用／没用 only on duty and brief rows, by their group (their own id without one), pressed as the API says", () => {
+  const base = { ...DELIVERIES.items[0], id: "row-1", group_id: "g-1" };
+  assert.deepEqual(deliveryRow({ ...base, source: "duty", feedback: "useful" }, "UTC").feedback, { group: "g-1", verdict: "useful" });
+  assert.deepEqual(deliveryRow({ ...base, source: "brief", feedback: "not_useful" }, "UTC").feedback, { group: "g-1", verdict: "not_useful" });
+  assert.deepEqual(deliveryRow({ ...base, source: "duty", feedback: null }, "UTC").feedback, { group: "g-1", verdict: null }, "nothing pressed yet");
+  assert.deepEqual(deliveryRow({ ...base, source: "brief", group_id: null }, "UTC").feedback, { group: "row-1", verdict: null });
+  assert.deepEqual(deliveryRow({ ...base, source: "duty", feedback: "maybe" }, "UTC").feedback, { group: "g-1", verdict: null }, "an unknown verdict is not shown pressed");
+  for (const source of ["notify", "routine", "reply", "x"]) assert.equal(deliveryRow({ ...base, source, feedback: "useful" }, "UTC").feedback, null, source);
+  assert.deepEqual(FEEDBACK_CHOICES, [{ verdict: "useful", label: "有用" }, { verdict: "not_useful", label: "没用" }]);
+  assert.equal(FEEDBACK_FAILED, "没记上");
+  assert.deepEqual(feedbackBody("g-1", "useful"), { target: "outbox", target_id: "g-1", verdict: "useful" });
+  assert.deepEqual(feedbackBody("g-1", "not_useful"), { target: "outbox", target_id: "g-1", verdict: "not_useful" });
+});
+
+test("deliveries tab: the buttons are plain buttons that show which one is pressed, and a failed request says 没记上", () => {
+  const tab = src("app/backstage/DeliveriesTab.tsx");
+  assert.match(tab, /aria-pressed=\{current === choice\.verdict\}/);
+  assert.match(tab, /chosen\[group\] \?\? row\.feedback\.verdict/, "a press on this page wins over the verdict the list was read with");
+  assert.match(tab, /if \(!row\.feedback\) return null;/, "no buttons on a row without feedback");
+  assert.match(tab, /failed\[group\] && <span role="status"[^>]*>\{t\(FEEDBACK_FAILED\)\}<\/span>/);
+  assert.match(tab, /setChosen\(state => \(\{ \.\.\.state, \[group\]: verdict \}\)\);\s*\} catch \{\s*setFailed/s, "pressed only once the server took it");
+  assert.match(src("api/backstage.ts"), /requestJson<[^>]+>\("\/api\/backstage\/feedback", \{\s*method: "POST"/);
+});
+
+test("the page is wired in: route, owner-only navigation, and its one write is 有用／没用", () => {
   const sidebar = src("app/shell/AppSidebar.tsx"), more = src("app/shell/MoreDrawer.tsx"), router = src("app/router.tsx");
   assert.match(sidebar, /\{props\.personal && <NavLeaf area="backstage" props=\{props\} \/>\}/, "the entry is the owner's");
   assert.match(more, /props\.personal && .*paths\.backstage\(\)/s, "the phone's 更多 lists it for the owner only");
   assert.match(router, /PATTERNS\.backstageTab/);
   assert.match(router, /PATTERNS\.backstage,/);
   const api = src("api/backstage.ts");
-  assert.doesNotMatch(api, /method:\s*"(POST|PUT|PATCH|DELETE)"/, "no write is made from the page");
+  assert.deepEqual(api.match(/method:\s*"(POST|PUT|PATCH|DELETE)"/g), ['method: "POST"'], "the only write is the feedback POST");
+  assert.match(api, /"\/api\/backstage\/feedback", \{\s*method: "POST"/);
   for (const file of ["BackstagePage", "AnswersTab", "AnswerDrawer", "UsageTab", "OperationsTab", "DeliveriesTab"]) assert.doesNotMatch(src(`app/backstage/${file}.tsx`), /method:\s*"(POST|PUT|PATCH|DELETE)"|<form|type="submit"/, file);
 });
 

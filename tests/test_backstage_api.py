@@ -16,6 +16,8 @@ from app.agent_chat_store import owner_hash
 from app.agent_workflow import consent
 from app.agent_workflow.models import AgentConsent
 from app.database import Base, SessionLocal, engine
+from app.alert_feedback import AlertFeedback
+from app.duty_brief import DutyBrief
 from app.duty_log import DutyLog
 
 OWNER = "o" * 40
@@ -39,14 +41,14 @@ ENDPOINTS = ["/backstage/answers", f"/backstage/answers/{uuid.uuid4()}", "/backs
 def world(monkeypatch, disposable_database):
     Base.metadata.create_all(engine, tables=[AgentConversation.__table__, AgentMessage.__table__, AgentBot.__table__,
                                              ModelCall.__table__, AgentConsent.__table__, AgentTelegramMessage.__table__,
-                                             DutyLog.__table__])
+                                             DutyLog.__table__, DutyBrief.__table__, AlertFeedback.__table__])
     consent.ensure_columns()
     import app.agent_chat_identity as identity
     monkeypatch.setattr(identity, "owner_credential_matches", lambda value: value == OWNER)
     monkeypatch.setattr(consent, "owner_credential_matches", lambda value: value == OWNER)
     model_usage.flush(timeout=10)
     with SessionLocal() as db:
-        for model in (DutyLog, ModelCall, AgentConsent, AgentTelegramMessage, AgentMessage, AgentConversation, AgentBot):
+        for model in (AlertFeedback, DutyBrief, DutyLog, ModelCall, AgentConsent, AgentTelegramMessage, AgentMessage, AgentConversation, AgentBot):
             db.query(model).delete()
         db.commit()
     yield
@@ -646,11 +648,118 @@ def test_deliveries_list_and_paging(client):
     assert channels.deliveries(OWNER_HASH, 50)[0]["text"] == "消息0"        # the list the settings page uses is unchanged
 
 
-def test_nothing_under_backstage_writes(client):
+def test_nothing_under_backstage_writes_but_the_feedback(client):
     from app.main import app
     for route in app.routes:
         if getattr(route, "path", "").startswith("/backstage"):
-            assert route.methods <= {"GET", "HEAD"}, route.path
+            if route.path == "/backstage/feedback":
+                assert route.methods == {"POST"}, route.path       # 5c-3b: 「有用／没用」, the one write
+            else:
+                assert route.methods <= {"GET", "HEAD"}, route.path
+
+
+# --- 5c-3b: 「有用／没用」 on duty and brief messages ------------------------------------------------------------------
+
+def outbox_row(source, text="【助理】\n消息", *, group=None, owner=OWNER_HASH, at=None):
+    with SessionLocal() as db:
+        row = AgentTelegramMessage(owner_hash=owner, source=source, text=text, status="sent", channel="telegram", group_id=group,
+                                   created_at=at or NOW)
+        db.add(row)
+        db.commit()
+        return row.id
+
+
+def post_feedback(client, body, headers=H):
+    return client.post("/backstage/feedback", headers=headers, json=body)
+
+
+def stored_feedback():
+    with SessionLocal() as db:
+        return [(row.target, row.target_id, row.verdict, row.channel, row.kind) for row in db.query(AlertFeedback).order_by(AlertFeedback.id)]
+
+
+@pytest.mark.parametrize("verdict", ["useful", "not_useful"])
+def test_feedback_on_a_duty_group_is_recorded_from_the_web(client, verdict):
+    group = uuid.uuid4()
+    outbox_row("duty", "【助理】\nNVDA 今天跌了 6%。", group=group)
+    outbox_row("duty", "NVDA 今天跌了 6%。", group=group)                  # the same message on a second channel: one group
+    with SessionLocal() as db:
+        db.add(DutyLog(owner_hash=OWNER_HASH, alert_id=31, event={"symbol": "NVDA"}, mode="on", outcome="decided", decision="tell_now",
+                       message="NVDA 今天跌了 6%。", delivery="queued", delivery_group=group))
+        db.commit()
+    response = post_feedback(client, {"target": "outbox", "target_id": str(group), "verdict": verdict})
+    assert response.status_code == 200 and response.headers["Cache-Control"] == "no-store"
+    body = response.json()
+    assert (body["target"], body["target_id"], body["verdict"], body["channel"]) == ("outbox", str(group), verdict, "web")
+    assert (body["symbol"], body["kind"], body["text"]) == ("NVDA", "duty", "NVDA 今天跌了 6%。")
+    assert stored_feedback() == [("outbox", str(group), verdict, "web", "duty")]
+
+
+def test_feedback_on_a_brief_without_a_group_uses_its_own_id_and_the_last_press_wins(client):
+    row_id = str(outbox_row("brief", "【助理】\n早上好。"))
+    assert post_feedback(client, {"target": "outbox", "target_id": row_id, "verdict": "useful"}).json()["kind"] == "brief"
+    assert post_feedback(client, {"target": "outbox", "target_id": row_id, "verdict": "not_useful"}).json()["verdict"] == "not_useful"
+    assert stored_feedback() == [("outbox", row_id, "not_useful", "web", "brief")]
+
+
+@pytest.mark.parametrize("body", [
+    {"target": "outbox", "target_id": "not-a-uuid", "verdict": "useful"},
+    {"target": "outbox", "target_id": "GROUP", "verdict": "useful"},                                 # replaced by an uppercase uuid below
+    {"target": "outbox", "target_id": 7, "verdict": "useful"},
+    {"target": "outbox", "target_id": None, "verdict": "useful"},
+    {"target": "sentinel", "target_id": "7", "verdict": "useful"},
+    {"target": "other", "target_id": "GOOD", "verdict": "useful"},
+    {"target": "outbox", "target_id": "GOOD", "verdict": "great"},
+    {"target": "outbox", "target_id": "GOOD", "verdict": None},
+    {"target": "outbox", "target_id": "GOOD"},
+    {"target": "outbox", "target_id": "GOOD", "verdict": "useful", "extra": 1},
+    {}, [], "useful", None,
+])
+def test_every_other_body_is_400_and_records_nothing(client, body):
+    group = uuid.uuid4()
+    outbox_row("duty", group=group)
+    if isinstance(body, dict):
+        body = {key: str(group) if value == "GOOD" else str(group).upper() if value == "GROUP" else value for key, value in body.items()}
+    response = post_feedback(client, body)
+    assert response.status_code == 400 and response.json() == {"detail": "invalid_feedback"}
+    assert stored_feedback() == []
+
+
+def test_a_body_that_is_not_json_is_400(client):
+    response = client.post("/backstage/feedback", headers={**H, "Content-Type": "application/json"}, content=b"{not json")
+    assert response.status_code == 400 and response.json() == {"detail": "invalid_feedback"}
+
+
+def test_feedback_on_a_message_that_is_not_his_duty_or_brief_is_404(client):
+    notify_group, other_group = uuid.uuid4(), uuid.uuid4()
+    outbox_row("notify", group=notify_group)
+    outbox_row("duty", group=other_group, owner=owner_hash(GUEST))
+    for target_id in (notify_group, other_group, uuid.uuid4()):
+        response = post_feedback(client, {"target": "outbox", "target_id": str(target_id), "verdict": "useful"})
+        assert response.status_code == 404, target_id
+    assert stored_feedback() == []
+
+
+def test_feedback_is_the_owners_alone(client):
+    group = uuid.uuid4()
+    outbox_row("duty", group=group)
+    for headers in (G, {}, {"X-Chat-Session": ""}, {"X-Chat-Session": OWNER + "x"}):
+        response = post_feedback(client, {"target": "outbox", "target_id": str(group), "verdict": "useful"}, headers=headers)
+        assert response.status_code == 403 and response.json() == {"detail": "owner_only"}, headers
+    assert post_feedback(client, [], headers=G).status_code == 403          # refused before the body is read
+    assert stored_feedback() == []
+
+
+def test_deliveries_carry_the_group_and_the_feedback_of_duty_and_brief_rows(client):
+    group = uuid.uuid4()
+    duty_id = outbox_row("duty", group=group, at=NOW)
+    brief_id = outbox_row("brief", at=NOW - timedelta(minutes=1))
+    notify_id = outbox_row("notify", group=uuid.uuid4(), at=NOW - timedelta(minutes=2))
+    assert post_feedback(client, {"target": "outbox", "target_id": str(group), "verdict": "not_useful"}).status_code == 200
+    items = {item["id"]: item for item in get(client, "/backstage/deliveries").json()["items"]}
+    assert (items[str(duty_id)]["group_id"], items[str(duty_id)]["feedback"]) == (str(group), "not_useful")
+    assert (items[str(brief_id)]["group_id"], items[str(brief_id)]["feedback"]) == (str(brief_id), None)
+    assert items[str(notify_id)]["feedback"] is None and items[str(notify_id)]["group_id"] != str(notify_id)
 
 
 def test_a_pressed_button_is_shown_as_what_it_was_not_as_its_value(client):

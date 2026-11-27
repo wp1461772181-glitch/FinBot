@@ -236,7 +236,18 @@ def test_pending_is_oldest_first_and_limited(chan):
     for n in range(3):
         _plant("wechat", created=NOW + timedelta(seconds=n), text=f"w{n}")
     assert [m["text"] for m in channels.pending(OWNER_HASH, "wechat", limit=2)] == ["w0", "w1"]
-    assert set(channels.pending(OWNER_HASH, "wechat")[0]) == {"id", "bot_id", "text"}
+    assert set(channels.pending(OWNER_HASH, "wechat")[0]) == {"id", "bot_id", "text", "source", "group_id"}
+
+
+def test_pending_carries_the_source_and_the_group(chan):
+    """5c-3b: the bridge puts the 「有用／没用」 row on a duty or brief message by its group (its own id when it has none)."""
+    _bind()
+    group = uuid.uuid4()
+    _plant(source="duty", group=group, text="值班", created=NOW)
+    _plant(source="brief", text="简报", created=NOW + timedelta(seconds=1))
+    duty, brief = tg.pending_messages(OWNER_HASH)
+    assert (duty["source"], duty["group_id"]) == ("duty", str(group))
+    assert (brief["source"], brief["group_id"]) == ("brief", None)
 
 
 # --- failure, fail-over, expiry ---------------------------------------------------------------------------

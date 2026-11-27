@@ -73,7 +73,7 @@ def test_every_act_operation_is_on_a_route_or_marked_kernel_only():
 def test_gaps_stay_visible():
     gaps = sorted(k for k, v in OPERATION_REGISTRY.items() if "gap" in v)
     assert gaps == [("DELETE", "/agent-chat/news-sources/{source_id}"), ("POST", "/agent-chat/news-sources/{source_id}/enabled"),
-                    ("PUT", "/agent-chat/news-sources/push-settings")]
+                    ("POST", "/backstage/feedback"), ("PUT", "/agent-chat/news-sources/push-settings")]
 
 
 def test_a_new_route_without_a_row_is_reported_by_name(monkeypatch):

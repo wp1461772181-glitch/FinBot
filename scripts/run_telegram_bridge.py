@@ -40,7 +40,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app import channels
+from app import alert_feedback, channels
 from app.agent_telegram import split_for_telegram, tables_for_telegram
 from app.agent_workflow.fp_flags import flag
 
@@ -827,10 +827,13 @@ async def _handle_callback(client, callback: dict, pending: dict, owner: str, cr
 
     kind, _, short_id = data.partition(":")
     if kind == "ack":
-        await _ack_alert_press(client, bot_token, cb_id, chat_id, message.get("message_id"), short_id)
+        await _ack_alert_press(client, bot_token, cb_id, chat_id, message, short_id)
+        return
+    if kind in {"fu", "fn"}:
+        await _feedback_press(client, bot_token, cb_id, chat_id, message, data, owner)
         return
     if kind not in {"ok", "no", "pick"}:
-        await _answer_callback(client, bot_token, cb_id)
+        await _answer_callback(client, bot_token, cb_id, "看不懂这个按钮")
         return
     entry = pending.pop(short_id, None)
     if not entry:
@@ -868,8 +871,9 @@ def _sentinel_store():
     return Store()
 
 
-async def _ack_alert_press(client, bot_token: str, cb_id: str, chat_id: int, message_id, alert_id: str) -> None:
-    """「收到」on a sentinel alert: write the acknowledgement into data/sentinel.db (the sentinel stops escalating)."""
+async def _ack_alert_press(client, bot_token: str, cb_id: str, chat_id: int, message: dict, alert_id: str) -> None:
+    """「收到」on a sentinel alert: write the acknowledgement into data/sentinel.db (the sentinel stops escalating), then take the
+    「收到」 row off the message (the 「有用／没用」 row stays).  A press that came without the keyboard edits nothing."""
     try:
         await asyncio.to_thread(_sentinel_store().ack_alert, int(alert_id))
     except Exception as exc:  # the file is the only channel to the sentinel; say so rather than pretend
@@ -877,7 +881,81 @@ async def _ack_alert_press(client, bot_token: str, cb_id: str, chat_id: int, mes
         await _answer_callback(client, bot_token, cb_id, "确认没有记上，请再点一次。")
         return
     await _answer_callback(client, bot_token, cb_id, "已确认")
-    await _clear_keyboard(client, bot_token, chat_id, message_id)
+    rows = _keyboard_of(message)
+    if rows is not None:
+        await _set_keyboard(client, bot_token, chat_id, message.get("message_id"), _without(rows, ("ack:",)))
+
+
+FEEDBACK_SAVED = {"useful": "记下了：有用", "not_useful": "记下了：没用"}
+FEEDBACK_LABELS = {"useful": ("✓ 有用", "没用"), "not_useful": ("有用", "✓ 没用")}
+
+
+def _feedback_row(target: str, target_id: str, verdict: str | None = None) -> list:
+    """The 「有用／没用」 row; with ``verdict`` the chosen one is ticked, and pressing the other changes it."""
+    up, down = FEEDBACK_LABELS.get(verdict, ("有用", "没用"))
+    code = "s" if target == "sentinel" else "o"
+    return [{"text": up, "callback_data": f"fu:{code}:{target_id}"}, {"text": down, "callback_data": f"fn:{code}:{target_id}"}]
+
+
+def _feedback_keyboard(item: dict) -> list | None:
+    """The 「有用／没用」 row of an outbox message of source duty or brief (its group id, else its own id); None for any other source."""
+    if item.get("source") not in alert_feedback.SOURCES:
+        return None
+    return [_feedback_row("outbox", item.get("group_id") or item["id"])]
+
+
+async def _feedback_press(client, bot_token: str, cb_id: str, chat_id: int, message: dict, data: str, owner: str) -> None:
+    """「有用／没用」 on an alert or a duty message: record the verdict and tick the chosen button (pressing the other one changes it).
+    On a sentinel alert a press also counts as 「收到」: he has seen it, so the sentinel stops escalating and the 「收到」 row goes.
+    A button it cannot read records nothing; a failed write leaves the buttons as they were; a press that came without the
+    keyboard records the verdict and edits nothing."""
+    parsed = alert_feedback.parse_callback(data)
+    if parsed is None:
+        await _answer_callback(client, bot_token, cb_id, "看不懂这个按钮")
+        return
+    target, target_id, verdict = parsed
+
+    def store():
+        about = alert_feedback.describe(owner, target, target_id)
+        return alert_feedback.record(owner, target, target_id, verdict, "telegram", **about)
+
+    try:
+        await asyncio.to_thread(store)
+    except Exception as exc:  # noqa: BLE001 - the owner is asked to press again, never shown a traceback
+        print(f"Alert feedback failed: {_redact(exc)}", file=sys.stderr)
+        await _answer_callback(client, bot_token, cb_id, "没有记上，请再点一次。")
+        return
+    acked = False
+    if target == "sentinel":
+        try:
+            await asyncio.to_thread(_sentinel_store().ack_alert, int(target_id))
+            acked = True
+        except Exception as exc:  # the verdict is kept; the 「收到」 button stays for him to press
+            print(f"Alert ack failed: {_redact(exc)}", file=sys.stderr)
+    await _answer_callback(client, bot_token, cb_id, FEEDBACK_SAVED[verdict] + ("，已确认" if acked else ""))
+    rows = _keyboard_of(message)
+    if rows is None:
+        return
+    rows = _without(rows, ("ack:",)) if acked else rows
+    rows = [_feedback_row(target, target_id, verdict) if _has(row, ("fu:", "fn:")) else row for row in rows]
+    await _set_keyboard(client, bot_token, chat_id, message.get("message_id"), rows)
+
+
+def _keyboard_of(message: dict) -> list | None:
+    """The message's inline keyboard as Telegram sent it with the press; None when the press came without one (an edit from nothing
+    would wipe the other row)."""
+    markup = message.get("reply_markup")
+    rows = markup.get("inline_keyboard") if isinstance(markup, dict) else None
+    return [row for row in rows if isinstance(row, list)] if isinstance(rows, list) else None
+
+
+def _has(row: list, prefixes: tuple[str, ...]) -> bool:
+    return any(isinstance(button, dict) and str(button.get("callback_data") or "").startswith(prefixes) for button in row)
+
+
+def _without(rows: list, prefixes: tuple[str, ...]) -> list:
+    """``rows`` less every row with a button whose data starts with ``prefixes``."""
+    return [row for row in rows if not _has(row, prefixes)]
 
 
 async def _ack_by_reply(chat_id: int, reply_to) -> bool:
@@ -936,7 +1014,7 @@ async def _send_queued(client, owner: str, bound_chat: int, tg, channel: dict | 
     queued = (await asyncio.to_thread(tg.pending_messages, owner, 20, channel["row_id"]) if channel
               else await asyncio.to_thread(tg.pending_messages, owner))
     for item in queued:
-        sent = await _send_text(client, bot_token, bound_chat, item["text"], markdown=False)
+        sent = await _send_text(client, bot_token, bound_chat, item["text"], _feedback_keyboard(item), markdown=False)
         if sent is None:
             await asyncio.to_thread(tg.mark_failed, item["id"])
         else:
@@ -1033,6 +1111,20 @@ async def _clear_keyboard(client, bot_token: str, chat_id: int, message_id) -> N
     try:
         await client.post(f"{TELEGRAM_API}/bot{bot_token}/editMessageReplyMarkup",
                           json={"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}})
+    except Exception as exc:
+        print(f"Telegram editMessageReplyMarkup failed: {_redact(exc)}", file=sys.stderr)
+
+
+async def _set_keyboard(client, bot_token: str, chat_id: int, message_id, rows: list) -> None:
+    """Leave only ``rows`` on a message: no rows left takes the keyboard off.  Best effort, as ``_clear_keyboard``."""
+    if not rows:
+        await _clear_keyboard(client, bot_token, chat_id, message_id)
+        return
+    if not bot_token or not isinstance(message_id, int):
+        return
+    try:
+        await client.post(f"{TELEGRAM_API}/bot{bot_token}/editMessageReplyMarkup",
+                          json={"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": rows}})
     except Exception as exc:
         print(f"Telegram editMessageReplyMarkup failed: {_redact(exc)}", file=sys.stderr)
 

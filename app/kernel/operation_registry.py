@@ -121,6 +121,7 @@ OPERATION_REGISTRY: dict[tuple[str, str], dict] = {
     ("PATCH", "/agent-chat/watch-presets/{key}"): _op("set_watch_preset"),
     ("POST", "/agent-chat/watch-presets/{key}/reset"): _op("set_watch_preset"),
     ("PUT", "/agent-chat/alert-settings"): _op("set_alert_settings"),
+    ("POST", "/backstage/feedback"): _gap("提醒上的有用／没用：网页和 Telegram 按钮能点，对话里说一句「那条没用」的操作还没做（微信上怎么给反馈等 owner 定）"),
     # 预测
     ("POST", "/v2/forecast-jobs"): _op("forecast"),
     ("POST", "/v2/historical-replays"): _op("start_historical_replay"),
