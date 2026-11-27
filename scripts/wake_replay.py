@@ -16,6 +16,7 @@ import json
 import os
 import sqlite3
 import sys
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -23,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 DEFAULT_OFFSET = 900_000_000
+SHADOW_DB = "finbot_ruler"          # the shadow database's name: a replay on any other database is refused
 
 
 def refusal(environ=os.environ) -> str | None:
@@ -32,6 +34,8 @@ def refusal(environ=os.environ) -> str | None:
         return "没有 RULER_DATABASE_URL：请先按 README 载入影子环境（. /opt/finbot/ruler.env），再导出 RULER_DATABASE_URL。"
     if shadow != current:
         return "DATABASE_URL 不是影子库：拒绝在别的库上回放。"
+    if urllib.parse.urlparse(shadow).path.lstrip("/") != SHADOW_DB:
+        return f"影子库应当叫 {SHADOW_DB}：拒绝在别的库上回放。"
     return None
 
 

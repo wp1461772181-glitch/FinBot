@@ -43,6 +43,7 @@ VALUE_MAX = 300
 RECENT = 10
 RECENT_TEXT = 300
 QUESTION_MAX = 1000
+HELD_NIGHT = "held_night"       # delivery of a tell_now for an alert the sentinel held over the night
 TIER_LABELS = {1: "值得知道", 2: "重大"}      # the sentinel's alert tiers that make the kernel look for a cause
 
 
@@ -98,6 +99,7 @@ def _facts(owner: str, event: dict) -> tuple[dict, list[dict], list[dict]]:
     symbols = [s for s in (event.get("members") or [event.get("symbol")]) if isinstance(s, str)]
     relation = {"symbols": symbols, "held": bool(event.get("held")), "weight_pct": event.get("weight_pct"),
                 "in_research_queue": None, "research_queue": []}
+    relation["already_sent"] = not bool(event.get("deferred"))      # a night-held alert (deferred) has not reached him yet
     tier = event.get("tier")
     if isinstance(tier, int) and not isinstance(tier, bool) and tier in TIER_LABELS:
         relation["tier_label"] = TIER_LABELS[tier]      # only the two tiers that ask for a cause; no key otherwise
@@ -113,8 +115,9 @@ def _facts(owner: str, event: dict) -> tuple[dict, list[dict], list[dict]]:
             outbox = [{"at": r.created_at.isoformat(), "source": r.source, "text": r.text[:RECENT_TEXT]} for r in rows]
     except Exception:
         logger.exception("wake: the owner's context could not be read")
-    told = [{"at": r["created_at"], "symbol": (r["event"] or {}).get("symbol"), "message": r["message"]}
-            for r in duty_log.recent(owner, RECENT, decision="tell_now")]
+    # Only messages that really went out: shadow, capped, unbound-channel and night-held ones never reached him.
+    sent = [r for r in duty_log.recent(owner, RECENT * 5, decision="tell_now") if r["mode"] == "on" and r["delivery"] == "queued"]
+    told = [{"at": r["created_at"], "symbol": (r["event"] or {}).get("symbol"), "message": r["message"]} for r in sent[:RECENT]]
     return relation, told, outbox
 
 
@@ -301,10 +304,13 @@ async def wake(event: dict, *, owner_hash: str) -> dict:
         said = (result.get("answer") or "").strip()
         fields = {"outcome": "no_decision", "reason": "模型没有调用 decide。" + (f"它的回答：{said[:300]}" if said and result.get("reason") != "empty_answer" else "")}
     if fields.get("decision") == "tell_now" and current == "on":
-        group, why = await asyncio.to_thread(_deliver, owner_hash, fields["message"])
-        fields["delivery"] = why
-        if group is not None:
-            fields["delivery_group"] = group
+        if event.get("deferred"):
+            fields["delivery"] = HELD_NIGHT         # the sentinel holds this alert until the morning digest; nothing is sent at night
+        else:
+            group, why = await asyncio.to_thread(_deliver, owner_hash, fields["message"])
+            fields["delivery"] = why
+            if group is not None:
+                fields["delivery_group"] = group
     answer = (result or {}).get("answer") or fields["reason"] or "没有结果。"
     protocol = {"route": "K", **((result or {}).get("final_protocol") or {}), "audit": audit or {"engine": "v2", "terminal_status": "failed", "model_calls": 0, "calls": []},
                 "citations": (result or {}).get("citations") or [], "unattended": True, "wake": True}

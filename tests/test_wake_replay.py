@@ -10,11 +10,17 @@ def test_it_refuses_without_the_shadow_database():
 
 
 def test_it_refuses_when_the_database_is_not_the_shadow_one():
-    assert "不是影子库" in wake_replay.refusal({"RULER_DATABASE_URL": "postgresql://shadow", "DATABASE_URL": "postgresql://live"})
+    assert "不是影子库" in wake_replay.refusal({"RULER_DATABASE_URL": "postgresql://u@h/finbot_ruler", "DATABASE_URL": "postgresql://live"})
+
+
+def test_it_refuses_a_database_not_named_finbot_ruler_even_when_both_variables_match():
+    url = "postgresql://u@h/finbot"
+    assert "finbot_ruler" in wake_replay.refusal({"RULER_DATABASE_URL": url, "DATABASE_URL": url})
 
 
 def test_it_runs_on_the_shadow_database():
-    assert wake_replay.refusal({"RULER_DATABASE_URL": "postgresql://shadow", "DATABASE_URL": "postgresql://shadow"}) is None
+    url = "postgresql://u@h/finbot_ruler"
+    assert wake_replay.refusal({"RULER_DATABASE_URL": url, "DATABASE_URL": url}) is None
 
 
 def test_main_exits_2_before_touching_anything_outside_the_shadow(monkeypatch, capsys):
