@@ -280,7 +280,7 @@ export function usageQuery({ from, to, group }) {
 }
 
 const PRICE_NAMES = { input: "输入价", output: "输出价", cache_read: "缓存读取价", cache_write: "缓存写入价" };
-const PURPOSES = { chat: "对话", summary: "摘要", profile: "画像", judge: "核查", forecast: "预测", earnings: "财报", material_analysis: "材料分析", news: "新闻", routine: "例行任务", duty: "值班", helper: "小助手", memory: "记忆整理",
+const PURPOSES = { chat: "对话", summary: "摘要", profile: "画像", judge: "核查", forecast: "预测", earnings: "财报", material_analysis: "材料分析", news: "新闻", routine: "例行任务", duty: "值班", helper: "小助手", memory: "记忆整理", quality: "每周自检",
   query_expansion: "查询扩展", localization: "翻译", knowledge: "知识库", other: "其他" };
 
 /** The name of a group: a purpose in words; a day, a model and a bot as the API labels them. */
@@ -565,5 +565,29 @@ export function rulerRunRow(item, timeZone, w = ZH_WORDS) {
     p90: formatMs(item?.total_ms_p90),
     failed: failed.length ? failed.join(", ") : w.t("全过"),
     all_passed: failed.length === 0,
+  };
+}
+
+/** The weekly self-check's categories, in the order the report lists them (5d-3c). */
+export const QUALITY_CATEGORIES = ["缺数据", "工具没用对", "想得太浅", "记错偏好", "说得不清楚", "其他", "没归类"];
+
+/** One weekly self-check as the 质量 tab shows it: the period, the counts, each category with how many, what to fix first, the answers sorted. */
+export function weeklyReportView(report, timeZone, w = ZH_WORDS) {
+  const counts = isObject(report?.categories) ? report.categories : {};
+  const order = [...QUALITY_CATEGORIES, ...Object.keys(counts).filter((name) => !QUALITY_CATEGORIES.includes(name))];
+  const empty = report?.status === "empty";
+  return {
+    id: text(report?.id),
+    period: `${formatTime(report?.period_start, timeZone)} – ${formatTime(report?.period_end, timeZone)}`,
+    counts: `${w.t("好")} ${Number(report?.good) || 0} · ${w.t("不好")} ${Number(report?.bad) || 0}`,
+    empty,
+    note: empty ? w.t("这一周没有被点「不好」的回答，没有调用模型。") : "",
+    categories: order.filter((name) => Number(counts[name]) > 0).map((name) => ({ name: w.t(name), count: String(Number(counts[name])) })),
+    next: text(report?.next),
+    items: list(report?.items).filter(isObject).map((item) => ({
+      id: text(item.message_id), category: w.t(text(item.category) || "没归类"), question: text(item.question) || w.t("（没有问题文字）"),
+      reason: text(item.reason), why: text(item.why),
+    })),
+    model: text(report?.model),
   };
 }

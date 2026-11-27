@@ -62,5 +62,7 @@ export type QualityWeek = { week_start: string; good: number; bad: number };
 export type BadAnswer = { message_id: string; at: string | null; rated_at: string | null; bot: string | null; question: string; reason: string | null; channel: string };
 export type RulerRun = { name: string; at: string; meta: boolean; suite: string | null; note: string | null; turns: number | null; pass_rate: number | null;
   total_ms_p50: number | null; total_ms_p90: number | null; model_calls_mean: number | null; failed: Array<{ case_id: string; turn: number | null; checks: string[] }> };
-export type Quality = { feedback: QualityWeek[]; bad: BadAnswer[]; ruler: RulerRun[]; ruler_errors: string[] };
+export type WeeklyReport = { id: string; created_at: string; period_start: string; period_end: string; status: "done" | "empty"; good: number; bad: number;
+  items: Array<{ message_id: string; question: string; reason: string | null; category: string; why: string | null }>; categories: Record<string, number>; next: string | null; model: string | null };
+export type Quality = { feedback: QualityWeek[]; bad: BadAnswer[]; ruler: RulerRun[]; ruler_errors: string[]; weekly?: WeeklyReport[] | null; weekly_next?: string | null };
 export const readQuality = (signal?: AbortSignal) => get<Quality>("quality", signal);

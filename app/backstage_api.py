@@ -32,7 +32,7 @@ from sqlalchemy import String, Text, and_, case, cast, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 
-from . import alert_feedback, answer_feedback, channels, memory_events
+from . import alert_feedback, answer_feedback, channels, memory_events, quality_review
 from .agent_chat_models import AgentBot, AgentConversation, AgentConversationTitle, AgentMessage, ModelCall
 from .agent_chat_store import owner_hash as hash_of
 from .agent_workflow.models import AgentConsent
@@ -1169,10 +1169,23 @@ def ruler_runs(root: Path | None = None) -> tuple[list[dict], list[str]]:
 
 @router.get("/quality")
 def quality(x_chat_session: str | None = Header(default=None)):
-    """质量: his 「好／不好」 by week and the answers he marked 不好 (``answer_feedback``), and every ruler run on the box with its pass rate, times
-    and failed cases (``FINBOT_RULER_OUT``).  Read-only."""
+    """质量: his 「好／不好」 by week and the answers he marked 不好 (``answer_feedback``), the weekly self-check's reports (``quality_review``,
+    ``weekly`` null when unreadable; ``weekly_next`` when the next one is due), and every ruler run on the box with its pass rate, times and
+    failed cases (``FINBOT_RULER_OUT``).  Read-only."""
     owner = _owner(x_chat_session)
     with SessionLocal() as db:
         weeks, bad = _feedback_weeks(db, owner, datetime.now(UTC)), _bad_answers(db, owner)
     runs, errors = ruler_runs()
-    return {"feedback": weeks, "bad": bad, "ruler": runs, "ruler_errors": errors}
+    try:
+        weekly = quality_review.recent(owner)
+    except Exception:  # noqa: BLE001 - the self-check is one part of the tab, not a reason to fail it
+        logger.warning("the weekly self-check is unreadable for the quality tab", exc_info=True)
+        weekly = None
+    next_due = None
+    try:
+        from . import memory_schedule
+        due = memory_schedule.next_due(quality_review.JOB, owner)
+        next_due = due.isoformat() if due else None
+    except Exception:  # noqa: BLE001 - the date is a hint
+        next_due = None
+    return {"feedback": weeks, "bad": bad, "ruler": runs, "ruler_errors": errors, "weekly": weekly, "weekly_next": next_due}

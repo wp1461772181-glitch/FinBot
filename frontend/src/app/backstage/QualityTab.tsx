@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { readQuality } from "../../api/backstage";
-import { badAnswerRow, qualityWeekRow, rulerRunRow, type BadAnswerRow, type QualityWeekRow, type RulerRunRow } from "../../backstage-view.mjs";
-import { useLocale } from "../../i18n";
+import { badAnswerRow, formatTime, qualityWeekRow, rulerRunRow, weeklyReportView, type BadAnswerRow, type QualityWeekRow, type RulerRunRow } from "../../backstage-view.mjs";
+import { colon, useLocale } from "../../i18n";
 import { useLoad } from "../use-load";
 import { AnswerDrawer } from "./AnswerDrawer";
 import { BackstageTable, TabState, type Column } from "./BackstageTable";
@@ -23,6 +23,8 @@ export function QualityTab() {
   const bad = (data?.bad ?? []).map(item => badAnswerRow(item, undefined, w));
   const runs = (data?.ruler ?? []).map(item => rulerRunRow(item, undefined, w));
   const errors = data?.ruler_errors ?? [];
+  const reports = (data?.weekly ?? []).map(report => weeklyReportView(report, undefined, w));
+  const nextDue = data?.weekly_next ? formatTime(data.weekly_next) : "";
 
   const weekColumns: Column<QualityWeekRow>[] = [
     { key: "week", header: t("周"), cell: row => <span className="whitespace-nowrap font-mono tabular-nums">{row.week}</span> },
@@ -56,6 +58,24 @@ export function QualityTab() {
   return <div data-testid="quality-tab" className="flex min-w-0 flex-col gap-6">
     <TabState loading={load.loading && !data} error={load.error} empty={false} onRetry={() => void load.reload()} emptyTitle="" emptyDescription="" />
     {data && <>
+      <section aria-labelledby="quality-weekly" data-testid="quality-weekly" className="flex min-w-0 flex-col gap-2">
+        <h2 id="quality-weekly" className="text-body font-medium text-ink">{t("每周自检")}</h2>
+        <p className="text-small text-muted-foreground">{t("每周把被点「不好」的回答交给裁判模型归类：缺数据、工具没用对、想得太浅、记错偏好、说得不清楚，并说下一步先改哪里。")}{nextDue && ` ${t("下一次")}${colon()}${nextDue}`}</p>
+        {data.weekly === null && <p role="note" className="text-small text-muted-foreground">{t("每周自检的记录暂时读不出来。")}</p>}
+        {data.weekly && !reports.length && <p className="text-small text-muted-foreground">{t("还没有每周自检的报告。")}</p>}
+        {reports.map(report => <article key={report.id} data-testid="weekly-report" className="flex min-w-0 flex-col gap-1.5 rounded-md border border-line px-3 py-2">
+          <p className="font-mono text-caption tabular-nums text-muted-foreground">{report.period} · {report.counts}{report.model && ` · ${report.model}`}</p>
+          {report.note && <p className="text-small text-ink-2">{report.note}</p>}
+          {report.categories.length > 0 && <p className="text-small text-ink">{report.categories.map(category => `${category.name} ${category.count}`).join(" · ")}</p>}
+          {report.next && <p dir="auto" className="whitespace-pre-wrap text-small text-ink">{t("先改")}{colon()}{report.next}</p>}
+          {report.items.length > 0 && <ul className="m-0 flex list-none flex-col gap-1 p-0">{report.items.map((item, index) => <li key={`${item.id}-${index}`} className="flex min-w-0 flex-col gap-0.5 text-small">
+            <button type="button" onClick={event => { event.stopPropagation(); if (item.id) open(item.id); }} className="text-left text-ink underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+              <span className="text-muted-foreground">［{item.category}］</span>{item.question}
+            </button>
+            {(item.reason || item.why) && <span className="text-caption text-muted-foreground [overflow-wrap:anywhere]">{[item.reason && `${t("原因")}${colon()}${item.reason}`, item.why].filter(Boolean).join(" · ")}</span>}
+          </li>)}</ul>}
+        </article>)}
+      </section>
       <section aria-labelledby="quality-feedback" className="flex min-w-0 flex-col gap-2">
         <h2 id="quality-feedback" className="text-body font-medium text-ink">{t("你的评价")}</h2>
         <p className="text-small text-muted-foreground">{t("最近 8 周，按回答所在的那一周（周一开始，北京时间）统计你点的「好」和「不好」，在对话里说的也算。")}</p>

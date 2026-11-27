@@ -18,6 +18,7 @@ from app.agent_workflow.models import AgentConsent
 from app.database import Base, SessionLocal, engine
 from app.alert_feedback import AlertFeedback
 from app.answer_feedback import AnswerFeedback
+from app.quality_review import QualityReport
 from app.duty_brief import DutyBrief
 from app.duty_log import DutyLog
 
@@ -43,14 +44,14 @@ def world(monkeypatch, disposable_database):
     Base.metadata.create_all(engine, tables=[AgentConversation.__table__, AgentMessage.__table__, AgentBot.__table__,
                                              ModelCall.__table__, AgentConsent.__table__, AgentTelegramMessage.__table__,
                                              DutyLog.__table__, DutyBrief.__table__, AlertFeedback.__table__, AnswerFeedback.__table__,
-                                             AgentProfileItem.__table__, MemoryEvent.__table__])
+                                             AgentProfileItem.__table__, MemoryEvent.__table__, QualityReport.__table__])
     consent.ensure_columns()
     import app.agent_chat_identity as identity
     monkeypatch.setattr(identity, "owner_credential_matches", lambda value: value == OWNER)
     monkeypatch.setattr(consent, "owner_credential_matches", lambda value: value == OWNER)
     model_usage.flush(timeout=10)
     with SessionLocal() as db:
-        for model in (MemoryEvent, AgentProfileItem, AnswerFeedback, AlertFeedback, DutyBrief, DutyLog, ModelCall, AgentConsent, AgentTelegramMessage, AgentMessage,
+        for model in (QualityReport, MemoryEvent, AgentProfileItem, AnswerFeedback, AlertFeedback, DutyBrief, DutyLog, ModelCall, AgentConsent, AgentTelegramMessage, AgentMessage,
                       AgentConversation, AgentBot):
             db.query(model).delete()
         db.commit()
@@ -1435,3 +1436,23 @@ def test_quality_survives_bad_records_and_reads_no_linked_file(client, monkeypat
     assert (by["numeric-time"]["note"], isinstance(by["numeric-time"]["at"], str)) == (None, True)
     assert (by["broken-meta"]["meta"], by["broken-meta"]["pass_rate"]) == (False, 1.0)
     assert by["linked-results"]["failed"] == [], "a linked results file is not read"
+
+
+def test_quality_carries_the_weekly_self_checks_newest_first_and_survives_an_unreadable_one(client, monkeypatch, tmp_path):
+    from app import quality_review
+    monkeypatch.setenv("FINBOT_RULER_OUT", str(tmp_path / "none"))
+    with SessionLocal() as db:
+        db.add(QualityReport(owner_hash=OWNER_HASH, period_start=NOW - timedelta(days=14), period_end=NOW - timedelta(days=7), status="empty", good=0, bad=0,
+                             created_at=NOW - timedelta(days=7)))
+        db.add(QualityReport(owner_hash=OWNER_HASH, period_start=NOW - timedelta(days=7), period_end=NOW, status="done", good=2, bad=1, created_at=NOW,
+                             items=[{"message_id": "m1", "question": "英伟达营收", "reason": "没说环比", "category": "想得太浅", "why": "漏了环比"}],
+                             categories={"想得太浅": 1}, next_step="先补环比对比。", model="judge-model"))
+        db.add(QualityReport(owner_hash="t" * 64, period_start=NOW, period_end=NOW, status="empty", good=0, bad=0))
+        db.commit()
+    body = get(client, "/backstage/quality").json()
+    assert [r["status"] for r in body["weekly"]] == ["done", "empty"]
+    assert (body["weekly"][0]["next"], body["weekly"][0]["categories"], body["weekly"][0]["items"][0]["category"]) == ("先补环比对比。", {"想得太浅": 1}, "想得太浅")
+    assert "weekly_next" in body
+    monkeypatch.setattr(quality_review, "recent", lambda owner: (_ for _ in ()).throw(RuntimeError("table gone")))
+    broken = get(client, "/backstage/quality").json()
+    assert broken["weekly"] is None and broken["ruler"] == []

@@ -74,3 +74,7 @@ export type RulerRunRow = { id: string; time: string; name: string; note: string
 export function qualityWeekRow(item: unknown, w?: Words): QualityWeekRow;
 export function badAnswerRow(item: unknown, timeZone?: string, w?: Words): BadAnswerRow;
 export function rulerRunRow(item: unknown, timeZone?: string, w?: Words): RulerRunRow;
+export const QUALITY_CATEGORIES: string[];
+export type WeeklyReportView = { id: string; period: string; counts: string; empty: boolean; note: string; categories: { name: string; count: string }[]; next: string;
+  items: { id: string; category: string; question: string; reason: string; why: string }[]; model: string };
+export function weeklyReportView(report: unknown, timeZone?: string, w?: Words): WeeklyReportView;

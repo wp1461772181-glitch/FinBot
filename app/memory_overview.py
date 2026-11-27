@@ -103,7 +103,7 @@ def _watch(db, owner: str) -> dict:
 
 def _jobs(owner: str) -> list[dict]:
     with SessionLocal() as db:
-        rows = {r.job: r for r in db.scalars(select(MemoryJob).where(MemoryJob.owner_hash == owner))}
+        rows = {r.job: r for r in db.scalars(select(MemoryJob).where(MemoryJob.owner_hash == owner)) if r.job in memory_schedule.MEMORY_JOBS or r.job not in memory_schedule.JOBS}
     order = [j for j in memory_schedule.JOBS if j in rows] + sorted(j for j in rows if j not in memory_schedule.JOBS)
     found = []
     for job in order:
