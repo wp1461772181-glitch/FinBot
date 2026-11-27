@@ -4,7 +4,7 @@ import { ErrorBar } from "@/components/state/ErrorBar";
 import { DelayedSkeleton, SkeletonRows } from "@/components/state/Skeleton";
 import { cn } from "@/lib/utils";
 import { readAnswer, type AnswerDetail } from "../../api/backstage";
-import { answerNotes, detailTimeline, helperLines, formatMs, formatTime, answerStatus, type TimelineStep } from "../../backstage-view.mjs";
+import { answerNotes, detailTimeline, helperLines, formatMs, formatTime, answerStatus, reconcileBlock, type TimelineStep } from "../../backstage-view.mjs";
 import { colon, useLocale } from "../../i18n";
 import { useLoad } from "../use-load";
 import { CostText, Status } from "./BackstageTable";
@@ -59,7 +59,7 @@ function Step({ step }: { step: TimelineStep }) {
   }
 }
 
-/** The course of one turn in a side drawer: notes, the timeline in order, the sources, and the Langfuse link when the server has one. */
+/** The course of one turn in a side drawer: notes, the timeline in order, the figure check, the sources, and the Langfuse link when the server has one. */
 export function AnswerDrawer({ id, onClose, returnFocus }: { id: string | null; onClose: () => void; returnFocus: () => void }) {
   const { t } = useLocale();
   const w = useWords();
@@ -69,6 +69,7 @@ export function AnswerDrawer({ id, onClose, returnFocus }: { id: string | null; 
   const steps = detail ? detailTimeline(detail, undefined, w) : [];
   const notes = detail ? answerNotes(detail, w) : [];
   const helpers = detail ? helperLines(detail, w) : [];
+  const reconcile = detail ? reconcileBlock(detail, w) : null;
   const langfuse = safeUrl(detail?.langfuse_url);
   const citations = detail?.citations ?? [];
   return <Drawer open={id !== null} onOpenChange={open => { if (!open) onClose(); }} direction="right" autoFocus>
@@ -87,6 +88,16 @@ export function AnswerDrawer({ id, onClose, returnFocus }: { id: string | null; 
         {helpers.length > 0 && <ul data-testid="helpers" aria-label={t("小助手")} className="m-0 flex list-none flex-col gap-1 p-0">{helpers.map(helper => <li key={helper.id} data-testid="helper-line" data-complete={helper.complete ? "true" : "false"} className="rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2">{helper.text}</li>)}</ul>}
         {steps.length > 0 && <ol data-testid="timeline" aria-label={t("时间线")} className="m-0 flex list-none flex-col p-0">{steps.map((step, index) => <Step key={`${step.kind}-${index}`} step={step} />)}</ol>}
         {detail && steps.length === 0 && <p className="text-small text-muted-foreground">{t("这一轮没有留下可以显示的内容。")}</p>}
+        {reconcile && <section data-testid="reconcile" data-kind={reconcile.kind} aria-labelledby="answer-reconcile" className="flex flex-col gap-1.5">
+          <h3 id="answer-reconcile" className="text-small font-medium text-ink">{reconcile.title}</h3>
+          {reconcile.checked && <p className="font-mono text-caption tabular-nums text-muted-foreground">{reconcile.checked}</p>}
+          {reconcile.text && <p className="text-small text-ink-2">{reconcile.text}</p>}
+          {reconcile.lines.length > 0 && <ul className="m-0 flex list-none flex-col gap-1 p-0">{reconcile.lines.map((item, index) => <li key={`${index}-${item.line}`} data-testid="reconcile-line" className="flex flex-col gap-0.5 rounded-md border border-line px-3 py-2">
+            <p dir="auto" className="whitespace-pre-wrap [overflow-wrap:anywhere] text-small text-ink">{item.line}</p>
+            {item.values && <p className="font-mono text-caption tabular-nums text-muted-foreground">{item.values}</p>}
+          </li>)}</ul>}
+          {reconcile.note && <p data-testid="reconcile-note" role="note" className="rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2">{reconcile.note}</p>}
+        </section>}
         {citations.length > 0 && <section aria-labelledby="answer-citations" className="flex flex-col gap-1.5">
           <h3 id="answer-citations" className="text-small font-medium text-ink">{t("引用的来源")}</h3>
           <ol className="m-0 flex list-none flex-col gap-1 p-0 text-small text-ink-2">{citations.map(citation => {

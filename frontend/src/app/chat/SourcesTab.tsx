@@ -7,7 +7,7 @@ import { ApiError } from "../../api/base";
 import { type AgentChatMessage, type AgentCitation } from "../../api/conversations";
 import { citationOrdinal } from "../../chat-citations.mjs";
 import { useLocale } from "../../i18n";
-import { roundSources, turnKey } from "../../panel-model.mjs";
+import { roundReconcile, roundSources, turnKey } from "../../panel-model.mjs";
 import { motionOff } from "../../motion-store.mjs";
 import { derivedDetail, excerptSource, isDerived, originalHref, sourceDates, sourceTypeLabel } from "../../source-view.mjs";
 import { useCitationDetail } from "./citation-details";
@@ -57,9 +57,29 @@ function Source({ citation, ordinal, marked, cardRef, onEscape }: { citation: Ag
 }
 
 /**
+ * The round's 「数字对账」 at the end of the tab (5d-1): the figures no source of the round holds, or one quiet line when all were found.
+ * Nothing when the answer was not checked.  It is never shown in the answer text itself.
+ */
+function Reconcile({ m }: { m: AgentChatMessage }) {
+  const { t, locale } = useLocale();
+  const block = roundReconcile(m, t);
+  if (!block) return null;
+  if (block.kind === "clean") return <p data-testid="reconcile-clean" className="px-1 text-caption text-muted-foreground">{block.text}</p>;
+  return <section data-testid="reconcile" aria-labelledby="sources-reconcile" className="flex flex-col gap-1.5 border-t border-line pt-3">
+    <h2 id="sources-reconcile" className="text-caption font-medium text-muted-foreground">{block.title}</h2>
+    <p className="text-small text-ink-2">{block.intro}</p>
+    <ul className="m-0 flex list-none flex-col gap-1 p-0">{block.lines.map((item, index) => <li key={`${index}-${item.line}`} data-testid="reconcile-line" className="flex flex-col gap-0.5 rounded-md border border-line px-3 py-2">
+      <p dir="auto" className="whitespace-pre-wrap [overflow-wrap:anywhere] text-small text-ink">{item.line}</p>
+      {item.values.length > 0 && <p className="font-mono text-caption tabular-nums text-muted-foreground">{item.values.join(locale === "en-US" ? ", " : "、")}</p>}
+    </li>)}</ul>
+    <p data-testid="reconcile-note" role="note" className="rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2">{block.note}</p>
+  </section>;
+}
+
+/**
  * The 来源 tab: every source of the round the panel shows, in the order the old 引用来源 drawer listed them.  A jump from a chip
  * scrolls to its card and marks it for a moment; when the jump came from the keyboard the focus goes into the card, and Esc takes it
- * back to the chip.
+ * back to the chip.  The round's figure check closes the tab.
  */
 export default function SourcesTab({ m, i }: { m: AgentChatMessage; i: number }) {
   const { t } = useLocale(), panel = usePanel();
@@ -78,7 +98,11 @@ export default function SourcesTab({ m, i }: { m: AgentChatMessage; i: number })
     const timer = window.setTimeout(() => setMarked(null), 1800);
     return () => window.clearTimeout(timer);
   }, [focus, key, panel.handledFocus]);
-  if (list.length === 0) return <p data-testid="sources-empty" className="px-1 py-6 text-small text-muted-foreground">{t("这一轮没有引用来源。")}</p>;
+  // A round with no sources can still have figures from nowhere: the check is shown under the empty line.
+  if (list.length === 0) return <div className="flex flex-col gap-3">
+    <p data-testid="sources-empty" className="px-1 py-6 text-small text-muted-foreground">{t("这一轮没有引用来源。")}</p>
+    <Reconcile m={m} />
+  </div>;
   return <div data-testid="sources-list" className="flex flex-col gap-3">
     <h2 className="text-caption font-medium text-muted-foreground">{t("引用来源")} · {t("本轮")} {list.length} {t("条")}</h2>
     {list.map((citation, j) => {
@@ -86,5 +110,6 @@ export default function SourcesTab({ m, i }: { m: AgentChatMessage; i: number })
       return <Source key={citation.chunk_id ?? citation.source_url ?? ordinal} citation={citation} ordinal={ordinal} marked={marked === ordinal}
         cardRef={(el) => { if (el) cards.current.set(ordinal, el); else cards.current.delete(ordinal); }} onEscape={() => panel.returnToOrigin()} />;
     })}
+    <Reconcile m={m} />
   </div>;
 }

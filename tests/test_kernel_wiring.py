@@ -525,3 +525,94 @@ def test_a_turn_without_a_bot_follows_the_environment_default(wiring):
     wiring.monkeypatch.delenv("FINBOT_KERNEL_DEFAULT")
     wiring.catalog_turn()
     assert seen == [True, False]
+
+
+# --- 5d-1: the figure check after a kernel answer ------------------------------------------------------------------
+
+def reconcile_spy(wiring, hold=None):
+    """The background job replaced by a recorder; with ``hold`` (a threading.Event) it waits for it before it finishes."""
+    import threading
+    from app.kernel import reconcile
+
+    calls, finished = [], threading.Event()
+
+    def job(message_id):
+        calls.append(message_id)
+        if hold is not None:
+            hold.wait(5)
+        finished.set()
+
+    wiring.monkeypatch.setattr(reconcile, "check_and_store", job)
+    return calls, finished
+
+
+async def settle(stream):
+    """Wait for this loop's background tasks (the check among them)."""
+    loop = asyncio.get_running_loop()
+    for task in [t for t in list(stream._BACKGROUND) if t.get_loop() is loop]:
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def checked_turn(wiring, message="show AAPL prices"):
+    async def scenario():
+        events = await wiring._send(message, bot_id=wiring.bot["bot_id"])
+        await settle(wiring.stream)
+        return events
+    return asyncio.run(scenario())
+
+
+def final_answer(wiring):
+    return [kw for args, kw in wiring.stored if len(args) >= 4 and args[2] == "assistant" and args[3]][-1]
+
+
+def test_a_kernel_answer_schedules_the_check_and_the_done_frame_does_not_wait_for_it(wiring):
+    import threading
+
+    wiring.bot["engine"] = "v2"
+    wiring.model([(["利润 8888 美元"], [])])
+    wiring.monkeypatch.setattr(wiring.stream, "_reconcile_wanted", lambda credential: True)
+    hold = threading.Event()
+    calls, finished = reconcile_spy(wiring, hold)
+
+    async def scenario():
+        events = await wiring._send("show AAPL prices", bot_id=wiring.bot["bot_id"])
+        assert done_of(events)["status"] == "succeeded"
+        assert not finished.is_set(), "the response ended only after the check: it waited for it"
+        hold.set()
+        await settle(wiring.stream)
+        return events
+
+    events = asyncio.run(scenario())
+    assert finished.is_set()
+    stored = final_answer(wiring)
+    assert stored["status"] == "complete" and calls == [stored["message_id"]], "the check is of the stored answer, by the id it was stored under"
+    assert "reconcil" not in json.dumps(events, ensure_ascii=False), "nothing of it goes to the stream"
+
+
+def test_the_switch_off_schedules_nothing(wiring):
+    from app.agent_workflow.fp_flags import flag
+
+    wiring.bot["engine"] = "v2"
+    wiring.model([(["利润 8888 美元"], [])])
+    wiring.monkeypatch.setattr(wiring.stream, "_reconcile_wanted", lambda credential: flag("FINBOT_KERNEL_RECONCILE", True))
+    wiring.monkeypatch.setenv("FINBOT_KERNEL_RECONCILE", "off")
+    calls, _ = reconcile_spy(wiring)
+    assert done_of(checked_turn(wiring))["status"] == "succeeded"
+    assert calls == []
+
+
+def test_an_old_engine_turn_schedules_nothing(wiring):
+    wiring.monkeypatch.setattr(wiring.stream, "_reconcile_wanted", lambda credential: True)
+    calls, _ = reconcile_spy(wiring)
+    checked_turn(wiring)
+    assert calls == [] and "message_id" not in final_answer(wiring)
+
+
+def test_only_the_owners_answers_are_checked_and_only_with_the_switch_on(wiring):
+    stream = wiring.stream
+    wiring.monkeypatch.setattr(stream, "_is_owner", lambda credential: credential == "owner")
+    wiring.monkeypatch.delenv("FINBOT_KERNEL_RECONCILE", raising=False)
+    assert stream._reconcile_wanted("owner") is True, "on by default"
+    assert stream._reconcile_wanted("guest") is False
+    wiring.monkeypatch.setenv("FINBOT_KERNEL_RECONCILE", "off")
+    assert stream._reconcile_wanted("owner") is False

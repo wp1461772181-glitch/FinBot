@@ -1,6 +1,7 @@
 // Live refresh of an open conversation: turns written from outside this tab (a Telegram message, a reminder, a push)
 // are pulled in by polling the newest few turns and appending the ones this tab has not seen.
-// Merging is by turn id and append-only, so existing message objects are untouched (no re-render, no reflow), and
+// Merging is by turn id and append-only, so existing message objects are untouched (no re-render, no reflow) - except that an
+// answer whose number check has since landed takes that one field (mergeReconciliation) - and
 // nothing is ever merged into a line that is answering, restoring or testing.  The draft is never read or written here.
 
 const VISIBLE_MS = 4000, HIDDEN_MS = 60000, MAX_BACKOFF_MS = 60000;
@@ -61,12 +62,31 @@ export function mergeNewTurns(local, serverTail) {
 }
 
 /**
+ * The number check of an answer lands a few seconds after it (5d-1): an answer this tab already shows takes the server's
+ * `reconciliation` when it has none yet.  Only that field is copied, onto a new object for that message alone; every other
+ * message object stays as it is.  @returns {{messages, updated: number}}
+ */
+export function mergeReconciliation(local, serverTail) {
+  const found = new Map();
+  for (const m of serverTail) if (m.role === "assistant" && m.turn_id && m.reconciliation) found.set(m.turn_id, m.reconciliation);
+  if (!found.size) return { messages: local, updated: 0 };
+  let updated = 0;
+  const messages = local.map(m => {
+    if (m.role !== "assistant" || !m.turn_id || m.reconciliation || !found.has(m.turn_id)) return m;
+    updated += 1;
+    return { ...m, reconciliation: found.get(m.turn_id) };
+  });
+  return updated ? { messages, updated } : { messages: local, updated: 0 };
+}
+
+/**
  * Decide what a poll result does to one line.  Null = leave it alone: the line is answering / restoring / testing, or the reply
  * belongs to a different conversation than the line shows now.  Otherwise `{messages, added}`; the caller applies only `messages`.
  */
 export function planTailSync(lineState, serverTail, conversationId) {
   if (!lineState || BUSY.has(lineState.state) || lineState.restoring) return null;
   if (!conversationId || lineState.conversationId !== conversationId) return null;
-  const { messages, added } = mergeNewTurns(lineState.messages, serverTail);
-  return added ? { messages, added } : null;
+  const { messages: merged, added } = mergeNewTurns(lineState.messages, serverTail);
+  const { messages, updated } = mergeReconciliation(merged, serverTail);
+  return added || updated ? { messages, added } : null;
 }

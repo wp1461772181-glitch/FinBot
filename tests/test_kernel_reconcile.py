@@ -1,0 +1,272 @@
+"""5d-1: the figure check after a kernel answer (``app.kernel.reconcile``).
+
+The check is ``evidence.answer_scope``'s ``unmarked_no_holder`` as it is; these tests pin what it flags and what it leaves alone, and the
+background job that keeps the result on the stored answer (real PostgreSQL, the test database).
+"""
+import uuid
+
+import pytest
+from sqlalchemy import text
+
+from app.agent_chat_models import AgentConversation, AgentMessage
+from app.database import Base, SessionLocal, engine
+from app.kernel import reconcile as rc
+
+FILING = {"ordinal": 1, "title": "Apple filing", "source_type": "official_filing", "quote": "营收 4500 美元，成本 1200 美元。",
+          "check_text": "营收 4500 美元，成本 1200 美元。"}
+NEWS = {"ordinal": 2, "title": "Apple news", "source_type": "web_news", "quote": "毛利 3300 美元。", "check_text": "毛利 3300 美元。"}
+
+
+def check(answer, citations=(FILING,), user_text="苹果营收多少"):
+    return rc.reconcile(answer, list(citations), question="苹果营收多少", user_text=user_text)
+
+
+def test_a_figure_a_source_holds_is_clean():
+    result = check("营收是 4500 美元。")
+    assert result == {"version": 1, "figures": 1, "flagged": []}
+
+
+def test_a_figure_the_user_wrote_is_clean():
+    assert check("你的成本是 7700 美元。", user_text="我的成本是 7700 美元")["flagged"] == []
+    assert check("你的成本是 7700 美元。", user_text="我的成本是七千七百美元")["flagged"] == [], "Chinese numerals count as his"
+
+
+def test_a_sum_or_ratio_of_source_figures_is_clean():
+    assert check("两项合计 5700 美元。")["flagged"] == []          # 4500 + 1200
+    assert check("成本约占营收的 26.67%。")["flagged"] == []      # 1200 / 4500
+
+
+def test_a_figure_nowhere_is_flagged_with_its_line():
+    result = check("营收是 4500 美元。利润是 8888 美元。")
+    assert result["figures"] == 2
+    assert result["flagged"] == [{"line": "营收是 4500 美元。利润是 8888 美元。", "values": ["8888"]}]      # the line, as the old check reads it
+
+
+def test_each_line_is_flagged_once_with_its_values_in_order():
+    result = check("利润是 8888 美元，现金是 9999 美元。")
+    assert result["flagged"] == [{"line": "利润是 8888 美元，现金是 9999 美元。", "values": ["8888", "9999"]}]
+
+
+def test_a_figure_in_a_source_the_sentence_does_not_cite_is_not_flagged():
+    # Held by the news item only: a citation slip, not a fabrication.
+    assert check("毛利是 3300 美元。", citations=(FILING, NEWS))["flagged"] == []
+    assert check("毛利是 3300 美元 [1]。", citations=(FILING, NEWS))["flagged"] == []
+
+
+def test_a_figure_from_nowhere_is_flagged_also_in_a_sentence_with_a_marker():
+    """answer_scope counts a marked sentence's figures and leaves them out of no_holder: they are the number review's."""
+    result = check("利润是 8888 美元 [1]。")
+    assert result["flagged"] == [{"line": "利润是 8888 美元 [1]。", "values": ["8888"]}] and result["figures"] == 1      # [1] does not state it
+
+
+def test_an_exception_is_an_error_and_never_raises(monkeypatch):
+    from app.agent_workflow import evidence
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(evidence, "answer_scope", broken)
+    assert check("利润是 8888 美元。") == {"version": 1, "error": "RuntimeError"}
+
+
+def test_a_long_line_is_clipped():
+    result = check("利润是 8888 美元，" + "字" * 400 + "。")
+    [item] = result["flagged"]
+    assert len(item["line"]) == 200 and item["line"].startswith("利润是 8888 美元") and item["values"] == ["8888"]
+
+
+def test_no_citations_and_a_damaged_list_still_answer():
+    assert check("利润是 8888 美元。", citations=())["flagged"] == [{"line": "利润是 8888 美元。", "values": ["8888"]}]
+    assert "error" not in check("营收是 4500 美元。", citations=(FILING, "junk", None))
+
+
+def test_a_value_reads_as_written():
+    assert [rc._value_text(v) for v in (8888.0, 12.5, 0.1234, 1e9)] == ["8888", "12.5", "0.1234", "1000000000"]
+
+
+# --- the stored answer ----------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def stored(disposable_database):
+    Base.metadata.create_all(engine, tables=[AgentConversation.__table__, AgentMessage.__table__])
+    with SessionLocal() as db:
+        conversation = AgentConversation(owner_hash="o" * 64)
+        db.add(conversation)
+        db.commit()
+        cid = conversation.id
+
+    def answer(content, record, *, before=(), question="苹果营收多少", status="complete"):
+        """The conversation's earlier user rows ``before``, then one turn: its question and its answer.  Returns the answer's id."""
+        turn = uuid.uuid4()
+        with SessionLocal() as db:
+            seq = db.execute(text("select coalesce(max(sequence),0) from agent_messages where conversation_id=:c"), {"c": cid}).scalar()
+            rows = [AgentMessage(conversation_id=cid, turn_id=uuid.uuid4(), sequence=seq + i + 1, role="user", content=said)
+                    for i, said in enumerate(before)]
+            seq += len(rows)
+            rows.append(AgentMessage(conversation_id=cid, turn_id=turn, sequence=seq + 1, role="user", content=question))
+            final = AgentMessage(conversation_id=cid, turn_id=turn, sequence=seq + 2, role="assistant", content=content, tool_calls=record, status=status)
+            rows.append(final)
+            db.add_all(rows)
+            db.commit()
+            return final.id
+    yield answer
+    with SessionLocal() as db:
+        db.query(AgentMessage).filter(AgentMessage.conversation_id == cid).delete()
+        db.query(AgentConversation).filter(AgentConversation.id == cid).delete()
+        db.commit()
+
+
+def record_of(message_id):
+    with SessionLocal() as db:
+        return db.get(AgentMessage, message_id).tool_calls
+
+
+def test_the_result_lands_on_the_stored_answer_and_the_other_keys_stay(stored):
+    record = {"route": "K", "audit": {"tier": "low"}, "citations": [FILING], "thinking_ms": 900}
+    mid = stored("营收是 4500 美元。利润是 8888 美元。", record)
+    rc.check_and_store(mid)
+    kept = record_of(mid)
+    assert {key: kept[key] for key in record} == record
+    assert kept["reconciliation"]["flagged"] == [{"line": "营收是 4500 美元。利润是 8888 美元。", "values": ["8888"]}] and kept["reconciliation"]["figures"] == 2
+
+
+def test_the_job_reads_the_stored_citations_with_their_check_text(stored):
+    # The quote shows only part of the source; the figure is in the check text the stored citation keeps.
+    citation = {**FILING, "quote": "营收 4500 美元。", "check_text": "营收 4500 美元。……现金 6100 美元。"}
+    mid = stored("现金是 6100 美元。", {"route": "K", "citations": [citation]})
+    rc.check_and_store(mid)
+    assert record_of(mid)["reconciliation"]["flagged"] == []
+
+
+def test_the_job_holds_figures_the_user_typed_earlier_but_not_a_card_button(stored):
+    mid = stored("你说的成本是 7700 美元，存款是 5200 美元。", {"route": "K", "citations": [FILING]},
+                 before=["我的成本是 7700 美元", "confirm:" + "Zq9" * 14 + " 5200"])
+    with SessionLocal() as db:
+        inputs = rc.inputs_of(db, db.get(AgentMessage, mid))
+    assert inputs["question"] == "苹果营收多少" and "7700" in inputs["user_text"] and "confirm:" not in inputs["user_text"]
+    rc.check_and_store(mid)
+    assert record_of(mid)["reconciliation"]["flagged"] == [{"line": "你说的成本是 7700 美元，存款是 5200 美元。", "values": ["5200"]}]
+
+
+def test_a_failed_check_is_stored_as_its_error(stored, monkeypatch):
+    monkeypatch.setattr(rc, "reconcile", lambda *a, **k: {"version": 1, "error": "KeyError"})
+    mid = stored("利润是 8888 美元。", {"route": "K", "citations": []})
+    rc.check_and_store(mid)
+    assert record_of(mid)["reconciliation"] == {"version": 1, "error": "KeyError"}
+
+
+def test_a_failure_to_read_or_write_is_logged_and_leaves_no_key(stored, monkeypatch, caplog):
+    mid = stored("利润是 8888 美元。", {"route": "K", "citations": []})
+
+    def broken(*_a, **_k):
+        raise RuntimeError("database gone")
+    monkeypatch.setattr(rc, "store", broken)
+    rc.check_and_store(mid)                       # never raises
+    assert "reconciliation" not in record_of(mid)
+    assert "checking answer" in caplog.text
+    rc.check_and_store(uuid.uuid4())              # no such row: nothing to write, nothing raised
+
+
+def test_kernel_answers_are_the_newest_route_k_answers(stored):
+    old = stored("旧流程的回答 8888 美元。", {"route": "A"})
+    tool_round = stored("", {"calls": [{"id": "c1"}]})
+    kernel = stored("新流程的回答 8888 美元。", {"route": "K"})
+    with SessionLocal() as db:
+        found = [row.id for row in rc.kernel_answers(db, 200)]
+    assert kernel in found and old not in found and tool_round not in found
+
+
+def test_a_figure_an_earlier_turn_read_is_not_flagged():
+    earlier = [{"ordinal": 1, "title": "一月行情", "quote": "AAPL 一月最低收盘 259.48 美元。"}]
+    assert rc.reconcile("一月最低收盘约 259.48 美元。", [], question="", user_text="", earlier=earlier)["flagged"] == []
+    assert rc.reconcile("一月最低收盘约 259.48 美元。", [], question="", user_text="")["flagged"] != []
+
+
+def test_a_table_figure_in_its_unit_and_a_price_times_shares_are_not_flagged():
+    table = [{"ordinal": 1, "title": "10-Q", "quote": "(In millions) Revenue 81,615 Net income 58,321"}]
+    assert rc.reconcile("第一季营收 81,615 百万美元 [1]。", table, question="", user_text="")["flagged"] == []
+    prices = [{"ordinal": 1, "title": "持仓", "quote": "AAPL 现价 271.01 美元，持有 100 股。"}]
+    assert rc.reconcile("100 股约 27,101 美元。", prices, question="", user_text="")["flagged"] == []
+    assert rc.reconcile("100 股约 31,415 美元。", prices, question="", user_text="")["flagged"] != []      # not a product of anything
+
+
+def test_arithmetic_on_the_lines_own_sourced_figures_is_not_flagged():
+    prices = [{"ordinal": 1, "title": "行情", "quote": "AAPL 现价 271.01 美元，持有 100 股。"}]
+    assert rc.reconcile("苹果 271.01 美元 [1]，100 股约 27,101 美元。", prices, question="", user_text="")["flagged"] == []
+    many = [{"ordinal": i, "title": f"s{i}", "quote": " ".join(str(1000 + 37 * i + k) for k in range(12))} for i in range(1, 8)]
+    sources = many + [{"ordinal": 9, "title": "利润表", "quote": "毛利 4,751 营收 28,236"}]
+    assert rc.reconcile("| 毛利率 | 16.8%（4,751 ÷ 28,236，计算值） |", sources, question="", user_text="")["flagged"] == []
+
+
+def test_a_figure_worked_out_on_one_line_passes_where_the_answer_restates_it():
+    sources = [{"ordinal": 1, "title": "利润表", "quote": "毛利 4,751 营收 28,236"}]
+    answer = "上一季毛利率约 16.8%。\n| 毛利率 | 16.8%（4,751 ÷ 28,236，计算值） |"
+    assert rc.reconcile(answer, sources, question="", user_text="")["flagged"] == []
+
+
+# --- what the passes still flag (Fable acceptance of 5d-1: B1, B2) ---------------------------------------------------------------
+
+def test_a_unit_scales_only_a_source_that_names_it():
+    """「回购 12 亿美元」 is not held by a source that states 1.2 somewhere: only a table that says it is in millions scales its figures."""
+    move = [{"ordinal": 1, "title": "行情", "quote": "苹果今天上涨 1.2%，收于 271.01 美元。"}]
+    assert rc.reconcile("苹果宣布回购 12 亿美元 [1]。", move, question="", user_text="")["flagged"] != []
+    assert rc.reconcile("苹果宣布回购 12 亿美元 [1]。", [], question="", user_text="", earlier=move)["flagged"] != []
+    fifty = [{"ordinal": 1, "title": "新闻", "quote": "公司有 50 家门店。"}]
+    assert rc.reconcile("现金 5 万美元 [1]。", fifty, question="", user_text="")["flagged"] != []
+    table = [{"ordinal": 1, "title": "10-Q", "quote": "(In millions) Buyback 1.2 Revenue 81,615"}]
+    assert rc.reconcile("回购 1,200,000 美元 [1]。", table, question="", user_text="")["flagged"] == []      # the table says millions
+
+
+def test_a_marker_a_date_or_a_count_does_not_make_a_figure_pass_by_restating():
+    sources = [{"ordinal": i, "title": f"s{i}", "quote": "苹果营收 4500 美元。"} for i in range(1, 24)]
+    for elsewhere in ("见 [23]。", "11 月 23 日发布。", "共 23 家机构。"):
+        assert rc.reconcile(f"营收同比增长 23% [1]。\n{elsewhere}", sources, question="", user_text="")["flagged"] != [], elsewhere
+    one = [{"ordinal": 1, "title": "行情", "quote": "苹果收于 271.01 美元。"}]
+    assert rc.reconcile("同比增长 25% [1]。\n21:25 更新。", one, question="", user_text="")["flagged"] != []
+
+
+def test_an_inference_does_not_become_evidence_by_restating():
+    one = [{"ordinal": 1, "title": "行情", "quote": "苹果收于 240 美元，每股收益 12 美元。"}]
+    answer = "推断：按 40 倍市盈率，目标价约 480 美元。\n目标价 480 美元 [1]。"
+    flagged = rc.reconcile(answer, one, question="", user_text="")["flagged"]
+    assert any("480" in item["values"] for item in flagged if item["line"].startswith("目标价"))
+
+
+def test_markers_dates_and_small_counts_are_not_operands():
+    one = [{"ordinal": 1, "title": "行情", "quote": "苹果收于 271.01 美元。"}]
+    assert rc.reconcile("收盘 271.01 [1]，目标价 813.03 [3]。", one, question="", user_text="")["flagged"] != []       # 271.01 × 3
+    assert rc.reconcile("12 月 31 日收盘 271.01 [1]，成本 8,401.31 [1]。", one, question="", user_text="")["flagged"] != []   # × 31
+
+
+def test_two_fabricated_figures_on_one_line_do_not_vouch_for_each_other():
+    one = [{"ordinal": 1, "title": "行情", "quote": "苹果收于 271.01 美元。"}]
+    result = rc.reconcile("按 850 股算，成本 1,234.5 美元，合计 1,049,325 美元 [1]。", one, question="", user_text="")
+    assert result["flagged"] and set(result["flagged"][0]["values"]) >= {"1,049,325"}
+
+
+def test_tool_rounds_do_not_push_the_earlier_answers_out_of_the_window(stored):
+    """Fable N1: a tool round is an assistant row with no text; EARLIER_ANSWERS counts answers, not rows."""
+    first = stored("一月最低收盘 259.48 美元 [1]。", {"route": "K", "citations": [{"ordinal": 1, "title": "一月行情", "quote": "AAPL 一月最低收盘 259.48 美元。"}]})
+    for _ in range(rc.EARLIER_ANSWERS + 3):
+        stored("", {"calls": [{"id": "c"}], "citations": []})
+    mid = stored("一月最低收盘约 259.48 美元。", {"route": "K", "citations": []})
+    with SessionLocal() as db:
+        inputs = rc.inputs_of(db, db.get(AgentMessage, mid))
+    assert first and any("259.48" in c["quote"] for c in inputs["earlier"])
+    assert rc.check(mid)["flagged"] == []
+
+
+def test_a_ratio_of_figures_written_in_millions_is_not_flagged():
+    """A filing fact stated in full (「4,751 百万美元」) is the operand a table in millions writes as 「4,751」 (shadow answer ad83ae0a)."""
+    facts = [{"ordinal": 1, "title": "毛利", "quote": "毛利 4,751,000,000 USD，即 4,751 百万美元。"},
+             {"ordinal": 2, "title": "营收", "quote": "营收 28,236,000,000 USD，即 28,236 百万美元。"}]
+    table = "| 指标（百万美元） | 上季 |\n|---|---:|\n| 营收 | 28,236 [2] |\n| 毛利 | 4,751 [1] |\n| 毛利率 | {row} |"
+    assert rc.reconcile(table.format(row="16.8%（4,751 ÷ 28,236，计算值）"), facts, question="", user_text="")["flagged"] == []
+    flagged = rc.reconcile(table.format(row="18.3%（4,751 ÷ 25,962，计算值）"), facts, question="", user_text="")["flagged"]
+    assert flagged and "18.3%" in flagged[0]["values"]          # 25,962 is nowhere, so neither is the ratio
+
+
+def test_a_figure_still_in_question_is_not_an_operand():
+    """Fable re-check R2: 12 and 30 are flagged on the line, so 12 × 30 = 360 is flagged too (12,000 and 30,000 in full are no source of 12, 30)."""
+    one = [{"ordinal": 1, "title": "公司", "quote": "公司有 12,000 employees and 30,000 stores。"}]
+    flagged = rc.reconcile("单价 12 美元，数量 30，合计 360 美元 [1]。", one, question="", user_text="")["flagged"]
+    assert flagged == [{"line": "单价 12 美元，数量 30，合计 360 美元 [1]。", "values": ["12", "30", "360"]}]

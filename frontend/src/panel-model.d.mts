@@ -16,3 +16,8 @@ export function hasRoundContent(message: AgentChatMessage | null | undefined): b
 export function selectedIndex(messages: AgentChatMessage[], key: string | null | undefined): number;
 export function roundQuestion(messages: AgentChatMessage[], index: number, max?: number): string;
 export function roundSources(message: AgentChatMessage | null | undefined): AgentCitation[];
+export const RECONCILE_NOTE: string;
+export type RoundReconcile =
+  | { kind: "flagged"; title: string; intro: string; lines: { line: string; values: string[] }[]; note: string }
+  | { kind: "clean"; text: string };
+export function roundReconcile(message: AgentChatMessage | null | undefined, t?: (phrase: string) => string): RoundReconcile | null;
