@@ -288,27 +288,29 @@ def _grounded(entry, key: str, haystack: str) -> float | None:
 
 
 def _step(entry, key: str, value: float | None) -> float | None:
-    """The written precision of the release's revenue in $ billions.  From the quote first: the number in it that is this revenue (in
-    billions, or in millions when the quote has it so), counted as written there; the model may have copied 「15.0」 as 「15」 or turned
-    「14,300」 million into 「14.3」 billion, and the quote is the release's own text.  Else from the token as given.  None when unknown."""
+    """The written precision of the release's revenue in $ billions: the finest of how the token and every number in the quote equal to this
+    revenue (in billions, or in millions) are written.  The quote is the release's own text (the model may have copied 「15.0」 as 「15」 or
+    turned 「14,300」 million into 「14.3」 billion); the finest wins because an equal number elsewhere in it (「Q3」 before 「$3.0 billion」)
+    is not the revenue and must not make it coarser.  None when unknown."""
     if value is None or not isinstance(entry, dict):
         return None
     billions = _billions(entry, value)
+    steps = []
+    token = entry.get(key) if entry.get(key) is not None else entry.get("number")
+    if isinstance(token, str):
+        cleaned = token.replace(",", "").replace("$", "").strip()
+        decimals = len(cleaned.split(".", 1)[1]) if "." in cleaned else 0
+        millions = str(entry.get("unit", "B")).upper() == "M" or abs(value) >= 1000
+        steps.append(10.0 ** -decimals / (1000.0 if millions else 1.0))
     quote = entry.get("quote") if isinstance(entry.get("quote"), str) else ""
     for written in re.findall(r"\d[\d,]*(?:\.\d+)?", quote):
         number = float(written.replace(",", ""))
         decimals = len(written.split(".", 1)[1]) if "." in written else 0
         if number < 1000 and abs(number - billions) < 1e-9:
-            return 10.0 ** -decimals
-        if number >= 1000 and abs(number / 1000.0 - billions) < 1e-9:
-            return 10.0 ** -decimals / 1000.0
-    token = entry.get(key) if entry.get(key) is not None else entry.get("number")
-    if not isinstance(token, str):
-        return None
-    cleaned = token.replace(",", "").replace("$", "").strip()
-    decimals = len(cleaned.split(".", 1)[1]) if "." in cleaned else 0
-    millions = str(entry.get("unit", "B")).upper() == "M" or abs(value) >= 1000
-    return 10.0 ** -decimals / (1000.0 if millions else 1.0)
+            steps.append(10.0 ** -decimals)
+        elif number >= 1000 and abs(number / 1000.0 - billions) < 1e-9:
+            steps.append(10.0 ** -decimals / 1000.0)
+    return min(steps) if steps else None
 
 
 def _billions(entry, value: float | None) -> float | None:

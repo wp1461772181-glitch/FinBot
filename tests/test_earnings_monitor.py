@@ -369,6 +369,9 @@ def test_the_reader_records_the_revenue_figure_as_written():
     assert er._step({"revenue_b": "15", "quote": "Revenue was $15.0 billion, up 4%"}, "revenue_b", 15.0) == 0.1
     assert er._step({"revenue_b": "14.3", "quote": "revenue of $14,300 million"}, "revenue_b", 14.3) == 0.001
     assert er._step({"revenue_b": "16", "quote": "revenue of $16 billion"}, "revenue_b", 16.0) == 1.0
+    # an equal number elsewhere in the quote is not the revenue: the finest written form wins
+    assert er._step({"revenue_b": "3.0", "quote": "Q3 revenue of $3.0 billion"}, "revenue_b", 3.0) == 0.1
+    assert er._step({"revenue_b": "2.0", "quote": "Revenue grew 2% to $2.0 billion"}, "revenue_b", 2.0) == 0.1
 
 
 def test_the_judge_sees_no_revenue_step():
