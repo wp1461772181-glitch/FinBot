@@ -4,7 +4,8 @@ It covers the duty rows since the last brief that ran (else from 24 hours before
 (``digest``), the follow-ups it wrote at night but did not send (``tell_now`` held over the night), and one line, written by code, of
 how many alerts it looked at and decided not to bother him with.  The kept and held items go to one model turn (``loop.run_wake``
 without ``decide``: reads only, no ``act``, no ``ask``); a turn that fails still sends what was kept, as a plain list.  Only filtered
-rows means no model call; no rows at all means no brief.
+rows means no model call; no rows at all means no brief.  The findings of the missed-alert checks done in the window (``kernel.selfcheck``)
+are added as code-written lines after the body; the model is not given them.
 
 ``FINBOT_DUTY_MODE`` decides as it does for the wake: ``off`` no brief, ``shadow`` written and logged, ``on`` sent through the outbox
 (source ``brief``: neither the duty messages' daily count nor the bot's notify count; a brief that cannot be queued is ``failed``, so the next
@@ -19,7 +20,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from .. import duty_brief, duty_log, model_usage
+from .. import duty_brief, duty_log, duty_selfcheck, model_usage
 from . import loop, prompt, wake
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,63 @@ def gather(owner_hash: str, since: datetime) -> dict:
             counts["told"] += 1
         elif decision in ("record", "ignore"):
             counts[decision] += 1
-    return {"kept": kept, "held": held, "counts": counts, "night_digest_sent": night_digest_sent}
+    findings, problems, selfcheck_ids = missed_findings(owner_hash)
+    return {"kept": kept, "held": held, "counts": counts, "night_digest_sent": night_digest_sent, "findings": findings, "problems": problems, "selfcheck_ids": selfcheck_ids}
+
+
+def missed_findings(owner_hash: str) -> tuple[list[dict], list[tuple[str, bool]], list[int]]:
+    """What the missed-alert checks no brief has carried yet (``kernel.selfcheck``) found, each ``(kind, symbol, at)`` once; what they could
+    not check (a check that failed, was cut off, or could not fetch some symbols); and those checks' row ids.  Not windowed: a check that
+    ends after the day's brief is carried by the next one.  A log that cannot be read costs the brief nothing but these lines."""
+    try:
+        rows = duty_selfcheck.unbriefed(owner_hash)
+    except Exception:
+        logger.exception("morning brief: the missed-alert checks could not be read")
+        return [], [], []
+    out, problems, seen, unfetched = [], [], set(), None
+    for row in rows:
+        day, session = row.get("day") or "", row.get("session")
+        if row.get("outcome") != "done":
+            problems.append((f"北京 {day} 的漏报自查没做完，这一天没有核对。", True))
+            continue
+        errors = (row.get("checked") or {}).get("errors") or {}
+        if errors.get("earnings"):
+            problems.append((f"北京 {day} 的财报自查没做成，这一天的财报没有核对。", True))
+        elif errors.get("earnings_seen"):
+            problems.append((f"北京 {day} 读不到盯盘程序那边的财报记录，只核对了已经收到的财报。", True))
+        when = f"纽约 {session}" if session else f"北京 {day}"
+        if errors.get("price"):
+            problems.append((f"{when} 的价格自查没做成，这一天的行情没有核对。", True))
+        elif errors.get("unfetched"):
+            # a symbol Yahoo never serves would repeat every day: it rides along in a brief, it never starts one
+            unfetched = (f"{when} 的价格自查有几只没取到行情：{errors['unfetched']}，这几只没有核对。", False)
+        for finding in row.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
+            key = (finding.get("kind"), finding.get("symbol"), finding.get("at"))
+            if key not in seen:
+                seen.add(key)
+                out.append(finding)
+    if unfetched:          # only the latest: days of the same symbols Yahoo does not serve would pile up otherwise
+        problems.append(unfetched)
+    return out, problems, [row["id"] for row in rows]
+
+
+def selfcheck_lines(findings: list[dict], problems: list[str] | None = None) -> str:
+    """The lines code writes about what the missed-alert check found and what it could not check; empty when there is neither."""
+    if not findings and not problems:
+        return ""
+    lines = ["漏报自查（每天收盘后核对，代码写的）："]
+    for f in findings:
+        symbol, at = f.get("symbol") or "", f.get("at") or ""
+        if f.get("kind") == "earnings":
+            url = f.get("url") or ""
+            lines.append(f"· {symbol} 的财报（北京 {at}）没解读成：{f.get('why') or ''}。原文：{url}" if url
+                         else f"· {symbol} 的财报（北京 {at}）没解读成：{f.get('why') or ''}。")
+        else:
+            lines.append(f"· {symbol} 美东 {at}：{f.get('text') or ''}——按现在的设置应当提醒，但当时没有发出（收盘后用五分钟线重算发现）。")
+    lines += [f"· {problem}" for problem in problems or []]
+    return "\n".join(lines)
 
 
 def filtered_line(counts: dict, since: datetime) -> str:
@@ -182,18 +239,25 @@ async def _run(row_id: int, owner: str, day: str, current: str, now: datetime, s
         since = await asyncio.to_thread(_window_start, owner, now)
     gathered = await asyncio.to_thread(gather, owner, since)
     kept, held, counts = gathered["kept"], gathered["held"], gathered["counts"]
+    findings, flagged = gathered.get("findings") or [], gathered.get("problems") or []
+    problems = [text for text, _ in flagged]
+    serious = sum(1 for _, counts_ in flagged if counts_)
+    if findings or serious:        # findings, and checks that did not finish, are content: a window with only these is not skipped
+        counts = {**counts, "missed": len(findings), **({"unchecked": serious} if serious else {})}
     line = filtered_line(counts, since)
+    missed = selfcheck_lines(findings, problems)
+    tail = "".join(f"\n\n{part}" for part in (missed, line) if part)
     if not any(counts.values()):
         return await asyncio.to_thread(lambda: finish(outcome="skipped", reason=NOTHING, counts=counts))
-    if not kept and not held and not line:
+    if not kept and not held and not line and not missed:
         return await asyncio.to_thread(lambda: finish(outcome="skipped", reason=NOTHING_TO_SAY, counts=counts))
     fields: dict = {"counts": counts}
     if kept or held:
         written = await _write(owner, day, kept, held, facts(now, since, gathered["night_digest_sent"]))
-        message = HEAD + written["body"] + (f"\n\n{line}" if line else "")
+        message = HEAD + written["body"] + tail        # the findings are the system's record: not given to the model
         fields.update(reason=written["reason"], turn_id=written["turn_id"], model_calls=written["model_calls"])
     else:
-        message = HEAD + line          # only filtered rows: the code-written line alone, no model call
+        message = HEAD + tail.removeprefix("\n\n")     # only code-written lines, no model call
     fields["message"] = message
     if current == "on":
         group, why = await asyncio.to_thread(lambda: wake._deliver(owner, message, source=SOURCE, cap=False))
@@ -210,6 +274,11 @@ async def _run(row_id: int, owner: str, day: str, current: str, now: datetime, s
             except Exception:       # the brief is already queued: it stays done, so tomorrow's does not send it again
                 logger.exception("morning brief %s: the held rows could not be marked briefed", day)
                 fields["reason"] = "简报已排进发件箱，但夜里留下的跟进没能标成已带出。"
+    if gathered.get("selfcheck_ids"):
+        try:            # carried: the next brief does not tell these again
+            await asyncio.to_thread(duty_selfcheck.mark_briefed, gathered["selfcheck_ids"])
+        except Exception:
+            logger.exception("morning brief %s: the missed-alert checks could not be marked briefed", day)
     return await asyncio.to_thread(lambda: finish(outcome="done", **fields))
 
 

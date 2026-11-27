@@ -23,6 +23,7 @@ MEMORY_JOBS_SECONDS = 600   # the memory calendar looks for a job that is due
 WORK_WATCH_SECONDS = 60     # a job started from a card that has ended gets its message within a minute
 EARNINGS_SECONDS = 60      # picks up events the response-time task missed, due follow-ups, and anything left over from a restart
 BRIEF_SECONDS = 60         # the morning brief looks whether today's is due (08:05–12:00 Beijing) and not written yet
+SELFCHECK_SECONDS = 60     # the missed-alert check looks whether today's is due (07:45–12:00 Beijing) and not run yet
 
 
 def enabled() -> bool:
@@ -144,6 +145,22 @@ def run_morning_brief() -> None:
         log.info("morning brief %s: %s (%s)", row.get("day"), row.get("outcome"), row.get("delivery") or row.get("reason") or "-")
 
 
+def run_selfcheck() -> None:
+    """The kernel's missed-alert check (app.kernel.selfcheck): run once a Beijing day, from 07:45; a day already run is left alone."""
+    from datetime import UTC, datetime
+
+    from .kernel import selfcheck
+    from .sentinel_bridge import owner_hash_from_login_config
+
+    owner = owner_hash_from_login_config()
+    if not owner:
+        return
+    row = selfcheck.run_once(owner, datetime.now(UTC))
+    if row:
+        log.info("missed-alert check %s: %s (%s found, errors %s)", row.get("day"), row.get("outcome"), len(row.get("findings") or []),
+                 sorted((row.get("checked") or {}).get("errors") or {}))
+
+
 LOOPS = (
     ("routine-tasks", ROUTINE_SECONDS, run_routine_tasks),
     ("sec-monitor", HOURLY_SECONDS, run_sec_monitor),
@@ -155,6 +172,7 @@ LOOPS = (
     ("work-watch", WORK_WATCH_SECONDS, run_work_watch),
     ("memory-jobs", MEMORY_JOBS_SECONDS, run_memory_jobs),
     ("morning-brief", BRIEF_SECONDS, run_morning_brief),
+    ("duty-selfcheck", SELFCHECK_SECONDS, run_selfcheck),
 )
 
 
