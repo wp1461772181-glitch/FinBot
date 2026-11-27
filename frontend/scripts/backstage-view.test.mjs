@@ -233,6 +233,11 @@ test("deliveries: time, source, channel, status, acknowledged", () => {
   assert.equal(deliveryRow({ ...DELIVERIES.items[0], source: "x", channel: "y" }, "UTC").source, "x", "an unknown source is shown as it came");
 });
 
+test("deliveries: the kernel's duty messages and its morning brief read in words", () => {
+  assert.equal(deliveryRow({ ...DELIVERIES.items[0], source: "duty" }, "UTC").source, "值班");
+  assert.equal(deliveryRow({ ...DELIVERIES.items[0], source: "brief" }, "UTC").source, "早间简报");
+});
+
 test("the page is wired in: route, owner-only navigation, a read-only page", () => {
   const sidebar = src("app/shell/AppSidebar.tsx"), more = src("app/shell/MoreDrawer.tsx"), router = src("app/router.tsx");
   assert.match(sidebar, /\{props\.personal && <NavLeaf area="backstage" props=\{props\} \/>\}/, "the entry is the owner's");
@@ -285,6 +290,7 @@ test("duty: each decision and each way a wake-up ends has its word, and only a s
 
 test("duty: a tell_now held over the night is not a failed send", () => {
   assert.equal(dutyDelivery({ decision: "tell_now", delivery: "held_night" }), "夜里压住，没发");
+  assert.equal(dutyDelivery({ decision: "tell_now", delivery: "briefed" }), "已随早间简报发出");
   assert.equal(dutyDelivery({ decision: "tell_now", delivery: "telegram_not_bound" }), "发送失败");
 });
 

@@ -622,10 +622,11 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
         return result
 
 
-async def run_wake(context, emit, messages: list[dict], *, turn_id: str, latest_symbols: list[str] | None = None) -> dict:
+async def run_wake(context, emit, messages: list[dict], *, turn_id: str, latest_symbols: list[str] | None = None, decide_tool: bool = True) -> dict:
     """One wake turn (``wake.wake``): the same append-only loop with the restricted tools and no history; it ends at the first valid
-    ``decide`` (``audit["decision"]``), or at an answer without one.  Nothing is streamed to anyone: ``emit`` is the caller's recorder."""
-    tool_schemas = _wake_schemas(context)
+    ``decide`` (``audit["decision"]``), or at an answer without one.  Nothing is streamed to anyone: ``emit`` is the caller's recorder.
+    With ``decide_tool=False`` (the morning brief) ``decide`` is not offered: the turn ends at its answer."""
+    tool_schemas = [s for s in _wake_schemas(context) if decide_tool or s["function"]["name"] != decide.DECIDE]
     run = _Run(context=context, emit=emit, messages=messages, user_text="", schemas=tool_schemas,
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                model=ModelUse(context.provider, context.model, context.api_key, context.base_url, getattr(context, "catalog_name", None)),

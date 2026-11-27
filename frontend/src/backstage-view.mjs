@@ -314,7 +314,7 @@ export function operationRow(item, timeZone, w = ZH_WORDS) {
 
 // ---- 提醒投递 ------------------------------------------------------------------------------------------------------
 
-const SOURCES = { notify: "提醒", routine: "任务" };
+const SOURCES = { notify: "提醒", routine: "任务", duty: "值班", brief: "早间简报" };
 const CHANNELS = { telegram: "Telegram", wechat: "微信", pushover: "Pushover" };
 
 function deliveryStatus(item) {
@@ -369,6 +369,7 @@ export function dutyDelivery(item) {
   if (item.delivery === "queued") return "已发出";
   if (item.delivery === "capped") return "超过今天的上限，没发";
   if (item.delivery === "held_night") return "夜里压住，没发";      // the sentinel held the alert for the 08:00 digest; nothing is sent at night
+  if (item.delivery === "briefed") return "已随早间简报发出";      // the morning brief carried the held message
   return "发送失败";
 }
 
