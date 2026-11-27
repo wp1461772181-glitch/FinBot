@@ -525,3 +525,45 @@ export function memoryRow(item, timeZone, w = ZH_WORDS) {
     reconstructed: item?.reconstructed === true ? w.t("补记") : "",
   };
 }
+
+// ---- 质量 (5d-3b) ------------------------------------------------------------------------------------------------------
+
+export const EARLY_RUN = "（早期记录，没有题库说明）";
+
+/** One week of his 「好／不好」: the week as 「11-23 那周」, the two counts. */
+export function qualityWeekRow(item, w = ZH_WORDS) {
+  const start = text(item?.week_start);
+  const [, month, day] = start.split("-");
+  return { id: start, week: month && day ? `${month}-${day} ${w.t("那周")}` : DASH, good: String(Number(item?.good) || 0), bad: String(Number(item?.bad) || 0) };
+}
+
+/** One answer he marked 不好: when, which bot, the question, his reason (and that he said it in a conversation). */
+export function badAnswerRow(item, timeZone, w = ZH_WORDS) {
+  const reason = text(item?.reason);
+  return {
+    id: text(item?.message_id),
+    time: formatTime(item?.at, timeZone),
+    bot: text(item?.bot) || DASH,
+    question: text(item?.question) || w.t("（没有问题文字）"),
+    reason: reason || w.t("（没写原因）"),
+    said: item?.channel === "chat" ? w.t("在对话里说的") : "",
+  };
+}
+
+/** One ruler run: when, its name (and note, or that it is an early one), how many turns, the pass rate, the median and P90 times, the cases that failed. */
+export function rulerRunRow(item, timeZone, w = ZH_WORDS) {
+  const rate = Number(item?.pass_rate);
+  const failed = list(item?.failed).filter(isObject).map((row) => text(row.case_id)).filter(Boolean);
+  return {
+    id: text(item?.name),
+    time: formatTime(item?.at, timeZone),
+    name: text(item?.name) || DASH,
+    note: text(item?.note) || (item?.meta === false ? w.t(EARLY_RUN) : ""),
+    turns: Number.isFinite(Number(item?.turns)) && item?.turns !== null ? String(item.turns) : DASH,
+    pass_rate: Number.isFinite(rate) && item?.pass_rate !== null ? `${(rate * 100).toFixed(1)}%` : DASH,
+    p50: formatMs(item?.total_ms_p50),
+    p90: formatMs(item?.total_ms_p90),
+    failed: failed.length ? failed.join(", ") : w.t("全过"),
+    all_passed: failed.length === 0,
+  };
+}

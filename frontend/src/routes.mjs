@@ -8,7 +8,7 @@
 //   /research/c/:symbol/latest        resolver: the symbol's newest forecast, then redirect (#revisions → ?section=versions)
 //   /research/evidence                the evidence centre without a version (the symbol comes from ?symbol=; ?upload=1 opens the upload dialog)
 //   /assistant/skills/:skillId        a skill's editor (drafts link to it)
-//   /backstage, /backstage/:tab       后台, the owner's read-only look behind the answers (tabs: answers, usage, operations, deliveries, duty, memory)
+//   /backstage, /backstage/:tab       后台, the owner's read-only look behind the answers (tabs: answers, usage, operations, deliveries, duty, memory, quality)
 
 const TICKER = /^[A-Z]{1,5}(?:[.-][A-Z]{1,2})?$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -19,7 +19,7 @@ export const ROUTINE_TABS = ["confirm", "tasks", "runs"];
 export const SETTINGS_SECTIONS = ["models", "notifications", "appearance", "data", "account"];
 export const ASSISTANT_SECTIONS = ["bots", "skills", "memory", "news", "knowledge"];
 export const SOURCE_TYPES = ["official_filing", "uploaded_media"];
-export const BACKSTAGE_TABS = ["answers", "usage", "operations", "deliveries", "duty", "memory"];
+export const BACKSTAGE_TABS = ["answers", "usage", "operations", "deliveries", "duty", "memory", "quality"];
 
 /** Route patterns in react-router syntax, one per address the app answers.  The router builds its map from these. */
 export const PATTERNS = {

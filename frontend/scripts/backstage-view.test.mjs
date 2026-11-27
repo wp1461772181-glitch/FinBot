@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyDelivery, dutyModeLine, helperLines, dutyRow, FEEDBACK_CHOICES, FEEDBACK_FAILED, feedbackBody, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
-  RECONCILE_NOTE, reconcileBlock, answerFeedbackBlock, slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
+  RECONCILE_NOTE, reconcileBlock, answerFeedbackBlock, EARLY_RUN, qualityWeekRow, badAnswerRow, rulerRunRow, slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
   MEMORY_BYS, MEMORY_CHANGES, MEMORY_FILTER_DEFAULTS, MEMORY_GONE, MEMORY_NOTE, MEMORY_TARGETS, memoryQuery, memoryRow,
 } from "../src/backstage-view.mjs";
 import { ANSWERS, DELIVERIES, DETAIL, DUTY, HELPERS, DETAIL_INCOMPLETE, DETAIL_OLD, OPERATIONS, usageAnswer } from "../tools/shots/fixtures/backstage.mjs";
@@ -521,4 +521,22 @@ test("5d-3a: 「被点不好的」 is feedback=bad; a row says his verdict; the 
   assert.deepEqual(answerFeedbackBlock({ feedback: { verdict: "good", reason: "x" } }), { verdict: "good", text: "你点了好", reason: "" });
   assert.equal(answerFeedbackBlock({ feedback: null }), null);
   assert.equal(answerFeedbackBlock({}), null);
+});
+
+
+test("5d-3b 质量: a week, an answer marked 不好, a ruler run with and without its record", () => {
+  assert.deepEqual(qualityWeekRow({ week_start: "2026-11-23", good: 3, bad: 1 }), { id: "2026-11-23", week: "11-23 那周", good: "3", bad: "1" });
+  assert.deepEqual(qualityWeekRow({}), { id: "", week: "—", good: "0", bad: "0" });
+  const bad = badAnswerRow({ message_id: "m1", at: "2026-11-27T12:46:00+00:00", bot: "研究员", question: "英伟达营收", reason: "没说环比", channel: "chat" }, "UTC");
+  assert.deepEqual(bad, { id: "m1", time: "11-27 12:46", bot: "研究员", question: "英伟达营收", reason: "没说环比", said: "在对话里说的" });
+  assert.equal(badAnswerRow({ message_id: "m2", reason: null, channel: "web" }, "UTC").reason, "（没写原因）");
+  const run = rulerRunRow({ name: "5d3a2-20261127", at: "2026-11-27T12:58:00+00:00", meta: true, note: "65fc373", turns: 86, pass_rate: 0.9883720930232558,
+    total_ms_p50: 6077, total_ms_p90: 12072, failed: [{ case_id: "B06", turn: 0, checks: ["include_any[0]"] }] }, "UTC");
+  assert.deepEqual(run, { id: "5d3a2-20261127", time: "11-27 12:58", name: "5d3a2-20261127", note: "65fc373", turns: "86", pass_rate: "98.8%", p50: "6.1 s", p90: "12.1 s",
+    failed: "B06", all_passed: false });
+  const early = rulerRunRow({ name: "baseline-v1", meta: false, turns: 86, pass_rate: 1, failed: [] }, "UTC");
+  assert.equal(early.note, EARLY_RUN);
+  assert.equal(early.failed, "全过");
+  assert.equal(early.pass_rate, "100.0%");
+  assert.equal(rulerRunRow({ name: "x", pass_rate: null, turns: null }, "UTC").pass_rate, "—");
 });

@@ -7,7 +7,7 @@ import { skeletonKind } from "../src/skeleton-kind.mjs";
 import { navGroup } from "../src/workspace-sections.mjs";
 
 test("后台 has an address and one per tab", () => {
-  assert.deepEqual(BACKSTAGE_TABS, ["answers", "usage", "operations", "deliveries", "duty", "memory"]);
+  assert.deepEqual(BACKSTAGE_TABS, ["answers", "usage", "operations", "deliveries", "duty", "memory", "quality"]);
   assert.equal(PATTERNS.backstage, "/backstage");
   assert.equal(PATTERNS.backstageTab, "/backstage/:tab");
   assert.equal(paths.backstage(), "/backstage");
@@ -15,6 +15,7 @@ test("后台 has an address and one per tab", () => {
   assert.equal(paths.backstage("nonsense"), "/backstage");
   assert.equal(backstageTab("usage"), "usage");
   assert.equal(backstageTab("memory"), "memory", "5d-2: 记忆变更 is the sixth tab");
+  assert.equal(backstageTab("quality"), "quality", "5d-3b: 质量 is the seventh tab");
   assert.equal(backstageTab("nonsense"), "answers");
   assert.equal(backstageTab(undefined), "answers");
 });
