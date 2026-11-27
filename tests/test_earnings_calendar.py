@@ -78,8 +78,8 @@ def test_upcoming_is_each_companys_next_report_and_its_line_says_where_the_conse
     ahead = ec.upcoming(["intc", "MSFT", "ANT"], date(2026, 11, 28))
     assert sorted(ahead) == ["INTC", "MSFT"] and ahead["INTC"]["report_date"] == "2027-01-20"
     text = ec.line(ahead["INTC"])
-    assert text == "下次财报：2027-01-20 盘后（FY2026 Q4）；市场预期（Finnhub，调整后口径）每股收益 0.25 美元、营收 158.5 亿美元；11-28 10:00 拉取"
-    assert ec.line(ahead["MSFT"]).startswith("下次财报：2027-01-26（FY2027 Q2）；市场预期（Finnhub，调整后口径）每股收益 4.96 美元；")
+    assert text == "下次财报：2027-01-20（周三） 盘后（财年 FY2026 Q4）；市场预期（Finnhub，调整后口径）每股收益 0.25 美元、营收 158.5 亿美元；11-28 10:00 拉取"
+    assert ec.line(ahead["MSFT"]).startswith("下次财报：2027-01-26（周二）（财年 FY2027 Q2）；市场预期（Finnhub，调整后口径）每股收益 4.96 美元；")
     assert "没有拿到市场预期" in ec.line({**ahead["MSFT"], "eps_estimate": None})
 
 

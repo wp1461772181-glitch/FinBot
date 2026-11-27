@@ -37,6 +37,7 @@ BACK_DAYS = 7
 AHEAD_DAYS = 120
 STALE_AFTER = timedelta(hours=20)
 HOURS = {"bmo": "盘前", "amc": "盘后", "dmh": "盘中"}
+WEEKDAYS = "一二三四五六日"
 
 
 class EarningsCalendar(Base):
@@ -181,6 +182,7 @@ def _amount(value: float) -> str:
 def line(row: dict) -> str:
     """One line for a company's next report: its date and hour, and the consensus with where it came from and when it was read."""
     when = row["report_date"]
+    weekday = f"（周{WEEKDAYS[date.fromisoformat(when).weekday()]}）"      # written by code: a model counting days from a date gets it wrong
     hour = HOURS.get(row.get("hour") or "")
     expected = []
     if row.get("eps_estimate") is not None:
@@ -190,4 +192,4 @@ def line(row: dict) -> str:
     fetched = datetime.fromisoformat(row["fetched_at"]).astimezone(UTC) + timedelta(hours=8) if row.get("fetched_at") else None
     told = f"市场预期（{SOURCE_NAME}，调整后口径）" + "、".join(expected) if expected else "没有拿到市场预期"
     stamp = f"；{fetched:%m-%d %H:%M} 拉取" if fetched else ""
-    return f"下次财报：{when}{(' ' + hour) if hour else ''}（FY{row['fiscal_year']} Q{row['fiscal_quarter']}）；{told}{stamp}"
+    return f"下次财报：{when}{weekday}{(' ' + hour) if hour else ''}（财年 FY{row['fiscal_year']} Q{row['fiscal_quarter']}）；{told}{stamp}"
