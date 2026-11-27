@@ -1,6 +1,7 @@
 export type BadgeStatus = { label: string; kind: string };
 export type Cost = { kind: "amount" | "unpriced" | "pending" | "unrecorded" | "none"; amount: string };
-export type AnswerFilters = { botId: string; engine: string; status: string; highTier: boolean; slow: boolean; q: string; before: string };
+export type AnswerFilters = { botId: string; engine: string; status: string; highTier: boolean; slow: boolean; reconcileFlagged: boolean; q: string; before: string };
+export type ReconcileBlock = { kind: "flagged" | "clean" | "error"; title: string; checked: string; text: string; lines: { line: string; values: string }[]; note: string };
 export type AnswerRow = { id: string; time: string; bot: string; question: string; status: BadgeStatus; tier: string; time_taken: string; calls: string; tokens: string; cost: Cost; old_engine: boolean };
 export type TimelineStep = {
   kind: "question" | "narration" | "model" | "tool" | "card" | "card_result" | "answer";
@@ -34,6 +35,8 @@ export function slowRuleText(thresholdMs: unknown, w?: Words): string;
 export function answerRow(item: unknown, timeZone?: string, w?: Words): AnswerRow;
 export function answerNotes(detail: unknown, w?: Words): { kind: string; text: string }[];
 export function helperLines(detail: unknown, w?: Words): { id: string; complete: boolean; text: string }[];
+export const RECONCILE_NOTE: string;
+export function reconcileBlock(detail: unknown, w?: Words): ReconcileBlock | null;
 export function detailTimeline(detail: unknown, timeZone?: string, w?: Words): TimelineStep[];
 export function usageRange(days: number, today: string): { from: string; to: string };
 export function usageQuery(options: { from?: string; to?: string; group?: string }): string;

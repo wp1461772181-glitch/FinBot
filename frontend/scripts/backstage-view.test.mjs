@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyDelivery, dutyModeLine, helperLines, dutyRow, FEEDBACK_CHOICES, FEEDBACK_FAILED, feedbackBody, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
-  slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
+  RECONCILE_NOTE, reconcileBlock, slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
 } from "../src/backstage-view.mjs";
 import { ANSWERS, DELIVERIES, DETAIL, DUTY, HELPERS, DETAIL_INCOMPLETE, DETAIL_OLD, OPERATIONS, usageAnswer } from "../tools/shots/fixtures/backstage.mjs";
 
@@ -343,4 +343,53 @@ test("helpers: one plain line each (model, steps, what it read, finished or not,
     "小助手 · deepseek-flash · 6 步 · 读了 SEC 申报 · 未做完 · 2 min 0 s"]);
   assert.deepEqual(helperLines({ helpers: [{ call_id: "x", model: "m", steps: 1, complete: true, seconds: 2, tools: [] }] }).map((h) => h.text), ["小助手 · m · 1 步 · 已做完 · 2.0 s"], "no tools read: no 读了");
   assert.equal(helperLines({ helpers: [{ call_id: "x", complete: false }] })[0].complete, false);
+});
+
+
+// ---- 5d-1: the figure check ----------------------------------------------------------------------------------------
+
+test("「数字没对上」 is the API's reconcile=flagged, sent only when it is ticked", () => {
+  assert.equal(ANSWER_FILTER_DEFAULTS.reconcileFlagged, false);
+  assert.equal(answersQuery({ ...ANSWER_FILTER_DEFAULTS, reconcileFlagged: true }), "?reconcile=flagged");
+  assert.equal(answersQuery({ ...ANSWER_FILTER_DEFAULTS, slow: true, reconcileFlagged: true, q: "x" }), "?slow=1&reconcile=flagged&q=x");
+});
+
+test("the detail's figure check: how many were checked, each flagged line with its values, and the fixed note under them", () => {
+  const block = reconcileBlock({ ...DETAIL, reconciliation: { state: "flagged", figures: 3, error: null,
+    flagged: [{ line: "利润是 8888 美元，现金是 9999 美元", values: ["8888", "9999"] }, { line: "", values: ["1"] }, "junk"] } });
+  assert.deepEqual(block, { kind: "flagged", title: "数字对账结果", checked: "查过的数字：3", text: "",
+    lines: [{ line: "利润是 8888 美元，现金是 9999 美元", values: "8888、9999" }], note: RECONCILE_NOTE });
+  assert.equal(RECONCILE_NOTE, "这些数字在这一轮读到的资料里都找不到；不一定是错，可能是模型自己的知识或算法，请对照原文判断。");
+});
+
+test("a clean check says so with no note; a failed one names its error; an unchecked answer shows no block", () => {
+  assert.deepEqual(reconcileBlock({ ...DETAIL, reconciliation: { state: "clean", figures: 2, flagged: [], error: null } }),
+    { kind: "clean", title: "数字对账结果", checked: "查过的数字：2", text: "没有找不到出处的数字。", lines: [], note: "" });
+  assert.deepEqual(reconcileBlock({ ...DETAIL, reconciliation: { state: "error", figures: null, flagged: [], error: "KeyError" } }),
+    { kind: "error", title: "数字对账结果", checked: "", text: "对账没有做完：KeyError", lines: [], note: "" });
+  assert.equal(reconcileBlock({ ...DETAIL, reconciliation: null }), null);
+  assert.equal(reconcileBlock(DETAIL), null, "an answer from before the check");
+  const english = { t: (phrase) => `<${phrase}>`, colon: ": ", comma: ", ", list: ", ", parens: (value) => ` (${value})` };
+  const translated = reconcileBlock({ ...DETAIL, reconciliation: { state: "flagged", figures: 1, flagged: [{ line: "l", values: ["1", "2"] }], error: null } }, english);
+  assert.equal(translated.checked, "<查过的数字>: 1");
+  assert.equal(translated.note, `<${RECONCILE_NOTE}>`);
+  assert.equal(translated.lines[0].values, "1, 2");
+});
+
+test("the answers tab has the 「数字没对上」 filter and the drawer shows the check's block", () => {
+  const tab = src("app/backstage/AnswersTab.tsx"), drawer = src("app/backstage/AnswerDrawer.tsx");
+  assert.match(tab, /data-testid="filter-reconcile" checked=\{filters\.reconcileFlagged\} onChange=\{event => set\(\{ reconcileFlagged: event\.target\.checked \}\)\}/);
+  assert.match(tab, /\{t\("数字没对上"\)\}/);
+  assert.match(tab, /filters\.reconcileFlagged \|\| searched/, "a filtered empty list says no answer matched");
+  assert.match(drawer, /const reconcile = detail \? reconcileBlock\(detail, w\) : null;/);
+  assert.match(drawer, /data-testid="reconcile-note" role="note"/);
+  assert.match(drawer, /data-testid="reconcile-line"/);
+});
+
+test("every phrase of the figure check is in both catalogs", () => {
+  const chinese = JSON.parse(src("locales/zh-CN.json")), english = JSON.parse(src("locales/en-US.json"));
+  for (const phrase of ["数字没对上", "数字对账结果", "查过的数字", "没有找不到出处的数字。", "对账没有做完", RECONCILE_NOTE]) {
+    assert.ok(chinese.includes(phrase), phrase);
+    assert.ok(english[phrase]?.trim(), phrase);
+  }
 });

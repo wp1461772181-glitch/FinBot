@@ -23,7 +23,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.routing import APIRoute
-from sqlalchemy import String, Text, and_, cast, exists, func, or_, select, tuple_
+from sqlalchemy import String, Text, and_, case, cast, exists, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 
@@ -327,6 +327,43 @@ def _helpers(audit: dict) -> list[dict]:
     return lines
 
 
+def _flagged(found: dict) -> list[dict]:
+    """The flagged lines of a stored check, each ``{"line", "values"}``; what is damaged is left out."""
+    lines = []
+    for item in map(_dict, _list(found.get("flagged"))):
+        if isinstance(item.get("line"), str) and item["line"].strip():
+            lines.append({"line": scrub(item["line"])[:PREVIEW_CHARS],
+                          "values": [scrub(value) for value in _list(item.get("values")) if isinstance(value, str) and value]})
+    return lines
+
+
+def reconcile_state(record) -> str | None:
+    """The 5d-1 figure check of an answer: ``flagged`` (a line no source of the turn holds), ``clean``, ``error``, or None (not checked)."""
+    found = _dict(record.get("reconciliation"))
+    if not found:
+        return None
+    if found.get("error"):
+        return "error"
+    # The same test as the list filter (_reconcile_flagged_clause): a non-empty list.
+    return "flagged" if _list(found.get("flagged")) else "clean"
+
+
+def _reconciliation(record) -> dict | None:
+    """The detail's view of the figure check: how many figures, the flagged lines with their values, or the error; None when not checked."""
+    state = reconcile_state(record)
+    if state is None:
+        return None
+    found = _dict(record.get("reconciliation"))
+    return {"state": state, "figures": _number(found.get("figures")), "flagged": _flagged(found),
+            "error": scrub(found.get("error")) if isinstance(found.get("error"), str) else None}
+
+
+def _reconcile_flagged_clause(F):
+    """The final row's check has at least one flagged line (``reconciliation.flagged`` is a non-empty list)."""
+    flagged = func.jsonb_extract_path(_jsonb(F), "reconciliation", "flagged")
+    return case((func.jsonb_typeof(flagged) == "array", func.jsonb_array_length(flagged)), else_=0) > 0
+
+
 def _list_item(asked, final, bot_id, ledger, bots, now, source="chat") -> dict:
     """One turn: ``asked`` is its user row, ``final`` its last assistant row (None when there is none).  A tool round is not an answer:
     a turn that stopped at one (or never got one) is ``incomplete`` and its item carries the question's id."""
@@ -361,19 +398,22 @@ def _list_item(asked, final, bot_id, ledger, bots, now, source="chat") -> dict:
             "tier": _tier(record), "models": scrub(models), "total_ms": _total_ms(record), "model_calls": calls, "tokens": tokens,
             "cost_usd": cost, "cost_state": state, "missing_prices": missing,
             "tool_count": _number(audit.get("tool_calls")) if _number(audit.get("tool_calls")) is not None else len(_list(record.get("tool_trace"))),
-            "write_outcomes": writes, "write_outcome": audit.get("write_outcome")}
+            "write_outcomes": writes, "write_outcome": audit.get("write_outcome"),
+            "reconcile": None if incomplete else reconcile_state(record)}
 
 
 @router.get("/answers")
 def answers(x_chat_session: str | None = Header(default=None), bot_id: str | None = None,
             engine: str | None = Query(default=None), status: str | None = None, tier: str | None = None, slow: int = 0,
-            source: str | None = Query(default=None),
+            source: str | None = Query(default=None), reconcile: str | None = Query(default=None),
             q: str | None = Query(default=None, max_length=100), before: str | None = None,
             limit: int = Query(default=50, ge=1, le=MAX_LIMIT)):
     """The owner's turns, newest question first: one item per turn, from its stored rows and the model-call ledger.  A turn with no
-    final assistant row (or only tool rounds) is ``incomplete``."""
+    final assistant row (or only tool rounds) is ``incomplete``.  ``reconcile=flagged`` keeps the answers whose figure check (5d-1)
+    found a line no source of the turn holds."""
     owner = _owner(x_chat_session)
-    if engine not in (None, "v1", "v2") or (status is not None and status not in STATUSES) or source not in (None, "chat", "duty"):
+    if (engine not in (None, "v1", "v2") or (status is not None and status not in STATUSES) or source not in (None, "chat", "duty")
+            or reconcile not in (None, "flagged")):
         raise HTTPException(400, "invalid_filter")
     bot = _uuid_or_400(bot_id, "invalid_bot_id") if bot_id else None
     cursor = _parse_cursor(before)
@@ -397,6 +437,8 @@ def answers(x_chat_session: str | None = Header(default=None), bot_id: str | Non
         query = query.where(_status_clause(F, status))
     if tier:
         query = query.where(func.coalesce(_json_text(F, "audit", "tier"), _json_text(F, "tier")) == tier)
+    if reconcile:
+        query = query.where(~_incomplete_clause(F), _reconcile_flagged_clause(F))
     if q and q.strip():
         pattern = _like(q.strip())
         query = query.where(or_(M.content.ilike(pattern, escape="\\"), F.content.ilike(pattern, escape="\\")))
@@ -674,6 +716,7 @@ def answer(message_id: str, x_chat_session: str | None = Header(default=None)):
             "answered": answered,
             "writes": scrub([item for item in _list(audit.get("writes")) if isinstance(item, dict)]),
             "write_outcome": audit.get("write_outcome"), "card": card, "answer": "" if incomplete else scrub(final.content or ""),
+            "reconciliation": None if incomplete else _reconciliation(record),
             "backup_model": scrub(fallback) if isinstance(fallback, dict) else None, "helpers": _helpers(audit),
             "latest_known": [scrub(symbol) for symbol in _list(audit.get("latest_known"))[:6] if isinstance(symbol, str)], "langfuse_url": _langfuse_url(record)}
 

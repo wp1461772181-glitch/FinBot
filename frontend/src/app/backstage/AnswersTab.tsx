@@ -19,8 +19,9 @@ function useDebounced<T>(value: T, delay: number): T {
 }
 
 /**
- * 回答: every answer the assistant gave, newest first, one line per turn.  Filters on top (bot, engine, status, only the high tier, only the slow ones, a search over the
- * question and the answer), the list pages itself as it scrolls, and a line opens the turn's course in a side drawer.  Nothing here writes.
+ * 回答: every answer the assistant gave, newest first, one line per turn.  Filters on top (bot, engine, status, only the high tier, only the slow ones, only those whose
+ * figures did not match (数字没对上), a search over the question and the answer), the list pages itself as it scrolls, and a line opens the turn's course in a side drawer.
+ * Nothing here writes.
  */
 export function AnswersTab() {
   const { t } = useLocale();
@@ -71,6 +72,7 @@ export function AnswersTab() {
       </label>
       <label className="flex min-h-9 items-center gap-2 text-small text-ink max-sm:min-h-11"><input type="checkbox" data-testid="filter-high" checked={filters.highTier} onChange={event => set({ highTier: event.target.checked })} className="size-4" />{t("只看用了高档的")}</label>
       <label className="flex min-h-9 items-center gap-2 text-small text-ink max-sm:min-h-11"><input type="checkbox" data-testid="filter-slow" checked={filters.slow} onChange={event => set({ slow: event.target.checked })} className="size-4" />{t("只看慢的")}</label>
+      <label className="flex min-h-9 items-center gap-2 text-small text-ink max-sm:min-h-11"><input type="checkbox" data-testid="filter-reconcile" checked={filters.reconcileFlagged} onChange={event => set({ reconcileFlagged: event.target.checked })} className="size-4" />{t("数字没对上")}</label>
       <label className="flex min-w-0 flex-1 basis-56 flex-col gap-1 text-caption text-muted-foreground">{t("搜索问题和回答")}
         <Input type="search" data-testid="filter-q" value={filters.q} maxLength={100} onChange={event => set({ q: event.target.value })} placeholder={t("搜索问题和回答")} className="max-sm:h-11" />
       </label>
@@ -78,7 +80,7 @@ export function AnswersTab() {
     {slow && <p data-testid="slow-rule" className="text-caption text-muted-foreground">{slow}</p>}
     {filters.slow && !slow && !list.loading && <p className="text-caption text-muted-foreground">{t("这一页的回答都没有记下耗时，没法判断哪些慢。")}</p>}
     <TabState loading={list.loading && rows.length === 0} error={list.error} empty={!list.loading && rows.length === 0} onRetry={() => void list.reload()}
-      emptyTitle={filters.botId || filters.engine || filters.status || filters.highTier || filters.slow || searched ? t("没有符合筛选的回答。") : t("还没有回答的记录。")}
+      emptyTitle={filters.botId || filters.engine || filters.status || filters.highTier || filters.slow || filters.reconcileFlagged || searched ? t("没有符合筛选的回答。") : t("还没有回答的记录。")}
       emptyDescription={t("助手每回答一次，这里就多一行。")} />
     {rows.length > 0 && <>
       <BackstageTable testId="answers-table" label={label} columns={columns} rows={rows} rowKey={row => row.id} onOpen={row => open(row.id)} />

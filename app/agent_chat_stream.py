@@ -505,6 +505,17 @@ def _model_label(resolved,chosen):
  the browser sent (resolved is None) is labelled as given."""
  if resolved is None:return f"{chosen.provider}/{chosen.model}"
  return f"{resolved['name']}（{chosen.provider}/{chosen.model}）"
+def _reconcile_wanted(credential)->bool:
+ """Whether a kernel answer of this credential gets the 5d-1 figure check: the owner's, under FINBOT_KERNEL_RECONCILE (default on)."""
+ return fp_flag("FINBOT_KERNEL_RECONCILE",True) and _is_owner(credential)
+def _schedule_reconcile(message_id,credential):
+ """5d-1: check the stored kernel answer's figures in a thread, in a task nobody awaits (the answer and the done frame never wait).
+ The result goes onto the stored message (``kernel.reconcile.check_and_store``); nothing goes to the stream or to a channel."""
+ if not _reconcile_wanted(credential):return None
+ from .kernel import reconcile
+ task=asyncio.ensure_future(asyncio.to_thread(reconcile.check_and_store,message_id))
+ _BACKGROUND.add(task); task.add_done_callback(_BACKGROUND.discard); task.add_done_callback(_failed_future_quiet)
+ return task
 def _unfinished_tool_calls(citation_sidecar,progress):
  # What a cancelled or failed turn stores: its citations (when any) and the kernel's progress (when it emitted any).
  stored={"citations":citation_sidecar} if citation_sidecar else {}
@@ -850,7 +861,11 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
      # A stopped turn in which a write ran is stored complete: the next model call must see that the write happened (it would propose it again).
      wrote=audit_of.get("write_outcome")=="executed" or any(isinstance(w,dict) and w.get("outcome")=="done" for w in audit_of.get("writes") or [])
      # A turn the owner stopped in the middle (3c) keeps what it had written and the sentence it ended with: a cancelled answer, or a complete one when a write ran.
-     await append_message(cid,turn,"assistant",text_out,tool_calls=protocol,status="failed" if ended=="failed" else "cancelled" if ended=="stopped" and not wrote else "complete")
+     stored_status="failed" if ended=="failed" else "cancelled" if ended=="stopped" and not wrote else "complete"
+     # 5d-1: a kernel answer is named before it is stored, so the figure check that runs after it can write onto it.
+     answer_id=str(uuid.uuid4()) if anchored else None
+     await append_message(cid,turn,"assistant",text_out,tool_calls=protocol,status=stored_status,**({"message_id":answer_id} if answer_id else {}))
+     if answer_id and stored_status=="complete":_schedule_reconcile(answer_id,x_chat_session)
      settled=True
      outcome=(work.FAILED,WORK_FAILED_REASON) if ended=="failed" else (work.STOPPED,WORK_STOPPED_BY_MESSAGE) if ended=="stopped" else (work.DONE,None)
      if work_open:

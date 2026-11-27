@@ -419,6 +419,53 @@ def test_detail_404s(client):
     assert get(client, f"/backstage/answers/{round_id}").status_code == 404          # a tool round is not an answer
 
 
+# --- answers: the figure check (5d-1) ---------------------------------------------------------------------------------
+
+FLAGGED = {"version": 1, "figures": 3, "flagged": [{"line": "利润是 8888 美元", "values": ["8888"]}]}
+CLEAN = {"version": 1, "figures": 2, "flagged": []}
+
+
+def reconcile_world():
+    cid = conversation(bot())
+    base = NOW - timedelta(hours=1)
+    turn(cid, "flagged", "利润是 8888 美元。", record=kernel_record(reconciliation=FLAGGED), at=base)
+    turn(cid, "clean", "营收是 4500 美元。", record=kernel_record(reconciliation=CLEAN), at=base + timedelta(minutes=1))
+    turn(cid, "error", "答", record=kernel_record(reconciliation={"version": 1, "error": "KeyError"}), at=base + timedelta(minutes=2))
+    turn(cid, "unchecked", "答", record=kernel_record(), at=base + timedelta(minutes=3))
+    turn(cid, "damaged", "答", record=kernel_record(reconciliation={"version": 1, "flagged": "x"}), at=base + timedelta(minutes=4))
+    turn(cid, "incomplete", final=False, at=base + timedelta(minutes=5))
+    return cid
+
+
+def test_each_answer_row_says_how_its_figure_check_went(client):
+    reconcile_world()
+    rows = {i["question"]: i["reconcile"] for i in get(client, "/backstage/answers").json()["items"]}
+    assert rows == {"flagged": "flagged", "clean": "clean", "error": "error", "unchecked": None, "damaged": "clean", "incomplete": None}
+
+
+def test_the_filter_keeps_only_the_answers_whose_figures_did_not_match(client):
+    reconcile_world()
+    assert [i["question"] for i in get(client, "/backstage/answers", reconcile="flagged").json()["items"]] == ["flagged"]
+    assert get(client, "/backstage/answers", reconcile="clean").status_code == 400
+    assert get(client, "/backstage/answers", reconcile="flagged", headers=G).status_code == 403
+
+
+def test_the_detail_shows_the_figures_checked_and_each_flagged_line(client):
+    cid = conversation(bot())
+    flagged = {"version": 1, "figures": 3, "flagged": [{"line": f"利润是 8888 美元 {CONFIRM}", "values": ["8888"]}, {"line": "", "values": ["1"]}, "junk"]}
+    _, mid = turn(cid, record=kernel_record(reconciliation=flagged), answer="利润是 8888 美元。")
+    body = get(client, f"/backstage/answers/{mid}").json()
+    assert body["reconciliation"] == {"state": "flagged", "figures": 3, "error": None,
+                                      "flagged": [{"line": "利润是 8888 美元 [已移除]", "values": ["8888"]}]}
+    _, clean = turn(cid, record=kernel_record(reconciliation=CLEAN), at=NOW + timedelta(minutes=1))
+    assert get(client, f"/backstage/answers/{clean}").json()["reconciliation"] == {"state": "clean", "figures": 2, "flagged": [], "error": None}
+    _, failed = turn(cid, record=kernel_record(reconciliation={"version": 1, "error": "KeyError"}), at=NOW + timedelta(minutes=2))
+    assert get(client, f"/backstage/answers/{failed}").json()["reconciliation"] == {"state": "error", "figures": None, "flagged": [], "error": "KeyError"}
+    _, unchecked = turn(cid, record=kernel_record(), at=NOW + timedelta(minutes=3))
+    assert get(client, f"/backstage/answers/{unchecked}").json()["reconciliation"] is None
+    assert get(client, f"/backstage/answers/{mid}", headers=G).status_code == 403
+
+
 def test_no_stored_button_value_appears_in_any_response(client):
     request_id, record = card_record()
     record["narration"].append(f"值是 {CONFIRM} 和 {AUTHORIZE}")

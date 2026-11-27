@@ -73,7 +73,7 @@ const text = (value) => (typeof value === "string" ? value.trim() : "");
 
 // ---- 回答 ----------------------------------------------------------------------------------------------------------
 
-export const ANSWER_FILTER_DEFAULTS = Object.freeze({ botId: "", engine: "", status: "", highTier: false, slow: false, q: "", before: "" });
+export const ANSWER_FILTER_DEFAULTS = Object.freeze({ botId: "", engine: "", status: "", highTier: false, slow: false, reconcileFlagged: false, q: "", before: "" });
 export const ANSWER_ENGINES = [{ value: "v2", label: "新流程" }, { value: "v1", label: "旧流程" }];
 export const ANSWER_STATUSES = ["succeeded", "failed", "cancelled", "waiting_for_input", "incomplete"];
 
@@ -96,10 +96,11 @@ function paramsOf(entries) {
   return out ? `?${out}` : "";
 }
 
-/** The query string of the answers list: only what is set.  「只看用了高档的」 is tier=high, 「只看慢的」 is slow=1; the search text is cut to the 100 characters the API takes. */
+/** The query string of the answers list: only what is set.  「只看用了高档的」 is tier=high, 「只看慢的」 is slow=1, 「数字没对上」 is reconcile=flagged; the search text is cut to the 100 characters the API takes. */
 export function answersQuery(filters) {
   const f = { ...ANSWER_FILTER_DEFAULTS, ...filters };
-  return paramsOf([["bot_id", f.botId], ["engine", f.engine], ["status", f.status], ["tier", f.highTier ? "high" : ""], ["slow", f.slow ? "1" : ""], ["q", text(f.q).slice(0, SEARCH_MAX)], ["before", f.before]]);
+  return paramsOf([["bot_id", f.botId], ["engine", f.engine], ["status", f.status], ["tier", f.highTier ? "high" : ""], ["slow", f.slow ? "1" : ""],
+    ["reconcile", f.reconcileFlagged ? "flagged" : ""], ["q", text(f.q).slice(0, SEARCH_MAX)], ["before", f.before]]);
 }
 
 /** "?before=<cursor>" for the lists that only page (操作记录, 提醒投递). */
@@ -159,6 +160,26 @@ export function helperLines(detail, w = ZH_WORDS) {
       Number.isFinite(seconds) && helper.seconds !== null && helper.seconds !== "" ? formatMs(seconds * 1000) : ""].filter(Boolean);
     return { id: text(helper.call_id) || `helper-${index}`, complete: helper.complete !== false, text: parts.join(" · ") };
   });
+}
+
+/** The fixed line under the flagged lines of the figure check: the owner judges, the check does not. */
+export const RECONCILE_NOTE = "这些数字在这一轮读到的资料里都找不到；不一定是错，可能是模型自己的知识或算法，请对照原文判断。";
+
+/**
+ * The detail's 「数字对账结果」 block (5d-1): how many figures were checked, each flagged line with its values, and the fixed note under them; a check that
+ * failed says so.  Null when the answer was not checked (an old turn, the switch off, a guest's).
+ */
+export function reconcileBlock(detail, w = ZH_WORDS) {
+  const found = detail?.reconciliation;
+  if (!isObject(found)) return null;
+  const title = w.t("数字对账结果");
+  if (found.state === "error" || text(found.error)) {
+    return { kind: "error", title, checked: "", text: `${w.t("对账没有做完")}${w.colon}${text(found.error) || w.t("未知原因")}`, lines: [], note: "" };
+  }
+  const lines = list(found.flagged).filter(isObject).map((item) => ({ line: text(item.line), values: list(item.values).filter((value) => typeof value === "string" && value).join(w.list) }))
+    .filter((item) => item.line);
+  const figures = typeof found.figures === "number" && Number.isFinite(found.figures) ? `${w.t("查过的数字")}${w.colon}${found.figures}` : "";
+  return { kind: lines.length ? "flagged" : "clean", title, checked: figures, text: lines.length ? "" : w.t("没有找不到出处的数字。"), lines, note: lines.length ? w.t(RECONCILE_NOTE) : "" };
 }
 
 function compactJson(value, max = 600) {

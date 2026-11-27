@@ -7,12 +7,14 @@ import { answersQuery, feedbackBody, pagedQuery, usageQuery, type AnswerFilters,
 export type Tokens = { input?: number; output?: number; cache_read?: number; cache_write?: number; total?: number };
 export type AnswerItem = { message_id: string; conversation_id: string; bot_id: string | null; bot_name: string | null; created_at: string; question: string; answer: string;
   engine: "v1" | "v2" | null; status: string; tier: "low" | "mid" | "high" | null; models: string[]; total_ms: number | null; model_calls: number; tokens: Tokens; cost_usd: number | null;
-  tool_count: number; write_outcomes: string[]; write_outcome: string | null };
+  tool_count: number; write_outcomes: string[]; write_outcome: string | null; reconcile?: "flagged" | "clean" | "error" | null };
 export type AnswersPage = { items: AnswerItem[]; next_before: string | null; slow_threshold_ms: number | null; slow_rule: string | null };
 
 export type ModelCall = { tier: string | null; model: string; catalog_name: string | null; purpose: string; ms: number | null; tokens: Tokens; attempt: number; ok: boolean; error: string | null; cost_usd: number | null; priced: boolean; at: string };
 export type ToolCall = { call_id: string; name: string; arguments: Record<string, unknown>; status: string; result: { ok: boolean; error_code: string | null; count: number | null; row_titles: string[] } | null };
 export type Citation = { ordinal: number; title: string; url: string | null; source_type: string };
+/** The figure check run after a kernel answer (5d-1); null when the answer was not checked. */
+export type Reconciliation = { state: "flagged" | "clean" | "error"; figures: number | null; flagged: Array<{ line: string; values: string[] }>; error: string | null };
 export type AnswerDetail = {
   message_id: string; conversation_id: string; turn_id: string; bot_id: string | null; bot_name: string | null; created_at: string; engine: "v1" | "v2" | null; partial: boolean; status: string; tier: string | null; total_ms: number | null;
   question: string; model_calls: ModelCall[]; model_calls_source: string; narration: string[]; checklist: Array<{ item: string; state: string }>; tool_calls: ToolCall[]; citations: Citation[];
@@ -20,6 +22,7 @@ export type AnswerDetail = {
   card: { request_id: string; reason: string; title: string; targets: unknown[]; question: string | null; choices: Array<{ label: string; kind: string }>;
     consent: { status: string; expired: boolean; decided_at: string | null; operations: unknown[]; result: unknown } | null } | null;
   answer: string; backup_model: { from: string | null; to: string | null; reason: string | null } | null; latest_known?: string[]; langfuse_url: string | null;
+  reconciliation?: Reconciliation | null;
 };
 
 export type UsageGroup = { key: string; label: string; calls: number; failed_calls: number; tokens: Tokens; ms_p50: number | null; cost_usd: number | null; unpriced_calls: number; missing_prices: string[] };
