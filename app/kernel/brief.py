@@ -95,7 +95,7 @@ def gather(owner_hash: str, since: datetime) -> dict:
     return {"kept": kept, "held": held, "counts": counts, "night_digest_sent": night_digest_sent, "findings": findings, "problems": problems, "selfcheck_ids": selfcheck_ids}
 
 
-def missed_findings(owner_hash: str) -> tuple[list[dict], list[str], list[int]]:
+def missed_findings(owner_hash: str) -> tuple[list[dict], list[tuple[str, bool]], list[int]]:
     """What the missed-alert checks no brief has carried yet (``kernel.selfcheck``) found, each ``(kind, symbol, at)`` once; what they could
     not check (a check that failed, was cut off, or could not fetch some symbols); and those checks' row ids.  Not windowed: a check that
     ends after the day's brief is carried by the next one.  A log that cannot be read costs the brief nothing but these lines."""
@@ -104,19 +104,23 @@ def missed_findings(owner_hash: str) -> tuple[list[dict], list[str], list[int]]:
     except Exception:
         logger.exception("morning brief: the missed-alert checks could not be read")
         return [], [], []
-    out, problems, seen = [], [], set()
+    out, problems, seen, unfetched = [], [], set(), None
     for row in rows:
-        day = row.get("day") or ""
+        day, session = row.get("day") or "", row.get("session")
         if row.get("outcome") != "done":
-            problems.append(f"{day} 的漏报自查没做完，这一天没有核对。")
+            problems.append((f"北京 {day} 的漏报自查没做完，这一天没有核对。", True))
             continue
         errors = (row.get("checked") or {}).get("errors") or {}
         if errors.get("earnings"):
-            problems.append(f"{day} 的财报自查没做成，这一天的财报没有核对。")
+            problems.append((f"北京 {day} 的财报自查没做成，这一天的财报没有核对。", True))
+        elif errors.get("earnings_seen"):
+            problems.append((f"北京 {day} 读不到盯盘程序那边的财报记录，只核对了已经收到的财报。", True))
+        when = f"纽约 {session}" if session else f"北京 {day}"
         if errors.get("price"):
-            problems.append(f"{day} 的价格自查没做成，这一天的行情没有核对。")
+            problems.append((f"{when} 的价格自查没做成，这一天的行情没有核对。", True))
         elif errors.get("unfetched"):
-            problems.append(f"{day} 的价格自查有几只没取到行情：{errors['unfetched']}，这几只没有核对。")
+            # a symbol Yahoo never serves would repeat every day: it rides along in a brief, it never starts one
+            unfetched = (f"{when} 的价格自查有几只没取到行情：{errors['unfetched']}，这几只没有核对。", False)
         for finding in row.get("findings") or []:
             if not isinstance(finding, dict):
                 continue
@@ -124,6 +128,8 @@ def missed_findings(owner_hash: str) -> tuple[list[dict], list[str], list[int]]:
             if key not in seen:
                 seen.add(key)
                 out.append(finding)
+    if unfetched:          # only the latest: days of the same symbols Yahoo does not serve would pile up otherwise
+        problems.append(unfetched)
     return out, problems, [row["id"] for row in rows]
 
 
@@ -233,9 +239,11 @@ async def _run(row_id: int, owner: str, day: str, current: str, now: datetime, s
         since = await asyncio.to_thread(_window_start, owner, now)
     gathered = await asyncio.to_thread(gather, owner, since)
     kept, held, counts = gathered["kept"], gathered["held"], gathered["counts"]
-    findings, problems = gathered.get("findings") or [], gathered.get("problems") or []
-    if findings or problems:       # findings, and checks that did not finish, are content: a window with only these is not skipped
-        counts = {**counts, "missed": len(findings), **({"unchecked": len(problems)} if problems else {})}
+    findings, flagged = gathered.get("findings") or [], gathered.get("problems") or []
+    problems = [text for text, _ in flagged]
+    serious = sum(1 for _, counts_ in flagged if counts_)
+    if findings or serious:        # findings, and checks that did not finish, are content: a window with only these is not skipped
+        counts = {**counts, "missed": len(findings), **({"unchecked": serious} if serious else {})}
     line = filtered_line(counts, since)
     missed = selfcheck_lines(findings, problems)
     tail = "".join(f"\n\n{part}" for part in (missed, line) if part)

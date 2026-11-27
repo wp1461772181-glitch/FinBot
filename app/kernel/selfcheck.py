@@ -204,7 +204,7 @@ def price_findings(day: date, snapshot: dict, sentinel_db, fetch=None) -> tuple[
                          "why": f"replayed kind={alert.get('kind')} tier={alert.get('tier')}; no live alert on it that New York date"})
     checked = {"price_symbols": symbols, "replayed": len(counted), "live": live_rows}
     if data.get("errors"):
-        checked["unfetched"] = sorted(data["errors"])
+        checked["unfetched"] = sorted(s for s in data["errors"] if s in symbols)       # SPY is only the market reference
     return findings, checked
 
 
@@ -236,8 +236,8 @@ def _run(row_id: int, owner: str, now: datetime, since: datetime | None, sentine
     checked: dict = {"since": since.isoformat(), "errors": {}}
     try:
         found, counts = earnings_findings(owner, since, now, watched_symbols(snapshot), sentinel_db)
-        if "error" in counts:
-            checked["errors"]["earnings"] = counts.pop("error")
+        if "error" in counts:          # only the sentinel's side could not be read: the events themselves were checked
+            checked["errors"]["earnings_seen"] = counts.pop("error")
         findings += found
         checked.update(counts)
     except Exception as exc:

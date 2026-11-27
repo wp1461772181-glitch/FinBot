@@ -1,8 +1,8 @@
-import sqlite3
 """5c-3a: the daily missed-alert check and the lines it adds to the morning brief.
 
 No network: the price check gets scripted 5-minute bars (``tests.test_sentinel_replay``), the sentinel's database is a ``Store`` in
 ``tmp_path``, the model is a script; the rest is the suite's disposable PostgreSQL."""
+import sqlite3
 import asyncio
 import copy
 import json
@@ -457,7 +457,54 @@ def test_a_check_that_did_not_finish_or_could_not_fetch_is_said_in_the_brief(env
     duty_selfcheck.finish(done_id, outcome="done", findings=[], checked={"errors": {"unfetched": "ANT、AMD"}})
     model([])
     row = write_brief()
-    assert row["outcome"] == "done" and row["counts"]["unchecked"] == 2 and row["counts"]["missed"] == 0
-    assert "2000-01-01 的漏报自查没做完" in row["message"] and "没取到行情：ANT、AMD" in row["message"]
+    assert row["outcome"] == "done" and row["counts"]["unchecked"] == 1 and row["counts"]["missed"] == 0
+    assert "北京 2000-01-01 的漏报自查没做完" in row["message"] and "北京 2000-01-02 的价格自查有几只没取到行情：ANT、AMD" in row["message"]
     again = asyncio.run(brief.run_once(OWNER_HASH, brief_now(1), day="2000-12-31"))
     assert again is None or "漏报自查" not in (again.get("message") or "")
+
+
+
+def _check(day, outcome="done", **fields):
+    row_id = duty_selfcheck.claim(OWNER_HASH, day)
+    return duty_selfcheck.finish(row_id, outcome=outcome, **fields)
+
+
+def test_symbols_that_could_not_be_fetched_ride_along_but_never_start_a_brief(env, model):
+    _check("2000-01-01", findings=[], checked={"errors": {"unfetched": "ANT"}}, session="1999-12-31")
+    _check("2000-01-02", findings=[], checked={"errors": {"unfetched": "ANT"}}, session="2000-01-01")
+    model([])
+    row = write_brief()
+    assert row["outcome"] == "skipped"          # nothing else to say: no brief for this alone
+    duty("record")
+    row = asyncio.run(brief.run_once(OWNER_HASH, brief_now(1), day="2000-12-30"))
+    assert row["outcome"] == "done" and row["message"].count("没取到行情") == 1 and "纽约 2000-01-01" in row["message"]
+
+
+def test_a_check_still_running_after_an_hour_is_said_to_have_not_finished(env, model):
+    row_id = duty_selfcheck.claim(OWNER_HASH, "2000-01-01")
+    with SessionLocal() as db:
+        db.get(duty_selfcheck.DutySelfcheck, row_id).created_at = datetime.now(UTC) - timedelta(hours=2)
+        db.commit()
+    recent = duty_selfcheck.claim(OWNER_HASH, "2000-01-02")           # 20 minutes in: not yet
+    model([])
+    row = write_brief()
+    assert "北京 2000-01-01 的漏报自查没做完" in row["message"] and "2000-01-02" not in row["message"] and recent
+
+
+def test_a_failed_price_check_and_an_unreadable_sentinel_side_are_said_apart(env, model):
+    _check("2000-01-01", findings=[], session="1999-12-31",
+           checked={"errors": {"price": "TimeoutError: x", "earnings_seen": "OperationalError: y"}})
+    model([])
+    row = write_brief()
+    assert "纽约 1999-12-31 的价格自查没做成" in row["message"]
+    assert "只核对了已经收到的财报" in row["message"] and "财报自查没做成" not in row["message"]
+
+
+def test_spy_is_not_listed_as_an_unchecked_symbol(env):
+    class NoSpy(Bars):
+        def __call__(self, symbols):
+            data = super().__call__(symbols)
+            data["errors"] = {"SPY": "HTTPError", "INTC": "HTTPError"}
+            return data
+    _, checked = prices(env, fetch=NoSpy())
+    assert checked.get("unfetched") == ["INTC"]
