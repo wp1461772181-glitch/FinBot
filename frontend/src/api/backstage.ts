@@ -39,7 +39,7 @@ export type DutyPage = Paged<DutyItem> & { mode: "off" | "shadow" | "on" };
 /** One change to the owner's memory or his views of companies (5d-2).  `text` is null once the item was deleted; `from_bot`/`to_bot` only on a layer move (id null: global). */
 export type MemoryLayer = { id: string | null; name: string | null };
 export type MemoryChangeItem = { id: string; at: string; target: "profile" | "view"; action: string; by: string; text: string | null; before: string | null; reason: string | null;
-  bot: string | null; symbol: string | null; company: string | null; reconstructed: boolean; quote: string | null; examples: Array<Record<string, unknown>>;
+  bot: string | null; bot_deleted: boolean; symbol: string | null; company: string | null; reconstructed: boolean; quote: string | null; examples: Array<Record<string, unknown>>;
   conversation_id: string | null; message_id: string | null; run: string | null; template: string | null; from_bot: MemoryLayer | null; to_bot: MemoryLayer | null };
 
 const get = <T,>(path: string, signal?: AbortSignal) => requestJson<T>(`/api/backstage/${path}`, { signal });

@@ -158,9 +158,10 @@ async def update_bot_endpoint(bot_id: str, body: BotBody, x_chat_session: str | 
 
 @router.delete("/bots/{bot_id}")
 async def delete_bot_endpoint(bot_id: str, x_chat_session: str | None = Header(default=None)):
+    from .memory_events import PAGE
     credential = _owner_only(x_chat_session)
     try:
-        deleted = await asyncio.to_thread(bots.delete_bot, owner_hash(credential), bot_id)
+        deleted = await asyncio.to_thread(bots.delete_bot, owner_hash(credential), bot_id, by=PAGE)
     except bots.BotError as exc:
         raise HTTPException(422, str(exc))
     if not deleted:

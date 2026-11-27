@@ -225,6 +225,8 @@ def delete_version(owner_hash: str, view_id: str, by: memory_events.Actor | None
         row = db.get(OwnerView, key)
         if row is None or row.owner_hash != owner_hash:
             return False
+        _lock(db, owner_hash, row.symbol)      # one writer per company: a drop or archive at the same moment cannot log its words after the scrub
+        db.refresh(row)
         _event(db, row, "deleted", by, words=False)
         memory_events.scrub(db, owner_hash, "view", row.id)
         db.execute(delete(ViewReview).where(ViewReview.owner_hash == owner_hash, ViewReview.view_id == key))

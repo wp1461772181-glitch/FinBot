@@ -3,12 +3,13 @@ transaction, with who made it and its basis; consequences carry their cause's ``
 events; a rolled-back change leaves no event; the backfill rebuilds what came before once.  Real PostgreSQL (the test database).
 """
 import ast
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text as text_sql
 
 import app
 from app import agent_profile as profile, memory_events, memory_settle as settle, owner_views
@@ -395,7 +396,8 @@ def test_page_filters_searches_and_pages_newest_first():
 
 MUTATORS = {"agent_profile": {"add_item", "add_manual_item", "archive_item", "restore_item", "delete_item", "confirm_item", "update_item",
                               "add_proposed", "add_noticed", "archive_stale_proposed"},
-            "owner_views": {"record", "drop", "archive", "restore", "delete_version"}}
+            "owner_views": {"record", "drop", "archive", "restore", "delete_version"},
+            "agent_bots": {"delete_bot"}}
 WRAPPERS = {"to_thread", "partial"}
 
 
@@ -429,18 +431,34 @@ def unlogged_calls(source: str, filename: str) -> tuple[int, list[str]]:
     def wrapper(func):
         return (isinstance(func, ast.Attribute) and func.attr in WRAPPERS) or (isinstance(func, ast.Name) and func.id in WRAPPERS)
 
-    found, missing = 0, []
+    def says_who(call):
+        """``by=`` given, and not the literal None (that is unknown by another name)."""
+        return any(keyword.arg == "by" and not (isinstance(keyword.value, ast.Constant) and keyword.value.value is None)
+                   for keyword in call.keywords)
+
+    found, missing, called = 0, [], set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        hit = target(node.func)
+        hit, named = target(node.func), node.func
         if hit is None and node.args and wrapper(node.func):
-            hit = target(node.args[0])
-        if hit is None or Path(filename).name == f"{hit[0]}.py":
+            hit, named = target(node.args[0]), node.args[0]
+        if hit is None:
+            continue
+        called.add(id(named))
+        if Path(filename).name == f"{hit[0]}.py":
             continue
         found += 1
-        if not any(keyword.arg == "by" for keyword in node.keywords):
+        if not says_who(node):
             missing.append(f"{filename}:{node.lineno} {hit[0]}.{hit[1]}")
+    # A mutator handed on as a value (a dict of functions, an alias, run_in_executor) is called where this check cannot see whether it says
+    # who it is: wrap it with functools.partial(fn, by=...) instead.
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Attribute, ast.Name)) and id(node) not in called and isinstance(getattr(node, "ctx", None), ast.Load):
+            hit = target(node)
+            if hit is not None and Path(filename).name != f"{hit[0]}.py":
+                found += 1
+                missing.append(f"{filename}:{node.lineno} {hit[0]}.{hit[1]} (passed as a value)")
     return found, missing
 
 
@@ -455,9 +473,97 @@ def test_every_caller_of_a_memory_changing_function_says_who_it_is():
     assert not missing, "a call that passes no by= would log 'unknown':\n" + "\n".join(missing)
 
 
+def test_the_caller_check_catches_a_call_passed_on_as_a_value_or_with_by_none():
+    """Fable acceptance of 5d-2: a dict of functions, an alias, run_in_executor and ``by=None`` all slipped past the first check."""
+    source = ("import asyncio, functools\nfrom . import agent_profile, owner_views\n"
+              "DELETERS = {'memory': agent_profile.delete_item}\n"
+              "f = owner_views.drop\n"
+              "async def g(loop, owner):\n    await loop.run_in_executor(None, agent_profile.archive_item, owner, 'x')\n"
+              "    agent_profile.delete_item(owner, 'x', by=None)\n"
+              "    functools.partial(agent_profile.delete_item, by=agent_profile)\n")
+    found, missing = unlogged_calls(source, "app/new_module.py")
+    assert sorted(missing) == sorted(["app/new_module.py:3 agent_profile.delete_item (passed as a value)", "app/new_module.py:4 owner_views.drop (passed as a value)",
+                                      "app/new_module.py:6 agent_profile.archive_item (passed as a value)", "app/new_module.py:7 agent_profile.delete_item"])
+
+
+MEMORY_MODELS = {"AgentProfileItem", "OwnerView"}
+MEMORY_TABLES = re.compile(r"\b(?:UPDATE|DELETE\s+FROM|INSERT\s+INTO)\s+(?:agent_profile_items|owner_views)\b", re.I)
+# The modules that write those rows themselves and log what is a change (agent_profile's own column backfills, its template label and its
+# seen / used stamps are not changes of what it keeps about him).
+MEMORY_WRITERS = {"agent_profile.py", "owner_views.py", "memory_events.py", "memory_settle.py"}
+
+
+def direct_writes(source: str, filename: str) -> list[str]:
+    """``query(Model).update/delete``, ``update(Model)``, ``delete(Model)`` or raw SQL writing the memory tables."""
+    def queried(node):
+        while isinstance(node, (ast.Call, ast.Attribute)):
+            if isinstance(node, ast.Call):
+                f = node.func
+                if isinstance(f, ast.Attribute) and f.attr == "query" and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id in MEMORY_MODELS:
+                    return True
+                node = f
+            else:
+                node = node.value
+        return False
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call):
+            f = node.func
+            if isinstance(f, ast.Attribute) and f.attr in ("update", "delete") and queried(f.value):
+                found.append(f"{filename}:{node.lineno}")
+            if isinstance(f, ast.Name) and f.id in ("update", "delete") and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id in MEMORY_MODELS:
+                found.append(f"{filename}:{node.lineno}")
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and MEMORY_TABLES.search(node.value):
+            found.append(f"{filename}:{node.lineno}")
+    return found
+
+
+def test_only_the_memory_modules_write_the_memory_tables_directly():
+    """A bulk write elsewhere (``delete_bot`` archived a bot's items with one UPDATE) changes memory without an event: go through agent_profile."""
+    root = Path(app.__file__).parent
+    stray = [hit for path in sorted(root.rglob("*.py")) if path.name not in MEMORY_WRITERS
+             for hit in direct_writes(path.read_text(encoding="utf-8"), str(path.relative_to(root)))]
+    assert not stray, "\n".join(stray)
+    assert direct_writes("db.query(AgentProfileItem).filter(x).update({'status': 'archived'})\n", "m.py") == ["m.py:1"]
+
+
 def test_the_caller_check_catches_a_call_without_by():
     source = ("import asyncio\nfrom . import agent_profile as profile\nfrom .owner_views import drop\n"
-              "async def f(owner):\n    await asyncio.to_thread(profile.delete_item, owner, 'x')\n    drop(owner, 'NVDA', by=None)\n"
+              "async def f(owner):\n    await asyncio.to_thread(profile.delete_item, owner, 'x')\n    drop(owner, 'NVDA', by=PAGE)\n"
               "    profile.list_items(owner)\n")
     found, missing = unlogged_calls(source, "app/new_module.py")
     assert found == 2 and missing == ["app/new_module.py:5 agent_profile.delete_item"]
+
+
+# --- Fable acceptance of 5d-2 --------------------------------------------------------------------------------------------
+
+def test_deleting_a_bot_records_each_of_its_items_it_archives():
+    from app import agent_bots
+    from app.agent_chat_models import AgentConversation, AgentInboxItem, AgentTask
+    from app.agent_telegram_bots import AgentTelegramBot
+    Base.metadata.create_all(engine, tables=[AgentConversation.__table__, AgentInboxItem.__table__, AgentTask.__table__, AgentTelegramBot.__table__])
+    b = a_bot()
+    own = explicit("研究员只看半导体", bot_id=str(b))["item"]["id"]
+    kept = explicit("全局：金额用亿美元")["item"]["id"]
+    assert agent_bots.delete_bot(OWNER_HASH, str(b), by=memory_events.PAGE) is True
+    last = events(own)[-1]
+    assert (last["action"], last["by"], last["reason"], last["text"]) == ("archived", "page", "bot_deleted", "研究员只看半导体")
+    assert actions(kept) == ["added"], "a global item is untouched"
+
+
+def test_a_template_meeting_a_guess_confirms_it_without_saying_he_said_it():
+    item = profile.add_item(OWNER_HASH, kind="instruction", text="按估值打分", quote="按估值打分", message="按估值打分", origin="inferred",
+                            by=memory_events.extract(MID))["item"]["id"]
+    profile.add_item(OWNER_HASH, kind="instruction", text="按估值打分", quote="按估值打分", message="按估值打分", origin="manual",
+                     by=memory_events.template("value_investor"))
+    confirmed = events(item)[-1]
+    assert (confirmed["action"], confirmed["by"], confirmed["reason"]) == ("confirmed", "template", None)
+
+
+def test_a_second_backfill_while_one_runs_skips_instead_of_waiting():
+    stored_item("以后先说结论")
+    with SessionLocal() as holder:
+        holder.execute(text_sql("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": memory_events.BACKFILL_LOCK})
+        assert memory_events.backfill() == 0          # it would hang on pg_advisory_xact_lock
+        holder.rollback()
+    assert memory_events.backfill() == 1

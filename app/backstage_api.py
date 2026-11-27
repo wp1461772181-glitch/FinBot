@@ -969,7 +969,7 @@ def _memory_item(event: dict, bots: dict) -> dict:
         return scrub(value) if isinstance(value, str) else None
     return {"id": event["id"], "at": event["at"], "target": event["target"], "action": event["action"], "by": event["by"],
             "text": text(event.get("text")), "before": text(event.get("before")), "reason": text(event.get("reason")),
-            "bot": bots.get(bot) if bot else None, "symbol": symbol, "company": display_name(symbol) if symbol else None,
+            "bot": bots.get(bot) if bot else None, "bot_deleted": bool(bot) and bot not in bots, "symbol": symbol, "company": display_name(symbol) if symbol else None,
             "reconstructed": bool(event.get("reconstructed")), "quote": text(basis.get("quote")),
             "examples": scrub([item for item in _list(basis.get("examples")) if isinstance(item, dict)]),
             "conversation_id": text(basis.get("conversation_id")), "message_id": text(basis.get("message_id")),

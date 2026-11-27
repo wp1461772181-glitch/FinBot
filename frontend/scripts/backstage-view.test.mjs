@@ -501,3 +501,10 @@ test("every phrase of the memory-changes tab is in both catalogs", () => {
     assert.ok(english[phrase]?.trim(), phrase);
   }
 });
+
+test("a memory item whose bot was deleted reads 记忆 · 已删除的 bot, not the global layer, with its reason in words", () => {
+  const row = change({ action: "archived", bot: null, bot_deleted: true, reason: "bot_deleted", quote: null });
+  assert.equal(row.what, "记忆 · 已删除的 bot");
+  assert.ok(row.basis.includes("原因：所属的 bot 被删除"), row.basis.join(" | "));
+  assert.equal(change({ bot: null, bot_deleted: false }).what, "记忆");
+});

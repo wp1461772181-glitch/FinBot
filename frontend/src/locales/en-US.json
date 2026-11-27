@@ -2722,6 +2722,7 @@
   "不明": "Unknown",
   "同一主题有了新的一条": "A newer item took over the same topic",
   "超过 30 条上限": "Over the 30-item limit",
+  "所属的 bot 被删除": "Its bot was deleted",
   "待确认的推测超过 20 条": "More than 20 guesses awaiting confirmation",
   "60 天没有回应": "No response for 60 days",
   "你自己又说了一遍": "You said it again yourself",

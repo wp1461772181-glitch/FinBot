@@ -1171,7 +1171,7 @@ def test_the_detail_names_the_companies_the_system_brought_and_skips_its_timelin
 
 # --- memory changes (5d-2) -------------------------------------------------------------------------------------------
 
-MEMORY_KEYS = {"id", "at", "target", "action", "by", "text", "before", "reason", "bot", "symbol", "company", "reconstructed", "quote", "examples",
+MEMORY_KEYS = {"id", "at", "target", "action", "by", "text", "before", "reason", "bot", "bot_deleted", "symbol", "company", "reconstructed", "quote", "examples",
                "conversation_id", "message_id", "run", "template", "from_bot", "to_bot"}
 
 
@@ -1273,3 +1273,11 @@ def test_memory_changes_find_the_conversation_of_a_change_that_names_only_his_me
     memory_event(by=memory_events.chat(None, None, other_id), text="别人的", at=NOW - timedelta(minutes=1))
     rows = get(client, "/backstage/memory").json()["items"]
     assert [(r["message_id"], r["conversation_id"]) for r in rows] == [(str(said_id), str(mine)), (str(other_id), None)]
+
+
+def test_memory_changes_name_a_deleted_bot_as_deleted_not_as_the_global_layer(client):
+    gone = uuid.uuid4()
+    memory_event(action="archived", text="研究员只看半导体", reason="bot_deleted", bot_id=gone, at=NOW)
+    memory_event(text="全局：金额用亿美元", at=NOW - timedelta(minutes=1))
+    rows = get(client, "/backstage/memory").json()["items"]
+    assert [(r["bot"], r["bot_deleted"], r["reason"]) for r in rows] == [(None, True, "bot_deleted"), (None, False, None)]

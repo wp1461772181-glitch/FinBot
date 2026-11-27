@@ -33,7 +33,7 @@ VIEW_ACTIONS = ("recorded", "superseded", "dropped", "archived", "restored", "de
 ACTIONS = tuple(dict.fromkeys(PROFILE_ACTIONS + VIEW_ACTIONS))
 BYS = ("chat", "page", "review", "settle", "template", "extract", "unknown")
 # The reasons the code itself gives (the settle's and a view archive's own sentences are stored as they are written).
-REPLACED, CAP, LIMIT, STALE, RESTATED = "replaced", "cap", "limit", "stale", "restated"
+REPLACED, CAP, LIMIT, STALE, RESTATED, BOT_DELETED = "replaced", "cap", "limit", "stale", "restated", "bot_deleted"
 TEXT_MAX = 200
 SCRUBBED = ("quote", "examples")          # what a deletion takes out of an earlier event's basis
 _LAYER_KEYS = ("from_bot", "to_bot")      # None there is the global layer, and is kept
@@ -262,7 +262,9 @@ def _rebuild_view(db, row: OwnerView) -> int:
 
 def backfill(owner_hash: str | None = None) -> int:
     """Once, idempotent: every profile item and view version with no event yet gets the events its row tells of, ``reconstructed``.  One
-    writer at a time (an advisory lock); a row whose change was logged already is never touched.  Returns how many events were written."""
+    writer at a time: a process that finds another one backfilling skips (it never waits at startup).  Each owner's rows are read under the
+    writer locks ``agent_profile`` and ``owner_views`` take, so an item deleted meanwhile cannot get its words back into the log after its
+    ``scrub``.  A row whose change was logged already is never touched.  Returns how many events were written."""
     ensure_table()
     E, P, V = MemoryEvent, AgentProfileItem, OwnerView
     items = select(P).where(~exists().where(E.owner_hash == P.owner_hash, E.target == "profile", E.item_id == P.id))
@@ -271,11 +273,19 @@ def backfill(owner_hash: str | None = None) -> int:
         items, versions = items.where(P.owner_hash == owner_hash), versions.where(V.owner_hash == owner_hash)
     written = 0
     with SessionLocal() as db:
-        db.execute(sql("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": BACKFILL_LOCK})
-        for row in db.scalars(items.order_by(P.created_at, P.id)).all():
-            written += _rebuild_item(db, row)
-        for row in db.scalars(versions.order_by(V.created_at, V.id)).all():
-            written += _rebuild_view(db, row)
+        if not db.execute(sql("SELECT pg_try_advisory_xact_lock(hashtext(:key))"), {"key": BACKFILL_LOCK}).scalar():
+            logger.info("memory change log: another process is backfilling; skipped")
+            return 0
+        owners = sorted({row.owner_hash for row in db.scalars(items).all()} | {row.owner_hash for row in db.scalars(versions).all()})
+        for owner in owners:
+            from .owner_views import _lock as view_lock
+            db.execute(sql("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": "profile:" + owner})       # agent_profile._lock
+            for symbol in sorted(set(db.scalars(select(V.symbol).where(V.owner_hash == owner)))):
+                view_lock(db, owner, symbol)
+            for row in db.scalars(items.where(P.owner_hash == owner).order_by(P.created_at, P.id)).all():
+                written += _rebuild_item(db, row)
+            for row in db.scalars(versions.where(V.owner_hash == owner).order_by(V.created_at, V.id)).all():
+                written += _rebuild_view(db, row)
         db.commit()
     return written
 

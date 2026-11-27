@@ -279,7 +279,8 @@ def add_item(owner_hash: str, *, kind: str, text: str, quote: str, message: str,
             if origin in OWNER_ORIGINS and same.origin not in OWNER_ORIGINS:
                 same.origin = origin
                 same.quote, same.source_message_id = quote, source or same.source_message_id
-                _event(db, same, "confirmed", by, reason=memory_events.RESTATED, basis=_said(same))     # a guess he has now said himself
+                _event(db, same, "confirmed", by, reason=None if getattr(by, "by", None) == "template" else memory_events.RESTATED,
+                       basis=_said(same))     # a guess he has now said himself (a template he chose says nothing of his words)
             same.updated_at = datetime.now(UTC)
             if origin in OWNER_ORIGINS:
                 same.last_seen_at = same.updated_at     # he said it again

@@ -459,7 +459,8 @@ const MEMORY_ACTION_LABELS = {
 };
 const MEMORY_BY_LABELS = { ...Object.fromEntries(MEMORY_BYS.map((by) => [by.value, by.label])), unknown: "不明" };
 // The reasons the code gives; anything else (the quarterly settle's own sentence) is shown as written.
-const MEMORY_REASONS = { replaced: "同一主题有了新的一条", cap: "超过 30 条上限", limit: "待确认的推测超过 20 条", stale: "60 天没有回应", restated: "你自己又说了一遍" };
+const MEMORY_REASONS = { replaced: "同一主题有了新的一条", cap: "超过 30 条上限", limit: "待确认的推测超过 20 条", stale: "60 天没有回应", restated: "你自己又说了一遍",
+  bot_deleted: "所属的 bot 被删除" };
 
 /** The query string of the memory-changes list: only what is set; 变更 becomes the actions it stands for; the search text is cut to 100 characters. */
 export function memoryQuery(filters) {
@@ -484,7 +485,8 @@ export function memoryRow(item, timeZone, w = ZH_WORDS) {
   const action = text(item?.action);
   const symbol = text(item?.symbol), company = text(item?.company), bot = text(item?.bot);
   const named = company && company !== symbol ? `${company}${w.parens(symbol)}` : symbol || company;
-  const what = view ? (named ? `${w.t("看法")} · ${named}` : w.t("看法")) : bot ? `${w.t("记忆")} · ${bot}` : w.t("记忆");
+  const owner = bot || (item?.bot_deleted === true ? w.t("已删除的 bot") : "");
+  const what = view ? (named ? `${w.t("看法")} · ${named}` : w.t("看法")) : owner ? `${w.t("记忆")} · ${owner}` : w.t("记忆");
   const words = text(item?.text), before = text(item?.before);
   const gone = action === "deleted" || action === "rejected" || !words;
   const basis = [];
