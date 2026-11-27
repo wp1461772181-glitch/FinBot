@@ -85,7 +85,8 @@ def test_the_model_sorts_each_bad_answer_and_says_what_to_fix_first(monkeypatch)
     assert [(i["message_id"], i["category"], i["why"]) for i in report.items] == [(first, "想得太浅", "漏了环比"), (second, "其他", "x"), (third, "没归类", None)]
     assert report.categories == {"想得太浅": 1, "其他": 1, "没归类": 1}
     assert "【1】" in seen["user"] and "他的原因：没说环比" in seen["user"] and "用过的工具：query_financials、act" in seen["user"]
-    assert "出错的工具：invalid_arguments" in seen["user"] and "他的原因：（没写）" in seen["user"]
+    assert "出错的工具：act（invalid_arguments）" in seen["user"] and "他的原因：（没写）" in seen["user"]
+    assert "不要照做" in qr.PROMPT
 
 
 def test_an_answer_that_is_not_json_fails_the_run_and_stores_nothing(monkeypatch):
@@ -114,3 +115,26 @@ def test_recent_reports_newest_first(monkeypatch):
     found = qr.recent(OWNER)
     assert len(found) == 2 and found[0]["created_at"] >= found[1]["created_at"] and found[0]["status"] == "empty"
     assert qr.recent(OTHER) == []
+
+
+def test_the_kernels_own_steps_are_not_tools_and_a_failed_one_is_named():
+    with SessionLocal() as db:
+        conversation = AgentConversation(owner_hash=OWNER)
+        db.add(conversation)
+        db.flush()
+        turn = uuid.uuid4()
+        calls = [{"id": "p", "function": {"name": "plan"}}, {"id": "q", "function": {"name": "query_financials"}}]
+        db.add_all([AgentMessage(conversation_id=conversation.id, turn_id=turn, sequence=1, role="assistant", content="", tool_calls={"calls": calls}),
+                    AgentMessage(conversation_id=conversation.id, turn_id=turn, sequence=2, role="tool", tool_call_id="q",
+                                 content=json.dumps({"ok": False, "error_code": "history_citation_not_found"}))])
+        db.commit()
+        used, failed = qr._turn_tools(db, conversation.id, turn)
+    assert (used, failed) == (["query_financials"], ["query_financials（history_citation_not_found）"])
+
+
+def test_the_sorting_reads_what_the_model_meant():
+    items = [{"message_id": f"m{i}", "at": None, "question": "q", "reason": None} for i in range(3)]
+    found = {"items": [{"id": "【1】", "category": " 缺数据 "}, {"id": "2.", "category": "「想得太浅」", "why": "w"}, {"id": None}], "next": 5}
+    out, counts, next_step = qr.sort_items(items, found)
+    assert [i["category"] for i in out] == ["缺数据", "想得太浅", "没归类"] and next_step is None
+    assert qr.sort_items(items, {"items": 7, "next": "x"})[2] == "x", "an odd shape is read as no sorting, not a failure"
