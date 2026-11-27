@@ -32,7 +32,7 @@ def test_enabled_flag(monkeypatch):
 def test_default_intervals():
     assert {n: i for n, i, _ in background.LOOPS} == {"routine-tasks": 300, "sec-monitor": 3600, "market-refresh": 3600, "earnings-monitor": 60,
                                                          "news-poll": 900, "release-figures": 600, "company-facts": 21600, "work-watch": 60, "memory-jobs": 600,
-                                                         "morning-brief": 60, "duty-selfcheck": 60}
+                                                         "morning-brief": 60, "duty-selfcheck": 60, "earnings-calendar": 21600}
 
 
 def test_news_poll_runs_one_refresh_and_the_switch_turns_it_off(monkeypatch):
