@@ -368,6 +368,7 @@ export function dutyDelivery(item) {
   if (item?.decision !== "tell_now" || !item?.delivery) return "";
   if (item.delivery === "queued") return "已发出";
   if (item.delivery === "capped") return "超过今天的上限，没发";
+  if (item.delivery === "held_night") return "夜里压住，没发";      // the sentinel held the alert for the 08:00 digest; nothing is sent at night
   return "发送失败";
 }
 

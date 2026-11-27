@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
-  ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyModeLine, helperLines, dutyRow, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
+  ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyDelivery, dutyModeLine, helperLines, dutyRow, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
   slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
 } from "../src/backstage-view.mjs";
 import { ANSWERS, DELIVERIES, DETAIL, DUTY, HELPERS, DETAIL_INCOMPLETE, DETAIL_OLD, OPERATIONS, usageAnswer } from "../tools/shots/fixtures/backstage.mjs";
@@ -281,6 +281,11 @@ test("duty: each decision and each way a wake-up ends has its word, and only a s
   assert.equal(rows[7].open, null, "a wake-up with no recorded turn has nothing to open");
   assert.equal(rows[1].message, "");
   assert.deepEqual(dutyRow({}, "UTC").decision, { label: "—", kind: "neutral" });
+});
+
+test("duty: a tell_now held over the night is not a failed send", () => {
+  assert.equal(dutyDelivery({ decision: "tell_now", delivery: "held_night" }), "夜里压住，没发");
+  assert.equal(dutyDelivery({ decision: "tell_now", delivery: "telegram_not_bound" }), "发送失败");
 });
 
 test("duty: the mode line says the mode in the owner's words, and an unknown mode says nothing", () => {
