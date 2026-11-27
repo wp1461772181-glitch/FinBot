@@ -341,3 +341,8 @@ def test_the_loop_runs_the_brief_for_the_owner_and_does_nothing_without_one(monk
     background.run_morning_brief()
     assert seen == [(OWNER_HASH, True)]
     assert {n: i for n, i, _ in background.LOOPS}["morning-brief"] == background.BRIEF_SECONDS == 60
+
+
+def test_the_brief_is_asked_for_plain_text_without_its_own_title():
+    text = prompt.brief_system_text()
+    assert "不要用 ** 加粗" in text and "开头不要再写标题或日期" in text
