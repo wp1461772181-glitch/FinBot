@@ -73,7 +73,13 @@ def test_every_act_operation_is_on_a_route_or_marked_kernel_only():
 def test_gaps_stay_visible():
     gaps = sorted(k for k, v in OPERATION_REGISTRY.items() if "gap" in v)
     assert gaps == [("DELETE", "/agent-chat/news-sources/{source_id}"), ("POST", "/agent-chat/news-sources/{source_id}/enabled"),
-                    ("POST", "/backstage/feedback"), ("PUT", "/agent-chat/news-sources/push-settings")]
+                    ("PUT", "/agent-chat/news-sources/push-settings")]
+
+
+def test_the_feedback_route_is_rate_alert():
+    """5c-3c: the 「有用／没用」 the page posts is the same verdict as one said in a conversation."""
+    assert OPERATION_REGISTRY[("POST", "/backstage/feedback")] == {"operation": "rate_alert"}
+    assert "rate_alert" in act.TIER1 and "rate_alert" not in KERNEL_ONLY_OPERATIONS
 
 
 def test_a_new_route_without_a_row_is_reported_by_name(monkeypatch):

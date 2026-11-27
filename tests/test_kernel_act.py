@@ -37,7 +37,7 @@ def test_every_operation_is_a_catalogue_write_and_every_write_is_listed():
 def test_summaries_costs_and_tiers():
     assert all(act.SUMMARIES[name] for name in act.OPERATIONS) and set(act.SUMMARIES) == set(act.OPERATIONS)
     assert set(act.COST_NOTES) == set(act.TIER3)
-    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 44
+    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 45
     assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "revise_forecast")] == [1, 2, 3, 3, 3]
     assert act.TIER1[0] == "remember" and act.TIER3[-2:] == ("ingest_web_source", "revise_forecast")
     assert act.SUMMARIES["ingest_web_source"].startswith("把这段对话里联网搜到的一个网页或新闻存进资料库")
@@ -228,6 +228,7 @@ MINIMAL = {
     "set_channel_prefs": {"mode": "all", "channels": ["telegram"]},
     "apply_role_template": {"template": "定投"}, "undo_role_template": {},
     "record_view": {"symbol": "AAPL", "text": "看好", "quote": "用中文回答"}, "drop_view": {"symbol": "AAPL"},
+    "rate_alert": {"verdict": "useful", "quote": "用中文回答"},
     "set_watch_rule": {"symbol": "INTC", "metric": "day_change", "levels": [{"threshold": 10, "level": "remind"}], "quote": "用中文回答"},
     "delete_watch_rule": {"rule_id": UUID},
     "set_watch_preset": {"key": "concentration", "enabled": False}, "set_alert_settings": {"sensitivity": "quiet"},
@@ -274,6 +275,10 @@ def faked(monkeypatch):
     monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: ready_plan())
     monkeypatch.setattr(profile, "user_message_id", lambda *a: "m1")
     monkeypatch.setattr(owner_views, "current", lambda owner, symbols: {"AAPL": {"text": "看好"}})
+    from datetime import UTC, datetime
+    from app import alert_feedback
+    monkeypatch.setattr(alert_feedback, "resolve", lambda owner, **k: {"target": "sentinel", "target_id": "7", "kind": "short", "symbol": "INTC",
+                                                                       "text": "INTC 急跌", "at": datetime(2026, 11, 27, 1, 0, tzinfo=UTC)})
     monkeypatch.setattr(profile, "resolve_handle", lambda *a, **k: {"text": "用中文"})
     monkeypatch.setattr(agent_tasks, "get_task", lambda *a: fake_preview("o", {}))
     monkeypatch.setattr(direct, "source_display_title", lambda *a: "某材料")

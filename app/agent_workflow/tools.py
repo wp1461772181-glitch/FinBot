@@ -1,6 +1,6 @@
 """Real service adapters; routing and natural-language argument inference do not live here."""
 from __future__ import annotations
-import asyncio,json,os,uuid
+import asyncio,json,logging,os,uuid
 from datetime import UTC,datetime,timedelta
 from sqlalchemy import select,text,or_
 from ..database import SessionLocal
@@ -10,6 +10,8 @@ from ..agent_tool_catalog import definitions,validate
 from ..knowledge.runtime import research_context
 from .models import AgentWebSource
 from .fp_flags import flag
+
+logger=logging.getLogger(__name__)
 
 
 def safe(value):return json.loads(json.dumps(value,default=str,ensure_ascii=False))
@@ -27,6 +29,14 @@ def error(code):
     if code=='write_tool_not_granted':hint='用 request_action 请求用户批准'
     elif code=='sec_form_outside_scope':hint='这一轮的范围只含 10-K/10-Q（财报），你点名的表格类型不在其中；要取该份申报请同时给出它的 accession_number。'
     return {'ok':False,'data':[],'error_code':code,'hint':hint}
+def rate_alert_refusal(about,symbol):
+    """Nothing within 48 hours fits what he said; the brief has no stock, so none is named for it."""
+    reason=f"最近 48 小时里没找到{'' if about=='brief' else symbol or ''}{'的早间简报' if about=='brief' else '的提醒'}。"
+    return {'ok':False,'data':[],'error_code':'feedback_target_not_found','reason':reason,'hint':reason}
+def rate_alert_line(match,verdict):
+    """What was recorded, naming the message it matched: symbol, Beijing time, its first line, the verdict."""
+    from ..alert_feedback import VERDICT_WORDS,when_text
+    return f"{match.get('symbol') or ''} {when_text(match.get('at'))}「{match.get('text') or ''}」——{VERDICT_WORDS[verdict]}".lstrip()
 
 
 async def search_knowledge(args,context):
@@ -92,6 +102,8 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if name=='remember':args['_source_message_id']=operation.get('source_message_id');args['_bot_id']=operation.get('bot_id')
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
         if name=='record_view':args['_source_message_id']=operation.get('source_message_id');args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id')
+        # The message the card named, frozen when it was made: the press rates that one, not whatever is newest by then.
+        if name=='rate_alert':args['_match']=operation.get('match')
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
         if name in {'create_bot','update_bot','apply_role_template','undo_role_template','set_watch_rule','set_watch_preset','set_alert_settings'}:args['_fields']=operation.get('fields')
         # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
@@ -402,6 +414,25 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         except owner_views.ViewError as exc:return error(str(exc))
         return result([{'status':value['status'],'symbol':value['view']['symbol'],'text':value['view']['text'],
                         'replaced':(value['replaced'] or {}).get('text')}],'owner view')
+    if name=='rate_alert':
+        # Only reached through execute_reversible (the kernel's tier 1 or a pressed card): his verdict on a message he got, in his words.
+        from .. import alert_feedback as feedback
+        if not is_owner:return error('owner_login_required')
+        match=args.get('_match')
+        if not isinstance(match,dict):
+            found=await asyncio.to_thread(feedback.resolve,context.owner_hash,about=args['about'],symbol=args.get('symbol'))
+            if found is None:return rate_alert_refusal(args['about'],args.get('symbol'))
+            match=feedback.frozen(found)
+        try:await asyncio.to_thread(feedback.record,context.owner_hash,match['target'],match['target_id'],args['verdict'],'chat',
+                                    symbol=match.get('symbol'),kind=match.get('kind'),text=match.get('text'))
+        except ValueError as exc:return error(str(exc))
+        if match['target']=='sentinel':
+            # A verdict on an alert also says he has seen it, as the button does: the sentinel stops escalating.
+            try:
+                from sentinel.store import Store,db_path
+                await asyncio.to_thread(lambda:Store(db_path()).ack_alert(int(match['target_id'])))
+            except Exception:logger.exception('rate_alert ack failed alert=%s',match['target_id'])
+        return result([{'status':'recorded','recorded':rate_alert_line(match,args['verdict']),'target':match['target'],'target_id':match['target_id']}],'alert feedback')
     if name=='search_configured_news':
         from .. import fin_news_engine as news
         call=asyncio.to_thread(
