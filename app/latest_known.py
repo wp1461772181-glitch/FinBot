@@ -491,6 +491,21 @@ def gather(symbols: list[str], *, now: datetime, deadline: float | None = None, 
             if filings or news or price:
                 items.append({"symbol": symbol, "name": _display_name(symbol),
                               "filings": filings, "news": news, "price": price, "facts": None})
+        # 5e-1: the next report and the market's consensus (earnings_calendar, kept by its daily refresh); a company with only this still shows
+        if deadline is None or time.monotonic() <= deadline:
+            try:
+                from .earnings_calendar import upcoming
+                ahead = upcoming(symbols, _trading_day(now), session=session)      # the read session's timeouts hold it too
+            except Exception:  # noqa: BLE001 - the calendar is one line of the block, never a reason to lose it
+                logger.warning("latest_known: earnings calendar unreadable", exc_info=True)
+                ahead = {}
+            have = {item["symbol"] for item in items}
+            for item in items:
+                item["earnings"] = ahead.get(item["symbol"])
+            for symbol in symbols:
+                if symbol in ahead and symbol not in have:
+                    items.append({"symbol": symbol, "name": _display_name(symbol), "filings": [], "news": [], "price": None, "facts": None,
+                                  "earnings": ahead[symbol]})
         # The quarter's numbers come last, once everything else is in hand, so a slow read of them can only cost themselves.
         if with_facts:
             for item in items:
@@ -885,7 +900,7 @@ def _section(item: dict, now: datetime, rows: list | None = None) -> list[str]:
     symbol = item["symbol"]
     notice = [_cap(item["notice"])] if item.get("notice") else []
     view = [_view_line(item["view"])] if item.get("view") else []
-    if notice and not (item.get("filings") or item.get("news") or item.get("price") or view):
+    if notice and not (item.get("filings") or item.get("news") or item.get("price") or item.get("earnings") or view):
         return notice          # nothing held for this company: the notice stands alone
     name = item.get("name") or ""
     name = _clean(name)
@@ -906,13 +921,20 @@ def _section(item: dict, now: datetime, rows: list | None = None) -> list[str]:
         lines.append(_marked(_price_line(price, now), {
             "id": f"latest-known:{symbol}:price:{price['kind']}", "symbol": symbol, "title": f"{symbol} 最新价格",
             "source_type": "market_data", "published_at": price["at"].isoformat() if price.get("at") else None}, rows))
+    if item.get("earnings"):
+        from .earnings_calendar import SOURCE_NAME, line as earnings_line
+        upcoming = item["earnings"]
+        lines.append(_marked(_cap(f"  财报日历  {earnings_line(upcoming)}"), {
+            "id": f"latest-known:{symbol}:earnings:{upcoming['report_date']}", "symbol": symbol, "title": f"{symbol} 下次财报与市场预期",
+            "source_type": "market_data", "source_name": SOURCE_NAME, "published_at": upcoming.get("fetched_at")}, rows))
     lines += _facts_lines(item.get("facts"), symbol, rows)
     return lines
 
 
 def _render(items: list[dict], now: datetime, extra, rows: list | None = None) -> tuple[str | None, list[str]]:
     kept = [dict(item, filings=list(item.get("filings") or [])[:MAX_FILINGS], news=list(item.get("news") or [])[:MAX_NEWS])
-            for item in items if item.get("filings") or item.get("news") or item.get("price") or item.get("notice") or item.get("view")][:MAX_COMPANIES]
+            for item in items if item.get("filings") or item.get("news") or item.get("price") or item.get("notice") or item.get("view")
+            or item.get("earnings")][:MAX_COMPANIES]
     if not kept:
         return None, []
     tail = [_cap(line) for line in extra] + ([VIEW_NOTE] if any(item.get("view") for item in kept) else []) + [CLOSING_LINE]
@@ -1078,7 +1100,9 @@ def _build(text: str, previous: str | None, focus: str | None, owner_hash: str |
         in_time = time.monotonic() <= deadline          # past it, a company missing from ``got`` may just not have been read
         for symbol in batch:
             item = got.get(symbol)
-            notice = _notice(symbol, states.get(symbol, "ok"), held=item is not None)
+            # a calendar line alone is not the company's material: 「系统里还没有资料」 still applies (5e-1)
+            held = item is not None and bool(item.get("filings") or item.get("news") or item.get("price"))
+            notice = _notice(symbol, states.get(symbol, "ok"), held=held)
             if item is None and (notice is None or not in_time) and symbol not in views:
                 continue
             item = dict(item) if item else {"symbol": symbol, "name": _display_name(symbol)}

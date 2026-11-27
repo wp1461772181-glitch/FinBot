@@ -24,6 +24,7 @@ WORK_WATCH_SECONDS = 60     # a job started from a card that has ended gets its 
 EARNINGS_SECONDS = 60      # picks up events the response-time task missed, due follow-ups, and anything left over from a restart
 BRIEF_SECONDS = 60         # the morning brief looks whether today's is due (08:05–12:00 Beijing) and not written yet
 SELFCHECK_SECONDS = 60     # the missed-alert check looks whether today's is due (07:45–12:00 Beijing) and not run yet
+EARNINGS_CALENDAR_SECONDS = 6 * 3600   # the calendar itself refetches once a day (earnings_calendar.STALE_AFTER)
 
 
 def enabled() -> bool:
@@ -121,6 +122,19 @@ def run_company_facts() -> None:
     log.info("company facts: symbols=%s facts=%s ratios=%s errors=%s", done["symbols"], done["facts"], done["ratios"], sorted(done["errors"]))
 
 
+def run_earnings_calendar() -> None:
+    """The earnings calendar and consensus (app.earnings_calendar): refetched when the last fetch is older than 20 hours; no key, no fetch."""
+    from . import earnings_calendar
+    from .sentinel_bridge import owner_hash_from_login_config
+
+    owner = owner_hash_from_login_config()
+    if not owner:
+        return
+    done = earnings_calendar.refresh(owner)
+    if not done["skipped"]:
+        log.info("earnings calendar: symbols=%s rows=%s errors=%s", done["symbols"], done["rows"], done["errors"])
+
+
 def run_memory_jobs() -> None:
     """The memory calendar (app.memory_schedule): the jobs that are due run once; a restart neither reruns nor skips one."""
     from . import memory_schedule
@@ -173,6 +187,7 @@ LOOPS = (
     ("memory-jobs", MEMORY_JOBS_SECONDS, run_memory_jobs),
     ("morning-brief", BRIEF_SECONDS, run_morning_brief),
     ("duty-selfcheck", SELFCHECK_SECONDS, run_selfcheck),
+    ("earnings-calendar", EARNINGS_CALENDAR_SECONDS, run_earnings_calendar),
 )
 
 
