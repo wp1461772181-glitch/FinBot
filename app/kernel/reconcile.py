@@ -86,6 +86,7 @@ def reconcile(answer: str, citations: list[dict], *, question: str, user_text: s
         for citation in holders:
             pool |= evidence._figures_of(evidence.citation_check_text(citation))
         grouped: dict[str, list[str]] = {}
+        passed: set = set()
         for _, stripped, checked in evidence._reviewable_lines(answer or "", cites):
             if checked is None:
                 continue          # a table header or rule is not a claim
@@ -100,12 +101,20 @@ def reconcile(answer: str, citations: list[dict], *, question: str, user_text: s
             near = {r["value"] for r in evidence._figure_records(checked)} | evidence.user_figure_values(user_text)
             near = {v for v in near if v not in {r["value"] for t in missing for r in evidence._figure_records(t)}}
             missing = [token for token in missing if not (_derived(token, near, near) or _derived(token, pool, verified))]
+            stated = {r["value"] for r in evidence._figure_records(checked)}
+            still = {r["value"] for t in missing for r in evidence._figure_records(t)}
+            passed |= stated - still
             if not missing:
                 continue
             values = grouped.setdefault(str(stripped).strip()[:LINE_CHARS], [])
             for token in missing:
                 if token not in values:
                     values.append(token)
+        # a figure that passed on one line (worked out in a table row) is the same figure when the answer restates it elsewhere
+        for line in list(grouped):
+            grouped[line] = [t for t in grouped[line] if not {r["value"] for r in evidence._figure_records(t)} <= passed]
+            if not grouped[line]:
+                del grouped[line]
         counts = evidence.answer_scope(answer or "", cites, question=question, user_text=user_text, verified=verified)["counts"]
         figures = int(counts.get("marked_figures", 0)) + int(counts.get("unmarked_backstopped", 0))
         return {"version": VERSION, "figures": figures, "flagged": [{"line": line, "values": values} for line, values in grouped.items()]}

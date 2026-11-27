@@ -195,3 +195,9 @@ def test_arithmetic_on_the_lines_own_sourced_figures_is_not_flagged():
     many = [{"ordinal": i, "title": f"s{i}", "quote": " ".join(str(1000 + 37 * i + k) for k in range(12))} for i in range(1, 8)]
     sources = many + [{"ordinal": 9, "title": "利润表", "quote": "毛利 4,751 营收 28,236"}]
     assert rc.reconcile("| 毛利率 | 16.8%（4,751 ÷ 28,236，计算值） |", sources, question="", user_text="")["flagged"] == []
+
+
+def test_a_figure_worked_out_on_one_line_passes_where_the_answer_restates_it():
+    sources = [{"ordinal": 1, "title": "利润表", "quote": "毛利 4,751 营收 28,236"}]
+    answer = "上一季毛利率约 16.8%。\n| 毛利率 | 16.8%（4,751 ÷ 28,236，计算值） |"
+    assert rc.reconcile(answer, sources, question="", user_text="")["flagged"] == []

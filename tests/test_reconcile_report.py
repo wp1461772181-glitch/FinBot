@@ -49,3 +49,10 @@ def test_the_summary_counts_the_flag_rate_over_the_checked_answers_and_lists_eve
 def test_it_writes_nothing():
     source = open(reconcile_report.__file__, encoding="utf-8").read()
     assert "store(" not in source and "check_and_store" not in source and ".commit(" not in source
+
+
+def test_a_planted_figure_is_one_no_source_states():
+    from scripts.reconcile_report import plant
+    planted, token = plant("营收 1,275.77 亿美元 [1]，毛利率 59.7%。")
+    assert token == "1,747.80" and token in planted and "1,275.77" not in planted
+    assert plant("没有数字。") == ("没有数字。", None)
