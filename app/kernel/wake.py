@@ -43,6 +43,7 @@ VALUE_MAX = 300
 RECENT = 10
 RECENT_TEXT = 300
 QUESTION_MAX = 1000
+TIER_LABELS = {1: "值得知道", 2: "重大"}      # the sentinel's alert tiers that make the kernel look for a cause
 
 
 def daily_cap() -> int:
@@ -97,6 +98,9 @@ def _facts(owner: str, event: dict) -> tuple[dict, list[dict], list[dict]]:
     symbols = [s for s in (event.get("members") or [event.get("symbol")]) if isinstance(s, str)]
     relation = {"symbols": symbols, "held": bool(event.get("held")), "weight_pct": event.get("weight_pct"),
                 "in_research_queue": None, "research_queue": []}
+    tier = event.get("tier")
+    if isinstance(tier, int) and not isinstance(tier, bool) and tier in TIER_LABELS:
+        relation["tier_label"] = TIER_LABELS[tier]      # only the two tiers that ask for a cause; no key otherwise
     outbox: list[dict] = []
     try:
         with SessionLocal() as db:

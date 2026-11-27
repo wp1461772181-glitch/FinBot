@@ -202,6 +202,25 @@ def test_the_system_block_carries_the_owners_situation_and_what_he_was_told(env)
     assert "上次对他说过的话" in system and '"in_research_queue": true' in system and '"held": true' in system and "哨兵已经发过它自己的提醒" in system
 
 
+@pytest.mark.parametrize("tier,label", [(1, "值得知道"), (2, "重大")])
+def test_the_relation_carries_the_tier_label_for_tier_one_and_two(env, tier, label):
+    fake = script(env, [step(calls=[decide()])])
+    judge(event(tier=tier))
+    assert f'"tier_label": "{label}"' in fake.calls[0]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("extra", [{}, {"tier": 0}, {"tier": True}, {"tier": "2"}])
+def test_the_relation_has_no_tier_label_without_a_tier_one_or_two(env, extra):
+    fake = script(env, [step(calls=[decide()])])
+    judge(event(**extra))
+    assert '"tier_label"' not in fake.calls[0]["messages"][0]["content"]
+
+
+def test_the_cause_section_sits_between_the_four_choices_and_how_to_work():
+    text = prompt.wake_system_text()
+    assert text.index("四个选择") < text.index("异动的原因") < text.index("\n怎么做\n")
+
+
 def test_a_read_tool_round_is_kept_with_the_turn(env):
     script(env, [step(calls=[call("c1", "query_financials", {"symbol": "NVDA"})]), step(calls=[decide()])])
     row = judge()
