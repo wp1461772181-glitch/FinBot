@@ -92,3 +92,17 @@ test("pollDelay: 4 s while visible, slower when hidden, none for a stopped polle
   assert.equal(pollDelay({ hidden: false, failures: 2 }), 16000);
   assert.ok(pollDelay({ hidden: false, failures: 20 }) <= 60000);
 });
+
+test("5d-1: an answer this tab shows takes its number check when it lands; nothing else changes", async () => {
+  const { mergeReconciliation } = await import("../src/chat-sync.mjs");
+  const local = [{ role: "user", content: "q", turn_id: "t1" }, { role: "assistant", content: "a", turn_id: "t1" }];
+  const check = { version: 1, figures: 2, flagged: [] };
+  const server = [{ role: "user", content: "q", turn_id: "t1" }, { role: "assistant", content: "a", turn_id: "t1", reconciliation: check }];
+  const { messages, updated } = mergeReconciliation(local, server);
+  assert.equal(updated, 1);
+  assert.deepEqual(messages[1].reconciliation, check);
+  assert.equal(messages[0], local[0]);                        // the other object is the same one
+  assert.equal(mergeReconciliation(messages, server).updated, 0);       // already there: left alone
+  const plan = planTailSync({ state: "idle", conversationId: "c", messages: local }, server, "c");
+  assert.ok(plan && plan.messages[1].reconciliation && plan.added === 0);
+});

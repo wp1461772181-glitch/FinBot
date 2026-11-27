@@ -334,7 +334,9 @@ export function AgentChatProviderRoot({ children }: { children: ReactNode }) {
   // The poll and the send-time sync share one merge: whole turns only, the chat-sync plan, then the background's bookkeeping.
   function mergeTail(line:string, target:string, page:{messages:AgentChatMessage[]}) {
     const cur = lines.current.get(line), plan = planTailSync(cur, completeTurnsOnly(page.messages), target), bg = cur.background;
-    if (plan) {
+    if (plan && !plan.added) {
+      apply(line, { messages: plan.messages });      // only a number check that landed on an answer already shown (5d-1): no arrival
+    } else if (plan) {
       const arrived = newTurnIds(cur.messages, plan.messages), marker = loadDetached(localStore(), target), ownTurnId = marker?.turnId ?? bg?.turnId ?? null;
       const split = arrivalSplit({ arrived, messages: plan.messages, ownTurnId, background: bg });
       apply(line, { messages: plan.messages });

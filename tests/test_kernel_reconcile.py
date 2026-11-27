@@ -173,3 +173,25 @@ def test_kernel_answers_are_the_newest_route_k_answers(stored):
     with SessionLocal() as db:
         found = [row.id for row in rc.kernel_answers(db, 200)]
     assert kernel in found and old not in found and tool_round not in found
+
+
+def test_a_figure_an_earlier_turn_read_is_not_flagged():
+    earlier = [{"ordinal": 1, "title": "一月行情", "quote": "AAPL 一月最低收盘 259.48 美元。"}]
+    assert rc.reconcile("一月最低收盘约 259.48 美元。", [], question="", user_text="", earlier=earlier)["flagged"] == []
+    assert rc.reconcile("一月最低收盘约 259.48 美元。", [], question="", user_text="")["flagged"] != []
+
+
+def test_a_table_figure_in_its_unit_and_a_price_times_shares_are_not_flagged():
+    table = [{"ordinal": 1, "title": "10-Q", "quote": "(In millions) Revenue 81,615 Net income 58,321"}]
+    assert rc.reconcile("第一季营收 81,615 百万美元 [1]。", table, question="", user_text="")["flagged"] == []
+    prices = [{"ordinal": 1, "title": "持仓", "quote": "AAPL 现价 271.01 美元，持有 100 股。"}]
+    assert rc.reconcile("100 股约 27,101 美元。", prices, question="", user_text="")["flagged"] == []
+    assert rc.reconcile("100 股约 31,415 美元。", prices, question="", user_text="")["flagged"] != []      # not a product of anything
+
+
+def test_arithmetic_on_the_lines_own_sourced_figures_is_not_flagged():
+    prices = [{"ordinal": 1, "title": "行情", "quote": "AAPL 现价 271.01 美元，持有 100 股。"}]
+    assert rc.reconcile("苹果 271.01 美元 [1]，100 股约 27,101 美元。", prices, question="", user_text="")["flagged"] == []
+    many = [{"ordinal": i, "title": f"s{i}", "quote": " ".join(str(1000 + 37 * i + k) for k in range(12))} for i in range(1, 8)]
+    sources = many + [{"ordinal": 9, "title": "利润表", "quote": "毛利 4,751 营收 28,236"}]
+    assert rc.reconcile("| 毛利率 | 16.8%（4,751 ÷ 28,236，计算值） |", sources, question="", user_text="")["flagged"] == []

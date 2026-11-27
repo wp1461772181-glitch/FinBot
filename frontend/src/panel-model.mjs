@@ -76,3 +76,26 @@ export function roundQuestion(messages, index, max = 24) {
 export function roundSources(message) {
   return citationsToShow(message?.citation_protocol, message?.citations, message?.citation_nodes);
 }
+
+/** The fixed line under the flagged figures, word for word the backstage's (backstage-view.mjs RECONCILE_NOTE). */
+export const RECONCILE_NOTE = "这些数字在这一轮读到的资料里都找不到；不一定是错，可能是模型自己的知识或算法，请对照原文判断。";
+
+/**
+ * The 「数字对账」 block at the end of the 出处 tab (5d-1, owner's option b).  `flagged`: the figures no source of the round holds, with the
+ * fixed note; `clean`: one quiet line.  Null when the answer was not checked, the check failed, or it had no figure to check.
+ */
+export function roundReconcile(message, t = (phrase) => phrase) {
+  const found = message?.reconciliation;
+  if (!found || typeof found !== "object" || Array.isArray(found) || found.error) return null;
+  const figures = found.figures;
+  if (typeof figures !== "number" || !Number.isInteger(figures) || figures < 0) return null;
+  const lines = (Array.isArray(found.flagged) ? found.flagged : [])
+    .filter((item) => item && typeof item === "object" && typeof item.line === "string" && item.line.trim())
+    .map((item) => ({ line: item.line, values: (Array.isArray(item.values) ? item.values : []).filter((value) => typeof value === "string" && value) }));
+  const n = String(figures);
+  if (lines.length) {
+    return { kind: "flagged", title: t("数字对账"), intro: t("这一轮核对了 {n} 个数字，下面这些在这一轮读到的资料里都找不到：").replace("{n}", n), lines, note: t(RECONCILE_NOTE) };
+  }
+  if (figures === 0) return null;
+  return { kind: "clean", text: t("数字对账：这一轮的 {n} 个数字都在资料里找得到。").replace("{n}", n) };
+}

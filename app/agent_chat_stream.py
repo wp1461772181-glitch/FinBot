@@ -1099,6 +1099,8 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
     for key in("narration","checklist","tier"):
      if stored_protocol.get(key):item[key]=stored_protocol[key]
     if stored_protocol.get("citation_protocol")=="v2":item["citation_protocol"]="v2";item["citation_nodes"]=stored_protocol.get("citation_nodes") or []
+    # 5d-1: the figure check stored after the answer; shown only in the 出处 tab.
+    if isinstance(stored_protocol.get("reconciliation"),dict):item["reconciliation"]=stored_protocol["reconciliation"]
     # Older turns only know the audit's elapsed time; either one is what the reader counted.
     stored_audit=stored_protocol.get("audit")
     thinking=stored_protocol.get("thinking_ms")

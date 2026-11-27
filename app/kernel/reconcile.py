@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 VERSION = 1
 KEY = "reconciliation"
 LINE_CHARS = 200
+EARLIER_ANSWERS = 20     # the earlier answers of the conversation whose sources still count
 _ALL = 1_000_000          # answer_scope cuts its lists to ``limit``; the check wants all of them
 
 
@@ -29,15 +30,42 @@ def _value_text(value) -> str:
     return f"{number:.4f}".rstrip("0").rstrip(".")
 
 
+_TABLE_UNITS = (1e3, 1e6, 1e9)       # "(In thousands / millions / billions)": a table states 81,615 for 81,615 百万
+
+
+def _held(value: float, holders: list[dict], pool: set) -> bool:
+    """Whether some source states ``value``: as written, or in a table's unit (the per-line review knows the cited source's unit;
+    this asks of every source, so it reads the unit from the figure)."""
+    from ..agent_workflow import unverified
+    if unverified._holders(value, holders):
+        return True
+    return any(round(value / unit, 4) in pool for unit in _TABLE_UNITS if value >= unit)
+
+
+def _product(record: dict, pool: list) -> bool:
+    """``value`` = a × b for two pool figures (price × shares), within ``evidence``'s false-accept bound as the amount closure counts it."""
+    from ..agent_workflow import evidence
+    digits, n = record["digits"], len(pool)
+    if n < 2 or record["pct"]:
+        return False
+    if n * (n - 1) // 2 + n > evidence.CLOSURE_FALSE_ACCEPT_BOUND * 18 * 10 ** (digits - 1):
+        return False
+    target = evidence._round_to(record["value"], digits)
+    return any(evidence._round_to(a * b, digits) == target for i, a in enumerate(pool) for b in pool[i:])
+
+
 def _derived(token: str, pool: set, verified) -> bool:
-    """Whether the written figure ``token`` is the sum, difference, ratio or change of figures the turn's sources state
-    (``evidence._closure``, with its false-accept bound)."""
+    """Whether the written figure ``token`` is the sum, difference, ratio, change or product of figures the sources state
+    (``evidence._closure`` and ``_product``, with the same false-accept bound)."""
     from ..agent_workflow import evidence
     records = evidence._figure_records(token)
-    return bool(records) and all(evidence._closure(record, pool, set(verified or ())) is not None for record in records)
+    operands = evidence._operand_pool(pool) + sorted(v for v in pool if v == int(v) and 1 < v <= 10_000)   # shares are small integers
+    operands = sorted(set(operands))
+    return bool(records) and all(evidence._closure(record, pool, set(verified or ())) is not None or _product(record, operands)
+                                 for record in records)
 
 
-def reconcile(answer: str, citations: list[dict], *, question: str, user_text: str) -> dict:
+def reconcile(answer: str, citations: list[dict], *, question: str, user_text: str, earlier: list[dict] | None = None) -> dict:
     """``{"version", "figures", "flagged": [{"line", "values"}]}`` for one answer; ``{"version", "error"}`` when the check fails.
 
     A figure is flagged only when no source of the turn states it at all.  Each line is read as the old check reads it
@@ -51,8 +79,11 @@ def reconcile(answer: str, citations: list[dict], *, question: str, user_text: s
         cites = [c for c in citations or [] if isinstance(c, dict)]
         question, user_text = question or "", user_text or ""
         verified = evidence.answer_verified_figures(answer or "", cites, question=question, user_text=user_text)
+        # the sources an earlier turn of the conversation read count too: the model may restate what it found a turn ago
+        before = [c for c in earlier or [] if isinstance(c, dict)]
+        holders = cites + before
         pool = set()
-        for citation in cites:
+        for citation in holders:
             pool |= evidence._figures_of(evidence.citation_check_text(citation))
         grouped: dict[str, list[str]] = {}
         for _, stripped, checked in evidence._reviewable_lines(answer or "", cites):
@@ -61,10 +92,14 @@ def reconcile(answer: str, citations: list[dict], *, question: str, user_text: s
             # the line as the old check reads it (a table row inherits its table's markers): the figures it rejects there, then
             # only those no citation of the turn holds at all
             _, written = unverified.line_numbers(checked, cites, user_text=user_text, verified=verified)
-            missing = [token for token, values in written if not any(unverified._holders(v, cites) for v in values)]
+            missing = [token for token, values in written if not any(_held(v, holders, pool) for v in values)]
             # a sentence with no [n] cites no source, so the review had nothing to derive from: a sum, difference, ratio or change of
             # any source's figures is the model's own arithmetic, not a figure from nowhere (same closure and false-accept bound)
-            missing = [token for token in missing if not _derived(token, pool, verified)]
+            # the line's own figures that some source states come first (price × shares, a written-out ratio): a pool that small stays
+            # well inside the false-accept bound where the whole turn's figures would not
+            near = {r["value"] for r in evidence._figure_records(checked)} | evidence.user_figure_values(user_text)
+            near = {v for v in near if v not in {r["value"] for t in missing for r in evidence._figure_records(t)}}
+            missing = [token for token in missing if not (_derived(token, near, near) or _derived(token, pool, verified))]
             if not missing:
                 continue
             values = grouped.setdefault(str(stripped).strip()[:LINE_CHARS], [])
@@ -103,8 +138,13 @@ def inputs_of(db, row) -> dict:
                                                            M.sequence <= row.sequence).order_by(M.sequence)).all()
     said = [content for _, content in typed if isinstance(content, str) and content and not content.startswith(CONTROL_PREFIXES)]
     question = next((content for turn, content in typed if turn == row.turn_id and isinstance(content, str)), "")
+    earlier: list[dict] = []
+    for stored in db.scalars(select(M.tool_calls).where(M.conversation_id == row.conversation_id, M.role == "assistant",
+                                                         M.sequence < row.sequence).order_by(M.sequence.desc()).limit(EARLIER_ANSWERS)):
+        found = _record(stored).get("citations")
+        earlier.extend(c for c in found if isinstance(c, dict)) if isinstance(found, list) else None
     return {"answer": row.content or "", "citations": citations if isinstance(citations, list) else [],
-            "question": question, "user_text": "\n".join(said)}
+            "question": question, "user_text": "\n".join(said), "earlier": earlier}
 
 
 def check(message_id) -> dict | None:
@@ -116,7 +156,7 @@ def check(message_id) -> dict | None:
         if row is None or row.role != "assistant":
             return None
         inputs = inputs_of(db, row)
-    return reconcile(inputs["answer"], inputs["citations"], question=inputs["question"], user_text=inputs["user_text"])
+    return reconcile(inputs["answer"], inputs["citations"], question=inputs["question"], user_text=inputs["user_text"], earlier=inputs["earlier"])
 
 
 def store(message_id, result: dict) -> bool:
@@ -157,5 +197,7 @@ def kernel_answers(db, limit: int) -> list:
     # A stored NUL escape is legal JSON but not jsonb (the backstage list does the same swap).
     record = cast(func.replace(cast(M.tool_calls, Text), "\\u0000", "\\u0020"), JSONB)
     return list(db.scalars(select(M).where(M.role == "assistant", M.status == "complete", func.btrim(func.coalesce(M.content, "")) != "",
-                                           func.jsonb_extract_path_text(record, "route") == "K")
+                                           func.jsonb_extract_path_text(record, "route") == "K",
+                                           # wake and brief turns are the duty's own records, not answers he asked for (the live job never sees them)
+                                           func.coalesce(func.jsonb_extract_path_text(record, "unattended"), "false") != "true")
                            .order_by(M.created_at.desc(), M.id.desc()).limit(limit)))

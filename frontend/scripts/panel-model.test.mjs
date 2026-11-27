@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PANEL_DEFAULT, PANEL_MAX, PANEL_MIN, THREAD_MIN, availableTabs, clampPanelWidth, hasRoundContent, initialTab, roundQuestion, roundSources, selectedIndex, storedPanelWidth, turnKey } from "../src/panel-model.mjs";
+import { readFileSync } from "node:fs";
+import { PANEL_DEFAULT, PANEL_MAX, PANEL_MIN, RECONCILE_NOTE, THREAD_MIN, availableTabs, clampPanelWidth, hasRoundContent, initialTab, roundQuestion, roundReconcile, roundSources, selectedIndex, storedPanelWidth, turnKey } from "../src/panel-model.mjs";
+import { RECONCILE_NOTE as BACKSTAGE_NOTE } from "../src/backstage-view.mjs";
+
+const src = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
 test("a bot's page has three tabs (the profile is its settings page since P5.1), a conversation with no bot only sources and process", () => {
   assert.deepEqual(availableTabs({ hasWorkspace: true }), ["sources", "process", "workspace"]);
@@ -75,4 +79,55 @@ test("the sources are what the old drawer listed: all of them under protocol 1, 
   assert.equal(roundSources({ citations }).length, 2);
   assert.deepEqual(roundSources({ citation_protocol: "v2", citations, citation_nodes: [{ source_ref: "2" }] }).map((c) => c.title), ["b"]);
   assert.deepEqual(roundSources(null), []);
+});
+
+// ---- 5d-1 Task 5: the figure check in the 出处 tab ----------------------------------------------------------------------
+
+test("a flagged check: the title, how many were checked, each line with its values, and the backstage's fixed note", () => {
+  const block = roundReconcile({ role: "assistant", content: "x", reconciliation: { version: 1, figures: 3,
+    flagged: [{ line: "利润是 8888 美元，现金是 9999 美元", values: ["8888", "9999"] }, { line: " ", values: ["1"] }, "junk", { line: "毛利 7 美元", values: [7, "7"] }] } });
+  assert.deepEqual(block, { kind: "flagged", title: "数字对账", intro: "这一轮核对了 3 个数字，下面这些在这一轮读到的资料里都找不到：",
+    lines: [{ line: "利润是 8888 美元，现金是 9999 美元", values: ["8888", "9999"] }, { line: "毛利 7 美元", values: ["7"] }],
+    note: "这些数字在这一轮读到的资料里都找不到；不一定是错，可能是模型自己的知识或算法，请对照原文判断。" });
+  assert.equal(RECONCILE_NOTE, BACKSTAGE_NOTE, "the same words as the backstage");
+});
+
+test("a clean check is one quiet line; an unchecked, failed or figure-less answer shows nothing", () => {
+  assert.deepEqual(roundReconcile({ reconciliation: { version: 1, figures: 2, flagged: [] } }), { kind: "clean", text: "数字对账：这一轮的 2 个数字都在资料里找得到。" });
+  assert.equal(roundReconcile({ role: "assistant", content: "x" }), null, "not checked");
+  assert.equal(roundReconcile({ reconciliation: null }), null);
+  assert.equal(roundReconcile({ reconciliation: { version: 1, error: "KeyError" } }), null, "a failed check is the backstage's business");
+  assert.equal(roundReconcile({ reconciliation: { version: 1, figures: 0, flagged: [] } }), null, "no figure, nothing to say");
+  assert.equal(roundReconcile({ reconciliation: { version: 1, flagged: [{ line: "l", values: ["1"] }] } }), null, "no count, not a result");
+  assert.equal(roundReconcile(null), null);
+});
+
+test("the phrases go through t and {n} is filled after", () => {
+  const t = (phrase) => `<${phrase}>`;
+  const flagged = roundReconcile({ reconciliation: { figures: 1, flagged: [{ line: "l", values: ["1"] }] } }, t);
+  assert.equal(flagged.title, "<数字对账>");
+  assert.equal(flagged.intro, "<这一轮核对了 1 个数字，下面这些在这一轮读到的资料里都找不到：>");
+  assert.equal(flagged.note, `<${RECONCILE_NOTE}>`);
+  assert.equal(roundReconcile({ reconciliation: { figures: 4, flagged: [] } }, t).text, "<数字对账：这一轮的 4 个数字都在资料里找得到。>");
+});
+
+test("every phrase of the 出处 tab's figure check is in both catalogs", () => {
+  const chinese = JSON.parse(src("locales/zh-CN.json")), english = JSON.parse(src("locales/en-US.json"));
+  for (const phrase of ["数字对账", "这一轮核对了 {n} 个数字，下面这些在这一轮读到的资料里都找不到：", "数字对账：这一轮的 {n} 个数字都在资料里找得到。", RECONCILE_NOTE]) {
+    assert.ok(chinese.includes(phrase), phrase);
+    assert.ok(english[phrase]?.trim(), phrase);
+    if (phrase.includes("{n}")) assert.ok(english[phrase].includes("{n}"), `the English of ${phrase} keeps {n}`);
+  }
+});
+
+test("the 出处 tab closes with the check, also under the empty line, and nothing in the answer text reads it", () => {
+  const tab = src("app/chat/SourcesTab.tsx");
+  assert.match(tab, /const block = roundReconcile\(m, t\);/);
+  assert.match(tab, /data-testid="reconcile-note" role="note"/);
+  assert.match(tab, /data-testid="reconcile-line"/);
+  assert.match(tab, /data-testid="reconcile-clean"/);
+  assert.equal(tab.match(/<Reconcile m=\{m\} \/>/g)?.length, 2, "after the cards and after 「这一轮没有引用来源。」");
+  for (const name of ["AgentChatPanel.tsx", "app/chat/ProcessTab.tsx"]) {
+    try { assert.doesNotMatch(src(name), /reconciliation|roundReconcile/, name); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
 });

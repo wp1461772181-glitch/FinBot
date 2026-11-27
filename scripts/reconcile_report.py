@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         for row in reconcile.kernel_answers(db, args.limit):
             inputs = reconcile.inputs_of(db, row)
             results.append((str(row.id), reconcile.reconcile(inputs["answer"], inputs["citations"], question=inputs["question"],
-                                                             user_text=inputs["user_text"])))
+                                                             user_text=inputs["user_text"], earlier=inputs["earlier"])))
         db.rollback()          # read only: nothing this session did is kept
     print(json.dumps(summary(results), ensure_ascii=False, indent=1))
     return 0
