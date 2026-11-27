@@ -117,4 +117,5 @@ def test_the_prompt_says_where_the_time_is_and_leaves_buying_to_him():
     from app.kernel import prompt
     text = prompt.prep_system_text()
     assert "十几个小时" not in text and "out 里" in text and "决定在他" in text and "不给买卖建议" not in text
+    assert "称呼他用「你」" in text and "没有就整项不写" in text
     assert "【接下来要发财报的】" in prompt.prep_block([], {}, None)
