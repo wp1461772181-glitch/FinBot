@@ -159,3 +159,131 @@ def test_recent_is_newest_first_and_counts_go_by_when_the_verdict_was_given():
     assert feedback.counts(OWNER, datetime.now(UTC) + timedelta(minutes=1)) == {"useful": 0, "not_useful": 0}
     assert feedback.counts(OTHER, before) == {"useful": 0, "not_useful": 0} and feedback.recent(OTHER) == []
     assert feedback.verdicts(OWNER, "outbox", [GROUP, str(uuid.uuid4())]) == {GROUP: "not_useful"}
+
+
+# --- 5c-3c: which message he means -----------------------------------------------------------------------------------------
+
+def _sentinel(tmp_path, monkeypatch):
+    path = tmp_path / "sentinel.db"
+    monkeypatch.setenv("SENTINEL_DB_PATH", str(path))
+    return Store(path)
+
+
+def _ago(hours):
+    return datetime.now(UTC) - timedelta(hours=hours)
+
+
+def _duty(alert_id, message, *, hours, symbol=None, members=None, mode="on", decision="tell_now", delivery="queued", group=True):
+    event = {"symbol": symbol, **({"members": members} if members else {})}
+    row = DutyLog(owner_hash=OWNER, alert_id=alert_id, event=event, mode=mode, outcome="decided", decision=decision, message=message,
+                  delivery=delivery, delivery_group=uuid.uuid4() if group else None, created_at=_ago(hours))
+    with SessionLocal() as db:
+        db.add(row)
+        db.commit()
+        return str(row.delivery_group) if row.delivery_group else None
+
+
+def _brief(day, message, *, hours, outcome="done", group=True):
+    row = DutyBrief(owner_hash=OWNER, day=day, mode="on", outcome=outcome, message=message, delivery="queued",
+                    delivery_group=uuid.uuid4() if group else None, counts={}, created_at=_ago(hours))
+    with SessionLocal() as db:
+        db.add(row)
+        db.commit()
+        return str(row.delivery_group) if row.delivery_group else None
+
+
+def test_resolve_takes_the_newest_of_the_sentinel_alerts_and_the_duty_messages(tmp_path, monkeypatch):
+    store = _sentinel(tmp_path, monkeypatch)
+    alert_id = store.add_alert("INTC", "short", "INTC 15 分钟内跌 3.2%\n现价 20", True, _ago(2).timestamp())
+    group = _duty(1, "【助理】\nNVDA 跌破了你记下的减仓线。\n要不要看看？", hours=1, symbol="NVDA")
+    newest = feedback.resolve(OWNER)
+    assert (newest["target"], newest["target_id"], newest["kind"], newest["symbol"], newest["text"]) == ("outbox", group, "duty", "NVDA", "NVDA 跌破了你记下的减仓线。")
+    assert isinstance(newest["at"], datetime)
+    named = feedback.resolve(OWNER, symbol="intc")
+    assert (named["target"], named["target_id"], named["kind"], named["text"]) == ("sentinel", str(alert_id), "short", "INTC 15 分钟内跌 3.2%")
+    later = store.add_alert("TSLA", "gap", "TSLA 跳空高开 5%", False, _ago(0.5).timestamp())
+    assert feedback.resolve(OWNER)["target_id"] == str(later)          # now the alert is the newest
+    assert feedback.resolve(OTHER, symbol="NVDA") is None              # another owner's duty message is not his
+
+
+def test_a_merged_alert_is_found_by_any_of_its_symbols(tmp_path, monkeypatch):
+    store = _sentinel(tmp_path, monkeypatch)
+    merged = store.add_alert("AMD+INTC", "merged", "AMD、INTC 同时急跌", True, _ago(3).timestamp())
+    store.add_alert("NVDA", "short", "NVDA 急涨", False, _ago(1).timestamp())
+    assert feedback.resolve(OWNER, symbol="INTC")["target_id"] == str(merged)
+    assert feedback.resolve(OWNER, symbol="AMD")["target_id"] == str(merged)
+    assert feedback.resolve(OWNER, symbol="AM") is None
+
+
+def test_a_member_a_merged_message_replaced_is_not_what_he_means(tmp_path, monkeypatch):
+    store = _sentinel(tmp_path, monkeypatch)
+    member = store.add_alert("INTC", "short", "INTC 急跌", True, _ago(2).timestamp())
+    merged = store.add_alert("AMD+INTC", "merged", "AMD、INTC 同时急跌", True, _ago(3).timestamp())
+    store.update_alert(member, superseded_by=merged)
+    assert feedback.resolve(OWNER, symbol="INTC")["target_id"] == str(merged)
+
+
+def test_only_alerts_that_reached_him_are_matched(tmp_path, monkeypatch):
+    store = _sentinel(tmp_path, monkeypatch)
+    sent = store.add_alert("INTC", "short", "INTC 急跌", True, _ago(3).timestamp())
+    store.add_alert("INTC", "record", "INTC 波动记一笔", False, _ago(1).timestamp(), deferred=True, digest_text="x")  # never sent alone
+    store.add_alert("NVDA", "daily", "NVDA 夜里压住", False, _ago(0.5).timestamp(), deferred=True)                   # not yet in a digest
+    assert feedback.resolve(OWNER)["target_id"] == str(sent)
+    assert feedback.resolve(OWNER, symbol="INTC")["target_id"] == str(sent)
+
+
+def test_a_night_line_counts_from_the_digest_that_carried_it(tmp_path, monkeypatch):
+    store = _sentinel(tmp_path, monkeypatch)
+    store.add_alert("INTC", "short", "INTC 急跌", True, _ago(5).timestamp())
+    night = store.add_alert("NVDA", "daily", "NVDA 夜里跌", False, _ago(6).timestamp(), deferred=True)
+    store.update_alert(night, digested_at=_ago(1).timestamp())          # he saw it at 08:00, after the INTC one
+    assert feedback.resolve(OWNER)["target_id"] == str(night)
+
+
+def test_a_duty_message_is_found_by_its_members_and_only_when_it_reached_him(tmp_path, monkeypatch):
+    _sentinel(tmp_path, monkeypatch)
+    group = _duty(1, "AMD 和 TSLA 一起跌了。", hours=5, members=["AMD", "TSLA"])
+    _duty(2, "TSLA 影子模式", hours=1, symbol="TSLA", mode="shadow")
+    _duty(3, "TSLA 攒到汇总", hours=1, symbol="TSLA", decision="digest")
+    _duty(4, "TSLA 到了上限", hours=1, symbol="TSLA", delivery="capped")
+    _duty(5, "TSLA 没有组", hours=1, symbol="TSLA", group=False)
+    found = feedback.resolve(OWNER, symbol="TSLA")
+    assert (found["target_id"], found["symbol"], found["text"]) == (group, None, "AMD 和 TSLA 一起跌了。")
+    _duty(6, "TSLA 早上简报里带了", hours=2, symbol="TSLA", delivery="briefed")     # reached him inside the brief: he rates the brief
+    assert feedback.resolve(OWNER, symbol="tsla")["target_id"] == group    # still the AMD+TSLA one, not the briefed row
+
+
+def test_about_brief_picks_the_newest_done_brief_with_a_group(tmp_path, monkeypatch):
+    store = _sentinel(tmp_path, monkeypatch)
+    store.add_alert("INTC", "short", "INTC 急跌", True, _ago(0.1).timestamp())        # an alert is never a brief
+    _brief("2026-11-26", "昨天的简报", hours=30)
+    newest = _brief("2026-11-27", "【助理】\n早上好。昨夜 3 件事。\n一、……", hours=6)
+    _brief("2026-11-28", "失败的那份", hours=2, outcome="failed")
+    _brief("2026-11-29", "没发出去的那份", hours=1, group=False)
+    found = feedback.resolve(OWNER, about="brief", symbol="INTC")
+    assert (found["target"], found["target_id"], found["kind"], found["symbol"], found["text"]) == ("outbox", newest, "brief", None, "早上好。昨夜 3 件事。")
+
+
+def test_nothing_older_than_48_hours_is_matched(tmp_path, monkeypatch):
+    store = _sentinel(tmp_path, monkeypatch)
+    store.add_alert("INTC", "short", "INTC 急跌", True, _ago(49).timestamp())
+    _duty(1, "INTC 跌了", hours=49, symbol="INTC")
+    _brief("2026-11-25", "早上好", hours=49)
+    assert feedback.resolve(OWNER) is None and feedback.resolve(OWNER, symbol="INTC") is None
+    assert feedback.resolve(OWNER, about="brief") is None
+    assert feedback.resolve(OWNER, now=_ago(2))["symbol"] == "INTC"         # 47 hours before that moment
+
+
+def test_an_unreadable_sentinel_database_still_finds_the_duty_messages(tmp_path, monkeypatch):
+    path = tmp_path / "sentinel.db"
+    path.write_bytes(b"not a sqlite database" * 50)
+    monkeypatch.setenv("SENTINEL_DB_PATH", str(path))
+    group = _duty(1, "NVDA 跌了 6%", hours=1, symbol="NVDA")
+    assert feedback.resolve(OWNER)["target_id"] == group
+    monkeypatch.setenv("SENTINEL_DB_PATH", str(tmp_path / "missing.db"))
+    assert feedback.resolve(OWNER, symbol="NVDA")["target_id"] == group
+
+
+def test_the_chat_channel_is_accepted():
+    row = feedback.record(OWNER, "sentinel", "7", "not_useful", "chat", symbol="INTC", kind="short", text="INTC 急跌")
+    assert row["channel"] == "chat" and "chat" in feedback.CHANNELS

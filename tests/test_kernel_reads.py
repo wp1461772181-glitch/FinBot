@@ -108,7 +108,8 @@ def test_evidence_reads_are_numbered_with_their_source_type(monkeypatch, name):
     run, shown = execute(monkeypatch, name)
     assert shown["data"][0]["citation"] == "[1]"
     assert len(run.citations) == 1 and run.citations[0]["source_type"] == NUMBERED[name]
-    assert run.read_results == 1
+    # his own alert records are his own state (5c-3c): looking up which alert he means keeps tier 1 at once, as list_watch_rules does
+    assert run.read_results == (0 if name == "query_alerts" else 1)
 
 
 @pytest.mark.parametrize("name", UNNUMBERED)

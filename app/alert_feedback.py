@@ -2,14 +2,17 @@
 
 The owner's verdict on one sentinel alert (target ``sentinel``, its alert id) or on one outbox message of source ``duty`` or ``brief``
 (target ``outbox``, its group id).  One row per owner and target: pressing again changes the verdict (the last one wins), the same
-verdict twice changes nothing.  The kernel's wake reads the latest verdicts as data.  Nothing here holds a key or a credential.
+verdict twice changes nothing.  The kernel's wake reads the latest verdicts as data.  ``resolve`` finds the message he means when he
+rates one in words (5c-3c).  Nothing here holds a key or a credential.
 """
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import BigInteger, DateTime, String, Text, UniqueConstraint, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -17,9 +20,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base, SessionLocal
 
+logger = logging.getLogger(__name__)
+
 TARGETS = ("sentinel", "outbox")
 VERDICTS = ("useful", "not_useful")
-CHANNELS = ("telegram", "web")
+CHANNELS = ("telegram", "web", "chat")          # chat: said in a conversation (5c-3c), on any channel
+VERDICT_WORDS = {"useful": "有用", "not_useful": "没用"}
+RESOLVE_WINDOW = timedelta(hours=48)
+BEIJING = ZoneInfo("Asia/Shanghai")
 SOURCES = ("duty", "brief")          # the outbox sources that carry the buttons
 TEXT_MAX = 200
 CALLBACK_MAX = 64                    # Telegram's limit on callback_data, in bytes
@@ -39,7 +47,7 @@ class AlertFeedback(Base):
     target: Mapped[str] = mapped_column(String(8), nullable=False)               # sentinel | outbox
     target_id: Mapped[str] = mapped_column(String(64), nullable=False)           # the alert id, or the outbox group id
     verdict: Mapped[str] = mapped_column(String(12), nullable=False)             # useful | not_useful
-    channel: Mapped[str] = mapped_column(String(10), nullable=False)             # telegram | web: where the last verdict came from
+    channel: Mapped[str] = mapped_column(String(10), nullable=False)             # telegram | web | chat: where the last verdict came from
     symbol: Mapped[str | None] = mapped_column(String(80), nullable=True)
     kind: Mapped[str | None] = mapped_column(String(24), nullable=True)          # the alert kind, or the outbox source
     text: Mapped[str | None] = mapped_column(Text, nullable=True)                # the first line of what was said
@@ -184,6 +192,104 @@ def describe(owner_hash: str, target: str, target_id: str) -> dict:
         return _outbox_group(owner_hash, target_id)
     except Exception:
         return empty
+
+
+# --- which message he means (5c-3c) ----------------------------------------------------------------------------------------
+
+def _names(symbol: str, symbols) -> bool:
+    """True when ``symbol`` (upper-cased) is one of ``symbols``."""
+    return symbol in {str(s).strip().upper() for s in symbols if isinstance(s, str) and s.strip()}
+
+
+def _newest_sentinel(since: datetime, until: datetime, symbol: str | None) -> dict | None:
+    """The newest alert in the sentinel's ``alerts`` table in the window (read-only); None when there is none or it cannot be read."""
+    from sentinel.store import db_path
+    path = db_path()
+    if not path.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=2.0)
+        try:
+            # Only what reached him: a member a merged message replaced never did on its own (he saw the merged one); a record line is
+            # never sent on its own; a line held over the night reached him with the 08:00 digest, so that is when he saw it.
+            seen = "CASE WHEN deferred = 1 THEN digested_at ELSE created_at END"
+            rows = conn.execute(f"SELECT id, symbol, kind, text, {seen} AS seen_at FROM alerts WHERE superseded_by IS NULL AND kind != 'record' "
+                                f"AND (deferred = 0 OR digested_at IS NOT NULL) AND {seen} >= ? AND {seen} <= ? "
+                                f"ORDER BY {seen} DESC, id DESC", (since.timestamp(), until.timestamp())).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        logger.warning("sentinel alerts unreadable; only duty messages are matched", exc_info=True)
+        return None
+    for alert_id, alert_symbol, kind, text, created_at in rows:
+        if symbol and not _names(symbol, str(alert_symbol or "").split("+")):
+            continue
+        return {"target": "sentinel", "target_id": str(alert_id), "kind": kind or None, "symbol": alert_symbol or None,
+                "text": _first_line(text), "at": datetime.fromtimestamp(float(created_at), UTC)}
+    return None
+
+
+def _newest_duty(owner_hash: str, since: datetime, until: datetime, symbol: str | None) -> dict | None:
+    """The newest duty message that reached him on its own (told now, mode on, queued) in the window.  A follow-up held over the night
+    reached him inside the morning brief: he rates the brief for that."""
+    from .duty_log import DutyLog
+    with SessionLocal() as db:
+        rows = db.scalars(select(DutyLog).where(
+            DutyLog.owner_hash == owner_hash, DutyLog.decision == "tell_now", DutyLog.mode == "on", DutyLog.delivery == "queued",
+            DutyLog.delivery_group.is_not(None), DutyLog.created_at >= since, DutyLog.created_at <= until)
+            .order_by(DutyLog.created_at.desc(), DutyLog.id.desc())).all()
+        for row in rows:
+            event = row.event if isinstance(row.event, dict) else {}
+            named = event.get("symbol") if isinstance(event.get("symbol"), str) else None
+            if symbol and not _names(symbol, [named, *(event.get("members") or [])]):
+                continue
+            return {"target": "outbox", "target_id": str(row.delivery_group), "kind": "duty", "symbol": named,
+                    "text": _first_line(row.message), "at": row.created_at}
+    return None
+
+
+def _newest_brief(owner_hash: str, since: datetime, until: datetime) -> dict | None:
+    from .duty_brief import DutyBrief
+    with SessionLocal() as db:
+        row = db.scalar(select(DutyBrief).where(
+            DutyBrief.owner_hash == owner_hash, DutyBrief.outcome == "done", DutyBrief.delivery_group.is_not(None),
+            DutyBrief.created_at >= since, DutyBrief.created_at <= until).order_by(DutyBrief.created_at.desc(), DutyBrief.id.desc()).limit(1))
+        if row is None:
+            return None
+        return {"target": "outbox", "target_id": str(row.delivery_group), "kind": "brief", "symbol": None,
+                "text": _first_line(row.message), "at": row.created_at}
+
+
+def resolve(owner_hash: str, *, about: str = "alert", symbol: str | None = None, now: datetime | None = None) -> dict | None:
+    """The message he means when he rates one in words: the newest that fits within ``RESOLVE_WINDOW``.
+
+    ``about="brief"``: his newest delivered morning brief.  ``about="alert"``: the newer of the newest sentinel alert and the newest duty
+    message that reached him, both naming ``symbol`` when it is given.  ``{"target", "target_id", "kind", "symbol", "text", "at"}``, or None."""
+    until = now or datetime.now(UTC)
+    since = until - RESOLVE_WINDOW
+    if about == "brief":
+        return _newest_brief(owner_hash, since, until)
+    symbol = symbol.strip().upper() if isinstance(symbol, str) and symbol.strip() else None
+    found = [m for m in (_newest_sentinel(since, until, symbol), _newest_duty(owner_hash, since, until, symbol)) if m is not None]
+    return max(found, key=lambda m: m["at"]) if found else None
+
+
+def frozen(match: dict) -> dict:
+    """``match`` as it is frozen into an operation: plain JSON (the time as an ISO string)."""
+    at = match.get("at")
+    return {**match, "at": at.astimezone(UTC).isoformat() if isinstance(at, datetime) else at}
+
+
+def when_text(at) -> str:
+    """Beijing time of a match, ``%m-%d %H:%M``; empty when it has none."""
+    if isinstance(at, str):
+        try:
+            at = datetime.fromisoformat(at)
+        except ValueError:
+            return ""
+    if not isinstance(at, datetime):
+        return ""
+    return (at if at.tzinfo else at.replace(tzinfo=UTC)).astimezone(BEIJING).strftime("%m-%d %H:%M")
 
 
 # --- reading -------------------------------------------------------------------------------------------------------------

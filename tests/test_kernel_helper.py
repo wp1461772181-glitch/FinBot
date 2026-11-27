@@ -30,7 +30,8 @@ from tests.test_kernel_loop import FakeConsent, act_call, call, env, fake_consen
 GOLDEN = {
     # Memory writes (11-26): remember's basis and quote wording in the act tool; the memory lines of the system text.
     # 5b-1: the owner's tools gain set_watch_rule / delete_watch_rule in act and the list_watch_rules read (the system text is unchanged).
-    "owner": ("2cddf917731c1072766dc7543f522bde9c84427911e4cd718cdb4733e4c38e85",
+    # 5c-3c: act gains rate_alert (the system text is unchanged).
+    "owner": ("d2f7bda9da94314560818a848d42ef43023b8b09e64e350ab9b6be507797d6d8",
                "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
     "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
 }
