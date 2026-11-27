@@ -314,7 +314,7 @@ export function operationRow(item, timeZone, w = ZH_WORDS) {
 
 // ---- 提醒投递 ------------------------------------------------------------------------------------------------------
 
-const SOURCES = { notify: "提醒", routine: "任务", duty: "值班", brief: "早间简报" };
+const SOURCES = { notify: "提醒", routine: "任务", duty: "值班", brief: "早间简报", sentinel: "盯盘提醒" };
 const CHANNELS = { telegram: "Telegram", wechat: "微信", pushover: "Pushover" };
 
 function deliveryStatus(item) {

@@ -23,6 +23,7 @@ from .database import SessionLocal
 CHANNELS = ("telegram", "wechat")
 MODES = ("first", "all")
 STUCK_SECONDS = 300
+SENTINEL_COPY_STALE = timedelta(minutes=30)     # a WeChat copy of a price alert older than this is not sent any more
 CLAIM_SECONDS = 180      # a bridge that took a row this recently is still sending it: the sweep leaves it
 ACK_DAYS = 7             # an acknowledgement reaches back this far, not into older history
 FAILURES = ("send_failed", "expired", "partial")
@@ -110,6 +111,12 @@ def pending(owner_hash: str, channel: str, limit: int = 20, telegram_bot_row_id=
     sending is not closed and failed over under it.  A bridge that died stops claiming and its rows expire.  Each item carries its
     ``source`` and ``group_id`` (the Telegram bridge puts 「有用／没用」 on a duty or brief message by its group)."""
     with SessionLocal() as db:
+        # a bridge that comes back after a long gap sends before it sweeps: a stale alert copy is closed here, before it is handed out
+        stamp_now = now or datetime.now(UTC)
+        db.execute(update(AgentTelegramMessage).where(
+            AgentTelegramMessage.owner_hash == owner_hash, AgentTelegramMessage.status == "pending", AgentTelegramMessage.channel == channel,
+            AgentTelegramMessage.source == "sentinel", AgentTelegramMessage.created_at < stamp_now - SENTINEL_COPY_STALE)
+            .values(status="failed", failure="expired"))
         query = select(AgentTelegramMessage).where(AgentTelegramMessage.owner_hash == owner_hash,
                                                    AgentTelegramMessage.status == "pending",
                                                    AgentTelegramMessage.channel == channel)
@@ -182,6 +189,8 @@ def mark_failed(message_id, code: str = "send_failed") -> None:
 def fail_over(db, row) -> bool:
     """Queue the message of a closed row on the next channel of the owner's preference that is available and has
     no row in the message's group.  The caller holds the row (locked) and commits."""
+    if row.source == "sentinel":
+        return False        # the WeChat copy of an alert the sentinel already sent to Telegram: a fail-over would be a second copy there
     wanted = prefs(db, row.owner_hash)["channels"]
     bot = db.get(AgentBot, row.bot_id) if row.bot_id else None
     have = {row.channel}
@@ -230,8 +239,11 @@ def expire_stuck(owner_hash: str, now: datetime | None = None) -> int:
             (AgentTelegramMessage.claimed_at.is_(None)) | (AgentTelegramMessage.claimed_at <= lease)).order_by(AgentTelegramMessage.created_at)
             .with_for_update(skip_locked=True)).all()
         closed = 0
+        stale = now - SENTINEL_COPY_STALE
         for row in rows:
-            if _delivered_elsewhere(db, row) or fail_over(db, row):
+            # the WeChat copy of an alert never fails over (Telegram has the alert from the sentinel itself); once it is this old a
+            # price it quotes is stale, so it is closed rather than sent when the bridge comes back hours later
+            if (row.source == "sentinel" and row.created_at < stale) or _delivered_elsewhere(db, row) or fail_over(db, row):
                 row.status, row.failure = "failed", "expired"
                 closed += 1
         db.commit()

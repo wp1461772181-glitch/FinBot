@@ -512,6 +512,41 @@ def test_the_endpoint_accepts_at_once_with_202_and_the_queue_takes_it(env, monke
     assert getattr(caught.value, "status_code", None) == 422
 
 
+def _post_alert(monkeypatch, copy_to_wechat):
+    """``alert_posted`` through the endpoint with the copy and the wake replaced: (the response, what was called in order)."""
+    from app import sentinel_api, sentinel_bridge, sentinel_copy
+    monkeypatch.setenv("SENTINEL_TOKEN", "tok")
+    monkeypatch.setattr(sentinel_bridge, "owner_hash_from_login_config", lambda: OWNER_HASH)
+    calls = []
+
+    def copy(owner, alert):
+        calls.append(("copy", owner, alert["alert_id"]))
+        return copy_to_wechat(owner, alert)
+
+    async def submit(alert, owner):
+        calls.append(("wake", owner, alert["alert_id"]))
+    monkeypatch.setattr(sentinel_copy, "copy_to_wechat", copy)
+    monkeypatch.setattr(wake, "submit", submit)
+    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"), headers={"X-Sentinel-Token": "tok"})
+    body = sentinel_api.SentinelEvent(type="alert_posted", payload=event(12))
+    response = asyncio.run(sentinel_api.post_event(body, request, SimpleNamespace(add_task=lambda *a: None)))
+    return response, calls
+
+
+def test_the_endpoint_hands_the_alert_to_the_wechat_copy_then_to_the_wake(env, monkeypatch):
+    response, calls = _post_alert(monkeypatch, lambda owner, alert: {"outcome": "queued"})
+    assert response.status_code == 202 and json.loads(response.body) == {"accepted": True}
+    assert calls == [("copy", OWNER_HASH, 12), ("wake", OWNER_HASH, 12)]
+
+
+def test_a_failing_wechat_copy_still_answers_202_and_wakes(env, monkeypatch):
+    def broken(owner, alert):
+        raise RuntimeError("copy down")
+    response, calls = _post_alert(monkeypatch, broken)
+    assert response.status_code == 202 and json.loads(response.body) == {"accepted": True}
+    assert calls == [("copy", OWNER_HASH, 12), ("wake", OWNER_HASH, 12)]
+
+
 def test_the_worker_starts_and_stops_with_the_api():
     async def go():
         wake.start()
@@ -676,3 +711,16 @@ def test_a_verdict_on_a_morning_brief_is_not_given_to_the_wake(env):
     judge()
     system = fake.calls[0]["messages"][0]["content"]
     assert "INTC 急跌" in system and "简报第一行" not in system
+
+
+def test_the_wechat_copy_of_an_alert_is_not_in_the_recent_outbox(env):
+    """5c-2b: the copy repeats the alert itself; listing it would crowd out what was really said to him."""
+    from app.agent_chat_models import AgentTelegramMessage
+    with SessionLocal() as db:
+        db.add(AgentTelegramMessage(owner_hash=OWNER_HASH, source="sentinel", text="哨兵副本的原文", status="sent", channel="wechat"))
+        db.add(AgentTelegramMessage(owner_hash=OWNER_HASH, source="notify", text="一条普通通知", status="sent", channel="telegram"))
+        db.commit()
+    fake = script(env, [step(calls=[decide()])])
+    judge()
+    system = fake.calls[0]["messages"][0]["content"]
+    assert "一条普通通知" in system and "哨兵副本的原文" not in system

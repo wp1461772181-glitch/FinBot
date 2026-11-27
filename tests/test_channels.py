@@ -450,6 +450,35 @@ def test_fail_over_goes_only_to_a_listed_and_available_channel(chan):
     assert [r.channel for r in _rows()] == ["wechat"]
 
 
+def test_a_closed_sentinel_row_never_fails_over_to_telegram(chan):
+    """5c-2b: the WeChat copy of a sentinel alert; Telegram already has the alert from the sentinel itself."""
+    _bind()
+    chan.update(LOGIN)
+    channels.set_prefs(OWNER_HASH, ["wechat", "telegram"], "first")
+    row = _plant("wechat", source="sentinel", attempts=tg.SEND_ATTEMPTS - 1)
+    channels.mark_failed(row)
+    [only] = _rows()
+    assert (only.channel, only.status, only.failure) == ("wechat", "failed", "send_failed")
+    stuck = _plant("wechat", source="sentinel", created=NOW - timedelta(minutes=10))
+    assert channels.expire_stuck(OWNER_HASH, now=NOW) == 0     # 10 minutes: its bridge may still come back and send it
+    assert {str(r.id): r.status for r in _rows()}[stuck] == "pending"
+    old = _plant("wechat", source="sentinel", created=NOW - timedelta(minutes=31))
+    assert channels.expire_stuck(OWNER_HASH, now=NOW) == 1     # the price it quotes is stale: closed, never sent late
+    states = {str(r.id): (r.status, r.failure) for r in _rows()}
+    assert states[old] == ("failed", "expired") and states[stuck][0] == "pending"
+    assert _rows(channel="telegram") == []
+
+
+def test_a_closed_notify_row_still_fails_over_to_telegram(chan):
+    _bind()
+    chan.update(LOGIN)
+    channels.set_prefs(OWNER_HASH, ["wechat", "telegram"], "first")
+    row = _plant("wechat", source="notify", attempts=tg.SEND_ATTEMPTS - 1)
+    channels.mark_failed(row)
+    [moved] = _rows(channel="telegram")
+    assert (moved.source, moved.status) == ("notify", "pending")
+
+
 # --- acknowledgement and the delivery list ---------------------------------------------------------------
 
 def test_acknowledge_marks_only_that_channel(chan):
@@ -703,3 +732,14 @@ def test_acknowledge_with_seen_at_skips_rows_sent_after_the_message(chan):
     assert channels.acknowledge(OWNER_HASH, "telegram", seen_at=seen) == 1
     by = {str(r.id): r for r in _rows()}
     assert by[before].acked_at == seen and by[after].acked_at is None
+
+
+def test_a_stale_alert_copy_is_closed_when_a_bridge_asks_for_its_rows(chan):
+    """A WeChat bridge back after a long gap sends before it sweeps: the stale copy is closed before it is handed out."""
+    _bind()
+    chan.update(LOGIN)
+    old = _plant("wechat", source="sentinel", created=NOW - timedelta(minutes=40))
+    fresh = _plant("wechat", source="sentinel", created=NOW - timedelta(minutes=2))
+    handed = [r["id"] for r in channels.pending(OWNER_HASH, "wechat", now=NOW)]
+    assert handed == [fresh]
+    assert {str(r.id): (r.status, r.failure) for r in _rows()}[old] == ("failed", "expired")

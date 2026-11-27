@@ -238,6 +238,13 @@ test("deliveries: the kernel's duty messages and its morning brief read in words
   assert.equal(deliveryRow({ ...DELIVERIES.items[0], source: "brief" }, "UTC").source, "早间简报");
 });
 
+test("deliveries: the WeChat copy of a sentinel alert reads 盯盘提醒 and asks for no 有用／没用", () => {
+  const row = deliveryRow({ ...DELIVERIES.items[0], source: "sentinel", channel: "wechat", group_id: "g-1" }, "UTC");
+  assert.equal(row.source, "盯盘提醒");
+  assert.equal(row.channel, "微信");
+  assert.equal(row.feedback, null);
+});
+
 test("deliveries: 有用／没用 only on duty and brief rows, by their group (their own id without one), pressed as the API says", () => {
   const base = { ...DELIVERIES.items[0], id: "row-1", group_id: "g-1" };
   assert.deepEqual(deliveryRow({ ...base, source: "duty", feedback: "useful" }, "UTC").feedback, { group: "g-1", verdict: "useful" });
