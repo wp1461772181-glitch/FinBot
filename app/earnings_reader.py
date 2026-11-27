@@ -81,6 +81,9 @@ class ReleaseFacts:
     eps_gaap: float | None = None
     guidance: Guidance = field(default_factory=Guidance)     # for the next quarter
     source_text: str = ""
+    # The smallest step the release's revenue figure is written to, in $ billions (「$15.0 billion」 → 0.1, 「14,300」 million → 0.001), from
+    # the token as written: a float keeps no trailing zero.  None when unknown.  Recorded by code; the model is asked for nothing new.
+    revenue_step: float | None = None
     unverified_fields: list[str] = field(default_factory=list)
 
 
@@ -284,6 +287,19 @@ def _grounded(entry, key: str, haystack: str) -> float | None:
     return val
 
 
+def _step(entry, key: str, value: float | None) -> float | None:
+    """The written precision of a revenue token in $ billions: 10^-decimals of the token as written, divided by 1,000 when it is in millions."""
+    if value is None or not isinstance(entry, dict):
+        return None
+    token = entry.get(key) if entry.get(key) is not None else entry.get("number")
+    if not isinstance(token, str):
+        return None
+    cleaned = token.replace(",", "").replace("$", "").strip()
+    decimals = len(cleaned.split(".", 1)[1]) if "." in cleaned else 0
+    millions = str(entry.get("unit", "B")).upper() == "M" or abs(value) >= 1000
+    return 10.0 ** -decimals / (1000.0 if millions else 1.0)
+
+
 def _billions(entry, value: float | None) -> float | None:
     if value is None:
         return None
@@ -302,6 +318,7 @@ async def extract_release(text: str, model: dict) -> ReleaseFacts:
     entry = data.get("revenue")
     val, ok = _grounded_with_status(entry, "revenue_b", haystack)
     facts.revenue = _billions(entry, val)
+    facts.revenue_step = _step(entry, "revenue_b", val)
     if entry and not ok:
         facts.unverified_fields.append("revenue")
 
