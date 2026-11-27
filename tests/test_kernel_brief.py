@@ -143,15 +143,15 @@ def test_only_filtered_rows_are_the_code_written_line_alone(env):
     fake = script(env, [])
     row = run()
     assert fake.calls == [] and row["outcome"] == "done" and row["turn_id"] is None and row["model_calls"] == 0
-    assert row["message"] == "【早间简报】过去 24 小时里，另有 3 条提醒我看过，判断不用打扰你（2 条只记下，1 条不理会），在后台「值班」里能看到。"
+    assert re.fullmatch(r"【早间简报】从 \d\d-\d\d \d\d:\d\d 到现在，另有 3 条提醒我看过，判断不用打扰你（2 条只记下，1 条不理会），在后台「值班」里能看到。", row["message"])
     assert row["counts"] == {"digest": 0, "held": 0, "record": 2, "ignore": 1, "told": 0, "failed": 0}
 
 
 def test_a_zero_part_of_the_filtered_line_is_left_out():
-    assert brief.filtered_line({"record": 3, "ignore": 0}, False) == "从上一份简报到现在，另有 3 条提醒我看过，判断不用打扰你（3 条只记下），在后台「值班」里能看到。"
-    assert brief.filtered_line({"record": 3, "ignore": 0}, True) == "过去 24 小时里，另有 3 条提醒我看过，判断不用打扰你（3 条只记下），在后台「值班」里能看到。"
-    assert "（1 条不理会）" in brief.filtered_line({"ignore": 1}, False)
-    assert brief.filtered_line({"record": 0, "ignore": 0, "digest": 4}, True) == ""
+    since = datetime(2026, 11, 27, 0, 5, tzinfo=UTC)        # 08:05 Beijing
+    assert brief.filtered_line({"record": 3, "ignore": 0}, since) == "从 11-27 08:05 到现在，另有 3 条提醒我看过，判断不用打扰你（3 条只记下），在后台「值班」里能看到。"
+    assert "（1 条不理会）" in brief.filtered_line({"ignore": 1}, since)
+    assert brief.filtered_line({"record": 0, "ignore": 0, "digest": 4}, since) == ""
 
 
 def test_kept_and_held_items_go_to_one_model_turn_without_decide_act_or_ask(env):
@@ -169,8 +169,8 @@ def test_kept_and_held_items_go_to_one_model_turn_without_decide_act_or_ask(env)
     assert "白天已经发出的话" not in system
     offered = fake.calls[0]["tools"]
     assert "query_financials" in offered and not {"decide", "act", "ask", "use_skill", "search_x"} & set(offered)
-    line = brief.filtered_line(row["counts"], True)
-    assert row["message"] == f"{brief.HEAD}{ANSWER}\n\n{line}" and "1 条只记下" in line
+    body, line = row["message"].rsplit("\n\n", 1)
+    assert body == f"{brief.HEAD}{ANSWER}" and re.fullmatch(r"从 \d\d-\d\d \d\d:\d\d 到现在，另有 1 条提醒我看过，判断不用打扰你（1 条只记下），在后台「值班」里能看到。", line)
     assert row["counts"] == {"digest": 1, "held": 1, "record": 1, "ignore": 0, "told": 1, "failed": 1}
     assert row["outcome"] == "done" and row["reason"] is None and row["model_calls"] == 1 and row["turn_id"]
 
@@ -283,6 +283,19 @@ def test_a_full_notify_cap_of_the_bot_does_not_stop_the_brief(env):
     assert row["delivery"] == "queued" and len(outbox()) == 1
 
 
+def test_a_brief_already_queued_stays_done_when_marking_the_held_rows_fails(env):
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
+    _bind()
+    held()
+
+    def broken(_ids):
+        raise RuntimeError("db")
+    env.monkeypatch.setattr(duty_log, "mark_briefed", broken)
+    script(env, [step(text=ANSWER)])
+    row = run()
+    assert row["outcome"] == "done" and row["delivery"] == "queued" and len(outbox()) == 1 and "没能标成已带出" in row["reason"]
+
+
 def test_on_without_a_bound_channel_marks_nothing(env):
     env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
     held_row = held()
@@ -359,10 +372,11 @@ def test_with_no_done_brief_the_window_reaches_24_hours_before_the_oldest_brief_
     old = duty("record")
     _age(duty_log.DutyLog, old["id"], 30)          # before now - 24h, after the failed row - 24h
     now = brief_now()
-    assert brief._window_start(OWNER_HASH, now) < datetime.now(UTC) - timedelta(hours=43)
+    start = brief._window_start(OWNER_HASH, now)
+    assert start < datetime.now(UTC) - timedelta(hours=43)
     row = run(now)
     assert row["outcome"] == "done" and row["counts"]["record"] == 1
-    assert row["message"] == brief.HEAD + brief.filtered_line(row["counts"], True)
+    assert row["message"] == brief.HEAD + brief.filtered_line(row["counts"], start)        # the line names where the window really starts
 
 
 def test_without_any_brief_row_the_window_is_the_last_24_hours(env):

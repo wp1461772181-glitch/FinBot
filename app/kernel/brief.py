@@ -93,16 +93,15 @@ def gather(owner_hash: str, since: datetime) -> dict:
     return {"kept": kept, "held": held, "counts": counts, "night_digest_sent": night_digest_sent}
 
 
-def filtered_line(counts: dict, first: bool) -> str:
-    """The line code writes about the alerts the duty looked at and kept from him; empty when there were none.
-    ``first``: no brief has run yet, so the window is the last 24 hours."""
+def filtered_line(counts: dict, since: datetime) -> str:
+    """The line code writes about the alerts the duty looked at and kept from him, from the window's start (Beijing); empty when none."""
     record, ignore = int(counts.get("record") or 0), int(counts.get("ignore") or 0)
     n = record + ignore
     if n == 0:
         return ""
     parts = [part for part, count in ((f"{record} 条只记下", record), (f"{ignore} 条不理会", ignore)) if count]
-    lead = "过去 24 小时里" if first else "从上一份简报到现在"
-    return f"{lead}，另有 {n} 条提醒我看过，判断不用打扰你（{'，'.join(parts)}），在后台「值班」里能看到。"
+    start = since.astimezone(BEIJING).strftime("%m-%d %H:%M")
+    return f"从 {start} 到现在，另有 {n} 条提醒我看过，判断不用打扰你（{'，'.join(parts)}），在后台「值班」里能看到。"
 
 
 def _window_start(owner: str, now: datetime) -> datetime:
@@ -179,12 +178,11 @@ async def _run(row_id: int, owner: str, day: str, current: str, now: datetime, s
 
     if current == "off":
         return await asyncio.to_thread(lambda: finish(outcome="skipped_off", reason=OFF))
-    first = await asyncio.to_thread(duty_brief.last_done, owner) is None
     if since is None:
         since = await asyncio.to_thread(_window_start, owner, now)
     gathered = await asyncio.to_thread(gather, owner, since)
     kept, held, counts = gathered["kept"], gathered["held"], gathered["counts"]
-    line = filtered_line(counts, first)
+    line = filtered_line(counts, since)
     if not any(counts.values()):
         return await asyncio.to_thread(lambda: finish(outcome="skipped", reason=NOTHING, counts=counts))
     if not kept and not held and not line:
@@ -207,7 +205,11 @@ async def _run(row_id: int, owner: str, day: str, current: str, now: datetime, s
             fields["reason"] = f"简报写好了但没能排进发件箱：{why}。夜里留下的事会由下一份简报补带。"
             return await asyncio.to_thread(lambda: finish(outcome="failed", **fields))
         if held:
-            await asyncio.to_thread(duty_log.mark_briefed, [item["id"] for item in held])
+            try:
+                await asyncio.to_thread(duty_log.mark_briefed, [item["id"] for item in held])
+            except Exception:       # the brief is already queued: it stays done, so tomorrow's does not send it again
+                logger.exception("morning brief %s: the held rows could not be marked briefed", day)
+                fields["reason"] = "简报已排进发件箱，但夜里留下的跟进没能标成已带出。"
     return await asyncio.to_thread(lambda: finish(outcome="done", **fields))
 
 

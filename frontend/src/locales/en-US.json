@@ -2493,6 +2493,8 @@
   "未记账": "Not booked",
   "值班": "On duty",
   "早间简报": "Morning brief",
+  "夜里压住，没发": "Held over the night, not sent",
+  "已随早间简报发出": "Sent with the morning brief",
   "发生了什么": "What happened",
   "理由": "Reason",
   "发给你的消息": "Message to you",
