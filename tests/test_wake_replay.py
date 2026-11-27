@@ -49,3 +49,9 @@ def test_a_missing_alert_is_a_message(tmp_path):
     with pytest.raises(LookupError, match="#60"):
         wake_replay.event_from(_sentinel(tmp_path), 60, offset=0, tier=None, sigma=None, held=False)
 
+
+
+def test_a_stored_call_is_named_from_its_function():
+    assert wake_replay.call_name({"id": "t1", "type": "function", "function": {"name": "query_stock_prices", "arguments": "{}"}}) == "query_stock_prices"
+    assert wake_replay.call_name({"name": "decide"}) == "decide"
+    assert wake_replay.call_name("junk") is None and wake_replay.call_name({}) is None

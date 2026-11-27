@@ -62,10 +62,16 @@ def _tools_of(turn_id) -> list[str]:
     names: list[str] = []
     with SessionLocal() as db:
         for calls in db.scalars(select(AgentMessage.tool_calls).where(AgentMessage.turn_id == uuid.UUID(str(turn_id)), AgentMessage.role == "assistant")):
-            for call in (calls or {}).get("calls") or []:
-                if isinstance(call, dict) and call.get("name"):
-                    names.append(call["name"])
+            names.extend(name for name in map(call_name, (calls or {}).get("calls") or []) if name)
     return names
+
+
+def call_name(call) -> str | None:
+    """A stored tool call's name (the protocol keeps it under ``function``)."""
+    if not isinstance(call, dict):
+        return None
+    function = call.get("function")
+    return (function.get("name") if isinstance(function, dict) else None) or call.get("name")
 
 
 def main(argv: list[str] | None = None) -> int:
