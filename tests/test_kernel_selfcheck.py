@@ -429,3 +429,10 @@ def test_the_loop_runs_the_check_for_the_owner_and_does_nothing_without_one(monk
     background.run_selfcheck()
     assert seen_runs == [(OWNER_HASH, True)]
     assert {n: i for n, i, _ in background.LOOPS}["duty-selfcheck"] == background.SELFCHECK_SECONDS == 60
+
+
+def test_a_tier_one_move_counts_only_clear_of_the_line():
+    assert selfcheck._clear({"tier": 2, "sigma_mult": 4.1}, 2.0)
+    assert not selfcheck._clear({"tier": 1, "sigma_mult": 2.1}, 2.0)           # ANT 11-25: within the 5- vs 1-minute noise
+    assert selfcheck._clear({"tier": 1, "sigma_mult": 2.6}, 2.0)
+    assert not selfcheck._clear({"tier": 1, "sigma_mult": ""}, 2.0) and not selfcheck._clear({"tier": 0, "sigma_mult": 9}, 2.0)

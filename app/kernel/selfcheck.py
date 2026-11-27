@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
-from sentinel import replay
+from sentinel import replay, tiers
 from sentinel import rules as owner_rules
 from sentinel.store import db_path as sentinel_db_path
 
@@ -46,6 +46,7 @@ MINUTE = "%Y-%m-%d %H:%M"
 # a preset or a price level fires once while its condition holds and stays locked across days (rule_state, level_lock); the replay
 # starts from an empty store, so it would "miss" them every day (shadow check on 11-25: five such false misses, no real one).
 MOVE_KINDS = ("daily", "gap", "update", "move", "reversal", "merged")
+MARGIN = 0.5           # sigmas a tier-1 move must clear the line by to count
 WHY_FAILED = "财报解读试了三次都没做成"
 WHY_STUCK = "收到一个多小时了还没发出"
 WHY_UNSEEN = "盯盘程序看到了这份财报，但没交到解读那一步"
@@ -171,6 +172,18 @@ def _live_symbols(sentinel_db, day: date) -> tuple[set[str], int]:
     return {s for r in rows for s in str(r["symbol"]).split("+") if s}, len(rows)
 
 
+def _clear(alert: dict, line: float) -> bool:
+    """A replayed move that is plainly over the line: tier 2, or tier 1 at least ``MARGIN`` sigmas above the worth-knowing line.  The
+    replay reads 5-minute bars and the live loop 1-minute bars, so a move just over the line in one is often just under it in the other
+    (shadow check of 11-24 and 11-25: ANT pre-market at 2.0 and 2.1 sigmas)."""
+    if alert.get("tier") == 2:
+        return True
+    try:
+        return alert.get("tier") == 1 and float(alert.get("sigma_mult")) >= line + MARGIN
+    except (TypeError, ValueError):
+        return False
+
+
 def price_findings(day: date, snapshot: dict, sentinel_db, fetch=None) -> tuple[list, dict]:
     """The alerts the sentinel's policy would have sent on the New York date ``day`` with no live alert on their symbols that date.
     ``fetch(symbols)`` returns the bars (``replay.fetch_data`` by default; tests pass scripted bars)."""
@@ -178,7 +191,9 @@ def price_findings(day: date, snapshot: dict, sentinel_db, fetch=None) -> tuple[
     data = (fetch or replay.fetch_data)(symbols + ([] if "SPY" in symbols else ["SPY"]))    # SPY: the tiers policy's market move
     with tempfile.TemporaryDirectory(prefix="selfcheck-replay-") as workdir:
         result = replay.run_replay(data, snapshot, day, day, policy=_policy(), workdir=workdir)
-    counted = sorted((a for a in result["alerts"] if a.get("tier") in (1, 2) and a.get("kind") in MOVE_KINDS), key=lambda a: a["ts"])
+    settings = snapshot.get("alert_settings") if isinstance(snapshot.get("alert_settings"), dict) else {}
+    line = tiers.thresholds(settings.get("sensitivity") or snapshot.get("alert_sensitivity"))[0]
+    counted = sorted((a for a in result["alerts"] if a.get("kind") in MOVE_KINDS and _clear(a, line)), key=lambda a: a["ts"])
     live, live_rows = _live_symbols(sentinel_db, day)
     findings, told = [], set()
     for alert in counted:
