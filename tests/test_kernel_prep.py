@@ -39,7 +39,11 @@ def calendar(env, monkeypatch):
               row("META", date(2027, 1, 21), "amc"),                    # tomorrow after the close: tomorrow evening's
               row("AMD", date(2027, 1, 20), "amc", eps_actual=0.5)],    # out already: no
              datetime.now(UTC))
-    return env
+    yield env
+    with SessionLocal() as db:            # other suites read the calendar (latest_known): leave it as found
+        db.query(ec.EarningsPrep).delete()
+        db.query(ec.EarningsCalendar).delete()
+        db.commit()
 
 
 def run(now=EVENING, **kwargs):
