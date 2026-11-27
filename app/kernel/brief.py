@@ -22,7 +22,6 @@ from datetime import datetime, timedelta, timezone
 
 from .. import duty_brief, duty_log, duty_selfcheck, model_usage
 from . import loop, prompt, wake
-from ..earnings_calendar import WEEK_HEAD as WEEK_HEAD_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -162,18 +161,20 @@ def filtered_line(counts: dict, since: datetime) -> str:
     return f"从 {start} 到现在，另有 {n} 条提醒我看过，判断不用打扰你（{'，'.join(parts)}），在后台「值班」里能看到。"
 
 
-def week_calendar(owner: str, now: datetime) -> str:
-    """On a Beijing Monday, the week's earnings calendar of the companies he holds and follows (5e-2a, code-written); else empty.  A failure
-    to read it is logged and leaves the brief as it was."""
-    local = now.astimezone(BEIJING)
-    if local.weekday() != 0:
-        return ""
+def week_calendar(owner: str, day: str) -> tuple[str, bool]:
+    """When the brief's Beijing ``day`` is a Monday, the week's earnings calendar of the companies he holds and follows (5e-2a, code-written)
+    and whether any reports this week; else ``("", False)``.  The brief's own day, not the clock, so a replay of a past Monday shows its week.
+    A failure to read it is logged and leaves the brief as it was."""
+    from datetime import date
+    monday = date.fromisoformat(day)
+    if monday.weekday() != 0:
+        return "", False
     try:
         from .. import earnings_calendar
-        return earnings_calendar.week_block(earnings_calendar.tracked_symbols(owner), local.date())
+        return earnings_calendar.week_block(earnings_calendar.tracked_symbols(owner), monday)
     except Exception:
         logger.exception("morning brief: the week's earnings calendar could not be read")
-        return ""
+        return "", False
 
 
 def _window_start(owner: str, now: datetime) -> datetime:
@@ -261,9 +262,8 @@ async def _run(row_id: int, owner: str, day: str, current: str, now: datetime, s
         counts = {**counts, "missed": len(findings), **({"unchecked": serious} if serious else {})}
     line = filtered_line(counts, since)
     missed = selfcheck_lines(findings, problems)
-    week = await asyncio.to_thread(week_calendar, owner, now)
     # the week's reports are content on a Monday (the brief goes out for them alone); 「本周没有」 only rides along with a brief going out anyway
-    reports_this_week = week.startswith(WEEK_HEAD_TEXT)
+    week, reports_this_week = await asyncio.to_thread(week_calendar, owner, day)
     tail = "".join(f"\n\n{part}" for part in (missed, line, week) if part)
     if not any(counts.values()) and not reports_this_week:
         return await asyncio.to_thread(lambda: finish(outcome="skipped", reason=NOTHING, counts=counts))

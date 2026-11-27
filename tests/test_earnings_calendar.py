@@ -145,10 +145,19 @@ def test_a_company_with_only_its_calendar_gets_a_section_and_still_the_no_materi
 def test_the_week_block_lists_this_us_weeks_reports_or_names_the_next_one():
     rows = ec.parse(PAYLOAD)
     ec.store(rows, NOW)
-    week = ec.week_block(["INTC", "MSFT", "ANT"], date(2027, 1, 18))
-    assert week.startswith(ec.WEEK_HEAD)
+    week, reports = ec.week_block(["INTC", "MSFT", "ANT"], date(2027, 1, 18))
+    assert reports and week.startswith(ec.WEEK_HEAD) and "以公司公告为准" in ec.WEEK_HEAD
     assert "\n· 01-20（周三）盘后　英特尔（INTC）　预期每股收益 0.25 美元、营收 158.5 亿美元" in week
     assert "\n· 01-26" not in week, "the next Monday's week is not this one"
-    quiet = ec.week_block(["INTC", "MSFT"], date(2026, 11, 30))
-    assert quiet == "本周你持有和关注的公司没有财报；最近的一家是 01-20（周三）盘后 英特尔（INTC）（美东日期）。"
-    assert ec.week_block(["ANT"], date(2026, 11, 30)) == "" and ec.week_block([], date(2026, 11, 30)) == ""
+    quiet, reports = ec.week_block(["INTC", "MSFT"], date(2026, 11, 30))
+    assert not reports and quiet == "本周你持有和关注的公司没有财报；最近的一家是 01-20（周三）盘后 英特尔（INTC）（美东日期）。"
+    assert ec.week_block(["ANT"], date(2026, 11, 30)) == ("", False) and ec.week_block([], date(2026, 11, 30)) == ("", False)
+
+
+def test_the_week_is_monday_to_sunday_and_a_report_out_already_is_left_out():
+    base = ec.parse(PAYLOAD)[0]
+    ec.store([{**base, "symbol": "AAA", "report_date": date(2027, 1, 24)},                          # Sunday: in
+              {**base, "symbol": "BBB", "report_date": date(2027, 1, 25)},                          # next Monday: out
+              {**base, "symbol": "CCC", "report_date": date(2027, 1, 19), "eps_actual": 0.3}], NOW) # out already: left out
+    week, reports = ec.week_block(["AAA", "BBB", "CCC"], date(2027, 1, 18))
+    assert reports and "AAA" in week and "BBB" not in week and "CCC" not in week

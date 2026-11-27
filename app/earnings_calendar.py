@@ -216,7 +216,7 @@ def line(row: dict) -> str:
 
 # --- the week's calendar in the Monday brief (5e-2a) ---------------------------------------------------------------------------
 
-WEEK_HEAD = "本周财报（Finnhub 日历；日期为美东，市场预期为调整后口径）："
+WEEK_HEAD = "本周财报（Finnhub 日历；日期为美东，是数据商的预估，以公司公告为准；市场预期为调整后口径）："
 
 
 def _company(symbol: str) -> str:
@@ -240,22 +240,22 @@ def _when(row: dict) -> str:
     return f"{reported:%m-%d}（周{WEEKDAYS[reported.weekday()]}）" + (f"{hour}" if hour else "")
 
 
-def week_block(symbols, monday: date) -> str:
+def week_block(symbols, monday: date) -> tuple[str, bool]:
     """The Monday brief's code-written block: the tracked companies reporting in the US week starting ``monday`` (a Beijing Monday morning is
     the US Sunday night before it), earliest first.  A week with none says so and names the next report, if any is known; nothing known at
-    all is an empty string."""
+    all is an empty string.  The second value says whether any company reports this week (the brief sends for that alone)."""
     wanted = sorted({str(s).upper() for s in symbols or [] if s})
     if not wanted:
-        return ""
+        return "", False
     with SessionLocal() as db:
         rows = [as_dict(row) for row in db.scalars(select(EarningsCalendar).where(
             EarningsCalendar.symbol.in_(wanted), EarningsCalendar.report_date >= monday, EarningsCalendar.eps_actual.is_(None))
             .order_by(EarningsCalendar.report_date, EarningsCalendar.symbol)).all()]
     if not rows:
-        return ""
+        return "", False
     end = monday + timedelta(days=6)
     week = [row for row in rows if date.fromisoformat(row["report_date"]) <= end]
     if not week:
         nxt = rows[0]
-        return f"本周你持有和关注的公司没有财报；最近的一家是 {_when(nxt)} {_company(nxt['symbol'])}（美东日期）。"
-    return WEEK_HEAD + "".join(f"\n· {_when(row)}　{_company(row['symbol'])}　{_expected(row)}" for row in week)
+        return f"本周你持有和关注的公司没有财报；最近的一家是 {_when(nxt)} {_company(nxt['symbol'])}（美东日期）。", False
+    return WEEK_HEAD + "".join(f"\n· {_when(row)}　{_company(row['symbol'])}　{_expected(row)}" for row in week), True

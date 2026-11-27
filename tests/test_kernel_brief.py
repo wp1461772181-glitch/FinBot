@@ -37,6 +37,7 @@ def env(owner, monkeypatch):
     monkeypatch.setattr(runner, "owner_credential", lambda: OWNER)
     monkeypatch.setattr(runner, "task_model", lambda owner_hash, name: dict(MODEL))
     monkeypatch.setenv("FINBOT_DUTY_MODE", "shadow")
+    monkeypatch.setattr(brief, "week_calendar", lambda owner, day: ("", False))       # the week's calendar has its own tests: not the clock's weekday here
     invoked, tags = [], []
 
     async def fake_invoke(name, args, context, *, emit=None, page_chars=None):
@@ -456,7 +457,7 @@ def test_a_monday_with_reports_this_week_sends_the_calendar_alone_without_a_mode
     _bind()
     fake = script(env, [])
     block = WEEK_HEAD + "\n· 01-20（周三）盘后　英特尔（INTC）　预期每股收益 0.25 美元"
-    env.monkeypatch.setattr(brief, "week_calendar", lambda owner, now: block)
+    env.monkeypatch.setattr(brief, "week_calendar", lambda owner, day: (block, True))
     row = run()
     assert row["outcome"] == "done" and block in row["message"] and fake.calls == []
     assert len(outbox()) == 1
@@ -464,7 +465,7 @@ def test_a_monday_with_reports_this_week_sends_the_calendar_alone_without_a_mode
 
 def test_a_quiet_week_alone_sends_nothing_and_rides_along_with_a_brief_that_goes_out(env):
     quiet = "本周你持有和关注的公司没有财报；最近的一家是 01-20（周三）盘后 英特尔（INTC）（美东日期）。"
-    env.monkeypatch.setattr(brief, "week_calendar", lambda owner, now: quiet)
+    env.monkeypatch.setattr(brief, "week_calendar", lambda owner, day: (quiet, False))
     env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
     _bind()
     script(env, [])
@@ -474,13 +475,12 @@ def test_a_quiet_week_alone_sends_nothing_and_rides_along_with_a_brief_that_goes
     assert row["outcome"] == "done" and row["message"].endswith(quiet)
 
 
-def test_the_week_calendar_is_read_on_a_beijing_monday_only(env, monkeypatch):
+def test_the_week_calendar_is_read_for_the_briefs_own_monday(monkeypatch):
     from app import earnings_calendar
     seen = []
     monkeypatch.setattr(earnings_calendar, "tracked_symbols", lambda owner: ["INTC"])
-    monkeypatch.setattr(earnings_calendar, "week_block", lambda symbols, monday: seen.append(monday) or "block")
-    monday_morning = datetime(2026, 11, 30, 9, 0, tzinfo=brief.BEIJING)
-    assert brief.week_calendar(OWNER_HASH, monday_morning.astimezone(UTC)) == "block" and seen == [date(2026, 11, 30)]
-    assert brief.week_calendar(OWNER_HASH, (monday_morning + timedelta(days=1)).astimezone(UTC)) == ""
+    monkeypatch.setattr(earnings_calendar, "week_block", lambda symbols, monday: (seen.append(monday), ("block", True))[1])
+    assert brief.week_calendar(OWNER_HASH, "2026-11-30") == ("block", True) and seen == [date(2026, 11, 30)]
+    assert brief.week_calendar(OWNER_HASH, "2026-12-01") == ("", False), "not a Monday: the clock does not matter"
     monkeypatch.setattr(earnings_calendar, "week_block", lambda *a: (_ for _ in ()).throw(RuntimeError("table gone")))
-    assert brief.week_calendar(OWNER_HASH, monday_morning.astimezone(UTC)) == "", "a failure leaves the brief as it was"
+    assert brief.week_calendar(OWNER_HASH, "2026-11-30") == ("", False), "a failure leaves the brief as it was"
