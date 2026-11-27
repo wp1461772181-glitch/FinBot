@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Stop hook: when a turn ends, show the owner which background commands are still running.
+"""Stop hook: a turn may not end with background commands running unless Claude has told the owner.
 
 docs/claude/collaboration-rules.md, section 5: the owner should not have to open the background
 panel to find out that something is idling. This reads the session transcript, pairs each
-background command with its completion notice, and lists the ones that have none.
+background command with its completion notice, and finds the ones that have none.
 
-It only reports. It never blocks the turn from ending, and prints nothing when nothing is running.
+If any are running and Claude's closing message does not mention background work at all, the stop
+is held back once and the list is handed to Claude, who then has to account for each one in the
+reply the owner reads. A closing message that already talks about it passes untouched, and so does
+a turn with nothing running. It never holds the same stop back twice.
+
 Covers shell commands started in the background; scheduled wake-ups and subagents are not listed.
 """
 
@@ -70,19 +74,56 @@ def message_for(tasks: list[dict]) -> str | None:
     if not tasks:
         return None
     rows = [f"- {task['what'] or '（没有说明）'}（{local_clock(task['at'])} 启动，编号 {task['id']}）" for task in tasks]
-    return f"还有 {len(tasks)} 个后台命令在运行：\n" + "\n".join(rows)
+    return (
+        f"还有 {len(tasks)} 个后台命令在运行，而你的收尾没有向 owner 提到后台：\n" + "\n".join(rows)
+        + "\n请在给 owner 的话里逐个说明：它在等什么、什么会叫醒你、最晚什么时候结束；没用的现在就停掉。"
+    )
+
+
+def last_reply(lines) -> str:
+    """The text of Claude's most recent message in the transcript."""
+    latest = ""
+    for line in lines:
+        if '"assistant"' not in line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or row.get("type") != "assistant":
+            continue
+        message = row.get("message")
+        blocks = message.get("content") if isinstance(message, dict) else None
+        texts = [block.get("text", "") for block in blocks or []
+                 if isinstance(block, dict) and block.get("type") == "text"]
+        if any(text.strip() for text in texts):
+            latest = "\n".join(texts)
+    return latest
+
+
+def decide(payload: dict, lines: list[str]) -> dict | None:
+    """Hold the stop back when something is running and the closing message is silent about it."""
+    if payload.get("stop_hook_active"):
+        return None
+    reason = message_for(running_tasks(lines))
+    if reason is None:
+        return None
+    closing = payload.get("last_assistant_message")
+    closing = closing if isinstance(closing, str) and closing.strip() else last_reply(lines)
+    if "后台" in closing:
+        return None
+    return {"decision": "block", "reason": reason}
 
 
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
-        path = payload["transcript_path"]
-        with open(path, encoding="utf-8", errors="replace") as transcript:
-            text = message_for(running_tasks(transcript))
+        with open(payload["transcript_path"], encoding="utf-8", errors="replace") as transcript:
+            result = decide(payload, transcript.readlines())
     except (ValueError, KeyError, TypeError, OSError):
         return 0
-    if text:
-        print(json.dumps({"systemMessage": text}, ensure_ascii=False))
+    if result:
+        print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
