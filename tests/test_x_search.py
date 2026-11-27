@@ -381,7 +381,7 @@ def test_other_tools_are_untouched():
 def test_the_kernel_sees_the_3a_additions_and_widenings():
     from app.agent_tool_catalog import KERNEL_ONLY, definitions, legacy_definitions
     full, old = definitions(), legacy_definitions()
-    assert set(full) - set(old) == set(KERNEL_ONLY) and len(KERNEL_ONLY) == 20      # 5b-2: set_watch_preset, set_alert_settings; 5c-3c: rate_alert
+    assert set(full) - set(old) == set(KERNEL_ONLY) and len(KERNEL_ONLY) == 21      # 5b-2: set_watch_preset, set_alert_settings; 5c-3c: rate_alert; 5d-3a: rate_answer
     widened = {n for n in old if full[n].description != old[n].description or full[n].args_schema is not old[n].args_schema}
     # open_page: 4e added the memory page to the kernel's list only; remember: the kernel's has basis (11-26 memory writes)
     assert widened == {"analyze", "create_routine", "update_routine", "open_page", "remember"}

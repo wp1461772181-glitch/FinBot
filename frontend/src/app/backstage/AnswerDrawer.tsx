@@ -4,7 +4,7 @@ import { ErrorBar } from "@/components/state/ErrorBar";
 import { DelayedSkeleton, SkeletonRows } from "@/components/state/Skeleton";
 import { cn } from "@/lib/utils";
 import { readAnswer, type AnswerDetail } from "../../api/backstage";
-import { answerNotes, detailTimeline, helperLines, formatMs, formatTime, answerStatus, reconcileBlock, type TimelineStep } from "../../backstage-view.mjs";
+import { answerNotes, detailTimeline, helperLines, formatMs, formatTime, answerStatus, reconcileBlock, answerFeedbackBlock, type TimelineStep } from "../../backstage-view.mjs";
 import { colon, useLocale } from "../../i18n";
 import { useLoad } from "../use-load";
 import { CostText, Status } from "./BackstageTable";
@@ -70,6 +70,7 @@ export function AnswerDrawer({ id, onClose, returnFocus }: { id: string | null; 
   const notes = detail ? answerNotes(detail, w) : [];
   const helpers = detail ? helperLines(detail, w) : [];
   const reconcile = detail ? reconcileBlock(detail, w) : null;
+  const verdict = detail ? answerFeedbackBlock(detail, w) : null;
   const langfuse = safeUrl(detail?.langfuse_url);
   const citations = detail?.citations ?? [];
   return <Drawer open={id !== null} onOpenChange={open => { if (!open) onClose(); }} direction="right" autoFocus>
@@ -84,6 +85,10 @@ export function AnswerDrawer({ id, onClose, returnFocus }: { id: string | null; 
       <div data-testid="answer-drawer-body" className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-4 [overflow-wrap:anywhere]">
         {load.error && !load.loading && !detail ? <ErrorBar error={load.error} onRetry={() => void load.reload()} retrying={load.loading} /> : null}
         {load.loading && !detail ? <DelayedSkeleton delay={150}><SkeletonRows rows={5} /></DelayedSkeleton> : null}
+        {verdict && <section data-testid="answer-verdict" data-verdict={verdict.verdict} aria-labelledby="answer-verdict-title" className="flex flex-col gap-1 rounded-md border border-line px-3 py-2">
+          <h3 id="answer-verdict-title" className="text-small font-medium text-ink">{verdict.text}</h3>
+          {verdict.reason && <p dir="auto" className="whitespace-pre-wrap [overflow-wrap:anywhere] text-small text-ink-2">{verdict.reason}</p>}
+        </section>}
         {notes.map(note => <p key={note.kind} data-testid={`note-${note.kind}`} role="note" className="rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2">{note.text}</p>)}
         {helpers.length > 0 && <ul data-testid="helpers" aria-label={t("小助手")} className="m-0 flex list-none flex-col gap-1 p-0">{helpers.map(helper => <li key={helper.id} data-testid="helper-line" data-complete={helper.complete ? "true" : "false"} className="rounded-md border border-line bg-sunken px-3 py-2 text-small text-ink-2">{helper.text}</li>)}</ul>}
         {steps.length > 0 && <ol data-testid="timeline" aria-label={t("时间线")} className="m-0 flex list-none flex-col p-0">{steps.map((step, index) => <Step key={`${step.kind}-${index}`} step={step} />)}</ol>}

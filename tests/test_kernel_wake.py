@@ -654,7 +654,7 @@ def test_the_answers_list_leaves_wake_turns_out_unless_asked(env):
                                  tool_calls={"route": "K", "audit": {"terminal_status": "succeeded", "model_calls": 1}})])
         db.commit()
     def listed(**kw):
-        base = dict(x_chat_session=OWNER, bot_id=None, engine=None, status=None, tier=None, slow=0, source=None, reconcile=None, q=None, before=None, limit=50)
+        base = dict(x_chat_session=OWNER, bot_id=None, engine=None, status=None, tier=None, slow=0, source=None, reconcile=None, feedback=None, q=None, before=None, limit=50)
         return backstage_api.answers(**{**base, **kw})
     default = listed()
     assert [i["question"] for i in default["items"]] == ["你好"] and default["items"][0]["source"] == "chat"

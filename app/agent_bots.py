@@ -48,12 +48,13 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # and list/update/delete_routine with it (Levi: 给了新增，怎么没给查看、编辑、删除).
 # read_turn, record_view and drop_view too (kernel-only): the memory note names read_turn, and a view is as much the owner's memory as remember; views make a card or a tier-1 write only.
 # rate_alert too (kernel-only, 5c-3c): his verdict on a message he got, said in any bot's conversation; a card or a tier-1 write only.
+# rate_answer too (kernel-only, 5d-3a): his 「好／不好」 on the bot's previous answer, the same way.  The old engine's bots do not have it.
 # The three portfolio writes too: they only ever make an owner-only card (query_portfolio is a data tool, scoped like the rest).
 ALWAYS_ON = frozenset({"ask_user", "use_result_set", "calculate", "read_history_citation", "select_stock",
                        "open_page", "request_action", "notify_telegram", "use_skill", "save_skill",
                        "remember", "forget", "create_routine", "list_routines", "update_routine",
                        "delete_routine", "record_trade", "set_available_funds", "set_position_plan", "load_tools",
-                       "read_turn", "record_view", "drop_view", "rate_alert", "set_watch_rule", "delete_watch_rule", "list_watch_rules",
+                       "read_turn", "record_view", "drop_view", "rate_alert", "rate_answer", "set_watch_rule", "delete_watch_rule", "list_watch_rules",
                        "set_watch_preset", "set_alert_settings"})
 
 TEMPLATES = {

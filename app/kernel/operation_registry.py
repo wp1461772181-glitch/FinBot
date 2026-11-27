@@ -42,6 +42,8 @@ OPERATION_REGISTRY: dict[tuple[str, str], dict] = {
     ("POST", "/agent-chat/conversations/{conversation_id}/compact"): _no("已有「/压缩」命令，属于对话控制"),
     ("POST", "/agent-chat/bots/{bot_id}/compact"): _no("已有「/压缩」命令，属于对话控制（Telegram 按 bot 找对话线）"),
     ("PATCH", "/agent-chat/conversations/{conversation_id}"): _no("对话改名和归档不开放：无需求证据，价值低，在页面上做"),
+    ("PUT", "/agent-chat/conversations/{conversation_id}/turns/{turn_id}/feedback"): _op("rate_answer"),
+    ("DELETE", "/agent-chat/conversations/{conversation_id}/turns/{turn_id}/feedback"): _op("rate_answer"),
     ("POST", "/agent-chat/personal-login"): _no("登录；owner 凭据不经过助手"),
     # Bot
     ("POST", "/agent-chat/bots/{bot_id}/read"): _no(_PAGE_ONLY_STATE),

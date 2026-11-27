@@ -1,4 +1,4 @@
-import { Suspense, lazy, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type RefObject } from "react";
 import { Check, Copy, LoaderCircle, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Skeleton } from "@/components/state/Skeleton";
 import { ErrorBar } from "@/components/state/ErrorBar";
@@ -11,6 +11,8 @@ import { isTaskPostHead } from "../../task-posts.mjs";
 import { doneLineState, type TurnEnd } from "../../signature.mjs";
 import { roundSources, turnKey } from "../../panel-model.mjs";
 import type { AgentChatMessage } from "../../api/conversations";
+import { deleteAnswerFeedback, putAnswerFeedback } from "../../api/conversations";
+import { FAILED_TEXT, REASON_MAX, REASON_PLACEHOLDER, THUMBS, asksReason, feedbackBody, forgetLocal, nextVerdict, readLocal, serverVerdict, toggleLocal, uploadFor, type AnswerVerdict } from "../../answer-feedback.mjs";
 import type { Bot } from "../../api/bots";
 import { useLocale, colon } from "../../i18n";
 import { queuedText, type Delivery } from "../../chat-interject.mjs";
@@ -34,7 +36,7 @@ const DELIVERY_TEXT = { sending: "发送中", received: "已收到", merged: "�
 // Message footer buttons: hidden until the message is hovered, tapped, or something in it has keyboard focus (they stay in the tab order).
 const footButton = "inline-flex size-8 items-center max-lg:size-11 justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-ink focus-visible:ring-2 focus-visible:ring-ring aria-pressed:text-brand [&_svg]:size-4";
 
-function feedbackOf(turnId: string): string { try { return localStorage.getItem(`market-evidence-agent:feedback:${turnId}`) ?? ""; } catch { return ""; } }
+function browserStore(): Storage | null { try { return typeof window === "undefined" ? null : window.localStorage; } catch { return null; } }
 
 type Props = {
   m: AgentChatMessage; i: number; last: boolean; bot?: Bot | null; botColor?: string;
@@ -52,6 +54,7 @@ type Props = {
 export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex, onFeedback, ended = null, entry, mark = null, quote = null }: Props) {
   const { t, locale } = useLocale(), c = useChat(), panel = usePanel();
   const [tapped, setTapped] = useState(false);
+  const fb = useAnswerFeedback(m, onFeedback);      // before the returns below: a hook runs on every message (it does nothing for the owner's own)
   const common = { id: `chat-message-${i}`, "data-testid": "message", "data-role": m.role, "data-turn-index": turnIndex, "data-last": last || undefined, ...(entry === undefined ? {} : { "data-entry": "", style: { "--entry-delay": `${entry}s` } as CSSProperties }) } as const;
 
   if (m.role === "user" && isTaskPostHead(m.content)) {
@@ -115,20 +118,98 @@ export function Message({ m, i, last, bot, streaming, copy, draftBox, turnIndex,
         onClick={(event) => { event.stopPropagation(); panel.showSource(turnKey(m, i), null, event.currentTarget, event.detail === 0); }}>{t("来源")} {sourceCount}</button>}
       <div data-testid="message-foot" className={`${sourceCount > 0 ? "" : "-ml-2 "}flex items-center gap-0.5 opacity-0 transition-opacity duration-1 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 group-data-[tapped]/msg:opacity-100`}>
         <button type="button" className={footButton} aria-label={copiedHere ? t("已复制") : copy.failed === i ? t("复制失败") : t("复制回答")} title={t("复制回答")} onClick={(event) => { event.stopPropagation(); void copy.copyText(m.content, i); }}>{copiedHere ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}</button>
-        {m.turn_id && (["up", "down"] as const).map(value => {
-          const saved = feedbackOf(m.turn_id!);
-          return <button type="button" key={value} className={footButton} aria-pressed={saved === value} aria-label={value === "up" ? t("有帮助") : t("没有帮助")} title={value === "up" ? t("有帮助") : t("没有帮助")}
-            onClick={(event) => { event.stopPropagation(); giveFeedback(m.turn_id!, value, onFeedback); }}>{value === "up" ? <ThumbsUp aria-hidden="true" /> : <ThumbsDown aria-hidden="true" />}</button>;
-        })}
+        {m.turn_id && <AnswerThumbs fb={fb} />}
       </div>
     </div>}
+    {m.content && m.turn_id && <AnswerReason fb={fb} />}
   </article>;
 }
 
-function giveFeedback(turnId: string, value: "up" | "down", done: () => void) {
-  const key = `market-evidence-agent:feedback:${turnId}`;
-  try { if (localStorage.getItem(key) === value) localStorage.removeItem(key); else localStorage.setItem(key, value); } catch { /* the thumbs are a local note, not required */ }
-  done();
+type Feedback = ReturnType<typeof useAnswerFeedback>;
+
+/**
+ * 「好／不好」 of one answer.  The owner's go to the server and show what it keeps (5d-3a); a failed call says so and leaves the thumb as it was.
+ * A guest's (and an imported archive's) stay a note in this browser, as before.  The owner's old notes in this browser are sent once for an answer
+ * the server has none on, then forgotten here.  A 不好 the server took opens the reason field (AnswerReason).
+ */
+function useAnswerFeedback(m: AgentChatMessage, onFeedback: () => void) {
+  const c = useChat();
+  const turnId = m.role === "assistant" ? m.turn_id ?? "" : "";
+  const server = Boolean(turnId && c.verified && !c.archiveView && c.conversationId);
+  const [mine, setMine] = useState<AnswerVerdict | null | undefined>(undefined);
+  const [asking, setAsking] = useState(false), [busy, setBusy] = useState(false), [failed, setFailed] = useState(false);
+  const upload = server ? uploadFor(m, browserStore()) : null;
+  useEffect(() => {
+    if (!upload || !c.conversationId) return;
+    let live = true;
+    putAnswerFeedback(c.conversationId, turnId, { verdict: upload })
+      .then(saved => { forgetLocal(browserStore(), turnId); if (live) setMine(current => current === undefined ? saved.verdict : current); })
+      .catch(() => { /* kept in this browser: sent again next time */ });
+    return () => { live = false; };
+  }, [upload, turnId, c.conversationId]);
+  const shown: AnswerVerdict | null = !turnId ? null : server ? (mine !== undefined ? mine : serverVerdict(m) ?? upload) : readLocal(browserStore(), turnId);
+
+  const press = async (pressed: AnswerVerdict) => {
+    if (!server) { toggleLocal(browserStore(), turnId, pressed); onFeedback(); return; }
+    const next = nextVerdict(shown, pressed);
+    setBusy(true); setFailed(false);
+    try {
+      if (next === null) await deleteAnswerFeedback(c.conversationId!, turnId);
+      else await putAnswerFeedback(c.conversationId!, turnId, feedbackBody(next));
+      forgetLocal(browserStore(), turnId);
+      setMine(next); setAsking(asksReason(shown, pressed));
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** 发送: the reason with the 不好 already kept; an empty field is the same as 跳过.  Whether it went through. */
+  const sendReason = async (text: string) => {
+    const body = feedbackBody("bad", text);
+    if (!body.reason || !c.conversationId) { setAsking(false); return true; }
+    setBusy(true); setFailed(false);
+    try {
+      await putAnswerFeedback(c.conversationId, turnId, body);
+      setAsking(false);
+      return true;
+    } catch {
+      setFailed(true);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const skip = () => { setAsking(false); setFailed(false); };
+  return { shown, busy, failed, asking, press, sendReason, skip };
+}
+
+function AnswerThumbs({ fb }: { fb: Feedback }) {
+  const { t } = useLocale();
+  return <>{THUMBS.map(({ verdict, label }) => <button type="button" key={verdict} data-testid={`feedback-${verdict}`} className={footButton} aria-pressed={fb.shown === verdict} disabled={fb.busy}
+    aria-label={t(label)} title={t(label)} onClick={(event) => { event.stopPropagation(); void fb.press(verdict); }}>
+    {verdict === "good" ? <ThumbsUp aria-hidden="true" /> : <ThumbsDown aria-hidden="true" />}
+  </button>)}</>;
+}
+
+/** 「哪里不好？（可不填）」 with 发送 / 跳过, under an answer whose 不好 the server has just taken; and the line that says a call failed. */
+function AnswerReason({ fb }: { fb: Feedback }) {
+  const { t } = useLocale();
+  const [reason, setReason] = useState("");
+  if (!fb.asking && !fb.failed) return null;
+  const send = async (event: FormEvent) => {
+    event.preventDefault();
+    if (await fb.sendReason(reason)) setReason("");
+  };
+  return <div className="flex min-w-0 flex-col gap-1" onClick={(event) => event.stopPropagation()}>
+    {fb.asking && <form data-testid="feedback-reason" onSubmit={(event) => void send(event)} className="flex min-w-0 items-center gap-2">
+      <input type="text" autoFocus value={reason} maxLength={REASON_MAX} placeholder={t(REASON_PLACEHOLDER)} aria-label={t(REASON_PLACEHOLDER)} onChange={(event) => setReason(event.target.value)}
+        className="h-8 min-w-0 flex-1 rounded-sm border border-input bg-background px-2 text-small text-ink outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 max-lg:h-11" />
+      <button type="submit" disabled={fb.busy} className="inline-flex h-8 items-center rounded-sm border border-line px-3 text-small text-ink outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 max-lg:h-11">{t("发送")}</button>
+      <button type="button" onClick={fb.skip} className="inline-flex h-8 items-center rounded-sm px-3 text-small text-muted-foreground outline-none hover:bg-accent hover:text-ink focus-visible:ring-2 focus-visible:ring-ring max-lg:h-11">{t("跳过")}</button>
+    </form>}
+    {fb.failed && <p role="status" data-testid="feedback-failed" className="text-caption text-danger">{t(FAILED_TEXT)}</p>}
+  </div>;
 }
 
 /**

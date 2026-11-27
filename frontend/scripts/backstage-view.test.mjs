@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   ANSWER_FILTER_DEFAULTS, answerRow, answerNotes, answersQuery, answerStatus, costCell, deliveryRow, detailTimeline, dutyDelivery, dutyModeLine, helperLines, dutyRow, FEEDBACK_CHOICES, FEEDBACK_FAILED, feedbackBody, formatMs, formatTime, formatTokens, formatUsd, operationRow, pagedQuery,
-  RECONCILE_NOTE, reconcileBlock, slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
+  RECONCILE_NOTE, reconcileBlock, answerFeedbackBlock, slowRuleText, usageGroupLabel, usageQuery, usageRange, usageRow, usageTotalsRow,
   MEMORY_BYS, MEMORY_CHANGES, MEMORY_FILTER_DEFAULTS, MEMORY_GONE, MEMORY_NOTE, MEMORY_TARGETS, memoryQuery, memoryRow,
 } from "../src/backstage-view.mjs";
 import { ANSWERS, DELIVERIES, DETAIL, DUTY, HELPERS, DETAIL_INCOMPLETE, DETAIL_OLD, OPERATIONS, usageAnswer } from "../tools/shots/fixtures/backstage.mjs";
@@ -64,7 +64,7 @@ test("answers tab: each sample row becomes the cells the table shows", () => {
   const rows = ANSWERS.items.map((row) => answerRow(row, "UTC"));
   assert.equal(rows.length, 5);
   assert.deepEqual(rows[0], { id: ANSWERS.items[0].message_id, time: "11-13 01:50", bot: "FinBot", question: "TSLA 最近一个季度的营收是多少？", status: { label: "已回答", kind: "success" }, tier: "低档",
-    time_taken: "4.2 s", calls: "2", tokens: "1,870", cost: { kind: "amount", amount: "$0.0123" }, old_engine: false });
+    time_taken: "4.2 s", calls: "2", tokens: "1,870", cost: { kind: "amount", amount: "$0.0123" }, old_engine: false, feedback: "" });
   assert.equal(rows[1].status.label, "等你回复");
   assert.equal(rows[1].tier, "中档");
   assert.equal(rows[2].tier, "高档");
@@ -381,7 +381,8 @@ test("the answers tab has the 「数字没对上」 filter and the drawer shows 
   const tab = src("app/backstage/AnswersTab.tsx"), drawer = src("app/backstage/AnswerDrawer.tsx");
   assert.match(tab, /data-testid="filter-reconcile" checked=\{filters\.reconcileFlagged\} onChange=\{event => set\(\{ reconcileFlagged: event\.target\.checked \}\)\}/);
   assert.match(tab, /\{t\("数字没对上"\)\}/);
-  assert.match(tab, /filters\.reconcileFlagged \|\| searched/, "a filtered empty list says no answer matched");
+  assert.match(tab, /filters\.reconcileFlagged \|\| filters\.feedbackBad \|\| searched/, "a filtered empty list says no answer matched");
+  assert.match(tab, /data-testid="filter-feedback"/, "5d-3a: the 「被点不好的」 filter");
   assert.match(drawer, /const reconcile = detail \? reconcileBlock\(detail, w\) : null;/);
   assert.match(drawer, /data-testid="reconcile-note" role="note"/);
   assert.match(drawer, /data-testid="reconcile-line"/);
@@ -507,4 +508,17 @@ test("a memory item whose bot was deleted reads 记忆 · 已删除的 bot, not 
   assert.equal(row.what, "记忆 · 已删除的 bot");
   assert.ok(row.basis.includes("原因：所属的 bot 被删除"), row.basis.join(" | "));
   assert.equal(change({ bot: null, bot_deleted: false }).what, "记忆");
+});
+
+
+test("5d-3a: 「被点不好的」 is feedback=bad; a row says his verdict; the detail shows it and his reason", () => {
+  assert.equal(answersQuery({ ...ANSWER_FILTER_DEFAULTS, feedbackBad: true }), "?feedback=bad");
+  assert.equal(answersQuery(ANSWER_FILTER_DEFAULTS), "");
+  assert.equal(answerRow({ message_id: "m1", feedback: "bad" }, "UTC").feedback, "你点了不好");
+  assert.equal(answerRow({ message_id: "m1", feedback: "good" }, "UTC").feedback, "你点了好");
+  assert.equal(answerRow({ message_id: "m1", feedback: null }, "UTC").feedback, "");
+  assert.deepEqual(answerFeedbackBlock({ feedback: { verdict: "bad", reason: "数据太旧了" } }), { verdict: "bad", text: "你点了不好", reason: "原因：数据太旧了" });
+  assert.deepEqual(answerFeedbackBlock({ feedback: { verdict: "good", reason: "x" } }), { verdict: "good", text: "你点了好", reason: "" });
+  assert.equal(answerFeedbackBlock({ feedback: null }), null);
+  assert.equal(answerFeedbackBlock({}), null);
 });

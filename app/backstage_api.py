@@ -3,6 +3,7 @@ the outbox, the duty log, the changes to his memory).
 
 Every route answers 403 ``owner_only`` to anyone but the owner (the same check as the other owner pages).  Every route is a GET and
 writes nothing, except ``POST /backstage/feedback``: the owner's 「有用／没用」 on a duty or brief message (``alert_feedback``).
+The 回答 tab also shows his 「好／不好」 on each answer (``answer_feedback``, written from the chat page and the kernel, not here).
 Stored records come in two shapes (the kernel's turn, the old engine's) and some are null or damaged; every reader below
 takes what it finds and shows what it can.  A card's button value (``confirm:``, ``authorize:``, ``change:``, ``reply:``,
 ``cancel:``) never leaves this module: the detail and the lists strip any that a stored record carries.
@@ -27,7 +28,7 @@ from sqlalchemy import String, Text, and_, case, cast, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 
-from . import alert_feedback, channels, memory_events
+from . import alert_feedback, answer_feedback, channels, memory_events
 from .agent_chat_models import AgentBot, AgentConversation, AgentConversationTitle, AgentMessage, ModelCall
 from .agent_chat_store import owner_hash as hash_of
 from .agent_workflow.models import AgentConsent
@@ -406,14 +407,16 @@ def _list_item(asked, final, bot_id, ledger, bots, now, source="chat") -> dict:
 def answers(x_chat_session: str | None = Header(default=None), bot_id: str | None = None,
             engine: str | None = Query(default=None), status: str | None = None, tier: str | None = None, slow: int = 0,
             source: str | None = Query(default=None), reconcile: str | None = Query(default=None),
+            feedback: str | None = Query(default=None),
             q: str | None = Query(default=None, max_length=100), before: str | None = None,
             limit: int = Query(default=50, ge=1, le=MAX_LIMIT)):
     """The owner's turns, newest question first: one item per turn, from its stored rows and the model-call ledger.  A turn with no
     final assistant row (or only tool rounds) is ``incomplete``.  ``reconcile=flagged`` keeps the answers whose figure check (5d-1)
-    found a line no source of the turn holds."""
+    found a line no source of the turn holds; ``feedback=bad`` the answers he marked 「不好」 (5d-3a).  Each item's ``feedback`` is his
+    verdict on the answer (``good``, ``bad`` or null)."""
     owner = _owner(x_chat_session)
     if (engine not in (None, "v1", "v2") or (status is not None and status not in STATUSES) or source not in (None, "chat", "duty")
-            or reconcile not in (None, "flagged")):
+            or reconcile not in (None, "flagged") or feedback not in (None, "bad")):
         raise HTTPException(400, "invalid_filter")
     bot = _uuid_or_400(bot_id, "invalid_bot_id") if bot_id else None
     cursor = _parse_cursor(before)
@@ -439,6 +442,9 @@ def answers(x_chat_session: str | None = Header(default=None), bot_id: str | Non
         query = query.where(func.coalesce(_json_text(F, "audit", "tier"), _json_text(F, "tier")) == tier)
     if reconcile:
         query = query.where(~_incomplete_clause(F), _reconcile_flagged_clause(F))
+    if feedback:
+        AF = answer_feedback.AnswerFeedback
+        query = query.where(exists().where(AF.owner_hash == owner, AF.message_id == F.id, AF.verdict == feedback))
     if q and q.strip():
         pattern = _like(q.strip())
         query = query.where(or_(M.content.ilike(pattern, escape="\\"), F.content.ilike(pattern, escape="\\")))
@@ -452,6 +458,10 @@ def answers(x_chat_session: str | None = Header(default=None), bot_id: str | Non
         bots = _bot_names(db, owner)
         items = [_list_item(asked, final, bot_of, ledger.get(asked.turn_id), bots, now, "duty" if duty else "chat") for asked, final, bot_of, duty in rows]
         next_before = _cursor(rows[-1][0].created_at, rows[-1][0].id) if more else None
+    # His 「好／不好」 on each answer (an incomplete turn has no answer to rate: its item carries the question's id, which has none).
+    given = answer_feedback.of(owner, [item["message_id"] for item in items if item["status"] != "incomplete"])
+    for item in items:
+        item["feedback"] = (given.get(item["message_id"]) or {}).get("verdict") if item["status"] != "incomplete" else None
     threshold = None
     if slow:
         timed = [item["total_ms"] for item in items if item["total_ms"] is not None]
@@ -699,6 +709,7 @@ def answer(message_id: str, x_chat_session: str | None = Header(default=None)):
         positions = _model_positions(source, ledger_rows, audit_calls)
     shown = asked_row if incomplete and asked_row is not None else final or opened
     engine = None if incomplete else _engine(record)
+    given = None if incomplete else answer_feedback.of(owner, [str(final.id)]).get(str(final.id))
     citations = [{"ordinal": item.get("ordinal"), "title": scrub(item.get("title")), "url": scrub(item.get("url")),
                   "source_type": item.get("source_type")} for item in map(_dict, _list(record.get("citations"))) if item]
     fallback = audit.get("fallback")
@@ -717,6 +728,7 @@ def answer(message_id: str, x_chat_session: str | None = Header(default=None)):
             "writes": scrub([item for item in _list(audit.get("writes")) if isinstance(item, dict)]),
             "write_outcome": audit.get("write_outcome"), "card": card, "answer": "" if incomplete else scrub(final.content or ""),
             "reconciliation": None if incomplete else _reconciliation(record),
+            "feedback": {"verdict": given["verdict"], "reason": scrub(given["reason"]) if given["reason"] else None} if given else None,
             "backup_model": scrub(fallback) if isinstance(fallback, dict) else None, "helpers": _helpers(audit),
             "latest_known": [scrub(symbol) for symbol in _list(audit.get("latest_known"))[:6] if isinstance(symbol, str)], "langfuse_url": _langfuse_url(record)}
 

@@ -82,6 +82,14 @@ def test_the_feedback_route_is_rate_alert():
     assert "rate_alert" in act.TIER1 and "rate_alert" not in KERNEL_ONLY_OPERATIONS
 
 
+def test_the_answer_feedback_routes_are_rate_answer():
+    """5d-3a: the thumbs under an answer (PUT a verdict, DELETE it) are the same verdict as one said in a conversation."""
+    path = "/agent-chat/conversations/{conversation_id}/turns/{turn_id}/feedback"
+    assert OPERATION_REGISTRY[("PUT", path)] == OPERATION_REGISTRY[("DELETE", path)] == {"operation": "rate_answer"}
+    assert ("PUT", path) in app_routes() and ("DELETE", path) in app_routes()
+    assert "rate_answer" in act.TIER1 and "rate_answer" not in KERNEL_ONLY_OPERATIONS
+
+
 def test_a_new_route_without_a_row_is_reported_by_name(monkeypatch):
     from fastapi import FastAPI
     import tests.test_operation_registry as me

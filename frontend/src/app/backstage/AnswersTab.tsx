@@ -44,6 +44,7 @@ export function AnswersTab() {
     { key: "question", header: t("问题"), className: "sm:w-[34%]", wide: true, cell: row => <span className="flex min-w-0 flex-col gap-1">
       <button type="button" data-testid="answer-open" onClick={event => { event.stopPropagation(); open(row.id); }} className="line-clamp-2 text-left text-ink underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">{row.question}</button>
       {row.old_engine && <span className="text-caption text-muted-foreground">{t("旧流程的记录，只有部分经过")}</span>}
+      {row.feedback && <span data-testid="answer-feedback" className="text-caption text-muted-foreground">{row.feedback}</span>}
     </span> },
     { key: "status", header: t("状态"), className: "whitespace-nowrap", cell: row => <Status status={row.status} /> },
     { key: "tier", header: t("档位"), cell: row => <span className="whitespace-nowrap">{row.tier}</span> },
@@ -73,6 +74,7 @@ export function AnswersTab() {
       <label className="flex min-h-9 items-center gap-2 text-small text-ink max-sm:min-h-11"><input type="checkbox" data-testid="filter-high" checked={filters.highTier} onChange={event => set({ highTier: event.target.checked })} className="size-4" />{t("只看用了高档的")}</label>
       <label className="flex min-h-9 items-center gap-2 text-small text-ink max-sm:min-h-11"><input type="checkbox" data-testid="filter-slow" checked={filters.slow} onChange={event => set({ slow: event.target.checked })} className="size-4" />{t("只看慢的")}</label>
       <label className="flex min-h-9 items-center gap-2 text-small text-ink max-sm:min-h-11"><input type="checkbox" data-testid="filter-reconcile" checked={filters.reconcileFlagged} onChange={event => set({ reconcileFlagged: event.target.checked })} className="size-4" />{t("数字没对上")}</label>
+      <label className="flex min-h-9 items-center gap-2 text-small text-ink max-sm:min-h-11"><input type="checkbox" data-testid="filter-feedback" checked={filters.feedbackBad} onChange={event => set({ feedbackBad: event.target.checked })} className="size-4" />{t("被点不好的")}</label>
       <label className="flex min-w-0 flex-1 basis-56 flex-col gap-1 text-caption text-muted-foreground">{t("搜索问题和回答")}
         <Input type="search" data-testid="filter-q" value={filters.q} maxLength={100} onChange={event => set({ q: event.target.value })} placeholder={t("搜索问题和回答")} className="max-sm:h-11" />
       </label>
@@ -80,7 +82,7 @@ export function AnswersTab() {
     {slow && <p data-testid="slow-rule" className="text-caption text-muted-foreground">{slow}</p>}
     {filters.slow && !slow && !list.loading && <p className="text-caption text-muted-foreground">{t("这一页的回答都没有记下耗时，没法判断哪些慢。")}</p>}
     <TabState loading={list.loading && rows.length === 0} error={list.error} empty={!list.loading && rows.length === 0} onRetry={() => void list.reload()}
-      emptyTitle={filters.botId || filters.engine || filters.status || filters.highTier || filters.slow || filters.reconcileFlagged || searched ? t("没有符合筛选的回答。") : t("还没有回答的记录。")}
+      emptyTitle={filters.botId || filters.engine || filters.status || filters.highTier || filters.slow || filters.reconcileFlagged || filters.feedbackBad || searched ? t("没有符合筛选的回答。") : t("还没有回答的记录。")}
       emptyDescription={t("助手每回答一次，这里就多一行。")} />
     {rows.length > 0 && <>
       <BackstageTable testId="answers-table" label={label} columns={columns} rows={rows} rowKey={row => row.id} onOpen={row => open(row.id)} />
