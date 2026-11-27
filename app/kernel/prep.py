@@ -24,7 +24,7 @@ BEIJING = timezone(timedelta(hours=8))
 FIRST_HOUR, LAST_HOUR = 20, 23
 SOURCE = "prep"
 HEAD = "【财报前瞻】"
-WALL_SECONDS = 180
+WALL_SECONDS = 240        # longer than the loop's own soft limit (loop.SOFT_SECONDS), so its wrap-up comes first, as in the brief
 OFF = "值班开关是关的（FINBOT_DUTY_MODE=off）"
 NOTHING = "接下来半天没有你持有或关注的公司发财报"
 
@@ -54,15 +54,21 @@ def fallback_text(items: list[dict]) -> str:
 
 
 def _known(symbols: list[str], now: datetime) -> str | None:
-    """The 「系统最新掌握」 block for these companies (the last quarter, its guidance, the latest filings and news), or None."""
+    """The 「系统最新掌握」 block for these companies (the last quarter, its guidance, the latest filings and news), built three companies at a
+    time (the block's own limit is three companies and 2,000 characters, so a busy evening is several blocks, not one with companies dropped);
+    None when nothing could be built.  A company the block leaves out is the model's to read with its tools (the prompt says so)."""
     from .. import latest_known
-    try:
-        items = latest_known.gather(symbols, now=now, with_facts=True)
-        text, _ = latest_known._render(items, now, [], None)
-        return text
-    except Exception:
-        logger.warning("earnings prep: the latest-known block could not be built", exc_info=True)
-        return None
+    parts = []
+    for start in range(0, len(symbols), latest_known.MAX_COMPANIES):
+        try:
+            items = latest_known.gather(symbols[start:start + latest_known.MAX_COMPANIES], now=now, with_facts=True)
+            text, _ = latest_known._render(items, now, [], None)
+        except Exception:
+            logger.warning("earnings prep: the latest-known block could not be built", exc_info=True)
+            continue
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts) or None
 
 
 async def _write(owner: str, day: str, items: list[dict], now: datetime) -> dict:
@@ -84,8 +90,8 @@ async def _write(owner: str, day: str, items: list[dict], now: datetime) -> dict
         logger.warning("earnings prep %s: the model turn failed: %s", day, wake._code(exc), exc_info=not hasattr(exc, "detail"))
         failure = f"模型这次没有写成：{wake._code(exc)}"
     answer = ((result or {}).get("answer") or "").strip()
-    if result is not None and not answer:
-        failure = "模型没有写出正文"
+    if result is not None and (result.get("reason") == "empty_answer" or not answer):
+        failure = "模型没有写出正文"          # the loop's 「这次没能生成回答」 is no preview to send
     audit = (result or {}).get("audit") or {}
     if holder.get("conversation"):
         from ..agent_recall import TASK_POST_HEAD
@@ -122,7 +128,7 @@ async def run_once(owner: str, now: datetime, *, day: str | None = None) -> dict
             return await asyncio.to_thread(lambda: finish(outcome="skipped", reason=NOTHING))
         written = await _write(owner, day, items, now)
         message = HEAD + written["body"]
-        fields = {"symbols": ",".join(item["symbol"] for item in items), "message": message, "reason": written["reason"],
+        fields = {"symbols": ",".join(item["symbol"] for item in items)[:200], "message": message, "reason": written["reason"],
                   "turn_id": written["turn_id"], "model_calls": written["model_calls"]}
         if current == "on":
             group, why = await asyncio.to_thread(lambda: wake._deliver(owner, message, source=SOURCE, cap=False))

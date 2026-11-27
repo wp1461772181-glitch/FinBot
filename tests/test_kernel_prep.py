@@ -14,6 +14,7 @@ from tests.test_kernel_brief import env, outbox, script  # noqa: F401  (fixtures
 from tests.test_kernel_loop import step
 
 EVENING = datetime(2027, 1, 20, 20, 30, tzinfo=prep.BEIJING)        # a Beijing Wednesday evening
+KNOWN = prep._known          # the real one (the calendar fixture replaces it)
 TEXT = "英特尔今晚美东盘后出 Q4 财报，北京时间明早 5 点前后。市场预期每股收益 0.25 美元、营收 158.5 亿美元（Finnhub，调整后口径）。"
 
 
@@ -94,3 +95,26 @@ def test_nothing_tonight_and_off_write_nothing(calendar):
     assert (quiet["outcome"], quiet["reason"]) == ("skipped", prep.NOTHING) and fake.calls == []
     calendar.monkeypatch.setenv("FINBOT_DUTY_MODE", "off")
     assert run(EVENING + timedelta(days=4))["outcome"] == "skipped_off"
+
+
+def test_an_empty_answer_is_no_preview_and_the_list_goes_instead(calendar):
+    script(calendar, [step(text=""), step(text="")])
+    done = run()
+    assert done["reason"].endswith("改发原样列表。") and "这次没能生成回答" not in done["message"]
+    assert "英特尔（INTC）：北京时间 01-21 清晨" in done["message"]
+
+
+def test_the_latest_known_block_is_built_three_companies_at_a_time(monkeypatch):
+    from app import latest_known
+    seen = []
+    monkeypatch.setattr(latest_known, "gather", lambda symbols, **kw: (seen.append(list(symbols)), [{"symbol": s} for s in symbols])[1])
+    monkeypatch.setattr(latest_known, "_render", lambda items, now, extra, rows: ("块：" + ",".join(i["symbol"] for i in items), []))
+    text = KNOWN(["A", "B", "C", "D", "E"], EVENING)
+    assert seen == [["A", "B", "C"], ["D", "E"]] and text == "块：A,B,C\n\n块：D,E"
+
+
+def test_the_prompt_says_where_the_time_is_and_leaves_buying_to_him():
+    from app.kernel import prompt
+    text = prompt.prep_system_text()
+    assert "十几个小时" not in text and "out 里" in text and "决定在他" in text and "不给买卖建议" not in text
+    assert "【接下来要发财报的】" in prompt.prep_block([], {}, None)
