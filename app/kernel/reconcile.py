@@ -127,7 +127,8 @@ def reconcile(answer: str, citations: list[dict], *, question: str, user_text: s
                 # arithmetic: first on the line's own figures that a source or the user states (price × shares, a written-out ratio; a pool
                 # that small stays well inside the false-accept bound where the whole turn's figures would not), then on all the sources'
                 # figures (same closure and false-accept bound as the old check)
-                near = {v for v in _amounts(checked) if _operand(v, pool, scaled, said) or v in passed} | said
+                flagged = {r["value"] for t in missing for r in evidence._figure_records(t)}      # a figure still in question vouches for nothing
+                near = {v for v in _amounts(checked) if v not in flagged and (_operand(v, pool, scaled, said) or v in passed)} | said
                 derived = [token for token in missing if _derived(token, near, near) or _derived(token, pool, verified)]
                 missing = [token for token in missing if token not in derived]
                 # an estimate does not become evidence by being repeated (``answer_verified_figures``): a labelled inference's own

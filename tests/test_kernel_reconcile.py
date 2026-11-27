@@ -263,3 +263,10 @@ def test_a_ratio_of_figures_written_in_millions_is_not_flagged():
     assert rc.reconcile(table.format(row="16.8%（4,751 ÷ 28,236，计算值）"), facts, question="", user_text="")["flagged"] == []
     flagged = rc.reconcile(table.format(row="18.3%（4,751 ÷ 25,962，计算值）"), facts, question="", user_text="")["flagged"]
     assert flagged and "18.3%" in flagged[0]["values"]          # 25,962 is nowhere, so neither is the ratio
+
+
+def test_a_figure_still_in_question_is_not_an_operand():
+    """Fable re-check R2: 12 and 30 are flagged on the line, so 12 × 30 = 360 is flagged too (12,000 and 30,000 in full are no source of 12, 30)."""
+    one = [{"ordinal": 1, "title": "公司", "quote": "公司有 12,000 employees and 30,000 stores。"}]
+    flagged = rc.reconcile("单价 12 美元，数量 30，合计 360 美元 [1]。", one, question="", user_text="")["flagged"]
+    assert flagged == [{"line": "单价 12 美元，数量 30，合计 360 美元 [1]。", "values": ["12", "30", "360"]}]
