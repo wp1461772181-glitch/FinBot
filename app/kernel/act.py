@@ -880,7 +880,7 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
     recorded = {"recorded": operation["arguments"]["text"]} if operation["name"] == "record_view" else {}
     if operation["name"] == "rate_alert":      # the line the tool wrote names the message it matched
         row = next(iter(direct.execution_rows(value)), {})
-        recorded = {k: row[k] for k in ("recorded", "target", "target_id") if row.get(k) is not None}
+        recorded = {k: row[k] for k in ("recorded", "target", "target_id", "note") if row.get(k) is not None}      # note: the ack did not go through
     return {"ok": True, "data": [{**facts, **recorded, "status": "done", "title": title, "undo": undo}]}, "done"
 
 

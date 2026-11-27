@@ -162,6 +162,7 @@ def test_a_failed_acknowledgement_does_not_fail_the_verdict(owner, monkeypatch):
     out, _ = rate({"verdict": "not_useful", "symbol": "INTC"})
     assert out["ok"] and out["data"][0]["target_id"] == str(alert_id)
     assert feedback.recent(OWNER_HASH)[0]["verdict"] == "not_useful"
+    assert "请在 Telegram 上按「收到」" in out["data"][0]["note"]          # the model is told, so it can tell him
 
 
 def test_a_guest_cannot_rate(owner):
