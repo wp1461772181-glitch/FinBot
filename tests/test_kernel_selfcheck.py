@@ -126,9 +126,14 @@ def test_a_failed_held_event_is_a_finding_with_its_link(env):
     assert counts == {"earnings_events": 1, "earnings_seen": 0}
 
 
-def test_a_failed_event_of_a_symbol_he_does_not_hold_is_not_a_finding(env):
+def test_a_failed_event_of_a_symbol_he_neither_holds_nor_watches_is_not_a_finding(env):
     event(symbol="AMD", status="failed")
     assert earnings(env)[0] == []
+
+
+def test_the_earnings_check_covers_the_research_queue_too():
+    snap = {"positions": [{"symbol": "INTC", "shares": 100}], "research_queue": ["NVDA", "INTC"]}
+    assert selfcheck.watched_symbols(snap) == {"INTC", "NVDA"}
 
 
 def test_an_event_stuck_over_an_hour_is_a_finding_and_a_recent_one_is_not(env):

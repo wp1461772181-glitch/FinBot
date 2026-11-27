@@ -70,6 +70,12 @@ def held_symbols(snapshot: dict) -> set[str]:
     return {p["symbol"] for p in snapshot.get("positions") or [] if p.get("symbol") and p.get("shares")}
 
 
+def watched_symbols(snapshot: dict) -> set[str]:
+    """Holdings and the research queue: the companies whose earnings he expects to hear about.  A queue company's earnings are only
+    recorded, not pushed, but a reader that failed records nothing (the 11-17 NVDA miss was a queue company)."""
+    return held_symbols(snapshot) | {s for s in snapshot.get("research_queue") or [] if isinstance(s, str) and s}
+
+
 def _replay_symbols(snapshot: dict) -> list[str]:
     """Held, then the research queue, then symbols only an owner rule names: the symbols ``replay.run_replay`` looks at."""
     held = [p["symbol"] for p in snapshot.get("positions") or [] if p.get("symbol") and p.get("shares")]
@@ -214,7 +220,7 @@ def _run(row_id: int, owner: str, now: datetime, since: datetime | None, sentine
     findings: list[dict] = []
     checked: dict = {"since": since.isoformat(), "errors": {}}
     try:
-        found, counts = earnings_findings(owner, since, now, held_symbols(snapshot), sentinel_db)
+        found, counts = earnings_findings(owner, since, now, watched_symbols(snapshot), sentinel_db)
         if "error" in counts:
             checked["errors"]["earnings"] = counts.pop("error")
         findings += found

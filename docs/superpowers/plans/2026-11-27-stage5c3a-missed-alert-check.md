@@ -15,7 +15,7 @@
 
 ## What counts as missed
 
-**Earnings (held symbols only — the hard guarantee 「持仓的财报」).** In the window:
+**Earnings (holdings and the research queue).** In the window (changed after the shadow check: the 11-17 NVDA miss was a research-queue company — a queue company's earnings are only recorded, not pushed, but a reader that failed records nothing):
 
 1. an `earnings_events` row of a held symbol with `status == "failed"` → 「财报解读三次都没做成，没发给你」;
 2. an `earnings_events` row of a held symbol still `received` or `analysing` more than 60 minutes after `created_at` → 「收到一个多小时了还没发出」;
