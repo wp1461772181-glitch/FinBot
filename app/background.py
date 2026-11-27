@@ -24,6 +24,7 @@ WORK_WATCH_SECONDS = 60     # a job started from a card that has ended gets its 
 EARNINGS_SECONDS = 60      # picks up events the response-time task missed, due follow-ups, and anything left over from a restart
 BRIEF_SECONDS = 60         # the morning brief looks whether today's is due (08:05–12:00 Beijing) and not written yet
 SELFCHECK_SECONDS = 60     # the missed-alert check looks whether today's is due (07:45–12:00 Beijing) and not run yet
+PREP_SECONDS = 60         # the evening preparation looks whether tonight's is due (20:00–23:00 Beijing) and not written yet
 EARNINGS_CALENDAR_SECONDS = 6 * 3600   # the calendar itself refetches once a day (earnings_calendar.STALE_AFTER)
 
 
@@ -135,6 +136,21 @@ def run_earnings_calendar() -> None:
         log.info("earnings calendar: symbols=%s rows=%s errors=%s", done["symbols"], done["rows"], done["errors"])
 
 
+def run_earnings_prep() -> None:
+    """The kernel's evening-before preparation (app.kernel.prep): once a Beijing evening, 20:00–23:00, when a company reports within half a day."""
+    from datetime import UTC, datetime
+
+    from .kernel import prep
+    from .sentinel_bridge import owner_hash_from_login_config
+
+    owner = owner_hash_from_login_config()
+    if not owner:
+        return
+    row = asyncio.run(prep.run_once(owner, datetime.now(UTC)))
+    if row:
+        log.info("earnings prep %s: %s (%s)", row["day"], row["outcome"], row.get("symbols"))
+
+
 def run_memory_jobs() -> None:
     """The memory calendar (app.memory_schedule): the jobs that are due run once; a restart neither reruns nor skips one."""
     from . import memory_schedule
@@ -188,6 +204,7 @@ LOOPS = (
     ("morning-brief", BRIEF_SECONDS, run_morning_brief),
     ("duty-selfcheck", SELFCHECK_SECONDS, run_selfcheck),
     ("earnings-calendar", EARNINGS_CALENDAR_SECONDS, run_earnings_calendar),
+    ("earnings-prep", PREP_SECONDS, run_earnings_prep),
 )
 
 
