@@ -1,5 +1,5 @@
 """5c-3c: 「有用／没用」 said in a conversation, the kernel's tier-1 ``rate_alert``.  Code finds the message he means and the result names it;
-it runs at once (channel chat), also after a read; a sentinel alert is acknowledged too, but only when nothing was read this turn.
+with nothing from outside read this turn it runs at once (channel chat; looking up his alerts is his own state), else it goes on the card; a sentinel alert is acknowledged too.
 Disposable Postgres and a scripted sentinel database; no network, no model."""
 import asyncio
 import uuid
@@ -89,24 +89,17 @@ def test_with_no_read_it_runs_at_once_records_with_channel_chat_and_acknowledges
     assert owner.alert(alert_id)["acked_at"] is not None            # 「收到」 as well: the sentinel stops escalating
 
 
-def test_after_a_read_it_still_runs_at_once_but_does_not_acknowledge(owner):
-    # He usually asks which alert first (query_alerts); a card would leave WeChat stuck.  A page read this turn could ask for a
-    # verdict, so the verdict is kept but the alert is not acknowledged: nothing read can silence an urgent alert.
-    created = _ago(2)
-    alert_id = owner.add_alert("INTC", "short", "INTC 急跌", True, created)
+def test_after_an_outside_read_it_goes_on_the_card(owner):
+    # a page or a filing read this turn could ask for a verdict: the verdict waits for his press (pressing it also counts as 收到)
+    alert_id = owner.add_alert("INTC", "short", "INTC 急跌", True, _ago(2))
     out, run_ = rate({"verdict": "useful", "symbol": "INTC"}, read_results=1)
-    assert out["ok"] and out["data"][0]["status"] == "done" and run_.writes == [{"operation": "rate_alert", "tier": 1, "outcome": "done"}]
-    assert [r["target_id"] for r in feedback.recent(OWNER_HASH)] == [str(alert_id)]
-    assert owner.alert(alert_id)["acked_at"] is None
-
-
-def test_after_a_read_a_quote_that_is_not_his_goes_on_the_card(owner):
-    # a page read this turn asked for a verdict: the quote is not in what he typed, so nothing is recorded at once
-    owner.add_alert("INTC", "short", "INTC 急跌", True, _ago(2))
-    run_ = make_run(read_results=1)
-    out = run(act.handle(run_, {"operation": "rate_alert", "arguments": {"quote": "这条提醒没用", "verdict": "not_useful", "symbol": "INTC"}}))
     assert out["data"][0]["status"] == "awaiting_confirmation" and run_.writes == [{"operation": "rate_alert", "tier": 1, "outcome": "proposed"}]
-    assert feedback.recent(OWNER_HASH) == []
+    assert feedback.recent(OWNER_HASH) == [] and owner.alert(alert_id)["acked_at"] is None
+
+
+def test_looking_up_his_alerts_does_not_count_as_an_outside_read():
+    from app.kernel import toolrun
+    assert "query_alerts" in toolrun._OWN_STATE_READS
 
 
 def test_a_card_rates_the_message_it_named_even_if_a_newer_one_arrives(owner):
@@ -127,12 +120,12 @@ def test_a_card_rates_the_message_it_named_even_if_a_newer_one_arrives(owner):
 def test_nothing_found_is_refused_with_the_sentence(owner):
     out, run_ = rate({"verdict": "not_useful", "symbol": "INTC"})
     assert out["ok"] is False and out["error_code"] == "feedback_target_not_found"
-    assert out["reason"] == out["hint"] == "最近 48 小时里没找到INTC的提醒。"
+    assert out["reason"] == out["hint"] == "最近 48 小时里没找到发给你的INTC 提醒。"
     assert run_.writes == [{"operation": "rate_alert", "tier": 1, "outcome": "refused:feedback_target_not_found"}]
     out, _ = rate({"verdict": "useful"})
-    assert out["reason"] == "最近 48 小时里没找到的提醒。"
+    assert out["reason"] == "最近 48 小时里没找到发给你的提醒。"
     out, _ = rate({"verdict": "useful", "about": "brief"}, question="今天的简报挺有用")
-    assert out["reason"] == "最近 48 小时里没找到的早间简报。"
+    assert out["reason"] == "最近 48 小时里没找到发给你的早间简报。"
     assert feedback.recent(OWNER_HASH) == []
 
 

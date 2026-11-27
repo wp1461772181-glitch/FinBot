@@ -926,11 +926,6 @@ async def handle(run, args: dict) -> dict:
 
 def _direct_after_reads(run, prepared: Prepared) -> bool:
     operation = prepared.operation
-    if operation["name"] == "rate_alert":
-        # He usually asks which alert first (query_alerts), and a card would leave WeChat, which has no buttons, stuck.  After a read it
-        # still runs at once, but only on his own words: the quote must be in what he typed this turn (checked here, as a view's is),
-        # so a page that asks for a verdict cannot make one; the verdict feeds the wake's later judgements.
-        return profile.quote_in_message(str(operation["arguments"].get("quote") or ""), _turn_words(run))
     return memory_writes() and operation["name"] == "remember" and operation["arguments"].get("basis") == "noticed"
 
 
@@ -967,9 +962,5 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
     # With memory writes on, after a read only a guess (``remember`` with basis noticed: stored unconfirmed, light use, he can reject it) still runs at once.
     # A said ``remember`` (his quote proves nothing about the text next to it), record_view, forget, drop_view, rate_alert and the research queue go on the card.
     if prepared.tier == 1 and (not run.read_results or _direct_after_reads(run, prepared)):
-        if prepared.operation["name"] == "rate_alert":
-            # The verdict also acknowledges a sentinel alert (the sentinel stops escalating) only while nothing but his own words was
-            # seen this turn: a page could ask for a verdict, and must not be able to silence an urgent alert with it.
-            prepared.operation["ack"] = not run.read_results
         return await _run_at_once(run, prepared)
     return _collect(run, prepared)

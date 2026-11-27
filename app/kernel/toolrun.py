@@ -36,7 +36,9 @@ _UNNUMBERED = {"recall_conversations", "read_past_conversation", "read_turn", "q
 _WEB_PAGE_READS = ("web_research", "search_configured_news")
 # These return the owner's own data, not text from outside: they do not make a tier-1 write go onto a card.  The system
 # status is not one of them: job and document names and error text in it come from outside.
-_OWN_STATE_READS = frozenset({"query_research_queue", "list_routines", "list_models", "list_work", "list_watch_rules"})
+# query_alerts: the sentinel's own alert lines (prices, his rules, the code's words), nothing from outside; asking which alert he means
+# before rating it (rate_alert) must not put the verdict on a card, which WeChat cannot press.
+_OWN_STATE_READS = frozenset({"query_research_queue", "list_routines", "list_models", "list_work", "list_watch_rules", "query_alerts"})
 _SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_news", "query_sec_filings": "official_filing",
                 "search_x": "x_post"}
 # Run one at a time after every read has been numbered, in call order: calculations work on the citations the reads just

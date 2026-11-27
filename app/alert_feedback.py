@@ -210,9 +210,12 @@ def _newest_sentinel(since: datetime, until: datetime, symbol: str | None) -> di
     try:
         conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=2.0)
         try:
-            # a member a merged message replaced never reached him on its own: he saw the merged one
-            rows = conn.execute("SELECT id, symbol, kind, text, created_at FROM alerts WHERE created_at >= ? AND created_at <= ? "
-                                "AND superseded_by IS NULL ORDER BY created_at DESC, id DESC", (since.timestamp(), until.timestamp())).fetchall()
+            # Only what reached him: a member a merged message replaced never did on its own (he saw the merged one); a record line is
+            # never sent on its own; a line held over the night reached him with the 08:00 digest, so that is when he saw it.
+            seen = "CASE WHEN deferred = 1 THEN digested_at ELSE created_at END"
+            rows = conn.execute(f"SELECT id, symbol, kind, text, {seen} AS seen_at FROM alerts WHERE superseded_by IS NULL AND kind != 'record' "
+                                f"AND (deferred = 0 OR digested_at IS NOT NULL) AND {seen} >= ? AND {seen} <= ? "
+                                f"ORDER BY {seen} DESC, id DESC", (since.timestamp(), until.timestamp())).fetchall()
         finally:
             conn.close()
     except Exception:
@@ -227,11 +230,12 @@ def _newest_sentinel(since: datetime, until: datetime, symbol: str | None) -> di
 
 
 def _newest_duty(owner_hash: str, since: datetime, until: datetime, symbol: str | None) -> dict | None:
-    """The newest duty message that reached him (told now, mode on, queued or carried by the brief) in the window."""
+    """The newest duty message that reached him on its own (told now, mode on, queued) in the window.  A follow-up held over the night
+    reached him inside the morning brief: he rates the brief for that."""
     from .duty_log import DutyLog
     with SessionLocal() as db:
         rows = db.scalars(select(DutyLog).where(
-            DutyLog.owner_hash == owner_hash, DutyLog.decision == "tell_now", DutyLog.mode == "on", DutyLog.delivery.in_(("queued", "briefed")),
+            DutyLog.owner_hash == owner_hash, DutyLog.decision == "tell_now", DutyLog.mode == "on", DutyLog.delivery == "queued",
             DutyLog.delivery_group.is_not(None), DutyLog.created_at >= since, DutyLog.created_at <= until)
             .order_by(DutyLog.created_at.desc(), DutyLog.id.desc())).all()
         for row in rows:

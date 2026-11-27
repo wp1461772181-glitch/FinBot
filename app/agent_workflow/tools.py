@@ -31,7 +31,7 @@ def error(code):
     return {'ok':False,'data':[],'error_code':code,'hint':hint}
 def rate_alert_refusal(about,symbol):
     """Nothing within 48 hours fits what he said; the brief has no stock, so none is named for it."""
-    reason=f"最近 48 小时里没找到{'' if about=='brief' else symbol or ''}{'的早间简报' if about=='brief' else '的提醒'}。"
+    reason="最近 48 小时里没找到发给你的早间简报。" if about=='brief' else f"最近 48 小时里没找到发给你的{symbol + ' ' if symbol else ''}提醒。"
     return {'ok':False,'data':[],'error_code':'feedback_target_not_found','reason':reason,'hint':reason}
 def rate_alert_line(match,verdict):
     """What was recorded, naming the message it matched: symbol, Beijing time, its first line, the verdict."""
@@ -103,7 +103,7 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if name=='create_routine':args['_bot_id']=operation.get('bot_id')
         if name=='record_view':args['_source_message_id']=operation.get('source_message_id');args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id')
         # The message the card named, frozen when it was made: the press rates that one, not whatever is newest by then.
-        if name=='rate_alert':args['_match']=operation.get('match');args['_ack']=operation.get('ack',True)
+        if name=='rate_alert':args['_match']=operation.get('match')
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
         if name in {'create_bot','update_bot','apply_role_template','undo_role_template','set_watch_rule','set_watch_preset','set_alert_settings'}:args['_fields']=operation.get('fields')
         # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
@@ -426,13 +426,20 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         try:await asyncio.to_thread(feedback.record,context.owner_hash,match['target'],match['target_id'],args['verdict'],'chat',
                                     symbol=match.get('symbol'),kind=match.get('kind'),text=match.get('text'))
         except ValueError as exc:return error(str(exc))
-        if match['target']=='sentinel' and args.get('_ack',True):
-            # A verdict on an alert also says he has seen it, as the button does: the sentinel stops escalating.
+        acknowledged=None
+        if match['target']=='sentinel':
+            # A verdict on an alert also says he has seen it, as the button does: the sentinel stops escalating.  It runs at once only
+            # when nothing from outside was read this turn (query_alerts is his own state), or he pressed the card himself.
             try:
                 from sentinel.store import Store,db_path
                 await asyncio.to_thread(lambda:Store(db_path()).ack_alert(int(match['target_id'])))
-            except Exception:logger.exception('rate_alert ack failed alert=%s',match['target_id'])
-        return result([{'status':'recorded','recorded':rate_alert_line(match,args['verdict']),'target':match['target'],'target_id':match['target_id']}],'alert feedback')
+                acknowledged=True
+            except Exception:
+                logger.exception('rate_alert ack failed alert=%s',match['target_id'])
+                acknowledged=False
+        row={'status':'recorded','recorded':rate_alert_line(match,args['verdict']),'target':match['target'],'target_id':match['target_id']}
+        if acknowledged is False:row['note']='这条提醒没能顺带算作「收到」，如果它还在提醒，请在 Telegram 上按「收到」。'
+        return result([row],'alert feedback')
     if name=='search_configured_news':
         from .. import fin_news_engine as news
         call=asyncio.to_thread(

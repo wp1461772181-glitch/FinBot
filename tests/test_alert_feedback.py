@@ -223,6 +223,23 @@ def test_a_member_a_merged_message_replaced_is_not_what_he_means(tmp_path, monke
     assert feedback.resolve(OWNER, symbol="INTC")["target_id"] == str(merged)
 
 
+def test_only_alerts_that_reached_him_are_matched(tmp_path, monkeypatch):
+    store = _sentinel(tmp_path, monkeypatch)
+    sent = store.add_alert("INTC", "short", "INTC 急跌", True, _ago(3).timestamp())
+    store.add_alert("INTC", "record", "INTC 波动记一笔", False, _ago(1).timestamp(), deferred=True, digest_text="x")  # never sent alone
+    store.add_alert("NVDA", "daily", "NVDA 夜里压住", False, _ago(0.5).timestamp(), deferred=True)                   # not yet in a digest
+    assert feedback.resolve(OWNER)["target_id"] == str(sent)
+    assert feedback.resolve(OWNER, symbol="INTC")["target_id"] == str(sent)
+
+
+def test_a_night_line_counts_from_the_digest_that_carried_it(tmp_path, monkeypatch):
+    store = _sentinel(tmp_path, monkeypatch)
+    store.add_alert("INTC", "short", "INTC 急跌", True, _ago(5).timestamp())
+    night = store.add_alert("NVDA", "daily", "NVDA 夜里跌", False, _ago(6).timestamp(), deferred=True)
+    store.update_alert(night, digested_at=_ago(1).timestamp())          # he saw it at 08:00, after the INTC one
+    assert feedback.resolve(OWNER)["target_id"] == str(night)
+
+
 def test_a_duty_message_is_found_by_its_members_and_only_when_it_reached_him(tmp_path, monkeypatch):
     _sentinel(tmp_path, monkeypatch)
     group = _duty(1, "AMD 和 TSLA 一起跌了。", hours=5, members=["AMD", "TSLA"])
@@ -232,8 +249,8 @@ def test_a_duty_message_is_found_by_its_members_and_only_when_it_reached_him(tmp
     _duty(5, "TSLA 没有组", hours=1, symbol="TSLA", group=False)
     found = feedback.resolve(OWNER, symbol="TSLA")
     assert (found["target_id"], found["symbol"], found["text"]) == (group, None, "AMD 和 TSLA 一起跌了。")
-    briefed = _duty(6, "TSLA 早上简报里带了", hours=2, symbol="TSLA", delivery="briefed")
-    assert feedback.resolve(OWNER, symbol="tsla")["target_id"] == briefed
+    _duty(6, "TSLA 早上简报里带了", hours=2, symbol="TSLA", delivery="briefed")     # reached him inside the brief: he rates the brief
+    assert feedback.resolve(OWNER, symbol="tsla")["target_id"] == group    # still the AMD+TSLA one, not the briefed row
 
 
 def test_about_brief_picks_the_newest_done_brief_with_a_group(tmp_path, monkeypatch):
