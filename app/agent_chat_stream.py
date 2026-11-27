@@ -1143,7 +1143,50 @@ async def get_messages(conversation_id:str,before:int|None=Query(default=None,ge
  marks_by_turn=await asyncio.to_thread(public_marks_for_turns,[str(item["turn_id"]) for item in messages if item.get("role")=="assistant" and item.get("turn_id")])
  for item in messages:
   if item.get("role")=="assistant" and marks_by_turn.get(str(item.get("turn_id"))):item["public_marks"]=marks_by_turn[str(item["turn_id"])]
+ # 5d-3a: the owner's 「好／不好」 on each answer, kept on the server (read once for the page, beside the figure check above; a guest's
+ # thumbs stay a note in the browser).  A failed read leaves them out: the page still loads.
+ if _is_owner(x_chat_session):
+  from . import answer_feedback
+  answer_ids=[str(item["id"]) for item in messages if item.get("role")=="assistant" and item.get("id")]
+  try:given=await asyncio.to_thread(answer_feedback.of,owner_hash(x_chat_session),answer_ids) if answer_ids else {}
+  except Exception:
+   log.warning("answer feedback unreadable for the history page",exc_info=True);given={}
+  for item in messages:
+   if item.get("role")=="assistant" and str(item.get("id")) in given:item["feedback"]=given[str(item["id"])]
  return {"messages":messages,"has_more":page["has_more"],"next_before":page["next_before"],"compactions":page.get("compactions",[])}
+
+
+class AnswerFeedbackBody(BaseModel):
+ """「好／不好」 on one answer; a reason (one line) only with 不好."""
+ model_config=ConfigDict(extra="forbid")
+ verdict:Literal["good","bad"]
+ reason:str|None=Field(default=None,max_length=200)
+ if_absent:bool=False      # the browser's one-time upload of an old note: keep a verdict the server already has
+
+
+def _feedback_reply(turn_id:str,row:dict|None)->dict:
+ return {"turn_id":turn_id,"message_id":row["message_id"] if row else None,"verdict":row["verdict"] if row else None,"reason":row["reason"] if row else None}
+
+
+@router.put("/conversations/{conversation_id}/turns/{turn_id}/feedback")
+async def put_answer_feedback(conversation_id:str,turn_id:str,body:AnswerFeedbackBody,x_chat_session:str|None=Header(default=None)):
+ """The owner's 「好／不好」 on the final answer of one turn (5d-3a).  The turn id names it, so an answer just streamed (whose stored id the
+ page does not know yet) can be rated too.  Owner only (a guest keeps the note in the browser); 404 when the turn has no answer of his."""
+ credential=_owner_only(x_chat_session)
+ from . import answer_feedback
+ try:row=await asyncio.to_thread(answer_feedback.record,owner_hash(credential),conversation_id,turn_id,body.verdict,"web",body.reason,only_if_absent=body.if_absent)
+ except ValueError:raise HTTPException(422,"invalid_feedback") from None
+ if row is None:raise HTTPException(404,"answer_not_found")
+ return _feedback_reply(turn_id,row)
+
+
+@router.delete("/conversations/{conversation_id}/turns/{turn_id}/feedback")
+async def delete_answer_feedback(conversation_id:str,turn_id:str,x_chat_session:str|None=Header(default=None)):
+ """Take the owner's verdict on that answer back (the second press on the same thumb).  Taking back one there is not is no error."""
+ credential=_owner_only(x_chat_session)
+ from . import answer_feedback
+ cleared=await asyncio.to_thread(answer_feedback.clear,owner_hash(credential),conversation_id,turn_id)
+ return {**_feedback_reply(turn_id,None),"cleared":cleared}
 
 
 class CancelBody(BaseModel):

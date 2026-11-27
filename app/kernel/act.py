@@ -16,7 +16,7 @@ import logging
 
 from .. import agent_context
 from .. import agent_profile as profile
-from .. import agent_tasks, alert_feedback, owner_views, portfolio, watch_presets, watch_rules
+from .. import agent_tasks, alert_feedback, answer_feedback, owner_views, portfolio, watch_presets, watch_rules
 from ..agent_chat_identity import owner_credential_matches
 from .. import agent_model_catalog as model_catalog
 from ..agent_tool_catalog import definitions, validate
@@ -28,7 +28,7 @@ from . import inbox as inboxes
 logger = logging.getLogger(__name__)
 
 ACT = "act"
-TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "rate_alert", "record_view", "drop_view")
+TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "rate_alert", "rate_answer", "record_view", "drop_view")
 TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_routine", "update_routine", "delete_routine",
          "save_skill", "review_filing", "create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role",
          "set_channel_prefs", "apply_role_template", "undo_role_template", "set_watch_rule", "delete_watch_rule", "set_watch_preset", "set_alert_settings")
@@ -58,6 +58,7 @@ SUMMARIES = {
     "add_to_research_queue": "把一只股票加进研究队列",
     "remove_from_research_queue": "把一只股票移出研究队列",
     "rate_alert": "记下用户对某条提醒、值班消息或早间简报的『有用／没用』（他这轮亲口说的；不写股票就是最近一条）。不用先查提醒列表：代码会自己找到最近 48 小时里对得上的那条，并在结果里写明是哪一条。记下后照工具返回的那句告诉他对上的是哪一条，对错了他会说。他想顺便调提醒的门槛，记下之后再问。",
+    "rate_answer": "记下用户对这段对话里上一条回答的『好／不好』（他这轮亲口说的；说的是你之前那条回答，不是正在写的这条），不好时可以带上他说的原因。他评价你上一条回答本身（不好、答错了、没说清、没用）时，就是在给它评价：先记下『不好』（原因用他的话；哪怕你觉得他说得不对，这也是他的评价，照记，再解释），再照常改正或补充；他夸上一条答得好，就记『好』。他只是回答你的提问（你问「是指苹果吗」，他说「不对，是微软」）、纠正他自己的问题、或者接着往下问，都不是评价，不要记。这些评价进质量统计，用来改进你。代码会自己找到那条回答，并在结果里写明是哪一条（第一句和时间）；记下后照工具返回的那句告诉他。",
     "record_view": "记下用户对某家公司的看法（他自己的话，一家一条；新的覆盖旧的，旧的留在历史里；不是证据，也不授权任何操作）。记下后在回答里告诉他「我记下了：……」",
     "drop_view": "撤回用户对某家公司已记下的看法（留在历史里，标为已撤回）",
     "record_trade": "在持仓账本里记一笔买入或卖出（只是记账，不是下单）",
@@ -136,7 +137,42 @@ def cost_note(name: str, args: dict) -> str:
 
 _HEADINGS = (("直接生效（可撤销）", TIER1), ("需要用户点确认卡", TIER2), ("需要用户点确认卡，并且花钱或不可撤销", TIER3))
 _INTRO = "所有会改数据的操作都从这里做。只带 operation 调用会返回它的参数格式；带上 arguments 才是真的提出操作。"
-_DIRECTORY = "\n\n".join(f"{heading}：\n" + "\n".join(f"{name}：{SUMMARIES[name]}" for name in names) for heading, names in _HEADINGS)
+
+
+def _arg_line(name: str) -> str:
+    """The arguments of a tier-1 operation, from its schema: 「参数：verdict（good/bad）、reason（可省）」.  These run in the turn, often in the
+    same step as a lookup; a guessed argument name fails, and the retry after the lookup goes on a card (which WeChat cannot press)."""
+    schema = _schema(name)
+    required = set(schema.get("required", []))
+    parts = []
+    for key, spec in schema.get("properties", {}).items():
+        if key.startswith("_") or key == "say":
+            continue
+        values = spec.get("enum") or next((option["enum"] for option in spec.get("anyOf", []) if option.get("enum")), None)
+        notes = ["/".join(map(str, values))] if values else []
+        if key not in required:
+            notes.append("可省")
+        parts.append(f"{key}（{'，'.join(notes)}）" if notes else key)
+    return f"参数：{'、'.join(parts)}" if parts else ""
+
+
+def _line(name: str, with_args: bool) -> str:
+    args = _arg_line(name) if with_args else ""
+    return f"{name}：{SUMMARIES[name]}" + (f" {args}" if args else "")
+
+
+def tier_of(name: str) -> int:
+    return 1 if name in TIER1 else 2 if name in TIER2 else 3
+
+
+def _schema(name: str) -> dict:
+    if name == "remember" and not memory_writes():      # without the flag there is no guess to write: the schema is the one before it
+        from ..agent_tool_catalog_legacy import RememberArgs as LegacyRememberArgs
+        return LegacyRememberArgs.model_json_schema()
+    return definitions()[name].args_schema.model_json_schema()
+
+
+_DIRECTORY = "\n\n".join(f"{heading}：\n" + "\n".join(_line(name, names is TIER1) for name in names) for heading, names in _HEADINGS)
 
 ACT_SCHEMA: dict = {
     "type": "function",
@@ -152,17 +188,6 @@ ACT_SCHEMA: dict = {
         },
     },
 }
-
-
-def tier_of(name: str) -> int:
-    return 1 if name in TIER1 else 2 if name in TIER2 else 3
-
-
-def _schema(name: str) -> dict:
-    if name == "remember" and not memory_writes():      # without the flag there is no guess to write: the schema is the one before it
-        from ..agent_tool_catalog_legacy import RememberArgs as LegacyRememberArgs
-        return LegacyRememberArgs.model_json_schema()
-    return definitions()[name].args_schema.model_json_schema()
 
 
 def describe(name: str) -> dict:
@@ -391,6 +416,23 @@ async def _rate_alert(run, args: dict, operation: dict) -> dict:
     target = {**({"symbol": match["symbol"]} if match.get("symbol") else {}),
               "title": f'{alert_feedback.when_text(match["at"])}「{match.get("text") or ""}」', "decision": alert_feedback.VERDICT_WORDS[args["verdict"]]}
     return {"title": RATE_TITLE, "targets": [target], "alternative": UNDO["rate_alert"]}
+
+
+ANSWER_RATE_TITLE = "记下回答反馈"
+
+
+async def _rate_answer(run, args: dict, operation: dict) -> dict:
+    """Find the answer he means (the newest of this conversation before this turn; code, not the model) and freeze it: the press records
+    exactly the one the card names, even if another answer comes in between."""
+    context = run.context
+    match = await asyncio.to_thread(answer_feedback.resolve_last, context.owner_hash, getattr(context, "conversation_id", None), getattr(run, "turn_id", ""))
+    if match is None:
+        return tools.rate_answer_refusal()
+    operation["match"] = answer_feedback.frozen(match)
+    target = {"title": f'{answer_feedback.when_text(match["at"])}「{match.get("text") or ""}」', "decision": answer_feedback.VERDICT_WORDS[args["verdict"]]}
+    if args.get("reason"):
+        target["quote"] = args["reason"]
+    return {"title": ANSWER_RATE_TITLE, "targets": [target], "alternative": UNDO["rate_answer"]}
 
 
 WATCH_OPERATIONS = ("set_watch_rule", "delete_watch_rule")
@@ -697,6 +739,10 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
         display = await _rate_alert(run, args, operation)
         if "error_code" in display:
             return display
+    elif name == "rate_answer":
+        display = await _rate_answer(run, args, operation)
+        if "error_code" in display:
+            return display
     elif name in WATCH_OPERATIONS:
         if name == "set_watch_rule":
             wiped = ("expires_on",) if "expires_on" in arguments and not args.get("expires_on") else ()
@@ -793,6 +839,7 @@ UNDO = {
     "record_view": "要撤回，说『撤回我对 {company} 的看法』。",
     "drop_view": "它仍在这家公司的历史里（标为已撤回）；想恢复就把看法再说一遍。",
     "rate_alert": "说错了就说『那条改成有用／没用』。",
+    "rate_answer": "说错了就说『那条改成好的／不好』；网页上那条回答下的按钮也能改。",
 }
 AWAITING_NOTE = "已放进确认卡。回答结束时卡片会交给用户，用户点了确认才执行。现在用一两句话告诉用户你准备做什么、请他核对卡片，不要说已经做了。"
 
@@ -881,6 +928,9 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
     if operation["name"] == "rate_alert":      # the line the tool wrote names the message it matched
         row = next(iter(direct.execution_rows(value)), {})
         recorded = {k: row[k] for k in ("recorded", "target", "target_id", "note") if row.get(k) is not None}      # note: the ack did not go through
+    if operation["name"] == "rate_answer":     # the line the tool wrote names the answer it matched
+        row = next(iter(direct.execution_rows(value)), {})
+        recorded = {k: row[k] for k in ("recorded", "message_id") if row.get(k) is not None}
     return {"ok": True, "data": [{**facts, **recorded, "status": "done", "title": title, "undo": undo}]}, "done"
 
 
@@ -960,7 +1010,7 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
     # Tier 1 runs at once only while nothing but the owner's own words has been seen this turn: once a read has come back, a
     # page or filing could be asking the model to remember something, so the operation goes onto the card like tier 2.
     # With memory writes on, after a read only a guess (``remember`` with basis noticed: stored unconfirmed, light use, he can reject it) still runs at once.
-    # A said ``remember`` (his quote proves nothing about the text next to it), record_view, forget, drop_view, rate_alert and the research queue go on the card.
+    # A said ``remember`` (his quote proves nothing about the text next to it), record_view, forget, drop_view, rate_alert, rate_answer and the research queue go on the card.
     if prepared.tier == 1 and (not run.read_results or _direct_after_reads(run, prepared)):
         return await _run_at_once(run, prepared)
     return _collect(run, prepared)

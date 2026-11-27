@@ -74,7 +74,7 @@ const text = (value) => (typeof value === "string" ? value.trim() : "");
 
 // ---- 回答 ----------------------------------------------------------------------------------------------------------
 
-export const ANSWER_FILTER_DEFAULTS = Object.freeze({ botId: "", engine: "", status: "", highTier: false, slow: false, reconcileFlagged: false, q: "", before: "" });
+export const ANSWER_FILTER_DEFAULTS = Object.freeze({ botId: "", engine: "", status: "", highTier: false, slow: false, reconcileFlagged: false, feedbackBad: false, q: "", before: "" });
 export const ANSWER_ENGINES = [{ value: "v2", label: "新流程" }, { value: "v1", label: "旧流程" }];
 export const ANSWER_STATUSES = ["succeeded", "failed", "cancelled", "waiting_for_input", "incomplete"];
 
@@ -97,11 +97,12 @@ function paramsOf(entries) {
   return out ? `?${out}` : "";
 }
 
-/** The query string of the answers list: only what is set.  「只看用了高档的」 is tier=high, 「只看慢的」 is slow=1, 「数字没对上」 is reconcile=flagged; the search text is cut to the 100 characters the API takes. */
+/** The query string of the answers list: only what is set.  「只看用了高档的」 is tier=high, 「只看慢的」 is slow=1, 「数字没对上」 is reconcile=flagged,
+ * 「被点不好的」 is feedback=bad; the search text is cut to the 100 characters the API takes. */
 export function answersQuery(filters) {
   const f = { ...ANSWER_FILTER_DEFAULTS, ...filters };
   return paramsOf([["bot_id", f.botId], ["engine", f.engine], ["status", f.status], ["tier", f.highTier ? "high" : ""], ["slow", f.slow ? "1" : ""],
-    ["reconcile", f.reconcileFlagged ? "flagged" : ""], ["q", text(f.q).slice(0, SEARCH_MAX)], ["before", f.before]]);
+    ["reconcile", f.reconcileFlagged ? "flagged" : ""], ["feedback", f.feedbackBad ? "bad" : ""], ["q", text(f.q).slice(0, SEARCH_MAX)], ["before", f.before]]);
 }
 
 /** "?before=<cursor>" for the lists that only page (操作记录, 提醒投递). */
@@ -130,7 +131,19 @@ export function answerRow(item, timeZone, w = ZH_WORDS) {
     tokens: total > 0 ? formatTokens(total) : DASH,
     cost: costCell(item?.cost_usd, calls > 0 || total > 0, item?.cost_state),
     old_engine: item?.engine === "v1",
+    feedback: ANSWER_VERDICT_LABELS[item?.feedback] ? w.t(ANSWER_VERDICT_LABELS[item.feedback]) : "",
   };
+}
+
+/** The owner's 「好／不好」 on an answer (5d-3a), as the backstage words it. */
+const ANSWER_VERDICT_LABELS = { good: "你点了好", bad: "你点了不好" };
+
+/** The detail's 「你的评价」: his verdict and, with 不好, his reason; null when he gave none. */
+export function answerFeedbackBlock(detail, w = ZH_WORDS) {
+  const verdict = detail?.feedback?.verdict;
+  if (!ANSWER_VERDICT_LABELS[verdict]) return null;
+  const reason = verdict === "bad" ? text(detail.feedback.reason) : "";
+  return { verdict, text: w.t(ANSWER_VERDICT_LABELS[verdict]), reason: reason ? `${w.t("原因")}${w.colon}${reason}` : "" };
 }
 
 /** The lines above the timeline: an old-engine record, a turn that did not finish, a switch to the backup model. */

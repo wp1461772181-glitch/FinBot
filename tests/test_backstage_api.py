@@ -17,6 +17,7 @@ from app.agent_workflow import consent
 from app.agent_workflow.models import AgentConsent
 from app.database import Base, SessionLocal, engine
 from app.alert_feedback import AlertFeedback
+from app.answer_feedback import AnswerFeedback
 from app.duty_brief import DutyBrief
 from app.duty_log import DutyLog
 
@@ -41,7 +42,7 @@ ENDPOINTS = ["/backstage/answers", f"/backstage/answers/{uuid.uuid4()}", "/backs
 def world(monkeypatch, disposable_database):
     Base.metadata.create_all(engine, tables=[AgentConversation.__table__, AgentMessage.__table__, AgentBot.__table__,
                                              ModelCall.__table__, AgentConsent.__table__, AgentTelegramMessage.__table__,
-                                             DutyLog.__table__, DutyBrief.__table__, AlertFeedback.__table__,
+                                             DutyLog.__table__, DutyBrief.__table__, AlertFeedback.__table__, AnswerFeedback.__table__,
                                              AgentProfileItem.__table__, MemoryEvent.__table__])
     consent.ensure_columns()
     import app.agent_chat_identity as identity
@@ -49,7 +50,7 @@ def world(monkeypatch, disposable_database):
     monkeypatch.setattr(consent, "owner_credential_matches", lambda value: value == OWNER)
     model_usage.flush(timeout=10)
     with SessionLocal() as db:
-        for model in (MemoryEvent, AgentProfileItem, AlertFeedback, DutyBrief, DutyLog, ModelCall, AgentConsent, AgentTelegramMessage, AgentMessage,
+        for model in (MemoryEvent, AgentProfileItem, AnswerFeedback, AlertFeedback, DutyBrief, DutyLog, ModelCall, AgentConsent, AgentTelegramMessage, AgentMessage,
                       AgentConversation, AgentBot):
             db.query(model).delete()
         db.commit()
@@ -466,6 +467,43 @@ def test_the_detail_shows_the_figures_checked_and_each_flagged_line(client):
     _, unchecked = turn(cid, record=kernel_record(), at=NOW + timedelta(minutes=3))
     assert get(client, f"/backstage/answers/{unchecked}").json()["reconciliation"] is None
     assert get(client, f"/backstage/answers/{mid}", headers=G).status_code == 403
+
+
+# --- 5d-3a: his 「好／不好」 on each answer ----------------------------------------------------------------------------------
+
+def feedback_world():
+    from app import answer_feedback
+    cid = conversation(bot())
+    base = NOW - timedelta(hours=1)
+    bad, bad_mid = turn(cid, "bad", "利润是 8888 美元。", record=kernel_record(), at=base)
+    good, _ = turn(cid, "good", "营收是 4500 美元。", record=kernel_record(), at=base + timedelta(minutes=1))
+    turn(cid, "none", "答", record=kernel_record(), at=base + timedelta(minutes=2))
+    turn(cid, "incomplete", final=False, at=base + timedelta(minutes=3))
+    answer_feedback.record(OWNER_HASH, cid, bad, "bad", "web", f"数据太旧了 {CONFIRM}")
+    answer_feedback.record(OWNER_HASH, cid, good, "good", "chat")
+    return bad_mid
+
+
+def test_each_answer_row_carries_his_verdict(client):
+    feedback_world()
+    rows = {i["question"]: i["feedback"] for i in get(client, "/backstage/answers").json()["items"]}
+    assert rows == {"bad": "bad", "good": "good", "none": None, "incomplete": None}
+
+
+def test_the_filter_keeps_only_the_answers_he_marked_bad(client):
+    feedback_world()
+    assert [i["question"] for i in get(client, "/backstage/answers", feedback="bad").json()["items"]] == ["bad"]
+    assert get(client, "/backstage/answers", feedback="good").status_code == 400
+    assert get(client, "/backstage/answers", feedback="bad", headers=G).status_code == 403
+
+
+def test_the_detail_shows_the_verdict_and_the_reason(client):
+    bad_mid = feedback_world()
+    body = get(client, f"/backstage/answers/{bad_mid}").json()
+    assert body["feedback"] == {"verdict": "bad", "reason": "数据太旧了 [已移除]"}       # a button value never leaves, even inside his reason
+    cid = conversation(bot("另一个"))
+    _, plain = turn(cid, record=kernel_record(), at=NOW + timedelta(minutes=5))
+    assert get(client, f"/backstage/answers/{plain}").json()["feedback"] is None
 
 
 def test_no_stored_button_value_appears_in_any_response(client):

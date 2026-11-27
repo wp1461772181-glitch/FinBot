@@ -37,6 +37,15 @@ def rate_alert_line(match,verdict):
     """What was recorded, naming the message it matched: symbol, Beijing time, its first line, the verdict."""
     from ..alert_feedback import VERDICT_WORDS,when_text
     return f"{match.get('symbol') or ''} {when_text(match.get('at'))}「{match.get('text') or ''}」——{VERDICT_WORDS[verdict]}".lstrip()
+ANSWER_NOT_FOUND="这段对话里还没有之前的回答可以评价。"
+def rate_answer_refusal():
+    """The conversation has no answer before this turn: there is nothing he can mean."""
+    return {'ok':False,'data':[],'error_code':'answer_not_found','reason':ANSWER_NOT_FOUND,'hint':ANSWER_NOT_FOUND}
+def rate_answer_line(match,verdict,reason=None):
+    """What was recorded, naming the answer it matched: Beijing time, its first line, the verdict, and his reason when he gave one."""
+    from ..answer_feedback import VERDICT_WORDS,when_text
+    said=f"（原因：{reason}）" if reason else ""
+    return f"{when_text(match.get('at'))}「{match.get('text') or ''}」——{VERDICT_WORDS[verdict]}{said}".lstrip()
 
 
 async def search_knowledge(args,context):
@@ -104,6 +113,8 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if name=='record_view':args['_source_message_id']=operation.get('source_message_id');args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id')
         # The message the card named, frozen when it was made: the press rates that one, not whatever is newest by then.
         if name=='rate_alert':args['_match']=operation.get('match')
+        # The answer the card named, the same way.
+        if name=='rate_answer':args['_match']=operation.get('match')
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
         if name in {'create_bot','update_bot','apply_role_template','undo_role_template','set_watch_rule','set_watch_preset','set_alert_settings'}:args['_fields']=operation.get('fields')
         # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
@@ -447,6 +458,17 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         row={'status':'recorded','recorded':rate_alert_line(match,args['verdict']),'target':match['target'],'target_id':match['target_id']}
         if acknowledged is False:row['note']='这条提醒没能顺带算作「收到」，如果它还在提醒，请在 Telegram 上按「收到」。'
         return result([row],'alert feedback')
+    if name=='rate_answer':
+        # Only reached through execute_reversible (the kernel's tier 1 or a pressed card): his 「好／不好」 on an earlier answer, in his words.
+        # The match is frozen by act.prepare; without one there is no turn to exclude, so nothing is guessed.
+        from .. import answer_feedback
+        if not is_owner:return error('owner_login_required')
+        match=args.get('_match')
+        if not isinstance(match,dict) or not match.get('turn_id'):return rate_answer_refusal()
+        try:row=await asyncio.to_thread(answer_feedback.record,context.owner_hash,match.get('conversation_id'),match['turn_id'],args['verdict'],'chat',args.get('reason'))
+        except ValueError as exc:return error(str(exc))
+        if row is None:return rate_answer_refusal()
+        return result([{'status':'recorded','recorded':rate_answer_line(match,args['verdict'],row.get('reason')),'message_id':row['message_id']}],'answer feedback')
     if name=='search_configured_news':
         from .. import fin_news_engine as news
         call=asyncio.to_thread(

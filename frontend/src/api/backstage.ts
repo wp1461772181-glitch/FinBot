@@ -7,7 +7,7 @@ import { answersQuery, feedbackBody, memoryQuery, pagedQuery, usageQuery, type A
 export type Tokens = { input?: number; output?: number; cache_read?: number; cache_write?: number; total?: number };
 export type AnswerItem = { message_id: string; conversation_id: string; bot_id: string | null; bot_name: string | null; created_at: string; question: string; answer: string;
   engine: "v1" | "v2" | null; status: string; tier: "low" | "mid" | "high" | null; models: string[]; total_ms: number | null; model_calls: number; tokens: Tokens; cost_usd: number | null;
-  tool_count: number; write_outcomes: string[]; write_outcome: string | null; reconcile?: "flagged" | "clean" | "error" | null };
+  tool_count: number; write_outcomes: string[]; write_outcome: string | null; reconcile?: "flagged" | "clean" | "error" | null; feedback?: "good" | "bad" | null };
 export type AnswersPage = { items: AnswerItem[]; next_before: string | null; slow_threshold_ms: number | null; slow_rule: string | null };
 
 export type ModelCall = { tier: string | null; model: string; catalog_name: string | null; purpose: string; ms: number | null; tokens: Tokens; attempt: number; ok: boolean; error: string | null; cost_usd: number | null; priced: boolean; at: string };
@@ -23,6 +23,8 @@ export type AnswerDetail = {
     consent: { status: string; expired: boolean; decided_at: string | null; operations: unknown[]; result: unknown } | null } | null;
   answer: string; backup_model: { from: string | null; to: string | null; reason: string | null } | null; latest_known?: string[]; langfuse_url: string | null;
   reconciliation?: Reconciliation | null;
+  /** 5d-3a: the owner's 「好／不好」 on this answer and, with 不好, his reason. */
+  feedback?: { verdict: "good" | "bad"; reason: string | null } | null;
 };
 
 export type UsageGroup = { key: string; label: string; calls: number; failed_calls: number; tokens: Tokens; ms_p50: number | null; cost_usd: number | null; unpriced_calls: number; missing_prices: string[] };

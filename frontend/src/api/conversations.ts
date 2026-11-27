@@ -1,4 +1,5 @@
 import { agentChatUrl } from "../agent-chat-url.mjs";
+import { feedbackRequest } from "../answer-feedback.mjs";
 import { fetchAgentChatModels } from "../agent-chat-models.mjs";
 import { type CompactionNotice, type ContextUsage, normalizeCompactions, normalizeContextUsage } from "../context-usage.mjs";
 import { conversationCreatedAtForMode, conversationForMode, selectConversationForMode } from "../chat-identity.mjs";
@@ -16,6 +17,8 @@ export type AgentClarification = {request_id:string;reason:string;question?:stri
 export type AgentChatMessage = { citation_protocol?: string; citation_nodes?: { source_ref: string; citation_id?: string; quote?: string }[]; unverified_lines?: UnverifiedLine[]; public_marks?: unknown[]; role: "user" | "assistant" | "tool"; content: string; status?: string; turn_id?: string; reused_sources?: boolean; citations?: AgentCitation[]; clarification?: AgentClarification; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>; tool_call_id?: string; tool_trace?: Array<{ call_id?: string; name: string; arguments?: unknown; result?: unknown; status: string; card?: boolean }>; trace?: FlowNode[]; thinking_ms?: number; started_at?: number; narration?: string[]; checklist?: Array<{ text: string; status: string }>; tier?: string;
   /** 5d-1: the figure check the server keeps on a kernel answer a few seconds after it (absent: not checked). */
   reconciliation?: { version?: number; figures?: number; flagged?: Array<{ line: string; values: string[] }>; error?: string };
+  /** 5d-3a: the owner's 「好／不好」 on this answer as the server keeps it (absent: none, or a guest's page). */
+  feedback?: { verdict: "good" | "bad"; reason?: string | null } | null;
   /** 3c (speaking while it works): `id` is the server's name for a stored message; `reply_to` says which messages an answer answers; the rest is what only this tab knows (see chat-interject.mjs). */
   id?: string; reply_to?: Array<{ id: string; text: string }>; client_key?: string; user_key?: string; answer_key?: string; delivery?: "sending" | "received" | "merged" | "separate" | "stopped" | "queued" | "unstarted"; into_turn?: string; queue_ahead?: number; live?: boolean; paused?: boolean; queued_ahead?: number; stopped_by_message?: boolean };
 export type AgentChatEvent = { event: string; data: Record<string, unknown> };
@@ -81,6 +84,22 @@ export async function archiveAgentConversation(id:string,archived=true,signal?:A
 }
 /** The owner's research queue as the server keeps it: null until one was saved.  Owner only. */
 
+/** 5d-3a: the owner's 「好／不好」 on the final answer of one turn (a reason only with 不好); resolves to what the server now keeps.  Owner only. */
+export async function putAnswerFeedback(conversationId: string, turnId: string, body: { verdict: "good" | "bad"; reason?: string; if_absent?: boolean }, signal?: AbortSignal): Promise<{ verdict: "good" | "bad"; reason: string | null }> {
+  const base = agentChatUrl("stream", configuredApiBaseUrl).replace(/stream$/, "");
+  const request = feedbackRequest(base, conversationId, turnId, "PUT", body, chatCredential());
+  const response = await fetch(request.url, { ...request.init, signal });
+  if (!response.ok) throw new ApiError("answer_feedback_failed", response.status);
+  const data = await response.json().catch(() => null) as { verdict?: unknown; reason?: unknown } | null;
+  return { verdict: data?.verdict === "bad" ? "bad" : "good", reason: typeof data?.reason === "string" ? data.reason : null };
+}
+/** Take the owner's verdict on that answer back (the second press on the same thumb). */
+export async function deleteAnswerFeedback(conversationId: string, turnId: string, signal?: AbortSignal): Promise<void> {
+  const base = agentChatUrl("stream", configuredApiBaseUrl).replace(/stream$/, "");
+  const request = feedbackRequest(base, conversationId, turnId, "DELETE", null, chatCredential());
+  const response = await fetch(request.url, { ...request.init, signal });
+  if (!response.ok) throw new ApiError("answer_feedback_failed", response.status);
+}
 export async function listAgentConversations(offset=0,signal?:AbortSignal): Promise<{conversations:ConversationSummary[];hasMore:boolean}> {
   const url = agentChatUrl("stream", configuredApiBaseUrl).replace(/stream$/, `conversations?limit=30&offset=${offset}`);
   const response = await fetch(url,{signal,cache:"no-store",headers:{Accept:"application/json","X-Chat-Session":chatCredential()}});

@@ -64,6 +64,7 @@ export const TOOL_LABELS = {
   record_view: "记下看法",
   drop_view: "撤回看法",
   rate_alert: "记下提醒反馈",
+  rate_answer: "记下回答反馈",
   create_bot: "新建 bot",
   update_bot: "修改 bot",
   delete_transaction: "删除持仓记录",
