@@ -5,7 +5,7 @@ it is finished whatever happened (done, switched off, failed).  The morning brie
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import JSON, BigInteger, DateTime, Integer, String, Text, UniqueConstraint, select
 from sqlalchemy.exc import IntegrityError
@@ -98,12 +98,17 @@ def since(owner_hash: str, after: datetime) -> list[dict]:
         return [as_dict(row) for row in rows]
 
 
+STALE_RUNNING = timedelta(hours=1)        # a check still "running" this long was cut off (a restart): the brief says it did not finish
+
+
 def unbriefed(owner_hash: str) -> list[dict]:
-    """The owner's done checks whose findings no morning brief has carried yet, oldest first (a check that ends after the day's brief
-    is carried by the next one)."""
+    """The owner's checks no morning brief has carried yet, oldest first: done ones (their findings, and their errors), failed ones and
+    ones cut off while running (the brief says these did not finish).  A check that ends after the day's brief rides the next one."""
+    cut = datetime.now(UTC) - STALE_RUNNING
     with SessionLocal() as db:
-        rows = db.scalars(select(DutySelfcheck).where(DutySelfcheck.owner_hash == owner_hash, DutySelfcheck.outcome == "done",
-                                                      DutySelfcheck.briefed_at.is_(None))
+        rows = db.scalars(select(DutySelfcheck).where(
+            DutySelfcheck.owner_hash == owner_hash, DutySelfcheck.briefed_at.is_(None),
+            DutySelfcheck.outcome.in_(("done", "failed")) | ((DutySelfcheck.outcome == "running") & (DutySelfcheck.created_at < cut)))
                           .order_by(DutySelfcheck.created_at.asc(), DutySelfcheck.id.asc())).all()
         return [as_dict(row) for row in rows]
 

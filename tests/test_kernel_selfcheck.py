@@ -1,3 +1,4 @@
+import sqlite3
 """5c-3a: the daily missed-alert check and the lines it adds to the morning brief.
 
 No network: the price check gets scripted 5-minute bars (``tests.test_sentinel_replay``), the sentinel's database is a ``Store`` in
@@ -335,7 +336,7 @@ def test_the_lines_are_written_by_code():
     assert brief.selfcheck_lines([]) == ""
     assert brief.selfcheck_lines(FINDINGS) == (
         "漏报自查（每天收盘后核对，代码写的）：\n"
-        f"· NVDA 的财报（2026-11-20 05:20）没发给你：财报解读试了三次都没做成。原文：{EVENT_URL}\n"
+        f"· NVDA 的财报（北京 2026-11-20 05:20）没解读成：试了三次都失败了。原文：{EVENT_URL}\n"
         "· INTC 美东 2026-11-25 10:05：【盘中异动】INTC 较昨收跌 16.0%——按现在的设置应当提醒，但当时没有发出（收盘后用五分钟线重算发现）。")
 
 
@@ -436,3 +437,27 @@ def test_a_tier_one_move_counts_only_clear_of_the_line():
     assert not selfcheck._clear({"tier": 1, "sigma_mult": 2.1}, 2.0)           # ANT 11-25: within the 5- vs 1-minute noise
     assert selfcheck._clear({"tier": 1, "sigma_mult": 2.6}, 2.0)
     assert not selfcheck._clear({"tier": 1, "sigma_mult": ""}, 2.0) and not selfcheck._clear({"tier": 0, "sigma_mult": 9}, 2.0)
+
+
+
+def test_a_filing_the_sentinel_saw_moments_ago_is_not_yet_a_finding(env):
+    seen(env, age=timedelta(minutes=5))           # may still be on its way to the reader
+    assert earnings(env)[0] == []
+
+
+def test_the_live_database_is_read_without_the_immutable_fallback(env, tmp_path):
+    with pytest.raises(sqlite3.OperationalError):
+        selfcheck._read(tmp_path / "missing" / "sentinel.db", "SELECT 1", ())
+
+
+def test_a_check_that_did_not_finish_or_could_not_fetch_is_said_in_the_brief(env, model):
+    failed_id = duty_selfcheck.claim(OWNER_HASH, "2000-01-01")
+    duty_selfcheck.finish(failed_id, outcome="failed", reason="x")
+    done_id = duty_selfcheck.claim(OWNER_HASH, "2000-01-02")
+    duty_selfcheck.finish(done_id, outcome="done", findings=[], checked={"errors": {"unfetched": "ANT、AMD"}})
+    model([])
+    row = write_brief()
+    assert row["outcome"] == "done" and row["counts"]["unchecked"] == 2 and row["counts"]["missed"] == 0
+    assert "2000-01-01 的漏报自查没做完" in row["message"] and "没取到行情：ANT、AMD" in row["message"]
+    again = asyncio.run(brief.run_once(OWNER_HASH, brief_now(1), day="2000-12-31"))
+    assert again is None or "漏报自查" not in (again.get("message") or "")

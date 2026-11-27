@@ -91,21 +91,32 @@ def gather(owner_hash: str, since: datetime) -> dict:
             counts["told"] += 1
         elif decision in ("record", "ignore"):
             counts[decision] += 1
-    findings, selfcheck_ids = missed_findings(owner_hash)
-    return {"kept": kept, "held": held, "counts": counts, "night_digest_sent": night_digest_sent, "findings": findings, "selfcheck_ids": selfcheck_ids}
+    findings, problems, selfcheck_ids = missed_findings(owner_hash)
+    return {"kept": kept, "held": held, "counts": counts, "night_digest_sent": night_digest_sent, "findings": findings, "problems": problems, "selfcheck_ids": selfcheck_ids}
 
 
-def missed_findings(owner_hash: str) -> tuple[list[dict], list[int]]:
-    """The findings of the missed-alert checks no brief has carried yet (``kernel.selfcheck``), oldest first, each ``(kind, symbol, at)``
-    once, and those checks' row ids.  Not windowed: a check that ends after the day's brief is carried by the next one.  A log that cannot
-    be read costs the brief nothing but these lines."""
+def missed_findings(owner_hash: str) -> tuple[list[dict], list[str], list[int]]:
+    """What the missed-alert checks no brief has carried yet (``kernel.selfcheck``) found, each ``(kind, symbol, at)`` once; what they could
+    not check (a check that failed, was cut off, or could not fetch some symbols); and those checks' row ids.  Not windowed: a check that
+    ends after the day's brief is carried by the next one.  A log that cannot be read costs the brief nothing but these lines."""
     try:
         rows = duty_selfcheck.unbriefed(owner_hash)
     except Exception:
         logger.exception("morning brief: the missed-alert checks could not be read")
-        return [], []
-    out, seen = [], set()
+        return [], [], []
+    out, problems, seen = [], [], set()
     for row in rows:
+        day = row.get("day") or ""
+        if row.get("outcome") != "done":
+            problems.append(f"{day} 的漏报自查没做完，这一天没有核对。")
+            continue
+        errors = (row.get("checked") or {}).get("errors") or {}
+        if errors.get("earnings"):
+            problems.append(f"{day} 的财报自查没做成，这一天的财报没有核对。")
+        if errors.get("price"):
+            problems.append(f"{day} 的价格自查没做成，这一天的行情没有核对。")
+        elif errors.get("unfetched"):
+            problems.append(f"{day} 的价格自查有几只没取到行情：{errors['unfetched']}，这几只没有核对。")
         for finding in row.get("findings") or []:
             if not isinstance(finding, dict):
                 continue
@@ -113,22 +124,23 @@ def missed_findings(owner_hash: str) -> tuple[list[dict], list[int]]:
             if key not in seen:
                 seen.add(key)
                 out.append(finding)
-    return out, [row["id"] for row in rows]
+    return out, problems, [row["id"] for row in rows]
 
 
-def selfcheck_lines(findings: list[dict]) -> str:
-    """The lines code writes about what the missed-alert check found; empty when nothing was found."""
-    if not findings:
+def selfcheck_lines(findings: list[dict], problems: list[str] | None = None) -> str:
+    """The lines code writes about what the missed-alert check found and what it could not check; empty when there is neither."""
+    if not findings and not problems:
         return ""
     lines = ["漏报自查（每天收盘后核对，代码写的）："]
     for f in findings:
         symbol, at = f.get("symbol") or "", f.get("at") or ""
         if f.get("kind") == "earnings":
             url = f.get("url") or ""
-            lines.append(f"· {symbol} 的财报（{at}）没发给你：{f.get('why') or ''}。原文：{url}" if url
-                         else f"· {symbol} 的财报（{at}）没发给你：{f.get('why') or ''}。")
+            lines.append(f"· {symbol} 的财报（北京 {at}）没解读成：{f.get('why') or ''}。原文：{url}" if url
+                         else f"· {symbol} 的财报（北京 {at}）没解读成：{f.get('why') or ''}。")
         else:
             lines.append(f"· {symbol} 美东 {at}：{f.get('text') or ''}——按现在的设置应当提醒，但当时没有发出（收盘后用五分钟线重算发现）。")
+    lines += [f"· {problem}" for problem in problems or []]
     return "\n".join(lines)
 
 
@@ -221,11 +233,11 @@ async def _run(row_id: int, owner: str, day: str, current: str, now: datetime, s
         since = await asyncio.to_thread(_window_start, owner, now)
     gathered = await asyncio.to_thread(gather, owner, since)
     kept, held, counts = gathered["kept"], gathered["held"], gathered["counts"]
-    findings = gathered.get("findings") or []
-    if findings:
-        counts = {**counts, "missed": len(findings)}       # findings are content: a window with only findings is not skipped
+    findings, problems = gathered.get("findings") or [], gathered.get("problems") or []
+    if findings or problems:       # findings, and checks that did not finish, are content: a window with only these is not skipped
+        counts = {**counts, "missed": len(findings), **({"unchecked": len(problems)} if problems else {})}
     line = filtered_line(counts, since)
-    missed = selfcheck_lines(findings)
+    missed = selfcheck_lines(findings, problems)
     tail = "".join(f"\n\n{part}" for part in (missed, line) if part)
     if not any(counts.values()):
         return await asyncio.to_thread(lambda: finish(outcome="skipped", reason=NOTHING, counts=counts))

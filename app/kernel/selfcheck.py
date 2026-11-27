@@ -47,8 +47,8 @@ MINUTE = "%Y-%m-%d %H:%M"
 # starts from an empty store, so it would "miss" them every day (shadow check on 11-25: five such false misses, no real one).
 MOVE_KINDS = ("daily", "gap", "update", "move", "reversal", "merged")
 MARGIN = 0.5           # sigmas a tier-1 move must clear the line by to count
-WHY_FAILED = "财报解读试了三次都没做成"
-WHY_STUCK = "收到一个多小时了还没发出"
+WHY_FAILED = "试了三次都失败了"
+WHY_STUCK = "收到一个多小时了还没出结果"
 WHY_UNSEEN = "盯盘程序看到了这份财报，但没交到解读那一步"
 OFF = "FINBOT_DUTY_MODE=off"
 
@@ -89,18 +89,14 @@ def _replay_symbols(snapshot: dict) -> list[str]:
 
 
 def _read(db_path, query: str, params: tuple) -> list[sqlite3.Row]:
-    """Rows of the sentinel's database, read-only (a WAL copy without its -shm needs ``immutable``, as ``replay.compare_actual`` does)."""
-    for mode in ("mode=ro", "mode=ro&immutable=1"):
-        conn = sqlite3.connect(f"file:{db_path}?{mode}", uri=True)
-        conn.row_factory = sqlite3.Row
-        try:
-            return conn.execute(query, params).fetchall()
-        except sqlite3.OperationalError:
-            if mode != "mode=ro":
-                raise
-        finally:
-            conn.close()
-    return []
+    """Rows of the sentinel's live database, read-only.  No ``immutable`` fallback: it skips the WAL, so rows the sentinel has not
+    checkpointed yet (today's alerts) would be missing and read as missed alerts.  A read that fails raises; the check records it."""
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
 
 
 def _bj(value: datetime | float) -> str:
@@ -150,7 +146,8 @@ def earnings_findings(owner: str, since: datetime, now: datetime, held: set[str]
             known = set(db.scalars(select(EarningsEvent.accession).where(EarningsEvent.owner_hash == owner,
                                                                          EarningsEvent.accession.in_([r["accession"] for r in unseen]))))
         for row in unseen:
-            if row["accession"] not in known and row["accession"] not in reported:
+            # a filing seen moments ago may still be on its way to the reader (the events job resends every 30 s): the same grace as a stuck one
+            if row["accession"] not in known and row["accession"] not in reported and now.timestamp() - float(row["detected_at"]) > STUCK.total_seconds():
                 findings.append({"kind": "earnings", "symbol": row["symbol"], "at": _bj(float(row["accepted_at"])), "why": WHY_UNSEEN,
                                  "accession": row["accession"],
                                  "text": "earnings_seen without an earnings_events row", "url": row["url"] or ""})
@@ -252,6 +249,8 @@ def _run(row_id: int, owner: str, now: datetime, since: datetime | None, sentine
             found, counts = price_findings(session, snapshot, sentinel_db, fetch)
             findings += found
             checked.update(counts)
+            if counts.get("unfetched"):        # symbols with no bars were not checked: an error the brief says, not a silent clean day
+                checked["errors"]["unfetched"] = "、".join(counts["unfetched"])
     except Exception as exc:
         logger.warning("missed-alert check: the price check failed", exc_info=True)
         checked["errors"]["price"] = _error(exc)
