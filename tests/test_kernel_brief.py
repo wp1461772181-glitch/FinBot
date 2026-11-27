@@ -3,6 +3,7 @@
 No network: the model is a script, ``tools.invoke`` is replaced; the database is the suite's disposable PostgreSQL."""
 import asyncio
 import copy
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -142,14 +143,15 @@ def test_only_filtered_rows_are_the_code_written_line_alone(env):
     fake = script(env, [])
     row = run()
     assert fake.calls == [] and row["outcome"] == "done" and row["turn_id"] is None and row["model_calls"] == 0
-    assert row["message"] == "【早间简报】从昨天到现在，另有 3 条提醒我看过，判断不用打扰你（2 条只记下，1 条不理会），在后台「值班」里能看到。"
+    assert row["message"] == "【早间简报】过去 24 小时里，另有 3 条提醒我看过，判断不用打扰你（2 条只记下，1 条不理会），在后台「值班」里能看到。"
     assert row["counts"] == {"digest": 0, "held": 0, "record": 2, "ignore": 1, "told": 0, "failed": 0}
 
 
 def test_a_zero_part_of_the_filtered_line_is_left_out():
-    assert brief.filtered_line({"record": 3, "ignore": 0}) == "从昨天到现在，另有 3 条提醒我看过，判断不用打扰你（3 条只记下），在后台「值班」里能看到。"
-    assert "（1 条不理会）" in brief.filtered_line({"ignore": 1})
-    assert brief.filtered_line({"record": 0, "ignore": 0, "digest": 4}) == ""
+    assert brief.filtered_line({"record": 3, "ignore": 0}, False) == "从上一份简报到现在，另有 3 条提醒我看过，判断不用打扰你（3 条只记下），在后台「值班」里能看到。"
+    assert brief.filtered_line({"record": 3, "ignore": 0}, True) == "过去 24 小时里，另有 3 条提醒我看过，判断不用打扰你（3 条只记下），在后台「值班」里能看到。"
+    assert "（1 条不理会）" in brief.filtered_line({"ignore": 1}, False)
+    assert brief.filtered_line({"record": 0, "ignore": 0, "digest": 4}, True) == ""
 
 
 def test_kept_and_held_items_go_to_one_model_turn_without_decide_act_or_ask(env):
@@ -167,7 +169,7 @@ def test_kept_and_held_items_go_to_one_model_turn_without_decide_act_or_ask(env)
     assert "白天已经发出的话" not in system
     offered = fake.calls[0]["tools"]
     assert "query_financials" in offered and not {"decide", "act", "ask", "use_skill", "search_x"} & set(offered)
-    line = brief.filtered_line(row["counts"])
+    line = brief.filtered_line(row["counts"], True)
     assert row["message"] == f"{brief.HEAD}{ANSWER}\n\n{line}" and "1 条只记下" in line
     assert row["counts"] == {"digest": 1, "held": 1, "record": 1, "ignore": 0, "told": 1, "failed": 1}
     assert row["outcome"] == "done" and row["reason"] is None and row["model_calls"] == 1 and row["turn_id"]
@@ -286,8 +288,29 @@ def test_on_without_a_bound_channel_marks_nothing(env):
     held_row = held()
     script(env, [step(text=ANSWER)])
     row = run()
-    assert row["outcome"] == "done" and row["delivery"] == "telegram_not_bound" and row["delivery_group"] is None
+    assert row["outcome"] == "failed" and row["delivery"] == "telegram_not_bound" and row["delivery_group"] is None
+    assert row["reason"] == "简报写好了但没能排进发件箱：telegram_not_bound。夜里留下的事会由下一份简报补带。"
+    assert row["message"].startswith(brief.HEAD + ANSWER) and row["turn_id"] and row["model_calls"] == 1
     assert duty_log.get(OWNER_HASH, held_row["alert_id"])["delivery"] == wake.HELD_NIGHT
+    assert duty_brief.last_done(OWNER_HASH) is None
+
+
+def test_a_brief_that_could_not_be_queued_is_carried_by_the_next_day(env):
+    env.monkeypatch.setenv("FINBOT_DUTY_MODE", "on")
+    kept_row, held_row = duty("digest", text="AAPL 跌 3%", symbol="AAPL"), held()
+    script(env, [step(text=ANSWER)])
+    first = run(brief_now())
+    assert first["outcome"] == "failed" and first["delivery"] == "telegram_not_bound" and outbox() == []
+    _bind()
+    fake = script(env, [step(text=ANSWER)])
+    later = brief_now(1)
+    second = run(later, day=brief.due_day(later))
+    assert second["day"] != first["day"] and second["outcome"] == "done" and second["delivery"] == "queued"
+    system = fake.calls[0]["messages"][0]["content"]
+    assert HELD in system and "AAPL 跌 3%" in system
+    assert second["counts"]["digest"] == 1 and second["counts"]["held"] == 1 and len(outbox()) == 1
+    assert duty_log.get(OWNER_HASH, held_row["alert_id"])["delivery"] == "briefed"
+    assert duty_log.get(OWNER_HASH, kept_row["alert_id"])["delivery"] is None
 
 
 def test_shadow_writes_the_brief_and_sends_nothing(env):
@@ -321,6 +344,69 @@ def test_rows_before_the_last_brief_that_ran_are_not_counted(env):
 def test_a_skipped_day_does_not_move_the_window(env):
     assert run(brief_now())["outcome"] == "skipped"
     assert duty_brief.last_done(OWNER_HASH) is None
+
+
+def _age(model, row_id, hours):
+    with SessionLocal() as db:
+        db.get(model, row_id).created_at = datetime.now(UTC) - timedelta(hours=hours)
+        db.commit()
+
+
+def test_with_no_done_brief_the_window_reaches_24_hours_before_the_oldest_brief_row(env):
+    failed_id = duty_brief.claim(OWNER_HASH, "2000-01-01", "on")
+    duty_brief.finish(failed_id, outcome="failed", reason="x")
+    _age(duty_brief.DutyBrief, failed_id, 20)
+    old = duty("record")
+    _age(duty_log.DutyLog, old["id"], 30)          # before now - 24h, after the failed row - 24h
+    now = brief_now()
+    assert brief._window_start(OWNER_HASH, now) < datetime.now(UTC) - timedelta(hours=43)
+    row = run(now)
+    assert row["outcome"] == "done" and row["counts"]["record"] == 1
+    assert row["message"] == brief.HEAD + brief.filtered_line(row["counts"], True)
+
+
+def test_without_any_brief_row_the_window_is_the_last_24_hours(env):
+    now = brief_now()
+    assert brief._window_start(OWNER_HASH, now) == now - brief.WINDOW_DEFAULT
+
+
+def test_a_day_that_already_has_a_row_is_not_claimed_again(env):
+    now = brief_now()
+    duty_brief.claim(OWNER_HASH, brief.due_day(now), "shadow")
+    claims = []
+    env.monkeypatch.setattr(duty_brief, "claim", lambda *a, **k: claims.append(a))
+    assert run(now) is None and claims == []
+
+
+# --- the time facts ---------------------------------------------------------------------------------------------------------
+
+def test_the_model_is_given_beijing_times_and_whether_the_night_digest_went_out(env):
+    duty("digest", reason="不急，留到早上说。")
+    fake = script(env, [step(text=ANSWER)])
+    now = brief_now()
+    run(now)
+    system = fake.calls[0]["messages"][0]["content"]
+    local = now.astimezone(brief.BEIJING)
+    weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[local.weekday()]
+    assert f'"now": "{local.strftime("%Y-%m-%d %H:%M")} {weekday}"' in system
+    assert '"night_digest_sent": false' in system and '"since": "' in system
+    assert system.index("【现在】只是资料：") < system.index("【攒进简报的】") < system.index("【夜里压住的跟进】")
+    assert re.search(r'"at": "\d{4}-\d{2}-\d{2} \d{2}:\d{2}"', system)
+    assert "night_digest_sent 为 true" in prompt.brief_system_text() and "不要自己推算「昨晚」「今天凌晨」" in prompt.brief_system_text()
+
+
+def test_a_deferred_alert_in_the_window_means_the_night_digest_went_out(env):
+    start = datetime.now(UTC) - timedelta(hours=1)
+    duty("record")
+    assert brief.gather(OWNER_HASH, start)["night_digest_sent"] is False
+    duty_log.record(OWNER_HASH, next(_IDS), event={"symbol": "NVDA", "text": "t", "deferred": True}, mode="on", outcome="decided",
+                    decision="digest", reason="r", message=None, delivery=None)
+    assert brief.gather(OWNER_HASH, start)["night_digest_sent"] is True
+
+
+def test_the_facts_block_uses_a_chinese_weekday():
+    now = datetime(2026, 11, 28, 1, 0, tzinfo=UTC)        # Saturday 09:00 Beijing
+    assert brief.facts(now, now - timedelta(hours=24), True) == {"now": "2026-11-28 09:00 周六", "since": "2026-11-27 09:00", "night_digest_sent": True}
 
 
 # --- the background loop ----------------------------------------------------------------------------------------------------

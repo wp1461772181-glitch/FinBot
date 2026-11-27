@@ -290,6 +290,7 @@ test("duty: each decision and each way a wake-up ends has its word, and only a s
 
 test("duty: a tell_now held over the night is not a failed send", () => {
   assert.equal(dutyDelivery({ decision: "tell_now", delivery: "held_night" }), "夜里压住，没发");
+  assert.equal(dutyDelivery({ decision: "tell_now", delivery: "briefed" }), "已随早间简报发出");
   assert.equal(dutyDelivery({ decision: "tell_now", delivery: "telegram_not_bound" }), "发送失败");
 });
 

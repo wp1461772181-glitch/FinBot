@@ -92,7 +92,16 @@ def last_done(owner_hash: str) -> dict | None:
         return as_dict(row) if row else None
 
 
+def earliest(owner_hash: str) -> dict | None:
+    """The owner's oldest brief row of any outcome, or None."""
+    with SessionLocal() as db:
+        row = db.scalar(select(DutyBrief).where(DutyBrief.owner_hash == owner_hash)
+                        .order_by(DutyBrief.created_at.asc(), DutyBrief.id.asc()).limit(1))
+        return as_dict(row) if row else None
+
+
 def get(owner_hash: str, day: str) -> dict | None:
+    """The owner's row for ``day``, or None."""
     with SessionLocal() as db:
         row = db.scalar(select(DutyBrief).where(DutyBrief.owner_hash == owner_hash, DutyBrief.day == day))
         return as_dict(row) if row else None
