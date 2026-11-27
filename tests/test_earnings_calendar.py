@@ -140,3 +140,15 @@ def test_a_company_with_only_its_calendar_gets_a_section_and_still_the_no_materi
     assert [item["symbol"] for item in items] == ["MSFT"] and not items[0]["filings"]
     text, _ = latest_known._render(items, NOW, [], [])
     assert text and "下次财报：2027-01-26" in text, "a calendar-only company is rendered"
+
+
+def test_the_week_block_lists_this_us_weeks_reports_or_names_the_next_one():
+    rows = ec.parse(PAYLOAD)
+    ec.store(rows, NOW)
+    week = ec.week_block(["INTC", "MSFT", "ANT"], date(2027, 1, 18))
+    assert week.startswith(ec.WEEK_HEAD)
+    assert "\n· 01-20（周三）盘后　英特尔（INTC）　预期每股收益 0.25 美元、营收 158.5 亿美元" in week
+    assert "\n· 01-26" not in week, "the next Monday's week is not this one"
+    quiet = ec.week_block(["INTC", "MSFT"], date(2026, 11, 30))
+    assert quiet == "本周你持有和关注的公司没有财报；最近的一家是 01-20（周三）盘后 英特尔（INTC）（美东日期）。"
+    assert ec.week_block(["ANT"], date(2026, 11, 30)) == "" and ec.week_block([], date(2026, 11, 30)) == ""
