@@ -456,20 +456,60 @@ def test_duty_and_brief_messages_go_out_with_the_feedback_row_and_a_notify_witho
     assert [a[0] for a in marked] == ["a1", ROW, "a3"]
 
 
+def _acks(monkeypatch, fail=False):
+    acked = []
+
+    def ack_alert(self, alert_id):
+        if fail:
+            raise OSError("locked")
+        acked.append(alert_id)
+    monkeypatch.setattr(bridge, "_sentinel_store", lambda: type("S", (), {"ack_alert": ack_alert})())
+    return acked
+
+
 @pytest.mark.parametrize("data,keyboard,recorded,toast,left", [
-    ("fu:s:7", [ACK_ROW, ALERT_FEEDBACK_ROW], ("sentinel", "7", "useful"), "记下了：有用", [ACK_ROW]),
-    ("fn:s:7", [ACK_ROW, ALERT_FEEDBACK_ROW], ("sentinel", "7", "not_useful"), "记下了：没用", [ACK_ROW]),
-    ("fu:s:7", [ALERT_FEEDBACK_ROW], ("sentinel", "7", "useful"), "记下了：有用", []),              # 收到 already pressed
-    (f"fu:o:{GROUP}", [_outbox_row(GROUP)], ("outbox", GROUP, "useful"), "记下了：有用", []),
-    (f"fn:o:{GROUP}", [_outbox_row(GROUP)], ("outbox", GROUP, "not_useful"), "记下了：没用", []),
+    # on a sentinel alert a press also counts as 收到: the ack row goes, the chosen button is ticked
+    ("fu:s:7", [ACK_ROW, ALERT_FEEDBACK_ROW], ("sentinel", "7", "useful"), "记下了：有用，已确认", [bridge._feedback_row("sentinel", "7", "useful")]),
+    ("fn:s:7", [ACK_ROW, ALERT_FEEDBACK_ROW], ("sentinel", "7", "not_useful"), "记下了：没用，已确认", [bridge._feedback_row("sentinel", "7", "not_useful")]),
+    ("fu:s:7", [ALERT_FEEDBACK_ROW], ("sentinel", "7", "useful"), "记下了：有用，已确认", [bridge._feedback_row("sentinel", "7", "useful")]),
+    (f"fu:o:{GROUP}", [_outbox_row(GROUP)], ("outbox", GROUP, "useful"), "记下了：有用", [bridge._feedback_row("outbox", GROUP, "useful")]),
+    (f"fn:o:{GROUP}", [_outbox_row(GROUP)], ("outbox", GROUP, "not_useful"), "记下了：没用", [bridge._feedback_row("outbox", GROUP, "not_useful")]),
 ])
-def test_a_feedback_press_records_and_takes_off_only_the_feedback_row(monkeypatch, data, keyboard, recorded, toast, left):
+def test_a_feedback_press_records_and_ticks_the_chosen_button(monkeypatch, data, keyboard, recorded, toast, left):
     store = _FeedbackStore()
     client, calls = _press_wire(monkeypatch, store)
+    acked = _acks(monkeypatch)
     _press(client, _keyboard_press(data, keyboard))
     assert store.records == [("owner", *recorded, "telegram", {"symbol": "INTC", "kind": "short", "text": "INTC 急跌"})]
-    assert calls["toasts"] == [toast]
-    assert calls["posts"] == [_edit(left)]
+    assert calls["toasts"] == [toast] and calls["posts"] == [_edit(left)]
+    assert acked == ([7] if recorded[0] == "sentinel" else [])
+
+
+def test_pressing_the_other_button_changes_the_verdict(monkeypatch):
+    store = _FeedbackStore()
+    client, calls = _press_wire(monkeypatch, store)
+    _acks(monkeypatch)
+    _press(client, _keyboard_press(f"fn:o:{GROUP}", [bridge._feedback_row("outbox", GROUP, "useful")]))
+    assert store.records[-1][3] == "not_useful" and calls["posts"] == [_edit([bridge._feedback_row("outbox", GROUP, "not_useful")])]
+    assert bridge._feedback_row("outbox", GROUP, "useful")[0]["text"] == "✓ 有用"
+
+
+def test_a_press_without_the_keyboard_records_and_edits_nothing(monkeypatch):
+    store = _FeedbackStore()
+    client, calls = _press_wire(monkeypatch, store)
+    _acks(monkeypatch)
+    callback = _keyboard_press("fu:s:7", [])
+    del callback["message"]["reply_markup"]
+    _press(client, callback)
+    assert len(store.records) == 1 and calls["posts"] == []
+
+
+def test_a_failed_ack_on_a_feedback_press_keeps_the_ack_row(monkeypatch):
+    store = _FeedbackStore()
+    client, calls = _press_wire(monkeypatch, store)
+    _acks(monkeypatch, fail=True)
+    _press(client, _keyboard_press("fu:s:7", [ACK_ROW, ALERT_FEEDBACK_ROW]))
+    assert calls["toasts"] == ["记下了：有用"] and calls["posts"] == [_edit([ACK_ROW, bridge._feedback_row("sentinel", "7", "useful")])]
 
 
 @pytest.mark.parametrize("keyboard,left", [([ACK_ROW, ALERT_FEEDBACK_ROW], [ALERT_FEEDBACK_ROW]), ([ACK_ROW], [])])

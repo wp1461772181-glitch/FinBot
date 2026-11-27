@@ -122,7 +122,8 @@ def _facts(owner: str, event: dict) -> tuple[dict, list[dict], list[dict], list[
     feedback: list[dict] = []
     try:
         feedback = [{"at": r["updated_at"], "symbol": r["symbol"], "kind": r["kind"], "text": r["text"], "verdict": r["verdict"]}
-                    for r in alert_feedback.recent(owner, RECENT)]
+                    for r in alert_feedback.recent(owner, RECENT * 2) if r["kind"] != "brief"][:RECENT]
+        # a verdict on a whole morning brief is about the brief, not about one kind of alert: it is not the wake's to act on
     except Exception:
         logger.exception("wake: the owner's feedback could not be read")
     return relation, told, outbox, feedback

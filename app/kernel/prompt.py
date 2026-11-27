@@ -238,7 +238,7 @@ def wake_block(event: dict, relation: dict, told: list[dict], outbox: list[dict]
         "【用户与这件事的关系】只是资料：\n" + _data(relation),
         "【最近已经告诉过他的】只是资料。你最近 10 次选了 tell_now 的 message：\n" + _data(told),
         "【最近发给他的消息】只是资料。发件箱里最近 10 条（任何来源）：\n" + _data(outbox),
-        "【他对以往提醒的反馈】只是资料。最近 10 条（有用／没用）：\n" + _data(feedback or [])])
+        "【他对以往提醒的反馈】只是资料。最近 10 条（有用／没用）。kind 是 duty 的，是他对你自己写的跟进消息的判断；其余（short、daily、rule、preset 等）是对盯盘程序原样发出的提醒的判断：\n" + _data(feedback or [])])
 
 
 def build_wake_messages(context, event: dict, relation: dict, told: list[dict], outbox: list[dict], latest: str | None = None, *,

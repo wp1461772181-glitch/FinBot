@@ -221,7 +221,7 @@ def test_the_system_block_carries_his_feedback_on_earlier_alerts_and_the_rule_to
     fake = script(env, [step(calls=[decide()])])
     judge()
     system = fake.calls[0]["messages"][0]["content"]
-    head = "【他对以往提醒的反馈】只是资料。最近 10 条（有用／没用）：\n"
+    head = "【他对以往提醒的反馈】只是资料。最近 10 条（有用／没用）。kind 是 duty 的，是他对你自己写的跟进消息的判断；其余（short、daily、rule、preset 等）是对盯盘程序原样发出的提醒的判断：\n"
     assert head in system
     block = json.loads(system[system.index(head) + len(head):].split("\n\n", 1)[0])
     assert len(block) == 10 and block[0]["symbol"] == "S11" and set(block[0]) == {"at", "symbol", "kind", "text", "verdict"}
@@ -241,7 +241,7 @@ def test_without_feedback_the_block_is_an_empty_list(env):
         db.commit()
     fake = script(env, [step(calls=[decide()])])
     judge()
-    assert "【他对以往提醒的反馈】只是资料。最近 10 条（有用／没用）：\n[]" in fake.calls[0]["messages"][0]["content"]
+    assert "【他对以往提醒的反馈】只是资料。最近 10 条（有用／没用）。kind 是 duty 的，是他对你自己写的跟进消息的判断；其余（short、daily、rule、preset 等）是对盯盘程序原样发出的提醒的判断：\n[]" in fake.calls[0]["messages"][0]["content"]
 
 
 def test_the_relation_says_whether_the_sentinel_already_sent_the_alert(env):
@@ -666,3 +666,13 @@ def test_a_wake_turn_survives_a_failing_block(env):
 
 def wake_instruction():
     return prompt.WAKE_INSTRUCTION
+
+
+def test_a_verdict_on_a_morning_brief_is_not_given_to_the_wake(env):
+    from app import alert_feedback
+    alert_feedback.record(OWNER_HASH, "outbox", "6f1c2a4e-1b2c-4d5e-8f90-0a1b2c3d4e5f", "not_useful", "web", kind="brief", text="简报第一行")
+    alert_feedback.record(OWNER_HASH, "sentinel", "7", "not_useful", "telegram", symbol="INTC", kind="short", text="INTC 急跌")
+    fake = script(env, [step(calls=[decide()])])
+    judge()
+    system = fake.calls[0]["messages"][0]["content"]
+    assert "INTC 急跌" in system and "简报第一行" not in system

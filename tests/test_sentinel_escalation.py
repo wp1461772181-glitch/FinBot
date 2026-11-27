@@ -185,7 +185,7 @@ def test_bridge_button_and_reply_write_the_ack(tmp_path, monkeypatch):
     callback = {"id": "cb1", "data": f"ack:{first}", "from": {"id": 42},
                 "message": {"chat": {"id": 42, "type": "private"}, "message_id": 5}}
     asyncio.run(bridge._handle_callback(None, callback, {}, "owner", "cred", 42, 42, tg=object(), channel={"token": "t"}))
-    assert store.alert(first)["acked_at"] is not None and cleared == [5] and answers == ["已确认"]
+    assert store.alert(first)["acked_at"] is not None and cleared == [] and answers == ["已确认"]      # no keyboard came with the press: nothing is edited
     assert asyncio.run(bridge._ack_by_reply(42, 777)) is True and store.alert(second)["acked_at"] is not None
     assert asyncio.run(bridge._ack_by_reply(42, 1)) is False
 
