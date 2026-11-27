@@ -732,3 +732,14 @@ def test_acknowledge_with_seen_at_skips_rows_sent_after_the_message(chan):
     assert channels.acknowledge(OWNER_HASH, "telegram", seen_at=seen) == 1
     by = {str(r.id): r for r in _rows()}
     assert by[before].acked_at == seen and by[after].acked_at is None
+
+
+def test_a_stale_alert_copy_is_closed_when_a_bridge_asks_for_its_rows(chan):
+    """A WeChat bridge back after a long gap sends before it sweeps: the stale copy is closed before it is handed out."""
+    _bind()
+    chan.update(LOGIN)
+    old = _plant("wechat", source="sentinel", created=NOW - timedelta(minutes=40))
+    fresh = _plant("wechat", source="sentinel", created=NOW - timedelta(minutes=2))
+    handed = [r["id"] for r in channels.pending(OWNER_HASH, "wechat", now=NOW)]
+    assert handed == [fresh]
+    assert {str(r.id): (r.status, r.failure) for r in _rows()}[old] == ("failed", "expired")

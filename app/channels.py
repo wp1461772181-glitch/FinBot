@@ -111,6 +111,12 @@ def pending(owner_hash: str, channel: str, limit: int = 20, telegram_bot_row_id=
     sending is not closed and failed over under it.  A bridge that died stops claiming and its rows expire.  Each item carries its
     ``source`` and ``group_id`` (the Telegram bridge puts 「有用／没用」 on a duty or brief message by its group)."""
     with SessionLocal() as db:
+        # a bridge that comes back after a long gap sends before it sweeps: a stale alert copy is closed here, before it is handed out
+        stamp_now = now or datetime.now(UTC)
+        db.execute(update(AgentTelegramMessage).where(
+            AgentTelegramMessage.owner_hash == owner_hash, AgentTelegramMessage.status == "pending", AgentTelegramMessage.channel == channel,
+            AgentTelegramMessage.source == "sentinel", AgentTelegramMessage.created_at < stamp_now - SENTINEL_COPY_STALE)
+            .values(status="failed", failure="expired"))
         query = select(AgentTelegramMessage).where(AgentTelegramMessage.owner_hash == owner_hash,
                                                    AgentTelegramMessage.status == "pending",
                                                    AgentTelegramMessage.channel == channel)

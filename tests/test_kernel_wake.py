@@ -711,3 +711,16 @@ def test_a_verdict_on_a_morning_brief_is_not_given_to_the_wake(env):
     judge()
     system = fake.calls[0]["messages"][0]["content"]
     assert "INTC 急跌" in system and "简报第一行" not in system
+
+
+def test_the_wechat_copy_of_an_alert_is_not_in_the_recent_outbox(env):
+    """5c-2b: the copy repeats the alert itself; listing it would crowd out what was really said to him."""
+    from app.agent_chat_models import AgentTelegramMessage
+    with SessionLocal() as db:
+        db.add(AgentTelegramMessage(owner_hash=OWNER_HASH, source="sentinel", text="哨兵副本的原文", status="sent", channel="wechat"))
+        db.add(AgentTelegramMessage(owner_hash=OWNER_HASH, source="notify", text="一条普通通知", status="sent", channel="telegram"))
+        db.commit()
+    fake = script(env, [step(calls=[decide()])])
+    judge()
+    system = fake.calls[0]["messages"][0]["content"]
+    assert "一条普通通知" in system and "哨兵副本的原文" not in system

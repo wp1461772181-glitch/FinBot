@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 SOURCE = "sentinel"
 CHANNEL = "wechat"
-OUTCOMES = ("queued", "skipped_deferred", "skipped_unwanted", "skipped_unavailable", "failed")
+OUTCOMES = ("queued", "skipped_deferred", "skipped_stale", "skipped_unwanted", "skipped_unavailable", "failed")
 
 
 class SentinelCopy(Base):
@@ -49,15 +49,37 @@ def wanted(prefs: dict) -> bool:
     return prefs.get("mode") == "all" or listed[0] == CHANNEL
 
 
+def _stale(event: dict, now: datetime | None = None) -> bool:
+    """The alert was sent longer ago than ``channels.SENTINEL_COPY_STALE`` (its own ``created_at``, not when the API heard of it)."""
+    from . import channels
+    created = event.get("created_at")
+    if isinstance(created, bool) or not isinstance(created, (int, float)):
+        return False
+    return (now or datetime.now(UTC)) - datetime.fromtimestamp(float(created), UTC) > channels.SENTINEL_COPY_STALE
+
+
 def copy_to_wechat(owner_hash: str, event: dict) -> dict:
     """Queue the alert ``event`` (as ``wake.clean_event`` returns it) on WeChat when the owner's preference wants it.  Returns the
-    alert's row as a dict, or ``{"outcome": "skipped_unwanted"}``.  Never raises: a failure is logged and is ``{"outcome": "failed"}``
-    (nothing is written, so a re-post of the same alert tries again)."""
+    alert's row as a dict, or ``{"outcome": "skipped_unwanted"}``.  Never raises: a failure is logged, leaves a ``failed`` row and is
+    ``{"outcome": "failed"}`` (the sentinel has its 202 and drops the event, so nothing retries it)."""
     try:
         return _copy(owner_hash, event)
     except Exception:
-        logger.exception("sentinel copy: alert %s was not copied to WeChat", event.get("alert_id") if isinstance(event, dict) else None)
+        alert_id = event.get("alert_id") if isinstance(event, dict) else None
+        logger.exception("sentinel copy: alert %s was not copied to WeChat", alert_id)
+        _record_failure(owner_hash, alert_id)
         return {"outcome": "failed"}
+
+
+def _record_failure(owner_hash: str, alert_id) -> None:
+    """Leave a ``failed`` row so the miss is visible (the sentinel drops the event once it has its 202: nothing retries it)."""
+    try:
+        with SessionLocal() as db:
+            if isinstance(alert_id, int) and not isinstance(alert_id, bool) and db.get(SentinelCopy, (owner_hash, alert_id)) is None:
+                db.add(SentinelCopy(owner_hash=owner_hash, alert_id=alert_id, outcome="failed"))
+                db.commit()
+    except Exception:
+        logger.exception("sentinel copy: the failure of alert %s could not be recorded", alert_id)
 
 
 def _copy(owner_hash: str, event: dict) -> dict:
@@ -74,6 +96,8 @@ def _copy(owner_hash: str, event: dict) -> dict:
     with SessionLocal() as db:
         if event.get("deferred"):
             outcome = "skipped_deferred"
+        elif _stale(event):
+            outcome = "skipped_stale"           # a post that waited in the sentinel's queue (the API was down): its price is old
         elif not channels.available(db, owner_hash, CHANNEL, bot):
             outcome = "skipped_unavailable"
         else:

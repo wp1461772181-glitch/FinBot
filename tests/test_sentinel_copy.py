@@ -168,11 +168,22 @@ def test_an_error_inside_is_failed_and_never_raises(chan, monkeypatch):
         return real(*args, **kwargs)
     monkeypatch.setattr(tg, "enqueue", flaky)
     assert copy() == {"outcome": "failed"}
-    assert _outbox() == [] and _copies() == []                # rolled back: a re-post tries again
-    assert copy()["outcome"] == "queued"
-    assert len(_outbox()) == 1
+    # rolled back, then a failed row: the miss is visible (the sentinel has its 202 and drops the event, so nothing retries it)
+    assert _outbox() == [] and [(c["alert_id"], c["outcome"]) for c in _copies()] == [(1, "failed")]
+    assert copy()["outcome"] == "failed" and _outbox() == []          # the same id is decided: no copy later
+    assert copy(alert(2))["outcome"] == "queued" and len(_outbox()) == 1
 
 
 def test_a_malformed_event_is_failed_and_never_raises(chan):
     assert sentinel_copy.copy_to_wechat(OWNER_HASH, {"text": TEXT}) == {"outcome": "failed"}
     assert sentinel_copy.copy_to_wechat(OWNER_HASH, None) == {"outcome": "failed"}
+
+
+
+def test_a_post_that_waited_in_the_sentinels_queue_is_not_copied(chan):
+    """The API was down: the sentinel delivers the event hours later. Its price is old, so no copy, and the row says why."""
+    import time
+    chan.update(LOGIN)
+    channels.set_prefs(OWNER_HASH, ["wechat"], "first")
+    assert copy(alert(81, created_at=time.time() - 3600))["outcome"] == "skipped_stale" and _outbox() == []
+    assert copy(alert(82, created_at=time.time() - 60))["outcome"] == "queued"

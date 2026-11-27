@@ -110,7 +110,7 @@ def _facts(owner: str, event: dict) -> tuple[dict, list[dict], list[dict], list[
             queue = [s for s in (row.symbols if row else []) if isinstance(s, str)]
             relation["research_queue"] = queue[:40]
             relation["in_research_queue"] = any(s in queue for s in symbols)
-            rows = db.scalars(select(AgentTelegramMessage).where(AgentTelegramMessage.owner_hash == owner, AgentTelegramMessage.source != "reply")
+            rows = db.scalars(select(AgentTelegramMessage).where(AgentTelegramMessage.owner_hash == owner, AgentTelegramMessage.source.notin_(("reply", "sentinel")))
                               .order_by(AgentTelegramMessage.created_at.desc()).limit(RECENT))
             outbox = [{"at": r.created_at.isoformat(), "source": r.source, "text": r.text[:RECENT_TEXT]} for r in rows]
     except Exception:
