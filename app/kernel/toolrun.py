@@ -292,6 +292,22 @@ def _settle_read(run, item: _Call) -> None:
         item.result = outcome
     else:
         item.result = _number_evidence(run, item.name, outcome)
+    _say_how_to_fetch(run, item)
+
+
+# 11-28 shadow: the SEC library was empty for IonQ, D-Wave and Rigetti, the read said only ``no_source``, and the answer ended with 「我可以现在把
+# 这三家最新的 10-Q 拉下来」 instead of fetching them.  Where the owner's turn can fetch (it has ``act``), the empty read says how.
+_FETCHABLE_EMPTY = {("query_sec_filings", "no_source"), ("query_financials", "no_reported_figures")}
+FETCH_HINT = ("库里还没存这只股票的 SEC 申报（财务数字也从申报里取）。需要就用 act 的 fetch_sec（symbol，可带 form，比如 10-Q 或 10-K）"
+              "把最新一份拉下来再读；拉官方公开资料不用先问他。")
+
+
+def _say_how_to_fetch(run, item: _Call) -> None:
+    result = item.result
+    if not isinstance(result, dict) or (item.name, result.get("error_code")) not in _FETCHABLE_EMPTY or result.get("data"):
+        return
+    if any((s.get("function") or {}).get("name") == "act" for s in (getattr(run, "schemas", None) or [])):
+        item.result = {**result, "hint": FETCH_HINT}
 
 
 def _settle_serial(run, item: _Call) -> None:

@@ -144,3 +144,27 @@ def test_saving_a_page_waits_after_the_search_in_every_mode(env, fake_consent, m
                      step(calls=[act_call("c2", "ingest_web_source", {"url": PAGE["url"], "symbol": "IONQ"})]), step(text="好")])
         run(context=ctx())
         assert fake_consent.executed == [] and fake_consent.costly == [], chosen
+
+
+def test_an_empty_sec_library_says_how_to_fetch_in_his_turn(env, fake_consent, monkeypatch):
+    """11-28 shadow: the library was empty, the read said only no_source, and the answer offered to fetch the 10-Q instead of fetching it."""
+    from app.agent_workflow import tools
+    from app.kernel import toolrun
+    async def invoke(name, args, context, *, emit=None, page_chars=None):
+        return {"ok": True, "data": [], "source": "sec_filing_inventory (saved inventory)", "as_of": None, "error_code": "no_source"}
+    monkeypatch.setattr(tools, "invoke", invoke)
+    fake = script(env, [step(calls=[call("c1", "query_sec_filings", {"symbol": "IONQ"})]), step(text="好")])
+    run(context=ctx())
+    assert tool_results(fake)[0]["hint"] == toolrun.FETCH_HINT and "fetch_sec" in toolrun.FETCH_HINT
+
+
+def test_a_guest_turn_is_not_told_to_fetch(env, monkeypatch):
+    from app.agent_workflow import tools
+    from app.kernel import toolrun
+    from tests.test_kernel_helper import guest_context
+    async def invoke(name, args, context, *, emit=None, page_chars=None):
+        return {"ok": True, "data": [], "error_code": "no_reported_figures"}
+    monkeypatch.setattr(tools, "invoke", invoke)
+    fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "IONQ"})]), step(text="好")])
+    run(context=guest_context())
+    assert "hint" not in tool_results(fake)[0]
