@@ -631,7 +631,8 @@ async def _latest_block(run: "_Run", text: str, previous: str | None, focus: str
     rows: list[dict] = []
     try:
         found, symbols = await latest_known.block_for(text, previous=previous, focus=focus, rows=rows,
-                                                      owner_hash=getattr(run.context, "owner_hash", None) if owner else None)
+                                                      owner_hash=getattr(run.context, "owner_hash", None) if owner else None,
+                                                      conversation_id=getattr(run.context, "conversation_id", None))
         if found:      # its lines are the turn's first citations: the model can answer from them without reading them again
             found = number_attached(run, found, rows)
     except Exception:
