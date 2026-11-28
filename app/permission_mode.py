@@ -11,6 +11,8 @@ the settings page (the route is exempt from ``act``).  No row means ``default``.
 """
 from __future__ import annotations
 
+import logging
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, String, func
@@ -23,6 +25,8 @@ DEFAULT = "default"
 LABELS = {"ask": "每步都问", "default": "默认", "full": "完全放行"}
 
 
+logger = logging.getLogger(__name__)
+
 class PermissionSetting(Base):
     __tablename__ = "permission_settings"
     owner_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -31,7 +35,8 @@ class PermissionSetting(Base):
 
 
 def get(owner_hash: str | None) -> str:
-    """The owner's mode; ``default`` when he never chose, or when it cannot be read (the middle, never the open end)."""
+    """The owner's mode; ``default`` when he never chose.  When it cannot be read it is ``ask``: a safety setting that fails, fails shut
+    (11-28 review: someone who chose 每步都问 must not drop to 默认 because a read failed)."""
     if not owner_hash:
         return DEFAULT
     try:
@@ -39,7 +44,8 @@ def get(owner_hash: str | None) -> str:
             row = db.get(PermissionSetting, owner_hash)
             return row.mode if row is not None and row.mode in MODES else DEFAULT
     except Exception:
-        return DEFAULT
+        logger.exception("permission mode read failed; asking every step this turn")
+        return "ask"
 
 
 def set_mode(owner_hash: str, mode: str) -> dict:

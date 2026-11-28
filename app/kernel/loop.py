@@ -89,7 +89,9 @@ class _Run:
     turn_id: str = ""
     tier: str = "low"
     permission_mode: str | None = None
-    typed_this_turn: str = ""          # what he sent while this turn ran (``question`` is what began it); never an earlier turn   # his permission mode, read once a turn by ``act`` (``app.permission_mode``)
+    typed_this_turn: str = ""
+    outside_in_prompt: bool = False    # outside text came in without a read (news in the latest-known block, a skill): see act._runs_at_once
+    done_at_once: dict = field(default_factory=dict)          # what he sent while this turn ran (``question`` is what began it); never an earlier turn   # his permission mode, read once a turn by ``act`` (``app.permission_mode``)
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
     web_rows: dict = field(default_factory=dict)      # url -> the raw row of a page this turn's web reads returned (what ``act`` may save)
@@ -643,8 +645,13 @@ async def _latest_block(run: "_Run", text: str, previous: str | None, focus: str
         return None
     if not found:
         return None
+    if any(row.get("source_type") not in _OFFICIAL_LATEST for row in rows):
+        run.outside_in_prompt = True        # a news title is third-party text, as a page is
     note_latest(run, symbols)
     return found
+
+
+_OFFICIAL_LATEST = {"official_filing", "market_data", "calculation"}
 
 
 def note_latest(run: "_Run", symbols: list[str]) -> None:
@@ -727,6 +734,8 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
         latest = await _latest_block(run, run.question if fact else question, _previous_user_message(history, run.question if fact else question, original=bool(fact)),
                                      company.get("symbol") if isinstance(company, dict) else None, owner)
         run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started, latest=latest, helper=helper.DELEGATE in run.tool_names)
+        if started:
+            run.outside_in_prompt = True     # a skill's steps can be imported text
         if started and owner_credential_matches(getattr(context, "identity_credential", "")):
             run.audit["skill"] = {"name": started["name"], "version": started["version"]}
         run.user_text = _user_text(run.question, history)

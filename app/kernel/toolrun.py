@@ -353,6 +353,7 @@ async def _settle_notify(run, item: _Call) -> None:
 
 async def _settle_skill(run, item: _Call) -> None:
     """One ``use_skill`` call: the owner's saved text, read from the database; it is not evidence and not a read."""
+    run.outside_in_prompt = True        # a skill's steps can be imported text (act._runs_at_once)
     try:
         item.result = await skills.settle(run, item.args)
     except (TimeoutError, ConnectionError):

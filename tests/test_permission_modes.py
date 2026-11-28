@@ -1,13 +1,14 @@
 """The permission modes (11-28, owner: 「把选择权交到用户身上」): 每步都问 / 默认 / 完全放行, his 「这次直接做」 for one turn, and what
 stays in every mode (after outside material a write waits; a card that asks him to pick always waits).  ``app.permission_mode``,
 ``kernel.act._runs_at_once``, the route ``/agent-chat/permission-mode``."""
+import asyncio
 import json
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import permission_mode
-from app.kernel import act
+from app.kernel import act, loop
 from app.kernel.operation_registry import OPERATION_REGISTRY
 from tests.test_kernel_loop import (TOKEN, act_call, call, ctx, env, fake_consent, run, script, step, tool_results)  # noqa: F401  (fixtures)
 
@@ -39,7 +40,7 @@ def test_a_forecast_waits_except_in_the_full_mode(env, fake_consent, mode, chose
     result, _ = run(context=ctx())
     assert (len(fake_consent.costly) == 1) is runs and statuses(fake) == (["done"] if runs else ["awaiting_confirmation"])
     if runs:      # done at once: the answer says what was done and how to undo it
-        assert tool_results(fake)[0]["data"][0]["undo"] == act.UNDO_OTHER and result["pending_request"] is None
+        assert tool_results(fake)[0]["data"][0]["undo"] == act.UNDO["forecast"] and "退不回来" in act.UNDO["forecast"] and result["pending_request"] is None
 
 
 def test_after_outside_material_a_write_waits_even_in_the_full_mode(env, fake_consent, mode):
@@ -168,3 +169,84 @@ def test_a_guest_turn_is_not_told_to_fetch(env, monkeypatch):
     fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "IONQ"})]), step(text="好")])
     run(context=guest_context())
     assert "hint" not in tool_results(fake)[0]
+
+
+# --- 11-28 Fable review: the gaps it listed -------------------------------------------------------------------------------------------
+
+ROUTINE = "11111111-2222-3333-4444-555555555555"
+
+
+def test_a_deletion_waits_in_the_full_mode_and_after_his_go_ahead(env, fake_consent, mode):
+    for chosen, said, go in (("full", "删掉那个例行任务", None), ("default", "删掉那个例行任务，直接做", "直接做"), ("ask", "删掉，直接做", "直接做")):
+        mode(chosen)
+        before = len(fake_consent.executed)
+        fake = script(env, [step(calls=[act_call("c1", "delete_routine", {"routine_id": ROUTINE}, **({"go_ahead": go} if go else {}))]), step(text="请核对卡片")])
+        run(said, context=ctx())
+        assert len(fake_consent.executed) == before and statuses(fake) == ["awaiting_confirmation"], chosen
+
+
+def test_in_the_full_mode_news_in_the_latest_block_keeps_tier_two_and_three_on_the_card(env, fake_consent, mode, monkeypatch):
+    """A news title attached before the first step is third-party text, as a page is: a forecast waits, tier 1 still runs."""
+    async def latest(run, *a, **k):
+        run.outside_in_prompt = True
+        return "系统最新掌握：……"
+    monkeypatch.setattr(loop, "_latest_block", latest)
+    mode("full")
+    fake = script(env, [step(calls=[act_call("c1", "forecast", {"symbol": "AAPL"}), act_call("c2", "add_to_research_queue", {"symbol": "AAPL"})]), step(text="好")])
+    run(context=ctx())
+    assert fake_consent.costly == [] and statuses(fake) == ["awaiting_confirmation", "done"]
+
+
+def test_the_latest_block_marks_outside_text_only_for_news(env, monkeypatch):
+    from app import latest_known
+    seen = {}
+    for kind, outside in (("market_data", False), ("official_filing", False), ("configured_news", True)):
+        async def block_for(text, previous=None, focus=None, rows=None, owner_hash=None, conversation_id=None, kind=kind):
+            rows.append({"id": "r1", "source_type": kind, "title": "t"})
+            return "最新：t", ["AAPL"]
+        monkeypatch.setattr(latest_known, "block_for", block_for)
+        monkeypatch.setattr(loop, "number_attached", lambda run, text, rows: text)
+        holder = type("R", (), {"outside_in_prompt": False, "context": ctx(), "audit": {}, "timeline": []})()
+        monkeypatch.setattr(loop, "note_latest", lambda run, symbols: None)
+        asyncio.run(loop._latest_block(holder, "AAPL 怎么样", None, None, True))
+        seen[kind] = holder.outside_in_prompt
+        assert holder.outside_in_prompt is outside, kind
+
+
+def test_the_same_operation_twice_in_a_turn_runs_once(env, fake_consent, mode):
+    mode("full")
+    fake = script(env, [step(calls=[act_call("c1", "forecast", {"symbol": "AAPL"})]), step(calls=[act_call("c2", "forecast", {"symbol": "AAPL"})]), step(text="好")])
+    run(context=ctx())
+    assert len(fake_consent.costly) == 1
+    assert [r["data"][0]["status"] for r in tool_results(fake)] == ["done", "done"] and tool_results(fake)[1]["note"] == act.DONE_AGAIN
+
+
+def test_the_full_mode_does_not_reach_a_scheduled_run_or_a_guest(env, fake_consent, mode):
+    from tests.test_kernel_helper import guest_context
+    mode("full")
+    sink = []
+    fake = script(env, [step(calls=[act_call("c1", "forecast", {"symbol": "AAPL"})]), step(text="建议")])
+    run(context=ctx(unattended=True, action_sink=sink, bot_id=None))
+    assert fake_consent.costly == [] and fake_consent.executed == [] and len(sink) == 1
+    fake = script(env, [step(text="好")])
+    run(context=guest_context())
+    assert "act" not in fake.calls[0]["tools"]
+
+
+def test_his_go_ahead_counts_in_the_ask_mode_and_in_a_message_sent_mid_turn(env, fake_consent, mode):
+    mode("ask")
+    script(env, [step(calls=[act_call("c1", "add_to_research_queue", {"symbol": "NVDA"}, go_ahead="直接加，不用确认")]), step(text="好")])
+    run("把 NVDA 加进研究队列，直接加，不用确认", context=ctx())
+    assert len(fake_consent.executed) == 1
+    holder = type("R", (), {"question": "做一份 AAPL 预测", "typed_this_turn": "\n不用确认，直接做"})()
+    assert act._said_go_ahead(holder, "不用确认，直接做") and not act._said_go_ahead(holder, "全部删掉")
+
+
+def test_a_mode_that_cannot_be_read_asks_every_step(monkeypatch):
+    class Broken:
+        def __enter__(self):
+            raise RuntimeError("database down")
+        def __exit__(self, *a):
+            return False
+    monkeypatch.setattr(permission_mode, "SessionLocal", lambda: Broken())
+    assert permission_mode.get("owner") == "ask" and permission_mode.get(None) == "default"

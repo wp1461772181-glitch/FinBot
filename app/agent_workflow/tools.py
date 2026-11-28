@@ -333,7 +333,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         if not is_owner:return error('owner_login_required')
         return result(await asyncio.to_thread(watch_rules_view.rows,context.owner_hash),'watch rules')
     if name in {'set_watch_rule','delete_watch_rule'}:
-        # Only reached through execute_reversible: the owner pressed the card; the fields are the ones the card showed.
+        # Only reached through execute_reversible: a frozen card, pressed by the owner or run at once by his permission mode (kernel.act._run_at_once); the fields are the ones the card showed.
         from .. import watch_rules
         if not is_owner:return error('owner_login_required')
         try:
@@ -347,7 +347,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         except watch_rules.WatchRuleError as exc:return {'ok':False,'data':[],'error_code':exc.code,'reason':exc.reason,'hint':exc.reason}
         return result([{'status':'saved','symbol':saved['symbol'],'rule_id':saved['id'],'title':saved['text']}],'watch rule')
     if name in {'set_watch_preset','set_alert_settings'}:
-        # Only reached through execute_reversible: the owner pressed the card; the values are the ones the card showed.
+        # Only reached through execute_reversible: a frozen card, pressed by the owner or run at once by his permission mode (kernel.act._run_at_once); the values are the ones the card showed.
         from .. import watch_presets,watch_rules
         if not is_owner:return error('owner_login_required')
         fields=args.get('_fields')
@@ -373,7 +373,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
                         'instruction':(t['instruction'] or '')[:300],'symbols':t['symbols'],'next_run_at':t['next_run_at'],
                         'last_status':t['last_status_label']} for t in rows],'routines')
     if name in {'update_routine','delete_routine'}:
-        # Only reached through execute_reversible: the owner pressed the card naming this routine.
+        # Only reached through execute_reversible: a frozen card, pressed by the owner or run at once by his permission mode (kernel.act._run_at_once); the card names this routine.
         from .. import agent_tasks as tasks
         if not is_owner:return error('owner_login_required')
         if name=='delete_routine':
@@ -387,7 +387,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         return result([{'status':'updated','name':task['name'],'schedule_kind':task['schedule_kind'],'enabled':task['enabled'],
                         'next_run_at':task.get('next_run_at')}],'bot routine')
     if name=='save_skill':
-        # Only reached through execute_reversible: the card was pressed and the frozen operation matched.
+        # Only reached through execute_reversible: a frozen card, pressed by the owner or run at once by his permission mode (kernel.act._run_at_once); the frozen operation matched.
         from .. import agent_skills as skills
         if not is_owner:return error('owner_login_required')
         fields={k:v for k,v in args.items() if not k.startswith('_')}
@@ -395,14 +395,14 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         except skills.SkillError as exc:return error(str(exc))
         return result([{'status':'saved','id':saved['id'],'name':saved['name'],'skill_status':saved['status'],'link':'#skills/'+saved['id']}],'skill library')
     if name in {'create_bot','update_bot','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template'}:
-        # Only reached through execute_reversible: the owner pressed the card; each is the service function its HTTP route calls.
+        # Only reached through execute_reversible: a frozen card, pressed by the owner or run at once by his permission mode (kernel.act._run_at_once); each is the service function its HTTP route calls.
         from . import directory_ops
         if not is_owner:return error('owner_login_required')
         try:data,source=await asyncio.to_thread(directory_ops.execute,name,args,context.owner_hash)
         except directory_ops.Refusal as exc:return {'ok':False,'data':[],'error_code':exc.code,'reason':exc.reason,'hint':exc.hint}
         return result([data],source)
     if name in {'record_trade','set_available_funds','set_position_plan','delete_transaction'}:
-        # Only reached through execute_reversible: the owner pressed the card, and the frozen operation matched.
+        # Only reached through execute_reversible: a frozen card, pressed by the owner or run at once by his permission mode (kernel.act._run_at_once); the frozen operation matched.
         from .. import portfolio
         if not is_owner:return error('owner_login_required')
         try:value=await asyncio.to_thread(portfolio.apply_tool,name,context.owner_hash,args)
@@ -423,7 +423,7 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         return result([{'status':'created','name':task['name'],'schedule_kind':task['schedule_kind'],
                         'next_run_at':task.get('next_run_at')}],'bot routine')
     if name in {'remember','forget'}:
-        # Only reached through execute_reversible: the card was pressed and the frozen operation matched.
+        # Only reached through execute_reversible: a frozen card, pressed by the owner or run at once by his permission mode (kernel.act._run_at_once); the frozen operation matched.
         from .. import agent_profile as profile
         if not is_owner:return error('owner_login_required')
         if name=='forget':

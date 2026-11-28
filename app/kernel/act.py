@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import re
 from dataclasses import dataclass
 
@@ -29,13 +30,13 @@ from . import inbox as inboxes
 logger = logging.getLogger(__name__)
 
 ACT = "act"
-# Fetching public material into the system (an SEC original, a page into 资料库, a price history, a scan of official filings) costs
+# Fetching official public material into the system (an SEC original, a scan of the official filing index, a price history) costs
 # nothing and changes none of his data: the design's 「拉取」 (4.2, section 5: 系统里没有就现在去拿).  11-28: it was tier 3, so a
-# research turn stopped to ask before reading a 10-Q.  It is tier 1 now, and it runs at once even after a read.
-PUBLIC_FETCH = ("fetch_sec", "refresh_sec", "scan_official", "initialize_prices", "ingest_web_source")
-# From official sources (SEC, its filing index, the price feed): a page it read cannot choose what they hold, so they still run after one.
-# ``ingest_web_source`` stores a page it found, which a page could steer into his 资料库 and later answers: after a read it waits on the card.
-OFFICIAL_FETCH = ("fetch_sec", "refresh_sec", "scan_official", "initialize_prices")
+# research turn stopped to ask before reading a 10-Q.  It is tier 1 now, and it runs at once even after a read: a page it read cannot
+# choose what an official source holds.  Saving a web page it found (``ingest_web_source``) stays tier 3: a page could steer what goes
+# into his 资料库 and so into later answers (11-28 review).
+PUBLIC_FETCH = ("fetch_sec", "refresh_sec", "scan_official", "initialize_prices")
+OFFICIAL_FETCH = PUBLIC_FETCH
 TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "rate_alert", "rate_answer", "report_missed", "record_view", "drop_view",
          *PUBLIC_FETCH)
 TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_routine", "update_routine", "delete_routine",
@@ -43,7 +44,7 @@ TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_rou
          "set_channel_prefs", "apply_role_template", "undo_role_template", "set_watch_rule", "delete_watch_rule", "set_watch_preset", "set_alert_settings")
 TIER3 = ("forecast", "analyze", "translate_content", "start_historical_replay",
          "import", "import_sources", "index", "retry_document_index", "review_knowledge_candidate",
-         "withdraw_knowledge_document", "save_material_evidence", "revise_forecast")
+         "withdraw_knowledge_document", "save_material_evidence", "ingest_web_source", "revise_forecast")
 OPERATIONS = (*TIER1, *TIER2, *TIER3)
 
 MEMORY_WRITES = "FINBOT_KERNEL_MEMORY_WRITES"     # the model writes memory on the spot (default on); off: the earlier, narrower ``remember``
@@ -861,7 +862,29 @@ UNDO = {
     "rate_answer": "说错了就说『那条改成好的／不好』；网页上那条回答下的按钮也能改。",
     "report_missed": "这只是一条漏报记录，用来改进提醒，不会改变任何设置。",
 }
-UNDO_OTHER = "这一步已经按他的权限档位直接做了；要撤销就告诉我，能改回的我来改，后台「操作记录」里有这一条。"
+# 11-28 review: in the full mode (or after his 「直接做」) tier 2 and 3 run at once too, and the answer says honestly what can be undone.
+_PAID_UNDO = "已经调用模型做完了，花掉的费用退不回来；结果不想要可以不用。"
+_SETTING_UNDO = "要改回，告诉我原来的值，或在对应的设置页改回。"
+UNDO.update({
+    "record_trade": "记错了就说「删掉这笔交易」（删除要他在卡片上确认）。",
+    "set_available_funds": "再告诉我正确的数即可改回。",
+    "set_position_plan": "再告诉我原来的计划即可改回。",
+    "create_routine": "不要了就说「删掉这个例行任务」（删除要他在卡片上确认）。",
+    "update_routine": _SETTING_UNDO, "update_bot": _SETTING_UNDO, "set_default_model": _SETTING_UNDO, "set_model_role": _SETTING_UNDO,
+    "set_channel_prefs": _SETTING_UNDO, "set_watch_rule": _SETTING_UNDO, "set_watch_preset": _SETTING_UNDO, "set_alert_settings": _SETTING_UNDO,
+    "manage_skill": _SETTING_UNDO,
+    "create_bot": "不要了可以在 bot 页删掉。",
+    "save_skill": "不要了可以停用或删除这个技能（删除要他在卡片上确认）。",
+    "apply_role_template": "说「撤掉那个角色模板」即可撤回。",
+    "undo_role_template": "要恢复就再用一次那个模板。",
+    "forecast": _PAID_UNDO, "analyze": _PAID_UNDO, "translate_content": _PAID_UNDO, "start_historical_replay": _PAID_UNDO,
+    "ingest_web_source": "已存进资料库；不要了可以从资料库撤回（撤回要他在卡片上确认）。",
+    "save_material_evidence": "已存进资料库；不要了可以从资料库撤回（撤回要他在卡片上确认）。",
+})
+UNDO_OTHER = "这一步已经按他的权限档位直接做了，后台「操作记录」里有这一条；要改回就告诉我，能改的我来改，改不了的如实告诉他。"
+# Deletions wait on a card in every mode, whatever he said this turn: they cannot be undone (owner: 删除先确认).
+DELETES = ("delete_transaction", "delete_routine", "delete_watch_rule", "withdraw_knowledge_document")
+DONE_AGAIN = "这一轮已经做过一模一样的一步，没有再做一次；结果见上一次。"
 UNATTENDED_OWN_WORDS = ("这是无人值守的定时运行：改他的记忆和看法、持仓和资金、定时任务、技能、bot 和各项设置的操作，只凭他自己在对话里说，"
                         "不由定时运行建议。在回答里写出你的看法，由他决定要不要去对话里提。")
 INBOX_NOTE = "已放进他的收件箱「待你确认」，这一轮不会执行，由他以后决定。现在用一两句话说明你建议了什么、为什么，不要说已经做了。"
@@ -917,8 +940,35 @@ def execute_handler(context, *, variant: str | None = None, emit=None, picks=Non
     return handler
 
 
+def _always_card(operation: dict) -> bool:
+    return operation.get("name") in DELETES or directory_ops.own_card(operation)
+
+
+def _same_key(operation: dict) -> str:
+    return json.dumps([operation.get("name"), operation.get("arguments")], sort_keys=True, ensure_ascii=False, default=str)
+
+
 async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
-    """An operation his mode lets run now: a card minted and pressed in the same breath, so consent still freezes, locks and records it."""
+    """An operation his mode lets run now: a card minted and pressed in the same breath, so consent still freezes, locks and records it.
+    The same operation asked for twice in a turn (a repeated call, a retry) runs once: a card would merge them, so must this."""
+    done = getattr(run, "done_at_once", None)
+    if done is None:
+        done = {}
+        try:
+            run.done_at_once = done
+        except AttributeError:
+            pass
+    key = _same_key(prepared.operation)
+    if key in done:
+        earlier, outcome = done[key]
+        return {**copy.deepcopy(earlier), "note": DONE_AGAIN}, outcome
+    result, outcome = await _run_at_once_now(run, prepared)
+    if outcome == "done":
+        done[key] = (copy.deepcopy(result), outcome)
+    return result, outcome
+
+
+async def _run_at_once_now(run, prepared: Prepared) -> tuple[dict, str]:
     context, operation = run.context, prepared.operation
     handler = execute_handler(context, emit=getattr(run, "emit", None))
 
@@ -1075,17 +1125,22 @@ async def _runs_at_once(run, prepared: Prepared, go_ahead) -> bool:
     """Whether this operation runs now or waits on a card, by his permission mode (``app.permission_mode``):
 
     * a card that asks him to pick (a revision's materials) always waits;
+    * a deletion always waits (it cannot be undone), in every mode and whatever he said;
     * once outside material has been read this turn, only what such material cannot abuse runs at once (a guess, a missed-alert note,
-      fetching public material), in every mode;
-    * ``ask``: everything waits; ``default``: tier 1 runs; ``full``, or his own 「直接做」 this turn (``go_ahead``): everything runs."""
-    if prepared.options is not None:
+      fetching official material), in every mode;
+    * ``ask``: everything waits; ``default``: tier 1 runs; ``full``, or his own 「直接做」 this turn (``go_ahead``): tier 2 and 3 run too,
+      unless outside text came in without a read (news lines in the 「系统最新掌握」 block, a skill's text): then only tier 1 does."""
+    if prepared.options is not None or _always_card(prepared.operation):
         return False
     if run.read_results:
         return _direct_after_reads(run, prepared) and await _mode(run) != "ask"
     mode = await _mode(run)
-    if mode == "full" or (go_ahead and _said_go_ahead(run, go_ahead)):
+    tier = tier_of(prepared.operation.get("name"))      # its name, not what a prepare said: a forged tier is no key
+    if mode == "default" and tier == 1:
         return True
-    return mode == "default" and tier_of(prepared.operation.get("name")) == 1      # its name, not what a prepare said: a forged tier is no key
+    if mode == "full" or (go_ahead and _said_go_ahead(run, go_ahead)):
+        return tier == 1 or not getattr(run, "outside_in_prompt", False)
+    return False
 
 
 async def _mode(run) -> str:
