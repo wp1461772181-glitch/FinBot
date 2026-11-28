@@ -48,6 +48,7 @@ MAX_TOLD = 2
 MAX_ASKED = 2
 DEALINGS_DAYS = 90
 DEALING_TEXT = 70
+QUESTIONS_READ = 2000      # his own questions read back for 往来 (90 days; about 860 on the box on 11-28)
 BLOCK_LIMIT = 2000
 INTRADAY_MAX_AGE_SECONDS = 30 * 60
 # 哨兵库被锁时最多等这么久：比整块 1.5 秒的预算短，这样最坏是丢掉盘中价、回到日线收盘，而不是整块没有。
@@ -1097,21 +1098,28 @@ def _first_line(text: str | None, limit: int = DEALING_TEXT) -> str:
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
-def _mention_pattern(symbol: str) -> tuple[str, str]:
-    """(case-sensitive, case-insensitive) Postgres patterns for a mention of ``symbol`` in his words: the ticker as ``mentions`` reads it
-    (upper case, no ASCII letter or digit on either side: 「NVDA今天」 counts, "must" is not MU), its Chinese and English names as they are."""
-    edge = "(^|[^A-Za-z0-9])"
-    ticker = f"{edge}{re.escape(symbol)}([^A-Za-z0-9]|$)"
+def _mention_regex(symbol: str) -> re.Pattern:
+    """A mention of ``symbol`` in his words: the ticker as ``mentions`` reads it (upper case, no ASCII letter or digit on either side:
+    「NVDA今天」 counts, "must" is not MU), its Chinese and English names (the English ones in any case, as whole words)."""
+    edge_l, edge_r = r"(?<![A-Za-z0-9])", r"(?![A-Za-z0-9])"
     names = sorted({alias for alias, owner in ALIASES.items() if owner == symbol and alias.upper() != symbol}, key=len, reverse=True)
-    words = "|".join(f"{edge}{re.escape(n)}([^A-Za-z0-9]|$)" if n.isascii() else re.escape(n) for n in names)
-    return ticker, words
+    parts = [f"{edge_l}{re.escape(symbol)}{edge_r}"] + [f"(?i:{edge_l}{re.escape(n)}{edge_r})" if n.isascii() else re.escape(n) for n in names]
+    return re.compile("|".join(parts))
+
+
+def _his_words(content: str) -> bool:
+    """The owner's own words, not a post the system made in his conversation (a task's or a job's result, the monthly memory note)."""
+    from .agent_recall import TASK_POST_HEAD, WORK_END_HEAD
+    from .agent_tasks import POST_NOTE
+    return not (content.startswith(TASK_POST_HEAD) or content.startswith(WORK_END_HEAD) or POST_NOTE in content)
 
 
 def _dealings(session, owner_hash: str | None, symbols: list[str], now: datetime, conversation_id, deadline: float) -> dict[str, list[dict]]:
     """档案的「往来」for each mentioned company: the last messages the duty told him about it (sent, or carried by a brief) and the last
     times he asked about it in another conversation of his (his own words only: not a task's or the duty's posts, not an archived or
     hidden conversation), with the first line of what was answered and the conversation to read it back from.  Runs after the company's
-    material, inside the block's deadline, a statement at a time; a failure costs the lines, never the block."""
+    material, inside the block's deadline: one read of his recent questions serves every company (the database would otherwise run the
+    pattern over every stored message, tool rounds included: 0.5 s a company on the box); a failure costs the lines, never the block."""
     if not owner_hash or not symbols:
         return {}
     found: dict[str, list[dict]] = {}
@@ -1130,26 +1138,27 @@ def _dealings(session, owner_hash: str | None, symbols: list[str], now: datetime
     except Exception as exc:
         session.rollback()
         logger.info("latest_known: duty messages unreadable (%s: %s)", type(exc).__name__, exc)
+    if time.monotonic() >= deadline:
+        return found
     try:
         from .agent_chat_models import AgentConversation, AgentMessage
-        from .agent_recall import owner_message_clause
-        since = now - timedelta(days=DEALINGS_DAYS)
         here = uuid.UUID(str(conversation_id)) if conversation_id else None
-        for symbol in symbols:
-            if time.monotonic() >= deadline:
+        questions = session.execute(
+            select(AgentMessage.conversation_id, AgentMessage.turn_id, AgentMessage.content, AgentMessage.created_at)
+            .join(AgentConversation, AgentConversation.id == AgentMessage.conversation_id)
+            .where(AgentConversation.owner_hash == owner_hash, AgentConversation.archived_at.is_(None), AgentMessage.role == "user",
+                   AgentMessage.created_at >= now - timedelta(days=DEALINGS_DAYS), *([AgentConversation.id != here] if here else []))
+            .order_by(AgentMessage.created_at.desc()).limit(QUESTIONS_READ)).all()
+        patterns = {symbol: _mention_regex(symbol) for symbol in symbols}
+        for line_id, turn_id, content, created_at in questions:
+            if time.monotonic() >= deadline or all(sum(d["kind"] == "asked" for d in found.get(s, [])) >= MAX_ASKED for s in symbols):
                 break
-            ticker, words = _mention_pattern(symbol)
-            text = func.coalesce(AgentMessage.content, "")
-            match = text.op("~")(ticker) | text.op("~*")(words) if words else text.op("~")(ticker)
-            asked = session.execute(
-                select(AgentMessage.conversation_id, AgentMessage.turn_id, AgentMessage.content, AgentMessage.created_at)
-                .join(AgentConversation, AgentConversation.id == AgentMessage.conversation_id)
-                .where(AgentConversation.owner_hash == owner_hash, AgentConversation.archived_at.is_(None), owner_message_clause(),
-                       AgentMessage.created_at >= since, match, *([AgentConversation.id != here] if here else []))
-                .order_by(AgentMessage.created_at.desc()).limit(MAX_ASKED)).all()
-            for line_id, turn_id, content, created_at in asked:
-                if time.monotonic() >= deadline:
-                    break
+            content = content or ""
+            if not _his_words(content):
+                continue
+            for symbol, pattern in patterns.items():
+                if sum(d["kind"] == "asked" for d in found.get(symbol, [])) >= MAX_ASKED or not pattern.search(content):
+                    continue
                 answer = session.execute(
                     select(AgentMessage.content).where(AgentMessage.conversation_id == line_id, AgentMessage.turn_id == turn_id,
                                                        AgentMessage.role == "assistant", AgentMessage.status == "complete", AgentMessage.content != "")
