@@ -846,11 +846,14 @@ async def mint_card(credential: str, item_id) -> dict:
         payload = dict(row.payload or {})
         conversation = str(row.conversation_id) if row.conversation_id else None
     operation, display = payload.get("operation"), payload.get("display")
-    if not isinstance(operation, dict) or not isinstance(display, dict) or not conversation:
+    # A kernel run's item holds every operation it proposed (``operations``, one card); the old turn's holds one.
+    operations = payload.get("operations") or [operation]
+    if (not isinstance(operation, dict) or not isinstance(display, dict) or not conversation
+            or not isinstance(operations, list) or not all(isinstance(o, dict) for o in operations)):
         raise TaskError("inbox_item_invalid")
     if not await verify_conversation(conversation, credential):
         raise TaskError("inbox_item_not_found")
-    card = await asyncio.to_thread(consent.propose, credential, conversation, [operation], display,
+    card = await asyncio.to_thread(consent.propose, credential, conversation, operations, display,
                                    question=str(payload.get("question") or ""))
     label_suggestion_card(card, operation)
     await set_pending_request(owner, conversation, card)

@@ -44,6 +44,7 @@ def test_a_scheduled_run_puts_a_proposal_in_the_inbox_and_makes_no_card(env, fak
     assert row["data"][0]["status"] == "queued_for_owner_review" and "待你确认" in row["data"][0]["note"]
     (item,) = sink
     assert item["operation"]["name"] == "forecast" and item["operation"]["arguments"]["symbol"] == "AAPL"
+    assert item["operations"] == [item["operation"]]
     assert item["display"]["title"].startswith(loop.SUGGESTION_TITLE) and item["display"]["agent_suggestion"] is True
     assert item["question"] == "问题"
     assert result["pending_request"] is None and result["audit"]["write_outcome"] == "queued_for_owner"
@@ -129,3 +130,38 @@ def test_the_prompt_says_which_kind_of_turn_this_is(env, monkeypatch, kind):
     system = fake.calls[0]["messages"][0]["content"]
     assert (prompt.UNATTENDED_NOTE in system) == (kind == "routine")
     assert (prompt.GUEST_NOTE in system) == (kind == "guest")
+
+
+def test_several_proposals_of_a_run_are_one_inbox_item(env, fake_consent):
+    sink = []
+    script(env, [step(calls=[act_call("c1", "forecast", {"symbol": "AAPL"}), act_call("c2", "add_to_research_queue", {"symbol": "ORCL"})]),
+                 step(text="建议两件事")])
+    run(context=routine(sink))
+    (item,) = sink
+    assert [o["name"] for o in item["operations"]] == ["forecast", "add_to_research_queue"]
+    assert item["display"]["title"] == loop.SUGGESTION_TITLE + "确认以下操作" and len(item["display"]["targets"]) == 2
+
+
+@pytest.mark.parametrize("operation,arguments", [("remember", {"text": "他重仓苹果", "quote": "我重仓苹果", "basis": "said"}),
+                                                 ("record_trade", {"symbol": "AAPL", "side": "buy", "shares": 1, "price": 1}),
+                                                 ("create_routine", {"kind": "brief"}), ("set_alert_settings", {"sensitivity": "quiet"})])
+def test_a_scheduled_run_cannot_suggest_changes_to_his_own_data(env, fake_consent, operation, arguments):
+    sink = []
+    fake = script(env, [step(calls=[act_call("c1", operation, arguments)]), step(text="好")])
+    result, _ = run(context=routine(sink))
+    (row,) = tool_results(fake)
+    assert row["error_code"] == "unattended_own_words_only" and "只凭他自己在对话里说" in row["hint"]
+    assert sink == [] and fake_consent.proposed == [] and fake_consent.executed == []
+    assert result["audit"]["writes"][0]["outcome"] == "refused:unattended_own_words_only"
+
+
+def test_what_a_scheduled_run_may_suggest():
+    allowed = act.unattended_suggestions()
+    assert {"add_to_research_queue", "remove_from_research_queue", "review_filing", "forecast", "fetch_sec", "ingest_web_source"} <= allowed
+    assert not allowed & {"remember", "forget", "record_view", "record_trade", "set_available_funds", "create_routine", "save_skill",
+                          "set_channel_prefs", "rate_answer", "update_bot"}
+
+
+def test_the_helper_never_gets_notify():
+    from app.kernel import helper
+    assert notify.NOTIFY in helper.OWN_TOOLS

@@ -647,3 +647,35 @@ def test_launchagent_plist_runs_every_five_minutes_and_at_load():
     assert payload["StartInterval"] == 300 and payload["RunAtLoad"] is True
     assert payload["ProgramArguments"][-1] == str(PROJECT_ROOT / "scripts" / "run_agent_tasks.py")
     assert "EnvironmentVariables" not in payload  # no secret in the plist
+
+
+def test_a_kernel_suggestion_with_several_operations_becomes_one_card(owner, monkeypatch):
+    """6a: a kernel run puts everything it proposed in one inbox item (``operations``); the card is minted with all of them."""
+    import uuid as _uuid
+    from app.agent_workflow import consent, graph
+    import app.agent_chat_store as chat_store
+    conversation = str(_uuid.uuid4())
+    first, second = {"name": "forecast", "arguments": {"symbol": "AAPL"}}, {"name": "add_to_research_queue", "arguments": {"symbol": "ORCL"}}
+    tasks.add_item(OWNER_HASH, section="confirm", kind="action", title="这是 Agent 的建议，不是你的要求：确认以下操作",
+                   payload={"operation": first, "operations": [first, second], "display": {"title": "确认以下操作", "targets": []},
+                            "question": "定时任务"}, conversation_id=conversation)
+    proposed = []
+
+    def propose(credential, conv, operations, display, *, question="", **kwargs):
+        proposed.append(operations)
+        return {"id": "card-1", "reason": "write_confirmation", "display": display, "question": question,
+                "choices": [{"label": "同意", "value": "confirm:t"}, {"label": "取消", "value": "cancel:card-1"}]}
+
+    async def yes(*args):
+        return True
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(consent, "propose", propose)
+    monkeypatch.setattr(chat_store, "verify_conversation", yes)
+    monkeypatch.setattr(chat_store, "append_message", nothing)
+    monkeypatch.setattr(graph, "set_pending_request", nothing)
+    (item,) = tasks.list_inbox(OWNER_HASH, section="confirm")
+    run(tasks.mint_card(OWNER, item["id"]))
+    assert proposed == [[first, second]]

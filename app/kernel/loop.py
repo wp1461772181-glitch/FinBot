@@ -343,16 +343,18 @@ NO_INBOX = "（这是无人值守的运行，提出的操作没有地方放，�
 
 
 def _to_inbox(run: _Run) -> str:
-    """A scheduled run's proposals: nobody is here to press a card (and a card lives ten minutes), so each one goes to the owner's inbox
-    (待你确认) through the runner's ``action_sink``; he makes the card there later (``agent_tasks.mint_card``) and presses it."""
+    """A scheduled run's proposals: nobody is here to press a card (and a card lives ten minutes), so they go to the owner's inbox
+    (待你确认) through the runner's ``action_sink``, as one item holding them all, the way a live turn puts them on one card; he makes
+    the card there later (``agent_tasks.mint_card``) and presses it.  One item, not one per proposal: a conversation holds one card at a
+    time, so separate items would make each other's cards stale."""
     sink = getattr(run.context, "action_sink", None)
     if sink is None:
         return NO_INBOX
-    for proposal in run.proposals:
-        display = copy.deepcopy(proposal.display)
-        display["title"] = SUGGESTION_TITLE + str(display.get("title") or proposal.operation["name"])
-        display["agent_suggestion"] = True
-        sink.append({"operation": copy.deepcopy(proposal.operation), "display": display, "question": run.question})
+    display = copy.deepcopy(_card_display(run.proposals))
+    display["title"] = SUGGESTION_TITLE + str(display.get("title") or run.proposals[0].operation["name"])
+    display["agent_suggestion"] = True
+    operations = [copy.deepcopy(p.operation) for p in run.proposals]
+    sink.append({"operation": operations[0], "operations": operations, "display": display, "question": run.question})
     run.audit["write_outcome"] = "queued_for_owner"
     return ""
 

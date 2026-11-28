@@ -452,3 +452,21 @@ def test_task_inbox_and_read_api_take_the_bot(owner, client):
     guest = {"X-Chat-Session": "g" * 40}
     for method, path in (("get", "/agent-chat/tasks/runs"), ("post", f"/agent-chat/bots/{apple['id']}/read")):
         assert getattr(client, method)(path, headers=guest).status_code in {401, 403}
+
+
+def test_the_unattended_turn_drops_what_the_kernel_took_back(owner, monkeypatch):
+    """6a: the kernel streams a step's preamble before a tool call and then takes it back (``answer_reset``); the stored answer is the
+    final text only, so a run whose answer is 「无新消息」 after a preamble is still quiet."""
+    from app.agent_workflow import graph
+
+    async def stream_workflow(**kwargs):
+        yield {"event": "delta", "text": "我先查一下苹果最新的公告。"}
+        yield {"event": "answer_reset"}
+        yield {"event": "delta", "text": "无新"}
+        yield {"event": "delta", "text": "消息"}
+        yield {"event": "done", "status": "succeeded", "citations": [], "final_protocol": {}, "audit": {"engine": "v2"}}
+    monkeypatch.setattr(graph, "stream_workflow", stream_workflow)
+    settings = bots.turn_settings(OWNER_HASH, _bot("苹果")["id"])
+    result = run(runner.run_unattended_turn(OWNER, "看看苹果。", {"name": "fast", "provider": "deepseek", "model": "m", "api_key": KEY},
+                                            title="t", bot=settings))
+    assert result["answer"] == "无新消息" and runner.is_quiet(result["answer"])
