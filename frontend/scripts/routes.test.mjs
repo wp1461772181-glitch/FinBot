@@ -95,6 +95,7 @@ test("search-parameter readers", () => {
   assert.equal(companyTab(q("tab=zzz")), "overview");
   assert.equal(routinesTab(q("")), null);
   assert.equal(routinesTab(q("tab=tasks")), "tasks");
+  assert.equal(routinesTab(q("tab=work")), "work");
   assert.equal(routinesTab(q("tab=bogus")), null);
   assert.equal(symbolFromParams(q("symbol=amd")), "AMD");
   assert.equal(symbolFromParams(q("symbol=<x>")), null);

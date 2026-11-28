@@ -130,6 +130,8 @@ app.include_router(portfolio_router)
 from .watch_rules_api import presets_router as watch_presets_router, router as watch_rules_router
 app.include_router(watch_rules_router)
 app.include_router(watch_presets_router)
+from .work_api import router as work_router
+app.include_router(work_router)
 from .agent_skills_api import router as agent_skills_router
 app.include_router(agent_skills_router)
 from .sentinel_api import router as sentinel_router
