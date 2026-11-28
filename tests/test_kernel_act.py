@@ -36,10 +36,10 @@ def test_every_operation_is_a_catalogue_write_and_every_write_is_listed():
 
 def test_summaries_costs_and_tiers():
     assert all(act.SUMMARIES[name] for name in act.OPERATIONS) and set(act.SUMMARIES) == set(act.OPERATIONS)
-    assert set(act.COST_NOTES) == set(act.TIER3)
+    assert set(act.COST_NOTES) == set(act.TIER3) | set(act.PUBLIC_FETCH)      # 11-28: fetching moved to tier 1, its card note stays (shown in the 每步都问 mode)
     assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 47
-    assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "revise_forecast")] == [1, 2, 3, 3, 3]
-    assert act.TIER1[0] == "remember" and act.TIER3[-2:] == ("ingest_web_source", "revise_forecast")
+    assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "fetch_sec", "revise_forecast")] == [1, 2, 3, 1, 1, 3]
+    assert act.TIER1[0] == "remember" and act.TIER1[-len(act.PUBLIC_FETCH):] == act.PUBLIC_FETCH and act.TIER3[-1] == "revise_forecast"
     assert act.SUMMARIES["ingest_web_source"].startswith("把这段对话里联网搜到的一个网页或新闻存进资料库")
     assert act.SUMMARIES["revise_forecast"] == "用新材料修订一份已存的预测（材料由用户在卡片上勾选）"
     assert act.COST_NOTES["ingest_web_source"] == "会把这个网页存入资料库和知识库。"
@@ -176,7 +176,7 @@ def test_fetch_sec_uses_the_prepared_filing(monkeypatch):
     monkeypatch.setattr(sec_sources, "prepare_filing", lambda name, args, financial_only=False: calls.append(financial_only) or prepared)
     out = run(act.prepare(make_run(), "fetch_sec", {"symbol": "AAPL"}))
     assert out.operation == prepared and calls == [False]
-    assert out.display["title"] == "确认登记并拉取 SEC 官方原文"
+    assert out.display["title"] == "登记并拉取 SEC 官方原文"
     assert out.display["targets"][0]["title"] == "AAPL 10-K" and out.display["alternative"].endswith(act.COST_NOTES["fetch_sec"])
 
     def refuse(name, args, financial_only=False):
@@ -367,7 +367,7 @@ def test_ingest_of_a_page_no_read_returned_is_refused_and_makes_no_card(web):
 
 def test_ingest_card_shows_title_url_date_destination_and_cost(web):
     out = ingest(make_run(web_rows={PAGE_URL: PAGE}), symbol="AAPL", company="Apple")
-    assert isinstance(out, act.Prepared) and out.tier == 3 and out.options is None
+    assert isinstance(out, act.Prepared) and out.tier == 1 and out.options is None      # 11-28: fetching public material is tier 1
     shown = out.display
     assert shown["title"] == "保存网页" and shown["url"] == PAGE_URL and shown["web_date"] == PAGE["published_at"]
     assert shown["targets"][0]["title"] == PAGE["title"]

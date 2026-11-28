@@ -141,7 +141,8 @@ def test_a_bot_scope_does_not_take_ask_away(env):
 
 def test_the_system_prompt_says_when_to_ask():
     from app.kernel import prompt
-    assert "真缺一条只有用户知道的信息时，用 ask 问，可以给几个选项；能查到的不要问。" in prompt.SYSTEM
+    assert "真缺一条只有用户知道的信息时，用 ask 问，可以给几个选项；能查到的、能自己判断的不要问。" in prompt.SYSTEM
+    assert "不要只交一份计划就停下来问他要不要开始" in prompt.SYSTEM      # 11-28: ReportBot planned and stopped instead of doing
 
 
 # --- pressing an option -------------------------------------------------------------------------------------------------

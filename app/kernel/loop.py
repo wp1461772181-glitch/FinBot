@@ -88,6 +88,7 @@ class _Run:
     question: str = ""      # this turn's user message, as typed
     turn_id: str = ""
     tier: str = "low"
+    permission_mode: str | None = None   # his permission mode, read once a turn by ``act`` (``app.permission_mode``)
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
     web_rows: dict = field(default_factory=dict)      # url -> the raw row of a page this turn's web reads returned (what ``act`` may save)

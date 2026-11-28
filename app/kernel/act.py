@@ -29,13 +29,18 @@ from . import inbox as inboxes
 logger = logging.getLogger(__name__)
 
 ACT = "act"
-TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "rate_alert", "rate_answer", "report_missed", "record_view", "drop_view")
+# Fetching public material into the system (an SEC original, a page into 资料库, a price history, a scan of official filings) costs
+# nothing and changes none of his data: the design's 「拉取」 (4.2, section 5: 系统里没有就现在去拿).  11-28: it was tier 3, so a
+# research turn stopped to ask before reading a 10-Q.  It is tier 1 now, and it runs at once even after a read.
+PUBLIC_FETCH = ("fetch_sec", "refresh_sec", "scan_official", "initialize_prices", "ingest_web_source")
+TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "rate_alert", "rate_answer", "report_missed", "record_view", "drop_view",
+         *PUBLIC_FETCH)
 TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_routine", "update_routine", "delete_routine",
          "save_skill", "review_filing", "create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role",
          "set_channel_prefs", "apply_role_template", "undo_role_template", "set_watch_rule", "delete_watch_rule", "set_watch_preset", "set_alert_settings")
-TIER3 = ("forecast", "analyze", "translate_content", "start_historical_replay", "fetch_sec", "refresh_sec", "scan_official",
-         "initialize_prices", "import", "import_sources", "index", "retry_document_index", "review_knowledge_candidate",
-         "withdraw_knowledge_document", "save_material_evidence", "ingest_web_source", "revise_forecast")
+TIER3 = ("forecast", "analyze", "translate_content", "start_historical_replay",
+         "import", "import_sources", "index", "retry_document_index", "review_knowledge_candidate",
+         "withdraw_knowledge_document", "save_material_evidence", "revise_forecast")
 OPERATIONS = (*TIER1, *TIER2, *TIER3)
 
 MEMORY_WRITES = "FINBOT_KERNEL_MEMORY_WRITES"     # the model writes memory on the spot (default on); off: the earlier, narrower ``remember``
@@ -138,7 +143,9 @@ def cost_note(name: str, args: dict) -> str:
 
 
 _HEADINGS = (("直接生效（可撤销）", TIER1), ("需要用户点确认卡", TIER2), ("需要用户点确认卡，并且花钱或不可撤销", TIER3))
-_INTRO = "所有会改数据的操作都从这里做。只带 operation 调用会返回它的参数格式；带上 arguments 才是真的提出操作。"
+_INTRO = ("所有会改数据的操作都从这里做。只带 operation 调用会返回它的参数格式；带上 arguments 才是真的提出操作。"
+          "哪些当场执行、哪些放进确认卡，由他选的权限档位决定，结果里会写明：status 是 done 就是已经做了，awaiting_confirmation 就是等他点卡。"
+          "他这一轮亲口说了不用确认、直接做时，把他那句原话抄进 go_ahead，这一轮的操作就当场执行（读过外部资料之后的除外）。")
 
 
 def _arg_line(name: str) -> str:
@@ -184,7 +191,8 @@ ACT_SCHEMA: dict = {
         "parameters": {
             "type": "object",
             "properties": {"operation": {"type": "string", "enum": list(OPERATIONS)},
-                           "arguments": {"type": "object"}},
+                           "arguments": {"type": "object"},
+                           "go_ahead": {"type": "string", "description": "只在他这一轮亲口说了不用确认、直接做的时候填：他那句话的原文。"}},
             "required": ["operation"],
             "additionalProperties": False,
         },
@@ -830,10 +838,10 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
             issuer = operation["arguments"].get("symbol") or ""
             display["targets"] = [{**operation["arguments"], "title": f'{issuer} {str(found.get("form") or "").strip().upper()}'.strip() or "SEC 文件",
                                    "form": found["form"], "web_date": found["filed_at"], "url": found["source_url"]}]
-            display["title"] = "确认登记并拉取 SEC 官方原文"
+            display["title"] = "登记并拉取 SEC 官方原文"
 
     tier = tier_of(name)
-    if tier == 3:
+    if name in COST_NOTES:      # tier 3, and fetching public material (tier 1 since 11-28): its card still says what it does
         display["alternative"] = "\n".join(filter(None, [display.get("alternative"), f"代价：{await asyncio.to_thread(cost_note, name, args)}"]))
     return Prepared(operation=operation, display=display, tier=tier)
 
@@ -850,6 +858,7 @@ UNDO = {
     "rate_answer": "说错了就说『那条改成好的／不好』；网页上那条回答下的按钮也能改。",
     "report_missed": "这只是一条漏报记录，用来改进提醒，不会改变任何设置。",
 }
+UNDO_OTHER = "这一步已经按他的权限档位直接做了；要撤销就告诉我，能改回的我来改，后台「操作记录」里有这一条。"
 UNATTENDED_OWN_WORDS = ("这是无人值守的定时运行：改他的记忆和看法、持仓和资金、定时任务、技能、bot 和各项设置的操作，只凭他自己在对话里说，"
                         "不由定时运行建议。在回答里写出你的看法，由他决定要不要去对话里提。")
 INBOX_NOTE = "已放进他的收件箱「待你确认」，这一轮不会执行，由他以后决定。现在用一两句话说明你建议了什么、为什么，不要说已经做了。"
@@ -906,10 +915,8 @@ def execute_handler(context, *, variant: str | None = None, emit=None, picks=Non
 
 
 async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
-    """A tier-1 operation: a card minted and pressed in the same breath, so consent still freezes, locks and records it."""
+    """An operation his mode lets run now: a card minted and pressed in the same breath, so consent still freezes, locks and records it."""
     context, operation = run.context, prepared.operation
-    if operation.get("name") not in TIER1:
-        return _refusal("unsupported_operation"), "refused:unsupported_operation"
     handler = execute_handler(context, emit=getattr(run, "emit", None))
 
     try:
@@ -935,7 +942,7 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
         code = str(facts.get("error_code") or "write_service_failed")
         reason = {"reason": NOTICED_REASONS[code]} if code in NOTICED_REASONS else {}
         return {"ok": False, "data": [{**facts, **reason, "status": "failed", "title": title}]}, f"failed:{code}"
-    undo = UNDO[operation["name"]].replace("{company}", owner_views.display_name(operation["arguments"].get("symbol") or ""))
+    undo = UNDO.get(operation["name"], UNDO_OTHER).replace("{company}", owner_views.display_name(operation["arguments"].get("symbol") or ""))
     if operation["name"] == "remember" and operation["arguments"].get("basis") == "noticed":
         undo = NOTICED_NOTE
     recorded = {"recorded": operation["arguments"]["text"]} if operation["name"] == "record_view" else {}
@@ -993,6 +1000,8 @@ async def handle(run, args: dict) -> dict:
 
 def _direct_after_reads(run, prepared: Prepared) -> bool:
     operation = prepared.operation
+    if operation["name"] in PUBLIC_FETCH:
+        return True          # what a page could make it fetch is public material, stored in 资料库: nothing of his changes
     if operation["name"] == "report_missed":
         # 11-28 shadow: it looked up the filing first, then the record waited on a card for him to press.  The record holds his own words,
         # taken by the code from his message, and changes nothing else: a page it read cannot put words in his mouth.
@@ -1046,11 +1055,49 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
         if outcome == "proposed":
             result = {"ok": True, "data": [{"status": "queued_for_owner_review", "title": prepared.display["title"], "note": INBOX_NOTE}]}
         return result, outcome
-    if prepared.tier == 1 and (not run.read_results or _direct_after_reads(run, prepared)):
+    if await _runs_at_once(run, prepared, args.get("go_ahead")):
         return await _run_at_once(run, prepared)
     return _collect(run, prepared)
 
 
+def _said_go_ahead(run, quote) -> bool:
+    """He said in this turn to just do it: the model copies his words, the code finds them in what he typed this turn (as with a said
+    ``remember``).  Never across turns, and never once outside material has been read (that text is not his)."""
+    said = " ".join(str(getattr(run, "question", "") or "").split()) + " " + " ".join(str(getattr(run, "user_text", "") or "").split())
+    quote = " ".join(str(quote or "").split())
+    return len(quote) >= 2 and quote in said
+
+
+async def _runs_at_once(run, prepared: Prepared, go_ahead) -> bool:
+    """Whether this operation runs now or waits on a card, by his permission mode (``app.permission_mode``):
+
+    * a card that asks him to pick (a revision's materials) always waits;
+    * once outside material has been read this turn, only what such material cannot abuse runs at once (a guess, a missed-alert note,
+      fetching public material), in every mode;
+    * ``ask``: everything waits; ``default``: tier 1 runs; ``full``, or his own 「直接做」 this turn (``go_ahead``): everything runs."""
+    if prepared.options is not None:
+        return False
+    if run.read_results:
+        return _direct_after_reads(run, prepared) and await _mode(run) != "ask"
+    mode = await _mode(run)
+    if mode == "full" or (go_ahead and _said_go_ahead(run, go_ahead)):
+        return True
+    return mode == "default" and tier_of(prepared.operation.get("name")) == 1      # its name, not what a prepare said: a forged tier is no key
+
+
+async def _mode(run) -> str:
+    """His mode, read once a turn (a change takes effect from his next message)."""
+    mode = getattr(run, "permission_mode", None)
+    if mode is None:
+        from .. import permission_mode
+        mode = await asyncio.to_thread(permission_mode.get, getattr(run.context, "owner_hash", None))
+        try:
+            run.permission_mode = mode
+        except AttributeError:
+            pass
+    return mode
+
+
 def unattended_suggestions() -> frozenset:
     """The operations a scheduled run may put in his inbox: the research queue, a filing to review, and every third-tier operation."""
-    return frozenset({"add_to_research_queue", "remove_from_research_queue", "review_filing", *(n for n in OPERATIONS if tier_of(n) == 3)})
+    return frozenset({"add_to_research_queue", "remove_from_research_queue", "review_filing", *PUBLIC_FETCH, *(n for n in OPERATIONS if tier_of(n) == 3)})
