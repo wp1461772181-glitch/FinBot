@@ -28,6 +28,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="手动跑知识库入库（默认只在影子环境）")
     parser.add_argument("--passes", type=int, default=10)
     parser.add_argument("--live", action="store_true", help="写线上向量库（不加则只许影子环境和非 chunks 表）")
+    parser.add_argument("--retry-failed", action="store_true", help="先把因故障用完重试次数的块放回队列")
     args = parser.parse_args(argv)
     if not args.live:
         from scripts.wake_replay import refusal
@@ -44,10 +45,15 @@ def main(argv=None) -> int:
     if parts is None:
         print("没有跑：" + why, file=sys.stderr)
         return 2
+    if args.retry_failed:
+        print(f"放回队列 {box_index.retry_failed()} 块", flush=True)
     started = datetime.now(UTC)
     total = 0
     for number in range(1, max(1, args.passes) + 1):
         result = box_index.run_once(parts=parts)
+        if result.get("skipped") or result.get("embedding_down"):
+            print("这一轮没跑：" + (result.get("skipped") or "向量化服务不可用 " + result["embedding_down"]), flush=True)
+            break
         accepted = sum((v or {}).get("accepted") or 0 for v in result["synced"].values())
         indexed = result["indexed"]
         total += indexed.get("indexed", 0)

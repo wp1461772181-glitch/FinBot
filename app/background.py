@@ -192,6 +192,16 @@ def run_selfcheck() -> None:
                  sorted((row.get("checked") or {}).get("errors") or {}))
 
 
+_KNOWLEDGE_PARTS = None
+_TOLD: set = set()
+
+
+def _tell_once(message: str) -> None:
+    if message not in _TOLD:
+        _TOLD.add(message)
+        log.info(message)
+
+
 def run_knowledge_index() -> None:
     """The knowledge index's write side on the box (app.knowledge.box_index): new sources synced, chunked, embedded and written to
     pgvector.  Off with FINBOT_KNOWLEDGE_INDEX=off; does nothing where its tokenizer and the two login files are not (a checkout, CI)."""
@@ -200,11 +210,21 @@ def run_knowledge_index() -> None:
 
     if not flag("FINBOT_KNOWLEDGE_INDEX", True):
         return
-    result = box_index.run_once()
+    if box_index.shadow_writing_live():
+        _tell_once("knowledge index not run: the shadow database must not write the live vector table")
+        return
+    global _KNOWLEDGE_PARTS
+    if _KNOWLEDGE_PARTS is None:       # loaded once (a 17 MB tokenizer, an HTTP client) and kept; looked for again while missing
+        _KNOWLEDGE_PARTS, why = box_index.load_parts()
+        if _KNOWLEDGE_PARTS is None:
+            _tell_once(f"knowledge index not run: {why}")
+            return
+    result = box_index.run_once(parts=_KNOWLEDGE_PARTS)
     if result.get("skipped"):
-        if not getattr(run_knowledge_index, "_told", False):
-            log.info("knowledge index not run: %s", result["skipped"])
-            run_knowledge_index._told = True
+        _tell_once(f"knowledge index not run: {result['skipped']}")
+        return
+    if result.get("embedding_down"):
+        log.warning("knowledge index: embedding service unavailable (%s); trying again next pass", result["embedding_down"])
         return
     indexed = result.get("indexed") or {}
     accepted = sum((v or {}).get("accepted") or 0 for v in (result.get("synced") or {}).values())

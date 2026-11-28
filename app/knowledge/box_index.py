@@ -32,6 +32,8 @@ KINDS = ("faq", "sec", "upload", "analysis", "web")
 DEFAULT_TOKENIZER = "/opt/finbot/knowledge/bge-m3-tokenizer.json"
 DEFAULT_EMBED_ENV = "/opt/finbot/rag-slim/env"
 DEFAULT_PGVECTOR_ENV = "/opt/finbot/pgvector.env"
+ATTEMPTS = 3
+RETRYABLE = (429, 500, 502, 503, 504)
 MAX_CHUNKS = 40                       # per run of the loop (every two minutes): a large 10-K (~600 chunks) is in within half an hour
 BATCH = 16                            # chunks per embedding request and per upsert
 
@@ -41,9 +43,16 @@ def read_env_file(path: str) -> dict:
     values = {}
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         line = line.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
-            values[key.strip()] = value.strip().strip('"').strip("'")
+            value = value.strip()
+            if value[:1] in "\"'" and len(value) > 1 and value[-1] == value[0]:
+                value = value[1:-1]
+            elif " #" in value:
+                value = value.split(" #", 1)[0].rstrip()      # an inline comment after an unquoted value
+            values[key.strip()] = value
     return values
 
 
@@ -70,25 +79,39 @@ class OpenRouterEmbedder:
         self._url = url
         self._model = model
 
+    def close(self) -> None:
+        try:
+            self._client.close()
+        except Exception:  # noqa: BLE001
+            pass
+
     def encode(self, texts: list[str]) -> list[list[float]]:
         from .. import model_usage
         began = time.monotonic()
         last = None
-        for attempt in range(3):
+        data = None
+        for attempt in range(ATTEMPTS):
+            if attempt:
+                time.sleep(1.0 * attempt)
             try:
                 response = self._client.post(self._url, json={"model": self._model, "input": list(texts), "encoding_format": "float"},
                                              headers={"Authorization": "Bearer " + self._key})
-                if response.status_code in (429, 500, 502, 503, 504):
-                    last = RuntimeError(f"embedding_status_{response.status_code}")
-                    time.sleep(1.0 * (attempt + 1))
-                    continue
-                response.raise_for_status()
-                data = response.json()
-                break
             except Exception as exc:  # noqa: BLE001 - the request's own details (the key) never reach the log
                 last = RuntimeError(f"embedding_{type(exc).__name__}")
-                time.sleep(1.0 * (attempt + 1))
-        else:
+                continue
+            if response.status_code in RETRYABLE:
+                last = RuntimeError(f"embedding_status_{response.status_code}")
+                continue
+            if response.status_code >= 400:      # a refused key or request: sending it again changes nothing
+                last = RuntimeError(f"embedding_status_{response.status_code}")
+                break
+            try:
+                data = response.json()
+            except Exception as exc:  # noqa: BLE001
+                last = RuntimeError(f"embedding_{type(exc).__name__}")
+                continue
+            break
+        if data is None:
             model_usage.record(provider="openrouter", model=self._model, ok=False, error=str(last), ms=round((time.monotonic() - began) * 1000))
             raise last or RuntimeError("embedding_failed")
         rows = sorted(data.get("data") or [], key=lambda row: row.get("index", 0))
@@ -207,6 +230,11 @@ def run_once(session_factory=None, parts: Parts | None = None, *, max_chunks: in
         if parts is None:
             return {"skipped": why}
     generation = current_generation()
+    try:
+        # First: the read side refuses a table with two generations, so nothing is synced for a generation it could not take.
+        parts.store.ensure_collection(generation)
+    except Exception as exc:  # noqa: BLE001
+        return {"skipped": "vector store: " + (str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__)}
     synced = {}
     for kind in kinds:
         try:
@@ -216,6 +244,48 @@ def run_once(session_factory=None, parts: Parts | None = None, *, max_chunks: in
             log.exception("knowledge sync of %s failed", kind)
             synced[kind] = {"error": True}
     with model_usage.purpose("knowledge", job="knowledge-index"):
+        # One word first: while the embedding service is down (or the key refused) a batch would fail and use up its chunks'
+        # retries (four, then they stay failed); this pass waits for the next instead.
+        if not _has_work(session_factory, generation):
+            return {"generation": generation[:8], "synced": synced, "indexed": {"indexed": 0, "failed": 0, "idle": 1}}
+        try:
+            parts.embedder.encode(["ping"])
+        except Exception as exc:  # noqa: BLE001
+            return {"generation": generation[:8], "synced": synced, "indexed": {"indexed": 0, "failed": 0, "idle": 0},
+                    "embedding_down": str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__}
         indexed = index_pending(session_factory, parts.embedder, parts.store, generation, max_tasks=max_chunks,
                                 worker_id="box-index", batch_size=batch)
     return {"generation": generation[:8], "synced": synced, "indexed": indexed}
+
+
+def _has_work(session_factory, generation: str) -> bool:
+    """Whether a chunk of this generation is waiting to be indexed (what ``claim_task`` would look at)."""
+    from datetime import UTC, datetime
+    from sqlalchemy import and_, exists, or_, select
+    from .models import KnowledgeIndexTask as Task
+    now = datetime.now(UTC)
+    with session_factory() as session:
+        return bool(session.scalar(select(exists().where(Task.generation == generation, or_(
+            Task.status == "pending",
+            and_(Task.status == "failed", Task.attempts < 4, or_(Task.next_attempt_at.is_(None), Task.next_attempt_at <= now)),
+            and_(Task.status == "leased", Task.lease_until <= now))))))
+
+
+def retry_failed(session_factory=None, generation: str | None = None) -> int:
+    """Put the chunks whose indexing failed (an outage that used up their retries) back in the queue; how many."""
+    from sqlalchemy import update
+    from .models import KnowledgeIndexTask
+    if session_factory is None:
+        from ..database import SessionLocal as session_factory
+    with session_factory() as session, session.begin():
+        result = session.execute(update(KnowledgeIndexTask).where(
+            KnowledgeIndexTask.generation == (generation or current_generation()), KnowledgeIndexTask.status == "failed",
+            KnowledgeIndexTask.error_code == "index_operation_failed").values(status="pending", attempts=0, next_attempt_at=None))
+        return result.rowcount or 0
+
+
+def shadow_writing_live(environ=os.environ) -> bool:
+    """The shadow API (database finbot_ruler) about to write the live vector table: its state is not the live one's."""
+    import urllib.parse
+    database = urllib.parse.urlparse(environ.get("DATABASE_URL", "")).path.lstrip("/")
+    return database == "finbot_ruler" and environ.get("RAG_PGVECTOR_TABLE", "chunks") == "chunks"

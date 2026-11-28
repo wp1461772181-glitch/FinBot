@@ -226,10 +226,22 @@ def test_one_pass_syncs_chunks_embeds_and_writes(monkeypatch):
         embedder.encode(["x"])
         return {"indexed": 1, "failed": 0, "idle": 0}
     monkeypatch.setattr("app.knowledge.indexing.index_pending", index_pending)
+    monkeypatch.setattr(box_index, "_has_work", lambda factory, generation: True)
     parts = box_index.Parts(tokenizer=object(), embedder=Embedder(), store=Store())
     result = box_index.run_once(session_factory=object(), parts=parts)
     assert synced == list(box_index.KINDS) and seen["max_tasks"] == box_index.MAX_CHUNKS and seen["batch_size"] == box_index.BATCH
-    assert seen["generation"] == box_index.current_generation() and result["indexed"]["indexed"] == 1 and embedded == [["x"]]
+    assert seen["generation"] == box_index.current_generation() and result["indexed"]["indexed"] == 1 and embedded == [["ping"], ["x"]]
+
+
+class Gen:
+    """A store whose table holds ``found`` (the right generation unless told otherwise)."""
+
+    def __init__(self, ok=True):
+        self.ok = ok
+
+    def ensure_collection(self, generation):
+        if not self.ok:
+            raise RuntimeError("vector_store_other_generation")
 
 
 def test_one_source_kind_failing_does_not_stop_the_others_or_the_indexing(monkeypatch):
@@ -239,7 +251,8 @@ def test_one_source_kind_failing_does_not_stop_the_others_or_the_indexing(monkey
         return {"scanned": 1, "accepted": 1}
     monkeypatch.setattr("app.knowledge.source_sync.sync_source_batch", sync)
     monkeypatch.setattr("app.knowledge.indexing.index_pending", lambda *a, **k: {"indexed": 0, "failed": 0, "idle": 1})
-    result = box_index.run_once(session_factory=object(), parts=box_index.Parts(object(), object(), object()))
+    monkeypatch.setattr(box_index, "_has_work", lambda factory, generation: False)
+    result = box_index.run_once(session_factory=object(), parts=box_index.Parts(object(), object(), Gen()))
     assert result["synced"]["sec"] == {"error": True} and result["synced"]["faq"] == {"scanned": 1, "accepted": 1}
 
 
@@ -257,3 +270,156 @@ def test_the_hand_run_refuses_the_live_table_outside_the_shadow(monkeypatch, cap
     monkeypatch.delenv("RAG_PGVECTOR_TABLE", raising=False)
     assert knowledge_index_once.main(["--passes", "1"]) == 2
     assert "chunks" in capsys.readouterr().err
+
+
+
+def test_a_refused_key_is_not_sent_again(ledger):
+    client = Client(Response(401), Response(200, {}))
+    with pytest.raises(RuntimeError, match="embedding_status_401"):
+        box_index.OpenRouterEmbedder("k", client=client).encode(["a"])
+    assert len(client.sent) == 1
+
+
+def test_the_env_file_takes_export_quotes_and_inline_comments(tmp_path):
+    path = tmp_path / "e.env"
+    path.write_text('export OPENROUTER_API_KEY=sk-1 # the shared key\nA="b # c"\n# x=y\nB=\'q\'\n')
+    assert box_index.read_env_file(str(path)) == {"OPENROUTER_API_KEY": "sk-1", "A": "b # c", "B": "q"}
+
+
+def test_another_generation_in_the_table_skips_the_pass_before_anything_is_synced(monkeypatch):
+    monkeypatch.setattr("app.knowledge.source_sync.sync_source_batch", lambda *a, **k: pytest.fail("synced"))
+    result = box_index.run_once(session_factory=object(), parts=box_index.Parts(object(), object(), Gen(ok=False)))
+    assert result == {"skipped": "vector store: vector_store_other_generation"}
+
+
+def test_an_embedding_outage_leaves_the_chunks_for_the_next_pass(monkeypatch):
+    class Down:
+        def encode(self, texts):
+            raise RuntimeError("embedding_status_503")
+    monkeypatch.setattr("app.knowledge.source_sync.sync_source_batch", lambda *a, **k: {"scanned": 0, "accepted": 0})
+    monkeypatch.setattr("app.knowledge.indexing.index_pending", lambda *a, **k: pytest.fail("indexed while the service was down"))
+    monkeypatch.setattr(box_index, "_has_work", lambda factory, generation: True)
+    result = box_index.run_once(session_factory=object(), parts=box_index.Parts(object(), Down(), Gen()))
+    assert result["embedding_down"] == "embedding_status_503"
+
+
+def test_nothing_waiting_means_no_embedding_call(monkeypatch):
+    class Counting:
+        calls = 0
+
+        def encode(self, texts):
+            Counting.calls += 1
+            return [vector()]
+    monkeypatch.setattr("app.knowledge.source_sync.sync_source_batch", lambda *a, **k: {"scanned": 0, "accepted": 0})
+    monkeypatch.setattr(box_index, "_has_work", lambda factory, generation: False)
+    result = box_index.run_once(session_factory=object(), parts=box_index.Parts(object(), Counting(), Gen()))
+    assert Counting.calls == 0 and result["indexed"]["idle"] == 1
+
+
+def test_the_shadow_database_never_writes_the_live_table():
+    assert box_index.shadow_writing_live({"DATABASE_URL": "postgresql://u@h/finbot_ruler"}) is True
+    assert box_index.shadow_writing_live({"DATABASE_URL": "postgresql://u@h/finbot_ruler", "RAG_PGVECTOR_TABLE": "chunks_shadow"}) is False
+    assert box_index.shadow_writing_live({"DATABASE_URL": "postgresql://u@h/finbot"}) is False
+
+
+def test_the_loop_loads_the_parts_once_and_keeps_them(monkeypatch):
+    from app import background
+    loads, passes = [], []
+    monkeypatch.setattr(background, "_KNOWLEDGE_PARTS", None)
+    monkeypatch.setattr(box_index, "shadow_writing_live", lambda environ=None: False)
+    monkeypatch.setattr(box_index, "load_parts", lambda environ=None: loads.append(1) or ("parts", None))
+    monkeypatch.setattr(box_index, "run_once", lambda parts=None, **k: passes.append(parts) or {"synced": {}, "indexed": {}})
+    background.run_knowledge_index()
+    background.run_knowledge_index()
+    assert loads == [1] and passes == ["parts", "parts"]
+
+
+# --- the contract with the real index tasks: receipts that ack (tests the PgVectorStore's SQL against a stand-in table) ----------
+
+class FakeTable:
+    """Interprets the three statements PgVectorStore sends; keeps rows like the ``chunks`` table (id is text)."""
+
+    def __init__(self):
+        self.rows = {}
+        self.db = self
+
+    def connect(self):
+        table = self
+
+        class C:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def cursor(self):
+                return self
+
+            def commit(self):
+                pass
+
+            def execute(self, sql, params=None):
+                if sql.startswith("SELECT DISTINCT generation"):
+                    self.result = [(g,) for g in {r["generation"] for r in table.rows.values()}][:2]
+                elif sql.startswith("INSERT INTO"):
+                    names = [c.strip() for c in sql.split("(", 1)[1].split(")", 1)[0].split(",")]
+                    record = dict(zip(names, params))
+                    table.rows[str(record["id"])] = record
+                    self.result = []
+                else:
+                    wanted = set(params[0])
+                    self.result = [(r["id"], r["source_hash"], r["content_hash"], r["generation"]) for i, r in table.rows.items() if i in wanted]
+
+            def fetchall(self):
+                return self.result
+        return C()
+
+
+@pytest.fixture
+def knowledge_db(disposable_database):
+    from sqlalchemy.orm import Session
+    from app.database import engine
+    from app.knowledge.models import KnowledgeChunk, KnowledgeDocument, KnowledgeIndexTask
+    from scripts.migrate_knowledge import migrate
+    migrate(engine)
+    yield lambda: Session(engine)
+    with Session(engine) as s, s.begin():
+        s.query(KnowledgeIndexTask).delete(); s.query(KnowledgeChunk).delete(); s.query(KnowledgeDocument).delete()
+
+
+def test_real_index_tasks_ack_on_the_stores_receipts_and_retry_failed_requeues(knowledge_db):
+    from datetime import UTC, datetime
+    from app.knowledge.indexing import index_pending
+    from app.knowledge.models import KnowledgeChunk, KnowledgeIndexTask
+    from app.knowledge.repository import ingest_documents
+    from app.knowledge.sources import SourceDocument
+
+    class Words:
+        def encode(self, text, **kwargs):
+            return text.split()
+
+    class Embed:
+        def encode(self, texts):
+            return [vector() for _ in texts]
+
+    generation = box_index.current_generation()
+    source = SourceDocument("fixture", "box-index-fixture", "v1", "b" * 64, "official_filing", "DEMO", "public", "public", None, "10-Q",
+                            "https://example.test", None, datetime.now(UTC), datetime.now(UTC), False, "markdown",
+                            "# Results\nRevenue was USD 123 million.\n\n# Risks\nSupply is tight.")
+    with knowledge_db() as s, s.begin():
+        assert ingest_documents(s, [source], Words(), generation)["chunks"] >= 1
+    table = FakeTable()
+    store = box_index.PgVectorStore({}, connect=table.connect)
+    result = index_pending(knowledge_db, Embed(), store, generation, max_tasks=10, batch_size=16)
+    with knowledge_db() as s:
+        ready = s.query(KnowledgeChunk).filter_by(generation=generation, status="ready").count()
+        complete = s.query(KnowledgeIndexTask).filter_by(generation=generation, status="complete").count()
+    assert result["failed"] == 0 and result["indexed"] == ready == complete == len(table.rows) >= 1
+    assert all(len(row["embedding"]) > 2 and row["generation"] == generation for row in table.rows.values())
+    with knowledge_db() as s, s.begin():
+        task = s.query(KnowledgeIndexTask).filter_by(generation=generation).first()
+        task.status, task.error_code, task.attempts = "failed", "index_operation_failed", 4
+    assert box_index.retry_failed(knowledge_db) == 1
+    with knowledge_db() as s:
+        assert s.query(KnowledgeIndexTask).filter_by(generation=generation, status="pending", attempts=0).count() == 1
