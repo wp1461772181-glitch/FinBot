@@ -28,6 +28,16 @@ def ceiling() -> str:
     return value if value in TIERS else "high"
 
 
+def lookup_tier() -> str | None:
+    """The tier a lookup step runs at once a turn has gone up (design 4.4: 「查资料的步骤始终用低档，不管最后由哪一档来写」):
+    ``FINBOT_KERNEL_LOOKUP_TIER`` (low / mid / high), default ``low``; ``same`` turns it off (every step at the turn's tier)."""
+    import os
+    value = (os.environ.get("FINBOT_KERNEL_LOOKUP_TIER") or "").strip().lower()
+    if value == "same":
+        return None
+    return value if value in TIERS else "low"
+
+
 def clamp(requested: str, top: str) -> str:
     return TIERS[min(TIERS.index(requested), TIERS.index(top))]
 

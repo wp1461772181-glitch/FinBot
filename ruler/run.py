@@ -292,7 +292,40 @@ def _command_ask(args) -> int:
         if outcome.tools:
             detail += f" · 工具 {', '.join(outcome.tools)}"
         print(f"\n[{index}] 问：{text}\n    {detail}\n    答：{outcome.answer or '（空）'}")
+        if getattr(args, "audit", False) and outcome.turn_id:
+            print(f"    账：{turn_audit_line(outcome.turn_id)}")
     return 0 if all_normal else 1
+
+
+def turn_audit_line(turn_id: str) -> str:
+    """One line from the stored answer's audit: the turn's tier, each model call's tier and time, the lookup tries."""
+    try:
+        audit = stored_audit(turn_id)
+    except Exception as exc:
+        return f"读不到（{type(exc).__name__}）"
+    if not audit:
+        return "这一轮没有存下账"
+    calls = audit.get("calls") or []
+    parts = [f"档位 {audit.get('tier') or '?'}", f"模型调用 {len(calls)} 次"]
+    if calls:
+        parts.append("、".join(f"{c.get('tier')} {c.get('ms', 0) / 1000:.1f}s" + ("（丢弃）" if c.get("kept") is False else "") for c in calls))
+    if audit.get("lookup_steps") or audit.get("lookup_redone"):
+        parts.append(f"低档查资料 {audit.get('lookup_steps', 0)} 步、试跑丢弃 {audit.get('lookup_redone', 0)} 次")
+    return " · ".join(parts)
+
+
+def stored_audit(turn_id: str) -> dict | None:
+    """The audit of the turn's stored answer (the assistant row's protocol), read from the database the environment names."""
+    import uuid
+    from sqlalchemy import select
+    from app.agent_chat_models import AgentMessage
+    from app.database import SessionLocal
+    with SessionLocal() as db:
+        rows = db.scalars(select(AgentMessage.tool_calls).where(AgentMessage.turn_id == uuid.UUID(turn_id), AgentMessage.role == "assistant"))
+        for protocol in rows:
+            if isinstance(protocol, dict) and isinstance(protocol.get("audit"), dict):
+                return protocol["audit"]
+    return None
 
 
 def _load_summary(directory) -> dict:
@@ -374,6 +407,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ask_cmd.add_argument("--model", default="")
     ask_cmd.add_argument("--server-dir", default="", help="被测服务应当所在的目录；默认是当前目录")
     ask_cmd.add_argument("--allow-production", action="store_true")
+    ask_cmd.add_argument("--audit", action="store_true", help="每轮答完后，从库里读出这一轮每次模型调用的档位和耗时")
     return parser
 
 

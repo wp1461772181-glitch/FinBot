@@ -118,3 +118,96 @@ def test_tier_event_only_when_the_tier_rises(env):
     script(env, [step(calls=[call("c4", "escalate", {"depth": "mid"})]), step(calls=[call("c5", "escalate", {"depth": "high"})]), step(text="好")])
     _, events = run(context=make_context(reasoning_effort="high"))
     assert [e["tier"] for e in events if e["event"] == "tier"] == ["mid", "high"]
+
+
+# --- design 4.4: 「查资料的步骤始终用低档，不管最后由哪一档来写」 ------------------------------------------------------------------
+
+def _efforts(fake):
+    return [c["kwargs"]["reasoning_effort"] for c in fake.calls]
+
+
+def test_after_going_up_lookups_run_low_and_the_answer_is_written_high(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_LOOKUP_TIER", raising=False)
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "high"})]),
+                        step(calls=[call("c2", "query_financials", {"symbol": "AAPL"})]),       # high's own first move
+                        step(calls=[call("c3", "query_stock_prices", {"symbol": "AAPL"})]),     # a low try: only a lookup, kept
+                        step(text="草稿"),                                                       # a low try that wants to write: dropped
+                        step(text="正式回答")])                                                  # the same step at high
+    result, events = run(context=make_context())
+    assert _efforts(fake) == ["low", "high", "low", "low", "high"]
+    assert [name for name, _ in env.invoked] == ["query_financials", "query_stock_prices"]
+    assert result["answer"] == "正式回答"
+    assert "草稿" not in "".join(e.get("text", "") for e in events if e.get("event") == "delta")      # never on the screen
+    assert result["audit"]["lookup_steps"] == 1 and result["audit"]["lookup_redone"] == 1
+    assert [c["tier"] for c in result["audit"]["calls"]] == ["low", "high", "low", "low", "high"]
+    assert [c.get("kept", True) for c in result["audit"]["calls"]] == [True, True, True, False, True]
+    assert result["audit"]["model_calls"] == 5 and result["audit"]["decision_steps"] == 4     # the dropped try is not a step
+    redo = fake.calls[4]["messages"]
+    assert redo == fake.calls[3]["messages"]          # the dropped try left nothing in the conversation
+    assert result["audit"]["tier"] == "high"
+
+
+def test_a_low_try_that_wants_anything_but_lookups_is_made_again_at_the_turns_tier(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_LOOKUP_TIER", raising=False)
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "mid"})]),
+                        step(calls=[call("c2", "query_financials", {"symbol": "AAPL"})]),
+                        step(calls=[call("c3", "query_stock_prices", {"symbol": "AAPL"}), call("c4", "plan", {"items": ["a"]})]),
+                        step(text="好")])
+    result, _ = run(context=make_context())
+    assert _efforts(fake) == ["low", "medium", "low", "medium"]
+    assert [name for name, _ in env.invoked] == ["query_financials"]       # the dropped try ran nothing
+    assert result["audit"]["lookup_redone"] == 1 and "lookup_steps" not in result["audit"]
+
+
+def test_lookup_tier_same_keeps_every_step_at_the_turns_tier(env):
+    env.monkeypatch.setenv("FINBOT_KERNEL_LOOKUP_TIER", "same")
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "high"})]),
+                        step(calls=[call("c2", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
+    result, _ = run(context=make_context())
+    assert _efforts(fake) == ["low", "high", "high"]
+    assert tool_message(fake, 1)["note"] == "已切换到 high 档，请继续。"
+
+
+def test_a_turn_that_stays_low_makes_no_extra_calls(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_LOOKUP_TIER", raising=False)
+    fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
+    run(context=make_context())
+    assert _efforts(fake) == ["low", "low"]
+
+
+def test_lookup_tier_setting(monkeypatch):
+    for value, expected in (("", "low"), ("mid", "mid"), ("same", None), ("bogus", "low")):
+        monkeypatch.setenv("FINBOT_KERNEL_LOOKUP_TIER", value)
+        assert tiers.lookup_tier() == expected
+
+
+def test_a_delegate_counts_as_a_lookup_and_a_wake_decide_is_redone(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_LOOKUP_TIER", raising=False)
+    assert "delegate" in loop.LOOKUP_CALLS and "decide" not in loop.LOOKUP_CALLS and "act" not in loop.LOOKUP_CALLS
+
+
+def test_a_streaming_try_that_starts_writing_is_cut_and_redone(env):
+    """On a provider that streams, a try is stopped as soon as it is plainly writing an answer, instead of writing all of it."""
+    env.monkeypatch.delenv("FINBOT_KERNEL_LOOKUP_TIER", raising=False)
+    env.monkeypatch.setattr(loop, "_streams", lambda use: True)
+    long = "这是一段很长的结论。" * 40
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "high"})]),
+                        step(calls=[call("c2", "query_financials", {"symbol": "AAPL"})]),
+                        step(text=long, pieces=[long[:100], long[100:200], long[200:]]),
+                        step(text="正式回答")])
+    result, events = run(context=make_context())
+    assert _efforts(fake) == ["low", "high", "low", "high"] and result["answer"] == "正式回答"
+    assert result["audit"]["calls"][2]["kept"] is False and result["audit"]["calls"][2].get("cut") is True
+    assert "结论" not in "".join(e.get("text", "") for e in events if e.get("event") == "delta")
+
+
+def test_after_one_dropped_try_the_turn_stops_trying_the_lookup_tier(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_LOOKUP_TIER", raising=False)
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "high"})]),
+                        step(calls=[call("c2", "query_financials", {"symbol": "AAPL"})]),
+                        step(text="草稿"),                                                       # a try that wants to write: dropped
+                        step(calls=[call("c3", "query_stock_prices", {"symbol": "AAPL"})]),     # the turn's tier looks further
+                        step(text="正式回答")])                                                  # no second try after the drop
+    result, _ = run(context=make_context())
+    assert _efforts(fake) == ["low", "high", "low", "high", "high"] and result["answer"] == "正式回答"
+    assert result["audit"]["lookup_redone"] == 1 and "lookup_steps" not in result["audit"]
