@@ -15,6 +15,7 @@ from . import model_usage
 
 log = logging.getLogger(__name__)
 ROUTINE_SECONDS = 300
+KNOWLEDGE_INDEX_SECONDS = 120   # a pass syncs a page per source kind and indexes up to box_index.MAX_CHUNKS chunks
 HOURLY_SECONDS = 3600
 NEWS_SECONDS = 900         # configured news sources; until this loop the library was only refreshed while a chat turn waited on it
 RELEASE_FIGURES_SECONDS = 600   # 8-K earnings-release figures for a quarter whose 10-Q/10-K is not filed yet
@@ -191,6 +192,46 @@ def run_selfcheck() -> None:
                  sorted((row.get("checked") or {}).get("errors") or {}))
 
 
+_KNOWLEDGE_PARTS = None
+_TOLD: set = set()
+
+
+def _tell_once(message: str) -> None:
+    if message not in _TOLD:
+        _TOLD.add(message)
+        log.info(message)
+
+
+def run_knowledge_index() -> None:
+    """The knowledge index's write side on the box (app.knowledge.box_index): new sources synced, chunked, embedded and written to
+    pgvector.  Off with FINBOT_KNOWLEDGE_INDEX=off; does nothing where its tokenizer and the two login files are not (a checkout, CI)."""
+    from .agent_workflow.fp_flags import flag
+    from .knowledge import box_index
+
+    if not flag("FINBOT_KNOWLEDGE_INDEX", True):
+        return
+    if box_index.shadow_writing_live():
+        _tell_once("knowledge index not run: the shadow database must not write the live vector table")
+        return
+    global _KNOWLEDGE_PARTS
+    if _KNOWLEDGE_PARTS is None:       # loaded once (a 17 MB tokenizer, an HTTP client) and kept; looked for again while missing
+        _KNOWLEDGE_PARTS, why = box_index.load_parts()
+        if _KNOWLEDGE_PARTS is None:
+            _tell_once(f"knowledge index not run: {why}")
+            return
+    result = box_index.run_once(parts=_KNOWLEDGE_PARTS)
+    if result.get("skipped"):
+        _tell_once(f"knowledge index not run: {result['skipped']}")
+        return
+    if result.get("embedding_down"):
+        log.warning("knowledge index: embedding service unavailable (%s); trying again next pass", result["embedding_down"])
+        return
+    indexed = result.get("indexed") or {}
+    accepted = sum((v or {}).get("accepted") or 0 for v in (result.get("synced") or {}).values())
+    if accepted or indexed.get("indexed") or indexed.get("failed"):
+        log.info("knowledge index: %s new documents, %s chunks indexed, %s failed", accepted, indexed.get("indexed", 0), indexed.get("failed", 0))
+
+
 LOOPS = (
     ("routine-tasks", ROUTINE_SECONDS, run_routine_tasks),
     ("sec-monitor", HOURLY_SECONDS, run_sec_monitor),
@@ -205,6 +246,7 @@ LOOPS = (
     ("duty-selfcheck", SELFCHECK_SECONDS, run_selfcheck),
     ("earnings-calendar", EARNINGS_CALENDAR_SECONDS, run_earnings_calendar),
     ("earnings-prep", PREP_SECONDS, run_earnings_prep),
+    ("knowledge-index", KNOWLEDGE_INDEX_SECONDS, run_knowledge_index),
 )
 
 
