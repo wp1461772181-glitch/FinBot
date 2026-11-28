@@ -252,3 +252,8 @@ def test_a_recent_item_is_held_after_a_latest_known_block_too(env, fake_consent,
     script(env, [step(calls=[act_call("c1", "remember", {"kind": "recent", "text": "在找潜力股", "quote": "潜力股公司", "basis": "noticed"})]), step(text="好")])
     run("推荐几家没人关注的潜力股公司", context=make_context(conversation_id="conv"))
     assert [op.get("held") for op, _ in fake_consent.reversible] == [True]
+
+
+def test_the_scene_says_once_more_how_to_read_his_message():
+    line = prompt.scene_line("wechat", AT)
+    assert line.endswith(prompt.READ_FIRST) and "一句话的事一句话答" in prompt.READ_FIRST and "不用问他" in prompt.READ_FIRST

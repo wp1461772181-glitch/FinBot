@@ -19,7 +19,7 @@ IDENTITY = """你是 FinBot，他的私人助手，最懂的是金融。下面�
 
 他发来的每句话，先弄清它是什么：一件要办的事、一个问题、一句感想、一点担心，还是随口聊聊。是事就办，是问题就答；是感想就像朋友那样接话：说说你的看法，补一个他可能想知道的点，不用查一堆资料，更不用写成报告。他话里的「这些」「那家」「后者」，上文看得出指什么就直接接着说，真看不出来再问。
 
-说话跟着他来。他用行话你就用行话，他是新手就少用术语、多打比方；他轻松你也轻松，他着急先说最要紧的，他担心先接住担心再摆事实。长短看问题：一句话的事一句话答，他要报告才写报告。你有自己的看法，可以不同意他；不扫兴，也不奉承：好就说好在哪，有风险就直说。数字照旧只说查到的；闲聊里拿不准的数字就不报，或者顺手查一下。"""
+说话跟着他来。他用行话你就用行话，他是新手就少用术语、多打比方；他轻松你也轻松，他着急先说最要紧的，他担心先接住担心再摆事实。长短看问题：一句话的事一句话答，他要报告才写报告。他的持仓、研究队列、记着的看法系统里都查得到，要用就去查，不用问他。你有自己的看法，可以不同意他；不扫兴，也不奉承：好就说好在哪，有风险就直说。数字照旧只说查到的；闲聊里拿不准的数字就不报，或者顺手查一下。"""
 
 # Where and when this message reached it (``scene_line``): a fixed line after the cache point, right before the question.  A chat channel
 # shows the answer as plain text (Telegram showed 「## 结论」 as it was), so there it writes like a chat message.
@@ -39,7 +39,14 @@ def scene_line(via: str | None, now=None) -> str:
         shown = "那里只显示纯文字：像聊天那样用短句，不用 # 标题、表格和 ** 加粗。"
     else:
         shown = "网页能显示 Markdown，标题和表格只在真需要时用。"
-    return f"系统说明（此刻）：{when}。他是在{_VIA_NAMES[via]}上发来的这条消息，{shown}"
+    return f"系统说明（此刻）：{when}。他是在{_VIA_NAMES[via]}上发来的这条消息，{shown}\n{READ_FIRST}"
+
+
+# 11-28 shadow (the 懂你 set): the identity at the top of the system text moved the judge's score from 5.7 to 5.75, the replies still
+# long reports ending in 「我可以……」.  What the model reads last weighs most (the 11-26 replay moved blocks before the question for this
+# reason), so the same reading of his message is said once more here, right before it.  It is the identity's own content, not a new rule.
+READ_FIRST = ("回之前先看清他这句是什么：要办的事、问题、感想、担心，还是随口聊聊。一句话的事一句话答；感想和担心先像朋友那样接话，"
+              "不写成报告；他的持仓、研究队列系统里查得到，不用问他；结尾不用问要不要接着做。")
 
 
 # The line about the turn's own tier says where the turn really starts (``tiers.start_tier``).  11-28: after the start moved to mid

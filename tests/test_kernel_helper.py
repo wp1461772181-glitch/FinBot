@@ -34,12 +34,13 @@ GOLDEN = {
     # 5d-3a: act gains rate_answer, and each tier-1 operation's line names its arguments (the system text is unchanged).
     # 11-28: act says how the permission mode decides, and its go_ahead; act: saving a page is tier 3 again; the system text: fetching official material (saving a page is a write to confirm), the card blocks one step, a task is done through; before that: escalate max, report_missed, open_page; the system text gains the report_missed and key lines.
     "owner": ("df7bca9099c2c4c28190f308d6b162371dd4b12329e1ae03f5bd160dc12882e2",
-               "521771ff294090410192c0813c232aeaf8c6eaa48698bd497b5828fa8d9e7f4d"),
+               "e65b464f2e42bf50318c9836c8c84ea627509d812a9fffb66cdfd4735e9a7ff7"),
+    # 11-28 活人感 after the shadow: the identity says his holdings and queue can be looked up.
     # 11-28 活人感 step 3: act gains follow_up and cancel_follow_up; the system text says when to keep a promise.
     # 11-28 活人感 step 2: remember takes style and recent (act and the catalog), the memory lines say so.
     # 11-28 活人感: the system text opens with who it is and how it reads what he says (``prompt.IDENTITY``), and a line about endings.
     # 6a: a guest's system prompt gains the line about what only the owner can do (``prompt.GUEST_NOTE``); the owner's is unchanged.
-    "guest": ("36a4a6c9ee1cdeeef86e81be9dc5d263a22e8acb719762466120b32b39c58666", "51ac6988bdd7b9d7c32f6244aed4ec2f772bd337e634d449e6e1318067b14bcd"),
+    "guest": ("36a4a6c9ee1cdeeef86e81be9dc5d263a22e8acb719762466120b32b39c58666", "1358c14fd431ff22097043d6d204f602c2e015e8ba1acb1aa746ab72f5915867"),
 }
 
 
