@@ -242,21 +242,26 @@ def _send_notice(db, owner: str, conversation_id, line: str, now: datetime, *, s
     return True
 
 
-def notify_if_unattended(turn_id: str) -> bool:
+DEEP_OUTCOMES = {DONE: "做完了", FAILED: "没做完"}
+
+
+def notify_if_unattended(turn_id: str, *, deep: bool = False) -> bool:
     """One line to the owner's channel for a chat turn that ended while nobody was reading (done or failed; a turn the owner stopped
     or whose reader was there is no news): what it was, the outcome, where to read it.  Never the answer.  The item is claimed
     (``notified_at``) in the same transaction that queues the line, so a retry or a second worker sends nothing twice, and a line
     the outbox cannot take (no channel, over the cap) leaves the claim undone.  Source ``work``: counted on its own, not against the bot's cap."""
     with SessionLocal() as db:
         item = db.scalars(select(AgentWork).where(AgentWork.kind == CHAT_TURN, AgentWork.ref == str(turn_id))).first()
-        if (item is None or item.status not in NOTICE_OUTCOMES or item.reader_present is not False or item.notified_at is not None):
+        if (item is None or item.status not in NOTICE_OUTCOMES or item.notified_at is not None
+                or (item.reader_present is not False and not deep)):     # deep research said it would come back: told even to a reader
             return False
         owner, summary, status, reason, conversation_id = item.owner_hash, item.summary, item.status, item.reason, item.conversation_id
     now = datetime.now(UTC)
     with SessionLocal() as db:
         claimed = db.execute(update(AgentWork).where(AgentWork.kind == CHAT_TURN, AgentWork.ref == str(turn_id), AgentWork.notified_at.is_(None))
                              .values(notified_at=now)).rowcount
-        line = f"你问的「{summary}」{NOTICE_OUTCOMES[status]}" + (f"：{reason}" if status == FAILED and reason else "") + "。打开对话查看。"
+        line = ((f"你要的深度研究「{summary}」{DEEP_OUTCOMES[status]}" if deep else f"你问的「{summary}」{NOTICE_OUTCOMES[status]}")
+                + (f"：{reason}" if status == FAILED and reason else "") + "。打开对话查看。")
         if not claimed or not _send_notice(db, owner, conversation_id, line, now):
             db.rollback()
             return False

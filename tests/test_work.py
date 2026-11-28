@@ -382,6 +382,25 @@ def test_no_notice_when_the_reader_was_there_or_the_turn_was_stopped_or_still_ru
     assert work.notify_if_unattended(turn) is False and _notices() == []
 
 
+def test_a_deep_research_turn_comes_back_to_him_even_while_he_reads(outbox):
+    """Design 4.4: deep research said 「做完来找你」, so its end is pushed whether or not a page was still reading it."""
+    conversation, turn = _conversation_with_user_row()
+    work.start_turn(OWNER, conversation, turn, "q")
+    work.end_turn(turn, "done", None, reader_present=True)
+    assert work.notify_if_unattended(turn) is False                  # an ordinary turn with a reader: no news
+    assert work.notify_if_unattended(turn, deep=True) is True
+    assert work.notify_if_unattended(turn, deep=True) is False       # once
+    [notice] = _notices()
+    assert "深度研究" in notice.text and "做完了" in notice.text
+
+
+def test_a_stopped_deep_turn_is_not_pushed(outbox):
+    conversation, turn = _conversation_with_user_row()
+    work.start_turn(OWNER, conversation, turn, "q")
+    work.end_turn(turn, "stopped", "x", reader_present=True)
+    assert work.notify_if_unattended(turn, deep=True) is False and _notices() == []
+
+
 def test_work_notices_have_their_own_daily_count_and_do_not_use_the_bots_cap(outbox, monkeypatch):
     from app import agent_bots
     bot = agent_bots.ensure_default_bot(OWNER)

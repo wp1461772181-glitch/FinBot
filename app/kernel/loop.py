@@ -36,8 +36,10 @@ READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_
     "query_alerts", "query_holdings_overview", "read_workspace", "query_system_status", "query_research_queue", "list_routines", "list_models", "list_work", "list_watch_rules")
 logger = logging.getLogger(__name__)
 MAX_STEPS = 12
+DEEP_MAX_STEPS = 40   # a deep-research turn (tier max): the owner asked for it and is not waiting on the page
 MAX_SETS = 6          # as the old engine: the last six result sets of a conversation
 SOFT_SECONDS = 180
+DEEP_SOFT_SECONDS = 900   # within the stream's own MAX_TURN_SECONDS (1200), so the wrap-up comes first
 IDLE_SECONDS = 300
 RETRY_WAIT_SECONDS = 1
 # Mirrors the old turn's RETRYABLE_PROVIDER list minus provider_protocol_too_large (resending the same request cannot cure it).
@@ -504,8 +506,10 @@ async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_aga
 
 async def _loop(run: _Run) -> dict:
     stop = "step_cap"
-    for _ in range(MAX_STEPS):
-        if time.monotonic() - run.started > SOFT_SECONDS:
+    steps = 0
+    while steps < (DEEP_MAX_STEPS if run.tier == tiers.DEEP else MAX_STEPS):
+        steps += 1
+        if time.monotonic() - run.started > (DEEP_SOFT_SECONDS if run.tier == tiers.DEEP else SOFT_SECONDS):
             stop = "time_cap"
             break
         await _intake(run)

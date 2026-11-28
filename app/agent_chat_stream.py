@@ -521,7 +521,7 @@ def _unfinished_tool_calls(citation_sidecar,progress):
  stored={"citations":citation_sidecar} if citation_sidecar else {}
  stored.update(progress)
  return stored or None
-async def _end_work(turn,status,reason=None,reader_present=None,notify=False,after=None):
+async def _end_work(turn,status,reason=None,reader_present=None,notify=False,after=None,deep=False):
  # The work item of a turn (agent_work) ends with the turn; a failed write is logged and never fails the turn.
  # ``after``: the insert of the item that may still be running in its thread when the turn is cancelled at its very start.
  # An owner's turn that ended with nobody reading gets its one-line channel notice (work.notify_if_unattended).
@@ -530,7 +530,8 @@ async def _end_work(turn,status,reason=None,reader_present=None,notify=False,aft
   if after is not None:await asyncio.gather(after,return_exceptions=True)
   await asyncio.to_thread(work.end_turn,turn,status,reason,reader_present=reader_present)
   # Safe to ask again whoever closed the item: the notice checks the item's own state and is claimed once.
-  if notify:await asyncio.to_thread(work.notify_if_unattended,turn)
+  # A deep-research turn (tier max) said it would come back to him: its end is pushed whether or not he is still reading.
+  if notify:await asyncio.to_thread(work.notify_if_unattended,turn,deep=deep)
  except Exception: log.exception("ending the work item failed (turn=%s)",turn)
 async def _record_cancelled(cid,turn,owner,text_out,citation_sidecar,progress=None):
  # The three writes of a cancelled turn, in order. Each is isolated, so one failure does not skip the rest.
@@ -548,7 +549,7 @@ async def _record_timed_out(cid,turn,owner,text_out,citation_sidecar,progress,ou
  except Exception: log.exception("timed-out turn: finishing the conversation failed (cid=%s)",cid)
  try: await mark_terminal_status(owner,cid,"failed",text_out)
  except Exception: log.exception("timed-out turn: marking the terminal status failed (cid=%s)",cid)
- await _end_work(turn,*outcome,reading["on"],notify)
+ await _end_work(turn,*outcome,reading["on"],notify,deep=reading.get("deep",False))
 @router.post("/stream")
 async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|None=Header(default=None)):
  if not x_chat_session or len(x_chat_session)<32 or len(x_chat_session)>256: raise HTTPException(401,"chat_session_required")
@@ -811,6 +812,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,*,separa
      # What passes through is kept for a turn that ends without a final protocol (cancelled, failed).
      if kind=="narration":progress.setdefault("narration",[]).append(event["text"])
      else:progress[kind]=event["items"] if kind=="checklist" else event["tier"]
+     if kind=="tier" and event["tier"]=="max":reading["deep"]=True
      yield frame(kind,{key:value for key,value in event.items() if key!="event"})
     elif kind=="client_action":
      yield frame("client_action",{key:value for key,value in event.items() if key!="event"})
@@ -862,7 +864,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,*,separa
      settled=True
      outcome=(work.FAILED,WORK_FAILED_REASON) if ended=="failed" else (work.STOPPED,WORK_STOPPED_BY_MESSAGE) if ended=="stopped" else (work.DONE,None)
      if work_open:
-      await _end_work(turn,*outcome,reading["on"],notify)
+      await _end_work(turn,*outcome,reading["on"],notify,deep=reading.get("deep",False))
       work_open=False
      await finish_conversation(cid,"active")
      if bot:
@@ -917,7 +919,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,*,separa
    await finish_conversation(cid,"failed")
    await mark_terminal_status(owner_hash(x_chat_session),cid,"failed",text_out)
    if work_open:
-    await _end_work(turn,*outcome,reading["on"],notify)
+    await _end_work(turn,*outcome,reading["on"],notify,deep=reading.get("deep",False))
     work_open=False
    code=exc.detail if isinstance(exc,HTTPException) else "chat_failed"
    if restored:yield frame("citations",{"turn_id":turn,"items":_client_citations(restored)})
@@ -937,7 +939,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,*,separa
     if outcome is None:
      outcome=(work.STOPPED,WORK_STOPPED_REASON)
      if not cancelled:reading["on"]=False      # a closed generator: the consumer is gone (a cancel has set this itself)
-    closing=asyncio.ensure_future(_end_work(turn,*outcome,reading["on"],notify,starting))
+    closing=asyncio.ensure_future(_end_work(turn,*outcome,reading["on"],notify,starting,deep=reading.get("deep",False)))
     _BACKGROUND.add(closing); closing.add_done_callback(_BACKGROUND.discard)
    release_resources()
  if separate is not None or (payload.detach and fp_flag("FINBOT_FP13_DETACHED_TURNS",True)):

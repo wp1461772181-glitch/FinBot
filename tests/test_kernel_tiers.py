@@ -211,3 +211,43 @@ def test_after_one_dropped_try_the_turn_stops_trying_the_lookup_tier(env):
     result, _ = run(context=make_context())
     assert _efforts(fake) == ["low", "high", "low", "high", "high"] and result["answer"] == "正式回答"
     assert result["audit"]["lookup_redone"] == 1 and "lookup_steps" not in result["audit"]
+
+# --- design 4.4: 最高档只用于明确要的深度研究，转后台，做完来找你 ---------------------------------------------------------------
+
+def test_max_is_the_deep_research_tier(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_TOP_TIER", raising=False)
+    env.monkeypatch.setenv("FINBOT_KERNEL_LOOKUP_TIER", "same")
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "max"})]), step(text="好")])
+    result, events = run(context=make_context())
+    assert _efforts(fake) == ["low", "max"]
+    assert result["audit"]["tier"] == "max" and result["final_protocol"]["tier"] == "max"
+    note = tool_message(fake, 1)["note"]
+    assert "深度研究" in note and "15 分钟" in note and "推送" in note
+    said = [e for e in events if e.get("event") == "narration"]
+    assert said and said[-1]["system"] is True and "后台" in said[-1]["text"] and "推送" in said[-1]["text"]
+    assert {"event": "tier", "tier": "max"} in events
+
+
+def test_the_escalate_tool_says_max_is_only_for_asked_for_research():
+    schema = tiers.ESCALATE_SCHEMA["function"]
+    assert schema["parameters"]["properties"]["depth"]["enum"] == ["mid", "high", "max"]
+    assert "明确要深度研究" in schema["description"]
+
+
+def test_a_top_tier_of_high_keeps_a_turn_out_of_max(env):
+    env.monkeypatch.setenv("FINBOT_KERNEL_TOP_TIER", "high")
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "max"})]), step(text="好")])
+    result, events = run(context=make_context())
+    assert _efforts(fake) == ["low", "high"] and result["audit"]["tier"] == "high"
+    assert tool_message(fake, 1)["note"].startswith("服务器设置的上限是 high 档")
+    assert not any(e.get("event") == "narration" and "后台" in e.get("text", "") for e in events)
+
+
+def test_a_deep_turn_may_take_more_steps(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_TOP_TIER", raising=False)
+    env.monkeypatch.setenv("FINBOT_KERNEL_LOOKUP_TIER", "same")
+    reads = [step(calls=[call(f"r{n}", "query_financials", {"symbol": "AAPL"})]) for n in range(loop.MAX_STEPS + 3)]
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "max"})]), *reads, step(text="研究结论")])
+    result, _ = run(context=make_context())
+    assert result["answer"] == "研究结论" and result["audit"]["stop_reason"] is None
+    assert len(fake.calls) == loop.MAX_STEPS + 5

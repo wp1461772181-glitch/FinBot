@@ -43,6 +43,7 @@ _SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_ne
                 "search_x": "x_post"}
 # Run one at a time after every read has been numbered, in call order: calculations work on the citations the reads just
 # registered, and an ``act`` call may rest on what this step's reads found.
+DEEP_SENTENCE = "这是深度研究，我转到后台慢慢做（最多约 15 分钟），你可以先去忙别的，做完我会推送告诉你。"
 _CALCULATIONS = ("calculate", "calculate_formula")
 
 logger = logging.getLogger(__name__)
@@ -471,6 +472,9 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
             planned = True
         if item.name == tiers.ESCALATE and run.tier != tier:
             await run.emit({"event": "tier", "tier": run.tier})
+            if run.tier == tiers.DEEP:      # the system's own sentence: where this turn goes and that it will come back to him
+                run.narration.append(DEEP_SENTENCE)
+                await run.emit({"event": "narration", "text": DEEP_SENTENCE, "system": True})
     # One checklist event per step: after a plan and the ticks the step's labels ask for, before the reads.
     if progress.mark_items(run, numbers) or planned:
         await run.emit({"event": "checklist", "items": [dict(entry) for entry in run.checklist]})

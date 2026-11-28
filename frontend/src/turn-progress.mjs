@@ -5,7 +5,7 @@
 export const KERNEL_TOOLS = ["escalate", "plan"];
 
 const STATUSES = ["pending", "doing", "done", "failed"];
-const TIER_LABELS = { mid: "中档", high: "高档" };
+const TIER_LABELS = { mid: "中档", high: "高档", max: "深度研究" };
 
 const list = (value) => (Array.isArray(value) ? value : []);
 

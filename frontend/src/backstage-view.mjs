@@ -62,7 +62,7 @@ export function formatTime(value, timeZone) {
   return `${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
-const TIERS = { low: "低档", mid: "中档", high: "高档" };
+const TIERS = { low: "低档", mid: "中档", high: "高档", max: "深度研究" };
 /** 低档 / 中档 / 高档, or a dash. */
 export function tierLabel(tier) {
   return TIERS[tier] ?? DASH;
