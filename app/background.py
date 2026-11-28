@@ -186,10 +186,14 @@ def run_selfcheck() -> None:
     owner = owner_hash_from_login_config()
     if not owner:
         return
-    row = selfcheck.run_once(owner, datetime.now(UTC))
+    now = datetime.now(UTC)
+    row = selfcheck.run_once(owner, now)
     if row:
         log.info("missed-alert check %s: %s (%s found, errors %s)", row.get("day"), row.get("outcome"), len(row.get("findings") or []),
                  sorted((row.get("checked") or {}).get("errors") or {}))
+        judged = asyncio.run(selfcheck.resend(row, owner))        # each finding sent again through the duty turn (design 7.2)
+        if judged:
+            log.info("missed-alert check %s: %s sent again (%s)", row.get("day"), len(judged), [r.get("decision") or r.get("outcome") for r in judged])
 
 
 _KNOWLEDGE_PARTS = None

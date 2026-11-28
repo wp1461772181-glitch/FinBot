@@ -37,7 +37,7 @@ def test_every_operation_is_a_catalogue_write_and_every_write_is_listed():
 def test_summaries_costs_and_tiers():
     assert all(act.SUMMARIES[name] for name in act.OPERATIONS) and set(act.SUMMARIES) == set(act.OPERATIONS)
     assert set(act.COST_NOTES) == set(act.TIER3)
-    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 46
+    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 47
     assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "revise_forecast")] == [1, 2, 3, 3, 3]
     assert act.TIER1[0] == "remember" and act.TIER3[-2:] == ("ingest_web_source", "revise_forecast")
     assert act.SUMMARIES["ingest_web_source"].startswith("把这段对话里联网搜到的一个网页或新闻存进资料库")
@@ -230,6 +230,7 @@ MINIMAL = {
     "record_view": {"symbol": "AAPL", "text": "看好", "quote": "用中文回答"}, "drop_view": {"symbol": "AAPL"},
     "rate_alert": {"verdict": "useful", "quote": "用中文回答"},
     "rate_answer": {"verdict": "bad", "reason": "数据太旧了"},
+    "report_missed": {"what": "英伟达 11-17 跌了 6% 没提醒我", "symbol": "NVDA"},
     "set_watch_rule": {"symbol": "INTC", "metric": "day_change", "levels": [{"threshold": 10, "level": "remind"}], "quote": "用中文回答"},
     "delete_watch_rule": {"rule_id": UUID},
     "set_watch_preset": {"key": "concentration", "enabled": False}, "set_alert_settings": {"sensitivity": "quiet"},

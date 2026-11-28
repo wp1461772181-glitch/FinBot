@@ -159,9 +159,10 @@ OPERATION_REGISTRY: dict[tuple[str, str], dict] = {
     ("PUT", "/agent-chat/local-model-profiles"): _no("只在本机开发模式开启，公开模式下直接 404"),
 }
 
-# Operations ``act`` has that no HTTP route corresponds to; naming one here keeps the "every operation is on a route" check honest.  None since 4e:
-# ``record_view`` and ``drop_view`` have the memory page's two view writes.
-KERNEL_ONLY_OPERATIONS: frozenset[str] = frozenset()
+# Operations ``act`` has that no HTTP route corresponds to; naming one here keeps the "every operation is on a route" check honest.
+# ``record_view`` and ``drop_view`` have the memory page's two view writes since 4e.  ``report_missed`` (11-28) has no page: 「这事怎么没告诉我」
+# is said in a conversation, and the rows are read by ``scripts.missed_reports``.
+KERNEL_ONLY_OPERATIONS: frozenset[str] = frozenset({"report_missed"})
 
 
 def operations_of(entry: dict) -> tuple[str, ...]:

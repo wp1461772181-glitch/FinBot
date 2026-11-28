@@ -9388,6 +9388,14 @@ async function routinesNoLegacy(ctx) {
     await check("待你确认");
     await page.locator("[data-testid=tab-tasks]").click(); await page.locator(RT_CARDS).first().waitFor({ timeout: 8000 }); await check("全部任务");
     await page.locator("[data-testid=tab-runs]").click(); await page.locator("[data-slot=timeline-item]").first().waitFor({ timeout: 8000 }); await check("运行记录");
+    // 手上的事 (11-28): the fourth tab reads GET /agent-chat/work, each item with its state, when, why a failed one failed and its conversation
+    await page.locator("[data-testid=tab-work]").click(); await page.locator("[data-testid=work-pane] [data-slot=timeline-item]").first().waitFor({ timeout: 8000 }); await check("手上的事");
+    const work = await page.evaluate(() => ({ items: document.querySelectorAll("[data-testid=work-pane] [data-slot=timeline-item]").length,
+      tones: [...document.querySelectorAll("[data-testid=work-status]")].map((e) => e.dataset.tone), failure: document.querySelector("[data-testid=work-failure]")?.textContent ?? "",
+      open: [...document.querySelectorAll("[data-testid=work-open]")].map((a) => a.getAttribute("href")), meta: document.querySelector("[data-testid=work-meta]")?.textContent ?? "" }));
+    assert(work.items === 4 && work.tones.join() === "progress,neutral,success,failure", `手上的事: ${JSON.stringify(work)}`);
+    assert(work.failure.includes("超过 20 分钟") && work.open.length === 2 && work.open.every((h) => h.startsWith("#/chat/c/")) && work.meta.includes("开始于 11-28 16:02"), `手上的事 lines: ${JSON.stringify(work)}`);
+    assert(new URL(page.url()).hash.includes("tab=work"), `the address keeps the tab: ${page.url()}`);
     await page.locator("[data-testid=tab-tasks]").click(); await page.locator("[data-testid=task-new]").first().click(); await page.locator(RT_DRAWER).waitFor({ timeout: 5000 });
     for (const section of ["basics", "time", "scope", "content"]) { await rtGo(page, section); await check(`抽屉 ${section}`); }
     // no order wording anywhere: the page is a list of routines and nods, never a trade
@@ -12073,7 +12081,7 @@ const CHECKS = [
   ["routines-states: skeleton after 400 ms, error bar + 重试, empty sentences, nothing waiting, one of the two lists failing", routinesStates],
   ["routines-tab-address: ?tab= and ?bot= are the address; a pasted link opens the same view; unknown values fall back", routinesTabAddress],
   ["routines-bot-section: a bot's settings page lists that bot's tasks and runs in the new components, 新建 fixes the bot and sends the old body, no save bar", routinesBotSection],
-  ["routines-no-legacy: the three tabs and the drawer's four sections hold no old-UI frame or class, no native select, no trade wording, no text under 12px", routinesNoLegacy],
+  ["routines-no-legacy: the four tabs and the drawer's four sections hold no old-UI frame or class, no native select, no trade wording, no text under 12px", routinesNoLegacy],
   ["latest-redirect-states: a company with a forecast lands on that forecast (section=versions), one with none on the forecast home, an unreadable list stops on its error sentence and 回到预测首页 leads to the forecast home; in all three the document never holds a data-legacy element or an old class", latestRedirectStates],
   ["research-bare-controls: the plain buttons on the forecast, judgment, evidence and material pages (outside data-slot parts) show the pointer, and the links the browser's own rule underlined keep their line", researchBareControls],
   ["routines-later-english: the English 「…」 menu of a suggested write reads Skip / Later / Ignore, Later sends the old later body, the sign-in dialog still reads Cancel", routinesLaterEnglish],

@@ -7,7 +7,7 @@ import { filingInventory } from "./filings.mjs";
 import { MATERIALS, materialList, analysisVersion, materialOriginal, ANALYSIS_SETTINGS } from "./materials.mjs";
 import { forecastList, forecastRoots, timeline, versionDetail, evaluations, monitorStatus, replayJob, REPLAY_JOB, workspace, job, revisionCandidates, JUDGMENTS } from "./forecasts.mjs";
 import { portfolioSummary, buildPortfolio } from "./portfolio.mjs";
-import { TASKS, RUNS, PROPOSALS, INBOX } from "./routines.mjs";
+import { TASKS, RUNS, PROPOSALS, INBOX, WORK } from "./routines.mjs";
 import { backstageRoutes } from "./backstage.mjs";
 import { OWNER_VIEWS, activeViews, viewHistory } from "./views.mjs";
 import { memoryOverview } from "./overview.mjs";
@@ -253,6 +253,7 @@ export function registerRoutes(route, reply) {
   route.get(`${A}/tasks`, own(({ state, query }) => ({ tasks: state.tasks.filter((t) => !query.get("bot_id") || t.bot_id === query.get("bot_id")) })));
   route.get(`${A}/tasks/runs`, own(({ state, query }) => ({ runs: state.runs.filter((r) => !query.get("bot_id") || TASKS.find((t) => t.id === r.task_id)?.bot_id === query.get("bot_id")) })));
   route.get(`${A}/tasks/proposals`, own(({ state }) => ({ proposals: state.proposals })));
+  route.get(`${A}/work`, own(() => ({ items: structuredClone(WORK) })));
   // P7.2: the routine writes.  Each keeps the request exactly as the page sent it (`state.routines.writes`: method, path, body) so a check reads the body back; the state moves
   // the way the server's does: a new task is listed, a patch merges into its task, and an inbox action sets the item's status the way fin_news_engine's
   // handle_inline_confirmation_action does (confirm: done / confirmed; skip: dismissed / skipped; later: read; the status route: whatever it is told; the card: a minted card).

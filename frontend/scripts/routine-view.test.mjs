@@ -41,3 +41,18 @@ test("the tasks and runs of one bot; no bot means all; a bot that is not a bot i
   assert.equal(botFilter(null, [{ id: bot }]), "");
   assert.equal(botFilter(bot, undefined), "");
 });
+
+test("手上的事: the tone and the one line of when", async () => {
+  const { workStatusKind, workWhen } = await import("../src/routine-view.mjs");
+  assert.equal(workStatusKind("done"), "success");
+  assert.equal(workStatusKind("failed"), "failure");
+  assert.equal(workStatusKind("running"), "progress");
+  assert.equal(workStatusKind("queued"), "neutral");
+  assert.equal(workStatusKind("stopped"), "neutral");
+  const at = { started_local: "11-28 16:02", ended_local: "11-28 16:05", next_run_local: "11-29 08:00" };
+  assert.equal(workWhen({ ...at, status: "running" }), "开始于 11-28 16:02");
+  assert.equal(workWhen({ ...at, status: "queued" }), "下次 11-29 08:00");
+  assert.equal(workWhen({ ...at, status: "failed" }), "11-28 16:05 结束");
+  assert.equal(workWhen({ ...at, ended_local: null, status: "done" }), "开始于 11-28 16:02");
+  assert.equal(workWhen({ status: "queued", started_local: null, ended_local: null, next_run_local: null }), "");
+});

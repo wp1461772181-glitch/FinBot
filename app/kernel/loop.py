@@ -122,7 +122,9 @@ def _tool_schemas(context) -> list[dict]:
     unattended = bool(getattr(context, "unattended", False))
     # search_x costs the owner money per post and needs his token: it is offered only where the server has one, and a scheduled run
     # (nobody watching) does not spend it, as the old turn's scheduled runs did not.
-    available = schemas(owner=owner, kernel=True, names=[n for n in READ_TOOLS if n != "search_x" or (x_search.configured() and not unattended)])
+    # open_page changes nothing: it opens a page of the web app for him, or hands back its link on a bridge (design 4.2); a scheduled run has no page.
+    names = [n for n in READ_TOOLS if n != "search_x" or (x_search.configured() and not unattended)] + (["open_page"] if owner and not unattended else [])
+    available = schemas(owner=owner, kernel=True, names=names)
     scope = getattr(context, "tool_scope", None)
     # The kernel's own tools go last whatever the ceiling is, so the list is the same for the whole turn.
     # A skill is offered to an owner who has any enabled (the endpoint puts their list on the context); a bot's scope does not take it away.
@@ -629,7 +631,8 @@ async def _latest_block(run: "_Run", text: str, previous: str | None, focus: str
     rows: list[dict] = []
     try:
         found, symbols = await latest_known.block_for(text, previous=previous, focus=focus, rows=rows,
-                                                      owner_hash=getattr(run.context, "owner_hash", None) if owner else None)
+                                                      owner_hash=getattr(run.context, "owner_hash", None) if owner else None,
+                                                      conversation_id=getattr(run.context, "conversation_id", None))
         if found:      # its lines are the turn's first citations: the model can answer from them without reading them again
             found = number_attached(run, found, rows)
     except Exception:

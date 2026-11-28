@@ -10,6 +10,22 @@ export function statusKind(status) {
   return "neutral";
 }
 
+/** The tone of a 手上的事 item's status (work.STATUSES and queued): done green, failed red, running in progress, queued and stopped plain. */
+export function workStatusKind(status) {
+  if (status === "done") return "success";
+  if (status === "failed") return "failure";
+  if (status === "running") return "progress";
+  return "neutral";
+}
+
+/** When a 手上的事 item is, in one short line: running since, queued for, or ended at (the server's local times); `t` translates the words. */
+export function workWhen(item, t = (text) => text) {
+  if (item.status === "running") return item.started_local ? t("开始于 {time}").replace("{time}", item.started_local) : "";
+  if (item.status === "queued") return item.next_run_local ? t("下次 {time}").replace("{time}", item.next_run_local) : "";
+  if (item.ended_local) return t("{time} 结束").replace("{time}", item.ended_local);
+  return item.started_local ? t("开始于 {time}").replace("{time}", item.started_local) : "";
+}
+
 /** "工作日 08:30 · 共 8 次"; the old list's words.  The time zone is its own item. */
 export function scheduleSummary(task, locale = "zh-CN") {
   return [scheduleLabel(task, locale), runsLabel(task, locale)].filter(Boolean).join(" · ");

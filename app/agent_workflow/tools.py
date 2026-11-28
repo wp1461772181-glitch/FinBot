@@ -10,6 +10,7 @@ from ..agent_tool_catalog import definitions,validate
 from ..knowledge.runtime import research_context
 from .models import AgentWebSource
 from .fp_flags import flag
+WEB_URL_DEFAULT='https://finbotai.me'     # the deployed web page (GitHub Pages); FINBOT_WEB_URL overrides it, https only (an open_page link may lead to where a key is entered)
 
 logger=logging.getLogger(__name__)
 
@@ -134,6 +135,8 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if name=='rate_alert':args['_match']=operation.get('match')
         # The answer the card named, the same way.
         if name=='rate_answer':args['_match']=operation.get('match')
+        # Where he said it: the record keeps the conversation and the turn.
+        if name=='report_missed':args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id');args['_quote']=operation.get('quote')
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
         if name in {'create_bot','update_bot','apply_role_template','undo_role_template','set_watch_rule','set_watch_preset','set_alert_settings'}:args['_fields']=operation.get('fields')
         # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
@@ -310,6 +313,12 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
     if name in {'select_stock','open_page'}:
         action={'event':'client_action','id':str(uuid.uuid4()),'action':name,**args}
         if emit:await emit(action)
+        if name=='open_page':
+            # The web opens it from the event; a bridge has no page to open, so the link goes back to the model to hand on.
+            from ..agent_tool_catalog import PAGE_PATHS
+            base=os.getenv('FINBOT_WEB_URL','').strip()
+            if not base.startswith('https://'):base=WEB_URL_DEFAULT
+            return result([{'client_action':action,'page':args['page'],'link':f"{base.rstrip('/')}/#{PAGE_PATHS[args['page']]}"}],'browser')
         return result([{'client_action':action}],'browser')
     if name=='review_filing':
         from ..models import SecFilingInventory
@@ -488,6 +497,14 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         except ValueError as exc:return error(str(exc))
         if row is None:return rate_answer_refusal()
         return result([{'status':'recorded','recorded':rate_answer_line(match,args['verdict'],row.get('reason')),'message_id':row['message_id']}],'answer feedback')
+    if name=='report_missed':
+        # Only reached through execute_reversible (the kernel's tier 1 or a pressed card): his 「这事怎么没告诉我」, in his words.
+        from .. import missed_reports
+        if not is_owner:return error('owner_login_required')
+        try:row=await asyncio.to_thread(missed_reports.record,context.owner_hash,args['what'],symbol=args.get('symbol'),quote=args.get('_quote'),
+                                        conversation_id=args.get('_conversation_id'),turn_id=args.get('_turn_id'))
+        except ValueError as exc:return error(str(exc))
+        return result([{'status':'recorded','recorded':missed_reports.recorded_line(row),'id':row['id']}],'missed report')
     if name=='search_configured_news':
         from .. import fin_news_engine as news
         call=asyncio.to_thread(

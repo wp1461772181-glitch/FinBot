@@ -15,7 +15,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ID = /^[0-9a-f-]{8,64}$/i;
 
 export const COMPANY_TABS = ["overview", "forecasts", "materials"];
-export const ROUTINE_TABS = ["confirm", "tasks", "runs"];
+export const ROUTINE_TABS = ["confirm", "tasks", "runs", "work"];
 export const SETTINGS_SECTIONS = ["models", "notifications", "appearance", "data", "account"];
 export const ASSISTANT_SECTIONS = ["bots", "skills", "memory", "news", "knowledge"];
 export const SOURCE_TYPES = ["official_filing", "uploaded_media"];

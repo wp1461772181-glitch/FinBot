@@ -32,11 +32,11 @@ GOLDEN = {
     # 5b-1: the owner's tools gain set_watch_rule / delete_watch_rule in act and the list_watch_rules read (the system text is unchanged).
     # 5c-3c: act gains rate_alert (the system text is unchanged).
     # 5d-3a: act gains rate_answer, and each tier-1 operation's line names its arguments (the system text is unchanged).
-    # 11-28 deep research: escalate takes depth max (both schemas change; the system texts are unchanged).
-    "owner": ("93ab5113d69286de2f9ff319e66f9df4a33463b22bcc96a12cfb48903f3aa046",
-               "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
+    # 11-28: escalate takes depth max; act gains report_missed; the owner gets open_page; the system text gains the report_missed and key lines.
+    "owner": ("0eb7b5cd8f48c2f352ec4a9b57376f9478a4aa009f8d2392956994af33e3910f",
+               "5324fbaeaf4d8e1aaa821a8208ff91c016adc63f0a3ca08a6277a642f9b25995"),
     # 6a: a guest's system prompt gains the line about what only the owner can do (``prompt.GUEST_NOTE``); the owner's is unchanged.
-    "guest": ("36a4a6c9ee1cdeeef86e81be9dc5d263a22e8acb719762466120b32b39c58666", "e02eb10753903050001bcd7b2958b43b174e6eb5c68cf837ae04753d8b6d3eff"),
+    "guest": ("36a4a6c9ee1cdeeef86e81be9dc5d263a22e8acb719762466120b32b39c58666", "8326995c39def007bd3949a5cd01526a6494ce66f3823e6a1308063c5ebf2080"),
 }
 
 
@@ -134,13 +134,10 @@ def by_symbol(env):
 
 # --- Review Focus 5: the switch off pins today's schemas and system text -------------------------------------------------------
 
-@pytest.mark.parametrize("setting", [None, "off", "OFF", "", "no"])
+@pytest.mark.parametrize("setting", ["off", "OFF"])      # 11-28: unset (and anything but off) is on
 def test_the_switch_off_leaves_schemas_and_system_text_as_they_were(env, setting):
     env.monkeypatch.setenv("FINBOT_KERNEL_INLINE_CATALOGUE", "off")     # the golden text is the one from before the inline-catalogue line
-    if setting is None:
-        env.monkeypatch.delenv("FINBOT_HELPER", raising=False)
-    else:
-        env.monkeypatch.setenv("FINBOT_HELPER", setting)
+    env.monkeypatch.setenv("FINBOT_HELPER", setting)
     for who, context in (("owner", make_context()), ("guest", guest_context())):
         schemas = loop._tool_schemas(context)
         messages = prompt.build_messages("q", context, [{"role": "user", "content": "q"}])
@@ -149,7 +146,7 @@ def test_the_switch_off_leaves_schemas_and_system_text_as_they_were(env, setting
 
 
 def test_the_switch_on_adds_the_tool_last_and_one_sentence_to_the_system_text(env):
-    env.monkeypatch.delenv("FINBOT_HELPER", raising=False)
+    env.monkeypatch.setenv("FINBOT_HELPER", "off")
     for context in (make_context(), guest_context()):
         before = loop._tool_schemas(context)
         env.monkeypatch.setenv("FINBOT_HELPER", "on")
@@ -158,11 +155,11 @@ def test_the_switch_on_adds_the_tool_last_and_one_sentence_to_the_system_text(en
         text_off = prompt.system_text()
         text_on = prompt.system_text(helper=True)
         assert text_on != text_off and prompt.HELPER_LINE in text_on and text_on.replace(prompt.HELPER_LINE + "\n", "") == text_off
-        env.monkeypatch.delenv("FINBOT_HELPER")
+        env.monkeypatch.setenv("FINBOT_HELPER", "off")
 
 
 def test_a_run_with_the_switch_off_sends_the_model_exactly_todays_schemas_and_system_text(env):
-    env.monkeypatch.delenv("FINBOT_HELPER", raising=False)
+    env.monkeypatch.setenv("FINBOT_HELPER", "off")
     model = install(env, [step(text="好")])
     run_turn()
     (sent,) = model.calls
@@ -645,3 +642,14 @@ def test_the_helper_is_given_the_read_schemas_without_say_and_item(on):
     schemas = helper.helper_schemas(loop._tool_schemas(make_context()), None)
     assert schemas and all(not {"say", "item"} & set(s["function"]["parameters"].get("properties", {})) for s in schemas)
     assert names(schemas) == [n for n in names(loop._tool_schemas(make_context())) if n not in helper.OWN_TOOLS]
+
+
+
+def test_the_app_default_is_on_and_off_takes_it_away(monkeypatch):
+    """11-28: on unless the server says off (the tests' own environment sets off, tests/conftest.py)."""
+    from app.kernel import helper
+    monkeypatch.delenv("FINBOT_HELPER", raising=False)
+    assert helper.enabled() is True
+    for value, expected in (("off", False), ("OFF", False), ("0", False), ("false", False), ("no", False), ("disabled", False), ("on", True), ("", True), ("1", True)):
+        monkeypatch.setenv("FINBOT_HELPER", value)
+        assert helper.enabled() is expected

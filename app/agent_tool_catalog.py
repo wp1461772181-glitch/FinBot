@@ -85,8 +85,16 @@ class InitializeArgs(SymbolArgs):
     days:int=Field(default=366,ge=1,le=3660)
 class ScanArgs(SymbolArgs):
     days:int|None=Field(default=None,ge=1,le=3650,description='Calendar days of history to backfill; omit for the incremental scan since the last saved watermark.')
+# The pages open_page names, each with the address it opens (the web's own routes, frontend/src/routes.mjs; agent-client-actions.mjs and
+# WorkspaceLayout.tsx know the same names).  The first nine are the old engine's; the rest came with the kernel (11-28, design 4.2: the
+# settings it never fills, a key or a token, it can still open for him).
+PAGE_PATHS={'overview':'/research','predictions':'/research/forecasts','materials':'/research/materials','sec':'/research/evidence',
+            'revisions':'/research/forecasts','evaluation':'/research/scores','agent':'/chat','knowledge':'/assistant/knowledge','memory':'/assistant/memory',
+            'settings_models':'/settings/models','settings_notifications':'/settings/notifications','settings_appearance':'/settings/appearance',
+            'settings_data':'/settings/data','settings_account':'/settings/account','routines':'/routines','work':'/routines?tab=work',
+            'portfolio':'/portfolio','bots':'/assistant/bots','skills':'/assistant/skills','news':'/assistant/news','backstage':'/backstage'}
 class PageArgs(Args):
-    page:Literal['overview','predictions','materials','sec','revisions','evaluation','agent','knowledge','memory']
+    page:Literal[tuple(PAGE_PATHS)]=Field(description="settings_models: models and their keys; settings_notifications: where messages go (Telegram, WeChat); settings_account: login; routines / work: tasks, 手上的事; portfolio: holdings; bots, skills, news, knowledge, memory: the assistant's pages; backstage: the records.")
 class StockArgs(SymbolArgs):pass
 class CardArgs(Args):
     question:str=Field(min_length=1,max_length=400)
@@ -288,6 +296,9 @@ class RateAnswerArgs(Args):
     def reason_only_when_bad(self):
         if self.verdict=='good':self.reason=None      # a reason goes with 不好 only: one given with 好 is dropped, not refused
         return self
+class ReportMissedArgs(Args):
+    what:str=Field(min_length=1,max_length=200,description="What he says he was not told and should have been, in one line (英伟达 11-17 跌了 6% 没提醒我; 美光的委托书没告诉我).")
+    symbol:str|None=Field(default=None,min_length=1,max_length=12,description='The stock it is about, when he names one or it is plain from the conversation.')
 class WatchLevelArgs(Args):
     threshold:float|int=Field(gt=0,description='The number at which this level fires, in the unit of the metric (a percent, dollars, or a multiple).')
     level:Literal['remind','urgent']=Field(description='remind: a notice. urgent: the owner asked for it to be loud (「加急」「紧急」「一定要叫我」). At most one urgent, and it is the further level.')
@@ -453,7 +464,7 @@ EXTRA=(
  ('add_to_research_queue',QueueArgs,'reversible','Add a requested symbol: owner database requires server confirmation; guest browser-local queue needs no server write.'),
  ('remove_from_research_queue',QueueArgs,'reversible','Remove a requested symbol, keeping materials and history. Owner database requires server confirmation; guest browser-local only.'),
  ('select_stock',StockArgs,'client','Select the current stock in the browser without fetching new data.'),
- ('open_page',PageArgs,'client','Open a named existing workspace page without changing data.'),
+ ('open_page',PageArgs,'client',"Open a page of the web app for the owner without changing anything: on the web it opens; on Telegram or WeChat give him the link the result carries. Use it for what only he may do himself: a model key, a login, a Telegram or WeChat binding — you never fill those, and he should not paste them into the chat; open the page and tell him what to put where."),
  ('ask_user',CardArgs,'card','Ask for a missing entity or let the user choose between options. Use when the reference is ambiguous.'),
  ('use_result_set',ExistingArgs,'card','Select exact one-based positions from a returned result set, then summarize them (for a set from an earlier turn: results returned in this turn are already numbered evidence, so cite their [n]) or propose a confirmed import/analyze/index.'),
  ('fetch_sec',FilingWriteArgs,'costly','Propose fetching a saved SEC filing original. Server confirmation required; optional accession or latest form.'),
@@ -503,6 +514,7 @@ EXTRA=(
  ('drop_view',DropViewArgs,'reversible',"Withdraw the owner's recorded view of one company when the USER asks (撤回我对英伟达的看法, 那个看法不算了). The view stays in the history as withdrawn."),
  ('rate_alert',RateAlertArgs,'reversible',"Record the owner's verdict (useful or not useful) on an alert, a duty message or the morning brief that he states in this turn (刚才英特尔那条没用, 今天的简报挺有用). symbol is the stock he names; leave it out when he names none (the newest one is meant). about is brief only when he speaks of the morning brief. The result names the message it matched: tell him which one in one line, and if he says it is the wrong one, call again with the symbol."),
  ('rate_answer',RateAnswerArgs,'reversible',"Record the owner's verdict (good or bad) on your previous answer in this conversation that he states in this turn (刚才那个回答不好，数据太旧了; 上一条答得不错; 那条改成好的). It is always the answer before this turn, never the one you are writing now: the code finds it. reason only with bad, when he says why. The result names the answer it matched (its first line and time): tell him in one line which one you recorded."),
+ ('report_missed',ReportMissedArgs,'reversible',"Record that the owner says he was not told something he should have been (这事怎么没告诉我, 英伟达跌这么多你怎么没说, 那份公告你没提醒我) when the USER says so in this turn. It only adds to the record of misses the system learns from (design 7.3: what is missed once becomes a rule or a test, so it is not missed twice); nothing else changes. After recording, look up why it was not told (query_alerts for what was sent around then) and tell him plainly; when a rule of his would catch it next time, propose one with set_watch_rule."),
  ('set_watch_rule',SetWatchRuleArgs,'reversible',"Propose one rule for when the owner wants to be told about a stock (「英特尔涨跌 10% 提醒我，20% 加急」, 「跌破 90 叫我」, 「成交量放大到平时 3 倍告诉我」), or change one of his rules with rule_id. You fill the fields only: the system writes the plain-language reading and a 30-day dry run on the card, so do not describe the rule yourself; tell him to check the card. The sentinel checks the rule every minute without a model. Only conditions that are numbers on price, volume or his holding are rules: a condition that needs reading content (news, policy, 「出利空」) is not, remember it as an instruction instead. Options, short interest and analyst ratings have no data here: say the system cannot watch them. Owner confirmation card."),
  ('set_watch_preset',SetWatchPresetArgs,'reversible',"Propose a change to one of the system's default watch rules when the owner asks (「单只占比的提醒改成 40%」, 「别再提醒我新高了」, 「恢复默认」): switch it off or on, new levels, or back to the default. You fill the fields only; the system writes the old and new reading and a 30-day dry run on the card. The stop price and filings are hard guarantees and cannot be turned off: tell him so. Owner confirmation card."),
  ('set_alert_settings',SetAlertSettingsArgs,'reversible',"Propose the owner's alert sensitivity (安静 quiet / 标准 standard / 灵敏 sensitive) and the 5-minute moves switch when he asks (「灵敏度调成安静」, 「开 5 分钟急动」). The card shows the sigma numbers in words. Owner confirmation card."),
@@ -510,11 +522,11 @@ EXTRA=(
  ('list_watch_rules',ListWatchRulesArgs,'read',"List what the system watches for the owner: the rules he set himself (id, plain-language reading, created on, when it last fired if known) and the system's default rules (each marked 系统默认, with whether it is on and its numbers, and which stocks it leaves to his own rules). Use it when he asks what you are watching for him, or before changing or deleting a rule or a default. Owner only."),
 )
 # Owner-only: they act on the owner's own records, so a guest neither sees nor proposes them.
-OWNER_ONLY={'review_filing','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template','record_view','drop_view','rate_alert','rate_answer','set_watch_rule','delete_watch_rule','list_watch_rules','set_watch_preset','set_alert_settings'}
+OWNER_ONLY={'review_filing','report_missed','remember','forget','create_routine','list_routines','update_routine','delete_routine','recall_conversations','read_past_conversation','notify_telegram','use_skill','save_skill','query_portfolio','record_trade','set_available_funds','set_position_plan','query_alerts','query_holdings_overview','search_x','list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template','record_view','drop_view','rate_alert','rate_answer','set_watch_rule','delete_watch_rule','list_watch_rules','set_watch_preset','set_alert_settings'}
 
 # Stage 3a: what only the kernel knows.  The old engine's classifier, its request_action schema, its tool list and its prompts stay as they
 # were before the branch (tests/test_x_search.py compares them): these names are not in them, and the three tools 3a widened show the old schema.
-KERNEL_ONLY=frozenset({'list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template','record_view','drop_view','rate_alert','rate_answer','read_turn','set_watch_rule','delete_watch_rule','list_watch_rules','set_watch_preset','set_alert_settings'})
+KERNEL_ONLY=frozenset({'list_models','list_work','create_bot','update_bot','delete_transaction','manage_skill','set_default_model','set_model_role','set_channel_prefs','apply_role_template','undo_role_template','record_view','drop_view','rate_alert','rate_answer','report_missed','read_turn','set_watch_rule','delete_watch_rule','list_watch_rules','set_watch_preset','set_alert_settings'})
 # Every base registry entry is read-only; write names come from catalogue levels.
 WriteTool=Literal[tuple(name for name,_,level,_ in EXTRA if level in {'reversible','costly'} and name not in KERNEL_ONLY)]
 class RequestActionArgs(Args):

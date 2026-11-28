@@ -933,6 +933,7 @@ export const PAGES = [
   // and nothing waiting.  The default state has one live proposal and one live suggested write; `stateWithRoutines` adds the extra tasks, the expired proposal and a second suggestion.
   { name: "routines-tasks", hash: "#/routines?tab=tasks", ready: routinesTasksLoaded },
   { name: "routines-runs", hash: "#/routines?tab=runs", ready: "[data-testid=runs-pane] [data-slot=timeline-item]" },
+  { name: "routines-work", hash: "#/routines?tab=work", ready: "[data-testid=work-pane] [data-slot=timeline-item]" },
   ...["basics", "time", "scope", "content"].map((section, index) => (
     { name: `routines-new-brief-${index + 1}`, hash: "#/routines?tab=tasks", ready: routinesTasksLoaded, element: DRAWER, before: async (page) => { await openNewTask(page, "brief", section); } })),
   { name: "routines-new-alert-content", hash: "#/routines?tab=tasks", ready: routinesTasksLoaded, element: DRAWER, before: async (page) => { await openNewTask(page, "alerts", "content"); } },
