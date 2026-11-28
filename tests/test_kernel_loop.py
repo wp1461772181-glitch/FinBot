@@ -62,6 +62,8 @@ def env(monkeypatch):
     monkeypatch.setattr(loop, "owner_credential_matches", lambda value: bool(value))
     monkeypatch.setattr(prompt, "owner_credential_matches", lambda value: bool(value))
     monkeypatch.setattr(act, "owner_credential_matches", lambda value: bool(value))
+    from app import permission_mode       # the owner's mode is 默认 unless a test chooses one (no database row read)
+    monkeypatch.setattr(permission_mode, "get", lambda owner: permission_mode.DEFAULT)
     invoked = []
 
     async def fake_invoke(name, args, context, *, emit=None, page_chars=None):

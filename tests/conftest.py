@@ -51,6 +51,8 @@ os.environ.setdefault("MODEL_CREDENTIAL_KEY", "pytest-model-credential-key-01234
 os.environ["FINBOT_ARCHIVE_BUILDS"] = "off"
 # The helper is on by default in the app (11-28); the kernel's tests describe the tool list without it, and the helper's own tests turn it on.
 os.environ["FINBOT_HELPER"] = "off"
+# The kernel tests were written for turns that start low; tests/test_kernel_tiers.py checks the default (mid) on its own.
+os.environ.setdefault("FINBOT_KERNEL_START_TIER", "low")
 
 # These imports must remain after DATABASE_URL is set so every application
 # module and test shares the disposable database engine.

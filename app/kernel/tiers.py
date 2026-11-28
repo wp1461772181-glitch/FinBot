@@ -1,4 +1,5 @@
-"""Thinking tiers.  A turn starts at ``low``; the model raises the tier with the kernel's own ``escalate`` tool.
+"""Thinking tiers.  A conversation turn starts at ``FINBOT_KERNEL_START_TIER`` (default ``mid``; 11-28, owner: the low tier decided
+whether to think harder and rarely did); the model raises the tier with the kernel's own ``escalate`` tool.
 
 How hard to think is the model's call, question by question (owner 11-22): a bot's stored effort is not read (11-28: it had become a
 ceiling the owner set by hand).  The only ceiling is the server's ``FINBOT_KERNEL_TOP_TIER`` (low / mid / high / max, default max:
@@ -33,6 +34,14 @@ def ceiling() -> str:
     return value if value in TIERS else DEEP
 
 
+def start_tier(top: str) -> str:
+    """Where a conversation turn starts: ``FINBOT_KERNEL_START_TIER`` (low / mid / high), default ``mid``, never above the turn's ceiling.
+    A helper and a wake turn keep starting at ``low`` (a helper's brief is a lookup; a wake turn is the frequent background check)."""
+    import os
+    value = (os.environ.get("FINBOT_KERNEL_START_TIER") or "").strip().lower()
+    return clamp(value if value in ("low", "mid", "high") else "mid", top)
+
+
 def lookup_tier() -> str | None:
     """The tier a lookup step runs at once a turn has gone up (design 4.4: 「查资料的步骤始终用低档，不管最后由哪一档来写」):
     ``FINBOT_KERNEL_LOOKUP_TIER`` (low / mid / high), default ``low``; ``same`` turns it off (every step at the turn's tier)."""
@@ -58,6 +67,8 @@ def escalate(run, args: dict) -> dict:
         run.tier = tier
     if tier != depth:
         note = f"服务器设置的上限是 {tier} 档，已按 {tier} 档继续。"
+    elif before == run.tier:
+        note = f"这一轮已经在 {run.tier} 档，请继续。"
     else:
         note = f"已切换到 {tier} 档，请继续。"
     if run.tier == DEEP and before != DEEP:
