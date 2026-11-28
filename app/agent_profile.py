@@ -30,8 +30,14 @@ from .agent_chat_models import AgentBot, AgentMessage, AgentProfileItem
 from .database import SessionLocal
 from .agent_workflow.fp_flags import flag
 
-KINDS = ("preference", "about_me", "instruction")
-KIND_LABELS = {"preference": "偏好", "about_me": "关于我", "instruction": "长期指令"}
+KINDS = ("preference", "about_me", "instruction", "style", "recent")
+KIND_LABELS = {"preference": "偏好", "about_me": "关于我", "instruction": "长期指令", "style": "相处方式", "recent": "近况"}
+# 11-28 (docs/finbot-humanlike-plan-2026-11-28, B): what it knows of him as a person.  ``style``: how to talk with him (how much he knows,
+# how much detail, his tone); a guess he confirms, like any other.  ``recent``: what is on his mind lately (dated); used at once without
+# a confirmation (it only helps pick up a thread, never a conclusion or a figure), dropped from the block after RECENT_DAYS without being
+# seen again and archived by the monthly review, at most RECENT_MAX at a time (the oldest archived first).
+RECENT_DAYS = 30
+RECENT_MAX = 8
 # manual: the owner typed the item on the memory page (UX batch 3); its quote is what they typed.  It ranks
 # with explicit (said in chat and confirmed on a card): both are the owner's outright word.
 # pattern: proposed by the monthly review from how he writes (status ``proposed`` until he confirms; confirming keeps the origin).
@@ -517,7 +523,21 @@ def _line(row: AgentProfileItem, layer: str = "") -> str:
     origin = "" if row.origin in OWNER_ORIGINS else ("·你确认的推测" if row.origin == "pattern" else "·推断")
     settled = "·" + SETTLED_LABEL if row.settled_at else ""
     chosen = f"·模板「{_template_label(row.template)}」" if row.template else ""    # he chose that template: true information for the model
-    return f"- {handle(row.id)} [{KIND_LABELS[row.kind]}{chosen}{origin}{settled}{layer}] {row.text}"
+    seen = f"·{(row.last_seen_at or row.created_at):%m-%d}" if row.kind == "recent" and (row.last_seen_at or row.created_at) else ""
+    # 11-28 (plan C): a standing instruction carries his words, so it is read as what he meant then, not as a rule a word sets off.
+    said = ""
+    quote = " ".join(str(row.quote or "").split())
+    if row.kind == "instruction" and row.origin in OWNER_ORIGINS and quote and _plain(quote) != _plain(row.text):
+        said = f"（他的原话：「{quote[:80]}」）"
+    return f"- {handle(row.id)} [{KIND_LABELS[row.kind]}{seen}{chosen}{origin}{settled}{layer}] {row.text}{said}"
+
+
+def _fresh(row: AgentProfileItem, now: datetime) -> bool:
+    """A 近况 not seen again for RECENT_DAYS is no longer sent (the monthly review archives it); every other item is."""
+    if row.kind != "recent":
+        return True
+    seen = row.last_seen_at or row.created_at
+    return seen is None or (now - seen).days < RECENT_DAYS
 
 
 def _pick(rows, lines, budget: int) -> list[tuple]:
@@ -546,8 +566,9 @@ def render_block(owner_hash: str, bot_id: str | None = None, *, every_bot: bool 
     most 30 lines and 2 KB; the default bot (``every_bot``) also gets the other bots' items, labelled with
     the bot's name, within another 30 lines and 2 KB.  Without a bot only the global layer is sent."""
     bot = _as_uuid(bot_id)
+    now = datetime.now(UTC)
     with SessionLocal() as db:
-        active = _active(db, owner_hash)
+        active = [r for r in _active(db, owner_hash) if _fresh(r, now)]
         proposed = _visible(_proposed(db, owner_hash), bot, every_bot)
         names = _bot_names(db, owner_hash)
     guesses = _proposed_lines(proposed)
@@ -693,6 +714,8 @@ def add_noticed(owner_hash: str, *, kind: str, text: str, quote: str, bot_id: st
     if kind not in KINDS or not text or len(text) > TEXT_MAX_CHARS or len(quote) > TEXT_MAX_CHARS or not quote:
         raise ProfileError("invalid_proposal")
     now = now or datetime.now(UTC)
+    if kind == "recent":
+        return _add_recent(owner_hash, text=text, quote=quote, bot_id=bot_id, message_id=message_id, now=now, by=by)
     with SessionLocal() as db:
         _lock(db, owner_hash)
         layer = _bot(db, owner_hash, bot_id)
@@ -717,6 +740,49 @@ def add_noticed(owner_hash: str, *, kind: str, text: str, quote: str, bot_id: st
             _event(db, old, "archived", by, at=now, reason=memory_events.LIMIT, basis={"by_item": row.id})
         db.commit()
         return {"status": "added", "item": serialize(row, _bot_names(db, owner_hash))}
+
+
+def _add_recent(owner_hash: str, *, text: str, quote: str, bot_id, message_id, now: datetime, by) -> dict:
+    """A 近况 the kernel model noticed: active at once (origin inferred), dated; the same text seen again only moves its date.  Past
+    RECENT_MAX the oldest 近况 is archived."""
+    with SessionLocal() as db:
+        _lock(db, owner_hash)
+        layer = _bot(db, owner_hash, bot_id)
+        rows = [r for r in _active(db, owner_hash) if r.kind == "recent"]
+        same = next((r for r in rows if _plain(r.text) == _plain(text)), None)
+        if same is not None:
+            same.last_seen_at = now
+            db.commit()
+            return {"status": "duplicate", "item": serialize(same, _bot_names(db, owner_hash))}
+        source = _as_uuid(message_id)
+        row = AgentProfileItem(owner_hash=owner_hash, kind="recent", topic=None, text=text, origin="inferred", status="active", quote=quote,
+                               source_message_id=source, bot_id=layer, review_run=None, created_at=now, updated_at=now, last_seen_at=now)
+        db.add(row)
+        db.flush()
+        _event(db, row, "noticed", by, at=now, basis={"quote": quote, "message_id": source})
+        floor = datetime.min.replace(tzinfo=UTC)
+        for old in sorted(rows, key=lambda r: (r.last_seen_at or r.created_at or floor))[:max(0, len(rows) + 1 - RECENT_MAX)]:
+            old.status = "archived"
+            _event(db, old, "archived", by, at=now, reason=memory_events.LIMIT, basis={"by_item": row.id})
+        try:
+            _evict(db, owner_hash, layer, by)
+        except ProfileError:
+            db.rollback()
+            raise
+        db.commit()
+        return {"status": "added", "item": serialize(row, _bot_names(db, owner_hash))}
+
+
+def archive_stale_recent(owner_hash: str, now: datetime, by: memory_events.Actor | None = None) -> int:
+    """The monthly review archives every 近况 not seen again for RECENT_DAYS (it is already left out of the block)."""
+    with SessionLocal() as db:
+        _lock(db, owner_hash)
+        stale = [r for r in _active(db, owner_hash) if r.kind == "recent" and not _fresh(r, now)]
+        for row in stale:
+            row.status = "archived"
+            _event(db, row, "archived", by, at=now, reason=memory_events.STALE)
+        db.commit()
+        return len(stale)
 
 
 def waiting_guesses(owner_hash: str, since: datetime | None) -> list[dict]:

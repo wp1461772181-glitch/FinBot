@@ -1,7 +1,7 @@
 import { ApiError, agentPath, ownerHeaders } from "./base";
 import { restoreFailText } from "../memory-items.mjs";
 
-export type ProfileItem = { id:string; handle:string; kind:"preference"|"about_me"|"instruction"; topic:string|null; text:string; origin:"explicit"|"inferred"|"manual"|"pattern"; quote:string; status:"active"|"archived"|"proposed"; examples?:ProfileExample[]|null; scope:"global"|"bot"; bot_id:string|null; bot_name:string|null; created_at:string|null; updated_at:string|null; last_used_at:string|null; last_seen_at?:string|null; archived_at?:string|null; archived_reason?:string|null; settled_at?:string|null; settled_label?:string; template?:string|null; template_label?:string|null };
+export type ProfileItem = { id:string; handle:string; kind:"preference"|"about_me"|"instruction"|"style"|"recent"; topic:string|null; text:string; origin:"explicit"|"inferred"|"manual"|"pattern"; quote:string; status:"active"|"archived"|"proposed"; examples?:ProfileExample[]|null; scope:"global"|"bot"; bot_id:string|null; bot_name:string|null; created_at:string|null; updated_at:string|null; last_used_at:string|null; last_seen_at?:string|null; archived_at?:string|null; archived_reason?:string|null; settled_at?:string|null; settled_label?:string; template?:string|null; template_label?:string|null };
 export type ProfileExample = { message_id:string; quote:string; date:string|null };
 export type ProfileBot = { id:string; name:string; is_default:boolean };
 export type RecallItem = { conversation_id:string; title:string; date:string|null; summary:string; kind:"summary"|"questions"; link:string; bot_id:string|null; bot_name:string|null };

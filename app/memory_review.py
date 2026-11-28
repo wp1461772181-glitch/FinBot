@@ -45,8 +45,9 @@ JOB_NAME = "每月整理记忆"
 _CONTROL_PREFIXES = ("confirm:", "cancel:", "change:", "authorize:", "reply:")  # button presses are the server's words
 
 PROMPT = (
-    "你在读一位股票研究助手的所有者最近说过的话（messages，每条有 id、date、text），找出他没有明说成规矩的两类东西：\n"
-    "习惯（type=habit）：他怎么提问、先看什么、什么时候问；关注（type=interest）：他最近反复在看的公司、行业或话题。\n"
+    "你在读一位股票研究助手的所有者最近说过的话（messages，每条有 id、date、text），找出他没有明说成规矩的三类东西：\n"
+    "习惯（type=habit）：他怎么提问、先看什么、什么时候问；关注（type=interest）：他最近反复在看的公司、行业或话题；"
+    "相处方式（type=style）：怎么和他说话最合适，比如他懂多少（老手还是刚入门）、喜欢详细还是简短、说话轻松还是严肃、爱不爱开玩笑。\n"
     "known 是已经记下的内容，不要重复。最多给 8 条。每条给：text（一句中文，不超过 80 字，写成对他的观察）、type、"
     "examples（2 到 5 条，每条是 {\"message_id\": 那条消息的 id, \"quote\": 从那条消息里原样抄下的一小段}）。"
     "例句必须来自不同的消息。不评价他财务决定的好坏，不给建议，不猜他的身份。\n"
@@ -148,7 +149,8 @@ def _checked(item, by_id: dict) -> dict | None:
     kept = _valid_examples(examples, by_id, MAX_EXAMPLES)
     if len({e["message_id"] for e in kept}) < MIN_EXAMPLES:
         return None
-    kind = "about_me" if str(item.get("type") or item.get("kind") or "").strip().lower() in ("interest", "about_me") else "preference"
+    said = str(item.get("type") or item.get("kind") or "").strip().lower()
+    kind = "about_me" if said in ("interest", "about_me") else "style" if said == "style" else "preference"
     return {"text": text, "kind": kind, "examples": [{k: v for k, v in e.items() if k != "at"} for e in kept]}
 
 
@@ -215,6 +217,7 @@ def run(owner_hash: str, now: datetime, last_run_at: datetime | None) -> dict:
     counts = profile.review_counts(owner_hash, last_run_at)
     run_id = uuid.uuid4()           # made here so what this run archives as stale is logged under it too (memory_events)
     archived = profile.archive_stale_proposed(owner_hash, now, ARCHIVE_DAYS, by=memory_events.review(run_id))
+    archived += profile.archive_stale_recent(owner_hash, now, by=memory_events.review(run_id))     # 近况 not seen for RECENT_DAYS
     by_id = {m["id"]: m for m in window}
     active = profile.active_for_review(owner_hash)
     handles = {a["handle"].lstrip("#"): a["id"] for a in active}

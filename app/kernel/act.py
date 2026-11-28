@@ -297,9 +297,11 @@ REMEMBER_HINTS = {"quote_not_owners": "quote 必须是用户自己在这段对�
 NOTICED_TITLE = "记下一条推测"
 NOTICED_NOTE = "记成了一条推测（未经他确认，只影响回答的详略和先后）。用一句话告诉他你记了什么；他说『不对』『忘掉』或在记忆页点『不对』就会删掉。"
 NOTICED_REASONS = {"already_noticed": "已经有这条推测了。", "rejected_before": "这条他否过。"}
-NOTICED_KINDS = ("preference", "about_me")       # a standing instruction is his to state; it is not guessed
+NOTICED_KINDS = ("preference", "about_me", "style", "recent")     # a standing instruction is his to state; it is not guessed
+# A 近况 is used at once and fades by itself (agent_profile.RECENT_DAYS): nothing for him to confirm, so nothing to announce.
+RECENT_NOTE = "记下了他的近况（直接生效，30 天没再提就不再用）。不用特意告诉他，接着聊就行；他说『忘掉』就删。"
 NOTICED_PER_TURN = 2                             # the system text says one or two; the code keeps it to that
-NOTICED_HINTS = {"noticed_kind": "推测只记偏好（preference）或关于他的背景（about_me）；长期指令要他自己明说。",
+NOTICED_HINTS = {"noticed_kind": "推测只记偏好（preference）、关于他的背景（about_me）、相处方式（style）或近况（recent）；长期指令要他自己明说。",
                  "noticed_quote_too_short": "推测的引用要是他原话里完整的一句或半句（至少 4 个字）。",
                  "noticed_turn_cap": "这一轮已经记了两条推测，够了；其余的不用记。"}
 SYSTEM_NOTE_PREFIX = "[系统提示："               # the omitted-turns marker: a system line in a user-role message, not his words
@@ -997,7 +999,7 @@ async def _run_at_once_now(run, prepared: Prepared) -> tuple[dict, str]:
         return {"ok": False, "data": [{**facts, **reason, "status": "failed", "title": title}]}, f"failed:{code}"
     undo = UNDO.get(operation["name"], UNDO_OTHER).replace("{company}", owner_views.display_name(operation["arguments"].get("symbol") or ""))
     if operation["name"] == "remember" and operation["arguments"].get("basis") == "noticed":
-        undo = NOTICED_NOTE
+        undo = RECENT_NOTE if operation["arguments"].get("kind") == "recent" else NOTICED_NOTE
     recorded = {"recorded": operation["arguments"]["text"]} if operation["name"] == "record_view" else {}
     if operation["name"] == "rate_alert":      # the line the tool wrote names the message it matched
         row = next(iter(texts.execution_rows(value)), {})

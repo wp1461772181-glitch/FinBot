@@ -440,6 +440,8 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
             try:value=await asyncio.to_thread(profile.add_noticed,context.owner_hash,kind=args['kind'],text=args['text'],quote=args['quote'],
                                               bot_id=args.get('_bot_id'),message_id=args.get('_source_message_id'),by=_memory_actor(context,args))
             except profile.ProfileError as exc:return error(str(exc))
+            if value['status']=='duplicate' and args['kind']=='recent':     # the same 近况 again: its date moved, nothing new to say
+                return result([{'status':'noticed','text':value['item']['text'],'handle':value['item']['handle']}],'owner profile')
             if value['status']!='added':return error('already_noticed' if value['status']=='duplicate' else 'rejected_before')
             return result([{'status':'noticed','text':value['item']['text'],'handle':value['item']['handle']}],'owner profile')
         try:value=await asyncio.to_thread(profile.add_item,context.owner_hash,origin='explicit',message=args['quote'],

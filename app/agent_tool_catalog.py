@@ -149,7 +149,7 @@ class RetrievalDiagnosticsArgs(Args):
     symbol:str|None=Field(default=None,pattern=r'^[A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?$')
     kind:Literal['material','analysis','faq']|None=None
 class RememberArgs(Args):
-    kind:Literal['preference','about_me','instruction']
+    kind:Literal['preference','about_me','instruction','style','recent']=Field(description='preference: how he wants answers; about_me: who he is, what he holds or follows; instruction: a standing rule he stated; style: how to talk with him (how much he knows, how much detail, his tone); recent: what is on his mind lately (fades after 30 days unseen).')
     topic:str|None=Field(default=None,pattern=r'^[a-z][a-z0-9_]{0,39}$',description='Short slug of the setting this changes (currency_unit, answer_language, answer_order); a newer item with the same kind and topic replaces the older one. Null when it replaces nothing.')
     text:str=Field(min_length=1,max_length=200,description='Short note of what to remember, in the user\'s language.')
     quote:str=Field(min_length=2,max_length=200,description="The user's own words, copied character for character: from this turn when he asks for it now; with basis noticed, from any of his messages in this conversation. The server checks the quote against his messages.")

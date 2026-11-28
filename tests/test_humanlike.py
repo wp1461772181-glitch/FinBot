@@ -122,3 +122,86 @@ def test_the_cleanup_names_only_the_two_old_instructions():
              {"id": "4", "status": "archived", "kind": "instruction", "text": "回答前先上网搜索"},
              {"id": "5", "status": "active", "kind": "preference", "text": "回答前先上网搜索"}]
     assert [(a, i["id"], n) for a, i, n in planned(items)] == [("archive", "1", None), ("rewrite", "2", "涉及最新消息和行情时先联网查")]
+
+
+# --- step 2: who he is as a person (plan B, C) ------------------------------------------------------------------------------------------
+
+from datetime import UTC, timedelta  # noqa: E402
+
+from app import memory_review  # noqa: E402
+from app.agent_chat_models import AgentProfileItem  # noqa: E402
+from app.database import SessionLocal  # noqa: E402
+
+OWNER = "h" * 64
+
+
+@pytest.fixture
+def clean_owner(disposable_database):
+    from app.agent_chat_models import AgentBot, AgentConversation, AgentMessage
+    from app.database import Base, engine
+    from app.memory_events import MemoryEvent
+    Base.metadata.create_all(engine, tables=[AgentProfileItem.__table__, AgentBot.__table__, AgentConversation.__table__,
+                                             AgentMessage.__table__, MemoryEvent.__table__])
+
+    def wipe():
+        with SessionLocal() as db:
+            db.query(AgentProfileItem).filter(AgentProfileItem.owner_hash == OWNER).delete()
+            db.commit()
+    wipe()
+    yield OWNER
+    wipe()
+
+
+def test_a_recent_item_is_used_at_once_dated_and_the_same_one_only_moves_its_date(clean_owner):
+    now = datetime(2026, 11, 28, 12, tzinfo=UTC)
+    added = profile.add_noticed(clean_owner, kind="recent", text="在找还没被广泛关注的潜力股", quote="主要是针对于那种暂时未获得太多关注的潜力股公司", now=now)
+    assert added["status"] == "added" and added["item"]["status"] == "active" and added["item"]["kind"] == "recent"
+    again = profile.add_noticed(clean_owner, kind="recent", text="在找还没被广泛关注的潜力股", quote="潜力股", now=now + timedelta(days=5))
+    assert again["status"] == "duplicate"
+    block, _ = profile.render_block(clean_owner)
+    assert "[近况·12-03·推断] 在找还没被广泛关注的潜力股" in block
+
+
+def test_a_recent_item_not_seen_for_thirty_days_leaves_the_block_and_the_review_archives_it(clean_owner):
+    old = datetime.now(UTC) - timedelta(days=31)
+    profile.add_noticed(clean_owner, kind="recent", text="担心加息会让股价再跌", quote="加息的话我感觉还会再跌啊", now=old)
+    assert profile.render_block(clean_owner)[0] is None
+    assert profile.archive_stale_recent(clean_owner, datetime.now(UTC)) == 1
+    assert [i["status"] for i in profile.list_items(clean_owner)] == ["archived"]
+
+
+def test_at_most_eight_recent_items_the_oldest_goes_first(clean_owner):
+    start = datetime.now(UTC) - timedelta(days=9)
+    for day in range(9):
+        profile.add_noticed(clean_owner, kind="recent", text=f"第 {day} 件最近在想的事", quote=f"第 {day} 件事", now=start + timedelta(days=day))
+    items = profile.list_items(clean_owner)
+    active = [i["text"] for i in items if i["status"] == "active"]
+    assert len(active) == 8 and "第 0 件最近在想的事" not in active
+
+
+def test_a_style_guess_waits_for_him_like_any_guess(clean_owner):
+    added = profile.add_noticed(clean_owner, kind="style", text="他是刚入门的新手，喜欢口语、少用术语", quote="我刚开始炒股，什么是市盈率啊")
+    assert added["item"]["status"] == "proposed" and added["item"]["kind"] == "style"
+
+
+def test_a_standing_instruction_carries_his_words(clean_owner):
+    profile.add_item(clean_owner, kind="instruction", text="找新闻默认最近 7 天", quote="找新闻没说时间就默认最近7天", message="以后找新闻没说时间就默认最近7天",
+                     origin="explicit")
+    block, _ = profile.render_block(clean_owner)
+    assert "[长期指令] 找新闻默认最近 7 天（他的原话：「找新闻没说时间就默认最近7天」）" in block
+
+
+def test_the_monthly_review_also_looks_for_how_to_talk_with_him():
+    assert "相处方式（type=style）" in memory_review.PROMPT
+    examples = [{"message_id": "m1", "quote": "什么是市盈率"}, {"message_id": "m2", "quote": "听着好复杂"}]
+    by_id = {"m1": {"id": "m1", "content": "我刚开始炒股，什么是市盈率啊", "at": None, "date": ""},
+             "m2": {"id": "m2", "content": "听着好复杂", "at": None, "date": ""}}
+    checked = memory_review._checked({"text": "他刚入门，喜欢大白话", "type": "style", "examples": examples}, by_id)
+    assert checked is not None and checked["kind"] == "style"
+
+
+def test_the_model_may_note_style_and_recent_and_is_told_how_each_works():
+    from app.kernel import act
+    assert {"style", "recent"} <= set(act.NOTICED_KINDS) and "不用特意告诉他" in act.RECENT_NOTE
+    text = prompt.system_text()
+    assert "相处方式（kind=style" in text and "近况（kind=recent" in text

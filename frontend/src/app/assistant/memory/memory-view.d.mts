@@ -6,3 +6,6 @@ export declare const MAX_TEXT: number;
 export declare function isInferred(item: ProfileItem): boolean;
 export declare function scopeChoices(item: ProfileItem, bots: ProfileBot[]): { bots: ProfileBot[]; gone: boolean };
 export declare function canSaveEdit(text: string): boolean;
+export declare const PORTRAIT_KINDS: readonly ProfileItem["kind"][];
+export declare function isPortrait(item: ProfileItem): boolean;
+export declare function canConfirm(item: ProfileItem): boolean;

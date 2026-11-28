@@ -10119,6 +10119,30 @@ async function permissionModes(ctx) {
   return "three modes, 默认 chosen with its line; 完全放行 sends one PUT {mode:full} and its line replaces the default one; choosing it again sends nothing; three always-lines; guest has no card; no sideways overflow at 390";
 }
 
+/** 活人感 (11-28): an active 相处方式 and 近况 sit apart in 「它对你的了解」, above the layers and not in them; a 近况 has no 确认, a style guess the
+ * owner confirmed keeps its edit and delete; nothing is sent by opening the page. */
+async function memoryPortrait(ctx) {
+  const state = buildState();
+  const base = state.assistant.profile[0];
+  state.assistant.profile.push({ ...base, id: "pf000000-0000-4000-8000-000000000091", handle: "P91", kind: "recent", text: "在找还没被广泛关注的潜力股", origin: "inferred", quote: "暂时未获得太多关注的潜力股" },
+                               { ...base, id: "pf000000-0000-4000-8000-000000000092", handle: "P92", kind: "style", text: "喜欢大白话，少用术语", origin: "pattern", quote: "听着好复杂" });
+  const view = await asOpen(ctx, "memory portrait", "#/assistant/memory", "[data-testid=memory-portrait]", { state, width: 390 });
+  try {
+    const { page } = view;
+    const portrait = page.locator("[data-testid=memory-portrait]");
+    assert((await portrait.locator("[data-testid=memory-item]").count()) === 2, "the portrait does not hold the two items");
+    assert((await page.locator("[data-testid=memory-layer] [data-testid=memory-item]", { hasText: "潜力股" }).count()) === 0, "the 近况 is also in a layer");
+    const recent = portrait.locator("[data-testid=memory-item]", { hasText: "潜力股" });
+    assert((await recent.locator("[data-testid=memory-kind]").innerText()).trim() === "近况", "the 近况 label is missing");
+    assert((await recent.locator("[data-testid=memory-confirm]").count()) === 0, "a 近况 offers 确认");
+    assert((await portrait.locator("[data-testid=memory-item]", { hasText: "大白话" }).locator("[data-testid=memory-kind]").innerText()).trim() === "相处方式", "the 相处方式 label is missing");
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert(wide <= 0, `sideways overflow of ${wide}px at 390`);
+    assert(view.mock.state.assistant.writes.length === 0, "opening the page wrote something");
+  } finally { await view.close(); }
+  return "相处方式 and 近况 sit apart in 「它对你的了解」 and not in a layer; labels; no 确认 on a 近况; no sideways overflow at 390; no write";
+}
+
 async function memoryNotesOnce(ctx) {
   const PROFILE = AS.memory.load.paragraphs[0], SCOPE = AS.memory.load.paragraphs[1], RECALL = AS.memory.recall.load.paragraphs[0];
   const times = (text, note) => text.split(note).length - 1;
@@ -12123,6 +12147,7 @@ const CHECKS = [
   ["skills-keyboard: a skill made and saved with the keyboard alone, the card's 「…」 menu with Esc returning the focus, the editor closed with Esc and the focus back on 编辑", skillsKeyboard],
   ["memory-ops: the nine memory operations (add ×3, edit with Enter / Esc, scope, 确认 only on inferred, delete by hold, the 往事 tab in the address, search only on submit, the bot filter, open a conversation) send the old requests; a refresh keeps the tab", memoryOps],
   ["owner-views: the company page's 你的看法 card (current view, his words, date, folded history, delete with a confirm) and the memory page's section", ownerViews],
+  ["memory-portrait: 相处方式 and 近况 shown apart in 「它对你的了解」, a 近况 without 确认", memoryPortrait],
   ["permission-modes: the account page's 权限 card: three modes, the chosen one's line, one PUT per change, none for the same choice, no card for a guest", permissionModes],
   ["watch-rules: the memory page's rules block: his rules, the system defaults (a hard guarantee has no switch), the switch, the threshold edit, restore, the sensitivity, the 5-minute switch and delete each send the contract's write", watchRules],
   ["memory-notes-once: each tab's one sentence appears exactly once, word for word as the old page, and not on the other tab; inferred items carry 推断 and 确认, the others neither", memoryNotesOnce],
