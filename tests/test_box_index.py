@@ -248,12 +248,12 @@ def test_one_source_kind_failing_does_not_stop_the_others_or_the_indexing(monkey
     def sync(factory, tok, gen, *, source_type, batch_size):
         if source_type == "sec":
             raise RuntimeError("boom")
-        return {"scanned": 1, "accepted": 1}
+        return {"scanned": 1, "accepted": 1, "documents": 1, "chunks": 3, "skipped": 0}
     monkeypatch.setattr("app.knowledge.source_sync.sync_source_batch", sync)
     monkeypatch.setattr("app.knowledge.indexing.index_pending", lambda *a, **k: {"indexed": 0, "failed": 0, "idle": 1})
     monkeypatch.setattr(box_index, "_has_work", lambda factory, generation: False)
     result = box_index.run_once(session_factory=object(), parts=box_index.Parts(object(), object(), Gen()))
-    assert result["synced"]["sec"] == {"error": True} and result["synced"]["faq"] == {"scanned": 1, "accepted": 1}
+    assert result["synced"]["sec"] == {"error": True} and result["synced"]["faq"] == {"scanned": 1, "documents": 1, "chunks": 3, "skipped": 0}
 
 
 def test_the_generation_is_the_one_the_vector_store_holds_on_the_box():
@@ -423,3 +423,17 @@ def test_real_index_tasks_ack_on_the_stores_receipts_and_retry_failed_requeues(k
     assert box_index.retry_failed(knowledge_db) == 1
     with knowledge_db() as s:
         assert s.query(KnowledgeIndexTask).filter_by(generation=generation, status="pending", attempts=0).count() == 1
+
+
+
+def test_the_loop_says_nothing_when_a_pass_only_rescanned_unchanged_sources(monkeypatch, caplog):
+    """A keyset cycle starts again from the top: unchanged sources are scanned and skipped, which is not news (11-28 backfill)."""
+    import logging
+    from app import background
+    monkeypatch.setattr(background, "_KNOWLEDGE_PARTS", "parts")
+    monkeypatch.setattr(box_index, "shadow_writing_live", lambda environ=None: False)
+    monkeypatch.setattr(box_index, "run_once", lambda parts=None, **k: {"synced": {"sec": {"scanned": 5, "documents": 0, "chunks": 0, "skipped": 5}},
+                                                                         "indexed": {"indexed": 0, "failed": 0, "idle": 1}})
+    with caplog.at_level(logging.INFO, logger="app.background"):
+        background.run_knowledge_index()
+    assert "knowledge index:" not in caplog.text

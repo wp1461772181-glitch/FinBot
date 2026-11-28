@@ -54,11 +54,12 @@ def main(argv=None) -> int:
         if result.get("skipped") or result.get("embedding_down"):
             print("这一轮没跑：" + (result.get("skipped") or "向量化服务不可用 " + result["embedding_down"]), flush=True)
             break
-        accepted = sum((v or {}).get("accepted") or 0 for v in result["synced"].values())
+        added = sum((v or {}).get("documents") or 0 for v in result["synced"].values())
+        new_chunks = sum((v or {}).get("chunks") or 0 for v in result["synced"].values())
         indexed = result["indexed"]
         total += indexed.get("indexed", 0)
-        print(f"第 {number} 轮：新文档 {accepted}，入库 {indexed.get('indexed', 0)} 块，失败 {indexed.get('failed', 0)}", flush=True)
-        if not accepted and indexed.get("idle") and not indexed.get("indexed") and not indexed.get("failed"):
+        print(f"第 {number} 轮：新文档 {added}（新块 {new_chunks}），入库 {indexed.get('indexed', 0)} 块，失败 {indexed.get('failed', 0)}", flush=True)
+        if not added and indexed.get("idle") and not indexed.get("indexed") and not indexed.get("failed"):
             break
     model_usage.flush()
     from sqlalchemy import func, select

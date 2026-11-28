@@ -227,9 +227,9 @@ def run_knowledge_index() -> None:
         log.warning("knowledge index: embedding service unavailable (%s); trying again next pass", result["embedding_down"])
         return
     indexed = result.get("indexed") or {}
-    accepted = sum((v or {}).get("accepted") or 0 for v in (result.get("synced") or {}).values())
-    if accepted or indexed.get("indexed") or indexed.get("failed"):
-        log.info("knowledge index: %s new documents, %s chunks indexed, %s failed", accepted, indexed.get("indexed", 0), indexed.get("failed", 0))
+    added = sum((v or {}).get("documents") or 0 for v in (result.get("synced") or {}).values())
+    if added or indexed.get("indexed") or indexed.get("failed"):
+        log.info("knowledge index: %s new documents, %s chunks indexed, %s failed", added, indexed.get("indexed", 0), indexed.get("failed", 0))
 
 
 LOOPS = (
